@@ -200,8 +200,15 @@ pub fn source_labels(source: &str) -> Option<crate::scripted::Labels> {
         let Expr::Map(m, _) = value else { continue };
         match ident.name.as_str() {
             "INFO" => {
-                if let Some(t) = m.0.iter().find(|(k, _)| k.name.as_str() == "title").and_then(|(_, v)| label_of(v)) {
+                let field = |name: &str| m.0.iter().find(|(k, _)| k.name.as_str() == name).map(|(_, v)| v);
+                if let Some(t) = field("title").and_then(label_of) {
                     out.title = t;
+                }
+                if let Some(d) = field("description").and_then(label_of) {
+                    out.description = d;
+                }
+                if let Some(Expr::StringConstant(a, _)) = field("author") {
+                    out.author = a.to_string();
                 }
             }
             "PARAMS" => {
@@ -886,6 +893,16 @@ impl<'s> Lowerer<'s> {
                     Some(l) => title = l.resolve(),
                     None => return self.err(*p, "`title` is a string, or a map of locale to string"),
                 },
+                // What a reader of the library is told about it, and who
+                // wrote it (P3's metadata; `source_labels`).
+                "description" => match label_of(v) {
+                    Some(_) => {}
+                    None => return self.err(*p, "`description` is a string, or a map of locale to string"),
+                },
+                "author" => match v {
+                    Expr::StringConstant(..) => {}
+                    _ => return self.err(*p, "`author` is a string"),
+                },
                 // The registry name (`variation_name`), read apart.
                 "name" if self.transform => match v {
                     Expr::StringConstant(..) => {}
@@ -897,7 +914,7 @@ impl<'s> Lowerer<'s> {
                     Expr::BoolConstant(..) => {}
                     _ => return self.err(*p, "`resets_orbits` is true or false"),
                 },
-                o if self.transform => return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `name` and `resets_orbits`, not `{o}`")),
+                o if self.transform => return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name` and `resets_orbits`, not `{o}`")),
                 // An effect's identity (design rule 7: a UUID, or a
                 // built-in's name) and its place in the pipeline, read
                 // apart (`info_string`).
@@ -905,7 +922,7 @@ impl<'s> Lowerer<'s> {
                     Expr::StringConstant(s, _) if matches!(s.as_str(), "color" | "density") => {}
                     _ => return self.err(*p, "`category` is \"color\" (after the tone map) or \"density\" (before it)"),
                 },
-                o if self.effect => return self.err(*p, format!("an effect's `INFO` has `title`, `id` and `category`, not `{o}`")),
+                o if self.effect => return self.err(*p, format!("an effect's `INFO` has `title`, `id`, `description`, `author` and `category`, not `{o}`")),
                 // A solid's ball: the set lies within this radius
                 // (`info_number`, read apart).
                 "radius" if kind == EntryKind::Solid => match v {
@@ -922,7 +939,7 @@ impl<'s> Lowerer<'s> {
                     Expr::StringConstant(s, _) if matches!(s.as_str(), "near" | "inside") => {}
                     _ => return self.err(*p, "`march` is \"near\" (a hit within a pixel of the solid) or \"inside\" (a hit only in it)"),
                 },
-                o if kind == EntryKind::Solid => return self.err(*p, format!("a solid's `INFO` has `title`, `radius`, `depth` and `march`, not `{o}`")),
+                o if kind == EntryKind::Solid => return self.err(*p, format!("a solid's `INFO` has `title`, `id`, `description`, `author`, `radius`, `depth` and `march`, not `{o}`")),
                 "center" | "magn" | "maxiter" | "angle" if !self.coloring => {
                     let value = self.literal(v)?;
                     default.items.push(Setting { name: name.clone(), value: SettingValue::Expr(value), span: self.pos.span(*p) });
@@ -948,8 +965,8 @@ impl<'s> Lowerer<'s> {
                     Expr::StringConstant(r, _) if matches!(r.as_str(), "inside" | "outside" | "both") => region = Some(r.to_string()),
                     _ => return self.err(*p, "`region` is \"inside\", \"outside\" or \"both\""),
                 },
-                o if self.coloring => return self.err(*p, format!("a colouring's `INFO` has `title` and `region`, not `{o}`")),
-                o => return self.err(*p, format!("`INFO` has `title`, `center`, `magn`, `maxiter`, `angle` and `cycle`, not `{o}`")),
+                o if self.coloring => return self.err(*p, format!("a colouring's `INFO` has `title`, `id`, `description`, `author` and `region`, not `{o}`")),
+                o => return self.err(*p, format!("`INFO` has `title`, `id`, `description`, `author`, `center`, `magn`, `maxiter`, `angle` and `cycle`, not `{o}`")),
             }
         }
         let span = Span { start: 0, end: self.source.len() };
@@ -3447,7 +3464,7 @@ fn escaped(s, p) { s.z.re > 1e9 }
             ("fn finish(s, z, p, ctx) { to_float(ctx.pass) }", "counts its own passes"),
             ("fn step(s, z, p) { s }", "needs `fn finish`"),
             ("fn finish(s, z, p) { z = complex(1.0, 0.0); 0.0 }", "not a variable to set"),
-            ("const INFO = #{ center: complex(0.0, 0.0) };\nfn finish(s, z, p) { 0.0 }", "`title` and `region`"),
+            ("const INFO = #{ center: complex(0.0, 0.0) };\nfn finish(s, z, p) { 0.0 }", "`author` and `region`"),
             ("const INFO = #{ region: \"left\" };\nfn finish(s, z, p) { 0.0 }", "`region` is"),
             ("fn finish(s, z, p) { let t = 1.0; }", "ends with the index"),
         ] {

@@ -515,6 +515,39 @@ that passed is its Rhai source.
   the banner, the effect install's name check, updates and Clear Cache
   for effects.
 
+**The steps** (written 2026-11-02, from the code as it stands):
+1. **One sidecar, one metadata.** `storage::links`: the record
+   `scripts/_links.json` keeps (`ScriptLink`: cloud id, version, owner,
+   `from_others`), plus `plugin`, for both stores --
+   `formulas/_links.json` keyed by file name, as a formula file's
+   extension is part of its name. Deleting a formula forgets its link,
+   as deleting a script does. `INFO.description` and `INFO.author` in
+   every GPU kind (a description by locale, as a title is). A scan,
+   `storage::library::scan()`, gives one entry per file of either store
+   and per shipped one (the script starters, the formula examples, the
+   effects): its store and file, kind, title, description, author, id,
+   version, origin (shipped, yours, downloaded), link and plug-in flag.
+2. **Plug-ins.** A Rhai variation, effect, formula, colouring or solid
+   in `formulas/` with `plugin` set is registered at start, where every
+   entry point registers the downloads (`load_installed_resources`,
+   desktop, web and CLI), under its key in the user's namespace. It is
+   then in the lists without a config carrying it: the variation
+   pickers (already), the Effects panel's Add list, and a group of the
+   user's own in the escape panel's formula and colouring pickers --
+   each choosing it carries its source into the config, as Use does.
+   The Formula Editor's file list marks plug-ins and gives the open file
+   a "load at start" switch; Import and Delete are its own, on the web
+   too.
+3. **The fixes**: adopting an online script never overwrites one of the
+   user's (a stem free of theirs too, or the same script by its cloud
+   id); the Variations panel's "downloaded" banner counts downloads
+   only; effect downloads get updates and Clear Cache as variations
+   have.
+4. **One presentation**: the Formula Editor's list and the Scripts
+   panel show the same marks for an entry's origin and plug-in flag,
+   from the scan; the shipped effects are in the editor's list beside
+   the formula examples.
+
 ### P4. Simulations in Rhai
 
 1. **Colourings first**: a colour function over `SimSample`'s fields
