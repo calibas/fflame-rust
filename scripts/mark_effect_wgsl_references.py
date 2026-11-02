@@ -15,8 +15,8 @@ import pathlib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # shader file -> the twin's name (hue_cycle.wgsl is the `hue_shift` effect).
-# The replaced ones only: kaleidoscope and julia are pending
-# (effects::custom::PENDING_TWINS), their WGSL still what the app runs.
+# The replaced ones only (effects::custom::BUILTIN_TWINS); one pending
+# (PENDING_TWINS) has its WGSL still what the app runs.
 TWINS = {
     "color/vignette.wgsl": "vignette",
     "color/film_grain.wgsl": "film_grain",
@@ -25,6 +25,8 @@ TWINS = {
     "color/hue_cycle.wgsl": "hue_shift",
     "color/plasma.wgsl": "plasma",
     "color/tunnel.wgsl": "tunnel",
+    "color/kaleidoscope.wgsl": "kaleidoscope",
+    "color/julia.wgsl": "julia",
     "color/worley_noise.wgsl": "worley_noise",
     "color/simplex_noise.wgsl": "simplex_noise",
     "color/domain_warp.wgsl": "domain_warp",

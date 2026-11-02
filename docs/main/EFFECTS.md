@@ -34,8 +34,8 @@ Research survey of candidate effects:
 - [src/renderer/effect_chain.rs](../../src/renderer/effect_chain.rs) —
   `EffectChainRunner`: ping-pong textures, the parameter uniform, the
   `distance_field` jump flood
-- [assets/effects/](../../assets/effects/) — the one-pass built-ins
-  as Rhai: thirteen the app runs, two pending
+- [assets/effects/](../../assets/effects/) — the fifteen one-pass
+  built-ins, as the Rhai sources the app runs
 - [shaders/effects/](../../shaders/effects/) — `density/`, `color/`, and
   `common/blend_modes.wgsl`: `distance_field`, the blend library, and
   the WGSL the Rhai built-ins replaced (the reference, below)
@@ -134,7 +134,7 @@ variations' `ParamType`), `default_value`, optional `min_value` and
 `max_value`, and an optional `description` shown as the slider's
 tooltip. Only `distance_field`'s parameters have descriptions today.
 
-**Shader source.** Thirteen of the sixteen built-ins are Rhai
+**Shader source.** Fifteen of the sixteen built-ins are Rhai
 (rhai-plugins.md, D1; [Effects written in Rhai](#effects-written-in-rhai)):
 `assets/effects/<name>.rhai`, embedded with `include_str!`
 (`effects::custom::BUILTIN_TWINS`) and compiled when the registry is
@@ -143,13 +143,11 @@ validated again at startup, the tests do that). On the desktop the copy
 beside the app is preferred when it differs and compiles, so a built-in
 can be edited and seen after a restart without a rebuild; one that does
 not compile is logged and the shipped copy runs. Their registry entries
-hold the compiled WGSL (`EffectSource::Owned`). `distance_field`,
-`kaleidoscope` and `julia` are WGSL, embedded (`effects::embedded_shaders`)
-with the same on-disk preference under `shaders/`
-(`EffectSource::Builtin { embedded, path }`); the last two have twins
-waiting to replace them (below).
+hold the compiled WGSL (`EffectSource::Owned`). `distance_field` is
+WGSL, embedded (`effects::embedded_shaders`) with the same on-disk
+preference under `shaders/` (`EffectSource::Builtin { embedded, path }`).
 
-The WGSL the thirteen replaced stays, as **the reference**
+The WGSL the fifteen replaced stays, as **the reference**
 (`effects::wgsl_builtins`, the definitions in registration order): what
 a build without the compiler (`lang` off: only the engine test matrix's
 `engine-flame` and `engine-sim` alone; every shipped module has it)
@@ -163,8 +161,7 @@ header. A download carries its WGSL in `EffectSource::Owned`.
 
 From the registry, in registration order (`register_builtin_effects`,
 over `wgsl_builtins`). The label is the curated name from
-`locales/en.yml`. All but `distance_field`, `kaleidoscope` and `julia`
-run as Rhai.
+`locales/en.yml`. All but `distance_field` run as Rhai.
 
 | Name | Label | Kind | Params | What it does |
 | --- | --- | --- | --- | --- |
@@ -522,15 +519,13 @@ adding an instance is structural). The panel's Add lists leave Rhai
 effects out: each version would list once.
 *Live* re-applies it by its id.
 
-**The built-ins are Rhai** (rhai-plugins.md, D1, P2 step 7): thirteen
+**The built-ins are Rhai** (rhai-plugins.md, D1, P2 step 7): fifteen
 are `assets/effects/<name>.rhai` (`custom::BUILTIN_TWINS`, compiled by
-`custom::builtin_twin` under the built-in's name, `Provenance::Builtin`).
-Each replaced its WGSL once nothing was lost. `kaleidoscope` and `julia`
-have twins that pass every check but speed (`custom::PENDING_TWINS`: 9
-to 13% slower on a GTX 1660 SUPER), so the WGSL runs and the twin waits;
-`distance_field`'s three passes the language cannot write. The checks
-stay as tests against the WGSL (`wgsl_builtins`), for the pending twins
-too:
+`custom::builtin_twin` under the built-in's name, `Provenance::Builtin`),
+each replacing its WGSL once nothing was lost; `distance_field`'s three
+passes the language cannot write. A twin that has not passed waits in
+`custom::PENDING_TWINS` (none now), its WGSL running. The checks stay
+as tests against the WGSL (`wgsl_builtins`):
 - **Pixels**: `the_rhai_twins_match_their_wgsl` (the twelve colour
   effects, within a step of 8-bit rounding, at four settings each) and
   `the_density_twins_match_their_wgsl` (the three density ones, to a
@@ -544,26 +539,41 @@ too:
   self-division, no subnormal literal -- with naga's validation of
   every built-in (`every_built_in_effect_validates`).
 - **Speed**: `the_twins_are_no_slower`, ignored (a GPU measurement, run
-  alone, the app closed): each at 1080p and 4K against its WGSL, the
-  first run and the best of seven batches of about 20 ms; a replaced
-  twin more than 5% slower fails, and a pending one is reported, ready
-  once it is within 5%. The thirteen measured within 1% of their WGSL
-  or faster (`density_blur` 5% faster, its taps skipped as the shader
-  skips them).
+  alone, the app closed): each at 1080p and 4K against its WGSL, nine
+  rounds of a ~20 ms batch, the twin straight after the WGSL, and the
+  median of the rounds' ratios (best-of-N moved with the GPU's clocks);
+  a replaced twin more than 5% slower fails, and a pending one is
+  reported, ready once it is within 5%. On a GTX 1660 SUPER all fifteen
+  are within 3% of their WGSL or faster: julia 4% faster, `density_blur`
+  5% (its taps skipped as the shader skips them).
+- **Why one is slower**: `time_effect_variants`, ignored, times the WGSL
+  files in `output/effect-variants/<effect>/` against the built-in's
+  WGSL and twin (both written there to start from), the median of
+  per-round ratios, at `EFFECT_VARIANTS_SIZE` -- an experiment is a
+  file edit, not a rebuild. Moving the twin toward the WGSL one change
+  at a time, and the WGSL toward the twin, is how each cost below was
+  found.
 - **The corpus** exports the compiled WGSL, the blend marker kept.
 A built-in that fails a check goes back to its WGSL by moving from
 `BUILTIN_TWINS` to `PENDING_TWINS`.
 
-**What the speed check changed in the compiler** (its causes were the
-language's general costs, not the twins'): in an effect, real `sin`,
-`cos` and `tan` are the GPU's own rather than range-reduced (an effect's
-arguments are its image's coordinates, and the WGSL effects call them
-so) and a real's `floor`, `trunc` or `ceil` read as a float is the float
-function, without the int's round trip; everywhere, a loop whose counter
-bounds it folds the cap into its bound instead of running a second
-counter ([ESCAPE.md](ESCAPE.md#the-formula-language)), and `atan2`'s
-zero-pair guard is a `select`, not a branch. Plasma was 1.5x slower
-before, julia 1.4x, density_blur 1.1x.
+**What the speed check changed in the compiler** (every cause was the
+language's code, not the twins'), so an effect compiles to what a
+hand-written one is:
+- **In an effect**: real `sin`, `cos` and `tan` are the GPU's own, not
+  range-reduced (an effect's arguments are its image's coordinates, and
+  the WGSL effects call them so; plasma 1.5x); an int parameter read as
+  a float, or compared with an int literal, is the float rounded, and
+  `ctx.width` / `ctx.height` the u32 widened, with no conversion through
+  i32 per pixel (kaleidoscope 6%); a real's `floor`, `trunc` or `ceil`
+  read as a float is the float function; Rhai's `min`, `max` and
+  `clamp`, which the language lowers to a test and an assignment, are
+  WGSL's own (2%). Each gives the same values (below 2^31; `min`/`max`
+  differ only at NaN, and an effect has no interpreter to agree with).
+- **Everywhere**: a loop whose counter bounds it folds the cap into its
+  bound instead of running a second counter (julia 1.4x), a loop's `&&`
+  test is one `break` for each part (julia 6%; [ESCAPE.md](ESCAPE.md#the-formula-language)),
+  and `atan2`'s zero-pair guard is a `select`, not a branch.
 
 ## The corpus for the API
 

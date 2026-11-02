@@ -1597,8 +1597,41 @@ impl<'p> Gen<'p> {
     // ---- statements -----------------------------------------------------
 
     fn stmts(&mut self, stmts: &[IStmt], depth: usize, out: &mut String) {
-        for s in stmts {
-            self.stmt(s, depth, out);
+        let mut i = 0;
+        while i < stmts.len() {
+            // In an effect, Rhai's `min` and `max` (and so `clamp`), which
+            // the language lowers to a test and an assignment for UF's sake,
+            // are WGSL's own: what a hand-written effect calls, 2% of the
+            // kaleidoscope effect's time (D1's speed check). They differ
+            // only at NaN, and an effect has no interpreter to agree with.
+            if self.ctx == Ctx::Effect {
+                if let Some((t, a, b, max)) = stmts.get(i + 1).and_then(|next| min_max_pair(&stmts[i], next)) {
+                    let pad = "    ".repeat(depth);
+                    let (t, a, b) = (self.var(t), self.expr(a), self.expr(b));
+                    let _ = writeln!(out, "{pad}{t} = {}({a}, {b});", if max { "max" } else { "min" });
+                    i += 2;
+                    continue;
+                }
+            }
+            self.stmt(&stmts[i], depth, out);
+            i += 1;
+        }
+    }
+
+    /// A loop's test, one `break` for each part `&&` joins: Rhai's
+    /// short-circuit as it reads, and the GPU's compiler gives each part
+    /// its own exit -- one `!(a && b)` cost the julia effect 6% (D1's
+    /// speed check).
+    fn loop_exits(&mut self, cond: &IExpr, pad: &str, out: &mut String) {
+        match &cond.kind {
+            IExprKind::Binary(BinOp::And, a, b) => {
+                self.loop_exits(a, pad, out);
+                self.loop_exits(b, pad, out);
+            }
+            _ => {
+                let c = self.expr(cond);
+                let _ = writeln!(out, "{pad}    if (!({c})) {{\n{pad}        break;\n{pad}    }}");
+            }
         }
     }
 
@@ -1657,16 +1690,14 @@ impl<'p> Gen<'p> {
                     let (op, step, most) = if counted.inclusive { ("<=", LOOP_CAP - 1, i32::MAX - 1) } else { ("<", LOOP_CAP, i32::MAX) };
                     let limit = i32::MAX - LOOP_CAP as i32;
                     let _ = writeln!(out, "{pad}let loop_end{k} = min({b}, select({i} + {step}i, {most}i, {i} > {limit}i));");
-                    let c = match counted.rest {
-                        Some(rest) => format!("(({i} {op} loop_end{k}) && {})", self.expr(rest)),
-                        None => format!("({i} {op} loop_end{k})"),
-                    };
                     let _ = writeln!(out, "{pad}loop {{");
-                    let _ = writeln!(out, "{pad}    if (!{c}) {{\n{pad}        break;\n{pad}    }}");
+                    let _ = writeln!(out, "{pad}    if (!({i} {op} loop_end{k})) {{\n{pad}        break;\n{pad}    }}");
+                    if let Some(rest) = counted.rest {
+                        self.loop_exits(rest, &pad, out);
+                    }
                 } else {
-                    let c = self.expr(cond);
                     let _ = writeln!(out, "{pad}for (var loop{k} = 0; loop{k} < {LOOP_CAP}; loop{k} = loop{k} + 1) {{");
-                    let _ = writeln!(out, "{pad}    if (!({c})) {{\n{pad}        break;\n{pad}    }}");
+                    self.loop_exits(cond, &pad, out);
                 }
                 self.stmts(body, depth + 1, out);
                 let _ = writeln!(out, "{pad}}}");
@@ -1754,6 +1785,14 @@ impl<'p> Gen<'p> {
             // int's round trip, which cost the kaleidoscope effect 5% (D1's
             // speed check). Elsewhere the int stays, as the interpreter
             // has it.
+            // In an effect, an int parameter read as a float is the float
+            // rounded, and the image's size the u32 widened: the same
+            // values, without a conversion through i32 per pixel, which
+            // with the comparisons below cost the kaleidoscope effect 6%
+            // (D1's speed check).
+            IExprKind::Convert(a) if self.ctx == Ctx::Effect && (a.ty, e.ty) == (Ty::Int, Ty::Float) && self.int_as_float(a).is_some() => {
+                self.int_as_float(a).unwrap_or_default()
+            }
             IExprKind::Convert(a)
                 if self.ctx == Ctx::Effect
                     && (a.ty, e.ty) == (Ty::Int, Ty::Float)
@@ -1925,8 +1964,33 @@ impl<'p> Gen<'p> {
         }
     }
 
+    /// In an effect, an int parameter, or the image's width or height, as
+    /// a float expression with the int's value; `None` for anything else.
+    fn int_as_float(&self, e: &IExpr) -> Option<String> {
+        match &e.kind {
+            IExprKind::Param(id) if self.p.params[*id].ty() == Ty::Int => Some(format!("round(get_param({}u))", self.slots[*id])),
+            IExprKind::Predef(Predef::Width) => Some("f32(effect_params.width)".to_string()),
+            IExprKind::Predef(Predef::Height) => Some("f32(effect_params.height)".to_string()),
+            _ => None,
+        }
+    }
+
     fn binary(&mut self, op: BinOp, a: &IExpr, b: &IExpr) -> String {
         use BinOp::*;
+        // In an effect, an int parameter against an int literal compares
+        // in floats ([`Self::int_as_float`]): exact below 2^24.
+        if self.ctx == Ctx::Effect && matches!(op, Eq | Ne | Lt | Le | Gt | Ge) && a.ty == Ty::Int {
+            let lit = |e: &IExpr| match e.kind {
+                IExprKind::Int(n) if n.abs() < 1 << 24 => Some(n),
+                _ => None,
+            };
+            if let (Some(x), Some(n)) = (self.int_as_float(a), lit(b)) {
+                return format!("({x} {} {n}.0)", op.symbol());
+            }
+            if let (Some(n), Some(x)) = (lit(a), self.int_as_float(b)) {
+                return format!("({n}.0 {} {x})", op.symbol());
+            }
+        }
         // A real factor scales (IExpr::is_lifted_real).
         if op == Mul && a.ty == Ty::Complex && (a.is_lifted_real() || b.is_lifted_real()) {
             let (k, z) = if a.is_lifted_real() { (a, b) } else { (b, a) };
@@ -2788,6 +2852,29 @@ fn literal(e: &IExpr) -> bool {
         IExprKind::Unary(UnOp::Neg, a) | IExprKind::Convert(a) => literal(a),
         _ => false,
     }
+}
+
+/// Rhai's `min` / `max` as the language lowers them (`rhai::vec::min_max`):
+/// `t = a;` then `if (b > t) { t = b; }` (`<` for `min`), `b` held -- a
+/// variable, literal or parameter. Gives `(t, a, b, max)`.
+fn min_max_pair<'a>(first: &'a IStmt, second: &'a IStmt) -> Option<(VarId, &'a IExpr, &'a IExpr, bool)> {
+    let IStmt::Assign(Place::Var(t), a) = first else { return None };
+    let IStmt::If { arms, otherwise } = second else { return None };
+    let [(cond, body)] = arms.as_slice() else { return None };
+    if !otherwise.is_empty() || !matches!(a.ty, Ty::Int | Ty::Float) {
+        return None;
+    }
+    let IExprKind::Binary(op @ (BinOp::Gt | BinOp::Lt), b, tested) = &cond.kind else { return None };
+    let [IStmt::Assign(Place::Var(set), b2)] = body.as_slice() else { return None };
+    let same = |x: &IExpr, y: &IExpr| match (&x.kind, &y.kind) {
+        (IExprKind::Var(p), IExprKind::Var(q)) => p == q,
+        (IExprKind::Param(p), IExprKind::Param(q)) => p == q,
+        (IExprKind::Int(p), IExprKind::Int(q)) => p == q,
+        (IExprKind::Float(p), IExprKind::Float(q)) => p.to_bits() == q.to_bits(),
+        _ => false,
+    };
+    let held = matches!(b.kind, IExprKind::Var(v) if v != *t) || matches!(b.kind, IExprKind::Param(_) | IExprKind::Int(_) | IExprKind::Float(_));
+    (matches!(tested.kind, IExprKind::Var(v) if v == *t) && *set == *t && same(b, b2) && held && b.ty == a.ty).then_some((*t, a, &**b, *op == BinOp::Gt))
 }
 
 /// A `while` its counter bounds ([`counted_loop`]).
@@ -4015,6 +4102,8 @@ fn step(s, p) {
         let wgsl = formula(&p);
         assert_eq!(wgsl.matches("let loop_end").count(), 3, "{wgsl}");
         assert_eq!(wgsl.matches(&format!("< {LOOP_CAP}; loop")).count(), 2, "{wgsl}");
+        // A test's `&&` is one exit for each part.
+        assert!(!wgsl.lines().any(|l| l.trim_start().starts_with("if (!(") && l.contains("&&")), "{wgsl}");
         assert!(crate::variations::shader_lint::mixed_operators(&wgsl).is_empty(), "{:?}", crate::variations::shader_lint::mixed_operators(&wgsl));
     }
 
