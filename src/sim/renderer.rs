@@ -3608,6 +3608,10 @@ impl SimRenderer {
         palette_view: &TextureView,
         steps: u32,
     ) {
+        // A colouring the config carries, registered before its name is
+        // resolved (P4).
+        #[cfg(feature = "lang")]
+        crate::sim::custom::ensure(cfg);
         if self.will_reseed(cfg) {
             self.seed(device, queue, cfg);
         }
@@ -3706,6 +3710,8 @@ impl SimRenderer {
         cfg: &SimConfig,
         palette_view: &TextureView,
     ) {
+        #[cfg(feature = "lang")]
+        crate::sim::custom::ensure(cfg);
         self.seed(device, queue, cfg);
         self.run_steps(device, queue, cfg, cfg.steps);
         self.color(device, queue, cfg, palette_view);

@@ -797,6 +797,14 @@ fn escaped(s, p) {
   width and height; and `min`, `max` and `clamp` are WGSL's own (the
   language lowers them to a test for UF; they differ only at NaN).
   [EFFECTS.md](EFFECTS.md#effects-written-in-rhai) has what each cost.
+- **Simulation colourings** (`EntryKind::SimColoring`, `fn cell_color(cell,
+  p, ctx)`; P4) run per sample of a simulation's field: `cell.state`
+  (a vector of four, whose parts are `.x` ... `.w` as well as `.r` ...
+  `.a`), the gradient, distance, tensor and relief, read through the
+  `__cell` built-in; `palette(t)` (its alone, the `__palette_*`
+  built-ins); and end with a colour and its coverage. Its code is an
+  effect's, the template's parameters (`cparam`) and grid
+  ([SIMULATION.md](SIMULATION.md#colourings-written-in-rhai)).
 - **`fract(x)`** (WGSL's, each part of a complex) and **`hash2(p)`**: a
   point to two numbers in [0, 1), the built-in noise effects' hash
   (`fract(sin(vec2(dot(p, (127.1, 311.7)), dot(p, (269.5, 183.3)))) *

@@ -71,6 +71,13 @@ pub enum EntryKind {
     /// `effect_*` places, and reads of the input are the `__sample_*`
     /// and `__load_*` built-ins.
     Effect,
+    /// A simulation's colouring (docs/projects/rhai-plugins.md, P4), Rhai
+    /// only: `fn cell_color(cell, p, ctx)`, a cell's sample -- its state
+    /// and the derived fields the template measures -- to a colour and its
+    /// coverage. The sample's reads are the `__cell` built-in, the
+    /// palette `__palette_*`; `#pixel` is the cell, and the result is
+    /// written to the `effect_r` ... `effect_a` places, `a` the coverage.
+    SimColoring,
 }
 
 /// A byte range in the source text.

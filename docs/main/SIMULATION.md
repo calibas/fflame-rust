@@ -673,6 +673,44 @@ reseeding on it would make every model unusable.
 
 ---
 
+## Colourings written in Rhai
+
+A colouring may be a Rhai script ([rhai-plugins.md](../projects/rhai-plugins.md),
+P4): `fn cell_color(cell, p, ctx)`, a cell's sample to a colour and its
+coverage, compiled by the formula language
+([ESCAPE.md](ESCAPE.md#the-formula-language), `EntryKind::SimColoring`)
+to the `sim_color` the colour template calls.
+
+- **What it reads**: `cell.state`, a vector of four (`.x` ... `.w`, or
+  `.r` ... `.a`); `cell.gx` and `cell.gy`, the gradient of every channel;
+  `cell.dist`, the signed distance to the matte's edge; `cell.tensor`
+  (Jxx, Jxy, Jyy) and `cell.relief` (h, dh/dx, dh/dy), vectors of three;
+  `p`, its `PARAMS`; `ctx.cell`, the cell (a complex), and `ctx.width`,
+  `ctx.height`, the grid. `palette(t)` is the shared palette, a vector of
+  three. The template measures the gradient, tensor, distance and relief
+  only for a colouring that reads them, so the features
+  (`ColoringFeature`) come from what the source reads, as do `ReadsCell`
+  and the rest. No `rand()`, no `prepare`.
+- **What it gives**: the last value, an `rgba` (its `a` the coverage, 0
+  letting the background through), a `vec3` (drawn whole), or
+  `#{ color, coverage }`. Its trig, `min`/`max`/`clamp` and int
+  parameters compile as an effect's do: what hand-written WGSL is.
+- **Registered** (`sim::custom`) as a `SimColoringDef`, leaked, under a
+  name `custom-` begins: its key (`scripted::key`, id and version) with an
+  `INFO.id` of its own, else a hash of its source. `coloring_or_default`
+  finds it, so every path that resolves a colouring does.
+- **Carried**: `SimConfig::custom_coloring` (`ConfigPath::
+  SimCustomColoring`), with `coloring` naming it; `sim::custom::ensure`
+  registers it where a render starts (`SimRenderer::render_frame`,
+  `render_still`, the render path's resource check, the panel). The
+  Formula Editor's **Use as Simulation Colouring** puts it in the config,
+  entering Simulation in the same step, and Live follows it by its id; a
+  plug-in one is in the panel's colouring picker under "Your plug-ins".
+  The single colouring only: a colour stack's entries name built-ins.
+- **Twins**: `sim::custom::SHIPPED`, Channel's (`assets/sim/channel.rhai`),
+  held to the built-in within 1e-5 at four settings
+  (`the_rhai_channel_colours_as_the_built_in`).
+
 ## Adding a model
 
 1. Write a `static ModelDef` in

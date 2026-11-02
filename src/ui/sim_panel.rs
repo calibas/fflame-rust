@@ -929,6 +929,9 @@ fn render_coloring_section(
     sim: &SimConfig,
 ) {
     use crate::config::sim::{SimBlend, SimColorLayer, SimMatteChannel, SimMatteEdge, MAX_COLOR_LAYERS};
+    // A colouring the config carries (P4), registered before its name is
+    // read for the picker.
+    crate::sim::custom::ensure(sim);
     let structural = |config_manager: &mut ConfigManager, edit: &dyn Fn(&mut SimConfig)| {
         let mut after = config.clone();
         edit(&mut after.sim);
@@ -1009,6 +1012,24 @@ fn render_coloring_section(
                                         }
                                     }));
                                 }
+                            }
+                        }
+                    }
+                    // The user's plug-in colourings (P3, P4): the single
+                    // colouring's, their source carried as Use carries it.
+                    if slot == ColorSlot::Flat {
+                        let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::SimColoring);
+                        if !plugins.is_empty() {
+                            ui.separator();
+                            ui.weak(t!("sim_panel.plugins"));
+                        }
+                        for p in plugins {
+                            if ui.selectable_label(coloring.name == p.key, &p.title).on_hover_text(t!("sim_panel.plugin_tip", file = p.file)).clicked() && coloring.name != p.key {
+                                let source = crate::config::manager::custom_source_json(&Some(p.carried.clone()));
+                                let _ = config_manager.update_batch(
+                                    vec![(ConfigPath::SimCustomColoring, source.into()), (ConfigPath::SimColoring, p.key.clone().into())],
+                                    "history.action.use_sim_coloring".to_string(),
+                                );
                             }
                         }
                     }

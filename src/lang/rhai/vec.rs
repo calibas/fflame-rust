@@ -72,6 +72,12 @@ impl Kind {
             (Kind::Vec3, "r") => Some(0),
             (Kind::Vec3, "g") => Some(1),
             (Kind::Vec3, "b") => Some(2),
+            // A vector of four is a colour's shape: a simulation's state
+            // reads `.x` ... `.w` (P4).
+            (Kind::Rgba, "x") => Some(0),
+            (Kind::Rgba, "y") => Some(1),
+            (Kind::Rgba, "z") => Some(2),
+            (Kind::Rgba, "w") => Some(3),
             _ => None,
         })
     }
@@ -124,6 +130,8 @@ pub(super) enum Owner {
     State,
     Params,
     Ctx,
+    /// A simulation colouring's sample (P4).
+    Cell,
 }
 
 /// The name of a vector field's or parameter's part `i`.
@@ -191,6 +199,7 @@ impl Lowerer<'_> {
                 Some(Binding::State) => Some(Owner::State),
                 Some(Binding::Params) => Some(Owner::Params),
                 Some(Binding::Ctx) => Some(Owner::Ctx),
+                Some(Binding::Cell) => Some(Owner::Cell),
                 _ => None,
             },
             _ => None,
@@ -216,6 +225,21 @@ impl Lowerer<'_> {
                         Vector::new(kind, (0..kind.axes().len()).map(|i| mk(ExprKind::Name(prepared_name(&part(name, kind, i))), span)).collect())
                     })
                 }
+            }
+            // A simulation colouring's sample (P4), at the `__cell`
+            // indices the template's `SimSample` reads (`lang::wgsl`):
+            // the state, its gradient, the tensor, the relief.
+            Owner::Cell => {
+                let (kind, first) = match name {
+                    "state" => (Kind::Rgba, 0),
+                    "gx" => (Kind::Rgba, 4),
+                    "gy" => (Kind::Rgba, 8),
+                    "tensor" => (Kind::Vec3, 13),
+                    "relief" => (Kind::Vec3, 16),
+                    _ => return None,
+                };
+                let parts = (0..kind.axes().len()).map(|i| call1("__cell", mk(ExprKind::Int((first + i) as i64), span), span)).collect();
+                Some(Vector::new(kind, parts))
             }
             // A 3D variation's accumulator (B2).
             Owner::Ctx => (self.three && name == "accum").then(|| {
@@ -289,6 +313,7 @@ impl Lowerer<'_> {
             "vec3" | "cross" => Some(Kind::Vec3),
             "quat" => Some(Kind::Quat),
             "rgba" | "input" | "input_at" => Some(Kind::Rgba),
+            "palette" => Some(Kind::Vec3),
             "normalize" | "abs" | "floor" | "min" | "max" | "clamp" | "mix" => first(),
             "conj" | "inv" | "pow" => first().filter(|k| *k == Kind::Quat),
             _ if PLANE_FUNCTIONS.contains(&n) => first().filter(|k| *k == Kind::Quat),
@@ -754,6 +779,17 @@ impl Lowerer<'_> {
                 }
                 _ => return self.err(p, "`rgba(s)` takes a number: every part `s`"),
             },
+            // A simulation colouring's palette (P4): the shared one at `t`.
+            ("palette", 1) if !self.sim_coloring => {
+                return self.err(p, "`palette(t)` is a simulation colouring's: in `fn cell_color` alone");
+            }
+            ("palette", 1) => match args.remove(0) {
+                S(t) => {
+                    let t = self.hold(t, "t");
+                    V(Vector::new(Kind::Vec3, ["r", "g", "b"].iter().map(|c| call1(&format!("__palette_{c}"), t.clone(), span)).collect()))
+                }
+                V(_) => return self.err(p, "`palette(t)` takes a number, from 0 to 1"),
+            },
             // An effect's reads of its image: four channels of one read.
             ("input", 1) | ("input_at", 2) if !self.effect => {
                 return self.err(p, format!("`{name}` reads an effect's image: in `fn effect` alone"));
@@ -978,7 +1014,7 @@ impl Lowerer<'_> {
                 }
             }
             (n, k) => {
-                if matches!(n, "vec3" | "quat" | "rgba" | "mix" | "input" | "input_at" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp" | "abs" | "floor" | "conj" | "inv" | "pow" | "complex") {
+                if matches!(n, "vec3" | "quat" | "rgba" | "mix" | "input" | "input_at" | "palette" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp" | "abs" | "floor" | "conj" | "inv" | "pow" | "complex") {
                     return self.err(p, format!("`{n}` does not take {k} argument{}", if k == 1 { "" } else { "s" }));
                 }
                 if first_kind == Some(Kind::Quat) {

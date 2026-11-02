@@ -245,8 +245,17 @@ pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
         #[cfg(feature = "engine-sim")]
         crate::scene::transforms::RenderMode::Simulation => {
             let s = &config.sim;
+            // A colouring the config carries is its own (P4).
+            #[cfg(feature = "lang")]
+            crate::sim::custom::ensure(s);
             let model = |name: &str| crate::sim::MODELS.iter().any(|m| m.name == name);
-            let colouring = |name: &str| crate::sim::COLORINGS.iter().any(|c| c.name == name);
+            let colouring = |name: &str| {
+                #[cfg(feature = "lang")]
+                if crate::sim::custom::coloring(name).is_some() {
+                    return true;
+                }
+                crate::sim::COLORINGS.iter().any(|c| c.name == name)
+            };
             for l in 0..s.layer_count() {
                 let name = s.layer_model_name(l);
                 if !model(name) {

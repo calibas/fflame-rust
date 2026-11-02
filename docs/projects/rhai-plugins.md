@@ -558,7 +558,16 @@ library panel of both stores together, if one is wanted -- the scan
 
 1. **Colourings first**: a colour function over `SimSample`'s fields
    returning rgb and coverage, with `palette(t)`; one pass and no reads
-   beyond the sample.
+   beyond the sample. **Built 2026-11-02**
+   ([SIMULATION.md](../main/SIMULATION.md#colourings-written-in-rhai)):
+   `fn cell_color(cell, p, ctx)`, `EntryKind::SimColoring`; the sample
+   through one built-in (`__cell`, by a literal index) rather than a
+   predefined name per field, and the effect's code generation hosted by
+   the colour template; the features from what it reads; carried on
+   `SimConfig`, ensured where a render starts; Use from the Formula Editor
+   and a plug-in group in the panel. The twin is Channel's, equal to 1e-5.
+   A colour stack's entries name built-ins only: carrying one source per
+   entry is a later step if wanted.
 2. **Models, the single-layer class**: a step function with neighbour
    reads at offsets (the boundary stays the framework's), `vec4` state,
    `dt`, the step index, random numbers, a seed function; up to four

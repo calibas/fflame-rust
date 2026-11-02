@@ -142,6 +142,12 @@ pub fn effect(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Effect)
 }
 
+/// A simulation's colouring (P4): `fn cell_color(cell, p, ctx)`, per
+/// sample of the field.
+pub fn sim_coloring(source: &str) -> Result<Program, Vec<Diag>> {
+    compile(source, EntryKind::SimColoring)
+}
+
 /// A number field of a script's `INFO` (a solid's `radius`, `depth`).
 pub fn info_number(source: &str, key: &str) -> Option<f64> {
     info_field(source, key, |v| match v {
@@ -460,6 +466,8 @@ pub fn kind_of(source: &str) -> Option<EntryKind> {
     let has = |n: &str| ast.iter_fn_def().any(|f| f.name == n);
     if has("effect") {
         Some(EntryKind::Effect)
+    } else if has("cell_color") {
+        Some(EntryKind::SimColoring)
     } else if has("variation") || has("variation3") {
         Some(EntryKind::Transform)
     } else if has("distance") {
@@ -556,6 +564,7 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         three,
         solid: kind == EntryKind::Solid,
         effect: kind == EntryKind::Effect,
+        sim_coloring: kind == EntryKind::SimColoring,
         probe: std::cell::Cell::new(0),
     };
     for (name, def) in extra {
@@ -656,6 +665,9 @@ enum Binding {
     Z,
     /// The context: every function's optional last argument.
     Ctx,
+    /// A simulation colouring's sample (P4): its fields read as the
+    /// `__cell` built-in.
+    Cell,
     /// A local, by its lowered name.
     Local(String),
     /// A value substituted where read: a helper's argument, a `let` in
@@ -741,6 +753,9 @@ struct Lowerer<'s> {
     solid: bool,
     /// Lowering an effect (P2): `fn effect`, its reads of the image.
     effect: bool,
+    /// Lowering a simulation's colouring (P4): `fn cell_color`, its reads
+    /// of the sample.
+    sim_coloring: bool,
     /// How deep [`Lowerer::is_vec`] has looked into helpers, against a
     /// helper that calls itself.
     probe: std::cell::Cell<usize>,
@@ -832,6 +847,8 @@ impl<'s> Lowerer<'s> {
             "a transformation"
         } else if self.effect {
             "an effect"
+        } else if self.sim_coloring {
+            "a simulation colouring"
         } else if kind == EntryKind::Solid {
             "a solid"
         } else {
@@ -870,6 +887,8 @@ impl<'s> Lowerer<'s> {
             "Variation"
         } else if self.effect {
             "Effect"
+        } else if self.sim_coloring {
+            "Colouring"
         } else if kind == EntryKind::Solid {
             "Solid"
         } else {
@@ -923,6 +942,7 @@ impl<'s> Lowerer<'s> {
                     _ => return self.err(*p, "`category` is \"color\" (after the tone map) or \"density\" (before it)"),
                 },
                 o if self.effect => return self.err(*p, format!("an effect's `INFO` has `title`, `id`, `description`, `author` and `category`, not `{o}`")),
+                o if self.sim_coloring => return self.err(*p, format!("a simulation colouring's `INFO` has `title`, `id`, `description` and `author`, not `{o}`")),
                 // A solid's ball: the set lies within this radius
                 // (`info_number`, read apart).
                 "radius" if kind == EntryKind::Solid => match v {
@@ -979,6 +999,10 @@ impl<'s> Lowerer<'s> {
             let f = &self.fns["prepare"];
             return self.err(f.body.position(), "an effect has no `prepare` yet: its values are computed in `effect`");
         }
+        if self.sim_coloring && self.fns.contains_key("prepare") {
+            let f = &self.fns["prepare"];
+            return self.err(f.body.position(), "a simulation colouring has no `prepare`: its values are computed in `cell_color`");
+        }
         // prepare: once per image, its map's fields read as `p.name`.
         if let Some(prep) = self.fns.get("prepare").cloned() {
             let mut scope = Scope::new(Fn3::Prepare, Vec::new());
@@ -1014,6 +1038,7 @@ impl<'s> Lowerer<'s> {
             EntryKind::Transform => sections.push(self.transform_section(span, state_fields)?),
             EntryKind::Solid => sections.extend(self.solid_sections(span)?),
             EntryKind::Effect => sections.push(self.effect_section(span)?),
+            EntryKind::SimColoring => sections.push(self.sim_coloring_section(span)?),
         }
         default.items.push(Setting { name: "title".into(), value: SettingValue::Strings(vec![title.clone()]), span });
         let setting = region.filter(|r| r != "both");
@@ -1163,6 +1188,76 @@ impl<'s> Lowerer<'s> {
         }
         body.push(put("effect_blend", blend.unwrap_or_else(|| mk(ExprKind::Int(-1), at))));
         body.push(put("effect_amount", amount.unwrap_or_else(|| mk(ExprKind::Float(1.0), at))));
+        Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
+    }
+
+    /// A simulation colouring's function as its section (P4):
+    /// `cell_color(cell[, p[, ctx]])`, `cell` the sample the template
+    /// measured at the point (`cell.state`, `cell.gx`, `cell.gy` vectors of
+    /// four, `cell.dist` a number, `cell.tensor` and `cell.relief` vectors
+    /// of three), `p` the parameters, `ctx` the cell (`ctx.cell`) and the
+    /// grid's size. The last value is the output: an `rgba`, its `a` the
+    /// coverage (0 lets the background through); a `vec3`, drawn whole; or
+    /// `#{ color, coverage }`.
+    fn sim_coloring_section(&mut self, span: Span) -> R<Section> {
+        let Some(f) = self.fns.get("cell_color").cloned() else {
+            return self.err(Position::NONE, "a simulation colouring has `fn cell_color(cell, p)`");
+        };
+        if f.params.is_empty() || f.params.len() > 3 {
+            return self.err(f.body.position(), "`cell_color(cell)`, `cell_color(cell, p)` or `cell_color(cell, p, ctx)`");
+        }
+        let mut scope = Scope::new(Fn3::Effect, Vec::new());
+        scope.bind(&f.params[0], Binding::Cell);
+        if let Some(p) = f.params.get(1) {
+            scope.bind(p, Binding::Params);
+        }
+        if let Some(c) = f.params.get(2) {
+            scope.bind(c, Binding::Ctx);
+        }
+        const RESULT: &str = "`cell_color` ends with the output: an `rgba` (its `a` the coverage), a `vec3`, or `#{ color, coverage }`";
+        let stmts = f.body.statements();
+        let Some((last, rest)) = stmts.split_last() else { return self.err(f.body.position(), RESULT) };
+        let mut body = Vec::new();
+        for st in rest {
+            self.stmt(st, &mut scope, &mut body)?;
+        }
+        let mut coverage = None;
+        let color = match final_value(last) {
+            Some(Final::Expr(Expr::Map(m, mp))) => {
+                let mut color = None;
+                for (k, v) in &m.0 {
+                    match k.name.as_str() {
+                        "color" => color = Some(self.vexpr(v, &mut scope)?),
+                        "coverage" => coverage = Some(self.expr(v, &mut scope)?),
+                        o => return self.err(k.pos, format!("a colouring's result has `color` and `coverage`, not `{o}`")),
+                    }
+                }
+                match color {
+                    Some(c) => c,
+                    None => return self.err(*mp, "the result needs `color`, the cell's colour"),
+                }
+            }
+            Some(f) => self.final_vec(f, &mut scope)?,
+            None => return self.err(last.position(), RESULT),
+        };
+        let at = self.pos.span(last.position());
+        let mut parts = match color.kind {
+            vec::Kind::Rgba => color.parts,
+            vec::Kind::Vec3 => {
+                let mut parts = color.parts;
+                parts.push(mk(ExprKind::Float(1.0), at));
+                parts
+            }
+            vec::Kind::Quat => return self.err(last.position(), "a colouring's output is a colour: an `rgba`, or a `vec3`"),
+        };
+        if let Some(c) = coverage {
+            parts[3] = c;
+        }
+        self.flush(&mut body);
+        let put = |name: &str, value: ast::Expr| assign(mk(ExprKind::Predef(name.into()), at), value, at);
+        for (name, part) in ["effect_r", "effect_g", "effect_b", "effect_a"].into_iter().zip(parts) {
+            body.push(put(name, part));
+        }
         Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
     }
 
@@ -2309,6 +2404,7 @@ impl<'s> Lowerer<'s> {
                 Some(Binding::State) => return self.err(*p, "the state is read by its fields, `s.z`"),
                 Some(Binding::Params) | Some(Binding::ParamMap(..)) => return self.err(*p, "the parameters are read by name, `p.power`"),
                 Some(Binding::Ctx) => return self.err(*p, "the context is read by its fields, `ctx.julia`"),
+                Some(Binding::Cell) => return self.err(*p, "a cell is read by its fields, `cell.state.x`"),
                 Some(Binding::VecLocal(..) | Binding::VecValue(_)) => return self.err(*p, vec::NUMBER_WANTED),
                 None => return self.err(*p, format!("`{}` is not declared", v.1)),
             },
@@ -2389,6 +2485,7 @@ impl<'s> Lowerer<'s> {
                 Some(Binding::Params) => return Ok(Base::Params),
                 Some(Binding::ParamMap(m, what)) => return Ok(Base::Map(m.clone(), what)),
                 Some(Binding::Ctx) => return Ok(Base::Ctx),
+                Some(Binding::Cell) => return Ok(Base::Cell),
                 _ => {}
             }
         }
@@ -2404,6 +2501,7 @@ impl<'s> Lowerer<'s> {
             Base::State => Some(vec::Owner::State),
             Base::Params => Some(vec::Owner::Params),
             Base::Ctx => Some(vec::Owner::Ctx),
+            Base::Cell => Some(vec::Owner::Cell),
             _ => None,
         };
         if let Some(owner) = owner {
@@ -2457,6 +2555,19 @@ impl<'s> Lowerer<'s> {
                         }
                         Ok(mk(ExprKind::Param(name.to_string()), span))
                     }
+                    // A simulation colouring's sample (P4): its one number;
+                    // the vectors are `named_vector`'s.
+                    Base::Cell => match name {
+                        "dist" => Ok(mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(12), span)], user: false }, span)),
+                        o => self.err(*p, format!("a cell has `state`, `gx`, `gy` (vectors of four: read a part), `dist`, `tensor` and `relief` (vectors of three); not `{o}`")),
+                    },
+                    // A simulation colouring's (P4): the cell, the grid's
+                    // size.
+                    Base::Ctx if self.sim_coloring => match name {
+                        "cell" => Ok(mk(ExprKind::Predef("pixel".into()), span)),
+                        "width" | "height" => Ok(mk(ExprKind::Predef(name.into()), span)),
+                        o => self.err(*p, format!("a simulation colouring's context has `cell`, `width` and `height`; not `{o}`")),
+                    },
                     // An effect's (P2): the pixel's position, the image's
                     // size and density.
                     Base::Ctx if self.effect => match name {
@@ -2555,6 +2666,9 @@ impl<'s> Lowerer<'s> {
             if !f.args.is_empty() {
                 return self.err(p, "`rand()` takes no argument: a draw in [0, 1)");
             }
+            if self.sim_coloring {
+                return self.err(p, "a simulation colouring has no `rand()`: a picture is the same every frame -- hash the cell and a seed parameter");
+            }
             if self.effect {
                 return self.err(p, "an effect has no `rand()`: a picture is the same every frame -- hash the pixel's position and a seed parameter");
             }
@@ -2600,7 +2714,7 @@ impl<'s> Lowerer<'s> {
         }
         // Numbers of vectors (`dot`, `length`), and the functions that came
         // with them (`min`, `max`, `clamp` of numbers) (B1).
-        if matches!(name, "vec3" | "quat" | "rgba" | "input" | "input_at" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
+        if matches!(name, "vec3" | "quat" | "rgba" | "input" | "input_at" | "palette" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
             || f.args.iter().any(|a| self.is_vec(a, scope))
         {
             let mut vals: Vec<Val> = args.drain(..).map(Val::S).collect();
@@ -2957,6 +3071,8 @@ enum Base {
     /// An inlined variation's parameters, or its context.
     Map(HashMap<String, ast::Expr>, &'static str),
     Ctx,
+    /// A simulation colouring's sample (P4).
+    Cell,
     Value(ast::Expr),
 }
 
