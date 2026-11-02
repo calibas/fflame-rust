@@ -862,6 +862,10 @@ impl App {
                 true,
             );
         }
+        let failed_plugins = crate::storage::library::plugin_failures();
+        if !failed_plugins.is_empty() {
+            egui_layer.show_api_notification(&format!("Plug-ins that did not load: {}", failed_plugins.join("; ")), true);
+        }
 
         // Use global preset library singleton
         let preset_library = global_preset_library();

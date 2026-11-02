@@ -733,11 +733,63 @@ impl FormulaEditorPanel {
             Ok(file) => {
                 self.saved = self.text.clone();
                 self.status = Some(t!("formula_editor.saved", file = file).to_string());
+                // A plug-in's lists offer what was saved: its new version.
+                if formula_store::link_of(&file).is_some_and(|l| l.plugin) {
+                    if let Err(e) = crate::storage::library::register_plugin(&file, &self.text) {
+                        self.status = Some(t!("formula_editor.plugin_failed", file = file, error = e).to_string());
+                    }
+                }
                 self.name = file.clone();
                 self.file = Some(file);
                 self.files = formula_store::list();
             }
             Err(e) => self.status = Some(e),
+        }
+    }
+
+    /// Whether the open text could be a plug-in: a Rhai variation,
+    /// effect, formula, colouring or solid (P3).
+    fn could_be_plugin(&self) -> bool {
+        self.dialect == CustomDialect::Rhai && lang::rhai::kind_of(&self.text).is_some()
+    }
+
+    /// Make a stored file a plug-in, registered at every start (P3), or
+    /// stop. It is saved first: what loads at start is the file. One
+    /// that needs an id of its own (a variation without a name, an
+    /// effect) gets one, written into the file.
+    fn set_plugin(&mut self, file: &str, on: bool) {
+        let mut link = formula_store::link_of(file).unwrap_or_default();
+        if !on {
+            link.plugin = false;
+            crate::storage::library::unlist_plugin(file);
+            self.status = Some(match formula_store::set_link(file, link) {
+                Ok(()) => t!("formula_editor.plugin_off", file = file).to_string(),
+                Err(e) => e,
+            });
+            return;
+        }
+        if self.text != self.saved {
+            self.status = Some(t!("formula_editor.plugin_save_first").to_string());
+            return;
+        }
+        let needs_id = match lang::rhai::kind_of(&self.text) {
+            Some(EntryKind::Transform) => crate::variations::custom::needs_id(&self.text),
+            Some(EntryKind::Effect) => !lang::rhai::info_string(&self.text, "id").is_some_and(|id| crate::scripted::is_uuid(&id)),
+            _ => false,
+        };
+        if needs_id {
+            self.text = lang::rhai::with_own_id(&self.text, &crate::scripted::mint_id());
+            self.save();
+        }
+        match crate::storage::library::register_plugin(file, &self.text) {
+            Ok(p) => {
+                link.plugin = true;
+                self.status = Some(match formula_store::set_link(file, link) {
+                    Ok(()) => t!("formula_editor.plugin_on", title = p.title).to_string(),
+                    Err(e) => e,
+                });
+            }
+            Err(e) => self.status = Some(t!("formula_editor.plugin_failed", file = file, error = e).to_string()),
         }
     }
 
@@ -767,8 +819,11 @@ impl FormulaEditorPanel {
                 .selected_text(current)
                 .width(180.0)
                 .show_ui(ui, |ui| {
+                    let links = formula_store::links();
                     for f in &self.files {
-                        if ui.selectable_label(self.file.as_deref() == Some(f.as_str()), f).clicked() {
+                        // A plug-in, marked: it loads at every start.
+                        let label = if links.get(f).is_some_and(|l| l.plugin) { t!("formula_editor.plugin_mark", file = f).to_string() } else { f.clone() };
+                        if ui.selectable_label(self.file.as_deref() == Some(f.as_str()), label).clicked() {
                             open = Some(f.clone());
                         }
                     }
@@ -801,12 +856,21 @@ impl FormulaEditorPanel {
             }
             if let Some(file) = self.file.clone() {
                 if ui.button(t!("formula_editor.delete")).clicked() {
+                    crate::storage::library::unlist_plugin(&file);
                     self.status = Some(match formula_store::delete(&file) {
                         Ok(()) => t!("formula_editor.deleted", file = file).to_string(),
                         Err(e) => e,
                     });
                     self.files = formula_store::list();
                     self.file = None;
+                }
+                // A plug-in: registered at every start, so it is in the
+                // lists without a config carrying it (P3).
+                if self.could_be_plugin() {
+                    let mut on = formula_store::link_of(&file).is_some_and(|l| l.plugin);
+                    if ui.checkbox(&mut on, t!("formula_editor.plugin")).on_hover_text(t!("formula_editor.plugin_tip")).changed() {
+                        self.set_plugin(&file, on);
+                    }
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]

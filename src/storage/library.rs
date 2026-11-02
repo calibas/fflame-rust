@@ -197,6 +197,157 @@ fn formula_entry(file: &str, source: &str, origin: Origin, link: Link) -> Entry 
     e
 }
 
+// ============================================================================
+// Plug-ins (P3, step 2)
+// ============================================================================
+
+/// A plug-in as registered: a GPU Rhai entry of the formula store with
+/// its link's `plugin` set, which every start registers
+/// ([`load_plugins`]) so the lists offer it without a config carrying it.
+#[derive(Debug, Clone)]
+pub struct Plugin {
+    pub kind: Kind,
+    /// Its file in the formula store.
+    pub file: String,
+    pub title: String,
+    /// What it registered as, which a config names: a variation's or an
+    /// effect's key, an escape slot's name.
+    pub key: String,
+    /// Its source as a config carries it, under `key`: choosing it from a
+    /// list puts this in the config, as the Formula Editor's Use does.
+    pub carried: crate::config::escape::CustomSource,
+}
+
+fn registered() -> &'static std::sync::RwLock<Vec<Plugin>> {
+    static P: std::sync::OnceLock<std::sync::RwLock<Vec<Plugin>>> = std::sync::OnceLock::new();
+    P.get_or_init(Default::default)
+}
+
+/// The plug-ins registered, in the order they loaded.
+pub fn plugins() -> Vec<Plugin> {
+    registered().read().map(|p| p.clone()).unwrap_or_default()
+}
+
+/// The plug-ins of a kind.
+pub fn plugins_of(kind: Kind) -> Vec<Plugin> {
+    plugins().into_iter().filter(|p| p.kind == kind).collect()
+}
+
+/// Register every plug-in of the formula store: what each start does
+/// where the downloads register (`storage::load_installed_resources`), on
+/// every platform and entry point. Gives what did not register, each with
+/// why, which is also logged.
+pub fn load_plugins() -> Vec<String> {
+    let mut failed = Vec::new();
+    if let Ok(mut f) = failures().write() {
+        f.clear();
+    }
+    for (file, link) in crate::storage::formula_store::links() {
+        if !link.plugin {
+            continue;
+        }
+        let Some(source) = crate::storage::formula_store::load(&file) else {
+            failed.push(format!("{file}: not in your formulas"));
+            continue;
+        };
+        if let Err(e) = register_plugin(&file, &source) {
+            log::warn!("The plug-in `{file}` did not register: {e}");
+            failed.push(format!("{file}: {e}"));
+        }
+    }
+    if let Ok(mut f) = failures().write() {
+        f.clone_from(&failed);
+    }
+    failed
+}
+
+fn failures() -> &'static std::sync::RwLock<Vec<String>> {
+    static F: std::sync::OnceLock<std::sync::RwLock<Vec<String>>> = std::sync::OnceLock::new();
+    F.get_or_init(Default::default)
+}
+
+/// The plug-ins the last [`load_plugins`] could not register, each with
+/// why: what the app's start reports, as a plug-in that fails silently is
+/// a list missing an entry for no reason anyone can see.
+pub fn plugin_failures() -> Vec<String> {
+    failures().read().map(|f| f.clone()).unwrap_or_default()
+}
+
+/// Register one formula store file as a plug-in, replacing what it
+/// registered before (an edit is a new version: a new key). A variation
+/// or an effect registers in its registry under its key (`Provenance::
+/// Custom`, the user's namespace); a formula, colouring or solid in the
+/// escape engine's under its slot name.
+pub fn register_plugin(file: &str, source: &str) -> Result<Plugin, String> {
+    let entry = formula_entry(file, source, Origin::Yours, Link::default());
+    if !entry.kind.can_be_plugin() {
+        return Err("a plug-in is a Rhai variation, effect, formula, colouring or solid".to_string());
+    }
+    let (key, carried) = register_kind(entry.kind, &entry.title, source)?;
+    let plugin = Plugin { kind: entry.kind, file: file.to_string(), title: entry.title, key, carried };
+    if let Ok(mut all) = registered().write() {
+        all.retain(|p| p.file != file);
+        all.push(plugin.clone());
+    }
+    Ok(plugin)
+}
+
+/// Stop offering a file's plug-in. What it registered stays registered
+/// until the app restarts -- a config may already be using it -- but the
+/// lists no longer offer it.
+pub fn unlist_plugin(file: &str) {
+    if let Ok(mut all) = registered().write() {
+        all.retain(|p| p.file != file);
+    }
+}
+
+#[cfg(not(feature = "lang"))]
+fn register_kind(_kind: Kind, _title: &str, _source: &str) -> Result<(String, crate::config::escape::CustomSource), String> {
+    Err("this build has no compiler for Rhai".to_string())
+}
+
+#[cfg(feature = "lang")]
+fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate::config::escape::CustomSource), String> {
+    match kind {
+        Kind::Variation => {
+            let key = crate::variations::custom::register(source)?;
+            let mut carried = crate::variations::custom::carried(source).ok_or("it does not name itself")?;
+            carried.entry = key.clone();
+            Ok((key, carried))
+        }
+        Kind::Effect => {
+            let key = crate::effects::custom::register(source, crate::provenance::Provenance::Custom)?;
+            let mut carried = crate::effects::custom::carried(source).ok_or("it has no id")?;
+            carried.entry = key.clone();
+            Ok((key, carried))
+        }
+        #[cfg(feature = "engine-escape")]
+        Kind::Formula | Kind::Coloring | Kind::Solid => {
+            use crate::config::escape::{CustomDialect, CustomSource};
+            use crate::escape::custom;
+            use crate::lang::EntryKind;
+            let ek = match kind {
+                Kind::Formula => EntryKind::Formula,
+                Kind::Coloring => EntryKind::Coloring,
+                _ => EntryKind::Solid,
+            };
+            let src = custom::with_called_variations(ek, CustomSource { dialect: CustomDialect::Rhai, entry: title.to_string(), source: source.to_string(), variations: Vec::new() });
+            let name = custom::name_of(ek, &src);
+            let compiled = match ek {
+                EntryKind::Formula => custom::compile_formula(&src, &name).map(|_| ()),
+                EntryKind::Coloring => custom::compile_coloring(&src, &name).map(|_| ()),
+                _ => custom::compile_solid(&src, &name).map(|_| ()),
+            };
+            compiled.map_err(|d| d.first().map(|x| x.render(source)).unwrap_or_else(|| "it does not compile".to_string()))?;
+            Ok((name, src))
+        }
+        _ => {
+            let _ = title;
+            Err("this build has no escape-time engine".to_string())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +371,74 @@ mod tests {
             assert_eq!(vignette.version.len(), 8);
             assert!(shipped.iter().any(|e| e.kind == Kind::Formula), "the formula examples");
         }
+    }
+
+    /// A formula store file's link: set, read back, cleared by deleting the
+    /// file, so a name reused later inherits nothing. Against the real
+    /// store, as the script store's tests are, and cleaned up.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_formula_files_link_goes_with_it() {
+        use crate::storage::formula_store as store;
+        let file = store::save("__library link test__.rhai", "fn variation(z, p) { z }\n").expect("save");
+        store::set_link(&file, Link { plugin: true, ..Default::default() }).expect("link");
+        assert!(store::link_of(&file).is_some_and(|l| l.plugin));
+        assert!(scan().iter().any(|e| e.file == file && e.origin == Origin::Yours && e.link.plugin), "the scan reads it");
+        store::delete(&file).expect("delete");
+        assert!(store::link_of(&file).is_none(), "deleting the file forgets its link");
+        // An empty link is no entry at all.
+        let file = store::save("__library link test__.rhai", "x").expect("save");
+        store::set_link(&file, Link::default()).expect("link");
+        assert!(!store::links().contains_key(&file));
+        store::delete(&file).expect("delete");
+    }
+
+    /// An effect plug-in registers under its key, its source carried
+    /// under it, and is offered as one; a file of no plug-in's kind is
+    /// refused; unlisting stops the offer.
+    #[cfg(feature = "lang")]
+    #[test]
+    fn an_effect_plugin_registers_and_is_offered() {
+        let src = "const INFO = #{ title: \"Tint test\", id: \"1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a\" };\nfn effect(c, p) { c }\n";
+        let p = register_plugin("__tint test__.rhai", src).expect("registers");
+        assert_eq!(p.kind, Kind::Effect);
+        assert!(crate::effects::global_effect_registry().get(&p.key).is_some_and(|i| i.provenance == crate::provenance::Provenance::Custom));
+        assert_eq!(p.carried.entry, p.key);
+        assert!(plugins_of(Kind::Effect).iter().any(|q| q.file == p.file));
+        unlist_plugin(&p.file);
+        assert!(!plugins_of(Kind::Effect).iter().any(|q| q.file == p.file));
+        crate::effects::global_effect_registry_mut().remove_by_name(&p.key);
+        assert!(register_plugin("__lib__.rhai", "script(\"x\", \"generator\");\n").is_err());
+    }
+
+    /// A formula and a colouring plug-in register in the escape engine's
+    /// registry under their slot names, which a config names.
+    #[cfg(feature = "engine-escape")]
+    #[test]
+    fn an_escape_plugin_registers_in_its_slot() {
+        let formula = "const INFO = #{ title: \"Plug test\" };\nfn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                       fn step(s, p) { s.z = s.z * s.z + s.c; s }\nfn escaped(s, p) { s.z.norm_sqr() > 4.0 }\n";
+        let p = register_plugin("__plug test__.rhai", formula).expect("registers");
+        assert_eq!((p.kind, p.title.as_str()), (Kind::Formula, "Plug test"));
+        assert!(p.key.starts_with(crate::escape::custom::PREFIX));
+        assert!(crate::escape::custom::formula(&p.key).is_some(), "registered under its slot name");
+        assert_eq!(p.carried.source, formula);
+        unlist_plugin(&p.file);
+    }
+
+    /// A variation plug-in registers under its key. Writes the global
+    /// variation registry: run alone (VARIATIONS.md, Testing).
+    #[cfg(feature = "lang")]
+    #[test]
+    #[ignore = "writes the global variation registry: run alone"]
+    fn a_variation_plugin_registers_under_its_key() {
+        let src = "const INFO = #{ title: \"Plug var\", name: \"rhai_plug_test\" };\nfn variation(z, p) { z * 0.5 }\n";
+        let p = register_plugin("__plug var__.rhai", src).expect("registers");
+        assert_eq!(p.kind, Kind::Variation);
+        assert!(crate::scripted::is_key(&p.key));
+        assert!(crate::variations::global_registry().has(&p.key));
+        unlist_plugin(&p.file);
+        crate::variations::global_registry_mut().remove_by_name(&p.key);
     }
 
     /// `INFO.description` and `INFO.author` reach the entry, a
