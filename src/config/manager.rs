@@ -1980,6 +1980,7 @@ impl ConfigManager {
             ConfigPath::SimModel => Ok(ConfigValue::String(config.sim.model.clone())),
             ConfigPath::SimColoring => Ok(ConfigValue::String(config.sim.coloring.clone())),
             ConfigPath::SimCustomColoring => Ok(ConfigValue::String(custom_source_json(&config.sim.custom_coloring))),
+            ConfigPath::SimCustomModel => Ok(ConfigValue::String(custom_source_json(&config.sim.custom_model))),
             ConfigPath::SimGridMode => Ok(ConfigValue::String(
                 match config.sim.grid {
                     crate::config::sim::SimGrid::Fixed { .. } => "fixed",
@@ -3294,7 +3295,13 @@ impl ConfigManager {
             // nothing while looking like it worked.
             ConfigPath::SimModel => {
                 let name = String::try_from(value)?;
-                if name != self.current.sim.model {
+                // A new version of the same Rhai model (P4: its id in both
+                // names) keeps what was set for it: each edit Used is a new
+                // version, and Live would otherwise reset the parameters,
+                // dt and steps at every keystroke.
+                let id = |n: &str| n.strip_prefix("custom-").and_then(crate::scripted::key_id);
+                let same_script = id(&name).is_some() && id(&name) == id(&self.current.sim.model);
+                if name != self.current.sim.model && !same_script {
                     // Parameters belong to the model that declared them,
                     // and dt/steps are per-model working values --
                     // Gray-Scott runs at dt 1.0 where Schnakenberg
@@ -3316,6 +3323,10 @@ impl ConfigManager {
             ConfigPath::SimCustomColoring => {
                 let s: String = value.try_into()?;
                 self.current.sim.custom_coloring = custom_source_from_json(&s)?;
+            }
+            ConfigPath::SimCustomModel => {
+                let s: String = value.try_into()?;
+                self.current.sim.custom_model = custom_source_from_json(&s)?;
             }
             ConfigPath::SimGridMode => {
                 let mode = String::try_from(value)?;

@@ -1295,6 +1295,12 @@ pub fn is_slow_param(model: &str, param: &str) -> bool {
 }
 
 pub fn model_or_default(name: &str) -> &'static ModelDef {
+    // One written in Rhai, registered from the config that carries it
+    // (P4).
+    #[cfg(feature = "lang")]
+    if let Some(def) = custom::model(name) {
+        return def;
+    }
     MODELS.iter().copied().find(|m| m.name == name).unwrap_or_else(|| {
         log::warn!("unknown simulation model {name:?}; using {:?}", MODELS[0].name);
         MODELS[0]

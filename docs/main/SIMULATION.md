@@ -701,8 +701,9 @@ to the `sim_color` the colour template calls.
   finds it, so every path that resolves a colouring does.
 - **Carried**: `SimConfig::custom_coloring` (`ConfigPath::
   SimCustomColoring`), with `coloring` naming it; `sim::custom::ensure`
-  registers it where a render starts (`SimRenderer::render_frame`,
-  `render_still`, the render path's resource check, the panel). The
+  registers it before anything resolves the name (every `SimRenderer`
+  entry point that takes a config, the render path's resource check, the
+  panel). The
   Formula Editor's **Use as Simulation Colouring** puts it in the config,
   entering Simulation in the same step, and Live follows it by its id; a
   plug-in one is in the panel's colouring picker under "Your plug-ins".
@@ -710,6 +711,48 @@ to the `sim_color` the colour template calls.
 - **Twins**: `sim::custom::SHIPPED`, Channel's (`assets/sim/channel.rhai`),
   held to the built-in within 1e-5 at four settings
   (`the_rhai_channel_colours_as_the_built_in`).
+
+## Models written in Rhai
+
+A model may be a Rhai script too ([rhai-plugins.md](../projects/rhai-plugins.md),
+P4 step 2): the single-layer class, `EntryKind::SimModel`, each function
+compiled by the formula language to the WGSL the step and seed templates
+call.
+
+- **The step**: `fn cell_step(cell, p, ctx)` gives the cell's next state,
+  a `vec4`; `cell_step2` ... `cell_step4` are further passes, in order,
+  each reading what the one before wrote (`ModelDef::passes`). `cell` is
+  the state (`.x` ... `.w`); `read(dx, dy)` a neighbour's, the offset in
+  whole cells through the config's boundary; `p` its `PARAMS`; `ctx.dt`,
+  `ctx.step` (the step index), `ctx.cell`, `ctx.width`, `ctx.height`.
+  `rand()` draws in [0, 1), keyed by the run's seed, the cell, the step
+  and the call site (`sim_rand`), so a run replays; a model that draws has
+  `ModelFeature::NeedsRng`.
+- **The seed**: `fn cell_seed(inside, noise, p, ctx)` gives a cell's
+  first state from the init shape (`inside`, 0 or 1) and a draw
+  (`noise`); no `rand()`. Without one, the shape in `.x`.
+- **INFO**: `dt` (the default time step), `max_dt` (the stable bound;
+  `dt` when absent), `steps` (the default run, 1000 when absent),
+  `diffusion` (the parameters that are diffusion rates on the Sims
+  stencil, by name: the cap on `dt` follows them, `max_dt_for`), `state`
+  (`"discrete"` for a cellular automaton's whole numbers). `kernel`,
+  `agents`, `memory`, `pyramid`, `repeat`, `measure` and `presets` are
+  refused with a reason: kernel tables, memory, the pyramid, agents,
+  repeated or measured passes and presets stay the built-in models'.
+- **Registered and carried** as a colouring is: a leaked `ModelDef` under
+  `custom-` and its key, found by `model_or_default`;
+  `SimConfig::custom_model` (`ConfigPath::SimCustomModel`) with `model`
+  naming it, ensured with the colouring. A new version of the model in
+  use keeps its parameters, `dt` and `steps` (the config's `SimModel`
+  rule compares the names' ids). The Formula Editor's **Use as Simulation
+  Model**, Live, and a plug-in group in the panel's model picker; the
+  single layer only (a layered config's layers name built-ins).
+- **Twins**: `sim::custom::SHIPPED_MODELS`, Gray-Scott's
+  (`assets/sim/gray_scott.rhai`): its field held to the built-in's within
+  1e-5 over 600 steps at two settings
+  (`the_rhai_gray_scott_steps_as_the_built_in`), and as fast
+  (`the_rhai_models_are_no_slower`, ignored: it times the GPU; median
+  ratio 0.98 on a GTX 1660 SUPER at 1024x1024).
 
 ## Adding a model
 

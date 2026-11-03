@@ -1566,6 +1566,8 @@ fn render_model_section(
     };
     let layered = !sim.layers.is_empty();
     let count = sim.layer_count();
+    // A model the config carries (P4), registered before its name is read.
+    crate::sim::custom::ensure(sim);
 
     for i in 0..count {
         let slot = if layered { LayerSlot::At(i) } else { LayerSlot::Flat };
@@ -1605,6 +1607,22 @@ fn render_model_section(
                                 }
                             }
                             let _ = super::render_mode::choose(config_manager, changes, "history.action.sim_model", RenderMode::Simulation);
+                        }
+                    }
+                    // The user's plug-in models (P3, P4): the single
+                    // layer's, their source carried as Use carries it.
+                    if slot == LayerSlot::Flat {
+                        let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::SimModel);
+                        if !plugins.is_empty() {
+                            ui.separator();
+                            ui.weak(t!("sim_panel.plugins"));
+                        }
+                        for p in plugins {
+                            if ui.selectable_label(model.name == p.key, &p.title).on_hover_text(t!("sim_panel.plugin_tip", file = p.file)).clicked() && model.name != p.key {
+                                let source = crate::config::manager::custom_source_json(&Some(p.carried.clone()));
+                                let changes = vec![(ConfigPath::SimCustomModel, source.into()), (ConfigPath::SimModel, p.key.clone().into())];
+                                let _ = super::render_mode::choose(config_manager, changes, "history.action.use_sim_model", RenderMode::Simulation);
+                            }
                         }
                     }
                 });

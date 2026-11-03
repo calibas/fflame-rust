@@ -652,7 +652,7 @@ impl BigMachine {
             F32 => self.c(z.re.to_f64() as f32 as f64, z.im.to_f64() as f32 as f64),
             // An effect's image, and the noise functions: never in a
             // reference orbit.
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | Fract | Hash2 => return Err(Stop),
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | Fract | Hash2 => return Err(Stop),
             Sin => {
                 let (s, c) = z.re.sin_cos();
                 let (ch, sh) = self.cosh_sinh(&z.im)?;

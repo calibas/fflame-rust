@@ -142,6 +142,37 @@ pub fn effect(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Effect)
 }
 
+/// Which function of a simulation model a lowering takes (P4): its seed,
+/// or pass `n` of its step (0 for `cell_step`, 1 for `cell_step2` ...).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SimFn {
+    Seed,
+    Step(u8),
+}
+
+impl SimFn {
+    /// The Rhai function it lowers.
+    pub fn function(self) -> String {
+        match self {
+            SimFn::Seed => "cell_seed".to_string(),
+            SimFn::Step(0) => "cell_step".to_string(),
+            SimFn::Step(n) => format!("cell_step{}", n + 1),
+        }
+    }
+}
+
+/// A simulation model's function (P4): its seed, or a pass of its step.
+pub fn sim_model(source: &str, f: SimFn) -> Result<Program, Vec<Diag>> {
+    let lowered = lower_full(source, EntryKind::SimModel, &[], false, f)?;
+    checked(lowered, EntryKind::SimModel)
+}
+
+/// How many passes a model's step has: `cell_step`, and each of
+/// `cell_step2` ... `cell_step4` it defines in a row.
+pub fn sim_model_passes(source: &str) -> u8 {
+    (1..4).take_while(|n| has_function(source, &SimFn::Step(*n).function())).count() as u8 + 1
+}
+
 /// A simulation's colouring (P4): `fn cell_color(cell, p, ctx)`, per
 /// sample of the field.
 pub fn sim_coloring(source: &str) -> Result<Program, Vec<Diag>> {
@@ -173,6 +204,21 @@ pub fn info_string(source: &str, key: &str) -> Option<String> {
         Expr::StringConstant(s, _) => Some(s.to_string()),
         _ => None,
     })
+}
+
+/// A list of strings in a script's `INFO` (a simulation model's
+/// `diffusion`); empty when it has none.
+pub fn info_strings(source: &str, key: &str) -> Vec<String> {
+    info_field(source, key, |v| match v {
+        Expr::Array(items, _) => Some(items.iter().filter_map(|i| if let Expr::StringConstant(s, _) = i { Some(s.to_string()) } else { None }).collect()),
+        _ => None,
+    })
+    .unwrap_or_default()
+}
+
+/// Whether the script's `INFO` has `key`, whatever its value.
+pub fn info_has(source: &str, key: &str) -> bool {
+    info_field(source, key, |_| Some(())).is_some()
 }
 
 /// A label as written (design rule 8): a string, every language's, or a
@@ -359,7 +405,7 @@ fn info_field<T>(source: &str, key: &str, read: impl Fn(&Expr) -> Option<T>) -> 
 /// variation3(v, p[, ctx])`, the KIFS plan, B2): its point a vector, read
 /// from and written to `#pixel` and `#pixelz`.
 pub fn transformation3(source: &str) -> Result<Program, Vec<Diag>> {
-    let lowered = lower_full(source, EntryKind::Transform, &[], true)?;
+    let lowered = lower_full(source, EntryKind::Transform, &[], true, SimFn::Step(0))?;
     checked(lowered, EntryKind::Transform)
 }
 
@@ -468,6 +514,8 @@ pub fn kind_of(source: &str) -> Option<EntryKind> {
         Some(EntryKind::Effect)
     } else if has("cell_color") {
         Some(EntryKind::SimColoring)
+    } else if has("cell_step") {
+        Some(EntryKind::SimModel)
     } else if has("variation") || has("variation3") {
         Some(EntryKind::Transform)
     } else if has("distance") {
@@ -537,11 +585,12 @@ pub fn lower_as(source: &str, kind: EntryKind) -> Result<Lowered, Vec<Diag>> {
 /// [`lower_as`], with functions besides the source's own to call as
 /// helpers (a script's, `program_from_fn`).
 fn lower_with(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)]) -> Result<Lowered, Vec<Diag>> {
-    lower_full(source, kind, extra, false)
+    lower_full(source, kind, extra, false, SimFn::Step(0))
 }
 
-/// [`lower_with`]; `three` lowers a transformation's 3D function.
-fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], three: bool) -> Result<Lowered, Vec<Diag>> {
+/// [`lower_with`]; `three` lowers a transformation's 3D function, `sim_fn`
+/// which of a simulation model's.
+fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], three: bool, sim_fn: SimFn) -> Result<Lowered, Vec<Diag>> {
     let (ast, pos) = parse(source)?;
     let mut l = Lowerer {
         coloring: kind == EntryKind::Coloring,
@@ -565,6 +614,8 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         solid: kind == EntryKind::Solid,
         effect: kind == EntryKind::Effect,
         sim_coloring: kind == EntryKind::SimColoring,
+        sim_model: kind == EntryKind::SimModel,
+        sim_fn,
         probe: std::cell::Cell::new(0),
     };
     for (name, def) in extra {
@@ -756,6 +807,9 @@ struct Lowerer<'s> {
     /// Lowering a simulation's colouring (P4): `fn cell_color`, its reads
     /// of the sample.
     sim_coloring: bool,
+    /// Lowering a simulation's model (P4), and which of its functions.
+    sim_model: bool,
+    sim_fn: SimFn,
     /// How deep [`Lowerer::is_vec`] has looked into helpers, against a
     /// helper that calls itself.
     probe: std::cell::Cell<usize>,
@@ -849,6 +903,8 @@ impl<'s> Lowerer<'s> {
             "an effect"
         } else if self.sim_coloring {
             "a simulation colouring"
+        } else if self.sim_model {
+            "a simulation model"
         } else if kind == EntryKind::Solid {
             "a solid"
         } else {
@@ -889,6 +945,8 @@ impl<'s> Lowerer<'s> {
             "Effect"
         } else if self.sim_coloring {
             "Colouring"
+        } else if self.sim_model {
+            "Model"
         } else if kind == EntryKind::Solid {
             "Solid"
         } else {
@@ -943,6 +1001,23 @@ impl<'s> Lowerer<'s> {
                 },
                 o if self.effect => return self.err(*p, format!("an effect's `INFO` has `title`, `id`, `description`, `author` and `category`, not `{o}`")),
                 o if self.sim_coloring => return self.err(*p, format!("a simulation colouring's `INFO` has `title`, `id`, `description` and `author`, not `{o}`")),
+                // A model's working values (`sim::custom` reads them apart):
+                // its dt and the largest it is stable at, a still's step
+                // count, its diffusion rates' parameter names, how a live
+                // field moves into another grid.
+                "dt" | "max_dt" | "steps" if self.sim_model => match v {
+                    Expr::FloatConstant(..) | Expr::IntegerConstant(..) => {}
+                    _ => return self.err(*p, format!("`{name}` is a number")),
+                },
+                "diffusion" if self.sim_model => match v {
+                    Expr::Array(items, _) if items.iter().all(|i| matches!(i, Expr::StringConstant(..))) => {}
+                    _ => return self.err(*p, "`diffusion` is a list of the parameters that are diffusion rates, `[\"diffusion_a\"]`"),
+                },
+                "state" if self.sim_model => match v {
+                    Expr::StringConstant(s, _) if matches!(s.as_str(), "continuous" | "discrete") => {}
+                    _ => return self.err(*p, "`state` is \"continuous\" (interpolated into a new grid) or \"discrete\" (the nearest cell)"),
+                },
+                o if self.sim_model => return self.err(*p, format!("a simulation model's `INFO` has `title`, `id`, `description`, `author`, `dt`, `max_dt`, `steps`, `diffusion` and `state`, not `{o}`")),
                 // A solid's ball: the set lies within this radius
                 // (`info_number`, read apart).
                 "radius" if kind == EntryKind::Solid => match v {
@@ -1003,6 +1078,10 @@ impl<'s> Lowerer<'s> {
             let f = &self.fns["prepare"];
             return self.err(f.body.position(), "a simulation colouring has no `prepare`: its values are computed in `cell_color`");
         }
+        if self.sim_model && self.fns.contains_key("prepare") {
+            let f = &self.fns["prepare"];
+            return self.err(f.body.position(), "a simulation model has no `prepare`: its values are computed in `cell_step`");
+        }
         // prepare: once per image, its map's fields read as `p.name`.
         if let Some(prep) = self.fns.get("prepare").cloned() {
             let mut scope = Scope::new(Fn3::Prepare, Vec::new());
@@ -1039,6 +1118,7 @@ impl<'s> Lowerer<'s> {
             EntryKind::Solid => sections.extend(self.solid_sections(span)?),
             EntryKind::Effect => sections.push(self.effect_section(span)?),
             EntryKind::SimColoring => sections.push(self.sim_coloring_section(span)?),
+            EntryKind::SimModel => sections.push(self.sim_model_section(span)?),
         }
         default.items.push(Setting { name: "title".into(), value: SettingValue::Strings(vec![title.clone()]), span });
         let setting = region.filter(|r| r != "both");
@@ -1256,6 +1336,68 @@ impl<'s> Lowerer<'s> {
         self.flush(&mut body);
         let put = |name: &str, value: ast::Expr| assign(mk(ExprKind::Predef(name.into()), at), value, at);
         for (name, part) in ["effect_r", "effect_g", "effect_b", "effect_a"].into_iter().zip(parts) {
+            body.push(put(name, part));
+        }
+        Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
+    }
+
+    /// A simulation model's function as its section (P4), the one
+    /// `sim_fn` names. A step pass, `cell_step(cell[, p[, ctx]])`: `cell`
+    /// the cell's state (a vector of four), its neighbours `read(dx, dy)`,
+    /// `ctx.dt`, `ctx.step`, the cell and the grid; its last value the next
+    /// state, a vector of four. The seed, `cell_seed(inside, noise[, p[,
+    /// ctx]])`: whether the init shape covers the cell (1 or 0) and a
+    /// uniform draw in [0, 1) from the config's seed; its last value the
+    /// first state.
+    fn sim_model_section(&mut self, span: Span) -> R<Section> {
+        let name = self.sim_fn.function();
+        let Some(f) = self.fns.get(&name).cloned() else {
+            return self.err(Position::NONE, format!("a simulation model has `fn {name}`"));
+        };
+        let mut scope = Scope::new(Fn3::Effect, Vec::new());
+        let host = |i: i64| mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(i), span)], user: false }, span);
+        let rest = match self.sim_fn {
+            SimFn::Seed => {
+                if f.params.len() < 2 || f.params.len() > 4 {
+                    return self.err(f.body.position(), "`cell_seed(inside, noise)`, `cell_seed(inside, noise, p)` or `cell_seed(inside, noise, p, ctx)`");
+                }
+                scope.bind(&f.params[0], Binding::Value(host(19)));
+                scope.bind(&f.params[1], Binding::Value(host(20)));
+                2
+            }
+            SimFn::Step(_) => {
+                if f.params.is_empty() || f.params.len() > 3 {
+                    return self.err(f.body.position(), format!("`{name}(cell)`, `{name}(cell, p)` or `{name}(cell, p, ctx)`"));
+                }
+                let state = vec::Vector::new(vec::Kind::Rgba, (0..4).map(host).collect());
+                scope.bind(&f.params[0], Binding::VecValue(Box::new(state)));
+                1
+            }
+        };
+        if let Some(p) = f.params.get(rest) {
+            scope.bind(p, Binding::Params);
+        }
+        if let Some(c) = f.params.get(rest + 1) {
+            scope.bind(c, Binding::Ctx);
+        }
+        let result = format!("`{name}` ends with the state: a vector of four, `vec4(x, y, z, w)`");
+        let stmts = f.body.statements();
+        let Some((last, others)) = stmts.split_last() else { return self.err(f.body.position(), result) };
+        let mut body = Vec::new();
+        for st in others {
+            self.stmt(st, &mut scope, &mut body)?;
+        }
+        let state = match final_value(last) {
+            Some(fv) => self.final_vec(fv, &mut scope)?,
+            None => return self.err(last.position(), result),
+        };
+        if state.kind != vec::Kind::Rgba {
+            return self.err(last.position(), result);
+        }
+        self.flush(&mut body);
+        let at = self.pos.span(last.position());
+        let put = |name: &str, value: ast::Expr| assign(mk(ExprKind::Predef(name.into()), at), value, at);
+        for (name, part) in ["effect_r", "effect_g", "effect_b", "effect_a"].into_iter().zip(state.parts) {
             body.push(put(name, part));
         }
         Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
@@ -2561,6 +2703,15 @@ impl<'s> Lowerer<'s> {
                         "dist" => Ok(mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(12), span)], user: false }, span)),
                         o => self.err(*p, format!("a cell has `state`, `gx`, `gy` (vectors of four: read a part), `dist`, `tensor` and `relief` (vectors of three); not `{o}`")),
                     },
+                    // A simulation model's (P4): its time step and step
+                    // index (host values, `__cell` 21 and 22), the cell, the
+                    // grid's size.
+                    Base::Ctx if self.sim_model => match name {
+                        "dt" | "step" => Ok(mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(if name == "dt" { 21 } else { 22 }), span)], user: false }, span)),
+                        "cell" => Ok(mk(ExprKind::Predef("pixel".into()), span)),
+                        "width" | "height" => Ok(mk(ExprKind::Predef(name.into()), span)),
+                        o => self.err(*p, format!("a simulation model's context has `dt`, `step`, `cell`, `width` and `height`; not `{o}`")),
+                    },
                     // A simulation colouring's (P4): the cell, the grid's
                     // size.
                     Base::Ctx if self.sim_coloring => match name {
@@ -2669,6 +2820,9 @@ impl<'s> Lowerer<'s> {
             if self.sim_coloring {
                 return self.err(p, "a simulation colouring has no `rand()`: a picture is the same every frame -- hash the cell and a seed parameter");
             }
+            if self.sim_model && self.sim_fn == SimFn::Seed {
+                return self.err(p, "a seed draws its randomness as `noise`, its second argument");
+            }
             if self.effect {
                 return self.err(p, "an effect has no `rand()`: a picture is the same every frame -- hash the pixel's position and a seed parameter");
             }
@@ -2714,7 +2868,7 @@ impl<'s> Lowerer<'s> {
         }
         // Numbers of vectors (`dot`, `length`), and the functions that came
         // with them (`min`, `max`, `clamp` of numbers) (B1).
-        if matches!(name, "vec3" | "quat" | "rgba" | "input" | "input_at" | "palette" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
+        if matches!(name, "vec3" | "vec4" | "quat" | "rgba" | "input" | "input_at" | "palette" | "read" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
             || f.args.iter().any(|a| self.is_vec(a, scope))
         {
             let mut vals: Vec<Val> = args.drain(..).map(Val::S).collect();

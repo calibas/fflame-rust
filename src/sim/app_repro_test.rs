@@ -211,10 +211,99 @@ fn the_rhai_channel_colours_as_the_built_in() {
         twin.coloring = carried.entry.clone();
         twin.custom_coloring = Some(carried.clone());
         let (a, b) = (render(&builtin), render(&twin));
+        // Not the default colouring's fallback, which is the built-in.
+        assert_eq!(crate::sim::coloring_or_default(&twin.coloring).name, twin.coloring, "the twin registered");
         assert!(a.iter().any(|p| p[0] > 0.05), "{set:?}: the built-in drew something");
         let worst = a.iter().zip(&b).flat_map(|(x, y)| x.iter().zip(y).map(|(p, q)| (p - q).abs())).fold(0.0f32, f32::max);
         assert!(worst <= 1e-5, "{set:?}: the twin is off by {worst}");
     }
+}
+
+/// A Rhai model runs its built-in twin's field (P4): Gray-Scott's Rhai
+/// source against the built-in, stepped side by side from the same seed,
+/// at its defaults and at another point of the (F, k) plane with a longer
+/// time step, the age channel included.
+#[cfg(feature = "lang")]
+#[test]
+fn the_rhai_gray_scott_steps_as_the_built_in() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let carried = crate::sim::custom::carried(crate::sim::custom::SHIPPED_MODELS[0].1);
+    let settings: [(&[(&str, f32)], f32); 2] = [(&[], 1.0), (&[("feed", 0.03), ("kill", 0.057), ("diffusion_b", 0.45)], 1.2)];
+    let run = |cfg: &SimConfig| {
+        let mut r = SimRenderer::new(&device, cfg, 64, 64);
+        r.seed(&device, &queue, cfg);
+        r.run_steps(&device, &queue, cfg, 600);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.field_texture(), 64, 64)
+    };
+    for (set, dt) in settings {
+        let mut builtin = small_config();
+        builtin.model = "gray_scott".into();
+        builtin.dt = dt;
+        for (k, v) in set {
+            builtin.model_params.insert(k.to_string(), *v);
+        }
+        let mut twin = builtin.clone();
+        twin.model = carried.entry.clone();
+        twin.custom_model = Some(carried.clone());
+        let (a, b) = (run(&builtin), run(&twin));
+        // Not the default model's fallback, which is the built-in.
+        assert_eq!(crate::sim::model_or_default(&twin.model).name, twin.model, "the twin registered");
+        assert!(a.iter().any(|p| p[1] > 0.05) && a.iter().any(|p| p[2] > 0.0), "{set:?}: the built-in's run has B and an age");
+        let worst = a.iter().zip(&b).flat_map(|(x, y)| x.iter().zip(y).map(|(p, q)| (p - q).abs())).fold(0.0f32, f32::max);
+        assert!(worst <= 1e-5, "{set:?}: the twin is off by {worst}");
+    }
+}
+
+/// A Rhai model steps as fast as its built-in twin (P4; the rule that
+/// Rhai compiles to equivalent WGSL): Gray-Scott at 1024x1024, each
+/// round the twin straight after the built-in, the median of the rounds'
+/// ratios, more than 5% slower a failure. Ignored: it times the GPU, so
+/// it wants the machine otherwise idle (the app closed).
+#[cfg(feature = "lang")]
+#[test]
+#[ignore]
+fn the_rhai_models_are_no_slower() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let carried = crate::sim::custom::carried(crate::sim::custom::SHIPPED_MODELS[0].1);
+    let mut builtin = small_config();
+    builtin.model = "gray_scott".into();
+    builtin.grid = SimGrid::Fixed { width: 1024, height: 1024 };
+    let mut twin = builtin.clone();
+    twin.model = carried.entry.clone();
+    twin.custom_model = Some(carried.clone());
+    let wait = || {
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    };
+    let mut renderers = [(&builtin, SimRenderer::new(&device, &builtin, 1024, 1024)), (&twin, SimRenderer::new(&device, &twin, 1024, 1024))];
+    for (cfg, r) in &mut renderers {
+        r.seed(&device, &queue, cfg);
+        r.run_steps(&device, &queue, cfg, 50);
+    }
+    wait();
+    let steps = 1500;
+    let mut ratios = Vec::new();
+    for _ in 0..9 {
+        let mut ms = [0.0f64; 2];
+        for (i, (cfg, r)) in renderers.iter_mut().enumerate() {
+            let start = web_time::Instant::now();
+            r.run_steps(&device, &queue, cfg, steps);
+            wait();
+            ms[i] = start.elapsed().as_secs_f64() * 1e3;
+        }
+        ratios.push(ms[1] / ms[0]);
+        println!("built-in {:8.2} ms   twin {:8.2} ms   ratio {:.3}", ms[0], ms[1], ms[1] / ms[0]);
+    }
+    ratios.sort_by(|a, b| a.total_cmp(b));
+    let ratio = ratios[ratios.len() / 2];
+    println!("gray_scott: median ratio {ratio:.3}");
+    assert!(ratio <= 1.05, "the Rhai twin is {:.1}% slower", (ratio - 1.0) * 100.0);
 }
 
 /// An active run's grid held through a resize (app/sim_lock.rs, D7):

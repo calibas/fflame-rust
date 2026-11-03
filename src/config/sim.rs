@@ -850,6 +850,11 @@ pub struct SimConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_coloring: Option<crate::config::escape::CustomSource>,
 
+    /// A model written in Rhai (P4), carried as the colouring is: `model`
+    /// names it (`custom-...`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_model: Option<crate::config::escape::CustomSource>,
+
     /// Cell count, or how to derive it from the output size.
     #[serde(default, skip_serializing_if = "is_default_grid")]
     pub grid: SimGrid,
@@ -1562,6 +1567,7 @@ impl Default for SimConfig {
             model: default_model(),
             coloring: default_coloring(),
             custom_coloring: None,
+            custom_model: None,
             grid: SimGrid::default(),
             seed: default_seed(),
             init: SimInit::default(),

@@ -573,8 +573,21 @@ library panel of both stores together, if one is wanted -- the scan
    `dt`, the step index, random numbers, a seed function; up to four
    passes. Gray-Scott is the first twin. Kernel tables, couplings,
    memory, the pyramid and agents stay built-in, refused with a reason.
+   **Built 2026-11-02**
+   ([SIMULATION.md](../main/SIMULATION.md#models-written-in-rhai)):
+   `fn cell_step(cell, p, ctx)` to `cell_step4`, `fn cell_seed(inside,
+   noise)`, `EntryKind::SimModel`; `read(dx, dy)` through `__nbr_*`
+   built-ins and `sim_read`; the working values (`dt`, `max_dt`, `steps`,
+   `diffusion`, `state`) from `INFO`, and the built-in-only keys refused
+   with a reason. Gray-Scott's twin steps the built-in's field to 1e-5
+   over 600 steps, at its speed (median ratio 0.98). Each component of a
+   neighbour is its own `sim_read` in the WGSL; the driver merges them
+   (measured on NVIDIA), and a browser's or Metal's compiler is expected
+   to, unmeasured. Presets stay the built-ins'; the single layer only.
 3. **Carried**: custom model and colouring sources on `SimConfig`,
-   ensured like the escape slots.
+   ensured like the escape slots. **Built** with steps 1 and 2:
+   `custom_coloring`, `custom_model`, `sim::custom::ensure` at every
+   `SimRenderer` entry point that takes a config.
 
 ### P5. Animation tracks as scripts
 

@@ -208,6 +208,13 @@ pub enum Builtin {
     PaletteR,
     PaletteG,
     PaletteB,
+    /// A simulation model's read of a neighbour (P4), one channel, at the
+    /// offset `complex(dx, dy)`; the framework's boundary applies. The
+    /// GPU's: 0 on the CPU.
+    NbrX,
+    NbrY,
+    NbrZ,
+    NbrW,
     /// A hash of a point to two numbers in [0, 1): the effects' noise hash,
     /// `fract(sin(vec2(dot(p, (127.1, 311.7)), dot(p, (269.5, 183.3)))) *
     /// 43758.5453)`, emitted as the built-in shaders write it so a twin
@@ -230,6 +237,10 @@ pub const BUILTINS: &[(&str, Builtin)] = &[
     ("__palette_r", Builtin::PaletteR),
     ("__palette_g", Builtin::PaletteG),
     ("__palette_b", Builtin::PaletteB),
+    ("__nbr_x", Builtin::NbrX),
+    ("__nbr_y", Builtin::NbrY),
+    ("__nbr_z", Builtin::NbrZ),
+    ("__nbr_w", Builtin::NbrW),
     ("fract", Builtin::Fract),
     ("hash2", Builtin::Hash2),
     ("sqr", Builtin::Sqr),
@@ -329,7 +340,7 @@ impl Builtin {
         Ok(match self {
             IsInf | IsNan => Ty::Bool,
             Cabs | Real | Imag | Atan2 => Ty::Float,
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB => Ty::Float,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW => Ty::Float,
             Hash2 => Ty::Complex,
             Fract if arg == Ty::Complex => Ty::Complex,
             Fract => Ty::Float,
@@ -408,7 +419,7 @@ impl Builtin {
             Log1p => z.ln1p(),
             F32 => C64::new(z.re as f32 as f64, z.im as f32 as f64),
             // An effect's image is the GPU's.
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB => C64::ZERO,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW => C64::ZERO,
             Fract => C64::new(z.re - z.re.floor(), z.im - z.im.floor()),
             Hash2 => {
                 let h = |x: f64| {
@@ -451,7 +462,7 @@ impl Builtin {
             Expm1 => z.exp(),
             Log1p => one.div(one.add(z)),
             F32 | Fract => one,
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | Hash2 => C64::ZERO,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | Hash2 => C64::ZERO,
             Zero | Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | Cosxx | IsInf
             | IsNan => C64::ZERO,
         }
@@ -499,7 +510,7 @@ impl Builtin {
             Expm1 => x.exp_m1(),
             Log1p => x.ln_1p(),
             F32 => x as f32 as f64,
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB => 0.0,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW => 0.0,
             Fract => x - x.floor(),
             Hash2 => Builtin::Hash2.eval_c(C64::real(x)).re,
             Conj | Flip | Cosxx => unreachable!("complex-valued"),
