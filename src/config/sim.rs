@@ -1658,7 +1658,7 @@ mod tests {
             before.model = m.name.to_string();
             for p in m.parameters {
                 // Something other than the default, so a lost map shows.
-                before.model_params.insert(p.name.to_string(), p.default + 0.125);
+                before.model_params.insert(p.name.to_string(), p.slot_default() + 0.125);
             }
             let mut after = before.clone();
             after.promote_model_to_layers();
@@ -1716,7 +1716,7 @@ mod tests {
             let mut before = SimConfig::default();
             before.coloring = c.name.to_string();
             for p in c.parameters {
-                before.coloring_params.insert(p.name.to_string(), p.default + 0.25);
+                before.coloring_params.insert(p.name.to_string(), p.slot_default() + 0.25);
             }
             before.matte = SimMatte {
                 channel: SimMatteChannel::Y,

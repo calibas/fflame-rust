@@ -16,9 +16,6 @@
 //! - a drag's preview is committed when it is released;
 //! - a choice reads a stored value rounded and clamped to an entry.
 
-// Until the panels draw through it (steps 4-8 of the plan).
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use egui::{Response, RichText, Ui};
@@ -93,6 +90,7 @@ impl ParamStore for ConfigStore<'_> {
 /// set only where the user set one (so a script keeps its defaults). A
 /// value of another kind than its parameter's -- the script declared it
 /// anew since -- reads as the default.
+#[allow(dead_code)] // The Scripts panel's, from step 8 of the plan.
 pub struct LocalStore<'a>(pub &'a mut HashMap<String, Value>);
 
 impl ParamStore for LocalStore<'_> {

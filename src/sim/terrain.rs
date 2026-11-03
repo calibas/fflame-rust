@@ -128,7 +128,7 @@ pub fn height_colour(config: &FractalConfig, height_scale: f32) -> Option<[f32; 
     }
     let def = crate::sim::COLORINGS.iter().find(|c| c.name == "channel")?;
     let param = |name: &str| {
-        params.get(name).copied().unwrap_or_else(|| def.parameters.iter().find(|p| p.name == name).map_or(0.0, |p| p.default))
+        params.get(name).copied().unwrap_or_else(|| def.parameters.iter().find(|p| p.name == name).map_or(0.0, |p| p.slot_default()))
     };
     if param("channel").round().clamp(0.0, 3.0) as u32 != t.channel {
         return None;
