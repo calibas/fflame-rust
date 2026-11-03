@@ -745,6 +745,7 @@ impl<'p> Machine<'p> {
     fn exec(&mut self, stmts: &[IStmt], sh: &mut Shared) {
         for s in stmts {
             match s {
+                IStmt::Break | IStmt::Continue | IStmt::Return => unreachable!("an effect-like function's `break`, `continue` or `return`, which runs on the GPU alone"),
                 IStmt::Assign(place, e) => {
                     let v = self.eval(e, sh);
                     match place {

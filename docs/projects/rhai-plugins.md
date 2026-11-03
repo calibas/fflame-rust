@@ -627,6 +627,13 @@ nested loops and neighbour reads at loop offsets already work.
    - Colourings: `ctx.step` (Age), `read(dx, dy)` (`ReadsCell`, LIC),
      `cell.memory` (`ReadsMemory`, Scale Memory), `pcg(n)` and
      `ctx.seed_lo` / `ctx.seed_hi` (Label, LIC's noise).
+   **Built 2026-11-02**, as written; the memory is `cell.m0` and
+   `cell.m1`, as the template's sample names it, and the seed words
+   and `pcg` are a model's too. A Rhai `break` outside a loop is
+   Rhai's own parse error; a helper or an `if` value is sealed from its
+   caller's loops and return (`seal`). Held by
+   `the_language_of_the_twins_compiles`; the twins (step 7) hold the
+   semantics on the GPU.
 6. **Model working values**: `fn max_dt(p)`, the stable time step as a
    function of the parameters, evaluated on the CPU (`dt_bound`; six
    models); `INFO.presets`, a model's presets as the built-ins' are.

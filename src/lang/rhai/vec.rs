@@ -236,6 +236,9 @@ impl Lowerer<'_> {
                     "gy" => (Kind::Rgba, 8),
                     "tensor" => (Kind::Vec3, 13),
                     "relief" => (Kind::Vec3, 16),
+                    // The source layer's memory, eight weights (P4 step 5).
+                    "m0" => (Kind::Rgba, 20),
+                    "m1" => (Kind::Rgba, 24),
                     _ => return None,
                 };
                 let parts = (0..kind.axes().len()).map(|i| call1("__cell", mk(ExprKind::Int((first + i) as i64), span), span)).collect();
@@ -484,6 +487,7 @@ impl Lowerer<'_> {
     /// pending) and the vector, as [`Lowerer::value_block`] for numbers.
     fn vec_value_block(&mut self, b: &StmtBlock, scope: &mut Scope) -> R<(Vec<ast::Stmt>, Vector)> {
         let outer = std::mem::take(&mut self.pending);
+        let sealed = self.seal();
         scope.blocks.push(HashMap::new());
         let r = (|| {
             let stmts = b.statements();
@@ -501,6 +505,7 @@ impl Lowerer<'_> {
             Ok((out, v))
         })();
         scope.blocks.pop();
+        self.unseal(sealed);
         self.pending = outer;
         r
     }
@@ -781,10 +786,11 @@ impl Lowerer<'_> {
                 }
                 _ => return self.err(p, "`rgba(s)` takes a number: every part `s`"),
             },
-            // A simulation model's neighbour (P4): the cell `dx`, `dy` away,
-            // the boundary the framework's.
-            ("read", 2) if !self.sim_model || self.sim_fn == super::SimFn::Seed => {
-                return self.err(p, "`read(dx, dy)` reads a neighbour: in a simulation model's step alone");
+            // A simulation model's neighbour (P4), or the field around a
+            // colouring's cell: the cell `dx`, `dy` away, the boundary the
+            // framework's.
+            ("read", 2) if !(self.sim_coloring || (self.sim_model && self.sim_fn != super::SimFn::Seed)) => {
+                return self.err(p, "`read(dx, dy)` reads the field around the cell: in a simulation model's step or a colouring");
             }
             ("read", 2) => match (args.remove(0), args.remove(0)) {
                 (S(dx), S(dy)) => {

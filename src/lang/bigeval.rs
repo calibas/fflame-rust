@@ -254,6 +254,7 @@ impl BigMachine {
     fn exec(&mut self, stmts: &[IStmt]) -> R<()> {
         for s in stmts {
             match s {
+                IStmt::Break | IStmt::Continue | IStmt::Return => unreachable!("an effect-like function's `break`, `continue` or `return`, which runs on the GPU alone"),
                 // A solid's alone; a reference orbit is a formula's.
                 IStmt::Map { .. } => unreachable!("a solid's call of a built-in variation in a reference orbit"),
                 IStmt::Assign(place, e) => {
@@ -652,7 +653,7 @@ impl BigMachine {
             F32 => self.c(z.re.to_f64() as f32 as f64, z.im.to_f64() as f32 as f64),
             // An effect's image, and the noise functions: never in a
             // reference orbit.
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | Fract | Hash2 => return Err(Stop),
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | Seed | Fract | Hash2 => return Err(Stop),
             Sin => {
                 let (s, c) = z.re.sin_cos();
                 let (ch, sh) = self.cosh_sinh(&z.im)?;

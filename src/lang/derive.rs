@@ -135,6 +135,7 @@ fn tainted(p: &Program) -> Vec<bool> {
             fn walk(stmts: &[IStmt], t: &mut Vec<bool>, changed: &mut bool) {
                 for s in stmts {
                     match s {
+                        IStmt::Break | IStmt::Continue | IStmt::Return => {}
                         IStmt::Assign(Place::Var(v), e) => {
                             if !t[*v] && follows(e, t) {
                                 t[*v] = true;
@@ -210,6 +211,7 @@ fn needed(p: &Program) -> Vec<bool> {
     fn walk(stmts: &[IStmt], need: &mut Vec<bool>, changed: &mut bool) {
         for s in stmts {
             match s {
+                IStmt::Break | IStmt::Continue | IStmt::Return => {}
                 IStmt::Assign(Place::Z, e) => mark(e, need, changed),
                 IStmt::Assign(Place::Var(v), e) if need[*v] => mark(e, need, changed),
                 IStmt::SetElem { var, index, value } if need[*var] => {
@@ -302,6 +304,7 @@ impl D<'_> {
         let mut out = Vec::new();
         for s in stmts {
             match s {
+                IStmt::Break | IStmt::Continue | IStmt::Return => return None,
                 // No derivative through a solid's call of a variation.
                 IStmt::Map { .. } => return None,
                 IStmt::Assign(place, e) => {
@@ -446,7 +449,7 @@ impl D<'_> {
                     Ident | F32 => return Ok(Some(da)),
                     Zero => return Ok(None),
                     // An effect's image: no formula derives through it.
-                    SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | Hash2 => return Ok(None),
+                    SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | Seed | Hash2 => return Ok(None),
                     // A sawtooth's slope is 1, between its jumps.
                     Fract => return Ok(Some(da)),
                     Sqrt => bin(BinOp::Div, konst(0.5, 0.0), call(Sqrt, a)),
@@ -666,6 +669,7 @@ impl J<'_> {
         let mut out = Vec::new();
         for s in stmts {
             match s {
+                IStmt::Break | IStmt::Continue | IStmt::Return => return None,
                 // No derivative through a solid's call of a variation.
                 IStmt::Map { .. } => return None,
                 IStmt::Assign(place, e) => {
@@ -733,7 +737,7 @@ impl J<'_> {
             Sqr => times(konst(2.0, 0.0), a),
             Ident | F32 => return Some(da),
             Zero | Round | Trunc | Ceil | Floor | IsInf | IsNan => return None,
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | Hash2 => return None,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | Seed | Hash2 => return None,
             Fract => return Some(da),
             Sqrt => bin(BinOp::Div, konst(0.5, 0.0), call(Sqrt, a)),
             Log => bin(BinOp::Div, one, a),

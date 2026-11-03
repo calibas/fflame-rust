@@ -556,6 +556,9 @@ impl Remap {
 
     fn stmt(&self, s: &IStmt) -> IStmt {
         match s {
+            IStmt::Break => IStmt::Break,
+            IStmt::Continue => IStmt::Continue,
+            IStmt::Return => IStmt::Return,
             IStmt::Map { call, input, out } => IStmt::Map {
                 call: *call,
                 input: Box::new([self.expr(&input[0]), self.expr(&input[1]), self.expr(&input[2])]),

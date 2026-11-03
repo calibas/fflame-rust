@@ -658,6 +658,7 @@ impl Checker {
     fn declare(&mut self, body: &[Stmt]) {
         for s in body {
             match s {
+                Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Return { .. } => {}
                 Stmt::Decl { ty, name, span, init, dims } => {
                     let ty = match ty {
                         TypeName::Bool => Ty::Bool,
@@ -1236,6 +1237,9 @@ impl Checker {
 
     fn stmt(&mut self, s: &Stmt, out: &mut Vec<IStmt>) {
         match s {
+            Stmt::Break { .. } => out.push(IStmt::Break),
+            Stmt::Continue { .. } => out.push(IStmt::Continue),
+            Stmt::Return { .. } => out.push(IStmt::Return),
             Stmt::Decl { name, init, .. } => {
                 if let Some(e) = init {
                     let Some(&id) = self.var_ids.get(name) else { return };
@@ -1635,20 +1639,32 @@ impl Checker {
             self.error(span, format!("unknown function `{name}`"));
             return None;
         }
-        // A simulation model's neighbour reads and host values (P4): its
-        // alone; `__cell` the colouring's sample (0-18) or the model's
-        // state, seed inputs, dt and step (0-3, 19-22).
-        if matches!(b, Builtin::NbrX | Builtin::NbrY | Builtin::NbrZ | Builtin::NbrW) && self.kind != EntryKind::SimModel {
+        // A simulation's neighbour reads, hash and seed (P4): a colouring's
+        // and a model's; a model's draws on a stream and the seed's init
+        // shape, its alone. `__cell` the colouring's sample (0-18), the
+        // step (19) and the memory (20-27), or the model's state, seed
+        // inputs, dt and step (0-3, 19-22); `__seed` its word (0, 1).
+        let sim = matches!(self.kind, EntryKind::SimColoring | EntryKind::SimModel);
+        if matches!(b, Builtin::NbrX | Builtin::NbrY | Builtin::NbrZ | Builtin::NbrW | Builtin::Pcg | Builtin::Seed) && !sim {
             self.error(span, format!("unknown function `{name}`"));
             return None;
         }
-        if b == Builtin::Cell {
-            let range = match self.kind {
-                EntryKind::SimColoring => 0..19,
+        if matches!(b, Builtin::SimRand | Builtin::InitAt) && self.kind != EntryKind::SimModel {
+            self.error(span, format!("unknown function `{name}`"));
+            return None;
+        }
+        let literal_in = |range: std::ops::Range<i64>| matches!(args.first().map(|a| &a.kind), Some(ExprKind::Int(i)) if range.contains(i));
+        let literal = match b {
+            Builtin::Cell => Some(match self.kind {
+                EntryKind::SimColoring => 0..28,
                 EntryKind::SimModel => 0..23,
                 _ => 0..0,
-            };
-            if !matches!(args.first().map(|a| &a.kind), Some(ExprKind::Int(i)) if range.contains(i)) {
+            }),
+            Builtin::Seed => Some(0..2),
+            _ => None,
+        };
+        if let Some(range) = literal {
+            if !literal_in(range) {
                 self.error(span, format!("unknown function `{name}`"));
                 return None;
             }
@@ -1664,8 +1680,9 @@ impl Checker {
                 return None;
             }
         };
-        // An int argument becomes a float unless the result is an int.
-        let arg = if arg.ty == Ty::Int && ty != Ty::Int { self.convert(arg, Ty::Float, args[0].span)? } else { arg };
+        // An int argument becomes a float unless the result is an int, or
+        // it is a stream's number (`rand(k)`).
+        let arg = if arg.ty == Ty::Int && ty != Ty::Int && b != Builtin::SimRand { self.convert(arg, Ty::Float, args[0].span)? } else { arg };
         Some(IExpr { kind: IExprKind::Call(b, Box::new(arg)), ty })
     }
 
@@ -1977,6 +1994,7 @@ fn mentions(body: &[Stmt], n: &str) -> bool {
         }
     }
     body.iter().any(|s| match s {
+        Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Return { .. } => false,
         Stmt::Decl { name, init, dims, .. } => {
             name == n || init.as_ref().is_some_and(|i| e(i, n)) || dims.as_ref().is_some_and(|d| d.iter().any(|x| e(x, n)))
         }
@@ -2085,6 +2103,7 @@ fn place_read(p: Place) -> Option<IExprKind> {
 
 fn stmt_span(s: &Stmt) -> Span {
     match s {
+        Stmt::Break { span } | Stmt::Continue { span } | Stmt::Return { span } => *span,
         Stmt::Decl { span, .. } | Stmt::If { span, .. } | Stmt::While { span, .. } | Stmt::Repeat { span, .. } | Stmt::Map { span, .. } => *span,
         Stmt::Expr(e) => e.span,
     }
@@ -2125,6 +2144,7 @@ pub(crate) struct Flow {
 pub(crate) fn flow(stmts: &[IStmt], f: &mut Flow) {
     for s in stmts {
         match s {
+            IStmt::Break | IStmt::Continue | IStmt::Return => {}
             IStmt::Assign(place, e) => {
                 reads(e, f);
                 if let Place::Var(v) = place {
@@ -2215,6 +2235,7 @@ pub(crate) fn reads(e: &IExpr, f: &mut Flow) {
 fn collect_assigns(stmts: &[IStmt], out: &mut Vec<(VarId, IExpr)>) {
     for s in stmts {
         match s {
+            IStmt::Break | IStmt::Continue | IStmt::Return => {}
             IStmt::Assign(Place::Var(v), e) => out.push((*v, e.clone())),
             IStmt::Assign(..) | IStmt::SetElem { .. } | IStmt::Map { .. } => {}
             IStmt::If { arms, otherwise } => {

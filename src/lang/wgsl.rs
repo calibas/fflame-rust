@@ -110,12 +110,20 @@ pub struct EffectWgsl {
     pub blends: bool,
 }
 
+/// The line that ends an effect's function, and an early `return` in it.
+const FX_RETURN: &str = "return FxOut(vec4<f32>(effect_r, effect_g, effect_b, effect_a), effect_blend, effect_amount);";
+
+/// The line that ends a simulation's colouring or model function, and an
+/// early `return` in it.
+const SIM_RETURN: &str = "return vec4<f32>(effect_r, effect_g, effect_b, effect_a);";
+
 /// [`EffectWgsl`] for a checked effect.
 pub fn effect(p: &Program) -> Result<EffectWgsl, String> {
     if !p.funcs.is_empty() {
         return Err("an effect's function parameters are a later step".into());
     }
     let mut g = Gen::new(p, Ctx::Effect, "fx_");
+    g.ret = FX_RETURN;
     let mut body = String::from(
         "struct FxOut {\n    color: vec4<f32>,\n    blend: i32,\n    amount: f32,\n}\n\n\
          fn uf_effect(uv: vec2<f32>) -> FxOut {\n    let pixel = uv;\n    var effect_r = 0.0;\n    var effect_g = 0.0;\n    \
@@ -125,21 +133,27 @@ pub fn effect(p: &Program) -> Result<EffectWgsl, String> {
         let _ = writeln!(body, "    {};", var_decl(i, v));
     }
     g.stmts(&p.transform, 1, &mut body);
-    body.push_str("    return FxOut(vec4<f32>(effect_r, effect_g, effect_b, effect_a), effect_blend, effect_amount);\n}\n");
-    // The lowering writes the blend last, -1 (none) when the result asks
-    // for none.
-    let blends = p.transform.iter().any(|s| match s {
-        IStmt::Assign(Place::Effect(Predef::EffectBlend), e) => !matches!(e.kind, IExprKind::Int(n) if n < 0),
-        _ => false,
-    });
+    let _ = writeln!(body, "    {FX_RETURN}\n}}");
+    // The lowering writes the blend with the result, -1 (none) when the
+    // result asks for none: at the end, or before an early `return`.
+    fn blends(stmts: &[IStmt]) -> bool {
+        stmts.iter().any(|s| match s {
+            IStmt::Assign(Place::Effect(Predef::EffectBlend), e) => !matches!(e.kind, IExprKind::Int(n) if n < 0),
+            IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| blends(b)) || blends(otherwise),
+            IStmt::While { body, .. } | IStmt::Repeat { body, .. } => blends(body),
+            _ => false,
+        })
+    }
+    let blends = blends(&p.transform);
     Ok(EffectWgsl { body: g.finish("", body), blends })
 }
 
 /// A simulation colouring's sample fields by `__cell`'s index
 /// (`lang::rhai::vec`'s `Owner::Cell`): the colour template's `SimSample`.
-const SIM_CELL_FIELDS: [&str; 19] = [
+const SIM_CELL_FIELDS: [&str; 28] = [
     "x.s.x", "x.s.y", "x.s.z", "x.s.w", "x.gx.x", "x.gx.y", "x.gx.z", "x.gx.w", "x.gy.x", "x.gy.y", "x.gy.z", "x.gy.w", "x.dist", "x.tensor.x",
-    "x.tensor.y", "x.tensor.z", "x.relief.x", "x.relief.y", "x.relief.z",
+    "x.tensor.y", "x.tensor.z", "x.relief.x", "x.relief.y", "x.relief.z", "f32(sim_step_index())", "x.m0.x", "x.m0.y", "x.m0.z", "x.m0.w", "x.m1.x",
+    "x.m1.y", "x.m1.z", "x.m1.w",
 ];
 
 /// `__cell`'s field index: its literal, as the checker leaves it (an int
@@ -186,6 +200,7 @@ pub fn sim_model(p: &Program, f: super::rhai::SimFn) -> Result<SimModelWgsl, Str
     };
     let mut g = Gen::new(p, Ctx::Effect, prefix);
     g.sim_model = true;
+    g.ret = SIM_RETURN;
     // Each pass's draws keyed apart from the others'.
     g.draw_salt = match f {
         SimFn::Seed => 0x7000,
@@ -197,8 +212,11 @@ pub fn sim_model(p: &Program, f: super::rhai::SimFn) -> Result<SimModelWgsl, Str
         let _ = writeln!(body, "    {};", var_decl(i, v));
     }
     g.stmts(&p.transform, 1, &mut body);
-    body.push_str("    return vec4<f32>(effect_r, effect_g, effect_b, effect_a);\n}\n");
-    Ok(SimModelWgsl { body: g.finish("", body), rng: p.reads(Predef::Draw) })
+    let _ = writeln!(body, "    {SIM_RETURN}\n}}");
+    // A draw by `rand()` or on a stream of its own, `rand(k)`.
+    let body = g.finish("", body);
+    let rng = body.contains("sim_rand(");
+    Ok(SimModelWgsl { body, rng })
 }
 
 /// A simulation colouring's WGSL (P4): `sim_color(x, p)` as the colour
@@ -215,9 +233,12 @@ pub struct SimColoringWgsl {
     pub distance: bool,
     /// The relief (`cell.relief`).
     pub relief: bool,
-    /// The cell it is at (`ctx.cell`), which a colouring under an
-    /// interpolating resolve reads only if it says so.
+    /// The cell it is at (`ctx.cell`) or the field around it (`read`),
+    /// which a colouring under an interpolating resolve reads only if it
+    /// says so.
     pub reads_cell: bool,
+    /// The source layer's memory (`cell.m0`, `cell.m1`).
+    pub memory: bool,
 }
 
 /// [`SimColoringWgsl`] for a checked simulation colouring: the effect
@@ -228,6 +249,7 @@ pub fn sim_coloring(p: &Program) -> Result<SimColoringWgsl, String> {
     }
     let mut g = Gen::new(p, Ctx::Effect, "sc_");
     g.sim = true;
+    g.ret = SIM_RETURN;
     let mut body = String::from(
         "fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {\n    let pixel = vec2<f32>(p);\n    var effect_r = 0.0;\n    \
          var effect_g = 0.0;\n    var effect_b = 0.0;\n    var effect_a = 1.0;\n",
@@ -236,17 +258,22 @@ pub fn sim_coloring(p: &Program) -> Result<SimColoringWgsl, String> {
         let _ = writeln!(body, "    {};", var_decl(i, v));
     }
     g.stmts(&p.transform, 1, &mut body);
-    body.push_str("    return vec4<f32>(effect_r, effect_g, effect_b, effect_a);\n}\n");
-    let mut read = [false; 19];
+    let _ = writeln!(body, "    {SIM_RETURN}\n}}");
+    let mut read = [false; 28];
     let mut pixel = false;
-    fn visit(e: &IExpr, read: &mut [bool; 19], pixel: &mut bool) {
+    fn visit(e: &IExpr, read: &mut [bool; 28], pixel: &mut bool) {
         match &e.kind {
             IExprKind::Call(Builtin::Cell, a) => {
-                if let Some(i) = cell_index(a).filter(|i| *i < 19) {
+                if let Some(i) = cell_index(a).filter(|i| *i < 28) {
                     read[i] = true;
                 }
             }
             IExprKind::Predef(Predef::Pixel) => *pixel = true,
+            // A read of the field around the cell walks it from the cell.
+            IExprKind::Call(Builtin::NbrX | Builtin::NbrY | Builtin::NbrZ | Builtin::NbrW, a) => {
+                *pixel = true;
+                visit(a, read, pixel);
+            }
             IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::Elem(_, a) => {
                 visit(a, read, pixel)
             }
@@ -257,9 +284,10 @@ pub fn sim_coloring(p: &Program) -> Result<SimColoringWgsl, String> {
             _ => {}
         }
     }
-    fn stmts(s: &[IStmt], read: &mut [bool; 19], pixel: &mut bool) {
+    fn stmts(s: &[IStmt], read: &mut [bool; 28], pixel: &mut bool) {
         for st in s {
             match st {
+                IStmt::Break | IStmt::Continue | IStmt::Return => {}
                 IStmt::Assign(_, e) => visit(e, read, pixel),
                 IStmt::SetElem { index, value, .. } => {
                     visit(index, read, pixel);
@@ -289,6 +317,7 @@ pub fn sim_coloring(p: &Program) -> Result<SimColoringWgsl, String> {
         structure: any(13..16),
         relief: any(16..19),
         reads_cell: pixel,
+        memory: any(20..28),
     })
 }
 
@@ -1540,6 +1569,9 @@ struct Gen<'p> {
     /// salt that follows, one per call site.
     sim_model: bool,
     draw_salt: u32,
+    /// What an early `return` emits (P4 step 5): the line that ends the
+    /// effect-like function it is in, its result already set.
+    ret: &'static str,
 }
 
 impl<'p> Gen<'p> {
@@ -1576,6 +1608,7 @@ impl<'p> Gen<'p> {
             sim: false,
             sim_model: false,
             draw_salt: 0,
+            ret: "",
         }
     }
 
@@ -1808,6 +1841,18 @@ impl<'p> Gen<'p> {
     fn stmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
         let pad = "    ".repeat(depth);
         match s {
+            // The effect-like functions' flow (P4 step 5): an early
+            // return's result is set before it, so it returns what the
+            // function's end returns.
+            IStmt::Break => {
+                let _ = writeln!(out, "{pad}break;");
+            }
+            IStmt::Continue => {
+                let _ = writeln!(out, "{pad}continue;");
+            }
+            IStmt::Return => {
+                let _ = writeln!(out, "{pad}{}", self.ret);
+            }
             IStmt::Assign(place, e) => {
                 let v = self.expr(e);
                 let target = match place {
@@ -2251,6 +2296,7 @@ impl<'p> Gen<'p> {
     fn sstmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
         let pad = "    ".repeat(depth);
         match s {
+            IStmt::Break | IStmt::Continue | IStmt::Return => unreachable!("an effect-like function's `break`, `continue` or `return`, which runs on the GPU alone"),
             IStmt::Map { .. } => unreachable!("a solid's call of a built-in variation in perturbation equations"),
             IStmt::Assign(place, e) => {
                 let (code, class) = self.sgen(e);
@@ -2466,6 +2512,7 @@ impl<'p> Gen<'p> {
     fn festmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
         let pad = "    ".repeat(depth);
         match s {
+            IStmt::Break | IStmt::Continue | IStmt::Return => unreachable!("an effect-like function's `break`, `continue` or `return`, which runs on the GPU alone"),
             IStmt::Map { .. } => unreachable!("a solid's call of a built-in variation in perturbation equations"),
             IStmt::Assign(place, e) => {
                 let (target, cfe) = match place {
@@ -2726,6 +2773,15 @@ impl<'p> Gen<'p> {
         } {
             return format!("sim_read(p + vec2<i32>(round({v}))).{part}");
         }
+        // A simulation's stream, init shape, hash and seed (P4 step 5):
+        // the template's, an int's 32 bits as its u32.
+        match f {
+            SimRand => return format!("sim_rand(p, bitcast<u32>({v}))"),
+            InitAt => return format!("sim_init_mask(vec2<i32>(round({v})))"),
+            Pcg => return format!("bitcast<i32>(sim_pcg(bitcast<u32>({v})))"),
+            Seed => return format!("bitcast<i32>(params.{})", if cell_index(a) == Some(1) { "seed_hi" } else { "seed_lo" }),
+            _ => {}
+        }
         if let Some(part) = match f {
             PaletteR => Some("x"),
             PaletteG => Some("y"),
@@ -2841,7 +2897,7 @@ impl<'p> Gen<'p> {
             Log1p => format!("{}({v})", self.use_(Helper::FLog1p)),
             Fract => format!("fract({v})"),
             Conj | Flip | Cosxx | Hash2 => unreachable!("complex-valued"),
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW => unreachable!("an image read, emitted above"),
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | Seed => unreachable!("an image read, emitted above"),
         };
         if ty == Ty::Int {
             format!("i32({real})")
@@ -2854,7 +2910,7 @@ impl<'p> Gen<'p> {
 fn complex_helper(f: Builtin) -> Helper {
     use Builtin::*;
     match f {
-        SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW => unreachable!("an image read, emitted by `Gen::call`"),
+        SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | Seed => unreachable!("an image read, emitted by `Gen::call`"),
         Hash2 => Helper::Hash2,
         Fract => unreachable!("emitted by `Gen::call`, real or complex"),
         // `Gen::call` passes the value through.
@@ -3000,6 +3056,7 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
     fn assigns(stmts: &[IStmt], out: &mut Vec<(VarId, IExpr)>) {
         for s in stmts {
             match s {
+                IStmt::Break | IStmt::Continue | IStmt::Return => {}
                 IStmt::Assign(Place::Var(v), e) => out.push((*v, e.clone())),
                 IStmt::Assign(..) | IStmt::SetElem { .. } | IStmt::Map { .. } => {}
                 IStmt::If { arms, otherwise } => {
@@ -3123,10 +3180,8 @@ fn counted_loop<'a>(cond: &'a IExpr, body: &'a [IStmt]) -> Option<CountedLoop<'a
         return None;
     }
     let (last, before) = body.split_last()?;
-    let IStmt::Assign(Place::Var(v), step) = last else { return None };
-    let steps_by_one = matches!(&step.kind, IExprKind::Binary(BinOp::Add, a, b)
-        if matches!(a.kind, IExprKind::Var(w) if w == i) && matches!(b.kind, IExprKind::Int(1)));
-    if *v != i || !steps_by_one || writes_var(before, i) {
+    let IStmt::Assign(Place::Var(v), _) = last else { return None };
+    if *v != i || !steps_by_one(last, i) || writes_counter(before, i) {
         return None;
     }
     match bound.kind {
@@ -3135,6 +3190,23 @@ fn counted_loop<'a>(cond: &'a IExpr, body: &'a [IStmt]) -> Option<CountedLoop<'a
         _ => return None,
     }
     Some(CountedLoop { counter, bound, inclusive: *op == BinOp::Le, rest })
+}
+
+/// `i = i + 1`.
+fn steps_by_one(s: &IStmt, i: VarId) -> bool {
+    matches!(s, IStmt::Assign(Place::Var(v), step) if *v == i && matches!(&step.kind, IExprKind::Binary(BinOp::Add, a, b)
+        if matches!(a.kind, IExprKind::Var(w) if w == i) && matches!(b.kind, IExprKind::Int(1))))
+}
+
+/// Whether a counted loop's body writes its counter, but for the step a
+/// `continue` takes first (the lowering's, P4 step 5): `i = i + 1`
+/// straight before it, which is the loop's own step.
+fn writes_counter(stmts: &[IStmt], i: VarId) -> bool {
+    stmts.iter().enumerate().any(|(k, s)| match s {
+        IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| writes_counter(b, i)) || writes_counter(otherwise, i),
+        _ if steps_by_one(s, i) && matches!(stmts.get(k + 1), Some(IStmt::Continue)) => false,
+        _ => super::delta::writes_var(std::slice::from_ref(s), i),
+    })
 }
 
 /// Whether a colouring can mark a pixel solid: it writes `#solid`, or it
@@ -3151,6 +3223,7 @@ pub fn colours_anything(p: &Program) -> bool {
 
 fn writes(stmts: &[IStmt], place: Place) -> bool {
     stmts.iter().any(|s| match s {
+        IStmt::Break | IStmt::Continue | IStmt::Return => false,
         IStmt::Assign(p, _) => *p == place,
         IStmt::SetElem { .. } | IStmt::Map { .. } => false,
         IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| writes(b, place)) || writes(otherwise, place),
