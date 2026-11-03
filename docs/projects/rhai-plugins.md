@@ -583,11 +583,60 @@ library panel of both stores together, if one is wanted -- the scan
    over 600 steps, at its speed (median ratio 0.98). Each component of a
    neighbour is its own `sim_read` in the WGSL; the driver merges them
    (measured on NVIDIA), and a browser's or Metal's compiler is expected
-   to, unmeasured. Presets stay the built-ins'; the single layer only.
+   to, unmeasured. Presets stay the built-ins' (step 6); layers are
+   step 4.
 3. **Carried**: custom model and colouring sources on `SimConfig`,
    ensured like the escape slots. **Built** with steps 1 and 2:
    `custom_coloring`, `custom_model`, `sim::custom::ensure` at every
    `SimRenderer` entry point that takes a config.
+
+**Full support (agreed 2026-11-02).** A survey of the 31 built-in models
+and 13 colourings against steps 1-2 found 9 models outside the
+single-layer class by design (kernel tables: Lenia, SmoothLife,
+Lattice4, Turing -- which also takes a drive and publishes a signal;
+the pyramid, memory, a measure pass and min/max: McCabe; agents:
+Physarum, DLA; a repeated relax pass and min/max: DBM, Fingering). The
+other 22 models and every colouring fit, but faithful twins need the
+steps below. Ising and Cyclic CA were compiled as trial ports
+(`output/sim-ports/`): integers, bit operations, parameter-bounded
+nested loops and neighbour reads at loop offsets already work.
+
+4. **Layers**: a Rhai model in any layer and a Rhai colouring in any
+   colour layer. The source is carried beside the name
+   (`SimLayer::custom_model`, `SimColorLayer::custom_coloring`; per
+   entry, so adding, removing, promoting and demoting a layer carry it
+   with no pruning, and undo restores both together), ensured for every
+   entry. Plug-ins in every slot's picker; the Formula Editor's Use
+   picks the layer; Live updates every slot that carries a version.
+   A new version of a layer's model keeps its parameters, as `SimModel`
+   does. GPU side unchanged: a layer's model is its own step module.
+   **Built 2026-11-02**: as written, plus choosing a built-in drops the
+   slot's source; a two-layer coupled run with Gray-Scott's twin in
+   layer 1 and Channel's in colour layer 1 matches the built-ins to 1e-5
+   (`rhai_models_and_colourings_run_in_layers`).
+5. **The language, for twins**:
+   - `rand(k)`: a draw on stream `k` (`sim_rand(p, k)`), in steps and
+     seeds; seeds may draw (10 built-in seeds do). A bare `rand()`
+     keeps its call-site stream.
+   - `INFO.time_step: false` (`NoTimeStep`, the 12 automata) and
+     `INFO.settles: false` (`NeverStills`).
+   - `init_at(x, y)` in a seed: the init shape at another cell
+     (Wolfram's middle row).
+   - `break` and `continue` in loops; an early `return` in the
+     effect-like functions (effects, colourings, models).
+   - Colourings: `ctx.step` (Age), `read(dx, dy)` (`ReadsCell`, LIC),
+     `cell.memory` (`ReadsMemory`, Scale Memory), `pcg(n)` and
+     `ctx.seed_lo` / `ctx.seed_hi` (Label, LIC's noise).
+6. **Model working values**: `fn max_dt(p)`, the stable time step as a
+   function of the parameters, evaluated on the CPU (`dt_bound`; six
+   models); `INFO.presets`, a model's presets as the built-ins' are.
+7. **Twins**, in batches, each held to its built-in (a field compare,
+   bit-exact where the arithmetic is the same, to a tolerance where a
+   chaotic rule amplifies the last bit) and timed against it: the 21
+   remaining in-class models and the 12 remaining colourings.
+   Built-ins stay (D2); the twins ship as Rhai sources.
+8. **Out of the class**, unchanged: the 9 models above stay built-in,
+   refused with a reason.
 
 ### P5. Animation tracks as scripts
 

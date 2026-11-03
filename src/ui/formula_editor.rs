@@ -70,6 +70,36 @@ impl EntryRow {
     }
 }
 
+/// Where a simulation's Rhai colouring or model goes (P4 step 4): the
+/// flat one, or entry `n` of the layers (a model) or the colour layers (a
+/// colouring).
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum SimSlot {
+    Flat,
+    At(usize),
+}
+
+/// The slots a simulation offers `kind`: the flat one, or every layer
+/// when it has them.
+fn sim_slots(kind: EntryKind, sim: &crate::config::sim::SimConfig) -> Vec<SimSlot> {
+    let n = if kind == EntryKind::SimModel { sim.layers.len() } else { sim.color_layers.len() };
+    if n == 0 {
+        vec![SimSlot::Flat]
+    } else {
+        (0..n).map(SimSlot::At).collect()
+    }
+}
+
+/// The source a slot carries and the name it carries it for.
+fn sim_carried(kind: EntryKind, sim: &crate::config::sim::SimConfig, slot: SimSlot) -> Option<(&CustomSource, &str)> {
+    match (kind == EntryKind::SimModel, slot) {
+        (true, SimSlot::Flat) => sim.custom_model.as_ref().map(|c| (c, sim.model.as_str())),
+        (true, SimSlot::At(l)) => sim.layers.get(l).and_then(|x| x.custom_model.as_ref().map(|c| (c, x.model.as_str()))),
+        (false, SimSlot::Flat) => sim.custom_coloring.as_ref().map(|c| (c, sim.coloring.as_str())),
+        (false, SimSlot::At(k)) => sim.color_layers.get(k).and_then(|x| x.custom_coloring.as_ref().map(|c| (c, x.coloring.as_str()))),
+    }
+}
+
 /// What tells one escape-time entry from another, version to version: a
 /// Rhai source's id (`INFO.id`), else its entry name.
 fn entry_ident(src: &CustomSource) -> String {
@@ -348,11 +378,9 @@ impl FormulaEditorPanel {
         if kind == EntryKind::Effect {
             return self.use_effect(cm, row);
         }
-        if kind == EntryKind::SimColoring {
-            return self.use_sim_coloring(cm, row);
-        }
-        if kind == EntryKind::SimModel {
-            return self.use_sim_model(cm, row);
+        if matches!(kind, EntryKind::SimColoring | EntryKind::SimModel) {
+            let slot = sim_slots(kind, &cm.config().sim)[0];
+            return self.use_sim(cm, kind, row, slot);
         }
         let Some(entry) = self.entries.get(row) else { return };
         // A Rhai entry is the user's: it has an id of its own (rule 7),
@@ -533,12 +561,15 @@ impl FormulaEditorPanel {
         }
     }
 
-    /// Use a simulation colouring (P4): give it an id if it has none --
-    /// written into the file, which Save then keeps -- register it under
-    /// its name (`sim::custom::name_of`: its id and version), and put its
-    /// source in the config with the colouring named, one undo step;
-    /// using one from another mode enters Simulation in the same step.
-    fn use_sim_coloring(&mut self, cm: &mut ConfigManager, row: usize) {
+    /// Use a simulation colouring or model (P4) in `slot`: give it an id
+    /// if it has none -- written into the file, which Save then keeps --
+    /// register it under its name (`sim::custom::name_of`: its id and
+    /// version), and carry its source beside the name, one undo step;
+    /// using one from another mode enters Simulation in the same step. A
+    /// new version of the one in a slot keeps its parameters (and the flat
+    /// model its dt and steps: `config::sim::same_script`).
+    fn use_sim(&mut self, cm: &mut ConfigManager, kind: EntryKind, row: usize, slot: SimSlot) {
+        use crate::scene::transforms::RenderMode;
         let Some(entry) = self.entries.get(row) else { return };
         let label = entry.name.clone();
         let mut source = entry.source.clone();
@@ -546,7 +577,9 @@ impl FormulaEditorPanel {
         if minted {
             source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
         }
-        let name = match crate::sim::custom::register(&source) {
+        let model = kind == EntryKind::SimModel;
+        let registered = if model { crate::sim::custom::register_model(&source) } else { crate::sim::custom::register(&source) };
+        let name = match registered {
             Ok(name) => name,
             Err(e) => {
                 self.status = Some(t!("formula_editor.did_not_compile", entry = label, error = e).to_string());
@@ -559,55 +592,40 @@ impl FormulaEditorPanel {
         }
         let carried = crate::sim::custom::carried(&source);
         let ident = entry_ident(&carried);
-        let changes = vec![
-            (ConfigPath::SimCustomColoring, ConfigValue::String(custom_source_json(&Some(carried)))),
-            (ConfigPath::SimColoring, ConfigValue::String(name)),
-        ];
-        match super::render_mode::choose(cm, changes, "history.action.use_sim_coloring", crate::scene::transforms::RenderMode::Simulation) {
-            Ok(_) => {
-                self.in_use.retain(|(k, _, _)| *k != EntryKind::SimColoring);
-                self.in_use.push((EntryKind::SimColoring, self.file.clone(), ident));
-                self.status = Some(if minted { t!("formula_editor.id_minted", entry = label) } else { t!("formula_editor.using_sim_coloring", entry = label) }.to_string());
-            }
-            Err(e) => self.status = Some(format!("{e:?}")),
-        }
-    }
-
-    /// Use a simulation model (P4), as a colouring is used: an id if it has
-    /// none, registered under its name, its source in the config with the
-    /// model named, one undo step entering Simulation. A new version of
-    /// the model in use keeps its parameters, dt and steps (the config's
-    /// `SimModel` rule).
-    fn use_sim_model(&mut self, cm: &mut ConfigManager, row: usize) {
-        let Some(entry) = self.entries.get(row) else { return };
-        let label = entry.name.clone();
-        let mut source = entry.source.clone();
-        let minted = !lang::rhai::info_string(&source, "id").is_some_and(|id| crate::scripted::is_uuid(&id));
-        if minted {
-            source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
-        }
-        let name = match crate::sim::custom::register_model(&source) {
-            Ok(name) => name,
-            Err(e) => {
-                self.status = Some(t!("formula_editor.did_not_compile", entry = label, error = e).to_string());
-                return;
+        let json = ConfigValue::String(custom_source_json(&Some(carried.clone())));
+        let action = if model { "history.action.use_sim_model" } else { "history.action.use_sim_coloring" };
+        let pair = |source: ConfigPath, named: ConfigPath| vec![(source, json.clone()), (named, ConfigValue::String(name.clone()))];
+        let done = match (model, slot) {
+            (true, SimSlot::Flat) => super::render_mode::choose(cm, pair(ConfigPath::SimCustomModel, ConfigPath::SimModel), action, RenderMode::Simulation).map(|_| ()),
+            (true, SimSlot::At(layer)) => super::render_mode::choose(
+                cm,
+                pair(ConfigPath::SimLayerCustomModel { layer }, ConfigPath::SimLayerModel { layer }),
+                action,
+                RenderMode::Simulation,
+            )
+            .map(|_| ()),
+            (false, SimSlot::Flat) => super::render_mode::choose(cm, pair(ConfigPath::SimCustomColoring, ConfigPath::SimColoring), action, RenderMode::Simulation).map(|_| ()),
+            // A colour layer's colouring is a snapshot edit, as the panel
+            // makes it.
+            (false, SimSlot::At(k)) => {
+                let mut after = cm.config().clone();
+                if let Some(l) = after.sim.color_layers.get_mut(k) {
+                    if !crate::config::sim::same_script(&name, &l.coloring) {
+                        l.coloring_params.clear();
+                    }
+                    l.coloring = name.clone();
+                    l.custom_coloring = Some(carried);
+                }
+                super::render_mode::enter_snapshot(cm.config(), &mut after, RenderMode::Simulation);
+                cm.apply_config_edit(after, action.to_string())
             }
         };
-        if minted {
-            self.text = source.clone();
-            self.changed_at = Some(web_time::Instant::now());
-        }
-        let carried = crate::sim::custom::carried(&source);
-        let ident = entry_ident(&carried);
-        let changes = vec![
-            (ConfigPath::SimCustomModel, ConfigValue::String(custom_source_json(&Some(carried)))),
-            (ConfigPath::SimModel, ConfigValue::String(name)),
-        ];
-        match super::render_mode::choose(cm, changes, "history.action.use_sim_model", crate::scene::transforms::RenderMode::Simulation) {
-            Ok(_) => {
-                self.in_use.retain(|(k, _, _)| *k != EntryKind::SimModel);
-                self.in_use.push((EntryKind::SimModel, self.file.clone(), ident));
-                self.status = Some(if minted { t!("formula_editor.id_minted", entry = label) } else { t!("formula_editor.using_sim_model", entry = label) }.to_string());
+        match done {
+            Ok(()) => {
+                self.in_use.retain(|(k, _, _)| *k != kind);
+                self.in_use.push((kind, self.file.clone(), ident));
+                let using = if model { t!("formula_editor.using_sim_model", entry = label) } else { t!("formula_editor.using_sim_coloring", entry = label) };
+                self.status = Some(if minted { t!("formula_editor.id_minted", entry = label) } else { using }.to_string());
             }
             Err(e) => self.status = Some(format!("{e:?}")),
         }
@@ -792,22 +810,21 @@ impl FormulaEditorPanel {
                 }
                 continue;
             }
-            // A simulation colouring or model: by its id, while the config
-            // carries a version of it.
+            // A simulation colouring or model: by its id, in every slot
+            // that carries a version of it (the flat one, or each layer's).
             if matches!(kind, EntryKind::SimColoring | EntryKind::SimModel) {
-                let sim = &cm.config().sim;
-                let (carried, name) = if kind == EntryKind::SimModel { (&sim.custom_model, &sim.model) } else { (&sim.custom_coloring, &sim.coloring) };
-                let carried = carried.as_ref().filter(|c| entry_ident(c) == entry && name.starts_with(crate::sim::custom::PREFIX)).map(|c| c.source.clone());
                 let row = self.entries.iter().position(|r| entry_ident(&CustomSource { dialect: CustomDialect::Rhai, entry: r.name.clone(), source: r.source.clone(), variations: Vec::new() }) == entry);
-                if let (Some(carried), Some(row)) = (carried, row) {
-                    let r = &self.entries[row];
-                    if r.errors(kind).is_empty() && r.source != carried {
-                        if kind == EntryKind::SimModel {
-                            self.use_sim_model(cm, row);
-                        } else {
-                            self.use_sim_coloring(cm, row);
-                        }
-                    }
+                let Some(row) = row.filter(|&row| self.entries[row].errors(kind).is_empty()) else { continue };
+                let sim = &cm.config().sim;
+                let stale: Vec<SimSlot> = sim_slots(kind, sim)
+                    .into_iter()
+                    .filter(|&slot| {
+                        sim_carried(kind, sim, slot)
+                            .is_some_and(|(c, name)| entry_ident(c) == entry && name.starts_with(crate::sim::custom::PREFIX) && c.source != self.entries[row].source)
+                    })
+                    .collect();
+                for slot in stale {
+                    self.use_sim(cm, kind, row, slot);
                 }
                 continue;
             }
@@ -1098,6 +1115,7 @@ impl FormulaEditorPanel {
         }
         let mut clicked: Option<(EntryKind, usize)> = None;
         let mut convert: Option<usize> = None;
+        let mut sim_clicked: Option<(EntryKind, usize, SimSlot)> = None;
         let foreign = self.dialect != CustomDialect::Rhai;
         for (i, row) in self.entries.iter().enumerate() {
             ui.horizontal_wrapped(|ui| {
@@ -1124,6 +1142,27 @@ impl FormulaEditorPanel {
                     if !ok && kind != row.likely {
                         continue;
                     }
+                    // A layered simulation: which layer, as a menu.
+                    let slots = if matches!(kind, EntryKind::SimColoring | EntryKind::SimModel) { sim_slots(kind, &cm.config().sim) } else { Vec::new() };
+                    if slots.len() > 1 {
+                        ui.add_enabled_ui(ok, |ui| {
+                            ui.menu_button(label, |ui| {
+                                for slot in &slots {
+                                    let SimSlot::At(n) = *slot else { continue };
+                                    let name = if kind == EntryKind::SimModel {
+                                        t!("sim_panel.layer_label", n = (n + 1).to_string())
+                                    } else {
+                                        t!("sim_panel.color_layer_label", n = (n + 1).to_string())
+                                    };
+                                    if ui.button(name.as_ref()).clicked() {
+                                        sim_clicked = Some((kind, i, *slot));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        });
+                        continue;
+                    }
                     let b = ui.add_enabled(ok, egui::Button::new(label));
                     if b.clicked() {
                         clicked = Some((kind, i));
@@ -1147,6 +1186,9 @@ impl FormulaEditorPanel {
         }
         if let Some((kind, i)) = clicked {
             self.use_entry(cm, kind, i);
+        }
+        if let Some((kind, i, slot)) = sim_clicked {
+            self.use_sim(cm, kind, i, slot);
         }
         if let Some(i) = convert {
             self.edit_as_rhai(i);

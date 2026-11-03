@@ -983,6 +983,14 @@ fn render_coloring_section(
                             && c.name != coloring.name
                         {
                             match slot {
+                                // A built-in carries no source: the Rhai
+                                // one goes with the name it was carried for.
+                                ColorSlot::Flat if sim.custom_coloring.is_some() => {
+                                    let _ = config_manager.update_batch(
+                                        vec![(ConfigPath::SimColoring, c.name.to_string().into()), (ConfigPath::SimCustomColoring, String::new().into())],
+                                        "history.action.sim_coloring".to_string(),
+                                    );
+                                }
                                 ColorSlot::Flat => {
                                     let _ = config_manager.update_param(
                                         ConfigPath::SimColoring,
@@ -995,6 +1003,7 @@ fn render_coloring_section(
                                     action = Some(Box::new(move |s: &mut SimConfig| {
                                         if let Some(l) = s.color_layers.get_mut(i) {
                                             l.coloring = name.clone();
+                                            l.custom_coloring = None;
                                             // Parameters are keyed by
                                             // name for whichever
                                             // colouring is current, so
@@ -1015,21 +1024,34 @@ fn render_coloring_section(
                             }
                         }
                     }
-                    // The user's plug-in colourings (P3, P4): the single
-                    // colouring's, their source carried as Use carries it.
-                    if slot == ColorSlot::Flat {
-                        let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::SimColoring);
-                        if !plugins.is_empty() {
-                            ui.separator();
-                            ui.weak(t!("sim_panel.plugins"));
-                        }
-                        for p in plugins {
-                            if ui.selectable_label(coloring.name == p.key, &p.title).on_hover_text(t!("sim_panel.plugin_tip", file = p.file)).clicked() && coloring.name != p.key {
-                                let source = crate::config::manager::custom_source_json(&Some(p.carried.clone()));
-                                let _ = config_manager.update_batch(
-                                    vec![(ConfigPath::SimCustomColoring, source.into()), (ConfigPath::SimColoring, p.key.clone().into())],
-                                    "history.action.use_sim_coloring".to_string(),
-                                );
+                    // The user's plug-in colourings (P3, P4), in every
+                    // slot: their source carried beside the name, as Use
+                    // carries it.
+                    let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::SimColoring);
+                    if !plugins.is_empty() {
+                        ui.separator();
+                        ui.weak(t!("sim_panel.plugins"));
+                    }
+                    for p in plugins {
+                        if ui.selectable_label(coloring.name == p.key, &p.title).on_hover_text(t!("sim_panel.plugin_tip", file = p.file)).clicked() && coloring.name != p.key {
+                            match slot {
+                                ColorSlot::Flat => {
+                                    let source = crate::config::manager::custom_source_json(&Some(p.carried.clone()));
+                                    let _ = config_manager.update_batch(
+                                        vec![(ConfigPath::SimCustomColoring, source.into()), (ConfigPath::SimColoring, p.key.clone().into())],
+                                        "history.action.use_sim_coloring".to_string(),
+                                    );
+                                }
+                                ColorSlot::At(i) => {
+                                    let (name, carried) = (p.key.clone(), p.carried.clone());
+                                    action = Some(Box::new(move |s: &mut SimConfig| {
+                                        if let Some(l) = s.color_layers.get_mut(i) {
+                                            l.coloring_params.clear();
+                                            l.coloring = name.clone();
+                                            l.custom_coloring = Some(carried.clone());
+                                        }
+                                    }));
+                                }
                             }
                         }
                     }
@@ -1323,6 +1345,22 @@ impl LayerSlot {
         }
     }
 
+    /// Where the slot's Rhai model source is carried (P4).
+    fn custom_path(self) -> ConfigPath {
+        match self {
+            LayerSlot::Flat => ConfigPath::SimCustomModel,
+            LayerSlot::At(layer) => ConfigPath::SimLayerCustomModel { layer },
+        }
+    }
+
+    /// Whether the slot carries a Rhai model's source.
+    fn carries(self, sim: &SimConfig) -> bool {
+        match self {
+            LayerSlot::Flat => sim.custom_model.is_some(),
+            LayerSlot::At(layer) => sim.layers.get(layer).is_some_and(|l| l.custom_model.is_some()),
+        }
+    }
+
     fn param_path(self, param: &str) -> ConfigPath {
         match self {
             LayerSlot::Flat => ConfigPath::SimModelParam { param: param.to_string() },
@@ -1598,6 +1636,11 @@ fn render_model_section(
                             // The field is the whole simulation's, so a layer
                             // switch leaves it.
                             let mut changes = vec![(slot.model_path(), m.name.to_string().into())];
+                            // A built-in carries no source: the Rhai one
+                            // goes with the name it was carried for.
+                            if slot.carries(sim) {
+                                changes.push((slot.custom_path(), String::new().into()));
+                            }
                             if slot == LayerSlot::Flat {
                                 if let Some(first) = m.presets.first() {
                                     if let Some(init) = first.init {
@@ -1609,20 +1652,19 @@ fn render_model_section(
                             let _ = super::render_mode::choose(config_manager, changes, "history.action.sim_model", RenderMode::Simulation);
                         }
                     }
-                    // The user's plug-in models (P3, P4): the single
-                    // layer's, their source carried as Use carries it.
-                    if slot == LayerSlot::Flat {
-                        let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::SimModel);
-                        if !plugins.is_empty() {
-                            ui.separator();
-                            ui.weak(t!("sim_panel.plugins"));
-                        }
-                        for p in plugins {
-                            if ui.selectable_label(model.name == p.key, &p.title).on_hover_text(t!("sim_panel.plugin_tip", file = p.file)).clicked() && model.name != p.key {
-                                let source = crate::config::manager::custom_source_json(&Some(p.carried.clone()));
-                                let changes = vec![(ConfigPath::SimCustomModel, source.into()), (ConfigPath::SimModel, p.key.clone().into())];
-                                let _ = super::render_mode::choose(config_manager, changes, "history.action.use_sim_model", RenderMode::Simulation);
-                            }
+                    // The user's plug-in models (P3, P4), in every layer:
+                    // their source carried beside the name, as Use
+                    // carries it.
+                    let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::SimModel);
+                    if !plugins.is_empty() {
+                        ui.separator();
+                        ui.weak(t!("sim_panel.plugins"));
+                    }
+                    for p in plugins {
+                        if ui.selectable_label(model.name == p.key, &p.title).on_hover_text(t!("sim_panel.plugin_tip", file = p.file)).clicked() && model.name != p.key {
+                            let source = crate::config::manager::custom_source_json(&Some(p.carried.clone()));
+                            let changes = vec![(slot.custom_path(), source.into()), (slot.model_path(), p.key.clone().into())];
+                            let _ = super::render_mode::choose(config_manager, changes, "history.action.use_sim_model", RenderMode::Simulation);
                         }
                     }
                 });
@@ -1743,6 +1785,7 @@ fn render_model_section(
                 model: next,
                 model_params: Default::default(),
                 enabled: true,
+                custom_model: None,
             });
         });
     }

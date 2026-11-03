@@ -496,6 +496,9 @@ pub enum ConfigPath {
     SimModelParam { param: String },
     /// Layer `layer`'s model (`SimLayer::model`). A restart.
     SimLayerModel { layer: usize },
+    /// Layer `layer`'s Rhai model source (`SimLayer::custom_model`), as
+    /// `SimCustomModel` is the flat one's: JSON, empty for none.
+    SimLayerCustomModel { layer: usize },
     /// Whether layer `layer` is stepped. Bool.
     SimLayerEnabled { layer: usize },
     /// One of layer `layer`'s model parameters. Animatable.
@@ -1258,6 +1261,7 @@ impl Display for ConfigPath {
             ConfigPath::SimFit => write!(f, "Simulation Fit"),
             ConfigPath::SimModelParam { param } => write!(f, "Simulation {param}"),
             ConfigPath::SimLayerModel { layer } => write!(f, "Simulation Layer {} Model", layer + 1),
+            ConfigPath::SimLayerCustomModel { layer } => write!(f, "Simulation Layer {} Model Source", layer + 1),
             ConfigPath::SimLayerEnabled { layer } => write!(f, "Simulation Layer {} Enabled", layer + 1),
             ConfigPath::SimLayerParam { layer, param } => write!(f, "Simulation Layer {} {param}", layer + 1),
             ConfigPath::SimCouplingFrom { index } => write!(f, "Simulation Coupling {} From", index + 1),
@@ -1711,6 +1715,9 @@ impl ConfigPath {
             ),
             ConfigPath::SimLayerModel { layer } => {
                 I18nKey::with_params("history.param.sim_layer_model", vec![("layer", (layer + 1).to_string())])
+            }
+            ConfigPath::SimLayerCustomModel { layer } => {
+                I18nKey::with_params("history.param.sim_layer_custom_model", vec![("layer", (layer + 1).to_string())])
             }
             ConfigPath::SimLayerEnabled { layer } => {
                 I18nKey::with_params("history.param.sim_layer_enabled", vec![("layer", (layer + 1).to_string())])
@@ -3482,6 +3489,7 @@ impl ConfigPath {
             ConfigPath::SimModel
             | ConfigPath::SimCustomModel
             | ConfigPath::SimLayerModel { .. }
+            | ConfigPath::SimLayerCustomModel { .. }
             | ConfigPath::SimGridMode
             | ConfigPath::SimGridWidth
             | ConfigPath::SimGridHeight
@@ -3847,6 +3855,7 @@ impl ConfigPath {
             ConfigPath::SimFit => "Sim.Fit".to_string(),
             ConfigPath::SimModelParam { param } => format!("Sim.ModelParam.{param}"),
             ConfigPath::SimLayerModel { layer } => format!("Sim.Layer.{layer}.Model"),
+            ConfigPath::SimLayerCustomModel { layer } => format!("Sim.Layer.{layer}.CustomModel"),
             ConfigPath::SimLayerEnabled { layer } => format!("Sim.Layer.{layer}.Enabled"),
             ConfigPath::SimLayerParam { layer, param } => format!("Sim.Layer.{layer}.Param.{param}"),
             ConfigPath::SimCouplingFrom { index } => format!("Sim.Coupling.{index}.From"),
@@ -4411,6 +4420,9 @@ impl ConfigPath {
                 ["Layer", layer, "Model"] => {
                     return Some(ConfigPath::SimLayerModel { layer: layer.parse().ok()? })
                 }
+                ["Layer", layer, "CustomModel"] => {
+                    return Some(ConfigPath::SimLayerCustomModel { layer: layer.parse().ok()? })
+                }
                 ["Layer", layer, "Enabled"] => {
                     return Some(ConfigPath::SimLayerEnabled { layer: layer.parse().ok()? })
                 }
@@ -4936,6 +4948,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimDownscale
         | ConfigPath::SimFit
         | ConfigPath::SimLayerModel { .. }
+        | ConfigPath::SimLayerCustomModel { .. }
         | ConfigPath::SimLayerEnabled { .. }
         | ConfigPath::SimCouplingFrom { .. }
         | ConfigPath::SimCouplingTo { .. }

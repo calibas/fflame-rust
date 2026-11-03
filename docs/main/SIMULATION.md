@@ -699,15 +699,18 @@ to the `sim_color` the colour template calls.
   name `custom-` begins: its key (`scripted::key`, id and version) with an
   `INFO.id` of its own, else a hash of its source. `coloring_or_default`
   finds it, so every path that resolves a colouring does.
-- **Carried**: `SimConfig::custom_coloring` (`ConfigPath::
-  SimCustomColoring`), with `coloring` naming it; `sim::custom::ensure`
-  registers it before anything resolves the name (every `SimRenderer`
-  entry point that takes a config, the render path's resource check, the
-  panel). The
-  Formula Editor's **Use as Simulation Colouring** puts it in the config,
-  entering Simulation in the same step, and Live follows it by its id; a
-  plug-in one is in the panel's colouring picker under "Your plug-ins".
-  The single colouring only: a colour stack's entries name built-ins.
+- **Carried** beside the name it is carried for: `SimConfig::
+  custom_coloring` (`ConfigPath::SimCustomColoring`) with `coloring`, or
+  a colour layer's `SimColorLayer::custom_coloring` with its `coloring`
+  (a snapshot edit, as the entry's name is). Promoting and demoting the
+  stack move it with entry 0; choosing a built-in drops it.
+  `sim::custom::ensure` registers every one before anything resolves the
+  names (every `SimRenderer` entry point that takes a config, the render
+  path's resource check, the panel). The Formula Editor's **Use as
+  Simulation Colouring** puts it in the config -- in a stack, in the
+  colour layer picked from its menu -- entering Simulation in the same
+  step, and Live updates every entry carrying a version, by its id; a
+  plug-in one is in every entry's picker under "Your plug-ins".
 - **Twins**: `sim::custom::SHIPPED`, Channel's (`assets/sim/channel.rhai`),
   held to the built-in within 1e-5 at four settings
   (`the_rhai_channel_colours_as_the_built_in`).
@@ -741,12 +744,17 @@ call.
   repeated or measured passes and presets stay the built-in models'.
 - **Registered and carried** as a colouring is: a leaked `ModelDef` under
   `custom-` and its key, found by `model_or_default`;
-  `SimConfig::custom_model` (`ConfigPath::SimCustomModel`) with `model`
-  naming it, ensured with the colouring. A new version of the model in
-  use keeps its parameters, `dt` and `steps` (the config's `SimModel`
-  rule compares the names' ids). The Formula Editor's **Use as Simulation
-  Model**, Live, and a plug-in group in the panel's model picker; the
-  single layer only (a layered config's layers name built-ins).
+  `SimConfig::custom_model` (`ConfigPath::SimCustomModel`) with `model`,
+  or a layer's `SimLayer::custom_model` (`ConfigPath::
+  SimLayerCustomModel`) with its `model`, ensured with the colourings. A
+  new version of a model keeps its parameters, and the flat one its `dt`
+  and `steps` (`config::sim::same_script` compares the names' ids). The
+  Formula Editor's **Use as Simulation Model** (in a layered config, in
+  the layer picked from its menu), Live in every layer carrying a
+  version, and a plug-in group in every layer's picker. A layer's model
+  is its own step module, so a Rhai one layers and couples as a built-in
+  does (`rhai_models_and_colourings_run_in_layers`); it cannot take a
+  drive or publish a signal (Turing's couplings).
 - **Twins**: `sim::custom::SHIPPED_MODELS`, Gray-Scott's
   (`assets/sim/gray_scott.rhai`): its field held to the built-in's within
   1e-5 over 600 steps at two settings
