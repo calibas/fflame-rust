@@ -733,6 +733,104 @@ shape fingerprint will not move by itself).
   config that carries its sources needs nothing from the API.
 - The WGSL catalogs stay beside it (D2).
 
+### P7. Every built-in editable as Rhai
+
+> The eventual goal is to port everything over to Rhai so the user can
+> edit any formula or coloring. (The user, 2026-11-02.)
+
+For each kind, two things: a **twin** of every built-in, held to it
+(its settings, its picture and its speed, as P4 step 7 holds the
+simulation twins), and an **Edit as Rhai** where the built-in is chosen
+that puts the twin in its place and opens it in the Formula Editor as
+the user's own -- what the Escape panel's Edit as Formula and the
+Effects panel's Edit as Rhai already do. Whether a twin then replaces
+its built-in (as D1 did for the effects, and as the escape plan's step
+9 retires native code family by family) or sits beside it is decided
+kind by kind (D7).
+
+Where each kind stands (2026-11-02; the counts below are from a census
+of each built-in's features and WGSL, not from ports -- P4's ports found
+needs the census did not, the int step and `ctx.layer`):
+
+| Kind | Built-ins | Twins | Edit as Rhai |
+|---|---|---|---|
+| Effects | 15 | all 15, the definitions (D1) | yes, the Effects panel |
+| Escape formulas | 26 | all 26 (`escape::twins`) | yes, Edit as Formula |
+| Escape colourings | 28 | none (two examples, `smooth`, `orbit-trap`) | no |
+| Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
+| Mode B fields | 3 | none | no |
+| Simulation models | 31 | 22 (P4 step 7); the 9 others are P4 step 9 | no: the Formula Editor's examples only |
+| Simulation colourings | 13 | all 13 | no: examples only |
+| Flame variations | 647 | 10, as test fixtures (linear, spherical, swirl, polar, horseshoe, blur, macmillan, spherical3D, hemisphere, zcone) | no |
+
+Steps, in the order that unlocks the most first (the user picks):
+
+1. **The interpreter's flow statements.** P4 step 5 built `break`,
+   `continue` and an early `return` through the lowering and the WGSL,
+   for the GPU-only kinds. Formulas, escape colourings and variations
+   also run in the CPU interpreter (deep zoom's references, `vary`, the
+   lens, the tests), so it learns the three statements, and the
+   derivation passes refuse them where they cannot follow (as they
+   refuse a solid's `Map`). Then every kind has them: built-in
+   variations use early returns in 86 places and `break` / `continue` in
+   9.
+2. **Escape colourings** (28). About 20 accumulate over the orbit, which
+   `start` / `step` / `finish` already do. The rest need:
+   - a colour as the result, not a palette position (Rainbow Fringe,
+     Infinite Waves, VOC Traps, Direct Traps, Image Trap): `finish`
+     ending with an `rgba` or a `vec3`, through the result handling the
+     effects and simulation colourings share (`put_result`);
+   - the palette inside the loop (Direct Traps): P4's `palette(t)`;
+   - the formula's derivative (Distance Estimate, Normal Map, Rainbow
+     Fringe): a read of `dz` outside the perturbation sections -- the
+     compiler derives a custom formula's, a built-in has its
+     `wgsl_derivative`;
+   - `INFO` flags for `Bounded`, `ColorsInterior`, `DirectAlpha` and
+     `SkipsEscapingIterate`.
+   Image Trap reads an image, which stays out with user image files
+   (decided 2026-10-02). Then the twins, and Edit as Rhai for the
+   colouring in the Escape panel.
+3. **Flame variations' hooks.** 339 of the 647 use nothing a Rhai
+   variation cannot say today; the other 308 need at least one of:
+   - **derived parameters** (134 built-ins, `wgsl_init`): a variation's
+     `fn prepare(p)`, compiled into the once-per-transform setup in the
+     built-ins' own precision, so a twin stays exact (the escape
+     dialect's `prepare` and P4's CPU-side `max_dt` are the precedents);
+   - **the transform's coefficients** (123, `NeedsTransform`): a `ctx`
+     read beside `ctx.weight`;
+   - `INFO` keys: the phase (pre or post, 45), `replace` (assign rather
+     than add, 48), `never_z` (16);
+   - **outputs beyond the point**: the result map (today `#{ z, color }`)
+     with `rgb` (`WritesRgb`, 20, the vector type built), `hide`
+     (`CanHide`, 39) and `w` (`NeedsW`, 12, with its read) -- the same
+     design P4 step 9c needs for McCabe's memory;
+   - `pcg` and the host ints for every kind (23 hash integers; P4 step
+     5 opened them to the simulations alone);
+   - the Möbius helpers (9 built-ins share `NeedsMobiusLib`) as a Rhai
+     library, imported (P0's `import`).
+   With the hooks but derived parameters, 141 stay blocked; with
+   derived parameters, 7: the renderer's own hooks (`PlotEmits` 3,
+   `AnalyticBlur` 2, `VolumeSideEmit` 2), each a design of its own,
+   open.
+4. **The twins, in batches**: the variations by family -- a skeleton
+   generator from the defs, as P4's `write_twin_skeletons`, and each
+   held by a density compare and timed -- the escape colourings, the
+   solids (Mandelbox, Mandelbulb, the KIFS, the quaternion Julia; the
+   two Flame Attractor solids are the flame itself, nothing to twin),
+   the fields (a never-escaping formula and an averaging colouring,
+   Weierstrass's analytic gradient for the hillshade the part to check;
+   decided in the KIFS plan to stay in mode B, so twins beside them).
+5. **Edit as Rhai everywhere**: the simulation panel (the model and the
+   colouring, per layer and colour layer), the Escape panel's colouring,
+   the solids and fields, a transform's variations -- each putting the
+   twin in place and opening it.
+
+Not convertible: JWildfire's 8 variations that run user-typed Java
+(`custom_wf` and the rest; refused for security,
+[variation-port-blockers.md](variation-port-blockers.md)). A Rhai
+variation is the safe stand-in for what they were used for, but a
+`.flame` that carries Java code cannot be translated.
+
 ## Decisions (the user, 2026-11-01)
 
 - **D1. The built-in effects: replaced by their Rhai twins**, "so long
@@ -753,6 +851,12 @@ shape fingerprint will not move by itself).
   person reads following the language -- design rules 7 and 8.
 - **P0**: the user wants a way to import Rhai scripts -- through the
   library, as P0 now says.
+- **D7. Everything editable as Rhai** (2026-11-02): "The eventual goal
+  is to port everything over to Rhai so the user can edit any formula
+  or coloring." Every built-in gets a twin and an Edit as Rhai (P7);
+  D2's "stay WGSL" holds until a kind's twins are done, and whether
+  they then replace the built-ins is decided kind by kind, as D1 did
+  for the effects.
 
 ## Left from the KIFS and variations plan
 
