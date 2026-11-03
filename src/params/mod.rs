@@ -117,6 +117,20 @@ impl ParamKind {
         }
     }
 
+    /// Whether `v` is a value of this kind (a script edited since a
+    /// value was set can declare its parameter anew).
+    pub fn holds(&self, v: &Value) -> bool {
+        matches!(
+            (self, v),
+            (ParamKind::Float { .. }, Value::Float(_))
+                | (ParamKind::Int { .. }, Value::Int(_))
+                | (ParamKind::Bool { .. }, Value::Bool(_))
+                | (ParamKind::Choice { .. }, Value::Choice(_))
+                | (ParamKind::Text { .. }, Value::Text(_))
+                | (ParamKind::Color { .. }, Value::Color(_))
+        )
+    }
+
     /// The default, as a GPU kind's slot holds it.
     pub fn slot_default(&self) -> f32 {
         self.to_slot(&self.default_value())

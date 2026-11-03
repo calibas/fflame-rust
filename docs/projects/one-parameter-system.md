@@ -159,7 +159,15 @@ Each a commit, each behaviour-preserving and held by tests:
    kind's f32 slot is read and written by `ParamKind::from_slot` /
    `to_slot` (a choice rounded and clamped, a switch above one half).
 3. **`ui::params`**: the renderer and its two stores, with layout tests
-   for every kind of control.
+   for every kind of control. **Done**: `control` (one per kind, every
+   slider a `VkbSlider`, `Edits` clamping, or `Never` for a free number;
+   a linear float's value field drags at a 500th of its range, the
+   simulations' rule; a choice is a dropdown labelled on its left, as
+   escape's, the simulations' and the scripts' are), and `list` /
+   `list_with` (conditions, fills as one undo step, grids, a `hide`
+   predicate, an `after` hook for escape's polar row). Grid cells no
+   longer clamp a stored value just by being drawn
+   (`clamp_existing_to_range(false)`).
 4. **Simulations**: 280 `SimParamDef` literals by a codemod in
    `scripts/`; `sim::custom` gives `ParamDef`; `SLOW_PARAMS` and
    `INFO.slow` become flags; the simulation panel draws through the
