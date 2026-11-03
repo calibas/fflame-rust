@@ -253,6 +253,9 @@ pub const SHIPPED_MODELS: &[(&str, &str)] = &[
     ("cahn_hilliard", include_str!("../../assets/sim/cahn_hilliard.rhai")),
     ("kobayashi", include_str!("../../assets/sim/kobayashi.rhai")),
     ("snowfake", include_str!("../../assets/sim/snowfake.rhai")),
+    // The field's range and a repeated pass (step 9a).
+    ("dbm", include_str!("../../assets/sim/dbm.rhai")),
+    ("fingering", include_str!("../../assets/sim/fingering.rhai")),
 ];
 
 // ============================================================================
@@ -411,12 +414,14 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     let passes = lang::rhai::sim_model_passes(source);
     let mut wgsl = String::new();
     let mut rng = false;
+    let mut min_max = false;
     let mut program = None;
     for n in 0..passes {
         let p = lang::rhai::sim_model(source, SimFn::Step(n)).map_err(|d| first(&d))?;
         let w = lang::wgsl::sim_model(&p, SimFn::Step(n))?;
         wgsl.push_str(&w.body);
         rng |= w.rng;
+        min_max |= w.min_max;
         program.get_or_insert(p);
     }
     let program = program.ok_or("a simulation model has `fn cell_step`")?;
@@ -443,6 +448,7 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     let mut features = Vec::new();
     for (on, f) in [
         (rng, ModelFeature::NeedsRng),
+        (min_max, ModelFeature::NeedsMinMax),
         (lang::rhai::info_bool(source, "time_step") == Some(false), ModelFeature::NoTimeStep),
         (lang::rhai::info_bool(source, "settles") == Some(false), ModelFeature::NeverStills),
     ] {
@@ -451,6 +457,23 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         }
     }
     let parameters: &'static [SimParamDef] = Box::leak(sim_params(&program)?.into_boxed_slice());
+    // A pass run several times a step, its count a parameter (P4 step
+    // 9a): `#{ pass: 2, param: "relax" }`, the pass numbered as the
+    // functions are (`cell_step` is 1).
+    let repeat = match lang::rhai::info_json(source, "repeat") {
+        None => None,
+        Some(serde_json::Value::Object(m)) => {
+            let pass = m.get("pass").and_then(serde_json::Value::as_u64).filter(|n| (1..=u64::from(passes)).contains(n));
+            let pass = pass.ok_or_else(|| format!("`INFO.repeat.pass` is a pass, 1 to {passes}"))?;
+            let param = m.get("param").and_then(serde_json::Value::as_str).filter(|n| parameters.iter().any(|p| p.name == *n));
+            let param = param.ok_or("`INFO.repeat.param` names a parameter of `PARAMS`, the count")?;
+            if let Some(o) = m.keys().find(|k| !matches!(k.as_str(), "pass" | "param")) {
+                return Err(format!("`INFO.repeat` has `pass` and `param`, not `{o}`"));
+            }
+            Some((pass as u32 - 1, leak(param)))
+        }
+        Some(_) => return Err("`INFO.repeat` is `#{ pass, param }`".to_string()),
+    };
     let default_steps = number("steps").map_or(1000, |v| v.max(1.0) as u32);
     // Its own stable time step, run once here at the defaults: a script
     // that cannot give one is a message now, not a cap that silently
@@ -477,7 +500,7 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         presets: Box::leak(presets_of(source, parameters, default_steps)?.into_boxed_slice()),
         wgsl: leak(wgsl),
         passes: u32::from(passes),
-        repeat: None,
+        repeat,
         measure: None,
         max_dt: number("max_dt").map_or(default_dt, |v| v as f32),
         diffusion: Box::leak(diffusion.into_boxed_slice()),
@@ -701,16 +724,12 @@ mod tests {
         refused("0.5 / max(p.d, 0.25)", "0.0 * p.d", "a time step is a positive number");
     }
 
-    /// Whether a built-in model is in the class a script can be (P4 step
-    /// 7): no kernel table, agents, repeated or measured pass, and none of
-    /// the features only the framework's stages give.
+    /// Whether a built-in model is one a script can be yet (P4 steps 7
+    /// and 9): none of the framework's stages a script cannot ask for --
+    /// the field's range and a repeated pass it can (9a).
     pub(crate) fn in_class(m: &ModelDef) -> bool {
         use ModelFeature::*;
-        m.kernel.is_none()
-            && m.agents.is_none()
-            && m.repeat.is_none()
-            && m.measure.is_none()
-            && !m.features.iter().any(|f| matches!(f, NeedsPyramid | ExactDiscs | NeedsAgents | NeedsMinMax | TakesDrive | PublishesSignal | Memory))
+        m.kernel.is_none() && m.agents.is_none() && m.measure.is_none() && !m.features.iter().any(|f| matches!(f, NeedsPyramid | ExactDiscs | NeedsAgents | TakesDrive | PublishesSignal | Memory))
     }
 
     /// JSON as a Rhai literal: maps `#{ }`, an f32's number as its
@@ -769,6 +788,9 @@ mod tests {
         }
         if m.has(ModelFeature::NeverStills) {
             let _ = writeln!(s, "    settles: false,");
+        }
+        if let Some((pass, param)) = m.repeat {
+            let _ = writeln!(s, "    repeat: #{{ pass: {}, param: {param:?} }},", pass + 1);
         }
         if !m.presets.is_empty() {
             let _ = writeln!(s, "    presets: [");

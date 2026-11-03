@@ -1658,7 +1658,7 @@ impl Checker {
         let literal = match b {
             Builtin::Cell => Some(match self.kind {
                 EntryKind::SimColoring => 0..28,
-                EntryKind::SimModel => 0..22,
+                EntryKind::SimModel => 0..24,
                 _ => 0..0,
             }),
             Builtin::HostInt => Some(0..4),

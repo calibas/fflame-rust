@@ -171,18 +171,23 @@ fn cell_index(a: &IExpr) -> Option<usize> {
 
 /// A simulation model's host values by `__cell`'s index (P4): the state
 /// a step pass is given (0-3), the seed's inside and noise (19, 20), the
-/// time step (21). The rest are a colouring's; the step index is an int
-/// (`__host_int`).
-const SIM_MODEL_HOST: [&str; 22] = ["s.x", "s.y", "s.z", "s.w", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "inside", "noise", "sim_dt()"];
+/// time step (21), the field's minimum and maximum of `.x` a step ago
+/// (22, 23: `NeedsMinMax`, P4 step 9a). The rest are a colouring's; the
+/// step index is an int (`__host_int`).
+const SIM_MODEL_HOST: [&str; 24] = [
+    "s.x", "s.y", "s.z", "s.w", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "inside", "noise", "sim_dt()", "sim_minmax().x", "sim_minmax().y",
+];
 
 /// A simulation model's function in WGSL (P4): a step pass as the step
 /// template calls it, `sim_step` (pass 0) or `sim_step2` ..., or the seed,
-/// `sim_seed`; and whether it draws random numbers (`ModelFeature::
-/// NeedsRng`). Each pass's helpers carry a prefix of its own, as every
-/// pass's module holds the model's whole WGSL.
+/// `sim_seed`; whether it draws random numbers (`ModelFeature::NeedsRng`)
+/// and reads the field's range (`NeedsMinMax`). Each pass's helpers carry
+/// a prefix of its own, as every pass's module holds the model's whole
+/// WGSL.
 pub struct SimModelWgsl {
     pub body: String,
     pub rng: bool,
+    pub min_max: bool,
 }
 
 /// [`SimModelWgsl`] for a checked function of a model (`rhai::SimFn`).
@@ -218,7 +223,8 @@ pub fn sim_model(p: &Program, f: super::rhai::SimFn) -> Result<SimModelWgsl, Str
     // seed hashed (`pcg` of `ctx.seed_lo`: a draw at another cell).
     let body = g.finish("", body);
     let rng = body.contains("sim_rand(") || body.contains("params.seed_lo") || body.contains("params.seed_hi");
-    Ok(SimModelWgsl { body, rng })
+    let min_max = body.contains("sim_minmax(");
+    Ok(SimModelWgsl { body, rng, min_max })
 }
 
 /// A simulation colouring's WGSL (P4): `sim_color(x, p)` as the colour
