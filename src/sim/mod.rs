@@ -433,6 +433,9 @@ pub fn spectral_scales(
     match model {
         "mccabe" => Some(models::mccabe_scale_discs(params)),
         "smoothlife" => Some(models::smoothlife_discs(params)),
+        // A Rhai model's `fn discs(p)` (P4 step 9b).
+        #[cfg(feature = "lang")]
+        name if name.starts_with(custom::PREFIX) => custom::discs(name, params),
         _ => None,
     }
 }

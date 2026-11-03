@@ -825,6 +825,10 @@ fn escaped(s, p) {
   (`rhai::SimFn`), its helpers prefixed per pass, as each pass's module
   holds the model's whole WGSL
   ([SIMULATION.md](SIMULATION.md#models-written-in-rhai)).
+- **Two ints divided** (P4 step 9b): Rhai's truncating division,
+  `BinOp::IDiv`, where UF's `/` is the quotient (the checker joins it
+  with float); by zero, and `i32::MIN` by -1, the dividend, as WGSL's
+  i32 division is -- the interpreter computes the same.
 - **Flow in the effect-like functions** (P4 step 5): `break`,
   `continue` and an early `return` -- `IStmt::Break`, `Continue`,
   `Return`, which only the WGSL back end emits (the interpreter and the

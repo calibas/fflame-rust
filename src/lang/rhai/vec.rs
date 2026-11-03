@@ -315,7 +315,7 @@ impl Lowerer<'_> {
         match n {
             "vec3" | "cross" => Some(Kind::Vec3),
             "quat" => Some(Kind::Quat),
-            "rgba" | "vec4" | "input" | "input_at" | "read" => Some(Kind::Rgba),
+            "rgba" | "vec4" | "input" | "input_at" | "read" | "drive" => Some(Kind::Rgba),
             "palette" => Some(Kind::Vec3),
             "normalize" | "abs" | "floor" | "min" | "max" | "clamp" | "mix" => first(),
             "conj" | "inv" | "pow" => first().filter(|k| *k == Kind::Quat),
@@ -805,6 +805,12 @@ impl Lowerer<'_> {
                 }
                 _ => return self.err(p, "`read(dx, dy)`: the neighbour's offset, two whole numbers"),
             },
+            // A simulation model's drive (P4 step 9b): the Signal couplings
+            // aimed at its layer, a vector of four.
+            ("drive", 0) if !self.sim_model || self.sim_fn == super::SimFn::Seed => {
+                return self.err(p, "`drive()` is the couplings' drive: in a simulation model's step alone");
+            }
+            ("drive", 0) => V(Vector::new(Kind::Rgba, (24..28).map(|i| call1("__cell", mk(ExprKind::Int(i), span), span)).collect())),
             // A simulation colouring's palette (P4): the shared one at `t`.
             ("palette", 1) if !self.sim_coloring => {
                 return self.err(p, "`palette(t)` is a simulation colouring's: in `fn cell_color` alone");

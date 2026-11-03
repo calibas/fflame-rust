@@ -53,8 +53,9 @@ struct Registry {
     /// Names whose carried source failed to compile: not retried every
     /// frame. A new source is a new name.
     failed: HashMap<String, String>,
-    /// The models with a `fn max_dt(p)` of their own, by name (P4 step 6).
-    dt: HashMap<String, Arc<DtScript>>,
+    /// The models with functions run on the CPU (`max_dt`, `kernel`,
+    /// `discs`), by name (P4 steps 6 and 9b).
+    cpu: HashMap<String, Arc<CpuScript>>,
 }
 
 fn registry() -> &'static RwLock<Registry> {
@@ -256,69 +257,192 @@ pub const SHIPPED_MODELS: &[(&str, &str)] = &[
     // The field's range and a repeated pass (step 9a).
     ("dbm", include_str!("../../assets/sim/dbm.rhai")),
     ("fingering", include_str!("../../assets/sim/fingering.rhai")),
+    // Kernel tables, the spectral discs, the drive and the signal (step
+    // 9b).
+    ("lenia", include_str!("../../assets/sim/lenia.rhai")),
+    ("lattice4", include_str!("../../assets/sim/lattice4.rhai")),
+    ("smoothlife", include_str!("../../assets/sim/smoothlife.rhai")),
+    ("turing", include_str!("../../assets/sim/turing.rhai")),
 ];
 
 // ============================================================================
 // A model's own time step and presets (P4 step 6)
 // ============================================================================
 
-/// A model's `fn max_dt(p)`: its stable time step at the parameters in
-/// force, which the built-ins write as a `dt_bound` closure. Plain Rhai on
-/// the CPU -- the script's source as Rhai runs it -- with the core
-/// language, its maths and `min`/`max`, an operation budget and nothing
-/// else.
-struct DtScript {
+/// A model's functions that run on the CPU (P4 steps 6 and 9b): `fn
+/// max_dt(p)`, its stable time step, which a built-in writes as a
+/// `dt_bound` closure; `fn kernel(p)`, its convolution table, a built-in's
+/// `kernel` closure; `fn discs(p)`, the discs the spectral stage averages
+/// over (`spectral_scales`). Plain Rhai -- the script's source as Rhai
+/// runs it -- with the core language, its maths, arrays and maps,
+/// `min`/`max`, an operation budget and nothing else.
+struct CpuScript {
     source: String,
     /// The parameters that are ints (`round` of the slot), as the script
     /// reads them on the GPU.
     ints: Vec<String>,
 }
 
-fn dt_engine() -> rhai::Engine {
+fn cpu_engine() -> rhai::Engine {
     use rhai::packages::Package;
     let mut engine = rhai::Engine::new_raw();
     engine.register_global_module(rhai::packages::CorePackage::new().as_shared_module());
     engine.register_global_module(rhai::packages::BasicMathPackage::new().as_shared_module());
     engine.register_global_module(rhai::packages::LogicPackage::new().as_shared_module());
-    engine.set_max_operations(100_000);
+    engine.register_global_module(rhai::packages::BasicArrayPackage::new().as_shared_module());
+    engine.register_global_module(rhai::packages::BasicMapPackage::new().as_shared_module());
+    // A 65 x 65 table twice over is a few hundred thousand operations.
+    engine.set_max_operations(20_000_000);
     engine
 }
 
-/// `max_dt(p)` at `value(name)` for each of `params`.
-fn eval_max_dt(engine: &rhai::Engine, ast: &rhai::AST, params: &[SimParamDef], ints: &[String], value: impl Fn(&str) -> f32) -> Result<f64, String> {
+/// The parameters as `p`: each at `value(name)`, an int where the script
+/// reads one.
+fn params_map(params: &[SimParamDef], ints: &[String], value: impl Fn(&str) -> f32) -> rhai::Map {
     let mut map = rhai::Map::new();
     for p in params {
         let v = value(p.name);
         let v = if ints.iter().any(|n| n == p.name) { rhai::Dynamic::from_int(v.round() as rhai::INT) } else { rhai::Dynamic::from_float(f64::from(v)) };
         map.insert(p.name.into(), v);
     }
+    map
+}
+
+/// `f(p)`, the script's function.
+fn call_cpu(engine: &rhai::Engine, ast: &rhai::AST, f: &str, p: rhai::Map) -> Result<rhai::Dynamic, String> {
     let options = rhai::CallFnOptions::new().eval_ast(false);
-    let r: rhai::Dynamic = engine.call_fn_with_options(options, &mut rhai::Scope::new(), ast, "max_dt", (map,)).map_err(|e| format!("`max_dt(p)`: {e}"))?;
-    r.as_float().or_else(|_| r.as_int().map(|i| i as f64)).map_err(|t| format!("`max_dt(p)` gives a number, not {t}"))
+    engine.call_fn_with_options(options, &mut rhai::Scope::new(), ast, f, (p,)).map_err(|e| format!("`{f}(p)`: {e}"))
+}
+
+fn number(v: &rhai::Dynamic) -> Option<f64> {
+    v.as_float().ok().or_else(|| v.as_int().ok().map(|i| i as f64))
+}
+
+/// `max_dt(p)`'s result: a number.
+fn dt_of(r: &rhai::Dynamic) -> Result<f64, String> {
+    number(r).ok_or_else(|| format!("`max_dt(p)` gives a number, not {}", r.type_name()))
+}
+
+/// `kernel(p)`'s result as the table: `#{ radius, weights }`, one block of
+/// `(2 radius + 1)^2` weights or two (a model that gathers two kernels,
+/// row-major from -radius to radius), finite.
+fn kernel_of(r: &rhai::Dynamic) -> Result<super::SimKernel, String> {
+    let what = "`kernel(p)` gives `#{ radius, weights }`: a radius in cells and one or two blocks of (2 radius + 1)^2 weights";
+    let map = r.clone().try_cast::<rhai::Map>().ok_or(what)?;
+    let radius = map.get("radius").and_then(|v| v.as_int().ok()).filter(|r| (1..=i64::from(super::MAX_KERNEL_RADIUS)).contains(r)).ok_or(what)? as u32;
+    let weights = map.get("weights").and_then(|v| v.clone().try_cast::<rhai::Array>()).ok_or(what)?;
+    let weights: Vec<f32> = weights.iter().map(|w| number(w).map(|v| v as f32)).collect::<Option<_>>().ok_or(what)?;
+    let taps = (2 * radius as usize + 1).pow(2);
+    if weights.is_empty() || weights.len() % taps != 0 || weights.len() > 2 * taps || weights.iter().any(|w| !w.is_finite()) {
+        return Err(format!("{what}; this one has {} weights for radius {radius}", weights.len()));
+    }
+    Ok(super::SimKernel { radius, weights })
+}
+
+/// `discs(p)`'s result as the spectral stage's discs: a list of `#{ ra,
+/// rb, stretch, angle, annulus }`, `rb` (0), `stretch` (1), `angle` (0)
+/// and `annulus` (false) optional.
+fn discs_of(r: &rhai::Dynamic) -> Result<Vec<super::spectral::SpectralScale>, String> {
+    let what = "`discs(p)` gives a list of `#{ ra, rb, stretch, angle, annulus }`";
+    let list = r.clone().try_cast::<rhai::Array>().ok_or(what)?;
+    list.iter()
+        .map(|d| {
+            let m = d.clone().try_cast::<rhai::Map>().ok_or(what)?;
+            let f = |k: &str, default: f64| m.get(k).map_or(Some(default), number).map(|v| v as f32);
+            let disc = super::spectral::SpectralScale {
+                ra: m.get("ra").and_then(number).ok_or(what)? as f32,
+                rb: f("rb", 0.0).ok_or(what)?,
+                stretch: f("stretch", 1.0).ok_or(what)?,
+                angle: f("angle", 0.0).ok_or(what)?,
+                annulus: m.get("annulus").map_or(Some(false), |v| v.as_bool().ok()).ok_or(what)?,
+            };
+            Ok(disc)
+        })
+        .collect()
+}
+
+/// `f` with the model `name`'s script parsed on this thread (an engine
+/// and its AST are not shared between threads: rhai is built without
+/// `sync`), parsed again when its source changes.
+fn with_script<T>(name: &str, f: impl FnOnce(&rhai::Engine, &rhai::AST, &CpuScript) -> T) -> Option<T> {
+    use std::cell::RefCell;
+    thread_local! {
+        static PARSED: RefCell<HashMap<String, (Arc<CpuScript>, rhai::Engine, rhai::AST)>> = RefCell::new(HashMap::new());
+    }
+    let script = registry().read().ok().and_then(|r| r.cpu.get(name).cloned())?;
+    PARSED.with(|parsed| {
+        let mut parsed = parsed.borrow_mut();
+        if parsed.get(name).is_none_or(|(s, ..)| !Arc::ptr_eq(s, &script)) {
+            let engine = cpu_engine();
+            let ast = engine.compile(&script.source).ok()?;
+            parsed.insert(name.to_string(), (script.clone(), engine, ast));
+        }
+        let (_, engine, ast) = &parsed[name];
+        Some(f(engine, ast, &script))
+    })
 }
 
 /// The `dt_bound` of a model with a `fn max_dt(p)`: its script, found by
-/// the model's name and parsed once per thread (an engine and its AST are
-/// not shared between threads). Not a number when it cannot run, which
-/// `max_dt_for` reads as "the static cap".
+/// the model's name. Not a number when it cannot run, which `max_dt_for`
+/// reads as "the static cap".
 fn script_dt_bound(p: &super::Params) -> f32 {
-    use std::cell::RefCell;
-    thread_local! {
-        static PARSED: RefCell<HashMap<String, (Arc<DtScript>, rhai::Engine, rhai::AST)>> = RefCell::new(HashMap::new());
-    }
     let model = p.model();
-    let Some(script) = registry().read().ok().and_then(|r| r.dt.get(model.name).cloned()) else { return f32::NAN };
-    PARSED.with(|parsed| {
-        let mut parsed = parsed.borrow_mut();
-        let fresh = parsed.get(model.name).is_none_or(|(s, ..)| !Arc::ptr_eq(s, &script));
-        if fresh {
-            let engine = dt_engine();
-            let Ok(ast) = engine.compile(&script.source) else { return f32::NAN };
-            parsed.insert(model.name.to_string(), (script.clone(), engine, ast));
+    let r = with_script(model.name, |e, ast, s| call_cpu(e, ast, "max_dt", params_map(model.parameters, &s.ints, |n| p.get(n))).and_then(|r| dt_of(&r)));
+    r.and_then(Result::ok).map_or(f32::NAN, |v| v as f32)
+}
+
+/// A CPU function's result at the parameters in force, cached on their
+/// values: the renderer asks for a kernel every batch, and a table is
+/// thousands of taps of Rhai. A failure is logged once and gives
+/// `fallback`.
+fn cached<T: Clone + 'static>(cache: &'static std::thread::LocalKey<std::cell::RefCell<HashMap<String, (Vec<u32>, T)>>>, model: &ModelDef, values: &dyn Fn(&str) -> f32, f: &str, read: fn(&rhai::Dynamic) -> Result<T, String>, fallback: impl FnOnce() -> T) -> T {
+    let key: Vec<u32> = model.parameters.iter().map(|p| values(p.name).to_bits()).collect();
+    if let Some(hit) = cache.with(|c| c.borrow().get(model.name).filter(|(k, _)| *k == key).map(|(_, v)| v.clone())) {
+        return hit;
+    }
+    let r = with_script(model.name, |e, ast, s| call_cpu(e, ast, f, params_map(model.parameters, &s.ints, values)).and_then(|r| read(&r)));
+    let value = match r {
+        Some(Ok(v)) => v,
+        other => {
+            let e = match other {
+                Some(Err(e)) => e,
+                _ => "its script is not registered".to_string(),
+            };
+            if registry().write().is_ok_and(|mut r| r.failed.insert(format!("{}:{f}", model.name), e.clone()).is_none()) {
+                log::warn!("The simulation model `{}`'s `{f}(p)` failed: {e}", model.name);
+            }
+            fallback()
         }
-        let (_, engine, ast) = &parsed[model.name];
-        eval_max_dt(engine, ast, model.parameters, &script.ints, |n| p.get(n)).map_or(f32::NAN, |v| v as f32)
-    })
+    };
+    cache.with(|c| c.borrow_mut().insert(model.name.to_string(), (key, value.clone())));
+    value
+}
+
+/// The `kernel` of a model with a `fn kernel(p)`: its table at the
+/// parameters in force; a zero table when the script fails.
+fn script_kernel(p: &super::Params) -> super::SimKernel {
+    thread_local! {
+        static KERNELS: std::cell::RefCell<HashMap<String, (Vec<u32>, super::SimKernel)>> = std::cell::RefCell::new(HashMap::new());
+    }
+    cached(&KERNELS, p.model(), &|n| p.get(n), "kernel", kernel_of, || super::SimKernel { radius: 1, weights: vec![0.0; 9] })
+}
+
+impl Clone for super::SimKernel {
+    fn clone(&self) -> Self {
+        super::SimKernel { radius: self.radius, weights: self.weights.clone() }
+    }
+}
+
+/// The spectral stage's discs of a Rhai model with a `fn discs(p)` (P4
+/// step 9b), at `params`, the defaults filling what they leave out; none
+/// for a model without.
+pub fn discs(name: &str, params: &std::collections::BTreeMap<String, f32>) -> Option<Vec<super::spectral::SpectralScale>> {
+    thread_local! {
+        static DISCS: std::cell::RefCell<HashMap<String, (Vec<u32>, Vec<super::spectral::SpectralScale>)>> = std::cell::RefCell::new(HashMap::new());
+    }
+    let m = model(name).filter(|m| m.has(ModelFeature::ExactDiscs))?;
+    let p = super::Params { model: m, map: params };
+    Some(cached(&DISCS, m, &|n| p.get(n), "discs", discs_of, Vec::new))
 }
 
 /// A model's `INFO.presets` as the built-ins' are: each a map of `name`,
@@ -425,6 +549,8 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         program.get_or_insert(p);
     }
     let program = program.ok_or("a simulation model has `fn cell_step`")?;
+    // Its step reads the spectral stage's disc averages (P4 step 9b).
+    let exact_discs = wgsl.contains("pyr_diff_cell(") || wgsl.contains("pyr_exact()");
     let seed = if lang::rhai::has_function(source, "cell_seed") {
         let p = lang::rhai::sim_model(source, SimFn::Seed).map_err(|d| first(&d))?;
         lang::wgsl::sim_model(&p, SimFn::Seed)?.body
@@ -449,6 +575,9 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     for (on, f) in [
         (rng, ModelFeature::NeedsRng),
         (min_max, ModelFeature::NeedsMinMax),
+        (wgsl.contains("sim_drive("), ModelFeature::TakesDrive),
+        (lang::rhai::info_bool(source, "publishes_signal") == Some(true), ModelFeature::PublishesSignal),
+        (exact_discs, ModelFeature::ExactDiscs),
         (lang::rhai::info_bool(source, "time_step") == Some(false), ModelFeature::NoTimeStep),
         (lang::rhai::info_bool(source, "settles") == Some(false), ModelFeature::NeverStills),
     ] {
@@ -475,14 +604,23 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         Some(_) => return Err("`INFO.repeat` is `#{ pass, param }`".to_string()),
     };
     let default_steps = number("steps").map_or(1000, |v| v.max(1.0) as u32);
-    // Its own stable time step, run once here at the defaults: a script
-    // that cannot give one is a message now, not a cap that silently
-    // falls back at the first step.
-    let dt_bound = if lang::rhai::has_function(source, "max_dt") {
-        let ints = int_params(&program);
-        let engine = dt_engine();
-        let ast = engine.compile(source).map_err(|e| format!("`max_dt(p)`: {e}"))?;
-        let at = eval_max_dt(&engine, &ast, parameters, &ints, |n| parameters.iter().find(|p| p.name == n).map_or(0.0, |p| p.default))?;
+    // Its CPU functions, each run once here at the defaults: a script
+    // that cannot give a time step, a table or its discs is a message
+    // now, not a fallback at the first step.
+    let has = |f: &str| lang::rhai::has_function(source, f);
+    let cpu = if has("max_dt") || has("kernel") || has("discs") {
+        let engine = cpu_engine();
+        let ast = engine.compile(source).map_err(|e| format!("its CPU functions: {e}"))?;
+        Some((engine, ast, int_params(&program)))
+    } else {
+        None
+    };
+    let at_defaults = |f: &str| -> Result<rhai::Dynamic, String> {
+        let (engine, ast, ints) = cpu.as_ref().expect("a CPU function");
+        call_cpu(engine, ast, f, params_map(parameters, ints, |n| parameters.iter().find(|p| p.name == n).map_or(0.0, |p| p.default)))
+    };
+    let dt_bound = if has("max_dt") {
+        let at = dt_of(&at_defaults("max_dt")?)?;
         if !(at.is_finite() && at > 0.0) {
             return Err(format!("`max_dt(p)` at the defaults gives {at}: a time step is a positive number"));
         }
@@ -490,6 +628,22 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     } else {
         None
     };
+    // The table its step gathers against (`tap(i)`), and the discs the
+    // spectral stage averages for it (`disc(i)`).
+    let reads_kernel = wgsl.contains("klut(") || wgsl.contains("params.kernel_radius");
+    let kernel = if has("kernel") {
+        kernel_of(&at_defaults("kernel")?)?;
+        Some(script_kernel as fn(&super::Params) -> super::SimKernel)
+    } else if reads_kernel {
+        return Err("the step reads a kernel table (`tap`, `ctx.kernel_radius`): it needs `fn kernel(p)`".to_string());
+    } else {
+        None
+    };
+    if has("discs") {
+        discs_of(&at_defaults("discs")?)?;
+    } else if exact_discs {
+        return Err("the step reads the spectral discs (`disc`, `ctx.exact_discs`): it needs `fn discs(p)`".to_string());
+    }
     let def = ModelDef {
         name: leak(name),
         state: if lang::rhai::info_string(source, "state").as_deref() == Some("discrete") { StateKind::Discrete } else { StateKind::Continuous },
@@ -505,7 +659,7 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         max_dt: number("max_dt").map_or(default_dt, |v| v as f32),
         diffusion: Box::leak(diffusion.into_boxed_slice()),
         agents: None,
-        kernel: None,
+        kernel,
         dt_bound,
         wgsl_seed: leak(seed),
         default_steps,
@@ -535,17 +689,18 @@ pub fn register_model(source: &str) -> Result<String, String> {
 /// [`register_model`] under a name given: the one a config names.
 pub fn register_model_as(source: &str, name: &str) -> Result<(), String> {
     let def: &'static ModelDef = Box::leak(Box::new(compile_model(source, name)?));
-    // Its `max_dt`, which `script_dt_bound` finds by the model's name.
-    let dt = def.dt_bound.is_some().then(|| {
+    // Its CPU functions, which `with_script` finds by the model's name.
+    let has_cpu = ["max_dt", "kernel", "discs"].iter().any(|f| lang::rhai::has_function(source, f));
+    let cpu = has_cpu.then(|| {
         let ints = lang::rhai::sim_model(source, lang::rhai::SimFn::Step(0)).map(|p| int_params(&p)).unwrap_or_default();
-        Arc::new(DtScript { source: source.to_string(), ints })
+        Arc::new(CpuScript { source: source.to_string(), ints })
     });
     if let Ok(mut r) = registry().write() {
         r.models.insert(name.to_string(), def);
         r.failed.remove(name);
-        match dt {
-            Some(dt) => r.dt.insert(name.to_string(), dt),
-            None => r.dt.remove(name),
+        match cpu {
+            Some(cpu) => r.cpu.insert(name.to_string(), cpu),
+            None => r.cpu.remove(name),
         };
     }
     Ok(())
@@ -555,6 +710,17 @@ pub fn register_model_as(source: &str, name: &str) -> Result<(), String> {
 /// which are ints too): what `max_dt` is given as Rhai ints.
 fn int_params(program: &lang::ir::Program) -> Vec<String> {
     program.params.iter().filter(|p| matches!(p.kind, ParamKind::Int | ParamKind::Enum | ParamKind::Bool)).map(|p| p.name.clone()).collect()
+}
+
+/// The registered model `name` with another kernel table, for the tests
+/// (P4 step 9b): a kernel twin's step held against its built-in's alone,
+/// on the built-in's own table -- a script builds its table in f64 where
+/// a built-in builds it in f32, and a field run amplifies the last bit.
+#[cfg(test)]
+pub(crate) fn swap_kernel(name: &str, kernel: Option<fn(&super::Params) -> super::SimKernel>) {
+    let def = model(name).expect("registered");
+    let swapped: &'static ModelDef = Box::leak(Box::new(ModelDef { kernel, ..*def }));
+    registry().write().expect("the registry").models.insert(name.to_string(), swapped);
 }
 
 /// Why the colouring or model `name` a config carries did not register,
@@ -726,10 +892,11 @@ mod tests {
 
     /// Whether a built-in model is one a script can be yet (P4 steps 7
     /// and 9): none of the framework's stages a script cannot ask for --
-    /// the field's range and a repeated pass it can (9a).
+    /// the field's range and a repeated pass it can (9a), kernel tables,
+    /// the spectral discs and the coupled drive (9b).
     pub(crate) fn in_class(m: &ModelDef) -> bool {
         use ModelFeature::*;
-        m.kernel.is_none() && m.agents.is_none() && m.measure.is_none() && !m.features.iter().any(|f| matches!(f, NeedsPyramid | ExactDiscs | NeedsAgents | TakesDrive | PublishesSignal | Memory))
+        m.agents.is_none() && m.measure.is_none() && !m.features.iter().any(|f| matches!(f, NeedsPyramid | NeedsAgents | Memory))
     }
 
     /// JSON as a Rhai literal: maps `#{ }`, an f32's number as its
@@ -788,6 +955,9 @@ mod tests {
         }
         if m.has(ModelFeature::NeverStills) {
             let _ = writeln!(s, "    settles: false,");
+        }
+        if m.has(ModelFeature::PublishesSignal) {
+            let _ = writeln!(s, "    publishes_signal: true,");
         }
         if let Some((pass, param)) = m.repeat {
             let _ = writeln!(s, "    repeat: #{{ pass: {}, param: {param:?} }},", pass + 1);
@@ -872,6 +1042,24 @@ mod tests {
             for at in &points {
                 let (a, b) = (builtin.max_dt_for(at), twin.max_dt_for(at));
                 assert!((a - b).abs() <= 1e-5 * a.abs().max(1e-3), "{name}: max_dt at {at:?}: the built-in's {a}, the twin's {b}");
+            }
+            // Its kernel table and the spectral stage's discs (P4 step 9b),
+            // at the defaults and at every preset. A built-in builds its
+            // table in f32 and a script in f64 Rhai: equal to a few units
+            // in the last place of the largest weight.
+            assert_eq!(twin.kernel.is_some(), builtin.kernel.is_some(), "{name}: a kernel table");
+            let at_presets = std::iter::once(std::collections::BTreeMap::new()).chain(builtin.presets.iter().map(|p| p.params.iter().map(|(k, v)| (k.to_string(), *v)).collect()));
+            for at in at_presets {
+                if let (Some(a), Some(b)) = (builtin.kernel_for(&at), twin.kernel_for(&at)) {
+                    assert_eq!((a.radius, a.weights.len()), (b.radius, b.weights.len()), "{name}: the table's size at {at:?}");
+                    // Against the table's largest weight: an anti-aliased rim's
+                    // tiny weights carry the f32 distance's last bit.
+                    let scale = a.weights.iter().fold(0.0f32, |m, w| m.max(w.abs()));
+                    let worst = a.weights.iter().zip(&b.weights).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max) / scale;
+                    assert!(worst <= 1e-5, "{name}: the table at {at:?} is off by {worst:e} of its largest weight");
+                }
+                let discs = |m: &str| super::super::spectral_scales(m, &at).map(|v| v.iter().map(|d| (d.ra, d.rb, d.stretch, d.angle, d.annulus)).collect::<Vec<_>>());
+                assert_eq!(discs(&key), discs(name), "{name}: the spectral discs at {at:?}");
             }
         }
     }

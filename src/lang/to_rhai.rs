@@ -1097,7 +1097,7 @@ impl<'p> Printer<'p> {
             BinOp::DiffAbs => return Err("`diffabs` is the compiler's own".into()),
             // Rhai binds these otherwise than the arithmetic (shifts above
             // `**`, `|` and `^` with `||`): written in parentheses.
-            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr | BinOp::IDiv => {
                 let (l, r) = (self.expr(a)?, self.expr(b)?);
                 return Ok(P::atom(format!("({} {} {})", l.at(ATOM), op.symbol(), r.at(ATOM))));
             }

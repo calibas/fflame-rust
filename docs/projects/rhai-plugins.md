@@ -690,6 +690,23 @@ nested loops and neighbour reads at loop offsets already work.
      A built-in's table is computed in f32 Rust and a script's in f64
      Rhai: these twins match to a tolerance, and a chaotic rule (Lenia)
      drifts over a long run, unless the table is made in f32.
+     **Built 2026-11-03**: as written, the CPU functions one runner
+     (`with_script`, `cached`: a table is thousands of taps of Rhai, so
+     cached on the parameters' values); `tap(i)` and `disc(i)`
+     builtins; `drive()` a vector; reading each implies its feature.
+     Rhai's int division joined the language (`IDiv`: the seeds' block
+     indices). The twins of Lenia, Lattice4, SmoothLife and Turing: the
+     tables within 1e-5 of their largest weight, the steps bit-identical
+     on the built-ins' own tables at every preset (`swap_kernel`), and
+     four coupled Turing twins bit-identical to four built-ins
+     (`a_rhai_turing_couples_as_the_built_in`); on their own tables
+     Turing and most of Lattice4 drift under 4e-6 over 300 steps,
+     Lattice4's cells presets 5e-5, Lenia's age channel by whole steps.
+     All four at speed (1.001, 1.004, 1.024, 0.993; the timing's rounds
+     now about 200 ms each, so a wide kernel's run stays minutes).
+     Lattice4 and Turing declared no `NeedsRng` though their steps draw:
+     corrected (a comment in the step shader; the texture engine
+     re-pinned, no bump).
    - **9c. The pyramid, memory and a measure pass** -> McCabe. Reads of
      the pyramid's averages at a radius (`pyr_sample`, `pyr_exact`,
      `pyr_diff`), and the step writing more than its `vec4`: the

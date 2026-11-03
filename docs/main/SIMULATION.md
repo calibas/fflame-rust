@@ -756,6 +756,30 @@ call.
   draws so (`sim_rand(p, 0xc1u)`), and a twin draws theirs to the bit. A
   model that draws has `ModelFeature::NeedsRng`. `break`, `continue` and
   an early `return x;` as an effect's; `pcg(n)` hashes an int.
+- **A kernel table** (P4 step 9b): `fn kernel(p)`, run on the CPU,
+  gives `#{ radius, weights }` -- one block of `(2 radius + 1)^2`
+  weights, row-major from -radius, or two (an activator and an
+  inhibitor) -- uploaded as a built-in's `kernel` closure's table is,
+  and cached on the parameters' values (the renderer asks every batch).
+  The step gathers it: `tap(i)`, `ctx.kernel_radius`, `ctx.kernel_taps`.
+  A built-in builds its table in f32 and a script in f64 Rhai, so a
+  twin's table equals its built-in's to the last bit of a weight (within
+  1e-5 of the largest), and a run amplifies that: the field compare
+  holds a kernel twin's step on the built-in's own table, bit-identical,
+  and prints the drift on its own (`swap_kernel`).
+- **The spectral discs**: `fn discs(p)` names the discs the spectral
+  stage averages by FFT (`#{ ra, rb, stretch, angle, annulus }`, as
+  `spectral_scales` gives a built-in's), and the step reads them --
+  `disc(i)` the average at the cell, `ctx.exact_discs` whether this
+  layer has them (else it gathers its table): `ExactDiscs`, as reading
+  them implies.
+- **Couplings**: `drive()`, the Signal couplings aimed at the layer, a
+  vector of four, folded in by the step itself (`TakesDrive`, as reading
+  it implies); `INFO.publishes_signal: true` says a pass before the last
+  writes the layer's signal into `.y` for the couplings from it
+  (`PublishesSignal`).
+- Two ints divided truncate toward zero, as Rhai's do (a block's index,
+  `x / r`), the dividend when by zero, as WGSL's.
 - **The seed**: `fn cell_seed(inside, noise, p, ctx)` gives a cell's
   first state from the init shape (`inside`, 0 or 1) and a draw
   (`noise`); it may draw more (`rand()`, `rand(k)`), and `init_at(x, y)`
@@ -767,16 +791,17 @@ call.
   stencil, by name: the cap on `dt` follows them, `max_dt_for`), `state`
   (`"discrete"` for a cellular automaton's whole numbers), `time_step:
   false` (`NoTimeStep`: generations, no dt slider) and `settles: false`
-  (`NeverStills`: the export is the state at step N), and `presets`: a
+  (`NeverStills`: the export is the state at step N), `publishes_signal`
+  (above), and `presets`: a
   list of maps, each `name`, `title`, `params` (by name), `steps`, `dt`,
   and the config's `boundary`, `init`, `coloring` (a built-in's name),
   `coloring_params`, `matte` and `warp` spelled as a `.fflame` spells
   them (`init: #{ blobs: #{ count: 6, radius: 24 } }`), read through
   serde; and `repeat: #{ pass: 2, param: "relax" }`, a pass run that
   parameter's number of times a step (up to `MAX_INNER_ITERATIONS`),
-  passes numbered as the functions are (`cell_step` is 1). `kernel`,
-  `agents`, `memory`, `pyramid` and `measure` are refused with a reason
-  until P4 step 9 gives each its hook.
+  passes numbered as the functions are (`cell_step` is 1). `agents`,
+  `memory`, `pyramid` and `measure` are refused with a reason until P4
+  step 9 gives each its hook.
 - **Its own stable time step**: `fn max_dt(p)`, the bound at the
   parameters in force, which a built-in writes as a `dt_bound` closure.
   It runs on the CPU as plain Rhai (the core language, its maths and
