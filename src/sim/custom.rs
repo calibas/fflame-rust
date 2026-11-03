@@ -56,6 +56,9 @@ struct Registry {
     /// The models with functions run on the CPU (`max_dt`, `kernel`,
     /// `discs`), by name (P4 steps 6 and 9b).
     cpu: HashMap<String, Arc<CpuScript>>,
+    /// The models with per-scale warps (`INFO.scale_warps`), by name (P4
+    /// step 9c).
+    warps: HashMap<String, &'static super::ScaleWarps>,
 }
 
 fn registry() -> &'static RwLock<Registry> {
@@ -263,6 +266,7 @@ pub const SHIPPED_MODELS: &[(&str, &str)] = &[
     ("lattice4", include_str!("../../assets/sim/lattice4.rhai")),
     ("smoothlife", include_str!("../../assets/sim/smoothlife.rhai")),
     ("turing", include_str!("../../assets/sim/turing.rhai")),
+    ("mccabe", include_str!("../../assets/sim/mccabe.rhai")),
 ];
 
 // ============================================================================
@@ -433,6 +437,36 @@ impl Clone for super::SimKernel {
     }
 }
 
+/// The per-scale warps of a Rhai model with `INFO.scale_warps` (P4 step
+/// 9c).
+pub fn scale_warps(name: &str) -> Option<&'static super::ScaleWarps> {
+    registry().read().ok()?.warps.get(name).copied()
+}
+
+/// A script's `INFO.scale_warps` (P4 step 9c): the parameter counting the
+/// live rows and the rows, each row's five `s{i}_warp_*` in `PARAMS`.
+fn scale_warps_of(source: &str, name: &str, parameters: &[SimParamDef]) -> Result<Option<super::ScaleWarps>, String> {
+    let Some(v) = lang::rhai::info_json(source, "scale_warps") else { return Ok(None) };
+    let what = "`INFO.scale_warps` is `#{ rows_param, rows }`";
+    let m = v.as_object().ok_or(what)?;
+    if let Some(o) = m.keys().find(|k| !matches!(k.as_str(), "rows_param" | "rows")) {
+        return Err(format!("`INFO.scale_warps` has `rows_param` and `rows`, not `{o}`"));
+    }
+    let rows_param = m.get("rows_param").and_then(serde_json::Value::as_str).filter(|n| parameters.iter().any(|p| p.name == *n));
+    let rows_param = rows_param.ok_or("`INFO.scale_warps.rows_param` names a parameter of `PARAMS`, the live rows")?;
+    let rows = m.get("rows").and_then(serde_json::Value::as_u64).filter(|n| (1..=8).contains(n)).ok_or("`INFO.scale_warps.rows` is 1 to 8")?;
+    let w = super::ScaleWarps { model: leak(name), rows_param: leak(rows_param), rows: rows as usize };
+    for r in 0..w.rows {
+        for f in super::SCALE_WARP_FIELDS {
+            let n = w.param(r, f);
+            if !parameters.iter().any(|p| p.name == n) {
+                return Err(format!("`INFO.scale_warps` has {} rows: `PARAMS` needs `{n}`", w.rows));
+            }
+        }
+    }
+    Ok(Some(w))
+}
+
 /// The spectral stage's discs of a Rhai model with a `fn discs(p)` (P4
 /// step 9b), at `params`, the defaults filling what they leave out; none
 /// for a model without.
@@ -440,7 +474,7 @@ pub fn discs(name: &str, params: &std::collections::BTreeMap<String, f32>) -> Op
     thread_local! {
         static DISCS: std::cell::RefCell<HashMap<String, (Vec<u32>, Vec<super::spectral::SpectralScale>)>> = std::cell::RefCell::new(HashMap::new());
     }
-    let m = model(name).filter(|m| m.has(ModelFeature::ExactDiscs))?;
+    let m = model(name).filter(|m| m.has(ModelFeature::ExactDiscs) || m.has(ModelFeature::NeedsPyramid))?;
     let p = super::Params { model: m, map: params };
     Some(cached(&DISCS, m, &|n| p.get(n), "discs", discs_of, Vec::new))
 }
@@ -550,7 +584,11 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     }
     let program = program.ok_or("a simulation model has `fn cell_step`")?;
     // Its step reads the spectral stage's disc averages (P4 step 9b).
-    let exact_discs = wgsl.contains("pyr_diff_cell(") || wgsl.contains("pyr_exact()");
+    // And the pyramid, its averages and spectral differences (step 9c);
+    // the memory.
+    let pyramid = wgsl.contains("pyr_prepare();");
+    let exact_discs = wgsl.contains("pyr_diff_cell(") || (wgsl.contains("pyr_exact()") && !pyramid);
+    let memory = wgsl.contains("sim_mem_read(") || wgsl.contains("sim_mem_write(") || wgsl.contains("sim_mem_count()");
     let seed = if lang::rhai::has_function(source, "cell_seed") {
         let p = lang::rhai::sim_model(source, SimFn::Seed).map_err(|d| first(&d))?;
         lang::wgsl::sim_model(&p, SimFn::Seed)?.body
@@ -578,6 +616,8 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         (wgsl.contains("sim_drive("), ModelFeature::TakesDrive),
         (lang::rhai::info_bool(source, "publishes_signal") == Some(true), ModelFeature::PublishesSignal),
         (exact_discs, ModelFeature::ExactDiscs),
+        (pyramid, ModelFeature::NeedsPyramid),
+        (memory, ModelFeature::Memory),
         (lang::rhai::info_bool(source, "time_step") == Some(false), ModelFeature::NoTimeStep),
         (lang::rhai::info_bool(source, "settles") == Some(false), ModelFeature::NeverStills),
     ] {
@@ -641,9 +681,32 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     };
     if has("discs") {
         discs_of(&at_defaults("discs")?)?;
-    } else if exact_discs {
-        return Err("the step reads the spectral discs (`disc`, `ctx.exact_discs`): it needs `fn discs(p)`".to_string());
+    } else if exact_discs || (pyramid && wgsl.contains("pyr_diff(")) {
+        return Err("the step reads the spectral discs (`disc`, `pyr_diff`, `ctx.exact_discs`): it needs `fn discs(p)`".to_string());
     }
+    if memory && !parameters.iter().any(|p| p.name == "memory") {
+        return Err("the step reads its memory: it needs a `memory` parameter, which turns it on above 0".to_string());
+    }
+    // A measure pass, the first, run while its parameter is above 0, its
+    // scratch slices those the step writes (step 9c).
+    let measure = match lang::rhai::info_json(source, "measure") {
+        None => None,
+        Some(serde_json::Value::Object(m)) => {
+            let param = m.get("param").and_then(serde_json::Value::as_str).filter(|n| parameters.iter().any(|p| p.name == *n));
+            let param = param.ok_or("`INFO.measure.param` names a parameter of `PARAMS`, which turns the pass on above 0")?;
+            let slices = m.get("slices").and_then(serde_json::Value::as_u64).filter(|n| (1..=4).contains(n));
+            let slices = slices.ok_or("`INFO.measure.slices` is the scratch's slices, 1 to 4")? as u32;
+            if let Some(o) = m.keys().find(|k| !matches!(k.as_str(), "param" | "slices")) {
+                return Err(format!("`INFO.measure` has `param` and `slices`, not `{o}`"));
+            }
+            Some(super::MeasurePass { param: leak(param), slices })
+        }
+        Some(_) => return Err("`INFO.measure` is `#{ param, slices }`".to_string()),
+    };
+    if measure.is_none() && wgsl.contains("sim_scratch_") {
+        return Err("the step reads a measure pass's scratch (`scratch`, `ctx.scratch_on`): it needs `INFO.measure`".to_string());
+    }
+    scale_warps_of(source, name, parameters)?;
     let def = ModelDef {
         name: leak(name),
         state: if lang::rhai::info_string(source, "state").as_deref() == Some("discrete") { StateKind::Discrete } else { StateKind::Continuous },
@@ -655,7 +718,7 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         wgsl: leak(wgsl),
         passes: u32::from(passes),
         repeat,
-        measure: None,
+        measure,
         max_dt: number("max_dt").map_or(default_dt, |v| v as f32),
         diffusion: Box::leak(diffusion.into_boxed_slice()),
         agents: None,
@@ -689,6 +752,7 @@ pub fn register_model(source: &str) -> Result<String, String> {
 /// [`register_model`] under a name given: the one a config names.
 pub fn register_model_as(source: &str, name: &str) -> Result<(), String> {
     let def: &'static ModelDef = Box::leak(Box::new(compile_model(source, name)?));
+    let warps = scale_warps_of(source, name, def.parameters)?.map(|w| &*Box::leak(Box::new(w)));
     // Its CPU functions, which `with_script` finds by the model's name.
     let has_cpu = ["max_dt", "kernel", "discs"].iter().any(|f| lang::rhai::has_function(source, f));
     let cpu = has_cpu.then(|| {
@@ -701,6 +765,10 @@ pub fn register_model_as(source: &str, name: &str) -> Result<(), String> {
         match cpu {
             Some(cpu) => r.cpu.insert(name.to_string(), cpu),
             None => r.cpu.remove(name),
+        };
+        match warps {
+            Some(w) => r.warps.insert(name.to_string(), w),
+            None => r.warps.remove(name),
         };
     }
     Ok(())
@@ -775,7 +843,63 @@ mod tests {
         let e = compile_model("fn cell_step(cell) { read(1, 0) }\nfn cell_seed(inside, noise) { sin(noise) }\n", "custom-x").unwrap_err();
         assert!(e.contains("a number where a vector"), "{e}");
         let e = compile_model("const INFO = #{ agents: 1000 };\nfn cell_step(cell) { read(1, 0) }\n", "custom-x").unwrap_err();
-        assert!(e.contains("INFO.agents") && e.contains("single-layer"), "{e}");
+        assert!(e.contains("INFO.agents") && e.contains("agent_step"), "{e}");
+    }
+
+    /// The framework stages a script asks for (P4 step 9c): the pyramid,
+    /// its caches filled where a path first reads it and not on a path
+    /// that does not; a measure pass and its scratch; the memory; per-scale
+    /// warps -- each from what the step reads, and a message for each one
+    /// half asked for. A helper takes the parameters and the context whole,
+    /// and a fresh array is its local, not copied into one.
+    #[test]
+    fn a_model_asks_for_the_pyramid_scratch_and_memory() {
+        let params = "const PARAMS = #{ variation: #{ value: 0.0, min: 0.0, max: 2.0 }, memory: #{ value: 0.0, min: 0.0, max: 1.0 } };
+";
+        let measure = "const INFO = #{ measure: #{ param: \"variation\", slices: 1 } };
+";
+        let steps = r#"
+fn level(p, ctx) { pyr_level(p.variation + to_float(ctx.width) * 0.0) }
+fn cell_step(cell, p, ctx) {
+    let m = [0.0, 0.0];
+    m[0] = pyr_sample(level(p, ctx), ctx.cell.re, ctx.cell.im);
+    write_scratch(0, rgba(m[0], m[1], 0.0, 0.0));
+    cell
+}
+fn cell_step2(cell, p, ctx) {
+    let v = 0.0;
+    if ctx.scratch_on == 1 {
+        v = scratch(1, 0, 0).x;
+    } else {
+        v = pyr_sample(0.0, ctx.cell.re, ctx.cell.im);
+    }
+    write_memory(0, mix(memory(0), rgba(v, 0.0, 0.0, 0.0), p.memory));
+    rgba(v, cell.y, 0.0, 0.0)
+}
+"#;
+        let def = compile_model(&format!("{params}{measure}{steps}"), "custom-stages").unwrap_or_else(|e| panic!("{e}"));
+        assert!(def.has(ModelFeature::NeedsPyramid) && def.has(ModelFeature::Memory) && !def.has(ModelFeature::ExactDiscs));
+        assert_eq!(def.measure.map(|m| (m.param, m.slices)), Some(("variation", 1)));
+        let (one, two) = def.wgsl.split_at(def.wgsl.find("fn sim_step2").expect("two passes"));
+        assert_eq!(two.matches("pyr_prepare();").count(), 1, "{two}");
+        assert!(two.find("pyr_prepare();") > two.find("sim_scratch_read("), "the scratch's path pays nothing for the pyramid:
+{two}");
+        assert!(one.contains("pyr_prepare();"));
+        assert_eq!(one.matches("array<f32, 2>").count(), 1, "the literal is the local:
+{one}");
+        // Half asked for: each a message.
+        for (src, says) in [
+            (format!("{params}{steps}"), "needs `INFO.measure`"),
+            (format!("{}{measure}{}", params.replace("memory:", "keep:"), steps.replace("p.memory", "p.keep")), "a `memory` parameter"),
+            (format!("{params}{measure}{}", steps.replace("pyr_sample(0.0,", "pyr_diff(0,")), "fn discs(p)"),
+            (format!("{params}{}{steps}", measure.replace("\"variation\"", "\"radius\"")), "names a parameter"),
+            (format!("{params}{}{steps}", measure.replace("measure:", "scale_warps: #{ rows_param: \"variation\", rows: 1 }, measure:")), "needs `s0_warp_zoom`"),
+            (format!("{params}{measure}{steps}fn cell_seed(inside, noise, p, ctx) {{ write_memory(0, rgba(0.0, 0.0, 0.0, 0.0)); rgba(inside, 0.0, 0.0, 0.0) }}
+"), "a step's"),
+        ] {
+            let e = compile_model(&src, "custom-half").expect_err(says);
+            assert!(e.contains(says), "{says}: {e}");
+        }
     }
 
     /// A carried source registers under the name the config gives it, and
@@ -893,10 +1017,10 @@ mod tests {
     /// Whether a built-in model is one a script can be yet (P4 steps 7
     /// and 9): none of the framework's stages a script cannot ask for --
     /// the field's range and a repeated pass it can (9a), kernel tables,
-    /// the spectral discs and the coupled drive (9b).
+    /// the spectral discs and the coupled drive (9b), the pyramid, a
+    /// measure pass and the memory (9c).
     pub(crate) fn in_class(m: &ModelDef) -> bool {
-        use ModelFeature::*;
-        m.agents.is_none() && m.measure.is_none() && !m.features.iter().any(|f| matches!(f, NeedsPyramid | NeedsAgents | Memory))
+        m.agents.is_none() && !m.has(ModelFeature::NeedsAgents)
     }
 
     /// JSON as a Rhai literal: maps `#{ }`, an f32's number as its
@@ -962,6 +1086,12 @@ mod tests {
         if let Some((pass, param)) = m.repeat {
             let _ = writeln!(s, "    repeat: #{{ pass: {}, param: {param:?} }},", pass + 1);
         }
+        if let Some(mp) = m.measure {
+            let _ = writeln!(s, "    measure: #{{ param: {:?}, slices: {} }},", mp.param, mp.slices);
+        }
+        if let Some(w) = super::super::scale_warps(m.name) {
+            let _ = writeln!(s, "    scale_warps: #{{ rows_param: {:?}, rows: {} }},", w.rows_param, w.rows);
+        }
         if !m.presets.is_empty() {
             let _ = writeln!(s, "    presets: [");
             for p in m.presets {
@@ -1026,6 +1156,10 @@ mod tests {
             assert_eq!(presets(twin), presets(builtin), "{name}: presets");
             let values = |m: &ModelDef| (m.default_dt, m.max_dt, m.default_steps, m.diffusion, m.state, m.passes, m.display_name, m.description);
             assert_eq!(values(twin), values(builtin), "{name}: working values");
+            let passes = |m: &ModelDef| (m.repeat, m.measure.map(|x| (x.param, x.slices)));
+            assert_eq!(passes(twin), passes(builtin), "{name}: its passes");
+            let warps = |m: &str| super::super::scale_warps(m).map(|w| (w.rows_param, w.rows));
+            assert_eq!(warps(&key), warps(name), "{name}: its per-scale warps");
             let features = |m: &ModelDef| {
                 let mut f: Vec<String> = m.features.iter().map(|f| format!("{f:?}")).collect();
                 f.sort();
@@ -1059,7 +1193,7 @@ mod tests {
                     assert!(worst <= 1e-5, "{name}: the table at {at:?} is off by {worst:e} of its largest weight");
                 }
                 let discs = |m: &str| super::super::spectral_scales(m, &at).map(|v| v.iter().map(|d| (d.ra, d.rb, d.stretch, d.angle, d.annulus)).collect::<Vec<_>>());
-                assert_eq!(discs(&key), discs(name), "{name}: the spectral discs at {at:?}");
+                assert_eq!(discs(&key), discs(name), "{name}: the spectral discs at {at:?} ({:?})", failure(&format!("{key}:discs")));
             }
         }
     }
@@ -1087,6 +1221,22 @@ mod tests {
 
     /// Write every in-class built-in model's skeleton and its WGSL to
     /// `output/sim-twins/` (P4 step 7): what a twin is written from.
+    /// Every shipped twin's generated WGSL, step and seed, beside the
+    /// built-in's (`write_twin_skeletons`), to read a twin's code against
+    /// its built-in's.
+    #[test]
+    #[ignore]
+    fn write_twin_wgsl() {
+        let dir = std::path::Path::new("output/sim-twins");
+        std::fs::create_dir_all(dir).unwrap();
+        for (name, source) in SHIPPED_MODELS {
+            let def = compile_model(source, &format!("custom-wgsl-{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+            std::fs::write(dir.join(format!("{name}.twin.wgsl")), format!("{}
+// ---- seed
+{}", def.wgsl, def.wgsl_seed)).unwrap();
+        }
+    }
+
     #[test]
     #[ignore = "a tool: writes files"]
     fn write_twin_skeletons() {

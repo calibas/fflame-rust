@@ -829,6 +829,23 @@ fn escaped(s, p) {
   `BinOp::IDiv`, where UF's `/` is the quotient (the checker joins it
   with float); by zero, and `i32::MIN` by -1, the dividend, as WGSL's
   i32 division is -- the interpreter computes the same.
+- **A simulation's framework calls** (P4 step 9c): `IExprKind::Host` and
+  `IStmt::Host` (`builtins::Host`), n-ary where a builtin is unary --
+  the pyramid's reads, a measure pass's scratch, the memory, a grid
+  test, a parameter by its slot; the writes statements. A vector read is
+  one call a part, its part a literal last argument the checker
+  requires; a simulation model's alone (`Check::host_args`), and only
+  the WGSL back end emits them. In a simulation model, `param(k)` and
+  the reads type as floats where a `let` infers its type.
+- **A helper takes `p` and `ctx` whole** (P4 step 9c): an argument that
+  is the entry's parameters, its context or a colouring's sample binds
+  the helper's parameter as it is bound at the call
+  (`passed_whole`), so `fn level(p, ctx)` reads `p.radius` and
+  `ctx.width` as its caller would.
+- **A fresh array is its local**: `let a = [x, y]` and `let a =
+  array(n, v)` bind `a` to the array the literal made, where they copied
+  it into another, element by element -- a loop the driver kept, which
+  cost McCabe's twin 7% on a pass whose other work is light.
 - **Flow in the effect-like functions** (P4 step 5): `break`,
   `continue` and an early `return` -- `IStmt::Break`, `Continue`,
   `Return`, which only the WGSL back end emits (the interpreter and the

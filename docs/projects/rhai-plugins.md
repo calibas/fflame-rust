@@ -714,6 +714,29 @@ nested loops and neighbour reads at loop offsets already work.
      to the language: a function's outputs beyond its result -- a
      result map (`#{ state, memory }`), as a variation's `#{ z, color }`
      is, rather than side-effecting calls the IR has none of.
+     **Built 2026-11-03, as calls, not a result map**: the IR gained
+     n-ary host calls (`IExprKind::Host`, `IStmt::Host`), the writes
+     statements -- `write_scratch(k, v)`, `write_memory(k, v)` -- which
+     are the template's own calls one for one; a result map would have
+     needed the scratch's slices and the memory's in one shape, and
+     McCabe writes them from different passes. The reads `pyr_sample`,
+     `pyr_level`, `pyr_diff`, `scratch(dx, dy, k)`, `memory(k)`,
+     `outside`, `param(k)` (a table's rows by slot); `ctx.scale_warped`,
+     `ctx.scratch_on`, `ctx.memory_count`; `INFO.measure` and
+     `INFO.scale_warps` (the per-scale warps, a registry beside
+     `SCALE_WARPS`); `NeedsPyramid` and `Memory` from what the step
+     reads. The checker's cap on a model's parameters is the layer's
+     block, 124 floats (McCabe has 82). Helpers take `p` and `ctx`
+     whole. McCabe's twin bit-identical at every preset and on every
+     other path (`a_rhai_mccabe_runs_every_path_as_the_built_in`: the
+     shifted grid, exact discs, a weighted leaning table, symmetry, the
+     variation radius, warps, the memory's slices) and at speed (1.024;
+     1.027 with the variation radius, from 1.104 before a compiler fix:
+     a fresh array is its `let`'s local, not copied into one; the
+     pyramid's caches filled only where a path reads it, as the
+     built-in's are, measured no difference). Open: the per-scale table's grid
+     (`PARAM_TABLES`, its fill from the ladder a Rust function) is the
+     built-in's alone -- the twin's rows are plain sliders (P7).
    - **9d. Agents** -> Physarum, DLA. A second entry point, per agent
      rather than per cell (`fn agent_step(a, p, ctx)`): its record
      (`vec4`s), its own draws (`agent_rand`), reads of the field around

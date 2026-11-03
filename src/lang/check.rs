@@ -11,7 +11,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::ast::*;
-use super::builtins::{Builtin, USER_FUNCTIONS};
+use super::builtins::{Builtin, Host, USER_FUNCTIONS};
 use super::ir::*;
 use super::{Diag, Dialect, EntryKind, Span};
 
@@ -24,6 +24,10 @@ pub const STATE_CAP_FLOATS: usize = 32;
 /// (the uniform's `fparams` / `cparams`, `assembler::PARAM_VEC4S`
 /// vec4s).
 pub const PARAM_SLOTS: usize = 64;
+/// Floats of parameters a simulation model may have (P4 step 9c): its
+/// layer's block, `sim::renderer::MODEL_PARAM_SLOTS`, less the renderer's
+/// reserved slots at its end.
+pub const SIM_MODEL_PARAM_SLOTS: usize = 124;
 /// Floats of `global:` values a formula may have: the uniform's
 /// `fdata` (64 vec4s), which nothing else of a custom formula's uses. A
 /// colouring's share its parameter block, [`PARAM_SLOTS`] in all.
@@ -322,11 +326,12 @@ impl Checker {
         }
         globals.sort_unstable();
         program.globals = globals;
-        if program.param_slots() > PARAM_SLOTS {
+        let cap = if self.kind == EntryKind::SimModel { SIM_MODEL_PARAM_SLOTS } else { PARAM_SLOTS };
+        if program.param_slots() > cap {
             self.error(
                 entry.span,
                 format!(
-                    "the parameters take {} floats; at most {PARAM_SLOTS} fit (a complex takes two)",
+                    "the parameters take {} floats; at most {cap} fit (a complex takes two)",
                     program.param_slots()
                 ),
             );
@@ -1258,6 +1263,14 @@ impl Checker {
                 ExprKind::Assign(target, value) => {
                     self.assign(target, value, out);
                 }
+                // A simulation's framework call that writes (P4 steps 9c,
+                // 9d): a statement.
+                ExprKind::Call { name, args, user: false } if Host::from_name(name).is_some_and(|h| h.result().is_none()) => {
+                    let h = Host::from_name(name).expect("a host call");
+                    if let Some(args) = self.host_args(h, args, e.span) {
+                        out.push(IStmt::Host(h, args));
+                    }
+                }
                 _ => self.warn(e.span, "this value is not used"),
             },
             Stmt::If { arms, otherwise, .. } => {
@@ -1600,6 +1613,15 @@ impl Checker {
         if self.rhai && !user && matches!(name, "to_float" | "to_int") {
             return self.rhai_conversion(name, args, span);
         }
+        // A simulation's framework call with its value (P4 steps 9c, 9d).
+        if let Some(h) = Host::from_name(name).filter(|_| !user) {
+            let Some(ty) = h.result() else {
+                self.error(span, format!("`{name}` writes: a statement of its own"));
+                return None;
+            };
+            let args = self.host_args(h, args, span)?;
+            return Some(IExpr { kind: IExprKind::Host(h, args), ty });
+        }
         let known = user || is_fractint_fn(name) || Builtin::from_name(name).is_some();
         if known && args.len() != 1 {
             self.error(span, format!("`{name}` takes one argument"));
@@ -1661,7 +1683,7 @@ impl Checker {
                 EntryKind::SimModel => 0..28,
                 _ => 0..0,
             }),
-            Builtin::HostInt => Some(0..7),
+            Builtin::HostInt => Some(0..10),
             _ => None,
         };
         if let Some(range) = literal {
@@ -1685,6 +1707,35 @@ impl Checker {
         // it is a stream's number (`rand(k)`).
         let arg = if arg.ty == Ty::Int && ty != Ty::Int && !matches!(b, Builtin::SimRand | Builtin::Tap | Builtin::Disc) { self.convert(arg, Ty::Float, args[0].span)? } else { arg };
         Some(IExpr { kind: IExprKind::Call(b, Box::new(arg)), ty })
+    }
+
+    /// A host call's arguments, each to the type it takes (an int widened
+    /// to a float where a float is taken; a float where an int is, refused),
+    /// a vector read's part a literal 0-3; a simulation model's alone.
+    fn host_args(&mut self, h: Host, args: &[Expr], span: Span) -> Option<Vec<IExpr>> {
+        if self.kind != EntryKind::SimModel {
+            self.error(span, "a simulation's framework call is a simulation model's");
+            return None;
+        }
+        let want = h.args();
+        if args.len() != want.len() {
+            self.error(span, format!("this takes {} arguments", want.len()));
+            return None;
+        }
+        if h.parts() && !matches!(args.last().map(|a| &a.kind), Some(ExprKind::Int(i)) if (0..4).contains(i)) {
+            self.error(span, "a vector read's part, a literal 0 to 3 (the lowering's)");
+            return None;
+        }
+        let mut out = Vec::new();
+        for (a, ty) in args.iter().zip(want) {
+            let v = self.expr(a)?;
+            if *ty == Ty::Int && v.ty != Ty::Int {
+                self.error(a.span, "an int here: a cell, a slot or a stream");
+                return None;
+            }
+            out.push(if v.ty == *ty { v } else { self.convert(v, *ty, a.span)? });
+        }
+        Some(out)
     }
 
     /// Rhai's conversions, the explicit way a Rhai formula turns a bool
@@ -2145,6 +2196,11 @@ pub(crate) struct Flow {
 pub(crate) fn flow(stmts: &[IStmt], f: &mut Flow) {
     for s in stmts {
         match s {
+            IStmt::Host(_, args) => {
+                for a in args {
+                    reads(a, f);
+                }
+            }
             IStmt::Break | IStmt::Continue | IStmt::Return => {}
             IStmt::Assign(place, e) => {
                 reads(e, f);
@@ -2212,6 +2268,11 @@ pub(crate) fn flow(stmts: &[IStmt], f: &mut Flow) {
 
 pub(crate) fn reads(e: &IExpr, f: &mut Flow) {
     match &e.kind {
+        IExprKind::Host(_, args) => {
+            for a in args {
+                reads(a, f);
+            }
+        }
         IExprKind::Var(v) => {
             if !f.written.contains(v) {
                 f.exposed.insert(*v);
@@ -2236,6 +2297,7 @@ pub(crate) fn reads(e: &IExpr, f: &mut Flow) {
 fn collect_assigns(stmts: &[IStmt], out: &mut Vec<(VarId, IExpr)>) {
     for s in stmts {
         match s {
+            IStmt::Host(..) => {}
             IStmt::Break | IStmt::Continue | IStmt::Return => {}
             IStmt::Assign(Place::Var(v), e) => out.push((*v, e.clone())),
             IStmt::Assign(..) | IStmt::SetElem { .. } | IStmt::Map { .. } => {}

@@ -3,7 +3,7 @@
 //! this and nothing else.
 
 use super::ast::{BinOp, UnOp};
-use super::builtins::Builtin;
+use super::builtins::{Builtin, Host};
 use super::{Dialect, EntryKind, Span};
 
 /// A value's type. `color` is phase 4 (direct colouring).
@@ -342,6 +342,8 @@ pub enum IExprKind {
     /// An array variable's element at a flattened index (an int, clamped
     /// to the array: UF stops the render past it, the GPU cannot).
     Elem(VarId, Box<IExpr>),
+    /// A simulation's framework call with its value (P4 steps 9c, 9d).
+    Host(Host, Vec<IExpr>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -388,6 +390,9 @@ pub enum IStmt {
     Break,
     Continue,
     Return,
+    /// A simulation's framework call that writes (P4 steps 9c, 9d): the
+    /// scratch, the memory, an agent's claim or deposit.
+    Host(Host, Vec<IExpr>),
 }
 
 /// A solid's call of a built-in flame variation (3d-look-and-tools P5,
@@ -611,11 +616,13 @@ impl Program {
                 IExprKind::Predef(q) => *q == p,
                 IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) | IExprKind::Elem(_, a) => e(a, p),
                 IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => e(a, p) || e(b, p),
+                IExprKind::Host(_, args) => args.iter().any(|a| e(a, p)),
                 _ => false,
             }
         }
         fn s(st: &[IStmt], p: Predef) -> bool {
             st.iter().any(|x| match x {
+                IStmt::Host(_, args) => args.iter().any(|x| e(x, p)),
                 IStmt::Break | IStmt::Continue | IStmt::Return => false,
                 IStmt::Assign(_, v) => e(v, p),
                 IStmt::SetElem { index, value, .. } => e(index, p) || e(value, p),

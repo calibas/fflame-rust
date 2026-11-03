@@ -773,6 +773,29 @@ call.
   `disc(i)` the average at the cell, `ctx.exact_discs` whether this
   layer has them (else it gathers its table): `ExactDiscs`, as reading
   them implies.
+- **The pyramid, a measure pass and the memory** (P4 step 9c):
+  `pyr_sample(level, x, y)` the pyramid's average at a level and a
+  position in cells, `pyr_level(r)` the level of a disc of radius `r`,
+  `pyr_diff(i, x, y)` the spectral stage's activator-minus-inhibitor `i`
+  there (with `fn discs(p)`), `ctx.exact_discs` which of the two this
+  layer reads: `NeedsPyramid`, as reading it implies, the parameter
+  `averaging` choosing as McCabe's does. The generator places
+  `pyr_prepare()` where each path first reads the pyramid (inside an
+  `if`'s arms when its tests do not), as the built-in does: a branch
+  that never reads it skips the caches. `INFO.measure: #{ param:
+  "variation", slices: 2 }` makes `cell_step` a measure pass, run while
+  that parameter is above 0: it writes the scratch, `write_scratch(k,
+  v)` (a statement), and the passes after it read it at any cell,
+  `scratch(dx, dy, k)`, `ctx.scratch_on` whether it ran. The memory --
+  internal slices the last pass carries from step to step, there while
+  a parameter named `memory` is above 0 -- is `memory(k)` and
+  `write_memory(k, v)`, `ctx.memory_count` its slices (`Memory`).
+  `outside(dx, dy)` tests a cell against a bounded boundary, `param(k)`
+  reads a parameter by its slot (a table's rows, `8 + 5 * i`, slot
+  order the order of `PARAMS`), and `INFO.scale_warps: #{ rows_param:
+  "scales", rows: 6 }` gives the per-scale warps (`ScaleWarps`): the
+  Warp section draws `s{i}_warp_*` behind its target list, and
+  `ctx.scale_warped` says whether any live row is off the identity.
 - **Couplings**: `drive()`, the Signal couplings aimed at the layer, a
   vector of four, folded in by the step itself (`TakesDrive`, as reading
   it implies); `INFO.publishes_signal: true` says a pass before the last
@@ -799,9 +822,9 @@ call.
   them (`init: #{ blobs: #{ count: 6, radius: 24 } }`), read through
   serde; and `repeat: #{ pass: 2, param: "relax" }`, a pass run that
   parameter's number of times a step (up to `MAX_INNER_ITERATIONS`),
-  passes numbered as the functions are (`cell_step` is 1). `agents`,
-  `memory`, `pyramid` and `measure` are refused with a reason until P4
-  step 9 gives each its hook.
+  passes numbered as the functions are (`cell_step` is 1); `measure`
+  and `scale_warps` (above). `agents` is refused until P4 step 9d gives
+  agents their functions.
 - **Its own stable time step**: `fn max_dt(p)`, the bound at the
   parameters in force, which a built-in writes as a `dt_bound` closure.
   It runs on the CPU as plain Rhai (the core language, its maths and
@@ -820,26 +843,40 @@ call.
   the layer picked from its menu), Live in every layer carrying a
   version, and a plug-in group in every layer's picker. A layer's model
   is its own step module, so a Rhai one layers and couples as a built-in
-  does (`rhai_models_and_colourings_run_in_layers`); it cannot take a
-  drive or publish a signal (Turing's couplings).
-- **Twins**: `sim::custom::SHIPPED_MODELS`, every built-in in the class
-  -- 22 of the 31 (`assets/sim/<name>.rhai`; the 9 others need kernel
-  tables, agents, the pyramid, memory, a measure or repeated pass, or
-  min/max). Each is held to its built-in three ways:
+  does (`rhai_models_and_colourings_run_in_layers`), the drive and the
+  published signal included (`a_rhai_turing_couples_as_the_built_in`).
+- **Twins**: `sim::custom::SHIPPED_MODELS`, every built-in but the two
+  agent models -- 29 of the 31 (`assets/sim/<name>.rhai`; Physarum and
+  DLA wait for P4 step 9d). Each is held to its built-in three ways:
   - its settings (`every_twin_carries_its_built_ins_settings`): the
     parameters in slot order with their labels, ranges and choices, the
-    presets, dt, `max_dt`, steps, diffusion, state, passes and features,
-    and `max_dt(p)` against the `dt_bound` at the defaults and at each
-    parameter's ends;
+    presets, dt, `max_dt`, steps, diffusion, state, passes (the repeat,
+    the measure), features and per-scale warps, `max_dt(p)` against the
+    `dt_bound` at the defaults and at each parameter's ends, the kernel
+    table and the spectral discs at the defaults and each preset;
   - its field (`the_rhai_models_step_as_the_built_ins`): 300 steps from
-    the same seed at the defaults and at every preset, 80 runs, every one
-    bit-identical, the age channel and the seeds' draws included;
+    the same seed at the defaults and at every preset, every one
+    bit-identical, the age channel and the seeds' draws included (the
+    kernel models on the built-in's own table, above); McCabe's other
+    paths -- the shifted grid, exact discs, a weighted and leaning table,
+    symmetry, the variation radius, per-scale warps, the memory's slices
+    -- bit-identical too (`a_rhai_mccabe_runs_every_path_as_the_built_in`);
   - its speed (`the_rhai_models_are_no_slower`, ignored: it times the
     GPU): fifteen rounds of 1500 steps at 1024x1024, the median of the
     rounds' ratios. On a GTX 1660 SUPER all within the run's own noise
     (`SIM_TWINS_SELF=1`, the built-in against itself, about 2%) but
     Brusselator2, 2-3% slower in repeated runs -- not its parameter
-    reads; unexplained, under the 5% gate.
+    reads; unexplained, under the 5% gate. `SIM_TWIN_PARAMS=variation=1.5`
+    sets parameters over the preset's, to time another path (McCabe:
+    1.024 at the preset, 1.027 with the variation radius, 1.003 on exact
+    discs, 1.034 with the memory).
+
+  `write_twin_wgsl` (ignored) writes each twin's generated WGSL beside
+  the built-in's, to read one against the other: it found why McCabe's
+  twin was 10% slower on the variation radius -- each fresh array copied
+  into its `let`, element by element -- fixed in the compiler, not the
+  script. (Filling the pyramid's caches only on the paths that read it,
+  as the built-in does, measured no difference: 10.4% to 10.0%.)
 
   The skeletons -- `PARAMS` and `INFO` as Rhai, from the built-in's
   definition -- come from `write_twin_skeletons` (ignored, writes

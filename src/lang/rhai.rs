@@ -738,6 +738,22 @@ impl Positions {
 
 // ---- lowering ---------------------------------------------------------
 
+/// A simulation model's write, a statement (P4 step 9c).
+fn is_sim_write(f: &FnCallExpr) -> bool {
+    matches!(f.name.as_str(), "write_scratch" | "write_memory")
+}
+
+/// An argument that is the entry's parameters, its context or a
+/// colouring's sample, passed whole to a helper (P4 step 9c): the helper
+/// reads it by its fields as its caller does.
+fn passed_whole(e: &Expr, scope: &Scope) -> Option<Binding> {
+    let Expr::Variable(v, _, _) = e else { return None };
+    match scope.get(v.1.as_str()) {
+        Some(b @ (Binding::Params | Binding::ParamMap(..) | Binding::Ctx | Binding::Cell)) => Some(b.clone()),
+        _ => None,
+    }
+}
+
 /// What a Rhai name stands for in a function being lowered.
 #[derive(Clone)]
 enum Binding {
@@ -944,6 +960,9 @@ fn host_int(name: &str, span: Span) -> ast::Expr {
         "kernel_radius" => 4,
         "kernel_taps" => 5,
         "exact_discs" => 6,
+        "scale_warped" => 7,
+        "scratch_on" => 8,
+        "memory_count" => 9,
         _ => 2,
     };
     mk(ExprKind::Call { name: "__host_int".into(), args: vec![mk(ExprKind::Int(k), span)], user: false }, span)
@@ -1097,6 +1116,16 @@ impl<'s> Lowerer<'s> {
                     _ => return self.err(*p, "`state` is \"continuous\" (interpolated into a new grid) or \"discrete\" (the nearest cell)"),
                 },
                 // What the panel and the export say of it (P4 step 5).
+                // A measure pass (P4 step 9c), read by `sim::custom`.
+                "measure" if self.sim_model => match v {
+                    Expr::Map(..) => {}
+                    _ => return self.err(*p, "`measure` is `#{ param: \"variation\", slices: 2 }`: the parameter that turns the first pass on, and its scratch"),
+                },
+                // Per-scale warps (P4 step 9c), read by `sim::custom`.
+                "scale_warps" if self.sim_model => match v {
+                    Expr::Map(..) => {}
+                    _ => return self.err(*p, "`scale_warps` is `#{ rows_param: \"scales\", rows: 6 }`: the parameter counting the live rows, and the rows"),
+                },
                 "time_step" | "settles" | "publishes_signal" if self.sim_model => match v {
                     Expr::BoolConstant(..) => {}
                     _ => return self.err(*p, format!("`{name}` is `true` or `false`")),
@@ -1113,12 +1142,11 @@ impl<'s> Lowerer<'s> {
                     _ => return self.err(*p, "`repeat` is `#{ pass: 2, param: \"relax\" }`: the pass (`cell_step` is 1) and the parameter that counts its runs"),
                 },
                 // What the built-ins have and a script does not: a reason.
-                "kernel" | "agents" | "memory" | "pyramid" | "measure" if self.sim_model => {
+                "agents" if self.sim_model => {
                     return self.err(
                         *p,
                         format!(
-                            "`INFO.{name}`: a model in Rhai is the single-layer class -- kernel tables, memory, the pyramid, agents, \
-                             and measured passes are the built-in models'"
+                            "`INFO.{name}`: a model's agents are its functions, `fn agent_step(a, p, ctx)`"
                         ),
                     )
                 }
@@ -1127,7 +1155,7 @@ impl<'s> Lowerer<'s> {
                         *p,
                         format!(
                             "a simulation model's `INFO` has `title`, `id`, `description`, `author`, `dt`, `max_dt`, `steps`, `diffusion`, `state`, \
-                             `time_step`, `settles`, `presets`, `repeat` and `publishes_signal`, not `{o}`"
+                             `time_step`, `settles`, `presets`, `repeat`, `publishes_signal`, `measure` and `scale_warps`, not `{o}`"
                         ),
                     )
                 }
@@ -2310,6 +2338,19 @@ impl<'s> Lowerer<'s> {
                 }
                 let v = self.expr(value, scope)?;
                 self.flush(out);
+                // A fresh array (`[a, b]`, `array(n, x)`) is the local
+                // itself, not copied into one: no other name holds it.
+                let fresh = match value {
+                    Expr::Array(..) => true,
+                    Expr::FnCall(f, _) => f.name.as_str() == "array" && !self.fns.contains_key("array"),
+                    _ => false,
+                };
+                if let (true, ExprKind::Name(n)) = (fresh, &v.kind) {
+                    if self.arrays.contains_key(n) {
+                        scope.bind(&ident.name, Binding::Local(n.clone()));
+                        return Ok(());
+                    }
+                }
                 let ty = self.ty_of(&v);
                 let name = self.local(&ident.name, ty);
                 self.decl(ty, name.clone(), v, span, out);
@@ -2412,6 +2453,13 @@ impl<'s> Lowerer<'s> {
                 out.extend(body);
                 Ok(())
             }
+            // A simulation model's writes (P4 step 9c): the measure pass's
+            // scratch, the memory -- statements, a vector of four each.
+            Stmt::FnCall(f, p) if self.sim_model && is_sim_write(f) => self.sim_write(f, *p, scope, out),
+            Stmt::Expr(e) if self.sim_model && matches!(&**e, Expr::FnCall(f, _) if is_sim_write(f)) => {
+                let Expr::FnCall(f, p) = &**e else { unreachable!("matched above") };
+                self.sim_write(f, *p, scope, out)
+            }
             // An effect-like function's flow (P4 step 5): its code is the
             // GPU's alone, which has both.
             Stmt::BreakLoop(value, flags, p) => {
@@ -2452,6 +2500,27 @@ impl<'s> Lowerer<'s> {
             Stmt::FnCall(_, p) => self.err(*p, "a call alone does nothing here"),
             other => self.err(other.position(), "not in a formula"),
         }
+    }
+
+    /// `write_scratch(k, v)`, `write_memory(k, v)`: the slice and a vector
+    /// of four, the host's write.
+    fn sim_write(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
+        let span = self.pos.span(p);
+        if self.sim_fn == SimFn::Seed {
+            return self.err(p, format!("`{}` is a step's, not a seed's", f.name));
+        }
+        let [k, v] = &f.args[..] else { return self.err(p, format!("`{}(k, v)`: the slice and a vector of four", f.name)) };
+        let k = self.expr(k, scope)?;
+        let v = self.vexpr(v, scope)?;
+        if v.kind != vec::Kind::Rgba {
+            return self.err(p, format!("`{}(k, v)` writes a vector of four", f.name));
+        }
+        self.flush(out);
+        let name = if f.name == "write_scratch" { "__scratch_write" } else { "__mem_write" };
+        let mut args = vec![k];
+        args.extend(v.parts);
+        out.push(ast::Stmt::Expr(mk(ExprKind::Call { name: name.into(), args, user: false }, span)));
+        Ok(())
     }
 
     /// An `if` and its `else if`s. A later condition that needs
@@ -2910,11 +2979,15 @@ impl<'s> Lowerer<'s> {
                         // Its kernel table's size and whether the spectral
                         // stage's discs are in (P4 step 9b): ints.
                         "kernel_radius" | "kernel_taps" | "exact_discs" => Ok(host_int(name, span)),
+                        // The warp's per-scale maps, the measure pass, the
+                        // memory (P4 step 9c): ints.
+                        "scale_warped" | "scratch_on" | "memory_count" => Ok(host_int(name, span)),
                         o => self.err(
                             *p,
                             format!(
                                 "a simulation model's context has `dt`, `step`, `cell`, `width`, `height`, `seed_lo`, `seed_hi`, `layer`, \
-                                 `field_min`, `field_max`, `kernel_radius`, `kernel_taps` and `exact_discs`; not `{o}`"
+                                 `field_min`, `field_max`, `kernel_radius`, `kernel_taps`, `exact_discs`, `scale_warped`, `scratch_on` and \
+                                 `memory_count`; not `{o}`"
                             ),
                         ),
                     },
@@ -3048,6 +3121,27 @@ impl<'s> Lowerer<'s> {
             let i = self.expr(i, scope)?;
             return Ok(mk(ExprKind::Call { name: format!("__{name}"), args: vec![i], user: false }, span));
         }
+        // A simulation model's framework calls (P4 step 9c): the pyramid's
+        // averages, the spectral differences, a grid test, a parameter by
+        // its slot, the agents' deposit -- a step's, but `param`.
+        if self.sim_model && args.is_empty() && !self.fns.contains_key(name) {
+            let host = match (name, f.args.len()) {
+                ("pyr_sample", 3) => Some("__pyr_sample"),
+                ("pyr_level", 1) => Some("__pyr_level"),
+                ("pyr_diff", 3) => Some("__pyr_diff"),
+                ("outside", 2) => Some("__outside"),
+                ("param", 1) => Some("__param"),
+                ("take_deposit", 0) => Some("__take_deposit"),
+                _ => None,
+            };
+            if let Some(h) = host {
+                if self.sim_fn == SimFn::Seed && h != "__param" {
+                    return self.err(p, format!("`{name}` is a step's, not a seed's"));
+                }
+                let args = f.args.iter().map(|a| self.expr(a, scope)).collect::<R<Vec<_>>>()?;
+                return Ok(mk(ExprKind::Call { name: h.into(), args, user: false }, span));
+            }
+        }
         // A simulation's hash of an int (P4 step 5), the framework's PCG.
         if name == "pcg" && args.is_empty() && (self.sim_coloring || self.sim_model) && !self.fns.contains_key("pcg") {
             let [n] = &f.args[..] else { return self.err(p, "`pcg(n)` takes the int to hash") };
@@ -3082,7 +3176,7 @@ impl<'s> Lowerer<'s> {
             // A vector argument binds as one (B1).
             let mut vals = Vec::new();
             for a in f.args.iter() {
-                vals.push(self.arg(a, scope)?);
+                vals.push(self.helper_arg(a, scope)?);
             }
             if def.params.len() != vals.len() {
                 return self.err(p, format!("`{name}` takes {}", def.params.len()));
@@ -3092,10 +3186,7 @@ impl<'s> Lowerer<'s> {
             }
             let mut inner = Scope::new(Fn3::Helper, Vec::new());
             for (param, a) in def.params.iter().zip(vals) {
-                match a {
-                    Val::S(a) => inner.bind(param, Binding::Value(a)),
-                    Val::V(v) => inner.bind(param, Binding::VecValue(Box::new(v))),
-                }
+                inner.bind(param, a);
             }
             // A helper giving a vector, where a number is wanted.
             if self.block_gives_vec(&def.body, &inner).is_some() {
@@ -3108,7 +3199,7 @@ impl<'s> Lowerer<'s> {
         }
         // Numbers of vectors (`dot`, `length`), and the functions that came
         // with them (`min`, `max`, `clamp` of numbers) (B1).
-        if matches!(name, "vec3" | "vec4" | "quat" | "rgba" | "input" | "input_at" | "palette" | "read" | "drive" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
+        if matches!(name, "vec3" | "vec4" | "quat" | "rgba" | "input" | "input_at" | "palette" | "read" | "drive" | "scratch" | "memory" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
             || f.args.iter().any(|a| self.is_vec(a, scope))
         {
             let mut vals: Vec<Val> = args.drain(..).map(Val::S).collect();
@@ -3416,6 +3507,10 @@ impl<'s> Lowerer<'s> {
                     "to_float" => return TypeName::Float,
                     "to_int" => return TypeName::Int,
                     _ => {}
+                }
+                // A simulation's framework call (P4 steps 9c, 9d).
+                if let Some(h) = super::builtins::Host::from_name(name) {
+                    return h.result().map_or(TypeName::Float, from_ty);
                 }
                 let arg = args.first().map(|a| self.ty_of(a)).unwrap_or(TypeName::Complex);
                 let b = match Builtin::from_name(name) {

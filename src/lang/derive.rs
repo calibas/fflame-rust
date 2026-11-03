@@ -135,6 +135,7 @@ fn tainted(p: &Program) -> Vec<bool> {
             fn walk(stmts: &[IStmt], t: &mut Vec<bool>, changed: &mut bool) {
                 for s in stmts {
                     match s {
+                        IStmt::Host(..) => {}
                         IStmt::Break | IStmt::Continue | IStmt::Return => {}
                         IStmt::Assign(Place::Var(v), e) => {
                             if !t[*v] && follows(e, t) {
@@ -211,6 +212,11 @@ fn needed(p: &Program) -> Vec<bool> {
     fn walk(stmts: &[IStmt], need: &mut Vec<bool>, changed: &mut bool) {
         for s in stmts {
             match s {
+                IStmt::Host(_, args) => {
+                    for x in args {
+                        mark(x, need, changed);
+                    }
+                }
                 IStmt::Break | IStmt::Continue | IStmt::Return => {}
                 IStmt::Assign(Place::Z, e) => mark(e, need, changed),
                 IStmt::Assign(Place::Var(v), e) if need[*v] => mark(e, need, changed),
@@ -304,6 +310,7 @@ impl D<'_> {
         let mut out = Vec::new();
         for s in stmts {
             match s {
+                IStmt::Host(..) => return None,
                 IStmt::Break | IStmt::Continue | IStmt::Return => return None,
                 // No derivative through a solid's call of a variation.
                 IStmt::Map { .. } => return None,
@@ -350,6 +357,7 @@ impl D<'_> {
         }
         let f = |x: &IExpr| follows(x, self.taint);
         Ok(match &e.kind {
+            IExprKind::Host(..) => return Err(()),
             IExprKind::Complex(..) | IExprKind::Param(_) | IExprKind::FuncChoice(_) => None,
             // The perturbation equations', which are not differentiated.
             IExprKind::UserDiff(..) => return Err(()),
@@ -669,6 +677,7 @@ impl J<'_> {
         let mut out = Vec::new();
         for s in stmts {
             match s {
+                IStmt::Host(..) => return None,
                 IStmt::Break | IStmt::Continue | IStmt::Return => return None,
                 // No derivative through a solid's call of a variation.
                 IStmt::Map { .. } => return None,
@@ -810,6 +819,7 @@ impl J<'_> {
             return Ok(None);
         }
         Ok(match &e.kind {
+            IExprKind::Host(..) => return Err(()),
             IExprKind::Complex(..) | IExprKind::Float(_) | IExprKind::Int(_) | IExprKind::Bool(_) | IExprKind::Param(_) | IExprKind::FuncChoice(_) | IExprKind::UserDeriv(..) | IExprKind::UserJac(..) => None,
             // The perturbation equations', which are not differentiated.
             IExprKind::UserDiff(..) => return Err(()),

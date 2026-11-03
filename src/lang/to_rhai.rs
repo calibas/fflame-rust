@@ -282,6 +282,11 @@ fn place_slot(p: Place) -> Option<Slot> {
 /// Every slot a statement reads or writes, in order.
 fn slots_of_stmt(s: &IStmt, out: &mut Vec<Slot>) {
     match s {
+        IStmt::Host(_, args) => {
+            for x in args {
+                slots_of_expr(x, out);
+            }
+        }
         IStmt::Break | IStmt::Continue | IStmt::Return => {}
         IStmt::Map { input, out: parts, .. } => {
             for x in input.iter() {
@@ -792,6 +797,7 @@ impl<'p> Printer<'p> {
 
     fn stmt(&mut self, st: &IStmt) -> R<()> {
         match st {
+            IStmt::Host(..) => return Err("a simulation's framework call has no spelling here".to_string()),
             IStmt::Break | IStmt::Continue | IStmt::Return => return Err("a loop's `break` or an early `return` has no spelling here".to_string()),
             IStmt::Map { .. } => return Err("a solid's call of a built-in variation has no Rhai spelling of its own here".to_string()),
             IStmt::SetElem { var, index, value } => {
@@ -886,6 +892,7 @@ impl<'p> Printer<'p> {
     fn expr(&mut self, e: &IExpr) -> R<P> {
         use IExprKind as K;
         Ok(match &e.kind {
+            K::Host(..) => return Err("a simulation's framework call has no spelling here".to_string()),
             K::Bool(b) => P::atom(b.to_string()),
             K::Int(i) => P(i.to_string(), if *i < 0 { UNARY } else { ATOM }),
             K::Float(x) => float_p(*x)?,
