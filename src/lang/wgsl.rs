@@ -153,6 +153,54 @@ fn cell_index(a: &IExpr) -> Option<usize> {
     }
 }
 
+/// A simulation model's host values by `__cell`'s index (P4): the state
+/// a step pass is given (0-3), the seed's inside and noise (19, 20), the
+/// time step and the step index (21, 22). The rest are a colouring's.
+const SIM_MODEL_HOST: [&str; 23] = [
+    "s.x", "s.y", "s.z", "s.w", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "inside", "noise", "sim_dt()", "f32(sim_step_index())",
+];
+
+/// A simulation model's function in WGSL (P4): a step pass as the step
+/// template calls it, `sim_step` (pass 0) or `sim_step2` ..., or the seed,
+/// `sim_seed`; and whether it draws random numbers (`ModelFeature::
+/// NeedsRng`). Each pass's helpers carry a prefix of its own, as every
+/// pass's module holds the model's whole WGSL.
+pub struct SimModelWgsl {
+    pub body: String,
+    pub rng: bool,
+}
+
+/// [`SimModelWgsl`] for a checked function of a model (`rhai::SimFn`).
+pub fn sim_model(p: &Program, f: super::rhai::SimFn) -> Result<SimModelWgsl, String> {
+    use super::rhai::SimFn;
+    if !p.funcs.is_empty() {
+        return Err("a model's function parameters are a later step".into());
+    }
+    const PREFIXES: [&str; 4] = ["sm1_", "sm2_", "sm3_", "sm4_"];
+    let (prefix, head) = match f {
+        SimFn::Seed => ("sms_", "fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {\n".to_string()),
+        SimFn::Step(n) => {
+            let suffix = if n == 0 { String::new() } else { (n + 1).to_string() };
+            (PREFIXES[n.min(3) as usize], format!("fn sim_step{suffix}(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {{\n"))
+        }
+    };
+    let mut g = Gen::new(p, Ctx::Effect, prefix);
+    g.sim_model = true;
+    // Each pass's draws keyed apart from the others'.
+    g.draw_salt = match f {
+        SimFn::Seed => 0x7000,
+        SimFn::Step(n) => 0x5000 + 0x100 * u32::from(n),
+    };
+    let mut body = head;
+    body.push_str("    let pixel = vec2<f32>(p);\n    var effect_r = 0.0;\n    var effect_g = 0.0;\n    var effect_b = 0.0;\n    var effect_a = 0.0;\n");
+    for (i, v) in p.vars.iter().enumerate() {
+        let _ = writeln!(body, "    {};", var_decl(i, v));
+    }
+    g.stmts(&p.transform, 1, &mut body);
+    body.push_str("    return vec4<f32>(effect_r, effect_g, effect_b, effect_a);\n}\n");
+    Ok(SimModelWgsl { body: g.finish("", body), rng: p.reads(Predef::Draw) })
+}
+
 /// A simulation colouring's WGSL (P4): `sim_color(x, p)` as the colour
 /// template calls it, and what it reads, which the template measures only
 /// when a colouring declares it (`sim::ColoringFeature`).
@@ -1486,6 +1534,12 @@ struct Gen<'p> {
     /// (P4): parameters are `cparam`, the size the grid's, the sample
     /// `x` and the palette the template's.
     sim: bool,
+    /// The effect context hosted by the simulation's step and seed
+    /// templates (P4): parameters are `mparam`, the size the grid's, the
+    /// state `s`, a neighbour `sim_read`, a draw `sim_rand` keyed by the
+    /// salt that follows, one per call site.
+    sim_model: bool,
+    draw_salt: u32,
 }
 
 impl<'p> Gen<'p> {
@@ -1520,6 +1574,8 @@ impl<'p> Gen<'p> {
             exact_near_zero: false,
             global_base: None,
             sim: false,
+            sim_model: false,
+            draw_salt: 0,
         }
     }
 
@@ -1880,6 +1936,8 @@ impl<'p> Gen<'p> {
                 let read = |k: usize| {
                     if self.ctx == Ctx::Variation {
                         format!("get_param(xform_id, variation_id, {k}u)")
+                    } else if self.ctx == Ctx::Effect && self.sim_model {
+                        format!("mparam({k}u)")
                     } else if self.ctx == Ctx::Effect && self.sim {
                         format!("cparam({k}u)")
                     } else if self.ctx == Ctx::Effect {
@@ -2012,8 +2070,8 @@ impl<'p> Gen<'p> {
             (Predef::EffectAmount, _) => "effect_amount".into(),
             (Predef::DensityMean, _) => "effect_params.density_mean".into(),
             (Predef::PixelScale, _) => "effect_params.pixel_scale".into(),
-            (Predef::Width, Ctx::Effect) if self.sim => "sim_grid().x".into(),
-            (Predef::Height, Ctx::Effect) if self.sim => "sim_grid().y".into(),
+            (Predef::Width, Ctx::Effect) if self.sim || self.sim_model => "sim_grid().x".into(),
+            (Predef::Height, Ctx::Effect) if self.sim || self.sim_model => "sim_grid().y".into(),
             (Predef::Width, Ctx::Effect) => "i32(effect_params.width)".into(),
             (Predef::Height, Ctx::Effect) => "i32(effect_params.height)".into(),
             (Predef::Z, Ctx::PerturbFe) => "cfe2_to_f32(cfe2_ref(zm, zlo, ze))".into(),
@@ -2046,6 +2104,12 @@ impl<'p> Gen<'p> {
             // Rhai's `rand()` (C2a): the flame's stream in a variation,
             // the pixel's elsewhere.
             (Predef::Draw, Ctx::Variation) => "rng_nextf(rng)".into(),
+            // A simulation model's draw (P4): keyed by (seed, cell, step)
+            // and a salt of its own, so two draws differ.
+            (Predef::Draw, Ctx::Effect) if self.sim_model => {
+                self.draw_salt += 1;
+                format!("sim_rand(p, {}u)", self.draw_salt)
+            }
             (Predef::Draw, _) => format!("{}()", self.use_(Helper::Draw)),
             // A flame variation's context and colour (C2b, C2d).
             (Predef::Accum, _) => "accum".into(),
@@ -2085,11 +2149,18 @@ impl<'p> Gen<'p> {
     /// In an effect, an int parameter, or the image's width or height, as
     /// a float expression with the int's value; `None` for anything else.
     fn int_as_float(&self, e: &IExpr) -> Option<String> {
-        let read = if self.sim { "cparam" } else { "get_param" };
+        let read = if self.sim_model {
+            "mparam"
+        } else if self.sim {
+            "cparam"
+        } else {
+            "get_param"
+        };
+        let grid = self.sim || self.sim_model;
         match &e.kind {
             IExprKind::Param(id) if self.p.params[*id].ty() == Ty::Int => Some(format!("round({read}({}u))", self.slots[*id])),
-            IExprKind::Predef(Predef::Width) if self.sim => Some("f32(sim_grid().x)".to_string()),
-            IExprKind::Predef(Predef::Height) if self.sim => Some("f32(sim_grid().y)".to_string()),
+            IExprKind::Predef(Predef::Width) if grid => Some("f32(sim_grid().x)".to_string()),
+            IExprKind::Predef(Predef::Height) if grid => Some("f32(sim_grid().y)".to_string()),
             IExprKind::Predef(Predef::Width) => Some("f32(effect_params.width)".to_string()),
             IExprKind::Predef(Predef::Height) => Some("f32(effect_params.height)".to_string()),
             _ => None,
@@ -2642,7 +2713,18 @@ impl<'p> Gen<'p> {
         // `__cell`'s literal index names (`SIM_CELL_FIELDS`).
         if f == Cell {
             let i = cell_index(a).expect("the checker's literal");
-            return SIM_CELL_FIELDS[i].to_string();
+            return if self.sim_model { SIM_MODEL_HOST[i] } else { SIM_CELL_FIELDS[i] }.to_string();
+        }
+        // A simulation model's neighbour (P4): the offset a complex, whole
+        // numbers, through the framework's boundary.
+        if let Some(part) = match f {
+            NbrX => Some("x"),
+            NbrY => Some("y"),
+            NbrZ => Some("z"),
+            NbrW => Some("w"),
+            _ => None,
+        } {
+            return format!("sim_read(p + vec2<i32>(round({v}))).{part}");
         }
         if let Some(part) = match f {
             PaletteR => Some("x"),
@@ -2759,7 +2841,7 @@ impl<'p> Gen<'p> {
             Log1p => format!("{}({v})", self.use_(Helper::FLog1p)),
             Fract => format!("fract({v})"),
             Conj | Flip | Cosxx | Hash2 => unreachable!("complex-valued"),
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB => unreachable!("an image read, emitted above"),
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW => unreachable!("an image read, emitted above"),
         };
         if ty == Ty::Int {
             format!("i32({real})")
@@ -2772,7 +2854,7 @@ impl<'p> Gen<'p> {
 fn complex_helper(f: Builtin) -> Helper {
     use Builtin::*;
     match f {
-        SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB => unreachable!("an image read, emitted by `Gen::call`"),
+        SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW => unreachable!("an image read, emitted by `Gen::call`"),
         Hash2 => Helper::Hash2,
         Fract => unreachable!("emitted by `Gen::call`, real or complex"),
         // `Gen::call` passes the value through.
@@ -4462,7 +4544,7 @@ fn step(s, p) {
             for e in &parsed.entries {
                 let (p, d) = match kind {
                     EntryKind::Formula => super::super::switch::check_formula(&parsed, e, dialect),
-                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring => check(e, kind, dialect),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => check(e, kind, dialect),
                 };
                 let errors: Vec<String> = d.iter().filter(|x| x.severity == super::super::Severity::Error).map(|x| x.render(text)).collect();
                 match p {
@@ -4498,7 +4580,7 @@ fn step(s, p) {
                         let back = super::super::rhai::coloring(&text);
                         (text, back)
                     }
-                    EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring => unreachable!("the test files hold no transformations, solids or effects"),
+                    EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => unreachable!("the test files hold no transformations, solids or effects"),
                 };
                 let back = back.unwrap_or_else(|d| panic!("{file} / {name} as Rhai: {:?}", d[0].render(&text)));
                 (*file, format!("{name} as Rhai"), back)
@@ -4522,7 +4604,7 @@ fn step(s, p) {
                     None => Ok(()),
                 }),
                 EntryKind::Coloring => validate_coloring(&coloring(p)),
-                EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring => unreachable!("the test files hold no transformations, solids or effects"),
+                EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => unreachable!("the test files hold no transformations, solids or effects"),
             };
             if let Err(e) = checked {
                 panic!("{file} / {name}: {e}");

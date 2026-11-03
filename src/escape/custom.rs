@@ -146,6 +146,7 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
         EntryKind::Solid => b"solid",
         EntryKind::Effect => b"effect",
         EntryKind::SimColoring => b"sim_coloring",
+        EntryKind::SimModel => b"sim_model",
     });
     eat(match src.dialect {
         CustomDialect::UltraFractal => b"uf",
@@ -192,6 +193,7 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
             EntryKind::Solid => lang::rhai::solid(&src.source),
             EntryKind::Effect => lang::rhai::effect(&src.source),
             EntryKind::SimColoring => lang::rhai::sim_coloring(&src.source),
+            EntryKind::SimModel => lang::rhai::sim_model(&src.source, lang::rhai::SimFn::Step(0)),
         });
     }
     if src.dialect == CustomDialect::Hybrid {
@@ -215,7 +217,7 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
         EntryKind::Coloring | EntryKind::Transform => lang::check::check(entry, kind, dialect(src.dialect)),
         EntryKind::Solid => return Err(vec![Diag::error(lang::Span::default(), "a solid is written in Rhai")]),
         EntryKind::Effect => return Err(vec![Diag::error(lang::Span::default(), "an effect is written in Rhai")]),
-        EntryKind::SimColoring => return Err(vec![Diag::error(lang::Span::default(), "a simulation colouring is written in Rhai")]),
+        EntryKind::SimColoring | EntryKind::SimModel => return Err(vec![Diag::error(lang::Span::default(), "a simulation's colouring or model is written in Rhai")]),
     };
     diags.extend(d);
     match program {
@@ -257,7 +259,7 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Coloring | EntryKind::Transform => lang::check::check(e, kind, d),
         EntryKind::Solid => return Err("a solid is written in Rhai".to_string()),
         EntryKind::Effect => return Err("an effect is written in Rhai".to_string()),
-        EntryKind::SimColoring => return Err("a simulation colouring is written in Rhai".to_string()),
+        EntryKind::SimColoring | EntryKind::SimModel => return Err("a simulation's colouring or model is written in Rhai".to_string()),
     };
     let program = match program {
         Some(p) if !lang::has_errors(&diags) => p,
@@ -288,7 +290,7 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Formula => lang::to_rhai::formula(&program, &header)?,
         EntryKind::Coloring => lang::to_rhai::coloring(&program, &header)?,
         EntryKind::Transform => return Err("a transformation does not convert to Rhai yet".to_string()),
-        EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring => return Err("it is written in Rhai".to_string()),
+        EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => return Err("it is written in Rhai".to_string()),
     };
     // What it printed must compile back: one that does not is the
     // converter's bug, not the user's to fix.
@@ -299,6 +301,7 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Solid => lang::rhai::solid(&rhai),
         EntryKind::Effect => lang::rhai::effect(&rhai),
         EntryKind::SimColoring => lang::rhai::sim_coloring(&rhai),
+        EntryKind::SimModel => lang::rhai::sim_model(&rhai, lang::rhai::SimFn::Step(0)),
     };
     back.map_err(|d| format!("the conversion does not compile ({})", d.first().map(|x| x.render(&rhai)).unwrap_or_default()))?;
     Ok(rhai)
@@ -1406,7 +1409,7 @@ pub fn ensure(escape: &EscapeConfig) {
             EntryKind::Coloring => coloring(name).is_some(),
             // An escape config carries no transformation (nor an effect,
             // nor a simulation's colouring).
-            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring => true,
+            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => true,
         };
         if known || registry().read().is_ok_and(|r| r.failed.contains(name)) {
             continue;
@@ -1416,7 +1419,7 @@ pub fn ensure(escape: &EscapeConfig) {
             EntryKind::Formula if solid => compile_solid(src, name).map(|_| ()),
             EntryKind::Formula => compile_formula(src, name).map(|_| ()),
             EntryKind::Coloring => compile_coloring(src, name).map(|_| ()),
-            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring => Ok(()),
+            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => Ok(()),
         };
         if let Err(diags) = result {
             let msgs: Vec<String> = diags.iter().map(|d| d.render(&src.source)).collect();
@@ -1754,7 +1757,7 @@ mod tests {
                 let compiled = match kind {
                     EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
                     EntryKind::Solid => compile_solid(&src, &name).map(|_| ()),
-                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring => compile_coloring(&src, &name).map(|_| ()),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => compile_coloring(&src, &name).map(|_| ()),
                 };
                 if let Err(d) = compiled {
                     panic!("{file}: {:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>());
@@ -1775,7 +1778,7 @@ mod tests {
                 let name = name_of(kind, &src);
                 let ok = match kind {
                     EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
-                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring => compile_coloring(&src, &name).map(|_| ()),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => compile_coloring(&src, &name).map(|_| ()),
                 };
                 if let Err(d) = ok {
                     panic!("{file} / {}: {:?}", e.name, d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>());

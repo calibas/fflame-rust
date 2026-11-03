@@ -78,6 +78,14 @@ pub enum EntryKind {
     /// palette `__palette_*`; `#pixel` is the cell, and the result is
     /// written to the `effect_r` ... `effect_a` places, `a` the coverage.
     SimColoring,
+    /// A simulation's model (P4), Rhai only: `fn cell_step(cell, p, ctx)`,
+    /// a cell's state and its neighbours' (`read(dx, dy)`) to its next
+    /// state, with `cell_step2` ... `cell_step4` for more passes, and `fn
+    /// cell_seed(inside, noise, p, ctx)`, a cell's first state. Each
+    /// function lowers apart (`rhai::SimFn`); the host's values are the
+    /// `__cell` built-in, a neighbour the `__nbr_*`, and the result is
+    /// written to the `effect_r` ... `effect_a` places.
+    SimModel,
 }
 
 /// A byte range in the source text.

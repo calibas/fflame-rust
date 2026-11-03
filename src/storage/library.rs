@@ -30,6 +30,8 @@ pub enum Kind {
     Effect,
     /// A simulation's colouring (P4).
     SimColoring,
+    /// A simulation's model (P4).
+    SimModel,
     /// An Ultra Fractal or Fractint file: many entries, of its kind.
     UfFormulas,
     UfColorings,
@@ -42,7 +44,7 @@ pub enum Kind {
 impl Kind {
     /// A GPU Rhai entry that can be a plug-in (`storage::links::Link::plugin`).
     pub fn can_be_plugin(self) -> bool {
-        matches!(self, Kind::Variation | Kind::Effect | Kind::Formula | Kind::Coloring | Kind::Solid | Kind::SimColoring)
+        matches!(self, Kind::Variation | Kind::Effect | Kind::Formula | Kind::Coloring | Kind::Solid | Kind::SimColoring | Kind::SimModel)
     }
 }
 
@@ -93,7 +95,7 @@ pub fn scan() -> Vec<Entry> {
         out.push(formula_entry(&format!("{name}.rhai"), source, Origin::Shipped, Link::default()));
     }
     #[cfg(all(feature = "lang", feature = "engine-sim"))]
-    for (name, source) in crate::sim::custom::SHIPPED {
+    for (name, source) in crate::sim::custom::SHIPPED.iter().chain(crate::sim::custom::SHIPPED_MODELS) {
         out.push(formula_entry(&format!("sim-{name}.rhai"), source, Origin::Shipped, Link::default()));
     }
     let script_links = crate::script::store::load_links();
@@ -208,6 +210,7 @@ fn formula_entry(file: &str, source: &str, origin: Origin, link: Link) -> Entry 
             Some(EntryKind::Solid) => Kind::Solid,
             Some(EntryKind::Effect) => Kind::Effect,
             Some(EntryKind::SimColoring) => Kind::SimColoring,
+            Some(EntryKind::SimModel) => Kind::SimModel,
             None => Kind::Unknown,
         };
         if let Some(labels) = rhai::source_labels(source) {
@@ -370,6 +373,11 @@ fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate
         #[cfg(feature = "engine-sim")]
         Kind::SimColoring => {
             let name = crate::sim::custom::register(source)?;
+            Ok((name, crate::sim::custom::carried(source)))
+        }
+        #[cfg(feature = "engine-sim")]
+        Kind::SimModel => {
+            let name = crate::sim::custom::register_model(source)?;
             Ok((name, crate::sim::custom::carried(source)))
         }
         _ => {

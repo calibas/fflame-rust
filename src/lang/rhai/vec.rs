@@ -312,7 +312,7 @@ impl Lowerer<'_> {
         match n {
             "vec3" | "cross" => Some(Kind::Vec3),
             "quat" => Some(Kind::Quat),
-            "rgba" | "input" | "input_at" => Some(Kind::Rgba),
+            "rgba" | "vec4" | "input" | "input_at" | "read" => Some(Kind::Rgba),
             "palette" => Some(Kind::Vec3),
             "normalize" | "abs" | "floor" | "min" | "max" | "clamp" | "mix" => first(),
             "conj" | "inv" | "pow" => first().filter(|k| *k == Kind::Quat),
@@ -713,6 +713,8 @@ impl Lowerer<'_> {
     /// numbers).
     pub(super) fn vfunc(&mut self, name: &str, args: Vec<Val>, p: Position) -> R<Val> {
         use Val::{S, V};
+        // A vector of four is an rgba's shape (P4).
+        let name = if name == "vec4" { "rgba" } else { name };
         let span = self.pos.span(p);
         let each = |v: Vector, f: &dyn Fn(ast::Expr) -> ast::Expr| -> Vector { Vector::new(v.kind, v.parts.into_iter().map(f).collect()) };
         let zip = |a: Vector, b: Vector, op: BinOp| -> Vector {
@@ -778,6 +780,18 @@ impl Lowerer<'_> {
                     V(Vector::new(Kind::Rgba, vec![s.clone(), s.clone(), s.clone(), s]))
                 }
                 _ => return self.err(p, "`rgba(s)` takes a number: every part `s`"),
+            },
+            // A simulation model's neighbour (P4): the cell `dx`, `dy` away,
+            // the boundary the framework's.
+            ("read", 2) if !self.sim_model || self.sim_fn == super::SimFn::Seed => {
+                return self.err(p, "`read(dx, dy)` reads a neighbour: in a simulation model's step alone");
+            }
+            ("read", 2) => match (args.remove(0), args.remove(0)) {
+                (S(dx), S(dy)) => {
+                    let at = self.hold(mk(ExprKind::Complex(Box::new(dx), Box::new(dy)), span), "offset");
+                    V(Vector::new(Kind::Rgba, ["x", "y", "z", "w"].iter().map(|c| call1(&format!("__nbr_{c}"), at.clone(), span)).collect()))
+                }
+                _ => return self.err(p, "`read(dx, dy)`: the neighbour's offset, two whole numbers"),
             },
             // A simulation colouring's palette (P4): the shared one at `t`.
             ("palette", 1) if !self.sim_coloring => {
@@ -1014,11 +1028,15 @@ impl Lowerer<'_> {
                 }
             }
             (n, k) => {
-                if matches!(n, "vec3" | "quat" | "rgba" | "mix" | "input" | "input_at" | "palette" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp" | "abs" | "floor" | "conj" | "inv" | "pow" | "complex") {
+                if matches!(n, "vec3" | "quat" | "rgba" | "mix" | "input" | "input_at" | "palette" | "read" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp" | "abs" | "floor" | "conj" | "inv" | "pow" | "complex") {
                     return self.err(p, format!("`{n}` does not take {k} argument{}", if k == 1 { "" } else { "s" }));
                 }
                 if first_kind == Some(Kind::Quat) {
                     return self.err(p, format!("`{n}` takes numbers; a quaternion's functions are {}, `pow`, `conj` and `inv`", PLANE_FUNCTIONS.join(", ")));
+                }
+                // No vector in: a number's function where a vector is wanted.
+                if !args.iter().any(|a| matches!(a, V(_))) {
+                    return self.err(p, format!("`{n}` gives a number where a vector is wanted"));
                 }
                 return self.err(p, format!("`{n}` takes numbers; of a vector, take its parts (`v.x`) or `length(v)`"));
             }

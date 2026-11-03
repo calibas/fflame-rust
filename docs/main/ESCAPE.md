@@ -805,6 +805,15 @@ fn escaped(s, p) {
   built-ins); and end with a colour and its coverage. Its code is an
   effect's, the template's parameters (`cparam`) and grid
   ([SIMULATION.md](SIMULATION.md#colourings-written-in-rhai)).
+- **Simulation models** (`EntryKind::SimModel`, `fn cell_step(cell, p,
+  ctx)`, `cell_step2` ... `cell_step4`, `fn cell_seed(inside, noise)`;
+  P4) step a cell's `vec4` state: the state, `ctx.dt` and `ctx.step` and
+  the seed's inputs through `__cell` (`SIM_MODEL_HOST`); a neighbour by
+  `read(dx, dy)`, the `__nbr_x` ... `__nbr_w` built-ins (`sim_read`, the
+  framework's boundary); `rand()` the template's `sim_rand`, a salt per
+  call site. Each function compiles alone (`rhai::SimFn`), its helpers
+  prefixed per pass, as each pass's module holds the model's whole WGSL
+  ([SIMULATION.md](SIMULATION.md#models-written-in-rhai)).
 - **`fract(x)`** (WGSL's, each part of a complex) and **`hash2(p)`**: a
   point to two numbers in [0, 1), the built-in noise effects' hash
   (`fract(sin(vec2(dot(p, (127.1, 311.7)), dot(p, (269.5, 183.3)))) *

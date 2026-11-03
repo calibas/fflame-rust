@@ -371,7 +371,7 @@ impl Checker {
                     }
                     EntryKind::Formula => kind = SectionKind::Init,
                     EntryKind::Coloring => kind = SectionKind::Final,
-                    EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring => kind = SectionKind::Transform,
+                    EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => kind = SectionKind::Transform,
                     EntryKind::Solid => kind = SectionKind::Init,
                 }
             }
@@ -384,7 +384,7 @@ impl Checker {
                 (EntryKind::Transform, SectionKind::Transform | SectionKind::Init) => true,
                 // An effect's `fn effect`, per pixel (P2), and a
                 // simulation colouring's `fn cell_color`, per sample (P4).
-                (EntryKind::Effect | EntryKind::SimColoring, SectionKind::Transform) => true,
+                (EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel, SectionKind::Transform) => true,
                 (EntryKind::Formula, SectionKind::Init | SectionKind::Loop | SectionKind::Bailout) => true,
                 (EntryKind::Formula, SectionKind::PerturbInit | SectionKind::PerturbLoop) => true,
                 (EntryKind::Formula, SectionKind::Creases) => true,
@@ -402,6 +402,7 @@ impl Checker {
                     EntryKind::Solid => "a solid",
                     EntryKind::Effect => "an effect",
                     EntryKind::SimColoring => "a simulation colouring",
+                    EntryKind::SimModel => "a simulation model",
                 };
                 self.error(s.span, format!("{what} has no `{}:` section", kind.label()));
                 continue;
@@ -448,6 +449,12 @@ impl Checker {
             EntryKind::SimColoring => {
                 if !has(SectionKind::Transform) {
                     self.error(entry.span, "a simulation colouring needs `fn cell_color`");
+                    return None;
+                }
+            }
+            EntryKind::SimModel => {
+                if !has(SectionKind::Transform) {
+                    self.error(entry.span, "a simulation model needs `fn cell_step`");
                     return None;
                 }
             }
@@ -947,7 +954,7 @@ impl Checker {
             "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_blend" | "effect_amount" | "density_mean" | "pixel_scale" if self.internal => {
                 // A simulation colouring writes its colour to the same
                 // places (P4), and has nothing else of an effect's.
-                let sim = self.kind == EntryKind::SimColoring && matches!(name, "effect_r" | "effect_g" | "effect_b" | "effect_a");
+                let sim = matches!(self.kind, EntryKind::SimColoring | EntryKind::SimModel) && matches!(name, "effect_r" | "effect_g" | "effect_b" | "effect_a");
                 if self.kind != EntryKind::Effect && !sim {
                     self.error(span, format!("`{name}` is an effect's"));
                     return None;
@@ -1033,6 +1040,14 @@ impl Checker {
             && !matches!(p, Predef::Pixel | Predef::Width | Predef::Height | Predef::Pi | Predef::E | Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA)
         {
             self.error(span, format!("a simulation colouring reads its cell, the grid's size, `#pi` and `#e`, not `#{name}`"));
+            return None;
+        }
+        // A simulation model's (P4): its cell, the grid's size, a draw,
+        // its result's places; the host's values through `__cell`.
+        if self.kind == EntryKind::SimModel
+            && !matches!(p, Predef::Pixel | Predef::Width | Predef::Height | Predef::Pi | Predef::E | Predef::Draw | Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA)
+        {
+            self.error(span, format!("a simulation model reads its cell, the grid's size, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
         if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ) {
@@ -1616,13 +1631,27 @@ impl Checker {
         }
         // A simulation colouring's reads of its sample and palette (P4):
         // its alone, a sample's field by a literal index.
-        if matches!(b, Builtin::Cell | Builtin::PaletteR | Builtin::PaletteG | Builtin::PaletteB) && self.kind != EntryKind::SimColoring {
+        if matches!(b, Builtin::PaletteR | Builtin::PaletteG | Builtin::PaletteB) && self.kind != EntryKind::SimColoring {
             self.error(span, format!("unknown function `{name}`"));
             return None;
         }
-        if b == Builtin::Cell && !matches!(args.first().map(|a| &a.kind), Some(ExprKind::Int(i)) if (0..19).contains(i)) {
-            self.error(span, "a cell's field by its index, a literal 0 to 18 (the lowering's)");
+        // A simulation model's neighbour reads and host values (P4): its
+        // alone; `__cell` the colouring's sample (0-18) or the model's
+        // state, seed inputs, dt and step (0-3, 19-22).
+        if matches!(b, Builtin::NbrX | Builtin::NbrY | Builtin::NbrZ | Builtin::NbrW) && self.kind != EntryKind::SimModel {
+            self.error(span, format!("unknown function `{name}`"));
             return None;
+        }
+        if b == Builtin::Cell {
+            let range = match self.kind {
+                EntryKind::SimColoring => 0..19,
+                EntryKind::SimModel => 0..23,
+                _ => 0..0,
+            };
+            if !matches!(args.first().map(|a| &a.kind), Some(ExprKind::Int(i)) if range.contains(i)) {
+                self.error(span, format!("unknown function `{name}`"));
+                return None;
+            }
         }
         let arg = self.expr(&args[0])?;
         // Rhai's `abs` of a complex is its modulus (UF's folds each

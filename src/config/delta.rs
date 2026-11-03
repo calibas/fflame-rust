@@ -410,6 +410,9 @@ pub enum ConfigPath {
     /// A Rhai colouring's source the config carries (`SimConfig::
     /// custom_coloring`), as JSON; empty for none.
     SimCustomColoring,
+    /// A Rhai model's source the config carries (`SimConfig::
+    /// custom_model`), as JSON; empty for none.
+    SimCustomModel,
     /// Whether the grid is Fixed or bound to the viewport.
     SimGridMode,
     /// Fixed-grid width in cells.
@@ -1217,6 +1220,7 @@ impl Display for ConfigPath {
             ConfigPath::SimModel => write!(f, "Simulation Model"),
             ConfigPath::SimColoring => write!(f, "Simulation Coloring"),
             ConfigPath::SimCustomColoring => write!(f, "Simulation Coloring Source"),
+            ConfigPath::SimCustomModel => write!(f, "Simulation Model Source"),
             ConfigPath::SimGridMode => write!(f, "Simulation Grid Mode"),
             ConfigPath::SimGridWidth => write!(f, "Simulation Grid Width"),
             ConfigPath::SimGridHeight => write!(f, "Simulation Grid Height"),
@@ -1665,6 +1669,7 @@ impl ConfigPath {
             ConfigPath::SimModel => I18nKey::simple("history.param.sim_model"),
             ConfigPath::SimColoring => I18nKey::simple("history.param.sim_coloring"),
             ConfigPath::SimCustomColoring => I18nKey::simple("history.param.sim_custom_coloring"),
+            ConfigPath::SimCustomModel => I18nKey::simple("history.param.sim_custom_model"),
             ConfigPath::SimGridMode => I18nKey::simple("history.param.sim_grid_mode"),
             ConfigPath::SimGridWidth => I18nKey::simple("history.param.sim_grid_width"),
             ConfigPath::SimGridHeight => I18nKey::simple("history.param.sim_grid_height"),
@@ -3475,6 +3480,7 @@ impl ConfigPath {
             // field's contents, the lattice size or what a step reads
             // at the edges all change what the state MEANS.
             ConfigPath::SimModel
+            | ConfigPath::SimCustomModel
             | ConfigPath::SimLayerModel { .. }
             | ConfigPath::SimGridMode
             | ConfigPath::SimGridWidth
@@ -3803,6 +3809,7 @@ impl ConfigPath {
             ConfigPath::SimPathZenith => "Sim.Path.Zenith".to_string(),
             ConfigPath::SimColoring => "Sim.Coloring".to_string(),
             ConfigPath::SimCustomColoring => "Sim.CustomColoring".to_string(),
+            ConfigPath::SimCustomModel => "Sim.CustomModel".to_string(),
             ConfigPath::SimGridMode => "Sim.GridMode".to_string(),
             ConfigPath::SimGridWidth => "Sim.GridWidth".to_string(),
             ConfigPath::SimGridHeight => "Sim.GridHeight".to_string(),
@@ -4365,6 +4372,7 @@ impl ConfigPath {
                 ["Path", "Zenith"] => return Some(ConfigPath::SimPathZenith),
                 ["Coloring"] => return Some(ConfigPath::SimColoring),
                 ["CustomColoring"] => return Some(ConfigPath::SimCustomColoring),
+                ["CustomModel"] => return Some(ConfigPath::SimCustomModel),
                 ["GridMode"] => return Some(ConfigPath::SimGridMode),
                 ["GridWidth"] => return Some(ConfigPath::SimGridWidth),
                 ["GridHeight"] => return Some(ConfigPath::SimGridHeight),
@@ -4911,6 +4919,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::SimModel
         | ConfigPath::SimColoring
         | ConfigPath::SimCustomColoring
+        | ConfigPath::SimCustomModel
         | ConfigPath::SimGridMode
         | ConfigPath::SimSeed
         | ConfigPath::SimInitKind

@@ -52,6 +52,8 @@ struct EntryRow {
     as_effect: Vec<String>,
     /// As a simulation's colouring (P4): Rhai only.
     as_sim_coloring: Vec<String>,
+    /// As a simulation's model (P4): Rhai only.
+    as_sim_model: Vec<String>,
 }
 
 impl EntryRow {
@@ -63,6 +65,7 @@ impl EntryRow {
             EntryKind::Solid => &self.as_solid,
             EntryKind::Effect => &self.as_effect,
             EntryKind::SimColoring => &self.as_sim_coloring,
+            EntryKind::SimModel => &self.as_sim_model,
         }
     }
 }
@@ -185,6 +188,7 @@ impl FormulaEditorPanel {
             EntryKind::Solid => lang::rhai::solid(&text),
             EntryKind::Effect => lang::rhai::effect(&text),
             EntryKind::SimColoring => lang::rhai::sim_coloring(&text),
+            EntryKind::SimModel => lang::rhai::sim_model(&text, lang::rhai::SimFn::Step(0)),
         };
         let mut errors: Vec<String> = match &checked {
             Ok(_) => Vec::new(),
@@ -217,6 +221,12 @@ impl FormulaEditorPanel {
                 errors.push(e);
             }
         }
+        // A model: every pass and its seed (P4).
+        if kind == EntryKind::SimModel && checked.is_ok() {
+            if let Err(e) = crate::sim::custom::compile_model(&text, "custom-check") {
+                errors.push(e);
+            }
+        }
         let title = match &checked {
             Ok(p) => p.name.clone(),
             Err(_) => lang::rhai::title(&text).unwrap_or_else(|| self.name.clone()),
@@ -228,35 +238,30 @@ impl FormulaEditorPanel {
                 errors.push(e);
             }
         }
-        let not = |key: &str| (is(key), is(key), is(key), is(key), is(key), is(key));
-        let (as_formula, as_coloring, as_transform, as_solid, as_effect, as_sim_coloring) = match kind {
-            EntryKind::Formula => {
-                let n = not("formula_editor.rhai_is_formula");
-                (errors, n.1, n.2, n.3, n.4, n.5)
-            }
-            EntryKind::Coloring => {
-                let n = not("formula_editor.rhai_is_coloring");
-                (n.0, errors, n.2, n.3, n.4, n.5)
-            }
-            EntryKind::Transform => {
-                let n = not("formula_editor.rhai_is_transform");
-                (n.0, n.1, errors, n.3, n.4, n.5)
-            }
-            EntryKind::Solid => {
-                let n = not("formula_editor.rhai_is_solid");
-                (n.0, n.1, n.2, errors, n.4, n.5)
-            }
-            EntryKind::Effect => {
-                let n = not("formula_editor.rhai_is_effect");
-                (n.0, n.1, n.2, n.3, errors, n.5)
-            }
-            EntryKind::SimColoring => {
-                let n = not("formula_editor.rhai_is_sim_coloring");
-                (n.0, n.1, n.2, n.3, n.4, errors)
-            }
+        // Its own kind's row has the errors; every other row says what
+        // the file is.
+        let key = match kind {
+            EntryKind::Formula => "formula_editor.rhai_is_formula",
+            EntryKind::Coloring => "formula_editor.rhai_is_coloring",
+            EntryKind::Transform => "formula_editor.rhai_is_transform",
+            EntryKind::Solid => "formula_editor.rhai_is_solid",
+            EntryKind::Effect => "formula_editor.rhai_is_effect",
+            EntryKind::SimColoring => "formula_editor.rhai_is_sim_coloring",
+            EntryKind::SimModel => "formula_editor.rhai_is_sim_model",
         };
+        let mut errors = Some(errors);
+        let mut row = |k: EntryKind| if k == kind { errors.take().unwrap_or_default() } else { is(key) };
+        let (as_formula, as_coloring, as_transform, as_solid, as_effect, as_sim_coloring, as_sim_model) = (
+            row(EntryKind::Formula),
+            row(EntryKind::Coloring),
+            row(EntryKind::Transform),
+            row(EntryKind::Solid),
+            row(EntryKind::Effect),
+            row(EntryKind::SimColoring),
+            row(EntryKind::SimModel),
+        );
         self.parse_errors = Vec::new();
-        self.entries = vec![EntryRow { name: title, source: text.clone(), likely: kind, as_formula, as_coloring, as_transform, as_solid, as_effect, as_sim_coloring }];
+        self.entries = vec![EntryRow { name: title, source: text.clone(), likely: kind, as_formula, as_coloring, as_transform, as_solid, as_effect, as_sim_coloring, as_sim_model }];
         self.checked = Some(text);
     }
 
@@ -294,7 +299,7 @@ impl FormulaEditorPanel {
                 let check = |kind| {
                     let (p, d) = match kind {
                         EntryKind::Formula => lang::switch::check_formula(&file, e, dialect),
-                        EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring => lang::check::check(e, kind, dialect),
+                        EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => lang::check::check(e, kind, dialect),
                     };
                     let mut msgs = own.clone();
                     msgs.extend(d.iter().filter(|x| x.severity == Severity::Error).map(render));
@@ -325,7 +330,8 @@ impl FormulaEditorPanel {
                     as_transform: if transform { check(EntryKind::Transform) } else { vec![t!("formula_editor.not_a_transform").to_string()] },
                     as_solid: vec![t!("formula_editor.solid_rhai_only").to_string()],
                     as_effect: vec![t!("formula_editor.effect_rhai_only").to_string()],
-                    as_sim_coloring: vec![t!("formula_editor.sim_coloring_rhai_only").to_string()],
+                    as_sim_coloring: vec![t!("formula_editor.sim_rhai_only").to_string()],
+                    as_sim_model: vec![t!("formula_editor.sim_rhai_only").to_string()],
                 }
             })
             .collect();
@@ -345,6 +351,9 @@ impl FormulaEditorPanel {
         if kind == EntryKind::SimColoring {
             return self.use_sim_coloring(cm, row);
         }
+        if kind == EntryKind::SimModel {
+            return self.use_sim_model(cm, row);
+        }
         let Some(entry) = self.entries.get(row) else { return };
         // A Rhai entry is the user's: it has an id of its own (rule 7),
         // given here when it has none -- written into the file, which Save
@@ -361,7 +370,7 @@ impl FormulaEditorPanel {
             EntryKind::Formula => custom::compile_formula(&src, &name).map(|_| ()),
             EntryKind::Coloring => custom::compile_coloring(&src, &name).map(|_| ()),
             EntryKind::Solid => custom::compile_solid(&src, &name).map(|_| ()),
-            EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring => return,
+            EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => return,
         };
         if let Err(d) = compiled {
             let first = d.first().map(|x| x.render(&src.source)).unwrap_or_default();
@@ -381,7 +390,7 @@ impl FormulaEditorPanel {
                 ConfigPath::EscapeFormula,
                 "history.action.use_custom_formula",
             ),
-            EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring => (
+            EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => (
                 escape.custom_coloring.as_ref(),
                 ConfigPath::EscapeCustomColoring,
                 ConfigPath::EscapeColoring,
@@ -422,7 +431,7 @@ impl FormulaEditorPanel {
                     _ if minted => t!("formula_editor.id_minted", entry = src.entry),
                     EntryKind::Formula => t!("formula_editor.using_formula", entry = src.entry),
                     EntryKind::Solid => t!("formula_editor.using_solid", entry = src.entry),
-                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring => t!("formula_editor.using_coloring", entry = src.entry),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => t!("formula_editor.using_coloring", entry = src.entry),
                 }
                 .to_string());
             }
@@ -559,6 +568,46 @@ impl FormulaEditorPanel {
                 self.in_use.retain(|(k, _, _)| *k != EntryKind::SimColoring);
                 self.in_use.push((EntryKind::SimColoring, self.file.clone(), ident));
                 self.status = Some(if minted { t!("formula_editor.id_minted", entry = label) } else { t!("formula_editor.using_sim_coloring", entry = label) }.to_string());
+            }
+            Err(e) => self.status = Some(format!("{e:?}")),
+        }
+    }
+
+    /// Use a simulation model (P4), as a colouring is used: an id if it has
+    /// none, registered under its name, its source in the config with the
+    /// model named, one undo step entering Simulation. A new version of
+    /// the model in use keeps its parameters, dt and steps (the config's
+    /// `SimModel` rule).
+    fn use_sim_model(&mut self, cm: &mut ConfigManager, row: usize) {
+        let Some(entry) = self.entries.get(row) else { return };
+        let label = entry.name.clone();
+        let mut source = entry.source.clone();
+        let minted = !lang::rhai::info_string(&source, "id").is_some_and(|id| crate::scripted::is_uuid(&id));
+        if minted {
+            source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
+        }
+        let name = match crate::sim::custom::register_model(&source) {
+            Ok(name) => name,
+            Err(e) => {
+                self.status = Some(t!("formula_editor.did_not_compile", entry = label, error = e).to_string());
+                return;
+            }
+        };
+        if minted {
+            self.text = source.clone();
+            self.changed_at = Some(web_time::Instant::now());
+        }
+        let carried = crate::sim::custom::carried(&source);
+        let ident = entry_ident(&carried);
+        let changes = vec![
+            (ConfigPath::SimCustomModel, ConfigValue::String(custom_source_json(&Some(carried)))),
+            (ConfigPath::SimModel, ConfigValue::String(name)),
+        ];
+        match super::render_mode::choose(cm, changes, "history.action.use_sim_model", crate::scene::transforms::RenderMode::Simulation) {
+            Ok(_) => {
+                self.in_use.retain(|(k, _, _)| *k != EntryKind::SimModel);
+                self.in_use.push((EntryKind::SimModel, self.file.clone(), ident));
+                self.status = Some(if minted { t!("formula_editor.id_minted", entry = label) } else { t!("formula_editor.using_sim_model", entry = label) }.to_string());
             }
             Err(e) => self.status = Some(format!("{e:?}")),
         }
@@ -743,16 +792,21 @@ impl FormulaEditorPanel {
                 }
                 continue;
             }
-            // A simulation colouring: by its id, while the config carries
-            // a version of it.
-            if kind == EntryKind::SimColoring {
+            // A simulation colouring or model: by its id, while the config
+            // carries a version of it.
+            if matches!(kind, EntryKind::SimColoring | EntryKind::SimModel) {
                 let sim = &cm.config().sim;
-                let carried = sim.custom_coloring.as_ref().filter(|c| entry_ident(c) == entry && sim.coloring.starts_with(crate::sim::custom::PREFIX)).map(|c| c.source.clone());
+                let (carried, name) = if kind == EntryKind::SimModel { (&sim.custom_model, &sim.model) } else { (&sim.custom_coloring, &sim.coloring) };
+                let carried = carried.as_ref().filter(|c| entry_ident(c) == entry && name.starts_with(crate::sim::custom::PREFIX)).map(|c| c.source.clone());
                 let row = self.entries.iter().position(|r| entry_ident(&CustomSource { dialect: CustomDialect::Rhai, entry: r.name.clone(), source: r.source.clone(), variations: Vec::new() }) == entry);
                 if let (Some(carried), Some(row)) = (carried, row) {
                     let r = &self.entries[row];
                     if r.errors(kind).is_empty() && r.source != carried {
-                        self.use_sim_coloring(cm, row);
+                        if kind == EntryKind::SimModel {
+                            self.use_sim_model(cm, row);
+                        } else {
+                            self.use_sim_coloring(cm, row);
+                        }
                     }
                 }
                 continue;
@@ -760,7 +814,7 @@ impl FormulaEditorPanel {
             let escape = &cm.config().escape;
             let (carried, name) = match kind {
                 EntryKind::Formula | EntryKind::Solid => (escape.custom_formula.as_ref(), &escape.formula),
-                EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring => (escape.custom_coloring.as_ref(), &escape.coloring),
+                EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => (escape.custom_coloring.as_ref(), &escape.coloring),
             };
             let Some(carried) = carried else { continue };
             if entry_ident(carried) != entry || !name.starts_with(custom::PREFIX) {
@@ -918,10 +972,11 @@ impl FormulaEditorPanel {
                             shipped_effect = Some((format!("{name}.rhai"), source.to_string()));
                         }
                     }
-                    // The simulation colourings that ship as Rhai (P4).
-                    for (name, source) in crate::sim::custom::SHIPPED {
+                    // The simulation colourings and models that ship as Rhai
+                    // (P4).
+                    for (name, source) in crate::sim::custom::SHIPPED.iter().chain(crate::sim::custom::SHIPPED_MODELS) {
                         let title = lang::rhai::title(source).unwrap_or_else(|| name.to_string());
-                        if ui.selectable_label(false, t!("formula_editor.example_sim_coloring", name = title)).clicked() {
+                        if ui.selectable_label(false, t!("formula_editor.example_sim", name = title)).clicked() {
                             shipped_effect = Some((format!("sim-{name}.rhai"), source.to_string()));
                         }
                     }
@@ -1049,7 +1104,7 @@ impl FormulaEditorPanel {
                 ui.strong(&row.name);
                 // What it most likely is leads, the rest in their order.
                 use EntryKind::*;
-                const ALL: [EntryKind; 6] = [Formula, Coloring, Transform, Solid, Effect, SimColoring];
+                const ALL: [EntryKind; 7] = [Formula, Coloring, Transform, Solid, Effect, SimColoring, SimModel];
                 let mut order = ALL;
                 order.sort_by_key(|k| *k != row.likely);
                 for kind in order {
@@ -1062,6 +1117,7 @@ impl FormulaEditorPanel {
                         EntryKind::Solid => t!("formula_editor.use_solid"),
                         EntryKind::Effect => t!("formula_editor.use_effect"),
                         EntryKind::SimColoring => t!("formula_editor.use_sim_coloring"),
+                        EntryKind::SimModel => t!("formula_editor.use_sim_model"),
                     };
                     // The kind it is not is offered only when it compiles
                     // as that too; the kind it is shows its errors.
