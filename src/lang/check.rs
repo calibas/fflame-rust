@@ -1641,11 +1641,12 @@ impl Checker {
         }
         // A simulation's neighbour reads, hash and seed (P4): a colouring's
         // and a model's; a model's draws on a stream and the seed's init
-        // shape, its alone. `__cell` the colouring's sample (0-18), the
-        // step (19) and the memory (20-27), or the model's state, seed
-        // inputs, dt and step (0-3, 19-22); `__seed` its word (0, 1).
+        // shape, its alone. `__cell` the colouring's sample (0-18) and
+        // memory (20-27), or the model's state, seed inputs and dt (0-3,
+        // 19-21); `__host_int` the seed's words, the step and the layer
+        // (0-3).
         let sim = matches!(self.kind, EntryKind::SimColoring | EntryKind::SimModel);
-        if matches!(b, Builtin::NbrX | Builtin::NbrY | Builtin::NbrZ | Builtin::NbrW | Builtin::Pcg | Builtin::Seed) && !sim {
+        if matches!(b, Builtin::NbrX | Builtin::NbrY | Builtin::NbrZ | Builtin::NbrW | Builtin::Pcg | Builtin::HostInt) && !sim {
             self.error(span, format!("unknown function `{name}`"));
             return None;
         }
@@ -1657,10 +1658,10 @@ impl Checker {
         let literal = match b {
             Builtin::Cell => Some(match self.kind {
                 EntryKind::SimColoring => 0..28,
-                EntryKind::SimModel => 0..23,
+                EntryKind::SimModel => 0..22,
                 _ => 0..0,
             }),
-            Builtin::Seed => Some(0..2),
+            Builtin::HostInt => Some(0..4),
             _ => None,
         };
         if let Some(range) = literal {

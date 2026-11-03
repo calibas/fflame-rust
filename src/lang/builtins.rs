@@ -225,9 +225,12 @@ pub enum Builtin {
     /// The framework's PCG hash of an int's 32 bits (`sim_pcg`), for a
     /// simulation's colouring or model (P4): `pcg(n)` in Rhai.
     Pcg,
-    /// The run's seed, as the 32-bit words `__seed(0)` (low) and
-    /// `__seed(1)` (high): `ctx.seed_lo`, `ctx.seed_hi` (P4).
-    Seed,
+    /// A simulation's host ints (P4), by a literal index: the run's seed
+    /// as its 32-bit words (0 low, 1 high: `ctx.seed_lo`, `ctx.seed_hi`)
+    /// and the step index (2: `ctx.step`), whole at any step as the
+    /// built-ins' `sim_step_index()` is; a model's layer (3: `ctx.layer`),
+    /// which salts its draws.
+    HostInt,
     /// A hash of a point to two numbers in [0, 1): the effects' noise hash,
     /// `fract(sin(vec2(dot(p, (127.1, 311.7)), dot(p, (269.5, 183.3)))) *
     /// 43758.5453)`, emitted as the built-in shaders write it so a twin
@@ -257,7 +260,7 @@ pub const BUILTINS: &[(&str, Builtin)] = &[
     ("__sim_rand", Builtin::SimRand),
     ("__init_at", Builtin::InitAt),
     ("__pcg", Builtin::Pcg),
-    ("__seed", Builtin::Seed),
+    ("__host_int", Builtin::HostInt),
     ("fract", Builtin::Fract),
     ("hash2", Builtin::Hash2),
     ("sqr", Builtin::Sqr),
@@ -362,7 +365,7 @@ impl Builtin {
             SimRand if arg != Ty::Int => return Err("`rand(k)` takes an int: the stream's number".to_string()),
             Pcg if arg != Ty::Int => return Err("`pcg(n)` takes an int: it hashes its 32 bits".to_string()),
             SimRand => Ty::Float,
-            Pcg | Seed => Ty::Int,
+            Pcg | HostInt => Ty::Int,
             SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | InitAt => Ty::Float,
             Hash2 => Ty::Complex,
             Fract if arg == Ty::Complex => Ty::Complex,
@@ -442,7 +445,7 @@ impl Builtin {
             Log1p => z.ln1p(),
             F32 => C64::new(z.re as f32 as f64, z.im as f32 as f64),
             // An effect's image is the GPU's.
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | Seed => C64::ZERO,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt => C64::ZERO,
             Fract => C64::new(z.re - z.re.floor(), z.im - z.im.floor()),
             Hash2 => {
                 let h = |x: f64| {
@@ -485,7 +488,7 @@ impl Builtin {
             Expm1 => z.exp(),
             Log1p => one.div(one.add(z)),
             F32 | Fract => one,
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | Seed | Hash2 => C64::ZERO,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Hash2 => C64::ZERO,
             Zero | Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | Cosxx | IsInf
             | IsNan => C64::ZERO,
         }
@@ -533,7 +536,7 @@ impl Builtin {
             Expm1 => x.exp_m1(),
             Log1p => x.ln_1p(),
             F32 => x as f32 as f64,
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | Seed => 0.0,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt => 0.0,
             Fract => x - x.floor(),
             Hash2 => Builtin::Hash2.eval_c(C64::real(x)).re,
             Conj | Flip | Cosxx => unreachable!("complex-valued"),

@@ -733,8 +733,10 @@ call.
   each reading what the one before wrote (`ModelDef::passes`). `cell` is
   the state (`.x` ... `.w`); `read(dx, dy)` a neighbour's, the offset in
   whole cells through the config's boundary; `p` its `PARAMS`; `ctx.dt`,
-  `ctx.step` (the step index), `ctx.cell`, `ctx.width`, `ctx.height`,
-  `ctx.seed_lo` and `ctx.seed_hi`. `rand()` draws in [0, 1), keyed by
+  `ctx.step` (the step index, an int: whole at any step, as the
+  framework's), `ctx.cell`, `ctx.width`, `ctx.height`, `ctx.seed_lo` and
+  `ctx.seed_hi`, and `ctx.layer` (which salts the layer's draws: with
+  `pcg`, a draw at another cell is `sim_rand` there). `rand()` draws in [0, 1), keyed by
   the run's seed, the cell, the step and the call site (`sim_rand`), so
   a run replays; `rand(k)` draws on the stream `k`, an int, which an edit
   elsewhere in the script leaves where it was -- the built-ins key their
@@ -781,12 +783,31 @@ call.
   is its own step module, so a Rhai one layers and couples as a built-in
   does (`rhai_models_and_colourings_run_in_layers`); it cannot take a
   drive or publish a signal (Turing's couplings).
-- **Twins**: `sim::custom::SHIPPED_MODELS`, Gray-Scott's
-  (`assets/sim/gray_scott.rhai`): its field held to the built-in's within
-  1e-5 over 600 steps at two settings
-  (`the_rhai_gray_scott_steps_as_the_built_in`), and as fast
-  (`the_rhai_models_are_no_slower`, ignored: it times the GPU; median
-  ratio 0.98 on a GTX 1660 SUPER at 1024x1024).
+- **Twins**: `sim::custom::SHIPPED_MODELS`, every built-in in the class
+  -- 22 of the 31 (`assets/sim/<name>.rhai`; the 9 others need kernel
+  tables, agents, the pyramid, memory, a measure or repeated pass, or
+  min/max). Each is held to its built-in three ways:
+  - its settings (`every_twin_carries_its_built_ins_settings`): the
+    parameters in slot order with their labels, ranges and choices, the
+    presets, dt, `max_dt`, steps, diffusion, state, passes and features,
+    and `max_dt(p)` against the `dt_bound` at the defaults and at each
+    parameter's ends;
+  - its field (`the_rhai_models_step_as_the_built_ins`): 300 steps from
+    the same seed at the defaults and at every preset, 80 runs, every one
+    bit-identical, the age channel and the seeds' draws included;
+  - its speed (`the_rhai_models_are_no_slower`, ignored: it times the
+    GPU): fifteen rounds of 1500 steps at 1024x1024, the median of the
+    rounds' ratios. On a GTX 1660 SUPER all within the run's own noise
+    (`SIM_TWINS_SELF=1`, the built-in against itself, about 2%) but
+    Brusselator2, 2-3% slower in repeated runs -- not its parameter
+    reads; unexplained, under the 5% gate.
+
+  The skeletons -- `PARAMS` and `INFO` as Rhai, from the built-in's
+  definition -- come from `write_twin_skeletons` (ignored, writes
+  `output/sim-twins/`), the functions by hand from the WGSL. Porting
+  showed what the language needed (step 5) and one built-in to correct:
+  Percolation declared `NeedsRng` for a draw in its seed alone, as no
+  other model does.
 
 ## Adding a model
 

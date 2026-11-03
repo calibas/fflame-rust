@@ -208,8 +208,36 @@ pub fn model(name: &str) -> Option<&'static ModelDef> {
     registry().read().ok()?.models.get(name).copied()
 }
 
-/// The models that ship as Rhai, by the built-in each is the twin of.
-pub const SHIPPED_MODELS: &[(&str, &str)] = &[("gray_scott", include_str!("../../assets/sim/gray_scott.rhai"))];
+/// The models that ship as Rhai, by the built-in each is the twin of
+/// (P4 step 7): each held to its built-in's settings
+/// (`every_twin_carries_its_built_ins_settings`), field
+/// (`the_rhai_models_step_as_the_built_ins`) and speed
+/// (`the_rhai_models_are_no_slower`). Assembled by
+/// `scripts/assemble_sim_twins.py`.
+pub const SHIPPED_MODELS: &[(&str, &str)] = &[
+    ("gray_scott", include_str!("../../assets/sim/gray_scott.rhai")),
+    ("fitzhugh_nagumo", include_str!("../../assets/sim/fitzhugh_nagumo.rhai")),
+    ("brusselator", include_str!("../../assets/sim/brusselator.rhai")),
+    ("schnakenberg", include_str!("../../assets/sim/schnakenberg.rhai")),
+    ("oregonator", include_str!("../../assets/sim/oregonator.rhai")),
+    ("brusselator2", include_str!("../../assets/sim/brusselator2.rhai")),
+    ("rossler", include_str!("../../assets/sim/rossler.rhai")),
+    ("hodgepodge", include_str!("../../assets/sim/hodgepodge.rhai")),
+    ("cyclic_ca", include_str!("../../assets/sim/cyclic_ca.rhai")),
+    ("spatial_rps", include_str!("../../assets/sim/spatial_rps.rhai")),
+    ("ising", include_str!("../../assets/sim/ising.rhai")),
+    ("eden", include_str!("../../assets/sim/eden.rhai")),
+    ("ballistic_deposition", include_str!("../../assets/sim/ballistic_deposition.rhai")),
+    ("percolation", include_str!("../../assets/sim/percolation.rhai")),
+    ("invasion_percolation", include_str!("../../assets/sim/invasion_percolation.rhai")),
+    ("wolfram_eca", include_str!("../../assets/sim/wolfram_eca.rhai")),
+    ("packard_snowflake", include_str!("../../assets/sim/packard_snowflake.rhai")),
+    ("sandpile", include_str!("../../assets/sim/sandpile.rhai")),
+    ("swift_hohenberg", include_str!("../../assets/sim/swift_hohenberg.rhai")),
+    ("cahn_hilliard", include_str!("../../assets/sim/cahn_hilliard.rhai")),
+    ("kobayashi", include_str!("../../assets/sim/kobayashi.rhai")),
+    ("snowfake", include_str!("../../assets/sim/snowfake.rhai")),
+];
 
 // ============================================================================
 // A model's own time step and presets (P4 step 6)
@@ -592,7 +620,7 @@ mod tests {
             let c = palette(t + s + ctx.step * 0.001 + cell.m1.w);\n    rgba(c.x, c.y, c.z, 1.0)\n}\n";
         let def = compile(colouring, "custom-language").unwrap_or_else(|e| panic!("{e}"));
         assert!(def.has(ColoringFeature::ReadsCell) && def.has(ColoringFeature::ReadsMemory), "{:?}", def.features);
-        for want in ["f32(sim_step_index())", "x.m0.x", "x.m1.w", "break;", "bitcast<i32>(params.seed_hi)"] {
+        for want in ["bitcast<i32>(sim_step_index())", "x.m0.x", "x.m1.w", "break;", "bitcast<i32>(params.seed_hi)"] {
             assert!(def.wgsl.contains(want), "{want} in\n{}", def.wgsl);
         }
 
@@ -657,6 +685,173 @@ mod tests {
         refused("0.5 / max(p.d, 0.25)", "0.0 * p.d", "a time step is a positive number");
     }
 
+    /// Whether a built-in model is in the class a script can be (P4 step
+    /// 7): no kernel table, agents, repeated or measured pass, and none of
+    /// the features only the framework's stages give.
+    pub(crate) fn in_class(m: &ModelDef) -> bool {
+        use ModelFeature::*;
+        m.kernel.is_none()
+            && m.agents.is_none()
+            && m.repeat.is_none()
+            && m.measure.is_none()
+            && !m.features.iter().any(|f| matches!(f, NeedsPyramid | ExactDiscs | NeedsAgents | NeedsMinMax | TakesDrive | PublishesSignal | Memory))
+    }
+
+    /// JSON as a Rhai literal: maps `#{ }`, an f32's number as its
+    /// shortest spelling with a point, an int as an int.
+    fn rhai_literal(v: &serde_json::Value) -> String {
+        use serde_json::Value;
+        match v {
+            Value::Null => "()".into(),
+            Value::Bool(b) => b.to_string(),
+            Value::Number(n) if n.is_i64() || n.is_u64() => n.to_string(),
+            Value::Number(n) => float(n.as_f64().unwrap_or_default()),
+            Value::String(s) => format!("{s:?}"),
+            Value::Array(a) => format!("[{}]", a.iter().map(rhai_literal).collect::<Vec<_>>().join(", ")),
+            Value::Object(m) => format!("#{{ {} }}", m.iter().map(|(k, v)| format!("{k}: {}", rhai_literal(v))).collect::<Vec<_>>().join(", ")),
+        }
+    }
+
+    fn float(v: f64) -> String {
+        if v as f32 as f64 == v {
+            format!("{:?}", v as f32)
+        } else {
+            format!("{v:?}")
+        }
+    }
+
+    /// A built-in model's `PARAMS` and `INFO` as a twin's source declares
+    /// them, the functions left to write (P4 step 7).
+    pub(crate) fn skeleton(m: &ModelDef) -> String {
+        use std::fmt::Write;
+        let mut s = String::new();
+        let _ = writeln!(s, "const PARAMS = #{{");
+        for p in m.parameters {
+            let value = if p.choices.is_empty() { float(f64::from(p.default)) } else { format!("{}", p.default as i64) };
+            let _ = writeln!(s, "    {}: #{{", p.name);
+            let _ = write!(s, "        value: {value}, ");
+            if p.choices.is_empty() {
+                let _ = write!(s, "min: {}, max: {}, ", float(f64::from(p.min)), float(f64::from(p.max)));
+            } else {
+                let _ = write!(s, "choices: {}, ", rhai_literal(&serde_json::json!(p.choices)));
+            }
+            let _ = writeln!(s, "caption: {:?},", p.display_name);
+            let _ = writeln!(s, "        hint: {:?},", p.tooltip);
+            let _ = writeln!(s, "    }},");
+        }
+        let _ = writeln!(s, "}};\nconst INFO = #{{");
+        let _ = writeln!(s, "    title: {:?},\n    id: {:?},\n    description: {:?},", m.display_name, m.name, m.description);
+        let _ = writeln!(s, "    dt: {},\n    max_dt: {},\n    steps: {},", float(f64::from(m.default_dt)), float(f64::from(m.max_dt)), m.default_steps);
+        if !m.diffusion.is_empty() {
+            let _ = writeln!(s, "    diffusion: {},", rhai_literal(&serde_json::json!(m.diffusion)));
+        }
+        if m.state == StateKind::Discrete {
+            let _ = writeln!(s, "    state: \"discrete\",");
+        }
+        if m.has(ModelFeature::NoTimeStep) {
+            let _ = writeln!(s, "    time_step: false,");
+        }
+        if m.has(ModelFeature::NeverStills) {
+            let _ = writeln!(s, "    settles: false,");
+        }
+        if !m.presets.is_empty() {
+            let _ = writeln!(s, "    presets: [");
+            for p in m.presets {
+                let mut fields = vec![format!("name: {:?}", p.name), format!("title: {:?}", p.display_name)];
+                let map = |pairs: &[(&str, f32)]| format!("#{{ {} }}", pairs.iter().map(|(k, v)| format!("{k}: {}", float(f64::from(*v)))).collect::<Vec<_>>().join(", "));
+                if !p.params.is_empty() {
+                    fields.push(format!("params: {}", map(p.params)));
+                }
+                fields.push(format!("steps: {}", p.steps));
+                if let Some(dt) = p.dt {
+                    fields.push(format!("dt: {}", float(f64::from(dt))));
+                }
+                fields.push(format!("boundary: {}", rhai_literal(&serde_json::to_value(p.boundary).unwrap())));
+                if let Some(init) = p.init {
+                    fields.push(format!("init: {}", rhai_literal(&serde_json::to_value(init).unwrap())));
+                }
+                if let Some(c) = p.coloring {
+                    fields.push(format!("coloring: {c:?}"));
+                }
+                if !p.coloring_params.is_empty() {
+                    fields.push(format!("coloring_params: {}", map(p.coloring_params)));
+                }
+                if let Some(matte) = p.matte {
+                    fields.push(format!("matte: {}", rhai_literal(&serde_json::to_value(matte).unwrap())));
+                }
+                if let Some(warp) = p.warp {
+                    fields.push(format!("warp: {}", rhai_literal(&serde_json::to_value(warp).unwrap())));
+                }
+                let _ = writeln!(s, "        #{{\n            {},\n        }},", fields.join(",\n            "));
+            }
+            let _ = writeln!(s, "    ],");
+        }
+        let _ = writeln!(s, "}};");
+        s
+    }
+
+    /// Every shipped twin carries its built-in's settings (P4 step 7):
+    /// its parameters (names in slot order, labels, defaults, ranges,
+    /// choices), presets, working values, state, passes and features, and
+    /// a stable time step that agrees with the built-in's `dt_bound` at
+    /// the defaults and at each parameter's ends.
+    #[test]
+    fn every_twin_carries_its_built_ins_settings() {
+        for (name, source) in SHIPPED_MODELS {
+            let builtin = super::super::MODELS.iter().find(|m| m.name == *name).unwrap_or_else(|| panic!("`{name}` is a built-in"));
+            let key = format!("custom-twin-{name}");
+            register_model_as(source, &key).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let twin = model(&key).expect("registered");
+            let params = |m: &ModelDef| m.parameters.iter().map(|p| (p.name, p.display_name, p.default, p.min, p.max, p.tooltip, p.choices)).collect::<Vec<_>>();
+            assert_eq!(params(twin), params(builtin), "{name}: parameters");
+            let sorted = |pairs: &[(&'static str, f32)]| {
+                let mut v = pairs.to_vec();
+                v.sort_by(|a, b| a.0.cmp(b.0));
+                v
+            };
+            let presets = |m: &ModelDef| {
+                m.presets
+                    .iter()
+                    .map(|p| (p.name, p.display_name, sorted(p.params), p.steps, p.dt, p.boundary, p.init, p.coloring, sorted(p.coloring_params), p.matte, p.warp))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(presets(twin), presets(builtin), "{name}: presets");
+            let values = |m: &ModelDef| (m.default_dt, m.max_dt, m.default_steps, m.diffusion, m.state, m.passes, m.display_name, m.description);
+            assert_eq!(values(twin), values(builtin), "{name}: working values");
+            let features = |m: &ModelDef| {
+                let mut f: Vec<String> = m.features.iter().map(|f| format!("{f:?}")).collect();
+                f.sort();
+                f
+            };
+            assert_eq!(features(twin), features(builtin), "{name}: features");
+            assert_eq!(twin.dt_bound.is_some(), builtin.dt_bound.is_some(), "{name}: a time step of its own");
+            let mut points = vec![std::collections::BTreeMap::new()];
+            for p in builtin.parameters {
+                for v in [p.min, p.max] {
+                    points.push([(p.name.to_string(), v)].into());
+                }
+            }
+            for at in &points {
+                let (a, b) = (builtin.max_dt_for(at), twin.max_dt_for(at));
+                assert!((a - b).abs() <= 1e-5 * a.abs().max(1e-3), "{name}: max_dt at {at:?}: the built-in's {a}, the twin's {b}");
+            }
+        }
+    }
+
+    /// Write every in-class built-in model's skeleton and its WGSL to
+    /// `output/sim-twins/` (P4 step 7): what a twin is written from.
+    #[test]
+    #[ignore = "a tool: writes files"]
+    fn write_twin_skeletons() {
+        let dir = std::path::Path::new("output/sim-twins");
+        std::fs::create_dir_all(dir).unwrap();
+        for m in super::super::MODELS.iter().filter(|m| in_class(m)) {
+            std::fs::write(dir.join(format!("{}.rhai", m.name)), skeleton(m)).unwrap();
+            std::fs::write(dir.join(format!("{}.wgsl", m.name)), format!("{}\n// ---- seed\n{}", m.wgsl, m.wgsl_seed)).unwrap();
+            println!("{}", m.name);
+        }
+    }
+
     /// A source goes with its layer (P4 step 4): promoting the flat model
     /// and colouring into the stacks carries their sources into entry 0,
     /// a later entry's source registers under its own name, and demoting
@@ -703,3 +898,4 @@ mod tests {
         assert!(!crate::config::sim::same_script("custom-0123456789abcdef", "custom-0123456789abcdef"));
     }
 }
+

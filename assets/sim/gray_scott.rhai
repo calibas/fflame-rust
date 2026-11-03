@@ -1,14 +1,15 @@
 // Gray–Scott reaction–diffusion, in Karl Sims' discretisation.
 //
 // The Rhai twin of the built-in `gray_scott` model (src/sim/models.rs;
-// docs/projects/rhai-plugins.md, P4): the same parameters, in the same
-// order, the same working values, and the same field.
+// docs/projects/rhai-plugins.md, P4): the same parameters, presets and
+// working values, and the same field.
 //
 //   dA/dt = D_A lap(A) - A B^2 + F (1 - A)
 //   dB/dt = D_B lap(B) + A B^2 - (F + k) B
 //
 // Channels: x = A, y = B, z = the step the cell last changed
-// appreciably (for the age colouring), w spare.
+// appreciably (for the age colouring), w spare. Explicit Euler on the
+// Sims stencil is stable while dt * D * 1.6 < 2: with D_A = 1, dt < 1.25.
 
 const PARAMS = #{
     feed: #{
@@ -33,11 +34,51 @@ const INFO = #{
     id: "gray_scott",
     description: "Two-species reaction–diffusion. Pearson's (F, k) plane holds spots, worms, mazes and mitosis — the classic reaction–diffusion patterns.",
     dt: 1.0,
-    // Explicit Euler on the Sims stencil is stable while dt * D * 1.6 < 2:
-    // with D_A = 1, dt < 1.25.
     max_dt: 1.25,
     steps: 10000,
     diffusion: ["diffusion_a", "diffusion_b"],
+    presets: [
+        #{
+            name: "mitosis",
+            title: "Mitosis",
+            params: #{ feed: 0.0367, kill: 0.0649 },
+            steps: 10000,
+            boundary: "periodic",
+            init: #{ blobs: #{ count: 6, radius: 24 } },
+            coloring: "channel",
+            coloring_params: #{ channel: 1.0, scale: 3.0, offset: 0.0, wrap: 0.0 },
+        },
+        #{
+            name: "coral",
+            title: "Coral",
+            params: #{ feed: 0.0545, kill: 0.062 },
+            steps: 10000,
+            boundary: "periodic",
+            init: #{ blobs: #{ count: 6, radius: 24 } },
+            coloring: "channel",
+            coloring_params: #{ channel: 1.0, scale: 3.0, offset: 0.0, wrap: 0.0 },
+        },
+        #{
+            name: "maze",
+            title: "Maze",
+            params: #{ feed: 0.03, kill: 0.057 },
+            steps: 10000,
+            boundary: "periodic",
+            init: #{ blobs: #{ count: 6, radius: 24 } },
+            coloring: "channel",
+            coloring_params: #{ channel: 1.0, scale: 3.0, offset: 0.0, wrap: 0.0 },
+        },
+        #{
+            name: "worms",
+            title: "Worms",
+            params: #{ feed: 0.046, kill: 0.065 },
+            steps: 10000,
+            boundary: "periodic",
+            init: #{ blobs: #{ count: 6, radius: 24 } },
+            coloring: "channel",
+            coloring_params: #{ channel: 1.0, scale: 3.0, offset: 0.0, wrap: 0.0 },
+        },
+    ],
 };
 
 fn cell_step(cell, p, ctx) {

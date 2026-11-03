@@ -794,7 +794,13 @@ impl Lowerer<'_> {
             }
             ("read", 2) => match (args.remove(0), args.remove(0)) {
                 (S(dx), S(dy)) => {
-                    let at = self.hold(mk(ExprKind::Complex(Box::new(dx), Box::new(dy)), span), "offset");
+                    // Whole numbers stay as they are, so the WGSL offsets
+                    // by them (`vec2<i32>(dx, dy)`) rather than by a float
+                    // rounded back (P4 step 7's speed check); others are
+                    // held, as the read rounds them.
+                    let whole = self.ty_of(&dx) == TypeName::Int && self.ty_of(&dy) == TypeName::Int;
+                    let at = mk(ExprKind::Complex(Box::new(dx), Box::new(dy)), span);
+                    let at = if whole { at } else { self.hold(at, "offset") };
                     V(Vector::new(Kind::Rgba, ["x", "y", "z", "w"].iter().map(|c| call1(&format!("__nbr_{c}"), at.clone(), span)).collect()))
                 }
                 _ => return self.err(p, "`read(dx, dy)`: the neighbour's offset, two whole numbers"),

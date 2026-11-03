@@ -812,7 +812,12 @@ fn escaped(s, p) {
   `read(dx, dy)`, the `__nbr_x` ... `__nbr_w` built-ins (`sim_read`, the
   framework's boundary); `rand()` the template's `sim_rand`, a salt per
   call site, and `rand(k)` the stream `k` (`__sim_rand`, its int kept an
-  int); in a seed, `init_at(x, y)` the init shape at another cell
+  int). A neighbour's parts read one after another are one `sim_read`
+  (`Gen::nbr_run`), at a `vec2<i32>` of the offset when it is whole
+  numbers (`nbr_offset`) -- the shader compiler merged the four reads at
+  a constant offset but not in a loop that picks it, and rounding an int
+  through a float cost snowfake's twin 6%. In a seed, `init_at(x, y)` the
+  init shape at another cell
   (`__init_at`). A colouring and a model hash with `pcg(n)` (`__pcg`, the
   framework's `sim_pcg` of the int's bits) and read the run's seed words
   (`ctx.seed_lo`, `ctx.seed_hi`: `__seed`); a colouring reads the field
