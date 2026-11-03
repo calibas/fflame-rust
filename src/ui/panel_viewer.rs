@@ -842,6 +842,8 @@ impl<'a> PanelViewer<'a> {
                         timeline_holding: self.context.sim_timeline_holding,
                         timeline_driven: self.context.sim_timeline_driven,
                         governor: self.context.sim_governor,
+                        formula_editor: self.context.formula_editor,
+                        open_formula_editor: self.context.open_formula_editor,
                     },
                 );
             }

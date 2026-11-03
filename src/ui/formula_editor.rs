@@ -631,6 +631,68 @@ impl FormulaEditorPanel {
         }
     }
 
+    /// The simulation panel's Edit as Rhai (P7 step 5): the built-in model
+    /// (`model`) or colouring `builtin` in a slot -- a layer or a colour
+    /// layer (`layer`), else the flat one -- becomes the user's own: its
+    /// twin, with an id of its own, registered and carried in the slot, the
+    /// slot's parameters (and a model's dt and steps) kept, so the picture
+    /// is the same; one undo step, entering Simulation if another mode is
+    /// on. It opens here unsaved and in use, so Live re-applies an edit.
+    /// Save keeps it in the library; the built-in is untouched.
+    pub fn edit_sim_as_rhai(&mut self, cm: &mut ConfigManager, model: bool, layer: Option<usize>, builtin: &str) {
+        use crate::scene::transforms::RenderMode;
+        let shipped = if model { crate::sim::custom::SHIPPED_MODELS } else { crate::sim::custom::SHIPPED };
+        let Some((_, text)) = shipped.iter().find(|(n, _)| *n == builtin) else { return };
+        let source = lang::rhai::with_own_id(text, &crate::scripted::mint_id());
+        let registered = if model { crate::sim::custom::register_model(&source) } else { crate::sim::custom::register(&source) };
+        let name = match registered {
+            Ok(name) => name,
+            Err(e) => {
+                self.status = Some(t!("formula_editor.did_not_compile", entry = builtin, error = e).to_string());
+                return;
+            }
+        };
+        let carried = crate::sim::custom::carried(&source);
+        let mut after = cm.config().clone();
+        let s = &mut after.sim;
+        match (model, layer) {
+            (true, None) => {
+                s.model = name;
+                s.custom_model = Some(carried.clone());
+            }
+            (true, Some(i)) => {
+                let Some(l) = s.layers.get_mut(i) else { return };
+                l.model = name;
+                l.custom_model = Some(carried.clone());
+            }
+            (false, None) => {
+                s.coloring = name;
+                s.custom_coloring = Some(carried.clone());
+            }
+            (false, Some(k)) => {
+                let Some(l) = s.color_layers.get_mut(k) else { return };
+                l.coloring = name;
+                l.custom_coloring = Some(carried.clone());
+            }
+        }
+        super::render_mode::enter_snapshot(cm.config(), &mut after, RenderMode::Simulation);
+        if let Err(e) = cm.apply_config_edit(after, "history.action.edit_sim_as_rhai".to_string()) {
+            self.status = Some(format!("{e:?}"));
+            return;
+        }
+        let title = if model {
+            crate::sim::model_or_default(builtin).display_name
+        } else {
+            crate::sim::coloring_or_default(builtin).display_name
+        };
+        let file = formula_store::file_name_for(&format!("{builtin}.rhai")).unwrap_or_else(|| "simulation.rhai".into());
+        self.adopt(None, file, source);
+        let kind = if model { EntryKind::SimModel } else { EntryKind::SimColoring };
+        self.in_use.retain(|(k, _, _)| *k != kind);
+        self.in_use.push((kind, None, entry_ident(&carried)));
+        self.status = Some(t!("formula_editor.editing_builtin_sim", name = title).to_string());
+    }
+
     /// The Effects panel's Edit as Rhai: the built-in effect at `index` of
     /// its chain (`density`, which) becomes one of the user's -- the source
     /// the built-in runs, with an id of its own, registered, and the
@@ -1396,6 +1458,49 @@ mod tests {
         cm.undo().unwrap();
         assert_eq!(cm.config().color_effects[0].effect_type, "vignette");
         crate::effects::global_effect_registry_mut().remove_by_name(&key);
+    }
+
+    /// Edit as Rhai in the simulation panel (P7 step 5): a built-in model
+    /// becomes its twin under a UUID of its own -- the flat slot's
+    /// parameters, dt and steps kept -- and a colour layer's colouring its
+    /// twin, its settings kept; each one undo step, the editor holding the
+    /// copy in use, and from another mode Simulation entered in the step.
+    #[test]
+    fn edit_as_rhai_makes_a_builtin_simulation_the_users() {
+        use crate::scene::transforms::RenderMode;
+        let mut config = crate::config::FractalConfig::default();
+        config.sim.model = "mccabe".into();
+        config.sim.model_params.insert("scales".into(), 4.0);
+        config.sim.dt = 0.5;
+        config.sim.steps = 321;
+        config.sim.color_layers = vec![
+            crate::config::sim::SimColorLayer { coloring: "channel".into(), coloring_params: [("scale".to_string(), 3.0)].into(), ..Default::default() },
+            crate::config::sim::SimColorLayer { coloring: "scale_memory".into(), ..Default::default() },
+        ];
+        let mut cm = ConfigManager::new(config);
+        let mut panel = FormulaEditorPanel::new();
+        let before = cm.history_len();
+        panel.edit_sim_as_rhai(&mut cm, true, None, "mccabe");
+        let s = &cm.config().sim;
+        assert!(s.model.starts_with(crate::sim::custom::PREFIX), "{}: {:?}", s.model, panel.status);
+        let id = lang::rhai::info_string(&s.custom_model.as_ref().expect("carried").source, "id").expect("an id");
+        assert!(crate::scripted::is_uuid(&id), "{id}");
+        assert_eq!((s.model_params.get("scales"), s.dt, s.steps), (Some(&4.0), 0.5, 321), "its settings kept");
+        assert_eq!(crate::sim::model_or_default(&s.model).name, s.model, "registered");
+        assert_eq!(cm.config().render_mode, RenderMode::Simulation, "a choice, from a flame, enters Simulation");
+        assert_eq!(cm.history_len() - before, 1, "one undo step");
+        assert_eq!(lang::rhai::info_string(&panel.text, "id").as_deref(), Some(id.as_str()), "the editor holds the copy");
+        assert!(panel.in_use.iter().any(|(k, _, n)| *k == EntryKind::SimModel && *n == id), "in use, for Live");
+        panel.edit_sim_as_rhai(&mut cm, false, Some(0), "channel");
+        let l = &cm.config().sim.color_layers;
+        assert!(l[0].coloring.starts_with(crate::sim::custom::PREFIX) && l[0].custom_coloring.is_some(), "{}", l[0].coloring);
+        assert_eq!(l[0].coloring_params.get("scale"), Some(&3.0), "its settings kept");
+        assert_eq!(l[1].coloring, "scale_memory", "the other colour layer untouched");
+        assert!(panel.in_use.iter().any(|(k, _, _)| *k == EntryKind::SimColoring), "in use, for Live");
+        cm.undo().unwrap();
+        cm.undo().unwrap();
+        assert_eq!((cm.config().sim.model.as_str(), cm.config().sim.color_layers[0].coloring.as_str()), ("mccabe", "channel"));
+        assert_eq!(cm.config().render_mode, RenderMode::TwoD);
     }
 
     /// A variation from before ids (its `INFO.name` alone) is Used under

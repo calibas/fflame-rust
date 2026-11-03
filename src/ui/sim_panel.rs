@@ -53,6 +53,10 @@ pub struct SimUiState<'a> {
     /// The quality governor's grid scale while it holds one, and *Fit to
     /// target*'s (app/governor.rs).
     pub governor: super::SimGovernorUi,
+    /// The Formula Editor, which Edit as Rhai gives a model or a colouring
+    /// to (P7 step 5), and whether the app should open it.
+    pub formula_editor: &'a mut Option<super::formula_editor::FormulaEditorPanel>,
+    pub open_formula_editor: &'a mut bool,
 }
 
 /// "Save as texture" (`docs/archive/projects/sim-textures.md`): this simulation,
@@ -277,6 +281,7 @@ pub fn render_sim_content(
     //
     // `id_salt` because this `Ui`'s id derives from the dock tab, so a
     // second scroll area added to this panel later would collide.
+    let mut edit_as_rhai: Option<EditAsRhai> = None;
     egui::ScrollArea::vertical()
         .id_salt("sim_panel_body")
         .auto_shrink([false, false])
@@ -285,7 +290,7 @@ pub fn render_sim_content(
                 .default_open(true)
                 .show(ui, |ui| {
                 // ---- Model: one list whose entry 0 IS the model ----
-                render_model_section(ui, config_manager, &config, &sim, state.reseed, state.grid);
+                render_model_section(ui, config_manager, &config, &sim, state.reseed, state.grid, &mut edit_as_rhai);
 
                 ui.separator();
             });
@@ -674,7 +679,7 @@ pub fn render_sim_content(
                 .default_open(true)
                 .show(ui, |ui| {
                 // ---- Colouring: one list whose entry 0 IS the colouring ----
-                render_coloring_section(ui, config_manager, &config, &sim);
+                render_coloring_section(ui, config_manager, &config, &sim, &mut edit_as_rhai);
             });
 
             #[cfg(feature = "terrain")]
@@ -684,6 +689,10 @@ pub fn render_sim_content(
             }
 
     });
+    if let Some(e) = edit_as_rhai {
+        state.formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).edit_sim_as_rhai(config_manager, e.model, e.layer, &e.builtin);
+        *state.open_formula_editor = true;
+    }
 }
 
 /// The **3D terrain** section (heightfield plan T4): the grid as a height
@@ -927,6 +936,7 @@ fn render_coloring_section(
     config_manager: &mut ConfigManager,
     config: &crate::config::FractalConfig,
     sim: &SimConfig,
+    edit_as_rhai: &mut Option<EditAsRhai>,
 ) {
     use crate::config::sim::{SimBlend, SimColorLayer, SimMatteChannel, SimMatteEdge, MAX_COLOR_LAYERS};
     // A colouring the config carries (P4), registered before its name is
@@ -1056,6 +1066,9 @@ fn render_coloring_section(
                         }
                     }
                 });
+            if edit_as_rhai_button(ui, coloring.name, false) {
+                *edit_as_rhai = Some(EditAsRhai { model: false, layer: layered.then_some(k), builtin: coloring.name.to_string() });
+            }
             if layered {
                 if n_sim_layers > 1 {
                     let source = entry.map(|l| l.source).unwrap_or(0);
@@ -1586,6 +1599,23 @@ fn column_label(c: &str) -> String {
 /// seam is invisible, undoes as one step, and
 /// `promotion_then_demotion_round_trips_the_config` is what keeps it
 /// exact.
+/// An Edit as Rhai the panel asked for (P7 step 5): a model (else a
+/// colouring), its layer or colour layer (`None`: the flat slot), and the
+/// built-in to edit. Handed to the Formula Editor once the panel is drawn.
+struct EditAsRhai {
+    model: bool,
+    layer: Option<usize>,
+    builtin: String,
+}
+
+/// Edit as Rhai, beside a built-in model or colouring with a twin:
+/// whether it was clicked.
+fn edit_as_rhai_button(ui: &mut egui::Ui, builtin: &str, model: bool) -> bool {
+    let shipped = if model { crate::sim::custom::SHIPPED_MODELS } else { crate::sim::custom::SHIPPED };
+    shipped.iter().any(|(n, _)| *n == builtin)
+        && ui.small_button(t!("sim_panel.edit_as_rhai")).on_hover_text(t!("sim_panel.edit_as_rhai_tip")).clicked()
+}
+
 fn render_model_section(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
@@ -1593,6 +1623,7 @@ fn render_model_section(
     sim: &SimConfig,
     reseed: &mut bool,
     grid: (u32, u32),
+    edit_as_rhai: &mut Option<EditAsRhai>,
 ) {
     use crate::config::sim::{
         SimCoupling, SimCouplingForm, SimLayer, MAX_COUPLINGS, MAX_LAYERS,
@@ -1668,6 +1699,11 @@ fn render_model_section(
                         }
                     }
                 });
+            // Edit as Rhai (P7 step 5): a built-in's twin, put in its
+            // place and opened as the user's own.
+            if edit_as_rhai_button(ui, model.name, true) {
+                *edit_as_rhai = Some(EditAsRhai { model: true, layer: layered.then_some(i), builtin: model.name.to_string() });
+            }
             if count > 1 {
                 let mut on = sim.layer_enabled(i);
                 if ui
