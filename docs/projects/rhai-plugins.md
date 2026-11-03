@@ -755,10 +755,12 @@ nested loops and neighbour reads at loop offsets already work.
      (`the_rhai_agent_models_move_as_the_built_ins`), and at speed (0.999,
      1.013). DLA's needed its launch sum's terms in the built-in's order
      for the shader compiler to fuse them alike. **Found**: the built-in
-     DLA reads its launch gap from `crowding`'s slot and its crowding from
+     DLA read its launch gap from `crowding`'s slot and its crowding from
      `launch_gap`'s (`mparam(2u)`, `mparam(3u)`), swapped since it was
-     written; the twin follows the built-in. Not fixed: correcting it
-     moves every DLA picture and the preset's tuning (the user's call).
+     written. **Fixed the same day** (the user: DLA is unreleased, swap
+     the saved configs): each read from its own slot, built-in and twin,
+     and the defaults, the preset and the saved setups swapped to the
+     values in effect, so no picture moved (SIMULATION-CATALOG.md, DLA).
      **All 31 models now have twins.** A script marks its slow
      parameters, `INFO.slow` (the built-ins' `SLOW_PARAMS`), so the four
      twins with one commit them when a drag ends.

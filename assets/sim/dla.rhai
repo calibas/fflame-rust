@@ -11,10 +11,6 @@
 // is dormant, parked on the launch circle, until the cluster is big
 // enough for it: so many walkers per cell of the circle's circumference,
 // so they arrive one at a time, which is what makes it DLA.
-//
-// The built-in reads its launch gap from the parameter slot of `crowding`
-// and its crowding from the slot of `launch_gap` (`mparam(2u)`,
-// `mparam(3u)`); the twin reads them as it does, by name.
 
 const PARAMS = #{
     walkers: #{
@@ -26,11 +22,11 @@ const PARAMS = #{
         hint: "Chance a walker that touches the cluster actually sticks. Below 1 a walker explores further before attaching, which fills the fjords and makes a denser, less branched cluster.",
     },
     crowding: #{
-        value: 2.0, min: 0.5, max: 16.0, caption: "Crowding",
+        value: 5.0, min: 0.5, max: 16.0, caption: "Crowding",
         hint: "How many walkers may work the cluster at once, per cell of its circumference. This is the speed-against-fidelity knob: DLA is what it is because particles arrive ONE AT A TIME, so low values grow a truer aggregate slowly and high values grow a denser, blunter one fast.",
     },
     launch_gap: #{
-        value: 5.0, min: 2.0, max: 40.0, caption: "Launch gap",
+        value: 2.0, min: 2.0, max: 40.0, caption: "Launch gap",
         hint: "How far outside the cluster's current radius walkers are launched.",
     },
 };
@@ -47,7 +43,7 @@ const INFO = #{
         #{
             name: "cluster",
             title: "Cluster",
-            params: #{ walkers: 4.0, p_stick: 1.0, crowding: 2.0, launch_gap: 5.0 },
+            params: #{ walkers: 4.0, p_stick: 1.0, crowding: 5.0, launch_gap: 2.0 },
             steps: 1200,
             boundary: "clamp",
             init: "center",
@@ -94,7 +90,7 @@ fn dla_launch(salt, p, ctx) {
     let gx = to_float(ctx.width);
     let gy = to_float(ctx.height);
     let limit = min(gx, gy) * 0.5 - 2.0;
-    let r = min(dla_radius(ctx) + p.crowding, limit);
+    let r = min(dla_radius(ctx) + p.launch_gap, limit);
     let a = rand(salt) * 6.28318530718;
     // The offset first: the shader compiler fuses this sum's multiplies
     // as it does the built-in's `c + dir * r`, to the last bit.
@@ -110,8 +106,8 @@ fn agent_step(a, p, ctx) {
     let gy = to_float(ctx.height);
     // Only as many walkers as the launch circle has room for: the rest
     // stay parked on it.
-    let launch_r = min(dla_radius(ctx) + p.crowding, min(gx, gy) * 0.5 - 2.0);
-    if to_float(ctx.agent) > p.launch_gap * 6.28318530718 * launch_r {
+    let launch_r = min(dla_radius(ctx) + p.launch_gap, min(gx, gy) * 0.5 - 2.0);
+    if to_float(ctx.agent) > p.crowding * 6.28318530718 * launch_r {
         return dla_launch(0x26, p, ctx);
     }
     let x = to_int(floor(a.x + 0.5));

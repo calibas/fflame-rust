@@ -5421,7 +5421,7 @@ pub static DLA: ModelDef = ModelDef {
         SimParamDef {
             name: "crowding",
             display_name: "Crowding",
-            default: 2.0,
+            default: 5.0,
             min: 0.5,
             max: 16.0,
             tooltip: "How many walkers may work the cluster at once, per cell of its \
@@ -5434,7 +5434,7 @@ pub static DLA: ModelDef = ModelDef {
         SimParamDef {
             name: "launch_gap",
             display_name: "Launch gap",
-            default: 5.0,
+            default: 2.0,
             min: 2.0,
             max: 40.0,
             tooltip: "How far outside the cluster's current radius walkers are launched.",
@@ -5444,7 +5444,7 @@ pub static DLA: ModelDef = ModelDef {
     presets: &[SimPreset {
         name: "cluster",
         display_name: "Cluster",
-        params: &[("walkers", 4.0), ("p_stick", 1.0), ("crowding", 2.0), ("launch_gap", 5.0)],
+        params: &[("walkers", 4.0), ("p_stick", 1.0), ("crowding", 5.0), ("launch_gap", 2.0)],
         // Measured at 512^2: 1,200 steps grows ~43,000 particles to a
         // radius of 230, which is a full aggregate still clear of the
         // walls.
@@ -5516,7 +5516,7 @@ fn dla_launch(i: u32, salt: u32) -> SimAgent {
     let g = vec2<f32>(sim_grid());
     let c = g * 0.5;
     let limit = min(g.x, g.y) * 0.5 - 2.0;
-    let r = min(dla_radius() + mparam(2u), limit);
+    let r = min(dla_radius() + mparam(3u), limit);
     let a = agent_rand(i, salt) * DLA_TAU;
     var out: SimAgent;
     out.pos = c + vec2<f32>(cos(a), sin(a)) * r;
@@ -5545,8 +5545,8 @@ fn sim_agent(a: SimAgent, i: u32) -> SimAgent {
     // one walker per cell of circumference, and parks on the launch
     // circle meanwhile. The active population then grows with the
     // cluster on its own, whatever the parameter says.
-    let launch_r = min(dla_radius() + mparam(2u), min(g.x, g.y) * 0.5 - 2.0);
-    if (f32(i) > mparam(3u) * 6.28318530718 * launch_r) {
+    let launch_r = min(dla_radius() + mparam(3u), min(g.x, g.y) * 0.5 - 2.0);
+    if (f32(i) > mparam(2u) * 6.28318530718 * launch_r) {
         return dla_launch(i, 0x26u);
     }
 
