@@ -335,7 +335,7 @@ pub fn generate() -> serde_json::Value {
                          implicit cross-repo dependency this file exists to \
                          eliminate.",
             "builtin_scripts": builtin_scripts,
-            "kinds": [ScriptKind::Generator.as_str(), ScriptKind::Modifier.as_str()],
+            "kinds": [ScriptKind::Generator.as_str(), ScriptKind::Modifier.as_str(), ScriptKind::Library.as_str()],
             "flags": {
                 "$comment": "The client WARNS on an unknown flag and drops it, \
                              so the vocabulary can grow without a coordinated \

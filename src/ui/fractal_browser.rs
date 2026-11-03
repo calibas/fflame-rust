@@ -83,7 +83,7 @@ fn runs_a_rhai_solid(config: &FractalConfig) -> bool {
     #[cfg(feature = "engine-escape")]
     {
         use crate::config::escape::CustomDialect;
-        use crate::escape::lang::{rhai, EntryKind};
+        use crate::lang::{rhai, EntryKind};
         let escape = &config.escape;
         escape.formula.starts_with("custom-")
             && escape

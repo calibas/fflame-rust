@@ -2187,7 +2187,7 @@ mod tests {
             let source = CustomSource { dialect: CustomDialect::Rhai, entry: "menger".to_string(), source: src.to_string(), variations: Vec::new() };
             let mut c = FractalConfig::default();
             c.render_mode = RenderMode::Escape;
-            c.escape.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Solid, &source);
+            c.escape.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Solid, &source);
             c.escape.custom_formula = Some(source);
             c.escape.cam_yaw = 0.9;
             c.escape.cam_pitch = 0.42;
@@ -2259,7 +2259,7 @@ mod tests {
             };
             let mut c = FractalConfig::default();
             c.render_mode = RenderMode::Escape;
-            c.escape.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Solid, &source);
+            c.escape.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Solid, &source);
             if let Err(e) = crate::escape::custom::compile_solid(&source, &c.escape.formula) {
                 panic!("the example compiles: {}", e.iter().map(|d| d.render(&source.source)).collect::<Vec<_>>().join("; "));
             }
@@ -2348,7 +2348,7 @@ mod tests {
             let mut c = FractalConfig::default();
             c.render_mode = RenderMode::Escape;
             if name == "rhai" {
-                c.escape.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Solid, &rhai);
+                c.escape.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Solid, &rhai);
                 c.escape.custom_formula = Some(rhai.clone());
             } else {
                 c.escape.formula = name.to_string();

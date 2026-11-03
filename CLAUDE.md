@@ -45,6 +45,7 @@ Project history is in git: `git log --oneline`.
 - `src/renderer/` - FlameRenderer (compute_kernel.rs), the unified render API (render.rs), sticky.rs, shade_pass.rs, dof_pass.rs, effect_chain.rs, thumbnails
 - `src/shader_builder_v2.rs`, `src/shader_cache.rs`, `src/gpu/` (buffers.rs, pipelines.rs), `shaders/` - see [SHADERS.md](docs/main/SHADERS.md)
 - `src/escape/`, `src/sim/`, `src/camera/`, `src/textures/` (simulation recipes as textures)
+- `src/lang/` - the formula language (feature `lang`, brought by `engine-escape`): Rhai, UF and Fractint to WGSL, for formulas, colourings, solids, variations and effects; `src/scripted.rs` (ids, versions, labels shared by every user-written script)
 - `src/export/` - high-res export (tiled GPU, CPU fallback), 2x AA (supersample.rs)
 - `src/ui/` - dockable panels (egui_dock); `src/animation/`, `src/signal/`, `src/audio/`; `src/effects/`
 - `src/script/` - Rhai scripting (api.rs registers every function; cli.rs; assets/scripts/)
@@ -65,7 +66,7 @@ Opt-in, 2D flames only (config `cylinder_targeting`; code says "cylinder targeti
 
 ### Variations ([VARIATIONS.md](docs/main/VARIATIONS.md))
 - 647 `static VariationDef`s in `src/variations/defs/*.rs` (flam3 / Apophysis / JWildfire), inline WGSL (2D + 3D), registered by appending to `defs/mod.rs` (**append-only**: registration order is the stable ID order). With the `engine-flame` feature off only `linear` is registered.
-- `global_registry()` returns a read guard; the registry changes at runtime -- API-downloaded variations and local plugins register through `global_registry_mut()`, and so do **Rhai variations** (`variations::custom`, `Provenance::Custom`: a Formula Editor transformation `fn variation(z, p)`; the flame carries the source in `Flame::custom_variations` and `custom::ensure` registers it wherever a flame is read; `.flame` export drops them).
+- `global_registry()` returns a read guard; the registry changes at runtime -- API-downloaded variations register through `global_registry_mut()`, and so do **Rhai variations** (`variations::custom`, `Provenance::Custom`: a Formula Editor transformation `fn variation(z, p)`; the flame carries the source in `Flame::custom_variations` and `custom::ensure` registers it wherever a flame is read; `.flame` export drops them).
 - Up to `MAX_VARIATIONS_PER_FLAME = 100` per flame, with a **per-flame local index map** (no global indices). The shader is the **sticky superset**: a canonical union of the flame's variations plus retained extras at weight 0, so edits rarely recompile (`src/renderer/sticky.rs`); chained pre/post order falls back to a specialized compile.
 - Parameters: per-transform `HashMap` with `"varname.param"` keys, packed into `MAX_VARIATION_PARAM_SLOTS = 1600` floats (user params, then `wgsl_init`-derived); shaders read `get_param(xform_id, variation_id, slot)`. Per-thread state (`state_count`) is not in that buffer: it is a `var<private> thread_state` array, read via `get_state`/`set_state` and saved with the orbit in the orbit buffer. ParamType: Float, UnlimitedFloat, Integer, UnlimitedInteger, Angle, Boolean, Enum.
 - UI ordering: by category, then registration order -- never HashMap order.
@@ -81,7 +82,7 @@ Opt-in, 2D flames only (config `cylinder_targeting`; code says "cylinder targeti
 
 ### Config, state, storage ([CONFIG.md](docs/main/CONFIG.md))
 - **All configuration changes flow through ConfigManager**: `ConfigPath` identifies every parameter; the `UpdateType` it returns drives selective GPU updates. Undo: delta-based, 500 states; rapid changes coalesce (500 ms inactivity, 3 s max span); camera gestures coalesce by description.
-- `FractalConfig` (per fractal, undoable; versioned with `migrate_value`, now v6 -- `render_mode`, `perspective_strength`, `preserve_z` live on the config, not the flame) vs `SystemSettings` (device preferences, no undo, saved immediately via `update_system_setting()`): VSync/FPS, iterations per thread, burn-in, the governor and manual workgroups, orbit cache size, the video export's encoder, the viewport letterbox, fly-mode preferences, online credentials, compact mode. The picture's size (`image_size`, what the exports render at) is the config's.
+- `FractalConfig` (per fractal, undoable; versioned with `migrate_value`, now v7 -- `render_mode`, `perspective_strength`, `preserve_z` live on the config, not the flame) vs `SystemSettings` (device preferences, no undo, saved immediately via `update_system_setting()`): VSync/FPS, iterations per thread, burn-in, the governor and manual workgroups, orbit cache size, the video export's encoder, the viewport letterbox, fly-mode preferences, online credentials, compact mode. The picture's size (`image_size`, what the exports render at) is the config's.
 - Storage (`src/storage/backend.rs`): Windows `%APPDATA%\Fractals for All\Fractal Art Editor\data\`, macOS/Linux via `directories`, WASM localStorage. Presets are one bundled file, `assets/presets.fflame`.
 
 ### GPU memory during exports ([EXPORT.md](docs/main/EXPORT.md))

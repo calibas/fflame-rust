@@ -844,6 +844,17 @@ pub struct SimConfig {
     #[serde(default = "default_coloring", skip_serializing_if = "is_default_coloring")]
     pub coloring: String,
 
+    /// A colouring written in Rhai (P4: `sim::custom`), carried so the
+    /// file renders anywhere: `coloring` names it (`custom-...`), and
+    /// `sim::custom::ensure` registers it under that name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_coloring: Option<crate::config::escape::CustomSource>,
+
+    /// A model written in Rhai (P4), carried as the colouring is: `model`
+    /// names it (`custom-...`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_model: Option<crate::config::escape::CustomSource>,
+
     /// Cell count, or how to derive it from the output size.
     #[serde(default, skip_serializing_if = "is_default_grid")]
     pub grid: SimGrid,
@@ -1202,6 +1213,10 @@ pub struct SimColorLayer {
     pub opacity: f32,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enabled: bool,
+    /// A colouring written in Rhai (P4), carried beside the name as the
+    /// flat `custom_coloring` is, so the entry takes it wherever it goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_coloring: Option<crate::config::escape::CustomSource>,
 }
 
 fn opacity_one() -> f32 {
@@ -1219,6 +1234,7 @@ impl Default for SimColorLayer {
             blend: SimBlend::Normal,
             opacity: 1.0,
             enabled: true,
+            custom_coloring: None,
         }
     }
 }
@@ -1382,6 +1398,16 @@ impl SimCouplingForm {
 /// The most couplings a config may carry: the shader's table.
 pub const MAX_COUPLINGS: usize = 32;
 
+/// Whether two model names are versions of one Rhai model (P4): both
+/// `custom-` and a key with the same id (`scripted::key_id`). A new
+/// version keeps what was set for the old -- its parameters, and on the
+/// flat model dt and steps -- since each edit Used is a new version and
+/// Live would otherwise reset them at every keystroke.
+pub fn same_script(a: &str, b: &str) -> bool {
+    let id = |n: &str| n.strip_prefix("custom-").and_then(crate::scripted::key_id);
+    id(a).is_some() && id(a) == id(b)
+}
+
 /// One layer of a layered simulation: a model and its parameters on
 /// one slice of the field.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1392,6 +1418,11 @@ pub struct SimLayer {
     /// A disabled layer keeps its state and is not stepped.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enabled: bool,
+    /// A model written in Rhai (P4), carried beside the name as the flat
+    /// `custom_model` is: adding, removing, promoting and demoting the
+    /// layer take it along, and undo restores both together.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_model: Option<crate::config::escape::CustomSource>,
 }
 
 fn default_true() -> bool {
@@ -1445,9 +1476,11 @@ impl SimConfig {
             model: std::mem::take(&mut self.model),
             model_params: std::mem::take(&mut self.model_params),
             enabled: true,
+            custom_model: self.custom_model.clone(),
         }];
         // `model` is a named default, not an empty string: a config
-        // whose layers are later removed has to still name a model.
+        // whose layers are later removed has to still name a model --
+        // and still carry it when it is a Rhai one.
         self.model = self.layers[0].model.clone();
         self.model_params = self.layers[0].model_params.clone();
     }
@@ -1476,6 +1509,7 @@ impl SimConfig {
             blend: SimBlend::Normal,
             opacity: 1.0,
             enabled: true,
+            custom_coloring: self.custom_coloring.clone(),
         }];
     }
 
@@ -1489,6 +1523,7 @@ impl SimConfig {
         self.coloring = only.coloring;
         self.coloring_params = only.coloring_params;
         self.matte = only.matte;
+        self.custom_coloring = only.custom_coloring;
     }
 
     /// The inverse: with exactly one layer left, fold it back into the
@@ -1504,6 +1539,7 @@ impl SimConfig {
         let only = self.layers.remove(0);
         self.model = only.model;
         self.model_params = only.model_params;
+        self.custom_model = only.custom_model;
         self.couplings.clear();
     }
 
@@ -1555,6 +1591,8 @@ impl Default for SimConfig {
         Self {
             model: default_model(),
             coloring: default_coloring(),
+            custom_coloring: None,
+            custom_model: None,
             grid: SimGrid::default(),
             seed: default_seed(),
             init: SimInit::default(),

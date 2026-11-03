@@ -68,8 +68,7 @@ pub enum CatalogState {
 ///
 /// 1. Built in → `BuiltIn`. It cannot be replaced by a download, and
 ///    both registries refuse to try.
-/// 2. A local plugin → `LocalOverride`. Never an update candidate; the
-///    version in a plugin file is the user's, not a server counter.
+/// 2. The user's own → `LocalOverride`. Never an update candidate.
 /// 3. Downloaded compares versions; the catalog winning means an update.
 /// 4. Not installed splits on `downloadable`, because "you can fetch
 ///    this" and "this exists but you cannot have it" are different
@@ -80,8 +79,8 @@ pub fn merge_state<T: CatalogItem>(
 ) -> CatalogState {
     match installed {
         Some(Provenance::Builtin) => CatalogState::BuiltIn,
-        // The user's own, plug-in or written: never an update candidate.
-        Some(Provenance::Local | Provenance::Custom) => CatalogState::LocalOverride,
+        // The user's own: never an update candidate.
+        Some(Provenance::Custom) => CatalogState::LocalOverride,
         Some(Provenance::Api { version: have }) => {
             if item.version() > *have {
                 CatalogState::UpdateAvailable { have: *have, available: item.version() }
@@ -296,15 +295,15 @@ mod tests {
     /// counter — comparing them would offer to replace the user's own
     /// work with a stranger's, and the higher number would usually win.
     #[test]
-    fn a_local_plugin_is_reported_not_updated() {
-        // Catalog says v99; the local plugin still wins its name.
+    fn the_users_own_is_reported_not_updated() {
+        // Catalog says v99; the user's own still wins its name.
         assert_eq!(
-            merge_state(&variation("mine", 99, true), Some(&Provenance::Local)),
+            merge_state(&variation("mine", 99, true), Some(&Provenance::Custom)),
             CatalogState::LocalOverride
         );
 
         let items = vec![variation("mine", 99, true), variation("theirs", 1, true)];
-        let s = summarize(&items, |n| (n == "mine").then_some(Provenance::Local));
+        let s = summarize(&items, |n| (n == "mine").then_some(Provenance::Custom));
         assert_eq!(s.local_overrides.len(), 1);
         assert_eq!(s.local_overrides[0].name, "mine");
         assert!(s.updatable.is_empty(), "a local plugin is not updatable");

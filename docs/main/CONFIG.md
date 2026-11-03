@@ -194,7 +194,7 @@ written this way (`PngMetadata::from_app_state`); see the warning under
 
 ## Versioning and migration
 
-`CURRENT_CONFIG_VERSION` is **6** (`src/config/fractal_config.rs`).
+`CURRENT_CONFIG_VERSION` is **7** (`src/config/fractal_config.rs`).
 `migrate_value` upgrades one version per arm:
 
 | arm | what it does |
@@ -205,6 +205,7 @@ written this way (`PngMetadata::from_app_state`); see the warning under
 | v3 → v4 | for a file saved as v3 only: an absent `levels_gamma` becomes 1.0. A v3 save skipped the field at 1.0, the pre-2026-05-31 default, rather than at its 0.5 default; every v3 file postdates that change, so absent meant 1.0. Older files keep loading at 0.5, as that change intended |
 | v4 → v5 | the Shadows default rose from 0.7 to 0.98 (2026-10-19): an absent `shadow` becomes 0.7 in `escape.formula_params` when the formula is a solid (a built-in solid's name, or a `custom-` formula whose carried source has `fn distance`), and in `escape.terrain` and `sim.terrain` when the file has them |
 | v5 → v6 | a solid's directional lights became the fractal's (2026-10-19): `solid_shading.lights_follow_camera` becomes true when the formula is a solid (as v4 → v5 tells one), so an older solid keeps the camera's lights and renders as it did. The shipped solid presets were converted to the fractal's at their own cameras and saved as v6 (`scripts/presets_lights_to_world.py`) |
+| v6 → v7 | a Rhai variation is keyed by its id and version, not its `INFO.name` (2026-11-02; [VARIATIONS.md](VARIATIONS.md#variations-written-in-rhai)): each a flame or subflame carries under its name takes `scripted::key(derived_id(name), source)`, the key it now registers under, and every place the config names it follows -- a transform's weight, `name.param` parameters, `variation_order` and priority at every level, the escape lens and transformations (`migrate_custom_variation_keys`, a string rewrite). An animation track that names one by its old key is not rewritten |
 
 A value **without a `version`** is read as v0, with two exceptions. A
 top-level `render_mode` with none on `flame`, or one of `"escape"` or
@@ -641,7 +642,7 @@ What lives there:
 | --- | --- |
 | `settings.json` | `SystemSettings` |
 | `custom_palettes.json` | the user's palettes |
-| `plugins/variations/`, `plugins/effects/` | locally installed plugins |
+| `plugins/variations/`, `plugins/effects/` | retired WGSL plug-ins: no longer loaded, and listed at start for one release (`storage::retired_plugin_files`) |
 | `textures/` | user simulation textures ([SIMULATION.md](SIMULATION.md)) |
 | `texture_cache/` | generated texture images (desktop) |
 | `orbit_cache/` | deep-zoom reference orbits (desktop) |

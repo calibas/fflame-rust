@@ -32,7 +32,7 @@ The papers (in `output/pdf/`, not in the repository):
    them. Real tubes (a renderer of their own) only if the fibres fall
    short.
 
-## The `quat` type (`src/escape/lang/rhai/vec.rs`)
+## The `quat` type (`src/lang/rhai/vec.rs`)
 
 The vector machinery generalises from three parts to a kind and its parts
 (`vec3`: x, y, z; `quat`: w, x, y, z, w the scalar part), so a quaternion

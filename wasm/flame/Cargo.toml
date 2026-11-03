@@ -22,7 +22,7 @@ crate-type = ["cdylib", "rlib"]
 path = "../render/src/lib.rs"
 
 [dependencies]
-fractal_flame_wgpu = { path = "../..", default-features = false, features = ["engine-flame"] }
+fractal_flame_wgpu = { path = "../..", default-features = false, features = ["engine-flame", "lang"] }
 egui-wgpu = { version = "0.34", default-features = false }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

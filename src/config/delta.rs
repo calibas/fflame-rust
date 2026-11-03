@@ -285,6 +285,9 @@ pub enum ConfigPath {
     /// The variations the user wrote that the flame uses
     /// (`config.flame.custom_variations`), as JSON: their sources.
     FlameCustomVariations,
+    /// The effects the user wrote that the chains use
+    /// (`config.custom_effects`), as JSON: their sources.
+    CustomEffects,
     /// Solo transform index (0-indexed). When Some(n), only transform n is active,
     /// all others effectively have weight 0. Used for debugging.
     /// Matches Apophysis XML: soloxform="N"
@@ -324,6 +327,12 @@ pub enum ConfigPath {
     ColorEffectEnabled { index: usize },
     /// Parameter value for a color effect
     ColorEffectParam { index: usize, param: String },
+    /// Which effect an instance runs, by its registry name: a Rhai
+    /// effect's key moves to its new version when the effect is edited
+    /// (`<id>@<version>`, docs/projects/rhai-plugins.md, rule 7), its
+    /// parameters kept.
+    ColorEffectType { index: usize },
+    DensityEffectType { index: usize },
     /// Add a new color effect
     AddColorEffect { effect_type: String },
     /// Remove a color effect by index
@@ -398,6 +407,12 @@ pub enum ConfigPath {
     SimModel,
     /// Which colouring maps the field, by registry name.
     SimColoring,
+    /// A Rhai colouring's source the config carries (`SimConfig::
+    /// custom_coloring`), as JSON; empty for none.
+    SimCustomColoring,
+    /// A Rhai model's source the config carries (`SimConfig::
+    /// custom_model`), as JSON; empty for none.
+    SimCustomModel,
     /// Whether the grid is Fixed or bound to the viewport.
     SimGridMode,
     /// Fixed-grid width in cells.
@@ -481,6 +496,9 @@ pub enum ConfigPath {
     SimModelParam { param: String },
     /// Layer `layer`'s model (`SimLayer::model`). A restart.
     SimLayerModel { layer: usize },
+    /// Layer `layer`'s Rhai model source (`SimLayer::custom_model`), as
+    /// `SimCustomModel` is the flat one's: JSON, empty for none.
+    SimLayerCustomModel { layer: usize },
     /// Whether layer `layer` is stepped. Bool.
     SimLayerEnabled { layer: usize },
     /// One of layer `layer`'s model parameters. Animatable.
@@ -1204,6 +1222,8 @@ impl Display for ConfigPath {
             ConfigPath::EscapeMaxIter => write!(f, "Escape Max Iterations"),
             ConfigPath::SimModel => write!(f, "Simulation Model"),
             ConfigPath::SimColoring => write!(f, "Simulation Coloring"),
+            ConfigPath::SimCustomColoring => write!(f, "Simulation Coloring Source"),
+            ConfigPath::SimCustomModel => write!(f, "Simulation Model Source"),
             ConfigPath::SimGridMode => write!(f, "Simulation Grid Mode"),
             ConfigPath::SimGridWidth => write!(f, "Simulation Grid Width"),
             ConfigPath::SimGridHeight => write!(f, "Simulation Grid Height"),
@@ -1241,6 +1261,7 @@ impl Display for ConfigPath {
             ConfigPath::SimFit => write!(f, "Simulation Fit"),
             ConfigPath::SimModelParam { param } => write!(f, "Simulation {param}"),
             ConfigPath::SimLayerModel { layer } => write!(f, "Simulation Layer {} Model", layer + 1),
+            ConfigPath::SimLayerCustomModel { layer } => write!(f, "Simulation Layer {} Model Source", layer + 1),
             ConfigPath::SimLayerEnabled { layer } => write!(f, "Simulation Layer {} Enabled", layer + 1),
             ConfigPath::SimLayerParam { layer, param } => write!(f, "Simulation Layer {} {param}", layer + 1),
             ConfigPath::SimCouplingFrom { index } => write!(f, "Simulation Coupling {} From", index + 1),
@@ -1432,6 +1453,7 @@ impl Display for ConfigPath {
             }
             ConfigPath::SoloTransform => write!(f, "Solo Transform"),
             ConfigPath::FlameCustomVariations => write!(f, "Custom Variations"),
+            ConfigPath::CustomEffects => write!(f, "Custom Effects"),
 
             // Post-symmetry
             ConfigPath::PostSymmetryType => write!(f, "Symmetry Type"),
@@ -1458,6 +1480,8 @@ impl Display for ConfigPath {
             ConfigPath::ColorEffectParam { index, param } => {
                 write!(f, "Color Effect {} → {}", index + 1, param)
             }
+            ConfigPath::ColorEffectType { index } => write!(f, "Color Effect {} → Type", index + 1),
+            ConfigPath::DensityEffectType { index } => write!(f, "Density Effect {} → Type", index + 1),
             ConfigPath::AddColorEffect { effect_type } => {
                 write!(f, "Add Color Effect: {}", effect_type)
             }
@@ -1648,6 +1672,8 @@ impl ConfigPath {
             ConfigPath::EscapeMaxIter => I18nKey::simple("history.param.escape_max_iter"),
             ConfigPath::SimModel => I18nKey::simple("history.param.sim_model"),
             ConfigPath::SimColoring => I18nKey::simple("history.param.sim_coloring"),
+            ConfigPath::SimCustomColoring => I18nKey::simple("history.param.sim_custom_coloring"),
+            ConfigPath::SimCustomModel => I18nKey::simple("history.param.sim_custom_model"),
             ConfigPath::SimGridMode => I18nKey::simple("history.param.sim_grid_mode"),
             ConfigPath::SimGridWidth => I18nKey::simple("history.param.sim_grid_width"),
             ConfigPath::SimGridHeight => I18nKey::simple("history.param.sim_grid_height"),
@@ -1689,6 +1715,9 @@ impl ConfigPath {
             ),
             ConfigPath::SimLayerModel { layer } => {
                 I18nKey::with_params("history.param.sim_layer_model", vec![("layer", (layer + 1).to_string())])
+            }
+            ConfigPath::SimLayerCustomModel { layer } => {
+                I18nKey::with_params("history.param.sim_layer_custom_model", vec![("layer", (layer + 1).to_string())])
             }
             ConfigPath::SimLayerEnabled { layer } => {
                 I18nKey::with_params("history.param.sim_layer_enabled", vec![("layer", (layer + 1).to_string())])
@@ -2182,6 +2211,7 @@ impl ConfigPath {
             ),
             ConfigPath::SoloTransform => I18nKey::simple("history.param.solo_transform"),
             ConfigPath::FlameCustomVariations => I18nKey::simple("history.param.flame_custom_variations"),
+            ConfigPath::CustomEffects => I18nKey::simple("history.param.custom_effects"),
             ConfigPath::PostSymmetryType => I18nKey::simple("history.param.post_symmetry_type"),
             ConfigPath::PostSymmetryOrder => I18nKey::simple("history.param.post_symmetry_order"),
             ConfigPath::PostSymmetryCenterX => I18nKey::simple("history.param.post_symmetry_center_x"),
@@ -2207,6 +2237,14 @@ impl ConfigPath {
             ),
             ConfigPath::ColorEffectEnabled { index } => I18nKey::with_params(
                 "history.param.color_effect_enabled",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::ColorEffectType { index } => I18nKey::with_params(
+                "history.param.color_effect_type",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::DensityEffectType { index } => I18nKey::with_params(
+                "history.param.density_effect_type",
                 vec![("index", (index + 1).to_string())],
             ),
             ConfigPath::ColorEffectParam { index, param } => I18nKey::with_params(
@@ -3357,6 +3395,7 @@ impl ConfigPath {
             // rather than one -- a colouring tweak must not throw away
             // a 10,000-step field, and a model change cannot keep it.
             ConfigPath::SimColoring
+            | ConfigPath::SimCustomColoring
             | ConfigPath::SimUpscale
             | ConfigPath::SimDownscale
             | ConfigPath::SimFit
@@ -3448,7 +3487,9 @@ impl ConfigPath {
             // field's contents, the lattice size or what a step reads
             // at the edges all change what the state MEANS.
             ConfigPath::SimModel
+            | ConfigPath::SimCustomModel
             | ConfigPath::SimLayerModel { .. }
+            | ConfigPath::SimLayerCustomModel { .. }
             | ConfigPath::SimGridMode
             | ConfigPath::SimGridWidth
             | ConfigPath::SimGridHeight
@@ -3467,7 +3508,10 @@ impl ConfigPath {
             | ConfigPath::AddColorEffect { .. }
             | ConfigPath::RemoveColorEffect { .. }
             | ConfigPath::AddDensityEffect { .. }
-            | ConfigPath::RemoveDensityEffect { .. } => UpdateType::ToneMappingOnly,
+            | ConfigPath::RemoveDensityEffect { .. }
+            | ConfigPath::CustomEffects
+            | ConfigPath::ColorEffectType { .. }
+            | ConfigPath::DensityEffectType { .. } => UpdateType::ToneMappingOnly,
 
             // The size the exports render at. Nothing on screen changes,
             // or the viewport's letterbox takes the new aspect, which
@@ -3772,6 +3816,8 @@ impl ConfigPath {
             ConfigPath::SimPathStudio => "Sim.Path.Studio".to_string(),
             ConfigPath::SimPathZenith => "Sim.Path.Zenith".to_string(),
             ConfigPath::SimColoring => "Sim.Coloring".to_string(),
+            ConfigPath::SimCustomColoring => "Sim.CustomColoring".to_string(),
+            ConfigPath::SimCustomModel => "Sim.CustomModel".to_string(),
             ConfigPath::SimGridMode => "Sim.GridMode".to_string(),
             ConfigPath::SimGridWidth => "Sim.GridWidth".to_string(),
             ConfigPath::SimGridHeight => "Sim.GridHeight".to_string(),
@@ -3809,6 +3855,7 @@ impl ConfigPath {
             ConfigPath::SimFit => "Sim.Fit".to_string(),
             ConfigPath::SimModelParam { param } => format!("Sim.ModelParam.{param}"),
             ConfigPath::SimLayerModel { layer } => format!("Sim.Layer.{layer}.Model"),
+            ConfigPath::SimLayerCustomModel { layer } => format!("Sim.Layer.{layer}.CustomModel"),
             ConfigPath::SimLayerEnabled { layer } => format!("Sim.Layer.{layer}.Enabled"),
             ConfigPath::SimLayerParam { layer, param } => format!("Sim.Layer.{layer}.Param.{param}"),
             ConfigPath::SimCouplingFrom { index } => format!("Sim.Coupling.{index}.From"),
@@ -3957,6 +4004,7 @@ impl ConfigPath {
             ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
             ConfigPath::SoloTransform => "SoloTransform".to_string(),
             ConfigPath::FlameCustomVariations => "CustomVariations".to_string(),
+            ConfigPath::CustomEffects => "CustomEffects".to_string(),
             ConfigPath::PostSymmetryType => "PostSymmetryType".to_string(),
             ConfigPath::PostSymmetryOrder => "PostSymmetryOrder".to_string(),
             ConfigPath::PostSymmetryCenterX => "PostSymmetryCenterX".to_string(),
@@ -3973,6 +4021,8 @@ impl ConfigPath {
             ConfigPath::DensityEffectParam { index, param } => format!("DensityEffect.{}.{}", index, param),
             ConfigPath::ColorEffectEnabled { index } => format!("ColorEffect.{}.Enabled", index),
             ConfigPath::ColorEffectParam { index, param } => format!("ColorEffect.{}.{}", index, param),
+            ConfigPath::ColorEffectType { index } => format!("ColorEffect.{}.Type", index),
+            ConfigPath::DensityEffectType { index } => format!("DensityEffect.{}.Type", index),
             ConfigPath::AddColorEffect { effect_type } => format!("ColorEffect.Add.{}", effect_type),
             ConfigPath::RemoveColorEffect { index } => format!("ColorEffect.Remove.{}", index),
             ConfigPath::AddDensityEffect { effect_type } => format!("DensityEffect.Add.{}", effect_type),
@@ -4104,6 +4154,7 @@ impl ConfigPath {
             "FarDensityFadeStart" => return Some(ConfigPath::FarDensityFadeStart),
             "SoloTransform" => return Some(ConfigPath::SoloTransform),
             "CustomVariations" => return Some(ConfigPath::FlameCustomVariations),
+            "CustomEffects" => return Some(ConfigPath::CustomEffects),
             "PostSymmetryType" => return Some(ConfigPath::PostSymmetryType),
             "PostSymmetryOrder" => return Some(ConfigPath::PostSymmetryOrder),
             "PostSymmetryCenterX" => return Some(ConfigPath::PostSymmetryCenterX),
@@ -4329,6 +4380,8 @@ impl ConfigPath {
                 ["Path", "Studio"] => return Some(ConfigPath::SimPathStudio),
                 ["Path", "Zenith"] => return Some(ConfigPath::SimPathZenith),
                 ["Coloring"] => return Some(ConfigPath::SimColoring),
+                ["CustomColoring"] => return Some(ConfigPath::SimCustomColoring),
+                ["CustomModel"] => return Some(ConfigPath::SimCustomModel),
                 ["GridMode"] => return Some(ConfigPath::SimGridMode),
                 ["GridWidth"] => return Some(ConfigPath::SimGridWidth),
                 ["GridHeight"] => return Some(ConfigPath::SimGridHeight),
@@ -4366,6 +4419,9 @@ impl ConfigPath {
                 ["Fit"] => return Some(ConfigPath::SimFit),
                 ["Layer", layer, "Model"] => {
                     return Some(ConfigPath::SimLayerModel { layer: layer.parse().ok()? })
+                }
+                ["Layer", layer, "CustomModel"] => {
+                    return Some(ConfigPath::SimLayerCustomModel { layer: layer.parse().ok()? })
                 }
                 ["Layer", layer, "Enabled"] => {
                     return Some(ConfigPath::SimLayerEnabled { layer: layer.parse().ok()? })
@@ -4623,6 +4679,8 @@ impl ConfigPath {
             if let Ok(index) = parts[1].parse::<usize>() {
                 if parts[2] == "Enabled" {
                     return Some(ConfigPath::DensityEffectEnabled { index });
+                } else if parts[2] == "Type" {
+                    return Some(ConfigPath::DensityEffectType { index });
                 } else {
                     return Some(ConfigPath::DensityEffectParam { index, param: parts[2].to_string() });
                 }
@@ -4633,6 +4691,8 @@ impl ConfigPath {
             if let Ok(index) = parts[1].parse::<usize>() {
                 if parts[2] == "Enabled" {
                     return Some(ConfigPath::ColorEffectEnabled { index });
+                } else if parts[2] == "Type" {
+                    return Some(ConfigPath::ColorEffectType { index });
                 } else {
                     return Some(ConfigPath::ColorEffectParam { index, param: parts[2].to_string() });
                 }
@@ -4870,6 +4930,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // so a future animatable field has to be classified here.
         ConfigPath::SimModel
         | ConfigPath::SimColoring
+        | ConfigPath::SimCustomColoring
+        | ConfigPath::SimCustomModel
         | ConfigPath::SimGridMode
         | ConfigPath::SimSeed
         | ConfigPath::SimInitKind
@@ -4886,6 +4948,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimDownscale
         | ConfigPath::SimFit
         | ConfigPath::SimLayerModel { .. }
+        | ConfigPath::SimLayerCustomModel { .. }
         | ConfigPath::SimLayerEnabled { .. }
         | ConfigPath::SimCouplingFrom { .. }
         | ConfigPath::SimCouplingTo { .. }
@@ -5267,6 +5330,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeCustomFormula
         | ConfigPath::EscapeCustomColoring
         | ConfigPath::FlameCustomVariations
+        | ConfigPath::CustomEffects
+        | ConfigPath::ColorEffectType { .. }
+        | ConfigPath::DensityEffectType { .. }
         | ConfigPath::EscapeColoring
         | ConfigPath::EscapeLayerColoring
         | ConfigPath::EscapeLayerBlend

@@ -148,7 +148,7 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 
 | path | what it is | read |
 | --- | --- | --- |
-| `src/storage/` | `SystemSettings`, the storage backend (files on desktop, localStorage in the browser), custom palettes, the thumbnail cache, caches and catalogs of API-loaded variations and effects, local plugins, encrypted credentials (desktop) | [CONFIG.md](main/CONFIG.md), [ONLINE.md](main/ONLINE.md) |
+| `src/storage/` | `SystemSettings`, the storage backend (files on desktop, localStorage in the browser), custom palettes, the thumbnail cache, caches and catalogs of API-loaded variations and effects, encrypted credentials (desktop) | [CONFIG.md](main/CONFIG.md), [ONLINE.md](main/ONLINE.md) |
 | `src/resources/` | Fetching shipped and remote resources on both platforms: palette packs (`palettes.rs`), presets, where `assets/` lives at runtime (`bundled.rs`) | [PALETTE_LIBRARY.md](main/PALETTE_LIBRARY.md) |
 | `src/api/` | The online API client: auth, HTTP client, health, `FractalConfig` to API conversion (`sync.rs`), wire types | [ONLINE.md](main/ONLINE.md) |
 | `src/provenance.rs` | Where a variation or effect came from: `Builtin`, `Api { version }`, `Local` | [ONLINE.md](main/ONLINE.md) |
@@ -173,7 +173,7 @@ it is not compiled. Undo lives in `ConfigManager`.
 | path | what it is |
 | --- | --- |
 | `shaders/` | `core/` (the flame template and its helpers: `header`, `main_template`, `utilities`, `rng`, `affine`, `affine_3d`, `accumulate_samples`, `noise`, `voronoi`, `complex`, `fractwf`, `polychora`, `polyhedra`, `su_mobius`, `subflame`, and for Focused Rendering `replay`, `replay_delta`, `plan_eval`, `plan_gather`, `plan_offsets`); `accumulate`, `accumulate_tiled`, `tonemap`, `downsample`, `histogram_blur`, `blur_convolve`, `blur_upscale`; solid shading `shade`, `normals`, `atrous`, `dof`; `effects/{density,color,common}/`. Variation, escape and simulation WGSL is inline in Rust |
-| `assets/` | `presets.fflame`, `palettes/` (packs and loose files), `scripts/`, `textures/`, `fonts/`, `branding/`, `plugins-example/` |
+| `assets/` | `presets.fflame`, `palettes/` (packs and loose files), `scripts/`, `textures/`, `fonts/`, `branding/` |
 | `build.rs` | Build provenance (version, git hash, profile), the WASM palette manifest, embedded texture presets, asset and shader copies into the target directory, the Windows icon |
 | `wasm/` | Gallery crates `script`, `render`, `flame`, `escape`, `sim`; see [wasm/README.md](../wasm/README.md) |
 | `python/` | `pyfflame`, PyO3 bindings built with maturin: config editing, `.flame` conversion, scripts; no rendering |
@@ -193,9 +193,9 @@ per entry carrying its WGSL inline and its parameters described well
 enough for the UI to build controls, collected in an ordered,
 append-only list and looked up by name. The shader for a frame is
 assembled from the entries it uses. Variations and effects can also
-arrive at runtime from the online API or from local plugins
+arrive at runtime from the online API
 (`storage::load_installed_resources`, called by every entry point that
-renders), which is why `global_registry()` and `global_effect_registry()`
+renders), and Rhai variations from configs and the Formula Editor, which is why `global_registry()` and `global_effect_registry()`
 return lock guards.
 
 ### Configuration and undo
@@ -399,7 +399,8 @@ since the export competes for the same GPU.
 | --- | --- | --- |
 | `web-app` | on | `mod app`, `mod ui`, the editor's wasm-bindgen exports (`wasm_main`, `WasmApi`) |
 | `engine-flame` | on | the variation catalog; off, the registry holds `linear` alone |
-| `engine-escape` | on | `src/escape/` |
+| `engine-escape` | on | `src/escape/`; implies `lang` |
+| `lang` | on (with `engine-escape`) | `src/lang/`, the formula language: Rhai (and UF's, Fractint's) to WGSL, so a build compiles Rhai effects and variations; its deep-zoom passes (`bigeval`, `periodic`) come with `engine-escape` alone. The flame and simulation gallery modules turn it on (+0.33 MB gzip to the flame module, measured before `wasm-opt`) |
 | `engine-sim` | on | `src/sim/` |
 | `terrain` | on | the terrain view; implies `engine-escape` |
 

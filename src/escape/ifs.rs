@@ -14863,14 +14863,14 @@ fn distance(s, p) {
     /// validates.
     #[test]
     fn rhai_solids_walk_as_the_builtins() {
-        use crate::escape::lang::interp::{solid, ParamValues};
+        use crate::lang::interp::{solid, ParamValues};
         let cases: [(&str, &str, Solid); 3] = [
             ("mandelbox", RHAI_BOX, Solid::Box(Mandelbox::new(2.0))),
             ("mandelbulb", RHAI_BULB, Solid::Bulb(Mandelbulb::new(8.0))),
             ("kifs-menger", RHAI_MENGER, Solid::Kifs(Kifs::new(3, 3.0, [1.0, 1.0, 1.0]))),
         ];
         for (what, src, twin) in cases {
-            let p = crate::escape::lang::rhai::solid(src).unwrap_or_else(|d| panic!("{what}: {:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>()));
+            let p = crate::lang::rhai::solid(src).unwrap_or_else(|d| panic!("{what}: {:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>()));
             let params = ParamValues::defaults(&p);
             let levels = match &twin {
                 Solid::Box(b) => b.levels,
@@ -14889,8 +14889,8 @@ fn distance(s, p) {
             println!("{what}: the Rhai walk's distance against the twin's, worst relative difference {worst:.2e}");
             assert!(worst < 1e-9, "{what}: {worst}");
             let base = template_parameters().len();
-            let wgsl = crate::escape::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("a walk");
-            crate::escape::lang::wgsl::validate_solid(&wgsl).expect("valid WGSL");
+            let wgsl = crate::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("a walk");
+            crate::lang::wgsl::validate_solid(&wgsl).expect("valid WGSL");
         }
     }
 
@@ -14904,7 +14904,7 @@ fn distance(s, p) {
     #[ignore = "needs a GPU"]
     fn rhai_solids_render_as_the_builtins() {
         use crate::config::escape::{CustomDialect, CustomSource};
-        use crate::escape::lang::EntryKind;
+        use crate::lang::EntryKind;
         const N: u32 = 160;
         let (device, queue) = device();
         let cases: [(&str, &str, Solid); 3] = [

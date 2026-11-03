@@ -108,10 +108,27 @@ fn dialect(d: CustomDialect) -> Dialect {
     }
 }
 
-/// The registry name of a source: stable across runs and builds (FNV-1a,
-/// not the std hasher, whose output is not promised), so a file saved
-/// today names the same entry tomorrow.
+/// The registry name of a source: stable across runs and builds, so a
+/// file saved today names the same entry tomorrow. A Rhai source with an
+/// id of its own (`INFO.id`, a UUID: design rule 7) is named by it and its
+/// version, `custom-<scripted::key>` -- the version over the source and
+/// the variations it carries, as a changed one is a changed entry; any
+/// other by an FNV-1a hash (not the std hasher, whose output is not
+/// promised) of its kind, dialect, entry and source, `custom-<16 hex>`.
+/// A config keeps the name it was saved with: `ensure` registers under it.
 pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
+    if src.dialect == CustomDialect::Rhai {
+        if let Some(id) = lang::rhai::info_string(&src.source, "id").filter(|id| crate::scripted::is_uuid(id)) {
+            let mut versioned = src.source.clone();
+            for v in &src.variations {
+                for part in [&v.entry, &v.source] {
+                    versioned.push('\0');
+                    versioned.push_str(part);
+                }
+            }
+            return format!("{PREFIX}{}", crate::scripted::key(&id, &versioned));
+        }
+    }
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut eat = |bytes: &[u8]| {
         for b in bytes {
@@ -127,6 +144,9 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
         EntryKind::Coloring => b"coloring",
         EntryKind::Transform => b"transform",
         EntryKind::Solid => b"solid",
+        EntryKind::Effect => b"effect",
+        EntryKind::SimColoring => b"sim_coloring",
+        EntryKind::SimModel => b"sim_model",
     });
     eat(match src.dialect {
         CustomDialect::UltraFractal => b"uf",
@@ -144,27 +164,22 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
     format!("{PREFIX}{h:016x}")
 }
 
-/// `src` with the variations it calls (`vary`) filled in from where they
-/// are now -- the user's registered variations and library -- so the
-/// config that carries it carries them too (the KIFS plan, C1e). A
-/// source that is not Rhai, or calls none, comes back as it was.
-pub fn with_called_variations(kind: EntryKind, src: CustomSource) -> CustomSource {
-    if src.dialect != CustomDialect::Rhai {
-        return src;
+/// A slot name's 64-bit hash, which names its variants (array sizes,
+/// damping, a biomorph) and its perturbation tier: an FNV name's own
+/// (`custom-<16 hex>`), or an FNV-1a hash of any other (a key's).
+pub fn slot_hash(name: &str) -> u64 {
+    let rest = name.strip_prefix(PREFIX).unwrap_or(name);
+    if rest.len() == 16 {
+        if let Ok(h) = u64::from_str_radix(rest, 16) {
+            return h;
+        }
     }
-    let called = lang::rhai::with_variations(&carried_variations(&src), || lang::rhai::variations_called(&src.source, kind));
-    let variations = called
-        .into_iter()
-        .map(|(entry, source)| CustomSource { dialect: CustomDialect::Rhai, entry, source, variations: Vec::new() })
-        .collect();
-    CustomSource { variations, ..src }
+    rest.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
-/// What `src` carries of the variations it calls, as the lowering's
-/// scope takes them.
-pub fn carried_variations(src: &CustomSource) -> Vec<(String, String)> {
-    src.variations.iter().map(|v| (v.entry.clone(), v.source.clone())).collect()
-}
+/// The language's (`lang::rhai`, since the compiler is its own feature):
+/// here too, where the escape engine has always called them.
+pub use crate::lang::rhai::{carried_variations, with_called_variations};
 
 /// Parse and check the named entry of a source. The source may hold
 /// other entries; only this one is compiled.
@@ -176,6 +191,9 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
             EntryKind::Coloring => lang::rhai::coloring(&src.source),
             EntryKind::Transform => lang::rhai::transformation_any(&src.source),
             EntryKind::Solid => lang::rhai::solid(&src.source),
+            EntryKind::Effect => lang::rhai::effect(&src.source),
+            EntryKind::SimColoring => lang::rhai::sim_coloring(&src.source),
+            EntryKind::SimModel => lang::rhai::sim_model(&src.source, lang::rhai::SimFn::Step(0)),
         });
     }
     if src.dialect == CustomDialect::Hybrid {
@@ -198,6 +216,8 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
         EntryKind::Formula => lang::switch::check_formula(&file, entry, dialect(src.dialect)),
         EntryKind::Coloring | EntryKind::Transform => lang::check::check(entry, kind, dialect(src.dialect)),
         EntryKind::Solid => return Err(vec![Diag::error(lang::Span::default(), "a solid is written in Rhai")]),
+        EntryKind::Effect => return Err(vec![Diag::error(lang::Span::default(), "an effect is written in Rhai")]),
+        EntryKind::SimColoring | EntryKind::SimModel => return Err(vec![Diag::error(lang::Span::default(), "a simulation's colouring or model is written in Rhai")]),
     };
     diags.extend(d);
     match program {
@@ -238,6 +258,8 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Formula => lang::switch::check_formula(&file, e, d),
         EntryKind::Coloring | EntryKind::Transform => lang::check::check(e, kind, d),
         EntryKind::Solid => return Err("a solid is written in Rhai".to_string()),
+        EntryKind::Effect => return Err("an effect is written in Rhai".to_string()),
+        EntryKind::SimColoring | EntryKind::SimModel => return Err("a simulation's colouring or model is written in Rhai".to_string()),
     };
     let program = match program {
         Some(p) if !lang::has_errors(&diags) => p,
@@ -268,7 +290,7 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Formula => lang::to_rhai::formula(&program, &header)?,
         EntryKind::Coloring => lang::to_rhai::coloring(&program, &header)?,
         EntryKind::Transform => return Err("a transformation does not convert to Rhai yet".to_string()),
-        EntryKind::Solid => return Err("a solid is written in Rhai".to_string()),
+        EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => return Err("it is written in Rhai".to_string()),
     };
     // What it printed must compile back: one that does not is the
     // converter's bug, not the user's to fix.
@@ -277,6 +299,9 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Coloring => lang::rhai::coloring(&rhai),
         EntryKind::Transform => lang::rhai::transformation(&rhai),
         EntryKind::Solid => lang::rhai::solid(&rhai),
+        EntryKind::Effect => lang::rhai::effect(&rhai),
+        EntryKind::SimColoring => lang::rhai::sim_coloring(&rhai),
+        EntryKind::SimModel => lang::rhai::sim_model(&rhai, lang::rhai::SimFn::Step(0)),
     };
     back.map_err(|d| format!("the conversion does not compile ({})", d.first().map(|x| x.render(&rhai)).unwrap_or_default()))?;
     Ok(rhai)
@@ -644,7 +669,7 @@ pub fn perturb_tier(escape: &EscapeConfig) -> Option<super::assembler::PerturbTi
     if !lang::interp::perturb_holds(&prog, &inputs.params, &inputs.env) {
         return None;
     }
-    let hash = u64::from_str_radix(&escape.formula[PREFIX.len()..], 16).ok()?;
+    let hash = slot_hash(&escape.formula);
     let deep = lang::perturb::grows_past_f32(&prog);
     let (stride, width) = (how.references() as u8, (1 + prog.carried.len()) as u8);
     // The built-ins' margin test needs the reference's |Z|^2 at the
@@ -727,6 +752,9 @@ pub fn bla_steps(escape: &EscapeConfig, orbit: &[[f64; 2]], reference: lang::bui
     }
     fn branches_on_the_iterate(stmts: &[IStmt], p: &ir::Program) -> bool {
         stmts.iter().any(|s| match s {
+            IStmt::Scope(..) => true,
+            IStmt::Host(..) => true,
+            IStmt::Break | IStmt::Continue | IStmt::Return => true,
             IStmt::Assign(..) => false,
             // An array written per pixel: not the straight-line map BLA
             // approximates.
@@ -1126,7 +1154,7 @@ fn resolve_coloring_sizes(escape: &EscapeConfig) -> Option<EscapeConfig> {
         note_sizes(&escape.coloring, None);
         return None;
     };
-    let base = u64::from_str_radix(&escape.coloring[PREFIX.len()..], 16).unwrap_or(0);
+    let base = slot_hash(&escape.coloring);
     let name = format!("{PREFIX}{:016x}", base.rotate_left(29) ^ h);
     if coloring(&name).is_none() {
         compile_once(&name, "colouring at its array sizes", src, Some(&settings), || compile_coloring(src, &name));
@@ -1173,7 +1201,7 @@ fn resolve_formula(escape: &EscapeConfig) -> std::borrow::Cow<'_, EscapeConfig> 
         return Cow::Owned(out);
     }
     let tag = u64::from(damped) | axis.map_or(0, |a| if a == lang::modifiers::Axis::Re { 2 } else { 4 });
-    let base = u64::from_str_radix(&escape.formula[PREFIX.len()..], 16).unwrap_or(0);
+    let base = slot_hash(&escape.formula);
     let sizes = sized.as_ref().map_or(0, |(h, _)| *h);
     let name = if !damped && axis.is_none() {
         format!("{PREFIX}{:016x}", base.rotate_left(29) ^ sizes)
@@ -1382,8 +1410,9 @@ pub fn ensure(escape: &EscapeConfig) {
             // A solid is a formula's choice too (B3).
             EntryKind::Formula => formula(name).is_some() || super::ifs::get_ifs(name).is_some(),
             EntryKind::Coloring => coloring(name).is_some(),
-            // An escape config carries no transformation.
-            EntryKind::Transform | EntryKind::Solid => true,
+            // An escape config carries no transformation (nor an effect,
+            // nor a simulation's colouring).
+            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => true,
         };
         if known || registry().read().is_ok_and(|r| r.failed.contains(name)) {
             continue;
@@ -1393,7 +1422,7 @@ pub fn ensure(escape: &EscapeConfig) {
             EntryKind::Formula if solid => compile_solid(src, name).map(|_| ()),
             EntryKind::Formula => compile_formula(src, name).map(|_| ()),
             EntryKind::Coloring => compile_coloring(src, name).map(|_| ()),
-            EntryKind::Transform | EntryKind::Solid => Ok(()),
+            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => Ok(()),
         };
         if let Err(diags) = result {
             let msgs: Vec<String> = diags.iter().map(|d| d.render(&src.source)).collect();
@@ -1660,8 +1689,8 @@ mod tests {
     /// not the formula's arithmetic.
     #[test]
     fn the_kifs_2d_example_draws_the_carpet() {
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{run, Env, ParamValues};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, Env, ParamValues};
         let (_, text) = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == "kifs-2d.rhai").expect("the example");
         let p = lang::rhai::program(text).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>()));
         let params = ParamValues::defaults(&p);
@@ -1731,7 +1760,7 @@ mod tests {
                 let compiled = match kind {
                     EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
                     EntryKind::Solid => compile_solid(&src, &name).map(|_| ()),
-                    EntryKind::Coloring | EntryKind::Transform => compile_coloring(&src, &name).map(|_| ()),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => compile_coloring(&src, &name).map(|_| ()),
                 };
                 if let Err(d) = compiled {
                     panic!("{file}: {:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>());
@@ -1752,7 +1781,7 @@ mod tests {
                 let name = name_of(kind, &src);
                 let ok = match kind {
                     EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
-                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid => compile_coloring(&src, &name).map(|_| ()),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => compile_coloring(&src, &name).map(|_| ()),
                 };
                 if let Err(d) = ok {
                     panic!("{file} / {}: {:?}", e.name, d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>());
@@ -1768,6 +1797,49 @@ mod tests {
         assert!(super::super::formula_julia_is_meaningful(def), "the switch is the Julia toggle");
     }
 
+    /// A formula whose step breaks and continues its loops (rhai-plugins
+    /// P7 step 1) compiles, and the deep-zoom paths -- perturbation, its
+    /// period and nucleus searches, BLA -- each decline it or take it,
+    /// none of them panicking on the statements it had never seen.
+    #[test]
+    fn a_formula_that_breaks_its_loops_compiles_and_deep_zoom_declines_it() {
+        let text = r#"
+fn start(pixel, p) {
+    #{ z: complex(0.0, 0.0), c: pixel }
+}
+fn step(s, p) {
+    let w = s.z;
+    for k in 0..6 {
+        if k == 1 {
+            continue;
+        }
+        if k == 4 {
+            break;
+        }
+        w = w * 0.5 + s.c * 0.25;
+    }
+    s.z = w * w + s.c;
+    s
+}
+fn escaped(s, p) {
+    s.z.norm_sqr() > 4.0
+}
+"#;
+        let src = CustomSource { dialect: CustomDialect::Rhai, entry: "Flow".into(), source: text.to_string(), variations: Vec::new() };
+        let name = name_of(EntryKind::Formula, &src);
+        compile_formula(&src, &name).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>()));
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = name;
+        esc.custom_formula = Some(src);
+        let _ = perturb_tier(&esc);
+        let _ = detect_period(&esc, 8);
+        let _ = offers_nucleus(&esc);
+        let _ = nucleus_search_for(&esc);
+        let _ = size_failure(&esc);
+        let orbit: Vec<[f64; 2]> = (0..16).map(|i| [0.01 * f64::from(i), 0.0]).collect();
+        let _ = bla_steps(&esc, &orbit, lang::builtins::C64::new(-0.5, 0.0), 1e-6);
+    }
+
     #[test]
     fn names_are_stable_and_follow_the_source() {
         let a = src("M {\nloop:\n z = z^2 + #pixel\nbailout:\n |z| < 4\n}", "M");
@@ -1780,6 +1852,36 @@ mod tests {
         assert_ne!(n, name_of(EntryKind::Coloring, &a), "a formula and a colouring never share one");
         // Pinned: a saved file must keep resolving to its entry.
         assert_eq!(name_of(EntryKind::Formula, &src("x", "y")), "custom-22c22db4acbfd02f");
+        assert_eq!(slot_hash(&n), u64::from_str_radix(&n[PREFIX.len()..], 16).unwrap(), "an FNV name's hash is its own");
+    }
+
+    /// A Rhai entry with an id of its own is named by it and its version:
+    /// an edit, or a change to a variation it carries, is a new version of
+    /// the same id; without an id it keeps its FNV name; and a key's name
+    /// hashes for its variants as an FNV name does.
+    #[test]
+    fn a_rhai_entry_with_an_id_is_named_by_it() {
+        let id = "0f8a3c52-6b1d-4e7a-9c3f-5d2e8b4a7c61";
+        let text = format!("const INFO = #{{ id: \"{id}\", title: \"Keyed\" }};\nfn start(pixel, p) {{ #{{ z: complex(0.0, 0.0), c: pixel }} }}\n");
+        let rhai = |source: &str| CustomSource { dialect: CustomDialect::Rhai, entry: "Keyed".into(), source: source.to_string(), variations: Vec::new() };
+        let n = name_of(EntryKind::Formula, &rhai(&text));
+        let key = n.strip_prefix(PREFIX).expect("a slot's prefix");
+        assert!(crate::scripted::is_key(key), "{n}");
+        assert_eq!(crate::scripted::key_id(key).as_deref(), Some(id));
+        assert_eq!(n, format!("{PREFIX}{}", crate::scripted::key(id, &text)), "with nothing carried, the source's version");
+        let edited = name_of(EntryKind::Formula, &rhai(&text.replace("0.0, 0.0", "0.5, 0.0")));
+        assert_ne!(edited, n);
+        assert_eq!(crate::scripted::key_id(&edited[PREFIX.len()..]).as_deref(), Some(id));
+        let mut carrying = rhai(&text);
+        carrying.variations.push(CustomSource { dialect: CustomDialect::Rhai, entry: "rhai_v".into(), source: "a".into(), variations: Vec::new() });
+        let with_v = name_of(EntryKind::Formula, &carrying);
+        carrying.variations[0].source = "b".into();
+        assert_ne!(with_v, n, "what it carries is in its version");
+        assert_ne!(with_v, name_of(EntryKind::Formula, &carrying));
+        let plain = name_of(EntryKind::Formula, &rhai("fn start(pixel, p) { 0 }\n"));
+        assert_eq!(plain.len(), PREFIX.len() + 16, "no id, an FNV name");
+        assert_ne!(slot_hash(&n), slot_hash(&edited));
+        assert_eq!(slot_hash(&n), slot_hash(&n.clone()));
     }
 
     #[test]
@@ -1932,6 +2034,18 @@ mod tests {
                     return;
                 }
                 match s {
+                    IStmt::Scope(..) => {
+                        *found = Some("an early `return`".into());
+                        return;
+                    }
+                    IStmt::Host(..) => {
+                        *found = Some("a simulation's framework call".into());
+                        return;
+                    }
+                    IStmt::Break | IStmt::Continue | IStmt::Return => {
+                        *found = Some("a loop's `break` or an early `return`".into());
+                        return;
+                    }
                     IStmt::Assign(_, e) => first(e, p, inits, found),
                     IStmt::SetElem { .. } => {
                         *found = Some("an array written in the loop".into());

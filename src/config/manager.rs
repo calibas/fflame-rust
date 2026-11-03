@@ -1946,6 +1946,7 @@ impl ConfigManager {
             ConfigPath::EscapeCustomFormula => Ok(ConfigValue::String(custom_source_json(&config.escape.custom_formula))),
             ConfigPath::EscapeCustomColoring => Ok(ConfigValue::String(custom_source_json(&config.escape.custom_coloring))),
             ConfigPath::FlameCustomVariations => Ok(ConfigValue::String(serde_json::to_string(&config.flame.custom_variations).unwrap_or_default())),
+            ConfigPath::CustomEffects => Ok(ConfigValue::String(serde_json::to_string(&config.custom_effects).unwrap_or_default())),
             ConfigPath::EscapeJulia => Ok(config.escape.julia.into()),
             ConfigPath::EscapeJuliaRe => Ok(config.escape.julia_re.into()),
             ConfigPath::EscapeJuliaIm => Ok(config.escape.julia_im.into()),
@@ -1978,6 +1979,8 @@ impl ConfigManager {
             // to the viewport.
             ConfigPath::SimModel => Ok(ConfigValue::String(config.sim.model.clone())),
             ConfigPath::SimColoring => Ok(ConfigValue::String(config.sim.coloring.clone())),
+            ConfigPath::SimCustomColoring => Ok(ConfigValue::String(custom_source_json(&config.sim.custom_coloring))),
+            ConfigPath::SimCustomModel => Ok(ConfigValue::String(custom_source_json(&config.sim.custom_model))),
             ConfigPath::SimGridMode => Ok(ConfigValue::String(
                 match config.sim.grid {
                     crate::config::sim::SimGrid::Fixed { .. } => "fixed",
@@ -2103,6 +2106,9 @@ impl ConfigManager {
             ConfigPath::SimLayerModel { layer } => Ok(ConfigValue::String(
                 config.sim.layers.get(*layer).map(|l| l.model.clone()).unwrap_or_default(),
             )),
+            ConfigPath::SimLayerCustomModel { layer } => {
+                Ok(ConfigValue::String(custom_source_json(&config.sim.layers.get(*layer).and_then(|l| l.custom_model.clone()))))
+            }
             ConfigPath::SimLayerEnabled { layer } => Ok(ConfigValue::Bool(
                 config.sim.layers.get(*layer).is_none_or(|l| l.enabled),
             )),
@@ -2814,6 +2820,14 @@ impl ConfigManager {
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(effect.enabled.into())
             }
+            ConfigPath::ColorEffectType { index } => {
+                let effect = config.color_effects.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(ConfigValue::String(effect.effect_type.clone()))
+            }
+            ConfigPath::DensityEffectType { index } => {
+                let effect = config.density_effects.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(ConfigValue::String(effect.effect_type.clone()))
+            }
             ConfigPath::ColorEffectParam { index, param } => {
                 let effect = config
                     .color_effects
@@ -3205,6 +3219,11 @@ impl ConfigManager {
                 self.current.flame.custom_variations =
                     if s.is_empty() { Vec::new() } else { serde_json::from_str(&s).map_err(|_| ConfigError::TypeMismatch)? };
             }
+            ConfigPath::CustomEffects => {
+                let s: String = value.try_into()?;
+                self.current.custom_effects =
+                    if s.is_empty() { Vec::new() } else { serde_json::from_str(&s).map_err(|_| ConfigError::TypeMismatch)? };
+            }
             ConfigPath::EscapeJulia => {
                 self.current.escape.julia = value.try_into()?;
             }
@@ -3279,7 +3298,12 @@ impl ConfigManager {
             // nothing while looking like it worked.
             ConfigPath::SimModel => {
                 let name = String::try_from(value)?;
-                if name != self.current.sim.model {
+                // A new version of the same Rhai model (P4: its id in both
+                // names) keeps what was set for it: each edit Used is a new
+                // version, and Live would otherwise reset the parameters,
+                // dt and steps at every keystroke.
+                let same_script = crate::config::sim::same_script(&name, &self.current.sim.model);
+                if name != self.current.sim.model && !same_script {
                     // Parameters belong to the model that declared them,
                     // and dt/steps are per-model working values --
                     // Gray-Scott runs at dt 1.0 where Schnakenberg
@@ -3297,6 +3321,14 @@ impl ConfigManager {
             }
             ConfigPath::SimColoring => {
                 self.current.sim.coloring = String::try_from(value)?;
+            }
+            ConfigPath::SimCustomColoring => {
+                let s: String = value.try_into()?;
+                self.current.sim.custom_coloring = custom_source_from_json(&s)?;
+            }
+            ConfigPath::SimCustomModel => {
+                let s: String = value.try_into()?;
+                self.current.sim.custom_model = custom_source_from_json(&s)?;
             }
             ConfigPath::SimGridMode => {
                 let mode = String::try_from(value)?;
@@ -3699,11 +3731,20 @@ impl ConfigManager {
                 let name = String::try_from(value)?;
                 if let Some(l) = self.current.sim.layers.get_mut(*layer) {
                     if l.model != name {
-                        l.model = name;
                         // As for SimModel: parameters belong to the model
-                        // that declared them.
-                        l.model_params.clear();
+                        // that declared them -- kept for a new version of
+                        // the same Rhai model.
+                        if !crate::config::sim::same_script(&name, &l.model) {
+                            l.model_params.clear();
+                        }
+                        l.model = name;
                     }
+                }
+            }
+            ConfigPath::SimLayerCustomModel { layer } => {
+                let s: String = value.try_into()?;
+                if let Some(l) = self.current.sim.layers.get_mut(*layer) {
+                    l.custom_model = custom_source_from_json(&s)?;
                 }
             }
             ConfigPath::SimLayerEnabled { layer } => {
@@ -4720,6 +4761,16 @@ impl ConfigManager {
                     .get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 effect.enabled = value.try_into()?;
+            }
+            // Its parameters stay: a parameter the new effect lacks is
+            // ignored, one it adds reads its default.
+            ConfigPath::ColorEffectType { index } => {
+                let effect = self.current.color_effects.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;
+                effect.effect_type = value.try_into()?;
+            }
+            ConfigPath::DensityEffectType { index } => {
+                let effect = self.current.density_effects.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;
+                effect.effect_type = value.try_into()?;
             }
             ConfigPath::ColorEffectParam { index, param } => {
                 let effect = self
@@ -5745,6 +5796,38 @@ mod tests {
         assert!(r.is_err());
         assert_eq!(m.config().exposure, before.exposure);
         assert!(m.undo().is_err(), "no undo point");
+    }
+
+    /// A new version of a Rhai model keeps what was set for it, flat and
+    /// in a layer (P4, `config::sim::same_script`); another model clears
+    /// it. A layer's source and model change in one undo step.
+    #[test]
+    fn a_new_version_of_a_rhai_model_keeps_its_settings() {
+        use crate::config::sim::SimLayer;
+        let id = "6f1e1d6c-6b1a-4c55-9a43-2d4b7c1f0e21";
+        let (v1, v2) = (format!("custom-{}", crate::scripted::key(id, "a")), format!("custom-{}", crate::scripted::key(id, "b")));
+        let mut config = FractalConfig::default();
+        config.sim.model = v1.clone();
+        config.sim.model_params.insert("feed".into(), 0.04);
+        config.sim.dt = 0.5;
+        let layer = |model: &str| SimLayer { model: model.into(), model_params: [("feed".to_string(), 0.03)].into(), enabled: true, custom_model: None };
+        config.sim.layers = vec![layer("gray_scott"), layer(&v1)];
+        let mut m = ConfigManager::new(config);
+        m.update_param(ConfigPath::SimModel, v2.clone().into()).unwrap();
+        assert_eq!((m.config().sim.model_params.get("feed"), m.config().sim.dt), (Some(&0.04), 0.5), "the flat model's version keeps its settings");
+        let source = crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: v2.clone(), source: "fn cell_step(cell) { cell }".into(), variations: Vec::new() };
+        m.update_batch(
+            vec![(ConfigPath::SimLayerCustomModel { layer: 1 }, custom_source_json(&Some(source.clone())).into()), (ConfigPath::SimLayerModel { layer: 1 }, v2.clone().into())],
+            "use".into(),
+        )
+        .unwrap();
+        assert_eq!(m.config().sim.layers[1].model_params.get("feed"), Some(&0.03), "a layer's version keeps its parameters");
+        assert_eq!(m.config().sim.layers[1].custom_model.as_ref(), Some(&source));
+        m.update_param(ConfigPath::SimLayerModel { layer: 1 }, "brusselator".to_string().into()).unwrap();
+        assert!(m.config().sim.layers[1].model_params.is_empty(), "another model clears them");
+        m.undo().unwrap();
+        m.undo().unwrap();
+        assert_eq!((m.config().sim.layers[1].model.as_str(), m.config().sim.layers[1].custom_model.as_ref()), (v1.as_str(), None), "source and model undo together");
     }
 
     #[test]

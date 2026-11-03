@@ -922,7 +922,9 @@ to them at display time, so a palette edit shows at once, even paused.
 **The per-scale table, 2026-10-04** (mccabe-multiscale plan, section
 3). `layout` = Table frees every scale: its own radius, ratio, step
 (negative allowed), weight (Softology's: both averages × w) and
-symmetry (to 12). Switching to it fills it from the ladder.
+symmetry (to 12). Switching to it fills it from the ladder. Since
+2026-11-03 the table is a parameter grid (`models::mccabe_layout`,
+rhai-plugins P7), the same one a script declares in its `PARAMS`.
 - **Measured.** CPU mirror exact on every cell. The table filled from
   the ladder agrees to 1.5e-8 per step: not bit for bit, because of
   `mix()` rounding.
@@ -1643,6 +1645,19 @@ Boundary Clamp.
   that reaches the wall densifies at the rim and reads 1.79, and the
   test asserts the cluster stayed clear of the walls before believing
   the number.
+- **Found and fixed 2026-11-03** (porting the Rhai twin, rhai-plugins
+  P4 step 9d): the shader read the launch gap from `crowding`'s slot and
+  the crowding from `launch_gap`'s (`mparam(2u)` and `mparam(3u)`; the
+  parameters are walkers, p_stick, crowding, launch_gap), since it was
+  written. So everything measured above ran with a launch gap of 2 and
+  five walkers per cell of circumference, the sliders each moving the
+  other's knob. Each is read from its own slot now, and the defaults,
+  the preset and every saved setup -- the bundled presets, the visual
+  suite's five -- hold the values that were in effect, crowding 5 and
+  launch gap 2: every picture is as it was (the gate above measures
+  the same 1.753 at the same radius), and the sliders move what they
+  name. DLA had not been released, so no user's file holds the old
+  meaning.
 
 ---
 

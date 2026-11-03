@@ -53,6 +53,10 @@ pub struct SimUiState<'a> {
     /// The quality governor's grid scale while it holds one, and *Fit to
     /// target*'s (app/governor.rs).
     pub governor: super::SimGovernorUi,
+    /// The Formula Editor, which Edit as Rhai gives a model or a colouring
+    /// to (P7 step 5), and whether the app should open it.
+    pub formula_editor: &'a mut Option<super::formula_editor::FormulaEditorPanel>,
+    pub open_formula_editor: &'a mut bool,
 }
 
 /// "Save as texture" (`docs/archive/projects/sim-textures.md`): this simulation,
@@ -277,6 +281,7 @@ pub fn render_sim_content(
     //
     // `id_salt` because this `Ui`'s id derives from the dock tab, so a
     // second scroll area added to this panel later would collide.
+    let mut edit_as_rhai: Option<EditAsRhai> = None;
     egui::ScrollArea::vertical()
         .id_salt("sim_panel_body")
         .auto_shrink([false, false])
@@ -285,7 +290,7 @@ pub fn render_sim_content(
                 .default_open(true)
                 .show(ui, |ui| {
                 // ---- Model: one list whose entry 0 IS the model ----
-                render_model_section(ui, config_manager, &config, &sim, state.reseed, state.grid);
+                render_model_section(ui, config_manager, &config, &sim, state.reseed, state.grid, &mut edit_as_rhai);
 
                 ui.separator();
             });
@@ -674,7 +679,7 @@ pub fn render_sim_content(
                 .default_open(true)
                 .show(ui, |ui| {
                 // ---- Colouring: one list whose entry 0 IS the colouring ----
-                render_coloring_section(ui, config_manager, &config, &sim);
+                render_coloring_section(ui, config_manager, &config, &sim, &mut edit_as_rhai);
             });
 
             #[cfg(feature = "terrain")]
@@ -684,6 +689,10 @@ pub fn render_sim_content(
             }
 
     });
+    if let Some(e) = edit_as_rhai {
+        state.formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).edit_sim_as_rhai(config_manager, e.model, e.layer, &e.builtin);
+        *state.open_formula_editor = true;
+    }
 }
 
 /// The **3D terrain** section (heightfield plan T4): the grid as a height
@@ -927,8 +936,12 @@ fn render_coloring_section(
     config_manager: &mut ConfigManager,
     config: &crate::config::FractalConfig,
     sim: &SimConfig,
+    edit_as_rhai: &mut Option<EditAsRhai>,
 ) {
     use crate::config::sim::{SimBlend, SimColorLayer, SimMatteChannel, SimMatteEdge, MAX_COLOR_LAYERS};
+    // A colouring the config carries (P4), registered before its name is
+    // read for the picker.
+    crate::sim::custom::ensure(sim);
     let structural = |config_manager: &mut ConfigManager, edit: &dyn Fn(&mut SimConfig)| {
         let mut after = config.clone();
         edit(&mut after.sim);
@@ -980,6 +993,14 @@ fn render_coloring_section(
                             && c.name != coloring.name
                         {
                             match slot {
+                                // A built-in carries no source: the Rhai
+                                // one goes with the name it was carried for.
+                                ColorSlot::Flat if sim.custom_coloring.is_some() => {
+                                    let _ = config_manager.update_batch(
+                                        vec![(ConfigPath::SimColoring, c.name.to_string().into()), (ConfigPath::SimCustomColoring, String::new().into())],
+                                        "history.action.sim_coloring".to_string(),
+                                    );
+                                }
                                 ColorSlot::Flat => {
                                     let _ = config_manager.update_param(
                                         ConfigPath::SimColoring,
@@ -992,6 +1013,7 @@ fn render_coloring_section(
                                     action = Some(Box::new(move |s: &mut SimConfig| {
                                         if let Some(l) = s.color_layers.get_mut(i) {
                                             l.coloring = name.clone();
+                                            l.custom_coloring = None;
                                             // Parameters are keyed by
                                             // name for whichever
                                             // colouring is current, so
@@ -1012,7 +1034,41 @@ fn render_coloring_section(
                             }
                         }
                     }
+                    // The user's plug-in colourings (P3, P4), in every
+                    // slot: their source carried beside the name, as Use
+                    // carries it.
+                    let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::SimColoring);
+                    if !plugins.is_empty() {
+                        ui.separator();
+                        ui.weak(t!("sim_panel.plugins"));
+                    }
+                    for p in plugins {
+                        if ui.selectable_label(coloring.name == p.key, &p.title).on_hover_text(t!("sim_panel.plugin_tip", file = p.file)).clicked() && coloring.name != p.key {
+                            match slot {
+                                ColorSlot::Flat => {
+                                    let source = crate::config::manager::custom_source_json(&Some(p.carried.clone()));
+                                    let _ = config_manager.update_batch(
+                                        vec![(ConfigPath::SimCustomColoring, source.into()), (ConfigPath::SimColoring, p.key.clone().into())],
+                                        "history.action.use_sim_coloring".to_string(),
+                                    );
+                                }
+                                ColorSlot::At(i) => {
+                                    let (name, carried) = (p.key.clone(), p.carried.clone());
+                                    action = Some(Box::new(move |s: &mut SimConfig| {
+                                        if let Some(l) = s.color_layers.get_mut(i) {
+                                            l.coloring_params.clear();
+                                            l.coloring = name.clone();
+                                            l.custom_coloring = Some(carried.clone());
+                                        }
+                                    }));
+                                }
+                            }
+                        }
+                    }
                 });
+            if edit_as_rhai_button(ui, coloring.name, false) {
+                *edit_as_rhai = Some(EditAsRhai { model: false, layer: layered.then_some(k), builtin: coloring.name.to_string() });
+            }
             if layered {
                 if n_sim_layers > 1 {
                     let source = entry.map(|l| l.source).unwrap_or(0);
@@ -1100,11 +1156,21 @@ fn render_coloring_section(
                 });
             }
             let params = entry.map(|l| &l.coloring_params).unwrap_or(&sim.coloring_params);
+            // A Rhai colouring's layout (rhai-plugins P7): its conditions
+            // and grids.
+            let layout = crate::sim::param_layout(coloring.name);
+            let value = |n: &str| def_value(coloring.parameters, params, n);
             for p in coloring.parameters {
+                if layout.as_ref().is_some_and(|l| !l.lists(p.name, &value)) {
+                    continue;
+                }
                 let mut v = params.get(p.name).copied().unwrap_or(p.default);
                 if param_control(ui, &mut v, p, &slot.salt(), false) {
                     let _ = config_manager.update_param(slot.param_path(p.name), v.into());
                 }
+            }
+            for g in layout.iter().flat_map(|l| l.grids.iter()).filter(|g| g.drawn) {
+                render_param_grid(ui, config_manager, coloring.parameters, g, &value, &|n| slot.param_path(n), &slot.salt(), (0, 0));
             }
             // The matte: channel, invert and edge are snapshot edits on
             // a layer and paths on the flat fields; cutoff and softness
@@ -1302,6 +1368,22 @@ impl LayerSlot {
         }
     }
 
+    /// Where the slot's Rhai model source is carried (P4).
+    fn custom_path(self) -> ConfigPath {
+        match self {
+            LayerSlot::Flat => ConfigPath::SimCustomModel,
+            LayerSlot::At(layer) => ConfigPath::SimLayerCustomModel { layer },
+        }
+    }
+
+    /// Whether the slot carries a Rhai model's source.
+    fn carries(self, sim: &SimConfig) -> bool {
+        match self {
+            LayerSlot::Flat => sim.custom_model.is_some(),
+            LayerSlot::At(layer) => sim.layers.get(layer).is_some_and(|l| l.custom_model.is_some()),
+        }
+    }
+
     fn param_path(self, param: &str) -> ConfigPath {
         match self {
             LayerSlot::Flat => ConfigPath::SimModelParam { param: param.to_string() },
@@ -1411,110 +1493,94 @@ fn preset_changes(
 /// variation goes to zero, and the scale wins everywhere. In the
 /// generated layout the rows are the ones the generator would fill.
 #[allow(clippy::too_many_arguments)]
-fn render_param_table(
-    ui: &mut egui::Ui,
-    config_manager: &mut ConfigManager,
-    model: &'static crate::sim::ModelDef,
-    t: &'static crate::sim::ParamTable,
-    params: &std::collections::BTreeMap<String, f32>,
-    slot: LayerSlot,
-    grid: (u32, u32),
-    table_on: bool,
-) {
-    let def_of = |name: &str| model.parameters.iter().find(|p| p.name == name);
-    let rows_default = def_of(t.rows_param).map(|p| p.default).unwrap_or(1.0);
-    let rows = params
-        .get(t.rows_param)
+/// A parameter's value in force: the slot's, else its default.
+fn def_value(defs: &[crate::sim::SimParamDef], params: &std::collections::BTreeMap<String, f32>, name: &str) -> f32 {
+    params
+        .get(name)
         .copied()
         .filter(|v| v.is_finite())
-        .unwrap_or(rows_default)
-        .round()
-        .clamp(1.0, t.rows as f32) as usize;
-    let reach = crate::sim::pyramid_reach(grid.0, grid.1);
-    // The value of a cell: the config's in table mode, the generator's
-    // otherwise.
-    let generated: std::collections::BTreeMap<String, f32> = if table_on {
-        Default::default()
-    } else {
-        (t.fill)(params).into_iter().collect()
-    };
-    let value = |name: &str| -> Option<f32> {
-        let def = def_of(name)?;
-        let src = if table_on { params } else { &generated };
-        Some(src.get(name).copied().filter(|v| v.is_finite()).unwrap_or(def.default))
-    };
-    let past_reach = |r: usize| -> bool {
-        match (value(&t.cell(r, "radius")), value(&t.cell(r, "ratio"))) {
-            (Some(ra), Some(ratio)) => ra * ratio > reach,
-            _ => false,
-        }
-    };
+        .unwrap_or_else(|| defs.iter().find(|p| p.name == name).map_or(0.0, |p| p.default))
+}
 
-    if !table_on {
-        if let Some(r) = (0..rows).rev().find(|&r| past_reach(r)) {
-            ui.label(
-                egui::RichText::new(t!(
-                    "sim_panel.table_past_reach_ladder",
-                    n = (r + 1).to_string(),
-                    reach = format!("{reach:.0}")
-                ))
-                .small()
-                .color(ui.visuals().warn_fg_color),
-            );
+/// A parameter grid (rhai-plugins P7; McCabe's per-scale table, the
+/// mccabe-multiscale plan's section 3): its live rows by its shown
+/// columns, each cell its parameter's control, a row its grid warns of
+/// marked. Hidden, a grid with a fill draws the warning its fill earns --
+/// the coarsest row's -- in a line.
+#[allow(clippy::too_many_arguments)]
+fn render_param_grid(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    defs: &[crate::sim::SimParamDef],
+    g: &crate::param_layout::ParamGrid,
+    value: &dyn Fn(&str) -> f32,
+    path: &dyn Fn(&str) -> ConfigPath,
+    salt: &str,
+    grid: (u32, u32),
+) {
+    let rows = g.live(value);
+    let warn = ui.visuals().warn_fg_color;
+    if !g.show_if.holds(value) {
+        if let (Some(f), Some(w)) = (&g.fill, &g.warn) {
+            if let Some(msg) = (0..rows).rev().find_map(|r| w(r, &(f.cells)(value, r), value, grid, true)) {
+                ui.label(egui::RichText::new(msg).small().color(warn));
+            }
         }
         return;
     }
-
-    let columns: Vec<&str> = t.columns.iter().copied().filter(|c| (t.shows_column)(params, c)).collect();
-    egui::Grid::new(format!("{}_param_table", slot.salt()))
+    let def_of = |name: &str| defs.iter().find(|p| p.name == name);
+    let columns: Vec<&crate::param_layout::GridColumn> = g.columns.iter().filter(|c| c.show_if.holds(value)).collect();
+    egui::Grid::new(format!("{salt}_{}_grid", g.name))
         .striped(true)
         .spacing([6.0, 2.0])
         .show(ui, |ui| {
             ui.label("");
             for c in &columns {
-                ui.label(egui::RichText::new(column_label(c)).small());
+                ui.label(egui::RichText::new(c.header.resolve()).small());
             }
             ui.end_row();
             for r in 0..rows {
                 ui.label((r + 1).to_string());
-                for &c in &columns {
-                    let name = t.cell(r, c);
-                    let (Some(def), Some(mut v)) = (def_of(&name), value(&name)) else {
+                for c in &columns {
+                    let name = g.cell(r, &c.key);
+                    let Some(def) = def_of(&name) else {
                         ui.label("");
                         continue;
                     };
-                    let integer = c == "symmetry";
-                    let speed = if integer { 0.05 } else { ((def.max - def.min) as f64 / 1000.0).max(1e-4) };
+                    let mut v = value(&name);
+                    let speed = if c.whole { 0.05 } else { ((def.max - def.min) as f64 / 1000.0).max(1e-4) };
                     let mut dv = egui::DragValue::new(&mut v).range(def.min..=def.max).speed(speed);
-                    dv = if integer { dv.fixed_decimals(0) } else { dv.max_decimals(3) };
+                    dv = if c.whole { dv.fixed_decimals(0) } else { dv.max_decimals(3) };
                     if ui.add(dv).on_hover_text(def.tooltip).changed() {
-                        if integer {
+                        if c.whole {
                             v = v.round();
                         }
-                        let _ = config_manager.update_param(slot.param_path(&name), v.into());
+                        let _ = config_manager.update_param(path(&name), v.into());
                     }
                 }
-                if past_reach(r) {
-                    ui.label(egui::RichText::new("⚠").color(ui.visuals().warn_fg_color))
-                        .on_hover_text(t!("sim_panel.table_past_reach", reach = format!("{reach:.0}")));
+                if let Some(msg) = g.warn.as_ref().and_then(|w| w(r, &g.row(r, value), value, grid, false)) {
+                    ui.label(egui::RichText::new("⚠").color(warn)).on_hover_text(msg);
                 }
                 ui.end_row();
             }
         });
 }
 
-/// The header of a parameter-table column.
-fn column_label(c: &str) -> String {
-    match c {
-        "radius" => t!("sim_panel.table_radius").to_string(),
-        "ratio" => t!("sim_panel.table_ratio").to_string(),
-        "amount" => t!("sim_panel.table_amount").to_string(),
-        "weight" => t!("sim_panel.table_weight").to_string(),
-        "symmetry" => t!("sim_panel.table_symmetry").to_string(),
-        "stretch" => t!("sim_panel.table_stretch").to_string(),
-        "angle" => t!("sim_panel.table_angle").to_string(),
-        other => other.to_string(),
-    }
+/// An Edit as Rhai the panel asked for (P7 step 5): a model (else a
+/// colouring), its layer or colour layer (`None`: the flat slot), and the
+/// built-in to edit. Handed to the Formula Editor once the panel is drawn.
+struct EditAsRhai {
+    model: bool,
+    layer: Option<usize>,
+    builtin: String,
+}
+
+/// Edit as Rhai, beside a built-in model or colouring with a twin:
+/// whether it was clicked.
+fn edit_as_rhai_button(ui: &mut egui::Ui, builtin: &str, model: bool) -> bool {
+    let shipped = if model { crate::sim::custom::SHIPPED_MODELS } else { crate::sim::custom::SHIPPED };
+    shipped.iter().any(|(n, _)| *n == builtin)
+        && ui.small_button(t!("sim_panel.edit_as_rhai")).on_hover_text(t!("sim_panel.edit_as_rhai_tip")).clicked()
 }
 
 /// The Model section: one list whose entry 0 is the primary model.
@@ -1534,6 +1600,7 @@ fn render_model_section(
     sim: &SimConfig,
     reseed: &mut bool,
     grid: (u32, u32),
+    edit_as_rhai: &mut Option<EditAsRhai>,
 ) {
     use crate::config::sim::{
         SimCoupling, SimCouplingForm, SimLayer, MAX_COUPLINGS, MAX_LAYERS,
@@ -1545,6 +1612,8 @@ fn render_model_section(
     };
     let layered = !sim.layers.is_empty();
     let count = sim.layer_count();
+    // A model the config carries (P4), registered before its name is read.
+    crate::sim::custom::ensure(sim);
 
     for i in 0..count {
         let slot = if layered { LayerSlot::At(i) } else { LayerSlot::Flat };
@@ -1575,6 +1644,11 @@ fn render_model_section(
                             // The field is the whole simulation's, so a layer
                             // switch leaves it.
                             let mut changes = vec![(slot.model_path(), m.name.to_string().into())];
+                            // A built-in carries no source: the Rhai one
+                            // goes with the name it was carried for.
+                            if slot.carries(sim) {
+                                changes.push((slot.custom_path(), String::new().into()));
+                            }
                             if slot == LayerSlot::Flat {
                                 if let Some(first) = m.presets.first() {
                                     if let Some(init) = first.init {
@@ -1586,7 +1660,27 @@ fn render_model_section(
                             let _ = super::render_mode::choose(config_manager, changes, "history.action.sim_model", RenderMode::Simulation);
                         }
                     }
+                    // The user's plug-in models (P3, P4), in every layer:
+                    // their source carried beside the name, as Use
+                    // carries it.
+                    let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::SimModel);
+                    if !plugins.is_empty() {
+                        ui.separator();
+                        ui.weak(t!("sim_panel.plugins"));
+                    }
+                    for p in plugins {
+                        if ui.selectable_label(model.name == p.key, &p.title).on_hover_text(t!("sim_panel.plugin_tip", file = p.file)).clicked() && model.name != p.key {
+                            let source = crate::config::manager::custom_source_json(&Some(p.carried.clone()));
+                            let changes = vec![(slot.custom_path(), source.into()), (slot.model_path(), p.key.clone().into())];
+                            let _ = super::render_mode::choose(config_manager, changes, "history.action.use_sim_model", RenderMode::Simulation);
+                        }
+                    }
                 });
+            // Edit as Rhai (P7 step 5): a built-in's twin, put in its
+            // place and opened as the user's own.
+            if edit_as_rhai_button(ui, model.name, true) {
+                *edit_as_rhai = Some(EditAsRhai { model: true, layer: layered.then_some(i), builtin: model.name.to_string() });
+            }
             if count > 1 {
                 let mut on = sim.layer_enabled(i);
                 if ui
@@ -1640,17 +1734,15 @@ fn render_model_section(
                 });
             }
             let params = sim.layer_model_params(i);
-            // A model with a parameter table (McCabe's per-scale table,
-            // mccabe-multiscale plan, section 3) draws its cells as a
-            // grid, and in table mode hides what only its generator reads.
-            let table = crate::sim::param_table(model.name);
-            let table_on = table.is_some_and(|t| params.get(t.mode_param).copied().unwrap_or(0.0) >= 0.5);
+            // A model's layout beyond its list (rhai-plugins P7): what is
+            // shown only while others hold certain values, and its grids
+            // (McCabe's per-scale table), drawn after the list.
+            let layout = crate::sim::param_layout(model.name);
+            let value = |n: &str| def_value(model.parameters, params, n);
             let warps = crate::sim::scale_warps(model.name);
             for p in model.parameters.iter() {
-                if let Some(t) = table {
-                    if t.is_cell(p.name) || (table_on && t.generator_params.contains(&p.name)) {
-                        continue;
-                    }
+                if layout.as_ref().is_some_and(|l| !l.lists(p.name, &value)) {
+                    continue;
                 }
                 // Per-scale warps live in the Warp section.
                 if warps.is_some_and(|w| w.is_param(p.name)) {
@@ -1658,24 +1750,21 @@ fn render_model_section(
                 }
                 let mut v = params.get(p.name).copied().unwrap_or(p.default);
                 if param_control(ui, &mut v, p, &slot.salt(), crate::sim::is_slow_param(model.name, p.name)) {
-                    match table {
-                        // Into the table: write the ladder into it in the
-                        // same undo step, so the switch changes nothing.
-                        Some(t) if p.name == t.mode_param && v >= 0.5 => {
-                            let mut changes = vec![(slot.param_path(p.name), v.into())];
-                            for (name, value) in (t.fill)(params) {
-                                changes.push((slot.param_path(&name), value.into()));
-                            }
-                            let _ = config_manager.update_batch(changes, "history.action.sim_table".to_string());
-                        }
-                        _ => {
-                            let _ = config_manager.update_param(slot.param_path(p.name), v.into());
-                        }
+                    // An edit that turns a grid on fills it in the same
+                    // undo step, so the switch changes nothing.
+                    let after = |n: &str| if n == p.name { v } else { value(n) };
+                    let fills = layout.as_ref().map(|l| l.fills(&value, &after)).unwrap_or_default();
+                    if fills.is_empty() {
+                        let _ = config_manager.update_param(slot.param_path(p.name), v.into());
+                    } else {
+                        let mut changes = vec![(slot.param_path(p.name), v.into())];
+                        changes.extend(fills.into_iter().map(|(name, value)| (slot.param_path(&name), value.into())));
+                        let _ = config_manager.update_batch(changes, "history.action.sim_table".to_string());
                     }
                 }
             }
-            if let Some(t) = table {
-                render_param_table(ui, config_manager, model, t, params, slot, grid, table_on);
+            for g in layout.iter().flat_map(|l| l.grids.iter()).filter(|g| g.drawn) {
+                render_param_grid(ui, config_manager, model.parameters, g, &value, &|n| slot.param_path(n), &slot.salt(), grid);
             }
         };
         if count > 1 {
@@ -1704,6 +1793,7 @@ fn render_model_section(
                 model: next,
                 model_params: Default::default(),
                 enabled: true,
+                custom_model: None,
             });
         });
     }

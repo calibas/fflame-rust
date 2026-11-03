@@ -26,7 +26,7 @@ fn edit_as_formula(
     formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
     open_formula_editor: &mut bool,
 ) {
-    use crate::escape::lang::EntryKind;
+    use crate::lang::EntryKind;
     let name = crate::escape::custom::name_of(EntryKind::Formula, &src);
     let changes = vec![
         (ConfigPath::EscapeCustomFormula, ConfigValue::String(crate::config::manager::custom_source_json(&Some(src.clone())))),
@@ -38,6 +38,34 @@ fn edit_as_formula(
     let file = crate::storage::formula_store::file_name_for(&format!("{builtin}.rhai")).unwrap_or_else(|| "formula.rhai".into());
     formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_in_use(file, &src);
     *open_formula_editor = true;
+}
+
+/// The user's plug-ins in the formula picker (formulas and solids) or the
+/// colouring picker (P3), after a separator. Choosing one is the Formula
+/// Editor's Use: its source carried in the config, its slot named, and
+/// Escape entered in the same undo step.
+fn plugin_entries(ui: &mut egui::Ui, config_manager: &mut ConfigManager, current: &str, formulas: bool) {
+    use crate::storage::library::{plugins, Kind};
+    let list: Vec<_> = plugins()
+        .into_iter()
+        .filter(|p| if formulas { matches!(p.kind, Kind::Formula | Kind::Solid) } else { p.kind == Kind::Coloring })
+        .collect();
+    if list.is_empty() {
+        return;
+    }
+    ui.separator();
+    ui.weak(t!("escape_panel.plugins"));
+    for p in list {
+        if ui.selectable_label(current == p.key, &p.title).on_hover_text(t!("escape_panel.plugin_tip", file = p.file)).clicked() && current != p.key {
+            let source = ConfigValue::String(crate::config::manager::custom_source_json(&Some(p.carried.clone())));
+            let (changes, description) = if formulas {
+                (vec![(ConfigPath::EscapeCustomFormula, source), (ConfigPath::EscapeFormula, ConfigValue::String(p.key.clone()))], "history.action.use_custom_formula")
+            } else {
+                (vec![(ConfigPath::EscapeCustomColoring, source), (ConfigPath::EscapeColoring, ConfigValue::String(p.key.clone()))], "history.action.use_custom_coloring")
+            };
+            let _ = super::render_mode::choose(config_manager, changes, description, RenderMode::Escape);
+        }
+    }
 }
 
 /// Render the Escape panel.
@@ -194,6 +222,7 @@ pub fn render_escape_content(
                         );
                     }
                 }
+                plugin_entries(ui, config_manager, &esc.formula, true);
             });
         // A built-in with a twin in Rhai (`escape::twins`): put the twin
         // in its place, the picture unchanged, and open it in the Formula
@@ -2092,6 +2121,9 @@ pub(super) fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigMa
                     } else {
                         crate::escape::lens::lens_menu(&registry)
                     };
+                    // One version of each of the user's Rhai variations.
+                    let superseded = registry.superseded(&config_manager.active_config().flame.custom_variations);
+                    let menu: Vec<String> = menu.into_iter().filter(|n| *n == current || !superseded.contains(n)).collect();
                     let head = if show_all {
                         0
                     } else {
@@ -2489,6 +2521,7 @@ fn show_coloring_section(
                         pick_coloring(config_manager, formula_def, esc, c);
                     }
                 }
+                plugin_entries(ui, config_manager, &esc.coloring, false);
             });
     });
     // The saved coloring may predate the formula it is paired with (an

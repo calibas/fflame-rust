@@ -114,15 +114,288 @@ fn unknown_variation_param_is_rejected_with_suggestions() {
 
 #[test]
 fn sandbox_has_no_io() {
-    // Nothing was registered for file access, so these are parse/lookup
-    // failures rather than working calls.
+    // Each attempt would WORK on an engine left as `Engine::new()` makes
+    // it: the import names a real file on disk (its path without
+    // `.rhai`, which is how the file resolver takes it), and `sleep` and
+    // `timestamp` are in rhai's standard packages. An attempt that would
+    // fail anyway -- a module that does not exist -- proves nothing.
+    let dir = std::env::temp_dir().join(format!("ff_sandbox_probe_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let file = dir.join("probe.rhai");
+    std::fs::write(&file, "export const X = 1;\n").expect("probe file");
+    let path = file.with_extension("").to_string_lossy().replace('\\', "/");
+
+    let import = format!("import \"{path}\" as m; m::X");
     for attempt in [
         "open(\"/etc/passwd\")",
-        "import \"std\" as s;",
+        import.as_str(),
         "eval(\"1+1\")",
+        "sleep(0)",
+        "sleep(0.0)",
+        "timestamp()",
     ] {
         assert!(run(attempt, 1).is_err(), "`{attempt}` must not work");
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `sleep` is refused at once, not after sleeping: the budget never sees
+/// time spent blocked, so an override that slept first would still hang
+/// the app.
+#[test]
+fn sleep_is_refused_without_sleeping() {
+    let started = std::time::Instant::now();
+    let err = run("sleep(30)", 1).expect_err("refused");
+    assert!(format!("{err}").contains("not available"), "{err}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+// ============================================================================
+// Libraries: `import` through the script library
+// ============================================================================
+
+const HELPERS: &str = r#"
+script("Helpers", "library");
+export const SCALE = 2.0;
+const SECRET = 7;
+fn double(x) { x * 2.0 }
+fn add_spiral(f) {
+    let t = f.add_transform();
+    t.add_variation("spiral", 1.0);
+}
+"#;
+
+fn library_host(extra: Vec<(&str, &str)>) -> super::ScriptHost {
+    let mut scripts = vec![("helpers".to_string(), HELPERS.to_string())];
+    scripts.extend(extra.into_iter().map(|(id, s)| (id.to_string(), s.to_string())));
+    super::ScriptHost::new().with_scripts(scripts)
+}
+
+#[test]
+fn a_library_imports_and_its_functions_run() {
+    let src = r#"
+script("User", "generator");
+import "helpers" as h;
+h::add_spiral(flame);
+let t = flame.add_transform();
+t.weight = h::double(h::SCALE);
+"#;
+    let out = library_host(vec![])
+        .run(src, &FractalConfig::default(), 1, HashMap::new())
+        .expect("imports and runs");
+    let transforms = &out.config.flame.transforms;
+    assert_eq!(transforms.len(), 2);
+    assert!(transforms[0].variations.contains_key("spiral"));
+    assert_eq!(transforms[1].weight, 4.0);
+    // The library's declaration did not replace the importer's.
+    assert_eq!(out.meta.name, "User");
+    assert_eq!(out.meta.kind, Some(ScriptKind::Generator));
+}
+
+/// The example in SCRIPTING-GUIDE.md's *Composition*, as written there.
+#[test]
+fn the_guides_library_example_runs() {
+    let kit = r#"
+script("Spiral Kit", "library");
+export const TURNS = 3;
+fn add_spiral(f, weight) {
+    let t = f.add_transform();
+    t.add_variation("spiral", weight);
+    t
+}
+"#;
+    let user = r#"
+script("Spirals", "generator");
+import "spiral_kit" as kit;
+for i in 0..kit::TURNS { kit::add_spiral(flame, 1.0 / (i + 1)); }
+"#;
+    let out = super::ScriptHost::new()
+        .with_scripts(vec![("spiral_kit".to_string(), kit.to_string())])
+        .run(user, &FractalConfig::default(), 1, HashMap::new())
+        .expect("the guide's example runs");
+    assert_eq!(out.config.flame.transforms.len(), 3);
+}
+
+/// The collect pass imports too, so a script that imports a library
+/// still lists its own parameters (the panel reads them this way).
+#[test]
+fn a_script_that_imports_collects_its_parameters() {
+    let src = r#"
+script("User", "generator");
+import "helpers" as h;
+let n = param_int("count", 3, 1, 9);
+"#;
+    let meta = library_host(vec![])
+        .collect(src, &FractalConfig::default())
+        .expect("collects");
+    assert_eq!(meta.kind, Some(ScriptKind::Generator));
+    assert_eq!(meta.params.len(), 1);
+    assert_eq!(meta.params[0].key(), "count");
+}
+
+#[test]
+fn a_library_imported_twice_loads_once() {
+    let src = "script(\"User\", \"generator\");\nimport \"helpers\" as a;\nimport \"helpers.rhai\" as b;\nlet x = a::double(1.0) + b::double(1.0);\n";
+    library_host(vec![])
+        .run(src, &FractalConfig::default(), 1, HashMap::new())
+        .expect("both imports resolve");
+}
+
+#[test]
+fn only_a_library_can_be_imported() {
+    let generator = "script(\"Gen\", \"generator\");\nlet t = flame.add_transform();\n";
+    let undeclared = "fn f() { 1 }\n";
+    let host = library_host(vec![("gen", generator), ("plain", undeclared)]);
+    let base = FractalConfig::default();
+
+    let err = host
+        .run("import \"gen\" as g;", &base, 1, HashMap::new())
+        .expect_err("a generator is not importable");
+    assert!(format!("{err}").contains("run_script"), "points at run_script: {err}");
+
+    let err = host
+        .run("import \"plain\" as p;", &base, 1, HashMap::new())
+        .expect_err("a library declares itself");
+    assert!(format!("{err}").contains("\"library\""), "{err}");
+}
+
+/// Whatever is at a library's top level runs on every import, so it may
+/// only declare. Each of these would otherwise reach the flame, the
+/// importer's panel, or another script.
+#[test]
+fn a_librarys_top_level_may_only_declare() {
+    let base = FractalConfig::default();
+    for body in [
+        "run_script(\"helpers\");",
+        "let n = param_int(\"n\", 1, 0, 9);",
+        "let t = rand();",
+        "const C = color_hex(\"#ffffff\");",
+        "if true { print(\"hi\"); }",
+        // (An empty loop is optimised away before the check sees it.)
+        "for i in 0..3 { print(i); }",
+    ] {
+        let lib = format!("script(\"Bad\", \"library\");\n{body}\nfn f() {{ 1 }}\n");
+        let host = library_host(vec![("bad", lib.as_str())]);
+        let err = host
+            .run("import \"bad\" as b;", &base, 1, HashMap::new())
+            .expect_err(body);
+        assert!(format!("{err}").contains("top level"), "`{body}`: {err}");
+    }
+    // Values written out are fine, operators included.
+    let lib = "script(\"Ok\", \"library\");\nconst A = -1.5 * 2.0;\nconst B = [1, 2, #{ x: 3 }];\nconst C = \"a\" + \"b\";\nfn f() { 1 }\n";
+    library_host(vec![("ok", lib)])
+        .run("import \"ok\" as o; o::f();", &base, 1, HashMap::new())
+        .expect("declarations import");
+}
+
+#[test]
+fn libraries_that_import_each_other_in_a_loop_are_named() {
+    let a = "script(\"A\", \"library\");\nimport \"lib_b\" as b;\nfn f() { 1 }\n";
+    let b = "script(\"B\", \"library\");\nimport \"lib_a\" as a;\nfn g() { 2 }\n";
+    let err = library_host(vec![("lib_a", a), ("lib_b", b)])
+        .run("import \"lib_a\" as a;", &FractalConfig::default(), 1, HashMap::new())
+        .expect_err("a cycle");
+    let msg = format!("{err}");
+    assert!(msg.contains("loop") && msg.contains("lib_a -> lib_b -> lib_a"), "{msg}");
+}
+
+#[test]
+fn an_unknown_import_says_so() {
+    let err = library_host(vec![])
+        .run("import \"nope\" as n;", &FractalConfig::default(), 1, HashMap::new())
+        .expect_err("unknown");
+    assert!(format!("{err}").contains("nope"), "{err}");
+}
+
+/// A downloaded script may import only shipped libraries, as it may only
+/// `run_script` shipped scripts -- whether it is the entry or reached
+/// from a trusted one.
+#[test]
+fn a_downloaded_script_cannot_import_the_users_library() {
+    let base = FractalConfig::default();
+    let src = "script(\"Nosy\", \"generator\");\nimport \"helpers\" as h;\n";
+    library_host(vec![])
+        .run(src, &base, 1, HashMap::new())
+        .expect("a trusted script may import a user library");
+    let err = library_host(vec![])
+        .with_untrusted_entry()
+        .run(src, &base, 1, HashMap::new())
+        .expect_err("refused");
+    assert!(format!("{err}").contains("only import libraries that ship"), "{err}");
+}
+
+/// A downloaded LIBRARY's functions run inside a trusted importer, where
+/// no frame on the call stack is theirs. They are still held to the
+/// downloaded-script rule -- including through a function pointer built
+/// from a string, which no reading of the source could catch.
+#[test]
+fn a_downloaded_librarys_functions_stay_restricted_in_a_trusted_caller() {
+    let base = FractalConfig::default();
+    let lib = r#"
+script("Downloaded", "library");
+fn direct() { run_script("my_helper"); }
+fn by_pointer() { let f = Fn("run" + "_script"); f.call("my_helper"); }
+fn imports() { import "helpers" as h; h::double(1.0) }
+"#;
+    let host = || {
+        library_host(vec![
+            ("downloaded", lib),
+            ("my_helper", "script(\"My Helper\", \"modifier\");\n"),
+        ])
+        .with_untrusted(vec!["downloaded".to_string()])
+    };
+    for call in ["d::direct();", "d::by_pointer();", "d::imports();"] {
+        let src = format!("script(\"Mine\", \"generator\");\nimport \"downloaded\" as d;\n{call}\n");
+        let err = host().run(&src, &base, 1, HashMap::new()).expect_err(call);
+        assert!(format!("{err}").contains("ship with the app"), "`{call}`: {err}");
+    }
+    // The importer itself is not restricted by having imported it.
+    let src = "script(\"Mine\", \"generator\");\nimport \"downloaded\" as d;\nrun_script(\"my_helper\");\n";
+    host().run(src, &base, 1, HashMap::new()).expect("the trusted caller's own call");
+}
+
+/// A library's functions spend the importer's budget: a runaway one
+/// stops with the budget error, not a hang.
+#[test]
+fn a_librarys_runaway_function_spends_the_shared_budget() {
+    let lib = "script(\"Spin\", \"library\");\nfn spin() { let i = 0; loop { i += 1; } }\n";
+    let err = library_host(vec![("spin", lib)])
+        .run("import \"spin\" as s; s::spin();", &FractalConfig::default(), 1, HashMap::new())
+        .expect_err("stopped");
+    assert!(format!("{err}").contains("budget"), "{err}");
+}
+
+/// `param_angle` is a float in degrees that says it is an angle: the panel
+/// draws the angle control, and the wire form adds `"angle": true` to a
+/// float's, which anything that knows no more reads as a float.
+#[test]
+fn an_angle_parameter_is_a_float_that_says_so() {
+    let script = r#"
+        script("Angles", "generator");
+        let a = param_angle("turn", 45);
+        let b = param_angle("tilt", 10.0, -90.0, 90.0);
+        let t = flame.add_transform();
+        t.add_variation("linear", 1.0);
+        t.weight = (a + b) / 100.0;
+    "#;
+    let meta = ScriptHost::new().collect(script, &FractalConfig::default()).expect("collect");
+    match &meta.params[0] {
+        ParamDecl::Float { default, min, max, angle, .. } => assert_eq!((*default, *min, *max, *angle), (45.0, 0.0, 360.0, true)),
+        other => panic!("expected an angle, got {other:?}"),
+    }
+    match &meta.params[1] {
+        ParamDecl::Float { min, max, angle, .. } => assert_eq!((*min, *max, *angle), (-90.0, 90.0, true)),
+        other => panic!("expected an angle, got {other:?}"),
+    }
+    let json = meta.params[0].to_api_json();
+    assert_eq!((json["type"].as_str(), json["angle"].as_bool()), (Some("float"), Some(true)));
+    // A plain float's wire form is as it was.
+    let plain = ParamDecl::Float { key: "k".into(), label: "K".into(), default: 1.0, min: 0.0, max: 2.0, angle: false }.to_api_json();
+    assert!(plain.get("angle").is_none(), "{plain}");
+    let out = run(script, 1).unwrap();
+    assert_eq!(out.config.flame.transforms[0].weight, 0.55);
+    let out = run_with(script, 1, &[("turn", ParamValue::Float(400.0))]).unwrap();
+    assert_eq!(out.config.flame.transforms[0].weight, 3.7, "clamped to its turn");
 }
 
 #[test]
@@ -3691,6 +3964,7 @@ fn adopting_a_downloaded_script_keeps_it_untrusted() {
             version: Some(3),
             owner: Some("someone/theirs".into()),
             from_others: true,
+            ..Default::default()
         },
     )
     .expect("link");
@@ -3770,6 +4044,7 @@ fn refetching_your_own_script_keeps_it_yours() {
             version: Some(4),
             owner: Some("me/mine".into()),
             from_others: false,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -3785,6 +4060,7 @@ fn refetching_your_own_script_keeps_it_yours() {
             version: Some(5),
             owner: Some("me/mine".into()),
             from_others: was_theirs,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -4602,7 +4878,7 @@ fn escaped(s, p) { s.z.norm_sqr() > 16.0 }`);
     .expect("script ran");
     let esc = out.config.escape;
     assert_eq!(esc.custom_formula.as_ref().map(|s| s.dialect), Some(crate::config::escape::CustomDialect::Hybrid));
-    let h = crate::escape::lang::hybrid::Hybrid::from_json(&esc.custom_formula.unwrap().source).unwrap();
+    let h = crate::lang::hybrid::Hybrid::from_json(&esc.custom_formula.unwrap().source).unwrap();
     assert_eq!(h.groups.len(), 2);
     assert_eq!(h.groups[1].repeats, 2);
     assert!(h.groups[1].blend.as_ref().is_some_and(|b| b.title == "Tricorn"));
@@ -4631,14 +4907,14 @@ fn a_script_function_becomes_a_formula() {
     let esc = out.config.escape;
     let src = esc.custom_formula.as_ref().expect("a custom formula");
     assert_eq!((src.dialect, src.entry.as_str()), (crate::config::escape::CustomDialect::Rhai, "ship"));
-    let ours = crate::escape::lang::rhai::program(&src.source).unwrap();
-    let twin = crate::escape::lang::rhai::program(crate::escape::twins::source("burning_ship").unwrap()).unwrap();
-    use crate::escape::lang::interp::{run as run_formula, Env, ParamValues};
+    let ours = crate::lang::rhai::program(&src.source).unwrap();
+    let twin = crate::lang::rhai::program(crate::escape::twins::source("burning_ship").unwrap()).unwrap();
+    use crate::lang::interp::{run as run_formula, Env, ParamValues};
     for julia in [false, true] {
         for c in [(-0.5, -0.5), (-1.7, -0.02), (0.3, 0.2), (-1.0, -1.0)] {
-            let mut env = Env::at(crate::escape::lang::builtins::C64::new(c.0, c.1), 100);
+            let mut env = Env::at(crate::lang::builtins::C64::new(c.0, c.1), 100);
             env.julia = julia;
-            env.julia_c = crate::escape::lang::builtins::C64::new(-0.8, 0.156);
+            env.julia_c = crate::lang::builtins::C64::new(-0.8, 0.156);
             let (a, b) = (run_formula(&ours, &ParamValues::defaults(&ours), None, &env), run_formula(&twin, &ParamValues::defaults(&twin), None, &env));
             assert_eq!((a.n, a.escaped), (b.n, b.escaped), "at {c:?} julia {julia}");
         }

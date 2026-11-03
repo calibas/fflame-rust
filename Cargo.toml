@@ -214,8 +214,17 @@ engine-flame = []
 # The escape-time engine: formulas, colorings, and the perturbation
 # machinery (fixed point, reference orbits, the double-double shadow,
 # the orbit store). Its shader source is under 1% of a module's
-# download; the deep-zoom code is the weight.
-engine-escape = []
+# download; the deep-zoom code is the weight. Its formulas are written
+# in the formula language, so it brings `lang`.
+engine-escape = ["lang"]
+# The formula language (`crate::lang`): Rhai -- and Ultra Fractal's and
+# Fractint's formulas -- compiled to WGSL, with the f64 interpreter as
+# its CPU back end. What makes an effect or a variation written in Rhai
+# work in a build: a gallery module without the escape engine turns
+# this on to compile them (docs/projects/rhai-plugins.md). Its
+# deep-zoom passes (big-float reference orbits, the nucleus search)
+# come with `engine-escape` alone.
+lang = []
 # The simulation engine: the model/colouring registries, the assembler
 # and SimRenderer. Like the escape engine its shader source is a small
 # fraction of a module's download; unlike it, there is no deep-zoom

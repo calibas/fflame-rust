@@ -27,7 +27,7 @@ and fails if one is missing from this page or the guide.
 
 | call | returns | what it does |
 |---|---|---|
-| `script(name, kind)` | — | Declares the script. Must be the first call. `kind` is `"generator"` (starts from a default config) or `"modifier"` (starts from the current flame). |
+| `script(name, kind)` | — | Declares the script. Must be the first call. `kind` is `"generator"` (starts from a default config), `"modifier"` (starts from the current flame) or `"library"` (functions for other scripts to `import`; see below). |
 | `script(name, kind, flags)` | — | Same, with a flag array: `"norng"` (ignores the seed → panel hides reroll), `"palette"` (offered in the Palette Editor). Unknown flags warn and are dropped. |
 
 ## Parameters (become sliders in the panel)
@@ -39,6 +39,7 @@ the key (`"scale_max"` → "Scale Max").
 | call | returns | what it does |
 |---|---|---|
 | `param(key, default, min, max)` | float | A float slider; returns the user's value clamped to `[min, max]`. |
+| `param_angle(key, default)` / `param_angle(key, default, min, max)` | float | An angle in **degrees**, drawn with the angle control (0–360 without a range); clamped like `param`. On the wire a float with `"angle": true`. |
 | `param_int(key, default, min, max)` | int | An integer slider, inclusive range. |
 | `param_bool(key, default)` | bool | A checkbox. |
 | `param_choice(key, options, default_index)` | string | A dropdown; returns the **chosen option's text**, so compare against the option strings. |
@@ -427,6 +428,28 @@ Nesting is capped at 8 and shares the caller's operation budget.
 | `run_script(id, params)` | — | With a parameter map: `#{ scheme: "Analogous", stops: 5 }`. |
 | `run_script(id, params, seed)` | — | With its own seed — the callee reproduces exactly what it would produce standalone at that seed (pass `seed()` for "this run's"). |
 
+### Libraries: `import`
+
+`import "id" as name;` loads a **library** -- a script declared with
+`script("Name", "library")` -- from the same script library `run_script`
+reads, by id. Never a file: an import means the same on desktop, the
+web and the CLI. Its functions are then `name::f(...)`, and what it
+`export`s (`export const SCALE = 2.0;`) is `name::SCALE`.
+
+- A library's top level may only declare: its `script(...)`, constants
+  written out as values (numbers, strings, arrays, maps, arithmetic on
+  them), its own imports and exports, and functions. Anything that
+  calls a function there is refused, since it would run on every import.
+  Its functions may do anything when called, under the caller's budget.
+- Only a library imports. A generator or modifier is run with
+  `run_script`.
+- Cycles are named, imports count towards the nesting depth of 8, and a
+  run imports at most 64 libraries (a repeat import is free but counts).
+- A downloaded script may import only libraries that ship with the app,
+  as it may only `run_script` shipped scripts -- and a downloaded
+  library's functions stay held to that rule wherever they are called
+  from.
+
 ## Engine queries
 
 | call | returns | what it does |
@@ -503,5 +526,6 @@ Each returns one row of weights; apply with
 See the [guide's limits table](SCRIPTING-GUIDE.md#limits-not-tunable-from-script):
 a shared 5M-operation budget (sub-scripts included), call depth 64,
 `run_script` depth 8, array/string/map size caps, 256 KB source,
-128 transforms. `eval` is disabled; there is no `import`. Runaway
+128 transforms. `eval` is disabled; `import` reads only the script library (above),
+never a file; `sleep` and `timestamp` are refused. Runaway
 scripts stop with an error naming the budget, not a hang.

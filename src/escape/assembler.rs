@@ -1216,7 +1216,7 @@ fn with_env(template: String, on: bool, at: EnvAt) -> String {
         "    esc_env_center = params.center;".to_string(),
         "    esc_env_magn = 4.0 / params.span.y;".to_string(),
     ];
-    let mut out = vec![crate::escape::lang::wgsl::ENV_DECLS.to_string()];
+    let mut out = vec![crate::lang::wgsl::ENV_DECLS.to_string()];
     if matches!(at, EnvAt::Recolor) {
         out.push(RECOLOR_PIXEL_WGSL.trim().to_string());
     }
@@ -1266,7 +1266,7 @@ fn with_solid(template: String, on: bool) -> String {
         let indent = &line[..line.len() - line.trim_start().len()];
         if line.trim_start().starts_with("let raw = coloring_map(") {
             out.push(line.to_string());
-            out.push(format!("{indent}let esc_solid_px = {};", crate::escape::lang::wgsl::SOLID_FLAG));
+            out.push(format!("{indent}let esc_solid_px = {};", crate::lang::wgsl::SOLID_FLAG));
         } else if line.trim() == "coverage = 1.0;" {
             out.push(format!("{indent}coverage = select(1.0, 0.0, esc_solid_px);"));
         } else {
@@ -5970,7 +5970,7 @@ pub fn assemble_perturbed_full(
                     out.push(custom_pass_wgsl(tier, f.name));
                     // The deep rung's own form of its equations.
                     if floatexp {
-                        out.push(crate::escape::lang::wgsl::PERTURB_FE_HELPERS.trim().to_string());
+                        out.push(crate::lang::wgsl::PERTURB_FE_HELPERS.trim().to_string());
                         out.push(crate::escape::custom::perturb_fe_wgsl(f.name).unwrap_or_default().to_string());
                     }
                 }
@@ -9872,7 +9872,7 @@ mod tests {
             ),
         ] {
             let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into(), variations: Vec::new() };
-            let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            let name = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             let f = crate::escape::custom::compile_formula(&src, &name).expect("compiles");
             for (analytic, orbits) in [
                 (true, ReliefOrbits::None),
@@ -10410,7 +10410,7 @@ mod tests {
         let total: String = (0..floats).map(|i| format!(" + s{i}")).collect();
         let source = format!("W {{\ninit:\n{decls}loop:\n{sums}final:\n #index = 0{total}\n}}");
         let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: "W".into(), source, variations: Vec::new() };
-        let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Coloring, &src);
+        let name = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
         let def = crate::escape::custom::compile_coloring(&src, &name).expect("compiles");
         let want = if floats <= 4 { AccumWidth::Wide } else { AccumWidth::Extended((floats - 4).div_ceil(4)) };
         assert_eq!(crate::escape::accum_width(def), want, "{floats} floats");
@@ -10451,7 +10451,7 @@ mod tests {
               default:\n func fn1\n  default = sin()\n endfunc\n}", true),
         ] {
             let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: source[..2].into(), source: source.into(), variations: Vec::new() };
-            let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            let name = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             crate::escape::custom::compile_formula(&src, &name).expect("compiles");
             let hash = u64::from_str_radix(&name[crate::escape::custom::PREFIX.len()..], 16).unwrap();
             let tier = PerturbTier::Custom { hash, rebase, stride: 1, width: 1, deep: false, margin: false, pair: false };
@@ -10505,9 +10505,9 @@ mod tests {
         }
         // A hybrid: a reference per phase, interleaved; the pixel steps
         // along its reference and rebases at its own phase.
-        for (name, h) in crate::escape::lang::hybrid::presets().into_iter().filter(|(_, h)| h.groups.len() > 1) {
+        for (name, h) in crate::lang::hybrid::presets().into_iter().filter(|(_, h)| h.groups.len() > 1) {
             let src = CustomSource { dialect: CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json(), variations: Vec::new() };
-            let formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            let formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             crate::escape::custom::compile_formula(&src, &formula).expect("compiles");
             let cycle = crate::escape::custom::cycle(&formula).expect("a cycle");
             assert_eq!(cycle, h.cycle(), "{name}");
@@ -10533,12 +10533,12 @@ mod tests {
             "NW {\ninit:\n z = #pixel\n zold = 0\nloop:\n zold = z\n z = z - (z^3 - 1) / (3 * z^2)\nbailout:\n |z - zold| > 1e-8\n}",
         ] {
             let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: source[..2].into(), source: source.into(), variations: Vec::new() };
-            let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            let name = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             crate::escape::custom::compile_formula(&src, &name).expect("compiles");
-            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, &src).unwrap();
-            let derived = crate::escape::lang::delta::with_derived_equations(&prog).expect("derived");
+            let prog = crate::escape::custom::check_entry(crate::lang::EntryKind::Formula, &src).unwrap();
+            let derived = crate::lang::delta::with_derived_equations(&prog).expect("derived");
             assert_eq!(derived.carried.len(), 1, "{}", &source[..2]);
-            let how = crate::escape::lang::perturb::perturbation(&derived).expect("perturbs");
+            let how = crate::lang::perturb::perturbation(&derived).expect("perturbs");
             assert!(how.rebase, "{}: what it carries rebases", &source[..2]);
             let hash = u64::from_str_radix(&name[crate::escape::custom::PREFIX.len()..], 16).unwrap();
             let tier = PerturbTier::Custom { hash, rebase: true, stride: 1, width: 2, deep: false, margin: false, pair: true };

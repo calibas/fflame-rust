@@ -48,9 +48,67 @@ impl App {
             return;
         };
 
-        for name in fresh {
+        self.fetch_effects(fresh, token);
+    }
+
+    /// Re-fetch downloaded effects the catalog says are stale: the path
+    /// that installs, as the variations' update is (`register_from_api`
+    /// replaces a download, the cache write overwrites).
+    pub(super) fn handle_effect_updates(&mut self, ui_response: &crate::ui::UiResponse) {
+        if ui_response.effect_update_requested.is_empty() {
+            return;
+        }
+        if !self.config_manager.system_settings().online_mode {
+            self.egui_layer.show_api_notification(&rust_i18n::t!("api.online_features_off"), true);
+            return;
+        }
+        let Some(token) = self.config_manager.system_settings().get_auth_token() else {
+            self.egui_layer.show_api_notification(&rust_i18n::t!("api.effect_update_needs_sign_in"), true);
+            return;
+        };
+        // Only a download can be updated: a built-in cannot be replaced,
+        // and one of the user's is theirs.
+        let names: Vec<String> = {
+            let registry = crate::effects::global_effect_registry();
+            ui_response
+                .effect_update_requested
+                .iter()
+                .filter(|n| registry.get(n).is_none_or(|i| i.provenance.is_cached_download()))
+                .cloned()
+                .collect()
+        };
+        self.fetch_effects(names, token);
+    }
+
+    /// The Effects panel's Clear Cache: the cached downloads and the
+    /// catalog, as the variations' does; a flame using one fetches it
+    /// again.
+    pub(super) fn handle_clear_effect_cache(&mut self, ui_response: &crate::ui::UiResponse) {
+        if !ui_response.clear_effect_cache_requested {
+            return;
+        }
+        let _ = crate::storage::effect_catalog::clear();
+        self.effect_catalog = None;
+        self.effect_catalog_started = false;
+        self.effect_fetch_attempted.clear();
+        match crate::storage::effect_cache::clear_all() {
+            Ok(count) => {
+                crate::effects::global_effect_registry_mut().clear_api();
+                self.egui_layer.show_api_notification(&rust_i18n::t!("api.effect_cache_cleared", count = count), false);
+            }
+            Err(e) => {
+                log::error!("Failed to clear the effect cache: {e}");
+                self.egui_layer.show_api_notification(&rust_i18n::t!("api.effect_cache_clear_failed", error = e.to_string()), true);
+            }
+        }
+    }
+
+    /// Fetch effects from the API in the background, each result folded
+    /// in by `poll_effect_fetches`.
+    fn fetch_effects(&mut self, names: Vec<String>, token: String) {
+        for name in names {
             self.effect_fetch_attempted.insert(name.clone());
-            log::info!("Fetching unknown effect `{name}` from the API");
+            log::info!("Fetching effect `{name}` from the API");
 
             let slot = self.effect_fetch_results.clone();
             let window = self.window.clone();

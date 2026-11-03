@@ -40,6 +40,9 @@ pub mod assembler;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod app_repro_test;
 pub mod colorings;
+/// Simulation colourings written in Rhai (P4).
+#[cfg(feature = "lang")]
+pub mod custom;
 pub mod fft;
 pub mod models;
 pub mod renderer;
@@ -324,43 +327,6 @@ pub fn pyramid_reach(grid_w: u32, grid_h: u32) -> f32 {
     (1u32 << top) as f32 / 0.55
 }
 
-/// A model's parameter TABLE: rows of the same columns, drawn by the
-/// panel as a grid rather than a slider each (mccabe-multiscale plan,
-/// section 3). Row `i`'s column `c` is the ordinary parameter
-/// `s{i}_{c}`, so presets, scripts and the config see plain names.
-pub struct ParamTable {
-    /// The model it belongs to.
-    pub model: &'static str,
-    /// The parameter choosing the generated layout (0) or the table (1).
-    pub mode_param: &'static str,
-    /// The parameter saying how many rows are live.
-    pub rows_param: &'static str,
-    /// Rows the table has.
-    pub rows: usize,
-    /// Column suffixes, in the order they are drawn.
-    pub columns: &'static [&'static str],
-    /// Parameters only the generated layout reads: hidden in table mode.
-    pub generator_params: &'static [&'static str],
-    /// The table the generator makes from these parameters. Switching
-    /// to the table writes it, so the switch changes nothing on screen.
-    pub fill: fn(&std::collections::BTreeMap<String, f32>) -> Vec<(String, f32)>,
-    /// Whether the panel draws a column at these parameters: a column
-    /// that does nothing in some mode is hidden there.
-    pub shows_column: fn(&std::collections::BTreeMap<String, f32>, &str) -> bool,
-}
-
-impl ParamTable {
-    /// The parameter name of row `row`, column `col`.
-    pub fn cell(&self, row: usize, col: &str) -> String {
-        format!("s{row}_{col}")
-    }
-
-    /// Whether `name` is one of this table's cells.
-    pub fn is_cell(&self, name: &str) -> bool {
-        (0..self.rows).any(|r| self.columns.iter().any(|c| self.cell(r, c) == name))
-    }
-}
-
 /// A model's per-scale WARPS (mccabe-multiscale plan, section 10): row
 /// `i`'s `s{i}_warp_{zoom,rotation,pan_x,pan_y,flow}` -- the field warp's
 /// five rates, applied to where scale `i` reads its averages. The Warp
@@ -413,12 +379,15 @@ pub static SCALE_WARPS: &[&ScaleWarps] = &[&models::MCCABE_WARPS];
 
 /// The per-scale warps of `model`, if it has them.
 pub fn scale_warps(model: &str) -> Option<&'static ScaleWarps> {
+    // A Rhai model's `INFO.scale_warps` (P4 step 9c).
+    #[cfg(feature = "lang")]
+    if model.starts_with(custom::PREFIX) {
+        return custom::scale_warps(model);
+    }
     SCALE_WARPS.iter().copied().find(|w| w.model == model)
 }
 
-/// Every model's table. Few models have one, so this is a list beside
-/// the registry rather than a field on every `ModelDef`.
-pub static PARAM_TABLES: &[&ParamTable] = &[&models::MCCABE_TABLE];
+
 
 /// The discs of `model`'s scales at these parameters, for the spectral
 /// stage, or `None` for a model it does not serve. McCabe is the only
@@ -430,13 +399,27 @@ pub fn spectral_scales(
     match model {
         "mccabe" => Some(models::mccabe_scale_discs(params)),
         "smoothlife" => Some(models::smoothlife_discs(params)),
+        // A Rhai model's `fn discs(p)` (P4 step 9b).
+        #[cfg(feature = "lang")]
+        name if name.starts_with(custom::PREFIX) => custom::discs(name, params),
         _ => None,
     }
 }
 
-/// The table of `model`, if it has one.
-pub fn param_table(model: &str) -> Option<&'static ParamTable> {
-    PARAM_TABLES.iter().copied().find(|t| t.model == model)
+/// The parameter layout of `model` beyond its list -- conditions and
+/// grids (`param_layout`; rhai-plugins P7) -- if it has one: a built-in's
+/// in Rust (few have one, so a match beside the registry rather than a
+/// field on every `ModelDef`), a Rhai model's from its `PARAMS`.
+pub fn param_layout(model: &str) -> Option<std::sync::Arc<crate::param_layout::ParamLayout>> {
+    // A Rhai model's or colouring's (both named `custom-`).
+    #[cfg(feature = "lang")]
+    if model.starts_with(custom::PREFIX) {
+        return custom::param_layout(model);
+    }
+    match model {
+        "mccabe" => Some(models::mccabe_layout()),
+        _ => None,
+    }
 }
 
 /// Slots in the min/max ring: one per step of the largest batch, plus
@@ -613,6 +596,11 @@ pub struct Params<'a> {
 }
 
 impl Params<'_> {
+    /// The model whose parameters these are.
+    pub fn model(&self) -> &ModelDef {
+        self.model
+    }
+
     /// The value in force for `name`. A parameter the model does not
     /// declare reads 0.0, which is a programming error rather than a
     /// state a config can reach -- the registry's invariant tests
@@ -1032,6 +1020,7 @@ impl SimLayeredPreset {
                 model: (*m).to_string(),
                 model_params: ps.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
                 enabled: true,
+                custom_model: None,
             })
             .collect();
         sim.couplings = self
@@ -1065,6 +1054,7 @@ impl SimLayeredPreset {
                 blend,
                 opacity,
                 enabled: true,
+                custom_coloring: None,
             })
             .collect();
         sim.warp = Default::default();
@@ -1288,10 +1278,21 @@ pub const SLOW_PARAMS: &[(&str, &str)] = &[
 
 /// Whether `param` of the model `model` is slow ([`SLOW_PARAMS`]).
 pub fn is_slow_param(model: &str, param: &str) -> bool {
+    // A Rhai model's `INFO.slow`.
+    #[cfg(feature = "lang")]
+    if model.starts_with(custom::PREFIX) {
+        return custom::is_slow_param(model, param);
+    }
     SLOW_PARAMS.iter().any(|&(m, p)| m == model && p == param)
 }
 
 pub fn model_or_default(name: &str) -> &'static ModelDef {
+    // One written in Rhai, registered from the config that carries it
+    // (P4).
+    #[cfg(feature = "lang")]
+    if let Some(def) = custom::model(name) {
+        return def;
+    }
     MODELS.iter().copied().find(|m| m.name == name).unwrap_or_else(|| {
         log::warn!("unknown simulation model {name:?}; using {:?}", MODELS[0].name);
         MODELS[0]
@@ -1299,6 +1300,12 @@ pub fn model_or_default(name: &str) -> &'static ModelDef {
 }
 
 pub fn coloring_or_default(name: &str) -> &'static SimColoringDef {
+    // One written in Rhai, registered from the config that carries it
+    // (P4).
+    #[cfg(feature = "lang")]
+    if let Some(def) = custom::coloring(name) {
+        return def;
+    }
     COLORINGS
         .iter()
         .copied()
@@ -1689,6 +1696,9 @@ mod tests {
                 m.parameters.len(),
             );
         }
+        // A Rhai model's cap is the same room (P4 step 9c).
+        #[cfg(feature = "lang")]
+        assert_eq!(crate::lang::check::SIM_MODEL_PARAM_SLOTS, room, "the checker's cap on a model's parameters");
     }
 
     /// A model that keeps a memory turns it on with a `memory`

@@ -222,7 +222,7 @@ The choices:
 | Panel | Choices that enter the mode |
 |---|---|
 | Escape | the formula picker and the preset it lands on, Preset, the colouring pickers, Edit as Formula |
-| Simulation | the model picker, its presets, Layered Presets |
+| Simulation | the model picker, its presets, Layered Presets, Rhai (Edit as Rhai, a model's or a colouring's) |
 | Formula Editor | Use as Formula, Use as Coloring, Use as Solid (Escape; a colouring is drawn over the escape formula the config has) |
 | Hybrid Designer | Use, Use Preset (a structural edit of the hybrid in use re-applies it without entering) |
 | Textures | picking a texture (Clear does not) |

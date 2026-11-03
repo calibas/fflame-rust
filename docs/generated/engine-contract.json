@@ -295,7 +295,8 @@
     },
     "kinds": [
       "generator",
-      "modifier"
+      "modifier",
+      "library"
     ]
   },
   "shape": "23a163e0bf37ffe9",
