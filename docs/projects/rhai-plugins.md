@@ -759,9 +759,10 @@ nested loops and neighbour reads at loop offsets already work.
      `launch_gap`'s (`mparam(2u)`, `mparam(3u)`), swapped since it was
      written; the twin follows the built-in. Not fixed: correcting it
      moves every DLA picture and the preset's tuning (the user's call).
-     **All 31 models now have twins.** Open: a twin carries no `SLOW_PARAMS`
-     entry (Physarum's population commits on every drag frame) and no
-     per-scale table grid (P7).
+     **All 31 models now have twins.** A script marks its slow
+     parameters, `INFO.slow` (the built-ins' `SLOW_PARAMS`), so the four
+     twins with one commit them when a drag ends. Open: McCabe's
+     per-scale table grid is the built-in's alone (P7).
 
 ### P5. Animation tracks as scripts
 

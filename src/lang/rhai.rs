@@ -1136,6 +1136,13 @@ impl<'s> Lowerer<'s> {
                     Expr::Array(items, _) if items.iter().all(|i| matches!(i, Expr::StringConstant(..))) => {}
                     _ => return self.err(*p, "`diffusion` is a list of the parameters that are diffusion rates, `[\"diffusion_a\"]`"),
                 },
+                // The parameters whose every value is a slow step (a kernel's
+                // radius, an agent count): the panel commits them when a
+                // drag ends, as `sim::SLOW_PARAMS` marks the built-ins'.
+                "slow" if self.sim_model => match v {
+                    Expr::Array(items, _) if items.iter().all(|i| matches!(i, Expr::StringConstant(..))) => {}
+                    _ => return self.err(*p, "`slow` is a list of the parameters that make a step slow, committed when a drag ends: `[\"radius\"]`"),
+                },
                 "state" if self.sim_model => match v {
                     Expr::StringConstant(s, _) if matches!(s.as_str(), "continuous" | "discrete") => {}
                     _ => return self.err(*p, "`state` is \"continuous\" (interpolated into a new grid) or \"discrete\" (the nearest cell)"),
@@ -1180,7 +1187,7 @@ impl<'s> Lowerer<'s> {
                         *p,
                         format!(
                             "a simulation model's `INFO` has `title`, `id`, `description`, `author`, `dt`, `max_dt`, `steps`, `diffusion`, `state`, \
-                             `time_step`, `settles`, `presets`, `repeat`, `publishes_signal`, `measure` and `scale_warps`, not `{o}`"
+                             `time_step`, `settles`, `presets`, `repeat`, `publishes_signal`, `measure`, `scale_warps` and `slow`, not `{o}`"
                         ),
                     )
                 }

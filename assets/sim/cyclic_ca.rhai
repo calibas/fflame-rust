@@ -37,6 +37,7 @@ const INFO = #{
     state: "discrete",
     time_step: false,
     settles: false,
+    slow: ["range"],
     presets: [
         #{
             name: "spirals_1_1_14",

@@ -1306,6 +1306,11 @@ pub const SLOW_PARAMS: &[(&str, &str)] = &[
 
 /// Whether `param` of the model `model` is slow ([`SLOW_PARAMS`]).
 pub fn is_slow_param(model: &str, param: &str) -> bool {
+    // A Rhai model's `INFO.slow`.
+    #[cfg(feature = "lang")]
+    if model.starts_with(custom::PREFIX) {
+        return custom::is_slow_param(model, param);
+    }
     SLOW_PARAMS.iter().any(|&(m, p)| m == model && p == param)
 }
 

@@ -35,6 +35,7 @@ const INFO = #{
     max_dt: 0.5,
     steps: 600,
     settles: false,
+    slow: ["radius"],
     presets: [
         #{
             name: "soup",

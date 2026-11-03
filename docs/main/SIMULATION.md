@@ -838,8 +838,10 @@ any model the built-ins are, each of the 31 with a twin.
   serde; and `repeat: #{ pass: 2, param: "relax" }`, a pass run that
   parameter's number of times a step (up to `MAX_INNER_ITERATIONS`),
   passes numbered as the functions are (`cell_step` is 1); `measure`
-  and `scale_warps` (above). `agents` is refused until P4 step 9d gives
-  agents their functions.
+  and `scale_warps` (above); `slow: ["radius"]`, the parameters whose
+  every value is a slow step, which the panel commits when a drag ends
+  (`SLOW_PARAMS` for a built-in). `agents` is refused: a model's agents
+  are its functions (below).
 - **Its own stable time step**: `fn max_dt(p)`, the bound at the
   parameters in force, which a built-in writes as a `dt_bound` closure.
   It runs on the CPU as plain Rhai (the core language, its maths and

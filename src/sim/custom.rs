@@ -59,6 +59,8 @@ struct Registry {
     /// The models with per-scale warps (`INFO.scale_warps`), by name (P4
     /// step 9c).
     warps: HashMap<String, &'static super::ScaleWarps>,
+    /// The models' slow parameters (`INFO.slow`), by name.
+    slow: HashMap<String, Vec<String>>,
 }
 
 fn registry() -> &'static RwLock<Registry> {
@@ -472,6 +474,12 @@ impl Clone for super::SimKernel {
     }
 }
 
+/// Whether `param` of the Rhai model `name` is slow (`INFO.slow`): what
+/// `sim::SLOW_PARAMS` says of a built-in's.
+pub fn is_slow_param(name: &str, param: &str) -> bool {
+    registry().read().is_ok_and(|r| r.slow.get(name).is_some_and(|s| s.iter().any(|p| p == param)))
+}
+
 /// The per-scale warps of a Rhai model with `INFO.scale_warps` (P4 step
 /// 9c).
 pub fn scale_warps(name: &str) -> Option<&'static super::ScaleWarps> {
@@ -775,6 +783,11 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         }
         Some(_) => return Err("`INFO.measure` is `#{ param, slices }`".to_string()),
     };
+    for s in lang::rhai::info_strings(source, "slow") {
+        if !parameters.iter().any(|p| p.name == s) {
+            return Err(format!("`INFO.slow` names `{s}`, which is not in `PARAMS`"));
+        }
+    }
     if measure.is_none() && wgsl.contains("sim_scratch_") {
         return Err("the step reads a measure pass's scratch (`scratch`, `ctx.scratch_on`): it needs `INFO.measure`".to_string());
     }
@@ -854,6 +867,7 @@ pub fn register_model_as(source: &str, name: &str) -> Result<(), String> {
             Some(w) => r.warps.insert(name.to_string(), w),
             None => r.warps.remove(name),
         };
+        r.slow.insert(name.to_string(), lang::rhai::info_strings(source, "slow"));
     }
     Ok(())
 }
@@ -978,6 +992,7 @@ fn cell_step2(cell, p, ctx) {
             (format!("{params}{measure}{}", steps.replace("pyr_sample(0.0,", "pyr_diff(0,")), "fn discs(p)"),
             (format!("{params}{}{steps}", measure.replace("\"variation\"", "\"radius\"")), "names a parameter"),
             (format!("{params}{}{steps}", measure.replace("measure:", "scale_warps: #{ rows_param: \"variation\", rows: 1 }, measure:")), "needs `s0_warp_zoom`"),
+            (format!("{params}{}{steps}", measure.replace("measure:", "slow: [\"nope\"], measure:")), "`INFO.slow` names `nope`"),
             (format!("{params}{measure}{steps}fn cell_seed(inside, noise, p, ctx) {{ write_memory(0, rgba(0.0, 0.0, 0.0, 0.0)); rgba(inside, 0.0, 0.0, 0.0) }}
 "), "a step's"),
         ] {
@@ -1242,6 +1257,10 @@ fn agent_count(p, w, h) { to_float(w * h) * p.amount }
         if let Some(w) = super::super::scale_warps(m.name) {
             let _ = writeln!(s, "    scale_warps: #{{ rows_param: {:?}, rows: {} }},", w.rows_param, w.rows);
         }
+        let slow: Vec<&str> = super::super::SLOW_PARAMS.iter().filter(|(model, _)| *model == m.name).map(|(_, p)| *p).collect();
+        if !slow.is_empty() {
+            let _ = writeln!(s, "    slow: {},", rhai_literal(&serde_json::json!(slow)));
+        }
         if !m.presets.is_empty() {
             let _ = writeln!(s, "    presets: [");
             for p in m.presets {
@@ -1310,6 +1329,9 @@ fn agent_count(p, w, h) { to_float(w * h) * p.amount }
             assert_eq!(passes(twin), passes(builtin), "{name}: its passes");
             let warps = |m: &str| super::super::scale_warps(m).map(|w| (w.rows_param, w.rows));
             assert_eq!(warps(&key), warps(name), "{name}: its per-scale warps");
+            for p in builtin.parameters {
+                assert_eq!(super::super::is_slow_param(&key, p.name), super::super::is_slow_param(name, p.name), "{name}.{}: slow", p.name);
+            }
             // Its agents (P4 step 9d): their passes, and their number at
             // the defaults and at each preset, on a few grids.
             assert_eq!(twin.agents.map(|a| a.passes), builtin.agents.map(|a| a.passes), "{name}: its agents' passes");
