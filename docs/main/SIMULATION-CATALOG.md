@@ -1645,13 +1645,19 @@ Boundary Clamp.
   that reaches the wall densifies at the rim and reads 1.79, and the
   test asserts the cluster stayed clear of the walls before believing
   the number.
-- **Found 2026-11-03, not fixed** (porting the Rhai twin, rhai-plugins
-  P4 step 9d): the shader reads the launch gap from `crowding`'s slot
-  and the crowding from `launch_gap`'s (`mparam(2u)` and `mparam(3u)`;
-  the parameters are walkers, p_stick, crowding, launch_gap). So
-  everything measured above ran with a launch gap of 2 and five walkers
-  per cell of circumference, the sliders each moving the other's knob.
-  Correcting it moves every DLA picture and the preset's tuning.
+- **Found and fixed 2026-11-03** (porting the Rhai twin, rhai-plugins
+  P4 step 9d): the shader read the launch gap from `crowding`'s slot and
+  the crowding from `launch_gap`'s (`mparam(2u)` and `mparam(3u)`; the
+  parameters are walkers, p_stick, crowding, launch_gap), since it was
+  written. So everything measured above ran with a launch gap of 2 and
+  five walkers per cell of circumference, the sliders each moving the
+  other's knob. Each is read from its own slot now, and the defaults,
+  the preset and every saved setup -- the bundled presets, the visual
+  suite's five -- hold the values that were in effect, crowding 5 and
+  launch gap 2: every picture is as it was (the gate above measures
+  the same 1.753 at the same radius), and the sliders move what they
+  name. DLA had not been released, so no user's file holds the old
+  meaning.
 
 ---
 

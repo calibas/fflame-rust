@@ -9827,8 +9827,8 @@
       "model_params": {
         "walkers": 4.0,
         "p_stick": 1.0,
-        "crowding": 2.0,
-        "launch_gap": 5.0
+        "crowding": 5.0,
+        "launch_gap": 2.0
       },
       "matte": {
         "channel": "x",

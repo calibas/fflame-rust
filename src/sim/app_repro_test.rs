@@ -4829,8 +4829,8 @@ fn dla_grows_a_cluster_of_the_right_fractal_dimension() {
     cfg.seed = 3;
     cfg.model_params.insert("walkers".into(), 4.0);
     cfg.model_params.insert("p_stick".into(), 1.0);
-    cfg.model_params.insert("crowding".into(), 2.0);
-    cfg.model_params.insert("launch_gap".into(), 5.0);
+    cfg.model_params.insert("crowding".into(), 5.0);
+    cfg.model_params.insert("launch_gap".into(), 2.0);
 
     let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
     r.seed(&device, &queue, &cfg);
