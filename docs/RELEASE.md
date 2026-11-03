@@ -90,12 +90,12 @@ python scripts/release.py check --fix    # ...and regenerate the generated files
 The gates, in order: every version agrees (§1), unit tests
 (`cargo test --release --lib`), the library compiled for
 `wasm32-unknown-unknown`, the generated contract, the shader dumps, doc
-links, and the five gallery crates' test suites (`wasm/script` parity,
-`wasm/render` smoke, and the `wasm/sim`, `wasm/escape` and `wasm/flame`
-smoke tests). The last three are also the engine feature matrix: each
-builds the library with only `engine-sim`, only `engine-escape` or only
-`engine-flame`. The commands are in
-[TESTING-GUIDE.md §2](TESTING-GUIDE.md).
+links, and the gallery modules: one incremental `cargo check` of all
+five gallery crates and their tests, each at its own feature set, which
+is the engine feature matrix (`wasm/flame`, `wasm/escape` and `wasm/sim`
+build the library with one engine each). The gallery crates' own test
+runs are `python scripts/release.py gallery`, before the modules deploy.
+The commands are in [TESTING-GUIDE.md §2](TESTING-GUIDE.md).
 
 **Nothing runs on push, on commit, or on a timer.** That is deliberate:
 the work CI would do is worth automating, the *triggering* is what gets
@@ -658,18 +658,22 @@ own `wasm-opt`, so binaryen need not be on PATH. The
 `Cargo.toml` are load-bearing: the bundled wasm-opt 117 predates
 rustc's bulk-memory default and rejects the module without them.
 
-**Gated.** `release.py check` runs all five crates' test suites
-(`gallery script parity`, `gallery renderer smoke`, `gallery sim
-smoke`, `gallery escape smoke`, `gallery flame smoke`) — the CLI-parity
-fixtures §6 names as the guard for `script + seed` reproducibility run
-in every check. The single-engine crates' smoke tests
-(`wasm/flame/tests/flame_smoke.rs`, `wasm/escape/tests/escape_smoke.rs`,
-`wasm/sim/tests/sim_smoke.rs`) assert the dropped engines really are
-gone, and building them is also the engine feature matrix: they replaced
-three `cargo check --lib --no-default-features --features engine-X`
-gates, at the cost of codegen instead of a check (the comment above
-`GATES` in `release.py` has the estimate). The renderer smoke tests skip
-cleanly on a machine with no GPU adapter. To run one by hand:
+**Gated.** `release.py check` checks all five crates and their tests,
+each at its own feature set (`gallery modules`: incremental, 14-15s
+after an edit, 3s with none). That is the engine feature matrix, and it
+evaluates the compile-time assertion that the flame catalog is whole
+with `engine-flame` and `linear` alone without (`variations::defs`). The
+CLI-parity fixtures §6 names as the guard for `script + seed`
+reproducibility are compared in the main suite too
+(`shipped_scripts_give_the_clis_flames_for_their_seeds`), so every check
+runs them. The crates' own test runs -- compiling the library at four
+feature sets with codegen, 7 minutes, which is why they left `check` on
+2026-11-03 -- are `python scripts/release.py gallery`, run before the
+modules deploy: the script module's parity (its parameters and
+envelope), the renderer's clamps and device reuse, each single-engine
+module rendering on the GPU and refusing a config of an engine it lacks.
+The GPU tests skip cleanly on a machine with no adapter. To run one by
+hand:
 
 ```bash
 cd wasm/script && cargo test --profile gallery-test   # byte-identical flames

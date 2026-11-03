@@ -4922,3 +4922,46 @@ fn a_script_function_becomes_a_formula() {
     let e = run(r#"escape.formula_fn("nothing");"#, 3).err().expect("no such function throws");
     assert!(format!("{e:?}").contains("no function `nothing(z, c)`"), "{e:?}");
 }
+
+/// Script + seed is a shareable artifact (the module comment), pinned to
+/// the bytes the `generate` CLI wrote for the gallery's script module
+/// (`wasm/script/tests/fixtures`): the shipped scripts under the CLI's
+/// host -- the palette library and the shipped script library -- give
+/// the committed flames, a generator, a modifier on a base and a choice
+/// parameter. The main suite holds this so every check does; the
+/// module's own parity tests, which also cover its parameter parsing
+/// and envelope, run before the gallery modules deploy
+/// (`release.py gallery`). Compared as values: a config's text orders
+/// its maps by hash.
+#[test]
+fn shipped_scripts_give_the_clis_flames_for_their_seeds() {
+    use crate::scene::palette::PaletteLibrary;
+    let host = ScriptHost::with_palettes(PaletteLibrary::new().iter().cloned().collect()).with_scripts(super::library::sources());
+    let value = |json: &str| serde_json::from_str::<serde_json::Value>(json).expect("a config");
+    let flame = |source: &str, seed: u64, base: Option<&str>, choice: Option<(&str, &str)>| {
+        let base = base.map_or_else(FractalConfig::default, |b| FractalConfig::from_json(b).expect("the base parses"));
+        let mut params = HashMap::new();
+        if let Some((key, option)) = choice {
+            let meta = host.collect(source, &base).expect("collects");
+            let index = meta
+                .params
+                .iter()
+                .find_map(|p| match p {
+                    ParamDecl::Choice { key: k, options, .. } if k == key => options.iter().position(|o| o.eq_ignore_ascii_case(option)),
+                    _ => None,
+                })
+                .expect("the option");
+            params.insert(key.to_string(), ParamValue::Choice(index));
+        }
+        let out = host.run(source, &base, seed, params).expect("runs");
+        value(&out.config.to_json().expect("serializes"))
+    };
+    let fixture = |name: &str| std::fs::read_to_string(format!("{}/wasm/script/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).expect("the fixture");
+    let basic = include_str!("../../assets/scripts/generators/basic_random.rhai");
+    let jitter = include_str!("../../assets/scripts/modifiers/jitter.rhai");
+    let lsystem = include_str!("../../assets/scripts/generators/lsystem.rhai");
+    let base = fixture("basic_random_seed7.fflame");
+    assert_eq!(flame(basic, 7, None, None), value(&base), "basic_random, seed 7");
+    assert_eq!(flame(jitter, 7, Some(&base), None), value(&fixture("basic_random_seed7_jitter.fflame")), "jitter on it, seed 7");
+    assert_eq!(flame(lsystem, 3, None, Some(("preset", "2D · Koch snowflake"))), value(&fixture("lsystem_koch_seed3.fflame")), "lsystem's Koch snowflake, seed 3");
+}

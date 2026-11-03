@@ -3,6 +3,7 @@
 
     python scripts/release.py check              # run every gate
     python scripts/release.py check --fix        # ...and regenerate what is stale
+    python scripts/release.py gallery            # the gallery modules' own tests, before they deploy
     python scripts/release.py changelog          # from git, since the last tag
     python scripts/release.py build              # every shipping artifact
     python scripts/release.py version 0.5.0      # bump every version together
@@ -143,71 +144,111 @@ GATES = [
          why="generated WGSL changed"),
     Gate("doc links", [sys.executable, "scripts/check_doc_links.py"],
          why="live docs pointing nowhere"),
-    # The gallery crates. wasm/script's CLI-parity fixtures are the
-    # guard for "script + seed reproduces a flame byte-for-byte" — the
-    # public determinism promise — and until now ran in no automated
-    # step (RELEASE.md §5 said "run them by hand until that is fixed";
-    # this is the fix). wasm/render's smoke tests skip cleanly on a
-    # machine with no GPU adapter.
+    # The gallery modules: one check of all five crates, each at its own
+    # feature set -- render and script with every engine and no web app,
+    # flame, escape and sim with one engine each. That is the engine
+    # feature matrix, and it is not hypothetical: `render_sim` and
+    # `register_sim` both silently required the ESCAPE feature for
+    # months, because a doc comment was inserted between an escape
+    # item's `#[cfg]` and the item, leaving the attribute on the
+    # simulation item that followed. Nothing failed until the first
+    # build with simulation and no escape. Checking the crates rather
+    # than the library alone also compiles their own code and tests.
     #
-    # Run from the crate directory, NOT --manifest-path from the root:
-    # that is how cargo finds wasm/.cargo/config.toml, which shares one
-    # target directory between the gallery crates and drops the git
-    # provenance that used to invalidate them on every commit. And
-    # `--profile gallery-test`, not `--release`: the crates' own
-    # [profile.release] is tuned to ship a small .wasm (opt-level="z",
-    # fat LTO, one codegen unit), so testing under it spent minutes
-    # optimizing the parent crate for download size. Measured on the
-    # parent-crate-changed case: 178s -> 73s from the profile alone.
-    Gate("gallery script parity",
-         ["cargo", "test", "--profile", "gallery-test"],
-         cwd="wasm/script",
+    # A check, not the crates' test runs: those compile the library at
+    # four feature sets with codegen, 7 minutes a release check
+    # (2026-11-03: script parity 125s, renderer 12s, sim 100s, escape
+    # 103s, flame 93s). Incremental, the check is 14-15s after an edit
+    # and 3s with none. What their runs asserted is kept where it costs
+    # nothing:
+    # - the flame catalog present or gone: a compile-time assertion
+    #   (`variations::defs`), which this check evaluates per module;
+    # - script + seed reproducing the CLI's flames: the main suite
+    #   compares the same fixtures (`shipped_scripts_give_the_clis_
+    #   flames_for_their_seeds`);
+    # - the rest -- each module rendering on a GPU, the renderer's clamps
+    #   and device reuse, the script module's parameters and envelope --
+    #   runs before the modules deploy: `release.py gallery`.
+    Gate("gallery modules", lambda: gallery_compiles(),
+         why="each module at its own feature set: a cfg on the wrong item compiles everywhere else"),
+]
+
+# The gallery crates, each a workspace of its own sharing
+# wasm/target-gallery.
+GALLERY_CRATES = ["render", "script", "flame", "escape", "sim"]
+
+
+def gallery_compiles():
+    """Every gallery crate and its tests compile, at its own features.
+
+    Run from the crate directory, NOT --manifest-path from the root: that
+    is how cargo finds wasm/.cargo/config.toml, which shares one target
+    directory between the gallery crates and drops the git provenance
+    that used to invalidate them on every commit. Under `gallery-test`,
+    the profile the tests build with, and incremental -- the profile
+    inherits release, which turns it off, and a check without it redoes
+    the library's whole front end per crate (50s after an edit, against
+    14-15s with it)."""
+    for crate in GALLERY_CRATES:
+        ok, out = run(["cargo", "check", "--profile", "gallery-test", "--tests"],
+                      env={"CARGO_INCREMENTAL": "1"}, cwd=f"wasm/{crate}")
+        if not ok:
+            return False, f"wasm/{crate}:\n{out}"
+    return True, ""
+
+
+# The gallery modules' own tests, run before they deploy (`release.py
+# gallery`), not in every check: each compiles the library at its
+# module's feature set with codegen, a minute or two a crate. wasm/script's
+# CLI parity covers the module's parameters and envelope; wasm/render's
+# smoke tests its clamps and device reuse (a regression froze real
+# galleries once); the single-engine smoke tests render on the GPU and
+# refuse a config of an engine they lack. The GPU tests skip without an
+# adapter. `--profile gallery-test`, not `--release`: the crates' own
+# [profile.release] is tuned to ship a small .wasm (opt-level="z", fat
+# LTO, one codegen unit), and testing under it spent minutes optimizing
+# the parent crate for download size (178s -> 73s from the profile).
+GALLERY_TESTS = [
+    Gate("gallery script parity", ["cargo", "test", "--profile", "gallery-test"], cwd="wasm/script",
          why="script + seed is a shareable artifact; drift redefines every published seed"),
-    Gate("gallery renderer smoke",
-         ["cargo", "test", "--profile", "gallery-test"],
-         cwd="wasm/render",
+    Gate("gallery renderer smoke", ["cargo", "test", "--profile", "gallery-test"], cwd="wasm/render",
          why="the device-reuse regression froze real galleries once already"),
-    # The single-engine modules, which are also the engine feature
-    # matrix. wasm/escape, wasm/flame and wasm/sim each link the
-    # library with default-features off and ONE engine on, and a
-    # `#[cfg]` that drifted off its item is invisible in every other
-    # build. That is not hypothetical: `render_sim` and `register_sim`
-    # both silently required the ESCAPE feature for months, because a
-    # doc comment was inserted between an escape item's `#[cfg]` and
-    # the item, leaving the attribute on the simulation item that
-    # followed. Nothing failed until the first build with simulation
-    # and no escape.
-    #
-    # These were `cargo check --lib --no-default-features --features
-    # engine-X` from the root (~20 s each), which catches that bug
-    # class but left the crates' own smoke tests running nowhere — and
-    # those are the only check that the dropped engines really are gone
-    # (the point of the crates) and that the module still renders. A
-    # test build compiles the library at exactly the same feature set,
-    # so it replaces the check rather than adding to it. The price is
-    # codegen instead of a check: estimated from wasm/render's 73 s
-    # above, about a minute more per crate when the parent crate
-    # changed (not measured for these three). The smoke tests skip
-    # without a GPU adapter.
-    Gate("gallery sim smoke",
-         ["cargo", "test", "--profile", "gallery-test"],
-         cwd="wasm/sim",
-         why="engine-sim alone: a cfg on the wrong item compiles everywhere else"),
-    Gate("gallery escape smoke",
-         ["cargo", "test", "--profile", "gallery-test"],
-         cwd="wasm/escape",
-         why="engine-escape alone, and the flame catalog must be gone"),
-    Gate("gallery flame smoke",
-         ["cargo", "test", "--profile", "gallery-test"],
-         cwd="wasm/flame",
-         why="engine-flame alone, and an escape config must be refused"),
+    Gate("gallery sim smoke", ["cargo", "test", "--profile", "gallery-test"], cwd="wasm/sim",
+         why="engine-sim alone renders, and refuses an escape config"),
+    Gate("gallery escape smoke", ["cargo", "test", "--profile", "gallery-test"], cwd="wasm/escape",
+         why="engine-escape alone renders"),
+    Gate("gallery flame smoke", ["cargo", "test", "--profile", "gallery-test"], cwd="wasm/flame",
+         why="engine-flame alone renders, and refuses an escape config"),
 ]
 
 
 def cmd_check(args):
     print(f"{BOLD}Gates{RESET}  {DIM}(nothing is fixed unless you pass --fix){RESET}\n")
+    if run_gates(GATES, args):
+        return 1
+    print(f"\n{GREEN}{BOLD}All gates pass.{RESET}")
+    print(f"{DIM}Not covered here — they need a GPU and a few minutes:{RESET}")
+    print(f"{DIM}  cargo build --release && python tests/visual/run_tests.py{RESET}")
+    print(f"{DIM}  python scripts/run_benchmarks.py --quick{RESET}")
+    print(f"{DIM}  cargo run --release --bin variation_probe   "
+          f"(regenerate if variation math changed){RESET}")
+    print(f"{DIM}  python scripts/release.py gallery   (before the gallery modules deploy){RESET}")
+    return 0
+
+
+def cmd_gallery(args):
+    print(f"{BOLD}Gallery modules' tests{RESET}  {DIM}(before they deploy){RESET}\n")
+    if run_gates(GALLERY_TESTS, args):
+        return 1
+    print(f"\n{GREEN}{BOLD}All gallery tests pass.{RESET}")
+    return 0
+
+
+def run_gates(gates, args):
+    """Run `gates` in order, fixing what `--fix` may; print each, and the
+    failures' output. Whether any failed."""
     failed = []
-    for g in GATES:
+    for g in gates:
         t0 = time.time()
         ok, out = g.cmd() if callable(g.cmd) else run(g.cmd, cwd=g.cwd)
         secs = time.time() - t0
@@ -238,15 +279,8 @@ def cmd_check(args):
             print(f"\n{BOLD}── {g.name}{RESET}")
             tail = [l for l in out.strip().split("\n") if l.strip()][-15:]
             print("\n".join("   " + l for l in tail))
-        return 1
-
-    print(f"\n{GREEN}{BOLD}All gates pass.{RESET}")
-    print(f"{DIM}Not covered here — they need a GPU and a few minutes:{RESET}")
-    print(f"{DIM}  cargo build --release && python tests/visual/run_tests.py{RESET}")
-    print(f"{DIM}  python scripts/run_benchmarks.py --quick{RESET}")
-    print(f"{DIM}  cargo run --release --bin variation_probe   "
-          f"(regenerate if variation math changed){RESET}")
-    return 0
+        return True
+    return False
 
 
 # ------------------------------------------------------------- changelog
@@ -511,6 +545,9 @@ def main():
     c.add_argument("--fix", action="store_true",
                    help="regenerate stale generated files (still read the diff)")
     c.set_defaults(fn=cmd_check)
+
+    gl = sub.add_parser("gallery", help="the gallery modules' own tests, before they deploy")
+    gl.set_defaults(fn=cmd_gallery, fix=False)
 
     g = sub.add_parser("changelog", help="generate from git history")
     g.add_argument("--since", help="tag or ref (default: last tag)")
