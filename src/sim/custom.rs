@@ -25,10 +25,26 @@ use crate::lang::{self, ir::ParamKind, EntryKind};
 /// What a registry name starts with when it names a compiled colouring.
 pub const PREFIX: &str = "custom-";
 
-/// The colourings that ship as Rhai, by the built-in each is the twin of:
-/// examples to open in the Formula Editor, each held to its built-in by a
-/// pixel compare (`the_rhai_channel_colours_as_the_built_in`).
-pub const SHIPPED: &[(&str, &str)] = &[("channel", include_str!("../../assets/sim/channel.rhai"))];
+/// The colourings that ship as Rhai, by the built-in each is the twin of
+/// (P4 step 7): every built-in, examples to open in the Formula Editor,
+/// each held to its built-in's settings
+/// (`every_colouring_twin_carries_its_built_ins_settings`) and picture
+/// (`the_rhai_colourings_colour_as_the_built_ins`).
+pub const SHIPPED: &[(&str, &str)] = &[
+    ("channel", include_str!("../../assets/sim/channel.rhai")),
+    ("two_channel", include_str!("../../assets/sim/two_channel.rhai")),
+    ("age", include_str!("../../assets/sim/age.rhai")),
+    ("label", include_str!("../../assets/sim/label.rhai")),
+    ("scale_mix", include_str!("../../assets/sim/scale_mix.rhai")),
+    ("occupancy", include_str!("../../assets/sim/occupancy.rhai")),
+    ("gradient", include_str!("../../assets/sim/gradient.rhai")),
+    ("structure", include_str!("../../assets/sim/structure.rhai")),
+    ("distance", include_str!("../../assets/sim/distance.rhai")),
+    ("lic", include_str!("../../assets/sim/lic.rhai")),
+    ("species", include_str!("../../assets/sim/species.rhai")),
+    ("scale_memory", include_str!("../../assets/sim/scale_memory.rhai")),
+    ("relief", include_str!("../../assets/sim/relief.rhai")),
+];
 
 #[derive(Default)]
 struct Registry {
@@ -838,6 +854,27 @@ mod tests {
         }
     }
 
+    /// Every shipped colouring twin carries its built-in's settings (P4
+    /// step 7): its parameters (names in slot order, labels, defaults,
+    /// ranges, choices), title, description and features.
+    #[test]
+    fn every_colouring_twin_carries_its_built_ins_settings() {
+        for (name, source) in SHIPPED {
+            let builtin = super::super::COLORINGS.iter().find(|c| c.name == *name).unwrap_or_else(|| panic!("`{name}` is a built-in"));
+            let twin = compile(source, &format!("custom-twin-{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let params = |c: &SimColoringDef| c.parameters.iter().map(|p| (p.name, p.display_name, p.default, p.min, p.max, p.tooltip, p.choices)).collect::<Vec<_>>();
+            assert_eq!(params(&twin), params(builtin), "{name}: parameters");
+            assert_eq!((twin.display_name, twin.description), (builtin.display_name, builtin.description), "{name}: labels");
+            let features = |c: &SimColoringDef| {
+                let mut f: Vec<String> = c.features.iter().map(|f| format!("{f:?}")).collect();
+                f.sort();
+                f
+            };
+            assert_eq!(features(&twin), features(builtin), "{name}: features");
+        }
+        assert_eq!(SHIPPED.len(), super::super::COLORINGS.len(), "every colouring has its twin");
+    }
+
     /// Write every in-class built-in model's skeleton and its WGSL to
     /// `output/sim-twins/` (P4 step 7): what a twin is written from.
     #[test]
@@ -849,6 +886,18 @@ mod tests {
             std::fs::write(dir.join(format!("{}.rhai", m.name)), skeleton(m)).unwrap();
             std::fs::write(dir.join(format!("{}.wgsl", m.name)), format!("{}\n// ---- seed\n{}", m.wgsl, m.wgsl_seed)).unwrap();
             println!("{}", m.name);
+        }
+        // The colourings: their parameters, title and description.
+        let dir = dir.join("colorings");
+        std::fs::create_dir_all(&dir).unwrap();
+        for c in super::super::COLORINGS {
+            let as_model = ModelDef { parameters: c.parameters, ..super::super::models::GRAY_SCOTT };
+            let params = skeleton(&as_model);
+            let params = &params[..params.find("const INFO").unwrap()];
+            let info = format!("const INFO = #{{\n    title: {:?},\n    id: {:?},\n    description: {:?},\n}};\n", c.display_name, c.name, c.description);
+            std::fs::write(dir.join(format!("{}.rhai", c.name)), format!("{params}{info}")).unwrap();
+            std::fs::write(dir.join(format!("{}.wgsl", c.name)), format!("// features: {:?}\n{}", c.features, c.wgsl)).unwrap();
+            println!("colouring {}", c.name);
         }
     }
 

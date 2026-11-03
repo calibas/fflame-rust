@@ -10,6 +10,7 @@ the built-ins'. Run from the repository root after the skeletons are
 written:
     cargo test --release --lib write_twin_skeletons -- --ignored
     python scripts/assemble_sim_twins.py [name ...]
+    python scripts/assemble_sim_twins.py --colorings [name ...]
 """
 
 import pathlib
@@ -31,7 +32,14 @@ def assemble(name):
 
 
 def main():
-    names = sys.argv[1:] or sorted(p.stem for p in FUNCTIONS.glob("*.rhai"))
+    global SKELETONS, FUNCTIONS
+    args = sys.argv[1:]
+    # The colourings' twins: their skeletons and functions beside the
+    # models'.
+    if args[:1] == ["--colorings"]:
+        args = args[1:]
+        SKELETONS, FUNCTIONS = SKELETONS / "colorings", SKELETONS / "fn-colorings"
+    names = args or sorted(p.stem for p in FUNCTIONS.glob("*.rhai"))
     for name in names:
         assemble(name)
     return 0
