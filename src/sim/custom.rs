@@ -110,6 +110,7 @@ pub fn compile(source: &str, name: &str) -> Result<SimColoringDef, String> {
         (wgsl.distance, ColoringFeature::NeedsDistance),
         (wgsl.relief, ColoringFeature::NeedsRelief),
         (wgsl.reads_cell, ColoringFeature::ReadsCell),
+        (wgsl.memory, ColoringFeature::ReadsMemory),
     ] {
         if on {
             features.push(f);
@@ -211,7 +212,9 @@ pub const SHIPPED_MODELS: &[(&str, &str)] = &[("gray_scott", include_str!("../..
 /// A model's source compiled to the definition it registers as, under
 /// `name`: each pass of its step (`cell_step`, `cell_step2` ...) and its
 /// seed (`cell_seed`; without one, the init shape in `.x`), its working
-/// values from `INFO` (`dt`, `max_dt`, `steps`, `diffusion`, `state`),
+/// values from `INFO` (`dt`, `max_dt`, `steps`, `diffusion`, `state`;
+/// `time_step: false` and `settles: false` its `NoTimeStep` and
+/// `NeverStills`),
 /// and `NeedsRng` when a pass draws. The single-layer class: no kernel
 /// table, no agents, no measure or repeated pass.
 pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
@@ -224,15 +227,6 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     };
     if lang::rhai::kind_of(source) != Some(EntryKind::SimModel) {
         return Err("a simulation model has `fn cell_step(cell, p)`".to_string());
-    }
-    // What the built-ins have and a script does not: asked for, a reason.
-    for key in ["kernel", "agents", "memory", "pyramid", "repeat", "measure", "presets"] {
-        if lang::rhai::info_has(source, key) {
-            return Err(format!(
-                "`INFO.{key}`: a model in Rhai is the single-layer class -- kernel tables, memory, the pyramid, agents, \
-                 repeated or measured passes and presets are the built-in models'"
-            ));
-        }
     }
     let passes = lang::rhai::sim_model_passes(source);
     let mut wgsl = String::new();
@@ -263,12 +257,25 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
             return Err(format!("`INFO.diffusion` names `{d}`, which is not in `PARAMS`"));
         }
     }
+    // What the panel and the export say of it (P4 step 5): a rule with no
+    // time step (a cellular automaton's generations), one that never
+    // settles.
+    let mut features = Vec::new();
+    for (on, f) in [
+        (rng, ModelFeature::NeedsRng),
+        (lang::rhai::info_bool(source, "time_step") == Some(false), ModelFeature::NoTimeStep),
+        (lang::rhai::info_bool(source, "settles") == Some(false), ModelFeature::NeverStills),
+    ] {
+        if on {
+            features.push(f);
+        }
+    }
     let def = ModelDef {
         name: leak(name),
         state: if lang::rhai::info_string(source, "state").as_deref() == Some("discrete") { StateKind::Discrete } else { StateKind::Continuous },
         display_name: leak(program.name.clone()),
         description: leak(lang::rhai::source_labels(source).map(|l| l.description.resolve()).unwrap_or_default()),
-        features: if rng { &[ModelFeature::NeedsRng] } else { &[] },
+        features: Box::leak(features.into_boxed_slice()),
         parameters: Box::leak(sim_params(&program)?.into_boxed_slice()),
         presets: &[],
         wgsl: leak(wgsl),
@@ -364,8 +371,6 @@ mod tests {
         let def = compile_model(two, "custom-two").unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(def.passes, 2);
         assert!(def.has(ModelFeature::NeedsRng));
-        let e = compile_model("fn cell_step(cell) { read(1, 0) }\nfn cell_seed(inside, noise) { vec4(rand(), 0.0, 0.0, 0.0) }\n", "custom-x").unwrap_err();
-        assert!(e.contains("noise"), "{e}");
         let e = compile_model("fn cell_step(cell) { read(1, 0) }\nfn cell_seed(inside, noise) { sin(noise) }\n", "custom-x").unwrap_err();
         assert!(e.contains("a number where a vector"), "{e}");
         let e = compile_model("const INFO = #{ agents: 1000 };\nfn cell_step(cell) { read(1, 0) }\n", "custom-x").unwrap_err();
@@ -386,6 +391,64 @@ mod tests {
         ensure(&sim);
         assert_eq!(super::super::coloring_or_default(&sim.coloring).name, sim.coloring);
         assert_eq!(super::super::model_or_default(&sim.model).name, sim.model);
+    }
+
+    /// The language the twins need (P4 step 5), each part in modules naga
+    /// validates (`compile_model`, `compile`) and visible in the WGSL: a
+    /// model's `rand(k)` on its stream, in the step and the seed, its seed
+    /// drawing and reading the init shape elsewhere (`init_at`), the
+    /// `INFO` flags, `break`, `continue` -- the counted loop kept -- and
+    /// an early `return`; a colouring's step, memory, field reads, hash
+    /// and seed; an effect's early `return`.
+    #[test]
+    fn the_language_of_the_twins_compiles() {
+        let model = "const INFO = #{ time_step: false, settles: false };\n\
+            fn cell_step(cell, p, ctx) {\n    if cell.x > 0.5 { return cell; }\n    let n = 0.0;\n    for dy in -2..=2 {\n        \
+            for dx in -2..=2 {\n            if dx == 0 && dy == 0 { continue; }\n            n += read(dx, dy).x;\n            \
+            if n > 3.0 { break; }\n        }\n    }\n    vec4(n, rand(0xc1), to_float(pcg(ctx.seed_lo) & 255), 0.0)\n}\n\
+            fn cell_seed(inside, noise, p, ctx) { vec4(init_at(ctx.cell.re, 32.0), rand(0x71), rand(), 0.0) }\n";
+        let def = compile_model(model, "custom-language").unwrap_or_else(|e| panic!("{e}"));
+        for f in [ModelFeature::NoTimeStep, ModelFeature::NeverStills, ModelFeature::NeedsRng] {
+            assert!(def.has(f), "{f:?}: {:?}", def.features);
+        }
+        for want in ["sim_rand(p, bitcast<u32>(", "continue;", "break;", "bitcast<i32>(sim_pcg(bitcast<u32>(", "bitcast<i32>(params.seed_lo)"] {
+            assert!(def.wgsl.contains(want), "{want} in\n{}", def.wgsl);
+        }
+        assert_eq!(def.wgsl.matches("return vec4<f32>(effect_r, effect_g, effect_b, effect_a);").count(), 2, "the early return and the end:\n{}", def.wgsl);
+        assert!(!def.wgsl.contains("for (var loop"), "both loops stay counted, `continue` and all:\n{}", def.wgsl);
+        assert!(def.wgsl_seed.contains("sim_init_mask(") && def.wgsl_seed.matches("sim_rand(p,").count() == 2, "{}", def.wgsl_seed);
+
+        let colouring = "fn cell_color(cell, p, ctx) {\n    if cell.m0.x > 0.9 { return rgba(1.0, 0.0, 0.0, 1.0); }\n    \
+            let t = to_float(pcg(to_int(ctx.cell.re) ^ ctx.seed_hi) & 1023) / 1023.0;\n    let s = 0.0;\n    let i = 0;\n    \
+            while i < 8 {\n        s += read(i, 0).x;\n        if s > 2.0 { break; }\n        i += 1;\n    }\n    \
+            let c = palette(t + s + ctx.step * 0.001 + cell.m1.w);\n    rgba(c.x, c.y, c.z, 1.0)\n}\n";
+        let def = compile(colouring, "custom-language").unwrap_or_else(|e| panic!("{e}"));
+        assert!(def.has(ColoringFeature::ReadsCell) && def.has(ColoringFeature::ReadsMemory), "{:?}", def.features);
+        for want in ["f32(sim_step_index())", "x.m0.x", "x.m1.w", "break;", "bitcast<i32>(params.seed_hi)"] {
+            assert!(def.wgsl.contains(want), "{want} in\n{}", def.wgsl);
+        }
+
+        let effect = "fn effect(c) {\n    if c.a < 0.5 { return c; }\n    rgba(1.0 - c.r, c.g, c.b, c.a)\n}\n";
+        let p = lang::rhai::effect(effect).unwrap_or_else(|d| panic!("{d:?}"));
+        let w = lang::wgsl::effect(&p).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(w.body.matches("return FxOut(").count(), 2, "{}", w.body);
+
+        // And what they refuse, with the reason.
+        let refused = |src: &str, why: &str| {
+            let e = compile_model(src, "custom-x").unwrap_err();
+            assert!(e.contains(why), "{why}: {e}");
+        };
+        refused("fn cell_step(cell) { vec4(rand(1.5), 0.0, 0.0, 0.0) }", "takes an int");
+        refused("fn cell_step(cell) { vec4(init_at(1.0, 2.0), 0.0, 0.0, 0.0) }", "is a seed's");
+        refused("fn cell_step(cell) {\n    let i = 0;\n    do { i += 1; continue; } while i < 3;\n    cell\n}", "`continue` in a `do` loop");
+        refused("fn helper(x) { if x > 0.0 { return x; } x }\nfn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "`return` ends a function");
+        // A helper's own loop breaks (Rhai's parser refuses a `break`
+        // outside one).
+        let own = "fn first(x) {\n    let n = 0.0;\n    for i in 0..8 { n += x; if n > 2.0 { break; } }\n    n\n}\nfn cell_step(cell) { vec4(first(cell.x), 0.0, 0.0, 0.0) }";
+        assert!(compile_model(own, "custom-x").unwrap_or_else(|e| panic!("{e}")).wgsl.contains("break;"));
+        let formula = "fn start(pixel, p) { #{ z: pixel } }\nfn step(s, p) {\n    for i in 0..3 { if i == 1 { break; } }\n    s\n}";
+        let e = lang::rhai::program(formula).unwrap_err();
+        assert!(e.iter().any(|d| d.message.contains("a formula's loops have no")), "{e:?}");
     }
 
     /// A source goes with its layer (P4 step 4): promoting the flat model

@@ -811,9 +811,22 @@ fn escaped(s, p) {
   the seed's inputs through `__cell` (`SIM_MODEL_HOST`); a neighbour by
   `read(dx, dy)`, the `__nbr_x` ... `__nbr_w` built-ins (`sim_read`, the
   framework's boundary); `rand()` the template's `sim_rand`, a salt per
-  call site. Each function compiles alone (`rhai::SimFn`), its helpers
-  prefixed per pass, as each pass's module holds the model's whole WGSL
+  call site, and `rand(k)` the stream `k` (`__sim_rand`, its int kept an
+  int); in a seed, `init_at(x, y)` the init shape at another cell
+  (`__init_at`). A colouring and a model hash with `pcg(n)` (`__pcg`, the
+  framework's `sim_pcg` of the int's bits) and read the run's seed words
+  (`ctx.seed_lo`, `ctx.seed_hi`: `__seed`); a colouring reads the field
+  around its cell with `read` too. Each function compiles alone
+  (`rhai::SimFn`), its helpers prefixed per pass, as each pass's module
+  holds the model's whole WGSL
   ([SIMULATION.md](SIMULATION.md#models-written-in-rhai)).
+- **Flow in the effect-like functions** (P4 step 5): `break`,
+  `continue` and an early `return` -- `IStmt::Break`, `Continue`,
+  `Return`, which only the WGSL back end emits (the interpreter and the
+  formula back ends never see one). A `continue` in a `for` runs the
+  counter's step before it, which `counted_loop` recognises, so the
+  loop stays counted; a `return` sets the result first and emits the
+  function's own last line (`Gen::ret`).
 - **`fract(x)`** (WGSL's, each part of a complex) and **`hash2(p)`**: a
   point to two numbers in [0, 1), the built-in noise effects' hash
   (`fract(sin(vec2(dot(p, (127.1, 311.7)), dot(p, (269.5, 183.3)))) *

@@ -381,6 +381,13 @@ pub enum IStmt {
     /// (`esc_solid_map` in the maps flame): the interpreter refuses it,
     /// and only a solid has one.
     Map { call: u32, input: Box<[IExpr; 3]>, out: [VarId; 3] },
+    /// `break`, `continue` (the innermost loop's) and an early `return`,
+    /// its result set before it (P4 step 5): an effect-like function's
+    /// alone (an effect, a simulation's colouring or model), whose code is
+    /// the GPU's; the interpreter and the formula back ends never see one.
+    Break,
+    Continue,
+    Return,
 }
 
 /// A solid's call of a built-in flame variation (3d-look-and-tools P5,
@@ -609,6 +616,7 @@ impl Program {
         }
         fn s(st: &[IStmt], p: Predef) -> bool {
             st.iter().any(|x| match x {
+                IStmt::Break | IStmt::Continue | IStmt::Return => false,
                 IStmt::Assign(_, v) => e(v, p),
                 IStmt::SetElem { index, value, .. } => e(index, p) || e(value, p),
                 IStmt::If { arms, otherwise } => arms.iter().any(|(c, b)| e(c, p) || s(b, p)) || s(otherwise, p),

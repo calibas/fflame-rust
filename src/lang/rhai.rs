@@ -61,6 +61,12 @@
 //!   { b };`), in `start`, `step` and helpers. `escaped` is one test:
 //!   its `let`s and its helpers' are substituted, so there an `if` value
 //!   is refused.
+//! - In the effect-like functions (an effect's, a simulation's colouring
+//!   and model), whose code is the GPU's alone: `break` and `continue`
+//!   in loops (`continue` runs a `for`'s step first; not in a `do` loop)
+//!   and an early `return x;`, which sets the result as the last value
+//!   does (`put_result`). A helper or an `if` value is a function of its
+//!   own: no loop of its caller's to leave, nothing to return from.
 //!
 //! Arrays (plan, item 3, step 3b), of one dimension: a literal `[a, b,
 //! c]`, `array(n, v)` (n a constant int, each element `v`), `a[i]` read
@@ -617,6 +623,9 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         sim_model: kind == EntryKind::SimModel,
         sim_fn,
         probe: std::cell::Cell::new(0),
+        loops: Vec::new(),
+        loop_floor: 0,
+        returns: None,
     };
     for (name, def) in extra {
         l.fns.insert(name.clone(), def.clone());
@@ -763,6 +772,20 @@ impl Fn3 {
     }
 }
 
+/// How an effect-like function's value becomes its result (P4 step 5):
+/// its last value's way, and an early `return`'s.
+#[derive(Clone, Debug)]
+enum Returns {
+    /// An effect: an `rgba`, a `vec3` keeping the input's alpha (the local
+    /// named), or `#{ color, blend, amount }`.
+    Effect { alpha: String },
+    /// A simulation colouring: an `rgba` (its `a` the coverage), a `vec3`,
+    /// or `#{ color, coverage }`.
+    SimColoring,
+    /// A simulation model's function: a vector of four (`result` says so).
+    SimModel { result: String },
+}
+
 struct Lowerer<'s> {
     /// A colouring: `z` is the formula's, and a state field of that name
     /// is the colouring's own.
@@ -813,6 +836,18 @@ struct Lowerer<'s> {
     /// How deep [`Lowerer::is_vec`] has looked into helpers, against a
     /// helper that calls itself.
     probe: std::cell::Cell<usize>,
+    /// The loops being lowered, innermost last (P4 step 5): each one's
+    /// step, which a `continue` runs before it jumps -- a `for`'s counter,
+    /// a `while`'s condition's statements -- or `None` for a `do` loop,
+    /// whose test follows its body. `loop_floor` is where the function
+    /// being lowered starts: a helper or an `if` value cannot leave a
+    /// loop outside it.
+    loops: Vec<Option<Vec<ast::Stmt>>>,
+    loop_floor: usize,
+    /// How an early `return` sets the result, while an effect-like
+    /// function's own statements are lowered (`body_returning`); `None`
+    /// in a helper, an `if` value or anything else.
+    returns: Option<Returns>,
 }
 
 /// One function's scope: Rhai names to what they stand for, innermost
@@ -868,6 +903,13 @@ fn final_value(st: &Stmt) -> Option<Final<'_>> {
 
 fn mk(kind: ExprKind, span: Span) -> ast::Expr {
     ast::Expr { kind, span }
+}
+
+/// A simulation's `ctx.seed_lo` or `ctx.seed_hi` (P4 step 5): the run's
+/// seed as its two 32-bit words, ints, for `pcg`.
+fn seed_word(name: &str, span: Span) -> ast::Expr {
+    let word = i64::from(name == "seed_hi");
+    mk(ExprKind::Call { name: "__seed".into(), args: vec![mk(ExprKind::Int(word), span)], user: false }, span)
 }
 
 fn assign(target: ast::Expr, value: ast::Expr, span: Span) -> ast::Stmt {
@@ -1017,7 +1059,27 @@ impl<'s> Lowerer<'s> {
                     Expr::StringConstant(s, _) if matches!(s.as_str(), "continuous" | "discrete") => {}
                     _ => return self.err(*p, "`state` is \"continuous\" (interpolated into a new grid) or \"discrete\" (the nearest cell)"),
                 },
-                o if self.sim_model => return self.err(*p, format!("a simulation model's `INFO` has `title`, `id`, `description`, `author`, `dt`, `max_dt`, `steps`, `diffusion` and `state`, not `{o}`")),
+                // What the panel and the export say of it (P4 step 5).
+                "time_step" | "settles" if self.sim_model => match v {
+                    Expr::BoolConstant(..) => {}
+                    _ => return self.err(*p, format!("`{name}` is `true` or `false`")),
+                },
+                // What the built-ins have and a script does not: a reason.
+                "kernel" | "agents" | "memory" | "pyramid" | "repeat" | "measure" | "presets" if self.sim_model => {
+                    return self.err(
+                        *p,
+                        format!(
+                            "`INFO.{name}`: a model in Rhai is the single-layer class -- kernel tables, memory, the pyramid, agents, \
+                             repeated or measured passes and presets are the built-in models'"
+                        ),
+                    )
+                }
+                o if self.sim_model => {
+                    return self.err(
+                        *p,
+                        format!("a simulation model's `INFO` has `title`, `id`, `description`, `author`, `dt`, `max_dt`, `steps`, `diffusion`, `state`, `time_step` and `settles`, not `{o}`"),
+                    )
+                }
                 // A solid's ball: the set lies within this radius
                 // (`info_number`, read apart).
                 "radius" if kind == EntryKind::Solid => match v {
@@ -1228,46 +1290,10 @@ impl<'s> Lowerer<'s> {
         const RESULT: &str = "`effect` ends with the output: an `rgba`, a `vec3` (the input's alpha kept), or `#{ color, blend, amount }`";
         let stmts = f.body.statements();
         let Some((last, rest)) = stmts.split_last() else { return self.err(f.body.position(), RESULT) };
-        for st in rest {
-            self.stmt(st, &mut scope, &mut body)?;
-        }
-        let (mut blend, mut amount) = (None, None);
-        let color = match final_value(last) {
-            Some(Final::Expr(Expr::Map(m, mp))) => {
-                let mut color = None;
-                for (k, v) in &m.0 {
-                    match k.name.as_str() {
-                        "color" => color = Some(self.vexpr(v, &mut scope)?),
-                        "blend" => blend = Some(self.expr(v, &mut scope)?),
-                        "amount" => amount = Some(self.expr(v, &mut scope)?),
-                        o => return self.err(k.pos, format!("an effect's result has `color`, `blend` and `amount`, not `{o}`")),
-                    }
-                }
-                match color {
-                    Some(c) => c,
-                    None => return self.err(*mp, "the result needs `color`, the effect's colour"),
-                }
-            }
-            Some(f) => self.final_vec(f, &mut scope)?,
-            None => return self.err(last.position(), RESULT),
-        };
-        let parts = match color.kind {
-            vec::Kind::Rgba => color.parts,
-            vec::Kind::Vec3 => {
-                let mut parts = color.parts;
-                parts.push(mk(ExprKind::Name(input[3].clone()), span));
-                parts
-            }
-            vec::Kind::Quat => return self.err(last.position(), "an effect's output is a colour: an `rgba`, or a `vec3`"),
-        };
-        self.flush(&mut body);
-        let at = self.pos.span(last.position());
-        let put = |name: &str, value: ast::Expr| assign(mk(ExprKind::Predef(name.into()), at), value, at);
-        for (name, part) in ["effect_r", "effect_g", "effect_b", "effect_a"].into_iter().zip(parts) {
-            body.push(put(name, part));
-        }
-        body.push(put("effect_blend", blend.unwrap_or_else(|| mk(ExprKind::Int(-1), at))));
-        body.push(put("effect_amount", amount.unwrap_or_else(|| mk(ExprKind::Float(1.0), at))));
+        let how = Returns::Effect { alpha: input[3].clone() };
+        self.body_returning(rest, &how, &mut scope, &mut body)?;
+        let Some(f) = final_value(last) else { return self.err(last.position(), RESULT) };
+        self.put_result(&how, f, last.position(), &mut scope, &mut body)?;
         Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
     }
 
@@ -1298,46 +1324,9 @@ impl<'s> Lowerer<'s> {
         let stmts = f.body.statements();
         let Some((last, rest)) = stmts.split_last() else { return self.err(f.body.position(), RESULT) };
         let mut body = Vec::new();
-        for st in rest {
-            self.stmt(st, &mut scope, &mut body)?;
-        }
-        let mut coverage = None;
-        let color = match final_value(last) {
-            Some(Final::Expr(Expr::Map(m, mp))) => {
-                let mut color = None;
-                for (k, v) in &m.0 {
-                    match k.name.as_str() {
-                        "color" => color = Some(self.vexpr(v, &mut scope)?),
-                        "coverage" => coverage = Some(self.expr(v, &mut scope)?),
-                        o => return self.err(k.pos, format!("a colouring's result has `color` and `coverage`, not `{o}`")),
-                    }
-                }
-                match color {
-                    Some(c) => c,
-                    None => return self.err(*mp, "the result needs `color`, the cell's colour"),
-                }
-            }
-            Some(f) => self.final_vec(f, &mut scope)?,
-            None => return self.err(last.position(), RESULT),
-        };
-        let at = self.pos.span(last.position());
-        let mut parts = match color.kind {
-            vec::Kind::Rgba => color.parts,
-            vec::Kind::Vec3 => {
-                let mut parts = color.parts;
-                parts.push(mk(ExprKind::Float(1.0), at));
-                parts
-            }
-            vec::Kind::Quat => return self.err(last.position(), "a colouring's output is a colour: an `rgba`, or a `vec3`"),
-        };
-        if let Some(c) = coverage {
-            parts[3] = c;
-        }
-        self.flush(&mut body);
-        let put = |name: &str, value: ast::Expr| assign(mk(ExprKind::Predef(name.into()), at), value, at);
-        for (name, part) in ["effect_r", "effect_g", "effect_b", "effect_a"].into_iter().zip(parts) {
-            body.push(put(name, part));
-        }
+        self.body_returning(rest, &Returns::SimColoring, &mut scope, &mut body)?;
+        let Some(f) = final_value(last) else { return self.err(last.position(), RESULT) };
+        self.put_result(&Returns::SimColoring, f, last.position(), &mut scope, &mut body)?;
         Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
     }
 
@@ -1384,23 +1373,112 @@ impl<'s> Lowerer<'s> {
         let stmts = f.body.statements();
         let Some((last, others)) = stmts.split_last() else { return self.err(f.body.position(), result) };
         let mut body = Vec::new();
-        for st in others {
-            self.stmt(st, &mut scope, &mut body)?;
-        }
-        let state = match final_value(last) {
-            Some(fv) => self.final_vec(fv, &mut scope)?,
-            None => return self.err(last.position(), result),
+        let how = Returns::SimModel { result: result.clone() };
+        self.body_returning(others, &how, &mut scope, &mut body)?;
+        let Some(f) = final_value(last) else { return self.err(last.position(), result) };
+        self.put_result(&how, f, last.position(), &mut scope, &mut body)?;
+        Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
+    }
+
+    /// An effect-like function's statements but its last (P4 step 5): an
+    /// early `return` in them sets the result as `how` says, and returns.
+    fn body_returning(&mut self, stmts: &[Stmt], how: &Returns, scope: &mut Scope, body: &mut Vec<ast::Stmt>) -> R<()> {
+        self.returns = Some(how.clone());
+        let r = stmts.iter().try_for_each(|st| self.stmt(st, scope, body));
+        self.returns = None;
+        r
+    }
+
+    /// Set an effect-like function's result from its value `f` at `p` --
+    /// its last, or an early `return`'s -- into the `effect_*` places the
+    /// function's end returns (P4 step 5).
+    fn put_result(&mut self, how: &Returns, f: Final, p: Position, scope: &mut Scope, body: &mut Vec<ast::Stmt>) -> R<()> {
+        let at = self.pos.span(p);
+        let mut extra: Vec<(&str, ast::Expr)> = Vec::new();
+        let parts = match how {
+            Returns::Effect { alpha } => {
+                let (mut blend, mut amount) = (None, None);
+                let color = match f {
+                    Final::Expr(Expr::Map(m, mp)) => {
+                        let mut color = None;
+                        for (k, v) in &m.0 {
+                            match k.name.as_str() {
+                                "color" => color = Some(self.vexpr(v, scope)?),
+                                "blend" => blend = Some(self.expr(v, scope)?),
+                                "amount" => amount = Some(self.expr(v, scope)?),
+                                o => return self.err(k.pos, format!("an effect's result has `color`, `blend` and `amount`, not `{o}`")),
+                            }
+                        }
+                        match color {
+                            Some(c) => c,
+                            None => return self.err(*mp, "the result needs `color`, the effect's colour"),
+                        }
+                    }
+                    f => self.final_vec(f, scope)?,
+                };
+                let parts = match color.kind {
+                    vec::Kind::Rgba => color.parts,
+                    vec::Kind::Vec3 => {
+                        let mut parts = color.parts;
+                        parts.push(mk(ExprKind::Name(alpha.clone()), at));
+                        parts
+                    }
+                    vec::Kind::Quat => return self.err(p, "an effect's output is a colour: an `rgba`, or a `vec3`"),
+                };
+                extra.push(("effect_blend", blend.unwrap_or_else(|| mk(ExprKind::Int(-1), at))));
+                extra.push(("effect_amount", amount.unwrap_or_else(|| mk(ExprKind::Float(1.0), at))));
+                parts
+            }
+            Returns::SimColoring => {
+                let mut coverage = None;
+                let color = match f {
+                    Final::Expr(Expr::Map(m, mp)) => {
+                        let mut color = None;
+                        for (k, v) in &m.0 {
+                            match k.name.as_str() {
+                                "color" => color = Some(self.vexpr(v, scope)?),
+                                "coverage" => coverage = Some(self.expr(v, scope)?),
+                                o => return self.err(k.pos, format!("a colouring's result has `color` and `coverage`, not `{o}`")),
+                            }
+                        }
+                        match color {
+                            Some(c) => c,
+                            None => return self.err(*mp, "the result needs `color`, the cell's colour"),
+                        }
+                    }
+                    f => self.final_vec(f, scope)?,
+                };
+                let mut parts = match color.kind {
+                    vec::Kind::Rgba => color.parts,
+                    vec::Kind::Vec3 => {
+                        let mut parts = color.parts;
+                        parts.push(mk(ExprKind::Float(1.0), at));
+                        parts
+                    }
+                    vec::Kind::Quat => return self.err(p, "a colouring's output is a colour: an `rgba`, or a `vec3`"),
+                };
+                if let Some(c) = coverage {
+                    parts[3] = c;
+                }
+                parts
+            }
+            Returns::SimModel { result } => {
+                let state = self.final_vec(f, scope)?;
+                if state.kind != vec::Kind::Rgba {
+                    return self.err(p, result.clone());
+                }
+                state.parts
+            }
         };
-        if state.kind != vec::Kind::Rgba {
-            return self.err(last.position(), result);
-        }
-        self.flush(&mut body);
-        let at = self.pos.span(last.position());
+        self.flush(body);
         let put = |name: &str, value: ast::Expr| assign(mk(ExprKind::Predef(name.into()), at), value, at);
-        for (name, part) in ["effect_r", "effect_g", "effect_b", "effect_a"].into_iter().zip(state.parts) {
+        for (name, part) in ["effect_r", "effect_g", "effect_b", "effect_a"].into_iter().zip(parts) {
             body.push(put(name, part));
         }
-        Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
+        for (name, value) in extra {
+            body.push(put(name, value));
+        }
+        Ok(())
     }
 
     /// A solid's functions as its sections (B3): `start(pos, p)` the init,
@@ -2223,13 +2301,19 @@ impl<'s> Lowerer<'s> {
                 // the loop and at the end of each pass.
                 let pre = std::mem::take(&mut self.pending);
                 out.extend(pre.iter().cloned());
-                let mut body = self.block(&fc.body, scope)?;
+                self.loops.push(Some(pre.clone()));
+                let body = self.block(&fc.body, scope);
+                self.loops.pop();
+                let mut body = body?;
                 body.extend(pre);
                 out.push(ast::Stmt::While { cond, body, span: self.pos.span(*p) });
                 Ok(())
             }
             Stmt::Do(fc, flags, p) => {
-                let mut body = self.block(&fc.body, scope)?;
+                self.loops.push(None);
+                let body = self.block(&fc.body, scope);
+                self.loops.pop();
+                let mut body = body?;
                 let c = self.expr(&fc.expr, scope)?;
                 self.flush(&mut body);
                 let span = c.span;
@@ -2260,11 +2344,14 @@ impl<'s> Lowerer<'s> {
                 out.push(ast::Stmt::Decl { ty: TypeName::Int, name: bound.clone(), init: Some(to), dims: None, span });
                 scope.blocks.push(HashMap::new());
                 scope.bind(&var.name, Binding::Local(name.clone()));
+                let i = || mk(ExprKind::Name(name.clone()), span);
+                let step = assign(i(), mk(ExprKind::Binary(BinOp::Add, Box::new(i()), Box::new(mk(ExprKind::Int(1), span))), span), span);
+                self.loops.push(Some(vec![step.clone()]));
                 let body = self.block(&fc.body, scope);
+                self.loops.pop();
                 scope.blocks.pop();
                 let mut body = body?;
-                let i = || mk(ExprKind::Name(name.clone()), span);
-                body.push(assign(i(), mk(ExprKind::Binary(BinOp::Add, Box::new(i()), Box::new(mk(ExprKind::Int(1), span))), span), span));
+                body.push(step);
                 let op = if inclusive { BinOp::Le } else { BinOp::Lt };
                 out.push(ast::Stmt::While { cond: mk(ExprKind::Binary(op, Box::new(i()), Box::new(mk(ExprKind::Name(bound), span))), span), body, span });
                 Ok(())
@@ -2274,8 +2361,42 @@ impl<'s> Lowerer<'s> {
                 out.extend(body);
                 Ok(())
             }
-            Stmt::BreakLoop(_, _, p) => self.err(*p, "a formula's loops have no `break` or `continue`"),
-            Stmt::Return(_, _, p) => self.err(*p, "`return` ends a function, as its last statement"),
+            // An effect-like function's flow (P4 step 5): its code is the
+            // GPU's alone, which has both.
+            Stmt::BreakLoop(value, flags, p) => {
+                if !(self.effect || self.sim_coloring || self.sim_model) {
+                    return self.err(*p, "a formula's loops have no `break` or `continue`");
+                }
+                let brk = flags.intersects(ASTFlags::BREAK);
+                let word = if brk { "break" } else { "continue" };
+                if value.is_some() {
+                    return self.err(*p, format!("`{word}` takes no value here"));
+                }
+                if self.loops.len() <= self.loop_floor {
+                    return self.err(*p, format!("`{word}` outside a loop: in a helper or an `if` value, only the helper's own loops"));
+                }
+                let span = self.pos.span(*p);
+                self.flush(out);
+                if brk {
+                    out.push(ast::Stmt::Break { span });
+                    return Ok(());
+                }
+                let Some(step) = self.loops.last().cloned().flatten() else {
+                    return self.err(*p, "`continue` in a `do` loop, whose test follows its body: write it as a `while`");
+                };
+                out.extend(step);
+                out.push(ast::Stmt::Continue { span });
+                Ok(())
+            }
+            Stmt::Return(value, flags, p) => {
+                let Some(how) = self.returns.clone().filter(|_| !flags.intersects(ASTFlags::BREAK)) else {
+                    return self.err(*p, "`return` ends a function, as its last statement");
+                };
+                let Some(value) = value else { return self.err(*p, "`return` gives the function's result: `return x;`") };
+                self.put_result(&how, Final::Expr(value), *p, scope, out)?;
+                out.push(ast::Stmt::Return { span: self.pos.span(*p) });
+                Ok(())
+            }
             Stmt::Expr(e) => self.err(e.position(), "a value alone does nothing here"),
             Stmt::FnCall(_, p) => self.err(*p, "a call alone does nothing here"),
             other => self.err(other.position(), "not in a formula"),
@@ -2395,6 +2516,7 @@ impl<'s> Lowerer<'s> {
     /// pending) and the value.
     fn value_block(&mut self, b: &StmtBlock, scope: &mut Scope) -> R<(Vec<ast::Stmt>, ast::Expr)> {
         let outer = std::mem::take(&mut self.pending);
+        let sealed = self.seal();
         scope.blocks.push(HashMap::new());
         let r = (|| {
             let stmts = b.statements();
@@ -2409,8 +2531,23 @@ impl<'s> Lowerer<'s> {
             Ok((out, v))
         })();
         scope.blocks.pop();
+        self.unseal(sealed);
         self.pending = outer;
         r
+    }
+
+    /// Lower a helper's or an `if` value's statements as a function of
+    /// their own (P4 step 5): no loop outside them to leave, nothing to
+    /// return from. Undone by [`Lowerer::unseal`].
+    fn seal(&mut self) -> (usize, Option<Returns>) {
+        let outer = (self.loop_floor, self.returns.take());
+        self.loop_floor = self.loops.len();
+        outer
+    }
+
+    fn unseal(&mut self, (floor, returns): (usize, Option<Returns>)) {
+        self.loop_floor = floor;
+        self.returns = returns;
     }
 
     /// What an assignment writes: a local, or a field of the state.
@@ -2701,7 +2838,10 @@ impl<'s> Lowerer<'s> {
                     // the vectors are `named_vector`'s.
                     Base::Cell => match name {
                         "dist" => Ok(mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(12), span)], user: false }, span)),
-                        o => self.err(*p, format!("a cell has `state`, `gx`, `gy` (vectors of four: read a part), `dist`, `tensor` and `relief` (vectors of three); not `{o}`")),
+                        o => self.err(
+                            *p,
+                            format!("a cell has `state`, `gx`, `gy`, `m0`, `m1` (vectors of four: read a part), `dist`, `tensor` and `relief` (vectors of three); not `{o}`"),
+                        ),
                     },
                     // A simulation model's (P4): its time step and step
                     // index (host values, `__cell` 21 and 22), the cell, the
@@ -2710,14 +2850,18 @@ impl<'s> Lowerer<'s> {
                         "dt" | "step" => Ok(mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(if name == "dt" { 21 } else { 22 }), span)], user: false }, span)),
                         "cell" => Ok(mk(ExprKind::Predef("pixel".into()), span)),
                         "width" | "height" => Ok(mk(ExprKind::Predef(name.into()), span)),
-                        o => self.err(*p, format!("a simulation model's context has `dt`, `step`, `cell`, `width` and `height`; not `{o}`")),
+                        "seed_lo" | "seed_hi" => Ok(seed_word(name, span)),
+                        o => self.err(*p, format!("a simulation model's context has `dt`, `step`, `cell`, `width`, `height`, `seed_lo` and `seed_hi`; not `{o}`")),
                     },
                     // A simulation colouring's (P4): the cell, the grid's
                     // size.
                     Base::Ctx if self.sim_coloring => match name {
                         "cell" => Ok(mk(ExprKind::Predef("pixel".into()), span)),
                         "width" | "height" => Ok(mk(ExprKind::Predef(name.into()), span)),
-                        o => self.err(*p, format!("a simulation colouring's context has `cell`, `width` and `height`; not `{o}`")),
+                        // The step the run is at (`__cell` 19, P4 step 5).
+                        "step" => Ok(mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(19), span)], user: false }, span)),
+                        "seed_lo" | "seed_hi" => Ok(seed_word(name, span)),
+                        o => self.err(*p, format!("a simulation colouring's context has `cell`, `width`, `height`, `step`, `seed_lo` and `seed_hi`; not `{o}`")),
                     },
                     // An effect's (P2): the pixel's position, the image's
                     // size and density.
@@ -2812,21 +2956,46 @@ impl<'s> Lowerer<'s> {
         if name == "vary" && args.is_empty() {
             return self.vary(f, p, scope);
         }
-        // A fresh draw in [0, 1) (C2a), unless the script has its own.
+        // A fresh draw in [0, 1) (C2a), unless the script has its own; a
+        // simulation model's on a stream of its own as well, `rand(k)`,
+        // which an edit elsewhere in the script leaves where it was (P4
+        // step 5).
         if name == "rand" && args.is_empty() && !self.fns.contains_key("rand") {
+            if self.sim_model && f.args.len() == 1 {
+                let k = self.expr(&f.args[0], scope)?;
+                return Ok(mk(ExprKind::Call { name: "__sim_rand".into(), args: vec![k], user: false }, span));
+            }
             if !f.args.is_empty() {
-                return self.err(p, "`rand()` takes no argument: a draw in [0, 1)");
+                let what = if self.sim_model { "`rand()` takes no argument, or a stream's number: `rand(k)`" } else { "`rand()` takes no argument: a draw in [0, 1)" };
+                return self.err(p, what);
             }
             if self.sim_coloring {
-                return self.err(p, "a simulation colouring has no `rand()`: a picture is the same every frame -- hash the cell and a seed parameter");
-            }
-            if self.sim_model && self.sim_fn == SimFn::Seed {
-                return self.err(p, "a seed draws its randomness as `noise`, its second argument");
+                return self.err(p, "a simulation colouring has no `rand()`: a picture is the same every frame -- hash the cell and the run's seed (`pcg`, `ctx.seed_lo`)");
             }
             if self.effect {
                 return self.err(p, "an effect has no `rand()`: a picture is the same every frame -- hash the pixel's position and a seed parameter");
             }
             return Ok(mk(ExprKind::Predef("draw".into()), span));
+        }
+        // A simulation's hash of an int (P4 step 5), the framework's PCG.
+        if name == "pcg" && args.is_empty() && (self.sim_coloring || self.sim_model) && !self.fns.contains_key("pcg") {
+            let [n] = &f.args[..] else { return self.err(p, "`pcg(n)` takes the int to hash") };
+            let n = self.expr(n, scope)?;
+            return Ok(mk(ExprKind::Call { name: "__pcg".into(), args: vec![n], user: false }, span));
+        }
+        // A seed's init shape at another cell (P4 step 5): the cell
+        // (x, y), not an offset.
+        if name == "init_at" && args.is_empty() && !self.fns.contains_key("init_at") {
+            if !self.sim_model || self.sim_fn != SimFn::Seed {
+                return self.err(p, "`init_at(x, y)` is a seed's: the init shape at the cell (x, y), in `fn cell_seed` alone");
+            }
+            if f.args.len() != 2 {
+                return self.err(p, "`init_at(x, y)` takes the cell's two coordinates");
+            }
+            let x = self.expr(&f.args[0], scope)?;
+            let y = self.expr(&f.args[1], scope)?;
+            let at = mk(ExprKind::Complex(Box::new(x), Box::new(y)), span);
+            return Ok(mk(ExprKind::Call { name: "__init_at".into(), args: vec![at], user: false }, span));
         }
         // A helper of the script's own, inlined; it reads only its
         // arguments.

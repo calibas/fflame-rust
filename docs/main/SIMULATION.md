@@ -685,12 +685,18 @@ to the `sim_color` the colour template calls.
   `.r` ... `.a`); `cell.gx` and `cell.gy`, the gradient of every channel;
   `cell.dist`, the signed distance to the matte's edge; `cell.tensor`
   (Jxx, Jxy, Jyy) and `cell.relief` (h, dh/dx, dh/dy), vectors of three;
-  `p`, its `PARAMS`; `ctx.cell`, the cell (a complex), and `ctx.width`,
-  `ctx.height`, the grid. `palette(t)` is the shared palette, a vector of
-  three. The template measures the gradient, tensor, distance and relief
-  only for a colouring that reads them, so the features
-  (`ColoringFeature`) come from what the source reads, as do `ReadsCell`
-  and the rest. No `rand()`, no `prepare`.
+  `cell.m0` and `cell.m1`, the source layer's memory (eight weights,
+  zeros without one); `p`, its `PARAMS`; `ctx.cell`, the cell (a
+  complex), `ctx.width`, `ctx.height`, the grid, `ctx.step`, the step the
+  run is at, and `ctx.seed_lo`, `ctx.seed_hi`, the run's seed as two
+  32-bit ints for `pcg(n)`, the framework's hash; `read(dx, dy)`, the
+  state of the cell `dx`, `dy` away. `palette(t)` is the shared palette,
+  a vector of three. The template measures the gradient, tensor, distance
+  and relief only for a colouring that reads them, so the features
+  (`ColoringFeature`) come from what the source reads: `ReadsCell` from
+  `ctx.cell` or `read`, `ReadsMemory` from the memory, and the rest. No
+  `rand()` (a picture is the same every frame: hash the cell), no
+  `prepare`; `break`, `continue` and an early `return` as an effect's.
 - **What it gives**: the last value, an `rgba` (its `a` the coverage, 0
   letting the background through), a `vec3` (drawn whole), or
   `#{ color, coverage }`. Its trig, `min`/`max`/`clamp` and int
@@ -727,18 +733,26 @@ call.
   each reading what the one before wrote (`ModelDef::passes`). `cell` is
   the state (`.x` ... `.w`); `read(dx, dy)` a neighbour's, the offset in
   whole cells through the config's boundary; `p` its `PARAMS`; `ctx.dt`,
-  `ctx.step` (the step index), `ctx.cell`, `ctx.width`, `ctx.height`.
-  `rand()` draws in [0, 1), keyed by the run's seed, the cell, the step
-  and the call site (`sim_rand`), so a run replays; a model that draws has
-  `ModelFeature::NeedsRng`.
+  `ctx.step` (the step index), `ctx.cell`, `ctx.width`, `ctx.height`,
+  `ctx.seed_lo` and `ctx.seed_hi`. `rand()` draws in [0, 1), keyed by
+  the run's seed, the cell, the step and the call site (`sim_rand`), so
+  a run replays; `rand(k)` draws on the stream `k`, an int, which an edit
+  elsewhere in the script leaves where it was -- the built-ins key their
+  draws so (`sim_rand(p, 0xc1u)`), and a twin draws theirs to the bit. A
+  model that draws has `ModelFeature::NeedsRng`. `break`, `continue` and
+  an early `return x;` as an effect's; `pcg(n)` hashes an int.
 - **The seed**: `fn cell_seed(inside, noise, p, ctx)` gives a cell's
   first state from the init shape (`inside`, 0 or 1) and a draw
-  (`noise`); no `rand()`. Without one, the shape in `.x`.
+  (`noise`); it may draw more (`rand()`, `rand(k)`), and `init_at(x, y)`
+  reads the init shape at another cell (Wolfram's middle row). Without
+  one, the shape in `.x`.
 - **INFO**: `dt` (the default time step), `max_dt` (the stable bound;
   `dt` when absent), `steps` (the default run, 1000 when absent),
   `diffusion` (the parameters that are diffusion rates on the Sims
   stencil, by name: the cap on `dt` follows them, `max_dt_for`), `state`
-  (`"discrete"` for a cellular automaton's whole numbers). `kernel`,
+  (`"discrete"` for a cellular automaton's whole numbers), `time_step:
+  false` (`NoTimeStep`: generations, no dt slider) and `settles: false`
+  (`NeverStills`: the export is the state at step N). `kernel`,
   `agents`, `memory`, `pyramid`, `repeat`, `measure` and `presets` are
   refused with a reason: kernel tables, memory, the pyramid, agents,
   repeated or measured passes and presets stay the built-in models'.

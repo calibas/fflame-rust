@@ -131,6 +131,13 @@ pub enum Stmt {
     /// parts into the three float variables `out`. Never parsed: the Rhai
     /// dialect's `vary` lowers to it, in a solid alone (`ir::MapCall`).
     Map { call: u32, input: Box<[Expr; 3]>, out: [String; 3], span: Span },
+    /// `break` and `continue`, the innermost loop's, and an early `return`
+    /// (P4 step 5), its result set before it. Never parsed: the Rhai
+    /// dialect's, in an effect-like function alone (an effect, a
+    /// simulation's colouring or model), whose code is the GPU's.
+    Break { span: Span },
+    Continue { span: Span },
+    Return { span: Span },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

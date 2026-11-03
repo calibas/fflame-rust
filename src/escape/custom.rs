@@ -752,6 +752,7 @@ pub fn bla_steps(escape: &EscapeConfig, orbit: &[[f64; 2]], reference: lang::bui
     }
     fn branches_on_the_iterate(stmts: &[IStmt], p: &ir::Program) -> bool {
         stmts.iter().any(|s| match s {
+            IStmt::Break | IStmt::Continue | IStmt::Return => true,
             IStmt::Assign(..) => false,
             // An array written per pixel: not the straight-line map BLA
             // approximates.
@@ -1988,6 +1989,10 @@ mod tests {
                     return;
                 }
                 match s {
+                    IStmt::Break | IStmt::Continue | IStmt::Return => {
+                        *found = Some("a loop's `break` or an early `return`".into());
+                        return;
+                    }
                     IStmt::Assign(_, e) => first(e, p, inits, found),
                     IStmt::SetElem { .. } => {
                         *found = Some("an array written in the loop".into());
