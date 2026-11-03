@@ -796,7 +796,7 @@ any model the built-ins are, each of the 31 with a twin.
   "scales", rows: 6 }` gives the per-scale warps (`ScaleWarps`): the
   Warp section draws `s{i}_warp_*` behind its target list, and
   `ctx.scale_warped` says whether any live row is off the identity.
-- **A parameter layout** (rhai-plugins P7; `param_layout`): a parameter
+- **A parameter layout** (rhai-plugins P7; `params::layout`): a parameter
   with `show_if: #{ layout: 0 }` (or a list of values,
   `#{ averaging: [1, 2] }`) is listed only while those hold; a `PARAMS`
   entry with `type: "grid"` is a grid of `rows` rows by its `columns`,

@@ -3610,8 +3610,8 @@ pub static MCCABE_WARPS: crate::sim::ScaleWarps = crate::sim::ScaleWarps {
 /// columns shape the spectral stage's discs, so they show under Exact
 /// discs alone; a scale whose inhibitor reaches past the pyramid is
 /// warned of, row by row, or -- under the ladder -- the coarsest such.
-pub fn mccabe_layout() -> std::sync::Arc<crate::param_layout::ParamLayout> {
-    use crate::param_layout::{GridColumn, GridFill, ParamGrid, ParamLayout, ShowIf, Text};
+pub fn mccabe_layout() -> std::sync::Arc<crate::params::layout::ParamLayout> {
+    use crate::params::layout::{GridColumn, GridFill, ParamGrid, ParamLayout, ShowIf, Text};
     use std::sync::{Arc, OnceLock};
     static LAYOUT: OnceLock<Arc<ParamLayout>> = OnceLock::new();
     LAYOUT
