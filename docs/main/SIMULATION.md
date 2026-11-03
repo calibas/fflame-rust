@@ -745,8 +745,11 @@ call.
   whole cells through the config's boundary; `p` its `PARAMS`; `ctx.dt`,
   `ctx.step` (the step index, an int: whole at any step, as the
   framework's), `ctx.cell`, `ctx.width`, `ctx.height`, `ctx.seed_lo` and
-  `ctx.seed_hi`, and `ctx.layer` (which salts the layer's draws: with
-  `pcg`, a draw at another cell is `sim_rand` there). `rand()` draws in [0, 1), keyed by
+  `ctx.seed_hi`, `ctx.layer` (which salts the layer's draws: with `pcg`,
+  a draw at another cell is `sim_rand` there), and `ctx.field_min`,
+  `ctx.field_max`: the field's range of `.x` a step ago, which the
+  framework reduces after each step for a model that reads it
+  (`NeedsMinMax`, as reading it implies). `rand()` draws in [0, 1), keyed by
   the run's seed, the cell, the step and the call site (`sim_rand`), so
   a run replays; `rand(k)` draws on the stream `k`, an int, which an edit
   elsewhere in the script leaves where it was -- the built-ins key their
@@ -769,10 +772,11 @@ call.
   and the config's `boundary`, `init`, `coloring` (a built-in's name),
   `coloring_params`, `matte` and `warp` spelled as a `.fflame` spells
   them (`init: #{ blobs: #{ count: 6, radius: 24 } }`), read through
-  serde. `kernel`, `agents`, `memory`, `pyramid`, `repeat` and
-  `measure` are refused with a reason: kernel tables, memory, the
-  pyramid, agents and repeated or measured passes stay the built-in
-  models'.
+  serde; and `repeat: #{ pass: 2, param: "relax" }`, a pass run that
+  parameter's number of times a step (up to `MAX_INNER_ITERATIONS`),
+  passes numbered as the functions are (`cell_step` is 1). `kernel`,
+  `agents`, `memory`, `pyramid` and `measure` are refused with a reason
+  until P4 step 9 gives each its hook.
 - **Its own stable time step**: `fn max_dt(p)`, the bound at the
   parameters in force, which a built-in writes as a `dt_bound` closure.
   It runs on the CPU as plain Rhai (the core language, its maths and

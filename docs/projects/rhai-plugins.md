@@ -675,7 +675,10 @@ nested loops and neighbour reads at loop offsets already work.
      `ctx.field_max` (the ring slot the next step reads, one step of
      lag as the built-ins'); `INFO.repeat: #{ pass: 2, param: "relax" }`
      (`ModelDef::repeat`), the framework running the pass that many
-     times a step.
+     times a step. **Built 2026-11-02**: the range a host value (no
+     `INFO` key: reading it is `NeedsMinMax`, as drawing is
+     `NeedsRng`); DBM's and Fingering's twins bit-identical at every
+     preset and at speed (0.995, 0.996).
    - **9b. Kernel tables** -> Lenia, Lattice4; then exact discs ->
      SmoothLife; then the drive and the published signal -> Turing.
      `fn kernel(p)` run on the CPU as `max_dt` is, giving the table (its

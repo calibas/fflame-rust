@@ -1103,13 +1103,19 @@ impl<'s> Lowerer<'s> {
                     Expr::Array(..) => {}
                     _ => return self.err(*p, "`presets` is a list of maps, `[#{ name: \"spots\", params: #{ feed: 0.03 } }]`"),
                 },
+                // A pass run several times a step (P4 step 9a), read by
+                // `sim::custom`.
+                "repeat" if self.sim_model => match v {
+                    Expr::Map(..) => {}
+                    _ => return self.err(*p, "`repeat` is `#{ pass: 2, param: \"relax\" }`: the pass (`cell_step` is 1) and the parameter that counts its runs"),
+                },
                 // What the built-ins have and a script does not: a reason.
-                "kernel" | "agents" | "memory" | "pyramid" | "repeat" | "measure" if self.sim_model => {
+                "kernel" | "agents" | "memory" | "pyramid" | "measure" if self.sim_model => {
                     return self.err(
                         *p,
                         format!(
                             "`INFO.{name}`: a model in Rhai is the single-layer class -- kernel tables, memory, the pyramid, agents, \
-                             repeated or measured passes are the built-in models'"
+                             and measured passes are the built-in models'"
                         ),
                     )
                 }
@@ -1118,7 +1124,7 @@ impl<'s> Lowerer<'s> {
                         *p,
                         format!(
                             "a simulation model's `INFO` has `title`, `id`, `description`, `author`, `dt`, `max_dt`, `steps`, `diffusion`, `state`, \
-                             `time_step`, `settles` and `presets`, not `{o}`"
+                             `time_step`, `settles`, `presets` and `repeat`, not `{o}`"
                         ),
                     )
                 }
@@ -2890,10 +2896,18 @@ impl<'s> Lowerer<'s> {
                     // grid's size.
                     Base::Ctx if self.sim_model => match name {
                         "dt" => Ok(mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(21), span)], user: false }, span)),
+                        // The field's range of `.x`, a step ago (P4 step 9a).
+                        "field_min" | "field_max" => {
+                            let k = if name == "field_min" { 22 } else { 23 };
+                            Ok(mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(k), span)], user: false }, span))
+                        }
                         "cell" => Ok(mk(ExprKind::Predef("pixel".into()), span)),
                         "width" | "height" => Ok(mk(ExprKind::Predef(name.into()), span)),
                         "step" | "seed_lo" | "seed_hi" | "layer" => Ok(host_int(name, span)),
-                        o => self.err(*p, format!("a simulation model's context has `dt`, `step`, `cell`, `width`, `height`, `seed_lo`, `seed_hi` and `layer`; not `{o}`")),
+                        o => self.err(
+                            *p,
+                            format!("a simulation model's context has `dt`, `step`, `cell`, `width`, `height`, `seed_lo`, `seed_hi`, `layer`, `field_min` and `field_max`; not `{o}`"),
+                        ),
                     },
                     // A simulation colouring's (P4): the cell, the grid's
                     // size.
