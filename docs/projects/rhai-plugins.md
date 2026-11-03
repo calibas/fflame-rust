@@ -929,6 +929,99 @@ Not convertible: JWildfire's 8 variations that run user-typed Java
 variation is the safe stand-in for what they were used for, but a
 `.flame` that carries Java code cannot be translated.
 
+## What is left, as branches (proposed 2026-11-03)
+
+`rhai-plugins` merged on 2026-11-03 with P0-P4 done and P7 done for
+the simulations (step 1, the simulation part of step 5, and the
+parameter layout). What remains, one branch each, every one starting
+from `main`. The order is the user's to pick: D5 put P5 tracks and then
+P6 the API next, and D7 came after it. The dependencies are listed
+under each branch.
+
+1. **`rhai-layouts-everywhere`** -- the parameter layout in every panel
+   (small).
+   - Grids and `show_if` drawn by the Escape, Effects and variation
+     panels: one renderer, today's `render_param_grid`, moved out of
+     the simulation panel.
+   - A cell at a computed row in every kind: each kind's dynamic slot
+     read (`fparam`, `cparam`, `get_param`), as `Host::GridParam` is
+     the simulations'.
+   - Depends on nothing. Helps 2 and 4: a colouring or variation twin
+     with a table, as McCabe's is.
+2. **`rhai-escape-colourings`** -- P7 step 2: twins of the 28 escape
+   colourings, and Edit as Rhai in the Escape panel's colouring.
+   - About 20 accumulate over the orbit, which `start`, `step` and
+     `finish` already do.
+   - The rest need a colour as the result (`finish` ending with a
+     `vec3` or `rgba`, through `put_result`), the palette inside the
+     loop (P4's `palette(t)`), a read of the formula's derivative
+     outside the perturbation sections, `INFO` flags for `Bounded`,
+     `ColorsInterior`, `DirectAlpha` and `SkipsEscapingIterate`, and an
+     early `return` in `finish` and the sections (a scope, as P7 step 1
+     built).
+   - Image Trap stays out with user image files (decided 2026-10-02).
+   - Each twin held by a picture compare and timed, as the simulation
+     twins are.
+3. **`rhai-variation-hooks`** -- P7 step 3, the language a variation
+   twin needs.
+   - `fn prepare(p)`, derived parameters compiled into the
+     once-per-transform setup (134 built-ins).
+   - The transform's coefficients as a `ctx` read (123).
+   - `INFO` keys: the phase, pre or post (45); `replace` (48);
+     `never_z` (16).
+   - Outputs beyond the point: `rgb` (20), `hide` (39), `w` (12).
+   - `pcg` and the host ints in every kind (23).
+   - The Möbius helpers as an imported Rhai library (9).
+   - With these, 7 built-ins stay blocked, each on a renderer hook of
+     its own (`PlotEmits`, `AnalyticBlur`, `VolumeSideEmit`).
+   - The KIFS plan's variation leftovers belong here too: a Rhai
+     variation's state inside a formula, state arrays, `rand()` in
+     `init`, `WritesRgb`.
+4. **`rhai-variation-twins`** -- P7 step 4 for the variations, in batches
+   by family. Depends on 3.
+   - A skeleton generator from the defs, as `write_twin_skeletons` is
+     for the models.
+   - Each batch held by a density compare and timed.
+   - The largest piece by count: 647, of which 339 need no new hook.
+   - Probably several branches, one family each; whether the twins then
+     replace the built-ins is D7's per-kind decision (D2 keeps the WGSL
+     until they are done).
+5. **`rhai-solids-fields`** -- P7 steps 4 and 5 for mode D and mode B.
+   - Twins of Mandelbox, Mandelbulb, the KIFS and the quaternion Julia.
+     The two Flame Attractor solids are the flame itself: nothing to
+     twin.
+   - Twins of the three fields beside them (decided in the KIFS plan):
+     a never-escaping formula and an averaging colouring, Weierstrass's
+     analytic gradient for the hillshade the part to check.
+   - Edit as Rhai for solids and fields.
+   - Depends on 2 for the fields' colourings.
+6. **`rhai-tracks`** -- P5, animation tracks as scripts.
+   - A track is a pure function of time (D4): CPU Rhai compiled once
+     per track, run each frame after the keyframes.
+   - Its targets declared, so the timeline shows them and a clash with
+     a keyframe track is visible.
+   - The same values reach the live applier and the export's.
+   - Depends on nothing.
+7. **`rhai-api`** -- P6, one scripts resource for every kind. Work in
+   the API repository first (RELEASE.md §3).
+   - Publish, update, unpublish, search and versions for every kind by a
+     `kind` field.
+   - Adopting saves into the library, flagged as a plug-in if wanted.
+   - Settles the effect corpus question in
+     [v0.6.0-release.md](v0.6.0-release.md): the generated WGSL or the
+     hand-written reference, until the API stores the Rhai source.
+   - Depends on nothing here; best after 2 and 3, so the kinds it
+     publishes have settled.
+
+Not given a branch, for the user to place:
+- Rhai's overloads by arity, refused since P7 step 1: support them, or
+  keep the refusal.
+- The KIFS plan's other leftovers (below): C3, a built-in variation as
+  a step in a formula; a formula's Live re-apply following an edit to a
+  variation it calls; a hybrid member carrying its variation.
+- The Brusselator2 (2-3%) and LIC (3-4%) twins' unexplained slowdowns,
+  under the gate.
+
 ## Decisions (the user, 2026-11-01)
 
 - **D1. The built-in effects: replaced by their Rhai twins**, "so long
