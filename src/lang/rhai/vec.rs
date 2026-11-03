@@ -315,7 +315,7 @@ impl Lowerer<'_> {
         match n {
             "vec3" | "cross" => Some(Kind::Vec3),
             "quat" => Some(Kind::Quat),
-            "rgba" | "vec4" | "input" | "input_at" | "read" | "drive" | "scratch" | "memory" => Some(Kind::Rgba),
+            "rgba" | "vec4" | "input" | "input_at" | "read" | "read_at" | "drive" | "scratch" | "memory" => Some(Kind::Rgba),
             "palette" => Some(Kind::Vec3),
             "normalize" | "abs" | "floor" | "min" | "max" | "clamp" | "mix" => first(),
             "conj" | "inv" | "pow" => first().filter(|k| *k == Kind::Quat),
@@ -799,9 +799,26 @@ impl Lowerer<'_> {
             // A simulation model's neighbour (P4), or the field around a
             // colouring's cell: the cell `dx`, `dy` away, the boundary the
             // framework's.
-            ("read", 2) if !(self.sim_coloring || (self.sim_model && self.sim_fn != super::SimFn::Seed)) => {
+            ("read", 2) if self.sim_model && self.sim_fn.agent() => {
+                return self.err(p, "an agent is at no cell: `read_at(x, y)` reads the field at the cell (x, y)");
+            }
+            ("read", 2) if !(self.sim_coloring || (self.sim_model && self.sim_fn.cell_step())) => {
                 return self.err(p, "`read(dx, dy)` reads the field around the cell: in a simulation model's step or a colouring");
             }
+            // The field at the cell (x, y) (P4 step 9d): an agent's read,
+            // and a step's.
+            ("read_at", 2) if !(self.sim_model && self.sim_fn != super::SimFn::Seed) => {
+                return self.err(p, "`read_at(x, y)` reads the field at a cell: in a simulation model's step or an agent's move");
+            }
+            ("read_at", 2) => match (args.remove(0), args.remove(0)) {
+                (S(x), S(y)) => {
+                    let x = self.hold(x, "x");
+                    let y = self.hold(y, "y");
+                    let part = |c: i64| mk(ExprKind::Call { name: "__read_at".into(), args: vec![x.clone(), y.clone(), mk(ExprKind::Int(c), span)], user: false }, span);
+                    V(Vector::new(Kind::Rgba, (0..4).map(part).collect()))
+                }
+                _ => return self.err(p, "`read_at(x, y)`: the cell's column and row, ints"),
+            },
             ("read", 2) => match (args.remove(0), args.remove(0)) {
                 (S(dx), S(dy)) => {
                     // Whole numbers stay as they are, so the WGSL offsets
@@ -817,14 +834,14 @@ impl Lowerer<'_> {
             },
             // A simulation model's drive (P4 step 9b): the Signal couplings
             // aimed at its layer, a vector of four.
-            ("drive", 0) if !self.sim_model || self.sim_fn == super::SimFn::Seed => {
+            ("drive", 0) if !self.sim_model || !self.sim_fn.cell_step() => {
                 return self.err(p, "`drive()` is the couplings' drive: in a simulation model's step alone");
             }
             ("drive", 0) => V(Vector::new(Kind::Rgba, (24..28).map(|i| call1("__cell", mk(ExprKind::Int(i), span), span)).collect())),
             // A simulation model's measure scratch at the cell dx, dy away,
             // and its memory (P4 step 9c): a vector of four, a host call a
             // part.
-            ("scratch" | "memory", _) if !self.sim_model || self.sim_fn == super::SimFn::Seed => {
+            ("scratch" | "memory", _) if !self.sim_model || !self.sim_fn.cell_step() => {
                 return self.err(p, format!("`{name}` is a simulation model step's"));
             }
             ("scratch", 3) | ("memory", 1) => {

@@ -167,10 +167,9 @@ pub enum Host {
     Param,
     /// The agents' deposit at the cell, taken (it clears): once a step.
     TakeDeposit,
-    /// An agent's draw on stream `k`; its claim of the cell (x, y) and
-    /// whether it won it; its deposit there; a read of the field at the
-    /// cell (x, y), part `c`.
-    AgentRand,
+    /// An agent's claim of the cell (x, y) and whether it won it; its
+    /// deposit there; a read of the field at the cell (x, y), part `c`.
+    /// (An agent's draws are `rand`'s, on its own stream.)
     AgentClaim,
     AgentClaimCheck,
     AgentDeposit,
@@ -193,7 +192,6 @@ pub const HOSTS: &[(&str, Host)] = &[
     ("__outside", Host::Outside),
     ("__param", Host::Param),
     ("__take_deposit", Host::TakeDeposit),
-    ("__agent_rand", Host::AgentRand),
     ("__agent_claim", Host::AgentClaim),
     ("__agent_claim_check", Host::AgentClaimCheck),
     ("__agent_deposit", Host::AgentDeposit),
@@ -218,7 +216,7 @@ impl Host {
             ScratchWrite | MemWrite => &[I, F, F, F, F],
             MemRead => &[I, I],
             Outside | AgentClaim | AgentClaimCheck => &[I, I],
-            Param | AgentRand => &[I],
+            Param => &[I],
             TakeDeposit | PyrPrepare => &[],
             AgentDeposit => &[I, I, F],
             ReadAt => &[I, I, I],
@@ -242,7 +240,7 @@ impl Host {
 
     /// Whether an agent function's (else a model step's).
     pub fn agent(self) -> bool {
-        matches!(self, Host::AgentRand | Host::AgentClaim | Host::AgentClaimCheck | Host::AgentDeposit | Host::ReadAt)
+        matches!(self, Host::AgentClaim | Host::AgentClaimCheck | Host::AgentDeposit)
     }
 }
 

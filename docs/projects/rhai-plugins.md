@@ -743,6 +743,25 @@ nested loops and neighbour reads at loop offsets already work.
      it, and deposits into the accumulation buffer (atomics, as
      `agent_deposit`); `INFO.agents` sizing the population. The largest
      piece: a new template for the compiler to fill.
+     **Built 2026-11-03**: `fn agent_seed(p, ctx)`, `agent_step(a, p,
+     ctx)`, `agent_step2`, each lowered as a step is (`SimFn::AgentSeed`,
+     `Agent`) into the agent template's functions, the record a vector of
+     four (x, y, heading, state); the population `fn agent_count(p, w,
+     h)` on the CPU rather than an `INFO` key, since it is a function of
+     the grid. `claim`, `claim_check`, `deposit`, `read_at`,
+     `take_deposit`, `ctx.agent`, `ctx.periodic`; `rand(k)` in an agent is
+     its stream. Physarum's and DLA's twins bit-identical at every preset,
+     every agent's record included, Physarum against walls too
+     (`the_rhai_agent_models_move_as_the_built_ins`), and at speed (0.999,
+     1.013). DLA's needed its launch sum's terms in the built-in's order
+     for the shader compiler to fuse them alike. **Found**: the built-in
+     DLA reads its launch gap from `crowding`'s slot and its crowding from
+     `launch_gap`'s (`mparam(2u)`, `mparam(3u)`), swapped since it was
+     written; the twin follows the built-in. Not fixed: correcting it
+     moves every DLA picture and the preset's tuning (the user's call).
+     **All 31 models now have twins.** Open: a twin carries no `SLOW_PARAMS`
+     entry (Physarum's population commits on every drag frame) and no
+     per-scale table grid (P7).
 
 ### P5. Animation tracks as scripts
 

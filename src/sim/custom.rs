@@ -267,6 +267,8 @@ pub const SHIPPED_MODELS: &[(&str, &str)] = &[
     ("smoothlife", include_str!("../../assets/sim/smoothlife.rhai")),
     ("turing", include_str!("../../assets/sim/turing.rhai")),
     ("mccabe", include_str!("../../assets/sim/mccabe.rhai")),
+    ("physarum", include_str!("../../assets/sim/physarum.rhai")),
+    ("dla", include_str!("../../assets/sim/dla.rhai")),
 ];
 
 // ============================================================================
@@ -314,8 +316,20 @@ fn params_map(params: &[SimParamDef], ints: &[String], value: impl Fn(&str) -> f
 
 /// `f(p)`, the script's function.
 fn call_cpu(engine: &rhai::Engine, ast: &rhai::AST, f: &str, p: rhai::Map) -> Result<rhai::Dynamic, String> {
+    call_cpu_with(engine, ast, f, (p,))
+}
+
+/// `f(args)`, the script's function.
+fn call_cpu_with(engine: &rhai::Engine, ast: &rhai::AST, f: &str, args: impl rhai::FuncArgs) -> Result<rhai::Dynamic, String> {
     let options = rhai::CallFnOptions::new().eval_ast(false);
-    engine.call_fn_with_options(options, &mut rhai::Scope::new(), ast, f, (p,)).map_err(|e| format!("`{f}(p)`: {e}"))
+    engine.call_fn_with_options(options, &mut rhai::Scope::new(), ast, f, args).map_err(|e| format!("`{f}`: {e}"))
+}
+
+/// `agent_count(p, w, h)`'s result: a number of agents, at least one and
+/// at most the engine's ceiling (P4 step 9d).
+fn count_of(r: &rhai::Dynamic) -> Result<u32, String> {
+    let n = number(r).filter(|n| n.is_finite()).ok_or_else(|| format!("`agent_count(p, w, h)` gives a number, not {}", r.type_name()))?;
+    Ok(n.clamp(1.0, f64::from(super::MAX_AGENTS)) as u32)
 }
 
 fn number(v: &rhai::Dynamic) -> Option<f64> {
@@ -408,18 +422,39 @@ fn cached<T: Clone + 'static>(cache: &'static std::thread::LocalKey<std::cell::R
     let value = match r {
         Some(Ok(v)) => v,
         other => {
-            let e = match other {
-                Some(Err(e)) => e,
-                _ => "its script is not registered".to_string(),
-            };
-            if registry().write().is_ok_and(|mut r| r.failed.insert(format!("{}:{f}", model.name), e.clone()).is_none()) {
-                log::warn!("The simulation model `{}`'s `{f}(p)` failed: {e}", model.name);
-            }
+            cpu_failed(model.name, f, other.and_then(Result::err));
             fallback()
         }
     };
     cache.with(|c| c.borrow_mut().insert(model.name.to_string(), (key, value.clone())));
     value
+}
+
+/// The `count` of a model with agents (P4 step 9d): its
+/// `fn agent_count(p, w, h)` at the parameters in force and the grid's
+/// size; one agent when the script fails. Not cached: it runs when the
+/// population is sized, not per step.
+fn script_agent_count(p: &super::Params, w: u32, h: u32) -> u32 {
+    let model = p.model();
+    let r = with_script(model.name, |e, ast, s| {
+        let map = params_map(model.parameters, &s.ints, |n| p.get(n));
+        call_cpu_with(e, ast, "agent_count", (map, rhai::INT::from(w), rhai::INT::from(h))).and_then(|r| count_of(&r))
+    });
+    match r {
+        Some(Ok(n)) => n,
+        other => {
+            cpu_failed(model.name, "agent_count", other.and_then(Result::err));
+            1
+        }
+    }
+}
+
+/// Log a CPU function's failure once (a run asks again every batch).
+fn cpu_failed(model: &str, f: &str, e: Option<String>) {
+    let e = e.unwrap_or_else(|| "its script is not registered".to_string());
+    if registry().write().is_ok_and(|mut r| r.failed.insert(format!("{model}:{f}"), e.clone()).is_none()) {
+        log::warn!("The simulation model `{model}`'s `{f}` failed: {e}");
+    }
 }
 
 /// The `kernel` of a model with a `fn kernel(p)`: its table at the
@@ -583,6 +618,32 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         program.get_or_insert(p);
     }
     let program = program.ok_or("a simulation model has `fn cell_step`")?;
+    // Its agents (P4 step 9d): `agent_seed`, `agent_step` and
+    // `agent_step2`, compiled into the agent template; their number
+    // `fn agent_count(p, w, h)`, run on the CPU.
+    let has_fn = |f: &str| lang::rhai::has_function(source, f);
+    let agent_passes = lang::rhai::sim_agent_passes(source);
+    let mut agent_wgsl = String::new();
+    if agent_passes > 0 {
+        if !has_fn("agent_seed") {
+            return Err("a model with agents has `fn agent_seed(p, ctx)`: each agent's first record, `vec4(x, y, heading, state)`".to_string());
+        }
+        if !has_fn("agent_count") {
+            return Err("a model with agents has `fn agent_count(p, w, h)`: how many, on a grid w by h".to_string());
+        }
+        for f in std::iter::once(SimFn::AgentSeed).chain((0..agent_passes).map(SimFn::Agent)) {
+            let p = lang::rhai::sim_model(source, f).map_err(|d| first(&d))?;
+            let w = lang::wgsl::sim_model(&p, f)?;
+            agent_wgsl.push_str(&w.body);
+            rng |= w.rng;
+            min_max |= w.min_max;
+        }
+    } else if has_fn("agent_seed") || has_fn("agent_count") {
+        return Err("a model's agents move in `fn agent_step(a, p, ctx)`".to_string());
+    }
+    if agent_passes == 0 && wgsl.contains("sim_take_deposit(") {
+        return Err("the step takes the agents' deposit (`take_deposit`): it needs agents, `fn agent_step(a, p, ctx)`".to_string());
+    }
     // Its step reads the spectral stage's disc averages (P4 step 9b).
     // And the pyramid, its averages and spectral differences (step 9c);
     // the memory.
@@ -618,6 +679,7 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         (exact_discs, ModelFeature::ExactDiscs),
         (pyramid, ModelFeature::NeedsPyramid),
         (memory, ModelFeature::Memory),
+        (agent_passes > 0, ModelFeature::NeedsAgents),
         (lang::rhai::info_bool(source, "time_step") == Some(false), ModelFeature::NoTimeStep),
         (lang::rhai::info_bool(source, "settles") == Some(false), ModelFeature::NeverStills),
     ] {
@@ -648,16 +710,20 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     // that cannot give a time step, a table or its discs is a message
     // now, not a fallback at the first step.
     let has = |f: &str| lang::rhai::has_function(source, f);
-    let cpu = if has("max_dt") || has("kernel") || has("discs") {
+    let cpu = if has("max_dt") || has("kernel") || has("discs") || has("agent_count") {
         let engine = cpu_engine();
         let ast = engine.compile(source).map_err(|e| format!("its CPU functions: {e}"))?;
         Some((engine, ast, int_params(&program)))
     } else {
         None
     };
+    let at_defaults_map = || {
+        let (_, _, ints) = cpu.as_ref().expect("a CPU function");
+        params_map(parameters, ints, |n| parameters.iter().find(|p| p.name == n).map_or(0.0, |p| p.default))
+    };
     let at_defaults = |f: &str| -> Result<rhai::Dynamic, String> {
-        let (engine, ast, ints) = cpu.as_ref().expect("a CPU function");
-        call_cpu(engine, ast, f, params_map(parameters, ints, |n| parameters.iter().find(|p| p.name == n).map_or(0.0, |p| p.default)))
+        let (engine, ast, _) = cpu.as_ref().expect("a CPU function");
+        call_cpu(engine, ast, f, at_defaults_map())
     };
     let dt_bound = if has("max_dt") {
         let at = dt_of(&at_defaults("max_dt")?)?;
@@ -684,6 +750,12 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     } else if exact_discs || (pyramid && wgsl.contains("pyr_diff(")) {
         return Err("the step reads the spectral discs (`disc`, `pyr_diff`, `ctx.exact_discs`): it needs `fn discs(p)`".to_string());
     }
+    let agents = if agent_passes > 0 {
+        count_of(&call_cpu_with(&cpu.as_ref().expect("a CPU function").0, &cpu.as_ref().expect("a CPU function").1, "agent_count", (at_defaults_map(), 512 as rhai::INT, 512 as rhai::INT))?)?;
+        Some(super::AgentDef { count: script_agent_count, passes: u32::from(agent_passes), wgsl: leak(agent_wgsl) })
+    } else {
+        None
+    };
     if memory && !parameters.iter().any(|p| p.name == "memory") {
         return Err("the step reads its memory: it needs a `memory` parameter, which turns it on above 0".to_string());
     }
@@ -709,7 +781,13 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     scale_warps_of(source, name, parameters)?;
     let def = ModelDef {
         name: leak(name),
-        state: if lang::rhai::info_string(source, "state").as_deref() == Some("discrete") { StateKind::Discrete } else { StateKind::Continuous },
+        state: if agents.is_some() {
+            StateKind::Agents
+        } else if lang::rhai::info_string(source, "state").as_deref() == Some("discrete") {
+            StateKind::Discrete
+        } else {
+            StateKind::Continuous
+        },
         display_name: leak(program.name.clone()),
         description: leak(lang::rhai::source_labels(source).map(|l| l.description.resolve()).unwrap_or_default()),
         features: Box::leak(features.into_boxed_slice()),
@@ -721,7 +799,7 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         measure,
         max_dt: number("max_dt").map_or(default_dt, |v| v as f32),
         diffusion: Box::leak(diffusion.into_boxed_slice()),
-        agents: None,
+        agents,
         kernel,
         dt_bound,
         wgsl_seed: leak(seed),
@@ -737,6 +815,12 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
             lang::wgsl::validate_effect(&super::assembler::assemble_step(&def, boundary, pass)).map_err(|e| format!("the compiler produced invalid WGSL (a bug): {e}"))?;
         }
         lang::wgsl::validate_effect(&super::assembler::assemble_seed(&def, "blob")).map_err(|e| format!("the compiler produced an invalid seed (a bug): {e}"))?;
+        if let Some(a) = def.agents {
+            for pass in 0..a.passes {
+                lang::wgsl::validate_effect(&super::assembler::assemble_agents(&def, boundary, pass)).map_err(|e| format!("the compiler produced an invalid agent pass (a bug): {e}"))?;
+            }
+            lang::wgsl::validate_effect(&super::assembler::assemble_agent_seed(&def, boundary)).map_err(|e| format!("the compiler produced an invalid agent seed (a bug): {e}"))?;
+        }
     }
     Ok(def)
 }
@@ -754,7 +838,7 @@ pub fn register_model_as(source: &str, name: &str) -> Result<(), String> {
     let def: &'static ModelDef = Box::leak(Box::new(compile_model(source, name)?));
     let warps = scale_warps_of(source, name, def.parameters)?.map(|w| &*Box::leak(Box::new(w)));
     // Its CPU functions, which `with_script` finds by the model's name.
-    let has_cpu = ["max_dt", "kernel", "discs"].iter().any(|f| lang::rhai::has_function(source, f));
+    let has_cpu = ["max_dt", "kernel", "discs", "agent_count"].iter().any(|f| lang::rhai::has_function(source, f));
     let cpu = has_cpu.then(|| {
         let ints = lang::rhai::sim_model(source, lang::rhai::SimFn::Step(0)).map(|p| int_params(&p)).unwrap_or_default();
         Arc::new(CpuScript { source: source.to_string(), ints })
@@ -902,6 +986,72 @@ fn cell_step2(cell, p, ctx) {
         }
     }
 
+    /// A model with agents (P4 step 9d): `agent_seed`, `agent_step` and
+    /// `agent_step2` compiled into the agent template, their number from
+    /// `agent_count(p, w, h)` on the CPU, clamped; `NeedsAgents`,
+    /// `StateKind::Agents`, `NeedsRng` from an agent's draws -- and a
+    /// message for each half of one, and for each call in the wrong
+    /// function.
+    #[test]
+    fn a_model_with_agents_compiles() {
+        let params = "const PARAMS = #{ amount: #{ value: 2.0, min: 0.0, max: 4.0 } };
+";
+        let step = "fn cell_step(cell, p, ctx) { rgba(take_deposit(), cell.y, 0.0, 0.0) }
+";
+        let agents = r#"
+fn agent_seed(p, ctx) { rgba(rand(1) * to_float(ctx.width), to_float(ctx.agent), 0.0, 0.0) }
+fn agent_step(a, p, ctx) {
+    let x = to_int(floor(a.x + 0.5));
+    let y = to_int(floor(a.y + 0.5));
+    if read_at(x, y).x < 1.0 && ctx.periodic == 1 {
+        claim(x, y);
+    }
+    a
+}
+fn agent_step2(a, p, ctx) {
+    let x = to_int(floor(a.x + 0.5));
+    let y = to_int(floor(a.y + 0.5));
+    if claim_check(x, y) {
+        deposit(x, y, p.amount);
+    }
+    rgba(a.x + rand(2), a.y, a.z, a.w)
+}
+fn agent_count(p, w, h) { to_float(w * h) * p.amount }
+"#;
+        let def = compile_model(&format!("{params}{step}{agents}"), "custom-agents").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(def.state, StateKind::Agents);
+        assert!(def.has(ModelFeature::NeedsAgents) && def.has(ModelFeature::NeedsRng));
+        let a = def.agents.expect("agents");
+        assert_eq!(a.passes, 2);
+        for want in ["fn sim_agent_seed(i: u32) -> SimAgent", "fn sim_agent(agent: SimAgent, i: u32) -> SimAgent", "fn sim_agent2(", "agent_claim(", "agent_claim_check(", "agent_deposit(", "agent_rand(i, "] {
+            assert!(a.wgsl.contains(want), "{want} in
+{}", a.wgsl);
+        }
+        register_model_as(&format!("{params}{step}{agents}"), "custom-agents").unwrap();
+        let def = model("custom-agents").expect("registered");
+        let at = |amount: f32| [("amount".to_string(), amount)].into();
+        assert_eq!((a.count)(&def.params_view(&at(2.0)), 10, 20), 400);
+        assert_eq!((a.count)(&def.params_view(&at(0.0)), 10, 20), 1, "at least one");
+        assert_eq!((a.count)(&def.params_view(&at(4.0)), 4096, 4096), crate::sim::MAX_AGENTS, "at most the ceiling");
+        // Half a model with agents, and calls in the wrong function.
+        let no_step = agents.replace("fn agent_step(", "fn agent_move(").replace("fn agent_step2(", "fn agent_move2(");
+        for (src, says) in [
+            (format!("{params}{step}{}", agents.replace("fn agent_seed(", "fn agent_first(")), "fn agent_seed"),
+            (format!("{params}{step}{}", agents.replace("fn agent_count(", "fn agent_number(")), "fn agent_count"),
+            (format!("{params}{step}{no_step}"), "agent_step"),
+            (format!("{params}{step}"), "take_deposit"),
+            (format!("{params}{step}{}", agents.replace("read_at(x, y)", "read(0, 0)")), "read_at(x, y)"),
+            (format!("{params}{step}{}", agents.replace("rand(1) * to_float(ctx.width)", "ctx.cell.re")), "no cell"),
+            (format!("{params}{}{agents}", step.replace("{ rgba(", "{ claim(0, 0); rgba(")), "an agent's"),
+            (format!("{params}{}{agents}", step.replace("cell.y", "to_float(ctx.agent)")), "an agent's index"),
+            (format!("{params}{step}{}", agents.replace("claim(x, y);", "write_memory(0, a);")), "a step's"),
+            (format!("{params}{step}{}", agents.replace("fn agent_seed(p, ctx)", "fn agent_seed(i, p, ctx)")), "`agent_seed()`"),
+        ] {
+            let e = compile_model(&src, "custom-half").expect_err(says);
+            assert!(e.contains(says), "{says}: {e}");
+        }
+    }
+
     /// A carried source registers under the name the config gives it, and
     /// the lookup every path uses finds it.
     #[test]
@@ -1019,8 +1169,8 @@ fn cell_step2(cell, p, ctx) {
     /// the field's range and a repeated pass it can (9a), kernel tables,
     /// the spectral discs and the coupled drive (9b), the pyramid, a
     /// measure pass and the memory (9c).
-    pub(crate) fn in_class(m: &ModelDef) -> bool {
-        m.agents.is_none() && !m.has(ModelFeature::NeedsAgents)
+    pub(crate) fn in_class(_: &ModelDef) -> bool {
+        true
     }
 
     /// JSON as a Rhai literal: maps `#{ }`, an f32's number as its
@@ -1160,6 +1310,18 @@ fn cell_step2(cell, p, ctx) {
             assert_eq!(passes(twin), passes(builtin), "{name}: its passes");
             let warps = |m: &str| super::super::scale_warps(m).map(|w| (w.rows_param, w.rows));
             assert_eq!(warps(&key), warps(name), "{name}: its per-scale warps");
+            // Its agents (P4 step 9d): their passes, and their number at
+            // the defaults and at each preset, on a few grids.
+            assert_eq!(twin.agents.map(|a| a.passes), builtin.agents.map(|a| a.passes), "{name}: its agents' passes");
+            if let (Some(a), Some(b)) = (builtin.agents, twin.agents) {
+                let at_presets = std::iter::once(std::collections::BTreeMap::new()).chain(builtin.presets.iter().map(|p| p.params.iter().map(|(k, v)| (k.to_string(), *v)).collect()));
+                for at in at_presets {
+                    for (w, h) in [(64, 64), (512, 512), (1920, 1080), (4096, 4096)] {
+                        let (x, y) = ((a.count)(&builtin.params_view(&at), w, h), (b.count)(&twin.params_view(&at), w, h));
+                        assert_eq!(x, y, "{name}: the agents on {w}x{h} at {at:?}");
+                    }
+                }
+            }
             let features = |m: &ModelDef| {
                 let mut f: Vec<String> = m.features.iter().map(|f| format!("{f:?}")).collect();
                 f.sort();
@@ -1231,9 +1393,12 @@ fn cell_step2(cell, p, ctx) {
         std::fs::create_dir_all(dir).unwrap();
         for (name, source) in SHIPPED_MODELS {
             let def = compile_model(source, &format!("custom-wgsl-{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let agents = def.agents.map_or(String::new(), |a| format!("
+// ---- agents
+{}", a.wgsl));
             std::fs::write(dir.join(format!("{name}.twin.wgsl")), format!("{}
 // ---- seed
-{}", def.wgsl, def.wgsl_seed)).unwrap();
+{}{agents}", def.wgsl, def.wgsl_seed)).unwrap();
         }
     }
 

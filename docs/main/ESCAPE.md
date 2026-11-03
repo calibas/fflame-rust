@@ -832,11 +832,16 @@ fn escaped(s, p) {
 - **A simulation's framework calls** (P4 step 9c): `IExprKind::Host` and
   `IStmt::Host` (`builtins::Host`), n-ary where a builtin is unary --
   the pyramid's reads, a measure pass's scratch, the memory, a grid
-  test, a parameter by its slot; the writes statements. A vector read is
+  test, a parameter by its slot, an agent's claim, its check and its
+  deposit, a read of the field at a cell (P4 step 9d); the writes
+  statements. A vector read is
   one call a part, its part a literal last argument the checker
   requires; a simulation model's alone (`Check::host_args`), and only
   the WGSL back end emits them. In a simulation model, `param(k)` and
-  the reads type as floats where a `let` infers its type.
+  the reads type as floats where a `let` infers its type. An agent's
+  functions (`rhai::SimFn::AgentSeed`, `Agent`) lower as a step's, the
+  record in `s` and out through `AGENT_RETURN`, their draws
+  `agent_rand(i, salt)` (`Gen::agent`).
 - **A helper takes `p` and `ctx` whole** (P4 step 9c): an argument that
   is the entry's parameters, its context or a colouring's sample binds
   the helper's parameter as it is bound at the call
