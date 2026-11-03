@@ -368,6 +368,18 @@ pub enum Place {
     Effect(Predef),
 }
 
+/// How a run of statements ended, in the evaluators (`interp`, `bigeval`;
+/// rhai-plugins P7 step 1): at its end, or at a `break` or a `continue`
+/// the loop around it takes, or an early `return` the function's caller
+/// does -- the section ends there, its result already set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flow {
+    Next,
+    Break,
+    Continue,
+    Return,
+}
+
 #[derive(Clone, Debug)]
 pub enum IStmt {
     Assign(Place, IExpr),

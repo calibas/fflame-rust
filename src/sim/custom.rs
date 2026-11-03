@@ -1137,8 +1137,8 @@ fn agent_count(p, w, h) { to_float(w * h) * p.amount }
         let own = "fn first(x) {\n    let n = 0.0;\n    for i in 0..8 { n += x; if n > 2.0 { break; } }\n    n\n}\nfn cell_step(cell) { vec4(first(cell.x), 0.0, 0.0, 0.0) }";
         assert!(compile_model(own, "custom-x").unwrap_or_else(|e| panic!("{e}")).wgsl.contains("break;"));
         let formula = "fn start(pixel, p) { #{ z: pixel } }\nfn step(s, p) {\n    for i in 0..3 { if i == 1 { break; } }\n    s\n}";
-        let e = lang::rhai::program(formula).unwrap_err();
-        assert!(e.iter().any(|d| d.message.contains("a formula's loops have no")), "{e:?}");
+        // A formula's loops too, since P7 step 1.
+        assert!(lang::rhai::program(formula).is_ok());
     }
 
     /// A model's own time step and presets (P4 step 6): `fn max_dt(p)`

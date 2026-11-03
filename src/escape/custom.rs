@@ -1796,6 +1796,49 @@ mod tests {
         assert!(super::super::formula_julia_is_meaningful(def), "the switch is the Julia toggle");
     }
 
+    /// A formula whose step breaks and continues its loops (rhai-plugins
+    /// P7 step 1) compiles, and the deep-zoom paths -- perturbation, its
+    /// period and nucleus searches, BLA -- each decline it or take it,
+    /// none of them panicking on the statements it had never seen.
+    #[test]
+    fn a_formula_that_breaks_its_loops_compiles_and_deep_zoom_declines_it() {
+        let text = r#"
+fn start(pixel, p) {
+    #{ z: complex(0.0, 0.0), c: pixel }
+}
+fn step(s, p) {
+    let w = s.z;
+    for k in 0..6 {
+        if k == 1 {
+            continue;
+        }
+        if k == 4 {
+            break;
+        }
+        w = w * 0.5 + s.c * 0.25;
+    }
+    s.z = w * w + s.c;
+    s
+}
+fn escaped(s, p) {
+    s.z.norm_sqr() > 4.0
+}
+"#;
+        let src = CustomSource { dialect: CustomDialect::Rhai, entry: "Flow".into(), source: text.to_string(), variations: Vec::new() };
+        let name = name_of(EntryKind::Formula, &src);
+        compile_formula(&src, &name).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>()));
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = name;
+        esc.custom_formula = Some(src);
+        let _ = perturb_tier(&esc);
+        let _ = detect_period(&esc, 8);
+        let _ = offers_nucleus(&esc);
+        let _ = nucleus_search_for(&esc);
+        let _ = size_failure(&esc);
+        let orbit: Vec<[f64; 2]> = (0..16).map(|i| [0.01 * f64::from(i), 0.0]).collect();
+        let _ = bla_steps(&esc, &orbit, lang::builtins::C64::new(-0.5, 0.0), 1e-6);
+    }
+
     #[test]
     fn names_are_stable_and_follow_the_source() {
         let a = src("M {\nloop:\n z = z^2 + #pixel\nbailout:\n |z| < 4\n}", "M");

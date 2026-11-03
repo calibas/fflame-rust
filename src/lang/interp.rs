@@ -742,11 +742,15 @@ impl<'p> Machine<'p> {
         (i.max(0) as usize).min(self.arrays[v].len().saturating_sub(1))
     }
 
-    fn exec(&mut self, stmts: &[IStmt], sh: &mut Shared) {
+    fn exec(&mut self, stmts: &[IStmt], sh: &mut Shared) -> Flow {
         for s in stmts {
             match s {
                 IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
-                IStmt::Break | IStmt::Continue | IStmt::Return => unreachable!("an effect-like function's `break`, `continue` or `return`, which runs on the GPU alone"),
+                // The loop or the function around it takes these (P7
+                // step 1), as the GPU's do.
+                IStmt::Break => return Flow::Break,
+                IStmt::Continue => return Flow::Continue,
+                IStmt::Return => return Flow::Return,
                 IStmt::Assign(place, e) => {
                     let v = self.eval(e, sh);
                     match place {
@@ -770,23 +774,31 @@ impl<'p> Machine<'p> {
                     self.arrays[*var][i] = v;
                 }
                 IStmt::If { arms, otherwise } => {
-                    let mut taken = false;
+                    let mut taken = None;
                     for (cond, body) in arms {
                         if self.eval(cond, sh).as_bool() {
-                            self.exec(body, sh);
-                            taken = true;
+                            taken = Some(self.exec(body, sh));
                             break;
                         }
                     }
-                    if !taken {
-                        self.exec(otherwise, sh);
+                    let flow = match taken {
+                        Some(f) => f,
+                        None => self.exec(otherwise, sh),
+                    };
+                    if flow != Flow::Next {
+                        return flow;
                     }
                 }
                 IStmt::While { cond, body } => {
                     let mut k = 0;
                     while k < LOOP_CAP && self.eval(cond, sh).as_bool() {
-                        self.exec(body, sh);
+                        let flow = self.exec(body, sh);
                         k += 1;
+                        match flow {
+                            Flow::Break => break,
+                            Flow::Return => return Flow::Return,
+                            Flow::Next | Flow::Continue => {}
+                        }
                     }
                 }
                 // The GPU's alone: the checker keeps it out of `prepare`,
@@ -795,8 +807,16 @@ impl<'p> Machine<'p> {
                 IStmt::Repeat { body, cond } => {
                     let mut k = 0;
                     loop {
-                        self.exec(body, sh);
+                        let flow = self.exec(body, sh);
                         k += 1;
+                        match flow {
+                            Flow::Break => break,
+                            Flow::Return => return Flow::Return,
+                            // Past the test, as the GPU's `continue` in its
+                            // `for` is (the lowering refuses one here).
+                            Flow::Continue if k < LOOP_CAP => continue,
+                            Flow::Next | Flow::Continue => {}
+                        }
                         if k >= LOOP_CAP || self.eval(cond, sh).as_bool() {
                             break;
                         }
@@ -804,6 +824,7 @@ impl<'p> Machine<'p> {
                 }
             }
         }
+        Flow::Next
     }
 
     fn eval(&self, e: &IExpr, sh: &Shared) -> Value {

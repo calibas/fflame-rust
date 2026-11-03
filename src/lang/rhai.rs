@@ -2518,12 +2518,9 @@ impl<'s> Lowerer<'s> {
                 let Expr::FnCall(f, p) = &**e else { unreachable!("matched above") };
                 self.sim_write(f, *p, scope, out)
             }
-            // An effect-like function's flow (P4 step 5): its code is the
-            // GPU's alone, which has both.
+            // A loop's flow: the effect-like functions' since P4 step 5,
+            // every kind's since P7 step 1 (the interpreter runs them too).
             Stmt::BreakLoop(value, flags, p) => {
-                if !(self.effect || self.sim_coloring || self.sim_model) {
-                    return self.err(*p, "a formula's loops have no `break` or `continue`");
-                }
                 let brk = flags.intersects(ASTFlags::BREAK);
                 let word = if brk { "break" } else { "continue" };
                 if value.is_some() {
@@ -3788,6 +3785,102 @@ fn escaped(s, p) {
 }
 "#;
 
+    /// A loop's `break` and `continue` in every kind (rhai-plugins P7
+    /// step 1): a formula's step using both, in a `for` and a `while`,
+    /// runs in the interpreter -- the CPU's reference, deep zoom's and
+    /// the tests' -- as the same step written without them, and compiles
+    /// to WGSL that validates; a variation's too, and its WGSL loops
+    /// break and continue. An early `return` stays the effect-like
+    /// functions' for now.
+    #[test]
+    fn break_and_continue_run_in_every_kind() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, transform, Env, ParamValues};
+        let head = "fn start(pixel, p) {
+    #{ z: complex(0.0, 0.0), c: pixel }
+}
+fn escaped(s, p) {
+    s.z.norm_sqr() > 4.0
+}
+";
+        let flow = r#"
+fn step(s, p) {
+    let w = s.z;
+    for k in 0..6 {
+        if k == 1 {
+            continue;
+        }
+        if k == 4 {
+            break;
+        }
+        w = w * 0.5 + s.c * 0.25;
+    }
+    let n = 0;
+    while n < 100 {
+        n += 1;
+        if n == 3 {
+            break;
+        }
+    }
+    s.z = w * w + s.c * to_float(n - 2);
+    s
+}
+"#;
+        let plain = "fn step(s, p) {
+    let w = s.z;
+    for k in 0..3 {
+        w = w * 0.5 + s.c * 0.25;
+    }
+    s.z = w * w + s.c;
+    s
+}
+";
+        let (a, b) = (program(&format!("{head}{flow}")).unwrap(), program(&format!("{head}{plain}")).unwrap());
+        let (va, vb) = (ParamValues::defaults(&a), ParamValues::defaults(&b));
+        for (re, im) in [(-0.75, 0.1), (0.3, 0.5), (-1.2, -0.2), (0.25, 0.0)] {
+            let env = Env::at(C64::new(re, im), 200);
+            let (x, y) = (run(&a, &va, None, &env), run(&b, &vb, None, &env));
+            assert_eq!((x.n, x.z.re.to_bits(), x.z.im.to_bits()), (y.n, y.z.re.to_bits(), y.z.im.to_bits()), "at {re} + {im}i");
+        }
+        let wgsl = crate::lang::wgsl::formula(&a);
+        assert!(wgsl.contains("break;") && wgsl.contains("continue;"), "{wgsl}");
+        crate::lang::wgsl::validate_formula(&wgsl).unwrap_or_else(|e| panic!("{e}
+{wgsl}"));
+
+        let var = "fn variation(z, p) {
+    let w = z;
+    for k in 0..5 {
+        if k == 1 {
+            continue;
+        }
+        if k == 3 {
+            break;
+        }
+        w = w * 0.9;
+    }
+    w
+}
+";
+        let v = transformation(var).unwrap_or_else(|d| panic!("{d:?}"));
+        let z = C64::new(0.7, -0.3);
+        let got = transform(&v, &ParamValues::defaults(&v), z);
+        let want = C64::new(0.7 * 0.9 * 0.9, -0.3 * 0.9 * 0.9);
+        assert!((got.re - want.re).abs() < 1e-12 && (got.im - want.im).abs() < 1e-12, "{got:?}");
+        let w = crate::lang::wgsl::variation(Some(&v), None, "flowtest").unwrap();
+        let w2 = w.wgsl_2d.expect("a 2D variation");
+        assert!(w2.contains("break;") && w2.contains("continue;"), "{w2}");
+
+        let e = program(&format!("{head}fn step(s, p) {{
+    if s.z.re > 1.0 {{
+        return s;
+    }}
+    s.z = s.z * s.z + s.c;
+    s
+}}
+")).unwrap_err();
+        assert!(e.iter().any(|d| d.message.contains("`return`")), "{e:?}");
+    }
+
     /// An id goes into the script's own text (design rule 7): first in its
     /// `INFO`, or a new `INFO` under its header comment; one it has stays.
     #[test]
@@ -4195,7 +4288,6 @@ fn escaped(s, p) { false }";
             ("s.w = s.z; s", "`w` is not in the state"),
             ("s.z = s.z * p.power; s", "`power` is not in `PARAMS`"),
             ("s.z = gamma(s.z); s", "unknown function `gamma`"),
-            ("while true { break; } s", "no `break`"),
             ("let a = []; s", "an empty array has no length"),
             ("s.z = \"x\"; s", "a string is metadata"),
             ("s.z = s.z + 1.0;", "ends with the state"),
