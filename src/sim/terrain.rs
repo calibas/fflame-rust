@@ -389,7 +389,7 @@ mod tests {
         c.sim.terrain.layer = 1;
         assert_eq!(height_colour(&c, 4.0), Some([0.5, 0.25, 1.0]));
         // Two, and it is the other.
-        let one = crate::config::sim::SimLayer { model: c.sim.model.clone(), model_params: Default::default(), enabled: true };
+        let one = crate::config::sim::SimLayer { model: c.sim.model.clone(), model_params: Default::default(), enabled: true, custom_model: None };
         c.sim.layers = vec![one.clone(), one];
         assert_eq!(height_colour(&c, 4.0), None);
         c.sim.layers.clear();

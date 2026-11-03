@@ -161,10 +161,10 @@ pub fn carried(source: &str) -> CustomSource {
     CustomSource { dialect: CustomDialect::Rhai, entry: name_of(source), source: source.to_string(), variations: Vec::new() }
 }
 
-/// Register the colouring and the model a simulation carries, before
-/// anything resolves their names. Cheap when they are registered
-/// already; one that does not compile is logged once, and its name falls
-/// back as an unknown one's does (`coloring_or_default`,
+/// Register the colourings and models a simulation carries (flat and
+/// per layer), before anything resolves their names. Cheap when they are
+/// registered already; one that does not compile is logged once, and its
+/// name falls back as an unknown one's does (`coloring_or_default`,
 /// `model_or_default`).
 pub fn ensure(sim: &crate::config::sim::SimConfig) {
     let failed = |name: &str| registry().read().is_ok_and(|r| r.failed.contains_key(name));
@@ -174,17 +174,23 @@ pub fn ensure(sim: &crate::config::sim::SimConfig) {
             r.failed.insert(name.to_string(), e);
         }
     };
-    if let Some(src) = &sim.custom_coloring {
-        if sim.coloring.starts_with(PREFIX) && coloring(&sim.coloring).is_none() && !failed(&sim.coloring) {
-            if let Err(e) = register_as(&src.source, &sim.coloring) {
-                note(&sim.coloring, e);
+    // The flat colouring and every colour layer's; the flat model and
+    // every layer's (P4 step 4).
+    let colorings = std::iter::once((&sim.coloring, &sim.custom_coloring)).chain(sim.color_layers.iter().map(|l| (&l.coloring, &l.custom_coloring)));
+    for (name, src) in colorings {
+        let Some(src) = src else { continue };
+        if name.starts_with(PREFIX) && coloring(name).is_none() && !failed(name) {
+            if let Err(e) = register_as(&src.source, name) {
+                note(name, e);
             }
         }
     }
-    if let Some(src) = &sim.custom_model {
-        if sim.model.starts_with(PREFIX) && model(&sim.model).is_none() && !failed(&sim.model) {
-            if let Err(e) = register_model_as(&src.source, &sim.model) {
-                note(&sim.model, e);
+    let models = std::iter::once((&sim.model, &sim.custom_model)).chain(sim.layers.iter().map(|l| (&l.model, &l.custom_model)));
+    for (name, src) in models {
+        let Some(src) = src else { continue };
+        if name.starts_with(PREFIX) && model(name).is_none() && !failed(name) {
+            if let Err(e) = register_model_as(&src.source, name) {
+                note(name, e);
             }
         }
     }
@@ -380,5 +386,51 @@ mod tests {
         ensure(&sim);
         assert_eq!(super::super::coloring_or_default(&sim.coloring).name, sim.coloring);
         assert_eq!(super::super::model_or_default(&sim.model).name, sim.model);
+    }
+
+    /// A source goes with its layer (P4 step 4): promoting the flat model
+    /// and colouring into the stacks carries their sources into entry 0,
+    /// a later entry's source registers under its own name, and demoting
+    /// brings entry 0's back to the flat fields.
+    #[test]
+    fn a_source_goes_with_its_layer() {
+        use crate::config::sim::{SimColorLayer, SimLayer};
+        let mut sim = crate::config::sim::SimConfig::default();
+        let (model, colouring) = (carried(SHIPPED_MODELS[0].1), carried(CHANNEL));
+        sim.model = model.entry.clone();
+        sim.custom_model = Some(model.clone());
+        sim.coloring = colouring.entry.clone();
+        sim.custom_coloring = Some(colouring.clone());
+        sim.promote_model_to_layers();
+        sim.promote_coloring_to_layers();
+        assert_eq!(sim.layers[0].custom_model.as_ref(), Some(&model));
+        assert_eq!(sim.color_layers[0].custom_coloring.as_ref(), Some(&colouring));
+        // Entry 1 under a name of its own: ensure registers it there.
+        let renamed = |c: &CustomSource, name: &str| CustomSource { entry: name.to_string(), ..c.clone() };
+        sim.layers.push(SimLayer { model: "custom-layer-test".into(), model_params: Default::default(), enabled: true, custom_model: Some(renamed(&model, "custom-layer-test")) });
+        sim.color_layers.push(SimColorLayer { coloring: "custom-colour-layer-test".into(), custom_coloring: Some(renamed(&colouring, "custom-colour-layer-test")), ..Default::default() });
+        ensure(&sim);
+        assert_eq!(super::super::model_or_default("custom-layer-test").name, "custom-layer-test");
+        assert_eq!(super::super::coloring_or_default("custom-colour-layer-test").name, "custom-colour-layer-test");
+        sim.layers.pop();
+        sim.color_layers.pop();
+        sim.custom_model = None;
+        sim.custom_coloring = None;
+        sim.demote_single_layer();
+        sim.demote_single_color_layer();
+        assert_eq!((sim.custom_model.as_ref(), sim.custom_coloring.as_ref()), (Some(&model), Some(&colouring)));
+    }
+
+    /// Two names are one Rhai model's versions when both are `custom-` and
+    /// a key with the same id; a built-in's name, or a hash name, is not.
+    #[test]
+    fn versions_of_one_script_are_told_apart_from_others() {
+        let v1 = format!("custom-{}", crate::scripted::key("6f1e1d6c-6b1a-4c55-9a43-2d4b7c1f0e21", "a"));
+        let v2 = format!("custom-{}", crate::scripted::key("6f1e1d6c-6b1a-4c55-9a43-2d4b7c1f0e21", "b"));
+        let other = format!("custom-{}", crate::scripted::key("0b7e4a0e-55a9-4d2c-8f7e-3f5c1a2b9d10", "a"));
+        assert!(crate::config::sim::same_script(&v1, &v2));
+        assert!(!crate::config::sim::same_script(&v1, &other));
+        assert!(!crate::config::sim::same_script("gray_scott", "gray_scott"));
+        assert!(!crate::config::sim::same_script("custom-0123456789abcdef", "custom-0123456789abcdef"));
     }
 }

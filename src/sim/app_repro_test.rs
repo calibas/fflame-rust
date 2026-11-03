@@ -258,6 +258,64 @@ fn the_rhai_gray_scott_steps_as_the_built_in() {
     }
 }
 
+/// Rhai models and colourings in layers (P4 step 4): a two-layer run with
+/// a coupling between the layers, layer 1 Gray-Scott's Rhai twin against
+/// the built-in, coloured by a two-entry stack whose second entry is
+/// Channel's twin against the built-in -- every slice and the picture as
+/// the built-ins make them, each twin registered from the source its
+/// entry carries.
+#[cfg(feature = "lang")]
+#[test]
+fn rhai_models_and_colourings_run_in_layers() {
+    use crate::config::sim::{SimBlend, SimColorLayer, SimCoupling, SimCouplingForm, SimLayer};
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let model = crate::sim::custom::carried(crate::sim::custom::SHIPPED_MODELS[0].1);
+    let colouring = crate::sim::custom::carried(crate::sim::custom::SHIPPED[0].1);
+    let mut builtin = small_config();
+    let layer = |feed: f32| SimLayer { model: "gray_scott".into(), model_params: [("feed".to_string(), feed)].into(), enabled: true, custom_model: None };
+    builtin.layers = vec![layer(0.0545), layer(0.037)];
+    builtin.couplings = vec![SimCoupling { from: 0, to: 1, form: SimCouplingForm::Linear, strength: 0.002, channels: 0b10 }];
+    let entry = |source: usize| SimColorLayer {
+        source,
+        coloring: "channel".into(),
+        coloring_params: [("channel".to_string(), 1.0), ("scale".to_string(), 4.0)].into(),
+        blend: if source == 0 { SimBlend::Normal } else { SimBlend::Screen },
+        opacity: if source == 0 { 1.0 } else { 0.7 },
+        ..Default::default()
+    };
+    builtin.color_layers = vec![entry(0), entry(1)];
+    builtin.steps = 400;
+    let mut twin = builtin.clone();
+    twin.layers[1].model = model.entry.clone();
+    twin.layers[1].custom_model = Some(model.clone());
+    twin.color_layers[1].coloring = colouring.entry.clone();
+    twin.color_layers[1].custom_coloring = Some(colouring.clone());
+    let run = |cfg: &SimConfig| {
+        let mut r = SimRenderer::new(&device, cfg, N, N);
+        r.render_still(&device, &queue, cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let slices = [0, 1].map(|l| read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, l));
+        (slices, read_rgba32f(&device, &queue, r.output_texture(), N, N))
+    };
+    let (a, b) = (run(&builtin), run(&twin));
+    // Not the default's fallback, which is the built-in.
+    assert_eq!(crate::sim::model_or_default(&twin.layers[1].model).name, twin.layers[1].model, "the layer's model registered");
+    assert_eq!(crate::sim::coloring_or_default(&twin.color_layers[1].coloring).name, twin.color_layers[1].coloring, "the colour layer's colouring registered");
+    let worst = |x: &[[f32; 4]], y: &[[f32; 4]]| x.iter().zip(y).flat_map(|(p, q)| p.iter().zip(q).map(|(u, v)| (u - v).abs())).fold(0.0f32, f32::max);
+    assert!(a.0[1].iter().any(|c| c[1] > 0.05), "layer 1 grew B");
+    for l in 0..2 {
+        let w = worst(&a.0[l], &b.0[l]);
+        assert!(w <= 1e-5, "slice {l} is off by {w}");
+    }
+    let w = worst(&a.1, &b.1);
+    assert!(w <= 1e-5, "the picture is off by {w}");
+}
+
 /// A Rhai model steps as fast as its built-in twin (P4; the rule that
 /// Rhai compiles to equivalent WGSL): Gray-Scott at 1024x1024, each
 /// round the twin straight after the built-in, the median of the rounds'
@@ -3041,11 +3099,12 @@ fn scale_memory_colours_the_memory_of_its_source_layer() {
     const N: u32 = 48;
     let mut cfg = mccabe_config(N);
     cfg.layers = vec![
-        SimLayer { model: "gray_scott".into(), model_params: Default::default(), enabled: true },
+        SimLayer { model: "gray_scott".into(), model_params: Default::default(), enabled: true, custom_model: None },
         SimLayer {
             model: "mccabe".into(),
             model_params: [("memory".to_string(), 0.2f32)].into_iter().collect(),
             enabled: true,
+            custom_model: None,
         },
     ];
     let palette = test_palette(&device, &queue);
@@ -8181,11 +8240,13 @@ fn a_layer_is_the_same_run_it_would_be_alone() {
             model: "lattice4".into(),
             model_params: alone.model_params.clone(),
             enabled: true,
+            custom_model: None,
         },
         crate::config::sim::SimLayer {
             model: "cahn_hilliard".into(),
             model_params: Default::default(),
             enabled: true,
+            custom_model: None,
         },
     ];
     let mut r = SimRenderer::new(&device, &layered, N, N);
@@ -8219,6 +8280,7 @@ fn layered_steps_are_batch_invariant() {
         model: model.into(),
         model_params: Default::default(),
         enabled: true,
+        custom_model: None,
     };
     cfg.layers = vec![layer("gray_scott"), layer("brusselator"), layer("lattice4")];
     let run = |chunks: &[u32]| -> Vec<Vec<[f32; 4]>> {
@@ -8258,6 +8320,7 @@ fn layered_step_cost_at_1080p() {
                 model: "gray_scott".into(),
                 model_params: Default::default(),
                 enabled: true,
+                custom_model: None,
             })
             .collect();
         if n == 1 {
@@ -8362,6 +8425,7 @@ fn two_brusselator_layers_are_the_two_layer_brusselator() {
             .map(|(k, v)| (k.to_string(), v))
             .collect(),
         enabled: true,
+        custom_model: None,
     };
     layered.layers = vec![layer(d[0], d[1]), layer(d[2], d[3])];
     let coupling = |from: usize, to: usize| crate::config::sim::SimCoupling {
@@ -8565,6 +8629,7 @@ fn a_single_normal_colour_layer_is_the_single_colouring() {
             blend: crate::config::sim::SimBlend::Normal,
             opacity: 1.0,
             enabled: true,
+            custom_coloring: None,
         }];
         let stack = render(&stacked);
         let differ = single.iter().zip(&stack).filter(|(a, b)| a != b).count();
@@ -8595,6 +8660,7 @@ fn blend_modes_match_a_cpu_evaluation() {
         model: "gray_scott".into(),
         model_params: [("feed", feed), ("kill", 0.062)].into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
         enabled: true,
+        custom_model: None,
     };
     cfg.layers = vec![layer(0.0545), layer(0.037)];
     let colour = |source: usize| crate::config::sim::SimColorLayer {
@@ -8609,6 +8675,7 @@ fn blend_modes_match_a_cpu_evaluation() {
         blend: crate::config::sim::SimBlend::Normal,
         opacity: 1.0,
         enabled: true,
+        custom_coloring: None,
     };
     let render = |cfg: &SimConfig| -> Vec<[f32; 4]> {
         let mut r = SimRenderer::new(&device, cfg, N, N);
@@ -8710,6 +8777,7 @@ fn turing_layers_of(lattice: &SimConfig) -> SimConfig {
             .map(|(k, v)| (k.to_string(), v))
             .collect(),
             enabled: true,
+            custom_model: None,
         })
         .collect();
     cfg.couplings.clear();
@@ -8813,6 +8881,7 @@ fn four_turing_layers_are_the_lattices_ring() {
             blend: crate::config::sim::SimBlend::Normal,
             opacity: 1.0,
             enabled: true,
+            custom_coloring: None,
         }];
         r_t.color(&device, &queue, &layered_c, &palette);
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });

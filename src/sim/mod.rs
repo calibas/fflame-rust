@@ -1035,6 +1035,7 @@ impl SimLayeredPreset {
                 model: (*m).to_string(),
                 model_params: ps.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
                 enabled: true,
+                custom_model: None,
             })
             .collect();
         sim.couplings = self
@@ -1068,6 +1069,7 @@ impl SimLayeredPreset {
                 blend,
                 opacity,
                 enabled: true,
+                custom_coloring: None,
             })
             .collect();
         sim.warp = Default::default();
