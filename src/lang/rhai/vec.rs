@@ -426,10 +426,23 @@ impl Lowerer<'_> {
                 inner.bind(param, a);
             }
             self.depth += 1;
-            let r = if self.pure { self.pure_vec_body(&def.body, &mut inner) } else { self.vec_value_block(&def.body, &mut inner).map(|(body, v)| {
-                self.pending.extend(body);
-                v
-            }) };
+            let r = if self.pure {
+                self.pure_vec_body(&def.body, &mut inner)
+            } else if super::returns_early(&def.body) {
+                // One that returns early: a scope (P7 step 1).
+                match self.block_gives_vec(&def.body, &inner) {
+                    Some(kind) => self.scoped(&def.body, &mut inner, Some(kind)).map(|(decls, into)| {
+                        self.pending.extend(decls);
+                        Vector::new(kind, into.into_iter().map(|n| mk(ExprKind::Name(n), self.pos.span(p))).collect())
+                    }),
+                    None => self.err(p, VECTOR_WANTED),
+                }
+            } else {
+                self.vec_value_block(&def.body, &mut inner).map(|(body, v)| {
+                    self.pending.extend(body);
+                    v
+                })
+            };
             self.depth -= 1;
             return r;
         }

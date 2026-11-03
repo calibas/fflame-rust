@@ -135,6 +135,7 @@ fn tainted(p: &Program) -> Vec<bool> {
             fn walk(stmts: &[IStmt], t: &mut Vec<bool>, changed: &mut bool) {
                 for s in stmts {
                     match s {
+                        IStmt::Scope(body) => walk(body, t, changed),
                         IStmt::Host(..) => {}
                         IStmt::Break | IStmt::Continue | IStmt::Return => {}
                         IStmt::Assign(Place::Var(v), e) => {
@@ -212,6 +213,7 @@ fn needed(p: &Program) -> Vec<bool> {
     fn walk(stmts: &[IStmt], need: &mut Vec<bool>, changed: &mut bool) {
         for s in stmts {
             match s {
+                IStmt::Scope(body) => walk(body, need, changed),
                 IStmt::Host(_, args) => {
                     for x in args {
                         mark(x, need, changed);
@@ -310,6 +312,7 @@ impl D<'_> {
         let mut out = Vec::new();
         for s in stmts {
             match s {
+                IStmt::Scope(..) => return None,
                 IStmt::Host(..) => return None,
                 IStmt::Break | IStmt::Continue | IStmt::Return => return None,
                 // No derivative through a solid's call of a variation.
@@ -677,6 +680,7 @@ impl J<'_> {
         let mut out = Vec::new();
         for s in stmts {
             match s {
+                IStmt::Scope(..) => return None,
                 IStmt::Host(..) => return None,
                 IStmt::Break | IStmt::Continue | IStmt::Return => return None,
                 // No derivative through a solid's call of a variation.

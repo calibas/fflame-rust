@@ -663,6 +663,7 @@ impl Checker {
     fn declare(&mut self, body: &[Stmt]) {
         for s in body {
             match s {
+                Stmt::Scope { body, .. } => self.declare(body),
                 Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Return { .. } => {}
                 Stmt::Decl { ty, name, span, init, dims } => {
                     let ty = match ty {
@@ -1242,6 +1243,10 @@ impl Checker {
 
     fn stmt(&mut self, s: &Stmt, out: &mut Vec<IStmt>) {
         match s {
+            Stmt::Scope { body, .. } => {
+                let body = self.stmts(body);
+                out.push(IStmt::Scope(body));
+            }
             Stmt::Break { .. } => out.push(IStmt::Break),
             Stmt::Continue { .. } => out.push(IStmt::Continue),
             Stmt::Return { .. } => out.push(IStmt::Return),
@@ -2046,6 +2051,7 @@ fn mentions(body: &[Stmt], n: &str) -> bool {
         }
     }
     body.iter().any(|s| match s {
+        Stmt::Scope { body, .. } => mentions(body, n),
         Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Return { .. } => false,
         Stmt::Decl { name, init, dims, .. } => {
             name == n || init.as_ref().is_some_and(|i| e(i, n)) || dims.as_ref().is_some_and(|d| d.iter().any(|x| e(x, n)))
@@ -2155,7 +2161,7 @@ fn place_read(p: Place) -> Option<IExprKind> {
 
 fn stmt_span(s: &Stmt) -> Span {
     match s {
-        Stmt::Break { span } | Stmt::Continue { span } | Stmt::Return { span } => *span,
+        Stmt::Break { span } | Stmt::Continue { span } | Stmt::Return { span } | Stmt::Scope { span, .. } => *span,
         Stmt::Decl { span, .. } | Stmt::If { span, .. } | Stmt::While { span, .. } | Stmt::Repeat { span, .. } | Stmt::Map { span, .. } => *span,
         Stmt::Expr(e) => e.span,
     }
@@ -2191,6 +2197,23 @@ pub(crate) struct Flow {
     pub(crate) any_write: HashSet<VarId>,
     /// Read where an earlier write is not certain.
     pub(crate) exposed: HashSet<VarId>,
+    /// The scopes around this point (rhai-plugins P7 step 1): what is
+    /// definitely written at every `return` from each so far, `None`
+    /// before its first.
+    exits: Vec<Option<Written>>,
+    /// The path here left its scope at a `return`: it constrains no merge.
+    left: bool,
+}
+
+/// Variables and constant-index elements definitely written.
+type Written = (HashSet<VarId>, HashSet<(VarId, i64)>);
+
+/// What both of two paths wrote.
+fn meet(a: Option<Written>, b: Written) -> Written {
+    match a {
+        None => b,
+        Some((w, e)) => (w.intersection(&b.0).copied().collect(), e.intersection(&b.1).copied().collect()),
+    }
 }
 
 pub(crate) fn flow(stmts: &[IStmt], f: &mut Flow) {
@@ -2201,7 +2224,33 @@ pub(crate) fn flow(stmts: &[IStmt], f: &mut Flow) {
                     reads(a, f);
                 }
             }
-            IStmt::Break | IStmt::Continue | IStmt::Return => {}
+            IStmt::Break | IStmt::Continue => {}
+            // Out of its scope: what is written here is what the scope's
+            // exit has on this path. (A function's own return, outside
+            // any scope, ends it: nothing after it is read.)
+            IStmt::Return => {
+                if let Some(top) = f.exits.last_mut() {
+                    *top = Some(meet(top.take(), (f.written.clone(), f.written_elems.clone())));
+                    f.left = true;
+                }
+            }
+            // After it: what every way out of it wrote -- its returns and
+            // its end, when its end is reached.
+            IStmt::Scope(body) => {
+                f.exits.push(None);
+                let outer = std::mem::replace(&mut f.left, false);
+                flow(body, f);
+                let returns = f.exits.pop().flatten();
+                let end = (!f.left).then(|| (f.written.clone(), f.written_elems.clone()));
+                let after = match (returns, end) {
+                    (Some(r), Some(e)) => meet(Some(r), e),
+                    (Some(r), None) => r,
+                    (None, Some(e)) => e,
+                    (None, None) => (f.written.clone(), f.written_elems.clone()),
+                };
+                (f.written, f.written_elems) = after;
+                f.left = outer;
+            }
             IStmt::Assign(place, e) => {
                 reads(e, f);
                 if let Place::Var(v) = place {
@@ -2221,36 +2270,44 @@ pub(crate) fn flow(stmts: &[IStmt], f: &mut Flow) {
             }
             IStmt::If { arms, otherwise } => {
                 let start = (f.written.clone(), f.written_elems.clone());
-                let mut after: Option<(HashSet<VarId>, HashSet<(VarId, i64)>)> = None;
+                // What every arm that goes on past the `if` wrote; an arm
+                // that left its scope at a `return` goes on nowhere.
+                let mut after: Option<Written> = None;
+                let mut on = false;
                 for (cond, body) in arms {
                     // Each test runs with only what came before the
                     // `if`: an earlier arm's body did not run.
                     (f.written, f.written_elems) = start.clone();
+                    f.left = false;
                     reads(cond, f);
                     flow(body, f);
-                    after = Some(match after {
-                        None => (f.written.clone(), f.written_elems.clone()),
-                        Some((a, e)) => (a.intersection(&f.written).copied().collect(), e.intersection(&f.written_elems).copied().collect()),
-                    });
+                    if !f.left {
+                        after = Some(meet(after, (f.written.clone(), f.written_elems.clone())));
+                        on = true;
+                    }
                 }
                 (f.written, f.written_elems) = start.clone();
+                f.left = false;
                 flow(otherwise, f);
-                let (w, we) = (f.written.clone(), f.written_elems.clone());
-                (f.written, f.written_elems) = match after {
-                    Some((a, e)) => (a.intersection(&w).copied().collect(), e.intersection(&we).copied().collect()),
-                    None => (w, we),
-                };
+                if !f.left {
+                    after = Some(meet(after, (f.written.clone(), f.written_elems.clone())));
+                    on = true;
+                }
+                (f.written, f.written_elems) = after.unwrap_or(start);
+                f.left = !on;
             }
             IStmt::While { cond, body } => {
                 reads(cond, f);
                 let start = (f.written.clone(), f.written_elems.clone());
                 flow(body, f);
+                f.left = false;
                 reads(cond, f);
                 // The body may not run at all.
                 (f.written, f.written_elems) = start;
             }
             IStmt::Repeat { body, cond } => {
                 flow(body, f);
+                f.left = false;
                 reads(cond, f);
             }
             IStmt::Map { input, out, .. } => {
@@ -2297,6 +2354,7 @@ pub(crate) fn reads(e: &IExpr, f: &mut Flow) {
 fn collect_assigns(stmts: &[IStmt], out: &mut Vec<(VarId, IExpr)>) {
     for s in stmts {
         match s {
+            IStmt::Scope(body) => collect_assigns(body, out),
             IStmt::Host(..) => {}
             IStmt::Break | IStmt::Continue | IStmt::Return => {}
             IStmt::Assign(Place::Var(v), e) => out.push((*v, e.clone())),

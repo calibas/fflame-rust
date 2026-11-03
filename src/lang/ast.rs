@@ -138,6 +138,12 @@ pub enum Stmt {
     Break { span: Span },
     Continue { span: Span },
     Return { span: Span },
+    /// A function's body inlined where it is called -- a helper, a varied
+    /// variation, a variation's or a step's own body (rhai-plugins P7
+    /// step 1) -- whose `return` leaves it, not the function around it:
+    /// the result set first, then the statements after the scope run.
+    /// Never parsed: the Rhai dialect's, for a body that returns early.
+    Scope { body: Vec<Stmt>, span: Span },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

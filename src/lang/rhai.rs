@@ -675,6 +675,8 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         loops: Vec::new(),
         loop_floor: 0,
         returns: None,
+        scope_tys: Vec::new(),
+        perturbing: false,
     };
     for (name, def) in extra {
         l.fns.insert(name.clone(), def.clone());
@@ -849,6 +851,15 @@ enum Returns {
     SimColoring,
     /// A simulation model's function: a vector of four (`result` says so).
     SimModel { result: String },
+    /// An inlined body that returns early (rhai-plugins P7 step 1): its
+    /// value into the result's locals -- one, or a vector's parts
+    /// (`kind`) -- the one's type the join of every value it is given.
+    Scope { into: Vec<String>, kind: Option<vec::Kind> },
+    /// A variation's own body: the new point, and its colour, into
+    /// `#pixel` (and `#pixelz`, `#vcolor`), as its end sets them.
+    Variation { three: bool },
+    /// A formula's `step`: the state, as its end leaves it.
+    State,
 }
 
 struct Lowerer<'s> {
@@ -910,9 +921,14 @@ struct Lowerer<'s> {
     loops: Vec<Option<Vec<ast::Stmt>>>,
     loop_floor: usize,
     /// How an early `return` sets the result, while an effect-like
-    /// function's own statements are lowered (`body_returning`); `None`
-    /// in a helper, an `if` value or anything else.
+    /// function's own statements are lowered (`body_returning`), or a
+    /// scope's (`scoped`); `None` in an `if` value or anything else.
     returns: Option<Returns>,
+    /// The types each open scope's `return`s give, joined into its
+    /// result's (rhai-plugins P7 step 1).
+    scope_tys: Vec<Vec<TypeName>>,
+    /// Lowering the perturbation equations, whose emitters take no scope.
+    perturbing: bool,
 }
 
 /// One function's scope: Rhai names to what they stand for, innermost
@@ -947,6 +963,29 @@ enum Final<'a> {
     Expr(&'a Expr),
     Call(&'a FnCallExpr, Position),
     If(&'a FlowControl, Position),
+}
+
+/// Whether a function's body returns before its end (rhai-plugins P7
+/// step 1): a `return` anywhere but as its last statement. Inlined, such a
+/// body is a scope its `return` leaves.
+fn returns_early(b: &StmtBlock) -> bool {
+    let stmts = b.statements();
+    let Some((last, rest)) = stmts.split_last() else { return false };
+    rest.iter().any(has_return) || !matches!(last, Stmt::Return(..)) && has_return(last)
+}
+
+/// Whether a statement holds a `return` (not a `throw`).
+fn has_return(s: &Stmt) -> bool {
+    let block = |b: &StmtBlock| b.statements().iter().any(has_return);
+    match s {
+        Stmt::Return(_, flags, _) => !flags.intersects(ASTFlags::BREAK),
+        Stmt::If(fc, _) => block(&fc.body) || block(&fc.branch),
+        Stmt::While(fc, _) | Stmt::Do(fc, _, _) => block(&fc.body),
+        Stmt::For(x, _) => block(&x.2.body),
+        Stmt::Block(b) => block(b),
+        Stmt::Expr(e) => matches!(&**e, Expr::Stmt(b) if block(b)),
+        _ => false,
+    }
 }
 
 fn final_value(st: &Stmt) -> Option<Final<'_>> {
@@ -1016,7 +1055,12 @@ impl<'s> Lowerer<'s> {
 
     fn run(&mut self, ast: &::rhai::AST, kind: EntryKind) -> R<Lowered> {
         for f in ast.iter_fn_def() {
-            self.fns.insert(f.name.to_string(), (**f).clone());
+            // Rhai tells two functions of one name apart by how many
+            // parameters they take; the compiler finds a function by its
+            // name alone.
+            if self.fns.insert(f.name.to_string(), (**f).clone()).is_some() {
+                return self.err(f.body.position(), format!("`{}` is defined twice: give each its own name", f.name));
+            }
         }
         let what = if self.coloring {
             "a colouring"
@@ -1335,37 +1379,28 @@ impl<'s> Lowerer<'s> {
             scope.bind(c, Binding::Ctx);
         }
         const RESULT: &str = "`variation` ends with the new point, or `#{ z: point, color: index }`";
+        // One that returns early is a scope its `return` leaves, each
+        // setting the point as its end does (P7 step 1).
+        if returns_early(&f.body) {
+            let how = Returns::Variation { three: false };
+            let outer = self.returns.replace(how.clone());
+            let inner = self.scope_body(&how, &f.body, &mut scope);
+            self.returns = outer;
+            body.push(ast::Stmt::Scope { body: inner?, span });
+            return Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true });
+        }
         let stmts = f.body.statements();
         let Some((last, rest)) = stmts.split_last() else { return self.err(f.body.position(), RESULT) };
         for st in rest {
             self.stmt(st, &mut scope, &mut body)?;
         }
-        let mut color = None;
-        let value = match final_value(last) {
-            Some(Final::Expr(Expr::Map(m, mp))) => {
-                let mut point = None;
-                for (k, v) in &m.0 {
-                    match k.name.as_str() {
-                        "z" => point = Some(self.expr(v, &mut scope)?),
-                        "color" => color = Some(self.expr(v, &mut scope)?),
-                        o => return self.err(k.pos, format!("a variation's result has `z` and `color`, not `{o}`")),
-                    }
-                }
-                match point {
-                    Some(v) => v,
-                    None => return self.err(*mp, "the result needs `z`, the new point"),
-                }
-            }
-            Some(Final::Expr(x)) => self.expr(x, &mut scope)?,
-            Some(Final::If(fc, p)) => self.if_value(fc, p, &mut scope)?,
+        let (value, color) = match final_value(last) {
+            Some(Final::Expr(x)) => self.point2(x, &mut scope)?,
+            Some(Final::If(fc, p)) => (self.if_value(fc, p, &mut scope)?, None),
             _ => return self.err(last.position(), RESULT),
         };
-        self.flush(&mut body);
         let at = self.pos.span(last.position());
-        if let Some(c) = color {
-            body.push(assign(mk(ExprKind::Predef("vcolor".into()), at), c, at));
-        }
-        body.push(assign(mk(ExprKind::Predef("pixel".into()), at), value, at));
+        self.set_point2(value, color, at, &mut body);
         Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
     }
 
@@ -1511,6 +1546,208 @@ impl<'s> Lowerer<'s> {
         Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
     }
 
+    /// An inlined body that returns early, as a scope (rhai-plugins P7
+    /// step 1): its result's locals declared before it, and each `return`
+    /// and its end setting them -- a `return` leaves the scope, not the
+    /// function it is inlined into. A helper's or a varied variation's
+    /// body: no loop outside it to leave. Gives the declarations and the
+    /// scope, and the result's locals.
+    fn scoped(&mut self, b: &StmtBlock, scope: &mut Scope, kind: Option<vec::Kind>) -> R<(Vec<ast::Stmt>, Vec<String>)> {
+        if self.perturbing {
+            return self.err(b.position(), "a helper of the perturbation equations returns early: write it without `return`");
+        }
+        let span = self.pos.span(b.position());
+        let into = match kind {
+            None => vec![self.local("result", TypeName::Float)],
+            Some(k) => self.vec_local(k, "result"),
+        };
+        let how = Returns::Scope { into: into.clone(), kind };
+        let outer = std::mem::take(&mut self.pending);
+        let sealed = self.seal();
+        self.returns = Some(how.clone());
+        self.scope_tys.push(Vec::new());
+        scope.blocks.push(HashMap::new());
+        let r = self.scope_body(&how, b, scope);
+        scope.blocks.pop();
+        let tys = self.scope_tys.pop().unwrap_or_default();
+        self.unseal(sealed);
+        self.pending = outer;
+        let body = r?;
+        let mut decls = Vec::new();
+        for n in &into {
+            let ty = match kind {
+                None => tys.iter().copied().reduce(join).unwrap_or(TypeName::Float),
+                Some(_) => TypeName::Float,
+            };
+            self.types.insert(n.clone(), ty);
+            decls.push(ast::Stmt::Decl { ty, name: n.clone(), init: None, dims: None, span });
+        }
+        decls.push(ast::Stmt::Scope { body, span });
+        Ok((decls, into))
+    }
+
+    /// A function's statements, then its last value set as `how` says (an
+    /// early `return` sets it the same way).
+    fn scope_body(&mut self, how: &Returns, b: &StmtBlock, scope: &mut Scope) -> R<Vec<ast::Stmt>> {
+        let stmts = b.statements();
+        let Some((last, rest)) = stmts.split_last() else { return self.err(b.position(), "the function ends with its value") };
+        let mut body = Vec::new();
+        for st in rest {
+            self.stmt(st, scope, &mut body)?;
+        }
+        let Some(f) = final_value(last) else { return self.err(last.position(), "the function ends with its value") };
+        self.put_result(how, f, last.position(), scope, &mut body)?;
+        Ok(body)
+    }
+
+    /// A scope's value into its result's locals.
+    fn scope_result(&mut self, into: &[String], kind: Option<vec::Kind>, f: Final, p: Position, scope: &mut Scope, body: &mut Vec<ast::Stmt>) -> R<()> {
+        // An `if` that ends it: each arm sets the result itself, so an arm
+        // may `return` too.
+        if let Final::If(fc, ip) = f {
+            return self.returns_if(&Returns::Scope { into: into.to_vec(), kind }, fc, ip, scope, body);
+        }
+        let at = self.pos.span(p);
+        match kind {
+            None => {
+                let v = self.final_expr(f, scope)?;
+                self.flush(body);
+                let ty = self.ty_of(&v);
+                if let Some(t) = self.scope_tys.last_mut() {
+                    t.push(ty);
+                }
+                body.push(assign(mk(ExprKind::Name(into[0].clone()), at), v, at));
+            }
+            Some(k) => {
+                let v = self.final_vec(f, scope)?;
+                if v.kind != k {
+                    return self.err(p, "each `return` gives the kind of vector the function's end does");
+                }
+                self.flush(body);
+                for (n, part) in into.iter().zip(v.parts) {
+                    body.push(assign(mk(ExprKind::Name(n.clone()), at), part, at));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A variation's own body's value, from its end or a `return`.
+    fn variation_result(&mut self, three: bool, f: Final, p: Position, scope: &mut Scope, body: &mut Vec<ast::Stmt>) -> R<()> {
+        let at = self.pos.span(p);
+        match f {
+            Final::If(fc, ip) => self.returns_if(&Returns::Variation { three }, fc, ip, scope, body),
+            Final::Expr(e) if three => {
+                let (value, color) = self.point3(e, p, scope)?;
+                self.set_point3(value, color, p, at, body)
+            }
+            Final::Expr(e) => {
+                let (value, color) = self.point2(e, scope)?;
+                self.set_point2(value, color, at, body);
+                Ok(())
+            }
+            Final::Call(..) => self.err(p, "`variation` ends with the new point, or `#{ z: point, color: index }`"),
+        }
+    }
+
+    /// An `if` that ends a scope's body (P7 step 1): each arm's statements,
+    /// then its value set as `how` sets it -- so an arm may `return` too.
+    fn returns_if(&mut self, how: &Returns, fc: &FlowControl, p: Position, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
+        let span = self.pos.span(p);
+        let mut arms = Vec::new();
+        let mut cur = fc;
+        let otherwise;
+        loop {
+            let cond = self.expr(&cur.expr, scope)?;
+            if !arms.is_empty() && !self.pending.is_empty() {
+                return self.err(cur.expr.position(), "an `else if` condition holds no `if` value or helper with statements");
+            }
+            self.flush(out);
+            scope.blocks.push(HashMap::new());
+            let body = self.scope_body(how, &cur.body, scope);
+            scope.blocks.pop();
+            arms.push((cond, body?));
+            match cur.branch.statements() {
+                [Stmt::If(inner, _)] => cur = &**inner,
+                [] => return self.err(p, "the `if` that ends the function needs its `else`"),
+                _ => {
+                    scope.blocks.push(HashMap::new());
+                    let body = self.scope_body(how, &cur.branch, scope);
+                    scope.blocks.pop();
+                    otherwise = Some(body?);
+                    break;
+                }
+            }
+        }
+        out.push(ast::Stmt::If { arms, otherwise, span });
+        Ok(())
+    }
+
+    /// A 2D variation's value: the new point, or `#{ z, color }`.
+    fn point2(&mut self, e: &Expr, scope: &mut Scope) -> R<(ast::Expr, Option<ast::Expr>)> {
+        let Expr::Map(m, mp) = e else { return Ok((self.expr(e, scope)?, None)) };
+        let (mut point, mut color) = (None, None);
+        for (k, v) in &m.0 {
+            match k.name.as_str() {
+                "z" => point = Some(self.expr(v, scope)?),
+                "color" => color = Some(self.expr(v, scope)?),
+                o => return self.err(k.pos, format!("a variation's result has `z` and `color`, not `{o}`")),
+            }
+        }
+        match point {
+            Some(v) => Ok((v, color)),
+            None => self.err(*mp, "the result needs `z`, the new point"),
+        }
+    }
+
+    /// A 2D variation's point and colour, set.
+    fn set_point2(&mut self, value: ast::Expr, color: Option<ast::Expr>, at: Span, body: &mut Vec<ast::Stmt>) {
+        self.flush(body);
+        if let Some(c) = color {
+            body.push(assign(mk(ExprKind::Predef("vcolor".into()), at), c, at));
+        }
+        body.push(assign(mk(ExprKind::Predef("pixel".into()), at), value, at));
+    }
+
+    /// A 3D variation's value: the new point, a vector, or `#{ z, color }`.
+    fn point3(&mut self, e: &Expr, p: Position, scope: &mut Scope) -> R<(vec::Vector, Option<ast::Expr>)> {
+        let (value, color) = match e {
+            Expr::Map(m, mp) => {
+                let (mut point, mut color) = (None, None);
+                for (k, v) in &m.0 {
+                    match k.name.as_str() {
+                        "z" => point = Some(self.vexpr(v, scope)?),
+                        "color" => color = Some(self.expr(v, scope)?),
+                        o => return self.err(k.pos, format!("a variation's result has `z` and `color`, not `{o}`")),
+                    }
+                }
+                match point {
+                    Some(v) => (v, color),
+                    None => return self.err(*mp, "the result needs `z`, the new point"),
+                }
+            }
+            x => (self.vexpr(x, scope)?, None),
+        };
+        if value.kind != vec::Kind::Vec3 {
+            return self.err(p, "the new point is a vector: a quaternion's vector part is `q.v`");
+        }
+        Ok((value, color))
+    }
+
+    /// A 3D variation's point and colour, set.
+    fn set_point3(&mut self, value: vec::Vector, color: Option<ast::Expr>, p: Position, at: Span, body: &mut Vec<ast::Stmt>) -> R<()> {
+        self.flush(body);
+        if let Some(c) = color {
+            body.push(assign(mk(ExprKind::Predef("vcolor".into()), at), c, at));
+        }
+        let Ok([x, y, z]) = <[ast::Expr; 3]>::try_from(value.parts) else {
+            return self.err(p, "`variation3` ends with the new point, a vector, or `#{ z: v, color: index }`");
+        };
+        body.push(assign(mk(ExprKind::Predef("pixel".into()), at), mk(ExprKind::Complex(Box::new(x), Box::new(y)), at), at));
+        body.push(assign(mk(ExprKind::Predef("pixelz".into()), at), z, at));
+        Ok(())
+    }
+
     /// An effect-like function's statements but its last (P4 step 5): an
     /// early `return` in them sets the result as `how` says, and returns.
     fn body_returning(&mut self, stmts: &[Stmt], how: &Returns, scope: &mut Scope, body: &mut Vec<ast::Stmt>) -> R<()> {
@@ -1524,9 +1761,22 @@ impl<'s> Lowerer<'s> {
     /// its last, or an early `return`'s -- into the `effect_*` places the
     /// function's end returns (P4 step 5).
     fn put_result(&mut self, how: &Returns, f: Final, p: Position, scope: &mut Scope, body: &mut Vec<ast::Stmt>) -> R<()> {
+        match how {
+            Returns::Scope { into, kind } => return self.scope_result(into, *kind, f, p, scope, body),
+            Returns::Variation { three } => return self.variation_result(*three, f, p, scope, body),
+            Returns::State => {
+                return match f {
+                    Final::Expr(v) => self.state_value(v, scope, body),
+                    Final::If(fc, ip) => self.state_if(fc, ip, scope, body),
+                    Final::Call(..) => self.err(p, "the function ends with the state: `s`, or a map `#{ z: ... }`"),
+                };
+            }
+            _ => {}
+        }
         let at = self.pos.span(p);
         let mut extra: Vec<(&str, ast::Expr)> = Vec::new();
         let parts = match how {
+            Returns::Scope { .. } | Returns::Variation { .. } | Returns::State => unreachable!("set above"),
             Returns::Effect { alpha } => {
                 let (mut blend, mut amount) = (None, None);
                 let color = match f {
@@ -1709,41 +1959,25 @@ impl<'s> Lowerer<'s> {
             scope.bind(c, Binding::Ctx);
         }
         const RESULT: &str = "`variation3` ends with the new point, a vector, or `#{ z: v, color: index }`";
+        if returns_early(&f.body) {
+            let how = Returns::Variation { three: true };
+            let outer = self.returns.replace(how.clone());
+            let inner = self.scope_body(&how, &f.body, &mut scope);
+            self.returns = outer;
+            body.push(ast::Stmt::Scope { body: inner?, span });
+            return Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true });
+        }
         let stmts = f.body.statements();
         let Some((last, rest)) = stmts.split_last() else { return self.err(f.body.position(), RESULT) };
         for st in rest {
             self.stmt(st, &mut scope, &mut body)?;
         }
-        let mut color = None;
-        let value = match final_value(last) {
-            Some(Final::Expr(Expr::Map(m, mp))) => {
-                let mut point = None;
-                for (k, v) in &m.0 {
-                    match k.name.as_str() {
-                        "z" => point = Some(self.vexpr(v, &mut scope)?),
-                        "color" => color = Some(self.expr(v, &mut scope)?),
-                        o => return self.err(k.pos, format!("a variation's result has `z` and `color`, not `{o}`")),
-                    }
-                }
-                match point {
-                    Some(v) => v,
-                    None => return self.err(*mp, "the result needs `z`, the new point"),
-                }
-            }
-            Some(Final::Expr(x)) => self.vexpr(x, &mut scope)?,
+        let (value, color) = match final_value(last) {
+            Some(Final::Expr(x)) => self.point3(x, last.position(), &mut scope)?,
             _ => return self.err(last.position(), RESULT),
         };
-        if value.kind != vec::Kind::Vec3 {
-            return self.err(last.position(), "the new point is a vector: a quaternion's vector part is `q.v`");
-        }
-        self.flush(&mut body);
         let at = self.pos.span(last.position());
-        if let Some(c) = color {
-            body.push(assign(mk(ExprKind::Predef("vcolor".into()), at), c, at));
-        }
-        let Ok([x, y, z]) = <[ast::Expr; 3]>::try_from(value.parts) else { return self.err(last.position(), RESULT) };
-        body.push(assign(mk(ExprKind::Predef("pixel".into()), at), mk(ExprKind::Complex(Box::new(x), Box::new(y)), at), at));
-        body.push(assign(mk(ExprKind::Predef("pixelz".into()), at), z, at));
+        self.set_point3(value, color, last.position(), at, &mut body)?;
         Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
     }
 
@@ -1779,7 +2013,17 @@ impl<'s> Lowerer<'s> {
             scope.bind(name, role);
         }
         let mut lp = Vec::new();
-        self.state_body(&step.body, &mut scope, &mut lp)?;
+        // A step that returns early is a scope its `return` leaves, the
+        // state as the return finds it (P7 step 1).
+        if returns_early(&step.body) {
+            let how = Returns::State;
+            let outer = self.returns.replace(how.clone());
+            let inner = self.scope_body(&how, &step.body, &mut scope);
+            self.returns = outer;
+            lp.push(ast::Stmt::Scope { body: inner?, span });
+        } else {
+            self.state_body(&step.body, &mut scope, &mut lp)?;
+        }
         // escaped: one test, its lets substituted; without it the formula
         // never escapes (UF's `bailout: true`).
         let go = match get(self, "escaped") {
@@ -1816,7 +2060,10 @@ impl<'s> Lowerer<'s> {
                 scope.bind(n, role);
             }
             let mut body = Vec::new();
-            self.state_body(&f.body, &mut scope, &mut body)?;
+            self.perturbing = true;
+            let r = self.state_body(&f.body, &mut scope, &mut body);
+            self.perturbing = false;
+            r?;
             sections.push(Section { kind, span, body, last_is_bailout: false, labelled: true });
         }
         // Its degree at infinity, for the smooth colourings.
@@ -3552,6 +3799,12 @@ impl<'s> Lowerer<'s> {
     /// A helper's body inlined into `start` or `step`: its statements
     /// pending, its value returned.
     fn helper_body(&mut self, b: &StmtBlock, scope: &mut Scope) -> R<ast::Expr> {
+        // One that returns early: a scope (P7 step 1).
+        if returns_early(b) {
+            let (decls, into) = self.scoped(b, scope, None)?;
+            self.pending.extend(decls);
+            return Ok(mk(ExprKind::Name(into[0].clone()), self.pos.span(b.position())));
+        }
         let (body, value) = self.value_block(b, scope)?;
         self.pending.extend(body);
         Ok(value)
@@ -3734,7 +3987,7 @@ fn from_ty(t: Ty) -> TypeName {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::builtins::C64;
     use super::super::interp::{run, Env, ParamValues};
     use super::super::{check::check, parser::parse_file, Dialect};
@@ -3790,8 +4043,7 @@ fn escaped(s, p) {
     /// runs in the interpreter -- the CPU's reference, deep zoom's and
     /// the tests' -- as the same step written without them, and compiles
     /// to WGSL that validates; a variation's too, and its WGSL loops
-    /// break and continue. An early `return` stays the effect-like
-    /// functions' for now.
+    /// break and continue.
     #[test]
     fn break_and_continue_run_in_every_kind() {
         use crate::lang::builtins::C64;
@@ -3870,15 +4122,168 @@ fn step(s, p) {
         let w2 = w.wgsl_2d.expect("a 2D variation");
         assert!(w2.contains("break;") && w2.contains("continue;"), "{w2}");
 
-        let e = program(&format!("{head}fn step(s, p) {{
+        // An early `return` in the step: its own scope, since P7 step 1.
+        assert!(program(&format!("{head}fn step(s, p) {{
     if s.z.re > 1.0 {{
         return s;
     }}
     s.z = s.z * s.z + s.c;
     s
 }}
-")).unwrap_err();
-        assert!(e.iter().any(|d| d.message.contains("`return`")), "{e:?}");
+")).is_ok());
+    }
+
+    /// A variation that returns early, varied by a formula, as an early
+    /// return in a varied variation for the GPU test beside it.
+    pub(crate) const EARLY_VARIATION: &str = r#"
+const INFO = #{ name: "rhai_early_test" };
+fn variation(z, p) {
+    if z.norm_sqr() > 1.0 {
+        return z * 0.5;
+    }
+    let w = z;
+    for k in 0..4 {
+        if k == 2 {
+            return w * 2.0;
+        }
+        w = w + complex(0.1, 0.0);
+    }
+    w
+}
+"#;
+
+    /// The formula that varies it, and the same formula written without
+    /// either: the variation's returns leave the variation, and the step
+    /// goes on past it.
+    pub(crate) const EARLY_FORMULA: &str = r#"
+fn start(pixel, p) {
+    #{ z: complex(0.0, 0.0), c: pixel }
+}
+fn step(s, p) {
+    let w = vary("rhai_early_test", s.z);
+    s.z = w * w + s.c;
+    s
+}
+fn escaped(s, p) {
+    s.z.norm_sqr() > 4.0
+}
+"#;
+    pub(crate) const EARLY_PLAIN: &str = r#"
+fn start(pixel, p) {
+    #{ z: complex(0.0, 0.0), c: pixel }
+}
+fn step(s, p) {
+    let w = if s.z.norm_sqr() > 1.0 { s.z * 0.5 } else { (s.z + complex(0.1, 0.0) + complex(0.1, 0.0)) * 2.0 };
+    s.z = w * w + s.c;
+    s
+}
+fn escaped(s, p) {
+    s.z.norm_sqr() > 4.0
+}
+"#;
+
+    /// An early `return` leaves its own scope (rhai-plugins P7 step 1): a
+    /// varied variation's -- directly, and from inside its own loop --
+    /// ends the variation, not the formula's step; a helper's ends the
+    /// helper; a step's ends the step. Each formula runs in the interpreter
+    /// as the same formula written without `return`, bit for bit, and its
+    /// WGSL validates; the variation's own WGSL leaves its scope by a
+    /// `break`, and by its flag from inside its loop. A function defined
+    /// twice is refused.
+    #[test]
+    fn an_early_return_leaves_its_own_scope() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, transform, Env, ParamValues};
+        let same = |a: &str, b: &str, vars: &[(String, String)]| {
+            let (a, b) = with_variations(vars, || (program(a), program(b)));
+            let (a, b) = (a.unwrap_or_else(|d| panic!("{d:?}")), b.unwrap_or_else(|d| panic!("{d:?}")));
+            let (va, vb) = (ParamValues::defaults(&a), ParamValues::defaults(&b));
+            for (re, im) in [(-0.75, 0.1), (0.3, 0.5), (-1.2, -0.2), (0.25, 0.0), (-0.1, 0.9), (0.38, -0.31)] {
+                let env = Env::at(C64::new(re, im), 300);
+                let (x, y) = (run(&a, &va, None, &env), run(&b, &vb, None, &env));
+                assert_eq!((x.n, x.z.re.to_bits(), x.z.im.to_bits()), (y.n, y.z.re.to_bits(), y.z.im.to_bits()), "at {re} + {im}i");
+            }
+            let wgsl = crate::lang::wgsl::formula(&a);
+            crate::lang::wgsl::validate_formula(&wgsl).unwrap_or_else(|e| panic!("{e}
+{wgsl}"));
+            wgsl
+        };
+        // A varied variation.
+        let vars = [("rhai_early_test".to_string(), EARLY_VARIATION.to_string())];
+        let wgsl = same(EARLY_FORMULA, EARLY_PLAIN, &vars);
+        if std::env::var("SHOW_SCOPE_WGSL").is_ok() {
+            println!("{wgsl}");
+        }
+        assert!(wgsl.contains("loop {") && wgsl.contains("scope_done"), "{wgsl}");
+        // A helper, and the step itself.
+        let head = "fn start(pixel, p) {
+    #{ z: complex(0.0, 0.0), c: pixel }
+}
+fn escaped(s, p) {
+    s.z.norm_sqr() > 4.0
+}
+";
+        let helper = "fn capped(x, hi) {
+    if x > hi {
+        return hi;
+    }
+    x
+}
+fn step(s, p) {
+    s.z = s.z * s.z + s.c;
+    s.z = complex(capped(s.z.re, 1.5), s.z.im);
+    s
+}
+";
+        let helper_plain = "fn step(s, p) {
+    s.z = s.z * s.z + s.c;
+    s.z = complex(if s.z.re > 1.5 { 1.5 } else { s.z.re }, s.z.im);
+    s
+}
+";
+        same(&format!("{head}{helper}"), &format!("{head}{helper_plain}"), &[]);
+        let step = "fn step(s, p) {
+    if s.z.norm_sqr() > 2.0 {
+        s.z = s.z * 1.5;
+        return s;
+    }
+    s.z = s.z * s.z + s.c;
+    s
+}
+";
+        let step_plain = "fn step(s, p) {
+    if s.z.norm_sqr() > 2.0 {
+        s.z = s.z * 1.5;
+    } else {
+        s.z = s.z * s.z + s.c;
+    }
+    s
+}
+";
+        same(&format!("{head}{step}"), &format!("{head}{step_plain}"), &[]);
+
+        // The variation on its own: the interpreter's point, and its WGSL
+        // leaving by the flag from inside its loop.
+        let v = transformation(EARLY_VARIATION).unwrap_or_else(|d| panic!("{d:?}"));
+        let at = |z: C64| transform(&v, &ParamValues::defaults(&v), z);
+        let z = C64::new(0.2, 0.1);
+        let w = at(z);
+        assert_eq!((w.re.to_bits(), w.im.to_bits()), ((((0.2 + 0.1) + 0.1) * 2.0f64).to_bits(), (0.1 * 2.0f64).to_bits()));
+        let far = at(C64::new(1.0, 1.0));
+        assert_eq!((far.re, far.im), (0.5, 0.5));
+        let w2 = crate::lang::wgsl::variation(Some(&v), None, "rhai_early_test").unwrap().wgsl_2d.expect("2D");
+        assert!(w2.contains("scope_done") && w2.contains("loop {"), "{w2}");
+
+        // Rhai's overloads by arity are one name too many here.
+        let twice = format!("{head}fn f(x) {{ x }}
+fn f(x, y) {{ x + y }}
+fn step(s, p) {{
+    s.z = s.z * s.z + s.c;
+    s
+}}
+");
+        let e = program(&twice).unwrap_err();
+        assert!(e.iter().any(|d| d.message.contains("`f` is defined twice")), "{e:?}");
     }
 
     /// An id goes into the script's own text (design rule 7): first in its

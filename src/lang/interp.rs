@@ -745,6 +745,10 @@ impl<'p> Machine<'p> {
     fn exec(&mut self, stmts: &[IStmt], sh: &mut Shared) -> Flow {
         for s in stmts {
             match s {
+                // Its `return` leaves it alone (P7 step 1).
+                IStmt::Scope(body) => {
+                    let _ = self.exec(body, sh);
+                }
                 IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
                 // The loop or the function around it takes these (P7
                 // step 1), as the GPU's do.

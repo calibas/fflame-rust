@@ -752,6 +752,7 @@ pub fn bla_steps(escape: &EscapeConfig, orbit: &[[f64; 2]], reference: lang::bui
     }
     fn branches_on_the_iterate(stmts: &[IStmt], p: &ir::Program) -> bool {
         stmts.iter().any(|s| match s {
+            IStmt::Scope(..) => true,
             IStmt::Host(..) => true,
             IStmt::Break | IStmt::Continue | IStmt::Return => true,
             IStmt::Assign(..) => false,
@@ -2033,6 +2034,10 @@ fn escaped(s, p) {
                     return;
                 }
                 match s {
+                    IStmt::Scope(..) => {
+                        *found = Some("an early `return`".into());
+                        return;
+                    }
                     IStmt::Host(..) => {
                         *found = Some("a simulation's framework call".into());
                         return;

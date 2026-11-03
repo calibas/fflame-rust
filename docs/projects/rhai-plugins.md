@@ -841,13 +841,18 @@ Steps, in the order that unlocks the most first (the user picks):
    takes `break` and `continue` in every kind's loops, the perturbation
    emitters write them; a formula using them runs in the interpreter as
    the same formula without them, bit for bit, and the deep-zoom paths
-   decline it without panicking. **Open: an early `return`** outside the
-   effect-like functions -- each kind's result set before it (a
-   formula's state, a variation's point and colour, a colouring's
-   index), and the case the plan did not foresee: a variation inlined by
-   `vary` into a formula's step, where a `return` must end the variation
-   and not the step (a flag the statements after it test, or a
-   refusal).
+   decline it without panicking. **An early `return` built 2026-11-03**,
+   by scope (the user's idea, over a flag on every statement after it or
+   a refusal): a body that returns early -- a helper, in every kind; a
+   varied variation; a variation's own; a formula's `step` -- is a scope
+   its `return` leaves, the result set first; the WGSL a `loop` it
+   breaks, with a flag only from inside the body's own loops. A varied
+   variation's return ends the variation and the step goes on: bit for
+   bit in the interpreter against the formula written without it, and
+   on the GPU but 6 pixels of 12,288 on an escape's edge (the scope's
+   loop moves a multiply-add's fusion). Deep zoom declines a formula with
+   a scope. Open: a colouring's own `finish` and the escape colourings'
+   sections returning early (P7 step 2 will want them).
 2. **Escape colourings** (28). About 20 accumulate over the orbit, which
    `start` / `step` / `finish` already do. The rest need:
    - a colour as the result, not a palette position (Rainbow Fringe,

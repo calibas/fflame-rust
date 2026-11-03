@@ -254,6 +254,10 @@ impl BigMachine {
     fn exec(&mut self, stmts: &[IStmt]) -> R<Flow> {
         for s in stmts {
             match s {
+                // Its `return` leaves it alone.
+                IStmt::Scope(body) => {
+                    self.exec(body)?;
+                }
                 IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
                 // As the interpreter's (P7 step 1).
                 IStmt::Break => return Ok(Flow::Break),
