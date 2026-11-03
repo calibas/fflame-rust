@@ -941,6 +941,9 @@ fn host_int(name: &str, span: Span) -> ast::Expr {
         "seed_lo" => 0,
         "seed_hi" => 1,
         "layer" => 3,
+        "kernel_radius" => 4,
+        "kernel_taps" => 5,
+        "exact_discs" => 6,
         _ => 2,
     };
     mk(ExprKind::Call { name: "__host_int".into(), args: vec![mk(ExprKind::Int(k), span)], user: false }, span)
@@ -1094,7 +1097,7 @@ impl<'s> Lowerer<'s> {
                     _ => return self.err(*p, "`state` is \"continuous\" (interpolated into a new grid) or \"discrete\" (the nearest cell)"),
                 },
                 // What the panel and the export say of it (P4 step 5).
-                "time_step" | "settles" if self.sim_model => match v {
+                "time_step" | "settles" | "publishes_signal" if self.sim_model => match v {
                     Expr::BoolConstant(..) => {}
                     _ => return self.err(*p, format!("`{name}` is `true` or `false`")),
                 },
@@ -1124,7 +1127,7 @@ impl<'s> Lowerer<'s> {
                         *p,
                         format!(
                             "a simulation model's `INFO` has `title`, `id`, `description`, `author`, `dt`, `max_dt`, `steps`, `diffusion`, `state`, \
-                             `time_step`, `settles`, `presets` and `repeat`, not `{o}`"
+                             `time_step`, `settles`, `presets`, `repeat` and `publishes_signal`, not `{o}`"
                         ),
                     )
                 }
@@ -2904,9 +2907,15 @@ impl<'s> Lowerer<'s> {
                         "cell" => Ok(mk(ExprKind::Predef("pixel".into()), span)),
                         "width" | "height" => Ok(mk(ExprKind::Predef(name.into()), span)),
                         "step" | "seed_lo" | "seed_hi" | "layer" => Ok(host_int(name, span)),
+                        // Its kernel table's size and whether the spectral
+                        // stage's discs are in (P4 step 9b): ints.
+                        "kernel_radius" | "kernel_taps" | "exact_discs" => Ok(host_int(name, span)),
                         o => self.err(
                             *p,
-                            format!("a simulation model's context has `dt`, `step`, `cell`, `width`, `height`, `seed_lo`, `seed_hi`, `layer`, `field_min` and `field_max`; not `{o}`"),
+                            format!(
+                                "a simulation model's context has `dt`, `step`, `cell`, `width`, `height`, `seed_lo`, `seed_hi`, `layer`, \
+                                 `field_min`, `field_max`, `kernel_radius`, `kernel_taps` and `exact_discs`; not `{o}`"
+                            ),
                         ),
                     },
                     // A simulation colouring's (P4): the cell, the grid's
@@ -3032,6 +3041,13 @@ impl<'s> Lowerer<'s> {
             }
             return Ok(mk(ExprKind::Predef("draw".into()), span));
         }
+        // A simulation model's kernel table at a tap, and the spectral
+        // stage's disc average at the cell (P4 step 9b).
+        if matches!(name, "tap" | "disc") && args.is_empty() && self.sim_model && !self.fns.contains_key(name) {
+            let [i] = &f.args[..] else { return self.err(p, format!("`{name}(i)` takes the index")) };
+            let i = self.expr(i, scope)?;
+            return Ok(mk(ExprKind::Call { name: format!("__{name}"), args: vec![i], user: false }, span));
+        }
         // A simulation's hash of an int (P4 step 5), the framework's PCG.
         if name == "pcg" && args.is_empty() && (self.sim_coloring || self.sim_model) && !self.fns.contains_key("pcg") {
             let [n] = &f.args[..] else { return self.err(p, "`pcg(n)` takes the int to hash") };
@@ -3092,7 +3108,7 @@ impl<'s> Lowerer<'s> {
         }
         // Numbers of vectors (`dot`, `length`), and the functions that came
         // with them (`min`, `max`, `clamp` of numbers) (B1).
-        if matches!(name, "vec3" | "vec4" | "quat" | "rgba" | "input" | "input_at" | "palette" | "read" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
+        if matches!(name, "vec3" | "vec4" | "quat" | "rgba" | "input" | "input_at" | "palette" | "read" | "drive" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
             || f.args.iter().any(|a| self.is_vec(a, scope))
         {
             let mut vals: Vec<Val> = args.drain(..).map(Val::S).collect();
@@ -3366,8 +3382,10 @@ impl<'s> Lowerer<'s> {
     /// `a op b`, with Rhai's rules where they differ from the checker's.
     fn binary(&mut self, op: BinOp, a: ast::Expr, b: ast::Expr, p: Position) -> R<ast::Expr> {
         let span = self.pos.span(p);
+        // Two ints divided truncate, as Rhai's do (P4 step 9b): its own
+        // operator, not UF's quotient.
         if op == BinOp::Div && self.ty_of(&a) == TypeName::Int && self.ty_of(&b) == TypeName::Int {
-            return self.err(p, "two ints divided: Rhai would truncate; write a float (`1.0 / 2`) for the quotient");
+            return Ok(mk(ExprKind::Binary(BinOp::IDiv, Box::new(a), Box::new(b)), span));
         }
         Ok(mk(ExprKind::Binary(op, Box::new(a), Box::new(b)), span))
     }
@@ -3968,11 +3986,27 @@ fn escaped(s, p) { s.z.re > 1e9 }
         }
     }
 
+    /// Two ints divided truncate toward zero, as Rhai's do (P4 step 9b),
+    /// in the interpreter as on the GPU; by zero the dividend, as WGSL's.
+    #[test]
+    fn two_ints_divided_truncate_as_rhai_does() {
+        let src = "fn start(pixel, p) { #{ z: pixel } }
+fn step(s, p) {
+    let q = 7 / 2 + (-7) / 2 * 10 + 5 / 0 * 100;
+    s.z = complex(to_float(q), 0.0);
+    s
+}
+fn escaped(s, p) { false }";
+        let p = program(src).unwrap_or_else(|d| panic!("{d:?}"));
+        let params = super::super::interp::ParamValues::defaults(&p);
+        let out = super::super::interp::run(&p, &params, None, &super::super::interp::Env::at(super::super::builtins::C64::new(0.0, 0.0), 1));
+        assert_eq!(out.z.re, f64::from(3 + (-3) * 10 + 5 * 100), "7 / 2 is 3, -7 / 2 is -3, 5 / 0 is 5");
+    }
+
     #[test]
     fn what_a_formula_refuses_and_where() {
         let base = |step: &str| format!("fn start(pixel, p) {{ #{{ z: pixel }} }}\nfn step(s, p, ctx) {{\n{step}\n}}\nfn escaped(s, p) {{ s.z.norm_sqr() > 4.0 }}");
         for (step, says) in [
-            ("let q = 1 / 2; s.z = s.z * q; s", "two ints divided"),
             ("s.w = s.z; s", "`w` is not in the state"),
             ("s.z = s.z * p.power; s", "`power` is not in `PARAMS`"),
             ("s.z = gamma(s.z); s", "unknown function `gamma`"),

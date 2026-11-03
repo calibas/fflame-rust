@@ -1650,7 +1650,7 @@ impl Checker {
             self.error(span, format!("unknown function `{name}`"));
             return None;
         }
-        if matches!(b, Builtin::SimRand | Builtin::InitAt) && self.kind != EntryKind::SimModel {
+        if matches!(b, Builtin::SimRand | Builtin::InitAt | Builtin::Tap | Builtin::Disc) && self.kind != EntryKind::SimModel {
             self.error(span, format!("unknown function `{name}`"));
             return None;
         }
@@ -1658,10 +1658,10 @@ impl Checker {
         let literal = match b {
             Builtin::Cell => Some(match self.kind {
                 EntryKind::SimColoring => 0..28,
-                EntryKind::SimModel => 0..24,
+                EntryKind::SimModel => 0..28,
                 _ => 0..0,
             }),
-            Builtin::HostInt => Some(0..4),
+            Builtin::HostInt => Some(0..7),
             _ => None,
         };
         if let Some(range) = literal {
@@ -1683,7 +1683,7 @@ impl Checker {
         };
         // An int argument becomes a float unless the result is an int, or
         // it is a stream's number (`rand(k)`).
-        let arg = if arg.ty == Ty::Int && ty != Ty::Int && b != Builtin::SimRand { self.convert(arg, Ty::Float, args[0].span)? } else { arg };
+        let arg = if arg.ty == Ty::Int && ty != Ty::Int && !matches!(b, Builtin::SimRand | Builtin::Tap | Builtin::Disc) { self.convert(arg, Ty::Float, args[0].span)? } else { arg };
         Some(IExpr { kind: IExprKind::Call(b, Box::new(arg)), ty })
     }
 
@@ -1748,7 +1748,7 @@ impl Checker {
                 };
                 Some(IExpr { kind: IExprKind::Binary(op, Box::new(l), Box::new(r)), ty: Ty::Bool })
             }
-            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr | BinOp::IDiv => {
                 if l.ty != Ty::Int || r.ty != Ty::Int {
                     self.error(span, format!("`{}` takes two ints (a float's bits are not a formula's)", op.symbol()));
                     return None;

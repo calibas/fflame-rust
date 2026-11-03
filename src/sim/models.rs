@@ -7129,7 +7129,9 @@ pub static LATTICE4: ModelDef = ModelDef {
                   ring they chase each other and every cell cycles in place, like a \
                   Belousov–Zhabotinsky reaction; under the warp's inflation the structure is \
                   carried outward while new structure forms within it.",
-    features: &[],
+    // `NeedsRng`: its step draws its noise (the flag says the step
+    // draws; it changes only a comment in the step shader).
+    features: &[ModelFeature::NeedsRng],
     parameters: &[
         SimParamDef {
             name: "kaa",
@@ -8301,7 +8303,8 @@ pub static TURING: ModelDef = ModelDef {
     description: "One difference-of-discs Turing field, made to be a layer: coupled to other \
                   Turing fields through Signal couplings it is one field of the coupled \
                   lattice, with its own radius, and its own transform.",
-    features: &[ModelFeature::TakesDrive, ModelFeature::PublishesSignal],
+    // `NeedsRng`: its step draws its noise, by its own hash.
+    features: &[ModelFeature::NeedsRng, ModelFeature::TakesDrive, ModelFeature::PublishesSignal],
     parameters: &[
         SimParamDef {
             name: "self",

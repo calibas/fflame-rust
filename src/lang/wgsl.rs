@@ -172,10 +172,12 @@ fn cell_index(a: &IExpr) -> Option<usize> {
 /// A simulation model's host values by `__cell`'s index (P4): the state
 /// a step pass is given (0-3), the seed's inside and noise (19, 20), the
 /// time step (21), the field's minimum and maximum of `.x` a step ago
-/// (22, 23: `NeedsMinMax`, P4 step 9a). The rest are a colouring's; the
-/// step index is an int (`__host_int`).
-const SIM_MODEL_HOST: [&str; 24] = [
+/// (22, 23: `NeedsMinMax`, P4 step 9a), the coupled drive (24-27:
+/// `TakesDrive`, 9b). The rest are a colouring's; the step index is an
+/// int (`__host_int`).
+const SIM_MODEL_HOST: [&str; 28] = [
     "s.x", "s.y", "s.z", "s.w", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "inside", "noise", "sim_dt()", "sim_minmax().x", "sim_minmax().y",
+    "sim_drive(p).x", "sim_drive(p).y", "sim_drive(p).z", "sim_drive(p).w",
 ];
 
 /// A simulation model's function in WGSL (P4): a step pass as the step
@@ -2350,6 +2352,9 @@ impl<'p> Gen<'p> {
             // Ints as 32-bit patterns: a shift by its amount's low five
             // bits, `>>` logical (`interp::bits`).
             BitAnd | BitOr | BitXor => format!("({l} {} {r})", op.symbol()),
+            // WGSL's i32 division is Rhai's: truncating, the dividend by
+            // zero.
+            IDiv => format!("({l} / {r})"),
             Shl => format!("({l} << (u32({r}) & 31u))"),
             Shr => format!("bitcast<i32>(bitcast<u32>({l}) >> (u32({r}) & 31u))"),
         }
@@ -2852,12 +2857,18 @@ impl<'p> Gen<'p> {
         match f {
             SimRand => return format!("sim_rand(p, bitcast<u32>({v}))"),
             InitAt => return format!("sim_init_mask(vec2<i32>(round({v})))"),
+            Tap => return format!("klut(u32({v}))"),
+            Disc => return format!("pyr_diff_cell({v}, p)"),
             Pcg => return format!("bitcast<i32>(sim_pcg(bitcast<u32>({v})))"),
             HostInt => {
                 return match cell_index(a) {
                     Some(0) => "bitcast<i32>(params.seed_lo)".into(),
                     Some(1) => "bitcast<i32>(params.seed_hi)".into(),
                     Some(3) => "bitcast<i32>(params.layer)".into(),
+                    // From the uniform, which the seed's module has too.
+                    Some(4) => "i32(params.kernel_radius)".into(),
+                    Some(5) => "i32((2u * params.kernel_radius + 1u) * (2u * params.kernel_radius + 1u))".into(),
+                    Some(6) => "select(0i, 1i, pyr_exact())".into(),
                     _ => "bitcast<i32>(sim_step_index())".into(),
                 }
             }
@@ -2978,7 +2989,7 @@ impl<'p> Gen<'p> {
             Log1p => format!("{}({v})", self.use_(Helper::FLog1p)),
             Fract => format!("fract({v})"),
             Conj | Flip | Cosxx | Hash2 => unreachable!("complex-valued"),
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt => unreachable!("an image read, emitted above"),
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Tap | Disc => unreachable!("an image read, emitted above"),
         };
         if ty == Ty::Int {
             format!("i32({real})")
@@ -2991,7 +3002,7 @@ impl<'p> Gen<'p> {
 fn complex_helper(f: Builtin) -> Helper {
     use Builtin::*;
     match f {
-        SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt => unreachable!("an image read, emitted by `Gen::call`"),
+        SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Tap | Disc => unreachable!("an image read, emitted by `Gen::call`"),
         Hash2 => Helper::Hash2,
         Fract => unreachable!("emitted by `Gen::call`, real or complex"),
         // `Gen::call` passes the value through.

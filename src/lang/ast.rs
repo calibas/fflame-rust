@@ -166,6 +166,10 @@ pub enum BinOp {
     /// `diffabs`): the deviation of `abs` in derived perturbation
     /// equations (`lang::delta`). Never parsed.
     DiffAbs,
+    /// Rhai's `/` of two ints (P4 step 9b): truncating toward zero, as
+    /// Rhai's is, where UF's `/` is the quotient. By zero, and `i32::MIN`
+    /// by -1, the dividend, as WGSL defines it.
+    IDiv,
     /// Rhai's bit operations, on ints as 32-bit patterns (UF has none);
     /// on bools `&` and `|` are and and or, `^` xor. `>>` is logical, as
     /// a hash of unsigned values wants it.
@@ -194,6 +198,7 @@ impl BinOp {
             BinOp::And => "&&",
             BinOp::Or => "||",
             BinOp::DiffAbs => "diffabs",
+            BinOp::IDiv => "/",
             BinOp::BitAnd => "&",
             BinOp::BitOr => "|",
             BinOp::BitXor => "^",

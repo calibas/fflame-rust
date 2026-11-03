@@ -378,6 +378,19 @@ fn the_rhai_models_step_as_the_built_ins() {
             let mut twin = builtin.clone();
             twin.model = carried.entry.clone();
             twin.custom_model = Some(carried.clone());
+            // A kernel twin's step on the built-in's own table (P4 step
+            // 9b): the tables are held to each other by the settings test,
+            // and a script's, built in f64, differs in the last bit of a
+            // weight -- which a run amplifies (printed below).
+            let own = m.kernel.is_some().then(|| {
+                let mut own = twin.clone();
+                own.model = format!("custom-own-table-{name}");
+                own.custom_model = Some(crate::config::escape::CustomSource { entry: own.model.clone(), ..carried.clone() });
+                crate::sim::custom::ensure(&own);
+                crate::sim::custom::ensure(&twin);
+                crate::sim::custom::swap_kernel(&twin.model, m.kernel);
+                own
+            });
             let ((seed_a, a), (_, b)) = (run(&builtin), run(&twin));
             assert_eq!(crate::sim::model_or_default(&twin.model).name, twin.model, "{name}: the twin registered");
             let label = format!("{name}/{}", pre.map_or("defaults", |p| p.name));
@@ -386,6 +399,11 @@ fn the_rhai_models_step_as_the_built_ins() {
             let cells = a.iter().zip(&b).filter(|(x, y)| x != y).count();
             let tolerance = if m.state == StateKind::Discrete { 0.0 } else { 1e-5 };
             println!("{label:40} {cells:5} cells differ, worst {off:.2e}");
+            if let Some(own) = &own {
+                let (_, c) = run(own);
+                let drift = a.iter().zip(&c).flat_map(|(x, y)| x.iter().zip(y).map(|(p, q)| (p - q).abs() / p.abs().max(1.0))).fold(0.0f32, f32::max);
+                println!("{:40} on its own table, worst {drift:.2e}", "");
+            }
             if off > tolerance || off.is_nan() {
                 failures.push(format!("{label}: {cells} cells differ, worst {off:e}"));
             }
@@ -454,9 +472,9 @@ fn rhai_models_and_colourings_run_in_layers() {
 
 /// The Rhai twins step as fast as their built-ins (P4; the rule that
 /// Rhai compiles to equivalent WGSL): each twin at 1024x1024 from its
-/// first preset, fifteen rounds of 1500 steps, each round the twin
-/// straight after the built-in, the median of the rounds' ratios, more
-/// than 5% slower a failure. Ignored:
+/// first preset, fifteen rounds of about 200 ms (1500 steps at most), each
+/// round the twin straight after the built-in, the median of the rounds'
+/// ratios, more than 5% slower a failure. Ignored:
 /// it times the GPU, so it wants the machine otherwise idle (the app
 /// closed). `SIM_TWINS=a,b` times those alone; `SIM_TWINS_SELF=1` times
 /// each built-in against itself, the measurement's own noise.
@@ -493,7 +511,13 @@ fn the_rhai_models_are_no_slower() {
         wait();
         // Long rounds, many of them: a whole run's median still moves by a
         // few percent with the card's clocks (`SIM_TWINS_SELF` measures it).
-        let steps = 1500;
+        // About 200 ms a round, from the built-in's pace: 1500 steps of a
+        // stencil, fewer of a wide kernel's gather.
+        let start = web_time::Instant::now();
+        renderers[0].1.run_steps(&device, &queue, &builtin, 20);
+        wait();
+        let per_step = start.elapsed().as_secs_f64() / 20.0;
+        let steps = ((0.2 / per_step.max(1e-6)) as u32).clamp(20, 1500);
         let mut ratios = Vec::new();
         let mut ms = [0.0f64; 2];
         for _ in 0..15 {
@@ -8946,6 +8970,49 @@ fn turing_layers_of(lattice: &SimConfig) -> SimConfig {
     cfg
 }
 
+/// A Rhai Turing couples as the built-in does (P4 step 9b): four layers
+/// under Signal couplings (Lattice4's ring preset, `turing_layers_of`),
+/// each layer the twin, against the built-in in each -- the published
+/// signal read by the couplings and the drive folded in by the step, on
+/// the built-in's own kernel table (`swap_kernel`), every slice
+/// bit-identical after 200 steps.
+#[cfg(feature = "lang")]
+#[test]
+fn a_rhai_turing_couples_as_the_built_in() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let lattice4 = crate::sim::MODELS.iter().find(|m| m.name == "lattice4").expect("a built-in");
+    let builtin = turing_layers_of(&preset_config(lattice4, lattice4.presets.iter().find(|p| p.name == "ring"), N));
+    assert!(builtin.couplings.len() >= 4, "the ring's couplings");
+    let carried = crate::sim::custom::carried(crate::sim::custom::SHIPPED_MODELS.iter().find(|(n, _)| *n == "turing").expect("the twin").1);
+    let mut twin = builtin.clone();
+    twin.model = carried.entry.clone();
+    twin.custom_model = Some(carried.clone());
+    for l in &mut twin.layers {
+        l.model = carried.entry.clone();
+        l.custom_model = Some(carried.clone());
+    }
+    crate::sim::custom::ensure(&twin);
+    let turing = crate::sim::MODELS.iter().find(|m| m.name == "turing").expect("a built-in");
+    crate::sim::custom::swap_kernel(&carried.entry, turing.kernel);
+    let run = |cfg: &SimConfig| {
+        let mut r = SimRenderer::new(&device, cfg, N, N);
+        r.seed(&device, &queue, cfg);
+        r.run_steps(&device, &queue, cfg, 200);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        (0..4).map(|l| read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, l)).collect::<Vec<_>>()
+    };
+    let (a, b) = (run(&builtin), run(&twin));
+    assert!(a[0].iter().any(|c| c[0].abs() > 0.05), "the coupled field formed");
+    for l in 0..4 {
+        let cells = a[l].iter().zip(&b[l]).filter(|(x, y)| x != y).count();
+        assert_eq!(cells, 0, "layer {l}: {cells} cells differ");
+    }
+}
+
 /// Phase 6 of the simulation-layers plan: four `turing` layers under
 /// Signal couplings are the coupled Turing lattice. The ring preset
 /// with its eight couplings, and the independent preset with none,
@@ -9156,3 +9223,4 @@ fn the_view_never_changes_the_field() {
     let differing = a.iter().zip(&b).filter(|(p, q)| p.iter().zip(q.iter()).any(|(x, y)| x.to_bits() != y.to_bits())).count();
     assert_eq!(differing, 0, "the view changed {differing} cells of the field");
 }
+

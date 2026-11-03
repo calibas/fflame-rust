@@ -473,7 +473,7 @@ impl BigMachine {
         Ok(match op {
             And => BigValue::Bool(l.truth(dialect) && r.truth(dialect)),
             Or => BigValue::Bool(l.truth(dialect) || r.truth(dialect)),
-            BitAnd | BitOr | BitXor | Shl | Shr => match (l, r) {
+            BitAnd | BitOr | BitXor | Shl | Shr | IDiv => match (l, r) {
                 (BigValue::Int(a), BigValue::Int(b)) => BigValue::Int(super::interp::bits(op, a, b)),
                 _ => return Err(Stop),
             },
@@ -653,7 +653,7 @@ impl BigMachine {
             F32 => self.c(z.re.to_f64() as f32 as f64, z.im.to_f64() as f32 as f64),
             // An effect's image, and the noise functions: never in a
             // reference orbit.
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Fract | Hash2 => return Err(Stop),
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Tap | Disc | Fract | Hash2 => return Err(Stop),
             Sin => {
                 let (s, c) = z.re.sin_cos();
                 let (ch, sh) = self.cosh_sinh(&z.im)?;

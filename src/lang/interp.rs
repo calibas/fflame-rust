@@ -963,7 +963,7 @@ fn binary(op: BinOp, l: Value, r: Value, ty: Ty, dialect: Dialect) -> Value {
         Gt => Value::Bool(l.as_f64() > r.as_f64()),
         Ge => Value::Bool(l.as_f64() >= r.as_f64()),
         DiffAbs => Value::Float(diffabs(l.as_f64(), r.as_f64())),
-        BitAnd | BitOr | BitXor | Shl | Shr => Value::Int(bits(op, l.as_int(), r.as_int())),
+        BitAnd | BitOr | BitXor | Shl | Shr | IDiv => Value::Int(bits(op, l.as_int(), r.as_int())),
         Add | Sub | Mul | Div | Mod | Pow => match ty {
             Ty::Int => {
                 let (a, b) = (l.as_int(), r.as_int());
@@ -1019,6 +1019,9 @@ pub(crate) fn bits(op: BinOp, a: i32, b: i32) -> i32 {
         BinOp::BitXor => a ^ b,
         BinOp::Shl => ((a as u32) << k) as i32,
         BinOp::Shr => ((a as u32) >> k) as i32,
+        // Truncating, and the dividend where WGSL defines it so.
+        BinOp::IDiv if b == 0 || (a == i32::MIN && b == -1) => a,
+        BinOp::IDiv => a / b,
         _ => unreachable!("a bit operation"),
     }
 }
