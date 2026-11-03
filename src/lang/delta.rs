@@ -226,6 +226,7 @@ fn stmt_reads_foreign(s: &IStmt, p: &Program) -> bool {
         }
     }
     match s {
+        IStmt::Host(_, args) => args.iter().any(|x| e(x, p)),
         IStmt::Break | IStmt::Continue | IStmt::Return => false,
         IStmt::Assign(Place::Var(v), x) => !(p.vars[*v].perturb) || e(x, p),
         IStmt::Assign(_, x) => e(x, p),
@@ -366,6 +367,7 @@ fn uniform_vars(p: &Program) -> Vec<bool> {
     fn assigns<'a>(stmts: &'a [IStmt], out: &mut Vec<(VarId, &'a IExpr)>) {
         for s in stmts {
             match s {
+                IStmt::Host(..) => {}
                 IStmt::Break | IStmt::Continue | IStmt::Return => {}
                 IStmt::Assign(Place::Var(v), e) => out.push((*v, e)),
                 IStmt::Assign(..) | IStmt::SetElem { .. } | IStmt::Map { .. } => {}
@@ -497,6 +499,7 @@ pub(crate) fn init_cases(p: &Program) -> Option<Vec<InitCase>> {
 fn walk_init(stmts: &[IStmt], mut cases: Vec<InitCase>, p: &Program) -> Option<Vec<InitCase>> {
     for s in stmts {
         match s {
+            IStmt::Host(..) => return None,
             IStmt::Break | IStmt::Continue | IStmt::Return => return None,
             IStmt::Map { .. } => return None,
             IStmt::Assign(place, e) => {
@@ -679,6 +682,7 @@ pub(crate) fn last_was_too_large() -> bool {
 fn assigned_in(stmts: &[IStmt], out: &mut Vec<VarId>, dz: &mut bool) {
     for s in stmts {
         match s {
+            IStmt::Host(..) => {}
             IStmt::Break | IStmt::Continue | IStmt::Return => {}
             IStmt::Map { out: parts, .. } => {
                 for v in parts {
@@ -708,6 +712,7 @@ fn assigned_in(stmts: &[IStmt], out: &mut Vec<VarId>, dz: &mut bool) {
 fn stmt_nodes(s: &IStmt) -> usize {
     let block = |b: &[IStmt]| b.iter().map(stmt_nodes).sum::<usize>();
     match s {
+        IStmt::Host(_, args) => 1 + args.iter().map(nodes).sum::<usize>(),
         IStmt::Break | IStmt::Continue | IStmt::Return => 1,
         IStmt::Assign(_, e) => 1 + nodes(e),
         IStmt::SetElem { index, value, .. } => 1 + nodes(index) + nodes(value),
@@ -1911,6 +1916,7 @@ fn stmt_reads_var(s: &IStmt, v: VarId) -> bool {
         }
     }
     match s {
+        IStmt::Host(_, args) => args.iter().any(|x| e(x, v)),
         IStmt::Break | IStmt::Continue | IStmt::Return => false,
         IStmt::Assign(_, x) => e(x, v),
         IStmt::SetElem { index, value, .. } => e(index, v) || e(value, v),
@@ -1927,6 +1933,7 @@ fn strip_assigns(stmts: &mut Vec<IStmt>, v: VarId) {
     stmts.retain(|s| !matches!(s, IStmt::Assign(Place::Var(w), _) if *w == v));
     for s in stmts {
         match s {
+            IStmt::Host(..) => {}
             IStmt::Break | IStmt::Continue | IStmt::Return => {}
             IStmt::Map { .. } => {}
             IStmt::If { arms, otherwise } => {
@@ -1952,6 +1959,7 @@ fn reads_z(e: &IExpr) -> bool {
 
 pub(crate) fn writes_var(stmts: &[IStmt], v: VarId) -> bool {
     stmts.iter().any(|s| match s {
+        IStmt::Host(..) => false,
         IStmt::Break | IStmt::Continue | IStmt::Return => false,
         IStmt::Assign(Place::Var(w), _) => *w == v,
         IStmt::Assign(..) => false,

@@ -477,7 +477,9 @@ fn rhai_models_and_colourings_run_in_layers() {
 /// ratios, more than 5% slower a failure. Ignored:
 /// it times the GPU, so it wants the machine otherwise idle (the app
 /// closed). `SIM_TWINS=a,b` times those alone; `SIM_TWINS_SELF=1` times
-/// each built-in against itself, the measurement's own noise.
+/// each built-in against itself, the measurement's own noise;
+/// `SIM_TWIN_PARAMS=variation=1.5,memory=0.3` sets parameters over the
+/// preset's, to time another path.
 #[cfg(feature = "lang")]
 #[test]
 #[ignore]
@@ -497,7 +499,11 @@ fn the_rhai_models_are_no_slower() {
         }
         let m = crate::sim::MODELS.iter().find(|m| m.name == *name).expect("a built-in");
         let carried = crate::sim::custom::carried(source);
-        let builtin = preset_config(m, m.presets.first(), 1024);
+        let mut builtin = preset_config(m, m.presets.first(), 1024);
+        for kv in std::env::var("SIM_TWIN_PARAMS").unwrap_or_default().split(',').filter(|s| !s.is_empty()) {
+            let (k, v) = kv.split_once('=').expect("`name=value`");
+            builtin.model_params.insert(k.to_string(), v.parse().expect("a number"));
+        }
         let mut twin = builtin.clone();
         if std::env::var("SIM_TWINS_SELF").is_err() {
             twin.model = carried.entry.clone();
@@ -9011,6 +9017,91 @@ fn a_rhai_turing_couples_as_the_built_in() {
         let cells = a[l].iter().zip(&b[l]).filter(|(x, y)| x != y).count();
         assert_eq!(cells, 0, "layer {l}: {cells} cells differ");
     }
+}
+
+/// McCabe's twin on the paths its presets leave out (P4 step 9c): the
+/// shifted grid and the exact discs (leaning, in a table), a table with
+/// weights off 1, a negative step and symmetry, the ladder's symmetry, the
+/// variation radius (the measure pass and its scratch), per-scale warps
+/// (alone and on the exact discs), the colour memory (with the variation
+/// radius too) -- the field, and the memory where it is on, bit-identical
+/// to the built-in's after 150 steps; each case a run of its own on the
+/// built-in, so every path ran.
+#[cfg(feature = "lang")]
+#[test]
+fn a_rhai_mccabe_runs_every_path_as_the_built_in() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let carried = crate::sim::custom::carried(crate::sim::custom::SHIPPED_MODELS.iter().find(|(n, _)| *n == "mccabe").expect("the twin").1);
+    let table: &[(&str, f32)] = &[
+        ("layout", 1.0),
+        ("s0_radius", 1.5),
+        ("s1_radius", 3.0),
+        ("s1_weight", 0.7),
+        ("s2_radius", 7.0),
+        ("s2_symmetry", 3.0),
+        ("s2_weight", 1.3),
+        ("s3_radius", 12.0),
+        ("s3_amount", -0.02),
+        ("s4_radius", 20.0),
+        ("s4_symmetry", 5.0),
+    ];
+    let lean: &[(&str, f32)] = &[("s1_stretch", 2.0), ("s1_angle", 30.0), ("s3_stretch", 1.5), ("s3_angle", -45.0)];
+    let warps: &[(&str, f32)] = &[("s2_warp_zoom", 1.05), ("s2_warp_pan_x", 1.5), ("s3_warp_rotation", 0.1), ("s4_warp_flow", 0.3)];
+    let cases: Vec<(&str, Vec<&[(&str, f32)]>)> = vec![
+        ("shifted grid", vec![&[("averaging", 1.0)]]),
+        ("exact discs", vec![&[("averaging", 2.0)]]),
+        ("exact discs, leaning table", vec![&[("averaging", 2.0)], table, lean]),
+        ("table", vec![table]),
+        ("ladder symmetry", vec![&[("symmetry", 4.0)]]),
+        ("variation radius", vec![&[("variation", 1.5)]]),
+        ("variation radius, table", vec![&[("variation", 2.0)], table]),
+        ("scale warps", vec![warps]),
+        ("scale warps, exact discs", vec![warps, &[("averaging", 2.0)]]),
+        ("memory", vec![&[("memory", 0.3)]]),
+        ("memory, variation radius", vec![&[("memory", 0.5), ("variation", 1.0)]]),
+    ];
+    let run = |cfg: &SimConfig, slices: u32| {
+        let mut r = SimRenderer::new(&device, cfg, N, N);
+        r.seed(&device, &queue, cfg);
+        r.run_steps(&device, &queue, cfg, 150);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        (0..slices).map(|l| read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, l)).collect::<Vec<_>>()
+    };
+    let plain = run(&mccabe_config(N), 1);
+    let mut failures = Vec::new();
+    for (label, sets) in &cases {
+        let mut builtin = mccabe_config(N);
+        for (k, v) in sets.iter().flat_map(|s| s.iter()) {
+            builtin.model_params.insert(k.to_string(), *v);
+        }
+        let mut twin = builtin.clone();
+        twin.model = carried.entry.clone();
+        twin.custom_model = Some(carried.clone());
+        // The field, and the memory's two slices after it.
+        let slices = if builtin.model_params.get("memory").is_some_and(|&b| b > 0.0) { 3 } else { 1 };
+        let (a, b) = (run(&builtin, slices), run(&twin, slices));
+        assert_eq!(crate::sim::model_or_default(&twin.model).name, twin.model, "the twin registered");
+        // The memory leaves the field as it was and fills its slices.
+        if slices > 1 {
+            assert!(a[1].iter().any(|c| c.iter().any(|v| *v != 0.0)), "{label}: the built-in's memory filled");
+        } else {
+            assert!(a[0] != plain[0], "{label}: the case changed the built-in's run");
+        }
+        for l in 0..slices as usize {
+            let cells = a[l].iter().zip(&b[l]).filter(|(x, y)| x != y).count();
+            println!("{label:30} slice {l}: {cells:5} cells differ");
+            if cells > 0 {
+                failures.push(format!("{label}, slice {l}: {cells} cells differ"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "the twin off the built-in:
+{}", failures.join("
+"));
 }
 
 /// Phase 6 of the simulation-layers plan: four `turing` layers under

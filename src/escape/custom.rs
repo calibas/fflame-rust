@@ -752,6 +752,7 @@ pub fn bla_steps(escape: &EscapeConfig, orbit: &[[f64; 2]], reference: lang::bui
     }
     fn branches_on_the_iterate(stmts: &[IStmt], p: &ir::Program) -> bool {
         stmts.iter().any(|s| match s {
+            IStmt::Host(..) => true,
             IStmt::Break | IStmt::Continue | IStmt::Return => true,
             IStmt::Assign(..) => false,
             // An array written per pixel: not the straight-line map BLA
@@ -1989,6 +1990,10 @@ mod tests {
                     return;
                 }
                 match s {
+                    IStmt::Host(..) => {
+                        *found = Some("a simulation's framework call".into());
+                        return;
+                    }
                     IStmt::Break | IStmt::Continue | IStmt::Return => {
                         *found = Some("a loop's `break` or an early `return`".into());
                         return;

@@ -33,7 +33,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write;
 
 use super::ast::{BinOp, UnOp};
-use super::builtins::{Builtin, USER_FUNCTIONS};
+use super::builtins::{Builtin, Host, USER_FUNCTIONS};
 use super::check::LOOP_CAP;
 use super::ir::*;
 use super::Dialect;
@@ -206,6 +206,16 @@ pub fn sim_model(p: &Program, f: super::rhai::SimFn) -> Result<SimModelWgsl, Str
             (PREFIXES[n.min(3) as usize], format!("fn sim_step{suffix}(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {{\n"))
         }
     };
+    // The pyramid's caches, filled where the step first reads it on each
+    // path (P4 step 9c).
+    let mut placed;
+    let p = if reads_pyramid(&p.transform) {
+        placed = p.clone();
+        place_pyr_prepare(&mut placed.transform, false);
+        &placed
+    } else {
+        p
+    };
     let mut g = Gen::new(p, Ctx::Effect, prefix);
     g.sim_model = true;
     g.ret = SIM_RETURN;
@@ -227,6 +237,60 @@ pub fn sim_model(p: &Program, f: super::rhai::SimFn) -> Result<SimModelWgsl, Str
     let rng = body.contains("sim_rand(") || body.contains("params.seed_lo") || body.contains("params.seed_hi");
     let min_max = body.contains("sim_minmax(");
     Ok(SimModelWgsl { body, rng, min_max })
+}
+
+/// Whether statements read the pyramid (`pyr_sample`, `pyr_level`,
+/// `pyr_diff`).
+fn reads_pyramid(st: &[IStmt]) -> bool {
+    let e = expr_reads_pyramid;
+    st.iter().any(|x| match x {
+        IStmt::Host(_, args) => args.iter().any(e),
+        IStmt::Break | IStmt::Continue | IStmt::Return => false,
+        IStmt::Assign(_, v) => e(v),
+        IStmt::SetElem { index, value, .. } => e(index) || e(value),
+        IStmt::If { arms, otherwise } => arms.iter().any(|(c, b)| e(c) || reads_pyramid(b)) || reads_pyramid(otherwise),
+        IStmt::While { cond, body } | IStmt::Repeat { body, cond } => e(cond) || reads_pyramid(body),
+        IStmt::Map { input, .. } => input.iter().any(e),
+    })
+}
+
+fn expr_reads_pyramid(x: &IExpr) -> bool {
+    let e = expr_reads_pyramid;
+    match &x.kind {
+        IExprKind::Host(h, args) => matches!(h, Host::PyrSample | Host::PyrLevel | Host::PyrDiff) || args.iter().any(e),
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) | IExprKind::Elem(_, a) => e(a),
+        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => e(a) || e(b),
+        _ => false,
+    }
+}
+
+/// `pyr_prepare();` where a step first reads the pyramid on each path, as
+/// the built-ins place it (P4 step 9c): before the first statement that
+/// reads it, inside an `if`'s arms when its tests do not -- so a branch
+/// that never reads the pyramid never pays for its caches. Whether every
+/// path through `st` ends with them filled.
+fn place_pyr_prepare(st: &mut Vec<IStmt>, mut ready: bool) -> bool {
+    let mut i = 0;
+    while i < st.len() && !ready {
+        if !reads_pyramid(std::slice::from_ref(&st[i])) {
+            i += 1;
+            continue;
+        }
+        if let IStmt::If { arms, otherwise } = &mut st[i] {
+            if !arms.iter().any(|(c, _)| expr_reads_pyramid(c)) {
+                let mut all = true;
+                for (_, b) in arms.iter_mut() {
+                    all &= place_pyr_prepare(b, false);
+                }
+                ready = place_pyr_prepare(otherwise, false) && all;
+                i += 1;
+                continue;
+            }
+        }
+        st.insert(i, IStmt::Host(Host::PyrPrepare, Vec::new()));
+        ready = true;
+    }
+    ready
 }
 
 /// A simulation colouring's WGSL (P4): `sim_color(x, p)` as the colour
@@ -291,12 +355,22 @@ pub fn sim_coloring(p: &Program) -> Result<SimColoringWgsl, String> {
                 visit(a, read, pixel);
                 visit(b, read, pixel);
             }
+            IExprKind::Host(_, args) => {
+                for a in args {
+                    visit(a, read, pixel);
+                }
+            }
             _ => {}
         }
     }
     fn stmts(s: &[IStmt], read: &mut [bool; 28], pixel: &mut bool) {
         for st in s {
             match st {
+                IStmt::Host(_, args) => {
+                    for a in args {
+                        visit(a, read, pixel);
+                    }
+                }
                 IStmt::Break | IStmt::Continue | IStmt::Return => {}
                 IStmt::Assign(_, e) => visit(e, read, pixel),
                 IStmt::SetElem { index, value, .. } => {
@@ -1878,6 +1952,39 @@ impl<'p> Gen<'p> {
         n
     }
 
+    /// A simulation's framework call (P4 steps 9c, 9d): the template's
+    /// function, its arguments as it takes them -- a cell's offset from
+    /// `p`, a position as a `vec2<f32>`, a slot as an int; a vector read's
+    /// part by its literal last argument. An agent's calls name the agent,
+    /// `i`, the agent template's.
+    fn host(&mut self, h: Host, args: &[IExpr]) -> String {
+        let a: Vec<String> = args.iter().map(|e| self.expr(e)).collect();
+        let part = |k: usize| match args.get(k).and_then(cell_index) {
+            Some(1) => "y",
+            Some(2) => "z",
+            Some(3) => "w",
+            _ => "x",
+        };
+        match h {
+            Host::PyrSample => format!("pyr_sample({}, vec2<f32>({}, {}))", a[0], a[1], a[2]),
+            Host::PyrLevel => format!("pyr_level_for_radius({})", a[0]),
+            Host::PyrDiff => format!("pyr_diff({}, vec2<f32>({}, {}))", a[0], a[1], a[2]),
+            Host::ScratchRead => format!("sim_scratch_read(sim_wrap_sized(p + vec2<i32>({}, {}), sim_grid()), {}).{}", a[0], a[1], a[2], part(3)),
+            Host::ScratchWrite => format!("sim_scratch_write(p, {}, vec4<f32>({}, {}, {}, {}))", a[0], a[1], a[2], a[3], a[4]),
+            Host::MemRead => format!("sim_mem_read(p, {}).{}", a[0], part(1)),
+            Host::MemWrite => format!("sim_mem_write(p, {}, vec4<f32>({}, {}, {}, {}))", a[0], a[1], a[2], a[3], a[4]),
+            Host::Outside => format!("sim_outside(p + vec2<i32>({}, {}), sim_grid())", a[0], a[1]),
+            Host::Param => format!("mparam(u32({}))", a[0]),
+            Host::TakeDeposit => "sim_take_deposit(p)".to_string(),
+            Host::AgentRand => format!("agent_rand(i, bitcast<u32>({}))", a[0]),
+            Host::AgentClaim => format!("agent_claim(vec2<i32>({}, {}), i)", a[0], a[1]),
+            Host::AgentClaimCheck => format!("agent_claim_check(vec2<i32>({}, {}), i)", a[0], a[1]),
+            Host::AgentDeposit => format!("agent_deposit(vec2<i32>({}, {}), {})", a[0], a[1], a[2]),
+            Host::ReadAt => format!("sim_read(vec2<i32>({}, {})).{}", a[0], a[1], part(2)),
+            Host::PyrPrepare => "pyr_prepare()".to_string(),
+        }
+    }
+
     /// A neighbour read's offset as WGSL's `vec2<i32>`: whole numbers as
     /// they are (an int converted, a literal), anything else rounded.
     fn nbr_offset(&mut self, a: &IExpr) -> String {
@@ -1922,6 +2029,11 @@ impl<'p> Gen<'p> {
     fn stmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
         let pad = "    ".repeat(depth);
         match s {
+            // A simulation's framework call that writes (P4 steps 9c, 9d).
+            IStmt::Host(h, args) => {
+                let call = self.host(*h, args);
+                let _ = writeln!(out, "{pad}{call};");
+            }
             // The effect-like functions' flow (P4 step 5): an early
             // return's result is set before it, so it returns what the
             // function's end returns.
@@ -2036,6 +2148,7 @@ impl<'p> Gen<'p> {
             return s;
         }
         match &e.kind {
+            IExprKind::Host(h, args) => self.host(*h, args),
             IExprKind::Bool(b) => b.to_string(),
             IExprKind::Int(i) if self.opaque => {
                 self.use_(Helper::Opaque);
@@ -2380,6 +2493,7 @@ impl<'p> Gen<'p> {
     fn sstmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
         let pad = "    ".repeat(depth);
         match s {
+            IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             IStmt::Break | IStmt::Continue | IStmt::Return => unreachable!("an effect-like function's `break`, `continue` or `return`, which runs on the GPU alone"),
             IStmt::Map { .. } => unreachable!("a solid's call of a built-in variation in perturbation equations"),
             IStmt::Assign(place, e) => {
@@ -2596,6 +2710,7 @@ impl<'p> Gen<'p> {
     fn festmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
         let pad = "    ".repeat(depth);
         match s {
+            IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             IStmt::Break | IStmt::Continue | IStmt::Return => unreachable!("an effect-like function's `break`, `continue` or `return`, which runs on the GPU alone"),
             IStmt::Map { .. } => unreachable!("a solid's call of a built-in variation in perturbation equations"),
             IStmt::Assign(place, e) => {
@@ -2869,6 +2984,9 @@ impl<'p> Gen<'p> {
                     Some(4) => "i32(params.kernel_radius)".into(),
                     Some(5) => "i32((2u * params.kernel_radius + 1u) * (2u * params.kernel_radius + 1u))".into(),
                     Some(6) => "select(0i, 1i, pyr_exact())".into(),
+                    Some(7) => "select(0i, 1i, sim_scale_warped())".into(),
+                    Some(8) => "select(0i, 1i, sim_scratch_on())".into(),
+                    Some(9) => "sim_mem_count()".into(),
                     _ => "bitcast<i32>(sim_step_index())".into(),
                 }
             }
@@ -3148,6 +3266,7 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
     fn assigns(stmts: &[IStmt], out: &mut Vec<(VarId, IExpr)>) {
         for s in stmts {
             match s {
+                IStmt::Host(..) => {}
                 IStmt::Break | IStmt::Continue | IStmt::Return => {}
                 IStmt::Assign(Place::Var(v), e) => out.push((*v, e.clone())),
                 IStmt::Assign(..) | IStmt::SetElem { .. } | IStmt::Map { .. } => {}
@@ -3195,6 +3314,7 @@ pub fn reads_a_variable(e: &IExpr, p: &Program) -> bool {
             reads_a_variable(a, p)
         }
         IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => reads_a_variable(a, p) || reads_a_variable(b, p),
+        IExprKind::Host(_, args) => args.iter().any(|a| reads_a_variable(a, p)),
         _ => false,
     }
 }
@@ -3203,6 +3323,7 @@ pub fn reads_a_variable(e: &IExpr, p: &Program) -> bool {
 /// parameter, symbol or user function in it.
 fn constant(e: &IExpr) -> bool {
     match &e.kind {
+        IExprKind::Host(..) => false,
         IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) | IExprKind::Complex(..) => true,
         IExprKind::Var(_) | IExprKind::Elem(..) | IExprKind::Param(_) | IExprKind::Predef(_) | IExprKind::UserCall(..) | IExprKind::UserDeriv(..) | IExprKind::UserJac(..) | IExprKind::FuncChoice(_) => false,
         IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) => {
@@ -3309,6 +3430,7 @@ fn reads_var(e: &IExpr, v: VarId) -> bool {
         | IExprKind::UserJac(_, a, _) => reads_var(a, v),
         IExprKind::Elem(w, a) => *w == v || reads_var(a, v),
         IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => reads_var(a, v) || reads_var(b, v),
+        IExprKind::Host(_, args) => args.iter().any(|a| reads_var(a, v)),
         _ => false,
     }
 }
@@ -3344,6 +3466,7 @@ pub fn colours_anything(p: &Program) -> bool {
 
 fn writes(stmts: &[IStmt], place: Place) -> bool {
     stmts.iter().any(|s| match s {
+        IStmt::Host(..) => false,
         IStmt::Break | IStmt::Continue | IStmt::Return => false,
         IStmt::Assign(p, _) => *p == place,
         IStmt::SetElem { .. } | IStmt::Map { .. } => false,

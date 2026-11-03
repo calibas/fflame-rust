@@ -315,7 +315,7 @@ impl Lowerer<'_> {
         match n {
             "vec3" | "cross" => Some(Kind::Vec3),
             "quat" => Some(Kind::Quat),
-            "rgba" | "vec4" | "input" | "input_at" | "read" | "drive" => Some(Kind::Rgba),
+            "rgba" | "vec4" | "input" | "input_at" | "read" | "drive" | "scratch" | "memory" => Some(Kind::Rgba),
             "palette" => Some(Kind::Vec3),
             "normalize" | "abs" | "floor" | "min" | "max" | "clamp" | "mix" => first(),
             "conj" | "inv" | "pow" => first().filter(|k| *k == Kind::Quat),
@@ -327,6 +327,18 @@ impl Lowerer<'_> {
     }
 
     /// A value, a vector or a number as it is.
+    /// A helper's argument as its parameter binds: a value, a vector, or
+    /// the entry's parameters or context passed whole.
+    pub(super) fn helper_arg(&mut self, e: &Expr, scope: &mut Scope) -> R<Binding> {
+        if let Some(b) = super::passed_whole(e, scope) {
+            return Ok(b);
+        }
+        Ok(match self.arg(e, scope)? {
+            Val::S(a) => Binding::Value(a),
+            Val::V(v) => Binding::VecValue(Box::new(v)),
+        })
+    }
+
     pub(super) fn arg(&mut self, e: &Expr, scope: &mut Scope) -> R<Val> {
         if self.is_vec(e, scope) {
             Ok(Val::V(self.vexpr(e, scope)?))
@@ -401,7 +413,7 @@ impl Lowerer<'_> {
             }
             let mut vals = Vec::new();
             for a in f.args.iter() {
-                vals.push(self.arg(a, scope)?);
+                vals.push(self.helper_arg(a, scope)?);
             }
             if def.params.len() != vals.len() {
                 return self.err(p, format!("`{n}` takes {}", def.params.len()));
@@ -411,10 +423,7 @@ impl Lowerer<'_> {
             }
             let mut inner = Scope::new(Fn3::Helper, Vec::new());
             for (param, a) in def.params.iter().zip(vals) {
-                match a {
-                    Val::S(a) => inner.bind(param, Binding::Value(a)),
-                    Val::V(v) => inner.bind(param, Binding::VecValue(Box::new(v))),
-                }
+                inner.bind(param, a);
             }
             self.depth += 1;
             let r = if self.pure { self.pure_vec_body(&def.body, &mut inner) } else { self.vec_value_block(&def.body, &mut inner).map(|(body, v)| {
@@ -444,7 +453,8 @@ impl Lowerer<'_> {
         }
         let mut inner = Scope::new(Fn3::Helper, Vec::new());
         for (param, a) in def.params.iter().zip(args.iter()) {
-            inner.bind(param, self.vec_kind(a, scope).map_or_else(num_marker, vec_marker));
+            let b = super::passed_whole(a, scope).unwrap_or_else(|| self.vec_kind(a, scope).map_or_else(num_marker, vec_marker));
+            inner.bind(param, b);
         }
         self.probe.set(self.probe.get() + 1);
         let r = self.block_gives_vec(&def.body, &inner);
@@ -811,6 +821,30 @@ impl Lowerer<'_> {
                 return self.err(p, "`drive()` is the couplings' drive: in a simulation model's step alone");
             }
             ("drive", 0) => V(Vector::new(Kind::Rgba, (24..28).map(|i| call1("__cell", mk(ExprKind::Int(i), span), span)).collect())),
+            // A simulation model's measure scratch at the cell dx, dy away,
+            // and its memory (P4 step 9c): a vector of four, a host call a
+            // part.
+            ("scratch" | "memory", _) if !self.sim_model || self.sim_fn == super::SimFn::Seed => {
+                return self.err(p, format!("`{name}` is a simulation model step's"));
+            }
+            ("scratch", 3) | ("memory", 1) => {
+                let host = if name == "scratch" { "__scratch_read" } else { "__mem_read" };
+                let mut ins = Vec::new();
+                for a in args.drain(..) {
+                    match a {
+                        S(x) => ins.push(x),
+                        V(_) => return self.err(p, format!("`{name}` takes ints: an offset and a slice")),
+                    }
+                }
+                let parts = (0..4)
+                    .map(|c| {
+                        let mut a = ins.clone();
+                        a.push(mk(ExprKind::Int(c), span));
+                        mk(ExprKind::Call { name: host.into(), args: a, user: false }, span)
+                    })
+                    .collect();
+                V(Vector::new(Kind::Rgba, parts))
+            }
             // A simulation colouring's palette (P4): the shared one at `t`.
             ("palette", 1) if !self.sim_coloring => {
                 return self.err(p, "`palette(t)` is a simulation colouring's: in `fn cell_color` alone");

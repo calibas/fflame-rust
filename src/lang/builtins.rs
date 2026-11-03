@@ -138,6 +138,114 @@ impl C64 {
     }
 }
 
+/// A simulation's framework call (P4 steps 9c and 9d): a hook the step or
+/// agent template gives, with arguments of its own -- several, some of
+/// them writing -- the GPU's alone (the interpreter and the formula back
+/// ends never see one). A read of a vector is one call a part, its part a
+/// literal last argument (`Host::parts`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Host {
+    /// `pyr_sample(level, x, y)`: the pyramid's average at a level and a
+    /// position (`pyr_sample`).
+    PyrSample,
+    /// `pyr_level(r)`: the level whose average is a disc of radius r.
+    PyrLevel,
+    /// `pyr_diff(i, x, y)`: the spectral stage's difference `i` at a
+    /// position.
+    PyrDiff,
+    /// The measure pass's scratch at the cell `dx`, `dy` away (wrapped),
+    /// slice `k`, part `c`; and the write of the cell's slice `k`.
+    ScratchRead,
+    ScratchWrite,
+    /// The cell's memory slice `k`, part `c`; and its write.
+    MemRead,
+    MemWrite,
+    /// Whether the cell `dx`, `dy` away is outside the grid (a bounded
+    /// boundary).
+    Outside,
+    /// A parameter by its slot, an int: `param(k)`.
+    Param,
+    /// The agents' deposit at the cell, taken (it clears): once a step.
+    TakeDeposit,
+    /// An agent's draw on stream `k`; its claim of the cell (x, y) and
+    /// whether it won it; its deposit there; a read of the field at the
+    /// cell (x, y), part `c`.
+    AgentRand,
+    AgentClaim,
+    AgentClaimCheck,
+    AgentDeposit,
+    ReadAt,
+    /// The pyramid's caches filled (`pyr_prepare()`), placed by the
+    /// generator where a step first reads the pyramid on each path; no
+    /// script writes it.
+    PyrPrepare,
+}
+
+/// Every host call by its lowered name.
+pub const HOSTS: &[(&str, Host)] = &[
+    ("__pyr_sample", Host::PyrSample),
+    ("__pyr_level", Host::PyrLevel),
+    ("__pyr_diff", Host::PyrDiff),
+    ("__scratch_read", Host::ScratchRead),
+    ("__scratch_write", Host::ScratchWrite),
+    ("__mem_read", Host::MemRead),
+    ("__mem_write", Host::MemWrite),
+    ("__outside", Host::Outside),
+    ("__param", Host::Param),
+    ("__take_deposit", Host::TakeDeposit),
+    ("__agent_rand", Host::AgentRand),
+    ("__agent_claim", Host::AgentClaim),
+    ("__agent_claim_check", Host::AgentClaimCheck),
+    ("__agent_deposit", Host::AgentDeposit),
+    ("__read_at", Host::ReadAt),
+    ("__pyr_prepare", Host::PyrPrepare),
+];
+
+impl Host {
+    pub fn from_name(name: &str) -> Option<Host> {
+        HOSTS.iter().find(|(n, _)| *n == name).map(|(_, h)| *h)
+    }
+
+    /// Its arguments' types, in order.
+    pub fn args(self) -> &'static [Ty] {
+        use Host::*;
+        use Ty::{Float as F, Int as I};
+        match self {
+            PyrSample => &[F, F, F],
+            PyrLevel => &[F],
+            PyrDiff => &[I, F, F],
+            ScratchRead => &[I, I, I, I],
+            ScratchWrite | MemWrite => &[I, F, F, F, F],
+            MemRead => &[I, I],
+            Outside | AgentClaim | AgentClaimCheck => &[I, I],
+            Param | AgentRand => &[I],
+            TakeDeposit | PyrPrepare => &[],
+            AgentDeposit => &[I, I, F],
+            ReadAt => &[I, I, I],
+        }
+    }
+
+    /// Its value's type; `None` for a write, a statement.
+    pub fn result(self) -> Option<Ty> {
+        use Host::*;
+        match self {
+            ScratchWrite | MemWrite | AgentClaim | AgentDeposit | PyrPrepare => None,
+            Outside | AgentClaimCheck => Some(Ty::Bool),
+            _ => Some(Ty::Float),
+        }
+    }
+
+    /// Whether its last argument is a vector read's part, a literal 0-3.
+    pub fn parts(self) -> bool {
+        matches!(self, Host::ScratchRead | Host::MemRead | Host::ReadAt)
+    }
+
+    /// Whether an agent function's (else a model step's).
+    pub fn agent(self) -> bool {
+        matches!(self, Host::AgentRand | Host::AgentClaim | Host::AgentClaimCheck | Host::AgentDeposit | Host::ReadAt)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Builtin {
     Sqr,

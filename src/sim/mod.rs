@@ -416,6 +416,11 @@ pub static SCALE_WARPS: &[&ScaleWarps] = &[&models::MCCABE_WARPS];
 
 /// The per-scale warps of `model`, if it has them.
 pub fn scale_warps(model: &str) -> Option<&'static ScaleWarps> {
+    // A Rhai model's `INFO.scale_warps` (P4 step 9c).
+    #[cfg(feature = "lang")]
+    if model.starts_with(custom::PREFIX) {
+        return custom::scale_warps(model);
+    }
     SCALE_WARPS.iter().copied().find(|w| w.model == model)
 }
 
@@ -1714,6 +1719,9 @@ mod tests {
                 m.parameters.len(),
             );
         }
+        // A Rhai model's cap is the same room (P4 step 9c).
+        #[cfg(feature = "lang")]
+        assert_eq!(crate::lang::check::SIM_MODEL_PARAM_SLOTS, room, "the checker's cap on a model's parameters");
     }
 
     /// A model that keeps a memory turns it on with a `memory`

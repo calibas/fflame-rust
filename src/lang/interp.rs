@@ -745,6 +745,7 @@ impl<'p> Machine<'p> {
     fn exec(&mut self, stmts: &[IStmt], sh: &mut Shared) {
         for s in stmts {
             match s {
+                IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
                 IStmt::Break | IStmt::Continue | IStmt::Return => unreachable!("an effect-like function's `break`, `continue` or `return`, which runs on the GPU alone"),
                 IStmt::Assign(place, e) => {
                     let v = self.eval(e, sh);
@@ -807,6 +808,7 @@ impl<'p> Machine<'p> {
 
     fn eval(&self, e: &IExpr, sh: &Shared) -> Value {
         match &e.kind {
+            IExprKind::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             IExprKind::Bool(b) => Value::Bool(*b),
             IExprKind::Int(i) => Value::Int(*i as i32),
             IExprKind::Float(f) => Value::Float(*f),
