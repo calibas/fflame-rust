@@ -63,7 +63,7 @@ struct Registry {
     slow: HashMap<String, Vec<String>>,
     /// The models' and colourings' parameter layouts (`PARAMS`'
     /// conditions and grids; rhai-plugins P7), by name.
-    layouts: HashMap<String, Arc<crate::param_layout::ParamLayout>>,
+    layouts: HashMap<String, Arc<crate::params::layout::ParamLayout>>,
 }
 
 fn registry() -> &'static RwLock<Registry> {
@@ -368,7 +368,7 @@ fn params_map(params: &[SimParamDef], ints: &[String], grids: &[CpuGrid], value:
 }
 
 /// A grid's fill's result for a row: its cells' values by column.
-fn row_of(r: &rhai::Dynamic, f: &str) -> Result<crate::param_layout::Row, String> {
+fn row_of(r: &rhai::Dynamic, f: &str) -> Result<crate::params::layout::Row, String> {
     let what = || format!("`{f}(p, row)` gives a map of the row's values by column, `#{{ radius: 2.0 }}`");
     let m = r.clone().try_cast::<rhai::Map>().ok_or_else(what)?;
     m.iter().map(|(k, v)| number(v).map(|n| (k.to_string(), n as f32)).ok_or_else(what)).collect()
@@ -380,8 +380,8 @@ fn row_of(r: &rhai::Dynamic, f: &str) -> Result<crate::param_layout::Row, String
 /// the grid's size and the pyramid's reach, and whether the row is the
 /// fill's while the grid is hidden. A failure is logged once and gives
 /// nothing.
-fn bind_layout(name: &str, parameters: &'static [SimParamDef], spec: lang::rhai::LayoutSpec) -> crate::param_layout::ParamLayout {
-    use crate::param_layout::{GridFill, ParamLayout, Row};
+fn bind_layout(name: &str, parameters: &'static [SimParamDef], spec: lang::rhai::LayoutSpec) -> crate::params::layout::ParamLayout {
+    use crate::params::layout::{GridFill, ParamLayout, Row};
     let grids = spec
         .grids
         .into_iter()
@@ -389,7 +389,7 @@ fn bind_layout(name: &str, parameters: &'static [SimParamDef], spec: lang::rhai:
             let mut grid = g.grid;
             grid.fill = g.fill.map(|(when, f)| {
                 let model = name.to_string();
-                let cells: crate::param_layout::FillFn = Arc::new(move |value: &dyn Fn(&str) -> f32, row: usize| -> Row {
+                let cells: crate::params::layout::FillFn = Arc::new(move |value: &dyn Fn(&str) -> f32, row: usize| -> Row {
                     let r = with_script(&model, |e, ast, s| {
                         let p = params_map(parameters, &s.ints, &s.grids, value);
                         call_cpu_with(e, ast, &f, (p, row as rhai::INT)).and_then(|r| row_of(&r, &f))
@@ -406,7 +406,7 @@ fn bind_layout(name: &str, parameters: &'static [SimParamDef], spec: lang::rhai:
             });
             grid.warn = g.warn.map(|f| {
                 let model = name.to_string();
-                let warn: crate::param_layout::WarnFn = Arc::new(move |row, cells: &Row, value: &dyn Fn(&str) -> f32, (w, h), preview| {
+                let warn: crate::params::layout::WarnFn = Arc::new(move |row, cells: &Row, value: &dyn Fn(&str) -> f32, (w, h), preview| {
                     let r = with_script(&model, |e, ast, s| {
                         let p = params_map(parameters, &s.ints, &s.grids, value);
                         let cells: rhai::Map = cells.iter().map(|(k, v)| (k.as_str().into(), rhai::Dynamic::from_float(f64::from(*v)))).collect();
@@ -595,7 +595,7 @@ impl Clone for super::SimKernel {
 
 /// The parameter layout of the Rhai model or colouring `name`, when its
 /// `PARAMS` has conditions or grids (rhai-plugins P7).
-pub fn param_layout(name: &str) -> Option<Arc<crate::param_layout::ParamLayout>> {
+pub fn param_layout(name: &str) -> Option<Arc<crate::params::layout::ParamLayout>> {
     registry().read().ok()?.layouts.get(name).cloned()
 }
 
@@ -1289,7 +1289,7 @@ fn discs(p) {
         let filled = layout.fills(&ladder, &table);
         assert_eq!(filled.iter().find(|(n, _)| n == "s2_radius").map(|(_, v)| *v), Some(4.5), "{filled:?}");
         let warn = g.warn.as_ref().expect("a warning");
-        let wide: crate::param_layout::Row = [("radius".to_string(), 1.0e6), ("sym".to_string(), 0.0)].into();
+        let wide: crate::params::layout::Row = [("radius".to_string(), 1.0e6), ("sym".to_string(), 0.0)].into();
         assert_eq!(warn(0, &wide, &table, (64, 64), false).as_deref(), Some("too wide"));
         assert_eq!(warn(0, &g.row(0, &table), &table, (64, 64), false), None);
         // The CPU reads the grid as rows.
@@ -1584,7 +1584,7 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
             // the warnings they give, at the defaults and at each preset.
             let shape = |m: &str| {
                 super::super::param_layout(m).map(|l| {
-                    let mut conditions: Vec<(String, crate::param_layout::ShowIf)> = l.show_if.clone();
+                    let mut conditions: Vec<(String, crate::params::layout::ShowIf)> = l.show_if.clone();
                     conditions.sort_by(|a, b| a.0.cmp(&b.0));
                     let grids: Vec<_> = l
                         .grids
@@ -1619,7 +1619,7 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
                             // coarse scales reach past it.
                             let row = fa.unwrap_or_else(|| ga.row(r, &value));
                             for preview in [false, true] {
-                                let warn = |g: &crate::param_layout::ParamGrid| g.warn.as_ref().and_then(|w| w(r, &row, &value, (64, 64), preview));
+                                let warn = |g: &crate::params::layout::ParamGrid| g.warn.as_ref().and_then(|w| w(r, &row, &value, (64, 64), preview));
                                 assert_eq!(warn(gb), warn(ga), "{name}: row {r}'s warning at {at:?}");
                             }
                         }

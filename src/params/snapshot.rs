@@ -38,11 +38,11 @@ fn dump() -> Vec<Value> {
 }
 
 /// A variation's or an effect's control and the range its renderer
-/// uses (`ui::variation_params`: a missing bound filled by the control).
+/// uses (`ui::variation_params`: a missing bound filled by the control,
+/// or by the slow control's 1..100).
 fn control_of(t: &crate::variations::ParamType, min: Option<f32>, max: Option<f32>, slow: bool) -> (&'static str, (f64, f64), Vec<String>) {
     use crate::variations::ParamType as T;
     let (control, lo, hi) = match t {
-        _ if slow => ("slow", 1.0, 100.0),
         T::Float => ("float", -10.0, 10.0),
         T::UnlimitedFloat => ("unlimited_float", -10.0, 10.0),
         T::Integer => ("integer", 1.0, 10.0),
@@ -51,6 +51,7 @@ fn control_of(t: &crate::variations::ParamType, min: Option<f32>, max: Option<f3
         T::Angle => ("angle", 0.0, 360.0),
         T::Enum { .. } => ("choice", 0.0, 0.0),
     };
+    let (lo, hi) = if slow { (1.0, 100.0) } else { (lo, hi) };
     let choices = match t {
         T::Enum { choices } => choices.iter().map(|c| c.to_string()).collect(),
         _ => Vec::new(),
@@ -93,7 +94,8 @@ fn escape_row(rows: &mut Vec<Value>, kind: &str, owner: &str, params: &'static [
     for p in params {
         let control = if p.choices.is_empty() { "float" } else { "choice" };
         let slow = crate::escape::is_slow_param(owner, p.name);
-        let log = crate::escape::custom::is_exponential(p);
+        // `escape_panel::param_slider`: five decades, or declared.
+        let log = p.min > 0.0 && (p.max / p.min >= 1e5 || crate::escape::custom::is_exponential(p));
         let choices = p.choices.iter().map(|c| c.to_string()).collect();
         rows.push(row(kind, owner, p.name, p.display_name, p.tooltip, control, f64::from(p.default), (f64::from(p.min), f64::from(p.max)), choices, slow, log));
     }

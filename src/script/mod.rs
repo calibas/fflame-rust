@@ -152,15 +152,7 @@ impl ParamDecl {
 }
 
 /// A value supplied for a declared parameter (from the UI or `--set`).
-#[derive(Debug, Clone, PartialEq)]
-pub enum ParamValue {
-    Float(f64),
-    Int(i64),
-    Bool(bool),
-    Choice(usize),
-    Text(String),
-    Color([f32; 3]),
-}
+pub use crate::params::Value as ParamValue;
 
 /// Turn `trace_a` into `Trace A` for UI labels.
 pub(crate) fn humanize(key: &str) -> String {

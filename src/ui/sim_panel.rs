@@ -1512,7 +1512,7 @@ fn render_param_grid(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     defs: &[crate::sim::SimParamDef],
-    g: &crate::param_layout::ParamGrid,
+    g: &crate::params::layout::ParamGrid,
     value: &dyn Fn(&str) -> f32,
     path: &dyn Fn(&str) -> ConfigPath,
     salt: &str,
@@ -1529,7 +1529,7 @@ fn render_param_grid(
         return;
     }
     let def_of = |name: &str| defs.iter().find(|p| p.name == name);
-    let columns: Vec<&crate::param_layout::GridColumn> = g.columns.iter().filter(|c| c.show_if.holds(value)).collect();
+    let columns: Vec<&crate::params::layout::GridColumn> = g.columns.iter().filter(|c| c.show_if.holds(value)).collect();
     egui::Grid::new(format!("{salt}_{}_grid", g.name))
         .striped(true)
         .spacing([6.0, 2.0])

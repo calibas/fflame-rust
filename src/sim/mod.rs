@@ -410,7 +410,7 @@ pub fn spectral_scales(
 /// grids (`param_layout`; rhai-plugins P7) -- if it has one: a built-in's
 /// in Rust (few have one, so a match beside the registry rather than a
 /// field on every `ModelDef`), a Rhai model's from its `PARAMS`.
-pub fn param_layout(model: &str) -> Option<std::sync::Arc<crate::param_layout::ParamLayout>> {
+pub fn param_layout(model: &str) -> Option<std::sync::Arc<crate::params::layout::ParamLayout>> {
     // A Rhai model's or colouring's (both named `custom-`).
     #[cfg(feature = "lang")]
     if model.starts_with(custom::PREFIX) {

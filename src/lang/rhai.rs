@@ -996,8 +996,8 @@ struct GridParts<'a> {
     row: String,
     live_rows: Option<String>,
     caption: Option<crate::scripted::Label>,
-    show_if: crate::param_layout::ShowIf,
-    fill: Option<(crate::param_layout::ShowIf, String)>,
+    show_if: crate::params::layout::ShowIf,
+    fill: Option<(crate::params::layout::ShowIf, String)>,
     warn: Option<String>,
     drawn: bool,
     columns: Vec<ColumnParts<'a>>,
@@ -1012,7 +1012,7 @@ struct ColumnParts<'a> {
     header: Option<crate::scripted::Label>,
     caption: Option<crate::scripted::Label>,
     whole: bool,
-    show_if: crate::param_layout::ShowIf,
+    show_if: crate::params::layout::ShowIf,
 }
 
 impl GridParts<'_> {
@@ -1023,7 +1023,7 @@ impl GridParts<'_> {
 
 /// A grid's parts, or what is wrong with it and where.
 fn grid_of<'a>(name: &str, entries: &'a [(::rhai::Ident, Expr)]) -> Result<GridParts<'a>, (Option<Position>, String)> {
-    use crate::param_layout::ShowIf;
+    use crate::params::layout::ShowIf;
     let mut g = GridParts {
         rows: 0,
         cell: format!("{name}_{{row}}_{{column}}"),
@@ -1110,7 +1110,7 @@ fn grid_of<'a>(name: &str, entries: &'a [(::rhai::Ident, Expr)]) -> Result<GridP
 
 /// A condition, `#{ layout: 1 }` or `#{ averaging: [1, 2] }`: every
 /// parameter named at one of its values.
-fn show_if_of(x: &Expr) -> Result<crate::param_layout::ShowIf, String> {
+fn show_if_of(x: &Expr) -> Result<crate::params::layout::ShowIf, String> {
     const WHAT: &str = "`show_if` is `#{ layout: 1 }`, or a list of values, `#{ averaging: [1, 2] }`";
     let Expr::Map(m, _) = x else { return Err(WHAT.into()) };
     let number = |e: &Expr| match e {
@@ -1127,21 +1127,21 @@ fn show_if_of(x: &Expr) -> Result<crate::param_layout::ShowIf, String> {
         };
         out.push((k.name.to_string(), values.ok_or(WHAT.to_string())?));
     }
-    Ok(crate::param_layout::ShowIf(out))
+    Ok(crate::params::layout::ShowIf(out))
 }
 
 /// A script's grid as its layout has it (rhai-plugins P7): the grid, and
 /// its fill's condition and function and its warning's function by the
 /// names the script defines them under, which the CPU runs.
 pub struct GridSpec {
-    pub grid: crate::param_layout::ParamGrid,
-    pub fill: Option<(crate::param_layout::ShowIf, String)>,
+    pub grid: crate::params::layout::ParamGrid,
+    pub fill: Option<(crate::params::layout::ShowIf, String)>,
     pub warn: Option<String>,
 }
 
 /// A script's parameter layout: its parameters' conditions and its grids.
 pub struct LayoutSpec {
-    pub show_if: Vec<(String, crate::param_layout::ShowIf)>,
+    pub show_if: Vec<(String, crate::params::layout::ShowIf)>,
     pub grids: Vec<GridSpec>,
 }
 
@@ -1149,7 +1149,7 @@ pub struct LayoutSpec {
 /// `show_if`, and each grid -- its cells, live rows, columns, headers,
 /// fill and warning -- every name it reads checked; `None` with neither.
 pub fn param_layout(source: &str) -> Result<Option<LayoutSpec>, String> {
-    use crate::param_layout::{GridColumn, ParamGrid, Text};
+    use crate::params::layout::{GridColumn, ParamGrid, Text};
     let Ok((ast, _)) = parse(source) else { return Ok(None) };
     let params = ast.statements().iter().find_map(|st| match st {
         Stmt::Var(x, _, _) if x.0.name.as_str() == "PARAMS" => match &x.1 {

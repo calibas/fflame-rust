@@ -141,9 +141,23 @@ Each a commit, each behaviour-preserving and held by tests:
    every kind -- name, label, hint, kind, default (f32 bits), range,
    choices, slow -- written to `output/params-snapshot.json` (an ignored
    test). Each migration step compares its kind's dump with it, so a
-   default or a range that moved is a failure, not a surprise.
+   default or a range that moved is a failure, not a surprise. **Done**
+   (`params::snapshot`: 3,946 parameters, each with the control and the
+   range it is drawn with, and escape's five-decade log sliders); the
+   API corpora too (`export_variations_json`, `export_effects_json`,
+   `export_scripts_json` into `output/params-baseline/`), to diff after
+   the variations, effects and scripts steps. Read from them:
+   - every bound a variation or an effect leaves out is a boolean's,
+     which the corpus publishes as null: `ParamKind::bounds` gives none
+     for a switch, so required bounds leave the corpus as it is;
+   - every escape and simulation choice's min and max are its indices,
+     so `Choice` carries no range;
+   - no integer has a fractional default or bound.
 2. **`params`**: `ParamDef`, `ParamKind`, `Spec`, `Options`, values,
-   and the layout moved in.
+   and the layout moved in. **Done**: `params::Value` is the scripts'
+   `ParamValue` (re-exported under that name until step 8), and a GPU
+   kind's f32 slot is read and written by `ParamKind::from_slot` /
+   `to_slot` (a choice rounded and clamped, a switch above one half).
 3. **`ui::params`**: the renderer and its two stores, with layout tests
    for every kind of control.
 4. **Simulations**: 280 `SimParamDef` literals by a codemod in
