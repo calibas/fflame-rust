@@ -821,8 +821,8 @@ needs the census did not, the int step and `ctx.layer`):
 | Escape colourings | 28 | none (two examples, `smooth`, `orbit-trap`) | no |
 | Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
 | Mode B fields | 3 | none | no |
-| Simulation models | 31 | 22 (P4 step 7); the 9 others are P4 step 9 | no: the Formula Editor's examples only |
-| Simulation colourings | 13 | all 13 | no: examples only |
+| Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
+| Simulation colourings | 13 | all 13 | yes, the simulation panel (2026-11-03) |
 | Flame variations | 647 | 10, as test fixtures (linear, spherical, swirl, polar, horseshoe, blur, macmillan, spherical3D, hemisphere, zcone) | no |
 
 Steps, in the order that unlocks the most first (the user picks):
@@ -885,7 +885,11 @@ Steps, in the order that unlocks the most first (the user picks):
 5. **Edit as Rhai everywhere**: the simulation panel (the model and the
    colouring, per layer and colour layer), the Escape panel's colouring,
    the solids and fields, a transform's variations -- each putting the
-   twin in place and opening it.
+   twin in place and opening it. **The simulation panel's built
+   2026-11-03**: a **Rhai** button beside a built-in model (each layer)
+   and colouring (each colour layer), `edit_sim_as_rhai` -- the twin in
+   the slot under a UUID of its own, the slot's settings kept, one undo
+   step, the editor holding it in use for Live.
 
 Not convertible: JWildfire's 8 variations that run user-typed Java
 (`custom_wf` and the rest; refused for security,

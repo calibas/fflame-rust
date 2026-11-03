@@ -860,6 +860,14 @@ any model the built-ins are, each of the 31 with a twin.
   is its own step module, so a Rhai one layers and couples as a built-in
   does (`rhai_models_and_colourings_run_in_layers`), the drive and the
   published signal included (`a_rhai_turing_couples_as_the_built_in`).
+- **Edit as Rhai** (rhai-plugins P7 step 5): the panel's **Rhai** beside
+  a built-in model, in each layer, and beside a built-in colouring, in
+  each colour layer, puts its twin in the slot under an id of its own
+  -- the slot's parameters, and a model's dt and steps, kept: the same
+  picture -- and opens it in the Formula Editor, unsaved and in use, so
+  Live re-applies each edit (`FormulaEditorPanel::edit_sim_as_rhai`).
+  One undo step, entering Simulation from another mode; the built-in is
+  untouched, and Save keeps the copy in the library.
 - **Twins**: `sim::custom::SHIPPED_MODELS`, every built-in -- all 31
   (`assets/sim/<name>.rhai`). Each is held to its built-in three ways:
   - its settings (`every_twin_carries_its_built_ins_settings`): the
