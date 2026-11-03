@@ -149,11 +149,15 @@ pub fn effect(source: &str) -> Result<Program, Vec<Diag>> {
 }
 
 /// Which function of a simulation model a lowering takes (P4): its seed,
-/// or pass `n` of its step (0 for `cell_step`, 1 for `cell_step2` ...).
+/// or pass `n` of its step (0 for `cell_step`, 1 for `cell_step2` ...);
+/// an agent's seed, or pass `n` of its move (P4 step 9d: `agent_seed`,
+/// `agent_step`, `agent_step2`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimFn {
     Seed,
     Step(u8),
+    AgentSeed,
+    Agent(u8),
 }
 
 impl SimFn {
@@ -163,7 +167,20 @@ impl SimFn {
             SimFn::Seed => "cell_seed".to_string(),
             SimFn::Step(0) => "cell_step".to_string(),
             SimFn::Step(n) => format!("cell_step{}", n + 1),
+            SimFn::AgentSeed => "agent_seed".to_string(),
+            SimFn::Agent(0) => "agent_step".to_string(),
+            SimFn::Agent(n) => format!("agent_step{}", n + 1),
         }
+    }
+
+    /// A pass of the step, run per cell.
+    pub fn cell_step(self) -> bool {
+        matches!(self, SimFn::Step(_))
+    }
+
+    /// An agent's function, run per agent.
+    pub fn agent(self) -> bool {
+        matches!(self, SimFn::AgentSeed | SimFn::Agent(_))
     }
 }
 
@@ -177,6 +194,12 @@ pub fn sim_model(source: &str, f: SimFn) -> Result<Program, Vec<Diag>> {
 /// `cell_step2` ... `cell_step4` it defines in a row.
 pub fn sim_model_passes(source: &str) -> u8 {
     (1..4).take_while(|n| has_function(source, &SimFn::Step(*n).function())).count() as u8 + 1
+}
+
+/// How many passes a model's agents make (P4 step 9d): `agent_step` and
+/// `agent_step2`, in a row; none without `agent_step`.
+pub fn sim_agent_passes(source: &str) -> u8 {
+    (0..2).take_while(|n| has_function(source, &SimFn::Agent(*n).function())).count() as u8
 }
 
 /// A simulation's colouring (P4): `fn cell_color(cell, p, ctx)`, per
@@ -963,6 +986,8 @@ fn host_int(name: &str, span: Span) -> ast::Expr {
         "scale_warped" => 7,
         "scratch_on" => 8,
         "memory_count" => 9,
+        "periodic" => 10,
+        "agent" => 11,
         _ => 2,
     };
     mk(ExprKind::Call { name: "__host_int".into(), args: vec![mk(ExprKind::Int(k), span)], user: false }, span)
@@ -1441,6 +1466,22 @@ impl<'s> Lowerer<'s> {
                 scope.bind(&f.params[0], Binding::VecValue(Box::new(state)));
                 1
             }
+            // An agent's first record, from its index alone (P4 step 9d).
+            SimFn::AgentSeed => {
+                if f.params.len() > 2 {
+                    return self.err(f.body.position(), "`agent_seed()`, `agent_seed(p)` or `agent_seed(p, ctx)`: `ctx.agent` is the agent's index");
+                }
+                0
+            }
+            // An agent's move: its record, `vec4(x, y, heading, state)`.
+            SimFn::Agent(_) => {
+                if f.params.is_empty() || f.params.len() > 3 {
+                    return self.err(f.body.position(), format!("`{name}(a)`, `{name}(a, p)` or `{name}(a, p, ctx)`"));
+                }
+                let record = vec::Vector::new(vec::Kind::Rgba, (0..4).map(host).collect());
+                scope.bind(&f.params[0], Binding::VecValue(Box::new(record)));
+                1
+            }
         };
         if let Some(p) = f.params.get(rest) {
             scope.bind(p, Binding::Params);
@@ -1448,7 +1489,11 @@ impl<'s> Lowerer<'s> {
         if let Some(c) = f.params.get(rest + 1) {
             scope.bind(c, Binding::Ctx);
         }
-        let result = format!("`{name}` ends with the state: a vector of four, `vec4(x, y, z, w)`");
+        let result = if self.sim_fn.agent() {
+            format!("`{name}` ends with the agent: a vector of four, `vec4(x, y, heading, state)`")
+        } else {
+            format!("`{name}` ends with the state: a vector of four, `vec4(x, y, z, w)`")
+        };
         let stmts = f.body.statements();
         let Some((last, others)) = stmts.split_last() else { return self.err(f.body.position(), result) };
         let mut body = Vec::new();
@@ -2456,6 +2501,12 @@ impl<'s> Lowerer<'s> {
             // A simulation model's writes (P4 step 9c): the measure pass's
             // scratch, the memory -- statements, a vector of four each.
             Stmt::FnCall(f, p) if self.sim_model && is_sim_write(f) => self.sim_write(f, *p, scope, out),
+            // An agent's claim and deposit (P4 step 9d): statements.
+            Stmt::FnCall(f, p) if self.sim_model && self.is_agent_write(f) => self.agent_write(f, *p, scope, out),
+            Stmt::Expr(e) if self.sim_model && matches!(&**e, Expr::FnCall(f, _) if self.is_agent_write(f)) => {
+                let Expr::FnCall(f, p) = &**e else { unreachable!("matched above") };
+                self.agent_write(f, *p, scope, out)
+            }
             Stmt::Expr(e) if self.sim_model && matches!(&**e, Expr::FnCall(f, _) if is_sim_write(f)) => {
                 let Expr::FnCall(f, p) = &**e else { unreachable!("matched above") };
                 self.sim_write(f, *p, scope, out)
@@ -2502,12 +2553,26 @@ impl<'s> Lowerer<'s> {
         }
     }
 
+    /// An agent's `claim(x, y)` or `deposit(x, y, amount)`, which a script
+    /// has not defined for itself.
+    fn is_agent_write(&self, f: &FnCallExpr) -> bool {
+        matches!(f.name.as_str(), "claim" | "deposit") && !self.fns.contains_key(f.name.as_str())
+    }
+
+    /// An agent's claim or deposit, a statement (P4 step 9d).
+    fn agent_write(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
+        let call = self.call(f, None, p, scope)?;
+        self.flush(out);
+        out.push(ast::Stmt::Expr(call));
+        Ok(())
+    }
+
     /// `write_scratch(k, v)`, `write_memory(k, v)`: the slice and a vector
     /// of four, the host's write.
     fn sim_write(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
         let span = self.pos.span(p);
-        if self.sim_fn == SimFn::Seed {
-            return self.err(p, format!("`{}` is a step's, not a seed's", f.name));
+        if !self.sim_fn.cell_step() {
+            return self.err(p, format!("`{}` is a step's, not a seed's or an agent's", f.name));
         }
         let [k, v] = &f.args[..] else { return self.err(p, format!("`{}(k, v)`: the slice and a vector of four", f.name)) };
         let k = self.expr(k, scope)?;
@@ -2973,9 +3038,15 @@ impl<'s> Lowerer<'s> {
                             let k = if name == "field_min" { 22 } else { 23 };
                             Ok(mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(k), span)], user: false }, span))
                         }
+                        "cell" if self.sim_fn.agent() => self.err(*p, "an agent is at no cell: its position is its record's, `a.x`, `a.y`"),
                         "cell" => Ok(mk(ExprKind::Predef("pixel".into()), span)),
                         "width" | "height" => Ok(mk(ExprKind::Predef(name.into()), span)),
                         "step" | "seed_lo" | "seed_hi" | "layer" => Ok(host_int(name, span)),
+                        // Whether the boundary wraps, and an agent's index
+                        // (P4 step 9d): ints.
+                        "periodic" => Ok(host_int(name, span)),
+                        "agent" if self.sim_fn.agent() => Ok(host_int(name, span)),
+                        "agent" => self.err(*p, "`ctx.agent` is an agent's index: in `agent_seed` and `agent_step`"),
                         // Its kernel table's size and whether the spectral
                         // stage's discs are in (P4 step 9b): ints.
                         "kernel_radius" | "kernel_taps" | "exact_discs" => Ok(host_int(name, span)),
@@ -2986,8 +3057,8 @@ impl<'s> Lowerer<'s> {
                             *p,
                             format!(
                                 "a simulation model's context has `dt`, `step`, `cell`, `width`, `height`, `seed_lo`, `seed_hi`, `layer`, \
-                                 `field_min`, `field_max`, `kernel_radius`, `kernel_taps`, `exact_discs`, `scale_warped`, `scratch_on` and \
-                                 `memory_count`; not `{o}`"
+                                 `field_min`, `field_max`, `kernel_radius`, `kernel_taps`, `exact_discs`, `scale_warped`, `scratch_on`, \
+                                 `memory_count`, `periodic` and (an agent's) `agent`; not `{o}`"
                             ),
                         ),
                     },
@@ -3117,6 +3188,9 @@ impl<'s> Lowerer<'s> {
         // A simulation model's kernel table at a tap, and the spectral
         // stage's disc average at the cell (P4 step 9b).
         if matches!(name, "tap" | "disc") && args.is_empty() && self.sim_model && !self.fns.contains_key(name) {
+            if !self.sim_fn.cell_step() {
+                return self.err(p, format!("`{name}(i)` is a step's, at its cell"));
+            }
             let [i] = &f.args[..] else { return self.err(p, format!("`{name}(i)` takes the index")) };
             let i = self.expr(i, scope)?;
             return Ok(mk(ExprKind::Call { name: format!("__{name}"), args: vec![i], user: false }, span));
@@ -3132,11 +3206,20 @@ impl<'s> Lowerer<'s> {
                 ("outside", 2) => Some("__outside"),
                 ("param", 1) => Some("__param"),
                 ("take_deposit", 0) => Some("__take_deposit"),
+                // An agent's (P4 step 9d): its claim on the cell (x, y),
+                // whether it won it, its deposit there.
+                ("claim", 2) => Some("__agent_claim"),
+                ("claim_check", 2) => Some("__agent_claim_check"),
+                ("deposit", 3) => Some("__agent_deposit"),
                 _ => None,
             };
             if let Some(h) = host {
-                if self.sim_fn == SimFn::Seed && h != "__param" {
-                    return self.err(p, format!("`{name}` is a step's, not a seed's"));
+                let agents = matches!(h, "__agent_claim" | "__agent_claim_check" | "__agent_deposit");
+                if agents && !self.sim_fn.agent() {
+                    return self.err(p, format!("`{name}` is an agent's: in `agent_step`"));
+                }
+                if !agents && h != "__param" && !self.sim_fn.cell_step() {
+                    return self.err(p, format!("`{name}` is a step's, at its cell"));
                 }
                 let args = f.args.iter().map(|a| self.expr(a, scope)).collect::<R<Vec<_>>>()?;
                 return Ok(mk(ExprKind::Call { name: h.into(), args, user: false }, span));
@@ -3199,7 +3282,7 @@ impl<'s> Lowerer<'s> {
         }
         // Numbers of vectors (`dot`, `length`), and the functions that came
         // with them (`min`, `max`, `clamp` of numbers) (B1).
-        if matches!(name, "vec3" | "vec4" | "quat" | "rgba" | "input" | "input_at" | "palette" | "read" | "drive" | "scratch" | "memory" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
+        if matches!(name, "vec3" | "vec4" | "quat" | "rgba" | "input" | "input_at" | "palette" | "read" | "read_at" | "drive" | "scratch" | "memory" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
             || f.args.iter().any(|a| self.is_vec(a, scope))
         {
             let mut vals: Vec<Val> = args.drain(..).map(Val::S).collect();

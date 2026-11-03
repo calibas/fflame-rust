@@ -1683,7 +1683,7 @@ impl Checker {
                 EntryKind::SimModel => 0..28,
                 _ => 0..0,
             }),
-            Builtin::HostInt => Some(0..10),
+            Builtin::HostInt => Some(0..12),
             _ => None,
         };
         if let Some(range) = literal {

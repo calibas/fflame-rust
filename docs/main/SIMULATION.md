@@ -734,9 +734,9 @@ to the `sim_color` the colour template calls.
 ## Models written in Rhai
 
 A model may be a Rhai script too ([rhai-plugins.md](../projects/rhai-plugins.md),
-P4 step 2): the single-layer class, `EntryKind::SimModel`, each function
-compiled by the formula language to the WGSL the step and seed templates
-call.
+P4 steps 2-9): `EntryKind::SimModel`, each function compiled by the
+formula language to the WGSL the step, seed and agent templates call --
+any model the built-ins are, each of the 31 with a twin.
 
 - **The step**: `fn cell_step(cell, p, ctx)` gives the cell's next state,
   a `vec4`; `cell_step2` ... `cell_step4` are further passes, in order,
@@ -796,6 +796,21 @@ call.
   "scales", rows: 6 }` gives the per-scale warps (`ScaleWarps`): the
   Warp section draws `s{i}_warp_*` behind its target list, and
   `ctx.scale_warped` says whether any live row is off the identity.
+- **Agents** (P4 step 9d): `fn agent_seed(p, ctx)` gives each agent's
+  first record and `fn agent_step(a, p, ctx)` its move, with
+  `agent_step2` a second pass -- each a vector of four, `vec4(x, y,
+  heading, state)`, the template's `SimAgent`, one thread per agent;
+  `ctx.agent` is its index. `fn agent_count(p, w, h)`, run on the CPU,
+  sizes the population on a grid `w` by `h` (at least one, at most
+  `MAX_AGENTS`). An agent reads the field at a cell, `read_at(x, y)`
+  (a step may too), draws on its own stream (`rand(k)`, `agent_rand`),
+  claims the cell it wants, `claim(x, y)` -- the lowest index wins --
+  and asks in the next pass whether it won, `claim_check(x, y)`, which
+  releases it (every claim must be checked, as the built-ins' contract
+  says); `deposit(x, y, amount)` adds to the cell's deposit, which the
+  step takes, `take_deposit()`, once. `ctx.periodic` says whether the
+  boundary wraps. Having agents is `NeedsAgents` and
+  `StateKind::Agents`.
 - **Couplings**: `drive()`, the Signal couplings aimed at the layer, a
   vector of four, folded in by the step itself (`TakesDrive`, as reading
   it implies); `INFO.publishes_signal: true` says a pass before the last
@@ -845,22 +860,25 @@ call.
   is its own step module, so a Rhai one layers and couples as a built-in
   does (`rhai_models_and_colourings_run_in_layers`), the drive and the
   published signal included (`a_rhai_turing_couples_as_the_built_in`).
-- **Twins**: `sim::custom::SHIPPED_MODELS`, every built-in but the two
-  agent models -- 29 of the 31 (`assets/sim/<name>.rhai`; Physarum and
-  DLA wait for P4 step 9d). Each is held to its built-in three ways:
+- **Twins**: `sim::custom::SHIPPED_MODELS`, every built-in -- all 31
+  (`assets/sim/<name>.rhai`). Each is held to its built-in three ways:
   - its settings (`every_twin_carries_its_built_ins_settings`): the
     parameters in slot order with their labels, ranges and choices, the
     presets, dt, `max_dt`, steps, diffusion, state, passes (the repeat,
-    the measure), features and per-scale warps, `max_dt(p)` against the
-    `dt_bound` at the defaults and at each parameter's ends, the kernel
-    table and the spectral discs at the defaults and each preset;
+    the measure, the agents'), features and per-scale warps, `max_dt(p)`
+    against the `dt_bound` at the defaults and at each parameter's ends,
+    the kernel table, the spectral discs and the agents' number at the
+    defaults and each preset;
   - its field (`the_rhai_models_step_as_the_built_ins`): 300 steps from
     the same seed at the defaults and at every preset, every one
     bit-identical, the age channel and the seeds' draws included (the
     kernel models on the built-in's own table, above); McCabe's other
     paths -- the shifted grid, exact discs, a weighted and leaning table,
     symmetry, the variation radius, per-scale warps, the memory's slices
-    -- bit-identical too (`a_rhai_mccabe_runs_every_path_as_the_built_in`);
+    -- bit-identical too (`a_rhai_mccabe_runs_every_path_as_the_built_in`),
+    and the agent models' every record as well as every cell, Physarum
+    on the wrapping field and against walls, DLA grown until walkers
+    stick, wake and are killed (`the_rhai_agent_models_move_as_the_built_ins`);
   - its speed (`the_rhai_models_are_no_slower`, ignored: it times the
     GPU): fifteen rounds of 1500 steps at 1024x1024, the median of the
     rounds' ratios. On a GTX 1660 SUPER all within the run's own noise
@@ -869,7 +887,7 @@ call.
     reads; unexplained, under the 5% gate. `SIM_TWIN_PARAMS=variation=1.5`
     sets parameters over the preset's, to time another path (McCabe:
     1.024 at the preset, 1.027 with the variation radius, 1.003 on exact
-    discs, 1.034 with the memory).
+    discs, 1.034 with the memory). Physarum 0.999, DLA 1.013.
 
   `write_twin_wgsl` (ignored) writes each twin's generated WGSL beside
   the built-in's, to read one against the other: it found why McCabe's

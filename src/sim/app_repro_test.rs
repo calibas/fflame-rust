@@ -9104,6 +9104,65 @@ fn a_rhai_mccabe_runs_every_path_as_the_built_in() {
 "));
 }
 
+/// The agent models' twins (P4 step 9d), records and all: Physarum dense
+/// enough that claims collide, on the wrapping field and against walls
+/// (the moves a wall refuses, which neither pass may claim), and DLA
+/// grown long enough that walkers stick, wake and are killed -- every
+/// agent's record and every cell bit-identical to the built-in's.
+#[cfg(feature = "lang")]
+#[test]
+fn the_rhai_agent_models_move_as_the_built_ins() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let shipped = |name: &str| crate::sim::custom::carried(crate::sim::custom::SHIPPED_MODELS.iter().find(|(n, _)| *n == name).expect("the twin").1);
+    let cases: [(&str, &str, &[(&str, f32)], SimBoundary, u32); 4] = [
+        ("physarum", "periodic", &[("population", 20.0)], SimBoundary::Periodic, 200),
+        ("physarum", "clamped", &[("population", 20.0)], SimBoundary::Clamp, 200),
+        ("physarum", "mirrored, coarse", &[("population", 8.0), ("sensor_angle", 45.0)], SimBoundary::Mirror, 200),
+        ("dla", "cluster", &[("walkers", 4.0)], SimBoundary::Clamp, 600),
+    ];
+    let mut failures = Vec::new();
+    for (name, label, params, boundary, steps) in cases {
+        let m = crate::sim::MODELS.iter().find(|m| m.name == name).expect("a built-in");
+        let mut builtin = preset_config(m, m.presets.first(), N);
+        builtin.boundary = boundary;
+        for (k, v) in params {
+            builtin.model_params.insert(k.to_string(), *v);
+        }
+        let carried = shipped(name);
+        let mut twin = builtin.clone();
+        twin.model = carried.entry.clone();
+        twin.custom_model = Some(carried.clone());
+        let run = |cfg: &SimConfig| {
+            let mut r = SimRenderer::new(&device, cfg, N, N);
+            r.seed(&device, &queue, cfg);
+            r.run_steps(&device, &queue, cfg, steps);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let def = crate::sim::model_or_default(&cfg.model);
+            let count = (def.agents.expect("agents").count)(&def.params_view(&cfg.model_params), N, N) as usize;
+            (read_rgba32f(&device, &queue, r.field_texture(), N, N), read_agents(&device, &queue, r.agent_buffer().expect("agents"), count))
+        };
+        let ((fa, aa), (fb, ab)) = (run(&builtin), run(&twin));
+        assert_eq!(crate::sim::model_or_default(&twin.model).name, twin.model, "the twin registered");
+        assert!(fa.iter().any(|c| c[0] > 0.0), "{name} {label}: the built-in's field formed");
+        let cells = fa.iter().zip(&fb).filter(|(x, y)| x != y).count();
+        let agents = aa.iter().zip(&ab).filter(|(x, y)| x != y).count();
+        println!("{name:10} {label:20} {} agents: {agents:6} differ; cells: {cells:5} differ", aa.len());
+        for (i, (x, y)) in aa.iter().zip(&ab).enumerate().filter(|(_, (x, y))| x != y).take(6) {
+            println!("    agent {i}: {x:?} {y:?}");
+        }
+        if cells > 0 || agents > 0 || aa.len() != ab.len() {
+            failures.push(format!("{name} {label}: {cells} cells, {agents} agents differ"));
+        }
+    }
+    assert!(failures.is_empty(), "the twins off their built-ins:
+{}", failures.join("
+"));
+}
+
 /// Phase 6 of the simulation-layers plan: four `turing` layers under
 /// Signal couplings are the coupled Turing lattice. The ring preset
 /// with its eight couplings, and the independent preset with none,

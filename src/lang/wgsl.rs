@@ -117,6 +117,10 @@ const FX_RETURN: &str = "return FxOut(vec4<f32>(effect_r, effect_g, effect_b, ef
 /// early `return` in it.
 const SIM_RETURN: &str = "return vec4<f32>(effect_r, effect_g, effect_b, effect_a);";
 
+/// The line that ends an agent's function (P4 step 9d): its record from
+/// the vector of four, position, heading and state.
+const AGENT_RETURN: &str = "return SimAgent(vec2<f32>(effect_r, effect_g), effect_b, effect_a);";
+
 /// [`EffectWgsl`] for a checked effect.
 pub fn effect(p: &Program) -> Result<EffectWgsl, String> {
     if !p.funcs.is_empty() {
@@ -205,6 +209,14 @@ pub fn sim_model(p: &Program, f: super::rhai::SimFn) -> Result<SimModelWgsl, Str
             let suffix = if n == 0 { String::new() } else { (n + 1).to_string() };
             (PREFIXES[n.min(3) as usize], format!("fn sim_step{suffix}(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {{\n"))
         }
+        // An agent's (P4 step 9d): its index `i`; a move's record `s`
+        // as a vector of four, as a cell's state is.
+        SimFn::AgentSeed => ("sa0_", "fn sim_agent_seed(i: u32) -> SimAgent {\n".to_string()),
+        SimFn::Agent(n) => {
+            let suffix = if n == 0 { String::new() } else { (n + 1).to_string() };
+            let prefix = if n == 0 { "sa1_" } else { "sa2_" };
+            (prefix, format!("fn sim_agent{suffix}(agent: SimAgent, i: u32) -> SimAgent {{\n    let s = vec4<f32>(agent.pos, agent.heading, agent.state);\n"))
+        }
     };
     // The pyramid's caches, filled where the step first reads it on each
     // path (P4 step 9c).
@@ -218,23 +230,29 @@ pub fn sim_model(p: &Program, f: super::rhai::SimFn) -> Result<SimModelWgsl, Str
     };
     let mut g = Gen::new(p, Ctx::Effect, prefix);
     g.sim_model = true;
-    g.ret = SIM_RETURN;
+    g.agent = f.agent();
+    g.ret = if g.agent { AGENT_RETURN } else { SIM_RETURN };
     // Each pass's draws keyed apart from the others'.
     g.draw_salt = match f {
         SimFn::Seed => 0x7000,
         SimFn::Step(n) => 0x5000 + 0x100 * u32::from(n),
+        SimFn::AgentSeed => 0x6000,
+        SimFn::Agent(n) => 0x6100 + 0x100 * u32::from(n),
     };
     let mut body = head;
-    body.push_str("    let pixel = vec2<f32>(p);\n    var effect_r = 0.0;\n    var effect_g = 0.0;\n    var effect_b = 0.0;\n    var effect_a = 0.0;\n");
+    if !g.agent {
+        body.push_str("    let pixel = vec2<f32>(p);\n");
+    }
+    body.push_str("    var effect_r = 0.0;\n    var effect_g = 0.0;\n    var effect_b = 0.0;\n    var effect_a = 0.0;\n");
     for (i, v) in p.vars.iter().enumerate() {
         let _ = writeln!(body, "    {};", var_decl(i, v));
     }
     g.stmts(&p.transform, 1, &mut body);
-    let _ = writeln!(body, "    {SIM_RETURN}\n}}");
+    let _ = writeln!(body, "    {}\n}}", g.ret);
     // A draw by `rand()`, on a stream of its own (`rand(k)`), or the run's
     // seed hashed (`pcg` of `ctx.seed_lo`: a draw at another cell).
     let body = g.finish("", body);
-    let rng = body.contains("sim_rand(") || body.contains("params.seed_lo") || body.contains("params.seed_hi");
+    let rng = body.contains("sim_rand(") || body.contains("agent_rand(") || body.contains("params.seed_lo") || body.contains("params.seed_hi");
     let min_max = body.contains("sim_minmax(");
     Ok(SimModelWgsl { body, rng, min_max })
 }
@@ -1653,6 +1671,9 @@ struct Gen<'p> {
     /// salt that follows, one per call site.
     sim_model: bool,
     draw_salt: u32,
+    /// A simulation model's agent function (P4 step 9d): its draws are
+    /// the agent's, `agent_rand(i, salt)`, keyed by its index.
+    agent: bool,
     /// What an early `return` emits (P4 step 5): the line that ends the
     /// effect-like function it is in, its result already set.
     ret: &'static str,
@@ -1692,6 +1713,7 @@ impl<'p> Gen<'p> {
             sim: false,
             sim_model: false,
             draw_salt: 0,
+            agent: false,
             ret: "",
         }
     }
@@ -1976,7 +1998,6 @@ impl<'p> Gen<'p> {
             Host::Outside => format!("sim_outside(p + vec2<i32>({}, {}), sim_grid())", a[0], a[1]),
             Host::Param => format!("mparam(u32({}))", a[0]),
             Host::TakeDeposit => "sim_take_deposit(p)".to_string(),
-            Host::AgentRand => format!("agent_rand(i, bitcast<u32>({}))", a[0]),
             Host::AgentClaim => format!("agent_claim(vec2<i32>({}, {}), i)", a[0], a[1]),
             Host::AgentClaimCheck => format!("agent_claim_check(vec2<i32>({}, {}), i)", a[0], a[1]),
             Host::AgentDeposit => format!("agent_deposit(vec2<i32>({}, {}), {})", a[0], a[1], a[2]),
@@ -2347,7 +2368,11 @@ impl<'p> Gen<'p> {
             // and a salt of its own, so two draws differ.
             (Predef::Draw, Ctx::Effect) if self.sim_model => {
                 self.draw_salt += 1;
-                format!("sim_rand(p, {}u)", self.draw_salt)
+                if self.agent {
+                    format!("agent_rand(i, {}u)", self.draw_salt)
+                } else {
+                    format!("sim_rand(p, {}u)", self.draw_salt)
+                }
             }
             (Predef::Draw, _) => format!("{}()", self.use_(Helper::Draw)),
             // A flame variation's context and colour (C2b, C2d).
@@ -2970,6 +2995,7 @@ impl<'p> Gen<'p> {
         // A simulation's stream, init shape, hash and seed (P4 step 5):
         // the template's, an int's 32 bits as its u32.
         match f {
+            SimRand if self.agent => return format!("agent_rand(i, bitcast<u32>({v}))"),
             SimRand => return format!("sim_rand(p, bitcast<u32>({v}))"),
             InitAt => return format!("sim_init_mask(vec2<i32>(round({v})))"),
             Tap => return format!("klut(u32({v}))"),
@@ -2987,6 +3013,8 @@ impl<'p> Gen<'p> {
                     Some(7) => "select(0i, 1i, sim_scale_warped())".into(),
                     Some(8) => "select(0i, 1i, sim_scratch_on())".into(),
                     Some(9) => "sim_mem_count()".into(),
+                    Some(10) => "select(0i, 1i, SIM_PERIODIC)".into(),
+                    Some(11) => "bitcast<i32>(i)".into(),
                     _ => "bitcast<i32>(sim_step_index())".into(),
                 }
             }
