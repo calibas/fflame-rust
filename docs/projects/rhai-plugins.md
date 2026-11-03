@@ -662,7 +662,44 @@ nested loops and neighbour reads at loop offsets already work.
    bit-identical; at speed but LIC (3-4% slower) and Gradient (6%
    faster), under the gate.
 8. **Out of the class**, unchanged: the 9 models above stay built-in,
-   refused with a reason.
+   refused with a reason. *Superseded by step 9 (the user,
+   2026-11-02: "I'd like to be able to cover everything").*
+9. **The framework's stages, for the other 9** (agreed 2026-11-02, not
+   started). Nothing in them is beyond the compiler: each is a stage the
+   framework runs outside the step, which a script asks for in `INFO`
+   and reads (or writes) through builtins -- the pattern `max_dt(p)`
+   and `init_at` set. In order, cheapest first, each with its twins'
+   field compare and timing as step 7's:
+   - **9a. The field's min/max and a repeated pass** -> DBM, Fingering.
+     `INFO.min_max: true` (`NeedsMinMax`) and `ctx.field_min` /
+     `ctx.field_max` (the ring slot the next step reads, one step of
+     lag as the built-ins'); `INFO.repeat: #{ pass: 2, param: "relax" }`
+     (`ModelDef::repeat`), the framework running the pass that many
+     times a step.
+   - **9b. Kernel tables** -> Lenia, Lattice4; then exact discs ->
+     SmoothLife; then the drive and the published signal -> Turing.
+     `fn kernel(p)` run on the CPU as `max_dt` is, giving the table (its
+     radius and taps, one or two blocks), uploaded as the built-ins'
+     `kernel` closure's is; `kernel_radius()` / `kernel_tap(i)` in the
+     step. `INFO.exact_discs` (`ExactDiscs`) and a read of the spectral
+     stage's disc averages. `ctx.drive` (`TakesDrive`) and
+     `INFO.publishes_signal` (the pass that writes the signal channel).
+     A built-in's table is computed in f32 Rust and a script's in f64
+     Rhai: these twins match to a tolerance, and a chaotic rule (Lenia)
+     drifts over a long run, unless the table is made in f32.
+   - **9c. The pyramid, memory and a measure pass** -> McCabe. Reads of
+     the pyramid's averages at a radius (`pyr_sample`, `pyr_exact`,
+     `pyr_diff`), and the step writing more than its `vec4`: the
+     memory's slices (`sim_mem_write`) and the measure's scratch. New
+     to the language: a function's outputs beyond its result -- a
+     result map (`#{ state, memory }`), as a variation's `#{ z, color }`
+     is, rather than side-effecting calls the IR has none of.
+   - **9d. Agents** -> Physarum, DLA. A second entry point, per agent
+     rather than per cell (`fn agent_step(a, p, ctx)`): its record
+     (`vec4`s), its own draws (`agent_rand`), reads of the field around
+     it, and deposits into the accumulation buffer (atomics, as
+     `agent_deposit`); `INFO.agents` sizing the population. The largest
+     piece: a new template for the compiler to fill.
 
 ### P5. Animation tracks as scripts
 
