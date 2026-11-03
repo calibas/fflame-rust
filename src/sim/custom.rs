@@ -61,6 +61,9 @@ struct Registry {
     warps: HashMap<String, &'static super::ScaleWarps>,
     /// The models' slow parameters (`INFO.slow`), by name.
     slow: HashMap<String, Vec<String>>,
+    /// The models' and colourings' parameter layouts (`PARAMS`'
+    /// conditions and grids; rhai-plugins P7), by name.
+    layouts: HashMap<String, Arc<crate::param_layout::ParamLayout>>,
 }
 
 fn registry() -> &'static RwLock<Registry> {
@@ -174,9 +177,20 @@ pub fn register(source: &str) -> Result<String, String> {
 pub fn register_as(source: &str, name: &str) -> Result<(), String> {
     let def = compile(source, name)?;
     let def: &'static SimColoringDef = Box::leak(Box::new(def));
+    // Its parameters' layout (rhai-plugins P7): conditions and grids; a
+    // grid's fill and warning run on the CPU, a model's alone for now.
+    let layout = lang::rhai::param_layout(source)?;
+    if layout.as_ref().is_some_and(|l| l.grids.iter().any(|g| g.fill.is_some() || g.warn.is_some())) {
+        return Err("a colouring's grid has no `fill` or `warn`: they run on the CPU, a model's".to_string());
+    }
+    let layout = layout.map(|l| Arc::new(bind_layout(name, def.parameters, l)));
     if let Ok(mut r) = registry().write() {
         r.colorings.insert(name.to_string(), def);
         r.failed.remove(name);
+        match layout {
+            Some(l) => r.layouts.insert(name.to_string(), l),
+            None => r.layouts.remove(name),
+        };
     }
     Ok(())
 }
@@ -289,6 +303,29 @@ struct CpuScript {
     /// The parameters that are ints (`round` of the slot), as the script
     /// reads them on the GPU.
     ints: Vec<String>,
+    /// Its grids, which `p` holds as arrays of rows (rhai-plugins P7).
+    grids: Vec<CpuGrid>,
+}
+
+/// A grid as the CPU functions read it: `p.table[i].radius`.
+#[derive(Clone, Debug)]
+struct CpuGrid {
+    name: String,
+    cell: String,
+    rows: usize,
+    columns: Vec<String>,
+}
+
+/// The grids of a script's layout, as its CPU functions read them.
+fn cpu_grids(layout: Option<&lang::rhai::LayoutSpec>) -> Vec<CpuGrid> {
+    layout
+        .map(|l| {
+            l.grids
+                .iter()
+                .map(|g| CpuGrid { name: g.grid.name.clone(), cell: g.grid.cell.clone(), rows: g.grid.rows, columns: g.grid.columns.iter().map(|c| c.key.clone()).collect() })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn cpu_engine() -> rhai::Engine {
@@ -299,6 +336,8 @@ fn cpu_engine() -> rhai::Engine {
     engine.register_global_module(rhai::packages::LogicPackage::new().as_shared_module());
     engine.register_global_module(rhai::packages::BasicArrayPackage::new().as_shared_module());
     engine.register_global_module(rhai::packages::BasicMapPackage::new().as_shared_module());
+    // A grid's warning builds its message (rhai-plugins P7).
+    engine.register_global_module(rhai::packages::MoreStringPackage::new().as_shared_module());
     // A 65 x 65 table twice over is a few hundred thousand operations.
     engine.set_max_operations(20_000_000);
     engine
@@ -306,14 +345,94 @@ fn cpu_engine() -> rhai::Engine {
 
 /// The parameters as `p`: each at `value(name)`, an int where the script
 /// reads one.
-fn params_map(params: &[SimParamDef], ints: &[String], value: impl Fn(&str) -> f32) -> rhai::Map {
+fn params_map(params: &[SimParamDef], ints: &[String], grids: &[CpuGrid], value: impl Fn(&str) -> f32) -> rhai::Map {
     let mut map = rhai::Map::new();
+    let at = |name: &str| {
+        let v = value(name);
+        if ints.iter().any(|n| n == name) { rhai::Dynamic::from_int(v.round() as rhai::INT) } else { rhai::Dynamic::from_float(f64::from(v)) }
+    };
     for p in params {
-        let v = value(p.name);
-        let v = if ints.iter().any(|n| n == p.name) { rhai::Dynamic::from_int(v.round() as rhai::INT) } else { rhai::Dynamic::from_float(f64::from(v)) };
-        map.insert(p.name.into(), v);
+        map.insert(p.name.into(), at(p.name));
+    }
+    // A grid: its rows, each a map of its cells by column.
+    for g in grids {
+        let rows: rhai::Array = (0..g.rows)
+            .map(|r| {
+                let row: rhai::Map = g.columns.iter().map(|c| (c.as_str().into(), at(&g.cell.replace("{row}", &r.to_string()).replace("{column}", c)))).collect();
+                rhai::Dynamic::from_map(row)
+            })
+            .collect();
+        map.insert(g.name.as_str().into(), rhai::Dynamic::from_array(rows));
     }
     map
+}
+
+/// A grid's fill's result for a row: its cells' values by column.
+fn row_of(r: &rhai::Dynamic, f: &str) -> Result<crate::param_layout::Row, String> {
+    let what = || format!("`{f}(p, row)` gives a map of the row's values by column, `#{{ radius: 2.0 }}`");
+    let m = r.clone().try_cast::<rhai::Map>().ok_or_else(what)?;
+    m.iter().map(|(k, v)| number(v).map(|n| (k.to_string(), n as f32)).ok_or_else(what)).collect()
+}
+
+/// A script's layout with its grids' fills and warnings bound to its CPU
+/// functions (rhai-plugins P7): `fn ladder(p, row)` gives a row's values,
+/// `fn past_reach(cells, p, ctx)` a row's warning or `()`, `ctx` the row,
+/// the grid's size and the pyramid's reach, and whether the row is the
+/// fill's while the grid is hidden. A failure is logged once and gives
+/// nothing.
+fn bind_layout(name: &str, parameters: &'static [SimParamDef], spec: lang::rhai::LayoutSpec) -> crate::param_layout::ParamLayout {
+    use crate::param_layout::{GridFill, ParamLayout, Row};
+    let grids = spec
+        .grids
+        .into_iter()
+        .map(|g| {
+            let mut grid = g.grid;
+            grid.fill = g.fill.map(|(when, f)| {
+                let model = name.to_string();
+                let cells: crate::param_layout::FillFn = Arc::new(move |value: &dyn Fn(&str) -> f32, row: usize| -> Row {
+                    let r = with_script(&model, |e, ast, s| {
+                        let p = params_map(parameters, &s.ints, &s.grids, value);
+                        call_cpu_with(e, ast, &f, (p, row as rhai::INT)).and_then(|r| row_of(&r, &f))
+                    });
+                    match r {
+                        Some(Ok(row)) => row,
+                        other => {
+                            cpu_failed(&model, &f, other.and_then(Result::err));
+                            Row::new()
+                        }
+                    }
+                });
+                GridFill { when, cells }
+            });
+            grid.warn = g.warn.map(|f| {
+                let model = name.to_string();
+                let warn: crate::param_layout::WarnFn = Arc::new(move |row, cells: &Row, value: &dyn Fn(&str) -> f32, (w, h), preview| {
+                    let r = with_script(&model, |e, ast, s| {
+                        let p = params_map(parameters, &s.ints, &s.grids, value);
+                        let cells: rhai::Map = cells.iter().map(|(k, v)| (k.as_str().into(), rhai::Dynamic::from_float(f64::from(*v)))).collect();
+                        let mut ctx = rhai::Map::new();
+                        ctx.insert("row".into(), rhai::Dynamic::from_int(row as rhai::INT));
+                        ctx.insert("width".into(), rhai::Dynamic::from_int(rhai::INT::from(w)));
+                        ctx.insert("height".into(), rhai::Dynamic::from_int(rhai::INT::from(h)));
+                        ctx.insert("pyramid_reach".into(), rhai::Dynamic::from_float(f64::from(super::pyramid_reach(w, h))));
+                        ctx.insert("preview".into(), rhai::Dynamic::from_bool(preview));
+                        call_cpu_with(e, ast, &f, (cells, p, ctx))
+                    });
+                    match r {
+                        Some(Ok(d)) if d.is_unit() => None,
+                        Some(Ok(d)) => d.into_string().ok(),
+                        other => {
+                            cpu_failed(&model, &f, other.and_then(Result::err));
+                            None
+                        }
+                    }
+                });
+                warn
+            });
+            grid
+        })
+        .collect();
+    ParamLayout { show_if: spec.show_if, grids }
 }
 
 /// `f(p)`, the script's function.
@@ -407,7 +526,7 @@ fn with_script<T>(name: &str, f: impl FnOnce(&rhai::Engine, &rhai::AST, &CpuScri
 /// reads as "the static cap".
 fn script_dt_bound(p: &super::Params) -> f32 {
     let model = p.model();
-    let r = with_script(model.name, |e, ast, s| call_cpu(e, ast, "max_dt", params_map(model.parameters, &s.ints, |n| p.get(n))).and_then(|r| dt_of(&r)));
+    let r = with_script(model.name, |e, ast, s| call_cpu(e, ast, "max_dt", params_map(model.parameters, &s.ints, &s.grids, |n| p.get(n))).and_then(|r| dt_of(&r)));
     r.and_then(Result::ok).map_or(f32::NAN, |v| v as f32)
 }
 
@@ -420,7 +539,7 @@ fn cached<T: Clone + 'static>(cache: &'static std::thread::LocalKey<std::cell::R
     if let Some(hit) = cache.with(|c| c.borrow().get(model.name).filter(|(k, _)| *k == key).map(|(_, v)| v.clone())) {
         return hit;
     }
-    let r = with_script(model.name, |e, ast, s| call_cpu(e, ast, f, params_map(model.parameters, &s.ints, values)).and_then(|r| read(&r)));
+    let r = with_script(model.name, |e, ast, s| call_cpu(e, ast, f, params_map(model.parameters, &s.ints, &s.grids, values)).and_then(|r| read(&r)));
     let value = match r {
         Some(Ok(v)) => v,
         other => {
@@ -439,7 +558,7 @@ fn cached<T: Clone + 'static>(cache: &'static std::thread::LocalKey<std::cell::R
 fn script_agent_count(p: &super::Params, w: u32, h: u32) -> u32 {
     let model = p.model();
     let r = with_script(model.name, |e, ast, s| {
-        let map = params_map(model.parameters, &s.ints, |n| p.get(n));
+        let map = params_map(model.parameters, &s.ints, &s.grids, |n| p.get(n));
         call_cpu_with(e, ast, "agent_count", (map, rhai::INT::from(w), rhai::INT::from(h))).and_then(|r| count_of(&r))
     });
     match r {
@@ -472,6 +591,12 @@ impl Clone for super::SimKernel {
     fn clone(&self) -> Self {
         super::SimKernel { radius: self.radius, weights: self.weights.clone() }
     }
+}
+
+/// The parameter layout of the Rhai model or colouring `name`, when its
+/// `PARAMS` has conditions or grids (rhai-plugins P7).
+pub fn param_layout(name: &str) -> Option<Arc<crate::param_layout::ParamLayout>> {
+    registry().read().ok()?.layouts.get(name).cloned()
 }
 
 /// Whether `param` of the Rhai model `name` is slow (`INFO.slow`): what
@@ -718,7 +843,12 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     // that cannot give a time step, a table or its discs is a message
     // now, not a fallback at the first step.
     let has = |f: &str| lang::rhai::has_function(source, f);
-    let cpu = if has("max_dt") || has("kernel") || has("discs") || has("agent_count") {
+    // Its parameters' layout (rhai-plugins P7): conditions and grids, the
+    // grids' fills and warnings run on the CPU.
+    let layout = lang::rhai::param_layout(source)?;
+    let grids = cpu_grids(layout.as_ref());
+    let layout_fns: Vec<&str> = layout.iter().flat_map(|l| l.grids.iter().flat_map(|g| g.fill.iter().map(|(_, f)| f.as_str()).chain(g.warn.as_deref()))).collect();
+    let cpu = if has("max_dt") || has("kernel") || has("discs") || has("agent_count") || !layout_fns.is_empty() {
         let engine = cpu_engine();
         let ast = engine.compile(source).map_err(|e| format!("its CPU functions: {e}"))?;
         Some((engine, ast, int_params(&program)))
@@ -727,8 +857,28 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     };
     let at_defaults_map = || {
         let (_, _, ints) = cpu.as_ref().expect("a CPU function");
-        params_map(parameters, ints, |n| parameters.iter().find(|p| p.name == n).map_or(0.0, |p| p.default))
+        params_map(parameters, ints, &grids, |n| parameters.iter().find(|p| p.name == n).map_or(0.0, |p| p.default))
     };
+    // A grid's fill and warning run once here, on its first row at the
+    // defaults: a script that cannot give them is a message now.
+    for g in layout.iter().flat_map(|l| l.grids.iter()) {
+        let (engine, ast, _) = cpu.as_ref().expect("a CPU function");
+        if let Some((_, f)) = &g.fill {
+            row_of(&call_cpu_with(engine, ast, f, (at_defaults_map(), 0 as rhai::INT))?, f)?;
+        }
+        if let Some(f) = &g.warn {
+            let mut ctx = rhai::Map::new();
+            for (k, v) in [("row", 0.0), ("width", 512.0), ("height", 512.0), ("pyramid_reach", f64::from(super::pyramid_reach(512, 512)))] {
+                ctx.insert(k.into(), if k == "pyramid_reach" { rhai::Dynamic::from_float(v) } else { rhai::Dynamic::from_int(v as rhai::INT) });
+            }
+            ctx.insert("preview".into(), rhai::Dynamic::from_bool(false));
+            let cells: rhai::Map = g.grid.columns.iter().map(|c| (c.key.as_str().into(), rhai::Dynamic::from_float(0.0))).collect();
+            let r = call_cpu_with(engine, ast, f, (cells, at_defaults_map(), ctx))?;
+            if !(r.is_unit() || r.is_string()) {
+                return Err(format!("`{f}(cells, p, ctx)` gives a message, a string, or `()` for none"));
+            }
+        }
+    }
     let at_defaults = |f: &str| -> Result<rhai::Dynamic, String> {
         let (engine, ast, _) = cpu.as_ref().expect("a CPU function");
         call_cpu(engine, ast, f, at_defaults_map())
@@ -850,12 +1000,16 @@ pub fn register_model(source: &str) -> Result<String, String> {
 pub fn register_model_as(source: &str, name: &str) -> Result<(), String> {
     let def: &'static ModelDef = Box::leak(Box::new(compile_model(source, name)?));
     let warps = scale_warps_of(source, name, def.parameters)?.map(|w| &*Box::leak(Box::new(w)));
+    let layout = lang::rhai::param_layout(source)?;
+    let grids = cpu_grids(layout.as_ref());
+    let fills = layout.as_ref().is_some_and(|l| l.grids.iter().any(|g| g.fill.is_some() || g.warn.is_some()));
     // Its CPU functions, which `with_script` finds by the model's name.
-    let has_cpu = ["max_dt", "kernel", "discs", "agent_count"].iter().any(|f| lang::rhai::has_function(source, f));
+    let has_cpu = fills || ["max_dt", "kernel", "discs", "agent_count"].iter().any(|f| lang::rhai::has_function(source, f));
     let cpu = has_cpu.then(|| {
         let ints = lang::rhai::sim_model(source, lang::rhai::SimFn::Step(0)).map(|p| int_params(&p)).unwrap_or_default();
-        Arc::new(CpuScript { source: source.to_string(), ints })
+        Arc::new(CpuScript { source: source.to_string(), ints, grids })
     });
+    let layout = layout.map(|l| Arc::new(bind_layout(name, def.parameters, l)));
     if let Ok(mut r) = registry().write() {
         r.models.insert(name.to_string(), def);
         r.failed.remove(name);
@@ -868,6 +1022,10 @@ pub fn register_model_as(source: &str, name: &str) -> Result<(), String> {
             None => r.warps.remove(name),
         };
         r.slow.insert(name.to_string(), lang::rhai::info_strings(source, "slow"));
+        match layout {
+            Some(l) => r.layouts.insert(name.to_string(), l),
+            None => r.layouts.remove(name),
+        };
     }
     Ok(())
 }
@@ -1065,6 +1223,97 @@ fn agent_count(p, w, h) { to_float(w * h) * p.amount }
             let e = compile_model(&src, "custom-half").expect_err(says);
             assert!(e.contains(says), "{says}: {e}");
         }
+    }
+
+    /// A grid of parameters (rhai-plugins P7): `PARAMS`' grid expands into
+    /// its cells -- named by its template, captioned by row and column,
+    /// a value a row -- which the step reads at a computed row by one slot
+    /// and the CPU as `p.table[i]`; its layout carries the conditions, the
+    /// columns, the live rows, and a fill and a warning bound to the
+    /// script's functions; a name it reads that is no parameter, and a
+    /// function it runs that is not defined, are refused.
+    #[test]
+    fn a_grid_of_parameters_expands_lays_out_and_fills() {
+        let src = r#"
+const PARAMS = #{
+    scales: #{ value: 2.0, min: 1.0, max: 3.0, caption: "Scales" },
+    base: #{ value: 1.0, min: 0.5, max: 4.0, caption: "Base", show_if: #{ layout: 0 } },
+    layout: #{ value: 0, choices: ["Ladder", "Table"], caption: "Layout" },
+    table: #{
+        type: "grid",
+        rows: 3,
+        live_rows: "scales",
+        cell: "s{row}_{column}",
+        row: "Scale {n}",
+        show_if: #{ layout: 1 },
+        fill: #{ when: #{ layout: 1 }, from: "ladder" },
+        warn: "too_wide",
+        columns: #{
+            radius: #{ value: [1.0, 2.0, 4.0], min: 0.5, max: 64.0, caption: "radius", header: "R", hint: "How far." },
+            sym: #{ value: 0.0, min: 0.0, max: 8.0, caption: "symmetry", whole: true, show_if: #{ layout: 1 } },
+        },
+    },
+};
+fn cell_step(cell, p, ctx) {
+    let k = to_int(round(cell.y));
+    rgba(cell.x + p.table[k].radius + p.table[1].sym, cell.y, 0.0, 0.0)
+}
+fn ladder(p, row) {
+    #{ radius: p.base * to_float(row + 1), sym: 0.0 }
+}
+fn too_wide(cells, p, ctx) {
+    if cells.radius > ctx.pyramid_reach { "too wide" } else { () }
+}
+fn discs(p) {
+    [#{ ra: p.table[0].radius, rb: p.table[1].radius }]
+}
+"#;
+        let def = compile_model(src, "custom-grid").unwrap_or_else(|e| panic!("{e}"));
+        let names: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
+        assert_eq!(names, ["scales", "base", "layout", "s0_radius", "s0_sym", "s1_radius", "s1_sym", "s2_radius", "s2_sym"]);
+        let cell = def.parameters.iter().find(|p| p.name == "s2_radius").unwrap();
+        assert_eq!((cell.display_name, cell.default, cell.tooltip), ("Scale 3 radius", 4.0, "How far."));
+        // A computed row: one read, at the slot its row gives.
+        assert!(def.wgsl.contains("mparam(u32(3i + clamp("), "{}", def.wgsl);
+        register_model_as(src, "custom-grid").unwrap();
+        let layout = crate::sim::param_layout("custom-grid").expect("a layout");
+        let at = |pairs: &'static [(&'static str, f32)]| move |n: &str| pairs.iter().find(|(k, _)| *k == n).map_or(0.0, |(_, v)| *v);
+        let ladder = at(&[("layout", 0.0), ("base", 1.5), ("scales", 2.0)]);
+        let table = at(&[("layout", 1.0), ("base", 1.5), ("scales", 2.0)]);
+        assert!(layout.lists("base", &ladder) && !layout.lists("base", &table) && !layout.lists("s0_radius", &ladder));
+        let g = &layout.grids[0];
+        assert_eq!((g.rows, g.live(&ladder), g.columns.len()), (3, 2, 2));
+        assert_eq!((g.columns[0].header.resolve(), g.columns[1].whole), ("R".to_string(), true));
+        assert!(!g.columns[1].show_if.holds(&ladder));
+        // Switching to the table fills it from `ladder`, every row.
+        let filled = layout.fills(&ladder, &table);
+        assert_eq!(filled.iter().find(|(n, _)| n == "s2_radius").map(|(_, v)| *v), Some(4.5), "{filled:?}");
+        let warn = g.warn.as_ref().expect("a warning");
+        let wide: crate::param_layout::Row = [("radius".to_string(), 1.0e6), ("sym".to_string(), 0.0)].into();
+        assert_eq!(warn(0, &wide, &table, (64, 64), false).as_deref(), Some("too wide"));
+        assert_eq!(warn(0, &g.row(0, &table), &table, (64, 64), false), None);
+        // The CPU reads the grid as rows.
+        let grids = cpu_grids(lang::rhai::param_layout(src).unwrap().as_ref());
+        let p = params_map(def.parameters, &[], &grids, |n| if n == "s1_radius" { 5.0 } else { 0.0 });
+        let rows = p["table"].clone().into_array().expect("rows");
+        let row = rows[1].clone().try_cast::<rhai::Map>().expect("a row");
+        assert_eq!((rows.len(), row["radius"].as_float().unwrap()), (3, 5.0));
+        // What it reads is a parameter; what it runs, defined.
+        for (bad, says) in [(src.replace("live_rows: \"scales\"", "live_rows: \"count\""), "`count`"), (src.replace("warn: \"too_wide\"", "warn: \"nope\""), "fn nope")] {
+            let e = compile_model(&bad, "custom-bad").expect_err(says);
+            assert!(e.contains(says), "{says}: {e}");
+        }
+        // A constant row anywhere; a computed one is a model's.
+        let colouring = "const PARAMS = #{ g: #{ type: \"grid\", rows: 2, columns: #{ v: #{ value: 1.0 } } } };
+fn cell_color(cell, p, ctx) {
+    rgba(p.g[1].v, cell.state.x, 0.0, 1.0)
+}
+";
+        if let Err(e) = compile(colouring, "custom-gc") {
+            panic!("{e}");
+        }
+        let computed = colouring.replace("p.g[1].v", "p.g[to_int(cell.state.x)].v");
+        assert!(compile(&computed, "custom-gc2").is_err_and(|e| e.contains("simulation model")));
     }
 
     /// A carried source registers under the name the config gives it, and
@@ -1312,8 +1561,71 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
             let key = format!("custom-twin-{name}");
             register_model_as(source, &key).unwrap_or_else(|e| panic!("{name}: {e}"));
             let twin = model(&key).expect("registered");
-            let params = |m: &ModelDef| m.parameters.iter().map(|p| (p.name, p.display_name, p.default, p.min, p.max, p.tooltip, p.choices)).collect::<Vec<_>>();
+            // Its parameters by name -- a grid lays its cells out row by
+            // row, where a built-in may have appended a column (McCabe's
+            // lean) -- and in the order the panel lists them.
+            let params = |m: &ModelDef| {
+                let mut v = m.parameters.iter().map(|p| (p.name, p.display_name, p.default, p.min, p.max, p.tooltip, p.choices)).collect::<Vec<_>>();
+                v.sort_by(|a, b| a.0.cmp(b.0));
+                v
+            };
             assert_eq!(params(twin), params(builtin), "{name}: parameters");
+            let listed = |m: &ModelDef| {
+                let (layout, warps) = (super::super::param_layout(m.name), super::super::scale_warps(m.name));
+                m.parameters
+                    .iter()
+                    .map(|p| p.name)
+                    .filter(|n| !layout.as_ref().is_some_and(|l| l.grids.iter().any(|g| g.is_cell(n))) && !warps.is_some_and(|w| w.is_param(n)))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(listed(twin), listed(builtin), "{name}: the parameters its panel lists, in order");
+            // Its layout (rhai-plugins P7): its conditions, its grids --
+            // cells, rows, columns and when each shows -- and the fill and
+            // the warnings they give, at the defaults and at each preset.
+            let shape = |m: &str| {
+                super::super::param_layout(m).map(|l| {
+                    let mut conditions: Vec<(String, crate::param_layout::ShowIf)> = l.show_if.clone();
+                    conditions.sort_by(|a, b| a.0.cmp(&b.0));
+                    let grids: Vec<_> = l
+                        .grids
+                        .iter()
+                        .filter(|g| g.drawn)
+                        .map(|g| {
+                            let columns: Vec<_> = g.columns.iter().map(|c| (c.key.clone(), c.header.resolve(), c.whole, c.show_if.clone())).collect();
+                            (g.cell.clone(), g.rows, g.live_rows.clone(), g.show_if.clone(), columns, g.fill.as_ref().map(|f| f.when.clone()))
+                        })
+                        .collect();
+                    (conditions, grids)
+                })
+            };
+            assert_eq!(shape(&key), shape(name), "{name}: its parameter layout");
+            if let (Some(a), Some(b)) = (super::super::param_layout(name), super::super::param_layout(&key)) {
+                let at_presets = std::iter::once(std::collections::BTreeMap::new()).chain(builtin.presets.iter().map(|p| p.params.iter().map(|(k, v)| (k.to_string(), *v)).collect()));
+                for at in at_presets {
+                    let value = |n: &str| at.get(n).copied().unwrap_or_else(|| builtin.parameters.iter().find(|p| p.name == n).map_or(0.0, |p| p.default));
+                    for (ga, gb) in a.grids.iter().zip(b.grids.iter().filter(|g| g.drawn)) {
+                        for r in 0..ga.rows {
+                            // A built-in fills in f32 and a script in f64:
+                            // equal to the last place of an f32.
+                            let (fa, fb) = (ga.fill.as_ref().map(|f| (f.cells)(&value, r)), gb.fill.as_ref().map(|f| (f.cells)(&value, r)));
+                            if let (Some(fa), Some(fb)) = (&fa, &fb) {
+                                assert_eq!(fa.keys().collect::<Vec<_>>(), fb.keys().collect::<Vec<_>>(), "{name}: the fill's columns");
+                                for (k, x) in fa {
+                                    let y = fb[k];
+                                    assert!((x - y).abs() <= 1e-6 * x.abs().max(1e-3), "{name}: row {r}'s {k} fills {x} and {y} at {at:?}");
+                                }
+                            }
+                            // The warnings on a grid small enough that the
+                            // coarse scales reach past it.
+                            let row = fa.unwrap_or_else(|| ga.row(r, &value));
+                            for preview in [false, true] {
+                                let warn = |g: &crate::param_layout::ParamGrid| g.warn.as_ref().and_then(|w| w(r, &row, &value, (64, 64), preview));
+                                assert_eq!(warn(gb), warn(ga), "{name}: row {r}'s warning at {at:?}");
+                            }
+                        }
+                    }
+                }
+            }
             let sorted = |pairs: &[(&'static str, f32)]| {
                 let mut v = pairs.to_vec();
                 v.sort_by(|a, b| a.0.cmp(b.0));

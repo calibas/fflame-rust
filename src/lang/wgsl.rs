@@ -2037,6 +2037,7 @@ impl<'p> Gen<'p> {
             Host::AgentDeposit => format!("agent_deposit(vec2<i32>({}, {}), {})", a[0], a[1], a[2]),
             Host::ReadAt => format!("sim_read(vec2<i32>({}, {})).{}", a[0], a[1], part(2)),
             Host::PyrPrepare => "pyr_prepare()".to_string(),
+            Host::GridParam => format!("mparam(u32({} + clamp({}, 0i, {}) * {}))", a[0], a[3], a[2], a[1]),
         }
     }
 

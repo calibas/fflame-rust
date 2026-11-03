@@ -796,6 +796,30 @@ any model the built-ins are, each of the 31 with a twin.
   "scales", rows: 6 }` gives the per-scale warps (`ScaleWarps`): the
   Warp section draws `s{i}_warp_*` behind its target list, and
   `ctx.scale_warped` says whether any live row is off the identity.
+- **A parameter layout** (rhai-plugins P7; `param_layout`): a parameter
+  with `show_if: #{ layout: 0 }` (or a list of values,
+  `#{ averaging: [1, 2] }`) is listed only while those hold; a `PARAMS`
+  entry with `type: "grid"` is a grid of `rows` rows by its `columns`,
+  each cell a scalar parameter of its own, named by `cell`
+  (`"s{row}_{column}"`) and captioned by `row` (`"Scale {n}"`) and its
+  column's caption, a column's `value` one for every row or a list of
+  one a row. A grid has `live_rows` (the parameter counting them),
+  `show_if`, a column `header`, `whole: true` and `show_if`; `fill:
+  #{ when: #{ layout: 1 }, from: "ladder" }`, which the edit making `when`
+  hold writes into the cells in the same undo step, from `fn ladder(p,
+  row)` (a row's values by column, on the CPU); `warn: "past_reach"`,
+  `fn past_reach(cells, p, ctx)` a row's message or `()` (`ctx.row`,
+  `width`, `height`, `pyramid_reach`, and `preview` -- the fill's row
+  while the grid is hidden, which the panel then shows in a line); and
+  `drawn: false` for cells another section draws (McCabe's warps, the
+  Warp section's). The step reads a cell as `p.grid[i].column` -- one
+  read at the slot the row gives, the row clamped (`Host::GridParam`);
+  the CPU functions as `p.grid[i].column` too. The cells stay plain
+  parameters: the config, undo, animation and presets see nothing new.
+  The panel draws a built-in's layout and a script's alike
+  (`render_param_grid`); McCabe's built-in table is one
+  (`models::mccabe_layout`), and its twin declares the same, its
+  table and its warps grids.
 - **Agents** (P4 step 9d): `fn agent_seed(p, ctx)` gives each agent's
   first record and `fn agent_step(a, p, ctx)` its move, with
   `agent_step2` a second pass -- each a vector of four, `vec4(x, y,
@@ -873,7 +897,11 @@ any model the built-ins are, each of the 31 with a twin.
 - **Twins**: `sim::custom::SHIPPED_MODELS`, every built-in -- all 31
   (`assets/sim/<name>.rhai`). Each is held to its built-in three ways:
   - its settings (`every_twin_carries_its_built_ins_settings`): the
-    parameters in slot order with their labels, ranges and choices, the
+    parameters by name with their labels, ranges and choices, and in the
+    order the panel lists them; its layout -- conditions, grids, columns
+    and when each shows, the fill (to an f32's last place: a built-in
+    fills in f32, a script in f64) and the warnings -- at the defaults
+    and each preset; the
     presets, dt, `max_dt`, steps, diffusion, state, passes (the repeat,
     the measure, the agents'), features and per-scale warps, `max_dt(p)`
     against the `dt_bound` at the defaults and at each parameter's ends,

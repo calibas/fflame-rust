@@ -178,6 +178,10 @@ pub enum Host {
     /// generator where a step first reads the pyramid on each path; no
     /// script writes it.
     PyrPrepare,
+    /// A grid's cell at a computed row (rhai-plugins P7): its first row's
+    /// slot, the stride, the last row, the row -- clamped to the grid's in
+    /// the read itself.
+    GridParam,
 }
 
 /// Every host call by its lowered name.
@@ -197,6 +201,7 @@ pub const HOSTS: &[(&str, Host)] = &[
     ("__agent_deposit", Host::AgentDeposit),
     ("__read_at", Host::ReadAt),
     ("__pyr_prepare", Host::PyrPrepare),
+    ("__grid_cell", Host::GridParam),
 ];
 
 impl Host {
@@ -212,7 +217,7 @@ impl Host {
             PyrSample => &[F, F, F],
             PyrLevel => &[F],
             PyrDiff => &[I, F, F],
-            ScratchRead => &[I, I, I, I],
+            ScratchRead | GridParam => &[I, I, I, I],
             ScratchWrite | MemWrite => &[I, F, F, F, F],
             MemRead => &[I, I],
             Outside | AgentClaim | AgentClaimCheck => &[I, I],

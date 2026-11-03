@@ -3596,7 +3596,6 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 ///
 /// Channels: `.x` = f, `.y` = the scale that fired (an integer),
 /// `.z` = the step at which the firing scale last changed, `.w` spare.
-/// McCabe's per-scale table (mccabe-multiscale plan, section 3).
 /// McCabe's per-scale warps (mccabe-multiscale plan, section 10).
 pub static MCCABE_WARPS: crate::sim::ScaleWarps = crate::sim::ScaleWarps {
     model: "mccabe",
@@ -3604,24 +3603,64 @@ pub static MCCABE_WARPS: crate::sim::ScaleWarps = crate::sim::ScaleWarps {
     rows: 6,
 };
 
-pub static MCCABE_TABLE: crate::sim::ParamTable = crate::sim::ParamTable {
-    model: "mccabe",
-    mode_param: "layout",
-    rows_param: "scales",
-    rows: 6,
-    columns: &["radius", "ratio", "amount", "weight", "symmetry", "stretch", "angle"],
-    generator_params: &["base_radius", "ratio", "amount", "amount_min", "symmetry"],
-    fill: mccabe_table_from_ladder,
-    shows_column: mccabe_shows_column,
-};
-
-/// The lean columns shape the spectral stage's discs, so they show only
-/// when the averaging is Exact discs.
-pub fn mccabe_shows_column(params: &std::collections::BTreeMap<String, f32>, column: &str) -> bool {
-    match column {
-        "stretch" | "angle" => params.get("averaging").is_some_and(|v| v.round() == 2.0),
-        _ => true,
-    }
+/// McCabe's per-scale table (mccabe-multiscale plan, section 3) as a
+/// parameter layout (rhai-plugins P7): Table mode (`layout` 1) draws the
+/// grid and hides the ladder's own parameters; switching to it fills the
+/// grid from the ladder, so nothing changes until it is edited; the lean
+/// columns shape the spectral stage's discs, so they show under Exact
+/// discs alone; a scale whose inhibitor reaches past the pyramid is
+/// warned of, row by row, or -- under the ladder -- the coarsest such.
+pub fn mccabe_layout() -> std::sync::Arc<crate::param_layout::ParamLayout> {
+    use crate::param_layout::{GridColumn, GridFill, ParamGrid, ParamLayout, ShowIf, Text};
+    use std::sync::{Arc, OnceLock};
+    static LAYOUT: OnceLock<Arc<ParamLayout>> = OnceLock::new();
+    LAYOUT
+        .get_or_init(|| {
+            let when = |p: &str, v: f32| ShowIf(vec![(p.to_string(), vec![v])]);
+            let column = |key: &str, header: &'static str, whole: bool, show_if: ShowIf| GridColumn { key: key.into(), header: Text::Key(header), whole, show_if };
+            let exact = when("averaging", 2.0);
+            let table = ParamGrid {
+                name: "table".into(),
+                cell: "s{row}_{column}".into(),
+                rows: 6,
+                live_rows: Some("scales".into()),
+                columns: vec![
+                    column("radius", "sim_panel.table_radius", false, ShowIf::default()),
+                    column("ratio", "sim_panel.table_ratio", false, ShowIf::default()),
+                    column("amount", "sim_panel.table_amount", false, ShowIf::default()),
+                    column("weight", "sim_panel.table_weight", false, ShowIf::default()),
+                    column("symmetry", "sim_panel.table_symmetry", true, ShowIf::default()),
+                    column("stretch", "sim_panel.table_stretch", false, exact.clone()),
+                    column("angle", "sim_panel.table_angle", false, exact),
+                ],
+                show_if: when("layout", 1.0),
+                fill: Some(GridFill {
+                    when: when("layout", 1.0),
+                    cells: Arc::new(|value, row| {
+                        let params = MCCABE.parameters.iter().map(|p| (p.name.to_string(), value(p.name))).collect();
+                        let prefix = format!("s{row}_");
+                        mccabe_table_from_ladder(&params).into_iter().filter_map(|(k, v)| k.strip_prefix(&prefix).map(|c| (c.to_string(), v))).collect()
+                    }),
+                }),
+                warn: Some(Arc::new(|row, cells, _, (w, h), preview| {
+                    let reach = crate::sim::pyramid_reach(w, h);
+                    let past = cells.get("radius").zip(cells.get("ratio")).is_some_and(|(ra, ratio)| ra * ratio > reach);
+                    let reach = format!("{reach:.0}");
+                    past.then(|| {
+                        if preview {
+                            rust_i18n::t!("sim_panel.table_past_reach_ladder", n = (row + 1).to_string(), reach = reach).to_string()
+                        } else {
+                            rust_i18n::t!("sim_panel.table_past_reach", reach = reach).to_string()
+                        }
+                    })
+                })),
+                drawn: true,
+            };
+            let ladder = when("layout", 0.0);
+            let show_if = ["base_radius", "ratio", "amount", "amount_min", "symmetry"].iter().map(|p| (p.to_string(), ladder.clone())).collect();
+            Arc::new(ParamLayout { show_if, grids: vec![table] })
+        })
+        .clone()
 }
 
 /// The table the ladder describes: radii doubling from the finest,
@@ -3640,7 +3679,7 @@ pub fn mccabe_table_from_ladder(params: &std::collections::BTreeMap<String, f32>
     let (amount, amount_min) = (get("amount"), get("amount_min"));
     let sym = get("symmetry").round();
     let mut out = Vec::new();
-    for i in 0..MCCABE_TABLE.rows as i32 {
+    for i in 0..6 {
         let t = if n > 1 { (i as f32 / (n - 1) as f32).min(1.0) } else { 0.0 };
         out.push((format!("s{i}_radius"), base * (1u32 << i) as f32));
         out.push((format!("s{i}_ratio"), ratio));

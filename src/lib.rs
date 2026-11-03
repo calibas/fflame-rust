@@ -35,6 +35,8 @@ pub mod api;
 pub mod script;
 /// What every user-written script shares: its identity and labels.
 pub mod scripted;
+/// Parameters drawn beyond a list: conditions and grids (rhai-plugins P7).
+pub mod param_layout;
 pub mod probe;
 pub mod census;
 /// The formula language: Rhai (and UF's and Fractint's formulas) to WGSL,
