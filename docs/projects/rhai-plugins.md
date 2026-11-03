@@ -649,6 +649,15 @@ nested loops and neighbour reads at loop offsets already work.
    chaotic rule amplifies the last bit) and timed against it: the 21
    remaining in-class models and the 12 remaining colourings.
    Built-ins stay (D2); the twins ship as Rhai sources.
+   **Models built 2026-11-02**: all 22 in-class models
+   ([SIMULATION.md](../main/SIMULATION.md#models-written-in-rhai)),
+   every preset's field bit-identical to the built-in's; equal speed but
+   Brusselator2 (2-3%, unexplained, under the gate). The port found two
+   more language needs, built with it: `ctx.step` an int (a float loses
+   whole steps past 2^24, and Ising's parity with them) and `ctx.layer`
+   (Ballistic Deposition draws at another cell, as `sim_rand` there,
+   from `pcg` and the seed words). And two compiler fixes from the speed
+   check: one read per neighbour, an int offset kept an int.
 8. **Out of the class**, unchanged: the 9 models above stay built-in,
    refused with a reason.
 

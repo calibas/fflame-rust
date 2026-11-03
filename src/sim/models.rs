@@ -1999,7 +1999,10 @@ pub static PERCOLATION: ModelDef = ModelDef {
     display_name: "Percolation",
     description: "Random open sites, coloured by which connected cluster they belong to. \
                   At the critical threshold the spanning cluster is fractal.",
-    features: &[ModelFeature::NeedsRng, ModelFeature::NoTimeStep],
+    // No `NeedsRng`: the step does not draw, only the seed, as the
+    // Brusselator's and the hodgepodge's seeds do (the flag says the step
+    // draws, and changes only a comment in the step shader).
+    features: &[ModelFeature::NoTimeStep],
     parameters: &[SimParamDef {
         name: "p_open",
         display_name: "Open probability",

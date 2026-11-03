@@ -149,10 +149,12 @@ pub fn effect(p: &Program) -> Result<EffectWgsl, String> {
 }
 
 /// A simulation colouring's sample fields by `__cell`'s index
-/// (`lang::rhai::vec`'s `Owner::Cell`): the colour template's `SimSample`.
+/// (`lang::rhai::vec`'s `Owner::Cell`): the colour template's `SimSample`
+/// -- the state, gradient, distance, tensor and relief (0-18), the memory
+/// (20-27); 19 is unused (the step is an int, `__host_int`).
 const SIM_CELL_FIELDS: [&str; 28] = [
     "x.s.x", "x.s.y", "x.s.z", "x.s.w", "x.gx.x", "x.gx.y", "x.gx.z", "x.gx.w", "x.gy.x", "x.gy.y", "x.gy.z", "x.gy.w", "x.dist", "x.tensor.x",
-    "x.tensor.y", "x.tensor.z", "x.relief.x", "x.relief.y", "x.relief.z", "f32(sim_step_index())", "x.m0.x", "x.m0.y", "x.m0.z", "x.m0.w", "x.m1.x",
+    "x.tensor.y", "x.tensor.z", "x.relief.x", "x.relief.y", "x.relief.z", "", "x.m0.x", "x.m0.y", "x.m0.z", "x.m0.w", "x.m1.x",
     "x.m1.y", "x.m1.z", "x.m1.w",
 ];
 
@@ -169,10 +171,9 @@ fn cell_index(a: &IExpr) -> Option<usize> {
 
 /// A simulation model's host values by `__cell`'s index (P4): the state
 /// a step pass is given (0-3), the seed's inside and noise (19, 20), the
-/// time step and the step index (21, 22). The rest are a colouring's.
-const SIM_MODEL_HOST: [&str; 23] = [
-    "s.x", "s.y", "s.z", "s.w", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "inside", "noise", "sim_dt()", "f32(sim_step_index())",
-];
+/// time step (21). The rest are a colouring's; the step index is an int
+/// (`__host_int`).
+const SIM_MODEL_HOST: [&str; 22] = ["s.x", "s.y", "s.z", "s.w", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "inside", "noise", "sim_dt()"];
 
 /// A simulation model's function in WGSL (P4): a step pass as the step
 /// template calls it, `sim_step` (pass 0) or `sim_step2` ..., or the seed,
@@ -213,9 +214,10 @@ pub fn sim_model(p: &Program, f: super::rhai::SimFn) -> Result<SimModelWgsl, Str
     }
     g.stmts(&p.transform, 1, &mut body);
     let _ = writeln!(body, "    {SIM_RETURN}\n}}");
-    // A draw by `rand()` or on a stream of its own, `rand(k)`.
+    // A draw by `rand()`, on a stream of its own (`rand(k)`), or the run's
+    // seed hashed (`pcg` of `ctx.seed_lo`: a draw at another cell).
     let body = g.finish("", body);
-    let rng = body.contains("sim_rand(");
+    let rng = body.contains("sim_rand(") || body.contains("params.seed_lo") || body.contains("params.seed_hi");
     Ok(SimModelWgsl { body, rng })
 }
 
@@ -1816,8 +1818,79 @@ impl<'p> Gen<'p> {
                     continue;
                 }
             }
+            // A neighbour's parts read one after another (`let n = read(dx,
+            // dy)`): one read of the cell, as hand-written WGSL makes it.
+            // The parts of one call are four, which the shader compiler
+            // merged at a constant offset but not in a loop that picks the
+            // offset (P4 step 7's speed check: snowfake's 6%).
+            if self.ctx == Ctx::Effect {
+                let n = self.nbr_run(&stmts[i..]);
+                if n >= 2 {
+                    let pad = "    ".repeat(depth);
+                    let IStmt::Assign(_, IExpr { kind: IExprKind::Call(_, a), .. }) = &stmts[i] else { unreachable!("nbr_run's") };
+                    let off = self.nbr_offset(a);
+                    let k = self.loops;
+                    self.loops += 1;
+                    let _ = writeln!(out, "{pad}let nbr{k} = sim_read(p + {off});");
+                    for s in &stmts[i..i + n] {
+                        if let IStmt::Assign(Place::Var(t), IExpr { kind: IExprKind::Call(f, _), .. }) = s {
+                            let t = self.var(*t);
+                            let _ = writeln!(out, "{pad}{t} = nbr{k}.{};", nbr_part(*f).expect("nbr_run's"));
+                        }
+                    }
+                    i += n;
+                    continue;
+                }
+            }
             self.stmt(&stmts[i], depth, out);
             i += 1;
+        }
+    }
+
+    /// How many statements from the first assign a neighbour's part read
+    /// at one offset to variables the offset does not read: what one read
+    /// serves. 0 or 1 when there is nothing to share.
+    fn nbr_run(&mut self, stmts: &[IStmt]) -> usize {
+        fn read(s: &IStmt) -> Option<(VarId, &IExpr)> {
+            match s {
+                IStmt::Assign(Place::Var(t), IExpr { kind: IExprKind::Call(f, a), .. }) if nbr_part(*f).is_some() => Some((*t, &**a)),
+                _ => None,
+            }
+        }
+        let Some((_, first)) = read(&stmts[0]) else { return 0 };
+        let off = self.nbr_offset(first);
+        let mut n = 0;
+        for s in stmts {
+            let Some((t, a)) = read(s) else { break };
+            if self.nbr_offset(a) != off || reads_var(first, t) {
+                break;
+            }
+            n += 1;
+        }
+        n
+    }
+
+    /// A neighbour read's offset as WGSL's `vec2<i32>`: whole numbers as
+    /// they are (an int converted, a literal), anything else rounded.
+    fn nbr_offset(&mut self, a: &IExpr) -> String {
+        fn whole(g: &mut Gen, e: &IExpr) -> Option<String> {
+            match &e.kind {
+                IExprKind::Convert(x) if x.ty == Ty::Int => Some(g.expr(x)),
+                IExprKind::Int(n) => Some(format!("{n}i")),
+                IExprKind::Float(f) if f.fract() == 0.0 && f.abs() < 1e9 => Some(format!("{}i", *f as i64)),
+                _ => None,
+            }
+        }
+        let parts = match &a.kind {
+            IExprKind::Complex(re, im) if re.fract() == 0.0 && im.fract() == 0.0 && re.abs() < 1e9 && im.abs() < 1e9 => {
+                Some((format!("{}i", *re as i64), format!("{}i", *im as i64)))
+            }
+            IExprKind::MakeComplex(x, y) => whole(self, x).zip(whole(self, y)),
+            _ => None,
+        };
+        match parts {
+            Some((x, y)) => format!("vec2<i32>({x}, {y})"),
+            None => format!("vec2<i32>(round({}))", self.expr(a)),
         }
     }
 
@@ -2764,14 +2837,9 @@ impl<'p> Gen<'p> {
         }
         // A simulation model's neighbour (P4): the offset a complex, whole
         // numbers, through the framework's boundary.
-        if let Some(part) = match f {
-            NbrX => Some("x"),
-            NbrY => Some("y"),
-            NbrZ => Some("z"),
-            NbrW => Some("w"),
-            _ => None,
-        } {
-            return format!("sim_read(p + vec2<i32>(round({v}))).{part}");
+        if let Some(part) = nbr_part(f) {
+            let off = self.nbr_offset(a);
+            return format!("sim_read(p + {off}).{part}");
         }
         // A simulation's stream, init shape, hash and seed (P4 step 5):
         // the template's, an int's 32 bits as its u32.
@@ -2779,7 +2847,14 @@ impl<'p> Gen<'p> {
             SimRand => return format!("sim_rand(p, bitcast<u32>({v}))"),
             InitAt => return format!("sim_init_mask(vec2<i32>(round({v})))"),
             Pcg => return format!("bitcast<i32>(sim_pcg(bitcast<u32>({v})))"),
-            Seed => return format!("bitcast<i32>(params.{})", if cell_index(a) == Some(1) { "seed_hi" } else { "seed_lo" }),
+            HostInt => {
+                return match cell_index(a) {
+                    Some(0) => "bitcast<i32>(params.seed_lo)".into(),
+                    Some(1) => "bitcast<i32>(params.seed_hi)".into(),
+                    Some(3) => "bitcast<i32>(params.layer)".into(),
+                    _ => "bitcast<i32>(sim_step_index())".into(),
+                }
+            }
             _ => {}
         }
         if let Some(part) = match f {
@@ -2897,7 +2972,7 @@ impl<'p> Gen<'p> {
             Log1p => format!("{}({v})", self.use_(Helper::FLog1p)),
             Fract => format!("fract({v})"),
             Conj | Flip | Cosxx | Hash2 => unreachable!("complex-valued"),
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | Seed => unreachable!("an image read, emitted above"),
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt => unreachable!("an image read, emitted above"),
         };
         if ty == Ty::Int {
             format!("i32({real})")
@@ -2910,7 +2985,7 @@ impl<'p> Gen<'p> {
 fn complex_helper(f: Builtin) -> Helper {
     use Builtin::*;
     match f {
-        SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | Seed => unreachable!("an image read, emitted by `Gen::call`"),
+        SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt => unreachable!("an image read, emitted by `Gen::call`"),
         Hash2 => Helper::Hash2,
         Fract => unreachable!("emitted by `Gen::call`, real or complex"),
         // `Gen::call` passes the value through.
@@ -3190,6 +3265,35 @@ fn counted_loop<'a>(cond: &'a IExpr, body: &'a [IStmt]) -> Option<CountedLoop<'a
         _ => return None,
     }
     Some(CountedLoop { counter, bound, inclusive: *op == BinOp::Le, rest })
+}
+
+/// A neighbour read's part, by its built-in.
+fn nbr_part(f: Builtin) -> Option<&'static str> {
+    match f {
+        Builtin::NbrX => Some("x"),
+        Builtin::NbrY => Some("y"),
+        Builtin::NbrZ => Some("z"),
+        Builtin::NbrW => Some("w"),
+        _ => None,
+    }
+}
+
+/// Whether an expression reads the variable `v`.
+fn reads_var(e: &IExpr, v: VarId) -> bool {
+    match &e.kind {
+        IExprKind::Var(w) => *w == v,
+        IExprKind::Convert(a)
+        | IExprKind::Unary(_, a)
+        | IExprKind::PowInt(a, _)
+        | IExprKind::Modulus(a)
+        | IExprKind::Call(_, a)
+        | IExprKind::UserCall(_, a)
+        | IExprKind::UserDeriv(_, a)
+        | IExprKind::UserJac(_, a, _) => reads_var(a, v),
+        IExprKind::Elem(w, a) => *w == v || reads_var(a, v),
+        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => reads_var(a, v) || reads_var(b, v),
+        _ => false,
+    }
 }
 
 /// `i = i + 1`.

@@ -931,11 +931,19 @@ fn mk(kind: ExprKind, span: Span) -> ast::Expr {
     ast::Expr { kind, span }
 }
 
-/// A simulation's `ctx.seed_lo` or `ctx.seed_hi` (P4 step 5): the run's
-/// seed as its two 32-bit words, ints, for `pcg`.
-fn seed_word(name: &str, span: Span) -> ast::Expr {
-    let word = i64::from(name == "seed_hi");
-    mk(ExprKind::Call { name: "__seed".into(), args: vec![mk(ExprKind::Int(word), span)], user: false }, span)
+/// A simulation's `ctx.seed_lo`, `ctx.seed_hi`, `ctx.step` or a model's
+/// `ctx.layer` (P4 step 5): the run's seed as its two 32-bit words, for
+/// `pcg`, the step index and the layer -- ints, as the framework's are,
+/// so a parity or a row index is whole at any step and a draw at another
+/// cell can be the framework's `sim_rand` there.
+fn host_int(name: &str, span: Span) -> ast::Expr {
+    let k = match name {
+        "seed_lo" => 0,
+        "seed_hi" => 1,
+        "layer" => 3,
+        _ => 2,
+    };
+    mk(ExprKind::Call { name: "__host_int".into(), args: vec![mk(ExprKind::Int(k), span)], user: false }, span)
 }
 
 fn assign(target: ast::Expr, value: ast::Expr, span: Span) -> ast::Stmt {
@@ -2881,20 +2889,19 @@ impl<'s> Lowerer<'s> {
                     // index (host values, `__cell` 21 and 22), the cell, the
                     // grid's size.
                     Base::Ctx if self.sim_model => match name {
-                        "dt" | "step" => Ok(mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(if name == "dt" { 21 } else { 22 }), span)], user: false }, span)),
+                        "dt" => Ok(mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(21), span)], user: false }, span)),
                         "cell" => Ok(mk(ExprKind::Predef("pixel".into()), span)),
                         "width" | "height" => Ok(mk(ExprKind::Predef(name.into()), span)),
-                        "seed_lo" | "seed_hi" => Ok(seed_word(name, span)),
-                        o => self.err(*p, format!("a simulation model's context has `dt`, `step`, `cell`, `width`, `height`, `seed_lo` and `seed_hi`; not `{o}`")),
+                        "step" | "seed_lo" | "seed_hi" | "layer" => Ok(host_int(name, span)),
+                        o => self.err(*p, format!("a simulation model's context has `dt`, `step`, `cell`, `width`, `height`, `seed_lo`, `seed_hi` and `layer`; not `{o}`")),
                     },
                     // A simulation colouring's (P4): the cell, the grid's
                     // size.
                     Base::Ctx if self.sim_coloring => match name {
                         "cell" => Ok(mk(ExprKind::Predef("pixel".into()), span)),
                         "width" | "height" => Ok(mk(ExprKind::Predef(name.into()), span)),
-                        // The step the run is at (`__cell` 19, P4 step 5).
-                        "step" => Ok(mk(ExprKind::Call { name: "__cell".into(), args: vec![mk(ExprKind::Int(19), span)], user: false }, span)),
-                        "seed_lo" | "seed_hi" => Ok(seed_word(name, span)),
+                        // The step the run is at, and the seed (P4 step 5).
+                        "step" | "seed_lo" | "seed_hi" => Ok(host_int(name, span)),
                         o => self.err(*p, format!("a simulation colouring's context has `cell`, `width`, `height`, `step`, `seed_lo` and `seed_hi`; not `{o}`")),
                     },
                     // An effect's (P2): the pixel's position, the image's
