@@ -387,14 +387,16 @@ is [escape-coloring-survey.md](../projects/escape-coloring-survey.md).
 
 ## The formula language
 
-Formulas and colourings can also be written as text; `escape::lang`
-compiles them to WGSL. The language's own form is **Rhai** (the
+Formulas and colourings can also be written as text; the formula
+language (`crate::lang`, its own module and feature since 2026-11-02,
+re-exported as `escape::lang`) compiles them to WGSL -- and the flame
+variations and effects written in it. The language's own form is **Rhai** (the
 scripting language the program embeds; since phase 4), and **Ultra
 Fractal's formula language** -- which accepts Fractint's shape too --
 is read as well. The plan, its phases and what is left are in
 [escape-formula-language.md](../projects/escape-formula-language.md).
 
-**Where it lives.** `src/escape/lang/`: `rhai.rs` (a Rhai formula
+**Where it lives.** `src/lang/`: `rhai.rs` (a Rhai formula
 lowered to the parse tree), `to_rhai.rs` (a checked UF or Fractint
 formula printed as Rhai), `lexer.rs`, `parser.rs` (a UF file into
 entries and sections), `check.rs` (names and types, UF's rules,
@@ -446,7 +448,9 @@ fn escaped(s, p) {
   `FormulaFeature::Convergent`.
 - **Parameters** in `PARAMS`: a value alone, or `value` with `min`,
   `max`, `caption`, `hint`, `choices` (an int's names), `exponential`
-  (the slider runs logarithmically, `custom::is_exponential`), or
+  (the slider runs logarithmically, `custom::is_exponential`), `type:
+  "angle"` (a float in degrees, as stored and shown: `ParamType::Angle`
+  for an effect's or a variation's, `ir::Param::angle`), or
   `function` (a user function, called `p.f(z)`). They are the panel's
   controls, animation targets and script parameters
   (`escape.formula_params()`). A complex parameter is two, `name.re` and
@@ -461,7 +465,9 @@ fn escaped(s, p) {
   hybrids), `ctx.maxiter`, `ctx.center`, `ctx.magn`, `ctx.angle` (the
   view's rotation, degrees), `ctx.x`, `ctx.y`, `ctx.width`,
   `ctx.height` (the pixel on the screen), `ctx.random`, `ctx.pixel`.
-  `INFO` gives `title`, `center`, `magn`, `maxiter`, `angle`.
+  `INFO` gives `title`, `center`, `magn`, `maxiter`, `angle`; every
+  kind's `INFO` may also give `id`, `description` and `author`, what the
+  library shows of it (`storage::library`).
 - **`prepare(p, ctx)`**, optional, runs once per image (UF's
   `global:`): the map it returns is read as `p.name`.
 - **`fn creases(p0, p, ctx)`**, optional: a folding formula's paper,
@@ -559,8 +565,10 @@ fn escaped(s, p) {
   `transform:` section, the point `#pixel` read and assigned). It is
   not an escape formula: it compiles to a **flame variation**
   ([VARIATIONS.md](VARIATIONS.md#variations-written-in-rhai)) and, in
-  Escape mode, is offered as the camera lens. `INFO.name` is its
-  registry name, and `INFO.resets_orbits: true` makes a flame using it
+  Escape mode, is offered as the camera lens. `INFO.name` is the
+  name `vary` calls it by (its registry key is its id and version:
+  [VARIATIONS.md](VARIATIONS.md#variations-written-in-rhai)), and
+  `INFO.resets_orbits: true` makes a flame using it
   start its orbits afresh every dispatch (`Feature::ResetsOrbits`;
   [RENDERER.md](RENDERER.md) *Persistent orbits*); `PARAMS` as a
   formula's; no `prepare`. The flame's
@@ -766,6 +774,140 @@ fn escaped(s, p) {
   `bristors_rule_gives_his_witnesses`, `the_solids_run_as_their_algebras`
   (against the product built from the rule in f64),
   `neither_is_stepped_through`.
+- **Colours** (`rhai/vec.rs`, the same machinery; rhai-plugins.md P2):
+  `rgba(r, g, b, a)`, `rgba(v, a)` (`v` a `vec3`) or `rgba(s)`; `c.r`,
+  `c.g`, `c.b`, `c.a` read and set, `c.rgb` the colour as a `vec3`
+  (settable), whose parts are `.r`, `.g`, `.b` as well as `.x`, `.y`,
+  `.z`; the vector's arithmetic part by part, `abs`, `floor`, `min`,
+  `max`, `clamp`, and `mix(a, b, t)` of colours or vectors. A `PARAMS`
+  entry `rgba(...)` is four float parameters, `name_r` first.
+- **Effects** (`EntryKind::Effect`, `fn effect(c, p, ctx)`; P2) run per
+  pixel of an image, read it with `input(uv)` and `input_at(x, y)` (an
+  effect's alone: the `__sample_*` and `__load_*` built-ins the lowering
+  emits), and end with a colour or `#{ color, blend, amount }`. What an
+  effect is and how it registers is in
+  [EFFECTS.md](EFFECTS.md#effects-written-in-rhai). A few things differ in
+  an effect, all for speed (D1's speed check): its real `sin`, `cos`
+  and `tan` are the GPU's own, not range-reduced -- an effect's arguments
+  are its image's coordinates and parameters, and the WGSL effects call
+  them so, on Metal too -- and a real's `floor`, `trunc` or `ceil` read
+  as a float is the float function (the same value below 2^31), without
+  the int's round trip; so is an int parameter read as a float or
+  compared with an int literal (`round(get_param(k))`), and the image's
+  width and height; and `min`, `max` and `clamp` are WGSL's own (the
+  language lowers them to a test for UF; they differ only at NaN).
+  [EFFECTS.md](EFFECTS.md#effects-written-in-rhai) has what each cost.
+- **Simulation colourings** (`EntryKind::SimColoring`, `fn cell_color(cell,
+  p, ctx)`; P4) run per sample of a simulation's field: `cell.state`
+  (a vector of four, whose parts are `.x` ... `.w` as well as `.r` ...
+  `.a`), the gradient, distance, tensor and relief, read through the
+  `__cell` built-in; `palette(t)` (its alone, the `__palette_*`
+  built-ins); and end with a colour and its coverage. Its code is an
+  effect's, the template's parameters (`cparam`) and grid
+  ([SIMULATION.md](SIMULATION.md#colourings-written-in-rhai)).
+- **Simulation models** (`EntryKind::SimModel`, `fn cell_step(cell, p,
+  ctx)`, `cell_step2` ... `cell_step4`, `fn cell_seed(inside, noise)`;
+  P4) step a cell's `vec4` state: the state, `ctx.dt` and `ctx.step` and
+  the seed's inputs through `__cell` (`SIM_MODEL_HOST`); a neighbour by
+  `read(dx, dy)`, the `__nbr_x` ... `__nbr_w` built-ins (`sim_read`, the
+  framework's boundary); `rand()` the template's `sim_rand`, a salt per
+  call site, and `rand(k)` the stream `k` (`__sim_rand`, its int kept an
+  int). A neighbour's parts read one after another are one `sim_read`
+  (`Gen::nbr_run`), at a `vec2<i32>` of the offset when it is whole
+  numbers (`nbr_offset`) -- the shader compiler merged the four reads at
+  a constant offset but not in a loop that picks it, and rounding an int
+  through a float cost snowfake's twin 6%. In a seed, `init_at(x, y)` the
+  init shape at another cell
+  (`__init_at`). A colouring and a model hash with `pcg(n)` (`__pcg`, the
+  framework's `sim_pcg` of the int's bits) and read the run's seed words
+  (`ctx.seed_lo`, `ctx.seed_hi`: `__seed`); a colouring reads the field
+  around its cell with `read` too. Each function compiles alone
+  (`rhai::SimFn`), its helpers prefixed per pass, as each pass's module
+  holds the model's whole WGSL
+  ([SIMULATION.md](SIMULATION.md#models-written-in-rhai)).
+- **Two ints divided** (P4 step 9b): Rhai's truncating division,
+  `BinOp::IDiv`, where UF's `/` is the quotient (the checker joins it
+  with float); by zero, and `i32::MIN` by -1, the dividend, as WGSL's
+  i32 division is -- the interpreter computes the same.
+- **A simulation's framework calls** (P4 step 9c): `IExprKind::Host` and
+  `IStmt::Host` (`builtins::Host`), n-ary where a builtin is unary --
+  the pyramid's reads, a measure pass's scratch, the memory, a grid
+  test, a parameter by its slot, an agent's claim, its check and its
+  deposit, a read of the field at a cell (P4 step 9d); the writes
+  statements. A vector read is
+  one call a part, its part a literal last argument the checker
+  requires; a simulation model's alone (`Check::host_args`), and only
+  the WGSL back end emits them. In a simulation model, `param(k)` and
+  the reads type as floats where a `let` infers its type. An agent's
+  functions (`rhai::SimFn::AgentSeed`, `Agent`) lower as a step's, the
+  record in `s` and out through `AGENT_RETURN`, their draws
+  `agent_rand(i, salt)` (`Gen::agent`).
+- **Grids and conditions in `PARAMS`** (rhai-plugins P7): `show_if`
+  on a parameter, and a `type: "grid"` entry the lowering expands into
+  its cells (`Lowerer::grid_param`), each a parameter of its own through
+  the scalar path (`param_cell`); `lang::rhai::param_layout(source)`
+  reads the layout -- conditions, grids, fills and warnings by function
+  name -- checking every name it reads. In every kind `p.grid[2].column`
+  reads a cell by name; at a computed row, in a simulation model, the
+  checker resolves `__grid_param` to one read at the first row's slot
+  plus the clamped row times the stride (`Host::GridParam`: a clamp in
+  the read itself -- the lowering's `min`/`max`, a local and an `if`
+  each, measured up to 2.5% on McCabe's twin). Only the simulation panel draws a
+  layout yet; elsewhere a grid's cells are listed one by one.
+- **A helper takes `p` and `ctx` whole** (P4 step 9c): an argument that
+  is the entry's parameters, its context or a colouring's sample binds
+  the helper's parameter as it is bound at the call
+  (`passed_whole`), so `fn level(p, ctx)` reads `p.radius` and
+  `ctx.width` as its caller would.
+- **A fresh array is its local**: `let a = [x, y]` and `let a =
+  array(n, v)` bind `a` to the array the literal made, where they copied
+  it into another, element by element -- a loop the driver kept, which
+  cost McCabe's twin 7% on a pass whose other work is light.
+- **Flow** (P4 step 5; rhai-plugins P7 step 1): `break` and `continue`
+  in every kind's loops, an early `return` in the effect-like functions
+  -- `IStmt::Break`, `Continue`, `Return`. The evaluators (`interp`,
+  `bigeval`) run them as the GPU does: `exec` gives an `ir::Flow` the
+  loop around takes (a `continue` in a `repeat` skips its test, as the
+  WGSL `for` does), an early `return` ends the section. The derivation
+  passes refuse them (the derivative, perturbation and BLA: deep zoom
+  declines such a formula, with the reason), and the perturbation
+  emitters write a script's own `break` and `continue`. A `continue` in a
+  `for` runs the counter's step before it, which `counted_loop`
+  recognises, so the loop stays counted; a general `while`'s cap counts
+  in its WGSL `for`, which a `continue` still advances. A `return` sets
+  the result first and emits the function's own last line (`Gen::ret`).
+- **An early `return` leaves its own scope** (P7 step 1): a body that
+  returns before its end -- a helper's, a varied variation's, a
+  variation's own, a formula's `step` -- lowers to `ast::Stmt::Scope` /
+  `IStmt::Scope`, each `return` setting the body's result as its end does
+  (`Returns::Scope`, `Variation`, `State`: a helper's value into its
+  result's locals, typed as their join; a variation's point and colour;
+  the state) and leaving the scope, not the function it is inlined into.
+  The evaluators take the return at the scope (`Flow`); the WGSL is a
+  `loop` run once that the return `break`s, a flag (`scope_done{k}`) only
+  when a return sits inside one of the scope's own loops, each such loop
+  testing it as it closes (`Gen::loop_body`). A body that does not return
+  early lowers as before, so nothing else's WGSL moved. The checker's
+  flow analysis takes what every way out of a scope wrote (`Flow::exits`),
+  so a helper's result is no state of the formula. The derivative,
+  perturbation and BLA refuse a scope (deep zoom declines the formula,
+  with the reason), and a helper of the perturbation equations may not
+  return early. A function defined twice -- Rhai's overloads by arity --
+  is refused: the compiler finds functions by name.
+- **`fract(x)`** (WGSL's, each part of a complex) and **`hash2(p)`**: a
+  point to two numbers in [0, 1), the built-in noise effects' hash
+  (`fract(sin(vec2(dot(p, (127.1, 311.7)), dot(p, (269.5, 183.3)))) *
+  43758.5453)`) emitted as their shaders write it, so a twin draws their
+  noise to the bit -- where the language's own `sin`, range-reduced
+  (`uf_reduce`, for Metal's error), would make it a different noise.
+  Fast, not good: hash a lattice point, as noise does.
+- **Labels by locale** (design rule 8): `INFO.title`, `INFO.description`
+  and a parameter's `caption`, `hint` and each choice may be a map of
+  locale to string,
+  `#{ en: "Spiral", ja: "螺旋" }`, compiled in the current language;
+  `rhai::source_labels` keeps every language for a kind that shows them
+  at display time (effects). `rhai::with_info_id` writes an id into a
+  script's `INFO` (design rule 7).
 - **`fn degree(p)`**, optional: the formula's degree at infinity, which
   the smooth colourings divide by, as a built-in's `escape_degree`
   (`Program::degree`; `custom::escape_degree` serves it to
@@ -985,7 +1127,15 @@ carries both entries' text.
 **The language.** Types `bool`, `int`, `float`, `complex`; an
 undeclared variable is complex. Conversion only widens; `/` never makes
 an int. `if / elseif / else / endif`, `while / endwhile`, `repeat /
-until` (each loop capped at 4096 passes on the GPU). `|z|` is the
+until` (each loop capped at 4096 passes on the GPU; a loop whose test
+starts `i < b` -- a Rhai range `for`, or a `while` so written -- with
+the int `i` stepped by one as the body's last statement and nowhere
+else, and `b` a literal or a variable the body does not write, carries
+the cap in its bound, `min(b, i + 4096)`, rather than in a second
+counter: the same passes, the GPU's work the loop's own;
+`wgsl::counted_loop`; and a test of parts joined by `&&` is one `break`
+for each, short-circuited as Rhai reads it, which the GPU's compiler
+runs faster than one `!(a && b)`). `|z|` is the
 SQUARED modulus; unary minus binds tighter than `^`, so `-x^2` is
 `(-x)^2`. Functions: `sqr sqrt log exp abs cabs recip ident zero`, the
 trigonometric and hyperbolic functions and their inverses, `atan2`,
@@ -1339,8 +1489,18 @@ interpreter does (`test_files_run_on_the_gpu_as_the_interpreter_does`).
 A construct added to the language gets an entry there.
 
 **How it joins the engine.** A compiled entry is registered as a
-`FormulaDef` or `ColoringDef` under the name `custom-` plus a hash of
-its source, which every name-keyed cache then keys on. The config
+`FormulaDef` or `ColoringDef` under a name `custom-` begins
+(`custom::name_of`), which every name-keyed cache then keys on: for a
+Rhai entry with an id of its own (`INFO.id`, a UUID, which the Formula
+Editor writes into the file on Use), `custom-` and its key
+(`scripted::key`: the id, and a version over the source and the
+variations it carries); for any other, `custom-` and an FNV-1a hash of
+its kind, dialect, entry and source. A config keeps the name it was
+saved with, so older files' FNV names still resolve; a variant (array
+sizes, damping, the biomorph) and the perturbation tier are named from
+the slot's 64-bit hash (`custom::slot_hash`). Live and a first Use's
+view follow a Rhai entry by its id, so a change of title is the same
+entry. The config
 carries the source (`EscapeConfig::custom_formula`, `custom_coloring`),
 and the renderer, the CLI and the panel compile it before resolving the
 name, so a saved file, a PNG or an upload renders anywhere.
@@ -1423,10 +1583,16 @@ it the first time (its `magn` does not yet: what span UF's magnification
 1 shows is unverified). **Live** re-applies the entry in use whenever an
 edit to it compiles again. Files live in a `formulas/` folder in the app's
 data directory (localStorage on the web, `storage::formula_store`); Open
-reads a `.ufm`, `.ucl` or `.frm` from disk, Export writes one; two example
+reads a `.ufm`, `.ucl` or `.frm` from disk, Export writes one; the example
 files ship (`assets/formulas/`), each entry compiled by
-`every_example_entry_compiles`. Scripts: `escape.custom_formula` and
-`escape.custom_coloring` ([SCRIPTING.md](SCRIPTING.md)).
+`every_example_entry_compiles`, and the built-in effects' sources after
+them (opened unsaved: a copy to Save and Use as one's own). The file list
+marks each file as the Scripts panel marks a script (`storage::library::
+marks`: ` *` the user's, ` ↓` somebody else's, and "(plug-in)"), and a
+stored Rhai file has **Load at start**: a plug-in, registered at every
+start and offered in the lists ([VARIATIONS.md](VARIATIONS.md#downloaded-variations)).
+Scripts: `escape.custom_formula` and `escape.custom_coloring`
+([SCRIPTING.md](SCRIPTING.md)).
 
 Measured against the built-ins it rewrites, the language's Mandelbrot,
 Lambda and Magnet I are identical, and so is a custom colouring at

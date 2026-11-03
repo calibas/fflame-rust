@@ -46,7 +46,7 @@ folded into the steps. **Nothing under *The plan* is built yet.**
 ## Two Rhai worlds
 
 The word covers two engines, and the design keeps them apart:
-- **The GPU dialect** (`escape::lang`): a typed subset of Rhai lowered
+- **The GPU dialect** (`crate::lang`, its own feature since 2026-11-02): a typed subset of Rhai lowered
   to the formula language's IR and compiled to WGSL, run per sample or
   per pixel. Rhai only parses it (`Engine::new_raw()`); it never runs.
   Variations, formulas, colourings and solids today; effects and
@@ -67,7 +67,7 @@ become one (P3).
 
 1. **One compiler, one parameter model.** Every GPU-side kind is a Rhai
    source with `PARAMS` and `INFO`, checked and compiled by
-   `escape::lang`. A new kind (a simulation rule, an effect) is a new
+   `crate::lang`. A new kind (a simulation rule, an effect) is a new
    entry kind of the same language, not a new language.
 2. **The source is the artefact.** A config carries the sources it
    uses and registers them on load (`escape::custom::ensure`,
@@ -92,6 +92,39 @@ become one (P3).
    declares (random numbers, the accumulator, per-thread state, colour
    writes), so a script can do what a ported variation does and the
    shader builder has one code path.
+7. **Identity: a UUID for the thing, a hash for the version** (decided
+   2026-11-01; the API already works this way -- scripts and flames have
+   ids and versions, palettes are content hashes).
+   - **Built-ins of every kind keep their string ids** (`julian`,
+     `vignette`, `mandelbrot`, a sim model's name): every config names
+     them, scripts call them by name, and we keep them unique.
+   - **Everything else -- the user's scripts and plug-ins, downloads --
+     is a UUID**, minted on New, Save As, Duplicate, or importing a file
+     that has none, and **written into the script's own text** (`INFO`'s
+     `id` for the GPU kinds, the `script(...)` declaration for the CPU
+     ones), so a copied `.rhai` keeps its identity with no sidecar.
+   - **A version is the SHA-256 of the source.** A config refers to a
+     script by its UUID and carries the source. On load the same UUID and
+     hash use what is registered; the same UUID with another hash
+     registers the carried version beside it, so the config renders as
+     saved, and the UI offers the installed one.
+   - **The namespace is the origin, not part of the key**: built in,
+     mine, downloaded, carried by a config. Lists show it, and the trust
+     rules use it (what a downloaded script may import or run). A plug-in
+     of mine and the same plug-in downloaded back are one thing.
+   - Names are free: two scripts may share one, and nothing is looked up
+     by it.
+   - Publishing keeps the UUID: the API should accept the client's id
+     on create (server work), or the sidecar's link maps the two.
+8. **Everything a person reads follows the language**: titles,
+   descriptions, parameter captions and hints, choice labels. A field
+   is a string (every language) or a map of locale to string
+   (`#{ en: "Spiral", ja: "..." }`), resolved current locale, then
+   `en`, then the first entry, and kept in the script so a plug-in is
+   self-contained. Parameter *keys* stay plain identifiers -- they are
+   what configs, undo and tracks address. Built-ins' labels, English by
+   policy today, move to the same rule; translating them is its own
+   work.
 
 ## Review (2026-11-01): what is disjointed
 
@@ -114,7 +147,7 @@ become one (P3).
 
 ### Inside the GPU dialect: one compiler, two of everything below it
 
-One front end (`escape/lang/rhai.rs`), checker, IR and WGSL back end.
+One front end (`lang/rhai.rs`), checker, IR and WGSL back end.
 Below that:
 - **Three registries**: `escape::custom::Registry` (content-hash names,
   `custom-<fnv>`), `ifs::custom_solids`, and the variation registry with
@@ -149,22 +182,22 @@ effect that is not built in renders only where that effect is installed.
 
 ### Inconsistencies between the kinds
 
-- An effect plug-in's install checks only `check_download`, not the
-  name (a variation's checks the registry), so a plug-in named as a
-  built-in installs and is refused at the next start.
+- ~~An effect plug-in's install checks only `check_download`, not the
+  name~~ -- gone with the WGSL plug-ins (D3).
 - Effect downloads need a token and are gated by online mode only at the
   caller; variation downloads need neither.
-- Updates and Clear Cache exist for variations only. The Effects panel
-  says a newer version exists and offers no action; `EffectRegistry` has
-  no version counter and no remove.
+- ~~Updates and Clear Cache exist for variations only~~ -- fixed in P3
+  step 3: the Effects panel updates a download and clears the cache
+  (`EffectRegistry::clear_api`; revisions and `remove_by_name` came
+  with P2).
 - An effect download's WGSL is never parsed before it is registered: a
   broken one is a pipeline error at first use. (The built-ins are now
   validated by `every_built_in_effect_validates`.)
-- The Variations panel's "downloaded" banner also counts Local and
-  Custom entries (`is_third_party`).
-- Adopting an online script whose stem matches one of the user's own
-  overwrites it: `free_stem` avoids only the shipped stems, though the
-  comment above `adopt` says it must not.
+- ~~The Variations panel's "downloaded" banner also counts Local and
+  Custom entries~~ -- fixed in P3 step 3: downloads only.
+- ~~Adopting an online script whose stem matches one of the user's own
+  overwrites it~~ -- fixed in P3 step 3 (`store::adopt_stem`: free of
+  theirs too; the same online script replaces its copy).
 - `ApiVariation` and `ApiEffectStage` have no users.
 
 ### The CPU sandbox is open (found 2026-11-01)
@@ -197,7 +230,7 @@ other people run in this engine; P0 closes it.
 ## What a new GPU kind needs from the dialect
 
 The dialect cannot read a texture or another pixel (nothing in
-`src/escape/lang` does), has no `vec2` or `vec4`, and its outputs are a
+`src/lang` does), has no `vec2` or `vec4`, and its outputs are a
 point, a palette index or a distance -- never a colour. Effects and
 simulations need exactly what is missing:
 
@@ -220,6 +253,15 @@ only one that needs passes.
 ## The plan
 
 ### P0. Close the CPU sandbox, keeping `import` (small; first)
+
+**Done 2026-11-01** (branch `rhai-plugins`): `host::LibraryResolver`,
+`check_library`, `ScriptKind::Library`, `sleep` / `timestamp` refused,
+`untrusted_code_running` for `run_script` and `import` alike; the panel,
+the listing and the Palette Editor read scripts through the whole
+library (the Palette Editor also now marks downloaded scripts, which it
+never did). **For the API repository**: the contract's `scripts.kinds`
+gained `"library"`, which a publish now sends -- the server must accept
+it on create.
 
 The user wants scripts to import other scripts. Half of that is already
 safe: `run_script("id", #{...})` resolves the id through the script
@@ -262,21 +304,22 @@ Before a fourth registry is written for effects:
   `plugins/{variations,effects}/*.json`; remove `storage::plugins` and
   its `PluginKind`. For one release, a start that finds files there
   logs that they are no longer loaded, naming them. The WGSL API
-  catalogs and their caches stay (D2).
-- **Namespaces (D6)**: the program's own (built-in), the user's (their
-  library and plug-ins), the API's (downloads). A name in one never
-  shadows or replaces a name in another, and every list shows where an
-  entry came from. Built-in names stay bare, so every existing config
-  and `.flame` reads unchanged; the others are qualified internally
-  (spelling settled when built). The WGSL variation and effect catalogs
-  are server copies of the program's own built-ins, so what they fetch
-  lands in the built-in namespace, as a built-in this build lacks.
-  Still to settle: a config from someone else carries a source under a
-  name the opener also has, with different text. Proposed: within the
-  user and API namespaces an entry's identity includes a hash of its
-  source (what the escape slots already do), so the carried version
-  renders as it was saved and the opener's own is untouched.
-- One registry for compiled Rhai entries, keyed by kind and name, with
+  catalogs and their caches stay (D2). **Done 2026-11-01**: the module,
+  `Provenance::Local`, `local_plugin_dependencies` and its save and
+  upload notices, and `assets/plugins-example/` are gone;
+  `storage::retired_plugin_files` names leftovers (a notice in the app,
+  stderr headless); `MissingReason::ProbablyAPlugin` is `NotInCatalog`.
+- **Identity and origin (D6, rule 7)**: built-ins keep their string
+  ids, so every existing config and `.flame` reads unchanged;
+  everything else is keyed by the UUID in its source, with the source's
+  SHA-256 as its version, and carries an origin (built in, mine,
+  downloaded, carried by a config) that every list shows. The WGSL
+  variation and effect catalogs are server copies of the program's own
+  built-ins, so what they fetch is a built-in this build lacks, under
+  its string id.
+- **Labels follow the language (rule 8)** in the shared parameter and
+  `INFO` lowering: a string or a locale map wherever a person reads it.
+- One registry for compiled Rhai entries, keyed by kind and id, with
   one `ensure` from a config's carried sources, one failure memory, one
   error type (`Vec<Diag>`), and a provenance on every entry.
 - One parameter lowering from `PARAMS`, from which each kind's def is
@@ -284,16 +327,90 @@ Before a fourth registry is written for effects:
   configs saved with Rhai variations keep their values.
 - Rhai variations register as a variation def directly, not through a
   synthesized `VariationDownload`.
-- Names: a kind that configs reference by name (variations, effects,
-  simulation models) keeps `INFO.name`, inside its namespace; the escape
-  slots keep their content hashes.
+- References: a transform names a Rhai variation, and an effect list a
+  Rhai effect, by its UUID; parameters are `<uuid>.<key>`. The escape
+  slots, which hold one carried source each, move from their FNV names
+  to the same UUID and hash. **Done 2026-11-02** (below, *Order taken*).
 - The kind as one value in the lowering rather than four bools, so the
   next kind costs a table entry, not fifty matches.
 
 Exit: every test, shader dump and visual config unchanged. No new
 feature.
 
+**Order taken (2026-11-01).** Built first, as the core every kind
+shares: `crate::scripted` (UUIDs, versions, the `Ledger`, `Label` and
+`Labels`), labels by locale in the dialect, `with_info_id`. Effects (P2)
+were then built on it directly, with UUID identity from the start, so
+they needed no migration and tested the core.
+
+**Rhai variations and the escape slots moved onto it, 2026-11-02** (the
+user's order: "the id@version keys for effects, then the variation and
+escape-slot migration on top of them"). Versions live side by side, as
+effects' do: every version is its own registry entry, and a config
+renders the one it carries.
+- **One key format** for both, `scripted::key(id, source)` =
+  `u<32 hex of the UUID>_<first 8 hex of the source's SHA-256>`: an
+  identifier, because a variation's key is its WGSL function's name and
+  its parameters' prefix. `scripted::key_id` reads the id back. (Effects
+  were `<id>@<version>` in one commit on this branch, a3d5c947; a config
+  saved by that build still renders, as `ensure` registers under the
+  entry a config names, but Use does not move it to the new form.)
+- **Variations.** The id is `INFO.id`; a source with only `INFO.name`
+  derives one from the name (`scripted::derived_id`, a v8 UUID), so it
+  keys the same everywhere without being rewritten. `INFO.name` stays
+  what `vary("name", z)` calls, so a formula's text needs no ids.
+  Config **v7** renames every carried variation from its name to its key
+  wherever the config names it. `ensure` registers a source under the
+  entry the config names, so an unmigrated config (an `.anim`'s base,
+  which derives `Deserialize`) still renders. Use mints a UUID only for
+  a source with neither an id nor a name, or a hand-written id; a new
+  version re-keys the config (`custom::rekey`, one `apply_config_edit`
+  step); Live follows the id; pickers offer one version of each id
+  (`VariationRegistry::superseded`); the sticky shader set drops older
+  versions of a live id.
+- **Escape slots.** A Rhai entry with an id is `custom-<key>`, its
+  version over the source and the variations it carries; any other
+  keeps its FNV name, and a config keeps the name it was saved with, so
+  no migration: no Rhai formula had an id before. Use mints one into the
+  file. A variant and the perturbation tier take the slot's 64-bit hash
+  through `custom::slot_hash`, which reads an FNV name's own hex and
+  hashes a key. Live and a first Use's view follow the id.
+- **Known gaps.** An animation track that names a variation by a key a
+  later Use replaced still names the old one (the base config moves, the
+  track does not); a subflame's transforms are not re-keyed by Use (the
+  flame's own are, and the subflame renders the version it carries).
+
 ### P2. Effects in Rhai
+
+**Status 2026-11-01** (branch `rhai-plugins`): steps 1-5 built, on the
+shared core (rule 7's UUIDs, rule 8's labels) rather than after the rest
+of P1 -- see *Order taken* below. **Step 6 done 2026-11-02**: every
+one-pass built-in has a twin in `assets/effects/*.rhai` -- the twelve
+colour effects match their WGSL within a step of 8-bit rounding at four
+settings each (`the_rhai_twins_match_their_wgsl`), the three density
+ones to a part in a thousand (`the_density_twins_match_their_wgsl`),
+each with the built-in's parameters, types, order and category. Two
+additions made that possible (user's answers, 2026-11-02):
+- **`hash2(p)`** emits the noise effects' shared hash as their shaders
+  write it. The dialect's `sin` is range-reduced (`uf_reduce`, for
+  Metal's error), so a hash written in Rhai was a different noise; the
+  built-in gives the same pixels. With it, `fract`.
+- **`type: "angle"`** in a `PARAMS` entry, and `param_angle` in the CPU
+  API: a float in degrees, drawn with the angle control. Scripts read
+  degrees, as stored and shown.
+
+**The compiler's own feature, done 2026-11-02** (the user: "compile
+Rhai to WGSL" in every WASM module, the Rhai scripting module an
+option): `src/escape/lang/` is `src/lang/`, the `lang` feature, which
+`engine-escape` brings; the deep-zoom passes (`bigeval`, `periodic`,
+the interpreter's steppers) stay with `engine-escape`; Rhai variations
+and effects need `lang` alone, and the flame and simulation gallery
+modules turn it on. **Its price**: the flame module from 1.21 MB to 1.55
+MB gzipped (5.2 to 6.3 MB raw), measured before `wasm-opt`. The CPU
+scripting module (`src/script`) is compiled into every build and linked
+only where something calls it (wasm/script, the app), so it is already
+an option by use; a `scripting` feature would make it one by name.
+Step 7 can now go ahead.
 
 1. **Dialect**: `vec4` (split into scalars like `vec3`); an `effect`
    entry kind returning a `vec4`; the pixel's position, the image size,
@@ -331,6 +448,53 @@ feature.
    `distance_field` keeps its WGSL (three passes) unless passes are
    added to the dialect, which is only done if wanted.
 
+   **Built 2026-11-02**: all fifteen are their Rhai sources
+   (`effects::custom::BUILTIN_TWINS`; [EFFECTS.md](../main/EFFECTS.md#effects-written-in-rhai)).
+   The WGSL is kept as the reference and as what a build without `lang`
+   registers (`effects::wgsl_builtins`; only the test matrix's
+   single-engine builds lack it -- every shipped module compiles Rhai,
+   the user's answer of 2026-11-02). The checks, as tests:
+   - pixels -- the two compares, now against `wgsl_builtins`;
+   - the values a config reads -- names, types, defaults, ranges, **labels
+     and hints** (`reference_beside_twin`). This found six differences
+     the earlier shape check missed (`density_blur`'s "Max Radius" for
+     "Radius", "Threshold" for "Density Threshold" and two missing hints,
+     `kaleidoscope`'s "Rotation" for "Source Angle", `julia`'s "(real)"
+     case) and two titles ("Hue Cycle", "Julia"); the twins were fixed;
+   - the web -- statically (`the_builtin_twins_are_web_safe`: explicit
+     sampling, Tint's operator rule, Metal's self-ops, subnormals); **a
+     run in a browser is the user's to do**;
+   - the corpus -- `export_effects_json` writes all sixteen, the twins'
+     compiled WGSL with the blend marker;
+   - the desktop's edit without a rebuild -- `assets/effects/<name>.rhai`
+     beside the app, when it differs and compiles; the WGSL files carry
+     a note that an edit there reaches nothing
+     (`scripts/mark_effect_wgsl_references.py`);
+   - speed -- `the_twins_are_no_slower` (ignored; 1080p and 4K, nine
+     rounds of a ~20 ms batch, the median of the rounds' twin/WGSL
+     ratios; more than 5% slower fails), run on the user's GTX 1660
+     SUPER with the app closed. The first run had nine failures, every
+     one from the compiler's code, fixed there rather than the twins
+     dropped (the user: "I want Rhai to be first-class and compile to
+     equivalent WGSL"): trig range reduction in effects (plasma 1.54x),
+     the loop cap's second counter (julia 1.44x, `density_blur`), and
+     `density_blur`'s twin skipped the taps its shader skips. Then
+     kaleidoscope (1.09-1.13x) and julia (1.09x), found with
+     `time_effect_variants` -- WGSL files timed against the built-in, the
+     twin moved toward the WGSL one change at a time and the WGSL toward
+     the twin: julia's loop test `!(a && b)` (6%; now one `break` per
+     part, everywhere), kaleidoscope's int parameters read through i32
+     per pixel (6%; now the float rounded, in effects), `min`/`max`/
+     `clamp` as tests (2%; now WGSL's own, in effects), the `atan2`
+     guard's branch and `floor`'s int round trip. Kaleidoscope's twin
+     with the WGSL's own body inside the template ran at 1.001x, so the
+     template costs nothing. Now all fifteen are within 3% or faster
+     (julia 4% faster, `density_blur` 5%).
+   Startup: compiling fifteen twins takes about 25 ms (native release; a
+   shipped twin skips naga's validation, which the tests do). Step 5's
+   remainder came with it: **Edit as Rhai** on a built-in's instance in
+   the Effects panel makes it the user's copy, in use in the editor.
+
 Exit: an effect written in the editor is saved in a `.fflame` and
 renders on another machine with no plug-in installed; every built-in
 that passed is its Rhai source.
@@ -351,18 +515,255 @@ that passed is its Rhai source.
   the banner, the effect install's name check, updates and Clear Cache
   for effects.
 
+**Status 2026-11-02: steps 1-4 built** (branch `rhai-plugins`). What P3
+leaves for P6: publishing and adopting a GPU Rhai entry online (the
+formula store's link record holds a cloud id already, unused); a
+library panel of both stores together, if one is wanted -- the scan
+(`storage::library::scan`) is ready for it, and nothing draws it yet.
+
+**The steps** (written 2026-11-02, from the code as it stands):
+1. **One sidecar, one metadata** (built 2026-11-02). `storage::links`: the record
+   `scripts/_links.json` keeps (`ScriptLink`: cloud id, version, owner,
+   `from_others`), plus `plugin`, for both stores --
+   `formulas/_links.json` keyed by file name, as a formula file's
+   extension is part of its name. Deleting a formula forgets its link,
+   as deleting a script does. `INFO.description` and `INFO.author` in
+   every GPU kind (a description by locale, as a title is). A scan,
+   `storage::library::scan()`, gives one entry per file of either store
+   and per shipped one (the script starters, the formula examples, the
+   effects): its store and file, kind, title, description, author, id,
+   version, origin (shipped, yours, downloaded), link and plug-in flag.
+2. **Plug-ins** (built 2026-11-02, as written here). A Rhai variation, effect, formula, colouring or solid
+   in `formulas/` with `plugin` set is registered at start, where every
+   entry point registers the downloads (`load_installed_resources`,
+   desktop, web and CLI), under its key in the user's namespace. It is
+   then in the lists without a config carrying it: the variation
+   pickers (already), the Effects panel's Add list, and a group of the
+   user's own in the escape panel's formula and colouring pickers --
+   each choosing it carries its source into the config, as Use does.
+   The Formula Editor's file list marks plug-ins and gives the open file
+   a "load at start" switch; Import and Delete are its own, on the web
+   too.
+3. **The fixes** (built 2026-11-02; `store::adopt_stem`, `downloaded_variations_in_use` on `is_cached_download`, `EffectRegistry::clear_api` and the Effects panel's Update and Clear buttons): adopting an online script never overwrites one of the
+   user's (a stem free of theirs too, or the same script by its cloud
+   id); the Variations panel's "downloaded" banner counts downloads
+   only; effect downloads get updates and Clear Cache as variations
+   have.
+4. **One presentation** (built 2026-11-02; `storage::library::marks`): the Formula Editor's list and the Scripts
+   panel show the same marks for an entry's origin and plug-in flag,
+   from the scan; the shipped effects are in the editor's list beside
+   the formula examples.
+
 ### P4. Simulations in Rhai
 
 1. **Colourings first**: a colour function over `SimSample`'s fields
    returning rgb and coverage, with `palette(t)`; one pass and no reads
-   beyond the sample.
+   beyond the sample. **Built 2026-11-02**
+   ([SIMULATION.md](../main/SIMULATION.md#colourings-written-in-rhai)):
+   `fn cell_color(cell, p, ctx)`, `EntryKind::SimColoring`; the sample
+   through one built-in (`__cell`, by a literal index) rather than a
+   predefined name per field, and the effect's code generation hosted by
+   the colour template; the features from what it reads; carried on
+   `SimConfig`, ensured where a render starts; Use from the Formula Editor
+   and a plug-in group in the panel. The twin is Channel's, equal to 1e-5.
+   A colour stack's entries name built-ins only: carrying one source per
+   entry is a later step if wanted.
 2. **Models, the single-layer class**: a step function with neighbour
    reads at offsets (the boundary stays the framework's), `vec4` state,
    `dt`, the step index, random numbers, a seed function; up to four
    passes. Gray-Scott is the first twin. Kernel tables, couplings,
    memory, the pyramid and agents stay built-in, refused with a reason.
+   **Built 2026-11-02**
+   ([SIMULATION.md](../main/SIMULATION.md#models-written-in-rhai)):
+   `fn cell_step(cell, p, ctx)` to `cell_step4`, `fn cell_seed(inside,
+   noise)`, `EntryKind::SimModel`; `read(dx, dy)` through `__nbr_*`
+   built-ins and `sim_read`; the working values (`dt`, `max_dt`, `steps`,
+   `diffusion`, `state`) from `INFO`, and the built-in-only keys refused
+   with a reason. Gray-Scott's twin steps the built-in's field to 1e-5
+   over 600 steps, at its speed (median ratio 0.98). Each component of a
+   neighbour is its own `sim_read` in the WGSL; the driver merges them
+   (measured on NVIDIA), and a browser's or Metal's compiler is expected
+   to, unmeasured. Presets stay the built-ins' (step 6); layers are
+   step 4.
 3. **Carried**: custom model and colouring sources on `SimConfig`,
-   ensured like the escape slots.
+   ensured like the escape slots. **Built** with steps 1 and 2:
+   `custom_coloring`, `custom_model`, `sim::custom::ensure` at every
+   `SimRenderer` entry point that takes a config.
+
+**Full support (agreed 2026-11-02).** A survey of the 31 built-in models
+and 13 colourings against steps 1-2 found 9 models outside the
+single-layer class by design (kernel tables: Lenia, SmoothLife,
+Lattice4, Turing -- which also takes a drive and publishes a signal;
+the pyramid, memory, a measure pass and min/max: McCabe; agents:
+Physarum, DLA; a repeated relax pass and min/max: DBM, Fingering). The
+other 22 models and every colouring fit, but faithful twins need the
+steps below. Ising and Cyclic CA were compiled as trial ports
+(`output/sim-ports/`): integers, bit operations, parameter-bounded
+nested loops and neighbour reads at loop offsets already work.
+
+4. **Layers**: a Rhai model in any layer and a Rhai colouring in any
+   colour layer. The source is carried beside the name
+   (`SimLayer::custom_model`, `SimColorLayer::custom_coloring`; per
+   entry, so adding, removing, promoting and demoting a layer carry it
+   with no pruning, and undo restores both together), ensured for every
+   entry. Plug-ins in every slot's picker; the Formula Editor's Use
+   picks the layer; Live updates every slot that carries a version.
+   A new version of a layer's model keeps its parameters, as `SimModel`
+   does. GPU side unchanged: a layer's model is its own step module.
+   **Built 2026-11-02**: as written, plus choosing a built-in drops the
+   slot's source; a two-layer coupled run with Gray-Scott's twin in
+   layer 1 and Channel's in colour layer 1 matches the built-ins to 1e-5
+   (`rhai_models_and_colourings_run_in_layers`).
+5. **The language, for twins**:
+   - `rand(k)`: a draw on stream `k` (`sim_rand(p, k)`), in steps and
+     seeds; seeds may draw (10 built-in seeds do). A bare `rand()`
+     keeps its call-site stream.
+   - `INFO.time_step: false` (`NoTimeStep`, the 12 automata) and
+     `INFO.settles: false` (`NeverStills`).
+   - `init_at(x, y)` in a seed: the init shape at another cell
+     (Wolfram's middle row).
+   - `break` and `continue` in loops; an early `return` in the
+     effect-like functions (effects, colourings, models).
+   - Colourings: `ctx.step` (Age), `read(dx, dy)` (`ReadsCell`, LIC),
+     `cell.memory` (`ReadsMemory`, Scale Memory), `pcg(n)` and
+     `ctx.seed_lo` / `ctx.seed_hi` (Label, LIC's noise).
+   **Built 2026-11-02**, as written; the memory is `cell.m0` and
+   `cell.m1`, as the template's sample names it, and the seed words
+   and `pcg` are a model's too. A Rhai `break` outside a loop is
+   Rhai's own parse error; a helper or an `if` value is sealed from its
+   caller's loops and return (`seal`). Held by
+   `the_language_of_the_twins_compiles`; the twins (step 7) hold the
+   semantics on the GPU.
+6. **Model working values**: `fn max_dt(p)`, the stable time step as a
+   function of the parameters, evaluated on the CPU (`dt_bound`; six
+   models); `INFO.presets`, a model's presets as the built-ins' are.
+   **Built 2026-11-02**: `max_dt` is plain Rhai on the CPU, the source
+   kept in the registry by name and parsed once per thread (rhai is
+   built without `sync`, so an AST is not shared); `dt_bound` is one
+   function for every script, `script_dt_bound`, which finds the script
+   by the model's name. Presets go through JSON into the config's own
+   serde types (`lang::rhai::info_json`). Held by
+   `a_model_has_its_own_time_step_and_presets`.
+7. **Twins**, in batches, each held to its built-in (a field compare,
+   bit-exact where the arithmetic is the same, to a tolerance where a
+   chaotic rule amplifies the last bit) and timed against it: the 21
+   remaining in-class models and the 12 remaining colourings.
+   Built-ins stay (D2); the twins ship as Rhai sources.
+   **Models built 2026-11-02**: all 22 in-class models
+   ([SIMULATION.md](../main/SIMULATION.md#models-written-in-rhai)),
+   every preset's field bit-identical to the built-in's; equal speed but
+   Brusselator2 (2-3%, unexplained, under the gate). The port found two
+   more language needs, built with it: `ctx.step` an int (a float loses
+   whole steps past 2^24, and Ising's parity with them) and `ctx.layer`
+   (Ballistic Deposition draws at another cell, as `sim_rand` there,
+   from `pcg` and the seed words). And two compiler fixes from the speed
+   check: one read per neighbour, an int offset kept an int.
+   **Colourings built 2026-11-02**: all 13, every picture of the compare
+   bit-identical; at speed but LIC (3-4% slower) and Gradient (6%
+   faster), under the gate.
+8. **Out of the class**, unchanged: the 9 models above stay built-in,
+   refused with a reason. *Superseded by step 9 (the user,
+   2026-11-02: "I'd like to be able to cover everything").*
+9. **The framework's stages, for the other 9** (agreed 2026-11-02, not
+   started). Nothing in them is beyond the compiler: each is a stage the
+   framework runs outside the step, which a script asks for in `INFO`
+   and reads (or writes) through builtins -- the pattern `max_dt(p)`
+   and `init_at` set. In order, cheapest first, each with its twins'
+   field compare and timing as step 7's:
+   - **9a. The field's min/max and a repeated pass** -> DBM, Fingering.
+     `INFO.min_max: true` (`NeedsMinMax`) and `ctx.field_min` /
+     `ctx.field_max` (the ring slot the next step reads, one step of
+     lag as the built-ins'); `INFO.repeat: #{ pass: 2, param: "relax" }`
+     (`ModelDef::repeat`), the framework running the pass that many
+     times a step. **Built 2026-11-02**: the range a host value (no
+     `INFO` key: reading it is `NeedsMinMax`, as drawing is
+     `NeedsRng`); DBM's and Fingering's twins bit-identical at every
+     preset and at speed (0.995, 0.996).
+   - **9b. Kernel tables** -> Lenia, Lattice4; then exact discs ->
+     SmoothLife; then the drive and the published signal -> Turing.
+     `fn kernel(p)` run on the CPU as `max_dt` is, giving the table (its
+     radius and taps, one or two blocks), uploaded as the built-ins'
+     `kernel` closure's is; `kernel_radius()` / `kernel_tap(i)` in the
+     step. `INFO.exact_discs` (`ExactDiscs`) and a read of the spectral
+     stage's disc averages. `ctx.drive` (`TakesDrive`) and
+     `INFO.publishes_signal` (the pass that writes the signal channel).
+     A built-in's table is computed in f32 Rust and a script's in f64
+     Rhai: these twins match to a tolerance, and a chaotic rule (Lenia)
+     drifts over a long run, unless the table is made in f32.
+     **Built 2026-11-03**: as written, the CPU functions one runner
+     (`with_script`, `cached`: a table is thousands of taps of Rhai, so
+     cached on the parameters' values); `tap(i)` and `disc(i)`
+     builtins; `drive()` a vector; reading each implies its feature.
+     Rhai's int division joined the language (`IDiv`: the seeds' block
+     indices). The twins of Lenia, Lattice4, SmoothLife and Turing: the
+     tables within 1e-5 of their largest weight, the steps bit-identical
+     on the built-ins' own tables at every preset (`swap_kernel`), and
+     four coupled Turing twins bit-identical to four built-ins
+     (`a_rhai_turing_couples_as_the_built_in`); on their own tables
+     Turing and most of Lattice4 drift under 4e-6 over 300 steps,
+     Lattice4's cells presets 5e-5, Lenia's age channel by whole steps.
+     All four at speed (1.001, 1.004, 1.024, 0.993; the timing's rounds
+     now about 200 ms each, so a wide kernel's run stays minutes).
+     Lattice4 and Turing declared no `NeedsRng` though their steps draw:
+     corrected (a comment in the step shader; the texture engine
+     re-pinned, no bump).
+   - **9c. The pyramid, memory and a measure pass** -> McCabe. Reads of
+     the pyramid's averages at a radius (`pyr_sample`, `pyr_exact`,
+     `pyr_diff`), and the step writing more than its `vec4`: the
+     memory's slices (`sim_mem_write`) and the measure's scratch. New
+     to the language: a function's outputs beyond its result -- a
+     result map (`#{ state, memory }`), as a variation's `#{ z, color }`
+     is, rather than side-effecting calls the IR has none of.
+     **Built 2026-11-03, as calls, not a result map**: the IR gained
+     n-ary host calls (`IExprKind::Host`, `IStmt::Host`), the writes
+     statements -- `write_scratch(k, v)`, `write_memory(k, v)` -- which
+     are the template's own calls one for one; a result map would have
+     needed the scratch's slices and the memory's in one shape, and
+     McCabe writes them from different passes. The reads `pyr_sample`,
+     `pyr_level`, `pyr_diff`, `scratch(dx, dy, k)`, `memory(k)`,
+     `outside`, `param(k)` (a table's rows by slot); `ctx.scale_warped`,
+     `ctx.scratch_on`, `ctx.memory_count`; `INFO.measure` and
+     `INFO.scale_warps` (the per-scale warps, a registry beside
+     `SCALE_WARPS`); `NeedsPyramid` and `Memory` from what the step
+     reads. The checker's cap on a model's parameters is the layer's
+     block, 124 floats (McCabe has 82). Helpers take `p` and `ctx`
+     whole. McCabe's twin bit-identical at every preset and on every
+     other path (`a_rhai_mccabe_runs_every_path_as_the_built_in`: the
+     shifted grid, exact discs, a weighted leaning table, symmetry, the
+     variation radius, warps, the memory's slices) and at speed (1.024;
+     1.027 with the variation radius, from 1.104 before a compiler fix:
+     a fresh array is its `let`'s local, not copied into one; the
+     pyramid's caches filled only where a path reads it, as the
+     built-in's are, measured no difference). The per-scale table's grid
+     was the built-in's alone (`PARAM_TABLES`) until the parameter
+     layout (P7, below).
+   - **9d. Agents** -> Physarum, DLA. A second entry point, per agent
+     rather than per cell (`fn agent_step(a, p, ctx)`): its record
+     (`vec4`s), its own draws (`agent_rand`), reads of the field around
+     it, and deposits into the accumulation buffer (atomics, as
+     `agent_deposit`); `INFO.agents` sizing the population. The largest
+     piece: a new template for the compiler to fill.
+     **Built 2026-11-03**: `fn agent_seed(p, ctx)`, `agent_step(a, p,
+     ctx)`, `agent_step2`, each lowered as a step is (`SimFn::AgentSeed`,
+     `Agent`) into the agent template's functions, the record a vector of
+     four (x, y, heading, state); the population `fn agent_count(p, w,
+     h)` on the CPU rather than an `INFO` key, since it is a function of
+     the grid. `claim`, `claim_check`, `deposit`, `read_at`,
+     `take_deposit`, `ctx.agent`, `ctx.periodic`; `rand(k)` in an agent is
+     its stream. Physarum's and DLA's twins bit-identical at every preset,
+     every agent's record included, Physarum against walls too
+     (`the_rhai_agent_models_move_as_the_built_ins`), and at speed (0.999,
+     1.013). DLA's needed its launch sum's terms in the built-in's order
+     for the shader compiler to fuse them alike. **Found**: the built-in
+     DLA read its launch gap from `crowding`'s slot and its crowding from
+     `launch_gap`'s (`mparam(2u)`, `mparam(3u)`), swapped since it was
+     written. **Fixed the same day** (the user: DLA is unreleased, swap
+     the saved configs): each read from its own slot, built-in and twin,
+     and the defaults, the preset and the saved setups swapped to the
+     values in effect, so no picture moved (SIMULATION-CATALOG.md, DLA).
+     **All 31 models now have twins.** A script marks its slow
+     parameters, `INFO.slow` (the built-ins' `SLOW_PARAMS`), so the four
+     twins with one commit them when a drag ends.
 
 ### P5. Animation tracks as scripts
 
@@ -396,6 +797,138 @@ shape fingerprint will not move by itself).
   config that carries its sources needs nothing from the API.
 - The WGSL catalogs stay beside it (D2).
 
+### P7. Every built-in editable as Rhai
+
+> The eventual goal is to port everything over to Rhai so the user can
+> edit any formula or coloring. (The user, 2026-11-02.)
+
+For each kind, two things: a **twin** of every built-in, held to it
+(its settings, its picture and its speed, as P4 step 7 holds the
+simulation twins), and an **Edit as Rhai** where the built-in is chosen
+that puts the twin in its place and opens it in the Formula Editor as
+the user's own -- what the Escape panel's Edit as Formula and the
+Effects panel's Edit as Rhai already do. Whether a twin then replaces
+its built-in (as D1 did for the effects, and as the escape plan's step
+9 retires native code family by family) or sits beside it is decided
+kind by kind (D7).
+
+Where each kind stands (2026-11-02; the counts below are from a census
+of each built-in's features and WGSL, not from ports -- P4's ports found
+needs the census did not, the int step and `ctx.layer`):
+
+| Kind | Built-ins | Twins | Edit as Rhai |
+|---|---|---|---|
+| Effects | 15 | all 15, the definitions (D1) | yes, the Effects panel |
+| Escape formulas | 26 | all 26 (`escape::twins`) | yes, Edit as Formula |
+| Escape colourings | 28 | none (two examples, `smooth`, `orbit-trap`) | no |
+| Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
+| Mode B fields | 3 | none | no |
+| Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
+| Simulation colourings | 13 | all 13 | yes, the simulation panel (2026-11-03) |
+| Flame variations | 647 | 10, as test fixtures (linear, spherical, swirl, polar, horseshoe, blur, macmillan, spherical3D, hemisphere, zcone) | no |
+
+Steps, in the order that unlocks the most first (the user picks):
+
+1. **The interpreter's flow statements.** P4 step 5 built `break`,
+   `continue` and an early `return` through the lowering and the WGSL,
+   for the GPU-only kinds. Formulas, escape colourings and variations
+   also run in the CPU interpreter (deep zoom's references, `vary`, the
+   lens, the tests), so it learns the three statements, and the
+   derivation passes refuse them where they cannot follow (as they
+   refuse a solid's `Map`). Then every kind has them: built-in
+   variations use early returns in 86 places and `break` / `continue` in
+   9. **`break` and `continue` built 2026-11-03** (the user away, queued):
+   the evaluators run all three statements (`ir::Flow`), the lowering
+   takes `break` and `continue` in every kind's loops, the perturbation
+   emitters write them; a formula using them runs in the interpreter as
+   the same formula without them, bit for bit, and the deep-zoom paths
+   decline it without panicking. **An early `return` built 2026-11-03**,
+   by scope (the user's idea, over a flag on every statement after it or
+   a refusal): a body that returns early -- a helper, in every kind; a
+   varied variation; a variation's own; a formula's `step` -- is a scope
+   its `return` leaves, the result set first; the WGSL a `loop` it
+   breaks, with a flag only from inside the body's own loops. A varied
+   variation's return ends the variation and the step goes on: bit for
+   bit in the interpreter against the formula written without it, and
+   on the GPU but 6 pixels of 12,288 on an escape's edge (the scope's
+   loop moves a multiply-add's fusion). Deep zoom declines a formula with
+   a scope. Open: a colouring's own `finish` and the escape colourings'
+   sections returning early (P7 step 2 will want them).
+2. **Escape colourings** (28). About 20 accumulate over the orbit, which
+   `start` / `step` / `finish` already do. The rest need:
+   - a colour as the result, not a palette position (Rainbow Fringe,
+     Infinite Waves, VOC Traps, Direct Traps, Image Trap): `finish`
+     ending with an `rgba` or a `vec3`, through the result handling the
+     effects and simulation colourings share (`put_result`);
+   - the palette inside the loop (Direct Traps): P4's `palette(t)`;
+   - the formula's derivative (Distance Estimate, Normal Map, Rainbow
+     Fringe): a read of `dz` outside the perturbation sections -- the
+     compiler derives a custom formula's, a built-in has its
+     `wgsl_derivative`;
+   - `INFO` flags for `Bounded`, `ColorsInterior`, `DirectAlpha` and
+     `SkipsEscapingIterate`.
+   Image Trap reads an image, which stays out with user image files
+   (decided 2026-10-02). Then the twins, and Edit as Rhai for the
+   colouring in the Escape panel.
+3. **Flame variations' hooks.** 339 of the 647 use nothing a Rhai
+   variation cannot say today; the other 308 need at least one of:
+   - **derived parameters** (134 built-ins, `wgsl_init`): a variation's
+     `fn prepare(p)`, compiled into the once-per-transform setup in the
+     built-ins' own precision, so a twin stays exact (the escape
+     dialect's `prepare` and P4's CPU-side `max_dt` are the precedents);
+   - **the transform's coefficients** (123, `NeedsTransform`): a `ctx`
+     read beside `ctx.weight`;
+   - `INFO` keys: the phase (pre or post, 45), `replace` (assign rather
+     than add, 48), `never_z` (16);
+   - **outputs beyond the point**: the result map (today `#{ z, color }`)
+     with `rgb` (`WritesRgb`, 20, the vector type built), `hide`
+     (`CanHide`, 39) and `w` (`NeedsW`, 12, with its read) -- the same
+     design P4 step 9c needs for McCabe's memory;
+   - `pcg` and the host ints for every kind (23 hash integers; P4 step
+     5 opened them to the simulations alone);
+   - the Möbius helpers (9 built-ins share `NeedsMobiusLib`) as a Rhai
+     library, imported (P0's `import`).
+   With the hooks but derived parameters, 141 stay blocked; with
+   derived parameters, 7: the renderer's own hooks (`PlotEmits` 3,
+   `AnalyticBlur` 2, `VolumeSideEmit` 2), each a design of its own,
+   open.
+4. **The twins, in batches**: the variations by family -- a skeleton
+   generator from the defs, as P4's `write_twin_skeletons`, and each
+   held by a density compare and timed -- the escape colourings, the
+   solids (Mandelbox, Mandelbulb, the KIFS, the quaternion Julia; the
+   two Flame Attractor solids are the flame itself, nothing to twin),
+   the fields (a never-escaping formula and an averaging colouring,
+   Weierstrass's analytic gradient for the hillshade the part to check;
+   decided in the KIFS plan to stay in mode B, so twins beside them).
+   **A parameter layout, built 2026-11-03** (the user: "a grid as a
+   generic param type ... and param display dependent on other param
+   selection"): `show_if` on a parameter, a grid, a grid's column; a
+   `type: "grid"` `PARAMS` entry expanding into its cells; a grid's fill
+   on the edit that switches it on and its row warnings, CPU functions;
+   `p.grid[i].column` on the GPU and the CPU (`param_layout.rs`,
+   `lang::rhai::param_layout`). McCabe's built-in table moved onto it
+   (`ParamTable` gone), its twin declares the same grids -- table and
+   warps -- and reads them by row instead of by slot: still bit for bit
+   on every path, at speed (1.030; 1.032 Table, 1.024 Table with the
+   variation radius, 1.024 warped). Open: only the simulation panel
+   draws a layout; the Escape, Effects and variation panels list a
+   grid's cells one by one and ignore `show_if`; a computed row reads a
+   grid in a simulation model alone (elsewhere a constant row).
+5. **Edit as Rhai everywhere**: the simulation panel (the model and the
+   colouring, per layer and colour layer), the Escape panel's colouring,
+   the solids and fields, a transform's variations -- each putting the
+   twin in place and opening it. **The simulation panel's built
+   2026-11-03**: a **Rhai** button beside a built-in model (each layer)
+   and colouring (each colour layer), `edit_sim_as_rhai` -- the twin in
+   the slot under a UUID of its own, the slot's settings kept, one undo
+   step, the editor holding it in use for Live.
+
+Not convertible: JWildfire's 8 variations that run user-typed Java
+(`custom_wf` and the rest; refused for security,
+[variation-port-blockers.md](variation-port-blockers.md)). A Rhai
+variation is the safe stand-in for what they were used for, but a
+`.flame` that carries Java code cannot be translated.
+
 ## Decisions (the user, 2026-11-01)
 
 - **D1. The built-in effects: replaced by their Rhai twins**, "so long
@@ -411,10 +944,17 @@ shape fingerprint will not move by itself).
   simulations, P5 tracks, P6 the API.
 - **D6. Namespaces**: "the program's default scripts, user-created
   plugins and the API won't interfere with each other. The UI can show
-  where things came from." Designed in P1, with one question left
-  there (a carried source under a name the opener also has).
+  where things came from." Then, the same day: UUIDs for everything but
+  the built-ins, with hashes for versions, names free, and every field a
+  person reads following the language -- design rules 7 and 8.
 - **P0**: the user wants a way to import Rhai scripts -- through the
   library, as P0 now says.
+- **D7. Everything editable as Rhai** (2026-11-02): "The eventual goal
+  is to port everything over to Rhai so the user can edit any formula
+  or coloring." Every built-in gets a twin and an Edit as Rhai (P7);
+  D2's "stay WGSL" holds until a kind's twins are done, and whether
+  they then replace the built-ins is decided kind by kind, as D1 did
+  for the effects.
 
 ## Left from the KIFS and variations plan
 

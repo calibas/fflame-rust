@@ -509,6 +509,10 @@ pub struct PanelContext<'a> {
     /// Downloaded variations the Variations panel asked to re-fetch at
     /// the catalog's version. Consumed by App.
     pub variation_update_requested: &'a mut Vec<String>,
+    /// The same for downloaded effects (the Effects panel), and its
+    /// Clear Cache.
+    pub effect_update_requested: &'a mut Vec<String>,
+    pub clear_effect_cache_requested: &'a mut bool,
     /// Online-library state the Scripts panel reads, and the slot it
     /// writes a request into. Owned by App.
     pub script_cloud: &'a crate::app::script_cloud::ScriptCloudState,
@@ -838,6 +842,8 @@ impl<'a> PanelViewer<'a> {
                         timeline_holding: self.context.sim_timeline_holding,
                         timeline_driven: self.context.sim_timeline_driven,
                         governor: self.context.sim_governor,
+                        formula_editor: self.context.formula_editor,
+                        open_formula_editor: self.context.open_formula_editor,
                     },
                 );
             }
@@ -1948,6 +1954,10 @@ impl<'a> PanelViewer<'a> {
             self.context.config_manager,
             self.context.animation_controller,
             self.context.effect_catalog,
+            self.context.formula_editor,
+            self.context.open_formula_editor,
+            self.context.effect_update_requested,
+            self.context.clear_effect_cache_requested,
         );
     }
 

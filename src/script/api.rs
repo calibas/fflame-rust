@@ -175,7 +175,7 @@ fn declare_script(
     }
     let kind = ScriptKind::parse(kind).ok_or_else(|| {
         err(format!(
-            "unknown script kind `{kind}` — expected \"generator\" or \"modifier\""
+            "unknown script kind `{kind}` — expected \"generator\", \"modifier\" or \"library\""
         ))
     })?;
 
@@ -441,11 +441,37 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
                 default,
                 min,
                 max,
+                angle: false,
             };
             match s.borrow_mut().declare(decl).map_err(err)? {
                 ParamValue::Float(v) => Ok(v.clamp(min, max)),
                 other => Err(err(format!("param `{key}`: expected a number, got {other:?}"))),
             }
+        },
+    );
+
+    // An angle in degrees, drawn with the angle control: the same value
+    // `param` gives, labelled as what it is. Without a range, a turn.
+    let declare_angle = |s: &Rc<RefCell<ScriptState>>, key: &str, default: f64, min: f64, max: f64| -> Result<f64, Box<EvalAltResult>> {
+        if min > max {
+            return Err(err(format!("param `{key}`: min ({min}) is above max ({max})")));
+        }
+        let decl = ParamDecl::Float { key: key.to_string(), label: humanize(key), default, min, max, angle: true };
+        match s.borrow_mut().declare(decl).map_err(err)? {
+            ParamValue::Float(v) => Ok(v.clamp(min, max)),
+            other => Err(err(format!("param `{key}`: expected an angle, got {other:?}"))),
+        }
+    };
+    let s = Rc::clone(&state);
+    engine.register_fn("param_angle", move |key: &str, default: Dynamic| -> Result<f64, Box<EvalAltResult>> {
+        declare_angle(&s, key, num(&default, "param_angle default")?, 0.0, 360.0)
+    });
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "param_angle",
+        move |key: &str, default: Dynamic, min: Dynamic, max: Dynamic| -> Result<f64, Box<EvalAltResult>> {
+            let (min, max) = (num(&min, "param_angle minimum")?, num(&max, "param_angle maximum")?);
+            declare_angle(&s, key, num(&default, "param_angle default")?, min, max)
         },
     );
 
@@ -1811,17 +1837,17 @@ fn register_escape(engine: &mut Engine) {
         Ok(crate::config::escape::CustomSource { dialect, entry: entry.to_string(), source: source.to_string(), variations: Vec::new() })
     }
     #[cfg(feature = "engine-escape")]
-    fn compile_error(src: &crate::config::escape::CustomSource, diags: &[crate::escape::lang::Diag]) -> Box<EvalAltResult> {
+    fn compile_error(src: &crate::config::escape::CustomSource, diags: &[crate::lang::Diag]) -> Box<EvalAltResult> {
         let lines: Vec<String> = diags
             .iter()
-            .filter(|d| d.severity == crate::escape::lang::Severity::Error)
+            .filter(|d| d.severity == crate::lang::Severity::Error)
             .map(|d| d.render(&src.source))
             .collect();
         err(format!("`{}` does not compile:\n{}", src.entry, lines.join("\n")))
     }
     #[cfg(feature = "engine-escape")]
     fn set_custom_formula(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
-        use crate::escape::lang::EntryKind;
+        use crate::lang::EntryKind;
         // With the variations it calls (`vary`), which the config carries.
         let src = crate::escape::custom::with_called_variations(EntryKind::Formula, src);
         let name = crate::escape::custom::name_of(EntryKind::Formula, &src);
@@ -1839,7 +1865,7 @@ fn register_escape(engine: &mut Engine) {
     }
     #[cfg(feature = "engine-escape")]
     fn set_custom_coloring(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
-        use crate::escape::lang::EntryKind;
+        use crate::lang::EntryKind;
         let src = crate::escape::custom::with_called_variations(EntryKind::Coloring, src);
         let name = crate::escape::custom::name_of(EntryKind::Coloring, &src);
         if let Err(d) = crate::escape::custom::compile_coloring(&src, &name) {
@@ -1877,7 +1903,7 @@ fn register_escape(engine: &mut Engine) {
         // A Rhai formula: its source alone, one formula to a source
         // (phase 4, step 8).
         engine.register_fn("custom_formula", |e: &mut EscapeHandle, source: &str| -> Result<(), Box<EvalAltResult>> {
-            let entry = crate::escape::lang::rhai::title(source).unwrap_or_else(|| "Formula".into());
+            let entry = crate::lang::rhai::title(source).unwrap_or_else(|| "Formula".into());
             set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry, source: source.to_string(), variations: Vec::new() })
         });
         // A formula from the script's own function `f(z, c)`, its step:
@@ -1895,10 +1921,10 @@ fn register_escape(engine: &mut Engine) {
             if !found {
                 return Err(err(format!("no function `{name}(z, c)` in the script")));
             }
-            let p = crate::escape::lang::rhai::program_from_fn(name, &fns).map_err(|d| {
+            let p = crate::lang::rhai::program_from_fn(name, &fns).map_err(|d| {
                 err(format!("`{name}` does not make a formula: {}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>().join("; ")))
             })?;
-            let source = crate::escape::lang::to_rhai::formula(&p, &[]).map_err(|e| err(format!("`{name}`: {e}")))?;
+            let source = crate::lang::to_rhai::formula(&p, &[]).map_err(|e| err(format!("`{name}`: {e}")))?;
             set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: name.to_string(), source, variations: Vec::new() })
         });
         // A hybrid composed in the script: the Hybrid Designer's groups.
@@ -1916,7 +1942,7 @@ fn register_escape(engine: &mut Engine) {
     // `lines` as the hybrid's JSON has them.
     #[cfg(feature = "engine-escape")]
     fn hybrid_source(groups: &Array, loop_start: i64) -> Result<crate::config::escape::CustomSource, Box<EvalAltResult>> {
-        use crate::escape::lang::hybrid::{Hybrid, Member};
+        use crate::lang::hybrid::{Hybrid, Member};
         let member = |source: Option<String>, twin: Option<String>| -> Result<Option<serde_json::Value>, Box<EvalAltResult>> {
             let rhai = match (source, twin) {
                 (Some(s), _) => s,
@@ -1925,7 +1951,7 @@ fn register_escape(engine: &mut Engine) {
                     .to_string(),
                 (None, None) => return Ok(None),
             };
-            let title = crate::escape::lang::rhai::title(&rhai).unwrap_or_else(|| "Formula".into());
+            let title = crate::lang::rhai::title(&rhai).unwrap_or_else(|| "Formula".into());
             Ok(Some(serde_json::to_value(Member { title, rhai }).expect("a member serialises")))
         };
         // Maps too, which a config value never is.
@@ -2654,16 +2680,19 @@ fn register_run_script(
     let state2 = Rc::clone(&state);
     let c = Rc::clone(&cfg);
     let s = Rc::clone(&state);
-    engine.register_fn("run_script", move |id: &str| -> Result<(), Box<EvalAltResult>> {
-        call_script(&c, &s, id, rhai::Map::new(), None)
-    });
+    engine.register_fn(
+        "run_script",
+        move |ctx: rhai::NativeCallContext, id: &str| -> Result<(), Box<EvalAltResult>> {
+            call_script(&ctx, &c, &s, id, rhai::Map::new(), None)
+        },
+    );
 
     let c = Rc::clone(&cfg);
     let s = Rc::clone(&state);
     engine.register_fn(
         "run_script",
-        move |id: &str, params: rhai::Map| -> Result<(), Box<EvalAltResult>> {
-            call_script(&c, &s, id, params, None)
+        move |ctx: rhai::NativeCallContext, id: &str, params: rhai::Map| -> Result<(), Box<EvalAltResult>> {
+            call_script(&ctx, &c, &s, id, params, None)
         },
     );
 
@@ -2671,8 +2700,8 @@ fn register_run_script(
     // continuing the caller's stream.
     engine.register_fn(
         "run_script",
-        move |id: &str, params: rhai::Map, seed: i64| -> Result<(), Box<EvalAltResult>> {
-            call_script(&cfg, &state, id, params, Some(seed as u64))
+        move |ctx: rhai::NativeCallContext, id: &str, params: rhai::Map, seed: i64| -> Result<(), Box<EvalAltResult>> {
+            call_script(&ctx, &cfg, &state, id, params, Some(seed as u64))
         },
     );
 
@@ -2681,6 +2710,7 @@ fn register_run_script(
 }
 
 fn call_script(
+    ctx: &rhai::NativeCallContext,
     cfg: &Rc<RefCell<FractalConfig>>,
     state: &Rc<RefCell<ScriptState>>,
     id: &str,
@@ -2698,7 +2728,10 @@ fn call_script(
     for (key, value) in params {
         supplied.insert(key.to_string(), dynamic_to_param(&value)?);
     }
-    super::host::run_sub_script(cfg, state, id, supplied, seed).map_err(err)
+    // Whose code is calling: a downloaded library's function is held to
+    // the downloaded-script rule even when a trusted script called it.
+    let restricted = super::host::untrusted_code_running(&state.borrow(), ctx.iter_namespaces());
+    super::host::run_sub_script(cfg, state, id, supplied, seed, restricted).map_err(err)
 }
 
 /// Turn a value from a `run_script` parameter map into a ParamValue.

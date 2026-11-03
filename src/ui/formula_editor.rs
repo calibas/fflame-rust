@@ -21,7 +21,7 @@ use crate::config::escape::{CustomDialect, CustomSource};
 use crate::config::manager::custom_source_json;
 use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::escape::custom;
-use crate::escape::lang::{self, EntryKind, Severity};
+use crate::lang::{self, EntryKind, Severity};
 use crate::storage::formula_store;
 
 /// Where the browser's file picker leaves the opened file's text.
@@ -48,6 +48,12 @@ struct EntryRow {
     as_transform: Vec<String>,
     /// As a solid (B3): Rhai only.
     as_solid: Vec<String>,
+    /// As an effect (P2): Rhai only.
+    as_effect: Vec<String>,
+    /// As a simulation's colouring (P4): Rhai only.
+    as_sim_coloring: Vec<String>,
+    /// As a simulation's model (P4): Rhai only.
+    as_sim_model: Vec<String>,
 }
 
 impl EntryRow {
@@ -57,7 +63,49 @@ impl EntryRow {
             EntryKind::Coloring => &self.as_coloring,
             EntryKind::Transform => &self.as_transform,
             EntryKind::Solid => &self.as_solid,
+            EntryKind::Effect => &self.as_effect,
+            EntryKind::SimColoring => &self.as_sim_coloring,
+            EntryKind::SimModel => &self.as_sim_model,
         }
+    }
+}
+
+/// Where a simulation's Rhai colouring or model goes (P4 step 4): the
+/// flat one, or entry `n` of the layers (a model) or the colour layers (a
+/// colouring).
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum SimSlot {
+    Flat,
+    At(usize),
+}
+
+/// The slots a simulation offers `kind`: the flat one, or every layer
+/// when it has them.
+fn sim_slots(kind: EntryKind, sim: &crate::config::sim::SimConfig) -> Vec<SimSlot> {
+    let n = if kind == EntryKind::SimModel { sim.layers.len() } else { sim.color_layers.len() };
+    if n == 0 {
+        vec![SimSlot::Flat]
+    } else {
+        (0..n).map(SimSlot::At).collect()
+    }
+}
+
+/// The source a slot carries and the name it carries it for.
+fn sim_carried(kind: EntryKind, sim: &crate::config::sim::SimConfig, slot: SimSlot) -> Option<(&CustomSource, &str)> {
+    match (kind == EntryKind::SimModel, slot) {
+        (true, SimSlot::Flat) => sim.custom_model.as_ref().map(|c| (c, sim.model.as_str())),
+        (true, SimSlot::At(l)) => sim.layers.get(l).and_then(|x| x.custom_model.as_ref().map(|c| (c, x.model.as_str()))),
+        (false, SimSlot::Flat) => sim.custom_coloring.as_ref().map(|c| (c, sim.coloring.as_str())),
+        (false, SimSlot::At(k)) => sim.color_layers.get(k).and_then(|x| x.custom_coloring.as_ref().map(|c| (c, x.coloring.as_str()))),
+    }
+}
+
+/// What tells one escape-time entry from another, version to version: a
+/// Rhai source's id (`INFO.id`), else its entry name.
+fn entry_ident(src: &CustomSource) -> String {
+    match src.dialect {
+        CustomDialect::Rhai => lang::rhai::info_string(&src.source, "id").filter(|id| crate::scripted::is_uuid(id)).unwrap_or_else(|| src.entry.clone()),
+        _ => src.entry.clone(),
     }
 }
 
@@ -168,6 +216,9 @@ impl FormulaEditorPanel {
             EntryKind::Coloring => lang::rhai::coloring(&text),
             EntryKind::Transform => lang::rhai::transformation_any(&text),
             EntryKind::Solid => lang::rhai::solid(&text),
+            EntryKind::Effect => lang::rhai::effect(&text),
+            EntryKind::SimColoring => lang::rhai::sim_coloring(&text),
+            EntryKind::SimModel => lang::rhai::sim_model(&text, lang::rhai::SimFn::Step(0)),
         };
         let mut errors: Vec<String> = match &checked {
             Ok(_) => Vec::new(),
@@ -177,9 +228,32 @@ impl FormulaEditorPanel {
         if kind == EntryKind::Coloring && checked.as_ref().is_ok_and(|p| !lang::wgsl::colours_anything(p)) {
             errors.push(t!("formula_editor.colours_nothing").to_string());
         }
-        // A transformation becomes a variation: its name and WGSL too.
+        // A transformation becomes a variation: its WGSL too, under the
+        // id Use gives it when it needs one.
         if kind == EntryKind::Transform && checked.is_ok() {
-            if let Err(e) = crate::variations::custom::compile(&text) {
+            let with_id = if crate::variations::custom::needs_id(&text) { lang::rhai::with_own_id(&text, &crate::scripted::mint_id()) } else { text.clone() };
+            if let Err(e) = crate::variations::custom::compile(&with_id) {
+                errors.push(e);
+            }
+        }
+        // An effect becomes one: its module too, under the id Use gives it
+        // when it has none of its own (none, or not a UUID: a copy of a
+        // built-in's, one typed by hand).
+        if kind == EntryKind::Effect && checked.is_ok() {
+            let with_id = lang::rhai::with_own_id(&text, &crate::scripted::mint_id());
+            if let Err(e) = crate::effects::custom::compile(&with_id, crate::provenance::Provenance::Custom) {
+                errors.push(e);
+            }
+        }
+        // A simulation colouring becomes one: its module too (P4).
+        if kind == EntryKind::SimColoring && checked.is_ok() {
+            if let Err(e) = crate::sim::custom::compile(&text, "custom-check") {
+                errors.push(e);
+            }
+        }
+        // A model: every pass and its seed (P4).
+        if kind == EntryKind::SimModel && checked.is_ok() {
+            if let Err(e) = crate::sim::custom::compile_model(&text, "custom-check") {
                 errors.push(e);
             }
         }
@@ -194,27 +268,30 @@ impl FormulaEditorPanel {
                 errors.push(e);
             }
         }
-        let not = |key: &str| (is(key), is(key), is(key), is(key));
-        let (as_formula, as_coloring, as_transform, as_solid) = match kind {
-            EntryKind::Formula => {
-                let n = not("formula_editor.rhai_is_formula");
-                (errors, n.1, n.2, n.3)
-            }
-            EntryKind::Coloring => {
-                let n = not("formula_editor.rhai_is_coloring");
-                (n.0, errors, n.2, n.3)
-            }
-            EntryKind::Transform => {
-                let n = not("formula_editor.rhai_is_transform");
-                (n.0, n.1, errors, n.3)
-            }
-            EntryKind::Solid => {
-                let n = not("formula_editor.rhai_is_solid");
-                (n.0, n.1, n.2, errors)
-            }
+        // Its own kind's row has the errors; every other row says what
+        // the file is.
+        let key = match kind {
+            EntryKind::Formula => "formula_editor.rhai_is_formula",
+            EntryKind::Coloring => "formula_editor.rhai_is_coloring",
+            EntryKind::Transform => "formula_editor.rhai_is_transform",
+            EntryKind::Solid => "formula_editor.rhai_is_solid",
+            EntryKind::Effect => "formula_editor.rhai_is_effect",
+            EntryKind::SimColoring => "formula_editor.rhai_is_sim_coloring",
+            EntryKind::SimModel => "formula_editor.rhai_is_sim_model",
         };
+        let mut errors = Some(errors);
+        let mut row = |k: EntryKind| if k == kind { errors.take().unwrap_or_default() } else { is(key) };
+        let (as_formula, as_coloring, as_transform, as_solid, as_effect, as_sim_coloring, as_sim_model) = (
+            row(EntryKind::Formula),
+            row(EntryKind::Coloring),
+            row(EntryKind::Transform),
+            row(EntryKind::Solid),
+            row(EntryKind::Effect),
+            row(EntryKind::SimColoring),
+            row(EntryKind::SimModel),
+        );
         self.parse_errors = Vec::new();
-        self.entries = vec![EntryRow { name: title, source: text.clone(), likely: kind, as_formula, as_coloring, as_transform, as_solid }];
+        self.entries = vec![EntryRow { name: title, source: text.clone(), likely: kind, as_formula, as_coloring, as_transform, as_solid, as_effect, as_sim_coloring, as_sim_model }];
         self.checked = Some(text);
     }
 
@@ -252,7 +329,7 @@ impl FormulaEditorPanel {
                 let check = |kind| {
                     let (p, d) = match kind {
                         EntryKind::Formula => lang::switch::check_formula(&file, e, dialect),
-                        EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid => lang::check::check(e, kind, dialect),
+                        EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => lang::check::check(e, kind, dialect),
                     };
                     let mut msgs = own.clone();
                     msgs.extend(d.iter().filter(|x| x.severity == Severity::Error).map(render));
@@ -282,6 +359,9 @@ impl FormulaEditorPanel {
                     // (UF support is paused): it shows its errors alone.
                     as_transform: if transform { check(EntryKind::Transform) } else { vec![t!("formula_editor.not_a_transform").to_string()] },
                     as_solid: vec![t!("formula_editor.solid_rhai_only").to_string()],
+                    as_effect: vec![t!("formula_editor.effect_rhai_only").to_string()],
+                    as_sim_coloring: vec![t!("formula_editor.sim_rhai_only").to_string()],
+                    as_sim_model: vec![t!("formula_editor.sim_rhai_only").to_string()],
                 }
             })
             .collect();
@@ -295,20 +375,39 @@ impl FormulaEditorPanel {
         if kind == EntryKind::Transform {
             return self.use_variation(cm, row);
         }
+        if kind == EntryKind::Effect {
+            return self.use_effect(cm, row);
+        }
+        if matches!(kind, EntryKind::SimColoring | EntryKind::SimModel) {
+            let slot = sim_slots(kind, &cm.config().sim)[0];
+            return self.use_sim(cm, kind, row, slot);
+        }
         let Some(entry) = self.entries.get(row) else { return };
+        // A Rhai entry is the user's: it has an id of its own (rule 7),
+        // given here when it has none -- written into the file, which Save
+        // then keeps -- and is named by it and its version.
+        let mut source = entry.source.clone();
+        let minted = self.dialect == CustomDialect::Rhai && !lang::rhai::info_string(&source, "id").is_some_and(|id| crate::scripted::is_uuid(&id));
+        if minted {
+            source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
+        }
         // With the variations it calls (`vary`), which the config carries.
-        let src = custom::with_called_variations(kind, CustomSource { dialect: self.dialect, entry: entry.name.clone(), source: entry.source.clone(), variations: Vec::new() });
+        let src = custom::with_called_variations(kind, CustomSource { dialect: self.dialect, entry: entry.name.clone(), source, variations: Vec::new() });
         let name = custom::name_of(kind, &src);
         let compiled = match kind {
             EntryKind::Formula => custom::compile_formula(&src, &name).map(|_| ()),
             EntryKind::Coloring => custom::compile_coloring(&src, &name).map(|_| ()),
             EntryKind::Solid => custom::compile_solid(&src, &name).map(|_| ()),
-            EntryKind::Transform => return,
+            EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => return,
         };
         if let Err(d) = compiled {
             let first = d.first().map(|x| x.render(&src.source)).unwrap_or_default();
             self.status = Some(t!("formula_editor.did_not_compile", entry = src.entry, error = first).to_string());
             return;
+        }
+        if minted {
+            self.text = src.source.clone();
+            self.changed_at = Some(web_time::Instant::now());
         }
         let escape = &cm.config().escape;
         let (current, path_src, path_name, description) = match kind {
@@ -319,14 +418,17 @@ impl FormulaEditorPanel {
                 ConfigPath::EscapeFormula,
                 "history.action.use_custom_formula",
             ),
-            EntryKind::Coloring | EntryKind::Transform => (
+            EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => (
                 escape.custom_coloring.as_ref(),
                 ConfigPath::EscapeCustomColoring,
                 ConfigPath::EscapeColoring,
                 "history.action.use_custom_coloring",
             ),
         };
-        let first_use = current.is_none_or(|c| c.entry != src.entry);
+        // The same entry by its id, which outlives a change of title; one
+        // without (another dialect's) by its entry name.
+        let ident = entry_ident(&src);
+        let first_use = current.is_none_or(|c| entry_ident(c) != ident);
         let mut changes = vec![
             (path_src, ConfigValue::String(custom_source_json(&Some(src.clone())))),
             (path_name, ConfigValue::String(name)),
@@ -352,11 +454,12 @@ impl FormulaEditorPanel {
         match super::render_mode::choose(cm, changes, description, crate::scene::transforms::RenderMode::Escape) {
             Ok(_) => {
                 self.in_use.retain(|(k, _, _)| *k != kind);
-                self.in_use.push((kind, self.file.clone(), src.entry.clone()));
+                self.in_use.push((kind, self.file.clone(), ident));
                 self.status = Some(match kind {
+                    _ if minted => t!("formula_editor.id_minted", entry = src.entry),
                     EntryKind::Formula => t!("formula_editor.using_formula", entry = src.entry),
                     EntryKind::Solid => t!("formula_editor.using_solid", entry = src.entry),
-                    EntryKind::Coloring | EntryKind::Transform => t!("formula_editor.using_coloring", entry = src.entry),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => t!("formula_editor.using_coloring", entry = src.entry),
                 }
                 .to_string());
             }
@@ -364,69 +467,364 @@ impl FormulaEditorPanel {
         }
     }
 
-    /// Use a transformation as a flame variation: register it
-    /// (`variations::custom`) and put its source in the flame, one undo
-    /// step, replacing the one of its name. It is then in every
+    /// Use a transformation as a flame variation: give it an id if it
+    /// needs one (`variations::custom::needs_id`; written into the file,
+    /// which Save then keeps), register it under its key (its id and
+    /// version, rule 7), and put its source in the flame, one undo step:
+    /// what named an earlier version -- the flame's transforms, the lens,
+    /// the escape transformations -- moves to this one (`custom::rekey`),
+    /// and a source nothing names any more goes. It is then in every
     /// transform's variation picker. In Escape mode it is also made the
     /// camera lens (at full amount if the lens was off).
     fn use_variation(&mut self, cm: &mut ConfigManager, row: usize) {
+        use crate::variations::custom;
         let Some(entry) = self.entries.get(row) else { return };
         if self.dialect != CustomDialect::Rhai {
             self.status = Some(t!("formula_editor.variation_rhai_only").to_string());
             return;
         }
-        let source = entry.source.clone();
-        let name = match crate::variations::custom::register(&source) {
-            Ok(name) => name,
+        let label = entry.name.clone();
+        let mut source = entry.source.clone();
+        let minted = custom::needs_id(&source);
+        if minted {
+            source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
+        }
+        let key = match custom::register(&source) {
+            Ok(key) => key,
             Err(e) => {
-                self.status = Some(t!("formula_editor.did_not_compile", entry = entry.name, error = e).to_string());
+                self.status = Some(t!("formula_editor.did_not_compile", entry = label, error = e).to_string());
                 return;
             }
         };
-        // The flame carries the sources it uses: this one, and those
-        // its transforms (or the lens) still name -- a renamed variation's
-        // old source goes.
-        let config = cm.config();
-        let mut list: Vec<CustomSource> = config
+        if minted {
+            // The file carries its id from now on.
+            self.text = source.clone();
+            self.changed_at = Some(web_time::Instant::now());
+        }
+        let id = crate::scripted::key_id(&key).unwrap_or_default();
+        let title = crate::variations::global_registry().get(&key).map(|v| v.display_name.clone()).unwrap_or_else(|| label.clone());
+        let mut after = cm.config().clone();
+        let moved = custom::rekey(&mut after, &id, &key);
+        // The flame carries the sources it uses: this version, and the
+        // others its transforms (or the lens) still name.
+        let names = |c: &crate::config::FractalConfig, entry: &str| {
+            custom::used_by(&c.flame, entry) || c.escape.lens == entry || c.escape.transforms.iter().any(|t| t.variation == entry)
+        };
+        let mut list: Vec<CustomSource> = after
             .flame
             .custom_variations
             .iter()
-            .filter(|s| {
-                s.entry == name
-                    || crate::variations::custom::used_by(&config.flame, &s.entry)
-                    || config.escape.lens == s.entry
-                    || config.escape.transforms.iter().any(|t| t.variation == s.entry)
-            })
+            .filter(|s| crate::scripted::key_id(&s.entry).as_deref() != Some(id.as_str()) && names(&after, &s.entry))
             .cloned()
             .collect();
-        let src = crate::variations::custom::carried(&source)
-            .unwrap_or(CustomSource { dialect: CustomDialect::Rhai, entry: name.clone(), source, variations: Vec::new() });
-        match list.iter_mut().find(|s| s.entry == name) {
-            Some(s) => *s = src,
-            None => list.push(src),
-        }
-        let json = serde_json::to_string(&list).unwrap_or_default();
-        let mut changes = vec![(ConfigPath::FlameCustomVariations, ConfigValue::String(json))];
-        let as_lens = cm.config().render_mode == crate::scene::transforms::RenderMode::Escape;
-        if as_lens {
-            changes.push((ConfigPath::EscapeLens, ConfigValue::String(name.clone())));
-            if cm.config().escape.lens_amount == 0.0 {
-                changes.push((ConfigPath::EscapeLensAmount, ConfigValue::Float(1.0)));
+        let mut src = custom::carried(&source).unwrap_or(CustomSource { dialect: CustomDialect::Rhai, entry: key.clone(), source, variations: Vec::new() });
+        src.entry = key.clone();
+        list.push(src);
+        let as_lens = after.render_mode == crate::scene::transforms::RenderMode::Escape;
+        let result = if moved {
+            // Renaming a variation in the transforms is no single path's
+            // edit: the whole config, as one step.
+            after.flame.custom_variations = list;
+            if as_lens {
+                after.escape.lens = key.clone();
+                if after.escape.lens_amount == 0.0 {
+                    after.escape.lens_amount = 1.0;
+                }
             }
-        }
-        match cm.update_batch(changes, "history.action.use_custom_variation".to_string()) {
-            Ok(_) => {
-                self.in_use.retain(|(k, _, n)| !(*k == EntryKind::Transform && *n == name));
-                self.in_use.push((EntryKind::Transform, self.file.clone(), name.clone()));
-                self.status = Some(if as_lens {
-                    t!("formula_editor.using_lens", name = name)
+            cm.apply_config_edit(after, "history.action.use_custom_variation".to_string())
+        } else {
+            let json = serde_json::to_string(&list).unwrap_or_default();
+            let mut changes = vec![(ConfigPath::FlameCustomVariations, ConfigValue::String(json))];
+            if as_lens {
+                changes.push((ConfigPath::EscapeLens, ConfigValue::String(key.clone())));
+                if after.escape.lens_amount == 0.0 {
+                    changes.push((ConfigPath::EscapeLensAmount, ConfigValue::Float(1.0)));
+                }
+            }
+            cm.update_batch(changes, "history.action.use_custom_variation".to_string()).map(|_| ())
+        };
+        match result {
+            Ok(()) => {
+                // By its id: Live follows it from version to version.
+                self.in_use.retain(|(k, _, n)| !(*k == EntryKind::Transform && *n == id));
+                self.in_use.push((EntryKind::Transform, self.file.clone(), id));
+                self.status = Some(if minted {
+                    t!("formula_editor.id_minted", entry = label)
+                } else if as_lens {
+                    t!("formula_editor.using_lens", name = title)
                 } else {
-                    t!("formula_editor.using_variation", name = name)
+                    t!("formula_editor.using_variation", name = title)
                 }
                 .to_string());
             }
             Err(e) => self.status = Some(format!("{e:?}")),
         }
+    }
+
+    /// Use a simulation colouring or model (P4) in `slot`: give it an id
+    /// if it has none -- written into the file, which Save then keeps --
+    /// register it under its name (`sim::custom::name_of`: its id and
+    /// version), and carry its source beside the name, one undo step;
+    /// using one from another mode enters Simulation in the same step. A
+    /// new version of the one in a slot keeps its parameters (and the flat
+    /// model its dt and steps: `config::sim::same_script`).
+    fn use_sim(&mut self, cm: &mut ConfigManager, kind: EntryKind, row: usize, slot: SimSlot) {
+        use crate::scene::transforms::RenderMode;
+        let Some(entry) = self.entries.get(row) else { return };
+        let label = entry.name.clone();
+        let mut source = entry.source.clone();
+        let minted = !lang::rhai::info_string(&source, "id").is_some_and(|id| crate::scripted::is_uuid(&id));
+        if minted {
+            source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
+        }
+        let model = kind == EntryKind::SimModel;
+        let registered = if model { crate::sim::custom::register_model(&source) } else { crate::sim::custom::register(&source) };
+        let name = match registered {
+            Ok(name) => name,
+            Err(e) => {
+                self.status = Some(t!("formula_editor.did_not_compile", entry = label, error = e).to_string());
+                return;
+            }
+        };
+        if minted {
+            self.text = source.clone();
+            self.changed_at = Some(web_time::Instant::now());
+        }
+        let carried = crate::sim::custom::carried(&source);
+        let ident = entry_ident(&carried);
+        let json = ConfigValue::String(custom_source_json(&Some(carried.clone())));
+        let action = if model { "history.action.use_sim_model" } else { "history.action.use_sim_coloring" };
+        let pair = |source: ConfigPath, named: ConfigPath| vec![(source, json.clone()), (named, ConfigValue::String(name.clone()))];
+        let done = match (model, slot) {
+            (true, SimSlot::Flat) => super::render_mode::choose(cm, pair(ConfigPath::SimCustomModel, ConfigPath::SimModel), action, RenderMode::Simulation).map(|_| ()),
+            (true, SimSlot::At(layer)) => super::render_mode::choose(
+                cm,
+                pair(ConfigPath::SimLayerCustomModel { layer }, ConfigPath::SimLayerModel { layer }),
+                action,
+                RenderMode::Simulation,
+            )
+            .map(|_| ()),
+            (false, SimSlot::Flat) => super::render_mode::choose(cm, pair(ConfigPath::SimCustomColoring, ConfigPath::SimColoring), action, RenderMode::Simulation).map(|_| ()),
+            // A colour layer's colouring is a snapshot edit, as the panel
+            // makes it.
+            (false, SimSlot::At(k)) => {
+                let mut after = cm.config().clone();
+                if let Some(l) = after.sim.color_layers.get_mut(k) {
+                    if !crate::config::sim::same_script(&name, &l.coloring) {
+                        l.coloring_params.clear();
+                    }
+                    l.coloring = name.clone();
+                    l.custom_coloring = Some(carried);
+                }
+                super::render_mode::enter_snapshot(cm.config(), &mut after, RenderMode::Simulation);
+                cm.apply_config_edit(after, action.to_string())
+            }
+        };
+        match done {
+            Ok(()) => {
+                self.in_use.retain(|(k, _, _)| *k != kind);
+                self.in_use.push((kind, self.file.clone(), ident));
+                let using = if model { t!("formula_editor.using_sim_model", entry = label) } else { t!("formula_editor.using_sim_coloring", entry = label) };
+                self.status = Some(if minted { t!("formula_editor.id_minted", entry = label) } else { using }.to_string());
+            }
+            Err(e) => self.status = Some(format!("{e:?}")),
+        }
+    }
+
+    /// The simulation panel's Edit as Rhai (P7 step 5): the built-in model
+    /// (`model`) or colouring `builtin` in a slot -- a layer or a colour
+    /// layer (`layer`), else the flat one -- becomes the user's own: its
+    /// twin, with an id of its own, registered and carried in the slot, the
+    /// slot's parameters (and a model's dt and steps) kept, so the picture
+    /// is the same; one undo step, entering Simulation if another mode is
+    /// on. It opens here unsaved and in use, so Live re-applies an edit.
+    /// Save keeps it in the library; the built-in is untouched.
+    pub fn edit_sim_as_rhai(&mut self, cm: &mut ConfigManager, model: bool, layer: Option<usize>, builtin: &str) {
+        use crate::scene::transforms::RenderMode;
+        let shipped = if model { crate::sim::custom::SHIPPED_MODELS } else { crate::sim::custom::SHIPPED };
+        let Some((_, text)) = shipped.iter().find(|(n, _)| *n == builtin) else { return };
+        let source = lang::rhai::with_own_id(text, &crate::scripted::mint_id());
+        let registered = if model { crate::sim::custom::register_model(&source) } else { crate::sim::custom::register(&source) };
+        let name = match registered {
+            Ok(name) => name,
+            Err(e) => {
+                self.status = Some(t!("formula_editor.did_not_compile", entry = builtin, error = e).to_string());
+                return;
+            }
+        };
+        let carried = crate::sim::custom::carried(&source);
+        let mut after = cm.config().clone();
+        let s = &mut after.sim;
+        match (model, layer) {
+            (true, None) => {
+                s.model = name;
+                s.custom_model = Some(carried.clone());
+            }
+            (true, Some(i)) => {
+                let Some(l) = s.layers.get_mut(i) else { return };
+                l.model = name;
+                l.custom_model = Some(carried.clone());
+            }
+            (false, None) => {
+                s.coloring = name;
+                s.custom_coloring = Some(carried.clone());
+            }
+            (false, Some(k)) => {
+                let Some(l) = s.color_layers.get_mut(k) else { return };
+                l.coloring = name;
+                l.custom_coloring = Some(carried.clone());
+            }
+        }
+        super::render_mode::enter_snapshot(cm.config(), &mut after, RenderMode::Simulation);
+        if let Err(e) = cm.apply_config_edit(after, "history.action.edit_sim_as_rhai".to_string()) {
+            self.status = Some(format!("{e:?}"));
+            return;
+        }
+        let title = if model {
+            crate::sim::model_or_default(builtin).display_name
+        } else {
+            crate::sim::coloring_or_default(builtin).display_name
+        };
+        let file = formula_store::file_name_for(&format!("{builtin}.rhai")).unwrap_or_else(|| "simulation.rhai".into());
+        self.adopt(None, file, source);
+        let kind = if model { EntryKind::SimModel } else { EntryKind::SimColoring };
+        self.in_use.retain(|(k, _, _)| *k != kind);
+        self.in_use.push((kind, None, entry_ident(&carried)));
+        self.status = Some(t!("formula_editor.editing_builtin_sim", name = title).to_string());
+    }
+
+    /// The Effects panel's Edit as Rhai: the built-in effect at `index` of
+    /// its chain (`density`, which) becomes one of the user's -- the source
+    /// the built-in runs, with an id of its own, registered, and the
+    /// instance moved to it with its values, one undo step -- and opens
+    /// here unsaved and in use, so Live re-applies an edit. Save keeps it
+    /// in the library; the built-in is untouched.
+    pub fn edit_effect_as_rhai(&mut self, cm: &mut ConfigManager, density: bool, index: usize, builtin: &str) {
+        let Some(text) = crate::effects::custom::builtin_twin_source(builtin) else { return };
+        let source = lang::rhai::with_own_id(&text, &crate::scripted::mint_id());
+        let key = match crate::effects::custom::register(&source, crate::provenance::Provenance::Custom) {
+            Ok(key) => key,
+            Err(e) => {
+                self.status = Some(t!("formula_editor.did_not_compile", entry = builtin, error = e).to_string());
+                return;
+            }
+        };
+        let Some(src) = crate::effects::custom::carried(&source) else { return };
+        let mut list = cm.config().custom_effects.clone();
+        list.push(src);
+        let path = if density { ConfigPath::DensityEffectType { index } } else { ConfigPath::ColorEffectType { index } };
+        let changes = vec![
+            (path, ConfigValue::String(key.clone())),
+            (ConfigPath::CustomEffects, ConfigValue::String(serde_json::to_string(&list).unwrap_or_default())),
+        ];
+        if let Err(e) = cm.update_batch(changes, "history.action.edit_effect_as_rhai".to_string()) {
+            self.status = Some(format!("{e:?}"));
+            return;
+        }
+        let title = crate::effects::global_effect_registry().get(builtin).map(|i| i.translated_name()).unwrap_or_else(|| builtin.to_string());
+        let file = formula_store::file_name_for(&format!("{builtin}.rhai")).unwrap_or_else(|| "effect.rhai".into());
+        self.adopt(None, file, source);
+        let id = crate::effects::custom::id_of(&key);
+        self.in_use.retain(|(k, _, n)| !(*k == EntryKind::Effect && *n == id));
+        self.in_use.push((EntryKind::Effect, None, id));
+        self.status = Some(t!("formula_editor.editing_builtin_effect", name = title).to_string());
+    }
+
+    /// Use an effect (P2): give it an id if it has none -- written into the
+    /// file, which Save then keeps -- register it under its key (its id
+    /// and version, rule 7), and put its source in the config, one undo
+    /// step: the instances of an earlier version move to this one
+    /// (`ColorEffectType`, their parameters kept), and the source the
+    /// config no longer runs goes. The first time, an instance is added at
+    /// the end of its chain (a second step: adding one is structural).
+    fn use_effect(&mut self, cm: &mut ConfigManager, row: usize) {
+        use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
+        let Some(entry) = self.entries.get(row) else { return };
+        if self.dialect != CustomDialect::Rhai {
+            self.status = Some(t!("formula_editor.effect_rhai_only").to_string());
+            return;
+        }
+        let name = entry.name.clone();
+        let mut source = entry.source.clone();
+        let mut minted = false;
+        if !lang::rhai::info_string(&source, "id").is_some_and(|id| crate::scripted::is_uuid(&id)) {
+            source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
+            minted = true;
+        }
+        let key = match crate::effects::custom::register(&source, crate::provenance::Provenance::Custom) {
+            Ok(key) => key,
+            Err(e) => {
+                self.status = Some(t!("formula_editor.did_not_compile", entry = name, error = e).to_string());
+                return;
+            }
+        };
+        if minted {
+            // The file carries its id from now on.
+            self.text = source.clone();
+            self.changed_at = Some(web_time::Instant::now());
+        }
+        use crate::effects::custom::id_of;
+        let id = id_of(&key);
+        let config = cm.config();
+        // The instances of any version of this effect move to this one.
+        let mut changes = Vec::new();
+        let mut in_chain = false;
+        for (list, path) in [
+            (&config.color_effects, (|index| ConfigPath::ColorEffectType { index }) as fn(usize) -> ConfigPath),
+            (&config.density_effects, |index| ConfigPath::DensityEffectType { index }),
+        ] {
+            for (index, e) in list.iter().enumerate() {
+                if id_of(&e.effect_type) == id {
+                    in_chain = true;
+                    if e.effect_type != key {
+                        changes.push((path(index), ConfigValue::String(key.clone())));
+                    }
+                }
+            }
+        }
+        // The config carries the sources its chains run: this one, and
+        // the others an instance still names.
+        let runs = |s: &CustomSource| config.color_effects.iter().chain(&config.density_effects).any(|e| e.effect_type == s.entry);
+        let mut list: Vec<CustomSource> = config.custom_effects.iter().filter(|s| id_of(&s.entry) != id && runs(s)).cloned().collect();
+        let Some(src) = crate::effects::custom::carried(&source) else { return };
+        list.push(src);
+        changes.push((ConfigPath::CustomEffects, ConfigValue::String(serde_json::to_string(&list).unwrap_or_default())));
+        if let Err(e) = cm.update_batch(changes, "history.action.use_custom_effect".to_string()) {
+            self.status = Some(format!("{e:?}"));
+            return;
+        }
+        let (title, category) = {
+            let registry = global_effect_registry();
+            let info = registry.get(&key);
+            (info.map(|i| i.translated_name()).unwrap_or_else(|| id.clone()), info.map(|i| i.category))
+        };
+        if !in_chain {
+            let effect = EffectInstance::new(&key);
+            let description = format!("Add Effect: {title}");
+            let change = match category {
+                Some(EffectCategory::Density) => {
+                    let index = cm.active_config().density_effects.len();
+                    crate::config::ConfigChange::add_density_effect_snapshot(index, effect, description)
+                }
+                _ => {
+                    let index = cm.active_config().color_effects.len();
+                    crate::config::ConfigChange::add_color_effect_snapshot(index, effect, description)
+                }
+            };
+            if let Err(e) = cm.apply_structural_change(change) {
+                self.status = Some(format!("{e:?}"));
+                return;
+            }
+        }
+        // By its id: Live follows it from version to version.
+        self.in_use.retain(|(k, _, n)| !(*k == EntryKind::Effect && *n == id));
+        self.in_use.push((EntryKind::Effect, self.file.clone(), id));
+        self.status = Some(if minted {
+            t!("formula_editor.id_minted", entry = name)
+        } else {
+            t!("formula_editor.using_effect", name = title)
+        }
+        .to_string());
     }
 
     /// Live: re-apply the entries in use whose text changed and still
@@ -437,10 +835,17 @@ impl FormulaEditorPanel {
             if file != self.file {
                 continue;
             }
-            // A variation: by its name, while the flame carries it.
+            // A variation: by its id, while the flame carries a version of
+            // it.
             if kind == EntryKind::Transform {
-                let carried = cm.config().flame.custom_variations.iter().find(|s| s.entry == entry).map(|s| s.source.clone());
-                let row = self.entries.iter().position(|r| lang::rhai::variation_name(&r.source).as_deref() == Some(entry.as_str()));
+                let carried = cm
+                    .config()
+                    .flame
+                    .custom_variations
+                    .iter()
+                    .find(|s| crate::scripted::key_id(&s.entry).as_deref() == Some(entry.as_str()))
+                    .map(|s| s.source.clone());
+                let row = self.entries.iter().position(|r| crate::variations::custom::id_of_source(&r.source).as_deref() == Some(entry.as_str()));
                 if let (Some(carried), Some(row)) = (carried, row) {
                     let r = &self.entries[row];
                     if r.errors(kind).is_empty() && r.source != carried {
@@ -449,16 +854,59 @@ impl FormulaEditorPanel {
                 }
                 continue;
             }
+            // An effect: by its id, while the config carries a version of
+            // it.
+            if kind == EntryKind::Effect {
+                let carried = cm
+                    .config()
+                    .custom_effects
+                    .iter()
+                    .find(|s| crate::effects::custom::id_of(&s.entry) == *entry)
+                    .map(|s| s.source.clone());
+                let row = self.entries.iter().position(|r| lang::rhai::info_string(&r.source, "id").as_deref() == Some(entry.as_str()));
+                if let (Some(carried), Some(row)) = (carried, row) {
+                    let r = &self.entries[row];
+                    if r.errors(kind).is_empty() && r.source != carried {
+                        self.use_effect(cm, row);
+                    }
+                }
+                continue;
+            }
+            // A simulation colouring or model: by its id, in every slot
+            // that carries a version of it (the flat one, or each layer's).
+            if matches!(kind, EntryKind::SimColoring | EntryKind::SimModel) {
+                let row = self.entries.iter().position(|r| entry_ident(&CustomSource { dialect: CustomDialect::Rhai, entry: r.name.clone(), source: r.source.clone(), variations: Vec::new() }) == entry);
+                let Some(row) = row.filter(|&row| self.entries[row].errors(kind).is_empty()) else { continue };
+                let sim = &cm.config().sim;
+                let stale: Vec<SimSlot> = sim_slots(kind, sim)
+                    .into_iter()
+                    .filter(|&slot| {
+                        sim_carried(kind, sim, slot)
+                            .is_some_and(|(c, name)| entry_ident(c) == entry && name.starts_with(crate::sim::custom::PREFIX) && c.source != self.entries[row].source)
+                    })
+                    .collect();
+                for slot in stale {
+                    self.use_sim(cm, kind, row, slot);
+                }
+                continue;
+            }
             let escape = &cm.config().escape;
             let (carried, name) = match kind {
                 EntryKind::Formula | EntryKind::Solid => (escape.custom_formula.as_ref(), &escape.formula),
-                EntryKind::Coloring | EntryKind::Transform => (escape.custom_coloring.as_ref(), &escape.coloring),
+                EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => (escape.custom_coloring.as_ref(), &escape.coloring),
             };
             let Some(carried) = carried else { continue };
-            if carried.entry != entry || !name.starts_with(custom::PREFIX) {
+            if entry_ident(carried) != entry || !name.starts_with(custom::PREFIX) {
                 continue;
             }
-            let Some(row) = self.entries.iter().position(|r| r.name == entry) else { continue };
+            let dialect = self.dialect;
+            let Some(row) = self
+                .entries
+                .iter()
+                .position(|r| entry_ident(&CustomSource { dialect, entry: r.name.clone(), source: r.source.clone(), variations: Vec::new() }) == entry)
+            else {
+                continue;
+            };
             let r = &self.entries[row];
             if r.errors(kind).is_empty() && (r.source != carried.source || carried.dialect != self.dialect) {
                 self.use_entry(cm, kind, row);
@@ -490,11 +938,63 @@ impl FormulaEditorPanel {
             Ok(file) => {
                 self.saved = self.text.clone();
                 self.status = Some(t!("formula_editor.saved", file = file).to_string());
+                // A plug-in's lists offer what was saved: its new version.
+                if formula_store::link_of(&file).is_some_and(|l| l.plugin) {
+                    if let Err(e) = crate::storage::library::register_plugin(&file, &self.text) {
+                        self.status = Some(t!("formula_editor.plugin_failed", file = file, error = e).to_string());
+                    }
+                }
                 self.name = file.clone();
                 self.file = Some(file);
                 self.files = formula_store::list();
             }
             Err(e) => self.status = Some(e),
+        }
+    }
+
+    /// Whether the open text could be a plug-in: a Rhai variation,
+    /// effect, formula, colouring or solid (P3).
+    fn could_be_plugin(&self) -> bool {
+        self.dialect == CustomDialect::Rhai && lang::rhai::kind_of(&self.text).is_some()
+    }
+
+    /// Make a stored file a plug-in, registered at every start (P3), or
+    /// stop. It is saved first: what loads at start is the file. One
+    /// that needs an id of its own (a variation without a name, an
+    /// effect) gets one, written into the file.
+    fn set_plugin(&mut self, file: &str, on: bool) {
+        let mut link = formula_store::link_of(file).unwrap_or_default();
+        if !on {
+            link.plugin = false;
+            crate::storage::library::unlist_plugin(file);
+            self.status = Some(match formula_store::set_link(file, link) {
+                Ok(()) => t!("formula_editor.plugin_off", file = file).to_string(),
+                Err(e) => e,
+            });
+            return;
+        }
+        if self.text != self.saved {
+            self.status = Some(t!("formula_editor.plugin_save_first").to_string());
+            return;
+        }
+        let needs_id = match lang::rhai::kind_of(&self.text) {
+            Some(EntryKind::Transform) => crate::variations::custom::needs_id(&self.text),
+            Some(EntryKind::Effect) => !lang::rhai::info_string(&self.text, "id").is_some_and(|id| crate::scripted::is_uuid(&id)),
+            _ => false,
+        };
+        if needs_id {
+            self.text = lang::rhai::with_own_id(&self.text, &crate::scripted::mint_id());
+            self.save();
+        }
+        match crate::storage::library::register_plugin(file, &self.text) {
+            Ok(p) => {
+                link.plugin = true;
+                self.status = Some(match formula_store::set_link(file, link) {
+                    Ok(()) => t!("formula_editor.plugin_on", title = p.title).to_string(),
+                    Err(e) => e,
+                });
+            }
+            Err(e) => self.status = Some(t!("formula_editor.plugin_failed", file = file, error = e).to_string()),
         }
     }
 
@@ -520,12 +1020,17 @@ impl FormulaEditorPanel {
             let current = format!("{}{}", self.name, if dirty { " *" } else { "" });
             let mut open: Option<String> = None;
             let mut example: Option<usize> = None;
+            let mut shipped_effect: Option<(String, String)> = None;
             egui::ComboBox::from_id_salt("formula_editor_file")
                 .selected_text(current)
                 .width(180.0)
                 .show_ui(ui, |ui| {
+                    // The library's marks: whose it is, and a plug-in.
+                    let links = formula_store::links();
                     for f in &self.files {
-                        if ui.selectable_label(self.file.as_deref() == Some(f.as_str()), f).clicked() {
+                        let link = links.get(f).cloned().unwrap_or_default();
+                        let label = format!("{f}{}", crate::storage::library::marks(crate::storage::library::origin_of_link(&link), link.plugin));
+                        if ui.selectable_label(self.file.as_deref() == Some(f.as_str()), label).clicked() {
                             open = Some(f.clone());
                         }
                     }
@@ -537,7 +1042,27 @@ impl FormulaEditorPanel {
                             example = Some(i);
                         }
                     }
+                    // The built-in effects' sources, which the app runs:
+                    // opened unsaved, a copy to Save and Use as one's own.
+                    ui.separator();
+                    for (name, source) in crate::effects::custom::BUILTIN_TWINS {
+                        let title = crate::effects::global_effect_registry().get(name).map(|i| i.translated_name()).unwrap_or_else(|| name.to_string());
+                        if ui.selectable_label(false, t!("formula_editor.example_effect", name = title)).clicked() {
+                            shipped_effect = Some((format!("{name}.rhai"), source.to_string()));
+                        }
+                    }
+                    // The simulation colourings and models that ship as Rhai
+                    // (P4).
+                    for (name, source) in crate::sim::custom::SHIPPED.iter().chain(crate::sim::custom::SHIPPED_MODELS) {
+                        let title = lang::rhai::title(source).unwrap_or_else(|| name.to_string());
+                        if ui.selectable_label(false, t!("formula_editor.example_sim", name = title)).clicked() {
+                            shipped_effect = Some((format!("sim-{name}.rhai"), source.to_string()));
+                        }
+                    }
                 });
+            if let Some((file, text)) = shipped_effect {
+                self.adopt(None, file, text);
+            }
             if let Some(f) = open {
                 self.open_stored(&f);
             }
@@ -558,12 +1083,21 @@ impl FormulaEditorPanel {
             }
             if let Some(file) = self.file.clone() {
                 if ui.button(t!("formula_editor.delete")).clicked() {
+                    crate::storage::library::unlist_plugin(&file);
                     self.status = Some(match formula_store::delete(&file) {
                         Ok(()) => t!("formula_editor.deleted", file = file).to_string(),
                         Err(e) => e,
                     });
                     self.files = formula_store::list();
                     self.file = None;
+                }
+                // A plug-in: registered at every start, so it is in the
+                // lists without a config carrying it (P3).
+                if self.could_be_plugin() {
+                    let mut on = formula_store::link_of(&file).is_some_and(|l| l.plugin);
+                    if ui.checkbox(&mut on, t!("formula_editor.plugin")).on_hover_text(t!("formula_editor.plugin_tip")).changed() {
+                        self.set_plugin(&file, on);
+                    }
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -643,16 +1177,16 @@ impl FormulaEditorPanel {
         }
         let mut clicked: Option<(EntryKind, usize)> = None;
         let mut convert: Option<usize> = None;
+        let mut sim_clicked: Option<(EntryKind, usize, SimSlot)> = None;
         let foreign = self.dialect != CustomDialect::Rhai;
         for (i, row) in self.entries.iter().enumerate() {
             ui.horizontal_wrapped(|ui| {
                 ui.strong(&row.name);
-                let order = match row.likely {
-                    EntryKind::Formula => [EntryKind::Formula, EntryKind::Coloring, EntryKind::Transform, EntryKind::Solid],
-                    EntryKind::Coloring => [EntryKind::Coloring, EntryKind::Formula, EntryKind::Transform, EntryKind::Solid],
-                    EntryKind::Transform => [EntryKind::Transform, EntryKind::Formula, EntryKind::Coloring, EntryKind::Solid],
-                    EntryKind::Solid => [EntryKind::Solid, EntryKind::Formula, EntryKind::Coloring, EntryKind::Transform],
-                };
+                // What it most likely is leads, the rest in their order.
+                use EntryKind::*;
+                const ALL: [EntryKind; 7] = [Formula, Coloring, Transform, Solid, Effect, SimColoring, SimModel];
+                let mut order = ALL;
+                order.sort_by_key(|k| *k != row.likely);
                 for kind in order {
                     let ok = row.errors(kind).is_empty();
                     let label = match kind {
@@ -661,10 +1195,34 @@ impl FormulaEditorPanel {
                         EntryKind::Transform if escape_mode => t!("formula_editor.use_lens"),
                         EntryKind::Transform => t!("formula_editor.use_variation"),
                         EntryKind::Solid => t!("formula_editor.use_solid"),
+                        EntryKind::Effect => t!("formula_editor.use_effect"),
+                        EntryKind::SimColoring => t!("formula_editor.use_sim_coloring"),
+                        EntryKind::SimModel => t!("formula_editor.use_sim_model"),
                     };
                     // The kind it is not is offered only when it compiles
                     // as that too; the kind it is shows its errors.
                     if !ok && kind != row.likely {
+                        continue;
+                    }
+                    // A layered simulation: which layer, as a menu.
+                    let slots = if matches!(kind, EntryKind::SimColoring | EntryKind::SimModel) { sim_slots(kind, &cm.config().sim) } else { Vec::new() };
+                    if slots.len() > 1 {
+                        ui.add_enabled_ui(ok, |ui| {
+                            ui.menu_button(label, |ui| {
+                                for slot in &slots {
+                                    let SimSlot::At(n) = *slot else { continue };
+                                    let name = if kind == EntryKind::SimModel {
+                                        t!("sim_panel.layer_label", n = (n + 1).to_string())
+                                    } else {
+                                        t!("sim_panel.color_layer_label", n = (n + 1).to_string())
+                                    };
+                                    if ui.button(name.as_ref()).clicked() {
+                                        sim_clicked = Some((kind, i, *slot));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        });
                         continue;
                     }
                     let b = ui.add_enabled(ok, egui::Button::new(label));
@@ -690,6 +1248,9 @@ impl FormulaEditorPanel {
         }
         if let Some((kind, i)) = clicked {
             self.use_entry(cm, kind, i);
+        }
+        if let Some((kind, i, slot)) = sim_clicked {
+            self.use_sim(cm, kind, i, slot);
         }
         if let Some(i) = convert {
             self.edit_as_rhai(i);
@@ -806,6 +1367,9 @@ mod tests {
         let c = cm.config();
         assert_eq!(c.render_mode, RenderMode::Escape, "{:?}", panel.status);
         assert!(c.escape.coloring.starts_with(custom::PREFIX), "{}", c.escape.coloring);
+        // Given an id, written into the file, and named by it.
+        let id = lang::rhai::info_string(&panel.text, "id").expect("an id in the file");
+        assert_eq!(crate::scripted::key_id(&c.escape.coloring[custom::PREFIX.len()..]).as_deref(), Some(id.as_str()), "{}", c.escape.coloring);
         assert_eq!(c.escape.formula, formula, "over the formula the config had");
         assert_eq!(cm.history_len() - before, 1, "one undo step");
         cm.undo().unwrap();
@@ -817,5 +1381,181 @@ mod tests {
         let c = cm.config();
         assert_eq!(c.render_mode, RenderMode::Escape, "{:?}", panel.status);
         assert!(c.escape.formula.starts_with(custom::PREFIX), "{}", c.escape.formula);
+    }
+
+    /// An effect opened with an id that is not one of the user's -- a copy
+    /// of a built-in's twin, `vignette`, or one typed by hand -- is offered
+    /// for Use, and Use gives it a UUID, written into the file, before it
+    /// goes into the config and the chain. (It was refused: "not an
+    /// effect's id", with Use disabled and nothing to do about it.)
+    #[test]
+    fn an_effect_with_a_hand_written_id_gets_its_own_on_use() {
+        let mut cm = ConfigManager::new(crate::config::FractalConfig::default());
+        let mut panel = FormulaEditorPanel::new();
+        let copied = include_str!("../../assets/effects/vignette.rhai").replace("id: \"vignette\"", "id: \"my_vignette\"");
+        panel.adopt(None, "my-vignette.rhai".into(), copied);
+        panel.recheck();
+        assert!(panel.entries[0].errors(EntryKind::Effect).is_empty(), "{:?}", panel.entries[0].errors(EntryKind::Effect));
+        panel.use_entry(&mut cm, EntryKind::Effect, 0);
+        let id = lang::rhai::info_string(&panel.text, "id").expect("an id in the file");
+        assert!(crate::scripted::is_uuid(&id), "{id}: {:?}", panel.status);
+        let c = cm.config();
+        assert_eq!(c.custom_effects.len(), 1);
+        assert_eq!(crate::effects::custom::id_of(&c.custom_effects[0].entry), id);
+        let key = c.custom_effects[0].entry.clone();
+        assert_eq!(crate::effects::custom::id_of(&key), id, "keyed by its id and version");
+        assert_eq!(c.color_effects.last().map(|e| e.effect_type.as_str()), Some(key.as_str()));
+        let instances = c.color_effects.len();
+
+        // Edited and used again: the instance moves to the new version, its
+        // source replaces the old, one undo step; both versions stay
+        // registered, so the undo renders what it did.
+        panel.text = panel.text.replace("value: 0.5, min: 0.0, max: 1.0, caption: \"Radius\"", "value: 0.7, min: 0.0, max: 1.0, caption: \"Radius\"");
+        panel.recheck();
+        let before = cm.history_len();
+        panel.use_entry(&mut cm, EntryKind::Effect, 0);
+        let c = cm.config();
+        let new_key = c.custom_effects[0].entry.clone();
+        assert_ne!(new_key, key, "a new version, a new key");
+        assert_eq!(crate::effects::custom::id_of(&new_key), id);
+        assert_eq!(c.custom_effects.len(), 1, "the old source goes");
+        assert_eq!(c.color_effects.len(), instances, "no second instance");
+        assert_eq!(c.color_effects.last().map(|e| e.effect_type.as_str()), Some(new_key.as_str()));
+        assert_eq!(cm.history_len() - before, 1, "one undo step");
+        cm.undo().unwrap();
+        assert_eq!(cm.config().color_effects.last().map(|e| e.effect_type.as_str()), Some(key.as_str()));
+        assert!(crate::effects::global_effect_registry().get(&key).is_some(), "the old version still renders");
+        let mut registry = crate::effects::global_effect_registry_mut();
+        registry.remove_by_name(&key);
+        registry.remove_by_name(&new_key);
+    }
+
+    /// Edit as Rhai on a built-in effect: the instance runs the user's
+    /// copy of the source the built-in runs, under a UUID of its own, its
+    /// settings kept, in one undo step; the editor holds that copy in use;
+    /// the built-in is untouched, and undo returns the instance to it.
+    #[test]
+    fn edit_as_rhai_makes_a_builtin_effect_the_users() {
+        let mut config = crate::config::FractalConfig::default();
+        let mut vignette = crate::effects::EffectInstance::new("vignette");
+        vignette.set_param("intensity", 0.8);
+        config.color_effects = vec![vignette];
+        let mut cm = ConfigManager::new(config);
+        let mut panel = FormulaEditorPanel::new();
+        let before = cm.history_len();
+        panel.edit_effect_as_rhai(&mut cm, false, 0, "vignette");
+        let c = cm.config();
+        let key = c.color_effects[0].effect_type.clone();
+        let id = crate::effects::custom::id_of(&key);
+        assert!(crate::scripted::is_uuid(&id), "{key}: {:?}", panel.status);
+        assert_eq!(c.color_effects[0].params.get("intensity"), Some(&0.8), "its settings kept");
+        assert_eq!(c.custom_effects.len(), 1);
+        assert_eq!(c.custom_effects[0].entry, key);
+        assert_eq!(cm.history_len() - before, 1, "one undo step");
+        assert_eq!(lang::rhai::info_string(&panel.text, "id").as_deref(), Some(id.as_str()), "the editor holds the copy");
+        assert!(panel.in_use.iter().any(|(k, _, n)| *k == EntryKind::Effect && *n == id), "in use, for Live");
+        assert!(crate::effects::global_effect_registry().get("vignette").is_some_and(|i| i.provenance.is_builtin()), "the built-in stays");
+        cm.undo().unwrap();
+        assert_eq!(cm.config().color_effects[0].effect_type, "vignette");
+        crate::effects::global_effect_registry_mut().remove_by_name(&key);
+    }
+
+    /// Edit as Rhai in the simulation panel (P7 step 5): a built-in model
+    /// becomes its twin under a UUID of its own -- the flat slot's
+    /// parameters, dt and steps kept -- and a colour layer's colouring its
+    /// twin, its settings kept; each one undo step, the editor holding the
+    /// copy in use, and from another mode Simulation entered in the step.
+    #[test]
+    fn edit_as_rhai_makes_a_builtin_simulation_the_users() {
+        use crate::scene::transforms::RenderMode;
+        let mut config = crate::config::FractalConfig::default();
+        config.sim.model = "mccabe".into();
+        config.sim.model_params.insert("scales".into(), 4.0);
+        config.sim.dt = 0.5;
+        config.sim.steps = 321;
+        config.sim.color_layers = vec![
+            crate::config::sim::SimColorLayer { coloring: "channel".into(), coloring_params: [("scale".to_string(), 3.0)].into(), ..Default::default() },
+            crate::config::sim::SimColorLayer { coloring: "scale_memory".into(), ..Default::default() },
+        ];
+        let mut cm = ConfigManager::new(config);
+        let mut panel = FormulaEditorPanel::new();
+        let before = cm.history_len();
+        panel.edit_sim_as_rhai(&mut cm, true, None, "mccabe");
+        let s = &cm.config().sim;
+        assert!(s.model.starts_with(crate::sim::custom::PREFIX), "{}: {:?}", s.model, panel.status);
+        let id = lang::rhai::info_string(&s.custom_model.as_ref().expect("carried").source, "id").expect("an id");
+        assert!(crate::scripted::is_uuid(&id), "{id}");
+        assert_eq!((s.model_params.get("scales"), s.dt, s.steps), (Some(&4.0), 0.5, 321), "its settings kept");
+        assert_eq!(crate::sim::model_or_default(&s.model).name, s.model, "registered");
+        assert_eq!(cm.config().render_mode, RenderMode::Simulation, "a choice, from a flame, enters Simulation");
+        assert_eq!(cm.history_len() - before, 1, "one undo step");
+        assert_eq!(lang::rhai::info_string(&panel.text, "id").as_deref(), Some(id.as_str()), "the editor holds the copy");
+        assert!(panel.in_use.iter().any(|(k, _, n)| *k == EntryKind::SimModel && *n == id), "in use, for Live");
+        panel.edit_sim_as_rhai(&mut cm, false, Some(0), "channel");
+        let l = &cm.config().sim.color_layers;
+        assert!(l[0].coloring.starts_with(crate::sim::custom::PREFIX) && l[0].custom_coloring.is_some(), "{}", l[0].coloring);
+        assert_eq!(l[0].coloring_params.get("scale"), Some(&3.0), "its settings kept");
+        assert_eq!(l[1].coloring, "scale_memory", "the other colour layer untouched");
+        assert!(panel.in_use.iter().any(|(k, _, _)| *k == EntryKind::SimColoring), "in use, for Live");
+        cm.undo().unwrap();
+        cm.undo().unwrap();
+        assert_eq!((cm.config().sim.model.as_str(), cm.config().sim.color_layers[0].coloring.as_str()), ("mccabe", "channel"));
+        assert_eq!(cm.config().render_mode, RenderMode::TwoD);
+    }
+
+    /// A variation from before ids (its `INFO.name` alone) is Used under
+    /// its name's derived id, the file untouched; edited and Used again,
+    /// the transforms naming the old version move to the new one, its
+    /// parameters with it, in one undo step; the old source goes, and undo
+    /// brings the old version back, still registered. One without a name
+    /// or an id gets an id written into the file.
+    #[test]
+    #[ignore = "writes the global variation registry (VARIATIONS.md, Testing): run alone"]
+    fn a_new_version_of_a_variation_moves_its_transforms() {
+        let mut cm = ConfigManager::new(crate::config::FractalConfig::default());
+        let mut panel = FormulaEditorPanel::new();
+        let text = "const INFO = #{ title: \"Rekey\", name: \"rhai_use_rekey_test\" };\nconst PARAMS = #{ k: 0.5 };\nfn variation(z, p) {\n    z * p.k\n}\n";
+        panel.adopt(None, "rekey.rhai".into(), text.into());
+        panel.recheck();
+        assert!(panel.entries[0].errors(EntryKind::Transform).is_empty(), "{:?}", panel.entries[0].errors(EntryKind::Transform));
+        panel.use_entry(&mut cm, EntryKind::Transform, 0);
+        assert_eq!(panel.text, text, "a name derives its id: nothing written");
+        let key = cm.config().flame.custom_variations[0].entry.clone();
+        assert_eq!(crate::variations::custom::key_of(text).as_deref(), Some(key.as_str()), "{:?}", panel.status);
+        cm.config_mut().flame.transforms.push(crate::scene::transforms::Transform::default());
+        cm.config_mut().flame.transforms[0].variations.insert(key.clone(), 0.5);
+        cm.config_mut().flame.transforms[0].variation_params.insert(format!("{key}.k"), 0.75);
+
+        panel.text = text.replace("z * p.k", "z * p.k * 0.5");
+        panel.recheck();
+        let before = cm.history_len();
+        panel.use_entry(&mut cm, EntryKind::Transform, 0);
+        let c = cm.config();
+        let new_key = c.flame.custom_variations[0].entry.clone();
+        assert_ne!(new_key, key, "a new version, a new key");
+        assert_eq!(crate::scripted::key_id(&new_key), crate::scripted::key_id(&key), "of the same id");
+        assert_eq!(c.flame.custom_variations.len(), 1, "the old source goes");
+        let t = &c.flame.transforms[0];
+        assert_eq!(t.variations.get(&new_key), Some(&0.5));
+        assert!(!t.variations.contains_key(&key));
+        assert_eq!(t.variation_params.get(&format!("{new_key}.k")), Some(&0.75));
+        assert_eq!(cm.history_len() - before, 1, "one undo step");
+        cm.undo().unwrap();
+        assert_eq!(cm.config().flame.transforms[0].variations.get(&key), Some(&0.5));
+        assert_eq!(cm.config().flame.custom_variations[0].entry, key);
+        assert!(crate::variations::global_registry().has(&key), "the old version still renders");
+
+        let bare = "const INFO = #{ title: \"Bare\" };\nfn variation(z, p) {\n    z\n}\n";
+        panel.adopt(None, "bare.rhai".into(), bare.into());
+        panel.recheck();
+        assert!(panel.entries[0].errors(EntryKind::Transform).is_empty(), "{:?}", panel.entries[0].errors(EntryKind::Transform));
+        panel.use_entry(&mut cm, EntryKind::Transform, 0);
+        let id = lang::rhai::info_string(&panel.text, "id").expect("an id in the file");
+        assert!(crate::scripted::is_uuid(&id), "{id}: {:?}", panel.status);
+        let bare_key = cm.config().flame.custom_variations.iter().map(|s| s.entry.clone()).find(|e| crate::scripted::key_id(e).as_deref() == Some(id.as_str()));
+        let mut registry = crate::variations::global_registry_mut();
+        for k in [Some(key), Some(new_key), bare_key].into_iter().flatten() {
+            registry.remove_by_name(&k);
+        }
     }
 }

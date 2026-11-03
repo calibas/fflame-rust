@@ -1810,7 +1810,7 @@ mod tests {
         coloring: Option<(&str, &str)>,
     ) -> crate::config::escape::EscapeConfig {
         use crate::config::escape::{CustomDialect, CustomSource};
-        use crate::escape::lang::EntryKind;
+        use crate::lang::EntryKind;
         if let Some((text, entry)) = formula {
             let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into(), variations: Vec::new() };
             esc.formula = crate::escape::custom::name_of(EntryKind::Formula, &src);
@@ -1825,10 +1825,10 @@ mod tests {
     }
 
     /// `esc` with a hybrid as its formula.
-    fn with_hybrid(mut esc: crate::config::escape::EscapeConfig, h: &crate::escape::lang::hybrid::Hybrid) -> crate::config::escape::EscapeConfig {
+    fn with_hybrid(mut esc: crate::config::escape::EscapeConfig, h: &crate::lang::hybrid::Hybrid) -> crate::config::escape::EscapeConfig {
         use crate::config::escape::{CustomDialect, CustomSource};
         let src = CustomSource { dialect: CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json(), variations: Vec::new() };
-        esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+        esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
         esc.custom_formula = Some(src);
         esc
     }
@@ -1836,11 +1836,42 @@ mod tests {
     /// `esc` with a Rhai formula (`lang::rhai`) as its formula.
     fn with_rhai(mut esc: crate::config::escape::EscapeConfig, source: &str) -> crate::config::escape::EscapeConfig {
         use crate::config::escape::{CustomDialect, CustomSource};
-        let title = crate::escape::lang::rhai::title(source).unwrap_or_default();
+        let title = crate::lang::rhai::title(source).unwrap_or_default();
         let src = CustomSource { dialect: CustomDialect::Rhai, entry: title, source: source.into(), variations: Vec::new() };
-        esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+        esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
         esc.custom_formula = Some(src);
         esc
+    }
+
+    /// **An early `return` in a varied variation leaves the variation
+    /// alone** (rhai-plugins P7 step 1), on the GPU as in the interpreter:
+    /// the formula that varies it -- the variation returning directly, and
+    /// from inside its own loop by the scope's flag -- renders as the same
+    /// formula written without either, but for pixels on an escape's edge:
+    /// the scope's `loop` changes where the shader compiler fuses a
+    /// multiply-add, and the last bit moves an orbit on the boundary
+    /// (measured: 6 of 12,288). A return that ended the step would move
+    /// nearly every pixel; the interpreter holds the two equal to the bit
+    /// (`an_early_return_leaves_its_own_scope`).
+    #[test]
+    fn a_varied_variations_early_return_renders_as_written_without_it() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        use crate::lang::rhai::tests::{EARLY_FORMULA, EARLY_PLAIN, EARLY_VARIATION};
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.max_iter = 200;
+        let variation = CustomSource { dialect: CustomDialect::Rhai, entry: "rhai_early_test".into(), source: EARLY_VARIATION.into(), variations: Vec::new() };
+        let mut early = with_rhai(base.clone(), EARLY_FORMULA);
+        if let Some(src) = early.custom_formula.as_mut() {
+            src.variations = vec![variation];
+            early.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, src);
+        }
+        let plain = with_rhai(base, EARLY_PLAIN);
+        let (w, h) = (128, 96);
+        let (a, b) = (records_on(&early, w, h, false, false, true), records_on(&plain, w, h, false, false, true));
+        assert!(a.iter().any(|r| r.n > 2) && a.iter().any(|r| r.n < 200), "a picture with structure");
+        let differ = a.iter().zip(&b).filter(|(x, y)| x.n != y.n).count();
+        println!("{differ} of {} pixels count differently", a.len());
+        assert!(differ * 500 <= a.len(), "{differ} pixels: the varied variation's return ended the step");
     }
 
     /// **A formula's `rand()` draws the interpreter's stream** (the KIFS
@@ -1851,8 +1882,8 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU"]
     fn a_formula_draws_the_interpreters_stream() {
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{run, Env, ParamValues};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, Env, ParamValues};
         const DRAWS: &str = "const PARAMS = #{ bailout: 4.0 };\nconst INFO = #{ title: \"Draws\" };\n\
                              fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
                              fn step(s, p) {\n    s.z = complex(rand(), rand());\n    s\n}\n\
@@ -1864,7 +1895,7 @@ mod tests {
         crate::escape::custom::ensure(&esc);
         let (w, h) = (64u32, 48u32);
         let gpu = records_on(&esc, w, h, false, false, false);
-        let prog = crate::escape::lang::rhai::program(DRAWS).expect("compiles");
+        let prog = crate::lang::rhai::program(DRAWS).expect("compiles");
         let values = ParamValues::defaults(&prog);
         let mut same = 0;
         let mut counts = std::collections::BTreeSet::new();
@@ -1892,9 +1923,9 @@ mod tests {
     #[ignore = "needs a GPU"]
     fn a_formula_calling_a_variation_renders_as_written_out() {
         use crate::config::escape::{CustomDialect, CustomSource};
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{run, Env, ParamValues};
-        use crate::escape::lang::EntryKind;
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, Env, ParamValues};
+        use crate::lang::EntryKind;
         const BEND: &str = "const PARAMS = #{\n    k: #{ value: 0.3 },\n    shift: #{ value: complex(0.1, 0.0) },\n};\n\
                             const INFO = #{ title: \"Bend\", name: \"rhai_bend_gpu\" };\n\
                             fn variation(z, p) {\n    let r2 = z.norm_sqr();\n    z = z * complex(cos(p.k * r2), sin(p.k * r2));\n    z + p.shift\n}\n";
@@ -1941,7 +1972,7 @@ mod tests {
         assert!(d <= 0.001, "{:.3}%", d * 100.0);
 
         // A point of the bent set's edge, on the line Im c = 0.3.
-        let prog = crate::escape::lang::rhai::program(WRITTEN_OUT).expect("compiles");
+        let prog = crate::lang::rhai::program(WRITTEN_OUT).expect("compiles");
         let pv = ParamValues::defaults(&prog);
         let inside = |re: f64| !run(&prog, &pv, None, &Env::at(C64::new(re, 0.3), 4000)).escaped;
         let (mut lo, mut hi) = (f64::NAN, f64::NAN);
@@ -2071,7 +2102,7 @@ mod tests {
         let twin_of = |esc: &crate::config::escape::EscapeConfig| {
             let src = crate::escape::twins::custom_source(&esc.formula).expect("a twin");
             let mut t = esc.clone();
-            t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            t.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             t.custom_formula = Some(src);
             crate::escape::custom::ensure(&t);
             t
@@ -2134,15 +2165,15 @@ mod tests {
             let twin = twin_of(&esc);
             let what = format!("damping {damping:?} {bio:?}");
             let src = twin.custom_formula.as_ref().unwrap();
-            let mut prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, src).unwrap();
+            let mut prog = crate::escape::custom::check_entry(crate::lang::EntryKind::Formula, src).unwrap();
             if bio != BiomorphMode::Off {
-                let axis = if bio == BiomorphMode::Re { crate::escape::lang::modifiers::Axis::Re } else { crate::escape::lang::modifiers::Axis::Im };
-                prog = crate::escape::lang::modifiers::biomorph(&prog, axis).unwrap();
+                let axis = if bio == BiomorphMode::Re { crate::lang::modifiers::Axis::Re } else { crate::lang::modifiers::Axis::Im };
+                prog = crate::lang::modifiers::biomorph(&prog, axis).unwrap();
             }
             if damping != (1.0, 0.0) {
-                prog = crate::escape::lang::modifiers::damped(&prog);
+                prog = crate::lang::modifiers::damped(&prog);
             }
-            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            let mut params = crate::lang::interp::ParamValues::defaults(&prog);
             for (i, x) in prog.params.iter().enumerate() {
                 if x.name == "bailout" {
                     params.values[i].0 = 16.0;
@@ -2179,7 +2210,7 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU"]
     fn a_custom_formula_carries_its_derivative_at_depth() {
-        use crate::escape::lang::builtins::C64;
+        use crate::lang::builtins::C64;
         type Records = [crate::escape::renderer::IterRecord];
         let (w, h) = (64u32, 48u32);
         let twin = |name: &str, (cre, cim): (&str, &str), zoom: f64, iters: u32| {
@@ -2192,7 +2223,7 @@ mod tests {
             esc.max_iter = iters;
             esc.bailout = 1e4;
             let mut t = esc.clone();
-            t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            t.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             t.custom_formula = Some(src);
             crate::escape::custom::ensure(&t);
             (esc, t)
@@ -2205,9 +2236,9 @@ mod tests {
         // pixel, where it escapes.
         let truth = |esc: &crate::config::escape::EscapeConfig, (cx, cy): (f64, f64)| -> Vec<Option<(u32, C64)>> {
             let src = esc.custom_formula.as_ref().unwrap();
-            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, src).unwrap();
-            let d = crate::escape::lang::derive::with_derivative(&prog).unwrap();
-            let mut params = crate::escape::lang::interp::ParamValues::defaults(&d);
+            let prog = crate::escape::custom::check_entry(crate::lang::EntryKind::Formula, src).unwrap();
+            let d = crate::lang::derive::with_derivative(&prog).unwrap();
+            let mut params = crate::lang::interp::ParamValues::defaults(&d);
             for (i, x) in d.params.iter().enumerate() {
                 if x.name == "bailout" {
                     params.values[i].0 = f64::from(esc.bailout);
@@ -2220,7 +2251,7 @@ mod tests {
                 .map(|idx| {
                     let (px, py) = (idx % w, idx / w);
                     let c = C64::new(cx + ((px as f64 + 0.5) / w as f64 - 0.5) * span_x, cy - ((py as f64 + 0.5) / h as f64 - 0.5) * span_y);
-                    let r = crate::escape::lang::interp::run(&d, &params, None, &crate::escape::lang::interp::Env::at(c, esc.max_iter));
+                    let r = crate::lang::interp::run(&d, &params, None, &crate::lang::interp::Env::at(c, esc.max_iter));
                     (r.escaped && r.n > 2).then(|| (r.n, r.dz.scale(span_y / h as f64)))
                 })
                 .collect()
@@ -2248,10 +2279,10 @@ mod tests {
         for (zoom, iters, deep, stride) in [(30.0, 4000u32, false, 7usize), (42.0, 8000, true, 7)] {
             let (built_in, esc) = twin("mandelbrot", seahorse, zoom, iters);
             let src = esc.custom_formula.as_ref().unwrap();
-            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, src).unwrap();
-            let d = std::sync::Arc::new(crate::escape::lang::derive::with_derivative(&prog).unwrap());
+            let prog = crate::escape::custom::check_entry(crate::lang::EntryKind::Formula, src).unwrap();
+            let d = std::sync::Arc::new(crate::lang::derive::with_derivative(&prog).unwrap());
             let dzv = d.dz_var.unwrap();
-            let mut params = crate::escape::lang::interp::ParamValues::defaults(&d);
+            let mut params = crate::lang::interp::ParamValues::defaults(&d);
             for (i, x) in d.params.iter().enumerate() {
                 if x.name == "bailout" {
                     params.values[i].0 = 1e4;
@@ -2271,8 +2302,8 @@ mod tests {
                     let (px, py) = (idx as u32 % w, idx as u32 / w);
                     let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
                     let dy = -((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
-                    let env = crate::escape::lang::interp::Env::at(C64::ZERO, iters);
-                    let mut m = crate::escape::lang::bigeval::BigMachine::new(d.clone(), params.clone(), env, c.add(&crate::escape::bigfloat::BigComplex::from_f64(dx, dy, n_limbs)), n_limbs).unwrap();
+                    let env = crate::lang::interp::Env::at(C64::ZERO, iters);
+                    let mut m = crate::lang::bigeval::BigMachine::new(d.clone(), params.clone(), env, c.add(&crate::escape::bigfloat::BigComplex::from_f64(dx, dy, n_limbs)), n_limbs).unwrap();
                     for i in 0..iters {
                         if !m.step().unwrap() {
                             let dz = m.complex_var(dzv);
@@ -2318,7 +2349,7 @@ mod tests {
             esc.bailout = 4.0;
             let esc = if entry.is_empty() {
                 let mut t = esc;
-                t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &twin);
+                t.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &twin);
                 t.custom_formula = Some(twin.clone());
                 t
             } else {
@@ -2333,8 +2364,8 @@ mod tests {
             let plain = records_on(&esc, w, h, false, true, false);
             std::env::remove_var("ESCAPE_DISABLE_NUCLEUS");
             let src = esc.custom_formula.as_ref().unwrap();
-            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, src).unwrap();
-            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            let prog = crate::escape::custom::check_entry(crate::lang::EntryKind::Formula, src).unwrap();
+            let mut params = crate::lang::interp::ParamValues::defaults(&prog);
             for (i, x) in prog.params.iter().enumerate() {
                 if x.name == "bailout" {
                     params.values[i].0 = 4.0;
@@ -2367,7 +2398,7 @@ mod tests {
         let twin_of = |esc: &crate::config::escape::EscapeConfig| {
             let src = crate::escape::twins::custom_source(&esc.formula).expect("a twin");
             let mut t = esc.clone();
-            t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            t.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             t.custom_formula = Some(src);
             t
         };
@@ -2538,8 +2569,8 @@ mod tests {
                 use rayon::prelude::*;
                 let (ra, rb) = (records_on(&esc, w, h, false, false, true), records_on(&twin, w, h, false, false, true));
                 let src = twin.custom_formula.as_ref().unwrap();
-                let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
-                let mut values = crate::escape::lang::interp::ParamValues::defaults(&prog);
+                let prog = crate::lang::rhai::program(&src.source).unwrap();
+                let mut values = crate::lang::interp::ParamValues::defaults(&prog);
                 for (i, x) in prog.params.iter().enumerate() {
                     if x.name == "bailout" {
                         values.values[i].0 = f64::from(esc.bailout);
@@ -2555,15 +2586,15 @@ mod tests {
                     .into_par_iter()
                     .map(|i| {
                         let (px, py) = (i % w, i / w);
-                        let c = crate::escape::lang::builtins::C64::new(
+                        let c = crate::lang::builtins::C64::new(
                             cx + ((px as f64 + 0.5) / w as f64 - 0.5) * span_x,
                             cy - ((py as f64 + 0.5) / h as f64 - 0.5) * span_y,
                         );
-                        let mut env = crate::escape::lang::interp::Env::at(c, esc.max_iter);
+                        let mut env = crate::lang::interp::Env::at(c, esc.max_iter);
                         if julia {
-                            (env.julia, env.julia_c) = (true, crate::escape::lang::builtins::C64::new(f64::from(esc.julia_re), f64::from(esc.julia_im)));
+                            (env.julia, env.julia_c) = (true, crate::lang::builtins::C64::new(f64::from(esc.julia_re), f64::from(esc.julia_im)));
                         }
-                        crate::escape::lang::interp::run(&prog, &values, None, &env).n
+                        crate::lang::interp::run(&prog, &values, None, &env).n
                     })
                     .collect();
                 let share = |r: &[crate::escape::renderer::IterRecord], f: &dyn Fn(u32, u32) -> bool| r.iter().zip(&exact).filter(|(a, t)| f(a.n, **t)).count() as f64 / r.len() as f64;
@@ -2632,8 +2663,8 @@ mod tests {
             // The truth, in big floats, at every seventh pixel: the
             // twin's own program, its parameters as the GPU holds them.
             let src = twin.custom_formula.as_ref().unwrap();
-            let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
-            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            let prog = crate::lang::rhai::program(&src.source).unwrap();
+            let mut params = crate::lang::interp::ParamValues::defaults(&prog);
             for (i, x) in prog.params.iter().enumerate() {
                 if x.name == "bailout" {
                     params.values[i].0 = f64::from(esc.bailout);
@@ -2641,7 +2672,7 @@ mod tests {
                     params.values[i].0 = f64::from(*v);
                 }
             }
-            let plane = julia.map(|(jr, ji)| crate::escape::lang::builtins::C64::new(f64::from(jr), f64::from(ji)));
+            let plane = julia.map(|(jr, ji)| crate::lang::builtins::C64::new(f64::from(jr), f64::from(ji)));
             let truth = truth_counts_on(std::sync::Arc::new(prog), as_on_the_gpu(params), (cre, cim), zoom, max_iter, (64, 48), 7, 6, plane);
             let agree = |r: &[crate::escape::renderer::IterRecord]| truth.iter().filter(|(i, n)| r[*i].n == *n).count();
             let (built_in_true, twin_true) = (agree(&a), agree(&b));
@@ -2669,8 +2700,8 @@ mod tests {
         let tier = crate::escape::EscapeRenderer::perturb_tier(&newton);
         assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { width: 2, .. })), "newton: {tier:?}");
         let got = records_on(&newton, 64, 48, true, true, false);
-        let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, newton.custom_formula.as_ref().unwrap()).unwrap();
-        let params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+        let prog = crate::escape::custom::check_entry(crate::lang::EntryKind::Formula, newton.custom_formula.as_ref().unwrap()).unwrap();
+        let params = crate::lang::interp::ParamValues::defaults(&prog);
         let truth = truth_counts_of(std::sync::Arc::new(prog), params, ("-0.50000000000000000", "0.23019701107058421"), 30.0, 400, (64, 48), 7, 6);
         let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
         let near = truth.iter().filter(|(i, n)| got[*i].n.abs_diff(*n) <= 1).count();
@@ -2690,7 +2721,7 @@ mod tests {
                             bailout:\n |z| < 4\n}";
         const USER: &str = "U {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel + 0.1 * @fn1(z)\nbailout:\n |z| < 4\n\
                             default:\n func fn1\n  default = sin()\n endfunc\n}";
-        let choice = |name: &str| crate::escape::lang::builtins::USER_FUNCTIONS.iter().position(|f| f.name() == name).unwrap();
+        let choice = |name: &str| crate::lang::builtins::USER_FUNCTIONS.iter().position(|f| f.name() == name).unwrap();
         // Branches on the iterate (step 6c): Barnsley's on Re z, and a
         // chain on both parts' signs.
         const BARNSLEY: &str = "B {\ninit:\n z = #pixel\nloop:\n if real(z) >= 0\n  z = (z - 1) * #pixel\n else\n  z = (z + 1) * #pixel\n endif\n\
@@ -2719,8 +2750,8 @@ mod tests {
             let tier = crate::escape::EscapeRenderer::perturb_tier(&custom);
             assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{name}: {tier:?}");
             let got = records_on(&custom, 64, 48, false, true, false);
-            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, custom.custom_formula.as_ref().unwrap()).unwrap();
-            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            let prog = crate::escape::custom::check_entry(crate::lang::EntryKind::Formula, custom.custom_formula.as_ref().unwrap()).unwrap();
+            let mut params = crate::lang::interp::ParamValues::defaults(&prog);
             if let Some(k) = func {
                 params.funcs[0] = k;
             }
@@ -2728,7 +2759,7 @@ mod tests {
             let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
             let near = truth.iter().filter(|(i, n)| got[*i].n.abs_diff(*n) <= 1).count();
             let escaped = truth.iter().filter(|(_, n)| *n < max_iter).count();
-            let name = format!("{name}{}", func.map_or(String::new(), |k| format!(" ({})", crate::escape::lang::builtins::USER_FUNCTIONS[k].name())));
+            let name = format!("{name}{}", func.map_or(String::new(), |k| format!(" ({})", crate::lang::builtins::USER_FUNCTIONS[k].name())));
             println!("{name} at zoom 30: of {} pixels in big floats ({escaped} escape), the custom formula counts {right} right, {near} within one", truth.len());
             assert!(escaped > truth.len() / 4, "{name}: the view escapes too little");
             assert!(right as f64 >= 0.95 * truth.len() as f64, "{name}: {right} of {}", truth.len());
@@ -2761,7 +2792,7 @@ mod tests {
         let src = crate::escape::twins::custom_source("littlewood").unwrap();
         for (digit_set, (cre, cim)) in [(0.0f32, ("0.4772929003733922", "1.2276697019857257")), (1.0, ("1.011542751811001", "0.6920336294844374"))] {
             let mut esc = crate::config::escape::EscapeConfig::default();
-            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             esc.custom_formula = Some(src.clone());
             esc.formula_params.insert("digit_set".into(), digit_set);
             esc.center_re = cre.into();
@@ -2773,8 +2804,8 @@ mod tests {
             let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
             assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "digit set {digit_set}: {tier:?}");
             let got = records_on(&esc, 64, 48, false, true, false);
-            let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
-            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            let prog = crate::lang::rhai::program(&src.source).unwrap();
+            let mut params = crate::lang::interp::ParamValues::defaults(&prog);
             for (i, x) in prog.params.iter().enumerate() {
                 if x.name == "bailout" {
                     params.values[i].0 = 4.0;
@@ -2823,12 +2854,12 @@ mod tests {
             let text = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == file).unwrap().1;
             let src = crate::config::escape::CustomSource {
                 dialect: crate::config::escape::CustomDialect::Rhai,
-                entry: crate::escape::lang::rhai::title(text).unwrap_or_default(),
+                entry: crate::lang::rhai::title(text).unwrap_or_default(),
                 source: text.to_string(),
                 variations: Vec::new(),
             };
-            let prog = std::sync::Arc::new(crate::escape::lang::rhai::program(text).unwrap());
-            let mut values = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            let prog = std::sync::Arc::new(crate::lang::rhai::program(text).unwrap());
+            let mut values = crate::lang::interp::ParamValues::defaults(&prog);
             for (i, x) in prog.params.iter().enumerate() {
                 if x.name == "bailout" {
                     values.values[i].0 = f64::from(bailout);
@@ -2837,7 +2868,7 @@ mod tests {
             let values = as_on_the_gpu(values);
             for (centre, zoom, max_iter) in [(home, home_zoom, 150u32), (deep, 30.0, 300)] {
                 let mut esc = crate::config::escape::EscapeConfig::default();
-                esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+                esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
                 esc.custom_formula = Some(src.clone());
                 esc.center_re = centre.0.into();
                 esc.center_im = centre.1.into();
@@ -2856,10 +2887,10 @@ mod tests {
                     .iter()
                     .filter(|(idx, n)| {
                         let (px, py) = (*idx as u32 % 64, *idx as u32 / 64);
-                        let c = crate::escape::lang::builtins::C64::new(cx + ((px as f64 + 0.5) / 64.0 - 0.5) * span_x, cy - ((py as f64 + 0.5) / 48.0 - 0.5) * span_y);
-                        let mut env = crate::escape::lang::interp::Env::at(c, max_iter);
+                        let c = crate::lang::builtins::C64::new(cx + ((px as f64 + 0.5) / 64.0 - 0.5) * span_x, cy - ((py as f64 + 0.5) / 48.0 - 0.5) * span_y);
+                        let mut env = crate::lang::interp::Env::at(c, max_iter);
                         env.magn = f64::from(zoom).exp2();
-                        crate::escape::lang::interp::run(&prog, &values, None, &env).n == *n
+                        crate::lang::interp::run(&prog, &values, None, &env).n == *n
                     })
                     .count();
                 println!("{file} at zoom {zoom}: f64 {f64_right} of {} right", truth.len());
@@ -2906,30 +2937,30 @@ mod tests {
             let text = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == file).unwrap().1;
             let src = crate::config::escape::CustomSource {
                 dialect: crate::config::escape::CustomDialect::Rhai,
-                entry: crate::escape::lang::rhai::title(text).unwrap_or_default(),
+                entry: crate::lang::rhai::title(text).unwrap_or_default(),
                 source: text.to_string(),
                 variations: Vec::new(),
             };
-            let prog = crate::escape::lang::rhai::program(text).unwrap();
+            let prog = crate::lang::rhai::program(text).unwrap();
             let (cx, cy) = prog.view.center.unwrap_or((0.0, 0.0));
             let zoom = prog.view.magn.unwrap_or(1.0).log2();
             let mut esc = crate::config::escape::EscapeConfig::default();
-            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             esc.custom_formula = Some(src.clone());
             esc.center_re = format!("{cx:.17}");
             esc.center_im = format!("{cy:.17}");
             esc.zoom_log2 = zoom;
             esc.max_iter = prog.view.maxiter.unwrap_or(150);
             crate::escape::custom::ensure(&esc);
-            let values = as_on_the_gpu(crate::escape::lang::interp::ParamValues::defaults(&prog));
+            let values = as_on_the_gpu(crate::lang::interp::ParamValues::defaults(&prog));
             let span_y = 4.0 / zoom.exp2();
             let span_x = span_y * w as f64 / h as f64;
             let exact: Vec<u32> = (0..w * h)
                 .into_par_iter()
                 .map(|i| {
                     let (px, py) = (i % w, i / w);
-                    let c = crate::escape::lang::builtins::C64::new(cx + ((px as f64 + 0.5) / w as f64 - 0.5) * span_x, cy - ((py as f64 + 0.5) / h as f64 - 0.5) * span_y);
-                    crate::escape::lang::interp::run(&prog, &values, None, &crate::escape::lang::interp::Env::at(c, esc.max_iter)).n
+                    let c = crate::lang::builtins::C64::new(cx + ((px as f64 + 0.5) / w as f64 - 0.5) * span_x, cy - ((py as f64 + 0.5) / h as f64 - 0.5) * span_y);
+                    crate::lang::interp::run(&prog, &values, None, &crate::lang::interp::Env::at(c, esc.max_iter)).n
                 })
                 .collect();
             let got = records_on(&esc, w, h, false, false, true);
@@ -2979,29 +3010,29 @@ mod tests {
             let text = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == file).unwrap().1;
             let src = crate::config::escape::CustomSource {
                 dialect: crate::config::escape::CustomDialect::Rhai,
-                entry: crate::escape::lang::rhai::title(text).unwrap_or_default(),
+                entry: crate::lang::rhai::title(text).unwrap_or_default(),
                 source: text.to_string(),
                 variations: Vec::new(),
             };
-            let prog = crate::escape::lang::rhai::program(text).unwrap();
+            let prog = crate::lang::rhai::program(text).unwrap();
             let (mut cx, mut cy) = prog.view.center.unwrap_or((0.0, 0.0));
             let mut zoom = prog.view.magn.unwrap_or(1.0).log2();
             let mut esc = crate::config::escape::EscapeConfig::default();
-            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             esc.custom_formula = Some(src.clone());
             esc.max_iter = prog.view.maxiter.unwrap_or(150);
             crate::escape::custom::ensure(&esc);
             let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
-            let values = as_on_the_gpu(crate::escape::lang::interp::ParamValues::defaults(&prog));
+            let values = as_on_the_gpu(crate::lang::interp::ParamValues::defaults(&prog));
             let at = |cx: f64, cy: f64, zoom: f64, i: u32| {
                 let span_y = 4.0 / zoom.exp2();
                 let span_x = span_y * w as f64 / h as f64;
-                crate::escape::lang::builtins::C64::new(cx + ((i % w) as f64 + 0.5) / w as f64 * span_x - span_x / 2.0, cy - (((i / w) as f64 + 0.5) / h as f64 - 0.5) * span_y)
+                crate::lang::builtins::C64::new(cx + ((i % w) as f64 + 0.5) / w as f64 * span_x - span_x / 2.0, cy - (((i / w) as f64 + 0.5) / h as f64 - 0.5) * span_y)
             };
             let mx = esc.max_iter;
             let target: f64 = std::env::var("ID_ZOOM").ok().and_then(|v| v.parse().ok()).unwrap_or(16.0);
             while zoom < target {
-                let exact: Vec<u32> = (0..w * h).into_par_iter().map(|i| crate::escape::lang::interp::run(&prog, &values, None, &crate::escape::lang::interp::Env::at(at(cx, cy, zoom, i), mx)).n).collect();
+                let exact: Vec<u32> = (0..w * h).into_par_iter().map(|i| crate::lang::interp::run(&prog, &values, None, &crate::lang::interp::Env::at(at(cx, cy, zoom, i), mx)).n).collect();
                 let Some((i, _)) = exact.iter().enumerate().filter(|(_, n)| **n < mx).max_by_key(|(_, n)| **n) else { break };
                 let c = at(cx, cy, zoom, i as u32);
                 (cx, cy) = (c.re, c.im);
@@ -3010,7 +3041,7 @@ mod tests {
             esc.center_re = format!("{cx:.17}");
             esc.center_im = format!("{cy:.17}");
             esc.zoom_log2 = zoom;
-            let exact: Vec<u32> = (0..w * h).into_par_iter().map(|i| crate::escape::lang::interp::run(&prog, &values, None, &crate::escape::lang::interp::Env::at(at(cx, cy, zoom, i), mx)).n).collect();
+            let exact: Vec<u32> = (0..w * h).into_par_iter().map(|i| crate::lang::interp::run(&prog, &values, None, &crate::lang::interp::Env::at(at(cx, cy, zoom, i), mx)).n).collect();
             let distinct = exact.iter().collect::<std::collections::BTreeSet<_>>().len();
             let (cre, cim) = (format!("{cx:.17}"), format!("{cy:.17}"));
             let truth = truth_counts_of(std::sync::Arc::new(prog.clone()), values.clone(), (&cre, &cim), zoom, mx, (w, h), 3, 6);
@@ -3055,7 +3086,7 @@ mod tests {
         for &(formula, params, (cre, cim), bailout, max_iter) in cases {
             let src = crate::escape::twins::custom_source(formula).unwrap();
             let mut esc = crate::config::escape::EscapeConfig::default();
-            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             esc.custom_formula = Some(src.clone());
             for (k, v) in params {
                 esc.formula_params.insert(k.to_string(), *v);
@@ -3068,8 +3099,8 @@ mod tests {
             crate::escape::custom::ensure(&esc);
             let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
             assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
-            let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
-            let mut values = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            let prog = crate::lang::rhai::program(&src.source).unwrap();
+            let mut values = crate::lang::interp::ParamValues::defaults(&prog);
             for (i, x) in prog.params.iter().enumerate() {
                 if x.name == "bailout" {
                     values.values[i].0 = f64::from(bailout);
@@ -3124,7 +3155,7 @@ mod tests {
         for &(formula, params, (cre, cim), max_iter, slack) in cases {
             let src = crate::escape::twins::custom_source(formula).unwrap();
             let mut esc = crate::config::escape::EscapeConfig::default();
-            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             esc.custom_formula = Some(src.clone());
             for (k, v) in params {
                 esc.formula_params.insert(k.to_string(), *v);
@@ -3136,8 +3167,8 @@ mod tests {
             crate::escape::custom::ensure(&esc);
             let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
             assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
-            let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
-            let mut values = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            let prog = crate::lang::rhai::program(&src.source).unwrap();
+            let mut values = crate::lang::interp::ParamValues::defaults(&prog);
             for (i, x) in prog.params.iter().enumerate() {
                 if x.name == "bailout" {
                     values.values[i].0 = f64::from(esc.bailout);
@@ -3159,8 +3190,8 @@ mod tests {
                 .iter()
                 .filter(|&&(i, n)| {
                     let (px, py) = (i as u32 % 64, i as u32 / 64);
-                    let c = crate::escape::lang::builtins::C64::new(cx + ((px as f64 + 0.5) / 64.0 - 0.5) * span_x, cy - ((py as f64 + 0.5) / 48.0 - 0.5) * span_y);
-                    crate::escape::lang::interp::run(&prog, &values, None, &crate::escape::lang::interp::Env::at(c, max_iter)).n.abs_diff(n) <= 1
+                    let c = crate::lang::builtins::C64::new(cx + ((px as f64 + 0.5) / 64.0 - 0.5) * span_x, cy - ((py as f64 + 0.5) / 48.0 - 0.5) * span_y);
+                    crate::lang::interp::run(&prog, &values, None, &crate::lang::interp::Env::at(c, max_iter)).n.abs_diff(n) <= 1
                 })
                 .count();
             for floatexp in [false, true] {
@@ -3184,7 +3215,7 @@ mod tests {
     #[ignore = "needs a GPU"]
     fn rhai_colourings_render_as_their_uf_twins() {
         use crate::config::escape::{CustomDialect, CustomSource};
-        use crate::escape::lang::EntryKind;
+        use crate::lang::EntryKind;
         let (device, queue) = repro_device();
         let config = crate::config::FractalConfig::default();
         let (w, h) = (192u32, 128u32);
@@ -3192,7 +3223,7 @@ mod tests {
             &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
         );
         let with_rhai_coloring = |mut esc: crate::config::escape::EscapeConfig, source: String| {
-            let title = crate::escape::lang::rhai::title(&source).unwrap_or_default();
+            let title = crate::lang::rhai::title(&source).unwrap_or_default();
             let src = CustomSource { dialect: CustomDialect::Rhai, entry: title, source, variations: Vec::new() };
             esc.coloring = crate::escape::custom::name_of(EntryKind::Coloring, &src);
             esc.custom_coloring = Some(src);
@@ -3208,7 +3239,7 @@ mod tests {
             ("smooth".into(), examples.into(), "Smooth".into(), include_str!("../../assets/formulas/smooth.rhai").into()),
             ("orbit trap".into(), UF_TRAP.into(), "T".into(), include_str!("../../assets/formulas/orbit-trap.rhai").into()),
         ];
-        let (parsed, _) = crate::escape::lang::parser::parse_file(examples);
+        let (parsed, _) = crate::lang::parser::parse_file(examples);
         for e in &parsed.entries {
             let rhai = crate::escape::custom::convert_to_rhai(examples, &e.name, EntryKind::Coloring, CustomDialect::UltraFractal, "examples.ucl")
                 .unwrap_or_else(|why| panic!("{}: {why}", e.name));
@@ -3246,7 +3277,7 @@ mod tests {
         let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
             &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
         );
-        let presets = crate::escape::lang::hybrid::presets();
+        let presets = crate::lang::hybrid::presets();
         let preset = |name: &str| presets.iter().find(|(n, _)| *n == name).unwrap().1.clone();
         // (preset, built-in formula, its params, centre, zoom)
         let cases: &[(&str, &str, &[(&str, f32)], (&str, &str), f64)] = &[
@@ -3500,7 +3531,7 @@ mod tests {
         assert!(d == 0.0, "at their sizes they differ on {:.3}%", d * 100.0);
         // Converted to Rhai, at the same settings.
         use crate::config::escape::{CustomDialect, CustomSource};
-        use crate::escape::lang::EntryKind;
+        use crate::lang::EntryKind;
         let mut rhai = custom.clone();
         for (kind, text, entry) in [(EntryKind::Formula, MS, "MS"), (EntryKind::Coloring, ECS, "ECS")] {
             let converted = crate::escape::custom::convert_to_rhai(text, entry, kind, CustomDialect::UltraFractal, "test").expect("converts");
@@ -3514,7 +3545,7 @@ mod tests {
                     rhai.coloring = crate::escape::custom::name_of(kind, &src);
                     rhai.custom_coloring = Some(src);
                 }
-                EntryKind::Transform | EntryKind::Solid => unreachable!("a formula and a colouring"),
+                EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => unreachable!("a formula and a colouring"),
             }
         }
         let got = output_on(&device, &queue, &renderer, &rhai, w, h, false);
@@ -3600,7 +3631,7 @@ final:
             esc.julia_im = 0.156;
             let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
             let mut custom = esc.clone();
-            custom.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            custom.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             custom.custom_formula = Some(src.clone());
             custom.formula_params.insert("p1.re".into(), -0.8);
             custom.formula_params.insert("p1.im".into(), 0.156);
@@ -3701,7 +3732,7 @@ final:
             esc.julia_im = 0.156;
             let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
             let mut custom = esc.clone();
-            custom.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, src);
+            custom.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, src);
             custom.custom_formula = Some(src.clone());
             custom.formula_params.insert("p1.re".into(), -0.8);
             custom.formula_params.insert("p1.im".into(), 0.156);
@@ -3733,15 +3764,15 @@ final:
             esc.center_re = "-0.5".into();
             esc.center_im = "-0.5".into();
             esc.zoom_log2 = 0.5;
-            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             esc.custom_formula = Some(src.clone());
             crate::escape::custom::ensure(&esc);
             assert!(crate::escape::EscapeRenderer::derivative_gap(&esc, 1080).is_none(), "{}", src.entry);
             let recs = records_on(&esc, rw, rh, false, false, true);
-            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, &src).unwrap();
-            let d = crate::escape::lang::derive::with_derivative(&prog).unwrap();
+            let prog = crate::escape::custom::check_entry(crate::lang::EntryKind::Formula, &src).unwrap();
+            let d = crate::lang::derive::with_derivative(&prog).unwrap();
             assert!(d.dzq_var.is_some(), "{}: a Jacobian", src.entry);
-            let mut params = crate::escape::lang::interp::ParamValues::defaults(&d);
+            let mut params = crate::lang::interp::ParamValues::defaults(&d);
             for (i, x) in d.params.iter().enumerate() {
                 if x.name == "bailout" {
                     params.values[i].0 = 4.0;
@@ -3755,14 +3786,14 @@ final:
                     continue;
                 }
                 let (px, py) = (idx as u32 % rw, idx as u32 / rw);
-                let c = crate::escape::lang::builtins::C64::new(
+                let c = crate::lang::builtins::C64::new(
                     -0.5 + ((px as f64 + 0.5) / rw as f64 - 0.5) * span_x,
                     -0.5 - ((py as f64 + 0.5) / rh as f64 - 0.5) * span_y,
                 );
-                let want = crate::escape::lang::interp::run(&d, &params, None, &crate::escape::lang::interp::Env::at(c, esc.max_iter));
+                let want = crate::lang::interp::run(&d, &params, None, &crate::lang::interp::Env::at(c, esc.max_iter));
                 // Per render pixel, as every path reports it.
                 let want = want.dz.scale(span_y / rh as f64);
-                let got = crate::escape::lang::builtins::C64::new(r.dz[0] as f64, r.dz[1] as f64);
+                let got = crate::lang::builtins::C64::new(r.dz[0] as f64, r.dz[1] as f64);
                 tested += 1;
                 if got.sub(want).abs() <= 1e-3 * want.abs() {
                     agree += 1;
@@ -3807,9 +3838,9 @@ final:
             let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
             let mut c = esc.clone();
             let (f, col) = (custom(J, "J"), custom(EC, "EC"));
-            c.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &f);
+            c.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &f);
             c.custom_formula = Some(f);
-            c.coloring = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Coloring, &col);
+            c.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &col);
             c.custom_coloring = Some(col);
             c.formula_params.insert("seed.re".into(), seed.0);
             c.formula_params.insert("seed.im".into(), seed.1);
@@ -3916,7 +3947,7 @@ final:
     fn a_custom_formula_perturbs_by_its_own_equations() {
         use crate::escape::bigfloat::BigComplex;
         use crate::escape::fixedpoint::{FixedComplex, FixedPoint};
-        use crate::escape::lang;
+        use crate::lang;
         const PM: &str = "PM {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n\
                           perturbinit:\n #dz = 0\nperturbloop:\n #dz = 2 * #z * #dz + sqr(#dz) + #dpixel\n\
                           default:\n float param bailout\n  default = 4\n endparam\n}";
@@ -4053,7 +4084,7 @@ final:
     #[allow(clippy::too_many_arguments)]
     fn truth_counts(
         src: &str,
-        params: crate::escape::lang::interp::ParamValues,
+        params: crate::lang::interp::ParamValues,
         centre: (&str, &str),
         zoom: f64,
         iters: u32,
@@ -4061,7 +4092,7 @@ final:
         stride: usize,
         n_limbs: usize,
     ) -> Vec<(usize, u32)> {
-        use crate::escape::lang;
+        use crate::lang;
         let (file, _) = lang::parser::parse_file(src);
         let prog = std::sync::Arc::new(lang::check::check(&file.entries[0], lang::EntryKind::Formula, lang::Dialect::UltraFractal).0.unwrap());
         truth_counts_of(prog, params, centre, zoom, iters, (w, h), stride, n_limbs)
@@ -4069,16 +4100,16 @@ final:
 
     /// Parameter values as the GPU holds them, in f32: the map the
     /// perturbed path and its reference iterate, and so the truth's.
-    fn as_on_the_gpu(p: crate::escape::lang::interp::ParamValues) -> crate::escape::lang::interp::ParamValues {
+    fn as_on_the_gpu(p: crate::lang::interp::ParamValues) -> crate::lang::interp::ParamValues {
         let f = |v: f64| f64::from(v as f32);
-        crate::escape::lang::interp::ParamValues { values: p.values.into_iter().map(|(a, b)| (f(a), f(b))).collect(), funcs: p.funcs }
+        crate::lang::interp::ParamValues { values: p.values.into_iter().map(|(a, b)| (f(a), f(b))).collect(), funcs: p.funcs }
     }
 
     /// [`truth_counts`] of a checked program.
     #[allow(clippy::too_many_arguments)]
     fn truth_counts_of(
-        prog: std::sync::Arc<crate::escape::lang::ir::Program>,
-        params: crate::escape::lang::interp::ParamValues,
+        prog: std::sync::Arc<crate::lang::ir::Program>,
+        params: crate::lang::interp::ParamValues,
         centre: (&str, &str),
         zoom: f64,
         iters: u32,
@@ -4092,19 +4123,19 @@ final:
     /// [`truth_counts_of`] on the Julia plane of `julia` where it is one.
     #[allow(clippy::too_many_arguments)]
     fn truth_counts_on(
-        prog: std::sync::Arc<crate::escape::lang::ir::Program>,
-        params: crate::escape::lang::interp::ParamValues,
+        prog: std::sync::Arc<crate::lang::ir::Program>,
+        params: crate::lang::interp::ParamValues,
         centre: (&str, &str),
         zoom: f64,
         iters: u32,
         (w, h): (u32, u32),
         stride: usize,
         n_limbs: usize,
-        julia: Option<crate::escape::lang::builtins::C64>,
+        julia: Option<crate::lang::builtins::C64>,
     ) -> Vec<(usize, u32)> {
         use crate::escape::bigfloat::BigComplex;
         use crate::escape::fixedpoint::{FixedComplex, FixedPoint};
-        use crate::escape::lang;
+        use crate::lang;
         let c = BigComplex::from_fixed(&FixedComplex {
             re: FixedPoint::from_decimal(centre.0, n_limbs).unwrap(),
             im: FixedPoint::from_decimal(centre.1, n_limbs).unwrap(),
@@ -4151,7 +4182,7 @@ final:
     #[test]
     #[ignore = "needs a GPU"]
     fn a_hybrid_perturbs_with_a_reference_per_phase() {
-        use crate::escape::lang::hybrid::{Combine, Group, Hybrid, Line, Operator};
+        use crate::lang::hybrid::{Combine, Group, Hybrid, Line, Operator};
         let (w, h) = (64u32, 48u32);
         let op = |power: u32, mul: [f64; 2]| Operator { power, mul, ..Default::default() };
         let group = |repeats: u32, o: Operator| Group::of_lines(repeats, vec![Line { one: o, two: None, combine: Combine::Add }]);
@@ -4162,7 +4193,7 @@ final:
         // Burning Ship's twins taking turns, composed.
         let twin = |name: &str| {
             let src = crate::escape::twins::source(name).unwrap();
-            Group::of_formula(1, &crate::escape::lang::rhai::title(src).unwrap(), src)
+            Group::of_formula(1, &crate::lang::rhai::title(src).unwrap(), src)
         };
         let hybrids = [
             ("alternating", Hybrid { groups: vec![group(1, op(2, [1.0, 0.0])), group(1, turned.clone())], loop_start: 0 }),
@@ -4177,7 +4208,7 @@ final:
         // 62 of 439): composed, it must count as well as they do there.
         let lines_of = |name: &str| {
             (name == "twins taking turns")
-                .then(|| crate::escape::lang::hybrid::presets().into_iter().find(|(n, _)| *n == "Mandelbrot / Burning Ship").unwrap().1)
+                .then(|| crate::lang::hybrid::presets().into_iter().find(|(n, _)| *n == "Mandelbrot / Burning Ship").unwrap().1)
         };
         let view = |hybrid: &Hybrid, cx: &str, cy: &str, zoom: f64, iters: u32| {
             let mut esc = crate::config::escape::EscapeConfig::default();
@@ -4192,7 +4223,7 @@ final:
         };
         for (name, hybrid) in &hybrids {
             let prog = std::sync::Arc::new(hybrid.program().unwrap());
-            let params = as_on_the_gpu(crate::escape::lang::interp::ParamValues::defaults(&prog));
+            let params = as_on_the_gpu(crate::lang::interp::ParamValues::defaults(&prog));
             // Walk to the boundary: the slowest escaping pixel, three
             // octaves at a time, on the direct path and then the
             // perturbed one.
@@ -4242,10 +4273,10 @@ final:
 
         // The folds through the phases: the Mandelbrot / Burning Ship
         // preset at a view still countable, perturbed by force.
-        let presets = crate::escape::lang::hybrid::presets();
+        let presets = crate::lang::hybrid::presets();
         let ms = presets.iter().find(|(n, _)| *n == "Mandelbrot / Burning Ship").unwrap().1.clone();
         let prog = std::sync::Arc::new(ms.program().unwrap());
-        let params = as_on_the_gpu(crate::escape::lang::interp::ParamValues::defaults(&prog));
+        let params = as_on_the_gpu(crate::lang::interp::ParamValues::defaults(&prog));
         let esc = view(&ms, "-0.25", "-0.75", 3.0, 500);
         let direct = records_on(&esc, w, h, false, false, true);
         let got = records_on(&esc, w, h, false, true, false);
@@ -4293,8 +4324,8 @@ final:
         let threshold = ("-0.74364388703715870475481082977993857803", "0.13182590420531251981651559677435626549");
         let shallow = ("-0.743643887037158704752191506114774", "0.131825904205311970493132056385139");
         let (w, h) = (64u32, 48u32);
-        let params = crate::escape::lang::interp::ParamValues { values: vec![(4.0, 0.0)], funcs: vec![] };
-        let mb_params = crate::escape::lang::interp::ParamValues { values: vec![(4.0, 0.0), (1.0, 0.0)], funcs: vec![] };
+        let params = crate::lang::interp::ParamValues { values: vec![(4.0, 0.0)], funcs: vec![] };
+        let mb_params = crate::lang::interp::ParamValues { values: vec![(4.0, 0.0), (1.0, 0.0)], funcs: vec![] };
         // The cubic's boundary: the slowest escaping pixel, walked in
         // three octaves at a time on the direct path.
         let cubic_edge = {
@@ -4514,7 +4545,7 @@ final:
             esc.formula = "origami".to_string();
             if twin {
                 let src = crate::escape::twins::custom_source("origami").unwrap();
-                esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+                esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
                 esc.custom_formula = Some(src);
             }
             esc.coloring = "position_map".to_string();
@@ -6348,7 +6379,7 @@ final:
     fn exact_mean_magnitude_of(esc: &crate::config::escape::EscapeConfig, w: u32, h: u32) -> Vec<f64> {
         use crate::escape::bigfloat::BigComplex;
         use crate::escape::fixedpoint::{FixedComplex, FixedPoint};
-        use crate::escape::lang;
+        use crate::lang;
         use rayon::prelude::*;
         let src = esc.custom_formula.as_ref().expect("a custom formula");
         let prog = std::sync::Arc::new(crate::escape::custom::check_entry(lang::EntryKind::Formula, src).unwrap());
@@ -6406,7 +6437,7 @@ final:
         for &(formula, params, (cre, cim), zoom, max_iter, julia) in cases {
             let src = crate::escape::twins::custom_source(formula).unwrap();
             let mut esc = crate::config::escape::EscapeConfig::default();
-            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             esc.custom_formula = Some(src);
             esc.coloring = "magnitude_average".into();
             for (k, v) in params {
@@ -17086,7 +17117,7 @@ fn main() {
         let twin = {
             let src = crate::escape::twins::custom_source("mandelbrot").unwrap();
             let mut t = esc.clone();
-            t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            t.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             t.custom_formula = Some(src);
             crate::escape::custom::ensure(&t);
             t
@@ -17200,7 +17231,7 @@ fn main() {
             esc.bailout = 4.0;
             let src = crate::escape::twins::custom_source(formula).unwrap();
             let mut twin = esc.clone();
-            twin.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            twin.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             twin.custom_formula = Some(src);
             crate::escape::custom::ensure(&twin);
             // Warm the shaders' compiles, which neither should pay here.
@@ -17275,7 +17306,7 @@ fn main() {
             let twin = {
                 let src = crate::escape::twins::custom_source(formula).unwrap();
                 let mut t = esc.clone();
-                t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+                t.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
                 t.custom_formula = Some(src);
                 crate::escape::custom::ensure(&t);
                 t

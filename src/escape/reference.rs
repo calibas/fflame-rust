@@ -49,7 +49,7 @@ fn nucleus_for_view(
 /// [`nucleus_for_view`]'s Newton through the formula's own derivative,
 /// and the offset.
 fn custom_nucleus_at(
-    search: &crate::escape::lang::periodic::NucleusSearch,
+    search: &crate::lang::periodic::NucleusSearch,
     center_re: &str,
     center_im: &str,
     zoom_log2: f64,
@@ -665,7 +665,7 @@ pub struct ReferenceOrbit {
     /// for a loop with a cycle (a hybrid), also one machine per phase,
     /// their entries interleaved (`m * R + r`, R machines) and padded
     /// with [`ORBIT_PAD_E`] once each has ended.
-    custom: Vec<crate::escape::lang::bigeval::BigMachine>,
+    custom: Vec<crate::lang::bigeval::BigMachine>,
     custom_live: Vec<bool>,
     /// The custom family's start, `Z_0` in big floats, where its
     /// reference wraps exactly (`custom::reference_wraps`; parameter
@@ -675,7 +675,7 @@ pub struct ReferenceOrbit {
     /// The nucleus search's test riding on the custom family's build
     /// (`lang::periodic::SlopeWatch`), no further than its cap; and the
     /// period it found, which stops the build there.
-    custom_watch: Option<(crate::escape::lang::periodic::SlopeWatch, u32)>,
+    custom_watch: Option<(crate::lang::periodic::SlopeWatch, u32)>,
     custom_found: Option<u32>,
     /// A stored custom orbit's machine state, read with it and restored
     /// once the formula is known ([`Self::restore_custom`]).
@@ -1231,7 +1231,7 @@ impl ReferenceOrbit {
 
     /// The nucleus search's test after a pass (`custom_watch`): true when
     /// it found the period, which stops the build for the caller's Newton.
-    fn custom_watched(&mut self, z_prev: Option<crate::escape::lang::builtins::C64>) -> bool {
+    fn custom_watched(&mut self, z_prev: Option<crate::lang::builtins::C64>) -> bool {
         let (Some(z_prev), Some((watch, cap))) = (z_prev, self.custom_watch.as_mut()) else {
             return false;
         };
@@ -1381,7 +1381,7 @@ impl ReferenceOrbit {
         }
         while (self.orbit.len() as u32) <= max_iter {
             if !self.custom.is_empty() {
-                let z_prev = self.custom_watch.as_ref().map(|_| crate::escape::lang::builtins::C64::new(self.zb.re.to_f64(), self.zb.im.to_f64()));
+                let z_prev = self.custom_watch.as_ref().map(|_| crate::lang::builtins::C64::new(self.zb.re.to_f64(), self.zb.im.to_f64()));
                 match self.step_custom() {
                     Some(true) => {
                         if self.custom_closes() || self.custom_watched(z_prev) {
@@ -1982,7 +1982,7 @@ impl ReferenceOrbit {
         };
         let start = machines.first().map(|m| m.z().clone());
         let mut bytes: &[u8] = &saved;
-        let Some(count) = crate::escape::lang::bigeval::take_u32(&mut bytes) else {
+        let Some(count) = crate::lang::bigeval::take_u32(&mut bytes) else {
             return false;
         };
         if count as usize != machines.len() {
@@ -3262,7 +3262,7 @@ impl ReferenceOrbit {
         let search = crate::escape::custom::nucleus_search(map_params);
         let depth = CUSTOM_NEWTON_PERIODS.min(horizon.max(1));
         if let (Some(search), Some(z0)) = (&search, plain.custom_start.clone()) {
-            let c = crate::escape::lang::builtins::C64::new(plain.c.re.to_f64(), plain.c.im.to_f64());
+            let c = crate::lang::builtins::C64::new(plain.c.re.to_f64(), plain.c.im.to_f64());
             plain.custom_watch = search.watch(c, z0, 1.0 - zoom_log2).map(|w| (w, depth));
         }
         plain.extend(depth);
@@ -3299,7 +3299,7 @@ impl ReferenceOrbit {
     /// its reference wraps exactly.
     fn custom_closure_octave(&self) -> Option<i64> {
         let z0 = self.custom_start.as_ref()?;
-        Some(match crate::escape::lang::periodic::log2_abs(&self.zb.sub(z0)) {
+        Some(match crate::lang::periodic::log2_abs(&self.zb.sub(z0)) {
             None => i64::MIN / 2,
             Some(l) => l.floor() as i64,
         })
@@ -5602,7 +5602,7 @@ mod tests {
             let mut esc = EscapeConfig { bailout: 4.0, max_iter: 4000, zoom_log2: zoom, ..EscapeConfig::default() };
             esc.center_re = re.into();
             esc.center_im = im.into();
-            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             esc.custom_formula = Some(src);
             crate::escape::custom::ensure(&esc);
             let id = crate::escape::custom::reference_identity(&esc).unwrap();
@@ -5639,7 +5639,7 @@ mod tests {
             let mut esc = EscapeConfig { bailout: 4.0, max_iter: 5000, zoom_log2: zoom, ..EscapeConfig::default() };
             esc.center_re = cre.into();
             esc.center_im = cim.into();
-            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             esc.custom_formula = Some(src);
             crate::escape::custom::ensure(&esc);
             crate::escape::custom::reference_identity(&esc).expect("an identity")
@@ -5698,7 +5698,7 @@ mod tests {
             let mut esc = EscapeConfig { bailout: 4.0, max_iter, zoom_log2: zoom, ..EscapeConfig::default() };
             esc.center_re = cre.into();
             esc.center_im = cim.into();
-            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             esc.custom_formula = Some(src.clone());
             crate::escape::custom::ensure(&esc);
             let id = crate::escape::custom::reference_identity(&esc).unwrap();
@@ -5738,7 +5738,7 @@ mod tests {
             }
             esc.center_re = cre.into();
             esc.center_im = cim.into();
-            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             esc.custom_formula = Some(src);
             crate::escape::custom::ensure(&esc);
             let id = crate::escape::custom::reference_identity(&esc).unwrap();

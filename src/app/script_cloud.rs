@@ -208,6 +208,7 @@ impl App {
                         // Publishing your own script does not make it
                         // somebody else's — preserve whatever was there.
                         from_others: store::link_of(&stem).is_some_and(|l| l.from_others),
+                        ..Default::default()
                     };
                     if let Err(e) = store::set_link(&stem, link) {
                         log::warn!("Could not record the cloud link for `{stem}`: {e}");
@@ -252,6 +253,7 @@ impl App {
                                         resp.owner_display_name, resp.name
                                     )),
                                     from_others: was_theirs,
+                                    ..Default::default()
                                 },
                             );
                             self.script_cloud.conflict = None;
@@ -284,12 +286,13 @@ impl App {
 
 /// Store a fetched script locally, marked as somebody else's.
 ///
-/// Named from the server's `name`, but through `free_stem`: a published
+/// Named from the server's `name`, but through `adopt_stem`: a published
 /// script may carry a name that collides with a shipped stem on an older
 /// client even though the server rejects those, and a local collision
-/// must not silently overwrite the user's own work either.
+/// must not silently overwrite the user's own work either -- the same
+/// online script adopted again replaces its copy.
 fn adopt(resp: &ScriptResponse) -> Result<String, String> {
-    let desired = store::free_stem(&resp.name);
+    let desired = store::adopt_stem(&resp.name, &resp.id);
     let stem = store::save(&desired, &resp.source)?;
     store::set_link(
         &stem,
@@ -300,6 +303,7 @@ fn adopt(resp: &ScriptResponse) -> Result<String, String> {
             // The whole point: this survives the save, so the script
             // keeps running under the cross-call restriction.
             from_others: true,
+            ..Default::default()
         },
     )?;
     Ok(stem)

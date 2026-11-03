@@ -3,6 +3,7 @@
 //! UI for managing post-processing effects (color and density effects).
 
 use egui::Ui;
+use rust_i18n::t;
 
 use crate::animation::AnimationController;
 use crate::config::{ConfigChange, ConfigManager, ConfigPath, UpdateType};
@@ -83,6 +84,68 @@ fn widget_param(p: &EffectParameter) -> VariationParameter {
     }
 }
 
+/// The user's plug-in effects of `category` in an Add list (P3), after a
+/// separator: whether one was added. Adding one puts its source in the
+/// config first, which carries what its chains run (as the Formula
+/// Editor's Use does), then an instance at the end of the chain.
+fn plugin_effects(ui: &mut Ui, config_manager: &mut ConfigManager, category: EffectCategory) -> bool {
+    let registry = global_effect_registry();
+    let plugins: Vec<(crate::storage::library::Plugin, String)> = crate::storage::library::plugins_of(crate::storage::library::Kind::Effect)
+        .into_iter()
+        .filter_map(|p| {
+            let info = registry.get(&p.key)?;
+            (info.category == category).then(|| (p.clone(), info.translated_name()))
+        })
+        .collect();
+    drop(registry);
+    if plugins.is_empty() {
+        return false;
+    }
+    ui.separator();
+    ui.weak(t!("effects_panel.plugins"));
+    let mut added = false;
+    for (plugin, title) in plugins {
+        if !ui.selectable_label(false, &title).on_hover_text(t!("effects_panel.plugin_tip", file = plugin.file)).clicked() {
+            continue;
+        }
+        let config = config_manager.active_config();
+        if !config.custom_effects.iter().any(|s| s.entry == plugin.key) {
+            let mut list = config.custom_effects.clone();
+            list.push(plugin.carried.clone());
+            let json = serde_json::to_string(&list).unwrap_or_default();
+            if let Err(e) = config_manager.update_batch(vec![(ConfigPath::CustomEffects, crate::config::ConfigValue::String(json))], "history.action.add_plugin_effect".to_string()) {
+                log::error!("Failed to carry the effect `{}`: {e}", plugin.key);
+                continue;
+            }
+        }
+        let effect = EffectInstance::new(&plugin.key);
+        let description = format!("Add Effect: {title}");
+        let change = match category {
+            EffectCategory::Density => {
+                let index = config_manager.active_config().density_effects.len();
+                ConfigChange::add_density_effect_snapshot(index, effect, description)
+            }
+            EffectCategory::Color => {
+                let index = config_manager.active_config().color_effects.len();
+                ConfigChange::add_color_effect_snapshot(index, effect, description)
+            }
+        };
+        if let Err(e) = config_manager.apply_structural_change(change) {
+            log::error!("Failed to add effect: {}", e);
+        }
+        added = true;
+    }
+    added
+}
+
+/// Edit as Rhai, on a built-in that is its Rhai twin: whether it was
+/// clicked. The Formula Editor makes it one of the user's
+/// (`FormulaEditorPanel::edit_effect_as_rhai`).
+fn edit_as_rhai_button(ui: &mut Ui, effect_type: &str) -> bool {
+    let twin = crate::effects::custom::all_twins().any(|(n, _)| *n == effect_type);
+    twin && ui.small_button(t!("effects_panel.edit_as_rhai")).on_hover_text(t!("effects_panel.edit_as_rhai_tip")).clicked()
+}
+
 /// Draw the parameters of the effect at `index` in `list`.
 fn render_effect_params(
     ui: &mut Ui,
@@ -95,7 +158,17 @@ fn render_effect_params(
     // write through the config manager.
     let Some(params) = global_effect_registry()
         .get(effect_type)
-        .map(|info| info.parameters.iter().map(widget_param).collect::<Vec<_>>())
+        .map(|info| {
+            info.parameters
+                .iter()
+                .map(|p| {
+                    // In the current language, for a Rhai effect's labels.
+                    let mut w = widget_param(p);
+                    (w.display_name, w.description) = info.param_label(p);
+                    w
+                })
+                .collect::<Vec<_>>()
+        })
     else {
         return UpdateType::None;
     };
@@ -142,15 +215,18 @@ enum ReorderAction {
 /// through `storage::catalog`. Silent when there is no catalog: an app
 /// that renders perfectly well offline should not grow an error panel
 /// because a metadata endpoint was unreachable.
+/// The online library's section; gives the downloaded effects the user
+/// asked to update to the catalog's version.
 fn render_effect_catalog(
     ui: &mut Ui,
     catalog: Option<&crate::storage::effect_catalog::CachedEffectCatalog>,
-) {
+) -> Vec<String> {
     use crate::storage::catalog::summarize;
 
-    let Some(catalog) = catalog else { return };
+    let mut update = Vec::new();
+    let Some(catalog) = catalog else { return update };
     if catalog.items.is_empty() {
-        return;
+        return update;
     }
 
     let registry = global_effect_registry();
@@ -181,10 +257,19 @@ fn render_effect_catalog(
                 .strong(),
             );
             for (item, have, avail) in &summary.updatable {
-                ui.weak(format!(
-                    "{} — have v{have}, v{avail} available",
-                    item.display_name
-                ));
+                ui.horizontal(|ui| {
+                    ui.weak(format!(
+                        "{} — have v{have}, v{avail} available",
+                        item.display_name
+                    ));
+                    // The path that installs also updates.
+                    if ui.small_button(t!("effects_panel.update")).clicked() {
+                        update.push(item.name.clone());
+                    }
+                });
+            }
+            if summary.updatable.len() > 1 && ui.button(t!("effects_panel.update_all", count = summary.updatable.len())).clicked() {
+                update.extend(summary.updatable.iter().map(|(i, _, _)| i.name.clone()));
             }
             ui.add_space(4.0);
         }
@@ -221,6 +306,7 @@ fn render_effect_catalog(
             ui.weak("Everything in the catalog is already here.");
         }
     });
+    update
 }
 
 pub fn render_effects_panel(
@@ -232,8 +318,14 @@ pub fn render_effects_panel(
     // in `app::gpu_updates`.
     _animation_controller: &mut AnimationController,
     catalog: Option<&crate::storage::effect_catalog::CachedEffectCatalog>,
+    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
+    open_formula_editor: &mut bool,
+    effect_update_requested: &mut Vec<String>,
+    clear_effect_cache_requested: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
+    // Edit as Rhai: (density, index, the built-in).
+    let mut edit_as_rhai: Option<(bool, usize, String)> = None;
 
     ui.heading("Post-Processing Effects");
     ui.add_space(8.0);
@@ -288,6 +380,9 @@ pub fn render_effects_panel(
                         // Remove button
                         if ui.small_button("X").clicked() {
                             effect_to_remove = Some(idx);
+                        }
+                        if edit_as_rhai_button(ui, &effect.effect_type) {
+                            edit_as_rhai = Some((false, idx, effect.effect_type.clone()));
                         }
                     });
                 });
@@ -344,9 +439,12 @@ pub fn render_effects_panel(
         ui.horizontal(|ui| {
             // Get available color effects
             let registry = global_effect_registry();
+            // A Rhai effect is put to use from the Formula Editor: every
+            // version of one is registered under its own key, and would
+            // list once each.
             let available: Vec<_> = registry
                 .all()
-                .filter(|info| info.category == EffectCategory::Color)
+                .filter(|info| info.category == EffectCategory::Color && info.provenance != crate::provenance::Provenance::Custom)
                 .collect();
 
             if available.is_empty() {
@@ -375,6 +473,9 @@ pub fn render_effects_panel(
                                 }
                                 max_update = max_update.max(UpdateType::ToneMappingOnly);
                             }
+                        }
+                        if plugin_effects(ui, config_manager, EffectCategory::Color) {
+                            max_update = max_update.max(UpdateType::ToneMappingOnly);
                         }
                     });
             }
@@ -410,7 +511,7 @@ pub fn render_effects_panel(
             let registry = global_effect_registry();
             let available = registry
                 .all()
-                .filter(|info| info.category == EffectCategory::Density)
+                .filter(|info| info.category == EffectCategory::Density && info.provenance != crate::provenance::Provenance::Custom)
                 .map(|info| (info.name.clone(), info.translated_name()))
                 .collect();
             let labels = density_effects.iter().map(|e| effect_label(&registry, &e.effect_type)).collect();
@@ -453,6 +554,9 @@ pub fn render_effects_panel(
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("X").clicked() {
                                 effect_to_remove = Some(idx);
+                            }
+                            if edit_as_rhai_button(ui, &effect.effect_type) {
+                                edit_as_rhai = Some((true, idx, effect.effect_type.clone()));
                             }
                         });
                     });
@@ -527,12 +631,29 @@ pub fn render_effects_panel(
                                 max_update = max_update.max(UpdateType::ToneMappingOnly);
                             }
                         }
+                        if plugin_effects(ui, config_manager, EffectCategory::Density) {
+                            max_update = max_update.max(UpdateType::ToneMappingOnly);
+                        }
                     });
             });
         }
     });
 
-    render_effect_catalog(ui, catalog);
+    *effect_update_requested = render_effect_catalog(ui, catalog);
+    // Downloads only: the built-ins and the user's own are not cache.
+    let downloaded = global_effect_registry().all().filter(|i| i.provenance.is_cached_download()).count();
+    if downloaded > 0 {
+        ui.add_space(4.0);
+        if ui.button(t!("effects_panel.clear_cache", count = downloaded)).on_hover_text(t!("effects_panel.clear_cache_tip")).clicked() {
+            *clear_effect_cache_requested = true;
+        }
+    }
+
+    if let Some((density, index, builtin)) = edit_as_rhai {
+        formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).edit_effect_as_rhai(config_manager, density, index, &builtin);
+        *open_formula_editor = true;
+        max_update = max_update.max(UpdateType::ToneMappingOnly);
+    }
 
     max_update
 }

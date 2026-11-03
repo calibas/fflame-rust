@@ -180,6 +180,371 @@ fn small_config() -> SimConfig {
     cfg
 }
 
+/// The Rhai colourings colour as their built-ins do (P4 step 7): every
+/// shipped twin against its built-in over the same runs -- Gray-Scott's,
+/// the two-layer Brusselator's four channels, McCabe's with its memory on
+/// and its scale in `.y`, and Gray-Scott's under a matte (the distance)
+/// -- at its defaults and with each parameter moved (each other choice; a
+/// number to 70% of its range), the picture to 1e-5. A colouring's
+/// arithmetic is the built-in's but for the language's own `mix`, `length`
+/// and the like, written out, whose last bit may differ: a picture does
+/// not feed back. Each twin is the one that ran.
+#[cfg(feature = "lang")]
+#[test]
+fn the_rhai_colourings_colour_as_the_built_ins() {
+    use crate::config::sim::{SimMatte, SimMatteChannel};
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let render = |cfg: &SimConfig| {
+        let mut r = SimRenderer::new(&device, cfg, 96, 72);
+        r.render_still(&device, &queue, cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.output_texture(), 96, 72)
+    };
+    let mut runs: Vec<(&str, SimConfig)> = Vec::new();
+    let mut gs = small_config();
+    gs.steps = 400;
+    runs.push(("gray_scott", gs.clone()));
+    let mut b2 = preset_config(crate::sim::MODELS.iter().find(|m| m.name == "brusselator2").expect("a built-in"), None, 64);
+    b2.steps = 300;
+    runs.push(("brusselator2", b2));
+    let mut mc = mccabe_config(64);
+    mc.model_params.insert("memory".into(), 0.2);
+    mc.steps = 20;
+    runs.push(("mccabe", mc));
+    let mut matted = gs;
+    matted.matte = SimMatte { channel: SimMatteChannel::Y, cutoff: 0.2, softness: 0.05, invert: false, ..SimMatte::default() };
+    runs.push(("matted", matted));
+    let mut failures = Vec::new();
+    for (name, source) in crate::sim::custom::SHIPPED {
+        let builtin = crate::sim::COLORINGS.iter().find(|c| c.name == *name).expect("a built-in");
+        let carried = crate::sim::custom::carried(source);
+        let mut settings: Vec<(String, f32)> = vec![(String::new(), 0.0)];
+        for p in builtin.parameters {
+            if p.choices.is_empty() {
+                settings.push((p.name.to_string(), p.min + 0.7 * (p.max - p.min)));
+            } else {
+                for k in (0..p.choices.len()).filter(|k| *k as f32 != p.default) {
+                    settings.push((p.name.to_string(), k as f32));
+                }
+            }
+        }
+        for (run, base) in &runs {
+            for (param, value) in &settings {
+                let mut a = base.clone();
+                a.coloring = name.to_string();
+                if !param.is_empty() {
+                    a.coloring_params.insert(param.clone(), *value);
+                }
+                let mut b = a.clone();
+                b.coloring = carried.entry.clone();
+                b.custom_coloring = Some(carried.clone());
+                let (x, y) = (render(&a), render(&b));
+                assert_eq!(crate::sim::coloring_or_default(&b.coloring).name, b.coloring, "{name}: the twin registered");
+                let off = x.iter().zip(&y).flat_map(|(p, q)| p.iter().zip(q).map(|(u, v)| (u - v).abs())).fold(0.0f32, f32::max);
+                let label = if param.is_empty() { format!("{name}/{run}") } else { format!("{name}/{run}/{param}={value}") };
+                // The picture is not one colour: it holds what the run made.
+                let spread = x.iter().flat_map(|p| p.iter().take(3)).fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+                println!("{label:44} spread {:.3}..{:.3}, worst {off:.1e}", spread.0, spread.1);
+                if off > 1e-5 || off.is_nan() {
+                    let cells = x.iter().zip(&y).filter(|(p, q)| p.iter().zip(q.iter()).any(|(u, v)| (u - v).abs() > 1e-5)).count();
+                    failures.push(format!("{label}: {cells} pixels differ, worst {off:e}"));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "colourings off their built-ins:\n{}", failures.join("\n"));
+}
+
+/// The Rhai colourings colour as fast as their built-ins (P4 step 7):
+/// each twin's colour pass over a 1024x1024 Gray-Scott field (McCabe's
+/// for the memory's), fifteen rounds of 200 passes, each round the twin
+/// straight after the built-in, the median of the rounds' ratios, more
+/// than 5% slower a failure. Ignored: it times the GPU (the app closed).
+/// `SIM_TWINS=a,b` times those alone.
+#[cfg(feature = "lang")]
+#[test]
+#[ignore]
+fn the_rhai_colourings_are_no_slower() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let only: Option<Vec<String>> = std::env::var("SIM_TWINS").ok().map(|v| v.split(',').map(str::to_string).collect());
+    let wait = || {
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    };
+    let mut slower = Vec::new();
+    for (name, source) in crate::sim::custom::SHIPPED {
+        if only.as_ref().is_some_and(|o| !o.iter().any(|n| n == name)) {
+            continue;
+        }
+        let carried = crate::sim::custom::carried(source);
+        let mut builtin = if *name == "scale_memory" { mccabe_config(1024) } else { small_config() };
+        builtin.grid = SimGrid::Fixed { width: 1024, height: 1024 };
+        builtin.model_params.insert("memory".into(), 0.2);
+        builtin.coloring = name.to_string();
+        let mut twin = builtin.clone();
+        twin.coloring = carried.entry.clone();
+        twin.custom_coloring = Some(carried.clone());
+        let mut renderers = [(&builtin, SimRenderer::new(&device, &builtin, 1024, 1024)), (&twin, SimRenderer::new(&device, &twin, 1024, 1024))];
+        for (cfg, r) in &mut renderers {
+            r.seed(&device, &queue, cfg);
+            r.run_steps(&device, &queue, cfg, 100);
+            r.color(&device, &queue, cfg, &palette);
+        }
+        wait();
+        let mut ratios = Vec::new();
+        let mut ms = [0.0f64; 2];
+        for _ in 0..15 {
+            for (i, (cfg, r)) in renderers.iter_mut().enumerate() {
+                let start = web_time::Instant::now();
+                for _ in 0..200 {
+                    r.color(&device, &queue, cfg, &palette);
+                }
+                wait();
+                ms[i] = start.elapsed().as_secs_f64() * 1e3;
+            }
+            ratios.push(ms[1] / ms[0]);
+        }
+        ratios.sort_by(|a, b| a.total_cmp(b));
+        let ratio = ratios[ratios.len() / 2];
+        println!("{name:16} built-in {:8.2} ms   twin {:8.2} ms   median ratio {ratio:.3}", ms[0], ms[1]);
+        if ratio > 1.05 {
+            slower.push(format!("{name}: {:.1}% slower", (ratio - 1.0) * 100.0));
+        }
+    }
+    assert!(slower.is_empty(), "{}", slower.join("
+"));
+}
+
+/// A built-in model's config at a preset (or its defaults): the
+/// preset's parameters, time step, initial field, boundary and warp, on
+/// a square grid of `n`.
+#[cfg(feature = "lang")]
+fn preset_config(m: &crate::sim::ModelDef, pre: Option<&crate::sim::SimPreset>, n: u32) -> SimConfig {
+    let mut cfg = small_config();
+    cfg.grid = SimGrid::Fixed { width: n, height: n };
+    cfg.model = m.name.to_string();
+    cfg.dt = m.default_dt;
+    if let Some(pre) = pre {
+        cfg.model_params = pre.params.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        cfg.dt = pre.dt.unwrap_or(m.default_dt);
+        if let Some(init) = pre.init {
+            cfg.init = init;
+        }
+        cfg.boundary = pre.boundary;
+        if let Some(warp) = pre.warp {
+            cfg.warp = warp;
+        }
+    }
+    cfg
+}
+
+/// The Rhai twins step as their built-ins do (P4 step 7): every shipped
+/// twin against its built-in from the same seed, at its defaults and at
+/// each of its presets, the field compared after a few hundred steps --
+/// bit for bit where the state is discrete, to 1e-5 of its size where it
+/// is continuous, the age channel included. Each twin is the one that ran
+/// (not the default's fallback), and each run moved.
+#[cfg(feature = "lang")]
+#[test]
+fn the_rhai_models_step_as_the_built_ins() {
+    use crate::sim::StateKind;
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    const STEPS: u32 = 300;
+    let run = |cfg: &SimConfig| {
+        let mut r = SimRenderer::new(&device, cfg, N, N);
+        r.seed(&device, &queue, cfg);
+        let first = { let _ = device.poll(PollType::Wait { submission_index: None, timeout: None }); read_rgba32f(&device, &queue, r.field_texture(), N, N) };
+        r.run_steps(&device, &queue, cfg, STEPS);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        (first, read_rgba32f(&device, &queue, r.field_texture(), N, N))
+    };
+    let mut failures = Vec::new();
+    for (name, source) in crate::sim::custom::SHIPPED_MODELS {
+        let m = crate::sim::MODELS.iter().find(|m| m.name == *name).expect("a built-in");
+        let carried = crate::sim::custom::carried(source);
+        for pre in std::iter::once(None).chain(m.presets.iter().map(Some)) {
+            let builtin = preset_config(m, pre, N);
+            let mut twin = builtin.clone();
+            twin.model = carried.entry.clone();
+            twin.custom_model = Some(carried.clone());
+            // A kernel twin's step on the built-in's own table (P4 step
+            // 9b): the tables are held to each other by the settings test,
+            // and a script's, built in f64, differs in the last bit of a
+            // weight -- which a run amplifies (printed below).
+            let own = m.kernel.is_some().then(|| {
+                let mut own = twin.clone();
+                own.model = format!("custom-own-table-{name}");
+                own.custom_model = Some(crate::config::escape::CustomSource { entry: own.model.clone(), ..carried.clone() });
+                crate::sim::custom::ensure(&own);
+                crate::sim::custom::ensure(&twin);
+                crate::sim::custom::swap_kernel(&twin.model, m.kernel);
+                own
+            });
+            let ((seed_a, a), (_, b)) = (run(&builtin), run(&twin));
+            assert_eq!(crate::sim::model_or_default(&twin.model).name, twin.model, "{name}: the twin registered");
+            let label = format!("{name}/{}", pre.map_or("defaults", |p| p.name));
+            assert!(a != seed_a, "{label}: the built-in's run moved");
+            let off = a.iter().zip(&b).flat_map(|(x, y)| x.iter().zip(y).map(|(p, q)| (p - q).abs() / p.abs().max(1.0))).fold(0.0f32, f32::max);
+            let cells = a.iter().zip(&b).filter(|(x, y)| x != y).count();
+            let tolerance = if m.state == StateKind::Discrete { 0.0 } else { 1e-5 };
+            println!("{label:40} {cells:5} cells differ, worst {off:.2e}");
+            if let Some(own) = &own {
+                let (_, c) = run(own);
+                let drift = a.iter().zip(&c).flat_map(|(x, y)| x.iter().zip(y).map(|(p, q)| (p - q).abs() / p.abs().max(1.0))).fold(0.0f32, f32::max);
+                println!("{:40} on its own table, worst {drift:.2e}", "");
+            }
+            if off > tolerance || off.is_nan() {
+                failures.push(format!("{label}: {cells} cells differ, worst {off:e}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "twins off their built-ins:\n{}", failures.join("\n"));
+}
+
+/// Rhai models and colourings in layers (P4 step 4): a two-layer run with
+/// a coupling between the layers, layer 1 Gray-Scott's Rhai twin against
+/// the built-in, coloured by a two-entry stack whose second entry is
+/// Channel's twin against the built-in -- every slice and the picture as
+/// the built-ins make them, each twin registered from the source its
+/// entry carries.
+#[cfg(feature = "lang")]
+#[test]
+fn rhai_models_and_colourings_run_in_layers() {
+    use crate::config::sim::{SimBlend, SimColorLayer, SimCoupling, SimCouplingForm, SimLayer};
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let palette = test_palette(&device, &queue);
+    let model = crate::sim::custom::carried(crate::sim::custom::SHIPPED_MODELS[0].1);
+    let colouring = crate::sim::custom::carried(crate::sim::custom::SHIPPED[0].1);
+    let mut builtin = small_config();
+    let layer = |feed: f32| SimLayer { model: "gray_scott".into(), model_params: [("feed".to_string(), feed)].into(), enabled: true, custom_model: None };
+    builtin.layers = vec![layer(0.0545), layer(0.037)];
+    builtin.couplings = vec![SimCoupling { from: 0, to: 1, form: SimCouplingForm::Linear, strength: 0.002, channels: 0b10 }];
+    let entry = |source: usize| SimColorLayer {
+        source,
+        coloring: "channel".into(),
+        coloring_params: [("channel".to_string(), 1.0), ("scale".to_string(), 4.0)].into(),
+        blend: if source == 0 { SimBlend::Normal } else { SimBlend::Screen },
+        opacity: if source == 0 { 1.0 } else { 0.7 },
+        ..Default::default()
+    };
+    builtin.color_layers = vec![entry(0), entry(1)];
+    builtin.steps = 400;
+    let mut twin = builtin.clone();
+    twin.layers[1].model = model.entry.clone();
+    twin.layers[1].custom_model = Some(model.clone());
+    twin.color_layers[1].coloring = colouring.entry.clone();
+    twin.color_layers[1].custom_coloring = Some(colouring.clone());
+    let run = |cfg: &SimConfig| {
+        let mut r = SimRenderer::new(&device, cfg, N, N);
+        r.render_still(&device, &queue, cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let slices = [0, 1].map(|l| read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, l));
+        (slices, read_rgba32f(&device, &queue, r.output_texture(), N, N))
+    };
+    let (a, b) = (run(&builtin), run(&twin));
+    // Not the default's fallback, which is the built-in.
+    assert_eq!(crate::sim::model_or_default(&twin.layers[1].model).name, twin.layers[1].model, "the layer's model registered");
+    assert_eq!(crate::sim::coloring_or_default(&twin.color_layers[1].coloring).name, twin.color_layers[1].coloring, "the colour layer's colouring registered");
+    let worst = |x: &[[f32; 4]], y: &[[f32; 4]]| x.iter().zip(y).flat_map(|(p, q)| p.iter().zip(q).map(|(u, v)| (u - v).abs())).fold(0.0f32, f32::max);
+    assert!(a.0[1].iter().any(|c| c[1] > 0.05), "layer 1 grew B");
+    for l in 0..2 {
+        let w = worst(&a.0[l], &b.0[l]);
+        assert!(w <= 1e-5, "slice {l} is off by {w}");
+    }
+    let w = worst(&a.1, &b.1);
+    assert!(w <= 1e-5, "the picture is off by {w}");
+}
+
+/// The Rhai twins step as fast as their built-ins (P4; the rule that
+/// Rhai compiles to equivalent WGSL): each twin at 1024x1024 from its
+/// first preset, fifteen rounds of about 200 ms (1500 steps at most), each
+/// round the twin straight after the built-in, the median of the rounds'
+/// ratios, more than 5% slower a failure. Ignored:
+/// it times the GPU, so it wants the machine otherwise idle (the app
+/// closed). `SIM_TWINS=a,b` times those alone; `SIM_TWINS_SELF=1` times
+/// each built-in against itself, the measurement's own noise;
+/// `SIM_TWIN_PARAMS=variation=1.5,memory=0.3` sets parameters over the
+/// preset's, to time another path.
+#[cfg(feature = "lang")]
+#[test]
+#[ignore]
+fn the_rhai_models_are_no_slower() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let only: Option<Vec<String>> = std::env::var("SIM_TWINS").ok().map(|v| v.split(',').map(str::to_string).collect());
+    let wait = || {
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    };
+    let mut slower = Vec::new();
+    for (name, source) in crate::sim::custom::SHIPPED_MODELS {
+        if only.as_ref().is_some_and(|o| !o.iter().any(|n| n == name)) {
+            continue;
+        }
+        let m = crate::sim::MODELS.iter().find(|m| m.name == *name).expect("a built-in");
+        let carried = crate::sim::custom::carried(source);
+        let mut builtin = preset_config(m, m.presets.first(), 1024);
+        for kv in std::env::var("SIM_TWIN_PARAMS").unwrap_or_default().split(',').filter(|s| !s.is_empty()) {
+            let (k, v) = kv.split_once('=').expect("`name=value`");
+            builtin.model_params.insert(k.to_string(), v.parse().expect("a number"));
+        }
+        let mut twin = builtin.clone();
+        if std::env::var("SIM_TWINS_SELF").is_err() {
+            twin.model = carried.entry.clone();
+            twin.custom_model = Some(carried.clone());
+        }
+        let mut renderers = [(&builtin, SimRenderer::new(&device, &builtin, 1024, 1024)), (&twin, SimRenderer::new(&device, &twin, 1024, 1024))];
+        for (cfg, r) in &mut renderers {
+            r.seed(&device, &queue, cfg);
+            r.run_steps(&device, &queue, cfg, 50);
+        }
+        wait();
+        // Long rounds, many of them: a whole run's median still moves by a
+        // few percent with the card's clocks (`SIM_TWINS_SELF` measures it).
+        // About 200 ms a round, from the built-in's pace: 1500 steps of a
+        // stencil, fewer of a wide kernel's gather.
+        let start = web_time::Instant::now();
+        renderers[0].1.run_steps(&device, &queue, &builtin, 20);
+        wait();
+        let per_step = start.elapsed().as_secs_f64() / 20.0;
+        let steps = ((0.2 / per_step.max(1e-6)) as u32).clamp(20, 1500);
+        let mut ratios = Vec::new();
+        let mut ms = [0.0f64; 2];
+        for _ in 0..15 {
+            for (i, (cfg, r)) in renderers.iter_mut().enumerate() {
+                let start = web_time::Instant::now();
+                r.run_steps(&device, &queue, cfg, steps);
+                wait();
+                ms[i] = start.elapsed().as_secs_f64() * 1e3;
+            }
+            ratios.push(ms[1] / ms[0]);
+        }
+        ratios.sort_by(|a, b| a.total_cmp(b));
+        let ratio = ratios[ratios.len() / 2];
+        println!("{name:24} built-in {:8.2} ms   twin {:8.2} ms   median ratio {ratio:.3}", ms[0], ms[1]);
+        if ratio > 1.05 {
+            slower.push(format!("{name}: {:.1}% slower", (ratio - 1.0) * 100.0));
+        }
+    }
+    assert!(slower.is_empty(), "{}", slower.join("\n"));
+}
+
 /// An active run's grid held through a resize (app/sim_lock.rs, D7):
 /// resized with its cells fixed, the field and its step survive a new
 /// picture size, shown larger; resized as the bound grid it is, the cells
@@ -2915,11 +3280,12 @@ fn scale_memory_colours_the_memory_of_its_source_layer() {
     const N: u32 = 48;
     let mut cfg = mccabe_config(N);
     cfg.layers = vec![
-        SimLayer { model: "gray_scott".into(), model_params: Default::default(), enabled: true },
+        SimLayer { model: "gray_scott".into(), model_params: Default::default(), enabled: true, custom_model: None },
         SimLayer {
             model: "mccabe".into(),
             model_params: [("memory".to_string(), 0.2f32)].into_iter().collect(),
             enabled: true,
+            custom_model: None,
         },
     ];
     let palette = test_palette(&device, &queue);
@@ -4463,8 +4829,8 @@ fn dla_grows_a_cluster_of_the_right_fractal_dimension() {
     cfg.seed = 3;
     cfg.model_params.insert("walkers".into(), 4.0);
     cfg.model_params.insert("p_stick".into(), 1.0);
-    cfg.model_params.insert("crowding".into(), 2.0);
-    cfg.model_params.insert("launch_gap".into(), 5.0);
+    cfg.model_params.insert("crowding".into(), 5.0);
+    cfg.model_params.insert("launch_gap".into(), 2.0);
 
     let mut r = SimRenderer::new(&device, &cfg, N as u32, N as u32);
     r.seed(&device, &queue, &cfg);
@@ -8055,11 +8421,13 @@ fn a_layer_is_the_same_run_it_would_be_alone() {
             model: "lattice4".into(),
             model_params: alone.model_params.clone(),
             enabled: true,
+            custom_model: None,
         },
         crate::config::sim::SimLayer {
             model: "cahn_hilliard".into(),
             model_params: Default::default(),
             enabled: true,
+            custom_model: None,
         },
     ];
     let mut r = SimRenderer::new(&device, &layered, N, N);
@@ -8093,6 +8461,7 @@ fn layered_steps_are_batch_invariant() {
         model: model.into(),
         model_params: Default::default(),
         enabled: true,
+        custom_model: None,
     };
     cfg.layers = vec![layer("gray_scott"), layer("brusselator"), layer("lattice4")];
     let run = |chunks: &[u32]| -> Vec<Vec<[f32; 4]>> {
@@ -8132,6 +8501,7 @@ fn layered_step_cost_at_1080p() {
                 model: "gray_scott".into(),
                 model_params: Default::default(),
                 enabled: true,
+                custom_model: None,
             })
             .collect();
         if n == 1 {
@@ -8236,6 +8606,7 @@ fn two_brusselator_layers_are_the_two_layer_brusselator() {
             .map(|(k, v)| (k.to_string(), v))
             .collect(),
         enabled: true,
+        custom_model: None,
     };
     layered.layers = vec![layer(d[0], d[1]), layer(d[2], d[3])];
     let coupling = |from: usize, to: usize| crate::config::sim::SimCoupling {
@@ -8439,6 +8810,7 @@ fn a_single_normal_colour_layer_is_the_single_colouring() {
             blend: crate::config::sim::SimBlend::Normal,
             opacity: 1.0,
             enabled: true,
+            custom_coloring: None,
         }];
         let stack = render(&stacked);
         let differ = single.iter().zip(&stack).filter(|(a, b)| a != b).count();
@@ -8469,6 +8841,7 @@ fn blend_modes_match_a_cpu_evaluation() {
         model: "gray_scott".into(),
         model_params: [("feed", feed), ("kill", 0.062)].into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
         enabled: true,
+        custom_model: None,
     };
     cfg.layers = vec![layer(0.0545), layer(0.037)];
     let colour = |source: usize| crate::config::sim::SimColorLayer {
@@ -8483,6 +8856,7 @@ fn blend_modes_match_a_cpu_evaluation() {
         blend: crate::config::sim::SimBlend::Normal,
         opacity: 1.0,
         enabled: true,
+        custom_coloring: None,
     };
     let render = |cfg: &SimConfig| -> Vec<[f32; 4]> {
         let mut r = SimRenderer::new(&device, cfg, N, N);
@@ -8584,6 +8958,7 @@ fn turing_layers_of(lattice: &SimConfig) -> SimConfig {
             .map(|(k, v)| (k.to_string(), v))
             .collect(),
             enabled: true,
+            custom_model: None,
         })
         .collect();
     cfg.couplings.clear();
@@ -8599,6 +8974,193 @@ fn turing_layers_of(lattice: &SimConfig) -> SimConfig {
         }
     }
     cfg
+}
+
+/// A Rhai Turing couples as the built-in does (P4 step 9b): four layers
+/// under Signal couplings (Lattice4's ring preset, `turing_layers_of`),
+/// each layer the twin, against the built-in in each -- the published
+/// signal read by the couplings and the drive folded in by the step, on
+/// the built-in's own kernel table (`swap_kernel`), every slice
+/// bit-identical after 200 steps.
+#[cfg(feature = "lang")]
+#[test]
+fn a_rhai_turing_couples_as_the_built_in() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let lattice4 = crate::sim::MODELS.iter().find(|m| m.name == "lattice4").expect("a built-in");
+    let builtin = turing_layers_of(&preset_config(lattice4, lattice4.presets.iter().find(|p| p.name == "ring"), N));
+    assert!(builtin.couplings.len() >= 4, "the ring's couplings");
+    let carried = crate::sim::custom::carried(crate::sim::custom::SHIPPED_MODELS.iter().find(|(n, _)| *n == "turing").expect("the twin").1);
+    let mut twin = builtin.clone();
+    twin.model = carried.entry.clone();
+    twin.custom_model = Some(carried.clone());
+    for l in &mut twin.layers {
+        l.model = carried.entry.clone();
+        l.custom_model = Some(carried.clone());
+    }
+    crate::sim::custom::ensure(&twin);
+    let turing = crate::sim::MODELS.iter().find(|m| m.name == "turing").expect("a built-in");
+    crate::sim::custom::swap_kernel(&carried.entry, turing.kernel);
+    let run = |cfg: &SimConfig| {
+        let mut r = SimRenderer::new(&device, cfg, N, N);
+        r.seed(&device, &queue, cfg);
+        r.run_steps(&device, &queue, cfg, 200);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        (0..4).map(|l| read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, l)).collect::<Vec<_>>()
+    };
+    let (a, b) = (run(&builtin), run(&twin));
+    assert!(a[0].iter().any(|c| c[0].abs() > 0.05), "the coupled field formed");
+    for l in 0..4 {
+        let cells = a[l].iter().zip(&b[l]).filter(|(x, y)| x != y).count();
+        assert_eq!(cells, 0, "layer {l}: {cells} cells differ");
+    }
+}
+
+/// McCabe's twin on the paths its presets leave out (P4 step 9c): the
+/// shifted grid and the exact discs (leaning, in a table), a table with
+/// weights off 1, a negative step and symmetry, the ladder's symmetry, the
+/// variation radius (the measure pass and its scratch), per-scale warps
+/// (alone and on the exact discs), the colour memory (with the variation
+/// radius too) -- the field, and the memory where it is on, bit-identical
+/// to the built-in's after 150 steps; each case a run of its own on the
+/// built-in, so every path ran.
+#[cfg(feature = "lang")]
+#[test]
+fn a_rhai_mccabe_runs_every_path_as_the_built_in() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 64;
+    let carried = crate::sim::custom::carried(crate::sim::custom::SHIPPED_MODELS.iter().find(|(n, _)| *n == "mccabe").expect("the twin").1);
+    let table: &[(&str, f32)] = &[
+        ("layout", 1.0),
+        ("s0_radius", 1.5),
+        ("s1_radius", 3.0),
+        ("s1_weight", 0.7),
+        ("s2_radius", 7.0),
+        ("s2_symmetry", 3.0),
+        ("s2_weight", 1.3),
+        ("s3_radius", 12.0),
+        ("s3_amount", -0.02),
+        ("s4_radius", 20.0),
+        ("s4_symmetry", 5.0),
+    ];
+    let lean: &[(&str, f32)] = &[("s1_stretch", 2.0), ("s1_angle", 30.0), ("s3_stretch", 1.5), ("s3_angle", -45.0)];
+    let warps: &[(&str, f32)] = &[("s2_warp_zoom", 1.05), ("s2_warp_pan_x", 1.5), ("s3_warp_rotation", 0.1), ("s4_warp_flow", 0.3)];
+    let cases: Vec<(&str, Vec<&[(&str, f32)]>)> = vec![
+        ("shifted grid", vec![&[("averaging", 1.0)]]),
+        ("exact discs", vec![&[("averaging", 2.0)]]),
+        ("exact discs, leaning table", vec![&[("averaging", 2.0)], table, lean]),
+        ("table", vec![table]),
+        ("ladder symmetry", vec![&[("symmetry", 4.0)]]),
+        ("variation radius", vec![&[("variation", 1.5)]]),
+        ("variation radius, table", vec![&[("variation", 2.0)], table]),
+        ("scale warps", vec![warps]),
+        ("scale warps, exact discs", vec![warps, &[("averaging", 2.0)]]),
+        ("memory", vec![&[("memory", 0.3)]]),
+        ("memory, variation radius", vec![&[("memory", 0.5), ("variation", 1.0)]]),
+    ];
+    let run = |cfg: &SimConfig, slices: u32| {
+        let mut r = SimRenderer::new(&device, cfg, N, N);
+        r.seed(&device, &queue, cfg);
+        r.run_steps(&device, &queue, cfg, 150);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        (0..slices).map(|l| read_rgba32f_layer(&device, &queue, r.field_texture(), N, N, l)).collect::<Vec<_>>()
+    };
+    let plain = run(&mccabe_config(N), 1);
+    let mut failures = Vec::new();
+    for (label, sets) in &cases {
+        let mut builtin = mccabe_config(N);
+        for (k, v) in sets.iter().flat_map(|s| s.iter()) {
+            builtin.model_params.insert(k.to_string(), *v);
+        }
+        let mut twin = builtin.clone();
+        twin.model = carried.entry.clone();
+        twin.custom_model = Some(carried.clone());
+        // The field, and the memory's two slices after it.
+        let slices = if builtin.model_params.get("memory").is_some_and(|&b| b > 0.0) { 3 } else { 1 };
+        let (a, b) = (run(&builtin, slices), run(&twin, slices));
+        assert_eq!(crate::sim::model_or_default(&twin.model).name, twin.model, "the twin registered");
+        // The memory leaves the field as it was and fills its slices.
+        if slices > 1 {
+            assert!(a[1].iter().any(|c| c.iter().any(|v| *v != 0.0)), "{label}: the built-in's memory filled");
+        } else {
+            assert!(a[0] != plain[0], "{label}: the case changed the built-in's run");
+        }
+        for l in 0..slices as usize {
+            let cells = a[l].iter().zip(&b[l]).filter(|(x, y)| x != y).count();
+            println!("{label:30} slice {l}: {cells:5} cells differ");
+            if cells > 0 {
+                failures.push(format!("{label}, slice {l}: {cells} cells differ"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "the twin off the built-in:
+{}", failures.join("
+"));
+}
+
+/// The agent models' twins (P4 step 9d), records and all: Physarum dense
+/// enough that claims collide, on the wrapping field and against walls
+/// (the moves a wall refuses, which neither pass may claim), and DLA
+/// grown long enough that walkers stick, wake and are killed -- every
+/// agent's record and every cell bit-identical to the built-in's.
+#[cfg(feature = "lang")]
+#[test]
+fn the_rhai_agent_models_move_as_the_built_ins() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    const N: u32 = 128;
+    let shipped = |name: &str| crate::sim::custom::carried(crate::sim::custom::SHIPPED_MODELS.iter().find(|(n, _)| *n == name).expect("the twin").1);
+    let cases: [(&str, &str, &[(&str, f32)], SimBoundary, u32); 4] = [
+        ("physarum", "periodic", &[("population", 20.0)], SimBoundary::Periodic, 200),
+        ("physarum", "clamped", &[("population", 20.0)], SimBoundary::Clamp, 200),
+        ("physarum", "mirrored, coarse", &[("population", 8.0), ("sensor_angle", 45.0)], SimBoundary::Mirror, 200),
+        ("dla", "cluster", &[("walkers", 4.0)], SimBoundary::Clamp, 600),
+    ];
+    let mut failures = Vec::new();
+    for (name, label, params, boundary, steps) in cases {
+        let m = crate::sim::MODELS.iter().find(|m| m.name == name).expect("a built-in");
+        let mut builtin = preset_config(m, m.presets.first(), N);
+        builtin.boundary = boundary;
+        for (k, v) in params {
+            builtin.model_params.insert(k.to_string(), *v);
+        }
+        let carried = shipped(name);
+        let mut twin = builtin.clone();
+        twin.model = carried.entry.clone();
+        twin.custom_model = Some(carried.clone());
+        let run = |cfg: &SimConfig| {
+            let mut r = SimRenderer::new(&device, cfg, N, N);
+            r.seed(&device, &queue, cfg);
+            r.run_steps(&device, &queue, cfg, steps);
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let def = crate::sim::model_or_default(&cfg.model);
+            let count = (def.agents.expect("agents").count)(&def.params_view(&cfg.model_params), N, N) as usize;
+            (read_rgba32f(&device, &queue, r.field_texture(), N, N), read_agents(&device, &queue, r.agent_buffer().expect("agents"), count))
+        };
+        let ((fa, aa), (fb, ab)) = (run(&builtin), run(&twin));
+        assert_eq!(crate::sim::model_or_default(&twin.model).name, twin.model, "the twin registered");
+        assert!(fa.iter().any(|c| c[0] > 0.0), "{name} {label}: the built-in's field formed");
+        let cells = fa.iter().zip(&fb).filter(|(x, y)| x != y).count();
+        let agents = aa.iter().zip(&ab).filter(|(x, y)| x != y).count();
+        println!("{name:10} {label:20} {} agents: {agents:6} differ; cells: {cells:5} differ", aa.len());
+        for (i, (x, y)) in aa.iter().zip(&ab).enumerate().filter(|(_, (x, y))| x != y).take(6) {
+            println!("    agent {i}: {x:?} {y:?}");
+        }
+        if cells > 0 || agents > 0 || aa.len() != ab.len() {
+            failures.push(format!("{name} {label}: {cells} cells, {agents} agents differ"));
+        }
+    }
+    assert!(failures.is_empty(), "the twins off their built-ins:
+{}", failures.join("
+"));
 }
 
 /// Phase 6 of the simulation-layers plan: four `turing` layers under
@@ -8687,6 +9249,7 @@ fn four_turing_layers_are_the_lattices_ring() {
             blend: crate::config::sim::SimBlend::Normal,
             opacity: 1.0,
             enabled: true,
+            custom_coloring: None,
         }];
         r_t.color(&device, &queue, &layered_c, &palette);
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
@@ -8810,3 +9373,4 @@ fn the_view_never_changes_the_field() {
     let differing = a.iter().zip(&b).filter(|(p, q)| p.iter().zip(q.iter()).any(|(x, y)| x.to_bits() != y.to_bits())).count();
     assert_eq!(differing, 0, "the view changed {differing} cells of the field");
 }
+

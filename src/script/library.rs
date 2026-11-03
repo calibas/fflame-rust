@@ -162,15 +162,18 @@ impl ScriptEntry {
         let tag = match self.kind {
             ScriptKind::Generator => "Generator",
             ScriptKind::Modifier => "Modifier",
+            ScriptKind::Library => "Library",
         };
-        let mark = if self.untrusted {
-            " ↓"
+        // The library's marks, the Formula Editor's too.
+        use crate::storage::library::{marks, Origin};
+        let origin = if self.untrusted {
+            Origin::Downloaded
         } else if matches!(self.origin, ScriptOrigin::User) {
-            " *"
+            Origin::Yours
         } else {
-            ""
+            Origin::Shipped
         };
-        format!("{tag} · {}{mark}", self.display_name)
+        format!("{tag} · {}{}", self.display_name, marks(origin, false))
     }
 }
 
@@ -182,6 +185,24 @@ impl ScriptEntry {
 /// the user happens to have saved.
 pub fn find(entries: &[ScriptEntry], id: &str) -> Option<ScriptEntry> {
     entries.iter().find(|e| e.id == id).cloned()
+}
+
+/// A script's declared name and kind, from its top-level
+/// `script("Name", "kind")` by parsing alone -- what a scan of the
+/// library reads (`storage::library`), where running every script as
+/// [`discover`] does costs ~5 ms each. `None` when it does not parse or
+/// declares itself some other way (a computed name).
+pub fn declared(source: &str) -> Option<(String, ScriptKind)> {
+    use rhai::{Expr, Stmt};
+    let ast = rhai::Engine::new_raw().compile(source).ok()?;
+    ast.statements().iter().find_map(|st| {
+        let Stmt::FnCall(f, _) = st else { return None };
+        if f.name != "script" || f.args.len() < 2 {
+            return None;
+        }
+        let (Expr::StringConstant(name, _), Expr::StringConstant(kind, _)) = (&f.args[0], &f.args[1]) else { return None };
+        Some((name.to_string(), ScriptKind::parse(kind)?))
+    })
 }
 
 /// Is this stem the name of a script that ships with the app?
@@ -326,6 +347,24 @@ pub fn sources() -> Vec<(String, String)> {
         .collect()
 }
 
+/// `host` over the whole library, the downloaded scripts marked: what
+/// one script calls or imports resolves as it does in the Scripts panel
+/// and the CLI, under the same restriction. Cheap -- the sources, no
+/// metadata. The entry script's own trust is still the caller's to set
+/// (`with_untrusted_entry`).
+pub fn with_library(host: ScriptHost) -> ScriptHost {
+    host_over(&merged_sources().0, host)
+}
+
+fn host_over(
+    by_name: &std::collections::BTreeMap<String, (String, ScriptOrigin, bool)>,
+    host: ScriptHost,
+) -> ScriptHost {
+    let stem = |name: &str| name.trim_end_matches(".rhai").to_string();
+    host.with_scripts(by_name.iter().map(|(name, (source, ..))| (stem(name), source.clone())).collect())
+        .with_untrusted(by_name.iter().filter(|(_, (_, _, untrusted))| *untrusted).map(|(name, _)| stem(name)))
+}
+
 /// As [`discover`], plus the stems of user scripts that were refused
 /// for taking a shipped name.
 ///
@@ -340,7 +379,9 @@ pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<S
         );
     }
 
-    let host = ScriptHost::new();
+    // The whole library, so a script that imports one of the user's
+    // libraries still reads its name, kind and parameters here.
+    let host = host_over(&by_name, ScriptHost::new());
     let mut entries: Vec<ScriptEntry> = by_name
         .into_iter()
         .map(|(name, (source, origin, untrusted))| {
@@ -369,9 +410,15 @@ pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<S
         .collect();
 
     entries.sort_by(|a, b| {
-        // Generators first, then alphabetically.
-        (a.kind == ScriptKind::Modifier, a.display_name.to_lowercase())
-            .cmp(&(b.kind == ScriptKind::Modifier, b.display_name.to_lowercase()))
+        // Generators, then modifiers, then libraries; alphabetically
+        // within each.
+        let rank = |k: ScriptKind| match k {
+            ScriptKind::Generator => 0,
+            ScriptKind::Modifier => 1,
+            ScriptKind::Library => 2,
+        };
+        (rank(a.kind), a.display_name.to_lowercase())
+            .cmp(&(rank(b.kind), b.display_name.to_lowercase()))
     });
     (entries, refused)
 }

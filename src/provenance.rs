@@ -15,17 +15,17 @@
 //! asking, and those come apart the moment locally installed resources
 //! exist:
 //!
-//! | | shipped | downloaded | local plugin |
+//! | | shipped | downloaded | the user's own |
 //! |---|---|---|---|
 //! | third-party code? | no | **yes** | **yes** |
 //! | in the download cache? | no | **yes** | no |
 //! | updatable from the server? | no | **yes** | no |
 //!
-//! A local plugin is third-party code that must be reported as such,
-//! but Clear Cache must not remove it and no update can be offered for
-//! it. Substituting a `Local` variant into code that reads `!is_core`
-//! would get two of those three wrong — silently, since both failures
-//! look like "nothing happened".
+//! The user's own is code the app did not ship, but Clear Cache must not
+//! remove it and no update can be offered for it.
+//!
+//! (A `Local` variant, for WGSL plug-in files, was retired with them on
+//! 2026-11-01; docs/projects/rhai-plugins.md.)
 
 use serde::{Deserialize, Serialize};
 
@@ -39,10 +39,6 @@ pub enum Provenance {
     /// Fetched from the online library. Lives in the download cache,
     /// carries the server's version, and can be updated or cleared.
     Api { version: u32 },
-    /// Installed by the user from their own files. Third-party code the
-    /// app did not fetch and cannot refresh — removing it is the user's
-    /// business, not Clear Cache's.
-    Local,
     /// Written by the user in the formula language and carried in the
     /// config that uses it (a Rhai transformation as a flame variation,
     /// `variations::custom`). Not a file, not a download: the config is
@@ -90,7 +86,6 @@ impl Provenance {
         match self {
             Self::Builtin => "built-in".to_string(),
             Self::Api { version } => format!("API v{version}"),
-            Self::Local => "local".to_string(),
             Self::Custom => "custom".to_string(),
         }
     }
@@ -103,11 +98,11 @@ mod tests {
     /// The three questions come apart, which is the whole reason this
     /// is not a bool.
     #[test]
-    fn a_local_plugin_is_third_party_but_not_cache_and_not_updatable() {
-        let local = Provenance::Local;
-        assert!(local.is_third_party(), "the user must be told it is not ours");
-        assert!(!local.is_cached_download(), "Clear Cache must not remove the user's files");
-        assert!(local.version().is_none(), "no update can be offered for it");
+    fn the_users_own_is_third_party_but_not_cache_and_not_updatable() {
+        let own = Provenance::Custom;
+        assert!(own.is_third_party(), "the user must be told it is not ours");
+        assert!(!own.is_cached_download(), "Clear Cache must not remove the user's work");
+        assert!(own.version().is_none(), "no update can be offered for it");
     }
 
     #[test]
@@ -132,7 +127,7 @@ mod tests {
     fn the_wire_spelling_is_stable() {
         let j = |p: &Provenance| serde_json::to_string(p).unwrap();
         assert_eq!(j(&Provenance::Builtin), "\"builtin\"");
-        assert_eq!(j(&Provenance::Local), "\"local\"");
+        assert_eq!(j(&Provenance::Custom), "\"custom\"");
         assert_eq!(j(&Provenance::Api { version: 2 }), "{\"api\":{\"version\":2}}");
     }
 }

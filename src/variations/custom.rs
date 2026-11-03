@@ -9,17 +9,20 @@
 //! anything builds the flame's shader, so a saved flame renders anywhere
 //! the app runs.
 //!
-//! The name is the source's own (`INFO.name`), a lowercase identifier. It
-//! may not be a built-in's, a download's or a plug-in's; registering a
-//! custom name again replaces it, and the registry's version tells the
-//! shader cache to rebuild.
+//! It registers under its key (design rule 7): its id and its version,
+//! `scripted::key`, so two versions of one variation are two entries and
+//! a flame renders the version it carries. The id is `INFO.id`; a source
+//! from before ids has its `INFO.name` alone, and its id is derived from
+//! the name (`scripted::derived_id`), which is what a config saved then
+//! migrates to (config v7). `INFO.name`, a lowercase identifier, stays
+//! what a formula's `vary("name", z)` calls it by.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use crate::api::types::VariationDownload;
 use crate::config::escape::{CustomDialect, CustomSource};
-use crate::escape::lang::{self, ir::ParamKind, EntryKind};
+use crate::lang::{self, ir::ParamKind, EntryKind};
 use crate::provenance::Provenance;
 use crate::scene::transforms::Flame;
 
@@ -37,10 +40,35 @@ pub fn check_name(name: &str) -> Result<(), String> {
     }
 }
 
-/// A transformation's source compiled to the payload a plug-in is: its
-/// name, display name, parameters (a complex one as two, `name_re` and
-/// `name_im`, in the slots the WGSL reads), and its 2D and 3D WGSL.
+/// A variation source's id: its `INFO.id`, or for one from before ids,
+/// the id its `INFO.name` derives (`scripted::derived_id`).
+pub fn id_of_source(source: &str) -> Option<String> {
+    match lang::rhai::info_string(source, "id") {
+        Some(id) if crate::scripted::is_uuid(&id) => Some(id),
+        _ => lang::rhai::variation_name(source).map(|n| crate::scripted::derived_id(&n)),
+    }
+}
+
+/// The registry key a variation source registers under: its id and its
+/// version (`scripted::key`).
+pub fn key_of(source: &str) -> Option<String> {
+    id_of_source(source).map(|id| crate::scripted::key(&id, source))
+}
+
+/// A transformation's source compiled to the payload a plug-in is, under
+/// its key ([`key_of`]): its display name, parameters (a complex one as
+/// two, `name_re` and `name_im`, in the slots the WGSL reads), and its 2D
+/// and 3D WGSL.
 pub fn compile(source: &str) -> Result<VariationDownload, String> {
+    let key = key_of(source).ok_or_else(|| {
+        "a variation names itself: `const INFO = #{ id: \"...\" }` (the Formula Editor gives it one on Use)".to_string()
+    })?;
+    compile_as(source, &key)
+}
+
+/// [`compile`] under a key given -- the one a flame names, which its
+/// transforms' variation keys and the WGSL function both carry.
+pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> {
     let first = |d: &[lang::Diag]| {
         d.iter()
             .find(|x| x.severity == lang::Severity::Error)
@@ -55,9 +83,11 @@ pub fn compile(source: &str) -> Result<VariationDownload, String> {
     let p2 = if two { Some(lang::rhai::transformation(source).map_err(|d| first(&d))?) } else { None };
     let p3 = if three { Some(lang::rhai::transformation3(source).map_err(|d| first(&d))?) } else { None };
     let p = p2.as_ref().or(p3.as_ref()).expect("a program");
-    let name = lang::rhai::variation_name(source)
-        .ok_or_else(|| "a variation names itself: `const INFO = #{ name: \"my_swirl\" }`".to_string())?;
-    check_name(&name)?;
+    // The name `vary` calls it by, when it has one.
+    if let Some(name) = lang::rhai::variation_name(source) {
+        check_name(&name)?;
+    }
+    let name = key.to_string();
     if p2.iter().chain(p3.iter()).any(|p| !p.funcs.is_empty()) {
         return Err("a variation's function parameters are a later step".to_string());
     }
@@ -74,7 +104,7 @@ pub fn compile(source: &str) -> Result<VariationDownload, String> {
             serde_json::json!({
                 "name": name,
                 "display_name": display,
-                "param_type": if bounded { "float" } else { "unlimited_float" },
+                "param_type": if param.angle { "angle" } else if bounded { "float" } else { "unlimited_float" },
                 "default_value": value,
                 "min_value": param.min,
                 "max_value": param.max,
@@ -138,11 +168,15 @@ pub fn compile(source: &str) -> Result<VariationDownload, String> {
     serde_json::from_value(payload).map_err(|e| format!("the variation's payload: {e}"))
 }
 
-/// Compile a source and register it, replacing a custom variation of the
-/// same name; refused when a built-in, a download or a plug-in has it.
-/// Gives the name.
+/// Compile a source and register it under its key, replacing what has that
+/// key (the same version, again); refused when a built-in or a download
+/// has it. Gives the key.
 pub fn register(source: &str) -> Result<String, String> {
     let dl = compile(source)?;
+    register_payload(dl, source)
+}
+
+fn register_payload(dl: VariationDownload, source: &str) -> Result<String, String> {
     let mut registry = crate::variations::global_registry_mut();
     if let Some(existing) = registry.get(&dl.name) {
         if existing.provenance != Provenance::Custom {
@@ -162,15 +196,19 @@ pub fn register(source: &str) -> Result<String, String> {
     }
 }
 
-/// The source of the user's variation `name`, for a formula's `vary`
-/// (the KIFS plan, C1e): as registered, else a Rhai transformation of
-/// that name in their formula library, else among the examples.
+/// The source of the user's variation `name` -- its key, or the
+/// `INFO.name` a formula's `vary` calls it by (the KIFS plan, C1e): as
+/// registered, else a Rhai transformation in their formula library, else
+/// among the examples.
 pub fn source_of(name: &str) -> Option<String> {
     if let Some(s) = registered().lock().ok().and_then(|k| k.get(name).cloned()) {
         return Some(s);
     }
     use crate::storage::formula_store::{is_rhai, list, load, EXAMPLES};
-    let named = |text: &str| lang::rhai::kind_of(text) == Some(EntryKind::Transform) && lang::rhai::variation_name(text).as_deref() == Some(name);
+    let named = |text: &str| {
+        lang::rhai::kind_of(text) == Some(EntryKind::Transform)
+            && (lang::rhai::variation_name(text).as_deref() == Some(name) || key_of(text).as_deref() == Some(name))
+    };
     for file in list().into_iter().filter(|f| is_rhai(f)) {
         if let Some(text) = load(&file).filter(|t| named(t)) {
             return Some(text);
@@ -179,12 +217,12 @@ pub fn source_of(name: &str) -> Option<String> {
     EXAMPLES.iter().find(|(f, t)| is_rhai(f) && named(t)).map(|(_, t)| t.to_string())
 }
 
-/// A transformation's source as a flame carries it: named by its
-/// registry name, with the variations it calls (`vary`) beside it.
+/// A transformation's source as a flame carries it: under its key, with
+/// the variations it calls (`vary`) beside it.
 pub fn carried(source: &str) -> Option<CustomSource> {
-    let name = lang::rhai::variation_name(source)?;
-    let src = CustomSource { dialect: CustomDialect::Rhai, entry: name, source: source.to_string(), variations: Vec::new() };
-    Some(crate::escape::custom::with_called_variations(EntryKind::Transform, src))
+    let key = key_of(source)?;
+    let src = CustomSource { dialect: CustomDialect::Rhai, entry: key, source: source.to_string(), variations: Vec::new() };
+    Some(crate::lang::rhai::with_called_variations(EntryKind::Transform, src))
 }
 
 /// When a config comes to use any of `names` that is a variation of the
@@ -199,7 +237,9 @@ pub fn carry_change<'a>(config: &crate::config::FractalConfig, names: impl IntoI
         if !custom || list.iter().any(|s| s.entry == name) {
             continue;
         }
-        if let Some(src) = source_of(name).as_deref().and_then(carried) {
+        // Under the name it is registered by, which the config uses.
+        if let Some(mut src) = source_of(name).as_deref().and_then(carried) {
+            src.entry = name.to_string();
             list.push(src);
             added = true;
         }
@@ -207,7 +247,44 @@ pub fn carry_change<'a>(config: &crate::config::FractalConfig, names: impl IntoI
     added.then(|| (crate::config::ConfigPath::FlameCustomVariations, crate::config::ConfigValue::String(serde_json::to_string(&list).unwrap_or_default())))
 }
 
-/// The registered custom variations' sources, by name, as last
+/// Whether a variation source needs an id minted before it is Used: its
+/// `INFO.id` is not a UUID (typed by hand, a copy of a built-in's), or it
+/// has neither an id nor the `INFO.name` one derives from.
+pub fn needs_id(source: &str) -> bool {
+    match lang::rhai::info_string(source, "id") {
+        Some(id) => !crate::scripted::is_uuid(&id),
+        None => lang::rhai::variation_name(source).is_none(),
+    }
+}
+
+/// Move a config from every other version of the variation `id` to the
+/// one keyed `key` (`scripted::key`): the flame's transforms (every
+/// level, its weight and parameters with it), the escape-time lens and
+/// transformations. Whether anything named an older version.
+pub fn rekey(config: &mut crate::config::FractalConfig, id: &str, key: &str) -> bool {
+    let older = |n: &str| n != key && crate::scripted::key_id(n).as_deref() == Some(id);
+    let mut moved = false;
+    let flame = &mut config.flame;
+    for t in flame.transforms.iter_mut().chain(flame.linked_transforms.iter_mut()).chain(flame.final_transforms.iter_mut()) {
+        let names: Vec<String> = t.variations.keys().filter(|n| older(n)).cloned().collect();
+        for n in names {
+            moved |= t.rename_variation(&n, key);
+        }
+    }
+    if older(&config.escape.lens) {
+        config.escape.lens = key.to_string();
+        moved = true;
+    }
+    for t in &mut config.escape.transforms {
+        if older(&t.variation) {
+            t.variation = key.to_string();
+            moved = true;
+        }
+    }
+    moved
+}
+
+/// The registered custom variations' sources, by key, as last
 /// registered: what [`ensure`] compares against.
 fn registered() -> &'static Mutex<HashMap<String, String>> {
     static R: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
@@ -227,9 +304,11 @@ pub fn ensure(flame: &Flame) {
         // Remembered either way, so a failure is not retried every frame.
         known.insert(src.entry.clone(), src.source.clone());
         drop(known);
-        // Against the variations it carries (`vary`).
-        let carried = crate::escape::custom::carried_variations(src);
-        if let Err(e) = lang::rhai::with_variations(&carried, || register(&src.source)) {
+        // Against the variations it carries (`vary`), under the key the
+        // flame names, which its transforms run.
+        let carried = crate::lang::rhai::carried_variations(src);
+        let result = lang::rhai::with_variations(&carried, || compile_as(&src.source, &src.entry).and_then(|dl| register_payload(dl, &src.source)));
+        if let Err(e) = result {
             log::warn!("Custom variation `{}` did not register: {e}", src.entry);
         }
     }
@@ -253,6 +332,88 @@ fn all_sources(flame: &Flame) -> Vec<&CustomSource> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compiled under its `INFO.name`, so a test reads the WGSL by a name
+    /// it knows; [`compile`] gives it its key.
+    fn named(src: &str) -> VariationDownload {
+        let name = lang::rhai::variation_name(src).expect("a name");
+        compile_as(src, &name).unwrap_or_else(|e| panic!("{name}: {e}"))
+    }
+
+    /// A source registers under its id and version: two versions are two
+    /// keys of one id, a source from before ids takes its name's derived
+    /// one, and an `INFO.id` is its own.
+    #[test]
+    fn a_variation_is_keyed_by_its_id_and_version() {
+        let v1 = "const INFO = #{ name: \"rhai_keyed_test\" };\nfn variation(z, p) { z * 0.5 }\n";
+        let v2 = v1.replace("0.5", "0.25");
+        let (k1, k2) = (compile(v1).unwrap().name, compile(&v2).unwrap().name);
+        assert!(crate::scripted::is_key(&k1), "{k1}");
+        assert_ne!(k1, k2);
+        let derived = crate::scripted::derived_id("rhai_keyed_test");
+        assert_eq!(crate::scripted::key_id(&k1).as_deref(), Some(derived.as_str()));
+        assert_eq!(crate::scripted::key_id(&k2).as_deref(), Some(derived.as_str()));
+        assert!(compile(v1).unwrap().shader_2d.unwrap().contains(&format!("fn variation_{k1}(p: vec2<f32>)")));
+        let id = "5b0d6f0e-3c1a-4e8b-9f5d-2a7c4e6b8d10";
+        let own = format!("const INFO = #{{ id: \"{id}\", name: \"rhai_keyed_test\" }};\nfn variation(z, p) {{ z * 0.5 }}\n");
+        assert_eq!(crate::scripted::key_id(&key_of(&own).unwrap()).as_deref(), Some(id));
+        // An id alone names it too.
+        let bare = format!("const INFO = #{{ id: \"{id}\" }};\nfn variation(z, p) {{ z }}\n");
+        assert!(compile(&bare).is_ok());
+        assert_eq!(super::carried(&bare).map(|c| c.entry), key_of(&bare));
+        assert!(!needs_id(v1) && !needs_id(&own), "a name derives one; a UUID is one");
+        assert!(needs_id("const INFO = #{ id: \"my_swirl\" };\nfn variation(z, p) { z }\n"), "typed by hand");
+        assert!(needs_id("fn variation(z, p) { z }\n"), "none at all");
+    }
+
+    /// A picker offers one version of each id: the one the flame carries,
+    /// else the last registered; built-ins and other ids are untouched.
+    #[test]
+    fn a_picker_offers_one_version_of_each() {
+        let v1 = "const INFO = #{ name: \"rhai_pick_test\" };\nfn variation(z, p) { z * 0.5 }\n";
+        let v2 = v1.replace("0.5", "0.25");
+        let other = "const INFO = #{ name: \"rhai_pick_other\" };\nfn variation(z, p) { z }\n";
+        let mut registry = crate::variations::VariationRegistry::new();
+        let (d1, d2, d3) = (compile(v1).unwrap(), compile(&v2).unwrap(), compile(other).unwrap());
+        for d in [&d1, &d2, &d3] {
+            registry.register_from_api(d, Provenance::Custom);
+        }
+        let hidden = registry.superseded(&[]);
+        assert_eq!(hidden.into_iter().collect::<Vec<_>>(), [d1.name.clone()], "the last registered");
+        let carried = [CustomSource { dialect: CustomDialect::Rhai, entry: d1.name.clone(), source: v1.to_string(), variations: Vec::new() }];
+        assert_eq!(registry.superseded(&carried).into_iter().collect::<Vec<_>>(), [d2.name.clone()], "the flame's");
+    }
+
+    /// Use of a new version moves the config to it: every transform's
+    /// weight, parameters and order, the lens and the escape
+    /// transformations; another id and the built-ins stay.
+    #[test]
+    fn a_new_version_takes_over_from_the_old() {
+        let id = crate::scripted::derived_id("rhai_rekey_test");
+        let (old, new) = (crate::scripted::key(&id, "a"), crate::scripted::key(&id, "b"));
+        let other = crate::scripted::key(&crate::scripted::derived_id("rhai_rekey_other"), "a");
+        let mut config = crate::config::FractalConfig::default();
+        config.flame.transforms.push(crate::scene::transforms::Transform::default());
+        let t = &mut config.flame.transforms[0];
+        t.variations.insert(old.clone(), 0.75);
+        t.variations.insert(other.clone(), 0.5);
+        t.variation_params.insert(format!("{old}.k"), 2.0);
+        t.variation_order = vec!["linear".into(), old.clone(), other.clone()];
+        config.flame.final_transforms.push(config.flame.transforms[0].clone());
+        config.escape.lens = old.clone();
+        config.escape.transforms.push(crate::config::escape::EscapeTransform::new(Default::default(), &old, 1.0));
+        assert!(rekey(&mut config, &id, &new));
+        for t in config.flame.transforms.iter().take(1).chain(config.flame.final_transforms.iter()) {
+            assert_eq!(t.variations.get(&new), Some(&0.75));
+            assert!(!t.variations.contains_key(&old));
+            assert_eq!(t.variations.get(&other), Some(&0.5));
+            assert_eq!(t.variation_params.get(&format!("{new}.k")), Some(&2.0));
+            assert_eq!(t.variation_order, ["linear".to_string(), new.clone(), other.clone()]);
+        }
+        assert_eq!(config.escape.lens, new);
+        assert_eq!(config.escape.transforms[0].variation, new);
+        assert!(!rekey(&mut config, &id, &new), "nothing older left");
+    }
 
     /// Twins of five built-ins, as their sources (the plan's C1 gates).
     pub(crate) const TWINS: &[(&str, &str)] = &[
@@ -291,7 +452,7 @@ mod tests {
     #[test]
     fn a_transformation_compiles_to_a_variations_payload() {
         for (builtin, src) in TWINS {
-            let dl = compile(src).unwrap_or_else(|e| panic!("{builtin}: {e}"));
+            let dl = named(src);
             assert_eq!(dl.name, format!("rhai_{builtin}"));
             assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains(&format!("fn variation_rhai_{builtin}(p: vec2<f32>) -> vec2<f32>"))));
             assert!(dl.shader_3d.as_deref().is_some_and(|s| s.contains(&format!("fn variation_rhai_{builtin}(p: vec3<f32>) -> vec3<f32>"))));
@@ -300,11 +461,15 @@ mod tests {
         let src = "const PARAMS = #{\n    k: #{ value: 0.5, min: 0.0, max: 2.0, caption: \"Amount\" },\n    c: #{ value: complex(0.1, -0.2) },\n    \
                    n: #{ value: 3, min: 1, max: 9 },\n    flip: #{ value: false },\n};\nconst INFO = #{ title: \"Params\", name: \"rhai_params\" };\n\
                    fn variation(z, p) {\n    let w = z * p.k + p.c * to_float(p.n);\n    if p.flip { -w } else { w }\n}\n";
-        let dl = compile(src).unwrap_or_else(|e| panic!("{e}"));
+        let dl = named(src);
         let names: Vec<&str> = dl.parameters.iter().map(|x| x.name.as_str()).collect();
         assert_eq!(names, ["k", "c_re", "c_im", "n", "flip"]);
         assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("get_param(xform_id, variation_id, 2u)")), "c's imaginary part in slot 2");
         assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("fn variation_rhai_params(p: vec2<f32>, xform_id: u32, variation_id: u32)")));
+        // An angle parameter is the registry's angle (degrees, its control).
+        let angled = "const PARAMS = #{ turn: #{ value: 30.0, min: 0.0, max: 360.0, type: \"angle\" } };\nconst INFO = #{ name: \"rhai_turn\" };\nfn variation(z, p) { z * p.turn }\n";
+        let dl = named(angled);
+        assert!(matches!(dl.parameters[0].param_type, crate::api::types::ApiParamType::Angle), "{:?}", dl.parameters[0].param_type);
         // Refused: no name, a name that is not one, the image's symbols.
         assert!(compile("fn variation(z, p) { z }").unwrap_err().contains("names itself"));
         assert!(compile("const INFO = #{ name: \"Bad Name\" };\nfn variation(z, p) { z }").unwrap_err().contains("not a variation name"));
@@ -316,8 +481,8 @@ mod tests {
     /// side of what the GPU tests render.
     #[test]
     fn the_twins_run_as_their_formulas() {
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{transform, ParamValues};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{transform, ParamValues};
         let at = |builtin: &str, z: C64| {
             let src = TWINS.iter().find(|(n, _)| *n == builtin).unwrap().1;
             let p = lang::rhai::transformation(src).unwrap();
@@ -393,8 +558,8 @@ mod tests {
     /// zoom derives its equations and the derivative as for that one.
     #[test]
     fn a_formula_calls_a_variation_as_written_out() {
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{run, Env, ParamValues};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, Env, ParamValues};
         let varied = lang::rhai::with_variations(&bend_scope(), || lang::rhai::program(VARIED)).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(VARIED)).collect::<Vec<_>>()));
         let written = lang::rhai::program(WRITTEN_OUT).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(WRITTEN_OUT)).collect::<Vec<_>>()));
         let (pv, pw) = (ParamValues::defaults(&varied), ParamValues::defaults(&written));
@@ -424,7 +589,7 @@ mod tests {
     /// a parameter it does not have.
     #[test]
     fn a_solid_calls_a_built_in_variation() {
-        use crate::escape::lang::ir::{MapCall, MapValue};
+        use crate::lang::ir::{MapCall, MapValue};
         let solid = |step: &str, extra: &str| {
             format!(
                 "const PARAMS = #{{ k: #{{ value: 0.5 }} }};\nconst INFO = #{{ title: \"t\", radius: 2.0 }};\n{extra}\n\
@@ -432,7 +597,7 @@ mod tests {
             )
         };
         let src = solid("s.z = vary(\"linear3D\", s.z) * 0.9; s.z = vary(\"julia3D\", s.z, #{ power: p.k }); s.z = vary(\"julia3D\", s.z, #{ power: -3 });", "");
-        let p = crate::escape::lang::rhai::solid(&src).unwrap_or_else(|d| panic!("{}", d[0].message));
+        let p = crate::lang::rhai::solid(&src).unwrap_or_else(|d| panic!("{}", d[0].message));
         assert_eq!(
             p.maps,
             vec![
@@ -442,13 +607,13 @@ mod tests {
             ]
         );
         let base = crate::escape::ifs::template_parameters().len();
-        let w = crate::escape::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("WGSL");
+        let w = crate::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("WGSL");
         for k in 0..3 {
             assert!(w.contains(&format!("esc_solid_map({k}u, vec3<f32>(")), "call {k}:\n{w}");
         }
-        crate::escape::lang::wgsl::validate_solid(&w).expect("validates");
+        crate::lang::wgsl::validate_solid(&w).expect("validates");
         let refused = |src: String, says: &str| {
-            let d = crate::escape::lang::rhai::solid(&src).err().unwrap_or_else(|| panic!("compiled: {src}"));
+            let d = crate::lang::rhai::solid(&src).err().unwrap_or_else(|| panic!("compiled: {src}"));
             assert!(d.iter().any(|x| x.message.contains(says)), "{says}: {:?}", d.iter().map(|x| &x.message).collect::<Vec<_>>());
         };
         refused(solid("", "fn prepare(p) { #{ q: vary(\"linear3D\", vec3(1.0, 0.0, 0.0)) } }"), "GPU");
@@ -546,7 +711,7 @@ mod tests {
     #[test]
     fn a_variation_declares_that_it_resets_orbits() {
         let (_, source) = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == "variation-dynamic-system.rhai").unwrap();
-        let dl = compile(source).unwrap_or_else(|e| panic!("{e}"));
+        let dl = named(source);
         assert!(dl.features.iter().any(|f| f == "resets_orbits"), "{:?}", dl.features);
         let whorl = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == "variation-whorl.rhai").unwrap().1;
         assert!(!compile(whorl).unwrap().features.iter().any(|f| f == "resets_orbits"), "Whorl's orbits persist");
@@ -581,11 +746,11 @@ mod tests {
 
     #[test]
     fn the_hooks_compile_to_the_builtins_features() {
-        let blur = compile(hooked("blur")).unwrap_or_else(|e| panic!("{e}"));
+        let blur = named(hooked("blur"));
         assert_eq!(blur.features, ["needs_rng"]);
         assert!(blur.shader_2d.as_deref().is_some_and(|s| s.contains("fn variation_rhai_blur(p: vec2<f32>, rng: ptr<function, RngState>)") && s.contains("rng_nextf(rng)")));
         assert_eq!(blur.state_count, 0);
-        let mac = compile(hooked("macmillan")).unwrap_or_else(|e| panic!("{e}"));
+        let mac = named(hooked("macmillan"));
         assert_eq!(mac.features, ["needs_accum", "writes_color"]);
         let s2 = mac.shader_2d.as_deref().unwrap();
         assert!(s2.contains("fn variation_rhai_macmillan(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>)"), "{s2}");
@@ -595,7 +760,7 @@ mod tests {
         // State without parameters still takes the ids: needs_transform.
         let counter = "const INFO = #{ name: \"rhai_counter_test\" };\nfn init(p) { #{ n: 0.0 } }\n\
                        fn variation(z, p) {\n    this.n = this.n + 1.0;\n    z * (1.0 / this.n)\n}\n";
-        let c = compile(counter).unwrap_or_else(|e| panic!("{e}"));
+        let c = named(counter);
         assert_eq!(c.features, ["needs_transform"]);
         assert_eq!(c.state_count, 1);
         // What the hooks refuse.
@@ -611,8 +776,8 @@ mod tests {
     /// accumulator and the weight read, the colour written.
     #[test]
     fn the_macmillan_twin_runs_as_the_builtin() {
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{ParamValues, VariationRun};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
         let p = lang::rhai::transformation(hooked("macmillan")).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>()));
         let params = ParamValues::defaults(&p);
         let mut run = VariationRun::new(&p, &params, 7);
@@ -643,8 +808,8 @@ mod tests {
     /// draws has no deep zoom.
     #[test]
     fn rand_draws_a_stream() {
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{run, Env, ParamValues, VariationRun};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, Env, ParamValues, VariationRun};
         let p = lang::rhai::transformation(hooked("blur")).unwrap();
         let params = ParamValues::defaults(&p);
         let mut v = VariationRun::new(&p, &params, 12345);
@@ -689,8 +854,8 @@ mod tests {
         let compiled = |step: &str| lang::rhai::with_variations(&scope, || lang::rhai::program(&formula(step)));
         let varied = compiled("s.z = vary(\"rhai_ctx_test\", s.z * s.z + s.c);").unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>()));
         let plain = lang::rhai::program(&formula("s.z = s.z * s.z + s.c;")).unwrap();
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{run, Env, ParamValues};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, Env, ParamValues};
         for px in [C64::new(-0.5, 0.3), C64::new(0.3, 0.5), C64::new(-1.2, 0.1)] {
             let (a, b) = (run(&varied, &ParamValues::defaults(&varied), None, &Env::at(px, 100)), run(&plain, &ParamValues::defaults(&plain), None, &Env::at(px, 100)));
             assert_eq!((a.n, a.escaped), (b.n, b.escaped));
@@ -728,7 +893,7 @@ mod tests {
     #[test]
     fn a_3d_variation_compiles_to_its_own_body() {
         for (builtin, src) in TWINS_3D {
-            let dl = compile(src).unwrap_or_else(|e| panic!("{builtin}: {e}"));
+            let dl = named(src);
             assert_eq!(dl.category, "only_3d", "{builtin}");
             assert!(dl.shader_2d.is_none());
             assert_eq!(dl.features, ["always_z"]);
@@ -736,14 +901,14 @@ mod tests {
             assert!(dl.shader_3d.as_deref().is_some_and(|s| s.contains(&format!("fn variation_{name}(p: vec3<f32>) -> vec3<f32>"))), "{builtin}");
         }
         let both = "const INFO = #{ name: \"rhai_both_test\" };\nfn variation(z, p) { z * 0.5 }\nfn variation3(v, p) { v * 0.25 }\n";
-        let dl = compile(both).unwrap_or_else(|e| panic!("{e}"));
+        let dl = named(both);
         assert_eq!(dl.category, "plugin");
         assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("cv_rhai_both_test_variation_2d")));
         assert!(dl.shader_3d.as_deref().is_some_and(|s| s.contains("cv_rhai_both_test_variation_3d") && !s.contains("p.xy), p.z)")));
         let hooked = "const PARAMS = #{ k: 0.1 };\nconst INFO = #{ name: \"rhai_hooked3_test\" };\nfn init(p) { #{ last: vec3(0.0) } }\n\
                       fn variation3(v, p, ctx) {\n    let w = (v + this.last) * 0.5 + ctx.accum * p.k;\n    this.last = v;\n    \
                       #{ z: w, color: clamp(length(w), 0.0, 1.0) }\n}\n";
-        let dl = compile(hooked).unwrap_or_else(|e| panic!("{e}"));
+        let dl = named(hooked);
         assert_eq!(dl.features, ["needs_accum", "writes_color", "always_z"]);
         assert_eq!(dl.state_count, 3);
         let s3 = dl.shader_3d.as_deref().unwrap();
@@ -761,7 +926,7 @@ mod tests {
     /// variation keeps its state and reads its vector accumulator.
     #[test]
     fn the_3d_twins_run_as_their_formulas() {
-        use crate::escape::lang::interp::{ParamValues, VariationRun};
+        use crate::lang::interp::{ParamValues, VariationRun};
         let at = |builtin: &str, v: [f64; 3]| {
             let src = TWINS_3D.iter().find(|(n, _)| *n == builtin).unwrap().1;
             let p = lang::rhai::transformation3(src).unwrap();

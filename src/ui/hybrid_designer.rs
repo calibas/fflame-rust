@@ -18,8 +18,8 @@ use crate::config::escape::{CustomDialect, CustomSource};
 use crate::config::manager::custom_source_json;
 use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::escape::custom;
-use crate::escape::lang::hybrid::{self, Combine, Group, Hybrid, Line, Operator};
-use crate::escape::lang::EntryKind;
+use crate::lang::hybrid::{self, Combine, Group, Hybrid, Line, Operator};
+use crate::lang::EntryKind;
 
 pub struct HybridDesignerPanel {
     /// What the panel shows: the config's hybrid when it uses one, else
@@ -351,7 +351,7 @@ impl HybridDesignerPanel {
 /// The formulas a group can run: the built-ins' Rhai twins, and the
 /// library's Rhai formulas (read when the list opens).
 fn member_choices() -> Vec<(String, String)> {
-    use crate::escape::lang::rhai;
+    use crate::lang::rhai;
     let mut out: Vec<(String, String)> =
         crate::escape::twins::TWINS.iter().map(|(name, src)| (rhai::title(src).unwrap_or_else(|| name.to_string()), src.to_string())).collect();
     for file in crate::storage::formula_store::list() {
@@ -503,7 +503,7 @@ mod tests {
         let mut panel = HybridDesignerPanel::new();
         let twin = |name: &str| {
             let src = crate::escape::twins::source(name).unwrap();
-            Group::of_formula(1, &crate::escape::lang::rhai::title(src).unwrap(), src)
+            Group::of_formula(1, &crate::lang::rhai::title(src).unwrap(), src)
         };
         let lines = Group::of_lines(1, vec![Line { one: Operator::default(), two: None, combine: Combine::Add }]);
         let h = Hybrid { groups: vec![lines.clone(), twin("burning_ship")], loop_start: 0 };

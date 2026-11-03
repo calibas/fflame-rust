@@ -119,8 +119,31 @@ pub fn load(file: &str) -> Option<String> {
     backend::read_file(&key_for(file)).ok()
 }
 
+/// Remove a file, and its link: a name reused later must not inherit the
+/// file's cloud identity, its provenance or its plug-in flag.
 pub fn delete(file: &str) -> Result<(), String> {
-    backend::delete_file(&key_for(file)).map_err(|e| format!("cannot delete `{file}`: {e}"))
+    backend::delete_file(&key_for(file)).map_err(|e| format!("cannot delete `{file}`: {e}"))?;
+    clear_link(file)
+}
+
+/// A file's link ([`crate::storage::links`], keyed by file name).
+pub fn link_of(file: &str) -> Option<crate::storage::links::Link> {
+    crate::storage::links::get(PREFIX, file)
+}
+
+/// Every file's link, by file name.
+pub fn links() -> std::collections::BTreeMap<String, crate::storage::links::Link> {
+    crate::storage::links::load(PREFIX)
+}
+
+/// Record (or replace) a file's link.
+pub fn set_link(file: &str, link: crate::storage::links::Link) -> Result<(), String> {
+    crate::storage::links::set(PREFIX, file, link)
+}
+
+/// Forget a file's link.
+pub fn clear_link(file: &str) -> Result<(), String> {
+    crate::storage::links::clear(PREFIX, file)
 }
 
 /// Every formula file in the store, sorted.

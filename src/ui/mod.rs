@@ -1606,6 +1606,8 @@ impl EguiLayer {
         let mut sim_reseed_local = false;
         let mut sim_saved_texture_local: Option<String> = None;
         let mut variation_update_requested: Vec<String> = Vec::new();
+        let mut effect_update_requested: Vec<String> = Vec::new();
+        let mut clear_effect_cache_requested = false;
         let mut script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest> = None;
 
         // The Paths panel's solo button, held this frame, and a path it
@@ -2006,6 +2008,8 @@ impl EguiLayer {
                         sim_timeline_driven,
                         terrain_range,
                         variation_update_requested: &mut variation_update_requested,
+                        effect_update_requested: &mut effect_update_requested,
+                        clear_effect_cache_requested: &mut clear_effect_cache_requested,
                         script_cloud,
                         effect_catalog,
                         script_cloud_request: &mut script_cloud_request,
@@ -2690,6 +2694,8 @@ impl EguiLayer {
             sim_reseed: sim_reseed_local,
             sim_saved_texture: sim_saved_texture_local,
             variation_update_requested,
+            effect_update_requested,
+            clear_effect_cache_requested,
             script_cloud_request,
         }
     }

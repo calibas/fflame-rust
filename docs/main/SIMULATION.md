@@ -673,6 +673,274 @@ reseeding on it would make every model unusable.
 
 ---
 
+## Colourings written in Rhai
+
+A colouring may be a Rhai script ([rhai-plugins.md](../projects/rhai-plugins.md),
+P4): `fn cell_color(cell, p, ctx)`, a cell's sample to a colour and its
+coverage, compiled by the formula language
+([ESCAPE.md](ESCAPE.md#the-formula-language), `EntryKind::SimColoring`)
+to the `sim_color` the colour template calls.
+
+- **What it reads**: `cell.state`, a vector of four (`.x` ... `.w`, or
+  `.r` ... `.a`); `cell.gx` and `cell.gy`, the gradient of every channel;
+  `cell.dist`, the signed distance to the matte's edge; `cell.tensor`
+  (Jxx, Jxy, Jyy) and `cell.relief` (h, dh/dx, dh/dy), vectors of three;
+  `cell.m0` and `cell.m1`, the source layer's memory (eight weights,
+  zeros without one); `p`, its `PARAMS`; `ctx.cell`, the cell (a
+  complex), `ctx.width`, `ctx.height`, the grid, `ctx.step`, the step the
+  run is at, and `ctx.seed_lo`, `ctx.seed_hi`, the run's seed as two
+  32-bit ints for `pcg(n)`, the framework's hash; `read(dx, dy)`, the
+  state of the cell `dx`, `dy` away. `palette(t)` is the shared palette,
+  a vector of three. The template measures the gradient, tensor, distance
+  and relief only for a colouring that reads them, so the features
+  (`ColoringFeature`) come from what the source reads: `ReadsCell` from
+  `ctx.cell` or `read`, `ReadsMemory` from the memory, and the rest. No
+  `rand()` (a picture is the same every frame: hash the cell), no
+  `prepare`; `break`, `continue` and an early `return` as an effect's.
+- **What it gives**: the last value, an `rgba` (its `a` the coverage, 0
+  letting the background through), a `vec3` (drawn whole), or
+  `#{ color, coverage }`. Its trig, `min`/`max`/`clamp` and int
+  parameters compile as an effect's do: what hand-written WGSL is.
+- **Registered** (`sim::custom`) as a `SimColoringDef`, leaked, under a
+  name `custom-` begins: its key (`scripted::key`, id and version) with an
+  `INFO.id` of its own, else a hash of its source. `coloring_or_default`
+  finds it, so every path that resolves a colouring does.
+- **Carried** beside the name it is carried for: `SimConfig::
+  custom_coloring` (`ConfigPath::SimCustomColoring`) with `coloring`, or
+  a colour layer's `SimColorLayer::custom_coloring` with its `coloring`
+  (a snapshot edit, as the entry's name is). Promoting and demoting the
+  stack move it with entry 0; choosing a built-in drops it.
+  `sim::custom::ensure` registers every one before anything resolves the
+  names (every `SimRenderer` entry point that takes a config, the render
+  path's resource check, the panel). The Formula Editor's **Use as
+  Simulation Colouring** puts it in the config -- in a stack, in the
+  colour layer picked from its menu -- entering Simulation in the same
+  step, and Live updates every entry carrying a version, by its id; a
+  plug-in one is in every entry's picker under "Your plug-ins".
+- **Twins**: `sim::custom::SHIPPED`, every built-in colouring (13,
+  `assets/sim/<name>.rhai`), each held to its built-in's settings
+  (`every_colouring_twin_carries_its_built_ins_settings`: parameters,
+  labels, features) and picture (`the_rhai_colourings_colour_as_the_built_ins`:
+  four runs -- Gray-Scott's, the two-layer Brusselator's four channels,
+  McCabe's with its memory, Gray-Scott's under a matte -- at the defaults
+  and with each parameter moved; to 1e-5, and in fact every picture
+  bit-identical). Timed by `the_rhai_colourings_are_no_slower` (ignored;
+  200 colour passes at 1024x1024, fifteen rounds): all within 1% but
+  LIC, 3-4% slower, and Gradient, 6% faster (the language's `atan2` and a
+  written-out `length`), both under the 5% gate. LIC's noise and Ballistic
+  Deposition's draw show the pattern for a hash of another cell:
+  `pcg` of its index and the seed words.
+
+## Models written in Rhai
+
+A model may be a Rhai script too ([rhai-plugins.md](../projects/rhai-plugins.md),
+P4 steps 2-9): `EntryKind::SimModel`, each function compiled by the
+formula language to the WGSL the step, seed and agent templates call --
+any model the built-ins are, each of the 31 with a twin.
+
+- **The step**: `fn cell_step(cell, p, ctx)` gives the cell's next state,
+  a `vec4`; `cell_step2` ... `cell_step4` are further passes, in order,
+  each reading what the one before wrote (`ModelDef::passes`). `cell` is
+  the state (`.x` ... `.w`); `read(dx, dy)` a neighbour's, the offset in
+  whole cells through the config's boundary; `p` its `PARAMS`; `ctx.dt`,
+  `ctx.step` (the step index, an int: whole at any step, as the
+  framework's), `ctx.cell`, `ctx.width`, `ctx.height`, `ctx.seed_lo` and
+  `ctx.seed_hi`, `ctx.layer` (which salts the layer's draws: with `pcg`,
+  a draw at another cell is `sim_rand` there), and `ctx.field_min`,
+  `ctx.field_max`: the field's range of `.x` a step ago, which the
+  framework reduces after each step for a model that reads it
+  (`NeedsMinMax`, as reading it implies). `rand()` draws in [0, 1), keyed by
+  the run's seed, the cell, the step and the call site (`sim_rand`), so
+  a run replays; `rand(k)` draws on the stream `k`, an int, which an edit
+  elsewhere in the script leaves where it was -- the built-ins key their
+  draws so (`sim_rand(p, 0xc1u)`), and a twin draws theirs to the bit. A
+  model that draws has `ModelFeature::NeedsRng`. `break`, `continue` and
+  an early `return x;` as an effect's; `pcg(n)` hashes an int.
+- **A kernel table** (P4 step 9b): `fn kernel(p)`, run on the CPU,
+  gives `#{ radius, weights }` -- one block of `(2 radius + 1)^2`
+  weights, row-major from -radius, or two (an activator and an
+  inhibitor) -- uploaded as a built-in's `kernel` closure's table is,
+  and cached on the parameters' values (the renderer asks every batch).
+  The step gathers it: `tap(i)`, `ctx.kernel_radius`, `ctx.kernel_taps`.
+  A built-in builds its table in f32 and a script in f64 Rhai, so a
+  twin's table equals its built-in's to the last bit of a weight (within
+  1e-5 of the largest), and a run amplifies that: the field compare
+  holds a kernel twin's step on the built-in's own table, bit-identical,
+  and prints the drift on its own (`swap_kernel`).
+- **The spectral discs**: `fn discs(p)` names the discs the spectral
+  stage averages by FFT (`#{ ra, rb, stretch, angle, annulus }`, as
+  `spectral_scales` gives a built-in's), and the step reads them --
+  `disc(i)` the average at the cell, `ctx.exact_discs` whether this
+  layer has them (else it gathers its table): `ExactDiscs`, as reading
+  them implies.
+- **The pyramid, a measure pass and the memory** (P4 step 9c):
+  `pyr_sample(level, x, y)` the pyramid's average at a level and a
+  position in cells, `pyr_level(r)` the level of a disc of radius `r`,
+  `pyr_diff(i, x, y)` the spectral stage's activator-minus-inhibitor `i`
+  there (with `fn discs(p)`), `ctx.exact_discs` which of the two this
+  layer reads: `NeedsPyramid`, as reading it implies, the parameter
+  `averaging` choosing as McCabe's does. The generator places
+  `pyr_prepare()` where each path first reads the pyramid (inside an
+  `if`'s arms when its tests do not), as the built-in does: a branch
+  that never reads it skips the caches. `INFO.measure: #{ param:
+  "variation", slices: 2 }` makes `cell_step` a measure pass, run while
+  that parameter is above 0: it writes the scratch, `write_scratch(k,
+  v)` (a statement), and the passes after it read it at any cell,
+  `scratch(dx, dy, k)`, `ctx.scratch_on` whether it ran. The memory --
+  internal slices the last pass carries from step to step, there while
+  a parameter named `memory` is above 0 -- is `memory(k)` and
+  `write_memory(k, v)`, `ctx.memory_count` its slices (`Memory`).
+  `outside(dx, dy)` tests a cell against a bounded boundary, `param(k)`
+  reads a parameter by its slot (a table's rows, `8 + 5 * i`, slot
+  order the order of `PARAMS`), and `INFO.scale_warps: #{ rows_param:
+  "scales", rows: 6 }` gives the per-scale warps (`ScaleWarps`): the
+  Warp section draws `s{i}_warp_*` behind its target list, and
+  `ctx.scale_warped` says whether any live row is off the identity.
+- **A parameter layout** (rhai-plugins P7; `param_layout`): a parameter
+  with `show_if: #{ layout: 0 }` (or a list of values,
+  `#{ averaging: [1, 2] }`) is listed only while those hold; a `PARAMS`
+  entry with `type: "grid"` is a grid of `rows` rows by its `columns`,
+  each cell a scalar parameter of its own, named by `cell`
+  (`"s{row}_{column}"`) and captioned by `row` (`"Scale {n}"`) and its
+  column's caption, a column's `value` one for every row or a list of
+  one a row. A grid has `live_rows` (the parameter counting them),
+  `show_if`, a column `header`, `whole: true` and `show_if`; `fill:
+  #{ when: #{ layout: 1 }, from: "ladder" }`, which the edit making `when`
+  hold writes into the cells in the same undo step, from `fn ladder(p,
+  row)` (a row's values by column, on the CPU); `warn: "past_reach"`,
+  `fn past_reach(cells, p, ctx)` a row's message or `()` (`ctx.row`,
+  `width`, `height`, `pyramid_reach`, and `preview` -- the fill's row
+  while the grid is hidden, which the panel then shows in a line); and
+  `drawn: false` for cells another section draws (McCabe's warps, the
+  Warp section's). The step reads a cell as `p.grid[i].column` -- one
+  read at the slot the row gives, the row clamped (`Host::GridParam`);
+  the CPU functions as `p.grid[i].column` too. The cells stay plain
+  parameters: the config, undo, animation and presets see nothing new.
+  The panel draws a built-in's layout and a script's alike
+  (`render_param_grid`); McCabe's built-in table is one
+  (`models::mccabe_layout`), and its twin declares the same, its
+  table and its warps grids.
+- **Agents** (P4 step 9d): `fn agent_seed(p, ctx)` gives each agent's
+  first record and `fn agent_step(a, p, ctx)` its move, with
+  `agent_step2` a second pass -- each a vector of four, `vec4(x, y,
+  heading, state)`, the template's `SimAgent`, one thread per agent;
+  `ctx.agent` is its index. `fn agent_count(p, w, h)`, run on the CPU,
+  sizes the population on a grid `w` by `h` (at least one, at most
+  `MAX_AGENTS`). An agent reads the field at a cell, `read_at(x, y)`
+  (a step may too), draws on its own stream (`rand(k)`, `agent_rand`),
+  claims the cell it wants, `claim(x, y)` -- the lowest index wins --
+  and asks in the next pass whether it won, `claim_check(x, y)`, which
+  releases it (every claim must be checked, as the built-ins' contract
+  says); `deposit(x, y, amount)` adds to the cell's deposit, which the
+  step takes, `take_deposit()`, once. `ctx.periodic` says whether the
+  boundary wraps. Having agents is `NeedsAgents` and
+  `StateKind::Agents`.
+- **Couplings**: `drive()`, the Signal couplings aimed at the layer, a
+  vector of four, folded in by the step itself (`TakesDrive`, as reading
+  it implies); `INFO.publishes_signal: true` says a pass before the last
+  writes the layer's signal into `.y` for the couplings from it
+  (`PublishesSignal`).
+- Two ints divided truncate toward zero, as Rhai's do (a block's index,
+  `x / r`), the dividend when by zero, as WGSL's.
+- **The seed**: `fn cell_seed(inside, noise, p, ctx)` gives a cell's
+  first state from the init shape (`inside`, 0 or 1) and a draw
+  (`noise`); it may draw more (`rand()`, `rand(k)`), and `init_at(x, y)`
+  reads the init shape at another cell (Wolfram's middle row). Without
+  one, the shape in `.x`.
+- **INFO**: `dt` (the default time step), `max_dt` (the stable bound;
+  `dt` when absent), `steps` (the default run, 1000 when absent),
+  `diffusion` (the parameters that are diffusion rates on the Sims
+  stencil, by name: the cap on `dt` follows them, `max_dt_for`), `state`
+  (`"discrete"` for a cellular automaton's whole numbers), `time_step:
+  false` (`NoTimeStep`: generations, no dt slider) and `settles: false`
+  (`NeverStills`: the export is the state at step N), `publishes_signal`
+  (above), and `presets`: a
+  list of maps, each `name`, `title`, `params` (by name), `steps`, `dt`,
+  and the config's `boundary`, `init`, `coloring` (a built-in's name),
+  `coloring_params`, `matte` and `warp` spelled as a `.fflame` spells
+  them (`init: #{ blobs: #{ count: 6, radius: 24 } }`), read through
+  serde; and `repeat: #{ pass: 2, param: "relax" }`, a pass run that
+  parameter's number of times a step (up to `MAX_INNER_ITERATIONS`),
+  passes numbered as the functions are (`cell_step` is 1); `measure`
+  and `scale_warps` (above); `slow: ["radius"]`, the parameters whose
+  every value is a slow step, which the panel commits when a drag ends
+  (`SLOW_PARAMS` for a built-in). `agents` is refused: a model's agents
+  are its functions (below).
+- **Its own stable time step**: `fn max_dt(p)`, the bound at the
+  parameters in force, which a built-in writes as a `dt_bound` closure.
+  It runs on the CPU as plain Rhai (the core language, its maths and
+  `min`/`max`, an operation budget; ints for int parameters), parsed
+  once per thread, and `max_dt_for` applies the stability margin and the
+  static `max_dt` to it as to a built-in's. `compile_model` runs it at
+  the defaults, so one that gives no positive number is refused there.
+- **Registered and carried** as a colouring is: a leaked `ModelDef` under
+  `custom-` and its key, found by `model_or_default`;
+  `SimConfig::custom_model` (`ConfigPath::SimCustomModel`) with `model`,
+  or a layer's `SimLayer::custom_model` (`ConfigPath::
+  SimLayerCustomModel`) with its `model`, ensured with the colourings. A
+  new version of a model keeps its parameters, and the flat one its `dt`
+  and `steps` (`config::sim::same_script` compares the names' ids). The
+  Formula Editor's **Use as Simulation Model** (in a layered config, in
+  the layer picked from its menu), Live in every layer carrying a
+  version, and a plug-in group in every layer's picker. A layer's model
+  is its own step module, so a Rhai one layers and couples as a built-in
+  does (`rhai_models_and_colourings_run_in_layers`), the drive and the
+  published signal included (`a_rhai_turing_couples_as_the_built_in`).
+- **Edit as Rhai** (rhai-plugins P7 step 5): the panel's **Rhai** beside
+  a built-in model, in each layer, and beside a built-in colouring, in
+  each colour layer, puts its twin in the slot under an id of its own
+  -- the slot's parameters, and a model's dt and steps, kept: the same
+  picture -- and opens it in the Formula Editor, unsaved and in use, so
+  Live re-applies each edit (`FormulaEditorPanel::edit_sim_as_rhai`).
+  One undo step, entering Simulation from another mode; the built-in is
+  untouched, and Save keeps the copy in the library.
+- **Twins**: `sim::custom::SHIPPED_MODELS`, every built-in -- all 31
+  (`assets/sim/<name>.rhai`). Each is held to its built-in three ways:
+  - its settings (`every_twin_carries_its_built_ins_settings`): the
+    parameters by name with their labels, ranges and choices, and in the
+    order the panel lists them; its layout -- conditions, grids, columns
+    and when each shows, the fill (to an f32's last place: a built-in
+    fills in f32, a script in f64) and the warnings -- at the defaults
+    and each preset; the
+    presets, dt, `max_dt`, steps, diffusion, state, passes (the repeat,
+    the measure, the agents'), features and per-scale warps, `max_dt(p)`
+    against the `dt_bound` at the defaults and at each parameter's ends,
+    the kernel table, the spectral discs and the agents' number at the
+    defaults and each preset;
+  - its field (`the_rhai_models_step_as_the_built_ins`): 300 steps from
+    the same seed at the defaults and at every preset, every one
+    bit-identical, the age channel and the seeds' draws included (the
+    kernel models on the built-in's own table, above); McCabe's other
+    paths -- the shifted grid, exact discs, a weighted and leaning table,
+    symmetry, the variation radius, per-scale warps, the memory's slices
+    -- bit-identical too (`a_rhai_mccabe_runs_every_path_as_the_built_in`),
+    and the agent models' every record as well as every cell, Physarum
+    on the wrapping field and against walls, DLA grown until walkers
+    stick, wake and are killed (`the_rhai_agent_models_move_as_the_built_ins`);
+  - its speed (`the_rhai_models_are_no_slower`, ignored: it times the
+    GPU): fifteen rounds of 1500 steps at 1024x1024, the median of the
+    rounds' ratios. On a GTX 1660 SUPER all within the run's own noise
+    (`SIM_TWINS_SELF=1`, the built-in against itself, about 2%) but
+    Brusselator2, 2-3% slower in repeated runs -- not its parameter
+    reads; unexplained, under the 5% gate. `SIM_TWIN_PARAMS=variation=1.5`
+    sets parameters over the preset's, to time another path (McCabe:
+    1.024 at the preset, 1.027 with the variation radius, 1.003 on exact
+    discs, 1.034 with the memory). Physarum 0.999, DLA 1.013.
+
+  `write_twin_wgsl` (ignored) writes each twin's generated WGSL beside
+  the built-in's, to read one against the other: it found why McCabe's
+  twin was 10% slower on the variation radius -- each fresh array copied
+  into its `let`, element by element -- fixed in the compiler, not the
+  script. (Filling the pyramid's caches only on the paths that read it,
+  as the built-in does, measured no difference: 10.4% to 10.0%.)
+
+  The skeletons -- `PARAMS` and `INFO` as Rhai, from the built-in's
+  definition -- come from `write_twin_skeletons` (ignored, writes
+  `output/sim-twins/`), the functions by hand from the WGSL. Porting
+  showed what the language needed (step 5) and one built-in to correct:
+  Percolation declared `NeedsRng` for a draw in its seed alone, as no
+  other model does.
+
 ## Adding a model
 
 1. Write a `static ModelDef` in

@@ -5,10 +5,13 @@
 //! hard execution budgets. See
 //! [docs/archive/projects/flame-scripting.md](../../docs/archive/projects/flame-scripting.md).
 //!
-//! Two kinds, declared by the script itself:
+//! Three kinds, declared by the script itself:
 //!
 //! * **Generator** — builds a flame from a default config.
 //! * **Modifier** — transforms a *copy* of the current config.
+//! * **Library** — functions and constants for other scripts to
+//!   `import` (resolved through the script library, never a file:
+//!   [`host::LibraryResolver`]).
 //!
 //! Both are seeded from a pinned PRNG algorithm, so script + seed
 //! reproduces a flame byte-for-byte on desktop, web, and Python.
@@ -40,6 +43,11 @@ pub enum ScriptKind {
     Generator,
     /// Transforms an existing flame (starts from the current config).
     Modifier,
+    /// Functions and constants other scripts `import`. Not run on its
+    /// own: its top level may only declare (see
+    /// [`host::check_library`]), so importing one never changes the
+    /// flame.
+    Library,
 }
 
 impl ScriptKind {
@@ -47,6 +55,7 @@ impl ScriptKind {
         match s.trim().to_ascii_lowercase().as_str() {
             "generator" | "generate" | "gen" => Some(Self::Generator),
             "modifier" | "modify" | "mod" => Some(Self::Modifier),
+            "library" | "lib" => Some(Self::Library),
             _ => None,
         }
     }
@@ -55,6 +64,7 @@ impl ScriptKind {
         match self {
             Self::Generator => "generator",
             Self::Modifier => "modifier",
+            Self::Library => "library",
         }
     }
 }
@@ -65,7 +75,8 @@ impl ScriptKind {
 /// real run — see the two-phase design in the project doc.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamDecl {
-    Float { key: String, label: String, default: f64, min: f64, max: f64 },
+    /// `angle`: degrees, drawn with the angle control (`param_angle`).
+    Float { key: String, label: String, default: f64, min: f64, max: f64, angle: bool },
     Int { key: String, label: String, default: i64, min: i64, max: i64 },
     Bool { key: String, label: String, default: bool },
     Choice { key: String, label: String, options: Vec<String>, default: usize },
@@ -108,9 +119,15 @@ impl ParamDecl {
     /// second.
     pub fn to_api_json(&self) -> serde_json::Value {
         match self {
-            Self::Float { key, label, default, min, max } => serde_json::json!({
+            // An angle is a float to anything that knows no more, and says
+            // so to what does.
+            Self::Float { key, label, default, min, max, angle: false } => serde_json::json!({
                 "type": "float", "key": key, "label": label,
                 "default": default, "min": min, "max": max,
+            }),
+            Self::Float { key, label, default, min, max, angle: true } => serde_json::json!({
+                "type": "float", "key": key, "label": label,
+                "default": default, "min": min, "max": max, "angle": true,
             }),
             Self::Int { key, label, default, min, max } => serde_json::json!({
                 "type": "int", "key": key, "label": label,

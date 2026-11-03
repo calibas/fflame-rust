@@ -39,15 +39,14 @@ pub fn render(ui: &mut egui::Ui, meta: &ScriptMeta, values: &mut HashMap<String,
                         ui.label(label.clone());
                     });
                 }
-                ParamDecl::Float { label, default, min, max, .. } => {
+                ParamDecl::Float { label, default, min, max, angle, .. } => {
                     let mut v = match values.get(&key) {
                         Some(ParamValue::Float(v)) => *v,
                         _ => *default,
                     };
-                    if ui
-                        .add(super::VkbSlider::new(&mut v, *min..=*max).text(label.clone()))
-                        .changed()
-                    {
+                    let slider = super::VkbSlider::new(&mut v, *min..=*max).text(label.clone());
+                    let slider = if *angle { slider.suffix("°") } else { slider };
+                    if ui.add(slider).changed() {
                         values.insert(key, ParamValue::Float(v));
                     }
                 }

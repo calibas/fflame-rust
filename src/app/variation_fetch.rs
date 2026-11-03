@@ -85,10 +85,10 @@ impl App {
         for name in missing {
             match crate::variations::classify_missing(&name, self.variation_catalog.as_ref()) {
                 // Unknown means no catalog has been fetched. Being
-                // offline is not evidence that a name is a plugin, so
+                // offline is not evidence that a name is unlisted, so
                 // this tries the fetch and lets it fail honestly.
                 MissingReason::Downloadable | MissingReason::Unknown => fetchable.push(name),
-                MissingReason::KnownButNotFetchable | MissingReason::ProbablyAPlugin => {
+                MissingReason::KnownButNotFetchable | MissingReason::NotInCatalog => {
                     unresolvable.push(name)
                 }
             }

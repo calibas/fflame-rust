@@ -42,6 +42,8 @@ impl App {
         self.handle_variation_fetches();
         self.handle_clear_variation_cache(ui_response);
         self.handle_variation_updates(ui_response);
+        self.handle_clear_effect_cache(ui_response);
+        self.handle_effect_updates(ui_response);
         // Online mode off: no catalog fetches, and an effect a flame
         // lacks stays in the missing set rather than being fetched, so
         // turning online mode on fetches it then. (Results already in
@@ -68,7 +70,6 @@ impl App {
         // Handle config save to file
         if ui_response.config_save_file_requested {
             let config = self.export_config();
-            self.warn_if_flame_needs_local_plugins(&config);
 
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -1624,31 +1625,6 @@ impl App {
         }
     }
 
-    /// Handle API save/update — process async results and new requests
-/// Say so when a flame about to leave this machine leans on a local
-    /// plugin.
-    ///
-    /// A flame travels as NAMES, so one using a plugin only this device
-    /// has renders correctly here and nowhere else — including for the
-    /// same person on another device. The far end shows no error either:
-    /// the name is simply unknown, and the fetch that normally rescues
-    /// an unknown name has nothing to fetch.
-    ///
-    /// A notice rather than a refusal. Saving a flame you can still open
-    /// yourself is legitimate, and the plugin may well be submitted for
-    /// curation later — this is a fact the user needs, not a mistake to
-    /// prevent.
-    fn warn_if_flame_needs_local_plugins(&mut self, config: &crate::config::FractalConfig) {
-        let deps = crate::variations::local_plugin_dependencies(config);
-        if deps.is_empty() {
-            return;
-        }
-        self.egui_layer.show_api_notification(
-            &rust_i18n::t!("api.flame_uses_local_plugins", names = deps.join(", ")),
-            true,
-        );
-    }
-
     fn handle_save_online(&mut self, ui_response: &UiResponse) {
         use crate::ui::ApiSaveAction;
 
@@ -1723,7 +1699,6 @@ impl App {
             }
 
             let config = self.export_config();
-            self.warn_if_flame_needs_local_plugins(&config);
             let result_slot = self.api_save_result.clone();
             self.api_save_in_progress = true;
 

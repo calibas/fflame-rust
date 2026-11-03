@@ -80,6 +80,29 @@ pub fn free_stem(desired: &str) -> String {
         .unwrap_or_else(|| format!("{base}-copy-x"))
 }
 
+/// The stem to adopt an online script under: `desired`'s, unless a
+/// shipped script has it or one of the user's does -- then `-copy`,
+/// `-copy-2`, ... -- except that the user's copy of this same online
+/// script (`cloud_id`) is the one to replace. Adopting never overwrites
+/// the user's own work (rhai-plugins.md, P3; `free_stem` avoided only
+/// the shipped stems, though its caller's comment said otherwise).
+pub fn adopt_stem(desired: &str, cloud_id: &str) -> String {
+    let taken = |stem: &str| {
+        if super::library::is_builtin_stem(stem) {
+            return true;
+        }
+        load(stem).is_some() && link_of(stem).and_then(|l| l.cloud_id).as_deref() != Some(cloud_id)
+    };
+    let base = stem_for(desired);
+    if !taken(&base) {
+        return base;
+    }
+    std::iter::once(format!("{base}-copy"))
+        .chain((2..1000).map(|n| format!("{base}-copy-{n}")))
+        .find(|s| !taken(s))
+        .unwrap_or_else(|| format!("{base}-copy-x"))
+}
+
 fn key_for(stem: &str) -> PathBuf {
     Path::new(PREFIX).join(format!("{stem}.rhai"))
 }
@@ -199,103 +222,38 @@ pub fn location_of(_stem: &str) -> String {
 // What a stored script is linked to, and where it came from
 // ============================================================================
 
-/// Per-script metadata that is not the source.
-///
-/// Kept in one sidecar file rather than beside each script, because a
-/// `.rhai` file has nowhere to put it and a header comment is the
-/// script's own prose, not ours to write into.
-///
-/// Two things live here, and they are needed by different features that
-/// turn out to want the same record:
-///
-/// * **The cloud link** — an id and the version last seen. Without it,
-///   an update after a restart is impossible: optimistic concurrency
-///   needs the version you read, and "the version you read" does not
-///   survive a process that forgot which server script this even is.
-/// * **Provenance** — whether this came from somebody else. This is the
-///   part that must be persistent rather than a UI flag, because saving
-///   a downloaded script would otherwise make it the user's own and
-///   trusted, laundering the cross-call restriction through Save.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct ScriptLink {
-    /// The server id, when this script exists there.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cloud_id: Option<String>,
-    /// The version last read from the server — what an update sends
-    /// back, and what a 409 compares against.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<u32>,
-    /// `owner_display_name/name`, the globally unique human-readable key
-    /// the server's unique display names make possible.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner: Option<String>,
-    /// Somebody else wrote this.
-    ///
-    /// Adopting a script — saving it locally — does not make it yours in
-    /// the sense that matters here. The user chose to keep it; they did
-    /// not read it. So this survives the save, and
-    /// `ScriptHost::with_untrusted` keeps applying.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub from_others: bool,
-}
-
-fn links_path() -> PathBuf {
-    Path::new(PREFIX).join("_links.json")
-}
+/// A stored script's link: its cloud identity, whether somebody else
+/// wrote it ([`crate::storage::links`], shared with the formula store).
+pub use crate::storage::links::Link as ScriptLink;
 
 /// Every stored link, keyed by stem.
-///
-/// A corrupt file is treated as absent rather than fatal: losing it
-/// costs a re-link, and failing every script listing over it would be
-/// the wrong trade. The one thing that is NOT safe to lose silently is
-/// `from_others`, so [`is_untrusted`] fails closed — see there.
 pub fn load_links() -> std::collections::BTreeMap<String, ScriptLink> {
-    match backend::read_file(&links_path()) {
-        Ok(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
-            log::warn!("Discarding unreadable script link file: {e}");
-            Default::default()
-        }),
-        Err(_) => Default::default(),
-    }
-}
-
-fn save_links(links: &std::collections::BTreeMap<String, ScriptLink>) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(links)
-        .map_err(|e| format!("cannot serialize script links: {e}"))?;
-    backend::write_file(&links_path(), &json)
-        .map_err(|e| format!("cannot write script links: {e}"))
+    crate::storage::links::load(PREFIX)
 }
 
 /// The link for one script, if it has one.
 pub fn link_of(stem: &str) -> Option<ScriptLink> {
-    load_links().get(stem).cloned()
+    crate::storage::links::get(PREFIX, stem)
 }
 
 /// Record (or replace) a script's link.
 pub fn set_link(stem: &str, link: ScriptLink) -> Result<(), String> {
-    let mut links = load_links();
-    links.insert(stem.to_string(), link);
-    save_links(&links)
+    crate::storage::links::set(PREFIX, stem, link)
 }
 
 /// Forget a script's link. Called by [`delete`], so a stem that is
 /// reused later does not inherit the previous script's cloud identity.
 pub fn clear_link(stem: &str) -> Result<(), String> {
-    let mut links = load_links();
-    if links.remove(stem).is_none() {
-        return Ok(());
-    }
-    save_links(&links)
+    crate::storage::links::clear(PREFIX, stem)
 }
 
 /// Whether a stored script must run under the cross-call restriction.
 ///
-/// Note the asymmetry with [`load_links`]: an unreadable link file is
-/// tolerated everywhere else, because the cost is a re-link. Here the
-/// cost is running somebody else's script as if it were the user's, so
-/// a link that exists and says so is believed, and the *absence* of a
-/// link means locally authored — which is true, because every path that
-/// brings in a foreign script writes one.
+/// An unreadable link file is tolerated everywhere else, because the
+/// cost is a re-link. Here the cost is running somebody else's script as
+/// if it were the user's, so a link that exists and says so is believed,
+/// and the *absence* of a link means locally authored -- which is true,
+/// because every path that brings in a foreign script writes one.
 pub fn is_untrusted(stem: &str) -> bool {
     link_of(stem).is_some_and(|l| l.from_others)
 }
@@ -372,6 +330,25 @@ mod tests {
                 "fork of `{stem}` still collides"
             );
         }
+    }
+
+    /// Adopting never takes one of the user's stems, except the copy of
+    /// the same online script, which it replaces; a shipped stem is
+    /// avoided as before. Against the real store, cleaned up.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn adopting_never_overwrites_the_users_own() {
+        let stem = "adopt-stem-test";
+        let _ = delete(stem);
+        let _ = delete("adopt-stem-test-copy");
+        assert_eq!(adopt_stem(stem, "cloud-1"), stem, "free: its own name");
+        save(stem, "script(\"Mine\", \"generator\");\n").unwrap();
+        assert_eq!(adopt_stem(stem, "cloud-1"), "adopt-stem-test-copy", "the user's own is not overwritten");
+        set_link(stem, ScriptLink { cloud_id: Some("cloud-1".into()), from_others: true, ..Default::default() }).unwrap();
+        assert_eq!(adopt_stem(stem, "cloud-1"), stem, "the same online script replaces its copy");
+        assert_eq!(adopt_stem(stem, "cloud-2"), "adopt-stem-test-copy", "another does not");
+        assert_eq!(adopt_stem("random_palette", "x"), "random_palette-copy", "a shipped name as before");
+        delete(stem).unwrap();
     }
 
     /// Sanitizing must be idempotent, or the stem `save` returns would

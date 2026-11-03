@@ -41,8 +41,6 @@ definitions, mostly ported from flam3, Apophysis and JWildfire.
   back out of the definitions' doc comments
 - [src/variations/analytic_blur.rs](../../src/variations/analytic_blur.rs)
   — kernels for the analytic blur path
-- [src/storage/plugins.rs](../../src/storage/plugins.rs) — locally
-  installed variations
 - [src/shader_builder_v2.rs](../../src/shader_builder_v2.rs) — the
   per-flame dispatcher and helper-library splicing
 
@@ -79,7 +77,7 @@ the names in registration order, and a version counter.
 | `name`, `display_name`, `category`, `phase`, `parameters` | copied |
 | `wgsl_function` | `variation_<name>`; the one exception is `julia`, whose function is `julia` |
 | `features` | copied, as a `Vec` |
-| `provenance` | `Builtin`; a download is `Api { version }`, a local plugin `Local` |
+| `provenance` | `Builtin`; a download is `Api { version }`, a Rhai variation `Custom` |
 | `wgsl_source`, `wgsl_source_3d`, `wgsl_source_init`, `wgsl_source_state_init` | the bodies (optional, because a download may lack one) |
 | `init_param_count`, `state_count` | copied |
 
@@ -116,7 +114,7 @@ and the Transforms panel's picker walk the categories in a fixed order
 and list each one with `by_category`, which keeps registration order.
 
 **Removal.** `clear_api()` removes only `Api` variations — built-ins
-are compiled in, and local plugins are the user's files.
+are compiled in, and `Custom` ones are the user's own.
 `remove_by_name()` removes one variation of any provenance.
 
 ### Categories
@@ -454,39 +452,31 @@ See [forward-bounds.md](../projects/deep-zoom/forward-bounds.md) and
 
 ---
 
-## Downloaded variations and local plugins
+## Downloaded variations
 
 The registry also takes variations at run time, in the API's
 `VariationDownload` JSON, through `register_from_api(download,
-provenance)`:
-- **Downloaded** (`Provenance::Api`). When a flame names an unknown
-  variation, the app fetches it from the API, caches it, and registers
-  it.
-- **Local plugins** (`Provenance::Local`). The same JSON, installed by
-  the user under `plugins/variations/` in the app data directory
-  (localStorage on the web).
+provenance)`: when a flame names an unknown variation, the app fetches
+it from the API, caches it, and registers it (`Provenance::Api`).
+`storage::load_installed_resources` loads the cache at startup. (Local
+WGSL plug-in files under `plugins/variations/` were retired 2026-11-01 ([rhai-plugins.md](../projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them.)
 
-`storage::load_installed_resources` loads the cache and then the
-plugins at startup.
+**Rhai plug-ins** ([rhai-plugins.md](../projects/rhai-plugins.md), P3): a Rhai variation, effect, formula, colouring, solid or simulation colouring in the user's formulas with **Load at start** set in the Formula Editor (`formulas/_links.json`, `storage::links::Link::plugin`) is registered at every start, after the downloads (`storage::library::load_plugins`, from `load_installed_resources`: desktop, web and headless), under its key in the user's namespace (`Provenance::Custom`). It is then in the lists without a config carrying it -- the variation pickers, the Effects panel's Add lists and the escape panel's formula and colouring pickers, each under "Your plug-ins" -- and choosing it carries its source into the config, as Use does. Saving the file registers the new version; turning it off unlists it; deleting it forgets the flag. One that does not register is named at start (a notice; stderr headless: `storage::library::plugin_failures`).
 
 The registry's rules:
 - A built-in can never be replaced.
-- A download cannot displace a local plugin.
-- A plugin whose name is already taken is refused, not shadowed.
+- A download cannot displace a `Custom` (Rhai) variation.
 - A download with no 2D body is refused unless its category is
   `only_3d`, and an `only_3d` one with no 3D body is refused.
 - A variation with no 3D body is dropped from 3D flames, with a
   warning.
-
-A flame that uses a local plugin renders only where the plugin is
-installed (`local_plugin_dependencies` reports it).
 
 ### Variations written in Rhai
 
 A **custom variation** (`Provenance::Custom`, `variations::custom`) is
 a Rhai transformation from the Formula Editor -- `fn variation(z, p)`,
 a point to a point ([ESCAPE.md](ESCAPE.md#the-formula-language)) --
-compiled to the same `VariationDownload` a plug-in is: its parameters
+compiled to the same `VariationDownload` a download is: its parameters
 (a complex one as two, `name_re` and `name_im`), category `plugin`,
 phase normal, and WGSL from the formula language's emitter. The 2D
 function takes the point, and the ids when it has parameters (as
@@ -500,10 +490,30 @@ function takes the point, and the ids when it has parameters (as
   load (`missing_variations_in`, so it is not fetched from the API),
   when a `FlameRenderer` is built, `load_config`, `update_flame`, and
   `render_with` (an escape lens, CLI, thumbnails, video).
-- **Names**: a lowercase identifier from `INFO.name`; refused when a
-  built-in, a download or a plug-in has it, and a download or plug-in
-  cannot displace one. Using a source again replaces it, and the
-  registry's version rebuilds the shader.
+- **Keyed by id and version** (design rule 7): it registers as
+  `scripted::key(id, source)`, `u<the id's 32 hex>_<the first 8 hex of
+  the source's SHA-256>` -- an identifier, so it is the WGSL function's
+  name (`variation_<key>`) and its parameters' prefix (`<key>.k`). Two
+  versions are two entries, and a flame renders the version it carries.
+  The id is `INFO.id`, a UUID; a source from before ids has `INFO.name`
+  alone, and its id is derived from that name (`scripted::derived_id`,
+  a v8 UUID of its SHA-256), so the same source keys the same way
+  everywhere. `INFO.name`, a lowercase identifier, stays what
+  `vary("name", z)` calls it by. Configs from before (v6) carried it
+  under its name; the v7 migration renames it to its key wherever the
+  config names it (`migrate_custom_variation_keys`).
+- **Use** (the Formula Editor) writes a UUID into a source that has
+  neither an id nor a name, or a hand-written id (`custom::needs_id`).
+  Using a new version moves the config to it in one undo step
+  (`custom::rekey`: every transform's weight, parameters, order and
+  priority, the lens, the escape transformations), the old source
+  going; the old version stays registered, so the undo renders. Live
+  follows a variation by its id. Pickers offer one version of each id
+  (`VariationRegistry::superseded`): the one the flame carries, else
+  the last registered; a picked one the flame does not carry comes with
+  its source (`custom::carry_change`). The sticky shader set keeps no
+  older version of an id that is live (`renderer::sticky`), as each
+  Live edit would otherwise fill its cap with dead code.
 - **`.flame` export drops it** (JWildfire has no such variation): its
   weight, its parameters and its `plugins=` entry, with a warning.
 - **As a lens**: the lens menu lists custom variations after the
@@ -513,7 +523,7 @@ function takes the point, and the ids when it has parameters (as
   ([ESCAPE.md](ESCAPE.md#the-formula-language)). A Rhai solid calls a
   BUILT-IN variation's 3D body on a vector the same way, through the
   maps flame built in 3D (`flame_map3`).
-- **Hooks** (`escape::lang::wgsl::variation_shape`): `rand()` declares
+- **Hooks** (`lang::wgsl::variation_shape`): `rand()` declares
   `NeedsRng`, `ctx.accum` `NeedsAccum`, a `#{ z, color }` result
   `WritesColor`; `init(p)` and `this.name` are per-thread state
   (`state_count`, the seeding call as `wgsl_state_init`); state or
