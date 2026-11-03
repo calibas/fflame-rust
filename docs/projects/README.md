@@ -48,6 +48,7 @@ which rewrites the references in code comments too).
 
 | Doc | What it is |
 |---|---|
+| [one-parameter-system.md](one-parameter-system.md) | Branch `params-one-system` (2026-11-03): one parameter definition, one renderer and one compiler converter for every kind -- variations, effects, escape formulas and colourings, simulations, CPU scripts -- in place of five definition types and four widget sets; conditions and grids in every panel with it. The survey, the design, the steps. |
 | [rhai-plugins.md](rhai-plugins.md) | The plan (direction 2026-10-18, reviewed 2026-11-01): everything editable a Rhai script -- variations, effects, formulas, colourings, simulations, animation tracks, generators -- as plug-ins, local files and downloads. The review of today's three ways in, the user's decisions, the order of work (P0 the CPU sandbox with `import` through the library, P1 one GPU machinery in namespaces, P2 effects, P3 one library, P4 simulations, P5 tracks, P6 the API), and what is left of the KIFS and variations plan. |
 | [jwf-features.md](jwf-features.md) | JWildfire features: shipped, deferred, and why. |
 | [VARIATIONS_WIRE_FORMAT.md](VARIATIONS_WIRE_FORMAT.md) | The variation wire format shared with the API repository. |
