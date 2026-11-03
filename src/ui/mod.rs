@@ -61,6 +61,7 @@ mod hybrid_designer;
 pub mod workspace;
 mod palette_generate;
 mod script_params;
+pub mod params;
 mod xaos_editor;
 
 pub use export_status::{ExportKind, ExportStatus, UiReporter};
