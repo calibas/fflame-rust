@@ -1833,7 +1833,7 @@ impl ConfigManager {
     /// hold: undoing a first edit wrote 0, and Gray-Scott's pattern died.
     #[cfg(feature = "engine-sim")]
     fn sim_model_default(model: &str, name: &str) -> Option<f32> {
-        crate::sim::model_or_default(model).parameters.iter().find(|p| p.name == name).map(|p| p.default)
+        crate::sim::model_or_default(model).parameters.iter().find(|p| p.name == name).map(|p| p.slot_default())
     }
     #[cfg(not(feature = "engine-sim"))]
     fn sim_model_default(_model: &str, _name: &str) -> Option<f32> {
@@ -1843,7 +1843,7 @@ impl ConfigManager {
     /// The same for a simulation colouring's parameter.
     #[cfg(feature = "engine-sim")]
     fn sim_coloring_default(coloring: &str, name: &str) -> Option<f32> {
-        crate::sim::coloring_or_default(coloring).parameters.iter().find(|p| p.name == name).map(|p| p.default)
+        crate::sim::coloring_or_default(coloring).parameters.iter().find(|p| p.name == name).map(|p| p.slot_default())
     }
     #[cfg(not(feature = "engine-sim"))]
     fn sim_coloring_default(_coloring: &str, _name: &str) -> Option<f32> {
@@ -5684,7 +5684,7 @@ mod tests {
             c.render_mode = crate::scene::transforms::RenderMode::Simulation;
             c.sim.model = "gray_scott".into();
             c.sim.model_params.clear();
-            let want = crate::sim::model_or_default("gray_scott").parameters.iter().find(|p| p.name == "feed").unwrap().default;
+            let want = crate::sim::model_or_default("gray_scott").parameters.iter().find(|p| p.name == "feed").unwrap().slot_default();
             let mut m = ConfigManager::new(c);
             m.update_param(ConfigPath::SimModelParam { param: "feed".into() }, 0.06f32.into()).unwrap();
             m.undo().unwrap();
@@ -6209,7 +6209,7 @@ mod tests {
             let dt0 = mgr.current.sim.dt;
 
             for pd in m.parameters {
-                for v in [pd.min, pd.default, pd.max, pd.min, pd.max] {
+                for v in [pd.slot_range().0, pd.slot_default(), pd.slot_range().1, pd.slot_range().0, pd.slot_range().1] {
                     mgr.update_param(
                         ConfigPath::SimModelParam { param: pd.name.to_string() },
                         ConfigValue::Float(v),

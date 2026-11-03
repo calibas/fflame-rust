@@ -171,7 +171,18 @@ Each a commit, each behaviour-preserving and held by tests:
 4. **Simulations**: 280 `SimParamDef` literals by a codemod in
    `scripts/`; `sim::custom` gives `ParamDef`; `SLOW_PARAMS` and
    `INFO.slow` become flags; the simulation panel draws through the
-   renderer. The twins' settings test compares definitions.
+   renderer. The twins' settings test compares definitions. **Done**:
+   278 literals by `scripts/params_codemod.py` (each literal's owner
+   checked against the snapshot first), the field reads by
+   `scripts/params_field_fix.py` from `cargo check`'s errors; a script's
+   bool stays an Off/On choice and its int a float, as the twins declare
+   them (step 9 revisits it); the twins compare whole `ParamDef`s, the
+   slow flag with them. What the panel does differently: its sliders are
+   `VkbSlider`s (a drag snaps to a round step, typing stays exact, the
+   value field gains the virtual keyboard); a colouring's grid fills on
+   its switch as a model's does; a drag's release commits its preview;
+   a stored value that is not finite shows as the default (the
+   conditions read it so already).
 5. **Escape**: 248 `EscapeParamDef` literals; `is_exponential`'s pointer
    set becomes `log`; `escape::SLOW_PARAMS`; the escape panel's formula,
    colouring and layer sections, the lighting panel, the animation
@@ -202,6 +213,12 @@ Each a commit, each behaviour-preserving and held by tests:
 11. **Docs and gates**: VARIATIONS.md, EFFECTS.md, ESCAPE.md,
     SIMULATION.md, SCRIPTING.md and UI.md; the contract's `shape`
     checked; the visual suite.
+
+## Found on the way, not addressed
+
+- `quaternion_julia_solid` declares `w_slice` twice: the template's
+  slice slot (its 7th parameter) and again as its 15th, so two Slice
+  Value sliders write one key (read from the snapshot, step 5).
 
 ## Out of it
 

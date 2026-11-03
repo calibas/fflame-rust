@@ -52,25 +52,6 @@ pub mod spectral;
 
 pub use renderer::SimRenderer;
 
-/// A parameter a model or colouring exposes, with everything the UI
-/// needs to build a control for it.
-///
-/// Deliberately the same shape as `EscapeParamDef`: a `choices` list
-/// turns the slider into a dropdown, and the value is still a plain
-/// `f32` on the wire so animation tracks address it uniformly.
-#[derive(Clone, Copy, Debug)]
-pub struct SimParamDef {
-    pub name: &'static str,
-    pub display_name: &'static str,
-    pub default: f32,
-    pub min: f32,
-    pub max: f32,
-    pub tooltip: &'static str,
-    /// Non-empty ⇒ the value is an index into these labels and the UI
-    /// shows a dropdown instead of a slider.
-    pub choices: &'static [&'static str],
-}
-
 /// A named parameter set for a model — the equivalent of an escape
 /// formula's presets, and the reason the panel can offer "mitosis"
 /// rather than two unlabelled numbers.
@@ -360,7 +341,7 @@ impl ScaleWarps {
         (0..self.live_rows(def, params)).any(|r| {
             SCALE_WARP_FIELDS.iter().any(|f| {
                 let name = self.param(r, f);
-                let d = def.parameters.iter().find(|p| p.name == name).map(|p| p.default).unwrap_or(0.0);
+                let d = def.parameters.iter().find(|p| p.name == name).map(|p| p.slot_default()).unwrap_or(0.0);
                 params.get(&name).copied().filter(|v| v.is_finite()).unwrap_or(d) != d
             })
         })
@@ -368,7 +349,7 @@ impl ScaleWarps {
 
     /// Rows live at these parameters.
     pub fn live_rows(&self, def: &ModelDef, params: &std::collections::BTreeMap<String, f32>) -> usize {
-        let d = def.parameters.iter().find(|p| p.name == self.rows_param).map(|p| p.default).unwrap_or(1.0);
+        let d = def.parameters.iter().find(|p| p.name == self.rows_param).map(|p| p.slot_default()).unwrap_or(1.0);
         params.get(self.rows_param).copied().filter(|v| v.is_finite()).unwrap_or(d).round().clamp(1.0, self.rows as f32)
             as usize
     }
@@ -615,7 +596,7 @@ impl Params<'_> {
                     .parameters
                     .iter()
                     .find(|p| p.name == name)
-                    .map(|p| p.default)
+                    .map(|p| p.slot_default())
             })
             .unwrap_or(0.0)
     }
@@ -702,7 +683,7 @@ pub struct ModelDef {
     /// One-line description for the panel's dropdown tooltip.
     pub description: &'static str,
     pub features: &'static [ModelFeature],
-    pub parameters: &'static [SimParamDef],
+    pub parameters: &'static [crate::params::ParamDef],
     pub presets: &'static [SimPreset],
     /// The step rule. See the type docs for the signature.
     ///
@@ -873,7 +854,7 @@ impl ModelDef {
                 .parameters
                 .iter()
                 .find(|p| p.name == *name)
-                .map(|p| p.default)
+                .map(|p| p.slot_default())
                 .unwrap_or(0.0);
             let v = params.get(*name).copied().filter(|v| v.is_finite()).unwrap_or(def);
             d_now = d_now.max(v.max(0.0));
@@ -898,7 +879,7 @@ impl ModelDef {
         if !self.has(ModelFeature::Memory) {
             return 0;
         }
-        let def = self.parameters.iter().find(|p| p.name == "memory").map(|p| p.default).unwrap_or(0.0);
+        let def = self.parameters.iter().find(|p| p.name == "memory").map(|p| p.slot_default()).unwrap_or(0.0);
         let v = params.get("memory").copied().filter(|v| v.is_finite()).unwrap_or(def);
         if v > 0.0 { MEMORY_SLICES } else { 0 }
     }
@@ -906,7 +887,7 @@ impl ModelDef {
     /// Whether this model's measure pass runs at these parameters.
     pub fn measuring(&self, params: &std::collections::BTreeMap<String, f32>) -> bool {
         let Some(m) = self.measure else { return false };
-        let def = self.parameters.iter().find(|p| p.name == m.param).map(|p| p.default).unwrap_or(0.0);
+        let def = self.parameters.iter().find(|p| p.name == m.param).map(|p| p.slot_default()).unwrap_or(0.0);
         params.get(m.param).copied().filter(|v| v.is_finite()).unwrap_or(def) > 0.0
     }
 
@@ -939,7 +920,7 @@ impl ModelDef {
     pub fn pack_params_from(&self, map: &std::collections::BTreeMap<String, f32>) -> Vec<f32> {
         self.parameters
             .iter()
-            .map(|p| map.get(p.name).copied().filter(|v| v.is_finite()).unwrap_or(p.default))
+            .map(|p| map.get(&*p.name).copied().filter(|v| v.is_finite()).unwrap_or(p.slot_default()))
             .collect()
     }
 
@@ -963,7 +944,7 @@ pub struct SimColoringDef {
     pub display_name: &'static str,
     pub description: &'static str,
     pub features: &'static [ColoringFeature],
-    pub parameters: &'static [SimParamDef],
+    pub parameters: &'static [crate::params::ParamDef],
     pub wgsl: &'static str,
 }
 
@@ -975,7 +956,7 @@ impl SimColoringDef {
     pub fn pack_params(&self, cfg: &crate::config::sim::SimConfig) -> Vec<f32> {
         self.parameters
             .iter()
-            .map(|p| cfg.coloring_param(p.name, p.default))
+            .map(|p| cfg.coloring_param(&*p.name, p.slot_default()))
             .collect()
     }
 }
@@ -1263,29 +1244,6 @@ pub static COLORINGS: &[&SimColoringDef] =
 /// posture the variation and formula registries take: a config naming
 /// a model this build does not have still opens, with a warning,
 /// instead of refusing the file.
-/// Parameters whose next step is slow, as (model, param): dragged live
-/// they overshoot, so the panel commits them when the drag ends, or
-/// offers a small whole-number range as a dropdown (`ui::slow_controls`).
-/// Lenia's and SmoothLife's kernels and the cyclic automaton's
-/// neighbourhood are read cell by cell, a cost that grows with the
-/// radius squared; physarum's population is its agent count.
-pub const SLOW_PARAMS: &[(&str, &str)] = &[
-    ("lenia", "radius"),
-    ("smoothlife", "inner_radius"),
-    ("cyclic_ca", "range"),
-    ("physarum", "population"),
-];
-
-/// Whether `param` of the model `model` is slow ([`SLOW_PARAMS`]).
-pub fn is_slow_param(model: &str, param: &str) -> bool {
-    // A Rhai model's `INFO.slow`.
-    #[cfg(feature = "lang")]
-    if model.starts_with(custom::PREFIX) {
-        return custom::is_slow_param(model, param);
-    }
-    SLOW_PARAMS.iter().any(|&(m, p)| m == model && p == param)
-}
-
 pub fn model_or_default(name: &str) -> &'static ModelDef {
     // One written in Rhai, registered from the config that carries it
     // (P4).
@@ -1366,16 +1324,16 @@ mod tests {
                     .flat_map(|c| c.parameters.iter().map(move |p| (c.name, p))),
             );
         for (owner, p) in all {
-            assert!(p.min <= p.max, "{owner}.{}: min > max", p.name);
+            assert!(p.slot_range().0 <= p.slot_range().1, "{owner}.{}: min > max", p.name);
             assert!(
-                p.default >= p.min && p.default <= p.max,
+                p.slot_default() >= p.slot_range().0 && p.slot_default() <= p.slot_range().1,
                 "{owner}.{}: default {} outside [{}, {}]",
                 p.name,
-                p.default,
-                p.min,
-                p.max
+                p.slot_default(),
+                p.slot_range().0,
+                p.slot_range().1
             );
-            assert!(!p.tooltip.is_empty(), "{owner}.{}: needs a tooltip", p.name);
+            assert!(!p.hint.is_empty(), "{owner}.{}: needs a tooltip", p.name);
         }
     }
 
@@ -1394,12 +1352,12 @@ mod tests {
                         .find(|p| p.name == *k)
                         .unwrap_or_else(|| panic!("{}/{}: no parameter {k:?}", m.name, pre.name));
                     assert!(
-                        *v >= def.min && *v <= def.max,
+                        *v >= def.slot_range().0 && *v <= def.slot_range().1,
                         "{}/{}: {k} = {v} outside [{}, {}]",
                         m.name,
                         pre.name,
-                        def.min,
-                        def.max
+                        def.slot_range().0,
+                        def.slot_range().1
                     );
                 }
             }
@@ -1441,12 +1399,12 @@ mod tests {
                     .find(|p| p.name == *name)
                     .unwrap_or_else(|| panic!("{}: diffusion parameter {name} does not exist", m.name));
                 assert!(
-                    m.max_dt * def.default * 1.6 <= 2.0 + 1e-5,
+                    m.max_dt * def.slot_default() * 1.6 <= 2.0 + 1e-5,
                     "{}: max_dt {} at default {name} = {} gives dt·D·1.6 = {} > 2",
                     m.name,
                     m.max_dt,
-                    def.default,
-                    m.max_dt * def.default * 1.6
+                    def.slot_default(),
+                    m.max_dt * def.slot_default() * 1.6
                 );
             }
             // With no parameters set, the cap is the declared one under
@@ -1548,7 +1506,7 @@ mod tests {
             // give a usable bound: a bound that goes to zero or NaN
             // somewhere in range would freeze the dt slider there.
             for pd in m.parameters {
-                for v in [pd.min, pd.default, pd.max] {
+                for v in [pd.slot_range().0, pd.slot_default(), pd.slot_range().1] {
                     let mut map = std::collections::BTreeMap::new();
                     map.insert(pd.name.to_string(), v);
                     let r = bound(&Params { model: m, map: &map });
@@ -1573,7 +1531,7 @@ mod tests {
             let Some(build) = m.kernel else { continue };
             let mut cases = vec![std::collections::BTreeMap::new()];
             for pd in m.parameters {
-                for v in [pd.min, pd.default, pd.max] {
+                for v in [pd.slot_range().0, pd.slot_default(), pd.slot_range().1] {
                     let mut map = std::collections::BTreeMap::new();
                     map.insert(pd.name.to_string(), v);
                     cases.push(map);
@@ -1709,7 +1667,7 @@ mod tests {
     fn memory_is_a_parameter_that_defaults_to_off() {
         for m in MODELS.iter().filter(|m| m.has(ModelFeature::Memory)) {
             let p = m.parameters.iter().find(|p| p.name == "memory");
-            assert!(p.is_some_and(|p| p.default == 0.0), "{}: needs a `memory` parameter defaulting to 0", m.name);
+            assert!(p.is_some_and(|p| p.slot_default() == 0.0), "{}: needs a `memory` parameter defaulting to 0", m.name);
             assert_eq!(m.memory_slices(&Default::default()), 0, "{}", m.name);
         }
     }
@@ -1730,7 +1688,7 @@ mod tests {
                         .iter()
                         .find(|pd| pd.name == *k)
                         .unwrap_or_else(|| panic!("{}: {m} has no parameter {k}", p.name));
-                    assert!(*v >= pd.min && *v <= pd.max, "{}: {m}.{k} = {v} outside range", p.name);
+                    assert!(*v >= pd.slot_range().0 && *v <= pd.slot_range().1, "{}: {m}.{k} = {v} outside range", p.name);
                 }
             }
             for &(from, to, _, strength, mask) in p.couplings {
@@ -1855,7 +1813,7 @@ mod tests {
             );
             let mut cases = vec![std::collections::BTreeMap::new()];
             for pd in m.parameters {
-                for v in [pd.min, pd.default, pd.max] {
+                for v in [pd.slot_range().0, pd.slot_default(), pd.slot_range().1] {
                     let mut map = std::collections::BTreeMap::new();
                     map.insert(pd.name.to_string(), v);
                     cases.push(map);
@@ -1889,7 +1847,7 @@ mod tests {
         let defaults = m.pack_params(&cfg);
         assert_eq!(defaults.len(), m.parameters.len());
         for (v, p) in defaults.iter().zip(m.parameters) {
-            assert_eq!(*v, p.default);
+            assert_eq!(*v, p.slot_default());
         }
         cfg.model_params.insert(m.parameters[0].name.to_string(), 0.125);
         assert_eq!(m.pack_params(&cfg)[0], 0.125);
@@ -2114,17 +2072,5 @@ mod timeline_driver_tests {
         // ...then WALKS FORWARD without restarting again. A second
         // reseed would show here as a drop back to 100.
         assert_eq!(&seen[6..], &[200, 250], "walks up, no second restart");
-    }
-}
-
-#[cfg(test)]
-mod slow_param_tests {
-    /// Every parameter marked slow names a real one.
-    #[test]
-    fn every_slow_param_names_a_real_parameter() {
-        for &(model, param) in super::SLOW_PARAMS {
-            let m = super::MODELS.iter().find(|m| m.name == model).unwrap_or_else(|| panic!("{model} is not a model"));
-            assert!(m.parameters.iter().any(|p| p.name == param), "{model}.{param} is marked slow but is not a parameter");
-        }
     }
 }

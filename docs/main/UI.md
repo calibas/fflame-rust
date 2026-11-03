@@ -750,9 +750,13 @@ config_manager.update_batch(changes, "history.action.some_edit".to_string())?;
     cap, Lenia's and SmoothLife's radii, physarum's population, steps per
     frame, the grid's size, and the variations' iteration counts.
 
-  What is slow is listed beside each registry: `escape::SLOW_PARAMS`,
-  `sim::SLOW_PARAMS` and `variations::SLOW_PARAMS`, each held to real
-  parameter names by a test. The variations' list is measured
+  What is slow is a parameter's own flag (`ParamDef::slow`; a
+  built-in's `.slow()`, a simulation script's `INFO.slow`) where its
+  kind has moved to the one parameter system
+  ([one-parameter-system.md](../projects/one-parameter-system.md)), and
+  a list beside the registry where it has not yet:
+  `escape::SLOW_PARAMS` and `variations::SLOW_PARAMS`, each held to
+  real parameter names by a test. The variations' list is measured
   (`renderer::param_cost`).
 
 ### Variation ordering

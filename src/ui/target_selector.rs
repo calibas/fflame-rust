@@ -662,9 +662,9 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
                 ConfigPath::SimModelParam { param: p.name.to_string() }
             };
             let label = if layered {
-                format!("Layer {} {}: {}", l + 1, model.display_name, p.display_name)
+                format!("Layer {} {}: {}", l + 1, model.display_name, p.label)
             } else {
-                format!("{}: {}", model.display_name, p.display_name)
+                format!("{}: {}", model.display_name, p.label)
             };
             items.push(TargetItem::new(path, &label));
         }
@@ -678,7 +678,7 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
         for p in coloring.parameters {
             items.push(TargetItem::new(
                 ConfigPath::SimColoringParam { param: p.name.to_string() },
-                &format!("Coloring: {}", p.display_name),
+                &format!("Coloring: {}", p.label),
             ));
         }
     } else {
@@ -687,7 +687,7 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
             for p in coloring.parameters {
                 items.push(TargetItem::new(
                     ConfigPath::SimColorLayerParam { index: k, param: p.name.to_string() },
-                    &format!("Colour {} {}: {}", k + 1, coloring.display_name, p.display_name),
+                    &format!("Colour {} {}: {}", k + 1, coloring.display_name, p.label),
                 ));
             }
             items.push(TargetItem::new(

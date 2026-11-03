@@ -148,6 +148,21 @@ impl ParamKind {
         }
     }
 
+    /// The range a GPU kind's slot holds: [`Self::bounds`], a switch's
+    /// 0..1.
+    pub fn slot_range(&self) -> (f32, f32) {
+        let (lo, hi) = self.bounds().unwrap_or((0.0, 1.0));
+        (lo as f32, hi as f32)
+    }
+
+    /// A choice's entries.
+    pub fn options(&self) -> Option<&Options> {
+        match self {
+            ParamKind::Choice { options, .. } => Some(options),
+            _ => None,
+        }
+    }
+
     /// An f32 slot read as this kind: an int truncated (as its slider
     /// reads it), a switch on above one half, a choice rounded and
     /// clamped to an entry (a value saved before the list existed, or set
@@ -200,6 +215,21 @@ impl ParamDef {
     /// The tooltip, if it has one.
     pub fn hint(&self) -> Option<&str> {
         (!self.hint.is_empty()).then_some(&*self.hint)
+    }
+
+    /// Its default as a GPU kind's slot holds it.
+    pub fn slot_default(&self) -> f32 {
+        self.kind.slot_default()
+    }
+
+    /// Its slot's range ([`ParamKind::slot_range`]).
+    pub fn slot_range(&self) -> (f32, f32) {
+        self.kind.slot_range()
+    }
+
+    /// A choice's entries; none for another kind.
+    pub fn options(&self) -> Option<&Options> {
+        self.kind.options()
     }
 }
 

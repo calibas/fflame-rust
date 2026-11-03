@@ -34,7 +34,8 @@
 //! mode enters with Linear tonemapping — a flame's Log-calibrated
 //! exposure would render a unit-range field black.
 
-use super::{ColoringFeature, SimColoringDef, SimParamDef};
+use super::{ColoringFeature, SimColoringDef};
+use crate::params::{ParamDef, Spec};
 
 /// Map one channel through the palette.
 ///
@@ -48,44 +49,32 @@ pub static CHANNEL: SimColoringDef = SimColoringDef {
     description: "One state channel through the palette, with scale and offset.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "channel",
-            display_name: "Channel",
-            default: 1.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "Which state channel to colour. For Gray–Scott: A is 0, B is 1.",
-            choices: &["A / x", "B / y", "Age / z", "Spare / w"],
-        },
-        SimParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 3.0,
-            min: -20.0,
-            max: 20.0,
-            tooltip: "Multiplies the channel before the palette lookup. Gray–Scott's B \
+        ParamDef::new(
+            "channel",
+            "Channel",
+            "Which state channel to colour. For Gray–Scott: A is 0, B is 1.",
+            Spec::choice(1, &["A / x", "B / y", "Age / z", "Spare / w"]),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Multiplies the channel before the palette lookup. Gray–Scott's B \
                       rarely exceeds 0.35, so a scale near 3 uses the whole palette.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "offset",
-            display_name: "Offset",
-            default: 0.0,
-            min: -1.0,
-            max: 1.0,
-            tooltip: "Added after scaling, before the palette lookup.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "wrap",
-            display_name: "Wrap",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Off clamps values outside the palette to its ends; on wraps them, \
+            Spec::float(3.0, -20.0, 20.0),
+        ),
+        ParamDef::new(
+            "offset",
+            "Offset",
+            "Added after scaling, before the palette lookup.",
+            Spec::float(0.0, -1.0, 1.0),
+        ),
+        ParamDef::new(
+            "wrap",
+            "Wrap",
+            "Off clamps values outside the palette to its ends; on wraps them, \
                       which suits cyclic state (automata phases) rather than concentrations.",
-            choices: &["Clamp", "Wrap"],
-        },
+            Spec::choice(0, &["Clamp", "Wrap"]),
+        ),
     ],
     wgsl: r#"
 fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
@@ -125,52 +114,37 @@ pub static TWO_CHANNEL: SimColoringDef = SimColoringDef {
     description: "First channel picks the palette colour, second scales its brightness.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "hue_channel",
-            display_name: "Colour from",
-            default: 1.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "Which channel drives the palette lookup.",
-            choices: &["A / x", "B / y", "Age / z", "Spare / w"],
-        },
-        SimParamDef {
-            name: "hue_scale",
-            display_name: "Colour scale",
-            default: 3.0,
-            min: -20.0,
-            max: 20.0,
-            tooltip: "Multiplies that channel before the palette lookup.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "value_channel",
-            display_name: "Brightness from",
-            default: 0.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "Which channel scales brightness.",
-            choices: &["A / x", "B / y", "Age / z", "Spare / w"],
-        },
-        SimParamDef {
-            name: "value_scale",
-            display_name: "Brightness scale",
-            default: 1.0,
-            min: -8.0,
-            max: 8.0,
-            tooltip: "Multiplies the brightness channel. Negative inverts it, which is \
+        ParamDef::new(
+            "hue_channel",
+            "Colour from",
+            "Which channel drives the palette lookup.",
+            Spec::choice(1, &["A / x", "B / y", "Age / z", "Spare / w"]),
+        ),
+        ParamDef::new(
+            "hue_scale",
+            "Colour scale",
+            "Multiplies that channel before the palette lookup.",
+            Spec::float(3.0, -20.0, 20.0),
+        ),
+        ParamDef::new(
+            "value_channel",
+            "Brightness from",
+            "Which channel scales brightness.",
+            Spec::choice(0, &["A / x", "B / y", "Age / z", "Spare / w"]),
+        ),
+        ParamDef::new(
+            "value_scale",
+            "Brightness scale",
+            "Multiplies the brightness channel. Negative inverts it, which is \
                       usually what reads best when the two species are complementary.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "value_offset",
-            display_name: "Brightness offset",
-            default: 0.0,
-            min: -1.0,
-            max: 2.0,
-            tooltip: "Added after scaling. Raise it to keep the dark species visible.",
-            choices: &[],
-        },
+            Spec::float(1.0, -8.0, 8.0),
+        ),
+        ParamDef::new(
+            "value_offset",
+            "Brightness offset",
+            "Added after scaling. Raise it to keep the dark species visible.",
+            Spec::float(0.0, -1.0, 2.0),
+        ),
     ],
     wgsl: r#"
 fn tc_pick(s: vec4<f32>, which: f32) -> f32 {
@@ -209,35 +183,26 @@ pub static AGE: SimColoringDef = SimColoringDef {
                   coarsening fronts.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "window",
-            display_name: "Window (steps)",
-            default: 64.0,
-            min: 1.0,
-            max: 10000.0,
-            tooltip: "How many steps back the palette spans. Anything older than this \
+        ParamDef::new(
+            "window",
+            "Window (steps)",
+            "How many steps back the palette spans. Anything older than this \
                       lands at the far end.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "invert",
-            display_name: "Direction",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Whether recent changes take the near end of the palette or the far end.",
-            choices: &["Recent first", "Oldest first"],
-        },
-        SimParamDef {
-            name: "wrap",
-            display_name: "Wrap",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Wrapping repeats the palette every window, which draws growth rings \
+            Spec::float(64.0, 1.0, 10000.0),
+        ),
+        ParamDef::new(
+            "invert",
+            "Direction",
+            "Whether recent changes take the near end of the palette or the far end.",
+            Spec::choice(0, &["Recent first", "Oldest first"]),
+        ),
+        ParamDef::new(
+            "wrap",
+            "Wrap",
+            "Wrapping repeats the palette every window, which draws growth rings \
                       explicitly; clamping fades once.",
-            choices: &["Clamp", "Wrap"],
-        },
+            Spec::choice(0, &["Clamp", "Wrap"]),
+        ),
     ],
     wgsl: r#"
 fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
@@ -274,25 +239,19 @@ pub static LABEL: SimColoringDef = SimColoringDef {
                   unrelated colours instead of a positional gradient.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "channel",
-            display_name: "Label from",
-            default: 0.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "Which channel holds the label.",
-            choices: &["A / x", "B / y", "Age / z", "Spare / w"],
-        },
-        SimParamDef {
-            name: "mask_channel",
-            display_name: "Masked by",
-            default: 1.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "Cells whose mask channel is below 0.5 are drawn as background — \
+        ParamDef::new(
+            "channel",
+            "Label from",
+            "Which channel holds the label.",
+            Spec::choice(0, &["A / x", "B / y", "Age / z", "Spare / w"]),
+        ),
+        ParamDef::new(
+            "mask_channel",
+            "Masked by",
+            "Cells whose mask channel is below 0.5 are drawn as background — \
                       percolation's closed sites, or a growth model's empty space.",
-            choices: &["None", "B / y", "Age / z", "Spare / w"],
-        },
+            Spec::choice(1, &["None", "B / y", "Age / z", "Spare / w"]),
+        ),
     ],
     wgsl: r#"
 fn lab_pick(s: vec4<f32>, which: f32) -> f32 {
@@ -334,25 +293,19 @@ pub static SCALE_MIX: SimColoringDef = SimColoringDef {
                   the multi-scale look, where each nesting level has its own colour.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "scales",
-            display_name: "Scales across palette",
-            default: 6.0,
-            min: 1.0,
-            max: 8.0,
-            tooltip: "How many scale indices the palette spans. Match the model's scale \
+        ParamDef::new(
+            "scales",
+            "Scales across palette",
+            "How many scale indices the palette spans. Match the model's scale \
                       count to use the whole palette once.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "value_scale",
-            display_name: "Brightness range",
-            default: 0.5,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How much the field darkens the colour. 0 shows the scale alone.",
-            choices: &[],
-        },
+            Spec::float(6.0, 1.0, 8.0),
+        ),
+        ParamDef::new(
+            "value_scale",
+            "Brightness range",
+            "How much the field darkens the colour. 0 shows the scale alone.",
+            Spec::float(0.5, 0.0, 1.0),
+        ),
     ],
     wgsl: r#"
 fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
@@ -381,26 +334,20 @@ pub static OCCUPANCY: SimColoringDef = SimColoringDef {
                   immediate than the trail it leaves behind.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 0.2,
-            min: 0.001,
-            max: 2.0,
-            tooltip: "Multiplies the density before the palette lookup.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "soften",
-            display_name: "Soften",
-            default: 1.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Compresses the bright end, so a cell that happened to take several \
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Multiplies the density before the palette lookup.",
+            Spec::float(0.2, 0.001, 2.0),
+        ),
+        ParamDef::new(
+            "soften",
+            "Soften",
+            "Compresses the bright end, so a cell that happened to take several \
                       agents does not wash out the ones that took one. At 0 the mapping is \
                       linear.",
-            choices: &[],
-        },
+            Spec::float(1.0, 0.0, 1.0),
+        ),
     ],
     wgsl: r#"
 fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
@@ -437,37 +384,28 @@ pub static GRADIENT: SimColoringDef = SimColoringDef {
                   palette, and how steeply, as brightness. Fronts, edges and flow lines.",
     features: &[ColoringFeature::NeedsGradient],
     parameters: &[
-        SimParamDef {
-            name: "channel",
-            display_name: "Channel",
-            default: 0.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "Which channel's gradient to draw. For fingering, y (the pressure) points \
+        ParamDef::new(
+            "channel",
+            "Channel",
+            "Which channel's gradient to draw. For fingering, y (the pressure) points \
                       along the flow.",
-            choices: &["A / x", "B / y", "Age / z", "Spare / w"],
-        },
-        SimParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 4.0,
-            min: 0.1,
-            max: 100.0,
-            tooltip: "Multiplies the gradient's magnitude before it becomes brightness. A \
+            Spec::choice(0, &["A / x", "B / y", "Age / z", "Spare / w"]),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Multiplies the gradient's magnitude before it becomes brightness. A \
                       field that changes by 0.25 per cell at its steepest fills the palette \
                       at 4.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "rotate",
-            display_name: "Rotate",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Turns which direction lands at the start of the palette, as a fraction \
+            Spec::float(4.0, 0.1, 100.0),
+        ),
+        ParamDef::new(
+            "rotate",
+            "Rotate",
+            "Turns which direction lands at the start of the palette, as a fraction \
                       of a full turn.",
-            choices: &[],
-        },
+            Spec::float(0.0, 0.0, 1.0),
+        ),
     ],
     wgsl: r#"
 fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
@@ -502,39 +440,30 @@ pub static STRUCTURE: SimColoringDef = SimColoringDef {
                   from junctions.",
     features: &[ColoringFeature::NeedsStructure],
     parameters: &[
-        SimParamDef {
-            name: "mode",
-            display_name: "Draw",
-            default: 0.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "Orientation colours by the direction lines run (half a turn is the \
+        ParamDef::new(
+            "mode",
+            "Draw",
+            "Orientation colours by the direction lines run (half a turn is the \
                       palette once), bright where the structure is strong. Coherence is how \
                       line-like each place is, 0 to 1. Energy is how much the field varies \
                       there at all.",
-            choices: &["Orientation", "Coherence", "Energy"],
-        },
-        SimParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 4.0,
-            min: 0.1,
-            max: 100.0,
-            tooltip: "Multiplies the strength (the square root of the energy) before it \
+            Spec::choice(0, &["Orientation", "Coherence", "Energy"]),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Multiplies the strength (the square root of the energy) before it \
                       becomes brightness in Orientation mode, or the palette position in \
                       Energy mode.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "rotate",
-            display_name: "Rotate",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Turns which orientation lands at the start of the palette, as a fraction \
+            Spec::float(4.0, 0.1, 100.0),
+        ),
+        ParamDef::new(
+            "rotate",
+            "Rotate",
+            "Turns which orientation lands at the start of the palette, as a fraction \
                       of a half turn.",
-            choices: &[],
-        },
+            Spec::float(0.0, 0.0, 1.0),
+        ),
     ],
     wgsl: r#"
 fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
@@ -583,29 +512,23 @@ pub static DISTANCE: SimColoringDef = SimColoringDef {
                   palette. Needs the matte on.",
     features: &[ColoringFeature::NeedsDistance],
     parameters: &[
-        SimParamDef {
-            name: "mode",
-            display_name: "Draw",
-            default: 1.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "The matte draws the figure, so these colour the figure by its distance \
+        ParamDef::new(
+            "mode",
+            "Draw",
+            "The matte draws the figure, so these colour the figure by its distance \
                       from its own edge. Depth is 0 at the edge and rises inward, full at \
                       Scale cells. Outline is brightest on the edge and fades to 0 at Scale \
                       cells in. Signed runs the palette from Scale cells outside to Scale \
                       cells inside, for a soft matte that shows both sides. Invert the matte \
                       to colour the space AROUND a figure instead — a glow.",
-            choices: &["Signed", "Depth", "Outline"],
-        },
-        SimParamDef {
-            name: "scale",
-            display_name: "Scale (cells)",
-            default: 8.0,
-            min: 0.5,
-            max: 256.0,
-            tooltip: "How many cells of distance span the palette.",
-            choices: &[],
-        },
+            Spec::choice(1, &["Signed", "Depth", "Outline"]),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale (cells)",
+            "How many cells of distance span the palette.",
+            Spec::float(8.0, 0.5, 256.0),
+        ),
     ],
     wgsl: r#"
 fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
@@ -649,46 +572,34 @@ pub static LIC: SimColoringDef = SimColoringDef {
                   are the picture. Line integral convolution.",
     features: &[ColoringFeature::ReadsCell],
     parameters: &[
-        SimParamDef {
-            name: "channel",
-            display_name: "Channel",
-            default: 0.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "Which channel's gradient gives the direction. For fingering, y (the \
+        ParamDef::new(
+            "channel",
+            "Channel",
+            "Which channel's gradient gives the direction. For fingering, y (the \
                       pressure) points along the flow.",
-            choices: &["A / x", "B / y", "Age / z", "Spare / w"],
-        },
-        SimParamDef {
-            name: "direction",
-            display_name: "Follow",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Contours runs along lines of equal value — the shape of the pattern. \
+            Spec::choice(0, &["A / x", "B / y", "Age / z", "Spare / w"]),
+        ),
+        ParamDef::new(
+            "direction",
+            "Follow",
+            "Contours runs along lines of equal value — the shape of the pattern. \
                       Gradient runs across them, up the slope — the flow.",
-            choices: &["Contours", "Gradient"],
-        },
-        SimParamDef {
-            name: "length",
-            display_name: "Length (cells)",
-            default: 8.0,
-            min: 1.0,
-            max: 32.0,
-            tooltip: "How far each way the noise is smeared. Longer lines are smoother and \
+            Spec::choice(0, &["Contours", "Gradient"]),
+        ),
+        ParamDef::new(
+            "length",
+            "Length (cells)",
+            "How far each way the noise is smeared. Longer lines are smoother and \
                       cost proportionally more.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "contrast",
-            display_name: "Contrast",
-            default: 1.0,
-            min: 0.1,
-            max: 4.0,
-            tooltip: "Stretches the averaged noise about its mean. The average of many noise \
+            Spec::float(8.0, 1.0, 32.0),
+        ),
+        ParamDef::new(
+            "contrast",
+            "Contrast",
+            "Stretches the averaged noise about its mean. The average of many noise \
                       values is close to a half; this pulls it back out to the palette.",
-            choices: &[],
-        },
+            Spec::float(1.0, 0.1, 4.0),
+        ),
     ],
     wgsl: r#"
 // Per-cell white noise keyed by cell and seed, NOT by step: the
@@ -789,37 +700,28 @@ pub static SPECIES: SimColoringDef = SimColoringDef {
                   coupled Turing lattice.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.1,
-            max: 10.0,
-            tooltip: "Multiplies the lead before it becomes brightness. The lead is the length \
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Multiplies the lead before it becomes brightness. The lead is the length \
                       of (A − C, B − D), at most about 1.4.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "rotate",
-            display_name: "Rotate",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Turns which field lands at the start of the palette, as a fraction of \
+            Spec::float(1.0, 0.1, 10.0),
+        ),
+        ParamDef::new(
+            "rotate",
+            "Rotate",
+            "Turns which field lands at the start of the palette, as a fraction of \
                       the whole.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "fields",
-            display_name: "Fields",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Four places the channels a quarter turn apart. Three places x, y, z a \
+            Spec::float(0.0, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "fields",
+            "Fields",
+            "Four places the channels a quarter turn apart. Three places x, y, z a \
                       third of a turn apart and ignores w — for the lattice with a memory in \
                       its fourth channel.",
-            choices: &["Four", "Three"],
-        },
+            Spec::choice(0, &["Four", "Three"]),
+        ),
     ],
     wgsl: r#"
 fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
@@ -856,40 +758,31 @@ pub static SCALE_MEMORY: SimColoringDef = SimColoringDef {
                   Colour memory on; without it the picture is black.",
     features: &[ColoringFeature::ReadsMemory],
     parameters: &[
-        SimParamDef {
-            name: "scales",
-            display_name: "Scales across palette",
-            default: 6.0,
-            min: 1.0,
-            max: 8.0,
-            tooltip: "How many scale indices the palette spans. Match the model's scale \
+        ParamDef::new(
+            "scales",
+            "Scales across palette",
+            "How many scale indices the palette spans. Match the model's scale \
                       count to use the whole palette once.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "value_scale",
-            display_name: "Brightness range",
-            default: 0.5,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How much the field sets the brightness. 0 shows the memory alone. At \
+            Spec::float(6.0, 1.0, 8.0),
+        ),
+        ParamDef::new(
+            "value_scale",
+            "Brightness range",
+            "How much the field sets the brightness. 0 shows the memory alone. At \
                       1, Multiply is Softology's colour times (f + 1) / 2, and Luminance makes \
                       (f + 1) / 2 the colour's whole luminance.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "brightness",
-            display_name: "Brightness from",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How the field sets the brightness. Multiply darkens the memory's colour \
+            Spec::float(0.5, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "brightness",
+            "Brightness from",
+            "How the field sets the brightness. Multiply darkens the memory's colour \
                       by it, as Softology's does: low regions go black. Luminance (YUV) keeps \
                       the colour's hue and saturation and sets its luminance from the field, \
                       as Chau's does: every scale's colour stays visible, light and dark, \
                       and pale where the field is bright.",
-            choices: &["Multiply", "Luminance (YUV)"],
-        },
+            Spec::choice(0, &["Multiply", "Luminance (YUV)"]),
+        ),
     ],
     wgsl: r#"
 fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {
@@ -962,86 +855,62 @@ pub static RELIEF: SimColoringDef = SimColoringDef {
     features: &[ColoringFeature::NeedsRelief],
     parameters: &[
         // Slots 0 and 1 are read by the renderer's relief stage too.
-        SimParamDef {
-            name: "channel",
-            display_name: "Height from",
-            default: 0.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "Which channel of the source layer is the height. McCabe: x is the \
+        ParamDef::new(
+            "channel",
+            "Height from",
+            "Which channel of the source layer is the height. McCabe: x is the \
                       pattern, z the step its winning scale last changed (age).",
-            choices: &["x", "y", "z", "w"],
-        },
-        SimParamDef {
-            name: "softness",
-            display_name: "Softness",
-            default: 2.0,
-            min: 0.0,
-            max: 8.0,
-            tooltip: "Gaussian smoothing of the height, in cells, before its slope is taken. \
+            Spec::choice(0, &["x", "y", "z", "w"]),
+        ),
+        ParamDef::new(
+            "softness",
+            "Softness",
+            "Gaussian smoothing of the height, in cells, before its slope is taken. \
                       Raw, the finest detail's speckle dominates; 2 gives raised cells with \
                       their nested texture.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "height",
-            display_name: "Height",
-            default: 12.0,
-            min: 0.0,
-            max: 100.0,
-            tooltip: "Vertical exaggeration of the slope. Its useful range depends on the \
+            Spec::float(2.0, 0.0, 8.0),
+        ),
+        ParamDef::new(
+            "height",
+            "Height",
+            "Vertical exaggeration of the slope. Its useful range depends on the \
                       model's values: McCabe's field runs -1 to 1.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "light",
-            display_name: "Light angle",
-            default: 135.0,
-            min: 0.0,
-            max: 360.0,
-            tooltip: "Where the light comes from, in degrees counter-clockwise from east: 135 \
+            Spec::float(12.0, 0.0, 100.0),
+        ),
+        ParamDef::new(
+            "light",
+            "Light angle",
+            "Where the light comes from, in degrees counter-clockwise from east: 135 \
                       is the upper left, the cartographic convention. Lit from the other side, \
                       raised detail reads as sunken.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "model",
-            display_name: "Lighting",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Tilt: the slope toward the light, symmetric in light and shade. Lambert: \
+            Spec::float(135.0, 0.0, 360.0),
+        ),
+        ParamDef::new(
+            "model",
+            "Lighting",
+            "Tilt: the slope toward the light, symmetric in light and shade. Lambert: \
                       the light raised by the elevation, so slopes facing away fall into shadow \
                       sooner the lower it is.",
-            choices: &["Tilt", "Lambert"],
-        },
-        SimParamDef {
-            name: "elevation",
-            display_name: "Light elevation",
-            default: 30.0,
-            min: 1.0,
-            max: 89.0,
-            tooltip: "The light's height above the horizon in degrees, for Lambert.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "shadow",
-            display_name: "Shadow",
-            default: 0.8,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How dark the side facing away from the light goes.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "highlight",
-            display_name: "Highlight",
-            default: 0.6,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How light the side facing the light goes.",
-            choices: &[],
-        },
+            Spec::choice(0, &["Tilt", "Lambert"]),
+        ),
+        ParamDef::new(
+            "elevation",
+            "Light elevation",
+            "The light's height above the horizon in degrees, for Lambert.",
+            Spec::float(30.0, 1.0, 89.0),
+        ),
+        ParamDef::new(
+            "shadow",
+            "Shadow",
+            "How dark the side facing away from the light goes.",
+            Spec::float(0.8, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "highlight",
+            "Highlight",
+            "How light the side facing the light goes.",
+            Spec::float(0.6, 0.0, 1.0),
+        ),
     ],
     wgsl: r#"
 fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {

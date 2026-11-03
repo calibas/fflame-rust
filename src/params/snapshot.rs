@@ -123,20 +123,28 @@ fn escape(rows: &mut Vec<Value>) {
     escape_row(rows, "escape-solid-template", "template", crate::escape::ifs::template_parameters());
 }
 
-fn sim(rows: &mut Vec<Value>) {
-    let sim_rows = |rows: &mut Vec<Value>, kind: &str, owner: &str, params: &[crate::sim::SimParamDef], model: bool| {
-        for p in params {
-            let control = if p.choices.is_empty() { "float" } else { "choice" };
-            let slow = model && crate::sim::is_slow_param(owner, p.name);
-            let choices = p.choices.iter().map(|c| c.to_string()).collect();
-            rows.push(row(kind, owner, p.name, p.display_name, p.tooltip, control, f64::from(p.default), (f64::from(p.min), f64::from(p.max)), choices, slow, false));
-        }
+/// A [`ParamDef`]'s row: its control by its kind, its range (a choice's
+/// its indices, a switch's 0..1), its flags as they are.
+fn def_row(kind: &str, owner: &str, d: &crate::params::ParamDef) -> Value {
+    use crate::params::ParamKind as K;
+    let (control, default, range, choices) = match &d.kind {
+        K::Float { default, min, max, free, angle, .. } => (if *free { "unlimited_float" } else if *angle { "angle" } else { "float" }, *default, (*min, *max), Vec::new()),
+        K::Int { default, min, max, free } => (if *free { "unlimited_integer" } else { "integer" }, *default as f64, (*min as f64, *max as f64), Vec::new()),
+        K::Bool { default } => ("boolean", f64::from(u8::from(*default)), (0.0, 1.0), Vec::new()),
+        K::Choice { default, options } => ("choice", *default as f64, (0.0, options.len().saturating_sub(1) as f64), options.iter().map(str::to_string).collect()),
+        K::Text { default, max_len } => ("text", 0.0, (0.0, *max_len as f64), vec![default.to_string()]),
+        K::Color { default } => ("color", 0.0, (0.0, 0.0), default.iter().map(|c| c.to_string()).collect()),
     };
+    let log = matches!(d.kind, K::Float { log: true, .. });
+    row(kind, owner, &d.name, &d.label, &d.hint, control, default, range, choices, d.slow, log)
+}
+
+fn sim(rows: &mut Vec<Value>) {
     for m in crate::sim::MODELS {
-        sim_rows(rows, "sim-model", m.name, m.parameters, true);
+        rows.extend(m.parameters.iter().map(|p| def_row("sim-model", m.name, p)));
     }
     for c in crate::sim::COLORINGS {
-        sim_rows(rows, "sim-coloring", c.name, c.parameters, false);
+        rows.extend(c.parameters.iter().map(|p| def_row("sim-coloring", c.name, p)));
     }
 }
 

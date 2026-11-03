@@ -1441,7 +1441,7 @@ impl<'s> Lowerer<'s> {
                 },
                 // The parameters whose every value is a slow step (a kernel's
                 // radius, an agent count): the panel commits them when a
-                // drag ends, as `sim::SLOW_PARAMS` marks the built-ins'.
+                // drag ends, as a built-in's `.slow()` marks it.
                 "slow" if self.sim_model => match v {
                     Expr::Array(items, _) if items.iter().all(|i| matches!(i, Expr::StringConstant(..))) => {}
                     _ => return self.err(*p, "`slow` is a list of the parameters that make a step slow, committed when a drag ends: `[\"radius\"]`"),
