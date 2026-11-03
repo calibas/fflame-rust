@@ -1306,3 +1306,12 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
 /// escape-only module's flame surface INERT rather than BROKEN.
 #[cfg(not(feature = "engine-flame"))]
 pub static ALL_VARIATIONS: &[&VariationDef] = &[&LINEAR];
+
+// The catalog is `engine-flame`'s whole seam, so it is checked wherever
+// the crate compiles -- the gallery modules' check in `release.py`
+// included: every definition with the feature, `linear` alone without,
+// as the escape and sim modules' smoke tests once checked at run time.
+#[cfg(feature = "engine-flame")]
+const _: () = assert!(ALL_VARIATIONS.len() > 500, "engine-flame carries the whole catalog");
+#[cfg(not(feature = "engine-flame"))]
+const _: () = assert!(ALL_VARIATIONS.len() == 1, "without engine-flame the catalog is `linear` alone");

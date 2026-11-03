@@ -286,6 +286,9 @@ ctx.putImageData(new ImageData(new Uint8ClampedArray(t.pixels), t.width, t.heigh
 
 ## Testing the modules
 
+`python scripts/release.py gallery` runs all five, before the modules
+deploy; `release.py check` only checks they compile. One by hand:
+
 ```bash
 cd wasm/script && cargo test --profile gallery-test   # CLI-parity: byte-identical fixtures
 cd wasm/render && cargo test --profile gallery-test   # GPU smoke test (skips without an adapter)

@@ -15,9 +15,10 @@ requires.
 cargo test --release --lib
 
 # Every fast gate: versions, tests, wasm build, generated files, doc
-# links, the five gallery crates (also the engine feature matrix)
+# links, the gallery modules checked (also the engine feature matrix)
 python scripts/release.py check
 python scripts/release.py check --fix      # ...and regenerate stale generated files
+python scripts/release.py gallery          # the gallery modules' own tests, before they deploy
 
 # Visual regression suite (needs a GPU; does NOT build the binary)
 cargo build --release && python tests/visual/run_tests.py
@@ -58,9 +59,9 @@ before you go looking for a simulation or escape failure:
 
   It has caught a model rendering black that no name check could. See
   [SIMULATION.md](main/SIMULATION.md) ("Adding a model").
-- **`release.py check` compiles the library at each single-engine
+- **`release.py check` checks the library at each single-engine
   feature combination** (`engine-flame`, `engine-escape`, `engine-sim`
-  alone). Those are what the WASM gallery modules link, and a `#[cfg]`
+  alone), through the gallery crates that link them. A `#[cfg]`
   attached to the wrong item compiles fine in every other build.
 
 Engine-specific testing notes live with each engine:
@@ -165,18 +166,27 @@ pass or FAIL with its time; any failure exits 1.
 | generated contract | `cargo test --release --lib contract_is_current` |
 | shader dumps | `cargo test --release --lib canonical_shader_dumps` |
 | doc links | `python scripts/check_doc_links.py` |
+| gallery modules | `cargo check --profile gallery-test --tests` with `CARGO_INCREMENTAL=1`, in each of `wasm/{render,script,flame,escape,sim}` |
+
+The last is the engine feature matrix: each single-engine crate links
+the library with `default-features` off and one engine on, so checking
+it catches a `#[cfg]` on the wrong item that every all-engines build
+hides, and evaluates the compile-time assertion that the flame catalog
+is whole with `engine-flame` and `linear` alone without. It runs from
+each crate's directory, where cargo finds `wasm/.cargo/config.toml`
+([RELEASE.md §5](RELEASE.md)); incremental, it is 14-15s after an edit.
+
+`python scripts/release.py gallery` runs the gallery crates' own tests,
+before the modules deploy (7 minutes: each compiles the library at its
+module's features with codegen):
+
+| test | command |
+|---|---|
 | gallery script parity | `cargo test --profile gallery-test`, in `wasm/script` |
 | gallery renderer smoke | `cargo test --profile gallery-test`, in `wasm/render` |
 | gallery sim smoke | the same, in `wasm/sim` (the library with only `engine-sim`) |
 | gallery escape smoke | the same, in `wasm/escape` (only `engine-escape`) |
 | gallery flame smoke | the same, in `wasm/flame` (only `engine-flame`) |
-
-The last three are the engine feature matrix: each single-engine crate
-links the library with `default-features` off and one engine on, so
-building its tests catches a `#[cfg]` on the wrong item that every
-all-engines build hides, and the tests assert the other engines are
-really gone. The gallery gates run from the crate directory, where
-cargo finds `wasm/.cargo/config.toml` ([RELEASE.md §5](RELEASE.md)).
 
 `--fix` regenerates the two generated files below when their gate
 fails, then tells you to read the diff. No other gate has a fix.

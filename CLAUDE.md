@@ -109,7 +109,8 @@ CLI flags (`--width`, `-H`, `--supersample`, `--transparent`, `--premultiplied`,
 ### Releasing, and changing anything the API sees
 **See [docs/RELEASE.md](docs/RELEASE.md).** Nothing runs on push or on a timer.
 ```bash
-python scripts/release.py check      # every fast gate (versions agree, tests, wasm builds, contract, shader dumps, doc links, all five gallery crates' tests -- the single-engine ones are the engine feature matrix)
+python scripts/release.py check      # every fast gate (versions agree, tests, wasm builds, contract, shader dumps, doc links, the five gallery crates checked -- the single-engine ones are the engine feature matrix)
+python scripts/release.py gallery    # the gallery crates' own tests (GPU smoke, script parity), before the modules deploy
 python scripts/release.py            # ...and a changelog preview
 ```
 Two committed files are **generated**, and a stale one fails a test rather than failing silently -- regenerate deliberately and read the diff:
@@ -145,7 +146,7 @@ The API's corpora come from `cargo run --release --bin export_variations_json` /
 ### Rust Code
 - `bytemuck::Pod` / `Zeroable` for GPU structs; vec3 needs 16-byte alignment -- add explicit padding and mirror it in the WGSL header.
 - Prefer `Queue::write_buffer()` over buffer mapping for updates.
-- Cargo features `web-app`, `engine-flame`, `engine-escape`, `engine-sim`, `terrain` (all default) gate whole engines for the gallery modules: new engine code needs its `#[cfg]`, and `release.py check` builds each combination.
+- Cargo features `web-app`, `engine-flame`, `engine-escape`, `engine-sim`, `terrain` (all default) gate whole engines for the gallery modules: new engine code needs its `#[cfg]`, and `release.py check` checks each combination.
 
 ### State Management
 ```rust
