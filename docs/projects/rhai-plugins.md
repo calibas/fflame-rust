@@ -637,6 +637,13 @@ nested loops and neighbour reads at loop offsets already work.
 6. **Model working values**: `fn max_dt(p)`, the stable time step as a
    function of the parameters, evaluated on the CPU (`dt_bound`; six
    models); `INFO.presets`, a model's presets as the built-ins' are.
+   **Built 2026-11-02**: `max_dt` is plain Rhai on the CPU, the source
+   kept in the registry by name and parsed once per thread (rhai is
+   built without `sync`, so an AST is not shared); `dt_bound` is one
+   function for every script, `script_dt_bound`, which finds the script
+   by the model's name. Presets go through JSON into the config's own
+   serde types (`lang::rhai::info_json`). Held by
+   `a_model_has_its_own_time_step_and_presets`.
 7. **Twins**, in batches, each held to its built-in (a field compare,
    bit-exact where the arithmetic is the same, to a tolerance where a
    chaotic rule amplifies the last bit) and timed against it: the 21

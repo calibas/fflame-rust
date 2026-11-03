@@ -227,6 +227,32 @@ pub fn info_has(source: &str, key: &str) -> bool {
     info_field(source, key, |_| Some(())).is_some()
 }
 
+/// A field of the script's `INFO` as JSON (a simulation model's
+/// `presets`, P4 step 6): maps, arrays, strings, numbers (an int an int),
+/// bools and `()` as null, a literal's negation folded. `None` when
+/// absent or holding anything else.
+pub fn info_json(source: &str, key: &str) -> Option<serde_json::Value> {
+    fn json(e: &Expr) -> Option<serde_json::Value> {
+        use serde_json::Value;
+        Some(match e {
+            Expr::IntegerConstant(i, _) => Value::from(*i),
+            Expr::FloatConstant(f, _) => Value::from(**f),
+            Expr::StringConstant(s, _) => Value::from(s.as_str()),
+            Expr::BoolConstant(b, _) => Value::from(*b),
+            Expr::Unit(_) => Value::Null,
+            Expr::Array(items, _) => Value::Array(items.iter().map(json).collect::<Option<_>>()?),
+            Expr::Map(m, _) => Value::Object(m.0.iter().map(|(k, v)| Some((k.name.to_string(), json(v)?))).collect::<Option<_>>()?),
+            Expr::FnCall(f, _) if f.name == "-" && f.args.len() == 1 => match json(&f.args[0])? {
+                Value::Number(n) if n.is_i64() => Value::from(-n.as_i64()?),
+                Value::Number(n) => Value::from(-n.as_f64()?),
+                _ => return None,
+            },
+            _ => return None,
+        })
+    }
+    info_field(source, key, json)
+}
+
 /// A label as written (design rule 8): a string, every language's, or a
 /// map of locale to string, `#{ en: "Spiral", ja: "螺旋" }` (a key may be
 /// quoted, `"zh-CN"`). `None` for anything else.
@@ -1064,20 +1090,28 @@ impl<'s> Lowerer<'s> {
                     Expr::BoolConstant(..) => {}
                     _ => return self.err(*p, format!("`{name}` is `true` or `false`")),
                 },
+                // A model's presets (P4 step 6): read by `sim::custom`.
+                "presets" if self.sim_model => match v {
+                    Expr::Array(..) => {}
+                    _ => return self.err(*p, "`presets` is a list of maps, `[#{ name: \"spots\", params: #{ feed: 0.03 } }]`"),
+                },
                 // What the built-ins have and a script does not: a reason.
-                "kernel" | "agents" | "memory" | "pyramid" | "repeat" | "measure" | "presets" if self.sim_model => {
+                "kernel" | "agents" | "memory" | "pyramid" | "repeat" | "measure" if self.sim_model => {
                     return self.err(
                         *p,
                         format!(
                             "`INFO.{name}`: a model in Rhai is the single-layer class -- kernel tables, memory, the pyramid, agents, \
-                             repeated or measured passes and presets are the built-in models'"
+                             repeated or measured passes are the built-in models'"
                         ),
                     )
                 }
                 o if self.sim_model => {
                     return self.err(
                         *p,
-                        format!("a simulation model's `INFO` has `title`, `id`, `description`, `author`, `dt`, `max_dt`, `steps`, `diffusion`, `state`, `time_step` and `settles`, not `{o}`"),
+                        format!(
+                            "a simulation model's `INFO` has `title`, `id`, `description`, `author`, `dt`, `max_dt`, `steps`, `diffusion`, `state`, \
+                             `time_step`, `settles` and `presets`, not `{o}`"
+                        ),
                     )
                 }
                 // A solid's ball: the set lies within this radius
