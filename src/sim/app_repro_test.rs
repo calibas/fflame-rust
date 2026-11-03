@@ -180,43 +180,146 @@ fn small_config() -> SimConfig {
     cfg
 }
 
-/// A Rhai colouring renders its built-in twin's picture (P4): Channel's
-/// Rhai source against the built-in, at its defaults and at three other
-/// settings (the other channel, a wrap, an offset), over a run that
-/// leaves structure in both of Gray-Scott's.
+/// The Rhai colourings colour as their built-ins do (P4 step 7): every
+/// shipped twin against its built-in over the same runs -- Gray-Scott's,
+/// the two-layer Brusselator's four channels, McCabe's with its memory on
+/// and its scale in `.y`, and Gray-Scott's under a matte (the distance)
+/// -- at its defaults and with each parameter moved (each other choice; a
+/// number to 70% of its range), the picture to 1e-5. A colouring's
+/// arithmetic is the built-in's but for the language's own `mix`, `length`
+/// and the like, written out, whose last bit may differ: a picture does
+/// not feed back. Each twin is the one that ran.
 #[cfg(feature = "lang")]
 #[test]
-fn the_rhai_channel_colours_as_the_built_in() {
+fn the_rhai_colourings_colour_as_the_built_ins() {
+    use crate::config::sim::{SimMatte, SimMatteChannel};
     let Some((device, queue)) = repro_device() else {
         eprintln!("no GPU adapter; skipping");
         return;
     };
     let palette = test_palette(&device, &queue);
-    let carried = crate::sim::custom::carried(include_str!("../../assets/sim/channel.rhai"));
-    let settings: [&[(&str, f32)]; 4] = [&[], &[("channel", 0.0), ("scale", 1.5)], &[("wrap", 1.0), ("scale", 7.0), ("offset", 0.2)], &[("channel", 1.0), ("scale", 5.0), ("offset", -0.3)]];
     let render = |cfg: &SimConfig| {
         let mut r = SimRenderer::new(&device, cfg, 96, 72);
         r.render_still(&device, &queue, cfg, &palette);
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
         read_rgba32f(&device, &queue, r.output_texture(), 96, 72)
     };
-    for set in settings {
-        let mut builtin = small_config();
-        builtin.steps = 400;
-        builtin.coloring = "channel".into();
-        for (k, v) in set {
-            builtin.coloring_params.insert(k.to_string(), *v);
+    let mut runs: Vec<(&str, SimConfig)> = Vec::new();
+    let mut gs = small_config();
+    gs.steps = 400;
+    runs.push(("gray_scott", gs.clone()));
+    let mut b2 = preset_config(crate::sim::MODELS.iter().find(|m| m.name == "brusselator2").expect("a built-in"), None, 64);
+    b2.steps = 300;
+    runs.push(("brusselator2", b2));
+    let mut mc = mccabe_config(64);
+    mc.model_params.insert("memory".into(), 0.2);
+    mc.steps = 20;
+    runs.push(("mccabe", mc));
+    let mut matted = gs;
+    matted.matte = SimMatte { channel: SimMatteChannel::Y, cutoff: 0.2, softness: 0.05, invert: false, ..SimMatte::default() };
+    runs.push(("matted", matted));
+    let mut failures = Vec::new();
+    for (name, source) in crate::sim::custom::SHIPPED {
+        let builtin = crate::sim::COLORINGS.iter().find(|c| c.name == *name).expect("a built-in");
+        let carried = crate::sim::custom::carried(source);
+        let mut settings: Vec<(String, f32)> = vec![(String::new(), 0.0)];
+        for p in builtin.parameters {
+            if p.choices.is_empty() {
+                settings.push((p.name.to_string(), p.min + 0.7 * (p.max - p.min)));
+            } else {
+                for k in (0..p.choices.len()).filter(|k| *k as f32 != p.default) {
+                    settings.push((p.name.to_string(), k as f32));
+                }
+            }
         }
+        for (run, base) in &runs {
+            for (param, value) in &settings {
+                let mut a = base.clone();
+                a.coloring = name.to_string();
+                if !param.is_empty() {
+                    a.coloring_params.insert(param.clone(), *value);
+                }
+                let mut b = a.clone();
+                b.coloring = carried.entry.clone();
+                b.custom_coloring = Some(carried.clone());
+                let (x, y) = (render(&a), render(&b));
+                assert_eq!(crate::sim::coloring_or_default(&b.coloring).name, b.coloring, "{name}: the twin registered");
+                let off = x.iter().zip(&y).flat_map(|(p, q)| p.iter().zip(q).map(|(u, v)| (u - v).abs())).fold(0.0f32, f32::max);
+                let label = if param.is_empty() { format!("{name}/{run}") } else { format!("{name}/{run}/{param}={value}") };
+                // The picture is not one colour: it holds what the run made.
+                let spread = x.iter().flat_map(|p| p.iter().take(3)).fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+                println!("{label:44} spread {:.3}..{:.3}, worst {off:.1e}", spread.0, spread.1);
+                if off > 1e-5 || off.is_nan() {
+                    let cells = x.iter().zip(&y).filter(|(p, q)| p.iter().zip(q.iter()).any(|(u, v)| (u - v).abs() > 1e-5)).count();
+                    failures.push(format!("{label}: {cells} pixels differ, worst {off:e}"));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "colourings off their built-ins:\n{}", failures.join("\n"));
+}
+
+/// The Rhai colourings colour as fast as their built-ins (P4 step 7):
+/// each twin's colour pass over a 1024x1024 Gray-Scott field (McCabe's
+/// for the memory's), fifteen rounds of 200 passes, each round the twin
+/// straight after the built-in, the median of the rounds' ratios, more
+/// than 5% slower a failure. Ignored: it times the GPU (the app closed).
+/// `SIM_TWINS=a,b` times those alone.
+#[cfg(feature = "lang")]
+#[test]
+#[ignore]
+fn the_rhai_colourings_are_no_slower() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let only: Option<Vec<String>> = std::env::var("SIM_TWINS").ok().map(|v| v.split(',').map(str::to_string).collect());
+    let wait = || {
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    };
+    let mut slower = Vec::new();
+    for (name, source) in crate::sim::custom::SHIPPED {
+        if only.as_ref().is_some_and(|o| !o.iter().any(|n| n == name)) {
+            continue;
+        }
+        let carried = crate::sim::custom::carried(source);
+        let mut builtin = if *name == "scale_memory" { mccabe_config(1024) } else { small_config() };
+        builtin.grid = SimGrid::Fixed { width: 1024, height: 1024 };
+        builtin.model_params.insert("memory".into(), 0.2);
+        builtin.coloring = name.to_string();
         let mut twin = builtin.clone();
         twin.coloring = carried.entry.clone();
         twin.custom_coloring = Some(carried.clone());
-        let (a, b) = (render(&builtin), render(&twin));
-        // Not the default colouring's fallback, which is the built-in.
-        assert_eq!(crate::sim::coloring_or_default(&twin.coloring).name, twin.coloring, "the twin registered");
-        assert!(a.iter().any(|p| p[0] > 0.05), "{set:?}: the built-in drew something");
-        let worst = a.iter().zip(&b).flat_map(|(x, y)| x.iter().zip(y).map(|(p, q)| (p - q).abs())).fold(0.0f32, f32::max);
-        assert!(worst <= 1e-5, "{set:?}: the twin is off by {worst}");
+        let mut renderers = [(&builtin, SimRenderer::new(&device, &builtin, 1024, 1024)), (&twin, SimRenderer::new(&device, &twin, 1024, 1024))];
+        for (cfg, r) in &mut renderers {
+            r.seed(&device, &queue, cfg);
+            r.run_steps(&device, &queue, cfg, 100);
+            r.color(&device, &queue, cfg, &palette);
+        }
+        wait();
+        let mut ratios = Vec::new();
+        let mut ms = [0.0f64; 2];
+        for _ in 0..15 {
+            for (i, (cfg, r)) in renderers.iter_mut().enumerate() {
+                let start = web_time::Instant::now();
+                for _ in 0..200 {
+                    r.color(&device, &queue, cfg, &palette);
+                }
+                wait();
+                ms[i] = start.elapsed().as_secs_f64() * 1e3;
+            }
+            ratios.push(ms[1] / ms[0]);
+        }
+        ratios.sort_by(|a, b| a.total_cmp(b));
+        let ratio = ratios[ratios.len() / 2];
+        println!("{name:16} built-in {:8.2} ms   twin {:8.2} ms   median ratio {ratio:.3}", ms[0], ms[1]);
+        if ratio > 1.05 {
+            slower.push(format!("{name}: {:.1}% slower", (ratio - 1.0) * 100.0));
+        }
     }
+    assert!(slower.is_empty(), "{}", slower.join("
+"));
 }
 
 /// A built-in model's config at a preset (or its defaults): the

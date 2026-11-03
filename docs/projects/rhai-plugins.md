@@ -658,6 +658,9 @@ nested loops and neighbour reads at loop offsets already work.
    (Ballistic Deposition draws at another cell, as `sim_rand` there,
    from `pcg` and the seed words). And two compiler fixes from the speed
    check: one read per neighbour, an int offset kept an int.
+   **Colourings built 2026-11-02**: all 13, every picture of the compare
+   bit-identical; at speed but LIC (3-4% slower) and Gradient (6%
+   faster), under the gate.
 8. **Out of the class**, unchanged: the 9 models above stay built-in,
    refused with a reason.
 

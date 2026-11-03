@@ -717,9 +717,19 @@ to the `sim_color` the colour template calls.
   colour layer picked from its menu -- entering Simulation in the same
   step, and Live updates every entry carrying a version, by its id; a
   plug-in one is in every entry's picker under "Your plug-ins".
-- **Twins**: `sim::custom::SHIPPED`, Channel's (`assets/sim/channel.rhai`),
-  held to the built-in within 1e-5 at four settings
-  (`the_rhai_channel_colours_as_the_built_in`).
+- **Twins**: `sim::custom::SHIPPED`, every built-in colouring (13,
+  `assets/sim/<name>.rhai`), each held to its built-in's settings
+  (`every_colouring_twin_carries_its_built_ins_settings`: parameters,
+  labels, features) and picture (`the_rhai_colourings_colour_as_the_built_ins`:
+  four runs -- Gray-Scott's, the two-layer Brusselator's four channels,
+  McCabe's with its memory, Gray-Scott's under a matte -- at the defaults
+  and with each parameter moved; to 1e-5, and in fact every picture
+  bit-identical). Timed by `the_rhai_colourings_are_no_slower` (ignored;
+  200 colour passes at 1024x1024, fifteen rounds): all within 1% but
+  LIC, 3-4% slower, and Gradient, 6% faster (the language's `atan2` and a
+  written-out `length`), both under the 5% gate. LIC's noise and Ballistic
+  Deposition's draw show the pattern for a hash of another cell:
+  `pcg` of its index and the seed words.
 
 ## Models written in Rhai
 
