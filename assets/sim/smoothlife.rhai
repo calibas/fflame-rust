@@ -71,6 +71,7 @@ const INFO = #{
     max_dt: 1.0,
     steps: 400,
     settles: false,
+    slow: ["inner_radius"],
     presets: [
         #{
             name: "glider",

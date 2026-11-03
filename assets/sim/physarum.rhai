@@ -53,6 +53,7 @@ const INFO = #{
     steps: 600,
     time_step: false,
     settles: false,
+    slow: ["population"],
     presets: [
         #{
             name: "network",
