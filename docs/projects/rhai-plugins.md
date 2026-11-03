@@ -734,9 +734,9 @@ nested loops and neighbour reads at loop offsets already work.
      1.027 with the variation radius, from 1.104 before a compiler fix:
      a fresh array is its `let`'s local, not copied into one; the
      pyramid's caches filled only where a path reads it, as the
-     built-in's are, measured no difference). Open: the per-scale table's grid
-     (`PARAM_TABLES`, its fill from the ladder a Rust function) is the
-     built-in's alone -- the twin's rows are plain sliders (P7).
+     built-in's are, measured no difference). The per-scale table's grid
+     was the built-in's alone (`PARAM_TABLES`) until the parameter
+     layout (P7, below).
    - **9d. Agents** -> Physarum, DLA. A second entry point, per agent
      rather than per cell (`fn agent_step(a, p, ctx)`): its record
      (`vec4`s), its own draws (`agent_rand`), reads of the field around
@@ -761,8 +761,7 @@ nested loops and neighbour reads at loop offsets already work.
      moves every DLA picture and the preset's tuning (the user's call).
      **All 31 models now have twins.** A script marks its slow
      parameters, `INFO.slow` (the built-ins' `SLOW_PARAMS`), so the four
-     twins with one commit them when a drag ends. Open: McCabe's
-     per-scale table grid is the built-in's alone (P7).
+     twins with one commit them when a drag ends.
 
 ### P5. Animation tracks as scripts
 
@@ -899,6 +898,20 @@ Steps, in the order that unlocks the most first (the user picks):
    the fields (a never-escaping formula and an averaging colouring,
    Weierstrass's analytic gradient for the hillshade the part to check;
    decided in the KIFS plan to stay in mode B, so twins beside them).
+   **A parameter layout, built 2026-11-03** (the user: "a grid as a
+   generic param type ... and param display dependent on other param
+   selection"): `show_if` on a parameter, a grid, a grid's column; a
+   `type: "grid"` `PARAMS` entry expanding into its cells; a grid's fill
+   on the edit that switches it on and its row warnings, CPU functions;
+   `p.grid[i].column` on the GPU and the CPU (`param_layout.rs`,
+   `lang::rhai::param_layout`). McCabe's built-in table moved onto it
+   (`ParamTable` gone), its twin declares the same grids -- table and
+   warps -- and reads them by row instead of by slot: still bit for bit
+   on every path, at speed (1.030; 1.032 Table, 1.024 Table with the
+   variation radius, 1.024 warped). Open: only the simulation panel
+   draws a layout; the Escape, Effects and variation panels list a
+   grid's cells one by one and ignore `show_if`; a computed row reads a
+   grid in a simulation model alone (elsewhere a constant row).
 5. **Edit as Rhai everywhere**: the simulation panel (the model and the
    colouring, per layer and colour layer), the Escape panel's colouring,
    the solids and fields, a transform's variations -- each putting the

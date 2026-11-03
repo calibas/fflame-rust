@@ -1618,6 +1618,33 @@ impl Checker {
         if self.rhai && !user && matches!(name, "to_float" | "to_int") {
             return self.rhai_conversion(name, args, span);
         }
+        // A grid's cell at a computed row (rhai-plugins P7): one read at
+        // its first row's slot plus the row -- clamped to the grid's --
+        // times the stride the next row's gives; a simulation model's.
+        if name == "__grid_param" && !user {
+            let (Some(ExprKind::Str(first)), Some(ExprKind::Str(next)), Some(row)) = (args.first().map(|a| &a.kind), args.get(1).map(|a| &a.kind), args.get(2)) else {
+                self.error(span, "a grid's cell, by the lowering");
+                return None;
+            };
+            if self.kind != EntryKind::SimModel {
+                self.error(span, "a grid's row by a computed index is a simulation model's");
+                return None;
+            }
+            let (a, b) = (self.param(first, span), self.param(next, span));
+            let slot = |id: ParamId| self.params[..id].iter().map(|p| p.ty().floats()).sum::<usize>() as i64;
+            let (s0, s1) = (slot(a), slot(b));
+            let row = self.expr(row)?;
+            if row.ty != Ty::Int {
+                self.error(span, "a grid's row is an int");
+                return None;
+            }
+            let Some(ExprKind::Int(last)) = args.get(3).map(|a| &a.kind) else {
+                self.error(span, "a grid's cell, by the lowering");
+                return None;
+            };
+            let int = |v: i64| IExpr { kind: IExprKind::Int(v), ty: Ty::Int };
+            return Some(IExpr { kind: IExprKind::Host(Host::GridParam, vec![int(s0), int(s1 - s0), int(*last), row]), ty: Ty::Float });
+        }
         // A simulation's framework call with its value (P4 steps 9c, 9d).
         if let Some(h) = Host::from_name(name).filter(|_| !user) {
             let Some(ty) = h.result() else {

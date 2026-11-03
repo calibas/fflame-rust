@@ -922,7 +922,9 @@ to them at display time, so a palette edit shows at once, even paused.
 **The per-scale table, 2026-10-04** (mccabe-multiscale plan, section
 3). `layout` = Table frees every scale: its own radius, ratio, step
 (negative allowed), weight (Softology's: both averages × w) and
-symmetry (to 12). Switching to it fills it from the ladder.
+symmetry (to 12). Switching to it fills it from the ladder. Since
+2026-11-03 the table is a parameter grid (`models::mccabe_layout`,
+rhai-plugins P7), the same one a script declares in its `PARAMS`.
 - **Measured.** CPU mirror exact on every cell. The table filled from
   the ladder agrees to 1.5e-8 per step: not bit for bit, because of
   `mix()` rounding.

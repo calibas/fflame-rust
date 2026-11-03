@@ -842,6 +842,18 @@ fn escaped(s, p) {
   functions (`rhai::SimFn::AgentSeed`, `Agent`) lower as a step's, the
   record in `s` and out through `AGENT_RETURN`, their draws
   `agent_rand(i, salt)` (`Gen::agent`).
+- **Grids and conditions in `PARAMS`** (rhai-plugins P7): `show_if`
+  on a parameter, and a `type: "grid"` entry the lowering expands into
+  its cells (`Lowerer::grid_param`), each a parameter of its own through
+  the scalar path (`param_cell`); `lang::rhai::param_layout(source)`
+  reads the layout -- conditions, grids, fills and warnings by function
+  name -- checking every name it reads. In every kind `p.grid[2].column`
+  reads a cell by name; at a computed row, in a simulation model, the
+  checker resolves `__grid_param` to one read at the first row's slot
+  plus the clamped row times the stride (`Host::GridParam`: a clamp in
+  the read itself -- the lowering's `min`/`max`, a local and an `if`
+  each, measured up to 2.5% on McCabe's twin). Only the simulation panel draws a
+  layout yet; elsewhere a grid's cells are listed one by one.
 - **A helper takes `p` and `ctx` whole** (P4 step 9c): an argument that
   is the entry's parameters, its context or a colouring's sample binds
   the helper's parameter as it is bound at the call

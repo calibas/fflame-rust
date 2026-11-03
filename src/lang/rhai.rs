@@ -677,6 +677,7 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         returns: None,
         scope_tys: Vec::new(),
         perturbing: false,
+        grids: HashMap::new(),
     };
     for (name, def) in extra {
         l.fns.insert(name.clone(), def.clone());
@@ -929,6 +930,24 @@ struct Lowerer<'s> {
     scope_tys: Vec<Vec<TypeName>>,
     /// Lowering the perturbation equations, whose emitters take no scope.
     perturbing: bool,
+    /// The grids `PARAMS` declares (rhai-plugins P7), by name: how
+    /// `p.grid[row].column` finds its cell.
+    grids: HashMap<String, GridCells>,
+}
+
+/// A grid's cells as the lowering reads them: their names' template, its
+/// rows and its columns' keys.
+#[derive(Clone, Debug)]
+struct GridCells {
+    cell: String,
+    rows: usize,
+    columns: Vec<String>,
+}
+
+impl GridCells {
+    fn cell(&self, row: usize, column: &str) -> String {
+        self.cell.replace("{row}", &row.to_string()).replace("{column}", column)
+    }
 }
 
 /// One function's scope: Rhai names to what they stand for, innermost
@@ -963,6 +982,246 @@ enum Final<'a> {
     Expr(&'a Expr),
     Call(&'a FnCallExpr, Position),
     If(&'a FlowControl, Position),
+}
+
+/// Whether a `PARAMS` entry is a grid: `type: "grid"`.
+fn is_grid(entries: &[(::rhai::Ident, Expr)]) -> bool {
+    entries.iter().any(|(k, x)| k.name == "type" && matches!(x, Expr::StringConstant(s, _) if s.as_str() == "grid"))
+}
+
+/// A grid's parts as `PARAMS` writes them (rhai-plugins P7).
+struct GridParts<'a> {
+    rows: usize,
+    cell: String,
+    row: String,
+    live_rows: Option<String>,
+    caption: Option<crate::scripted::Label>,
+    show_if: crate::param_layout::ShowIf,
+    fill: Option<(crate::param_layout::ShowIf, String)>,
+    warn: Option<String>,
+    drawn: bool,
+    columns: Vec<ColumnParts<'a>>,
+}
+
+struct ColumnParts<'a> {
+    key: String,
+    pos: Position,
+    /// Its map, a parameter's settings each cell takes.
+    map: &'a Expr,
+    value: &'a Expr,
+    header: Option<crate::scripted::Label>,
+    caption: Option<crate::scripted::Label>,
+    whole: bool,
+    show_if: crate::param_layout::ShowIf,
+}
+
+impl GridParts<'_> {
+    fn cell(&self, row: usize, column: &str) -> String {
+        self.cell.replace("{row}", &row.to_string()).replace("{column}", column)
+    }
+}
+
+/// A grid's parts, or what is wrong with it and where.
+fn grid_of<'a>(name: &str, entries: &'a [(::rhai::Ident, Expr)]) -> Result<GridParts<'a>, (Option<Position>, String)> {
+    use crate::param_layout::ShowIf;
+    let mut g = GridParts {
+        rows: 0,
+        cell: format!("{name}_{{row}}_{{column}}"),
+        row: "Row {n}".into(),
+        live_rows: None,
+        caption: None,
+        show_if: ShowIf::default(),
+        fill: None,
+        warn: None,
+        drawn: true,
+        columns: Vec::new(),
+    };
+    let string = |x: &Expr, k: &::rhai::Ident, what: &str| match x {
+        Expr::StringConstant(s, _) => Ok(s.to_string()),
+        _ => Err((Some(k.pos), format!("`{}` is {what}", k.name))),
+    };
+    for (k, x) in entries {
+        match k.name.as_str() {
+            "type" => {}
+            "rows" => match x {
+                Expr::IntegerConstant(n, _) if (1..=64).contains(n) => g.rows = *n as usize,
+                _ => return Err((Some(k.pos), "`rows` is how many, 1 to 64".into())),
+            },
+            "cell" => g.cell = string(x, k, "the cells' names, `\"s{row}_{column}\"`")?,
+            "row" => g.row = string(x, k, "a row's caption, `\"Scale {n}\"`")?,
+            "live_rows" => g.live_rows = Some(string(x, k, "the parameter counting the live rows")?),
+            "caption" => g.caption = Some(label_of(x).ok_or((Some(k.pos), "`caption` is a string, or a map of locale to string".to_string()))?),
+            "show_if" => g.show_if = show_if_of(x).map_err(|m| (Some(k.pos), m))?,
+            "fill" => {
+                let Expr::Map(m, _) = x else { return Err((Some(k.pos), "`fill` is `#{ when: #{ layout: 1 }, from: \"ladder\" }`".into())) };
+                let (mut when, mut from) = (None, None);
+                for (fk, fx) in &m.0 {
+                    match fk.name.as_str() {
+                        "when" => when = Some(show_if_of(fx).map_err(|m| (Some(fk.pos), m))?),
+                        "from" => from = Some(string(fx, fk, "the function giving a row's values, `\"ladder\"`")?),
+                        o => return Err((Some(fk.pos), format!("`fill` has `when` and `from`, not `{o}`"))),
+                    }
+                }
+                match (when, from) {
+                    (Some(w), Some(f)) => g.fill = Some((w, f)),
+                    _ => return Err((Some(k.pos), "`fill` needs `when` and `from`".into())),
+                }
+            }
+            "warn" => g.warn = Some(string(x, k, "the function warning of a row, `\"past_reach\"`")?),
+            // Another section draws its cells (a model's per-scale warps).
+            "drawn" => match x {
+                Expr::BoolConstant(b, _) => g.drawn = *b,
+                _ => return Err((Some(k.pos), "`drawn` is `true` or `false`".into())),
+            },
+            "columns" => {
+                let Expr::Map(m, _) = x else { return Err((Some(k.pos), "`columns` is a map of each column's settings".into())) };
+                for (ck, cx) in &m.0 {
+                    let Expr::Map(cm, _) = cx else { return Err((Some(ck.pos), format!("column `{}` is a map of its settings", ck.name))) };
+                    let mut c = ColumnParts { key: ck.name.to_string(), pos: ck.pos, map: cx, value: cx, header: None, caption: None, whole: false, show_if: ShowIf::default() };
+                    let mut value = None;
+                    for (sk, sx) in &cm.0 {
+                        match sk.name.as_str() {
+                            "value" => value = Some(sx),
+                            "header" => c.header = Some(label_of(sx).ok_or((Some(sk.pos), "`header` is a string, or a map of locale to string".to_string()))?),
+                            "caption" => c.caption = label_of(sx),
+                            "whole" => c.whole = matches!(sx, Expr::BoolConstant(true, _)),
+                            "show_if" => c.show_if = show_if_of(sx).map_err(|m| (Some(sk.pos), m))?,
+                            _ => {}
+                        }
+                    }
+                    c.value = value.ok_or((Some(ck.pos), format!("column `{}` needs its `value`, one for every row or a list of one a row", ck.name)))?;
+                    g.columns.push(c);
+                }
+            }
+            o => return Err((Some(k.pos), format!("a grid has `type`, `rows`, `columns`, `cell`, `row`, `live_rows`, `caption`, `show_if`, `fill`, `warn`, `drawn`; not `{o}`"))),
+        }
+    }
+    if g.rows == 0 {
+        return Err((None, format!("the grid `{name}` needs its `rows`")));
+    }
+    if g.columns.is_empty() {
+        return Err((None, format!("the grid `{name}` needs its `columns`")));
+    }
+    if !g.cell.contains("{row}") || !g.cell.contains("{column}") {
+        return Err((None, format!("the grid `{name}`'s `cell` names each cell by `{{row}}` and `{{column}}`")));
+    }
+    Ok(g)
+}
+
+/// A condition, `#{ layout: 1 }` or `#{ averaging: [1, 2] }`: every
+/// parameter named at one of its values.
+fn show_if_of(x: &Expr) -> Result<crate::param_layout::ShowIf, String> {
+    const WHAT: &str = "`show_if` is `#{ layout: 1 }`, or a list of values, `#{ averaging: [1, 2] }`";
+    let Expr::Map(m, _) = x else { return Err(WHAT.into()) };
+    let number = |e: &Expr| match e {
+        Expr::IntegerConstant(v, _) => Some(*v as f32),
+        Expr::FloatConstant(v, _) => Some(**v as f32),
+        Expr::BoolConstant(b, _) => Some(if *b { 1.0 } else { 0.0 }),
+        _ => None,
+    };
+    let mut out = Vec::new();
+    for (k, v) in &m.0 {
+        let values = match v {
+            Expr::Array(items, _) => items.iter().map(number).collect::<Option<Vec<_>>>(),
+            e => number(e).map(|n| vec![n]),
+        };
+        out.push((k.name.to_string(), values.ok_or(WHAT.to_string())?));
+    }
+    Ok(crate::param_layout::ShowIf(out))
+}
+
+/// A script's grid as its layout has it (rhai-plugins P7): the grid, and
+/// its fill's condition and function and its warning's function by the
+/// names the script defines them under, which the CPU runs.
+pub struct GridSpec {
+    pub grid: crate::param_layout::ParamGrid,
+    pub fill: Option<(crate::param_layout::ShowIf, String)>,
+    pub warn: Option<String>,
+}
+
+/// A script's parameter layout: its parameters' conditions and its grids.
+pub struct LayoutSpec {
+    pub show_if: Vec<(String, crate::param_layout::ShowIf)>,
+    pub grids: Vec<GridSpec>,
+}
+
+/// A script's parameter layout from its `PARAMS` (rhai-plugins P7): each
+/// `show_if`, and each grid -- its cells, live rows, columns, headers,
+/// fill and warning -- every name it reads checked; `None` with neither.
+pub fn param_layout(source: &str) -> Result<Option<LayoutSpec>, String> {
+    use crate::param_layout::{GridColumn, ParamGrid, Text};
+    let Ok((ast, _)) = parse(source) else { return Ok(None) };
+    let params = ast.statements().iter().find_map(|st| match st {
+        Stmt::Var(x, _, _) if x.0.name.as_str() == "PARAMS" => match &x.1 {
+            Expr::Map(m, _) => Some(&m.0),
+            _ => None,
+        },
+        _ => None,
+    });
+    let Some(params) = params else { return Ok(None) };
+    let mut names: Vec<String> = Vec::new();
+    let mut spec = LayoutSpec { show_if: Vec::new(), grids: Vec::new() };
+    for (k, v) in params.iter() {
+        let Expr::Map(m, _) = v else {
+            names.push(k.name.to_string());
+            continue;
+        };
+        if is_grid(&m.0) {
+            let g = grid_of(k.name.as_str(), &m.0).map_err(|(_, msg)| msg)?;
+            for r in 0..g.rows {
+                for c in &g.columns {
+                    names.push(g.cell(r, &c.key));
+                }
+            }
+            let columns = g
+                .columns
+                .iter()
+                .map(|c| GridColumn {
+                    key: c.key.clone(),
+                    header: Text::Label(c.header.clone().or_else(|| c.caption.clone()).unwrap_or_else(|| crate::scripted::Label::text(c.key.clone()))),
+                    whole: c.whole,
+                    show_if: c.show_if.clone(),
+                })
+                .collect();
+            let grid = ParamGrid {
+                name: k.name.to_string(),
+                cell: g.cell.clone(),
+                rows: g.rows,
+                live_rows: g.live_rows.clone(),
+                columns,
+                show_if: g.show_if.clone(),
+                fill: None,
+                warn: None,
+                drawn: g.drawn,
+            };
+            spec.grids.push(GridSpec { grid, fill: g.fill.clone(), warn: g.warn.clone() });
+            continue;
+        }
+        names.push(k.name.to_string());
+        for (sk, sx) in &m.0 {
+            if sk.name == "show_if" {
+                spec.show_if.push((k.name.to_string(), show_if_of(sx)?));
+            }
+        }
+    }
+    // Every name it reads is a parameter, every function it runs defined.
+    let known = |n: &str| names.iter().any(|m| m == n);
+    let mut reads: Vec<(&str, &str)> = spec.show_if.iter().flat_map(|(p, s)| s.reads().map(move |r| (p.as_str(), r))).collect();
+    for g in &spec.grids {
+        reads.extend(g.grid.show_if.reads().map(|r| (g.grid.name.as_str(), r)));
+        reads.extend(g.grid.columns.iter().flat_map(|c| c.show_if.reads().map(|r| (g.grid.name.as_str(), r))));
+        reads.extend(g.fill.iter().flat_map(|(w, _)| w.reads().map(|r| (g.grid.name.as_str(), r))));
+        reads.extend(g.grid.live_rows.iter().map(|r| (g.grid.name.as_str(), r.as_str())));
+        for f in g.fill.iter().map(|(_, f)| f).chain(g.warn.iter()) {
+            if !ast.iter_fn_def().any(|d| d.name == f.as_str()) {
+                return Err(format!("the grid `{}` runs `fn {f}`, which the script does not define", g.grid.name));
+            }
+        }
+    }
+    if let Some((by, name)) = reads.iter().find(|(_, n)| !known(n)) {
+        return Err(format!("`{by}` reads `{name}`, which is not a parameter"));
+    }
+    Ok((!spec.show_if.is_empty() || !spec.grids.is_empty()).then_some(spec))
 }
 
 /// Whether a function's body returns before its end (rhai-plugins P7
@@ -2266,6 +2525,40 @@ impl<'s> Lowerer<'s> {
 
     /// One `PARAMS` entry as a parameter (or user function) block.
     fn param(&mut self, name: &str, v: &Expr, p: Position, out: &mut Settings) -> R<()> {
+        if let Expr::Map(m, _) = v {
+            if is_grid(&m.0) {
+                return self.grid_param(name, &m.0, p, out);
+            }
+        }
+        self.param_cell(name, v, p, out, None)
+    }
+
+    /// A grid of parameters (rhai-plugins P7): `rows` rows by its
+    /// `columns`, each cell a parameter of its own -- named by `cell`
+    /// (`s{row}_{column}`), captioned by `row` (`Scale {n}`) and its
+    /// column's caption -- in row order. Its layout is `param_layout`'s.
+    fn grid_param(&mut self, name: &str, entries: &[(::rhai::Ident, Expr)], p: Position, out: &mut Settings) -> R<()> {
+        let g = grid_of(name, entries).map_err(|(at, msg)| Diag::error(self.pos.span(at.unwrap_or(p)), msg))?;
+        for r in 0..g.rows {
+            let row = g.row.replace("{n}", &(r + 1).to_string());
+            for c in &g.columns {
+                let at = match c.value {
+                    Expr::Array(items, ip) => match items.get(r) {
+                        Some(x) => x,
+                        None => return self.err(*ip, format!("`value` lists one value a row: {}", g.rows)),
+                    },
+                    x => x,
+                };
+                self.param_cell(&g.cell(r, &c.key), c.map, c.pos, out, Some((at, row.clone())))?;
+            }
+        }
+        self.grids.insert(name.to_string(), GridCells { cell: g.cell.clone(), rows: g.rows, columns: g.columns.iter().map(|c| c.key.clone()).collect() });
+        Ok(())
+    }
+
+    /// A parameter, or a grid's cell: its column's settings, its row's
+    /// value and its row's caption before its column's.
+    fn param_cell(&mut self, name: &str, v: &Expr, p: Position, out: &mut Settings, cell: Option<(&Expr, String)>) -> R<()> {
         let span = self.pos.span(p);
         let mut value: Option<&Expr> = None;
         let mut settings = Vec::new();
@@ -2276,12 +2569,22 @@ impl<'s> Lowerer<'s> {
                 for (k, x) in &m.0 {
                     let kspan = self.pos.span(k.pos);
                     match k.name.as_str() {
-                        "value" => value = Some(x),
+                        "value" => value = Some(cell.as_ref().map_or(x, |c| c.0)),
                         "min" | "max" => settings.push(Setting { name: k.name.to_string(), value: SettingValue::Expr(self.literal(x)?), span: kspan }),
                         "caption" | "hint" => match label_of(x) {
-                            Some(l) => settings.push(Setting { name: k.name.to_string(), value: SettingValue::Strings(vec![l.resolve()]), span: kspan }),
+                            Some(l) => {
+                                let text = match &cell {
+                                    Some((_, row)) if k.name == "caption" => format!("{row} {}", l.resolve()),
+                                    _ => l.resolve(),
+                                };
+                                settings.push(Setting { name: k.name.to_string(), value: SettingValue::Strings(vec![text]), span: kspan })
+                            }
                             None => return self.err(k.pos, format!("`{}` is a string, or a map of locale to string", k.name)),
                         },
+                        // When it shows, and a column's header and whole
+                        // numbers: its layout's (`param_layout`).
+                        "show_if" => {}
+                        "header" | "whole" if cell.is_some() => {}
                         "choices" => match x {
                             Expr::Array(items, _) => {
                                 for it in items.iter() {
@@ -2312,7 +2615,7 @@ impl<'s> Lowerer<'s> {
                         o => {
                             return self.err(
                                 k.pos,
-                                format!("a parameter has `value`, `min`, `max`, `caption`, `hint`, `choices`, `function`, `exponential`, `type`; not `{o}`"),
+                                format!("a parameter has `value`, `min`, `max`, `caption`, `hint`, `choices`, `function`, `exponential`, `type`, `show_if`; not `{o}`"),
                             )
                         }
                     }
@@ -2818,6 +3121,41 @@ impl<'s> Lowerer<'s> {
         Ok(())
     }
 
+    /// `p.grid[row].column` (rhai-plugins P7): at a constant row the cell
+    /// by its name, in every kind; at a computed row, a simulation model's,
+    /// the row clamped to the grid's, one read at the slot its first row's
+    /// and its next's give (`__grid_param`, the checker's).
+    fn grid_read(&mut self, g: &GridCells, rhs: &Expr, flags: ASTFlags, scope: &mut Scope, p: Position) -> R<ast::Expr> {
+        let span = self.pos.span(p);
+        const WANT: &str = "a grid's cell is `p.grid[row].column`";
+        // Rhai keeps what follows an index inside it, unbroken.
+        let (index, rest) = match rhs {
+            Expr::Dot(be, _, _) if !flags.intersects(ASTFlags::BREAK) => (&be.lhs, &be.rhs),
+            _ => return self.err(p, WANT),
+        };
+        let Expr::Property(col, cp) = rest else { return self.err(p, WANT) };
+        let col = col.2.as_str();
+        if !g.columns.iter().any(|c| c == col) {
+            return self.err(*cp, format!("the grid's columns are `{}`; not `{col}`", g.columns.join("`, `")));
+        }
+        let row = self.expr(index, scope)?;
+        if let ExprKind::Int(r) = row.kind {
+            if r < 0 || r as usize >= g.rows {
+                return self.err(p, format!("the grid's rows are 0 to {}", g.rows - 1));
+            }
+            return Ok(mk(ExprKind::Param(g.cell(r as usize, col)), span));
+        }
+        if !self.sim_model {
+            return self.err(p, "a grid's row by a computed index is a simulation model's; elsewhere, a constant row: `p.grid[2].column`");
+        }
+        if g.rows == 1 {
+            return Ok(mk(ExprKind::Param(g.cell(0, col)), span));
+        }
+        let name = |r: usize| mk(ExprKind::Str(g.cell(r, col)), span);
+        let last = mk(ExprKind::Int(g.rows as i64 - 1), span);
+        Ok(mk(ExprKind::Call { name: "__grid_param".into(), args: vec![name(0), name(1), row, last], user: false }, span))
+    }
+
     /// `write_scratch(k, v)`, `write_memory(k, v)`: the slice and a vector
     /// of four, the host's write.
     fn sim_write(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
@@ -3241,6 +3579,14 @@ impl<'s> Lowerer<'s> {
             }
             // A field's element: `p.lines[i]`, `s.hist[0]`.
             Expr::Index(be, flags, p) => {
+                // A grid's cell: `p.table[i].radius` (rhai-plugins P7).
+                if matches!(base, Base::Params) {
+                    if let Expr::Property(prop, _) = &be.lhs {
+                        if let Some(g) = self.grids.get(prop.2.as_str()).cloned() {
+                            return self.grid_read(&g, &be.rhs, *flags, scope, *p);
+                        }
+                    }
+                }
                 let array = self.chain(base, &be.lhs, scope)?;
                 self.index(array, &be.rhs, *flags, scope, *p, true)
             }
@@ -3844,7 +4190,7 @@ impl<'s> Lowerer<'s> {
                     return TypeName::Complex;
                 }
                 match name.as_str() {
-                    "to_float" => return TypeName::Float,
+                    "to_float" | "__grid_param" => return TypeName::Float,
                     "to_int" => return TypeName::Int,
                     _ => {}
                 }
