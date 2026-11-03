@@ -2055,9 +2055,10 @@ impl<'p> Gen<'p> {
                 let call = self.host(*h, args);
                 let _ = writeln!(out, "{pad}{call};");
             }
-            // The effect-like functions' flow (P4 step 5): an early
-            // return's result is set before it, so it returns what the
-            // function's end returns.
+            // A loop's `break` and `continue`, in every kind (P7 step 1);
+            // the effect-like functions' early return (P4 step 5), its
+            // result set before it, so it returns what the function's
+            // end returns.
             IStmt::Break => {
                 let _ = writeln!(out, "{pad}break;");
             }
@@ -2519,7 +2520,14 @@ impl<'p> Gen<'p> {
         let pad = "    ".repeat(depth);
         match s {
             IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
-            IStmt::Break | IStmt::Continue | IStmt::Return => unreachable!("an effect-like function's `break`, `continue` or `return`, which runs on the GPU alone"),
+            // A loop's, in perturbation equations a script wrote (P7 step 1).
+            IStmt::Break => {
+                let _ = writeln!(out, "{pad}break;");
+            }
+            IStmt::Continue => {
+                let _ = writeln!(out, "{pad}continue;");
+            }
+            IStmt::Return => unreachable!("an early `return` in perturbation equations, which the lowering refuses"),
             IStmt::Map { .. } => unreachable!("a solid's call of a built-in variation in perturbation equations"),
             IStmt::Assign(place, e) => {
                 let (code, class) = self.sgen(e);
@@ -2736,7 +2744,14 @@ impl<'p> Gen<'p> {
         let pad = "    ".repeat(depth);
         match s {
             IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
-            IStmt::Break | IStmt::Continue | IStmt::Return => unreachable!("an effect-like function's `break`, `continue` or `return`, which runs on the GPU alone"),
+            // A loop's, in perturbation equations a script wrote (P7 step 1).
+            IStmt::Break => {
+                let _ = writeln!(out, "{pad}break;");
+            }
+            IStmt::Continue => {
+                let _ = writeln!(out, "{pad}continue;");
+            }
+            IStmt::Return => unreachable!("an early `return` in perturbation equations, which the lowering refuses"),
             IStmt::Map { .. } => unreachable!("a solid's call of a built-in variation in perturbation equations"),
             IStmt::Assign(place, e) => {
                 let (target, cfe) = match place {

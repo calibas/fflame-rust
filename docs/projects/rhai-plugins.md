@@ -836,7 +836,18 @@ Steps, in the order that unlocks the most first (the user picks):
    derivation passes refuse them where they cannot follow (as they
    refuse a solid's `Map`). Then every kind has them: built-in
    variations use early returns in 86 places and `break` / `continue` in
-   9.
+   9. **`break` and `continue` built 2026-11-03** (the user away, queued):
+   the evaluators run all three statements (`ir::Flow`), the lowering
+   takes `break` and `continue` in every kind's loops, the perturbation
+   emitters write them; a formula using them runs in the interpreter as
+   the same formula without them, bit for bit, and the deep-zoom paths
+   decline it without panicking. **Open: an early `return`** outside the
+   effect-like functions -- each kind's result set before it (a
+   formula's state, a variation's point and colour, a colouring's
+   index), and the case the plan did not foresee: a variation inlined by
+   `vary` into a formula's step, where a `return` must end the variation
+   and not the step (a flag the statements after it test, or a
+   refusal).
 2. **Escape colourings** (28). About 20 accumulate over the orbit, which
    `start` / `step` / `finish` already do. The rest need:
    - a colour as the result, not a palette position (Rainbow Fringe,

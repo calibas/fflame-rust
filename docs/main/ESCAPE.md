@@ -851,13 +851,19 @@ fn escaped(s, p) {
   array(n, v)` bind `a` to the array the literal made, where they copied
   it into another, element by element -- a loop the driver kept, which
   cost McCabe's twin 7% on a pass whose other work is light.
-- **Flow in the effect-like functions** (P4 step 5): `break`,
-  `continue` and an early `return` -- `IStmt::Break`, `Continue`,
-  `Return`, which only the WGSL back end emits (the interpreter and the
-  formula back ends never see one). A `continue` in a `for` runs the
-  counter's step before it, which `counted_loop` recognises, so the
-  loop stays counted; a `return` sets the result first and emits the
-  function's own last line (`Gen::ret`).
+- **Flow** (P4 step 5; rhai-plugins P7 step 1): `break` and `continue`
+  in every kind's loops, an early `return` in the effect-like functions
+  -- `IStmt::Break`, `Continue`, `Return`. The evaluators (`interp`,
+  `bigeval`) run them as the GPU does: `exec` gives an `ir::Flow` the
+  loop around takes (a `continue` in a `repeat` skips its test, as the
+  WGSL `for` does), an early `return` ends the section. The derivation
+  passes refuse them (the derivative, perturbation and BLA: deep zoom
+  declines such a formula, with the reason), and the perturbation
+  emitters write a script's own `break` and `continue`. A `continue` in a
+  `for` runs the counter's step before it, which `counted_loop`
+  recognises, so the loop stays counted; a general `while`'s cap counts
+  in its WGSL `for`, which a `continue` still advances. A `return` sets
+  the result first and emits the function's own last line (`Gen::ret`).
 - **`fract(x)`** (WGSL's, each part of a complex) and **`hash2(p)`**: a
   point to two numbers in [0, 1), the built-in noise effects' hash
   (`fract(sin(vec2(dot(p, (127.1, 311.7)), dot(p, (269.5, 183.3)))) *

@@ -251,11 +251,14 @@ impl BigMachine {
         }
     }
 
-    fn exec(&mut self, stmts: &[IStmt]) -> R<()> {
+    fn exec(&mut self, stmts: &[IStmt]) -> R<Flow> {
         for s in stmts {
             match s {
                 IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
-                IStmt::Break | IStmt::Continue | IStmt::Return => unreachable!("an effect-like function's `break`, `continue` or `return`, which runs on the GPU alone"),
+                // As the interpreter's (P7 step 1).
+                IStmt::Break => return Ok(Flow::Break),
+                IStmt::Continue => return Ok(Flow::Continue),
+                IStmt::Return => return Ok(Flow::Return),
                 // A solid's alone; a reference orbit is a formula's.
                 IStmt::Map { .. } => unreachable!("a solid's call of a built-in variation in a reference orbit"),
                 IStmt::Assign(place, e) => {
@@ -273,30 +276,44 @@ impl BigMachine {
                     self.arrays[*var][i] = v;
                 }
                 IStmt::If { arms, otherwise } => {
-                    let mut taken = false;
+                    let mut taken = None;
                     for (c, b) in arms {
                         if self.eval(c)?.truth(self.prog.dialect) {
-                            self.exec(b)?;
-                            taken = true;
+                            taken = Some(self.exec(b)?);
                             break;
                         }
                     }
-                    if !taken {
-                        self.exec(otherwise)?;
+                    let flow = match taken {
+                        Some(f) => f,
+                        None => self.exec(otherwise)?,
+                    };
+                    if flow != Flow::Next {
+                        return Ok(flow);
                     }
                 }
                 IStmt::While { cond, body } => {
                     let mut k = 0;
                     while k < LOOP_CAP && self.eval(cond)?.truth(self.prog.dialect) {
-                        self.exec(body)?;
+                        let flow = self.exec(body)?;
                         k += 1;
+                        match flow {
+                            Flow::Break => break,
+                            Flow::Return => return Ok(Flow::Return),
+                            Flow::Next | Flow::Continue => {}
+                        }
                     }
                 }
                 IStmt::Repeat { body, cond } => {
                     let mut k = 0;
                     loop {
-                        self.exec(body)?;
+                        let flow = self.exec(body)?;
                         k += 1;
+                        match flow {
+                            Flow::Break => break,
+                            Flow::Return => return Ok(Flow::Return),
+                            Flow::Continue if k < LOOP_CAP => continue,
+                            Flow::Next | Flow::Continue => {}
+                        }
                         if k >= LOOP_CAP || self.eval(cond)?.truth(self.prog.dialect) {
                             break;
                         }
@@ -304,7 +321,7 @@ impl BigMachine {
                 }
             }
         }
-        Ok(())
+        Ok(Flow::Next)
     }
 
     /// An element's place: the flattened index clamped to the array, as
