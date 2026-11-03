@@ -864,6 +864,24 @@ fn escaped(s, p) {
   recognises, so the loop stays counted; a general `while`'s cap counts
   in its WGSL `for`, which a `continue` still advances. A `return` sets
   the result first and emits the function's own last line (`Gen::ret`).
+- **An early `return` leaves its own scope** (P7 step 1): a body that
+  returns before its end -- a helper's, a varied variation's, a
+  variation's own, a formula's `step` -- lowers to `ast::Stmt::Scope` /
+  `IStmt::Scope`, each `return` setting the body's result as its end does
+  (`Returns::Scope`, `Variation`, `State`: a helper's value into its
+  result's locals, typed as their join; a variation's point and colour;
+  the state) and leaving the scope, not the function it is inlined into.
+  The evaluators take the return at the scope (`Flow`); the WGSL is a
+  `loop` run once that the return `break`s, a flag (`scope_done{k}`) only
+  when a return sits inside one of the scope's own loops, each such loop
+  testing it as it closes (`Gen::loop_body`). A body that does not return
+  early lowers as before, so nothing else's WGSL moved. The checker's
+  flow analysis takes what every way out of a scope wrote (`Flow::exits`),
+  so a helper's result is no state of the formula. The derivative,
+  perturbation and BLA refuse a scope (deep zoom declines the formula,
+  with the reason), and a helper of the perturbation equations may not
+  return early. A function defined twice -- Rhai's overloads by arity --
+  is refused: the compiler finds functions by name.
 - **`fract(x)`** (WGSL's, each part of a complex) and **`hash2(p)`**: a
   point to two numbers in [0, 1), the built-in noise effects' hash
   (`fract(sin(vec2(dot(p, (127.1, 311.7)), dot(p, (269.5, 183.3)))) *

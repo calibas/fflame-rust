@@ -1843,6 +1843,37 @@ mod tests {
         esc
     }
 
+    /// **An early `return` in a varied variation leaves the variation
+    /// alone** (rhai-plugins P7 step 1), on the GPU as in the interpreter:
+    /// the formula that varies it -- the variation returning directly, and
+    /// from inside its own loop by the scope's flag -- renders as the same
+    /// formula written without either, but for pixels on an escape's edge:
+    /// the scope's `loop` changes where the shader compiler fuses a
+    /// multiply-add, and the last bit moves an orbit on the boundary
+    /// (measured: 6 of 12,288). A return that ended the step would move
+    /// nearly every pixel; the interpreter holds the two equal to the bit
+    /// (`an_early_return_leaves_its_own_scope`).
+    #[test]
+    fn a_varied_variations_early_return_renders_as_written_without_it() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        use crate::lang::rhai::tests::{EARLY_FORMULA, EARLY_PLAIN, EARLY_VARIATION};
+        let mut base = crate::config::escape::EscapeConfig::default();
+        base.max_iter = 200;
+        let variation = CustomSource { dialect: CustomDialect::Rhai, entry: "rhai_early_test".into(), source: EARLY_VARIATION.into(), variations: Vec::new() };
+        let mut early = with_rhai(base.clone(), EARLY_FORMULA);
+        if let Some(src) = early.custom_formula.as_mut() {
+            src.variations = vec![variation];
+            early.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, src);
+        }
+        let plain = with_rhai(base, EARLY_PLAIN);
+        let (w, h) = (128, 96);
+        let (a, b) = (records_on(&early, w, h, false, false, true), records_on(&plain, w, h, false, false, true));
+        assert!(a.iter().any(|r| r.n > 2) && a.iter().any(|r| r.n < 200), "a picture with structure");
+        let differ = a.iter().zip(&b).filter(|(x, y)| x.n != y.n).count();
+        println!("{differ} of {} pixels count differently", a.len());
+        assert!(differ * 500 <= a.len(), "{differ} pixels: the varied variation's return ended the step");
+    }
+
     /// **A formula's `rand()` draws the interpreter's stream** (the KIFS
     /// plan, C2a): a formula that escapes on its first draw past 0.9
     /// counts, on the GPU, what the interpreter counts at the same place

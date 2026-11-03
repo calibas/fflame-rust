@@ -1131,7 +1131,10 @@ fn agent_count(p, w, h) { to_float(w * h) * p.amount }
         refused("fn cell_step(cell) { vec4(rand(1.5), 0.0, 0.0, 0.0) }", "takes an int");
         refused("fn cell_step(cell) { vec4(init_at(1.0, 2.0), 0.0, 0.0, 0.0) }", "is a seed's");
         refused("fn cell_step(cell) {\n    let i = 0;\n    do { i += 1; continue; } while i < 3;\n    cell\n}", "`continue` in a `do` loop");
-        refused("fn helper(x) { if x > 0.0 { return x; } x }\nfn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "`return` ends a function");
+        // A helper's early return leaves the helper (P7 step 1).
+        let helper = compile_model("fn helper(x) { if x > 0.0 { return x; } x }
+fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
+        assert!(helper.is_ok_and(|d| d.wgsl.contains("loop {")));
         // A helper's own loop breaks (Rhai's parser refuses a `break`
         // outside one).
         let own = "fn first(x) {\n    let n = 0.0;\n    for i in 0..8 { n += x; if n > 2.0 { break; } }\n    n\n}\nfn cell_step(cell) { vec4(first(cell.x), 0.0, 0.0, 0.0) }";

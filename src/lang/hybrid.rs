@@ -556,6 +556,7 @@ impl Remap {
 
     fn stmt(&self, s: &IStmt) -> IStmt {
         match s {
+            IStmt::Scope(body) => IStmt::Scope(body.iter().map(|s| self.stmt(s)).collect()),
             IStmt::Host(h, args) => IStmt::Host(*h, args.iter().map(|a| self.expr(a)).collect()),
             IStmt::Break => IStmt::Break,
             IStmt::Continue => IStmt::Continue,

@@ -252,6 +252,7 @@ pub fn grows_past_f32(p: &Program) -> bool {
     }
     fn s(st: &[IStmt], p: &Program) -> bool {
         st.iter().any(|x| match x {
+            IStmt::Scope(b) => s(b, p),
             IStmt::Host(_, args) => args.iter().any(|x| e(x, p)),
             IStmt::Break | IStmt::Continue | IStmt::Return => false,
             IStmt::Assign(_, v) => e(v, p),

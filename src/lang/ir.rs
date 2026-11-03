@@ -405,6 +405,11 @@ pub enum IStmt {
     /// A simulation's framework call that writes (P4 steps 9c, 9d): the
     /// scratch, the memory, an agent's claim or deposit.
     Host(Host, Vec<IExpr>),
+    /// An inlined body whose `Return` leaves it, not the function around
+    /// it (`ast::Stmt::Scope`; rhai-plugins P7 step 1). The evaluators
+    /// take the return at the scope; the WGSL is a `loop` the return
+    /// breaks.
+    Scope(Vec<IStmt>),
 }
 
 /// A solid's call of a built-in flame variation (3d-look-and-tools P5,
@@ -634,6 +639,7 @@ impl Program {
         }
         fn s(st: &[IStmt], p: Predef) -> bool {
             st.iter().any(|x| match x {
+                IStmt::Scope(b) => s(b, p),
                 IStmt::Host(_, args) => args.iter().any(|x| e(x, p)),
                 IStmt::Break | IStmt::Continue | IStmt::Return => false,
                 IStmt::Assign(_, v) => e(v, p),

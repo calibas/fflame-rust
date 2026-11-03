@@ -282,6 +282,7 @@ fn place_slot(p: Place) -> Option<Slot> {
 /// Every slot a statement reads or writes, in order.
 fn slots_of_stmt(s: &IStmt, out: &mut Vec<Slot>) {
     match s {
+        IStmt::Scope(body) => body.iter().for_each(|x| slots_of_stmt(x, out)),
         IStmt::Host(_, args) => {
             for x in args {
                 slots_of_expr(x, out);
@@ -797,6 +798,7 @@ impl<'p> Printer<'p> {
 
     fn stmt(&mut self, st: &IStmt) -> R<()> {
         match st {
+            IStmt::Scope(..) => return Err("an early `return` has no spelling here".to_string()),
             IStmt::Host(..) => return Err("a simulation's framework call has no spelling here".to_string()),
             IStmt::Break | IStmt::Continue | IStmt::Return => return Err("a loop's `break` or an early `return` has no spelling here".to_string()),
             IStmt::Map { .. } => return Err("a solid's call of a built-in variation has no Rhai spelling of its own here".to_string()),

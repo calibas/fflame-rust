@@ -262,6 +262,7 @@ pub fn sim_model(p: &Program, f: super::rhai::SimFn) -> Result<SimModelWgsl, Str
 fn reads_pyramid(st: &[IStmt]) -> bool {
     let e = expr_reads_pyramid;
     st.iter().any(|x| match x {
+        IStmt::Scope(b) => reads_pyramid(b),
         IStmt::Host(_, args) => args.iter().any(e),
         IStmt::Break | IStmt::Continue | IStmt::Return => false,
         IStmt::Assign(_, v) => e(v),
@@ -384,6 +385,7 @@ pub fn sim_coloring(p: &Program) -> Result<SimColoringWgsl, String> {
     fn stmts(s: &[IStmt], read: &mut [bool; 28], pixel: &mut bool) {
         for st in s {
             match st {
+                IStmt::Scope(b) => stmts(b, read, pixel),
                 IStmt::Host(_, args) => {
                     for a in args {
                         visit(a, read, pixel);
@@ -1677,6 +1679,22 @@ struct Gen<'p> {
     /// What an early `return` emits (P4 step 5): the line that ends the
     /// effect-like function it is in, its result already set.
     ret: &'static str,
+    /// The scopes being written, innermost last (rhai-plugins P7 step 1),
+    /// and how many loops are open around this point: a `return` leaves
+    /// the innermost scope.
+    scopes: Vec<ScopeExit>,
+    nest: usize,
+}
+
+/// A scope being written (`IStmt::Scope`): the `loop` it is, how many
+/// loops were open inside it (its own included), and its flag -- set by a
+/// `return` from inside one of its own loops, which a `break` alone would
+/// leave only the innermost of; the loops it is inside test it as they
+/// close. `uses` counts those returns.
+struct ScopeExit {
+    flag: String,
+    nest: usize,
+    uses: usize,
 }
 
 impl<'p> Gen<'p> {
@@ -1715,6 +1733,22 @@ impl<'p> Gen<'p> {
             draw_salt: 0,
             agent: false,
             ret: "",
+            scopes: Vec::new(),
+            nest: 0,
+        }
+    }
+
+    /// A loop's body, one loop deeper; then, when a `return` inside it
+    /// left its scope by the flag, the test that carries the leaving out
+    /// past this loop too.
+    fn loop_body(&mut self, body: &[IStmt], depth: usize, out: &mut String) -> Option<String> {
+        let before = self.scopes.last().map(|s| s.uses);
+        self.nest += 1;
+        self.stmts(body, depth, out);
+        self.nest -= 1;
+        match (self.scopes.last(), before) {
+            (Some(s), Some(b)) if s.uses > b => Some(format!("if ({}) {{\n{}    break;\n{}}}", s.flag, "    ".repeat(depth - 1), "    ".repeat(depth - 1))),
+            _ => None,
         }
     }
 
@@ -2065,8 +2099,38 @@ impl<'p> Gen<'p> {
             IStmt::Continue => {
                 let _ = writeln!(out, "{pad}continue;");
             }
-            IStmt::Return => {
-                let _ = writeln!(out, "{pad}{}", self.ret);
+            // Inside a scope, out of it: `break` its `loop` -- by its flag
+            // from inside one of its own loops.
+            IStmt::Return => match self.scopes.last_mut() {
+                Some(s) if self.nest > s.nest => {
+                    s.uses += 1;
+                    let _ = writeln!(out, "{pad}{} = true;\n{pad}break;", s.flag);
+                }
+                Some(_) => {
+                    let _ = writeln!(out, "{pad}break;");
+                }
+                None => {
+                    let _ = writeln!(out, "{pad}{}", self.ret);
+                }
+            },
+            // An inlined body that returns early (P7 step 1): a `loop` run
+            // once, which its `return` breaks; the flag declared only when
+            // one of its own loops needs it.
+            IStmt::Scope(body) => {
+                let k = self.loops;
+                self.loops += 1;
+                self.nest += 1;
+                self.scopes.push(ScopeExit { flag: format!("scope_done{k}"), nest: self.nest, uses: 0 });
+                let mut inner = String::new();
+                self.stmts(body, depth + 1, &mut inner);
+                let s = self.scopes.pop().expect("pushed above");
+                self.nest -= 1;
+                if s.uses > 0 {
+                    let _ = writeln!(out, "{pad}var {} = false;", s.flag);
+                }
+                let _ = writeln!(out, "{pad}loop {{");
+                out.push_str(&inner);
+                let _ = writeln!(out, "{pad}    break;\n{pad}}}");
             }
             IStmt::Assign(place, e) => {
                 let v = self.expr(e);
@@ -2129,17 +2193,23 @@ impl<'p> Gen<'p> {
                     let _ = writeln!(out, "{pad}for (var loop{k} = 0; loop{k} < {LOOP_CAP}; loop{k} = loop{k} + 1) {{");
                     self.loop_exits(cond, &pad, out);
                 }
-                self.stmts(body, depth + 1, out);
+                let leave = self.loop_body(body, depth + 1, out);
                 let _ = writeln!(out, "{pad}}}");
+                if let Some(t) = leave {
+                    let _ = writeln!(out, "{pad}{t}");
+                }
             }
             IStmt::Repeat { body, cond } => {
                 let k = self.loops;
                 self.loops += 1;
                 let _ = writeln!(out, "{pad}for (var loop{k} = 0; loop{k} < {LOOP_CAP}; loop{k} = loop{k} + 1) {{");
-                self.stmts(body, depth + 1, out);
+                let leave = self.loop_body(body, depth + 1, out);
                 let c = self.expr(cond);
                 let _ = writeln!(out, "{pad}    if ({c}) {{\n{pad}        break;\n{pad}    }}");
                 let _ = writeln!(out, "{pad}}}");
+                if let Some(t) = leave {
+                    let _ = writeln!(out, "{pad}{t}");
+                }
             }
             // A solid's call of a built-in variation (P5): the maps
             // flame's 3D body, once, into the three parts.
@@ -2519,6 +2589,7 @@ impl<'p> Gen<'p> {
     fn sstmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
         let pad = "    ".repeat(depth);
         match s {
+            IStmt::Scope(..) => unreachable!("an early `return` in perturbation equations, which the lowering refuses"),
             IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             // A loop's, in perturbation equations a script wrote (P7 step 1).
             IStmt::Break => {
@@ -2743,6 +2814,7 @@ impl<'p> Gen<'p> {
     fn festmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
         let pad = "    ".repeat(depth);
         match s {
+            IStmt::Scope(..) => unreachable!("an early `return` in perturbation equations, which the lowering refuses"),
             IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             // A loop's, in perturbation equations a script wrote (P7 step 1).
             IStmt::Break => {
@@ -3309,6 +3381,7 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
     fn assigns(stmts: &[IStmt], out: &mut Vec<(VarId, IExpr)>) {
         for s in stmts {
             match s {
+                IStmt::Scope(body) => assigns(body, out),
                 IStmt::Host(..) => {}
                 IStmt::Break | IStmt::Continue | IStmt::Return => {}
                 IStmt::Assign(Place::Var(v), e) => out.push((*v, e.clone())),
@@ -3509,6 +3582,7 @@ pub fn colours_anything(p: &Program) -> bool {
 
 fn writes(stmts: &[IStmt], place: Place) -> bool {
     stmts.iter().any(|s| match s {
+        IStmt::Scope(b) => writes(b, place),
         IStmt::Host(..) => false,
         IStmt::Break | IStmt::Continue | IStmt::Return => false,
         IStmt::Assign(p, _) => *p == place,
