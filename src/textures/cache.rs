@@ -143,7 +143,9 @@ mod tests {
     use super::*;
 
     /// The shaders a texture is made with, as of `TEXTURE_CACHE_VERSION`.
-    const PINNED_ENGINE: &str = "4aae063f0dd69648";
+    /// Re-pinned 2026-11-02 without a bump: Percolation's step shader lost
+    /// its `NeedsRng` comment line, which moves no pixel.
+    const PINNED_ENGINE: &str = "ffaa34e275701650";
 
     /// When this fails, the simulation's shaders or the tone map changed,
     /// and a cached texture may no longer be what its recipe makes. If
