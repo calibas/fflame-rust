@@ -16,9 +16,9 @@
 //! `.fflame` with one renders anywhere the app runs.
 
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
-use super::{ColoringFeature, ModelDef, ModelFeature, SimColoringDef, SimParamDef, StateKind};
+use super::{ColoringFeature, ModelDef, ModelFeature, SimColoringDef, SimParamDef, SimPreset, StateKind};
 use crate::config::escape::{CustomDialect, CustomSource};
 use crate::lang::{self, ir::ParamKind, EntryKind};
 
@@ -37,6 +37,8 @@ struct Registry {
     /// Names whose carried source failed to compile: not retried every
     /// frame. A new source is a new name.
     failed: HashMap<String, String>,
+    /// The models with a `fn max_dt(p)` of their own, by name (P4 step 6).
+    dt: HashMap<String, Arc<DtScript>>,
 }
 
 fn registry() -> &'static RwLock<Registry> {
@@ -209,6 +211,140 @@ pub fn model(name: &str) -> Option<&'static ModelDef> {
 /// The models that ship as Rhai, by the built-in each is the twin of.
 pub const SHIPPED_MODELS: &[(&str, &str)] = &[("gray_scott", include_str!("../../assets/sim/gray_scott.rhai"))];
 
+// ============================================================================
+// A model's own time step and presets (P4 step 6)
+// ============================================================================
+
+/// A model's `fn max_dt(p)`: its stable time step at the parameters in
+/// force, which the built-ins write as a `dt_bound` closure. Plain Rhai on
+/// the CPU -- the script's source as Rhai runs it -- with the core
+/// language, its maths and `min`/`max`, an operation budget and nothing
+/// else.
+struct DtScript {
+    source: String,
+    /// The parameters that are ints (`round` of the slot), as the script
+    /// reads them on the GPU.
+    ints: Vec<String>,
+}
+
+fn dt_engine() -> rhai::Engine {
+    use rhai::packages::Package;
+    let mut engine = rhai::Engine::new_raw();
+    engine.register_global_module(rhai::packages::CorePackage::new().as_shared_module());
+    engine.register_global_module(rhai::packages::BasicMathPackage::new().as_shared_module());
+    engine.register_global_module(rhai::packages::LogicPackage::new().as_shared_module());
+    engine.set_max_operations(100_000);
+    engine
+}
+
+/// `max_dt(p)` at `value(name)` for each of `params`.
+fn eval_max_dt(engine: &rhai::Engine, ast: &rhai::AST, params: &[SimParamDef], ints: &[String], value: impl Fn(&str) -> f32) -> Result<f64, String> {
+    let mut map = rhai::Map::new();
+    for p in params {
+        let v = value(p.name);
+        let v = if ints.iter().any(|n| n == p.name) { rhai::Dynamic::from_int(v.round() as rhai::INT) } else { rhai::Dynamic::from_float(f64::from(v)) };
+        map.insert(p.name.into(), v);
+    }
+    let options = rhai::CallFnOptions::new().eval_ast(false);
+    let r: rhai::Dynamic = engine.call_fn_with_options(options, &mut rhai::Scope::new(), ast, "max_dt", (map,)).map_err(|e| format!("`max_dt(p)`: {e}"))?;
+    r.as_float().or_else(|_| r.as_int().map(|i| i as f64)).map_err(|t| format!("`max_dt(p)` gives a number, not {t}"))
+}
+
+/// The `dt_bound` of a model with a `fn max_dt(p)`: its script, found by
+/// the model's name and parsed once per thread (an engine and its AST are
+/// not shared between threads). Not a number when it cannot run, which
+/// `max_dt_for` reads as "the static cap".
+fn script_dt_bound(p: &super::Params) -> f32 {
+    use std::cell::RefCell;
+    thread_local! {
+        static PARSED: RefCell<HashMap<String, (Arc<DtScript>, rhai::Engine, rhai::AST)>> = RefCell::new(HashMap::new());
+    }
+    let model = p.model();
+    let Some(script) = registry().read().ok().and_then(|r| r.dt.get(model.name).cloned()) else { return f32::NAN };
+    PARSED.with(|parsed| {
+        let mut parsed = parsed.borrow_mut();
+        let fresh = parsed.get(model.name).is_none_or(|(s, ..)| !Arc::ptr_eq(s, &script));
+        if fresh {
+            let engine = dt_engine();
+            let Ok(ast) = engine.compile(&script.source) else { return f32::NAN };
+            parsed.insert(model.name.to_string(), (script.clone(), engine, ast));
+        }
+        let (_, engine, ast) = &parsed[model.name];
+        eval_max_dt(engine, ast, model.parameters, &script.ints, |n| p.get(n)).map_or(f32::NAN, |v| v as f32)
+    })
+}
+
+/// A model's `INFO.presets` as the built-ins' are: each a map of `name`,
+/// `title`, `params` (by name, of `PARAMS`), `steps`, `dt`, and the
+/// config's `boundary`, `init`, `coloring` (a built-in's name),
+/// `coloring_params`, `matte` and `warp` as a `.fflame` spells them.
+fn presets_of(source: &str, params: &[SimParamDef], default_steps: u32) -> Result<Vec<SimPreset>, String> {
+    use serde_json::Value;
+    let Some(list) = lang::rhai::info_json(source, "presets") else { return Ok(Vec::new()) };
+    let Value::Array(list) = list else { return Err("`INFO.presets` is a list of maps".to_string()) };
+    let pairs = |v: &Value, what: &str, known: &dyn Fn(&str) -> bool| -> Result<&'static [(&'static str, f32)], String> {
+        let Value::Object(m) = v else { return Err(format!("a preset's `{what}` is a map of name to number")) };
+        let mut out = Vec::new();
+        for (k, x) in m {
+            if !known(k) {
+                return Err(format!("a preset's `{what}` names `{k}`, which is not one"));
+            }
+            let x = x.as_f64().ok_or_else(|| format!("a preset's `{what}.{k}` is a number"))?;
+            out.push((leak(k.clone()), x as f32));
+        }
+        Ok(Box::leak(out.into_boxed_slice()))
+    };
+    let typed = |v: &Value, what: &str| format!("a preset's `{what}` is not one the config reads: {v}");
+    let mut out = Vec::new();
+    for item in &list {
+        let Value::Object(m) = item else { return Err("a preset is a map".to_string()) };
+        let text = |k: &str| m.get(k).and_then(Value::as_str).map(str::to_string);
+        let name = text("name").ok_or("a preset has a `name`")?;
+        let mut preset = SimPreset {
+            name: leak(name.clone()),
+            display_name: leak(text("title").unwrap_or(name)),
+            params: &[],
+            steps: default_steps,
+            dt: None,
+            boundary: Default::default(),
+            init: None,
+            coloring: None,
+            coloring_params: &[],
+            matte: None,
+            warp: None,
+        };
+        for (k, v) in m {
+            match k.as_str() {
+                "name" | "title" => {}
+                "params" => preset.params = pairs(v, "params", &|n| params.iter().any(|p| p.name == n))?,
+                "steps" => preset.steps = v.as_u64().and_then(|s| u32::try_from(s).ok()).ok_or("a preset's `steps` is a whole number")?,
+                "dt" => preset.dt = Some(v.as_f64().ok_or("a preset's `dt` is a number")? as f32),
+                "boundary" => preset.boundary = serde_json::from_value(v.clone()).map_err(|_| typed(v, "boundary"))?,
+                "init" => preset.init = Some(serde_json::from_value(v.clone()).map_err(|_| typed(v, "init"))?),
+                "matte" => preset.matte = Some(serde_json::from_value(v.clone()).map_err(|_| typed(v, "matte"))?),
+                "warp" => preset.warp = Some(serde_json::from_value(v.clone()).map_err(|_| typed(v, "warp"))?),
+                "coloring" => {
+                    let c = v.as_str().ok_or("a preset's `coloring` names a colouring")?;
+                    let def = super::COLORINGS.iter().find(|d| d.name == c).ok_or_else(|| format!("a preset's `coloring` is a built-in's name, not `{c}`"))?;
+                    preset.coloring = Some(def.name);
+                }
+                "coloring_params" => {
+                    let c = m.get("coloring").and_then(Value::as_str).and_then(|c| super::COLORINGS.iter().find(|d| d.name == c));
+                    let known = |n: &str| c.is_some_and(|d| d.parameters.iter().any(|p| p.name == n));
+                    preset.coloring_params = pairs(v, "coloring_params", &known)?;
+                }
+                o => {
+                    return Err(format!(
+                        "a preset has `name`, `title`, `params`, `steps`, `dt`, `boundary`, `init`, `coloring`, `coloring_params`, `matte` and `warp`; not `{o}`"
+                    ))
+                }
+            }
+        }
+        out.push(preset);
+    }
+    Ok(out)
+}
+
 /// A model's source compiled to the definition it registers as, under
 /// `name`: each pass of its step (`cell_step`, `cell_step2` ...) and its
 /// seed (`cell_seed`; without one, the init shape in `.x`), its working
@@ -270,14 +406,31 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
             features.push(f);
         }
     }
+    let parameters: &'static [SimParamDef] = Box::leak(sim_params(&program)?.into_boxed_slice());
+    let default_steps = number("steps").map_or(1000, |v| v.max(1.0) as u32);
+    // Its own stable time step, run once here at the defaults: a script
+    // that cannot give one is a message now, not a cap that silently
+    // falls back at the first step.
+    let dt_bound = if lang::rhai::has_function(source, "max_dt") {
+        let ints = int_params(&program);
+        let engine = dt_engine();
+        let ast = engine.compile(source).map_err(|e| format!("`max_dt(p)`: {e}"))?;
+        let at = eval_max_dt(&engine, &ast, parameters, &ints, |n| parameters.iter().find(|p| p.name == n).map_or(0.0, |p| p.default))?;
+        if !(at.is_finite() && at > 0.0) {
+            return Err(format!("`max_dt(p)` at the defaults gives {at}: a time step is a positive number"));
+        }
+        Some(script_dt_bound as fn(&super::Params) -> f32)
+    } else {
+        None
+    };
     let def = ModelDef {
         name: leak(name),
         state: if lang::rhai::info_string(source, "state").as_deref() == Some("discrete") { StateKind::Discrete } else { StateKind::Continuous },
         display_name: leak(program.name.clone()),
         description: leak(lang::rhai::source_labels(source).map(|l| l.description.resolve()).unwrap_or_default()),
         features: Box::leak(features.into_boxed_slice()),
-        parameters: Box::leak(sim_params(&program)?.into_boxed_slice()),
-        presets: &[],
+        parameters,
+        presets: Box::leak(presets_of(source, parameters, default_steps)?.into_boxed_slice()),
         wgsl: leak(wgsl),
         passes: u32::from(passes),
         repeat: None,
@@ -286,9 +439,9 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         diffusion: Box::leak(diffusion.into_boxed_slice()),
         agents: None,
         kernel: None,
-        dt_bound: None,
+        dt_bound,
         wgsl_seed: leak(seed),
-        default_steps: number("steps").map_or(1000, |v| v.max(1.0) as u32),
+        default_steps,
         default_dt,
     };
     // Every module, as the renderer builds it: a compiler bug is a message
@@ -315,11 +468,26 @@ pub fn register_model(source: &str) -> Result<String, String> {
 /// [`register_model`] under a name given: the one a config names.
 pub fn register_model_as(source: &str, name: &str) -> Result<(), String> {
     let def: &'static ModelDef = Box::leak(Box::new(compile_model(source, name)?));
+    // Its `max_dt`, which `script_dt_bound` finds by the model's name.
+    let dt = def.dt_bound.is_some().then(|| {
+        let ints = lang::rhai::sim_model(source, lang::rhai::SimFn::Step(0)).map(|p| int_params(&p)).unwrap_or_default();
+        Arc::new(DtScript { source: source.to_string(), ints })
+    });
     if let Ok(mut r) = registry().write() {
         r.models.insert(name.to_string(), def);
         r.failed.remove(name);
+        match dt {
+            Some(dt) => r.dt.insert(name.to_string(), dt),
+            None => r.dt.remove(name),
+        };
     }
     Ok(())
+}
+
+/// The names of a script's int parameters (and its choices and bools,
+/// which are ints too): what `max_dt` is given as Rhai ints.
+fn int_params(program: &lang::ir::Program) -> Vec<String> {
+    program.params.iter().filter(|p| matches!(p.kind, ParamKind::Int | ParamKind::Enum | ParamKind::Bool)).map(|p| p.name.clone()).collect()
 }
 
 /// Why the colouring or model `name` a config carries did not register,
@@ -449,6 +617,44 @@ mod tests {
         let formula = "fn start(pixel, p) { #{ z: pixel } }\nfn step(s, p) {\n    for i in 0..3 { if i == 1 { break; } }\n    s\n}";
         let e = lang::rhai::program(formula).unwrap_err();
         assert!(e.iter().any(|d| d.message.contains("a formula's loops have no")), "{e:?}");
+    }
+
+    /// A model's own time step and presets (P4 step 6): `fn max_dt(p)`
+    /// runs on the CPU at the parameters in force, as a built-in's
+    /// `dt_bound` does, under the static cap and the stability margin; its
+    /// `INFO.presets` read as the built-ins' are; and what they refuse.
+    #[test]
+    fn a_model_has_its_own_time_step_and_presets() {
+        use crate::config::sim::{SimBoundary, SimInit};
+        let src = "const PARAMS = #{ d: #{ value: 0.5, min: 0.0, max: 2.0 }, n: #{ value: 3, min: 1, max: 9 } };\n\
+            const INFO = #{ dt: 0.2, max_dt: 0.4, steps: 500, presets: [\n    \
+            #{ name: \"slow\", title: \"Slow\", params: #{ d: 0.1 }, steps: 900, dt: 0.1, boundary: \"clamp\",\n       \
+            init: #{ blobs: #{ count: 6, radius: 24 } }, coloring: \"channel\", coloring_params: #{ channel: 1.0, scale: -3.0 } },\n    \
+            #{ name: \"plain\" },\n] };\n\
+            fn max_dt(p) { 0.5 / max(p.d, 0.25) + to_float(p.n) * 0.0 }\n\
+            fn cell_step(cell, p, ctx) { cell }\n";
+        register_model_as(src, "custom-dt-test").unwrap_or_else(|e| panic!("{e}"));
+        let def = model("custom-dt-test").expect("registered");
+        let at = |d: f32| def.max_dt_for(&[("d".to_string(), d)].into());
+        assert_eq!(at(2.0), super::super::STABILITY_MARGIN * 0.25, "its own bound at d = 2");
+        assert_eq!(at(0.1), 0.4, "under the static cap");
+        assert_eq!(def.presets.len(), 2);
+        let slow = &def.presets[0];
+        assert_eq!((slow.name, slow.display_name, slow.params, slow.steps, slow.dt), ("slow", "Slow", &[("d", 0.1f32)][..], 900, Some(0.1)));
+        assert_eq!((slow.boundary, slow.init, slow.coloring), (SimBoundary::Clamp, Some(SimInit::Blobs { count: 6, radius: 24 }), Some("channel")));
+        assert_eq!(slow.coloring_params, &[("channel", 1.0), ("scale", -3.0)][..]);
+        let plain = &def.presets[1];
+        assert_eq!((plain.display_name, plain.steps, plain.boundary, plain.init), ("plain", 500, SimBoundary::default(), None));
+
+        let refused = |from: &str, to: &str, why: &str| {
+            let e = compile_model(&src.replace(from, to), "custom-x").unwrap_err();
+            assert!(e.contains(why), "{why}: {e}");
+        };
+        refused("#{ name: \"plain\" }", "#{ name: \"plain\", speed: 2 }", "not `speed`");
+        refused("params: #{ d: 0.1 }", "params: #{ e: 0.1 }", "names `e`");
+        refused("coloring: \"channel\"", "coloring: \"chanel\"", "not `chanel`");
+        refused("boundary: \"clamp\"", "boundary: \"sideways\"", "`boundary` is not one");
+        refused("0.5 / max(p.d, 0.25)", "0.0 * p.d", "a time step is a positive number");
     }
 
     /// A source goes with its layer (P4 step 4): promoting the flat model

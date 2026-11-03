@@ -616,6 +616,11 @@ pub struct Params<'a> {
 }
 
 impl Params<'_> {
+    /// The model whose parameters these are.
+    pub fn model(&self) -> &ModelDef {
+        self.model
+    }
+
     /// The value in force for `name`. A parameter the model does not
     /// declare reads 0.0, which is a programming error rather than a
     /// state a config can reach -- the registry's invariant tests

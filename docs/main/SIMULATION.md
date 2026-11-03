@@ -752,10 +752,22 @@ call.
   stencil, by name: the cap on `dt` follows them, `max_dt_for`), `state`
   (`"discrete"` for a cellular automaton's whole numbers), `time_step:
   false` (`NoTimeStep`: generations, no dt slider) and `settles: false`
-  (`NeverStills`: the export is the state at step N). `kernel`,
-  `agents`, `memory`, `pyramid`, `repeat`, `measure` and `presets` are
-  refused with a reason: kernel tables, memory, the pyramid, agents,
-  repeated or measured passes and presets stay the built-in models'.
+  (`NeverStills`: the export is the state at step N), and `presets`: a
+  list of maps, each `name`, `title`, `params` (by name), `steps`, `dt`,
+  and the config's `boundary`, `init`, `coloring` (a built-in's name),
+  `coloring_params`, `matte` and `warp` spelled as a `.fflame` spells
+  them (`init: #{ blobs: #{ count: 6, radius: 24 } }`), read through
+  serde. `kernel`, `agents`, `memory`, `pyramid`, `repeat` and
+  `measure` are refused with a reason: kernel tables, memory, the
+  pyramid, agents and repeated or measured passes stay the built-in
+  models'.
+- **Its own stable time step**: `fn max_dt(p)`, the bound at the
+  parameters in force, which a built-in writes as a `dt_bound` closure.
+  It runs on the CPU as plain Rhai (the core language, its maths and
+  `min`/`max`, an operation budget; ints for int parameters), parsed
+  once per thread, and `max_dt_for` applies the stability margin and the
+  static `max_dt` to it as to a built-in's. `compile_model` runs it at
+  the defaults, so one that gives no positive number is refused there.
 - **Registered and carried** as a colouring is: a leaked `ModelDef` under
   `custom-` and its key, found by `model_or_default`;
   `SimConfig::custom_model` (`ConfigPath::SimCustomModel`) with `model`,
