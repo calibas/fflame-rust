@@ -37,6 +37,8 @@ pub mod script;
 pub mod scripted;
 /// Parameters drawn beyond a list: conditions and grids (rhai-plugins P7).
 pub mod param_layout;
+/// One parameter system for every kind (docs/projects/one-parameter-system.md).
+pub mod params;
 pub mod probe;
 pub mod census;
 /// The formula language: Rhai (and UF's and Fractint's formulas) to WGSL,
