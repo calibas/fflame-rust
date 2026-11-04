@@ -1,4 +1,4 @@
-"""SPIKE: render configs through the WASI module (fflame_host.py) and
+"""SPIKE: render configs through the WASI module (the fflame package) and
 through the native CLI, and compare the pictures.
 
     python wasm/python/compare.py [--size WxH] CONFIG.fflame...
@@ -7,8 +7,8 @@ Writes output/python-spike/compare/<name>-{wasi,native,diff}.png and a
 table: the mean absolute difference (0-255), the share of pixels off by
 more than 8, the same on 8x8 block means (what survives sampling noise),
 and the render times (WASI: wall and the engine's own; native: the
-engine's own, from the PNG). A failing config gets a fresh module, since
-a panic leaves the instance unusable.
+engine's own, from the PNG). A config that panics the module is
+reported, and the engine restarts it.
 """
 
 import argparse
@@ -23,7 +23,7 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(__file__))
-import fflame_host as fh  # noqa: E402
+import fflame  # noqa: E402
 
 OUT = "output/python-spike/compare"
 EXE = os.path.abspath("target/release/FractalArtEditor.exe")
@@ -46,10 +46,8 @@ def native(cfg, name, w, h):
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work + "/in")
     shutil.copy(cfg, work + "/in/")
-    # 256 iterations a thread: `RenderJob::new`'s, which the module renders
-    # with (the CLI's own default is 1024, another flame sample set).
-    r = subprocess.run([EXE, "export", "-i", work + "/in", "-o", work, "--width", str(w), "--height", str(h),
-                        "--iterations-per-thread", "256"], capture_output=True, text=True)
+    r = subprocess.run([EXE, "export", "-i", work + "/in", "-o", work, "--width", str(w), "--height", str(h)],
+                       capture_output=True, text=True)
     pngs = [f for f in os.listdir(work) if f.endswith(".png")]
     if not pngs:
         return None, None, (r.stdout + r.stderr).strip().splitlines()[-1:]
@@ -72,22 +70,22 @@ def main():
     a = ap.parse_args()
     w, h = map(int, a.size.split("x"))
     os.makedirs(OUT, exist_ok=True)
-    eng = fh.Engine()
+    eng = fflame.Engine()
     print(f"{'config':40s} {'mean':>6s} {'>8':>6s} {'blocks':>6s} {'wasi wall':>9s} {'wasi eng':>8s} {'native':>8s}")
     for cfg in a.configs:
         name = os.path.splitext(os.path.basename(cfg))[0]
         text = open(cfg, encoding="utf-8").read()
         t0 = time.perf_counter()
         try:
-            px, info = eng.render(text, w, h)
-        except Exception as e:  # a panic traps the module: start a new one
+            image = eng.render(text, w, h)
+        except fflame.EngineError as e:  # a panic restarts the module itself
             msg = str(e).strip().splitlines()
             print(f"{name:40s} WASI FAILED: {msg[0][:150] if msg else type(e).__name__}")
-            eng = fh.Engine()
             continue
         wall = (time.perf_counter() - t0) * 1000
         wasi_path = os.path.join(OUT, name + "-wasi.png")
-        fh.write_png(wasi_path, px, info["width"], info["height"])
+        image.save(wasi_path)
+        info = image.info
         npath, nms, err = native(cfg, name, w, h)
         if npath is None:
             print(f"{name:40s} native failed: {err}")
