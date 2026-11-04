@@ -331,7 +331,7 @@ does not compile cannot be published. It can still be saved locally.
 Every registered variation and effect has a `Provenance`
 ([provenance.rs](../../src/provenance.rs)):
 
-| | `Builtin` | `Api { version }` | `Local` |
+| | `Builtin` | `Api { version }` | `Custom` (the user's own Rhai) |
 | --- | --- | --- | --- |
 | shipped with the app | yes | no | no |
 | third-party code | no | yes | yes |
@@ -386,8 +386,9 @@ The Variations panel shows the catalog: update buttons for stale
 downloads, the available list (fetched on demand, not downloadable from
 the list), the not-fetchable count, and **Clear Variation Cache**, which
 removes downloads and the cached catalog and refetches the catalog;
-plugins are untouched. The Effects panel shows the effect catalog; there
-is no control to clear the effect cache.
+plugins are untouched. The Effects panel shows the effect catalog, with
+updates for stale downloads and **Clear downloaded effects (N)**
+(`EffectRegistry::clear_api`; [EFFECTS.md](EFFECTS.md)).
 
 ### Missing variations
 
@@ -400,7 +401,7 @@ names with non-zero weight that the registry lacks, and
 | listed, downloadable | `Downloadable` | fetches it |
 | no catalog yet (or empty) | `Unknown` | fetches it — offline is not evidence of a plugin |
 | listed, not downloadable | `KnownButNotFetchable` | notifies that a plugin is needed |
-| not listed | `ProbablyAPlugin` | notifies that a plugin is needed |
+| not listed | `NotInCatalog` | notifies that a plugin is needed |
 
 Fetches (`GET /api/variations/{name}`, no authentication) run in
 parallel and **pause rendering** until they all finish or 30 s pass.
@@ -474,11 +475,11 @@ procedure. Render modes are the exception: they are published as
 
 Where the vocabularies come from matters when adding one: `phases` and
 `features` iterate `VariationPhase::ALL` and `Feature::ALL` (a test
-holds `Feature::ALL` to the enum), and `render_modes` iterates
-`RenderMode::ALL` (a test's exhaustive match holds it), but
-`categories` and `param_types` are written out as lists in `generate()`,
-so a new category or parameter type is absent from the contract until
-it is added there by hand.
+holds `Feature::ALL` to the enum), `render_modes` iterates
+`RenderMode::ALL` (a test's exhaustive match holds it), and
+`categories` and `param_types` iterate `VariationCategory::ALL` and
+`ParamType::ALL` (tests in `src/contract.rs` hold each to its enum and
+to what the contract publishes).
 
 ---
 
@@ -526,9 +527,13 @@ engines by feature:
 | --- | --- | --- |
 | `wasm/script` | `fflame-script` | `engine-flame`, `engine-escape`, `engine-sim` — script + seed + params → config JSON |
 | `wasm/render` | `fflame-render` | `engine-flame`, `engine-escape`, `engine-sim` |
-| `wasm/flame` | `fflame-flame` | `engine-flame` |
-| `wasm/escape` | `fflame-escape` | `engine-escape` |
-| `wasm/sim` | `fflame-sim` | `engine-sim` |
+| `wasm/flame` | `fflame-flame` | `engine-flame`, `lang` |
+| `wasm/escape` | `fflame-escape` | `engine-escape` (which brings `lang`) |
+| `wasm/sim` | `fflame-sim` | `engine-sim`, `lang` |
+
+`wasm/python` is under `wasm/` too but is not a web module: it is the
+library built for WASI (every engine plus `terrain`), the engine of the
+Python package (`python/`).
 
 The four renderers are one source (`wasm/render/src/lib.rs`) built with
 different features. An escape or simulation config sent to a module
@@ -550,12 +555,10 @@ in [WASM.md](../WASM.md) and [RELEASE.md](../RELEASE.md) §5.
   the web deep-link loader** (`trigger_url_load`). It passes the
   signed-in token (empty when signed out, and ignored on the web, where
   the cookie authenticates).
-- **The search URL is not encoded.** `SearchFlamesParams::to_query_string`
-  interpolates the name raw, so `&` or `#` in a search corrupts the
-  query (noted at `api::urlencode`, which the script search does use).
 - **Several client methods have no caller:** `search_public_flames`,
   `get_palette`, `set_library_nickname`, `list_flame_animations`,
-  `delete_animation`, `validate_token`.
+  `delete_animation`. (`validate_token` is called by the web app's
+  `WasmApi::api_validate_token`.)
 
 ---
 
