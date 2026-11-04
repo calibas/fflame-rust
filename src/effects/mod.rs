@@ -14,7 +14,7 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use rust_i18n::t;
 
-use crate::variations::ParamType;
+use crate::params::{ParamDef, Spec};
 
 /// Effects written in Rhai, compiled by the formula language (P2).
 #[cfg(feature = "lang")]
@@ -57,36 +57,6 @@ pub enum EffectCategory {
     Density,
     /// Runs after tonemap, operates on final RGB colors
     Color,
-}
-
-/// Definition of a single effect parameter
-#[derive(Clone, Debug, Serialize)]
-pub struct EffectParameter {
-    /// Parameter name (canonical, lowercase, e.g. "intensity", "radius")
-    pub name: String,
-
-    /// Display name for UI (e.g. "Intensity", "Hue Offset"). Single
-    /// English locale by policy — these are technical labels, not
-    /// subject to i18n. Replaces the previous
-    /// `EffectInfo::translated_param_name()` lookup pattern.
-    pub display_name: String,
-
-    /// Parameter type (reuse from variations)
-    pub param_type: ParamType,
-
-    /// Default value
-    pub default_value: f32,
-
-    /// Minimum value (None = no limit)
-    pub min_value: Option<f32>,
-
-    /// Maximum value (None = no limit)
-    pub max_value: Option<f32>,
-
-    /// Free-form help / tooltip prose shown under the parameter
-    /// control. `None` renders the control without a tooltip. Single
-    /// English locale by policy.
-    pub description: Option<String>,
 }
 
 /// Every shipped effect shader, compiled in.
@@ -209,7 +179,7 @@ pub struct EffectInfo {
     pub source: EffectSource,
 
     /// Parameters for this effect
-    pub parameters: Vec<EffectParameter>,
+    pub parameters: Vec<ParamDef>,
 
     /// Where this effect came from, and therefore whether it is
     /// third-party code, cache, or updatable. See
@@ -227,16 +197,16 @@ pub struct EffectInfo {
 impl EffectInfo {
     /// A parameter's label and hint in the current language: its source's
     /// when it has labels, else the definition's own.
-    pub fn param_label(&self, p: &EffectParameter) -> (String, Option<String>) {
+    pub fn param_label(&self, p: &ParamDef) -> (String, Option<String>) {
         if let Some(l) = self.labels.as_ref().and_then(|l| l.param(&p.name)) {
             let caption = l.caption.resolve();
             let hint = l.hint.resolve();
             return (
-                if caption.is_empty() { p.display_name.clone() } else { caption },
-                if hint.is_empty() { p.description.clone() } else { Some(hint) },
+                if caption.is_empty() { p.label.to_string() } else { caption },
+                if hint.is_empty() { p.hint().map(str::to_string) } else { Some(hint) },
             );
         }
-        (p.display_name.clone(), p.description.clone())
+        (p.label.to_string(), p.hint().map(str::to_string))
     }
 
     /// The label to show for this effect.
@@ -272,11 +242,11 @@ impl EffectInfo {
         self.parameters
             .iter()
             .find(|p| p.name == param_name)
-            .map(|p| p.default_value)
+            .map(|p| p.slot_default())
     }
 
     /// Get parameter definition by name
-    pub fn get_param(&self, param_name: &str) -> Option<&EffectParameter> {
+    pub fn get_param(&self, param_name: &str) -> Option<&ParamDef> {
         self.parameters.iter().find(|p| p.name == param_name)
     }
 
@@ -284,7 +254,7 @@ impl EffectInfo {
     pub fn default_params(&self) -> HashMap<String, f32> {
         self.parameters
             .iter()
-            .map(|p| (p.name.clone(), p.default_value))
+            .map(|p| (p.name.to_string(), p.slot_default()))
             .collect()
     }
 }
@@ -636,19 +606,8 @@ pub fn check_download(dl: &crate::api::types::EffectDownload) -> Result<EffectIn
         }
     }
 
-    let parameters = dl
-        .parameters
-        .iter()
-        .map(|p| EffectParameter {
-            name: p.name.clone(),
-            display_name: p.display_name.clone(),
-            param_type: crate::variations::api_param_type_to_runtime_pub(&p.param_type),
-            default_value: p.default_value,
-            min_value: p.min_value,
-            max_value: p.max_value,
-            description: p.description.clone(),
-        })
-        .collect();
+    // An unranged float as the Effects panel has always drawn one: 0..1.
+    let parameters = dl.parameters.iter().map(|p| crate::params::from_api(p, (0.0, 1.0))).collect();
 
     Ok(EffectInfo {
         name,
@@ -729,42 +688,30 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.5,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "radius".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.5,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Radius".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "softness".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.5,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Softness".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "blend_mode".to_string(),
-                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
-                default_value: 0.0, // Normal
-                min_value: Some(0.0),
-                max_value: Some(12.0),
-                display_name: "Blend Mode".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(0.5, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "radius",
+                "Radius",
+                "",
+                Spec::float(0.5, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "softness",
+                "Softness",
+                "",
+                Spec::float(0.5, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "blend_mode",
+                "Blend Mode",
+                "",
+                Spec::choice(0, BLEND_MODE_NAMES),
+            ),
         ],
     });
 
@@ -782,33 +729,24 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.1,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "seed".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.0,
-                min_value: Some(0.0),
-                max_value: Some(256.0),
-                display_name: "Seed".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "blend_mode".to_string(),
-                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
-                default_value: 4.0, // Overlay (good for grain)
-                min_value: Some(0.0),
-                max_value: Some(12.0),
-                display_name: "Blend Mode".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(0.1, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "seed",
+                "Seed",
+                "",
+                Spec::float(0.0, 0.0, 256.0),
+            ),
+            ParamDef::new(
+                "blend_mode",
+                "Blend Mode",
+                "",
+                Spec::choice(4, BLEND_MODE_NAMES),
+            ),
         ],
     });
 
@@ -826,42 +764,30 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "amount".to_string(),
-                param_type: ParamType::Float,
-                default_value: 2.0,
-                min_value: Some(0.0),
-                max_value: Some(20.0),
-                display_name: "Amount".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "radial".to_string(),
-                param_type: ParamType::Boolean,
-                default_value: 1.0, // true
-                min_value: None,
-                max_value: None,
-                display_name: "Radial".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "blend_mode".to_string(),
-                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
-                default_value: 0.0, // Normal
-                min_value: Some(0.0),
-                max_value: Some(12.0),
-                display_name: "Blend Mode".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "amount",
+                "Amount",
+                "",
+                Spec::float(2.0, 0.0, 20.0),
+            ),
+            ParamDef::new(
+                "radial",
+                "Radial",
+                "",
+                Spec::bool(true),
+            ),
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(1.0, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "blend_mode",
+                "Blend Mode",
+                "",
+                Spec::choice(0, BLEND_MODE_NAMES),
+            ),
         ],
     });
 
@@ -879,33 +805,24 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "offset".to_string(),
-                param_type: ParamType::Angle,
-                default_value: 0.0,
-                min_value: Some(0.0),
-                max_value: Some(360.0),
-                display_name: "Hue Offset".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "blend_mode".to_string(),
-                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
-                default_value: 0.0, // Normal
-                min_value: Some(0.0),
-                max_value: Some(12.0),
-                display_name: "Blend Mode".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "offset",
+                "Hue Offset",
+                "",
+                Spec::angle(0.0, 0.0, 360.0),
+            ),
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(1.0, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "blend_mode",
+                "Blend Mode",
+                "",
+                Spec::choice(0, BLEND_MODE_NAMES),
+            ),
         ],
     });
 
@@ -925,37 +842,24 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "radius".to_string(),
-                param_type: ParamType::Float,
-                default_value: 3.0,
-                min_value: Some(0.0),
-                max_value: Some(10.0),
-                display_name: "Radius".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "threshold".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.25,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Density Threshold".to_string(),
-                description: Some(
-                    "Density, in multiples of the frame's mean density, below which a pixel blurs at the full radius. 0.25 blurs the parts sparser than a quarter of the average.".to_string(),
-                ),
-            },
-            EffectParameter {
-                name: "falloff".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.5,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Falloff".to_string(),
-                description: Some(
-                    "How far above the threshold, in multiples of the mean density, the blur fades out to none.".to_string(),
-                ),
-            },
+            ParamDef::new(
+                "radius",
+                "Radius",
+                "",
+                Spec::float(3.0, 0.0, 10.0),
+            ),
+            ParamDef::new(
+                "threshold",
+                "Density Threshold",
+                "Density, in multiples of the frame's mean density, below which a pixel blurs at the full radius. 0.25 blurs the parts sparser than a quarter of the average.",
+                Spec::float(0.25, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "falloff",
+                "Falloff",
+                "How far above the threshold, in multiples of the mean density, the blur fades out to none.",
+                Spec::float(0.5, 0.0, 1.0),
+            ),
         ],
     });
 
@@ -973,24 +877,18 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "amount".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.0),
-                max_value: Some(2.0),
-                display_name: "Amount".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "radius".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.5),
-                max_value: Some(5.0),
-                display_name: "Radius".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "amount",
+                "Amount",
+                "",
+                Spec::float(1.0, 0.0, 2.0),
+            ),
+            ParamDef::new(
+                "radius",
+                "Radius",
+                "",
+                Spec::float(1.0, 0.5, 5.0),
+            ),
         ],
     });
 
@@ -1008,33 +906,24 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "radius".to_string(),
-                param_type: ParamType::Float,
-                default_value: 3.0,
-                min_value: Some(1.0),
-                max_value: Some(10.0),
-                display_name: "Radius".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "sigma_spatial".to_string(),
-                param_type: ParamType::Float,
-                default_value: 3.0,
-                min_value: Some(1.0),
-                max_value: Some(10.0),
-                display_name: "Spatial Sigma".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "sigma_range".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.1,
-                min_value: Some(0.05),
-                max_value: Some(0.5),
-                display_name: "Range Sigma".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "radius",
+                "Radius",
+                "",
+                Spec::float(3.0, 1.0, 10.0),
+            ),
+            ParamDef::new(
+                "sigma_spatial",
+                "Spatial Sigma",
+                "",
+                Spec::float(3.0, 1.0, 10.0),
+            ),
+            ParamDef::new(
+                "sigma_range",
+                "Range Sigma",
+                "",
+                Spec::float(0.1, 0.05, 0.5),
+            ),
         ],
     });
 
@@ -1054,71 +943,48 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "segments".to_string(),
-                param_type: ParamType::Float,
-                default_value: 6.0,
-                min_value: Some(2.0),
-                max_value: Some(16.0),
-                display_name: "Segments".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "rotation".to_string(),
-                param_type: ParamType::Angle,
-                default_value: 0.0,
-                min_value: Some(0.0),
-                max_value: Some(360.0),
-                display_name: "Source Angle".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "zoom".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.1),
-                max_value: Some(3.0),
-                display_name: "Zoom".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "blend_mode".to_string(),
-                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
-                default_value: 0.0, // Normal
-                min_value: Some(0.0),
-                max_value: Some(12.0),
-                display_name: "Blend Mode".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "square_mode".to_string(),
-                param_type: ParamType::Enum {
-                    choices: &["Screen ratio (stretched)", "Square"],
-                },
-                default_value: 1.0, // 1 = Square (1:1 perfect symmetry), 0 = Screen ratio (stretched)
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Square Mode".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "edge_offset".to_string(),
-                param_type: ParamType::Integer,
-                default_value: 0.0, // 0 = no offset (existing behavior)
-                min_value: Some(0.0),
-                max_value: Some(2000.0),
-                display_name: "Edge Offset".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "segments",
+                "Segments",
+                "",
+                Spec::float(6.0, 2.0, 16.0),
+            ),
+            ParamDef::new(
+                "rotation",
+                "Source Angle",
+                "",
+                Spec::angle(0.0, 0.0, 360.0),
+            ),
+            ParamDef::new(
+                "zoom",
+                "Zoom",
+                "",
+                Spec::float(1.0, 0.1, 3.0),
+            ),
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(1.0, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "blend_mode",
+                "Blend Mode",
+                "",
+                Spec::choice(0, BLEND_MODE_NAMES),
+            ),
+            ParamDef::new(
+                "square_mode",
+                "Square Mode",
+                "",
+                Spec::choice(1, &["Screen ratio (stretched)", "Square"]),
+            ),
+            ParamDef::new(
+                "edge_offset",
+                "Edge Offset",
+                "",
+                Spec::int(0, 0, 2000),
+            ),
         ],
     });
 
@@ -1136,60 +1002,42 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.3,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "scale".to_string(),
-                param_type: ParamType::Float,
-                default_value: 3.0,
-                min_value: Some(0.1),
-                max_value: Some(100.0),
-                display_name: "Scale".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "speed".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.0),
-                max_value: Some(10.0),
-                display_name: "Speed".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "time".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.0,
-                min_value: Some(0.0),
-                max_value: Some(1000.0),
-                display_name: "Time".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "blend_mode".to_string(),
-                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
-                default_value: 1.0, // Add (classic plasma look)
-                min_value: Some(0.0),
-                max_value: Some(12.0),
-                display_name: "Blend Mode".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "direction".to_string(),
-                param_type: ParamType::Angle,
-                default_value: 225.0, // Default: up-left (legacy behavior)
-                min_value: Some(0.0),
-                max_value: Some(360.0),
-                display_name: "Direction".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(0.3, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "scale",
+                "Scale",
+                "",
+                Spec::float(3.0, 0.1, 100.0),
+            ),
+            ParamDef::new(
+                "speed",
+                "Speed",
+                "",
+                Spec::float(1.0, 0.0, 10.0),
+            ),
+            ParamDef::new(
+                "time",
+                "Time",
+                "",
+                Spec::float(0.0, 0.0, 1000.0),
+            ),
+            ParamDef::new(
+                "blend_mode",
+                "Blend Mode",
+                "",
+                Spec::choice(1, BLEND_MODE_NAMES),
+            ),
+            ParamDef::new(
+                "direction",
+                "Direction",
+                "",
+                Spec::angle(225.0, 0.0, 360.0),
+            ),
         ],
     });
 
@@ -1207,60 +1055,42 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "speed".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.0),
-                max_value: Some(5.0),
-                display_name: "Speed".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "rotation_speed".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.5,
-                min_value: Some(0.0),
-                max_value: Some(5.0),
-                display_name: "Rotation Speed".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "distortion".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.0,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Distortion".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "time".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.0,
-                min_value: Some(0.0),
-                max_value: Some(1000.0),
-                display_name: "Time".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "blend_mode".to_string(),
-                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
-                default_value: 0.0, // Normal
-                min_value: Some(0.0),
-                max_value: Some(12.0),
-                display_name: "Blend Mode".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "speed",
+                "Speed",
+                "",
+                Spec::float(1.0, 0.0, 5.0),
+            ),
+            ParamDef::new(
+                "rotation_speed",
+                "Rotation Speed",
+                "",
+                Spec::float(0.5, 0.0, 5.0),
+            ),
+            ParamDef::new(
+                "distortion",
+                "Distortion",
+                "",
+                Spec::float(0.0, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "time",
+                "Time",
+                "",
+                Spec::float(0.0, 0.0, 1000.0),
+            ),
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(1.0, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "blend_mode",
+                "Blend Mode",
+                "",
+                Spec::choice(0, BLEND_MODE_NAMES),
+            ),
         ],
     });
 
@@ -1278,51 +1108,36 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.0),
-                max_value: Some(2.0),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "threshold".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.1,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Threshold".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "glow".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.5,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Glow".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "preserve_color".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.5,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Preserve Color".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "blend_mode".to_string(),
-                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
-                default_value: 1.0, // Add (good for neon glow)
-                min_value: Some(0.0),
-                max_value: Some(12.0),
-                display_name: "Blend Mode".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(1.0, 0.0, 2.0),
+            ),
+            ParamDef::new(
+                "threshold",
+                "Threshold",
+                "",
+                Spec::float(0.1, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "glow",
+                "Glow",
+                "",
+                Spec::float(0.5, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "preserve_color",
+                "Preserve Color",
+                "",
+                Spec::float(0.5, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "blend_mode",
+                "Blend Mode",
+                "",
+                Spec::choice(1, BLEND_MODE_NAMES),
+            ),
         ],
     });
 
@@ -1340,60 +1155,42 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.1,
-                min_value: Some(0.0),
-                max_value: Some(0.5),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "scale".to_string(),
-                param_type: ParamType::Float,
-                default_value: 3.0,
-                min_value: Some(0.5),
-                max_value: Some(10.0),
-                display_name: "Scale".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "octaves".to_string(),
-                param_type: ParamType::Integer,
-                default_value: 4.0,
-                min_value: Some(1.0),
-                max_value: Some(6.0),
-                display_name: "Octaves".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "time".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.0,
-                min_value: Some(0.0),
-                max_value: Some(1000.0),
-                display_name: "Time".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "blend_mode".to_string(),
-                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
-                default_value: 0.0, // Normal
-                min_value: Some(0.0),
-                max_value: Some(12.0),
-                display_name: "Blend Mode".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "direction".to_string(),
-                param_type: ParamType::Angle,
-                default_value: 225.0, // Default: up-left (legacy behavior)
-                min_value: Some(0.0),
-                max_value: Some(360.0),
-                display_name: "Direction".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(0.1, 0.0, 0.5),
+            ),
+            ParamDef::new(
+                "scale",
+                "Scale",
+                "",
+                Spec::float(3.0, 0.5, 10.0),
+            ),
+            ParamDef::new(
+                "octaves",
+                "Octaves",
+                "",
+                Spec::int(4, 1, 6),
+            ),
+            ParamDef::new(
+                "time",
+                "Time",
+                "",
+                Spec::float(0.0, 0.0, 1000.0),
+            ),
+            ParamDef::new(
+                "blend_mode",
+                "Blend Mode",
+                "",
+                Spec::choice(0, BLEND_MODE_NAMES),
+            ),
+            ParamDef::new(
+                "direction",
+                "Direction",
+                "",
+                Spec::angle(225.0, 0.0, 360.0),
+            ),
         ],
     });
 
@@ -1411,71 +1208,48 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.5,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "scale".to_string(),
-                param_type: ParamType::Float,
-                default_value: 5.0,
-                min_value: Some(0.5),
-                max_value: Some(20.0),
-                display_name: "Scale".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "octaves".to_string(),
-                param_type: ParamType::Integer,
-                default_value: 4.0,
-                min_value: Some(1.0),
-                max_value: Some(6.0),
-                display_name: "Octaves".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "time".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.0,
-                min_value: Some(0.0),
-                max_value: Some(1000.0),
-                display_name: "Time".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "mode".to_string(),
-                param_type: ParamType::Enum {
-                    choices: &["Color", "Distort", "Mask"],
-                },
-                default_value: 0.0, // 0=Color, 1=Distort, 2=Mask
-                min_value: Some(0.0),
-                max_value: Some(2.0),
-                display_name: "Mode".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "blend_mode".to_string(),
-                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
-                default_value: 4.0, // Overlay (good for noise)
-                min_value: Some(0.0),
-                max_value: Some(12.0),
-                display_name: "Blend Mode".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "direction".to_string(),
-                param_type: ParamType::Angle,
-                default_value: 225.0, // Default: up-left (legacy behavior)
-                min_value: Some(0.0),
-                max_value: Some(360.0),
-                display_name: "Direction".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(0.5, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "scale",
+                "Scale",
+                "",
+                Spec::float(5.0, 0.5, 20.0),
+            ),
+            ParamDef::new(
+                "octaves",
+                "Octaves",
+                "",
+                Spec::int(4, 1, 6),
+            ),
+            ParamDef::new(
+                "time",
+                "Time",
+                "",
+                Spec::float(0.0, 0.0, 1000.0),
+            ),
+            ParamDef::new(
+                "mode",
+                "Mode",
+                "",
+                Spec::choice(0, &["Color", "Distort", "Mask"]),
+            ),
+            ParamDef::new(
+                "blend_mode",
+                "Blend Mode",
+                "",
+                Spec::choice(4, BLEND_MODE_NAMES),
+            ),
+            ParamDef::new(
+                "direction",
+                "Direction",
+                "",
+                Spec::angle(225.0, 0.0, 360.0),
+            ),
         ],
     });
 
@@ -1493,73 +1267,48 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.5,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "scale".to_string(),
-                param_type: ParamType::Float,
-                default_value: 8.0,
-                min_value: Some(1.0),
-                max_value: Some(20.0),
-                display_name: "Scale".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "time".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.0,
-                min_value: Some(0.0),
-                max_value: Some(1000.0),
-                display_name: "Time".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "mode".to_string(),
-                param_type: ParamType::Enum {
-                    choices: &["Cells", "Edges", "Organic", "Crystal"],
-                },
-                default_value: 0.0, // 0=Cells, 1=Edges, 2=Organic, 3=Crystal
-                min_value: Some(0.0),
-                max_value: Some(3.0),
-                display_name: "Pattern".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "color_mode".to_string(),
-                param_type: ParamType::Enum {
-                    choices: &["Grayscale", "Rainbow", "Original"],
-                },
-                default_value: 1.0, // 0=Grayscale, 1=Rainbow, 2=Original
-                min_value: Some(0.0),
-                max_value: Some(2.0),
-                display_name: "Color Mode".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "blend_mode".to_string(),
-                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
-                default_value: 4.0, // Overlay
-                min_value: Some(0.0),
-                max_value: Some(12.0),
-                display_name: "Blend Mode".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "direction".to_string(),
-                param_type: ParamType::Angle,
-                default_value: 225.0, // Default: up-left (legacy behavior)
-                min_value: Some(0.0),
-                max_value: Some(360.0),
-                display_name: "Direction".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(0.5, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "scale",
+                "Scale",
+                "",
+                Spec::float(8.0, 1.0, 20.0),
+            ),
+            ParamDef::new(
+                "time",
+                "Time",
+                "",
+                Spec::float(0.0, 0.0, 1000.0),
+            ),
+            ParamDef::new(
+                "mode",
+                "Pattern",
+                "",
+                Spec::choice(0, &["Cells", "Edges", "Organic", "Crystal"]),
+            ),
+            ParamDef::new(
+                "color_mode",
+                "Color Mode",
+                "",
+                Spec::choice(1, &["Grayscale", "Rainbow", "Original"]),
+            ),
+            ParamDef::new(
+                "blend_mode",
+                "Blend Mode",
+                "",
+                Spec::choice(4, BLEND_MODE_NAMES),
+            ),
+            ParamDef::new(
+                "direction",
+                "Direction",
+                "",
+                Spec::angle(225.0, 0.0, 360.0),
+            ),
         ],
     });
 
@@ -1577,100 +1326,66 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "mode".to_string(),
-                param_type: ParamType::Enum {
-                    choices: &["Mandelbrot", "Julia"],
-                },
-                default_value: 1.0, // 0=Mandelbrot, 1=Julia
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Mode".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "julia_cx".to_string(),
-                param_type: ParamType::Float,
-                default_value: -0.7,
-                min_value: Some(-2.0),
-                max_value: Some(2.0),
-                display_name: "Julia C (Real)".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "julia_cy".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.27,
-                min_value: Some(-2.0),
-                max_value: Some(2.0),
-                display_name: "Julia C (Imag)".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "max_iter".to_string(),
-                param_type: ParamType::Integer,
-                default_value: 100.0,
-                min_value: Some(10.0),
-                max_value: Some(500.0),
-                display_name: "Max Iterations".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "zoom".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.1),
-                max_value: Some(100.0),
-                display_name: "Zoom".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "center_x".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.0,
-                min_value: Some(-3.0),
-                max_value: Some(3.0),
-                display_name: "Center X".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "center_y".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.0,
-                min_value: Some(-3.0),
-                max_value: Some(3.0),
-                display_name: "Center Y".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "color_mode".to_string(),
-                param_type: ParamType::Enum {
-                    choices: &["Escape", "Smooth", "Original mask"],
-                },
-                default_value: 1.0, // 0=Escape, 1=Smooth, 2=Original mask
-                min_value: Some(0.0),
-                max_value: Some(2.0),
-                display_name: "Color Mode".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "blend_mode".to_string(),
-                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
-                default_value: 0.0, // Normal
-                min_value: Some(0.0),
-                max_value: Some(12.0),
-                display_name: "Blend Mode".to_string(),
-                description: None,
-            },
+            ParamDef::new(
+                "mode",
+                "Mode",
+                "",
+                Spec::choice(1, &["Mandelbrot", "Julia"]),
+            ),
+            ParamDef::new(
+                "julia_cx",
+                "Julia C (Real)",
+                "",
+                Spec::float(-0.7, -2.0, 2.0),
+            ),
+            ParamDef::new(
+                "julia_cy",
+                "Julia C (Imag)",
+                "",
+                Spec::float(0.27, -2.0, 2.0),
+            ),
+            ParamDef::new(
+                "max_iter",
+                "Max Iterations",
+                "",
+                Spec::int(100, 10, 500),
+            ),
+            ParamDef::new(
+                "zoom",
+                "Zoom",
+                "",
+                Spec::float(1.0, 0.1, 100.0),
+            ),
+            ParamDef::new(
+                "center_x",
+                "Center X",
+                "",
+                Spec::float(0.0, -3.0, 3.0),
+            ),
+            ParamDef::new(
+                "center_y",
+                "Center Y",
+                "",
+                Spec::float(0.0, -3.0, 3.0),
+            ),
+            ParamDef::new(
+                "color_mode",
+                "Color Mode",
+                "",
+                Spec::choice(1, &["Escape", "Smooth", "Original mask"]),
+            ),
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(1.0, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "blend_mode",
+                "Blend Mode",
+                "",
+                Spec::choice(0, BLEND_MODE_NAMES),
+            ),
         ],
     });
 
@@ -1693,59 +1408,36 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
         parameters: vec![
-            EffectParameter {
-                name: "threshold".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.15,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
-                display_name: "Seed Threshold".to_string(),
-                description: Some(
-                    "Pixels brighter than this seed the distance field.".to_string(),
-                ),
-            },
-            EffectParameter {
-                name: "spread".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.25,
-                min_value: Some(0.01),
-                max_value: Some(1.0),
-                display_name: "Spread".to_string(),
-                description: Some(
-                    "Field range as a fraction of the image's larger dimension.".to_string(),
-                ),
-            },
-            EffectParameter {
-                name: "mode".to_string(),
-                param_type: ParamType::Enum {
-                    choices: &["Glow", "Contours", "Nearest fill"],
-                },
-                default_value: 0.0, // 0=Glow, 1=Contours, 2=Nearest fill
-                min_value: Some(0.0),
-                max_value: Some(2.0),
-                display_name: "Mode".to_string(),
-                description: Some(
-                    "0 = glow, 1 = contour bands, 2 = nearest-color fill.".to_string(),
-                ),
-            },
-            EffectParameter {
-                name: "intensity".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.0),
-                max_value: Some(2.0),
-                display_name: "Intensity".to_string(),
-                description: None,
-            },
-            EffectParameter {
-                name: "band_count".to_string(),
-                param_type: ParamType::Float,
-                default_value: 12.0,
-                min_value: Some(1.0),
-                max_value: Some(64.0),
-                display_name: "Band Count".to_string(),
-                description: Some("Contour rings across the range (mode 1).".to_string()),
-            },
+            ParamDef::new(
+                "threshold",
+                "Seed Threshold",
+                "Pixels brighter than this seed the distance field.",
+                Spec::float(0.15, 0.0, 1.0),
+            ),
+            ParamDef::new(
+                "spread",
+                "Spread",
+                "Field range as a fraction of the image's larger dimension.",
+                Spec::float(0.25, 0.01, 1.0),
+            ),
+            ParamDef::new(
+                "mode",
+                "Mode",
+                "0 = glow, 1 = contour bands, 2 = nearest-color fill.",
+                Spec::choice(0, &["Glow", "Contours", "Nearest fill"]),
+            ),
+            ParamDef::new(
+                "intensity",
+                "Intensity",
+                "",
+                Spec::float(1.0, 0.0, 2.0),
+            ),
+            ParamDef::new(
+                "band_count",
+                "Band Count",
+                "Contour rings across the range (mode 1).",
+                Spec::float(12.0, 1.0, 64.0),
+            ),
         ],
     });
     out
@@ -1785,11 +1477,11 @@ mod tests {
         let mut seen = 0;
         for info in registry.all() {
             for p in &info.parameters {
-                let ParamType::Enum { choices } = p.param_type else { continue };
+                let Some(choices) = p.options() else { continue };
                 seen += 1;
                 let last = choices.len() as f32 - 1.0;
-                assert_eq!((p.min_value, p.max_value), (Some(0.0), Some(last)), "{}.{}", info.name, p.name);
-                assert!((0.0..=last).contains(&p.default_value) && p.default_value.fract() == 0.0, "{}.{}", info.name, p.name);
+                assert_eq!(p.slot_range(), (0.0, last), "{}.{}", info.name, p.name);
+                assert!((0.0..=last).contains(&p.slot_default()) && p.slot_default().fract() == 0.0, "{}.{}", info.name, p.name);
             }
         }
         assert!(seen >= 19, "{seen}");

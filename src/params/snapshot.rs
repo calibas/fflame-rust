@@ -78,15 +78,7 @@ fn effects(rows: &mut Vec<Value>) {
     let mut all: Vec<_> = registry.all().filter(|e| e.provenance.is_builtin()).collect();
     all.sort_by(|a, b| a.name.cmp(&b.name));
     for e in all {
-        for p in &e.parameters {
-            // The Effects panel's own fallback for a float with no range.
-            let (min, max) = match p.param_type {
-                crate::variations::ParamType::Float => (p.min_value.or(Some(0.0)), p.max_value.or(Some(1.0))),
-                _ => (p.min_value, p.max_value),
-            };
-            let (control, range, choices) = control_of(&p.param_type, min, max, false);
-            rows.push(row("effect", &e.name, &p.name, &p.display_name, p.description.as_deref().unwrap_or(""), control, f64::from(p.default_value), range, choices, false, false));
-        }
+        rows.extend(e.parameters.iter().map(|p| def_row("effect", &e.name, p)));
     }
 }
 

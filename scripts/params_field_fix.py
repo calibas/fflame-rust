@@ -29,7 +29,7 @@ for m in re.finditer(r"error\[E0609\]: no field `(\w+)` on type `&?(?:params::)?
         sites[path].add((line, col, field))
 
 # A `Cow` name, label or hint where a `&str` was (`p.name` -> `&*p.name`).
-for m in re.finditer(r"error\[E0(?:308|507)\]: (?:mismatched types|cannot move out of `[\w.]+` which is behind a shared reference)\n\s*--> ([^:\n]+):(\d+):(\d+)\n(?:.*\n){0,3}?.*(?:found `Cow<'_, str>`|does not implement the `Copy` trait)", text):
+for m in re.finditer(r"error\[E0(?:308|507)\]: (?:mismatched types|cannot move out of `[\w.]+` which is behind a shared reference)\n\s*--> ([^:\n]+):(\d+):(\d+)\n(?:.*\n){0,3}?.*(?:expected `&(?:str|_)`, found `Cow<'_, str>`|does not implement the `Copy` trait)", text):
     path, line, col = m.group(1).replace("\\", "/"), int(m.group(2)), int(m.group(3))
     sites[path].add((line, col, "&*"))
 

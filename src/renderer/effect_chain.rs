@@ -1719,16 +1719,11 @@ mod gpu_tests {
         registry.remove_by_name(&multiply);
     }
 
-    /// What a config reads of an effect: each parameter's name, type (its
-    /// Debug names its kind and an enum's choices), default, range, label
-    /// and hint, in order.
+    /// What a config reads of an effect: its parameters' definitions --
+    /// name, kind, default, range, label and hint -- in order.
     #[cfg(feature = "lang")]
-    #[allow(clippy::type_complexity)]
-    fn values(i: &crate::effects::EffectInfo) -> Vec<(String, String, f32, Option<f32>, Option<f32>, String, Option<String>)> {
-        i.parameters
-            .iter()
-            .map(|p| (p.name.clone(), format!("{:?}", p.param_type), p.default_value, p.min_value, p.max_value, p.display_name.clone(), p.description.clone()))
-            .collect()
+    fn values(i: &crate::effects::EffectInfo) -> &[crate::params::ParamDef] {
+        &i.parameters
     }
 
     /// The D1 checks that need no pixels, for a built-in's twin: the
@@ -1757,7 +1752,7 @@ mod gpu_tests {
         if a.len() != b.len() {
             failures.push(format!("{builtin}: {} parameters, its WGSL {}", a.len(), b.len()));
         }
-        for (t, w) in a.iter().zip(&b) {
+        for (t, w) in a.iter().zip(b) {
             if t != w {
                 failures.push(format!("{builtin}: the twin's {t:?}
     the WGSL's  {w:?}"));
