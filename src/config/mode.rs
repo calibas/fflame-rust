@@ -170,16 +170,14 @@ impl Engine {
     }
 }
 
-/// The fields each engine owns ([`ENGINE_OWNED`]), listed once: their
-/// names, and a copy between two configs (all of them, or one by name).
-macro_rules! engine_owned {
-    ($($field:ident),* $(,)?) => {
-        /// The settings each engine keeps its own of: the palette and its
-        /// settings, the background, the tone map, the effects (and the
-        /// Rhai effects they carry), the lighting rig.
-        pub const ENGINE_OWNED: &[&str] = &[$(stringify!($field)),*];
+/// A class of `FractalConfig` fields, listed once: their names, and a
+/// copy between two configs (all of them, or one by name).
+macro_rules! field_class {
+    ($(#[$doc:meta])* $list:ident, $copy:ident: $($field:ident),* $(,)?) => {
+        $(#[$doc])*
+        pub const $list: &[&str] = &[$(stringify!($field)),*];
 
-        fn copy_owned(from: &FractalConfig, to: &mut FractalConfig, only: Option<&str>) {
+        fn $copy(from: &FractalConfig, to: &mut FractalConfig, only: Option<&str>) {
             $(if only.is_none_or(|name| name == stringify!($field)) {
                 to.$field = from.$field.clone();
             })*
@@ -187,7 +185,11 @@ macro_rules! engine_owned {
     };
 }
 
-engine_owned!(
+field_class!(
+    /// The settings each engine keeps its own of: the palette and its
+    /// settings, the background, the tone map, the effects (and the Rhai
+    /// effects they carry), the lighting rig.
+    ENGINE_OWNED, copy_owned:
     palette, palette_rotation, palette_size, palette_squeeze, palette_squeeze_mode,
     palette_squeeze_falloff, palette_log_strength, palette_reverse, background_color,
     tonemap_mode, highlight_mode, tonemap_curve, use_curve, exposure, gamma, gamma_threshold,
@@ -196,21 +198,23 @@ engine_owned!(
     density_effects, color_effects, custom_effects, solid_shading,
 );
 
+field_class!(
+    /// What the flame alone reads -- its camera, projection, depth,
+    /// filter, iteration, colour-mode and Focused Rendering settings. The
+    /// flame's already, so a switch leaves them where they are; a flame
+    /// seeded into an empty config brings its own ([`seed_flame`]).
+    FLAME_ONLY, copy_flame_only:
+    preserve_z, reset_orbits, zoom, pan_x, pan_y, rotation, camera_rotation_x,
+    camera_rotation_y, camera_bank, camera_x, camera_y, camera_z, perspective_strength,
+    dof_focus_distance, dof_blur_strength, fog_strength, fog_start, depth_density_compensation,
+    far_density_fade, far_density_fade_start, solid_strength, surface_thickness, filter_radius,
+    filter_blur_edges, density_scale, speed_factor, max_iterations, blend_factor,
+    use_dynamic_blend, color_mode, path_map_style, path_map_level, importance,
+    cylinder_targeting, cylinder_always, cylinder_trim, cylinder_trim_levels, word_removals,
+);
+
 /// What every engine shares: the picture's frame and its reproducibility.
 pub const SHARED: &[&str] = &["image_size", "deterministic_rng"];
-
-/// What the flame alone reads -- its camera, projection, depth, filter,
-/// iteration, colour-mode and Focused Rendering settings. The flame's
-/// already, so a switch leaves them where they are.
-pub const FLAME_ONLY: &[&str] = &[
-    "preserve_z", "reset_orbits", "zoom", "pan_x", "pan_y", "rotation", "camera_rotation_x",
-    "camera_rotation_y", "camera_bank", "camera_x", "camera_y", "camera_z", "perspective_strength",
-    "dof_focus_distance", "dof_blur_strength", "fog_strength", "fog_start", "depth_density_compensation",
-    "far_density_fade", "far_density_fade_start", "solid_strength", "surface_thickness", "filter_radius",
-    "filter_blur_edges", "density_scale", "speed_factor", "max_iterations", "blend_factor",
-    "use_dynamic_blend", "color_mode", "path_map_style", "path_map_level", "importance",
-    "cylinder_targeting", "cylinder_always", "cylinder_trim", "cylinder_trim_levels", "word_removals",
-];
 
 /// The engines' own blocks, the mode, and the stash.
 pub const STRUCTURE: &[&str] = &["flame", "render_mode", "escape", "sim", "engine_settings"];
@@ -270,14 +274,57 @@ fn first_entry(config: &mut FractalConfig, engine: Engine) {
     copy_owned(&defaults, config, None);
 }
 
+/// Whether `config` draws its flame: a flame mode, a formula drawing the
+/// flame (the Flame Attractor, `IfsDef::needs_flame`), or a simulation
+/// whose layers the flame's transforms warp.
+pub fn needs_flame(config: &FractalConfig) -> bool {
+    match config.render_mode {
+        RenderMode::TwoD | RenderMode::ThreeD => true,
+        #[cfg(feature = "engine-escape")]
+        RenderMode::Escape => crate::escape::ifs::get_ifs(&config.escape.formula).is_some_and(|d| d.needs_flame),
+        #[cfg(feature = "engine-sim")]
+        RenderMode::Simulation => config.sim.use_transforms,
+        #[allow(unreachable_patterns)]
+        _ => false,
+    }
+}
+
+/// Whether entering `mode` (or choosing in it) must give `after` a flame:
+/// it draws one, and has none.
+fn wants_seed(after: &FractalConfig, mode: RenderMode) -> bool {
+    after.flame.transforms.is_empty() && needs_flame(&FractalConfig { render_mode: mode, ..after.clone() })
+}
+
+/// An empty flame, where one is drawn, given the app's own first flame
+/// (the first preset, the one it starts on): its transforms, its camera
+/// and iteration settings, and -- when `owned`, the flame engine entered
+/// for the first time -- its palette and tone map, so it looks as it was
+/// made to. A config made in another engine (a simulation, a script's
+/// escape picture) has an empty flame, and a flame mode, the Flame
+/// Attractor or a warp by its transforms drew nothing from it; every
+/// editing path that assumes a transform then had none to edit.
+pub fn seed_flame(config: &mut FractalConfig, owned: bool) {
+    let Some(preset) = crate::resources::presets::load_embedded_presets().ok().and_then(|p| p.into_iter().next()) else {
+        log::warn!("no preset to seed an empty flame with");
+        return;
+    };
+    config.flame = preset.flame.clone();
+    copy_flame_only(&preset, config, None);
+    if owned {
+        copy_owned(&preset, config, None);
+    }
+}
+
 /// `after` -- `before` with a choice made in it -- entered into `mode`:
 /// the mode; when that is another engine, the one left stashed and the
 /// one entered restored (or its defaults), what the choice itself set
-/// kept over them; and the 3D look when the result is a lit 3D view the
+/// kept over them; an empty flame seeded where one is drawn
+/// ([`seed_flame`]); and the 3D look when the result is a lit 3D view the
 /// engine was not showing ([`look_3d`]).
 pub fn enter(before: &FractalConfig, after: &mut FractalConfig, mode: RenderMode) {
     let (from, to) = (Engine::of(before.render_mode), Engine::of(mode));
     let mut restored = false;
+    let seed = wants_seed(after, mode);
     if from != to {
         // What the choice set of the engine-owned settings wins over the
         // entered engine's: a preset's palette, say.
@@ -293,9 +340,14 @@ pub fn enter(before: &FractalConfig, after: &mut FractalConfig, mode: RenderMode
         if !restored {
             first_entry(after, to);
         }
+        if seed {
+            seed_flame(after, to == Engine::Flame && !restored);
+        }
         for field in set_by_choice {
             copy_owned(&chosen, after, Some(field));
         }
+    } else if seed {
+        seed_flame(after, false);
     }
     after.render_mode = mode;
     // The 3D look on entering a lit view the engine was not showing: in
@@ -336,19 +388,26 @@ impl ConfigManager {
         mode: RenderMode,
     ) -> Result<UpdateType, ConfigError> {
         let before = self.active_config().clone();
+        // The mode shown, chosen again with nothing else: no step at all
+        // (a menu row for the active mode costs no undo entry), a flame to
+        // seed included -- seeding comes with a real change.
+        if changes.is_empty() && before.render_mode == mode {
+            return Ok(UpdateType::None);
+        }
         let mut after = before.clone();
         for (path, value) in &changes {
             let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, path, value.clone());
         }
-        if before.render_mode == mode {
+        if before.render_mode == mode && !wants_seed(&after, mode) {
             changes.extend(look_3d(&before, &after));
             if changes.is_empty() {
                 return Ok(UpdateType::None);
             }
             return self.update_batch(changes, description.to_string());
         }
-        // Another mode: a whole-config step, so the engines' settings move
-        // with it through undo and redo.
+        // Another mode, or a flame to seed: a whole-config step, so the
+        // engines' settings and the flame move with it through undo and
+        // redo.
         enter(&before, &mut after, mode);
         self.apply_config_edit(after, description.to_string())?;
         Ok(UpdateType::IterationReset)
@@ -367,7 +426,15 @@ mod tests {
     use crate::config::defaults::{ESCAPE_EXPOSURE, ESCAPE_GAMMA};
     use crate::scene::tonemap::ToneMapMode;
 
+    /// A config in `mode` with a one-transform flame, so no switch seeds
+    /// one (`a_flame_is_seeded_where_one_is_drawn` covers that).
     fn in_mode(mode: RenderMode) -> FractalConfig {
+        FractalConfig { render_mode: mode, ..crate::resources::presets::create_default_preset() }
+    }
+
+    /// A config in `mode` whose flame is empty, as a simulation's or a
+    /// script-built escape picture's is.
+    fn empty_flame_in(mode: RenderMode) -> FractalConfig {
         FractalConfig { render_mode: mode, ..FractalConfig::default() }
     }
 
@@ -539,6 +606,53 @@ mod tests {
             for f in class {
                 assert!(fields.contains(f), "`{f}` is classified but is no field of FractalConfig");
             }
+        }
+    }
+    /// Where the config draws its flame and has none, it is given the
+    /// app's first flame in the same undo step: a flame mode entered from
+    /// a simulation (with the preset's look, the flame engine's first
+    /// entry), the Flame Attractor chosen in escape-time (escape keeping
+    /// its own look). A flame that has transforms is never replaced.
+    #[test]
+    fn a_flame_is_seeded_where_one_is_drawn() {
+        let preset = crate::resources::presets::load_embedded_presets().expect("presets").remove(0);
+        assert!(!preset.flame.transforms.is_empty());
+
+        let mut m = ConfigManager::new(empty_flame_in(RenderMode::Simulation));
+        m.switch_mode(RenderMode::TwoD).expect("to the flame");
+        let c = m.active_config();
+        assert_eq!(c.flame.transforms.len(), preset.flame.transforms.len(), "seeded");
+        assert_eq!((c.zoom, owned_json(c)), (preset.zoom, owned_json(&preset)), "the preset's view and look");
+        m.undo().expect("undo");
+        assert!(m.active_config().flame.transforms.is_empty(), "one undo step");
+        assert_eq!(m.active_config().render_mode, RenderMode::Simulation);
+
+        // A flame with transforms stays.
+        let mut m = ConfigManager::new(in_mode(RenderMode::Simulation));
+        let flame = serde_json::to_value(&m.active_config().flame).expect("flame");
+        m.switch_mode(RenderMode::TwoD).expect("to the flame");
+        assert_eq!(serde_json::to_value(&m.active_config().flame).expect("flame"), flame);
+
+        // The Flame Attractor, chosen in escape-time.
+        #[cfg(feature = "engine-escape")]
+        {
+            let mut escape = empty_flame_in(RenderMode::Escape);
+            escape.exposure = 3.0;
+            let mut m = ConfigManager::new(escape);
+            m.choose(vec![(ConfigPath::EscapeFormula, ConfigValue::String("ifs_flame".into()))], "history.param.escape_formula", RenderMode::Escape)
+                .expect("choose");
+            let c = m.active_config();
+            assert_eq!((c.escape.formula.as_str(), c.flame.transforms.len()), ("ifs_flame", preset.flame.transforms.len()));
+            assert_eq!(c.exposure, 3.0, "escape keeps its own look");
+        }
+
+        // A simulation warped by the flame's transforms.
+        #[cfg(feature = "engine-sim")]
+        {
+            let mut m = ConfigManager::new(empty_flame_in(RenderMode::Simulation));
+            m.choose(vec![(ConfigPath::SimUseTransforms, true.into())], "history.param.sim_use_transforms", RenderMode::Simulation)
+                .expect("choose");
+            assert_eq!(m.active_config().flame.transforms.len(), preset.flame.transforms.len());
         }
     }
 }

@@ -1739,7 +1739,14 @@ fn render_model_section(
         .on_hover_text(t!("sim_panel.use_transforms_tip"))
         .changed()
     {
-        let _ = config_manager.update_param(ConfigPath::SimUseTransforms, use_transforms.into());
+        // Through `choose` in the mode shown: a warp by the flame's
+        // transforms needs a flame, which an empty one is given
+        // (`config::mode::seed_flame`) in the same undo step.
+        let _ = super::render_mode::apply_with_look(
+            config_manager,
+            vec![(ConfigPath::SimUseTransforms, use_transforms.into())],
+            "history.param.sim_use_transforms",
+        );
     }
     ui.horizontal(|ui| {
         ui.label(t!("sim_panel.layered_presets").as_ref());

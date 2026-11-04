@@ -225,7 +225,9 @@ the mode, and what entering implies (the engines' settings swapped, the
 -- a preset's exposure -- wins over the entered engine's own;
 `switch_mode` is `choose` with no changes, and `apply_with_look` is
 `choose` in the current mode (a terrain switched on). `enter_snapshot`
-does the same to a whole-config edit. The choices:
+does the same to a whole-config edit. Where the result draws the flame
+and the flame is empty (a simulation's), it is given the first preset's
+in the same step (`seed_flame`; [CONFIG.md](CONFIG.md)). The choices:
 
 | Panel | Choices that enter the mode |
 |---|---|
