@@ -25,7 +25,8 @@ use pyo3::types::PyDict;
 
 use fractal_flame_wgpu::config::FractalConfig;
 use fractal_flame_wgpu::scene::transforms::{RenderMode, Transform};
-use fractal_flame_wgpu::script::{ParamDecl, ParamValue, ScriptHost};
+use fractal_flame_wgpu::params::{ParamDef, ParamKind};
+use fractal_flame_wgpu::script::{ParamValue, ScriptHost};
 use fractal_flame_wgpu::variations::global_registry;
 
 /// A complete flame: the model plus its camera, colour and render
@@ -504,25 +505,25 @@ fn script_err(e: fractal_flame_wgpu::script::ScriptError) -> PyErr {
 /// Turn one Python value into the `ParamValue` the script's declaration
 /// calls for. Mirrors the app's `generate --set` coercion, including
 /// naming a choice by its option text or its index.
-fn coerce_param(key: &str, value: &Bound<'_, PyAny>, decl: Option<&ParamDecl>) -> PyResult<ParamValue> {
+fn coerce_param(key: &str, value: &Bound<'_, PyAny>, decl: Option<&ParamDef>) -> PyResult<ParamValue> {
     let wrong = |want: &str| {
         PyValueError::new_err(format!("parameter {key:?} expects {want}"))
     };
-    match decl {
-        Some(ParamDecl::Float { .. }) => Ok(ParamValue::Float(
+    match decl.map(|d| &d.kind) {
+        Some(ParamKind::Float { .. }) => Ok(ParamValue::Float(
             value.extract::<f64>().map_err(|_| wrong("a number"))?,
         )),
-        Some(ParamDecl::Int { .. }) => Ok(ParamValue::Int(
+        Some(ParamKind::Int { .. }) => Ok(ParamValue::Int(
             value.extract::<i64>().map_err(|_| wrong("a whole number"))?,
         )),
-        Some(ParamDecl::Bool { .. }) => Ok(ParamValue::Bool(
+        Some(ParamKind::Bool { .. }) => Ok(ParamValue::Bool(
             value.extract::<bool>().map_err(|_| wrong("True or False"))?,
         )),
-        Some(ParamDecl::Text { .. }) => Ok(ParamValue::Text(
+        Some(ParamKind::Text { .. }) => Ok(ParamValue::Text(
             value.extract::<String>().map_err(|_| wrong("a string"))?,
         )),
         // Colours arrive as "#ff8800" or an (r, g, b) triple in 0..1.
-        Some(ParamDecl::Color { .. }) => {
+        Some(ParamKind::Color { .. }) => {
             if let Ok(text) = value.extract::<String>() {
                 return fractal_flame_wgpu::script::color::ScriptColor::from_hex(&text)
                     .map(|c| ParamValue::Color(c.to_rgb()))
@@ -533,7 +534,7 @@ fn coerce_param(key: &str, value: &Bound<'_, PyAny>, decl: Option<&ParamDecl>) -
                 .map_err(|_| wrong("a hex string like \"#ff8800\" or an (r, g, b) triple"))?;
             Ok(ParamValue::Color(rgb))
         }
-        Some(ParamDecl::Choice { options, .. }) => {
+        Some(ParamKind::Choice { options, .. }) => {
             // By option text (case-insensitively) or by index.
             let idx = if let Ok(s) = value.extract::<String>() {
                 options.iter().position(|o| o.eq_ignore_ascii_case(&s))
@@ -545,7 +546,7 @@ fn coerce_param(key: &str, value: &Bound<'_, PyAny>, decl: Option<&ParamDecl>) -
             idx.map(ParamValue::Choice).ok_or_else(|| {
                 PyValueError::new_err(format!(
                     "parameter {key:?} expects one of [{}] (by name or index), got {}",
-                    options.join(", "),
+                    options.iter().collect::<Vec<_>>().join(", "),
                     value.repr().map(|r| r.to_string()).unwrap_or_default()
                 ))
             })
@@ -625,7 +626,7 @@ fn run_script(
     if let Some(dict) = params {
         for (key, value) in dict.iter() {
             let key: String = key.extract()?;
-            let decl = declared.iter().find(|d| d.key() == key);
+            let decl = declared.iter().find(|d| d.name == key);
             let parsed = coerce_param(&key, &value, decl)?;
             supplied.insert(key, parsed);
         }

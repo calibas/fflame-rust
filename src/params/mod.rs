@@ -302,6 +302,153 @@ pub fn from_api(p: &crate::api::types::ApiVariationParameter, float: (f32, f32))
     ParamDef::owned(p.name.clone(), p.display_name.clone(), p.description.clone().unwrap_or_default(), kind)
 }
 
+/// A script's parameter as the gallery and the script corpus spell it
+/// (`list_scripts`, `export_scripts_json`): `type` (`float`, `int`,
+/// `bool`, `choice`, `text`, `color`), `key`, `label`, `default`, and a
+/// kind's own -- a number's `min` and `max` (an angle's `angle: true`),
+/// a choice's `options`, a text's `max_len`.
+pub fn script_json(d: &ParamDef) -> serde_json::Value {
+    use serde_json::json;
+    let (key, label) = (&d.name, &d.label);
+    match &d.kind {
+        ParamKind::Float { default, min, max, angle: false, .. } => json!({ "type": "float", "key": key, "label": label, "default": default, "min": min, "max": max }),
+        ParamKind::Float { default, min, max, angle: true, .. } => json!({ "type": "float", "key": key, "label": label, "default": default, "min": min, "max": max, "angle": true }),
+        ParamKind::Int { default, min, max, .. } => json!({ "type": "int", "key": key, "label": label, "default": default, "min": min, "max": max }),
+        ParamKind::Bool { default } => json!({ "type": "bool", "key": key, "label": label, "default": default }),
+        ParamKind::Choice { default, options } => json!({ "type": "choice", "key": key, "label": label, "options": options.iter().collect::<Vec<_>>(), "default": default }),
+        ParamKind::Text { default, max_len } => json!({ "type": "text", "key": key, "label": label, "default": default, "max_len": max_len }),
+        ParamKind::Color { default } => json!({ "type": "color", "key": key, "label": label, "default": default }),
+    }
+}
+
+/// A value given for a parameter from outside: the CLI's `--set` text,
+/// or the script module's JSON.
+#[derive(Clone, Copy, Debug)]
+pub enum Given<'a> {
+    Text(&'a str),
+    Json(&'a serde_json::Value),
+}
+
+impl Given<'_> {
+    /// As an error shows it.
+    fn shown(&self) -> String {
+        match self {
+            Given::Text(t) => format!("`{t}`"),
+            Given::Json(v) => v.to_string(),
+        }
+    }
+}
+
+/// A value given for `def`, read as its kind: a number, a whole number,
+/// true/false (`yes`/`on`/`1` as text), text, a choice by its option's
+/// name (in any case) or its index, a colour as `#rrggbb` (or `[r, g, b]`
+/// in JSON).
+pub fn parse(def: &ParamDef, given: Given) -> Result<Value, String> {
+    let key = &def.name;
+    let wrong = |want: &str| format!("`{key}` expects {want}, got {}", given.shown());
+    let text = match given {
+        Given::Text(t) => Some(t),
+        Given::Json(v) => v.as_str(),
+    };
+    let json = match given {
+        Given::Json(v) => Some(v),
+        Given::Text(_) => None,
+    };
+    Ok(match &def.kind {
+        ParamKind::Float { .. } => Value::Float(match given {
+            Given::Text(t) => t.parse::<f64>().map_err(|_| wrong("a number"))?,
+            Given::Json(v) => v.as_f64().ok_or_else(|| wrong("a number"))?,
+        }),
+        ParamKind::Int { .. } => Value::Int(match given {
+            Given::Text(t) => t.parse::<i64>().map_err(|_| wrong("a whole number"))?,
+            Given::Json(v) => v.as_i64().ok_or_else(|| wrong("a whole number"))?,
+        }),
+        ParamKind::Bool { .. } => Value::Bool(match given {
+            Given::Text(t) => match t.to_ascii_lowercase().as_str() {
+                "true" | "yes" | "on" | "1" => true,
+                "false" | "no" | "off" | "0" => false,
+                _ => return Err(wrong("true/false")),
+            },
+            Given::Json(v) => v.as_bool().ok_or_else(|| wrong("true/false"))?,
+        }),
+        ParamKind::Text { .. } => Value::Text(text.ok_or_else(|| wrong("a string"))?.to_string()),
+        ParamKind::Choice { options, .. } => {
+            let by_name = text.and_then(|t| options.iter().position(|o| o.eq_ignore_ascii_case(t)));
+            let by_index = match given {
+                Given::Text(t) => t.parse::<usize>().ok(),
+                Given::Json(v) => v.as_u64().map(|i| i as usize),
+            };
+            let picked = by_name.or(by_index.filter(|i| *i < options.len()));
+            Value::Choice(picked.ok_or_else(|| format!("`{key}` expects one of [{}], got {}", options.iter().collect::<Vec<_>>().join(", "), given.shown()))?)
+        }
+        ParamKind::Color { .. } => match (text, json.and_then(|v| v.as_array())) {
+            (Some(hex), _) => Value::Color(crate::script::color::ScriptColor::from_hex(hex).map_err(|e| format!("`{key}`: {e}"))?.to_rgb()),
+            (None, Some(a)) if a.len() == 3 => {
+                let mut rgb = [0f32; 3];
+                for (c, v) in rgb.iter_mut().zip(a) {
+                    *c = v.as_f64().ok_or_else(|| format!("`{key}` expects numbers in [r, g, b]"))? as f32;
+                }
+                Value::Color(rgb)
+            }
+            _ => return Err(format!("`{key}` expects \"#rrggbb\" or [r, g, b]")),
+        },
+    })
+}
+
+/// Values given by key, each read as its parameter's kind ([`parse`]):
+/// an unknown key is an error that names the known ones.
+pub fn parse_all<'a>(defs: &[ParamDef], given: impl IntoIterator<Item = (&'a str, Given<'a>)>) -> Result<std::collections::HashMap<String, Value>, String> {
+    let mut out = std::collections::HashMap::new();
+    for (key, value) in given {
+        let def = defs.iter().find(|d| d.name == key).ok_or_else(|| {
+            let known: Vec<&str> = defs.iter().map(|d| &*d.name).collect();
+            let has = if known.is_empty() { " (it declares none)".to_string() } else { format!(" (has: {})", known.join(", ")) };
+            format!("script has no parameter `{key}`{has}")
+        })?;
+        out.insert(key.to_string(), parse(def, value)?);
+    }
+    Ok(out)
+}
+
+/// A value supplied for `def` -- by the panel, `--set`, Python, one
+/// script calling another -- as its kind holds it: a value of the kind
+/// as it is; a choice named or numbered; a whole number for a float or
+/// the nearest for an int; a hex colour; a number or a switch as text.
+///
+/// The DEFINITION decides the type, not the value: a caller cannot know
+/// what the script it calls declares, so `run_script("x", #{ scheme:
+/// "Triadic" })` hands over a string where a choice is wanted. Resolving
+/// it here means every route in agrees, instead of each coercing its own
+/// way.
+pub fn coerce(def: &ParamDef, value: Value) -> Result<Value, String> {
+    let key = &def.name;
+    Ok(match (&def.kind, value) {
+        (k, v) if k.holds(&v) => v,
+        (ParamKind::Choice { options, .. }, Value::Text(name)) => match options.iter().position(|o| o.eq_ignore_ascii_case(name.trim())) {
+            Some(i) => Value::Choice(i),
+            None => return Err(format!("`{key}` expects one of [{}], got `{name}`", options.iter().collect::<Vec<_>>().join(", "))),
+        },
+        (ParamKind::Choice { options, .. }, Value::Int(i)) => {
+            let i = i.max(0) as usize;
+            if i >= options.len() {
+                return Err(format!("`{key}` expects one of [{}], got index {i}", options.iter().collect::<Vec<_>>().join(", ")));
+            }
+            Value::Choice(i)
+        }
+        // Whole numbers are numbers.
+        (ParamKind::Float { .. }, Value::Int(i)) => Value::Float(i as f64),
+        (ParamKind::Int { .. }, Value::Float(f)) => Value::Int(f.round() as i64),
+        (ParamKind::Color { .. }, Value::Text(text)) => Value::Color(crate::script::color::ScriptColor::from_hex(&text)?.to_rgb()),
+        (ParamKind::Text { .. }, other) => Value::Text(match other {
+            Value::Float(f) => f.to_string(),
+            Value::Int(i) => i.to_string(),
+            Value::Bool(b) => b.to_string(),
+            _ => return Err(format!("`{key}` expects text")),
+        }),
+        (_, other) => return Err(format!("`{key}` was given an unusable value: {other:?}")),
+    })
+}
+
 /// A built-in's kind, for [`ParamDef::new`]. Its numbers are f32, the
 /// GPU kinds' slots, so a default is the f32 its literal names, and the
 /// f64 the definition stores holds it exactly.

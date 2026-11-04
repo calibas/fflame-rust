@@ -9,7 +9,8 @@ use std::path::Path;
 
 use crate::config::fractal_config::FractalConfig;
 
-use super::{ParamDecl, ParamValue, ScriptHost, ScriptKind};
+use super::{ParamValue, ScriptHost, ScriptKind};
+use crate::params::{Given, ParamDef, ParamKind};
 
 /// Run a script and write the resulting `.fflame`.
 ///
@@ -86,27 +87,28 @@ pub fn generate_mode(
             println!("  (no parameters)");
         }
         for p in &meta.params {
-            match p {
-                ParamDecl::Color { key, default, .. } => println!(
+            let key = &p.name;
+            match &p.kind {
+                ParamKind::Color { default } => println!(
                     "  {key}: colour = {}",
                     crate::script::color::ScriptColor::from_rgb(*default).to_hex()
                 ),
-                ParamDecl::Float { key, default, min, max, .. } => {
+                ParamKind::Float { default, min, max, .. } => {
                     println!("  {key}: number = {default}  [{min} … {max}]")
                 }
-                ParamDecl::Int { key, default, min, max, .. } => {
+                ParamKind::Int { default, min, max, .. } => {
                     println!("  {key}: integer = {default}  [{min} … {max}]")
                 }
-                ParamDecl::Bool { key, default, .. } => {
+                ParamKind::Bool { default } => {
                     println!("  {key}: true/false = {default}")
                 }
-                ParamDecl::Text { key, default, .. } => {
+                ParamKind::Text { default, .. } => {
                     println!("  {key}: text = \"{default}\"")
                 }
-                ParamDecl::Choice { key, options, default, .. } => println!(
+                ParamKind::Choice { options, default } => println!(
                     "  {key}: one of [{}] = {}",
-                    options.join(", "),
-                    options.get(*default).map(String::as_str).unwrap_or("")
+                    options.iter().collect::<Vec<_>>().join(", "),
+                    options.get(*default).unwrap_or("")
                 ),
             }
         }
@@ -196,71 +198,12 @@ pub fn generate_mode(
     }
 }
 
-/// Turn `key=value` strings into typed values using the declarations.
-fn resolve_sets(
-    sets: &[String],
-    decls: &[ParamDecl],
-) -> Result<HashMap<String, ParamValue>, String> {
-    let mut out = HashMap::new();
-    for raw in sets {
-        let (key, value) = raw
-            .split_once('=')
-            .ok_or_else(|| format!("--set expects key=value, got `{raw}`"))?;
-        let decl = decls
-            .iter()
-            .find(|d| d.key() == key)
-            .ok_or_else(|| {
-                let known: Vec<&str> = decls.iter().map(ParamDecl::key).collect();
-                format!(
-                    "script has no parameter `{key}`{}",
-                    if known.is_empty() {
-                        " (it declares none)".to_string()
-                    } else {
-                        format!(" (has: {})", known.join(", "))
-                    }
-                )
-            })?;
-
-        let parsed = match decl {
-            ParamDecl::Color { .. } => ParamValue::Color(
-                crate::script::color::ScriptColor::from_hex(value)
-                    .map_err(|e| format!("`{key}`: {e}"))?
-                    .to_rgb(),
-            ),
-            ParamDecl::Float { .. } => ParamValue::Float(
-                value
-                    .parse::<f64>()
-                    .map_err(|_| format!("`{key}` expects a number, got `{value}`"))?,
-            ),
-            ParamDecl::Int { .. } => ParamValue::Int(
-                value
-                    .parse::<i64>()
-                    .map_err(|_| format!("`{key}` expects a whole number, got `{value}`"))?,
-            ),
-            ParamDecl::Bool { .. } => ParamValue::Bool(
-                match value.to_ascii_lowercase().as_str() {
-                    "true" | "yes" | "on" | "1" => true,
-                    "false" | "no" | "off" | "0" => false,
-                    _ => return Err(format!("`{key}` expects true/false, got `{value}`")),
-                },
-            ),
-            ParamDecl::Text { .. } => ParamValue::Text(value.to_string()),
-            ParamDecl::Choice { options, .. } => {
-                // Accept the option's name or its index.
-                let idx = options
-                    .iter()
-                    .position(|o| o.eq_ignore_ascii_case(value))
-                    .or_else(|| value.parse::<usize>().ok().filter(|i| *i < options.len()))
-                    .ok_or_else(|| {
-                        format!(
-                            "`{key}` expects one of [{}], got `{value}`",
-                            options.join(", ")
-                        )
-                    })?;
-                ParamValue::Choice(idx)
-            }
-        };
-        out.insert(key.to_string(), parsed);
-    }
-    Ok(out)
+/// Turn `key=value` strings into typed values using the declarations
+/// (`params::parse_all`, as the script module reads its JSON).
+fn resolve_sets(sets: &[String], decls: &[ParamDef]) -> Result<HashMap<String, ParamValue>, String> {
+    let pairs = sets
+        .iter()
+        .map(|raw| raw.split_once('=').map(|(k, v)| (k, Given::Text(v))).ok_or_else(|| format!("--set expects key=value, got `{raw}`")))
+        .collect::<Result<Vec<_>, _>>()?;
+    crate::params::parse_all(decls, pairs)
 }

@@ -238,6 +238,19 @@ Each a commit, each behaviour-preserving and held by tests:
      the CLI's `--set` and the script module's parameters;
    - the Scripts panel and the palette generator draw through the
      renderer with a `LocalStore`.
+
+   **Done**: `ScriptMeta.params` are `ParamDef`s, built owned by the
+   CPU API's `param_*` (a script's float keeps its f64 default exactly);
+   the host's coercion is `params::coerce`; `params::parse` /
+   `parse_all` read a value from the CLI's text and the script
+   module's JSON by one set of rules and messages; `params::script_json`
+   spells a script's parameter for the gallery and the corpus, which is
+   byte-identical. The python bindings convert from Python objects in
+   `ParamKind` terms (their own route, pyo3's types). The snapshot's
+   script choices now carry their indices as their range, as every
+   other kind's do (the old dump wrote 0..0 for them). A script's
+   bounded number no longer clamps a stored value by being drawn
+   (`Edits`), as every other kind's.
 9. **The compiler**: `ir::Param` gives `ParamDef` directly, and the four
    converters go.
 10. **Everywhere**: conditions and grids in every panel (falls out of

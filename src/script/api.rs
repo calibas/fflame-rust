@@ -22,7 +22,8 @@ use crate::scene::transforms::Transform;
 
 use super::host::ScriptState;
 use super::color::ScriptColor;
-use super::{humanize, ParamDecl, ParamValue, ScriptFlags, ScriptKind};
+use super::{humanize, ParamValue, ScriptFlags, ScriptKind};
+use crate::params::{Options, ParamDef, ParamKind};
 use crate::scene::palette::ColorStop;
 
 /// Accept a whole number wherever a decimal is expected.
@@ -435,14 +436,7 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
             if min > max {
                 return Err(err(format!("param `{key}`: min ({min}) is above max ({max})")));
             }
-            let decl = ParamDecl::Float {
-                key: key.to_string(),
-                label: humanize(key),
-                default,
-                min,
-                max,
-                angle: false,
-            };
+            let decl = ParamDef::owned(key.to_string(), humanize(key), "", ParamKind::Float { default, min, max, free: false, log: false, angle: false });
             match s.borrow_mut().declare(decl).map_err(err)? {
                 ParamValue::Float(v) => Ok(v.clamp(min, max)),
                 other => Err(err(format!("param `{key}`: expected a number, got {other:?}"))),
@@ -456,7 +450,7 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         if min > max {
             return Err(err(format!("param `{key}`: min ({min}) is above max ({max})")));
         }
-        let decl = ParamDecl::Float { key: key.to_string(), label: humanize(key), default, min, max, angle: true };
+        let decl = ParamDef::owned(key.to_string(), humanize(key), "", ParamKind::Float { default, min, max, free: false, log: false, angle: true });
         match s.borrow_mut().declare(decl).map_err(err)? {
             ParamValue::Float(v) => Ok(v.clamp(min, max)),
             other => Err(err(format!("param `{key}`: expected an angle, got {other:?}"))),
@@ -483,11 +477,7 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         "param_color",
         move |key: &str, default: &str| -> Result<ScriptColor, Box<EvalAltResult>> {
             let fallback = ScriptColor::from_hex(default).map_err(err)?;
-            let decl = ParamDecl::Color {
-                key: key.to_string(),
-                label: humanize(key),
-                default: fallback.to_rgb(),
-            };
+            let decl = ParamDef::owned(key.to_string(), humanize(key), "", ParamKind::Color { default: fallback.to_rgb() });
             match s.borrow_mut().declare(decl).map_err(err)? {
                 ParamValue::Color(rgb) => Ok(ScriptColor::from_rgb(rgb)),
                 other => Err(err(format!("param `{key}`: expected a colour, got {other:?}"))),
@@ -502,13 +492,7 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
             if min > max {
                 return Err(err(format!("param `{key}`: min ({min}) is above max ({max})")));
             }
-            let decl = ParamDecl::Int {
-                key: key.to_string(),
-                label: humanize(key),
-                default,
-                min,
-                max,
-            };
+            let decl = ParamDef::owned(key.to_string(), humanize(key), "", ParamKind::Int { default, min, max, free: false });
             match s.borrow_mut().declare(decl).map_err(err)? {
                 ParamValue::Int(v) => Ok(v.clamp(min, max)),
                 ParamValue::Float(v) => Ok((v as i64).clamp(min, max)),
@@ -521,11 +505,7 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
     engine.register_fn(
         "param_bool",
         move |key: &str, default: bool| -> Result<bool, Box<EvalAltResult>> {
-            let decl = ParamDecl::Bool {
-                key: key.to_string(),
-                label: humanize(key),
-                default,
-            };
+            let decl = ParamDef::owned(key.to_string(), humanize(key), "", ParamKind::Bool { default });
             match s.borrow_mut().declare(decl).map_err(err)? {
                 ParamValue::Bool(v) => Ok(v),
                 other => Err(err(format!("param `{key}`: expected true/false, got {other:?}"))),
@@ -538,12 +518,7 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         "param_string",
         move |key: &str, default: &str| -> Result<String, Box<EvalAltResult>> {
             const MAX_LEN: usize = 2048;
-            let decl = ParamDecl::Text {
-                key: key.to_string(),
-                label: humanize(key),
-                default: default.to_string(),
-                max_len: MAX_LEN,
-            };
+            let decl = ParamDef::owned(key.to_string(), humanize(key), "", ParamKind::Text { default: default.to_string().into(), max_len: MAX_LEN });
             match s.borrow_mut().declare(decl).map_err(err)? {
                 ParamValue::Text(v) => Ok(v.chars().take(MAX_LEN).collect()),
                 other => Err(err(format!("param `{key}`: expected text, got {other:?}"))),
@@ -562,12 +537,7 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
                 return Err(err(format!("param `{key}`: needs at least one option")));
             }
             let default = default.clamp(0, opts.len() as i64 - 1) as usize;
-            let decl = ParamDecl::Choice {
-                key: key.to_string(),
-                label: humanize(key),
-                options: opts.clone(),
-                default,
-            };
+            let decl = ParamDef::owned(key.to_string(), humanize(key), "", ParamKind::Choice { default, options: Options::Owned(opts.clone()) });
             let idx = match s.borrow_mut().declare(decl).map_err(err)? {
                 ParamValue::Choice(i) => i,
                 ParamValue::Int(i) => i.clamp(0, opts.len() as i64 - 1) as usize,
