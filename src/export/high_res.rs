@@ -8,8 +8,8 @@
 //! This allows exports of any resolution limited only by system RAM,
 //! while still using GPU for fast tonemapping.
 
-use egui_wgpu::wgpu::util::DeviceExt;
-use egui_wgpu::wgpu::*;
+use wgpu::util::DeviceExt;
+use wgpu::*;
 use rayon::prelude::*;
 
 use crate::config::FractalConfig;

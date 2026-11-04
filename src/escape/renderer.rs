@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use egui_wgpu::wgpu::{
+use wgpu::{
     self, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferBindingType,
     BufferDescriptor, BufferUsages, CommandEncoder, ComputePassDescriptor, ComputePipeline,

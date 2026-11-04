@@ -13,7 +13,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use egui_wgpu::wgpu::*;
+use wgpu::*;
 
 /// Attractor-bounds readback (shadow-map auto-fit).
 ///

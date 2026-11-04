@@ -6,7 +6,7 @@
 //! On desktop: Uses pollster::block_on() for synchronous rendering
 //! On WASM: Uses async rendering with spawn_local()
 
-use egui_wgpu::wgpu::*;
+use wgpu::*;
 
 use crate::config::FractalConfig;
 use crate::renderer::{render, NoProgress, RenderJob};

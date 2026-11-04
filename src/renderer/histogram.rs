@@ -4,7 +4,7 @@
 //! providing statistics useful for Levels-style tone mapping controls.
 
 use std::sync::Arc;
-use egui_wgpu::wgpu::*;
+use wgpu::*;
 
 /// Number of bins in the histogram
 pub const HISTOGRAM_BINS: usize = 256;

@@ -128,7 +128,7 @@ pub fn file_exists(relative_path: &Path) -> bool {
 
 // ===== WASM IMPLEMENTATION (localStorage) =====
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 pub fn read_file(key: &Path) -> StorageResult<String> {
     use wasm_bindgen::JsValue;
     use web_sys::window;
@@ -153,7 +153,7 @@ pub fn read_file(key: &Path) -> StorageResult<String> {
         .ok_or_else(|| StorageError::NotFound(format!("Key not found: {}", key_str)))
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 pub fn write_file(key: &Path, content: &str) -> StorageResult<()> {
     use web_sys::window;
 
@@ -176,7 +176,7 @@ pub fn write_file(key: &Path, content: &str) -> StorageResult<()> {
         )))
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 pub fn delete_file(key: &Path) -> StorageResult<()> {
     use web_sys::window;
 
@@ -199,7 +199,7 @@ pub fn delete_file(key: &Path) -> StorageResult<()> {
         )))
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 pub fn file_exists(key: &Path) -> bool {
     use web_sys::window;
 
@@ -210,6 +210,37 @@ pub fn file_exists(key: &Path) -> bool {
         }
     }
     false
+}
+
+// ===== WASI (wasm/python): no store =====
+//
+// The module keeps nothing between runs: the Python program owns its
+// files and hands the engine what it needs. Reads find nothing, so every
+// caller takes its first-run path.
+
+#[cfg(target_os = "wasi")]
+pub fn read_file(key: &Path) -> StorageResult<String> {
+    Err(StorageError::NotFound(format!("No store in this build: {}", key.display())))
+}
+
+#[cfg(target_os = "wasi")]
+pub fn write_file(_key: &Path, _content: &str) -> StorageResult<()> {
+    Err(StorageError::NotAvailable("No store in this build".to_string()))
+}
+
+#[cfg(target_os = "wasi")]
+pub fn delete_file(key: &Path) -> StorageResult<()> {
+    Err(StorageError::NotFound(format!("No store in this build: {}", key.display())))
+}
+
+#[cfg(target_os = "wasi")]
+pub fn file_exists(_key: &Path) -> bool {
+    false
+}
+
+#[cfg(target_os = "wasi")]
+pub fn list_entries(_prefix: &Path) -> StorageResult<Vec<String>> {
+    Ok(Vec::new())
 }
 
 /// Names of the entries stored directly under `prefix`.
@@ -247,7 +278,7 @@ pub fn list_entries(prefix: &Path) -> StorageResult<Vec<String>> {
     Ok(out)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 pub fn list_entries(prefix: &Path) -> StorageResult<Vec<String>> {
     use web_sys::window;
 

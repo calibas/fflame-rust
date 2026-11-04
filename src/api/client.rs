@@ -18,7 +18,7 @@ pub fn build_url(base_url: &str, path: &str) -> String {
 // WASM implementation
 // ============================================================================
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 mod wasm {
     use super::*;
     use wasm_bindgen::prelude::*;
@@ -282,8 +282,51 @@ mod wasm {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 pub use wasm::{api_put_binary_raw, api_request, api_request_raw};
+
+// ============================================================================
+// WASI (wasm/python): no network
+// ============================================================================
+
+#[cfg(target_os = "wasi")]
+mod wasi {
+    use super::*;
+
+    fn unavailable(url: &str) -> FetchError {
+        FetchError::Network(format!("No network in this build: {url}"))
+    }
+
+    pub async fn api_request_raw(
+        _method: &str,
+        url: &str,
+        _body: Option<String>,
+        _token: Option<&str>,
+    ) -> FetchResult<String> {
+        Err(unavailable(url))
+    }
+
+    pub async fn api_request<T: DeserializeOwned>(
+        _method: &str,
+        url: &str,
+        _body: Option<String>,
+        _token: Option<&str>,
+    ) -> FetchResult<T> {
+        Err(unavailable(url))
+    }
+
+    pub async fn api_put_binary_raw(
+        url: &str,
+        _data: &[u8],
+        _content_type: &str,
+        _token: &str,
+    ) -> FetchResult<()> {
+        Err(unavailable(url))
+    }
+}
+
+#[cfg(target_os = "wasi")]
+pub use wasi::{api_put_binary_raw, api_request, api_request_raw};
 
 // ============================================================================
 // Desktop stub (to be implemented)
