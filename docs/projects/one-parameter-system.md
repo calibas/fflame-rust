@@ -299,6 +299,12 @@ Each a commit, each behaviour-preserving and held by tests:
   other kind refuses them (`LayoutSpec::without_cpu`) rather than
   dropping them; moving that CPU machinery out of `sim::custom` would
   give them to every kind.
+- **The python bindings (`python/`, pyfflame) do not compile**, on
+  `main` as here: no gate builds them, and they predate the escape and
+  simulation render modes (`render_mode` matches `TwoD`/`ThreeD` alone)
+  and the config's current `zoom`/`pan` types. This branch's edits to
+  them (`ParamKind` in `coerce_param`) type-check; the five errors are
+  elsewhere (`cargo check` in `python/`, 2026-11-03).
 - **A CPU script's layout**: a script declares its parameters by calls
   (`param`, `param_choice`, ...), not a `PARAMS` map, so it has no
   conditions or grids to declare; a `param_show_if`-like call would
