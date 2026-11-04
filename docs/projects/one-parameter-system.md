@@ -266,12 +266,35 @@ Each a commit, each behaviour-preserving and held by tests:
    bounds, so nothing shipped moves (the snapshot and the corpora are
    unchanged).
 10. **Everywhere**: conditions and grids in every panel (falls out of
-    4-9), and a computed grid row in every kind.
+    4-9), and a computed grid row in every kind. **Done**: a computed
+    row is every kind's -- the checker gives the grid's cells as
+    parameters and the WGSL back end reads the first row's slot plus the
+    clamped row times the stride in the kind's own read (`slot_read`:
+    `fparam`/`cparam`, `get_param`, `mparam`), so a solid's template
+    offset is counted; the interpreter and the big-float evaluator read
+    the same parameter, and the derivative pass takes it as one. A Rhai
+    formula, colouring, solid, effect and variation records its layout
+    (`lang::rhai::plain_layout`: conditions and grids) where its panel
+    finds it (`escape::custom::param_layout`, `effects::custom::...`,
+    `variations::custom::...`). Not done, recorded below: a grid's fill
+    and warning outside a simulation, and a CPU script's layout.
 11. **Docs and gates**: VARIATIONS.md, EFFECTS.md, ESCAPE.md,
     SIMULATION.md, SCRIPTING.md and UI.md; the contract's `shape`
     checked; the visual suite.
 
 ## Found on the way, not addressed
+
+- **A grid's fill and warning outside a simulation** (step 10). They
+  are Rhai functions the CPU runs; only the simulation registry holds a
+  CPU script for a source (`sim::custom::with_script`, `params_map`,
+  the warning's `ctx` with the grid's size and pyramid reach). Every
+  other kind refuses them (`LayoutSpec::without_cpu`) rather than
+  dropping them; moving that CPU machinery out of `sim::custom` would
+  give them to every kind.
+- **A CPU script's layout**: a script declares its parameters by calls
+  (`param`, `param_choice`, ...), not a `PARAMS` map, so it has no
+  conditions or grids to declare; a `param_show_if`-like call would
+  give it them.
 
 - `quaternion_julia_solid` declares `w_slice` twice: the template's
   slice slot (its 7th parameter) and again as its 15th, so two Slice

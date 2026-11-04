@@ -341,10 +341,10 @@ pub fn render_escape_content(
     // Formula parameters, straight from the def (slider bounds and
     // tooltips included). Values read def defaults when unset — the
     // same value the shader's packer uses.
-    let formula_params = match (ifs_def, field) {
-        (Some(d), _) => d.parameters,
-        (None, Some(f)) => f.parameters,
-        (None, None) => formula.map_or(&[][..], |m| m.parameters),
+    let (formula_params, owner) = match (ifs_def, field) {
+        (Some(d), _) => (d.parameters, d.name),
+        (None, Some(f)) => (f.parameters, f.name),
+        (None, None) => formula.map_or((&[][..], ""), |m| (m.parameters, m.name)),
     };
     let program = formula.is_some_and(|m| m.has_feature(crate::escape::FormulaFeature::Program));
     // A compiled formula's `bailout` parameter is the bailout control
@@ -362,7 +362,8 @@ pub fn render_escape_content(
             |_, d| Some(esc.formula_params.get(&*d.name).copied().unwrap_or(d.slot_default())),
             |n| ConfigPath::EscapeFormulaParam { param: n.to_string() },
         );
-        let list = super::params::List::new(formula_params, "formula").hide(&hide);
+        let layout = layout_of(owner);
+        let list = super::params::List::new(formula_params, "formula").layout(layout.as_deref()).hide(&hide);
         super::params::list_with(ui, &mut store, &list, |ui, store, p| polar_row(ui, store.manager, formula_params, p));
     }
 
@@ -1218,18 +1219,33 @@ pub fn render_escape_content(
     }
 }
 
-/// One section's parameters (a colouring's, the texture layer's), read
-/// from `values` (the default where unset) and written at `path`.
+/// A custom formula's, colouring's or solid's parameter layout, by its
+/// name: its conditions and grids (`escape::custom::param_layout`).
+fn layout_of(name: &str) -> Option<std::sync::Arc<crate::params::layout::ParamLayout>> {
+    #[cfg(feature = "lang")]
+    return crate::escape::custom::param_layout(name);
+    #[cfg(not(feature = "lang"))]
+    {
+        let _ = name;
+        None
+    }
+}
+
+/// One section's parameters (a colouring's, the texture layer's, by
+/// `owner`'s layout), read from `values` (the default where unset) and
+/// written at `path`.
 fn param_list(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
+    owner: &str,
     defs: &[crate::params::ParamDef],
     salt: &str,
     values: &std::collections::BTreeMap<String, f32>,
     path: impl Fn(&str) -> ConfigPath,
 ) {
+    let layout = layout_of(owner);
     let mut store = super::params::ConfigStore::new(config_manager, |_, d| Some(values.get(&*d.name).copied().unwrap_or(d.slot_default())), path);
-    super::params::list(ui, &mut store, &super::params::List::new(defs, salt));
+    super::params::list(ui, &mut store, &super::params::List::new(defs, salt).layout(layout.as_deref()));
 }
 
 /// After a complex parameter's two parts, `p` its `.im`: the same point
@@ -2347,7 +2363,7 @@ fn show_coloring_section(
                     }
                 });
         });
-        param_list(ui, config_manager, coloring.parameters, "coloring", &esc.coloring_params, |n| ConfigPath::EscapeColoringParam { param: n.to_string() });
+        param_list(ui, config_manager, coloring.name, coloring.parameters, "coloring", &esc.coloring_params, |n| ConfigPath::EscapeColoringParam { param: n.to_string() });
         return;
     }
     if let Some(f) = field {
@@ -2401,7 +2417,7 @@ fn show_coloring_section(
                 }
             });
         }
-        param_list(ui, config_manager, coloring.parameters, "coloring", &esc.coloring_params, |n| ConfigPath::EscapeColoringParam { param: n.to_string() });
+        param_list(ui, config_manager, coloring.name, coloring.parameters, "coloring", &esc.coloring_params, |n| ConfigPath::EscapeColoringParam { param: n.to_string() });
         return;
     }
     let coloring = crate::escape::get_coloring(&esc.coloring);
@@ -2509,7 +2525,7 @@ fn show_coloring_section(
             }
         });
     }
-    param_list(ui, config_manager, coloring.parameters, "coloring", &esc.coloring_params, |n| ConfigPath::EscapeColoringParam { param: n.to_string() });
+    param_list(ui, config_manager, coloring.name, coloring.parameters, "coloring", &esc.coloring_params, |n| ConfigPath::EscapeColoringParam { param: n.to_string() });
 
     // ---- Texture layer ----
     // A second colouring blended into this one before the palette, so
@@ -2625,7 +2641,7 @@ fn texture_layer_controls(
             let _ = config_manager.update_param(ConfigPath::EscapeLayerWeight, w.into());
         }
     });
-    param_list(ui, config_manager, l.parameters, "layer", &layer.params, |n| ConfigPath::EscapeLayerParam { param: n.to_string() });
+    param_list(ui, config_manager, l.name, l.parameters, "layer", &layer.params, |n| ConfigPath::EscapeLayerParam { param: n.to_string() });
 }
 
 /// Pick a texture layer colouring as one undo step, with the values a
