@@ -2242,10 +2242,10 @@ fn show_shipped_docs() {
 /// deleted.
 ///
 /// This used to be enforced by canonicalizing a path and checking it
-/// against the user folder, because `ScriptOrigin::File` covered the
+/// against the user folder, because `ScriptOrigin::File` (now `ScriptHome`) covered the
 /// shipped `assets/scripts/` copies too. It is now structural: `delete`
 /// takes a stem and builds the key itself, so there is no path for a
-/// caller to aim elsewhere, and `ScriptOrigin::User` is the only origin
+/// caller to aim elsewhere, and `ScriptHome::Store` is the only home
 /// the panel offers a Delete button for.
 ///
 /// What is left to test is that the structure actually holds — a stem
@@ -2292,7 +2292,7 @@ script(\"Visibility Test\", \"generator\");
         .find(|e| e.id == stem)
         .expect("a saved script must be listed");
     assert_eq!(found.display_name, "Visibility Test");
-    assert_eq!(found.origin, super::library::ScriptOrigin::User);
+    assert_eq!(found.home, super::library::ScriptHome::Store);
     // The picker marks the user's own with a trailing asterisk.
     assert!(found.label().ends_with(" *"), "{}", found.label());
 
@@ -3945,7 +3945,7 @@ fn link_test_lock() -> std::sync::MutexGuard<'static, ()> {
 ///
 /// This is the hole that would otherwise open the moment browsing
 /// lands: a downloaded script saved locally becomes
-/// `ScriptOrigin::User`, and if trust were read from the origin, Save
+/// `ScriptHome::Store`, and if trust were read from the home, Save
 /// would launder away the cross-call restriction. The user chose to
 /// keep the script; they did not read it.
 #[test]
@@ -3973,7 +3973,8 @@ fn adopting_a_downloaded_script_keeps_it_untrusted() {
     let entries = super::library::discover(&crate::config::FractalConfig::default());
     let e = entries.iter().find(|e| e.id == stem).expect("listed");
     assert!(e.untrusted, "the library must carry it through to the panel");
-    assert_eq!(e.origin, super::library::ScriptOrigin::User, "it IS the user's copy");
+    assert_eq!(e.home, super::library::ScriptHome::Store, "it IS the user's copy");
+    assert_eq!(e.origin(), crate::provenance::Origin::Api, "but somebody else wrote it");
     assert!(e.label().ends_with(" ↓"), "and it is marked as such: {}", e.label());
 
     store::delete(stem).expect("cleanup");

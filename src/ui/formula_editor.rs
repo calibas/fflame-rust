@@ -241,7 +241,7 @@ impl FormulaEditorPanel {
         // built-in's, one typed by hand).
         if kind == EntryKind::Effect && checked.is_ok() {
             let with_id = lang::rhai::with_own_id(&text, &crate::scripted::mint_id());
-            if let Err(e) = crate::effects::custom::compile(&with_id, crate::provenance::Provenance::Custom) {
+            if let Err(e) = crate::effects::custom::compile(&with_id, crate::provenance::Provenance::Local) {
                 errors.push(e);
             }
         }
@@ -702,7 +702,7 @@ impl FormulaEditorPanel {
     pub fn edit_effect_as_rhai(&mut self, cm: &mut ConfigManager, density: bool, index: usize, builtin: &str) {
         let Some(text) = crate::effects::custom::builtin_twin_source(builtin) else { return };
         let source = lang::rhai::with_own_id(&text, &crate::scripted::mint_id());
-        let key = match crate::effects::custom::register(&source, crate::provenance::Provenance::Custom) {
+        let key = match crate::effects::custom::register(&source, crate::provenance::Provenance::Local) {
             Ok(key) => key,
             Err(e) => {
                 self.status = Some(t!("formula_editor.did_not_compile", entry = builtin, error = e).to_string());
@@ -751,7 +751,7 @@ impl FormulaEditorPanel {
             source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
             minted = true;
         }
-        let key = match crate::effects::custom::register(&source, crate::provenance::Provenance::Custom) {
+        let key = match crate::effects::custom::register(&source, crate::provenance::Provenance::Local) {
             Ok(key) => key,
             Err(e) => {
                 self.status = Some(t!("formula_editor.did_not_compile", entry = name, error = e).to_string());

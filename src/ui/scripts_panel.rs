@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use egui;
 
 use crate::config::FractalConfig;
-use crate::script::library::{self, ScriptEntry, ScriptOrigin};
+use crate::script::library::{self, ScriptEntry, ScriptHome};
 use crate::script::store;
 
 /// egui temp-data key the browser file picker writes into (WASM).
@@ -204,7 +204,7 @@ impl ScriptsPanel {
         &mut self,
         display_name: String,
         source: String,
-        origin: ScriptOrigin,
+        home: ScriptHome,
         untrusted: bool,
     ) {
         let kind = self
@@ -219,7 +219,7 @@ impl ScriptsPanel {
             display_name: display_name.clone(),
             kind,
             source: source.clone(),
-            origin,
+            home,
             untrusted,
         });
         self.opened_untrusted = untrusted;
@@ -340,7 +340,7 @@ impl ScriptsPanel {
             .ctx()
             .data_mut(|d| d.remove_temp::<String>(egui::Id::new(PENDING_SCRIPT_LOAD)))
         {
-            self.adopt_opened("Opened".to_string(), text, ScriptOrigin::External, false);
+            self.adopt_opened("Opened".to_string(), text, ScriptHome::External, false);
         }
 
         // No ScrollArea of our own: the host already scrolls this panel
@@ -514,7 +514,7 @@ impl ScriptsPanel {
                                 .file_stem()
                                 .map(|s| s.to_string_lossy().into_owned())
                                 .unwrap_or_else(|| "Opened".to_string());
-                            self.adopt_opened(name, text, ScriptOrigin::External, false);
+                            self.adopt_opened(name, text, ScriptHome::External, false);
                         }
                         Err(e) => self.status = Some(format!("Open failed: {e}")),
                     }
@@ -575,7 +575,7 @@ impl ScriptsPanel {
             use egui::Color32;
 
             let target = self.entries.get(self.selected).and_then(|e| {
-                (e.origin == ScriptOrigin::User).then(|| (e.display_name.clone(), e.id.clone()))
+                (e.home == ScriptHome::Store).then(|| (e.display_name.clone(), e.id.clone()))
             });
             let hint = match &target {
                 Some((name, stem)) => {
@@ -605,10 +605,7 @@ impl ScriptsPanel {
             }
         }
 
-        if matches!(
-            self.entries.get(self.selected).map(|e| &e.origin),
-            Some(ScriptOrigin::Builtin)
-        ) {
+        if self.entries.get(self.selected).is_some_and(|e| e.origin() == crate::provenance::Origin::Builtin) {
             ui.label(egui::RichText::new("built-in").weak());
         }
     }
@@ -767,14 +764,13 @@ impl ScriptsPanel {
         request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
     ) {
         use crate::app::script_cloud::ScriptCloudRequest as Req;
-        use crate::script::library::ScriptOrigin;
 
         let Some(entry) = self.entries.get(self.selected) else { return };
 
         // Only the user's own stored scripts can be published: a shipped
         // one is not theirs to publish, and an unsaved editor buffer has
         // no stem for the server to key on.
-        if entry.origin != ScriptOrigin::User {
+        if entry.home != ScriptHome::Store {
             ui.weak("Save this script first to publish it.");
             return;
         }
@@ -1193,9 +1189,9 @@ impl ScriptsPanel {
     }
 
     fn selected_is_shipped(&self) -> bool {
-        match self.entries.get(self.selected).map(|e| &e.origin) {
-            Some(ScriptOrigin::Builtin) | Some(ScriptOrigin::Shipped(_)) => true,
-            Some(ScriptOrigin::User) | Some(ScriptOrigin::External) => false,
+        match self.entries.get(self.selected).map(|e| &e.home) {
+            Some(ScriptHome::Embedded) | Some(ScriptHome::Shipped(_)) => true,
+            Some(ScriptHome::Store) | Some(ScriptHome::External) => false,
             None => false,
         }
     }

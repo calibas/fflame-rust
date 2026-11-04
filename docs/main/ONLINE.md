@@ -329,9 +329,13 @@ does not compile cannot be published. It can still be saved locally.
 ### Provenance
 
 Every registered variation and effect has a `Provenance`
-([provenance.rs](../../src/provenance.rs)):
+([provenance.rs](../../src/provenance.rs)), the registry's form of the
+one origin model every kind shares (`Origin`: `Builtin`, `Local`,
+`Api`), with the server's version on a download. A plug-in is `Local`
+in the registry whoever wrote it (the user keeps it: Clear Cache leaves
+it); the library's mark on its file says who wrote it.
 
-| | `Builtin` | `Api { version }` | `Custom` (the user's own Rhai) |
+| | `Builtin` | `Api { version }` | `Local` (the user's own Rhai) |
 | --- | --- | --- | --- |
 | shipped with the app | yes | no | no |
 | third-party code | no | yes | yes |

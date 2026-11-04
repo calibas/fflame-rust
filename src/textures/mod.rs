@@ -43,20 +43,13 @@ fn library_changed() {
     LIBRARY_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Where a library entry came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextureOrigin {
-    /// Shipped with the app.
-    Preset,
-    /// Saved by the user from Simulation mode.
-    User,
-}
-
 /// One texture the panel offers.
 #[derive(Debug, Clone)]
 pub struct TextureEntry {
     pub name: String,
-    pub origin: TextureOrigin,
+    /// `Builtin` for a preset, `Local` for one the user saved from
+    /// Simulation mode.
+    pub origin: crate::provenance::Origin,
     pub config: FractalConfig,
 }
 
@@ -73,7 +66,7 @@ impl TextureLibrary {
         let mut entries = Vec::new();
         for (name, json) in TEXTURE_PRESETS {
             match FractalConfig::from_json(json) {
-                Ok(config) => entries.push(TextureEntry { name: name.to_string(), origin: TextureOrigin::Preset, config }),
+                Ok(config) => entries.push(TextureEntry { name: name.to_string(), origin: crate::provenance::Origin::Builtin, config }),
                 Err(e) => log::warn!("texture preset {name} does not parse: {e}"),
             }
         }
@@ -84,7 +77,7 @@ impl TextureLibrary {
                 let name = file.strip_suffix(&format!(".{EXT}"))?.to_string();
                 let json = crate::storage::backend::read_file(&user_path(&name)).ok()?;
                 match FractalConfig::from_json(&json) {
-                    Ok(config) => Some(TextureEntry { name, origin: TextureOrigin::User, config }),
+                    Ok(config) => Some(TextureEntry { name, origin: crate::provenance::Origin::Local, config }),
                     Err(e) => {
                         log::warn!("user texture {name} does not parse: {e}");
                         None

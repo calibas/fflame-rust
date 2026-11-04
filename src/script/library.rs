@@ -99,24 +99,32 @@ pub const EMBEDDED: &[(&str, &str)] = &[
     ),
 ];
 
-/// Where a script came from — and therefore who owns it.
+/// Where a script's file is kept -- and therefore what may be done to
+/// it. Not who wrote it: that is [`ScriptEntry::origin`], the one origin
+/// model every kind shares (`crate::provenance::Origin`), read from the
+/// home and the store's link record.
+///
+/// Four homes for three origins: a shipped script has two (compiled in,
+/// and on the desktop its live disk copy, which supersedes it), and a
+/// file opened from outside every store has a home the panel does not
+/// own.
 ///
 /// The old two-variant form lumped the shipped `assets/scripts/` files
-/// in with the user's own under a single `File(PathBuf)`, so origin
-/// alone could not answer "may this be deleted"; the panel asked a
-/// separate path-canonicalizing check to find out — which could not
-/// exist on the web, where there are no paths.
-/// Splitting the variants makes ownership structural: a `User` script is
-/// the user's, and nothing else is, on either platform.
+/// in with the user's own under a single `File(PathBuf)`, so it alone
+/// could not answer "may this be deleted"; the panel asked a separate
+/// path-canonicalizing check to find out — which could not exist on the
+/// web, where there are no paths. Splitting the variants makes
+/// ownership structural: a `Store` script is the user's to edit and
+/// delete, and nothing else is, on either platform.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScriptOrigin {
+pub enum ScriptHome {
     /// Compiled in — read-only; edits are saved as a user copy.
-    Builtin,
+    Embedded,
     /// A shipped script's live disk copy under `assets/scripts/`.
     /// Desktop only, and still the app's file rather than the user's.
     Shipped(PathBuf),
-    /// The user's own, in [`super::store`]. Editable and deletable.
-    User,
+    /// In the user's store, [`super::store`]. Editable and deletable.
+    Store,
     /// Opened from outside every store — an ad-hoc file the panel is
     /// holding but does not own, so Save must ask where to put it.
     External,
@@ -145,12 +153,12 @@ pub struct ScriptEntry {
     pub display_name: String,
     pub kind: ScriptKind,
     pub source: String,
-    pub origin: ScriptOrigin,
+    pub home: ScriptHome,
     /// Somebody else wrote this — it came from the online library.
     ///
-    /// Read from the store's link record, not from the origin, and that
-    /// distinction is the point: adopting a downloaded script makes it
-    /// `ScriptOrigin::User`, and if trust were derived from the origin
+    /// Read from the store's link record, not from the home, and that
+    /// distinction is the point: adopting a downloaded script makes its
+    /// home `ScriptHome::Store`, and if trust were derived from the home
     /// alone, pressing Save would launder away the cross-call
     /// restriction. The user chose to keep it; they did not read it.
     pub untrusted: bool,
@@ -165,15 +173,19 @@ impl ScriptEntry {
             ScriptKind::Library => "Library",
         };
         // The library's marks, the Formula Editor's too.
-        use crate::storage::library::{marks, Origin};
-        let origin = if self.untrusted {
-            Origin::Downloaded
-        } else if matches!(self.origin, ScriptOrigin::User) {
-            Origin::Yours
-        } else {
-            Origin::Shipped
-        };
-        format!("{tag} · {}{}", self.display_name, marks(origin, false))
+        format!("{tag} · {}{}", self.display_name, crate::storage::library::marks(self.origin(), false))
+    }
+
+    /// Who wrote it: a shipped script is built in wherever it is read
+    /// from; one from the online library is the API's, adopted or not; a
+    /// stored or opened file is the user's.
+    pub fn origin(&self) -> crate::provenance::Origin {
+        use crate::provenance::Origin;
+        match self.home {
+            _ if self.untrusted => Origin::Api,
+            ScriptHome::Embedded | ScriptHome::Shipped(_) => Origin::Builtin,
+            ScriptHome::Store | ScriptHome::External => Origin::Local,
+        }
     }
 }
 
@@ -241,21 +253,21 @@ pub fn is_builtin_stem(stem: &str) -> bool {
 ///
 /// The classification used to be passed in as data, because telling a
 /// user file from a shipped one needed the filesystem. It no longer
-/// does: [`ScriptOrigin::User`] says so directly, on both platforms.
+/// does: [`ScriptHome::Store`] says so directly, on both platforms.
 struct FoundScript {
     name: String,
     source: String,
-    origin: ScriptOrigin,
+    home: ScriptHome,
     untrusted: bool,
 }
 
 fn merge_sources(
     found: Vec<FoundScript>,
 ) -> (
-    std::collections::BTreeMap<String, (String, ScriptOrigin, bool)>,
+    std::collections::BTreeMap<String, (String, ScriptHome, bool)>,
     Vec<String>,
 ) {
-    let mut by_name: std::collections::BTreeMap<String, (String, ScriptOrigin, bool)> =
+    let mut by_name: std::collections::BTreeMap<String, (String, ScriptHome, bool)> =
         std::collections::BTreeMap::new();
     let mut refused = Vec::new();
 
@@ -263,11 +275,11 @@ fn merge_sources(
         let stem = f.name.trim_end_matches(".rhai");
         // Only a USER script can be refused; shipped sources are allowed
         // to supersede each other (embedded <- assets).
-        if f.origin == ScriptOrigin::User && is_builtin_stem(stem) {
+        if f.home == ScriptHome::Store && is_builtin_stem(stem) {
             refused.push(stem.to_string());
             continue;
         }
-        by_name.insert(f.name, (f.source, f.origin, f.untrusted));
+        by_name.insert(f.name, (f.source, f.home, f.untrusted));
     }
 
     (by_name, refused)
@@ -290,7 +302,7 @@ pub fn discover(base: &FractalConfig) -> Vec<ScriptEntry> {
 /// Everything on disk/embedded/in the store, merged by precedence.
 /// The cheap half of discovery — no parsing, no metadata.
 fn merged_sources() -> (
-    std::collections::BTreeMap<String, (String, ScriptOrigin, bool)>,
+    std::collections::BTreeMap<String, (String, ScriptHome, bool)>,
     Vec<String>,
 ) {
     // Precedence order: embedded, then the shipped disk copies, then the
@@ -300,7 +312,7 @@ fn merged_sources() -> (
         .map(|(name, source)| FoundScript {
             name: (*name).to_string(),
             source: (*source).to_string(),
-            origin: ScriptOrigin::Builtin,
+            home: ScriptHome::Embedded,
             untrusted: false,
         })
         .collect();
@@ -318,7 +330,7 @@ fn merged_sources() -> (
         found.push(FoundScript {
             name: format!("{stem}.rhai"),
             source,
-            origin: ScriptOrigin::User,
+            home: ScriptHome::Store,
             untrusted,
         });
     }
@@ -357,7 +369,7 @@ pub fn with_library(host: ScriptHost) -> ScriptHost {
 }
 
 fn host_over(
-    by_name: &std::collections::BTreeMap<String, (String, ScriptOrigin, bool)>,
+    by_name: &std::collections::BTreeMap<String, (String, ScriptHome, bool)>,
     host: ScriptHost,
 ) -> ScriptHost {
     let stem = |name: &str| name.trim_end_matches(".rhai").to_string();
@@ -384,7 +396,7 @@ pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<S
     let host = host_over(&by_name, ScriptHost::new());
     let mut entries: Vec<ScriptEntry> = by_name
         .into_iter()
-        .map(|(name, (source, origin, untrusted))| {
+        .map(|(name, (source, home, untrusted))| {
             let id = name.trim_end_matches(".rhai").to_string();
             // Read the declared name/kind. A script that fails to parse is
             // still listed — under its file name — so the user can select
@@ -403,7 +415,7 @@ pub fn discover_with_conflicts(base: &FractalConfig) -> (Vec<ScriptEntry>, Vec<S
                     .and_then(|m| m.kind)
                     .unwrap_or(ScriptKind::Generator),
                 source,
-                origin,
+                home,
                 untrusted,
             }
         })
@@ -440,7 +452,7 @@ fn collect_dir(dir: &std::path::Path, out: &mut Vec<FoundScript>) {
             Ok(source) => out.push(FoundScript {
                 name: name.to_string(),
                 source,
-                origin: ScriptOrigin::Shipped(path.clone()),
+                home: ScriptHome::Shipped(path.clone()),
                 untrusted: false,
             }),
             Err(e) => log::warn!("Cannot read script {}: {e}", path.display()),
@@ -460,7 +472,7 @@ mod tests {
         FoundScript {
             name: name.to_string(),
             source: source.to_string(),
-            origin: ScriptOrigin::Builtin,
+            home: ScriptHome::Embedded,
             untrusted: false,
         }
     }
@@ -468,7 +480,7 @@ mod tests {
         FoundScript {
             name: name.to_string(),
             source: source.to_string(),
-            origin: ScriptOrigin::User,
+            home: ScriptHome::Store,
             untrusted: false,
         }
     }
@@ -500,7 +512,7 @@ mod tests {
     #[test]
     fn the_disk_copy_of_a_shipped_script_still_wins() {
         let mut assets = shipped("basic_random.rhai", "FROM_ASSETS");
-        assets.origin = ScriptOrigin::Shipped(std::path::PathBuf::from(
+        assets.home = ScriptHome::Shipped(std::path::PathBuf::from(
             "assets/scripts/generators/basic_random.rhai",
         ));
         let (merged, refused) = merge_sources(vec![
@@ -534,7 +546,7 @@ mod tests {
         let from_sources = sources();
         let mut shipped = 0;
         for e in discover(&base) {
-            if e.origin == ScriptOrigin::User {
+            if e.home == ScriptHome::Store {
                 continue;
             }
             shipped += 1;

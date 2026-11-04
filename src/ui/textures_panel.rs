@@ -15,7 +15,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::escape::{EscapeTexture, ShadingTexture, TextureFit};
 use crate::config::{ConfigChange, ConfigManager, ConfigPath, ConfigValue, FractalConfig};
-use crate::textures::{TextureLibrary, TextureOrigin};
+use crate::provenance::Origin;
+use crate::textures::TextureLibrary;
 
 /// Preview side, in points.
 const THUMB: u32 = 96;
@@ -231,8 +232,8 @@ impl TexturesPanel {
                 if last_origin != Some(entry.origin) {
                     ui.add_space(4.0);
                     ui.strong(match entry.origin {
-                        TextureOrigin::Preset => t!("textures_panel.presets"),
-                        TextureOrigin::User => t!("textures_panel.saved"),
+                        Origin::Builtin => t!("textures_panel.presets"),
+                        Origin::Local | Origin::Api => t!("textures_panel.saved"),
                     });
                     last_origin = Some(entry.origin);
                 }
@@ -294,7 +295,7 @@ impl TexturesPanel {
                             let label = if picked { egui::RichText::new(&entry.name).strong() } else { egui::RichText::new(&entry.name) };
                             ui.label(label);
                             ui.weak(cost_label(&entry.config));
-                            if entry.origin == TextureOrigin::User {
+                            if entry.origin != Origin::Builtin {
                                 ui.horizontal(|ui| {
                                     if ui.small_button(t!("textures_panel.rename")).clicked() {
                                         self.rename = Some((entry.name.clone(), entry.name.clone()));
@@ -308,7 +309,7 @@ impl TexturesPanel {
                     });
                 });
             }
-            if !self.library.entries.iter().any(|e| e.origin == TextureOrigin::User) {
+            if !self.library.entries.iter().any(|e| e.origin != Origin::Builtin) {
                 ui.add_space(6.0);
                 ui.weak(t!("textures_panel.empty_hint"));
             }
