@@ -539,6 +539,7 @@ fn parse_flame_element(
         cylinder_trim_levels: 2,
         word_removals: Vec::new(),
         auto_exposure: false,
+        engine_settings: Default::default(),
         blend_factor: 0.1,
         use_dynamic_blend: true,
         alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,

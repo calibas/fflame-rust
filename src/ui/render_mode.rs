@@ -47,12 +47,6 @@ pub fn switch_render_mode(
     config_manager.switch_mode(mode)
 }
 
-/// The two engines that are not the chaos game.
-#[cfg(test)]
-pub fn is_non_flame(mode: RenderMode) -> bool {
-    mode.is_non_flame()
-}
-
 /// The panel that edits a mode's picture, which a change into the mode
 /// brings to the front (one-workspace plan): one workspace holds all
 /// three, as tabs, and a mode change closes and swaps nothing.
@@ -126,7 +120,7 @@ pub fn mode_label_key(mode: RenderMode) -> &'static str {
 mod tests {
     use super::*;
     #[allow(unused_imports)]
-    use crate::config::mode::{entering_changes, look_3d, surface_3d};
+    use crate::config::mode::{look_3d, surface_3d};
     use crate::config::FractalConfig;
     use crate::scene::tonemap::ToneMapMode;
 
@@ -243,41 +237,6 @@ mod tests {
                     *to,
                     "{from:?} -> {to:?} did not land"
                 );
-            }
-        }
-    }
-
-    /// Entering a non-flame mode from a flame mode rescues the tone
-    /// mapping; every other pair leaves it alone.
-    #[test]
-    fn only_entering_a_non_flame_mode_resets_the_tone_mapping() {
-        for from in RenderMode::ALL {
-            for to in RenderMode::ALL {
-                if from == to {
-                    continue;
-                }
-                let mut m = manager_in(*from);
-                // Start Logarithmic, as a flame preset would.
-                m.update_param(ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into())
-                    .expect("tonemap");
-                switch_render_mode(&mut m, *to).expect("switch");
-                let want_reset = is_non_flame(*to) && !is_non_flame(*from);
-                let got = m.active_config().tonemap_mode;
-                if want_reset {
-                    assert_eq!(got, ToneMapMode::Linear, "{from:?} -> {to:?} should reset");
-                    // Escape has its own exposure and gamma; a simulation
-                    // keeps the flame defaults.
-                    use crate::config::defaults::{DEFAULT_EXPOSURE, DEFAULT_GAMMA, ESCAPE_EXPOSURE, ESCAPE_GAMMA};
-                    let want = if *to == RenderMode::Escape { (ESCAPE_EXPOSURE, ESCAPE_GAMMA) } else { (DEFAULT_EXPOSURE, DEFAULT_GAMMA) };
-                    let c = m.active_config();
-                    assert_eq!((c.exposure, c.gamma), want, "{from:?} -> {to:?}: exposure and gamma");
-                } else {
-                    assert_eq!(
-                        got,
-                        ToneMapMode::Logarithmic,
-                        "{from:?} -> {to:?} should not touch the tone mapping"
-                    );
-                }
             }
         }
     }

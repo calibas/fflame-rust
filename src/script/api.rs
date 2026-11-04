@@ -1443,7 +1443,12 @@ fn register_sim(engine: &mut Engine) {
 
     fn enter(cfg: &mut FractalConfig) {
         if cfg.render_mode != RenderMode::Simulation {
-            // As the Mode menu enters it (`entry_tone_mapping`).
+            // The tone map a simulation's picture needs
+            // (`entry_tone_mapping`). Not the Mode menu's swap of every
+            // engine's settings (`config::mode::enter`): a script builds
+            // one config, and the swap would undo what it set before
+            // choosing the engine (a palette) -- and change what a
+            // published script and seed make.
             if let Some((exposure, gamma)) = crate::config::defaults::entry_tone_mapping(cfg, RenderMode::Simulation) {
                 cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
                 cfg.exposure = exposure;
@@ -1726,9 +1731,9 @@ fn register_escape(engine: &mut Engine) {
     fn enter(cfg: &mut FractalConfig) {
         if cfg.render_mode != RenderMode::Escape {
             // Flame presets carry Log-calibrated tone mapping, which
-            // renders Linear escape output invisibly: switched as the
-            // Mode menu switches it (`entry_tone_mapping`), so a script
-            // and a click agree.
+            // renders Linear escape output invisibly: the tone map an
+            // escape picture needs (`entry_tone_mapping`), not the Mode
+            // menu's swap of every engine's settings -- see `register_sim`.
             if let Some((exposure, gamma)) = crate::config::defaults::entry_tone_mapping(cfg, RenderMode::Escape) {
                 cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
                 cfg.exposure = exposure;

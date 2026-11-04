@@ -123,13 +123,13 @@ defaults for Simulation. A Log-calibrated flame tone map renders either
 engine's unit-range image black.
 
 Entering a lit 3D view -- a solid formula, an escape or simulation
-terrain -- from a view that draws none sets **the 3D look**
-(`ui::render_mode::look_3d`) in the same undo step: Linear, exposure 2.0,
+terrain -- the engine was not showing sets **the 3D look**
+(`config::mode::look_3d`) in the same undo step: Linear, exposure 2.0,
 gamma 1.0, saturation 1.0, no hue shift, and, when the lighting rig is
 untouched, shading strength 1.0 and ambient 0.0. The mode switch, the
 Escape panel's formula picker and terrain switch, the Simulation panel's
 terrain switch and the Formula Editor's Use go through it
-(`apply_with_look`).
+(`ConfigManager::choose`).
 
 **Changing a default changes old files.** Serialization omits values
 equal to their default, so a file saved before the change and relying
@@ -300,15 +300,27 @@ cap to the panel's transport and a target to the timeline and exporters
 
 ## Who changes the render mode
 
-The render mode has exactly one writer: `switch_render_mode` in
-`src/ui/render_mode.rs`. It applies the tone-map reset on entering a
-non-flame mode in the same undo entry as the mode change, and a mode
-change never coalesces with another. The test
-`nothing_outside_this_module_writes_the_render_mode` scans the source
-tree and fails on any mention of `ConfigPath::RenderMode` outside that
-module, except the config module itself (`delta.rs`, `manager.rs`) and
-the whole-config load paths (`ui_handlers.rs`, `panel_viewer.rs`,
-`api/`), which bring a mode in with a file rather than switch one.
+The render mode has exactly one writer: `config::mode`, through
+`ConfigManager::choose` and `switch_mode` (`ui::render_mode` delegates).
+A mode change is one whole-config undo step and never coalesces with
+another. The test `nothing_outside_this_module_writes_the_render_mode`
+scans the source tree and fails on any mention of `ConfigPath::RenderMode`
+outside it, except the rest of the config module (`delta.rs`,
+`manager.rs`), `ui::render_mode`, and the whole-config load paths
+(`ui_handlers.rs`, `panel_viewer.rs`, `api/`), which bring a mode in with
+a file rather than switch one.
+
+**Each engine owns its settings.** The palette and its settings, the
+background, the tone map, the effects and the lighting rig
+(`config::mode::ENGINE_OWNED`) belong to the engine shown: a switch to
+another engine stashes them in `engine_settings` (keyed `flame`,
+`escape`, `simulation`, in the file's own JSON) and restores the entered
+engine's, or its defaults the first time -- nothing is copied between
+engines. 2D and 3D flames are one engine. What the flame alone reads
+(`FLAME_ONLY`) is untouched by a switch; `image_size` and
+`deterministic_rng` are shared. `every_config_field_is_classified` holds
+every field of `FractalConfig` to one of these classes. A migration that
+renames an engine-owned field must also migrate the stash's copies.
 
 What a mode makes available — which panels, which controls, whether fly
 mode is offered — is answered only by `src/ui/visibility.rs`

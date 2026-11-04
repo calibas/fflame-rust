@@ -557,6 +557,15 @@ pub struct FractalConfig {
     /// with the coverage curve in hand rather than in advance.
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_exposure: bool,
+
+    /// The settings each engine owns -- the palette, the tone map, the
+    /// background, the effects, the lighting rig (`config::mode::
+    /// ENGINE_OWNED`) -- of the engines not shown, keyed by engine
+    /// (`flame`, `escape`, `simulation`), in this file's own JSON. A mode
+    /// change swaps them (`config::mode::enter`), so no engine's look is
+    /// copied into another's. Empty until the config has changed engine.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub engine_settings: std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Biased transform selection with a windowed likelihood-ratio
@@ -1342,6 +1351,7 @@ impl Default for FractalConfig {
             cylinder_trim_levels: default_trim_levels(),
             word_removals: Vec::new(),
             auto_exposure: false,
+            engine_settings: Default::default(),
         }
     }
 }
