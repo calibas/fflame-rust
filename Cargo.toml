@@ -195,7 +195,7 @@ base64 = "0.22"
 [features]
 # `web-app`: the EDITOR -- its wasm-bindgen export surface
 # (`wasm_main` boot + the `WasmApi` bindings). ON by default so the
-# desktop app, the wasm-pack app build and pyfflame are unchanged.
+# desktop app and the wasm-pack app build are unchanged.
 # wasm-bindgen collects `#[wasm_bindgen]` exports from the ENTIRE
 # dependency graph, so the thin gallery crates (wasm/render,
 # wasm/script) depend on this crate with default-features = false —

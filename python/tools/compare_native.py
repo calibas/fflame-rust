@@ -1,9 +1,9 @@
-"""SPIKE: render configs through the WASI module (the fflame package) and
+"""Render configs through the WASI module (pyfflame) and
 through the native CLI, and compare the pictures.
 
-    python wasm/python/compare.py [--size WxH] CONFIG.fflame...
+    python python/tools/compare_native.py [--size WxH] CONFIG.fflame...
 
-Writes output/python-spike/compare/<name>-{wasi,native,diff}.png and a
+Writes output/python/compare/<name>-{wasi,native,diff}.png and a
 table: the mean absolute difference (0-255), the share of pixels off by
 more than 8, the same on 8x8 block means (what survives sampling noise),
 and the render times (WASI: wall and the engine's own; native: the
@@ -22,10 +22,10 @@ import time
 import numpy as np
 from PIL import Image
 
-sys.path.insert(0, os.path.dirname(__file__))
-import fflame  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import pyfflame as ff  # noqa: E402
 
-OUT = "output/python-spike/compare"
+OUT = "output/python/compare"
 EXE = os.path.abspath("target/release/FractalArtEditor.exe")
 
 
@@ -70,7 +70,7 @@ def main():
     a = ap.parse_args()
     w, h = map(int, a.size.split("x"))
     os.makedirs(OUT, exist_ok=True)
-    eng = fflame.Engine()
+    eng = ff.Engine()
     print(f"{'config':40s} {'mean':>6s} {'>8':>6s} {'blocks':>6s} {'wasi wall':>9s} {'wasi eng':>8s} {'native':>8s}")
     for cfg in a.configs:
         name = os.path.splitext(os.path.basename(cfg))[0]
@@ -78,7 +78,7 @@ def main():
         t0 = time.perf_counter()
         try:
             image = eng.render(text, w, h)
-        except fflame.EngineError as e:  # a panic restarts the module itself
+        except ff.EngineError as e:  # a panic restarts the module itself
             msg = str(e).strip().splitlines()
             print(f"{name:40s} WASI FAILED: {msg[0][:150] if msg else type(e).__name__}")
             continue

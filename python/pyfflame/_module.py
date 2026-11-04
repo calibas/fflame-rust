@@ -15,24 +15,27 @@ from ._gpu import GpuHost
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-class EngineError(Exception):
-    """A call the engine refused or failed, with its reason."""
+class EngineError(ValueError):
+    """A call the engine refused or failed, with its reason: a config
+    that does not parse, a script's error (its line first), a parameter
+    a script does not declare. A ValueError, as pyfflame's errors were."""
 
 
 def find_module(path=None):
-    """The module's file: `path`, $FFLAME_WASM, one beside this package,
-    or the spike's build output."""
+    """The module's file: `path`, $PYFFLAME_WASM, the one packaged beside
+    this file (`python/build.py` puts it there), or the build output in
+    a checkout."""
     candidates = [
         path,
-        os.environ.get("FFLAME_WASM"),
+        os.environ.get("PYFFLAME_WASM"),
         os.path.join(_HERE, "fflame.wasm"),
-        os.path.join(_HERE, "..", "..", "target-gallery", "wasm32-wasip1", "release", "fflame_python.wasm"),
+        os.path.join(_HERE, "..", "..", "wasm", "target-gallery", "wasm32-wasip1", "release", "fflame_python.wasm"),
     ]
     for c in candidates:
         if c and os.path.exists(c):
             return os.path.abspath(c)
     raise FileNotFoundError(
-        "no engine module: build wasm/python for wasm32-wasip1, or set FFLAME_WASM")
+        "no engine module: run `python python/build.py`, or set PYFFLAME_WASM")
 
 
 # Compiling the module is most of loading it; a module made again after

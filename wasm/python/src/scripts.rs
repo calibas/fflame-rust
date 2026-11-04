@@ -1,8 +1,10 @@
 //! Rhai scripts: the gallery script module's calls (wasm/script), with
 //! the same semantics -- a script + seed gives byte-identical config
 //! JSON on every platform, the RNG being a pinned-algorithm Pcg64Mcg.
-//! Ported rather than shared because that crate's exports are
-//! wasm-bindgen's; the two should become one module of the engine's.
+//!
+//! COPIED from wasm/script/src/lib.rs (its exports are wasm-bindgen's),
+//! and listed for review in docs/projects/pyfflame.md, "Copied code":
+//! the two should become one module of the engine's.
 
 use std::collections::HashMap;
 

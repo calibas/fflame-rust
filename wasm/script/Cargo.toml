@@ -3,8 +3,8 @@
 # script + seed + params (+ optional base config) in, FractalConfig
 # JSON out. No GPU, no UI — this module can live in a worker.
 #
-# Standalone: deliberately NOT a member of the main crate's build (the
-# python/ pattern). The app must be unaffected by anything here.
+# Standalone: deliberately NOT a member of the main crate's build, like
+# every crate under wasm/. The app must be unaffected by anything here.
 
 [package]
 name = "fflame-script"

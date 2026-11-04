@@ -1,0 +1,12 @@
+# pyfflame's engine module is a WASI build: `cargo build --release` here
+# builds it (python/build.py runs exactly that). The target directory is
+# wasm/.cargo/config.toml's, shared with the gallery crates.
+[build]
+target = "wasm32-wasip1"
+
+# The browser build's two flags, for the browser's reasons (the root
+# .cargo/config.toml explains both): simd128 for the escape engine's
+# vectorized bignum multiply, and a 64 MiB shadow stack, the default
+# 1 MiB being small for parameter blocks built by value.
+[target.wasm32-wasip1]
+rustflags = ['-Ctarget-feature=+simd128', '-Clink-arg=-zstack-size=67108864']
