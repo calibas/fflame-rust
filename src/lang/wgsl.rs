@@ -4307,7 +4307,7 @@ pub fn validate_effect(module: &str) -> Result<(), String> {
 /// naga's verdict on a whole module.
 #[cfg(not(target_arch = "wasm32"))]
 fn validate_module(src: &str) -> Result<(), String> {
-    use egui_wgpu::wgpu::naga;
+    use wgpu::naga;
     let module = naga::front::wgsl::parse_str(src).map_err(|e| e.emit_to_string(src))?;
     naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
         .validate(&module)
@@ -4502,7 +4502,6 @@ pub(crate) mod tests {
     /// The probe: `wgsl`'s init and one loop per input, `out` (of `s`)
     /// written back.
     fn gpu_run(wgsl: &str, out: &str, inputs: &[(f32, f32, f32)]) -> Option<Vec<[f32; 4]>> {
-        use egui_wgpu::wgpu;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -5084,7 +5083,6 @@ fn step(s, p) {
     /// given, over `io` (two vec4 per point, the point in the first) and
     /// `blocks` (fparams, cparams, then fdata, as the uniform holds them).
     fn gpu_program_probe(body: &str, wgsl: &[&str], points: &[(f64, f64)], blocks: &[f32], max_iter: u32) -> Option<Vec<[f32; 8]>> {
-        use egui_wgpu::wgpu;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()

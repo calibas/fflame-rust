@@ -15,7 +15,7 @@ pub mod supersample;
 
 pub use high_res::*;
 
-use egui_wgpu::wgpu::Limits;
+use wgpu::Limits;
 
 /// Unified progress sink for every export path (PNG direct / high-res / video).
 ///

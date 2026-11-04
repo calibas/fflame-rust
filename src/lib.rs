@@ -69,9 +69,9 @@ mod sim_microbench;
 // the thin gallery modules must be able to turn them off.
 #[cfg(all(target_arch = "wasm32", feature = "web-app"))]
 pub mod wasm_api;
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 mod web_clipboard;
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 mod web_text_agent;
 
 // Prelude for convenient imports
@@ -85,14 +85,14 @@ pub mod prelude {
 
 #[cfg(feature = "web-app")]
 use app::App;
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 use winit::dpi::PhysicalSize;
 
 /// Force a specific export engine from the CLI (`export --engine`); see app::export.
 #[cfg(all(not(target_arch = "wasm32"), feature = "web-app"))]
 pub use app::export::ExportEngine;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 use wasm_bindgen::prelude::*;
 
 // The application entry point. `web-app`-gated like `wasm_api`: a
@@ -437,7 +437,7 @@ async fn export_animation_async(
 
 /// Parse URL query parameters for deep-linking (?flame=uuid or ?animation=uuid).
 /// Returns (flame_id, animation_id).
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 fn parse_url_load_params() -> (Option<String>, Option<String>) {
     let search = match web_sys::window()
         .and_then(|w| w.location().search().ok())

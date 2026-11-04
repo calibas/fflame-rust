@@ -15,7 +15,7 @@
 
 use crate::camera::fly::Clearance;
 use crate::config::escape::EscapeConfig;
-use egui_wgpu::wgpu::{
+use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,
     Buffer, BufferBindingType, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, ComputePassDescriptor,
     ComputePipelineDescriptor, Device, MapMode, PipelineLayoutDescriptor, PollType, Queue, ShaderModuleDescriptor,

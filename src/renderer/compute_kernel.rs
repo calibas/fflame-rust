@@ -1,4 +1,4 @@
-use egui_wgpu::wgpu::*;
+use wgpu::*;
 use crate::gpu::{buffers::*, pipelines::FlamePipelines};
 use crate::scene::transforms::Flame;
 use crate::scene::palette::{Palette, ColorMode, PathMapStyle};
@@ -4849,7 +4849,7 @@ impl FlameRenderer {
     #[cfg(test)]
     pub(crate) fn read_accumulator_blocking(&self, device: &Device, queue: &Queue) -> Vec<[f64; 4]> {
         let row = self.width * 16;
-        let align = egui_wgpu::wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded = row.div_ceil(align) * align;
         let buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Density Readback"),
@@ -5558,7 +5558,7 @@ impl FlameRenderer {
         // since Phase 8c — was Rgba16Float).
         let bytes_per_pixel = 16; // Rgba32Float = 4 channels × 4 bytes each
         let unpadded_bytes_per_row = self.width * bytes_per_pixel;
-        let align = egui_wgpu::wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
         let buffer_size = (padded_bytes_per_row * self.height) as u64;
         let buffer = device.create_buffer(&BufferDescriptor {

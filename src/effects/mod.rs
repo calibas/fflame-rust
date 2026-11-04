@@ -1493,7 +1493,7 @@ mod tests {
         // module (fs_seed / fs_flood / fs_composite); a WGSL error in
         // any of them is a runtime pipeline panic, so validate at
         // test time like the escape templates do.
-        use egui_wgpu::wgpu::naga;
+        use wgpu::naga;
         let src = embedded_shaders::DISTANCE_FIELD;
         let module = naga::front::wgsl::parse_str(src)
             .unwrap_or_else(|e| panic!("distance_field parse: {e}"));

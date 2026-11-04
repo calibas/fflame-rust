@@ -253,8 +253,10 @@ Each a commit, each behaviour-preserving and held by tests:
    `parse_all` read a value from the CLI's text and the script
    module's JSON by one set of rules and messages; `params::script_json`
    spells a script's parameter for the gallery and the corpus, which is
-   byte-identical. The python bindings convert from Python objects in
-   `ParamKind` terms (their own route, pyo3's types). The snapshot's
+   byte-identical. (The PyO3 bindings converted from Python objects in
+   `ParamKind` terms, their own route; the WASI package that replaced
+   them goes through `parse_all` with JSON, as the script module
+   does.) The snapshot's
    script choices now carry their indices as their range, as every
    other kind's do (the old dump wrote 0..0 for them). A script's
    bounded number no longer clamps a stored value by being drawn
@@ -299,12 +301,11 @@ Each a commit, each behaviour-preserving and held by tests:
   other kind refuses them (`LayoutSpec::without_cpu`) rather than
   dropping them; moving that CPU machinery out of `sim::custom` would
   give them to every kind.
-- **The python bindings (`python/`, pyfflame) do not compile**, on
-  `main` as here: no gate builds them, and they predate the escape and
-  simulation render modes (`render_mode` matches `TwoD`/`ThreeD` alone)
-  and the config's current `zoom`/`pan` types. This branch's edits to
-  them (`ParamKind` in `coerce_param`) type-check; the five errors are
-  elsewhere (`cargo check` in `python/`, 2026-11-03).
+- **The python bindings (`python/`, pyfflame) did not compile** here:
+  no gate built them, and they predated the escape and simulation
+  render modes. Resolved by replacing them: pyfflame is now the engine
+  built for WASI (`wasm/python`), which a gate compiles
+  ([pyfflame.md](pyfflame.md), 2026-11-04).
 - **A CPU script's layout**: a script declares its parameters by calls
   (`param`, `param_choice`, ...), not a `PARAMS` map, so it has no
   conditions or grids to declare; a `param_show_if`-like call would

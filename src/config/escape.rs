@@ -167,6 +167,15 @@ pub struct EscapeConfig {
     #[serde(default = "default_lens_amount", skip_serializing_if = "is_one")]
     pub lens_amount: f32,
 
+    /// Where a solid's surface is drawn (mode D): its march stops this
+    /// share of a pixel from the set, 1 a whole pixel. Less draws closer
+    /// to the set, for more steps -- where a distance estimate undershoots
+    /// (the quaternion Julia's stacked sheets) a pixel's tolerance swells
+    /// the surface by many, merging what is apart and changing as the
+    /// view zooms. 0.01 to 1.
+    #[serde(default = "default_solid_detail", skip_serializing_if = "is_one")]
+    pub solid_detail: f32,
+
     /// Transformations (the KIFS plan, C4): variations applied to the
     /// sample point in the fractal's coordinates (`Plane`, UF's
     /// transformations), to each orbit value the colouring accumulates
@@ -1920,6 +1929,13 @@ fn default_lens_amount() -> f32 {
     1.0
 }
 
+fn default_solid_detail() -> f32 {
+    1.0
+}
+
+/// The range [`EscapeConfig::solid_detail`] keeps to.
+pub const SOLID_DETAIL_RANGE: (f32, f32) = (0.01, 1.0);
+
 fn default_formula() -> String {
     "mandelbrot".to_string()
 }
@@ -2790,6 +2806,7 @@ impl Default for EscapeConfig {
             lens: String::new(),
             lens_params: BTreeMap::new(),
             lens_amount: default_lens_amount(),
+            solid_detail: default_solid_detail(),
             transforms: Vec::new(),
             supersample: 1,
             downsample: DownsampleMode::Box,
@@ -3028,6 +3045,25 @@ mod shading_tests {
 mod tests {
     use super::*;
 
+    /// The Surface Detail is saved only when moved off a whole pixel, and
+    /// a saved one loads back; the manager keeps it in its range.
+    #[test]
+    fn the_surface_detail_saves_when_set_and_keeps_its_range() {
+        let mut config = crate::config::FractalConfig::default();
+        config.escape.formula = "quaternion_julia_solid".into();
+        assert!(!config.to_json().unwrap().contains("solid_detail"));
+        config.escape.solid_detail = 0.25;
+        let json = config.to_json().unwrap();
+        assert!(json.contains("\"solid_detail\": 0.25"), "{json}");
+        let back = crate::config::FractalConfig::from_json(&json).unwrap();
+        assert_eq!(back.escape.solid_detail, 0.25);
+        let mut cm = crate::config::ConfigManager::new(back);
+        cm.update_param(crate::config::ConfigPath::EscapeSolidDetail, 0.001f32.into()).unwrap();
+        assert_eq!(cm.active_config().escape.solid_detail, SOLID_DETAIL_RANGE.0);
+        cm.update_param(crate::config::ConfigPath::EscapeSolidDetail, 5.0f32.into()).unwrap();
+        assert_eq!(cm.active_config().escape.solid_detail, SOLID_DETAIL_RANGE.1);
+    }
+
     #[test]
     fn default_is_default_and_serializes_to_nothing_inside_a_config() {
         assert!(EscapeConfig::is_default(&EscapeConfig::default()));
@@ -3247,6 +3283,7 @@ mod tests {
             ConfigPath::EscapeColoringParam { param: "trap_radius".into() },
             ConfigPath::EscapeLens,
             ConfigPath::EscapeLensAmount,
+            ConfigPath::EscapeSolidDetail,
             ConfigPath::EscapeLensParam { param: "power".into() },
         ];
         for p in paths {

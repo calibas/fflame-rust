@@ -3,8 +3,8 @@
 # (canvas.putImageData on the JS side; PNG encoding, if wanted, is
 # canvas.toBlob — no image codecs in here).
 #
-# Standalone: deliberately NOT a member of the main crate's build (the
-# python/ pattern). The app must be unaffected by anything here.
+# Standalone: deliberately NOT a member of the main crate's build, like
+# every crate under wasm/. The app must be unaffected by anything here.
 
 [package]
 name = "fflame-render"

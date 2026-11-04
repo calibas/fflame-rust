@@ -1008,6 +1008,10 @@ fn apply_config_value(
             let lim = crate::config::escape::LENS_AMOUNT_LIMIT;
             config.escape.lens_amount = if v.is_finite() { v.clamp(-lim, lim) } else { 0.0 };
         }
+        (ConfigPath::EscapeSolidDetail, ConfigValue::Float(v)) => {
+            let (lo, hi) = crate::config::escape::SOLID_DETAIL_RANGE;
+            config.escape.solid_detail = if v.is_finite() { v.clamp(lo, hi) } else { hi };
+        }
         (ConfigPath::EscapeLensParam { param }, ConfigValue::Float(v)) => {
             config.escape.lens_params.insert(param.clone(), *v);
         }
@@ -1944,7 +1948,6 @@ pub async fn export_animation(
 ) -> Result<AnimationExportResult, AnimationExportError> {
     export_config.force_even_dimensions();
     use crate::renderer::compute_kernel::FlameRenderer;
-    use egui_wgpu::wgpu;
     use std::io::Write;
     use std::process::Stdio;
     use std::sync::mpsc;

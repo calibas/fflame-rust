@@ -38,13 +38,14 @@ ROOT = Path(__file__).resolve().parent.parent
 # A manifest's version is its FIRST `version =` line only: a Cargo.toml
 # can hold version strings further down (a `[dependencies.x]` table),
 # and rewriting those would be a disaster wearing the costume of a
-# version bump. python/Cargo.toml matters as much as pyproject.toml:
-# pyfflame.__version__ is CARGO_PKG_VERSION, read from the Cargo.toml.
+# version bump. pyfflame carries three: its engine module's crate, the
+# wheel's (pyproject.toml) and the package's own `__version__`.
 _MANIFEST_VERSION = re.compile(r'^(version\s*=\s*")([^"]+)(")', re.M)
 VERSION_FILES = [
     ("Cargo.toml", _MANIFEST_VERSION, 1),
-    ("python/Cargo.toml", _MANIFEST_VERSION, 1),
+    ("wasm/python/Cargo.toml", _MANIFEST_VERSION, 1),
     ("python/pyproject.toml", _MANIFEST_VERSION, 1),
+    ("python/pyfflame/__init__.py", re.compile(r'^(__version__\s*=\s*")([^"]+)(")', re.M), 1),
     ("wasm/render/Cargo.toml", _MANIFEST_VERSION, 1),
     ("wasm/script/Cargo.toml", _MANIFEST_VERSION, 1),
     ("wasm/flame/Cargo.toml", _MANIFEST_VERSION, 1),
@@ -171,6 +172,13 @@ GATES = [
     #   runs before the modules deploy: `release.py gallery`.
     Gate("gallery modules", lambda: gallery_compiles(),
          why="each module at its own feature set: a cfg on the wrong item compiles everywhere else"),
+    # pyfflame's engine: the one WASI build, with code (`browser` versus
+    # wasm32 cfgs, its storage and fetch stubs) nothing else compiles.
+    # The PyO3 crate it replaced fell out of every gate and stopped
+    # compiling unnoticed. The check runs from the crate's directory,
+    # whose .cargo/config.toml names the target.
+    Gate("python module (WASI)", ["cargo", "check"], cwd="wasm/python",
+         why="pyfflame's engine; needs `rustup target add wasm32-wasip1`"),
 ]
 
 # The gallery crates, each a workspace of its own sharing
@@ -219,7 +227,18 @@ GALLERY_TESTS = [
          why="engine-escape alone renders"),
     Gate("gallery flame smoke", ["cargo", "test", "--profile", "gallery-test"], cwd="wasm/flame",
          why="engine-flame alone renders, and refuses an escape config"),
+    # pyfflame: its module built and packaged, then its tests -- the old
+    # PyO3 package's, which the WASI one passes unchanged, and rendering.
+    Gate("python package", lambda: python_tests(),
+         why="pyfflame's API and renders; GPU tests skip without an adapter"),
 ]
+
+
+def python_tests():
+    ok, out = run([sys.executable, "python/build.py"])
+    if not ok:
+        return False, out
+    return run([sys.executable, "-m", "pytest", "-q", "tests"], cwd="python")
 
 
 def cmd_check(args):
@@ -489,7 +508,8 @@ BUILDS = [
      "in wasm/escape", "wasm/escape"),
     ("gallery: sim", ["wasm-pack", "build", "--target", "web", "--release"],
      "in wasm/sim", "wasm/sim"),
-    ("python wheel", ["maturin", "build", "--release"], "in python/", "python"),
+    ("python wheel", [sys.executable, "python/build.py", "--wheel"],
+     "the WASI module + one pure-Python wheel -> python/dist", None),
 ]
 
 # Host-specific packaging. Separate from BUILDS because each CONSUMES
@@ -546,7 +566,7 @@ def main():
                    help="regenerate stale generated files (still read the diff)")
     c.set_defaults(fn=cmd_check)
 
-    gl = sub.add_parser("gallery", help="the gallery modules' own tests, before they deploy")
+    gl = sub.add_parser("gallery", help="the gallery modules' and pyfflame's own tests, before they ship")
     gl.set_defaults(fn=cmd_gallery, fix=False)
 
     g = sub.add_parser("changelog", help="generate from git history")

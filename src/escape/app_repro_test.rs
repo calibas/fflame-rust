@@ -9,7 +9,6 @@
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use egui_wgpu::wgpu;
 
     /// Tests that read (or reset) the GLOBAL escape diagnostics
     /// snapshot hold this while they run: cargo runs tests in

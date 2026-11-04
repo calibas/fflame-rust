@@ -2333,6 +2333,7 @@ impl ConfigManager {
             ConfigPath::EscapeLayerWeight => Ok(config.escape.layer.weight.into()),
             ConfigPath::EscapeLens => Ok(config.escape.lens.clone().into()),
             ConfigPath::EscapeLensAmount => Ok(config.escape.lens_amount.into()),
+            ConfigPath::EscapeSolidDetail => Ok(config.escape.solid_detail.into()),
             ConfigPath::EscapeLensParam { param } => Ok(config
                 .escape
                 .lens_params
@@ -4241,6 +4242,11 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 let lim = crate::config::escape::LENS_AMOUNT_LIMIT;
                 self.current.escape.lens_amount = v.clamp(-lim, lim);
+            }
+            ConfigPath::EscapeSolidDetail => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::SOLID_DETAIL_RANGE;
+                self.current.escape.solid_detail = if v.is_finite() { v.clamp(lo, hi) } else { hi };
             }
             ConfigPath::EscapeLensParam { param } => {
                 let v: f32 = value.try_into()?;

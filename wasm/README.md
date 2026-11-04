@@ -17,6 +17,9 @@ whatever repo consumes the modules.
 engines only; it now carries the simulation engine too (its
 `Cargo.toml` features) and has not been re-measured.
 
+`wasm/python` is not one of these: it is the library built for WASI,
+the engine of the Python package ([python/README.md](../python/README.md)).
+
 **Which renderer to take.** `fflame-render` renders every mode — 2D and
 3D flames, escape-time fractals and simulations — and is the one to
 embed if you do not know what the config will be. (A terrain config

@@ -16,7 +16,6 @@ path = "src/main.rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-winit = "0.30"
 egui = "0.34"
 egui_dock = "0.19"
 serde = { version = "1.0", features = ["derive"] }
@@ -31,10 +30,8 @@ smallvec = "1.15"
 half = "2.4"
 rand = { version = "0.9", features = ["os_rng"] }
 web-time = "1.1"
-rfd = "0.15"
 once_cell = "1.19"
 chrono = "0.4"
-webbrowser = "1.0"
 
 # Optional
 # PNG (export, thumbnail cache, visual-regression compare) and JPEG
@@ -46,12 +43,10 @@ png = "0.17"
 futures = "0.3"
 quick-xml = "0.36"
 rust-i18n = "3.1"
-directories = "6.0"
 rayon = "1.10"
 sha2 = "0.10"
 
 # Audio (for audio-reactive animations)
-cpal = "0.15"
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "flac", "ogg", "vorbis", "pcm"] }
 rustfft = "6.2"
 ringbuf = "0.4"
@@ -73,8 +68,24 @@ rhai = { version = "=1.25.1", default-features = false, features = ["std", "inte
 # rather than silently redefining every published seed.
 rand_pcg = "0.9"
 
-# WASM-specific dependencies
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Everywhere but WASI (the Python module, wasm/python): a window, file
+# dialogs, audio devices, platform folders and a browser to open.
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+winit = "0.30"
+rfd = "0.15"
+webbrowser = "1.0"
+directories = "6.0"
+cpal = "0.15"
+
+# WASI: the engine as a module Python runs (wasm/python), its GPU calls
+# forwarded to the host through wgpu's custom backend. No egui-wgpu (it
+# assumes a browser on wasm32), so the engine names `wgpu` directly and
+# the app, which draws egui, is not part of this build.
+[target.'cfg(target_os = "wasi")'.dependencies]
+wgpu = { version = "29.0", default-features = false, features = ["std", "wgsl", "custom"] }
+
+# WASM-specific dependencies (the browser's; WASI is wasm32 too)
+[target.'cfg(all(target_arch = "wasm32", not(target_os = "wasi")))'.dependencies]
 egui-winit = { version = "0.34", default-features = false }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
@@ -184,7 +195,7 @@ base64 = "0.22"
 [features]
 # `web-app`: the EDITOR -- its wasm-bindgen export surface
 # (`wasm_main` boot + the `WasmApi` bindings). ON by default so the
-# desktop app, the wasm-pack app build and pyfflame are unchanged.
+# desktop app and the wasm-pack app build are unchanged.
 # wasm-bindgen collects `#[wasm_bindgen]` exports from the ENTIRE
 # dependency graph, so the thin gallery crates (wasm/render,
 # wasm/script) depend on this crate with default-features = false —
