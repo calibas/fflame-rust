@@ -78,7 +78,7 @@ the names in registration order, and a version counter.
 | `name`, `display_name`, `category`, `phase`, `parameters` | copied |
 | `wgsl_function` | `variation_<name>`; the one exception is `julia`, whose function is `julia` |
 | `features` | copied, as a `Vec` |
-| `provenance` | `Builtin`; a download is `Api { version }`, a Rhai variation `Custom` |
+| `provenance` | `Builtin`; a download is `Api { version }`, a Rhai variation `Local` |
 | `wgsl_source`, `wgsl_source_3d`, `wgsl_source_init`, `wgsl_source_state_init` | the bodies (optional, because a download may lack one) |
 | `init_param_count`, `state_count` | copied |
 
@@ -466,7 +466,7 @@ it from the API, caches it, and registers it (`Provenance::Api`).
 `storage::load_installed_resources` loads the cache at startup. (Local
 WGSL plug-in files under `plugins/variations/` were retired 2026-11-01 ([rhai-plugins.md](../projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them.)
 
-**Rhai plug-ins** ([rhai-plugins.md](../projects/rhai-plugins.md), P3): a Rhai variation, effect, formula, colouring, solid or simulation colouring in the user's formulas with **Load at start** set in the Formula Editor (`formulas/_links.json`, `storage::links::Link::plugin`) is registered at every start, after the downloads (`storage::library::load_plugins`, from `load_installed_resources`: desktop, web and headless), under its key in the user's namespace (`Provenance::Custom`). It is then in the lists without a config carrying it -- the variation pickers, the Effects panel's Add lists and the escape panel's formula and colouring pickers, each under "Your plug-ins" -- and choosing it carries its source into the config, as Use does. Saving the file registers the new version; turning it off unlists it; deleting it forgets the flag. One that does not register is named at start (a notice; stderr headless: `storage::library::plugin_failures`).
+**Rhai plug-ins** ([rhai-plugins.md](../projects/rhai-plugins.md), P3): a Rhai variation, effect, formula, colouring, solid or simulation colouring in the user's formulas with **Load at start** set in the Formula Editor (`formulas/_links.json`, `storage::links::Link::plugin`) is registered at every start, after the downloads (`storage::library::load_plugins`, from `load_installed_resources`: desktop, web and headless), under its key in the user's namespace (`Provenance::Local`). It is then in the lists without a config carrying it -- the variation pickers, the Effects panel's Add lists and the escape panel's formula and colouring pickers, each under "Your plug-ins" -- and choosing it carries its source into the config, as Use does. Saving the file registers the new version; turning it off unlists it; deleting it forgets the flag. One that does not register is named at start (a notice; stderr headless: `storage::library::plugin_failures`).
 
 The registry's rules:
 - A built-in can never be replaced.
@@ -478,7 +478,7 @@ The registry's rules:
 
 ### Variations written in Rhai
 
-A **custom variation** (`Provenance::Custom`, `variations::custom`) is
+A **custom variation** (`Provenance::Local`, `variations::custom`) is
 a Rhai transformation from the Formula Editor -- `fn variation(z, p)`,
 a point to a point ([ESCAPE.md](ESCAPE.md#the-formula-language)) --
 compiled to the same `VariationDownload` a download is: its parameters

@@ -1698,7 +1698,7 @@ mod gpu_tests {
         let (_input, view) = filled(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &[200, 120, 40, 255]);
         let register = |id: &str, body: &str| {
             let src = format!("const INFO = #{{ id: \"{id}\" }};\n{body}");
-            crate::effects::custom::register(&src, crate::provenance::Provenance::Custom).unwrap_or_else(|e| panic!("{e}"))
+            crate::effects::custom::register(&src, crate::provenance::Provenance::Local).unwrap_or_else(|e| panic!("{e}"))
         };
         let invert = register("3c1b5f0e-2a4d-4e6f-8a9b-0c1d2e3f4a5b", "fn effect(c, p) { rgba(vec3(1.0) - c.rgb, c.a) }");
         let out = run_colour(&device, &queue, &view, W, H, &[EffectInstance::new(&invert)]);

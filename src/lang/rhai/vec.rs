@@ -1164,7 +1164,7 @@ impl Lowerer<'_> {
             let registry = crate::variations::global_registry();
             registry
                 .get(&vname)
-                .filter(|v| v.provenance != crate::provenance::Provenance::Custom && v.wgsl_source_3d.is_some())
+                .filter(|v| v.provenance != crate::provenance::Provenance::Local && v.wgsl_source_3d.is_some())
                 .map(|v| v.parameters.iter().map(|x| x.name.to_string()).collect())
         };
         let Some(known) = known else {

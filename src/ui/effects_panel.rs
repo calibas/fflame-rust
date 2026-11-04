@@ -425,7 +425,7 @@ pub fn render_effects_panel(
             // list once each.
             let available: Vec<_> = registry
                 .all()
-                .filter(|info| info.category == EffectCategory::Color && info.provenance != crate::provenance::Provenance::Custom)
+                .filter(|info| info.category == EffectCategory::Color && info.provenance != crate::provenance::Provenance::Local)
                 .collect();
 
             if available.is_empty() {
@@ -492,7 +492,7 @@ pub fn render_effects_panel(
             let registry = global_effect_registry();
             let available = registry
                 .all()
-                .filter(|info| info.category == EffectCategory::Density && info.provenance != crate::provenance::Provenance::Custom)
+                .filter(|info| info.category == EffectCategory::Density && info.provenance != crate::provenance::Provenance::Local)
                 .map(|info| (info.name.clone(), info.translated_name()))
                 .collect();
             let labels = density_effects.iter().map(|e| effect_label(&registry, &e.effect_type)).collect();

@@ -4,7 +4,7 @@
 //! A transformation -- a Rhai source with `fn variation(z, p)` -- compiles
 //! to the payload a plug-in is ([`VariationDownload`]: its parameters, its
 //! 2D and 3D WGSL) and registers through the same path, with
-//! [`Provenance::Custom`]. A flame carries the sources it uses
+//! [`Provenance::Local`]. A flame carries the sources it uses
 //! (`Flame::custom_variations`), and [`ensure`] registers them before
 //! anything builds the flame's shader, so a saved flame renders anywhere
 //! the app runs.
@@ -161,11 +161,11 @@ pub fn register(source: &str) -> Result<String, String> {
 fn register_payload(dl: VariationDownload, source: &str) -> Result<String, String> {
     let mut registry = crate::variations::global_registry_mut();
     if let Some(existing) = registry.get(&dl.name) {
-        if existing.provenance != Provenance::Custom {
+        if existing.provenance != Provenance::Local {
             return Err(format!("`{}` is taken by a {} variation", dl.name, existing.provenance.label()));
         }
     }
-    registry.register_from_api(&dl, Provenance::Custom);
+    registry.register_from_api(&dl, Provenance::Local);
     if registry.has(&dl.name) {
         drop(registry);
         // So `ensure` does not register this source again.
@@ -215,7 +215,7 @@ pub fn carry_change<'a>(config: &crate::config::FractalConfig, names: impl IntoI
     let mut list = config.flame.custom_variations.clone();
     let mut added = false;
     for name in names {
-        let custom = crate::variations::global_registry().get(name).is_some_and(|v| v.provenance == Provenance::Custom);
+        let custom = crate::variations::global_registry().get(name).is_some_and(|v| v.provenance == Provenance::Local);
         if !custom || list.iter().any(|s| s.entry == name) {
             continue;
         }
@@ -402,7 +402,7 @@ mod tests {
         let mut registry = crate::variations::VariationRegistry::new();
         let (d1, d2, d3) = (compile(v1).unwrap(), compile(&v2).unwrap(), compile(other).unwrap());
         for d in [&d1, &d2, &d3] {
-            registry.register_from_api(d, Provenance::Custom);
+            registry.register_from_api(d, Provenance::Local);
         }
         let hidden = registry.superseded(&[]);
         assert_eq!(hidden.into_iter().collect::<Vec<_>>(), [d1.name.clone()], "the last registered");
@@ -744,7 +744,7 @@ mod tests {
         assert!(compile("const INFO = #{ name: \"rhai_x\", resets_orbits: 1 };\nfn variation(z, p) { z }\n").unwrap_err().contains("true or false"));
 
         let mut registry = crate::variations::VariationRegistry::new();
-        registry.register_from_api(&dl, Provenance::Custom);
+        registry.register_from_api(&dl, Provenance::Local);
         let mut flame = crate::scene::transforms::Flame::default();
         flame.transforms = vec![crate::scene::transforms::Transform::default()];
         flame.transforms[0].variations.clear();

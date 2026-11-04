@@ -24,7 +24,7 @@ use crate::variations::{global_registry, VariationCategory};
 /// flame running third-party code" is the question §1 of the
 /// shared-resources plan asks, and the answer must not depend on
 /// scrolling a 646-row list looking for "API v#". Downloads only, as the
-/// banner says: a Rhai variation of the user's (`Provenance::Custom`) is
+/// banner says: a Rhai variation of the user's (`Provenance::Local`) is
 /// theirs, and its key would read as noise (rhai-plugins.md, P3).
 ///
 /// A name the registry does not know is NOT reported here — it is
@@ -384,7 +384,7 @@ mod tests {
         );
 
         // One of the user's own Rhai variations is not a download.
-        registry.register_from_api(&api_download("mine_in_rhai"), crate::provenance::Provenance::Custom);
+        registry.register_from_api(&api_download("mine_in_rhai"), crate::provenance::Provenance::Local);
         let mut t3 = Transform::new();
         t3.set_variation("mine_in_rhai", 1.0);
         flame.transforms.push(t3);

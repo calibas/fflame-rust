@@ -1610,7 +1610,7 @@ fn collect_plugin_names(flame: &Flame) -> String {
     }
     // Not the user's own (`write_xform` drops them).
     let registry = crate::variations::global_registry();
-    names.retain(|n| !carries_custom(flame, n) && registry.get(n).is_none_or(|v| v.provenance != crate::provenance::Provenance::Custom));
+    names.retain(|n| !carries_custom(flame, n) && registry.get(n).is_none_or(|v| v.provenance != crate::provenance::Provenance::Local));
     names.into_iter().collect::<Vec<_>>().join(" ")
 }
 
@@ -1656,7 +1656,7 @@ fn write_xform(
     // its parameters both. The `.fflame` carries its source. Known by the
     // config carrying it, or by the registry's provenance.
     let custom = |name: &str| {
-        carries_custom(&parent_config.flame, name) || registry.get(name).is_some_and(|v| v.provenance == crate::provenance::Provenance::Custom)
+        carries_custom(&parent_config.flame, name) || registry.get(name).is_some_and(|v| v.provenance == crate::provenance::Provenance::Local)
     };
     for name in xform.variations.keys().filter(|n| custom(n)) {
         log::warn!("`.flame` export: the custom variation `{name}` is not written (only a .fflame carries it)");

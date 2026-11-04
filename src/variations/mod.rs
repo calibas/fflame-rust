@@ -554,7 +554,7 @@ impl VariationRegistry {
             // Collisions are reported, never shadowed, and silently
             // replacing something the user wrote with something they did
             // not is the worse direction.
-            if existing.provenance == crate::provenance::Provenance::Custom && provenance != crate::provenance::Provenance::Custom {
+            if existing.provenance == crate::provenance::Provenance::Local && provenance != crate::provenance::Provenance::Local {
                 log::warn!("Cannot register variation '{}' — a custom variation has that name", dl.name);
                 return;
             }

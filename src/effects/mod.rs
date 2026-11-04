@@ -1745,7 +1745,7 @@ mod download_tests {
         let builtins = reg.len();
         reg.register_from_api(&dl("fetched_one", Some("fn main() {}")), crate::provenance::Provenance::Api { version: 1 }).unwrap();
         let mut mine = check_download(&dl("mine_one", Some("fn main() {}"))).unwrap();
-        mine.provenance = crate::provenance::Provenance::Custom;
+        mine.provenance = crate::provenance::Provenance::Local;
         reg.register(mine);
         assert_eq!(reg.clear_api(), 1);
         assert!(!reg.contains("fetched_one") && reg.contains("mine_one") && reg.contains("vignette"));
@@ -1809,7 +1809,7 @@ mod label_tests {
             category: EffectCategory::Color,
             source: EffectSource::Owned("fn main() {}".into()),
             parameters: Vec::new(),
-            provenance: crate::provenance::Provenance::Custom,
+            provenance: crate::provenance::Provenance::Local,
             labels: None,
         };
         assert_eq!(info.translated_name(), "Plugin Example (Tint)");
@@ -1829,7 +1829,7 @@ mod label_tests {
             category: EffectCategory::Color,
             source: EffectSource::Owned("fn main() {}".into()),
             parameters: Vec::new(),
-            provenance: crate::provenance::Provenance::Custom,
+            provenance: crate::provenance::Provenance::Local,
             labels: None,
         };
         assert_eq!(info.translated_name(), "unnamed_thing");

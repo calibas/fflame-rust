@@ -145,7 +145,9 @@ become one (P3).
 3. **CPU Rhai** (`scripts/`, `script::store`, 18 embedded). Its own
    origin model (`ScriptOrigin` plus `ScriptLink` in `_links.json`),
    deliberately outside `Provenance`; the only kind with an online
-   library both ways.
+   library both ways. (One origin model since 2026-11-04:
+   `provenance::Origin`, `Builtin` / `Local` / `Api`, for every kind;
+   `ScriptOrigin` is `ScriptHome`, where the file is kept.)
 
 ### Inside the GPU dialect: one compiler, two of everything below it
 
@@ -153,7 +155,7 @@ One front end (`lang/rhai.rs`), checker, IR and WGSL back end.
 Below that:
 - **Three registries**: `escape::custom::Registry` (content-hash names,
   `custom-<fnv>`), `ifs::custom_solids`, and the variation registry with
-  `Provenance::Custom` plus `variations::custom`'s own source map.
+  `Provenance::Local` (was `Custom`) plus `variations::custom`'s own source map.
 - **Two ensure paths** with different failure memory, and **two
   outputs**: leaked `FormulaDef` / `ColoringDef` / `IfsDef`, or a
   synthesized `VariationDownload` pushed through `register_from_api` --
@@ -315,7 +317,10 @@ Before a fourth registry is written for effects:
   ids, so every existing config and `.flame` reads unchanged;
   everything else is keyed by the UUID in its source, with the source's
   SHA-256 as its version, and carries an origin (built in, mine,
-  downloaded, carried by a config) that every list shows. The WGSL
+  downloaded, carried by a config) that every list shows. (Built
+  2026-11-04 as three, at the user's choice: `provenance::Origin`'s
+  `Builtin`, `Local` -- mine, and a source a config carries -- and
+  `Api`.) The WGSL
   variation and effect catalogs are server copies of the program's own
   built-ins, so what they fetch is a built-in this build lacks, under
   its string id.
@@ -430,7 +435,7 @@ Step 7 can now go ahead.
    library spliced only when called); at most 48 parameters
    (`MAX_EFFECT_PARAMS`).
 3. **Registry**: a Rhai effect becomes an `EffectInfo` with
-   `EffectSource::Owned` WGSL and its carried source, `Provenance::Custom`,
+   `EffectSource::Owned` WGSL and its carried source, `Provenance::Local`,
    colour or density from `INFO`.
 4. **Carrying**: `FractalConfig::custom_effects: Vec<CustomSource>`
    (skip-if-empty), ensured in `render_with` so the CLI, video and
