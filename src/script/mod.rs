@@ -23,6 +23,7 @@ pub mod builtins;
 /// Headless `generate` command (desktop only — needs the filesystem).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
+pub mod headless;
 pub mod host;
 pub mod library;
 pub mod store;

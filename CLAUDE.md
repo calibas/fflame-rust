@@ -49,7 +49,7 @@ Project history is in git: `git log --oneline`.
 - `src/params/` - the one parameter system: `ParamDef`/`ParamKind` (built-ins in one const call via `Spec`), values, layouts (conditions, grids), wire spellings; every kind's parameters, drawn by one renderer (`src/ui/params.rs`). [one-parameter-system.md](docs/projects/one-parameter-system.md)
 - `src/export/` - high-res export (tiled GPU, CPU fallback), 2x AA (supersample.rs)
 - `src/ui/` - dockable panels (egui_dock); `src/animation/`, `src/signal/`, `src/audio/`; `src/effects/`
-- `src/script/` - Rhai scripting (api.rs registers every function; cli.rs; assets/scripts/)
+- `src/script/` - Rhai scripting (api.rs registers every function; cli.rs; headless.rs: the script calls the gallery module and Python share; assets/scripts/)
 - `src/api/` (online client), `src/storage/` (settings, backend, caches, catalogs, plugins, credentials), `src/resources/` (HTTP/filesystem fetching, lazy palette packs)
 - `src/probe/`, `src/census/` - the variation math probe and reachability census; `src/contract.rs` (engine contract), `src/provenance.rs`, `src/shader_dumps.rs`
 - `src/flame_xml.rs` (.flame import/export), `src/png_metadata.rs`, `src/wasm_api.rs`, `src/i18n.rs`
