@@ -22,7 +22,8 @@ video export's arms are gone, and scripts' `config.set` and Python's
 facade (2.2) has begun: the script calls have one home,
 `script::headless`, for `wasm/script` and `wasm/python`, and the frame
 source is split out of the video export (`animation::frames`), Python's
-frames taken from it. Beside the
+frames taken from it. One `ensure` (2.4): `FractalConfig::ensure_sources()`
+at the whole-config entry points. Beside the
 order, the mode switch was reworked at the user's request: each engine
 owns its settings, the switch is a whole-config undo step, and an empty
 flame is seeded where one is drawn (`config::mode`). Gallery correctness
