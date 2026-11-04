@@ -1114,7 +1114,7 @@ pub struct SolidShadingSettings {
     /// every orbit, as every solid was lit before; a solid saved then
     /// loads with it on (the v5 -> v6 migration), and the View panel's Fly
     /// Mode section fixes its lights where they are
-    /// (`ui::render_mode::lights_to_world`). A solid's alone: a terrain's
+    /// (`config::mode::lights_to_world`). A solid's alone: a terrain's
     /// lights are always the world's, a 3D flame's always the camera's
     /// (its shade pass lights the projected picture). Not a touch of the
     /// rig (`rig_untouched`).
