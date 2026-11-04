@@ -252,7 +252,19 @@ Each a commit, each behaviour-preserving and held by tests:
    bounded number no longer clamps a stored value by being drawn
    (`Edits`), as every other kind's.
 9. **The compiler**: `ir::Param` gives `ParamDef` directly, and the four
-   converters go.
+   converters go. **Done**: `ir::Program::param_defs` (a complex
+   parameter split with `.` for a formula, `_` for a variation, refused
+   by a simulation and an effect -- `ir::ComplexParams`). The rules are
+   the effects' and the variations', which already agreed, with
+   escape's reach for a missing end: a number not bounded both ways is
+   free, its missing end a reach around the default (an angle's
+   0..360); five decades or `exponential` is logarithmic in every kind;
+   an int is an integer and a bool a switch in every kind. So in a
+   user's script a formula's or a simulation's bool is a checkbox where
+   it was an Off/On dropdown, a simulation's int an integer slider, and
+   an unbounded number free; every built-in and twin declares both
+   bounds, so nothing shipped moves (the snapshot and the corpora are
+   unchanged).
 10. **Everywhere**: conditions and grids in every panel (falls out of
     4-9), and a computed grid row in every kind.
 11. **Docs and gates**: VARIATIONS.md, EFFECTS.md, ESCAPE.md,

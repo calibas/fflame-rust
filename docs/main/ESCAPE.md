@@ -453,10 +453,15 @@ fn escaped(s, p) {
 - **Parameters** in `PARAMS`: a value alone, or `value` with `min`,
   `max`, `caption`, `hint`, `choices` (an int's names), `exponential`
   (the slider runs logarithmically: the definition's `log`), `type:
-  "angle"` (a float in degrees, as stored and shown: `ParamType::Angle`
-  for an effect's or a variation's, `ir::Param::angle`), or
-  `function` (a user function, called `p.f(z)`). They are the panel's
-  controls, animation targets and script parameters
+  "angle"` (a float in degrees, as stored and shown, `ir::Param::angle`),
+  or `function` (a user function, called `p.f(z)`). Every kind reads a
+  script's `PARAMS` alike (`ir::Program::param_defs`): a number bounded
+  both ways keeps to its range, one not is free (a typed value may
+  leave it) with its missing end a reach around the default (an
+  angle's 0..360); a range spanning five decades from above zero is
+  logarithmic too; an int is an integer slider, a bool a checkbox, an
+  enum a dropdown. They are the panel's controls, animation targets and
+  script parameters
   (`escape.formula_params()`). A complex parameter is two, `name.re` and
   `name.im`, and also reads and sets as a point in polar form,
   `name.r` and `name.angle` (degrees; `EscapeConfig::formula_param`):

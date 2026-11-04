@@ -20,10 +20,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use super::{EffectCategory, EffectInfo, EffectSource};
 use crate::renderer::effect_chain::MAX_EFFECT_PARAMS;
 use crate::config::escape::{CustomDialect, CustomSource};
-use crate::lang::{self, ir::ParamKind, EntryKind};
+use crate::lang::{self, EntryKind};
 use crate::provenance::Provenance;
 use crate::scripted::{self, Ledger};
-use crate::params::{Options, ParamDef, ParamKind as K};
 
 /// The effect template around a compiled effect's `fx_effect(uv)`.
 ///
@@ -91,32 +90,8 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
         _ => EffectCategory::Color,
     };
 
-    let mut parameters = Vec::new();
-    for param in &program.params {
-        let caption = if param.caption.is_empty() { param.name.clone() } else { param.caption.clone() };
-        // A number without both bounds is free; a missing bound is the
-        // one its control draws (a float's -10..10, an int's -100..100,
-        // an angle's 0..360). Its numbers are f32s, the slots'.
-        let bounded = param.min.is_some() && param.max.is_some();
-        let default = param.default.0 as f32;
-        let span = |(lo, hi): (f32, f32)| (f64::from(param.min.map_or(lo, |v| v as f32)), f64::from(param.max.map_or(hi, |v| v as f32)));
-        let kind = match param.kind {
-            ParamKind::Float => {
-                let (min, max) = span(if param.angle { (0.0, 360.0) } else { (-10.0, 10.0) });
-                K::Float { default: default.into(), min, max, free: !bounded && !param.angle, log: false, angle: param.angle }
-            }
-            ParamKind::Int => {
-                let (min, max) = span((-100.0, 100.0));
-                K::Int { default: default as i64, min: min as i64, max: max as i64, free: !bounded }
-            }
-            ParamKind::Bool => K::Bool { default: default > 0.5 },
-            ParamKind::Enum => K::Choice { default: default.round().max(0.0) as usize, options: Options::Owned(param.choices.clone()) },
-            ParamKind::Complex => {
-                return Err(format!("`{}`: an effect's parameters are numbers, bools, choices and colours (`rgba`), not complex numbers", param.name))
-            }
-        };
-        parameters.push(ParamDef::owned(param.name.clone(), caption, param.hint.clone(), kind));
-    }
+    // As every kind takes a script's (`ir::Program::param_defs`).
+    let parameters = program.param_defs(lang::ir::ComplexParams::Refuse("an effect's parameters are numbers, bools, choices and colours (`rgba`)"))?;
     if parameters.len() > MAX_EFFECT_PARAMS {
         return Err(format!("{} parameters: an effect has at most {MAX_EFFECT_PARAMS}", parameters.len()));
     }
@@ -326,6 +301,7 @@ pub fn failure(id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::ParamKind as K;
 
     /// The built-ins that are their twins run on the web (a D1 check):
     /// each module, as the chain builds it, samples only at an explicit
