@@ -322,6 +322,16 @@ engines. 2D and 3D flames are one engine. What the flame alone reads
 every field of `FractalConfig` to one of these classes. A migration that
 renames an engine-owned field must also migrate the stash's copies.
 
+**A drawn flame is never empty.** A config made in another engine (a
+simulation, a script's escape picture) has a flame with no transforms.
+Where a choice makes the config draw its flame -- a flame mode, a
+formula that reads it (`IfsDef::needs_flame`: the Flame Attractor), a
+simulation warped by its transforms -- an empty flame is given the app's
+first preset's (`config::mode::seed_flame`), with its camera and
+iteration settings, and on the flame engine's first entry its look, in
+the same undo step. A flame with transforms is never replaced, and
+choosing the mode already shown changes nothing.
+
 What a mode makes available — which panels, which controls, whether fly
 mode is offered — is answered only by `src/ui/visibility.rs`
 (`visibility::panel`, `visibility::control`, `visibility::fly_mode`,
