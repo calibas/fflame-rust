@@ -1551,9 +1551,12 @@ impl SimConfig {
     /// cannot show a step one layer will not survive.
     #[cfg(feature = "engine-sim")]
     pub fn max_dt_ceiling(&self) -> f32 {
+        // Floored as `max_dt_for` is: the manager and `sim.dt()` clamp
+        // into [1e-4, this].
         (0..self.layer_count())
             .map(|l| crate::sim::model_or_default(self.layer_model_name(l)).max_dt)
             .fold(f32::INFINITY, f32::min)
+            .max(1e-4)
     }
 
     /// The tightest cap at the layers' current parameters -- what the

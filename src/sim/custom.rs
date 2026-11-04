@@ -766,7 +766,19 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
 ".to_string()
     };
     let number = |key: &str| lang::rhai::info_number(source, key);
-    let default_dt = number("dt").unwrap_or(1.0) as f32;
+    // Time steps, so a positive number, as `fn max_dt(p)` must give: a
+    // `max_dt` of 0 compiled, and the solver's `dt.clamp(1e-4, cap)`
+    // panicked the app.
+    let time_step = |key: &str, default: f32| -> Result<f32, String> {
+        let v = number(key).map_or(default, |v| v as f32);
+        if v.is_finite() && v > 0.0 {
+            Ok(v)
+        } else {
+            Err(format!("`INFO.{key}` is {v}: a time step is a positive number"))
+        }
+    };
+    let default_dt = time_step("dt", 1.0)?;
+    let max_dt = time_step("max_dt", default_dt)?;
     let diffusion: Vec<&'static str> = lang::rhai::info_strings(source, "diffusion").into_iter().map(leak).collect();
     for d in &diffusion {
         if !program.params.iter().any(|p| p.name == *d) {
@@ -933,7 +945,7 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         passes: u32::from(passes),
         repeat,
         measure,
-        max_dt: number("max_dt").map_or(default_dt, |v| v as f32),
+        max_dt,
         diffusion: Box::leak(diffusion.into_boxed_slice()),
         agents,
         kernel,
@@ -1366,6 +1378,25 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
         let formula = "fn start(pixel, p) { #{ z: pixel } }\nfn step(s, p) {\n    for i in 0..3 { if i == 1 { break; } }\n    s\n}";
         // A formula's loops too, since P7 step 1.
         assert!(lang::rhai::program(formula).is_ok());
+    }
+
+    /// `INFO.dt` and `INFO.max_dt` are time steps: a positive number, or
+    /// the model is refused. Editing `spatial_rps.rhai`'s `max_dt` to 0
+    /// compiled, and the solver's `dt.clamp(1e-4, 0.0)` panicked the app.
+    /// And a cap that reaches the solver at 0 regardless is floored.
+    #[test]
+    fn a_time_step_of_zero_is_refused_not_a_crash() {
+        let src = include_str!("../../assets/sim/spatial_rps.rhai");
+        assert!(src.contains("max_dt: 1.0,") && src.contains("    dt: 1.0,"), "the fixture moved");
+        for (from, to) in [("max_dt: 1.0,", "max_dt: 0,"), ("max_dt: 1.0,", "max_dt: -2.0,"), ("    dt: 1.0,", "    dt: 0.0,")] {
+            let e = compile_model(&src.replace(from, to), "custom-x").map(|_| ()).unwrap_err();
+            assert!(e.contains("a time step is a positive number"), "{to}: {e}");
+        }
+        let mut def = compile_model(src, "custom-x").unwrap_or_else(|e| panic!("{e}"));
+        def.max_dt = 0.0;
+        let cap = def.max_dt_for(&Default::default());
+        assert!(cap > 0.0, "a zero cap reached the solver: {cap}");
+        assert_eq!(1e-4f32.max(0.5).clamp(1e-4, cap), cap, "the solver's clamp holds");
     }
 
     /// A model's own time step and presets (P4 step 6): `fn max_dt(p)`
