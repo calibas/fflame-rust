@@ -527,6 +527,26 @@ or a terrain:
 The occlusion rows hide when the tier is Path traced: occlusion is the
 lit tier's stand-in for the sky the path tracer traces.
 
+**Surface Detail** (a solid's; `EscapeConfig::solid_detail`, the Escape
+panel under the formula's parameters): where the surface itself is
+drawn. Both tiers' marches stop this share of a pixel from the set
+(`ifs_detail()`, `fdata[45].x` its complement so an unset uniform is a
+whole pixel) -- 1, the default, as before; down to 0.01, for more steps
+(raise March Steps if the surface frays). A pixel's tolerance is right
+where the distance estimate is close; where it undershoots, the surface
+is drawn as far outside as it undershoots. The quaternion Julia's
+(Hart's, a bound on the stretch) undershoots tens of times between
+stacked sheets, so at a pixel neighbouring sheets swelled into one
+surface whose seams read as terraces, and the shape changed as the view
+zoomed (the pixel shrinking); at a quarter of a pixel the sheets come
+apart (measured 2026-11-03: a pixel at 3200 wide is half a pixel at
+1600, to the picture). The estimate itself stays Hart's: the potential's
+gradient through the full Jacobian measured closer, but squaring a
+quaternion is degenerate wherever its scalar part is zero, the gradient
+vanishes near those points' preimages, and the estimate overshot there
+-- the march broke into speckle. `the_surface_detail_reaches_both_tiers`.
+The normals and a leaving ray's offset stay at a pixel.
+
 **Ray tolerance** (a solid's; `SolidShadingSettings::ray_tolerance`):
 how close a ray leaving a surface -- a shadow ray in either tier
 (`ifs_shadow`), the path tracer's bounces and shadows (`pt_ifs_leave`) --

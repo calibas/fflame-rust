@@ -1700,7 +1700,8 @@ Columns. The tests hold it to a CPU twin (`gpu_tests::Kifs`), pixel for
 pixel. Like the quaternion Julia it is f32 and absolute: no deep zoom.
 
 **The flame-less solids colour from the start of the orbit.** A solid is
-drawn where the march stops, a pixel's width from the set, and that
+drawn where the march stops, a pixel's width from the set (a share of
+one at a finer Surface Detail, TERRAIN.md), and that
 width is the camera's, so a quantity read from where or when the orbit
 escapes changes with the camera (measured: it never settles as the view
 refines). The KIFS and the quaternion Julia read their first
