@@ -1708,10 +1708,17 @@ refines). The KIFS and the quaternion Julia read their first
 closest approach to the origin, as coordinates the set's symmetry
 keeps; the level `log2` of the running derivative at the depth (the
 quaternion) or the iteration of the closest approach (the KIFS, whose
-derivative is `s^n` everywhere); the quaternion's address is which side
-of the plane across `c`'s axis each iterate falls, then the angle from
-that axis. `the_solids_colours_settle_as_the_view_refines` holds them
-to it on the CPU twins. **The flame solids** (`ifs_flame_3d`) colour the
+derivative is `s^n` everywhere). The quaternion's are in terms every
+rotation of the vector part keeps -- the scalar part and the vector
+part's length, the orbit point in its own complex plane -- so with a
+real `c` (the complex Julia set turned about the scalar axis) each is
+one value all round a ring, and they are that Julia set's colourings:
+the trap's point is (scalar part, vector length), the address which
+branch of the n-th root each iterate lies on (its angle from the scalar
+axis in n sectors; for n = 2 the sign of its scalar part), then the
+angle within its sector. `the_solids_colours_settle_as_the_view_refines`
+holds them to it on the CPU twins, and
+`the_quaternion_colours_are_the_same_all_round_a_ring` to the turn. **The flame solids** (`ifs_flame_3d`) colour the
 same way: a colourings' walk at the hit point, `colour_depth` levels
 from the sample's own point (link 0 of the chain, the final transform
 undone), the child the walk's ranking puts first at each level -- the
@@ -1749,7 +1756,10 @@ taken at each level as a base-N fraction — the analogue of transform
 colour, and the one that survives a deep zoom), `ifs_trap` (Orbit Trap,
 in the expanded frame) and `ifs_measure` (Measure: the flame's invariant
 density and colour, read through the walk instead of sampled by a chaos
-game; it needs a coarse pass over the ball, `ensure_coarse`).
+game; it needs a coarse pass over the ball, `ensure_coarse`). On a solid
+every pixel drawn is the set, so Distance is its Interior Palette colour
+alone; Measure reads the flat attractor's walk, which no solid has, and
+the panel does not offer it for one (`ifs::coloring_applies`).
 
 **The flame becomes maps on the CPU.** `scene::ifs_analysis` turns the
 flame into maps and decides whether it qualifies (affine, or one of the
