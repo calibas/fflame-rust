@@ -842,10 +842,12 @@ impl ModelDef {
             if raw.is_finite() && raw > 0.0 {
                 return (STABILITY_MARGIN * raw).min(self.max_dt).max(1e-4);
             }
-            return self.max_dt;
+            return self.max_dt.max(1e-4);
         }
+        // Floored on every path, as the bounds are: the solver clamps its
+        // dt into [1e-4, this], which panics if this falls below 1e-4.
         if self.diffusion.is_empty() {
-            return self.max_dt;
+            return self.max_dt.max(1e-4);
         }
         let mut d_now = 0.0f32;
         let mut d_def = 0.0f32;
