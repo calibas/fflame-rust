@@ -2569,6 +2569,38 @@ mod tests {
         }
     }
 
+    /// The Surface Detail (`EscapeConfig::solid_detail`) reaches both
+    /// tiers' marches: on the quaternion Julia, whose distance estimate
+    /// undershoots between its sheets, a quarter of a pixel draws a
+    /// different surface lit and path traced -- the sheets a whole pixel
+    /// swelled together come apart.
+    #[cfg(feature = "web-app")]
+    #[test]
+    fn the_surface_detail_reaches_both_tiers() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const N: u32 = 96;
+        let presets = crate::resources::presets::presets_and_test_scenes();
+        let render = |c: &FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, N, N);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data
+        };
+        for tier in [RenderTier::Lit, RenderTier::PathTraced] {
+            let mut c = presets.iter().find(|c| c.flame.name == "Quaternion Julia").expect("the preset").clone();
+            c.escape.solid_tier = tier;
+            c.escape.path.samples = 8;
+            c.escape.path.denoise = false;
+            let pixel = render(&c);
+            c.escape.solid_detail = 0.25;
+            let quarter = render(&c);
+            let apart = pixel.chunks(4).zip(quarter.chunks(4)).filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 8)).count();
+            println!("{tier:?}: {apart} of {} pixels apart", N * N);
+            assert!(apart * 50 > (N * N) as usize, "{tier:?}: the march did not read the detail ({apart} pixels apart)");
+        }
+    }
+
     /// MEASUREMENT (escape-sim-followups, *the solid path tracer's speed*):
     /// a preset (`PT_PRESET`, the Menger Sponge) path traced at 320x180 --
     /// the time a sample takes as a still renders it, and how far

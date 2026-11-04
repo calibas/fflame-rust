@@ -704,6 +704,9 @@ pub enum ConfigPath {
     EscapeLens,
     /// How much of the lens to apply, 0 to 1.
     EscapeLensAmount,
+    /// Where a solid's surface is drawn, a share of a pixel
+    /// (`EscapeConfig::solid_detail`).
+    EscapeSolidDetail,
     /// One parameter of the lens variation, keyed by name like
     /// `EscapeFormulaParam`.
     EscapeLensParam { param: String },
@@ -1416,6 +1419,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeLayerWeight => write!(f, "Texture Layer Weight"),
             ConfigPath::EscapeLens => write!(f, "Lens"),
             ConfigPath::EscapeLensAmount => write!(f, "Lens Amount"),
+            ConfigPath::EscapeSolidDetail => write!(f, "Surface Detail"),
             ConfigPath::EscapeLensParam { param } => write!(f, "Lens → {param}"),
             ConfigPath::EscapeTransforms => write!(f, "Transformations"),
             ConfigPath::EscapeTransformAmount { index } => write!(f, "Transformation {} Amount", index + 1),
@@ -1908,6 +1912,7 @@ impl ConfigPath {
             ConfigPath::EscapeLayerWeight => I18nKey::simple("history.param.escape_layer_weight"),
             ConfigPath::EscapeLens => I18nKey::simple("history.param.escape_lens"),
             ConfigPath::EscapeLensAmount => I18nKey::simple("history.param.escape_lens_amount"),
+            ConfigPath::EscapeSolidDetail => I18nKey::simple("history.param.escape_solid_detail"),
             ConfigPath::EscapeLensParam { param } => I18nKey::with_params(
                 "history.param.escape_lens_param",
                 vec![("param", param.clone())],
@@ -3385,6 +3390,7 @@ impl ConfigPath {
             | ConfigPath::EscapeLayerWeight
             | ConfigPath::EscapeLens
             | ConfigPath::EscapeLensAmount
+            | ConfigPath::EscapeSolidDetail
             | ConfigPath::EscapeLensParam { .. }
             | ConfigPath::EscapeTransforms
             | ConfigPath::EscapeTransformAmount { .. }
@@ -3972,6 +3978,7 @@ impl ConfigPath {
             ConfigPath::EscapeLayerWeight => "Escape.Layer.Weight".to_string(),
             ConfigPath::EscapeLens => "Escape.Lens".to_string(),
             ConfigPath::EscapeLensAmount => "Escape.LensAmount".to_string(),
+            ConfigPath::EscapeSolidDetail => "Escape.SolidDetail".to_string(),
             ConfigPath::EscapeLensParam { param } => format!("Escape.LensParam.{param}"),
             ConfigPath::EscapeTransforms => "Escape.Transforms".to_string(),
             ConfigPath::EscapeTransformAmount { index } => format!("Escape.Transform.{index}.Amount"),
@@ -4321,6 +4328,7 @@ impl ConfigPath {
                 ["Layer", "Weight"] => return Some(ConfigPath::EscapeLayerWeight),
                 ["Lens"] => return Some(ConfigPath::EscapeLens),
                 ["LensAmount"] => return Some(ConfigPath::EscapeLensAmount),
+                ["SolidDetail"] => return Some(ConfigPath::EscapeSolidDetail),
                 ["Transforms"] => return Some(ConfigPath::EscapeTransforms),
                 _ => return None,
             }
@@ -5134,6 +5142,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeLayerParam { .. }
         | ConfigPath::EscapeLayerWeight
         | ConfigPath::EscapeLensAmount
+        | ConfigPath::EscapeSolidDetail
         | ConfigPath::EscapeLensParam { .. }
         | ConfigPath::EscapeTransformAmount { .. }
         | ConfigPath::EscapeTransformParam { .. } => {

@@ -8120,6 +8120,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         ),
                         &mut fdata,
                     );
+                    // Where the surface is drawn, a share of a pixel
+                    // (`ifs_detail`), its complement so zero is a pixel.
+                    let (lo, hi) = crate::config::escape::SOLID_DETAIL_RANGE;
+                    let detail = if escape.solid_detail.is_finite() { escape.solid_detail.clamp(lo, hi) } else { hi };
+                    fdata[45][0] = 1.0 - detail;
                     // The sky, past the rig's lights (`ifs_sky_seen`).
                     if let Some(z) = self.solid_sky {
                         fdata[20] = [z[0], z[1], z[2], 1.0];

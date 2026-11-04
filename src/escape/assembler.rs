@@ -7107,6 +7107,10 @@ fn ifs_reflectance() -> f32 { return 1.0 - clamp(params.fdata[32].z, 0.0, 1.0); 
 // hitting it, as a share of its ball: a ten-thousandth, times the ray
 // tolerance (`SolidShadingSettings::ray_tolerance`; fdata[32].w past 1).
 fn ifs_ray_tolerance() -> f32 { return 1.0e-4 * (1.0 + clamp(params.fdata[32].w, 0.0, 99.0)); }
+// Where the surface is drawn: the march stops this share of a pixel from
+// the set (`EscapeConfig::solid_detail`). Its complement in fdata[45].x,
+// so a uniform that never wrote it draws at a whole pixel.
+fn ifs_detail() -> f32 { return 1.0 - clamp(params.fdata[45].x, 0.0, 0.99); }
 
 // A direction in the studio's frame: x right, y up, z toward the front.
 fn ifs_studio_frame(d: vec3<f32>) -> vec3<f32> {
@@ -8460,7 +8464,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // fixed distance early and the picture stopped sharpening
             // with the zoom. The remaining floor exists only so a
             // sample at t = 0 cannot give an epsilon of zero.
-            let eps = max(px_at * t, 1e-30);
+            // Less than a pixel at a finer Surface Detail (`ifs_detail`).
+            let eps = max(px_at * t * ifs_detail(), 1e-30);
             // The walk is asked for a HUNDREDTH of that. A pixel of
             // slack in the distance is a pixel of slack in where the
             // ray lands, and on structure that is itself a pixel
@@ -9061,7 +9066,7 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
         if (t > span.y) {
             break;
         }
-        let eps = pt_ifs_eps(t);
+        let eps = pt_ifs_eps(t) * ifs_detail();
         let dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);
         if (dist < eps) {
             // Stepped in: back to the surface (`ifs_refine`).
