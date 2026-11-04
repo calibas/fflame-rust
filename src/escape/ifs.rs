@@ -1961,18 +1961,20 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
     // multiplicative: each step multiplies it by n |q|^(n-1) (Q1).
     // The colourings read the start of the orbit (the KIFS's note):
     // the closest approach to the origin within the first `depth`
-    // iterations, and the orbit's angle at `depth`, both in terms the
-    // set's own symmetry keeps -- rotations about the axis of c's
-    // vector part commute with q -> q^n + c, so what is kept is the
-    // scalar part, the part along that axis and the rest's length.
+    // iterations, and the orbit's branches and angle, all in terms
+    // every rotation of the vector part keeps -- the scalar part and
+    // the vector part's length, the orbit point in its own complex
+    // plane. The rotations about c's vector part commute with
+    // q -> q^n + c, so these are the set's own symmetry's; for a real c
+    // the set is the complex Julia set turned about the scalar axis,
+    // and they are that Julia set's colourings, the same all round each
+    // ring. (Its part along c's axis was not: with c real it fell back
+    // to i and coloured the solid by a side of it.)
     let depth = u32(clamp(round(fparam(14u)), 1.0, 12.0));
-    let vlen = length(c.yzw);
-    let axis_v = select(vec3<f32>(1.0, 0.0, 0.0), c.yzw / vlen, vlen > 1e-12);
     var trap_r = 1.0e30;
-    var trap_k = 0u;
     var trap_p = vec2<f32>(0.0, 0.0);
     var address = 0.0;
-    var place = 0.5;
+    var span = 1.0;
     var spread = 1.0;
 
     var dq = 1.0;
@@ -1989,26 +1991,26 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
         k = k + 1u;
         if (k <= depth) {
             spread = dq;
-            let along = dot(q.yzw, axis_v);
             // What the trap measures: the vector part through the Orbit
             // transformations when there are any (3d-look-and-tools P5).
             let qt = vec4<f32>(q.x, ifs_trap_point(q.yzw));
             let mag_t = length(qt);
             if (mag_t < trap_r) {
                 trap_r = mag_t;
-                trap_k = k;
-                trap_p = vec2<f32>(qt.x, dot(qt.yzw, axis_v));
+                trap_p = vec2<f32>(qt.x, length(qt.yzw));
             }
-            // The address: a binary digit each iteration, which side of
-            // the plane across the axis the orbit falls on (the binary
-            // decomposition, in terms the symmetry keeps); at `depth`,
-            // the vector part's angle from the axis fills the rest.
-            let angle = ff_atan2(length(q.yzw - along * axis_v), along) * 0.31830988618;
+            // The address: which branch of the n-th root the orbit is
+            // on, a base-n digit an iteration -- the n roots of a point
+            // lie each in its own of n equal sectors of the angle from
+            // the scalar axis, [0, pi] (for n = 2, the sign of the scalar
+            // part); at `depth`, the angle within its sector fills the
+            // rest.
+            let sector = ff_atan2(length(q.yzw), q.x) * n * 0.31830988618;
             if (k < depth) {
-                address = address + select(0.0, place, along < 0.0);
-                place = place * 0.5;
+                span = span / n;
+                address = address + min(floor(sector), n - 1.0) * span;
             } else {
-                address = address + angle * place;
+                address = address + sector / n * span;
             }
         }
         if (escape_k < 0.0 && mag > bail) {
@@ -3091,6 +3093,13 @@ fn ifs_color(res: IfsResult) -> IfsShade {
 
 pub static IFS_COLORINGS: &[&IfsColoringDef] =
     &[&IFS_DISTANCE, &IFS_LEVEL, &IFS_ADDRESS, &IFS_TRAP, &IFS_MEASURE_COLORING];
+
+/// Whether `coloring` colours `def`, so the panel offers it: Measure
+/// reads the flat attractor's measure walk alone (the assembler's
+/// `measure`), which no solid has -- on one it was a flat colour.
+pub fn coloring_applies(def: &IfsDef, coloring: &IfsColoringDef) -> bool {
+    !(def.solid && coloring.name == "ifs_measure")
+}
 
 /// Look up a mode-D distance function by name. `None` = the name
 /// belongs to another mode (or is unknown).
@@ -13651,10 +13660,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         pub(super) fn walk(&self, p: [f64; 3]) -> (f64, SolidColour) {
             let mut q = [p[0], p[1], p[2], self.slice];
             let len4 = |q: [f64; 4]| (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-            let vlen = norm3([self.c[1], self.c[2], self.c[3]]);
-            let axis = if vlen > 1e-12 { [self.c[1] / vlen, self.c[2] / vlen, self.c[3] / vlen] } else { [1.0, 0.0, 0.0] };
             let mut out = SolidColour::default();
-            let (mut trap_r, mut spread) = (f64::INFINITY, 1.0f64);
+            let (mut trap_r, mut spread, mut span) = (f64::INFINITY, 1.0f64, 1.0f64);
             let (mut dq, mut mag, mut k, mut escape) = (1.0f64, len4(q), 0u32, None);
             while k < self.levels && mag <= 1.0e4 {
                 dq *= self.n * mag.powf(self.n - 1.0);
@@ -13664,18 +13671,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 k += 1;
                 if k <= self.depth {
                     spread = dq;
-                    let along = q[1] * axis[0] + q[2] * axis[1] + q[3] * axis[2];
+                    let vlen = norm3([q[1], q[2], q[3]]);
                     if mag < trap_r {
                         trap_r = mag;
-                        out.point = [q[0], along];
+                        out.point = [q[0], vlen];
                     }
-                    let perp = norm3([q[1] - along * axis[0], q[2] - along * axis[1], q[3] - along * axis[2]]);
-                    let angle = perp.atan2(along) / std::f64::consts::PI;
-                    let place = 0.5f64.powi(k as i32);
+                    let sector = vlen.atan2(q[0]) * self.n / std::f64::consts::PI;
                     if k < self.depth {
-                        out.address += if along < 0.0 { place } else { 0.0 };
+                        span /= self.n;
+                        out.address += sector.floor().min(self.n - 1.0) * span;
                     } else {
-                        out.address += angle * place;
+                        out.address += sector / self.n * span;
                     }
                 }
                 if escape.is_none() && mag > self.bail {
@@ -14213,6 +14219,44 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             rows.push(measure(format!("flame {name}"), &de, &colour, ifs.ball.centre, ifs.ball.radius));
         }
         rows
+    }
+
+    /// A quaternion Julia solid's colours follow its shape: with c real
+    /// the set is the complex Julia set turned about the scalar axis,
+    /// and at points of its surface all round a ring -- found by
+    /// marching in along each radius -- the level, the trap and the
+    /// address are each one value. The trap and the address read the
+    /// orbit's part along an axis once (`i`, with c real having none),
+    /// and coloured the solid by a side of it. Bourke's c, whose vector
+    /// part breaks the turn, keeps the set's own mirror (z to -z).
+    #[test]
+    fn the_quaternion_colours_are_the_same_all_round_a_ring() {
+        let at = |q: &QuatJulia, x: f64, th: f64| -> SolidColour {
+            let mut r = 1.8f64;
+            for _ in 0..400 {
+                let d = q.walk([x, r * th.cos(), r * th.sin()]).0;
+                if d < 1e-4 || r <= 0.0 {
+                    break;
+                }
+                r -= d.max(1e-5);
+            }
+            q.walk([x, r * th.cos(), r * th.sin()]).1
+        };
+        let real = QuatJulia { c: [-1.0, 0.0, 0.0, 0.0], ..QuatJulia::bourke() };
+        let bourke = QuatJulia::bourke();
+        for x in [-0.9, -0.3, 0.3, 0.9] {
+            let first = at(&real, x, 0.0);
+            for t in 1..12 {
+                let th = f64::from(t) * std::f64::consts::PI / 6.0;
+                let c = at(&real, x, th);
+                let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+                assert!(near(c.level, first.level), "x {x}, {} degrees: level {} against {}", t * 30, c.level, first.level);
+                assert!(near(c.point[0], first.point[0]) && near(c.point[1], first.point[1]), "x {x}, {} degrees: trap {:?} against {:?}", t * 30, c.point, first.point);
+                assert!(near(c.address, first.address), "x {x}, {} degrees: address {} against {}", t * 30, c.address, first.address);
+                let (m, n) = (at(&bourke, x, th), at(&bourke, x, -th));
+                assert_eq!((m.level, m.point, m.address), (n.level, n.point, n.address), "Bourke's mirror at x {x}, {} degrees", t * 30);
+            }
+        }
     }
 
     /// [`solid_colour_settling`] at colour depths 2 to 6, printed.

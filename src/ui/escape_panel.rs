@@ -2347,7 +2347,7 @@ fn show_coloring_section(
             egui::ComboBox::from_id_salt("escape_coloring")
                 .selected_text(coloring.display_name)
                 .show_ui(ui, |ui| {
-                    for c in crate::escape::ifs::IFS_COLORINGS {
+                    for c in crate::escape::ifs::IFS_COLORINGS.iter().filter(|c| crate::escape::ifs::coloring_applies(d, c)) {
                         if ui
                             .selectable_label(c.name == coloring.name, c.display_name)
                             .clicked()
