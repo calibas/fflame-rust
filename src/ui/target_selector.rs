@@ -1024,9 +1024,9 @@ fn get_effects_items(config: &FractalConfig) -> Vec<TargetItem> {
                 items.push(TargetItem::new(
                     ConfigPath::DensityEffectParam {
                         index,
-                        param: param.name.clone(),
+                        param: param.name.to_string(),
                     },
-                    &format!("{} (Density) → {}", effect_name, param.display_name),
+                    &format!("{} (Density) → {}", effect_name, param.label),
                 ));
             }
         }
@@ -1052,9 +1052,9 @@ fn get_effects_items(config: &FractalConfig) -> Vec<TargetItem> {
                 items.push(TargetItem::new(
                     ConfigPath::ColorEffectParam {
                         index,
-                        param: param.name.clone(),
+                        param: param.name.to_string(),
                     },
-                    &format!("{} (Color) → {}", effect_name, param.display_name),
+                    &format!("{} (Color) → {}", effect_name, param.label),
                 ));
             }
         }

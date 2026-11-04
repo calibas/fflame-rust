@@ -233,6 +233,69 @@ impl ParamDef {
     }
 }
 
+/// A parameter as the API spells it -- the variations' and the effects'
+/// wire format (VARIATIONS_WIRE_FORMAT.md): its type's name
+/// ([`wire_type`]), its numbers as the f32s its slot holds, a switch's
+/// bounds and an empty hint null.
+pub fn api_json(d: &ParamDef) -> serde_json::Value {
+    let bounds = d.kind.bounds();
+    serde_json::json!({
+        "name": d.name,
+        "display_name": d.label,
+        "param_type": wire_type(&d.kind),
+        "default_value": d.slot_default(),
+        "min_value": bounds.map(|b| b.0 as f32),
+        "max_value": bounds.map(|b| b.1 as f32),
+        "description": d.hint(),
+    })
+}
+
+/// A kind's name on the wire: `float`, `unlimited_float` (a free
+/// float), `angle`, `integer`, `unlimited_integer`, `boolean`, `enum`
+/// with its choices. Text and a colour are a script's, never a
+/// variation's or an effect's.
+pub fn wire_type(k: &ParamKind) -> serde_json::Value {
+    match k {
+        ParamKind::Float { angle: true, .. } => "angle".into(),
+        ParamKind::Float { free: true, .. } => "unlimited_float".into(),
+        ParamKind::Float { .. } => "float".into(),
+        ParamKind::Int { free: true, .. } => "unlimited_integer".into(),
+        ParamKind::Int { .. } => "integer".into(),
+        ParamKind::Bool { .. } => "boolean".into(),
+        ParamKind::Choice { options, .. } => serde_json::json!({ "enum": { "choices": options.iter().collect::<Vec<_>>() } }),
+        ParamKind::Text { .. } => "text".into(),
+        ParamKind::Color { .. } => "color".into(),
+    }
+}
+
+/// A parameter downloaded (a variation's or an effect's), a missing
+/// bound filled as its control draws one: `float` the range an unranged
+/// float is drawn over (a variation's -10..10, an effect's 0..1); an
+/// unlimited float -10..10, an integer 1..10, an unlimited one
+/// -100..100, an angle 0..360.
+pub fn from_api(p: &crate::api::types::ApiVariationParameter, float: (f32, f32)) -> ParamDef {
+    use crate::api::types::ApiParamType as T;
+    let range = |(lo, hi): (f32, f32)| (f64::from(p.min_value.unwrap_or(lo)), f64::from(p.max_value.unwrap_or(hi)));
+    let number = |fallback, free, angle| {
+        let (min, max) = range(fallback);
+        ParamKind::Float { default: p.default_value.into(), min, max, free, log: false, angle }
+    };
+    let int = |fallback, free| {
+        let (min, max) = range(fallback);
+        ParamKind::Int { default: p.default_value as i64, min: min as i64, max: max as i64, free }
+    };
+    let kind = match &p.param_type {
+        T::Float => number(float, false, false),
+        T::UnlimitedFloat => number((-10.0, 10.0), true, false),
+        T::Angle => number((0.0, 360.0), false, true),
+        T::Integer => int((1.0, 10.0), false),
+        T::UnlimitedInteger => int((-100.0, 100.0), true),
+        T::Boolean => ParamKind::Bool { default: p.default_value > 0.5 },
+        T::Enum { choices } => ParamKind::Choice { default: p.default_value.round().max(0.0) as usize, options: Options::Owned(choices.clone()) },
+    };
+    ParamDef::owned(p.name.clone(), p.display_name.clone(), p.description.clone().unwrap_or_default(), kind)
+}
+
 /// A built-in's kind, for [`ParamDef::new`]. Its numbers are f32, the
 /// GPU kinds' slots, so a default is the f32 its literal names, and the
 /// f64 the definition stores holds it exactly.

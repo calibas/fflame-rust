@@ -94,7 +94,8 @@ def literals(src, struct):
         code[i] = in_code
     out = []
     for m in re.finditer(r"\b" + struct + r"\s*\{", src):
-        if not code[m.start()] or src[:m.start()].rstrip().endswith("->"):
+        before = src[:m.start()].rstrip()
+        if not code[m.start()] or before.endswith("->") or re.search(r"\b(struct|impl|enum|for)$", before):
             continue
         open_brace = m.end() - 1
         depth, k = 0, open_brace
@@ -129,6 +130,9 @@ def fields(src, code, open_brace, end):
         parts.append(src[start:body_end])
     out = {}
     for p in parts:
+        # A comment after the last field's comma (`0.0, // Normal`) opens
+        # this one's text.
+        p = re.sub(r"(?m)^\s*//.*\n?", "", p.lstrip(" \t").lstrip("\n"))
         key, colon, value = p.strip().partition(":")
         # `default,` is `default: default,`.
         out[key.strip()] = value.strip() if colon else key.strip()
@@ -174,15 +178,99 @@ def owners(src, code, spans):
     return out
 
 
+def string(text, what):
+    """A string field as a `&'static str` literal: `"x"`,
+    `"x".to_string()`, `"x".into()`, `String::from("x")`."""
+    t = text.strip()
+    m = re.fullmatch(r'(?s)(".*")(?:\.to_string\(\)|\.to_owned\(\)|\.into\(\))?', t) or re.fullmatch(r'(?s)String::from\((".*")\)', t)
+    if not m:
+        sys.exit(f"{what} is not a string literal: {t[:80]}")
+    return m.group(1)
+
+
+def optional(text, what):
+    """`None`, or `Some(x)`'s x."""
+    t = text.strip()
+    if t == "None":
+        return None
+    m = re.fullmatch(r"(?s)Some\((.*)\)", t)
+    if not m:
+        sys.exit(f"{what} is neither None nor Some(..): {t[:80]}")
+    return m.group(1).strip().removesuffix(",").strip()
+
+
+def as_int(text):
+    v = number(text)
+    if v is not None and v == int(v):
+        return str(int(v))
+    return f"({text}) as i64"
+
+
+def typed_spec(f, at):
+    """A typed literal's (`param_type`, `default_value`, `min_value`,
+    `max_value`: an effect's, a variation's) Spec."""
+    t = f["param_type"].strip()
+    d = f["default_value"]
+    lo, hi = optional(f["min_value"], f"{at}: min_value"), optional(f["max_value"], f"{at}: max_value")
+    kind = re.fullmatch(r"(?s)(?:[\w:]*::)?ParamType::(\w+)(.*)", t)
+    if not kind:
+        sys.exit(f"{at}: param_type {t[:60]}")
+    k, rest = kind.group(1), kind.group(2).strip()
+
+    def bounded():
+        if lo is None or hi is None:
+            sys.exit(f"{at}: a {k} without both bounds")
+        return lo, hi
+
+    if k in ("Float", "UnlimitedFloat", "Angle"):
+        a, b = bounded()
+        spec = f"Spec::{'angle' if k == 'Angle' else 'float'}({d}, {a}, {b})"
+        return spec + (".free()" if k == "UnlimitedFloat" else "")
+    if k in ("Integer", "UnlimitedInteger"):
+        a, b = bounded()
+        return f"Spec::int({as_int(d)}, {as_int(a)}, {as_int(b)})" + (".free()" if k == "UnlimitedInteger" else "")
+    if k == "Boolean":
+        v = number(d)
+        return f"Spec::bool({'true' if v else 'false'})" if v is not None else f"Spec::bool(({d}) != 0.0)"
+    if k == "Enum":
+        m = re.fullmatch(r"(?s)\{\s*choices:\s*(.*?)\s*,?\s*\}", rest)
+        if not m:
+            sys.exit(f"{at}: enum {rest[:60]}")
+        return f"Spec::choice({as_index(d)}, {m.group(1)})"
+    sys.exit(f"{at}: unknown ParamType::{k}")
+
+
 def rewrite(src, struct, slow, log, log_decades):
     spans, code = literals(src, struct)
     found = []
     pieces, last = [], 0
     for (s, ob, e), owner in zip(spans, owners(src, code, spans)):
         f = fields(src, code, ob, e)
+        at = f"{struct} literal at {src.count(chr(10), 0, s) + 1}"
+        if "param_type" in f:
+            missing = {"name", "display_name", "param_type", "default_value", "min_value", "max_value", "description"} - set(f)
+            if missing:
+                sys.exit(f"{at} lacks {sorted(missing)}")
+            if not f["name"].strip().startswith('"'):
+                print(f"{at}: named by `{f['name'].strip()}`, left for a hand")
+                continue
+            name_lit = string(f["name"], f"{at}: name")
+            name = json.loads(name_lit)
+            found.append((owner, name))
+            spec = typed_spec(f, at)
+            if f"{owner}.{name}" in slow:
+                spec += ".slow()"
+            hint = optional(f["description"], f"{at}: description")
+            args = [name_lit, string(f["display_name"], f"{at}: display_name"), '""' if hint is None else string(hint, f"{at}: description"), spec]
+            line_start = src.rfind("\n", 0, s) + 1
+            indent = re.match(r"[ \t]*", src[line_start:]).group(0)
+            pieces.append(src[last:s])
+            pieces.append("ParamDef::new(\n" + "".join(f"{indent}    {a},\n" for a in args) + indent + ")")
+            last = e
+            continue
         missing = {"name", "display_name", "default", "min", "max", "tooltip", "choices"} - set(f)
         if missing:
-            sys.exit(f"{struct} literal at {src.count(chr(10), 0, s) + 1} lacks {sorted(missing)}")
+            sys.exit(f"{at} lacks {sorted(missing)}")
         name = json.loads(f["name"]) if f["name"].startswith('"') else None
         if name is not None:
             found.append((owner, name))

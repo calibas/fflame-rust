@@ -17,13 +17,13 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use super::{EffectCategory, EffectInfo, EffectParameter, EffectSource};
+use super::{EffectCategory, EffectInfo, EffectSource};
 use crate::renderer::effect_chain::MAX_EFFECT_PARAMS;
 use crate::config::escape::{CustomDialect, CustomSource};
 use crate::lang::{self, ir::ParamKind, EntryKind};
 use crate::provenance::Provenance;
 use crate::scripted::{self, Ledger};
-use crate::variations::ParamType;
+use crate::params::{Options, ParamDef, ParamKind as K};
 
 /// The effect template around a compiled effect's `fx_effect(uv)`.
 ///
@@ -94,35 +94,28 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
     let mut parameters = Vec::new();
     for param in &program.params {
         let caption = if param.caption.is_empty() { param.name.clone() } else { param.caption.clone() };
+        // A number without both bounds is free; a missing bound is the
+        // one its control draws (a float's -10..10, an int's -100..100,
+        // an angle's 0..360). Its numbers are f32s, the slots'.
         let bounded = param.min.is_some() && param.max.is_some();
-        let param_type = match param.kind {
-            ParamKind::Float if param.angle => ParamType::Angle,
-            ParamKind::Float if bounded => ParamType::Float,
-            ParamKind::Float => ParamType::UnlimitedFloat,
-            ParamKind::Int if bounded => ParamType::Integer,
-            ParamKind::Int => ParamType::UnlimitedInteger,
-            ParamKind::Bool => ParamType::Boolean,
-            ParamKind::Enum => {
-                let choices: Vec<&'static str> = param.choices.iter().map(|c| &*Box::leak(c.clone().into_boxed_str())).collect();
-                ParamType::Enum { choices: Box::leak(choices.into_boxed_slice()) }
+        let default = param.default.0 as f32;
+        let span = |(lo, hi): (f32, f32)| (f64::from(param.min.map_or(lo, |v| v as f32)), f64::from(param.max.map_or(hi, |v| v as f32)));
+        let kind = match param.kind {
+            ParamKind::Float => {
+                let (min, max) = span(if param.angle { (0.0, 360.0) } else { (-10.0, 10.0) });
+                K::Float { default: default.into(), min, max, free: !bounded && !param.angle, log: false, angle: param.angle }
             }
+            ParamKind::Int => {
+                let (min, max) = span((-100.0, 100.0));
+                K::Int { default: default as i64, min: min as i64, max: max as i64, free: !bounded }
+            }
+            ParamKind::Bool => K::Bool { default: default > 0.5 },
+            ParamKind::Enum => K::Choice { default: default.round().max(0.0) as usize, options: Options::Owned(param.choices.clone()) },
             ParamKind::Complex => {
                 return Err(format!("`{}`: an effect's parameters are numbers, bools, choices and colours (`rgba`), not complex numbers", param.name))
             }
         };
-        let (min_value, max_value) = match &param_type {
-            ParamType::Enum { choices } => (Some(0.0), Some(choices.len().saturating_sub(1) as f32)),
-            _ => (param.min.map(|v| v as f32), param.max.map(|v| v as f32)),
-        };
-        parameters.push(EffectParameter {
-            name: param.name.clone(),
-            display_name: caption,
-            param_type,
-            default_value: param.default.0 as f32,
-            min_value,
-            max_value,
-            description: (!param.hint.is_empty()).then(|| param.hint.clone()),
-        });
+        parameters.push(ParamDef::owned(param.name.clone(), caption, param.hint.clone(), kind));
     }
     if parameters.len() > MAX_EFFECT_PARAMS {
         return Err(format!("{} parameters: an effect has at most {MAX_EFFECT_PARAMS}", parameters.len()));
@@ -418,10 +411,10 @@ fn effect(c, p, ctx) {
         assert_eq!(info.name, key_for("6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b", TINT), "under its key: id and version");
         assert_eq!(id_of(&info.name), "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b");
         assert_eq!(info.category, EffectCategory::Color);
-        let names: Vec<&str> = info.parameters.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = info.parameters.iter().map(|p| &*p.name).collect();
         assert_eq!(names, ["amount", "tint_r", "tint_g", "tint_b", "tint_a", "mode", "invert"]);
-        assert!(matches!(info.parameters[5].param_type, ParamType::Enum { choices } if choices.len() == 3));
-        assert!(matches!(info.parameters[6].param_type, ParamType::Boolean));
+        assert!(matches!(info.parameters[5].options(), Some(o) if o.len() == 3));
+        assert!(matches!(info.parameters[6].kind, K::Bool { .. }));
         let EffectSource::Owned(wgsl) = &info.source else { panic!("owned") };
         assert!(wgsl.contains("// INCLUDE_BLEND_MODES"), "it blends, so the library is spliced");
         assert!(wgsl.contains("fn fs_main") && wgsl.contains("fn vs_main"));

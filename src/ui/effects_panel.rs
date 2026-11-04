@@ -7,10 +7,7 @@ use rust_i18n::t;
 
 use crate::animation::AnimationController;
 use crate::config::{ConfigChange, ConfigManager, ConfigPath, UpdateType};
-use crate::effects::{global_effect_registry, EffectCategory, EffectInstance, EffectParameter, EffectRegistry};
-use crate::variations::{ParamType, VariationParameter};
-
-use super::variation_params::{render_variation_params, ParamTarget};
+use crate::effects::{global_effect_registry, EffectCategory, EffectInstance, EffectRegistry};
 
 /// The name to show for an effect in the list and in undo entries: the
 /// registry's label (curated and translated for a built-in), or the raw
@@ -30,57 +27,33 @@ enum EffectList {
     Density,
 }
 
-/// One effect's parameters as a [`ParamTarget`], so they are drawn by
-/// the variation parameter renderer: an Integer gets an integer slider
-/// (Blend Mode 0-12), a Boolean a checkbox, an Angle degrees -- every
-/// parameter used to be a float slider -- and a value is written only
-/// when it actually changed, never merely by being drawn.
+/// One effect instance: its list and place, which its parameters'
+/// paths name.
+#[derive(Clone, Copy)]
 struct EffectTarget {
     list: EffectList,
     index: usize,
 }
 
-impl ParamTarget for EffectTarget {
-    fn stored(
-        &self,
-        config_manager: &ConfigManager,
-        _var_name: &str,
-        param: &VariationParameter,
-    ) -> Option<f32> {
+impl EffectTarget {
+    /// The value of `param`, its default where unset; `None` once the
+    /// instance is gone.
+    fn stored(self, config_manager: &ConfigManager, param: &crate::params::ParamDef) -> Option<f32> {
         let config = config_manager.active_config();
         let effects = match self.list {
             EffectList::Color => &config.color_effects,
             EffectList::Density => &config.density_effects,
         };
         let effect = effects.get(self.index)?;
-        Some(effect.params.get(&param.name).copied().unwrap_or(param.default_value))
+        Some(effect.params.get(&*param.name).copied().unwrap_or(param.slot_default()))
     }
 
-    fn path(&self, _var_name: &str, param_name: &str) -> ConfigPath {
+    fn path(self, param_name: &str) -> ConfigPath {
         let (index, param) = (self.index, param_name.to_string());
         match self.list {
             EffectList::Color => ConfigPath::ColorEffectParam { index, param },
             EffectList::Density => ConfigPath::DensityEffectParam { index, param },
         }
-    }
-}
-
-/// An effect parameter in the shape the parameter renderer draws. The
-/// two structs carry the same fields. A Float the effect left unranged
-/// keeps this panel's old 0..1 slider rather than the variations' -10..10.
-fn widget_param(p: &EffectParameter) -> VariationParameter {
-    let (min_value, max_value) = match p.param_type {
-        ParamType::Float => (p.min_value.or(Some(0.0)), p.max_value.or(Some(1.0))),
-        _ => (p.min_value, p.max_value),
-    };
-    VariationParameter {
-        name: p.name.clone(),
-        display_name: p.display_name.clone(),
-        param_type: p.param_type.clone(),
-        default_value: p.default_value,
-        min_value,
-        max_value,
-        description: p.description.clone(),
     }
 }
 
@@ -163,9 +136,8 @@ fn render_effect_params(
                 .iter()
                 .map(|p| {
                     // In the current language, for a Rhai effect's labels.
-                    let mut w = widget_param(p);
-                    (w.display_name, w.description) = info.param_label(p);
-                    w
+                    let (label, hint) = info.param_label(p);
+                    crate::params::ParamDef { label: label.into(), hint: hint.unwrap_or_default().into(), ..p.clone() }
                 })
                 .collect::<Vec<_>>()
         })
@@ -176,8 +148,12 @@ fn render_effect_params(
         EffectList::Color => "effect_params",
         EffectList::Density => "density_effect_params",
     };
-    ui.indent(format!("{salt}_{index}"), |ui| {
-        render_variation_params(ui, config_manager, &EffectTarget { list, index }, effect_type, &params)
+    let salt = format!("{salt}_{index}");
+    ui.indent(&salt, |ui| {
+        let target = EffectTarget { list, index };
+        let mut store = super::params::ConfigStore::new(config_manager, move |m, d| target.stored(m, d), move |n| target.path(n));
+        super::params::list(ui, &mut store, &super::params::List::new(&params, &salt));
+        store.update
     })
     .inner
 }
@@ -673,32 +649,26 @@ mod tests {
         assert_eq!(effect_label(&registry, "no_such_effect"), "no_such_effect");
     }
 
-    /// Enum, Integer, Boolean and Angle parameters keep their type on the
-    /// way to the widget renderer: every one used to be a float slider.
+    /// Choice, integer, switch and angle parameters keep their kinds on
+    /// the way to the renderer: every one used to be a float slider.
     #[test]
     fn effect_parameters_keep_their_types() {
+        use crate::params::ParamKind as K;
         let registry = global_effect_registry();
         let vignette = registry.get("vignette").expect("vignette");
         let blend = vignette.get_param("blend_mode").expect("blend_mode");
-        let w = widget_param(blend);
-        assert!(matches!(w.param_type, ParamType::Enum { choices } if choices.len() == 13));
-        assert_eq!((w.min_value, w.max_value), (Some(0.0), Some(12.0)));
+        assert!(matches!(blend.options(), Some(o) if o.len() == 13));
+        assert_eq!(blend.kind.bounds(), Some((0.0, 12.0)));
         let kaleidoscope = registry.get("kaleidoscope").expect("kaleidoscope");
-        let offset = widget_param(kaleidoscope.get_param("edge_offset").expect("edge_offset"));
-        assert!(matches!(offset.param_type, ParamType::Integer));
+        assert!(matches!(kaleidoscope.get_param("edge_offset").expect("edge_offset").kind, K::Int { .. }));
         // The shaders loop `octaves` times, truncating it as the slider does.
         for name in ["domain_warp", "simplex_noise"] {
             let octaves = registry.get(name).and_then(|e| e.get_param("octaves")).expect(name);
-            assert!(matches!(widget_param(octaves).param_type, ParamType::Integer), "{name}");
+            assert!(matches!(octaves.kind, K::Int { .. }), "{name}");
         }
-
-        let typed: Vec<_> = registry
-            .all()
-            .flat_map(|info| info.parameters.iter())
-            .map(|p| widget_param(p).param_type)
-            .collect();
-        assert!(typed.iter().any(|t| matches!(t, ParamType::Boolean)));
-        assert!(typed.iter().any(|t| matches!(t, ParamType::Angle)));
+        let kinds: Vec<&K> = registry.all().flat_map(|info| info.parameters.iter()).map(|p| &p.kind).collect();
+        assert!(kinds.iter().any(|k| matches!(k, K::Bool { .. })));
+        assert!(kinds.iter().any(|k| matches!(k, K::Float { angle: true, .. })));
     }
 
     /// Drawing an effect's parameters must not edit it: values off a
@@ -726,12 +696,12 @@ mod tests {
     fn an_effect_target_writes_its_own_list() {
         let color = EffectTarget { list: EffectList::Color, index: 2 };
         assert_eq!(
-            color.path("x", "radius"),
+            color.path("radius"),
             ConfigPath::ColorEffectParam { index: 2, param: "radius".to_string() }
         );
         let density = EffectTarget { list: EffectList::Density, index: 0 };
         assert_eq!(
-            density.path("x", "strength"),
+            density.path("strength"),
             ConfigPath::DensityEffectParam { index: 0, param: "strength".to_string() }
         );
     }

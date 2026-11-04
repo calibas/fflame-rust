@@ -200,7 +200,15 @@ Each a commit, each behaviour-preserving and held by tests:
    solid commits them on release as the built-in solids do.
 6. **Effects**: 84 `EffectParameter` literals, Rhai effects, the
    Effects panel (`widget_param` goes), `export_effects_json` (its
-   output unchanged).
+   output unchanged). **Done**: 81 literals by the codemod's typed mode
+   (the WGSL references; the registry's built-ins are their Rhai twins,
+   so the twins' conversion is what the snapshot holds it to); a Rhai
+   effect's missing bound is the one its control drew (a free float's
+   -10..10, an int's -100..100, an angle's 0..360); a downloaded one's
+   through `params::from_api`, an unranged float 0..1 as the panel drew
+   it. The corpus is byte-identical (`params::api_json`, one copy for
+   both exports). The twins are held to their WGSL by whole
+   definitions.
 7. **Variations**:
    - `param!` emits `ParamDef`, and 175 `VariationParamDef` literals
      move by codemod;
