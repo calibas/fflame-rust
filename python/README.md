@@ -1,6 +1,29 @@
 # pyfflame
 
-Build, edit and convert fractal flames from Python.
+Fractal flames, escape-time fractals and simulations from Python: build
+and edit them, run the app's Rhai scripts, render them on the GPU,
+animate them, and write PNGs and video.
+
+pyfflame is the Fractal Art Editor's own engine, built as one
+WebAssembly module: [wasmtime](https://pypi.org/project/wasmtime/) runs
+it and [wgpu-py](https://pypi.org/project/wgpu/) does its GPU work, so
+one wheel serves every platform those two do. A flame saved here is the
+file the app writes; a script and seed give the app's flame byte for
+byte; a render is the CLI's picture.
+
+## Build and install
+
+```bash
+rustup target add wasm32-wasip1        # once
+python python/build.py                 # the module -> python/pyfflame/fflame.wasm
+pip install -e python/                 # or: python python/build.py --wheel; pip install python/dist/*.whl
+```
+
+Dependencies: `wasmtime`, `wgpu` (both install prebuilt wheels from
+their maintainers); `numpy` and `pillow` for `Image.to_numpy` / `to_pil`;
+FFmpeg on the PATH for `VideoWriter`.
+
+## Build and edit a flame
 
 ```python
 import pyfflame as ff
@@ -9,86 +32,86 @@ c = ff.Config()
 i = c.add_transform()
 c.set_weight(i, 0.5)
 c.set_affine(i, 0.5, 0.0, 0.0, 0.5, 0.25, 0.0)
-c.add_variation(i, "julian", 1.0)
+c.add_variation(i, "julian", 1.0)          # checked: a typo raises
 c.set_variation_param(i, "julian.power", 3.0)
+c.zoom = 1.5
 
-c.save("mine.fflame")          # our JSON format
-c.save_flame_xml("mine.flame") # Apophysis / JWildfire XML
+c.save("mine.fflame")                      # the app's JSON
+c.save_flame_xml("mine.flame")             # Apophysis / JWildfire XML
+c.data["exposure"] = 0.8                   # every field the properties do not name
 ```
 
-Run a flame script — the same sandboxed Rhai engine and the same seeded
-RNG the app uses, so a given `(script, seed, params)` produces the same
-flame here as in the editor:
+`Config.load` / `from_json`, `load_flame_xml` / `parse_flame_xml` (a
+list: one file may hold several flames); transforms by index:
+`get_/set_weight`, `_color`, `_color_speed`, `_opacity`, `_affine`,
+`add_variation`, `remove_variation`, `set_variation_param`,
+`get_variations`, `get_variation_params`; `variations()`,
+`variation_params(name)`.
+
+## Run a script
+
+The app's sandboxed Rhai engine and seeded RNG: `(script, seed, params)`
+gives the flame the editor and `FractalArtEditor generate` give.
 
 ```python
 src = open("assets/scripts/generators/lsystem.rhai", encoding="utf-8").read()
-r = ff.run_script(src, seed=3, params={
-    "axiom": "X",
-    "rule_1": "X=-YF+XFX+FY-",
-    "rule_2": "Y=+XF-YFY-FX+",
-    "angle": 90.0,
-    "output": "Path (finite depth)",
-})
-for line in r.messages:
-    print(line)
-r.config.save("hilbert.fflame")
+r = ff.run_script(src, seed=3, params={"output": "Path (finite depth)", "angle": 90.0})
+print(r.messages)
+r.config.save("hilbert.fflame")            # byte-identical to the CLI's
 ```
 
-## What's here
+A choice parameter takes its option's text or index, a colour `"#rrggbb"`
+or `(r, g, b)`; an undeclared name raises. Seeds wrap modulo 2^64. A
+script that keys `anim` returns `r.animation` (a `.anim`).
 
-| | |
-| --- | --- |
-| `Config` | a whole flame: model, camera, colour and render settings |
-| `Config.load` / `.save` | `.fflame` (JSON) |
-| `Config.load_flame_xml` / `.save_flame_xml` | `.flame` (Apophysis/JWildfire XML) |
-| `Config.from_json` / `.to_json` / `.parse_flame_xml` / `.to_flame_xml` | the same, as strings |
-| `run_script(source, seed=1, params=None, base=None)` | run a Rhai flame script |
-| `variations()` / `variation_params(name)` | what the registry knows |
-
-Transforms are addressed by index: `add_transform()` returns one, and
-`get_/set_weight`, `_color`, `_color_speed`, `_opacity`, `get_/set_affine`,
-`add_variation`, `remove_variation`, `set_variation_param`,
-`get_variations`, `get_variation_params` all take it first.
-
-**No rendering.** The wheel carries no GPU code. To turn a flame into a
-PNG, call the app's headless exporter:
+## Render
 
 ```python
-import subprocess
-c.save("out.fflame")
-subprocess.run(["FractalArtEditor", "export",
-                "-i", "out.fflame", "-o", "out.png",
-                "-w", "1920", "-H", "1080"], check=True)
+eng = ff.Engine()                          # the GPU starts on the first render
+image = eng.render(c, 1920, 1080)          # Config, dict, JSON or a path
+image.save("mine.png")                     # the CLI's PNG, the config in its metadata
+array = image.to_numpy()                   # (1080, 1920, 4) uint8
 ```
 
-## Three things that will bite you otherwise
+`render(config, w, h, iterations=None, iterations_per_thread=None,
+transparent=False, premultiplied=False, sticky=False, sequence=False)`.
+Every engine: flames 2D and 3D, escape-time (deep zoom, solids, terrains)
+and simulations.
 
-**Values are f32.** The flame model is 32-bit throughout (WGSL has no
-f64), so a Python float is stored rounded — set `-0.1` and read back
-`-0.10000000149011612`. Compare with a tolerance.
+## Animate
 
-**Angles are radians.** `rotation`, `camera_pitch` and `camera_yaw` are
-stored in radians — the app's View panel converts for display, so the
-number you see in the UI is not the number in the file. Use
-`math.radians(35)`, not `35`.
+Change a config over time from Python. `sequence=True` makes each frame
+continue the last: a simulation runs on to the frame's step count
+instead of restarting from its seed.
 
-**Names are checked.** `add_variation` and `set_variation_param` raise on
-an unknown variation or parameter, and `set_variation_param` lists the
-ones that do exist. A misspelled variation would otherwise render as a
-silently missing one, which is near-impossible to spot in an image.
+```python
+with ff.VideoWriter("spin.mp4", 1280, 720, fps=30) as video:
+    for n in range(90):
+        c.rotation = n / 90 * 6.2832
+        frame = eng.render(c, 1280, 720, sequence=True)
+        frame.save(f"frame{n:04d}.png")
+        video.write(frame)
+```
 
-## Building
+Or let the animation engine do it, from a `.anim` or a script's animation
+-- the frames the app's video export makes:
+
+```python
+r = ff.run_script(turntable_source, base=c)
+with eng.open_animation(r.animation, 1280, 720, fps=30) as frames:
+    for image in frames:
+        video.write(image)
+```
+
+`python/examples/` has all three, runnable from the repository root.
+
+## Tests and tools
 
 ```bash
-cd python
-maturin build --release      # -> target/wheels/*.whl
-pip install target/wheels/pyfflame-*.whl
-python tests/test_pyfflame.py
+python -m pytest python/tests              # GPU tests skip without an adapter
+python python/tools/compare_native.py tests/visual/configs/escape/*.fflame
+                                           # the module's pictures against the CLI's
 ```
 
-This crate is a **standalone build** with its own `[workspace]`,
-depending on the main crate by path. Nothing here changes the app: no
-features are toggled and no modules are gated, so the editor's build and
-codegen are untouched. It links the app's whole dependency graph, but the
-linker drops what is never called — the wheel comes out around 2.6 MB
-with no GPU or window code in it.
+The design, what was measured, and what is open:
+[docs/projects/pyfflame.md](../docs/projects/pyfflame.md).

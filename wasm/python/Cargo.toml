@@ -1,7 +1,9 @@
-# fflame-python -- SPIKE (branch python-wasm-spike): the engine as a WASI
+# fflame-python -- pyfflame's engine (python/): the engine as a WASI
 # module Python loads with wasmtime, its GPU calls forwarded to wgpu-py
 # through a wgpu custom backend. Standalone, like the gallery crates: the
-# app must be unaffected by anything here.
+# app must be unaffected by anything here. `cargo build --release` in
+# this directory builds it for wasm32-wasip1 (.cargo/config.toml);
+# python/build.py builds it and puts it in the package.
 
 [package]
 name = "fflame-python"

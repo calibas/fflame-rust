@@ -1,6 +1,7 @@
-//! SPIKE (branch python-wasm-spike): the engine as a WASI module for
-//! Python. wasmtime runs it; its GPU calls go to the host through a wgpu
-//! custom backend (`backend`), and the host makes them with wgpu-py.
+//! pyfflame's engine (python/): the engine as a WASI module for Python.
+//! wasmtime runs it; its GPU calls go to the host through a wgpu custom
+//! backend (`backend`), and the host makes them with wgpu-py
+//! (python/pyfflame/_gpu.py). docs/projects/pyfflame.md has the design.
 //!
 //! One call crosses the boundary: `fflame_call`, a JSON request
 //! (`{"fn": ..., ...}`) and a block of bytes beside it (pixels to encode),
@@ -144,6 +145,51 @@ fn call(r: &Value, bytes: Vec<u8>) -> Result<(Vec<u8>, Value), String> {
             })))
         }
         "default_config" => Ok(data(json!(FractalConfig::default().to_json().map_err(|e| e.to_string())?))),
+        // For the Python `Config`'s properties: what a field a `.fflame`
+        // leaves out READS as -- not the struct's default, which can
+        // differ (an absent `preserve_z` is true, for flames older than
+        // the field; `FractalConfig::default()` has it false). So: the
+        // default config without those fields, read back. And a new
+        // transform as the app makes it, and a transform's absent fields.
+        "defaults" => {
+            use fractal_flame_wgpu::scene::transforms::Transform;
+            const FIELDS: [&str; 10] = [
+                "render_mode", "zoom", "pan_x", "pan_y", "rotation", "camera_rotation_x",
+                "camera_rotation_y", "perspective_strength", "preserve_z", "max_iterations",
+            ];
+            let mut v: Value = serde_json::from_str(&FractalConfig::default().to_json().map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            if let Some(o) = v.as_object_mut() {
+                for k in FIELDS {
+                    o.remove(k);
+                }
+            }
+            let d = FractalConfig::from_json(&v.to_string()).map_err(|e| e.to_string())?;
+            let absent = serde_json::from_value::<Transform>(json!({})).unwrap_or_default();
+            Ok(data(json!({
+                "config": {
+                    "render_mode": d.render_mode, "zoom": d.zoom, "pan_x": d.pan_x, "pan_y": d.pan_y,
+                    "rotation": d.rotation, "camera_rotation_x": d.camera_rotation_x,
+                    "camera_rotation_y": d.camera_rotation_y, "perspective_strength": d.perspective_strength,
+                    "preserve_z": d.preserve_z, "max_iterations": d.max_iterations,
+                },
+                "new_transform": serde_json::to_value(Transform::default()).map_err(|e| e.to_string())?,
+                "transform": serde_json::to_value(absent).map_err(|e| e.to_string())?,
+            })))
+        }
+        // The config as the app writes it: parsed (so a broken one is
+        // refused) and serialized again.
+        "config_normalize" => Ok(data(json!(config_arg(r, "config")?.to_json().map_err(|e| e.to_string())?))),
+        // Every variation in registration order, with its parameters' names.
+        "variations" => {
+            let registry = fractal_flame_wgpu::variations::global_registry();
+            let list: Vec<Value> = registry
+                .all()
+                .iter()
+                .map(|v| json!({ "name": v.name, "params": v.parameters.iter().map(|p| p.name.to_string()).collect::<Vec<_>>() }))
+                .collect();
+            Ok(data(Value::Array(list)))
+        }
         "presets" => {
             let presets = fractal_flame_wgpu::resources::presets::load_embedded_presets().map_err(|e| e.to_string())?;
             let list: Result<Vec<Value>, String> = presets

@@ -9,7 +9,8 @@ The program is a GPU fractal editor written in Rust on wgpu (WGSL
 compute shaders) and egui. One library crate (`fractal_flame_wgpu`,
 `src/lib.rs`) is built five ways: the desktop app, which is also a
 headless CLI; the web app (WASM on WebGPU); the single-purpose gallery
-modules in `wasm/`; and the Python bindings in `python/`.
+modules in `wasm/`; and the Python package in `python/`, which runs the
+library built for WASI (`wasm/python`).
 
 ---
 
@@ -176,8 +177,8 @@ it is not compiled. Undo lives in `ConfigManager`.
 | `shaders/` | `core/` (the flame template and its helpers: `header`, `main_template`, `utilities`, `rng`, `affine`, `affine_3d`, `accumulate_samples`, `noise`, `voronoi`, `complex`, `fractwf`, `polychora`, `polyhedra`, `su_mobius`, `subflame`, and for Focused Rendering `replay`, `replay_delta`, `plan_eval`, `plan_gather`, `plan_offsets`); `accumulate`, `accumulate_tiled`, `tonemap`, `downsample`, `histogram_blur`, `blur_convolve`, `blur_upscale`; solid shading `shade`, `normals`, `atrous`, `dof`; `effects/{density,color,common}/`. Variation, escape and simulation WGSL is inline in Rust |
 | `assets/` | `presets.fflame`, `palettes/` (packs and loose files), `scripts/`, `textures/`, `fonts/`, `branding/` |
 | `build.rs` | Build provenance (version, git hash, profile), the WASM palette manifest, embedded texture presets, asset and shader copies into the target directory, the Windows icon |
-| `wasm/` | Gallery crates `script`, `render`, `flame`, `escape`, `sim`; see [wasm/README.md](../wasm/README.md) |
-| `python/` | `pyfflame`, PyO3 bindings built with maturin: config editing, `.flame` conversion, scripts; no rendering |
+| `wasm/` | Gallery crates `script`, `render`, `flame`, `escape`, `sim`; see [wasm/README.md](../wasm/README.md). `python`: the library for WASI, pyfflame's engine |
+| `python/` | `pyfflame`: the WASI module run by wasmtime, its GPU work by wgpu-py -- config editing, `.flame` conversion, scripts, rendering, animation, video; [projects/pyfflame.md](projects/pyfflame.md) |
 | `tests/` | `regression.rs`, `shader_dumps/`, `test_configs/`, and `visual/` (374 configs in `2d`, `3d`, `escape`, `sim`, `solid`, `tonemap`, `variations`) |
 | `benches/` | `flame_bench.rs` (Criterion) |
 | `scripts/` | `release.py`, `run_benchmarks.py`, `check_doc_links.py`, audits and one-shot codemods |
@@ -416,7 +417,7 @@ combination.
 | Desktop app and CLI | `cargo run --release`; release builds use `cargo build --profile dist` | wgpu backends: Vulkan, Metal, GLES (no DX12) |
 | Web app | `./build-wasm.sh` (or `.bat`): `--profile dist` plus wasm-bindgen | WebGPU only; [WASM.md](WASM.md) |
 | Gallery modules | `wasm-pack build --target web --release` in `wasm/script`, `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/sim` | each depends on the library with `default-features = false`; [wasm/README.md](../wasm/README.md) |
-| Python | maturin in `python/` | standalone crate, default features; [projects/pyfflame.md](projects/pyfflame.md) |
+| Python | `python python/build.py` (the module, `cargo build` in `wasm/python` for `wasm32-wasip1`, into the package; `--wheel`) | one pure-Python wheel; [projects/pyfflame.md](projects/pyfflame.md) |
 
 Profiles in `Cargo.toml`: `release`; `dist` (fat LTO, stripped,
 `panic = "abort"`); `dist-symbols` (dist with names kept); `dist-debug`
