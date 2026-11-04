@@ -1,6 +1,26 @@
 //! Entering a render mode: what a mode change, or a choice that takes
-//! the config into another engine, implies for the config -- one undo
-//! step through [`ConfigManager::choose`].
+//! the config into another engine, does to the config -- one undo step
+//! through [`ConfigManager::choose`].
+//!
+//! **Each engine owns its settings.** The palette, the tone map, the
+//! background, the effects and the lighting rig work differently for a
+//! flame, an escape-time picture and a simulation, so nothing of them is
+//! carried from one engine to another (the user, 2026-11-04: "There's
+//! really no reason coloring/tonemapping/lighting or any other settings
+//! should be copied between modes."). The config's own fields hold the
+//! shown engine's; the others wait in `FractalConfig::engine_settings`,
+//! in the config's own JSON. Leaving an engine puts its settings there;
+//! entering one takes its own back -- or, the first time, its defaults,
+//! never a copy. 2D and 3D flames are one engine and share them.
+//!
+//! The stash is config state like any other, so the old objections to
+//! restoring on the way out do not hold: undo and redo move it with the
+//! mode (the switch is one whole-config step), a saved file keeps each
+//! engine's settings, and a loaded fractal brings its own. What the
+//! flame alone reads (its camera, its iteration settings) is the flame's
+//! already; the picture's frame (`image_size`) and `deterministic_rng`
+//! stay shared. Every field of `FractalConfig` is in one of these
+//! classes (`every_config_field_is_classified`).
 //!
 //! The rules live here, in the config, rather than in the UI, so every
 //! surface that switches a mode applies them alike. The four modes
@@ -36,10 +56,15 @@ pub fn surface_3d(config: &FractalConfig) -> bool {
 /// lighting at all), the rig taken over ([`rig_taken_over`]). Nothing
 /// when it enters no such view, or was in one already.
 pub fn look_3d(before: &FractalConfig, after: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
-    use crate::config::defaults::{DEFAULT_HUE_SHIFT, DEFAULT_SATURATION, ESCAPE_EXPOSURE, ESCAPE_GAMMA};
     if surface_3d(before) || !surface_3d(after) {
         return Vec::new();
     }
+    look_3d_changes(after)
+}
+
+/// The 3D look's changes for `after`, whatever it came from.
+fn look_3d_changes(after: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
+    use crate::config::defaults::{DEFAULT_HUE_SHIFT, DEFAULT_SATURATION, ESCAPE_EXPOSURE, ESCAPE_GAMMA};
     let mut changes = vec![
         (ConfigPath::TonemapMode, crate::scene::tonemap::ToneMapMode::Linear.into()),
         (ConfigPath::Exposure, ESCAPE_EXPOSURE.into()),
@@ -115,59 +140,186 @@ pub fn lights_to_world(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)>
     changes
 }
 
-/// What else `changes` imply when they take `before` into `mode`: the
-/// mode itself if it is another, and then the 3D look ([`look_3d`]) when
-/// the result is a lit 3D view `before` did not draw, or else the tone
-/// map's rescue (`entry_tone_mapping`: a flame's Log-calibrated mapping
-/// renders a non-flame engine's unit-range image black). In `mode`
-/// already, only the look the changes themselves bring.
-///
-/// For a caller that cannot go through [`ConfigManager::choose`] -- a
-/// structural snapshot applies these to its `after` detached.
-pub fn entering_changes(
-    before: &FractalConfig,
-    changes: &[(ConfigPath, ConfigValue)],
-    mode: RenderMode,
-) -> Vec<(ConfigPath, ConfigValue)> {
-    let mut after = before.clone();
-    for (path, value) in changes {
-        let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, path, value.clone());
-    }
-    implied(before, after, mode)
+// ---------------------------------------------------------------- engines
+
+/// The three engines. 2D and 3D flames are one: the same chaos game,
+/// one palette and tone map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Engine {
+    Flame,
+    Escape,
+    Simulation,
 }
 
-/// [`entering_changes`] for a choice made as a whole-config snapshot (a
-/// layered simulation preset, a texture): what entering `mode` implies,
-/// applied to `after` in place, so the snapshot is still one undo step.
-pub fn enter_snapshot(before: &FractalConfig, after: &mut FractalConfig, mode: RenderMode) {
-    for (path, value) in implied(before, after.clone(), mode) {
-        let _ = ConfigManager::apply_value_detached(after, EditingTarget::Main, &path, value);
-    }
-}
-
-/// What entering `mode` adds to `after`, which is `before` with a choice
-/// made in it.
-fn implied(before: &FractalConfig, mut after: FractalConfig, mode: RenderMode) -> Vec<(ConfigPath, ConfigValue)> {
-    let entering = after.render_mode != mode;
-    let mut out = Vec::new();
-    if entering {
-        out.push((ConfigPath::RenderMode, mode.into()));
-        let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, &ConfigPath::RenderMode, mode.into());
-    }
-    let look = look_3d(before, &after);
-    if !look.is_empty() {
-        out.extend(look);
-    } else if entering {
-        // Escape output has its own calibration; a simulation keeps the
-        // flame defaults (`entry_tone_mapping`, shared with the script
-        // handles).
-        if let Some((exposure, gamma)) = crate::config::defaults::entry_tone_mapping(before, mode) {
-            out.push((ConfigPath::TonemapMode, crate::scene::tonemap::ToneMapMode::Linear.into()));
-            out.push((ConfigPath::Exposure, exposure.into()));
-            out.push((ConfigPath::Gamma, gamma.into()));
+impl Engine {
+    pub fn of(mode: RenderMode) -> Self {
+        match mode {
+            RenderMode::TwoD | RenderMode::ThreeD => Engine::Flame,
+            RenderMode::Escape => Engine::Escape,
+            RenderMode::Simulation => Engine::Simulation,
         }
     }
-    out
+
+    /// Its key in `FractalConfig::engine_settings`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Engine::Flame => "flame",
+            Engine::Escape => "escape",
+            Engine::Simulation => "simulation",
+        }
+    }
+}
+
+/// The fields each engine owns ([`ENGINE_OWNED`]), listed once: their
+/// names, and a copy between two configs (all of them, or one by name).
+macro_rules! engine_owned {
+    ($($field:ident),* $(,)?) => {
+        /// The settings each engine keeps its own of: the palette and its
+        /// settings, the background, the tone map, the effects (and the
+        /// Rhai effects they carry), the lighting rig.
+        pub const ENGINE_OWNED: &[&str] = &[$(stringify!($field)),*];
+
+        fn copy_owned(from: &FractalConfig, to: &mut FractalConfig, only: Option<&str>) {
+            $(if only.is_none_or(|name| name == stringify!($field)) {
+                to.$field = from.$field.clone();
+            })*
+        }
+    };
+}
+
+engine_owned!(
+    palette, palette_rotation, palette_size, palette_squeeze, palette_squeeze_mode,
+    palette_squeeze_falloff, palette_log_strength, palette_reverse, background_color,
+    tonemap_mode, highlight_mode, tonemap_curve, use_curve, exposure, gamma, gamma_threshold,
+    brightness, vibrancy, white_level, saturation, hue_shift, alpha_blend_low, alpha_blend_high,
+    levels_enabled, levels_low, levels_high, levels_gamma, auto_exposure,
+    density_effects, color_effects, custom_effects, solid_shading,
+);
+
+/// What every engine shares: the picture's frame and its reproducibility.
+pub const SHARED: &[&str] = &["image_size", "deterministic_rng"];
+
+/// What the flame alone reads -- its camera, projection, depth, filter,
+/// iteration, colour-mode and Focused Rendering settings. The flame's
+/// already, so a switch leaves them where they are.
+pub const FLAME_ONLY: &[&str] = &[
+    "preserve_z", "reset_orbits", "zoom", "pan_x", "pan_y", "rotation", "camera_rotation_x",
+    "camera_rotation_y", "camera_bank", "camera_x", "camera_y", "camera_z", "perspective_strength",
+    "dof_focus_distance", "dof_blur_strength", "fog_strength", "fog_start", "depth_density_compensation",
+    "far_density_fade", "far_density_fade_start", "solid_strength", "surface_thickness", "filter_radius",
+    "filter_blur_edges", "density_scale", "speed_factor", "max_iterations", "blend_factor",
+    "use_dynamic_blend", "color_mode", "path_map_style", "path_map_level", "importance",
+    "cylinder_targeting", "cylinder_always", "cylinder_trim", "cylinder_trim_levels", "word_removals",
+];
+
+/// The engines' own blocks, the mode, and the stash.
+pub const STRUCTURE: &[&str] = &["flame", "render_mode", "escape", "sim", "engine_settings"];
+
+/// A config's engine-owned settings, as its JSON (a field at its default
+/// is absent, as in a file).
+fn owned_json(config: &FractalConfig) -> serde_json::Map<String, serde_json::Value> {
+    match serde_json::to_value(config) {
+        Ok(serde_json::Value::Object(o)) => o.into_iter().filter(|(k, _)| ENGINE_OWNED.contains(&k.as_str())).collect(),
+        _ => serde_json::Map::new(),
+    }
+}
+
+/// `config`'s engine-owned settings set from `owned` (as [`owned_json`]
+/// wrote them), read through `FractalConfig`'s own serde, so an absent
+/// field takes the default a file's would. False if they do not read.
+fn restore_owned(config: &mut FractalConfig, owned: &serde_json::Map<String, serde_json::Value>) -> bool {
+    let Ok(serde_json::Value::Object(mut carrier)) = serde_json::to_value(FractalConfig::default()) else {
+        return false;
+    };
+    for k in ENGINE_OWNED {
+        carrier.remove(*k);
+    }
+    carrier.extend(owned.iter().map(|(k, v)| (k.clone(), v.clone())));
+    match serde_json::from_value::<FractalConfig>(serde_json::Value::Object(carrier)) {
+        Ok(read) => {
+            copy_owned(&read, config, None);
+            true
+        }
+        Err(e) => {
+            log::warn!("an engine's stashed settings did not read ({e}); it starts from its defaults");
+            false
+        }
+    }
+}
+
+/// An engine's settings the first time a config enters it: the defaults,
+/// with the tone map the engine's picture needs -- an escape-time or
+/// simulation image is unit-range linear light, which a flame's Log
+/// mapping renders black; escape-time has its own calibration.
+fn first_entry(config: &mut FractalConfig, engine: Engine) {
+    use crate::config::defaults::{DEFAULT_EXPOSURE, DEFAULT_GAMMA, ESCAPE_EXPOSURE, ESCAPE_GAMMA};
+    let mut defaults = FractalConfig::default();
+    match engine {
+        Engine::Flame => {}
+        Engine::Escape => {
+            defaults.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            defaults.exposure = ESCAPE_EXPOSURE;
+            defaults.gamma = ESCAPE_GAMMA;
+        }
+        Engine::Simulation => {
+            defaults.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            defaults.exposure = DEFAULT_EXPOSURE;
+            defaults.gamma = DEFAULT_GAMMA;
+        }
+    }
+    copy_owned(&defaults, config, None);
+}
+
+/// `after` -- `before` with a choice made in it -- entered into `mode`:
+/// the mode; when that is another engine, the one left stashed and the
+/// one entered restored (or its defaults), what the choice itself set
+/// kept over them; and the 3D look when the result is a lit 3D view the
+/// engine was not showing ([`look_3d`]).
+pub fn enter(before: &FractalConfig, after: &mut FractalConfig, mode: RenderMode) {
+    let (from, to) = (Engine::of(before.render_mode), Engine::of(mode));
+    let mut restored = false;
+    if from != to {
+        // What the choice set of the engine-owned settings wins over the
+        // entered engine's: a preset's palette, say.
+        let set_by_choice: Vec<&str> = {
+            let (was, now) = (owned_json(before), owned_json(after));
+            ENGINE_OWNED.iter().copied().filter(|k| was.get(*k) != now.get(*k)).collect()
+        };
+        let chosen = after.clone();
+        after.engine_settings.insert(from.key().to_string(), owned_json(before));
+        if let Some(own) = after.engine_settings.remove(to.key()) {
+            restored = restore_owned(after, &own);
+        }
+        if !restored {
+            first_entry(after, to);
+        }
+        for field in set_by_choice {
+            copy_owned(&chosen, after, Some(field));
+        }
+    }
+    after.render_mode = mode;
+    // The 3D look on entering a lit view the engine was not showing: in
+    // the engine already, as `before` drew it; an engine restored, as it
+    // was left (its block is as it was); a first entry, from nothing.
+    let was_lit = if from == to {
+        surface_3d(before)
+    } else if restored {
+        surface_3d(&FractalConfig { render_mode: mode, ..before.clone() })
+    } else {
+        false
+    };
+    if !was_lit && surface_3d(after) {
+        for (path, value) in look_3d_changes(after) {
+            let _ = ConfigManager::apply_value_detached(after, EditingTarget::Main, &path, value);
+        }
+    }
+}
+
+/// [`enter`] for a choice made as a whole-config snapshot (a layered
+/// simulation preset, a texture): `after` entered into `mode` in place,
+/// so the snapshot is still one undo step.
+pub fn enter_snapshot(before: &FractalConfig, after: &mut FractalConfig, mode: RenderMode) {
+    enter(before, after, mode);
 }
 
 impl ConfigManager {
@@ -175,25 +327,218 @@ impl ConfigManager {
     /// an engine takes the config into its mode (one-workspace plan,
     /// decision 4) -- a formula picked, a Rhai entry put to use, a
     /// simulation model, a texture -- with what entering implies
-    /// ([`entering_changes`]). In the mode already, the changes with the
-    /// look they bring.
+    /// ([`enter`]). In the mode already, the changes with the 3D look
+    /// they bring.
     pub fn choose(
         &mut self,
         mut changes: Vec<(ConfigPath, ConfigValue)>,
         description: &str,
         mode: RenderMode,
     ) -> Result<UpdateType, ConfigError> {
-        let extra = entering_changes(self.active_config(), &changes, mode);
-        changes.extend(extra);
-        if changes.is_empty() {
-            return Ok(UpdateType::None);
+        let before = self.active_config().clone();
+        let mut after = before.clone();
+        for (path, value) in &changes {
+            let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, path, value.clone());
         }
-        self.update_batch(changes, description.to_string())
+        if before.render_mode == mode {
+            changes.extend(look_3d(&before, &after));
+            if changes.is_empty() {
+                return Ok(UpdateType::None);
+            }
+            return self.update_batch(changes, description.to_string());
+        }
+        // Another mode: a whole-config step, so the engines' settings move
+        // with it through undo and redo.
+        enter(&before, &mut after, mode);
+        self.apply_config_edit(after, description.to_string())?;
+        Ok(UpdateType::IterationReset)
     }
 
     /// Change the render mode, as one undo step; to the mode already
     /// shown, nothing (no history entry).
     pub fn switch_mode(&mut self, mode: RenderMode) -> Result<(), ConfigError> {
         self.choose(Vec::new(), "history.param.render_mode", mode).map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::defaults::{ESCAPE_EXPOSURE, ESCAPE_GAMMA};
+    use crate::scene::tonemap::ToneMapMode;
+
+    fn in_mode(mode: RenderMode) -> FractalConfig {
+        FractalConfig { render_mode: mode, ..FractalConfig::default() }
+    }
+
+    /// `c` with its engine's settings off their defaults, every kind of
+    /// them: the tone map, the palette, the background, the effects, the
+    /// lighting.
+    fn styled(mut c: FractalConfig, n: f32) -> FractalConfig {
+        c.exposure = 1.0 + n;
+        c.vibrancy = 0.1 * n;
+        c.saturation = 1.0 + 0.1 * n;
+        c.background_color = [0.1 * n, 0.0, 0.0];
+        c.palette_rotation = 0.05 * n;
+        c.color_effects = vec![crate::effects::EffectInstance::new("vignette")];
+        c.solid_shading.ambient = 0.1 * n;
+        c
+    }
+
+    /// What a first entry into `mode`'s engine gives.
+    fn first_entry_of(mode: RenderMode) -> serde_json::Map<String, serde_json::Value> {
+        let mut c = in_mode(mode);
+        first_entry(&mut c, Engine::of(mode));
+        owned_json(&c)
+    }
+
+    /// The user's case: each engine keeps its own palette, tone map,
+    /// effects and lighting, and gets them back on returning -- nothing of
+    /// one engine is copied into another.
+    #[test]
+    fn each_engine_keeps_its_own_settings() {
+        let mut m = ConfigManager::new(styled(in_mode(RenderMode::TwoD), 3.0));
+        let flame = owned_json(m.active_config());
+        m.switch_mode(RenderMode::Escape).expect("to escape");
+        let c = m.active_config();
+        assert_eq!((c.tonemap_mode, c.exposure, c.gamma), (ToneMapMode::Linear, ESCAPE_EXPOSURE, ESCAPE_GAMMA), "escape's own tone map");
+        assert!(c.color_effects.is_empty(), "the flame's effects were copied");
+        assert_eq!(owned_json(c), first_entry_of(RenderMode::Escape), "a first entry is the engine's defaults");
+        m.update_param(ConfigPath::Exposure, 5.0f32.into()).expect("exposure");
+        let escape = owned_json(m.active_config());
+        m.switch_mode(RenderMode::Simulation).expect("to sim");
+        assert_eq!(owned_json(m.active_config()), first_entry_of(RenderMode::Simulation), "nor the escape's into the simulation");
+        m.switch_mode(RenderMode::TwoD).expect("back to the flame");
+        assert_eq!(owned_json(m.active_config()), flame, "the flame's own back");
+        m.switch_mode(RenderMode::Escape).expect("back to escape");
+        assert_eq!(owned_json(m.active_config()), escape, "and the escape's");
+        let keys: Vec<&String> = m.active_config().engine_settings.keys().collect();
+        assert_eq!(keys, ["flame", "simulation"], "the engines not shown wait in the stash");
+    }
+
+    /// 2D and 3D flames are one engine: a switch between them moves no
+    /// setting and stashes nothing.
+    #[test]
+    fn two_d_and_three_d_share_the_flames_settings() {
+        let mut m = ConfigManager::new(styled(in_mode(RenderMode::TwoD), 2.0));
+        let flame = owned_json(m.active_config());
+        m.switch_mode(RenderMode::ThreeD).expect("to 3d");
+        assert_eq!(owned_json(m.active_config()), flame);
+        assert!(m.active_config().engine_settings.is_empty());
+    }
+
+    /// A switch is one undo step: undo takes the mode and every engine's
+    /// settings back, redo brings them forward again.
+    #[test]
+    fn a_switch_undoes_and_redoes_whole() {
+        let mut m = ConfigManager::new(styled(in_mode(RenderMode::TwoD), 1.0));
+        let flame = owned_json(m.active_config());
+        let before = m.history_len();
+        m.switch_mode(RenderMode::Escape).expect("switch");
+        assert_eq!(m.history_len() - before, 1, "one undo step");
+        m.undo().expect("undo");
+        let c = m.active_config();
+        assert_eq!((c.render_mode, owned_json(c)), (RenderMode::TwoD, flame.clone()));
+        assert!(c.engine_settings.is_empty(), "the stash went back too");
+        m.redo().expect("redo");
+        let c = m.active_config();
+        assert_eq!((c.render_mode, owned_json(c)), (RenderMode::Escape, first_entry_of(RenderMode::Escape)));
+        assert_eq!(c.engine_settings.get("flame"), Some(&flame));
+    }
+
+    /// The stash is part of the file: a config saved in one engine and
+    /// loaded gives the other engines their own settings back.
+    #[test]
+    fn the_engines_settings_travel_with_the_file() {
+        let mut m = ConfigManager::new(styled(in_mode(RenderMode::TwoD), 4.0));
+        let flame = owned_json(m.active_config());
+        m.switch_mode(RenderMode::Simulation).expect("switch");
+        let loaded = FractalConfig::from_json(&m.active_config().to_json().expect("save")).expect("load");
+        let mut m = ConfigManager::new(loaded);
+        m.switch_mode(RenderMode::TwoD).expect("back");
+        assert_eq!(owned_json(m.active_config()), flame);
+    }
+
+    /// Every pair of engines: a first entry is the entered engine's
+    /// defaults, whatever the engine left was wearing.
+    #[test]
+    fn a_first_entry_copies_nothing() {
+        for from in RenderMode::ALL {
+            for to in RenderMode::ALL {
+                if Engine::of(*from) == Engine::of(*to) {
+                    continue;
+                }
+                let mut m = ConfigManager::new(styled(in_mode(*from), 5.0));
+                m.switch_mode(*to).expect("switch");
+                assert_eq!(owned_json(m.active_config()), first_entry_of(*to), "{from:?} -> {to:?}");
+            }
+        }
+    }
+
+    /// A choice that takes the config into another engine keeps what the
+    /// choice itself set (a preset's exposure), the entered engine's own
+    /// for the rest.
+    #[test]
+    fn a_choice_across_engines_keeps_what_it_set() {
+        let mut m = ConfigManager::new(styled(in_mode(RenderMode::TwoD), 3.0));
+        m.choose(
+            vec![(ConfigPath::Exposure, 7.0f32.into()), (ConfigPath::EscapeFormula, ConfigValue::String("burning_ship".into()))],
+            "history.action.escape_preset",
+            RenderMode::Escape,
+        )
+        .expect("choose");
+        let c = m.active_config();
+        assert_eq!((c.render_mode, c.escape.formula.as_str(), c.exposure), (RenderMode::Escape, "burning_ship", 7.0));
+        assert_eq!(c.vibrancy, FractalConfig::default().vibrancy, "the rest is escape's own");
+        assert!(c.color_effects.is_empty());
+    }
+
+    /// The 3D look is for a lit view the engine was not showing: a solid
+    /// entered for the first time gets it; a solid left and returned to
+    /// keeps the look it was given since.
+    #[cfg(feature = "engine-escape")]
+    #[test]
+    fn a_lit_view_gets_the_3d_look_once() {
+        let mut flame = in_mode(RenderMode::TwoD);
+        flame.escape.formula = "mandelbulb_solid".to_string();
+        let mut m = ConfigManager::new(flame);
+        m.switch_mode(RenderMode::Escape).expect("first entry");
+        let c = m.active_config();
+        assert_eq!((c.tonemap_mode, c.exposure, c.solid_shading.shading_strength), (ToneMapMode::Linear, ESCAPE_EXPOSURE, 1.0), "the 3D look, rig taken over");
+        m.update_param(ConfigPath::Exposure, 3.0f32.into()).expect("tuned");
+        m.switch_mode(RenderMode::TwoD).expect("away");
+        m.switch_mode(RenderMode::Escape).expect("back");
+        assert_eq!(m.active_config().exposure, 3.0, "a returned solid keeps its own look");
+    }
+
+    /// Every field of `FractalConfig` is in exactly one class: owned by
+    /// each engine, shared, the flame's alone, or structure. A new field
+    /// must say which, or it would be silently copied between engines (or
+    /// silently not). A source scan, as the render mode's writer scan is.
+    #[test]
+    fn every_config_field_is_classified() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/config/fractal_config.rs");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            eprintln!("no source tree; skipping");
+            return;
+        };
+        let body = &text[text.find("pub struct FractalConfig {").expect("the struct")..];
+        let body = &body[..body.find("\n}").expect("its end")];
+        let fields: Vec<&str> = body
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub ").and_then(|r| r.split(':').next()))
+            .filter(|f| f.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+            .collect();
+        assert!(fields.len() > 60, "the scan found {} fields", fields.len());
+        let classes = [ENGINE_OWNED, SHARED, FLAME_ONLY, STRUCTURE];
+        for f in &fields {
+            let n = classes.iter().filter(|c| c.contains(f)).count();
+            assert_eq!(n, 1, "`{f}` is in {n} classes of config::mode, not one");
+        }
+        for class in classes {
+            for f in class {
+                assert!(fields.contains(f), "`{f}` is classified but is no field of FractalConfig");
+            }
+        }
     }
 }

@@ -104,10 +104,10 @@ pub const DEFAULT_DENSITY_SCALE: f32 = 1.0;
 /// The tone mapping a config takes on when it enters `mode` from a flame
 /// mode: a Log-calibrated flame tone map renders an escape-time or
 /// simulation picture black, so it becomes Linear at the mode's own
-/// calibration -- `(exposure, gamma)`; None keeps the config's. One rule
-/// for the app's Mode menu and a script's `escape` / `sim` handles, which
-/// had drifted (a script-built escape picture came out at half the
-/// panel's exposure).
+/// calibration -- `(exposure, gamma)`; None keeps the config's. A
+/// script's `escape` / `sim` handles use it; the app's Mode menu gives
+/// each engine its own settings instead (`config::mode`), whose first
+/// entry into escape-time or a simulation is this same calibration.
 pub fn entry_tone_mapping(
     config: &crate::config::FractalConfig,
     mode: crate::scene::transforms::RenderMode,
