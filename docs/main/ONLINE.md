@@ -527,21 +527,17 @@ engines by feature:
 | --- | --- | --- |
 | `wasm/script` | `fflame-script` | `engine-flame`, `engine-escape`, `engine-sim` — script + seed + params → config JSON |
 | `wasm/render` | `fflame-render` | `engine-flame`, `engine-escape`, `engine-sim` |
-| `wasm/flame` | `fflame-flame` | `engine-flame`, `lang` |
-| `wasm/escape` | `fflame-escape` | `engine-escape` (which brings `lang`) |
-| `wasm/sim` | `fflame-sim` | `engine-sim`, `lang` |
 
 `wasm/python` is under `wasm/` too but is not a web module: it is the
 library built for WASI (every engine plus `terrain`), the engine of the
 Python package (`python/`).
 
-The four renderers are one source (`wasm/render/src/lib.rs`) built with
-different features. An escape or simulation config sent to a module
-without that engine is refused with `RenderError::EngineMissing`
-("this build has no simulation engine"); a flame config sent to a
-module without `engine-flame` renders against a catalog holding only
-`linear`. `fflame-render` has all three engines and renders every
-mode. The JavaScript API and its guarantees are in
+`fflame-render` has all three engines and renders every mode. It is
+the one gallery renderer: the single-engine modules (`fflame-flame`,
+`fflame-escape`, `fflame-sim`) were retired on 2026-11-04, because
+escape and simulation configs use flame variations (a lens, a
+transformation, the Flame Attractor, a layer's warp) and those modules
+drew them without. The JavaScript API and its guarantees are in
 [wasm/README.md](../../wasm/README.md); building and releasing them are
 in [WASM.md](../WASM.md) and [RELEASE.md](../RELEASE.md) §5.
 

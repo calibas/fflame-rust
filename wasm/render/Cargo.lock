@@ -1433,13 +1433,14 @@ name = "fflame-render"
 version = "0.5.0"
 dependencies = [
  "console_error_panic_hook",
- "egui-wgpu",
  "fractal_flame_wgpu",
  "js-sys",
  "log",
  "pollster",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wgpu",
 ]
 
 [[package]]

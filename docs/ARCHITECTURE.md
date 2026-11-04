@@ -440,16 +440,19 @@ since the export competes for the same GPU.
 | `web-app` | on | `mod app`, `mod ui`, the editor's wasm-bindgen exports (`wasm_main`, `WasmApi`) |
 | `engine-flame` | on | the variation catalog; off, the registry holds `linear` alone |
 | `engine-escape` | on | `src/escape/`; implies `lang` |
-| `lang` | on (with `engine-escape`) | `src/lang/`, the formula language: Rhai (and UF's, Fractint's) to WGSL, so a build compiles Rhai effects and variations; its deep-zoom passes (`bigeval`, `periodic`) come with `engine-escape` alone. The flame and simulation gallery modules turn it on (+0.33 MB gzip to the flame module, measured before `wasm-opt`) |
+| `lang` | on (with `engine-escape`) | `src/lang/`, the formula language: Rhai (and UF's, Fractint's) to WGSL, so a build compiles Rhai effects and variations; its deep-zoom passes (`bigeval`, `periodic`) come with `engine-escape` alone |
 | `engine-sim` | on | `src/sim/` |
 | `terrain` | on | the terrain view; implies `engine-escape` |
 
 With an engine off, `render_with` returns `RenderError::EngineMissing`
-for configs in that mode. `python scripts/release.py check` compiles the
-five gallery crates and their tests, each at its own feature set (render
-and script with every engine, flame, escape and sim with one each): that
-is the engine feature matrix, because a `#[cfg]` on the wrong item
-compiles in every other combination. It also checks the WASI module
+for configs in that mode. No shipped build drops an engine: the
+single-engine gallery modules were retired on 2026-11-04, because the
+engines use each other (an escape lens or Flame Attractor names flame
+variations). `python scripts/release.py check` compiles the two gallery
+crates and their tests (every engine, no web app, no terrain), then the
+library at each engine's features alone: that is the engine feature
+matrix, because a `#[cfg]` on the wrong item compiles in every other
+combination. It also checks the WASI module
 (the `python module (WASI)` gate). The gallery crates' own tests and
 pyfflame's run under `python scripts/release.py gallery`.
 
@@ -457,7 +460,7 @@ pyfflame's run under `python scripts/release.py gallery`.
 | --- | --- | --- |
 | Desktop app and CLI | `cargo run --release`; release builds use `cargo build --profile dist` | wgpu backends: Vulkan, Metal, GLES (no DX12) |
 | Web app | `./build-wasm.sh` (or `.bat`): `--profile dist` plus wasm-bindgen | WebGPU only; [WASM.md](WASM.md) |
-| Gallery modules | `wasm-pack build --target web --release` in `wasm/script`, `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/sim` | each depends on the library with `default-features = false`; [wasm/README.md](../wasm/README.md) |
+| Gallery modules | `wasm-pack build --target web --release` in `wasm/script`, `wasm/render` | each depends on the library with `default-features = false`; [wasm/README.md](../wasm/README.md) |
 | Python | `python python/build.py` (the module, `cargo build` in `wasm/python` for `wasm32-wasip1`, into the package; `--wheel`) | one pure-Python wheel; [projects/pyfflame.md](projects/pyfflame.md) |
 
 Profiles in `Cargo.toml`: `release`; `dist` (fat LTO, stripped,
@@ -504,8 +507,8 @@ exported PNG. Release procedure: [RELEASE.md](RELEASE.md).
   `docs/generated/variation-census-*.txt`.
 - `python scripts/release.py check` runs the fast gates (unit tests,
   WASM check, contract, shader dumps, doc links, the gallery crates
-  compiled at their feature sets -- the engine feature matrix -- and the
-  WASI module). `python scripts/release.py gallery` runs the gallery
+  compiled, the library at each engine alone -- the engine feature
+  matrix -- and the WASI module). `python scripts/release.py gallery` runs the gallery
   crates' tests and pyfflame's.
 
 Detail: [TESTING-GUIDE.md](TESTING-GUIDE.md).

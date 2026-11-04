@@ -9,9 +9,6 @@ whatever repo consumes the modules.
 | --- | --- | --- | --- |
 | `fflame-script` | script + seed + params → FractalConfig JSON | 3.93 MB / 1.01 MB | nothing (pure CPU; worker-safe) |
 | `fflame-render` | FractalConfig JSON + dims → RGBA pixels, **any render mode** | 3.29 MB / 0.80 MB¹ | WebGPU |
-| `fflame-flame` | the same, flames only | 3.12 MB / 0.73 MB | WebGPU |
-| `fflame-escape` | the same, escape-time only | 1.52 MB / 0.46 MB | WebGPU |
-| `fflame-sim` | the same, simulations only | 1.46 MB / 0.43 MB | WebGPU |
 
 ¹ Measured when `fflame-render` carried the flame and escape-time
 engines only; it now carries the simulation engine too (its
@@ -20,21 +17,16 @@ engines only; it now carries the simulation engine too (its
 `wasm/python` is not one of these: it is the library built for WASI,
 the engine of the Python package ([python/README.md](../python/README.md)).
 
-**Which renderer to take.** `fflame-render` renders every mode — 2D and
-3D flames, escape-time fractals and simulations — and is the one to
-embed if you do not know what the config will be. (A terrain config
-renders as its 2D picture in every gallery module: none is built with
-the `terrain` feature.) The three
-single-engine modules are the SAME SOURCE built with different Cargo
-features, and exist for one reason: download size. Turning off
-`engine-flame` drops the 646-variation catalogue and its 1.1 MB of
-inline WGSL, which is nearly half the gzipped module — an escape or
-simulation gallery has no use for it.
-
-They are not interchangeable. A single-engine module hands a config
-for another engine either a catalogue of one variation (which is not
-the flame the file describes) or a "this build has no X engine" error.
-Serve the right module, or serve `fflame-render`.
+**One renderer.** `fflame-render` renders every mode — 2D and 3D
+flames, escape-time fractals and simulations. (A terrain config renders
+as its 2D picture: the module is not built with the `terrain`
+feature.) It is the only gallery renderer: the single-engine modules `fflame-flame`, `fflame-escape` and `fflame-sim` were retired on 2026-11-04.
+The engines now use each other — an escape-time lens, transformation or
+Flame Attractor names flame variations, and a simulation's layers can
+be warped by the flame — and a module without the 646-variation
+catalogue drew those configs wrong without saying so: a Flame
+Attractor came out blank, a lens was skipped. What they saved was
+about 0.4 MB gzip each.
 
 **Browser support:** WebGPU is required for rendering — Chrome/Edge
 113+, Firefox 121+; Safari behind a flag. There is no WebGL fallback
@@ -47,17 +39,12 @@ anywhere wasm runs, including Node.
 # from the source repo
 cd wasm/script && wasm-pack build --target web --release
 cd wasm/render && wasm-pack build --target web --release
-# and, if you want a single-engine build:
-cd wasm/flame  && wasm-pack build --target web --release
-cd wasm/escape && wasm-pack build --target web --release
-cd wasm/sim    && wasm-pack build --target web --release
 ```
 
-Each renderer crate carries a native smoke test — `cargo test` in its
-directory — which renders a real config and asserts that the engines it
-is supposed to have dropped really are gone. That check is the point of
-the single-engine crates and cannot be inferred from a file size, so it
-is asserted against the registry directly.
+The renderer crate carries a native smoke test — `cargo test --profile
+gallery-test` in its directory — which renders a config of every engine
+on the machine's GPU, among them a Flame Attractor that needs the
+variation catalogue.
 
 Each produces a `pkg/` directory (ES module + `.wasm`) that is the
 whole deliverable — copy or publish it as-is. The `Cargo.toml`s
@@ -225,15 +212,16 @@ ctx.putImageData(new ImageData(new Uint8ClampedArray(t.pixels), t.width, t.heigh
   config's own `max_iterations`. Rule of thumb: quality scales with
   iterations **per pixel** — 30M at 512×512 (~115/px) is a good tile,
   and a 2× larger edge wants ~4× the iterations for the same look.
-- `iterationsPerThread` (optional, default 256, clamped to 64–4096) is
+- `iterationsPerThread` (optional, default 1024, clamped to 64–4096) is
   how many iterations each GPU thread runs in one dispatch. Orbits
   **persist across dispatches** — each thread resumes where the last
   dispatch left it, and burn-in is paid when the orbits start, not once
   per dispatch — so this slices the budget rather than setting how deep an
   orbit gets. It does not change the total budget (`iterations` does
   that) and the picture does not depend on it; the exact pixels do,
-  because each dispatch seeds its own random streams. The CLI export
-  defaults to 1024; pass 1024 here for pixel parity with it.
+  because each dispatch seeds its own random streams. The default is
+  the CLI's and Python's, so the same config and budget give their
+  pixels on the same machine.
 - **Inputs are treated as hostile**, because a config and a URL are both
   shareable artifacts:
   - dimensions are checked against the device's
@@ -289,12 +277,11 @@ ctx.putImageData(new ImageData(new Uint8ClampedArray(t.pixels), t.width, t.heigh
 
 ## Testing the modules
 
-`python scripts/release.py gallery` runs all five, before the modules
+`python scripts/release.py gallery` runs both, before the modules
 deploy; `release.py check` only checks they compile. One by hand:
 
 ```bash
 cd wasm/script && cargo test --profile gallery-test   # CLI-parity: byte-identical fixtures
 cd wasm/render && cargo test --profile gallery-test   # GPU smoke test (skips without an adapter)
-cd wasm/sim    && cargo test --profile gallery-test   # likewise wasm/flame, wasm/escape
 node wasm/script/check_node_parity.mjs  # the BUILT wasm artifact vs the same fixtures
 ```

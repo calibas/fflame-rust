@@ -53,7 +53,7 @@ Project history is in git: `git log --oneline`.
 - `src/api/` (online client), `src/storage/` (settings, backend, caches, catalogs, plugins, credentials), `src/resources/` (HTTP/filesystem fetching, lazy palette packs)
 - `src/probe/`, `src/census/` - the variation math probe and reachability census; `src/contract.rs` (engine contract), `src/provenance.rs`, `src/shader_dumps.rs`
 - `src/flame_xml.rs` (.flame import/export), `src/png_metadata.rs`, `src/wasm_api.rs`, `src/i18n.rs`
-- `wasm/{render,script,flame,escape,sim}` - single-engine gallery modules; `wasm/python` - the library built for WASI, which `python/` (pyfflame) runs with wasmtime and wgpu-py: editing, scripts, rendering, animation ([pyfflame.md](docs/projects/pyfflame.md))
+- `wasm/{render,script}` - the gallery modules (one renderer for every engine, and scripts); `wasm/python` - the library built for WASI, which `python/` (pyfflame) runs with wasmtime and wgpu-py: editing, scripts, rendering, animation ([pyfflame.md](docs/projects/pyfflame.md))
 
 ### The flame pipeline (each frame; [RENDERER.md](docs/main/RENDERER.md))
 1. **Compute** - the chaos game; each plotted sample atomically adds into a per-pixel u32 histogram (R, G, B, density x `color_scale = 100`). Dispatch = workgroups x 64 threads x `iterations_per_thread` (default 1024). **Orbits persist** between dispatches (orbit buffer, binding 8): only an edit to the dynamics (the orbit key: the flame, render mode, preserve_z, colour mode, speed factor) starts a new generation, never a pan or zoom -- except on a flame carrying variation STATE, which restarts with the accumulation (JWF re-inits variations per render), and on a flame in reset mode (config `reset_orbits`, or a variation with `Feature::ResetsOrbits`), which restarts every dispatch, each orbit `iterations_per_thread` long -- or a variation's `orbit_length` parameter, saved with the flame, which `compute_pass` dispatches on every path. Burn-in is paid once per restart, and the plotted count comes from `OrbitFuses` -- every sample-counting caller must use what `compute_pass` returns. Bad-value recovery as flam3/JWF: X/Y divergence respawns; Z saturates at +/-1e32.
@@ -103,14 +103,14 @@ cargo run --release                      # desktop app (binary: FractalArtEditor
 # CLI subcommands: export, export-animation, generate (Rhai scripts), list-encoders
 cargo run --release -- export -i tests/visual/configs/2d -o output/visual-2d   # one folder (not recursive); the whole suite is run_tests.py
 ./build-wasm.sh                          # web app (or build-wasm.bat): --profile dist + wasm-bindgen, not wasm-pack
-wasm-pack build --target web --release   # gallery modules only: in wasm/render, script, flame, escape, sim
+wasm-pack build --target web --release   # gallery modules only: in wasm/render, wasm/script
 ```
 CLI flags (`--width`, `-H`, `--supersample`, `--transparent`, `--premultiplied`, `--strip-metadata`, `--engine`, `--category`, ...) and PNG metadata (`png_metadata::read_png_metadata(&bytes)`) are in [EXPORT.md](docs/main/EXPORT.md); the JS API (`WasmApi.export_png`) in [WASM.md](docs/WASM.md). iOS/Android builds cross-compile but do not run (`docs/experimental/ios-native-app.md`, `android-native-app.md`); phones use the web app's compact layout.
 
 ### Releasing, and changing anything the API sees
 **See [docs/RELEASE.md](docs/RELEASE.md).** Nothing runs on push or on a timer.
 ```bash
-python scripts/release.py check      # every fast gate (versions agree, tests, wasm builds, contract, shader dumps, doc links, the five gallery crates checked -- the single-engine ones are the engine feature matrix)
+python scripts/release.py check      # every fast gate (versions agree, tests, wasm builds, contract, shader dumps, doc links, the two gallery crates checked, and the library at each engine's features alone -- the engine feature matrix)
 python scripts/release.py gallery    # the gallery crates' own tests (GPU smoke, script parity), before the modules deploy
 python scripts/release.py            # ...and a changelog preview
 ```
@@ -147,7 +147,7 @@ The API's corpora come from `cargo run --release --bin export_variations_json` /
 ### Rust Code
 - `bytemuck::Pod` / `Zeroable` for GPU structs; vec3 needs 16-byte alignment -- add explicit padding and mirror it in the WGSL header.
 - Prefer `Queue::write_buffer()` over buffer mapping for updates.
-- Cargo features `web-app`, `engine-flame`, `engine-escape`, `engine-sim`, `terrain` (all default) gate whole engines for the gallery modules: new engine code needs its `#[cfg]`, and `release.py check` checks each combination.
+- Cargo features `web-app`, `engine-flame`, `engine-escape`, `engine-sim`, `terrain` (all default) gate whole engines. The gallery modules build without `web-app` and `terrain`; no shipped build drops an engine since the single-engine gallery modules retired (2026-11-04), but new engine code still needs its `#[cfg]`, and `release.py check` checks each engine alone.
 
 ### State Management
 ```rust
