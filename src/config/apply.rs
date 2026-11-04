@@ -312,13 +312,15 @@ pub fn apply(config: &mut FractalConfig, target: EditingTarget, path: &ConfigPat
                 config.escape.cam_fov = v.clamp(0.05, 3.0);
             }
             ConfigPath::EscapeZoomLog2 | ConfigPath::EscapeZoomLog10 => {
-                let v: f32 = value.try_into()?;
+                // An f64, as the config holds it (a track's f32 widens):
+                // a script's or Python's zoom keeps its digits.
+                let v: f64 = value.try_into()?;
                 // Same travel range as the input paths; NaN from a
                 // wild animation signal must not poison the view.
                 let v = if matches!(path, ConfigPath::EscapeZoomLog10) {
-                    crate::config::escape::EscapeConfig::log10_to_log2(v as f64)
+                    crate::config::escape::EscapeConfig::log10_to_log2(v)
                 } else {
-                    v as f64
+                    v
                 };
                 config.escape.zoom_log2 =
                     if v.is_finite() { v.clamp(-8.0, 100_000_000.0) } else { 0.0 };

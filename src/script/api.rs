@@ -2461,9 +2461,9 @@ fn register_config(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         "set",
         move |c: &mut ConfigHandle, key: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
             let mut cfg = c.cfg.borrow_mut();
-            match set_config_field(&mut cfg, key, dynamic_to_json(&value)?) {
-                Ok(Applied::Changed) => Ok(()),
-                Ok(Applied::NoVisibleChange) => {
+            match crate::config::by_name::set(&mut cfg, key, dynamic_to_json(&value)?) {
+                Ok(crate::config::by_name::Applied::Changed) => Ok(()),
+                Ok(crate::config::by_name::Applied::NoVisibleChange) => {
                     // Either a no-op (already that value / equals the
                     // default of a skip-if-default field) or a bad key.
                     // Can't tell them apart from the JSON alone, so warn
@@ -2483,7 +2483,7 @@ fn register_config(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         |c: &mut ConfigHandle, key: &str| -> Result<Dynamic, Box<EvalAltResult>> {
             let cfg = c.cfg.borrow();
             let root = serde_json::to_value(&*cfg).map_err(|e| err(e.to_string()))?;
-            match json_at(&root, key) {
+            match crate::config::by_name::json_at(&root, key) {
                 Some(v) => Ok(json_to_dynamic(v)),
                 None => Err(err(format!(
                     "`{key}` is not set (it may be at its default and omitted, or misspelled)"
@@ -2498,9 +2498,9 @@ fn register_config(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
     engine.register_indexer_set(
         move |c: &mut ConfigHandle, key: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
             let mut cfg = c.cfg.borrow_mut();
-            match set_config_field(&mut cfg, key, dynamic_to_json(&value)?) {
-                Ok(Applied::Changed) => Ok(()),
-                Ok(Applied::NoVisibleChange) => {
+            match crate::config::by_name::set(&mut cfg, key, dynamic_to_json(&value)?) {
+                Ok(crate::config::by_name::Applied::Changed) => Ok(()),
+                Ok(crate::config::by_name::Applied::NoVisibleChange) => {
                     s.borrow_mut().warnings.push(format!(
                         "config[\"{key}\"] = … changed nothing — check the setting name"
                     ));
@@ -2510,84 +2510,6 @@ fn register_config(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
             }
         },
     );
-}
-
-enum Applied {
-    Changed,
-    NoVisibleChange,
-}
-
-/// Set any `FractalConfig` field by its `.fflame` JSON path.
-///
-/// Goes through serde rather than a hand-written table so the whole
-/// config is reachable and the key names are the ones users already see
-/// in saved files. The flame itself is excluded: it has richer structure
-/// (and session-local IDs that a JSON round trip would reset), so it is
-/// edited through the typed `flame` handle instead.
-fn set_config_field(
-    cfg: &mut FractalConfig,
-    key: &str,
-    value: serde_json::Value,
-) -> Result<Applied, String> {
-    if key == "flame" || key.starts_with("flame.") {
-        return Err("use the `flame` object to edit the flame, not config.set".to_string());
-    }
-
-    let before = serde_json::to_value(&*cfg).map_err(|e| e.to_string())?;
-    // A key already present in the JSON is a known setting, even if the
-    // assignment turns out to be a no-op (setting brightness to the value
-    // it already has). Only a key that is BOTH absent and produced no
-    // change is ambiguous enough to warn about.
-    let key_existed = json_at(&before, key).is_some();
-    let mut patched = before.clone();
-
-    // Walk to the parent, creating a missing group as an empty object: a
-    // group at its defaults is omitted from the JSON entirely (`sim`,
-    // `escape`, `solid_shading`, `sim.terrain` all skip-if-default), and
-    // each deserializes from a partial object, as a compact save loads.
-    // A misspelt group lands as an unknown key serde ignores, which the
-    // "changed nothing" warning below then reports.
-    let parts: Vec<&str> = key.split('.').collect();
-    let (last, parents) = parts.split_last().ok_or("empty setting name")?;
-    let mut cur = &mut patched;
-    for p in parents {
-        cur = cur
-            .as_object_mut()
-            .ok_or_else(|| format!("`{key}` is not a settable field"))?
-            .entry((*p).to_string())
-            .or_insert_with(|| serde_json::Value::Object(Default::default()));
-    }
-    let obj = cur
-        .as_object_mut()
-        .ok_or_else(|| format!("`{key}` is not a settable field"))?;
-    // Insert rather than require presence: fields sitting at their
-    // default are omitted from the JSON entirely (skip-if-default).
-    obj.insert((*last).to_string(), value);
-
-    let flame = cfg.flame.clone();
-    let mut next: FractalConfig = serde_json::from_value(patched)
-        .map_err(|e| format!("invalid value for `{key}`: {e}"))?;
-    // Session-local IDs are #[serde(skip)]; restore the flame wholesale
-    // and re-issue IDs for anything the round trip blanked.
-    next.flame = flame;
-    next.fixup_ids();
-
-    let after = serde_json::to_value(&next).map_err(|e| e.to_string())?;
-    let changed = after != before;
-    *cfg = next;
-    Ok(if changed || key_existed {
-        Applied::Changed
-    } else {
-        Applied::NoVisibleChange
-    })
-}
-
-fn json_at<'a>(root: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
-    let mut cur = root;
-    for p in key.split('.') {
-        cur = cur.get(p)?;
-    }
-    Some(cur)
 }
 
 fn dynamic_to_json(d: &Dynamic) -> Result<serde_json::Value, Box<EvalAltResult>> {

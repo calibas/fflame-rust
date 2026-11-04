@@ -92,6 +92,31 @@ def test_fflame_round_trip():
     assert json.loads(back.to_json()) == json.loads(c.to_json())
 
 
+def test_a_setting_is_set_by_the_apps_rules():
+    """`Config.set` is a script's `config.set`: the panels' clamps, the
+    file's names and the tracks' alike, the flame refused."""
+    import warnings
+
+    c = ff.Config()
+    c.set("sim.dt", 0.0)
+    assert c.data["sim"]["dt"] > 0.0, "a time step of 0 reached the solver"
+    c.set("Sim.Terrain.Height", 0.25)
+    assert c.data["sim"]["terrain"]["height"] == 0.25
+    c.set("escape.zoom_log2", 150.1234567890123)
+    assert c.data["escape"]["zoom_log2"] == 150.1234567890123, "the zoom keeps its f64"
+    c.zoom = 2.5
+    assert c.zoom == 2.5
+    try:
+        c.set("flame.name", "x")
+        raise AssertionError("the flame was set by name")
+    except ff.EngineError as e:
+        assert "flame" in str(e)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        c.set("exposre", 2.0)
+    assert any("changed nothing" in str(w.message) for w in caught)
+
+
 def test_flame_xml_round_trip():
     c = ff.Config()
     i = c.add_transform()
