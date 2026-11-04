@@ -111,7 +111,7 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 
 | path | what it is | read |
 | --- | --- | --- |
-| `src/config/` | `FractalConfig` (`fractal_config.rs`), with `EscapeConfig` (`escape.rs`) and `SimConfig` (`sim.rs`) inside it; `ConfigManager` (`manager.rs`); `ConfigPath`, `ConfigValue`, `UpdateType` (`delta.rs`); defaults; the f32 precision policy (`precision.rs`); slider widgets (`slider.rs`, `web-app` only) | [CONFIG.md](main/CONFIG.md) |
+| `src/config/` | `FractalConfig` (`fractal_config.rs`), with `EscapeConfig` (`escape.rs`) and `SimConfig` (`sim.rs`) inside it; `ConfigManager` (`manager.rs`) around the one setter, `config::apply` (`apply.rs`); the render mode's rules (`mode.rs`); `ConfigPath`, `ConfigValue`, `UpdateType` (`delta.rs`); defaults; the f32 precision policy (`precision.rs`); slider widgets (`slider.rs`, `web-app` only) | [CONFIG.md](main/CONFIG.md) |
 | `src/scene/` | The flame model: `Flame`, `Transform`, `RenderMode` (`transforms.rs`); palettes and `ColorMode` (Palette, Speed, PathMap) (`palette.rs`); tone-map types and presets; xaos; the preset library (`presets.rs`, from `assets/presets.fflame`); random flames (`randomize.rs`). Also the Focused Rendering planners: `cylinder.rs`, `backward.rs`, `plan_gpu.rs`, `word_tree.rs`, `final_map.rs`, `importance.rs`, `slice.rs`, and the IFS analysis they rest on (`ifs_analysis.rs`, `ifs_estimate.rs`, `ifs_ball.rs`, `ifs_real.rs`, `mobius.rs`, `forward_delta.rs`) | [TRANSFORMS.md](main/TRANSFORMS.md), [COLOR.md](main/COLOR.md), [FOCUSED-RENDERING.md](main/FOCUSED-RENDERING.md) |
 | `src/camera/` | Every camera behind one interface: `quat`, `chain`, `view3d`, `gesture`, `fly`. Returns a `CameraEdit` the caller applies | [CAMERA.md](main/CAMERA.md) |
 
@@ -245,8 +245,12 @@ Detail: [CONFIG.md](main/CONFIG.md).
 
 The mode decides which panels, menu items and controls exist.
 
-- `src/ui/render_mode.rs` is the only writer of
-  `ConfigPath::RenderMode` (a source-scanning test enforces it). It
+- `src/config/mode.rs` is the only writer of `ConfigPath::RenderMode`
+  (a source-scanning test enforces it), through
+  `ConfigManager::choose` / `switch_mode`: each engine owns its
+  settings (palette, tone map, effects, lighting rig), stashed in the
+  config on leaving and restored on entering, and an empty flame is
+  seeded where one is drawn -- one undo step. `src/ui/render_mode.rs`
   maps each mode to a workspace layout and decides which engines stay
   resident.
 - `src/ui/visibility.rs` answers "is this available in this mode" for
@@ -471,7 +475,7 @@ exported PNG. Release procedure: [RELEASE.md](RELEASE.md).
 | Add an effect | a one-pass built-in is its Rhai source, `assets/effects/<name>.rhai`, listed in `effects::custom::BUILTIN_TWINS`; its WGSL in `shaders/effects/density/` or `color/`, added to `wgsl_builtins` in `src/effects/mod.rs`, is the reference the pixel compares hold it to and the fallback without `lang`; English labels in `locales/en.yml`; regenerate with `export_effects_json` | [EFFECTS.md](main/EFFECTS.md) |
 | Add a panel | `src/ui/<panel>.rs`; a `PanelType` in `src/ui/workspace.rs`; dispatch in `src/ui/panel_viewer.rs`; availability in `visibility::panel` and a `WINDOW_MENU` row | [UI.md](main/UI.md) |
 | Add a config field | the struct in `src/config/fractal_config.rs` (or `escape.rs`, `sim.rs`), skip-if-default so old files stay stable | [CONFIG.md](main/CONFIG.md) |
-| Make a field editable | a `ConfigPath` variant in `src/config/delta.rs` (history label, string key, `update_type`); read and write in `get_value` / `set_value` in `src/config/manager.rs` | [CONFIG.md](main/CONFIG.md) |
+| Make a field editable | a `ConfigPath` variant in `src/config/delta.rs` (history label, string key, `update_type`); read it in `get_value_from_config` (`src/config/manager.rs`), write it in `config::apply` (`src/config/apply.rs`) | [CONFIG.md](main/CONFIG.md) |
 | Gate a control by mode | a case in `src/ui/visibility.rs` | [UI.md](main/UI.md) |
 | Change tone mapping | `shaders/tonemap.wgsl`; `TonemapParams` in `src/gpu/buffers.rs`; controls in `src/ui/tone_mapping.rs` | [TONE-MAPPING.md](main/TONE-MAPPING.md) |
 | Add a GPU binding to the flame shader | `compute_layout_entries` / `compute_entries` in `src/gpu/pipelines.rs`, the declaration in `shaders/core/header.wgsl` | [BUFFERS.md](main/BUFFERS.md) |

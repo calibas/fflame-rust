@@ -302,8 +302,9 @@ mod tests {
                     continue;
                 }
                 let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                // `config/mode.rs` writes it; `delta.rs` and `manager.rs` define it.
-                if name == "render_mode.rs" || name == "mode.rs" || name == "delta.rs" || name == "manager.rs" {
+                // `config/mode.rs` writes it; `delta.rs`, `manager.rs` and
+                // `apply.rs` (the setter) define it.
+                if name == "render_mode.rs" || name == "mode.rs" || name == "delta.rs" || name == "manager.rs" || name == "apply.rs" {
                     continue;
                 }
                 let rel = path.strip_prefix(&root).unwrap_or(&path).to_string_lossy().to_string();
@@ -324,8 +325,8 @@ mod tests {
         }
         assert!(
             offenders.is_empty(),
-            "these write the render mode directly instead of calling \
-             switch_render_mode, so they skip the tone-map rescue: {offenders:?}"
+            "these write the render mode directly instead of going through \
+             ConfigManager::choose, so they skip the engines' settings swap: {offenders:?}"
         );
     }
 

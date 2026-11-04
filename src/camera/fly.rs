@@ -526,12 +526,12 @@ fn solid_flight(config: &FractalConfig, v: [f64; 3], forward: [f64; 3], c: Clear
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::manager::{ConfigManager, EditingTarget};
+    use crate::config::manager::EditingTarget;
 
     fn applied(c: &FractalConfig, e: &CameraEdit) -> FractalConfig {
         let mut out = c.clone();
         for (p, v) in &e.changes {
-            ConfigManager::apply_value_detached(&mut out, EditingTarget::Main, p, v.clone()).expect("applies");
+            crate::config::apply(&mut out, EditingTarget::Main, p, v.clone()).expect("applies");
         }
         out
     }

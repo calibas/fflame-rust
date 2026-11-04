@@ -575,8 +575,8 @@ went missing from in-app video. Do not add one.
 ### What a frame is
 
 Per frame: evaluate the animation tracks at that time, apply them to a
-copy of the config (`ConfigManager::apply_value_detached`, the editor's
-own setters), call `render_with`, hand the pixels to the writer thread.
+copy of the config (`config::apply`, the editor's own setter), call
+`render_with`, hand the pixels to the writer thread.
 Which passes run is decided by reading that frame's config, exactly as
 a still render decides — that is what makes the video and a PNG of the
 same config identical.

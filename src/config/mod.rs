@@ -10,6 +10,7 @@
 /// - Centralized lazy undo throttling
 
 pub mod precision;
+mod apply;
 pub mod defaults;
 pub mod delta;
 pub mod escape;
@@ -22,6 +23,7 @@ pub mod mode;
 #[cfg(feature = "web-app")]
 pub mod slider;
 
+pub use apply::apply;
 pub use defaults::*;
 pub use delta::{
     AffineParam, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, I18nKey, SnapshotData,

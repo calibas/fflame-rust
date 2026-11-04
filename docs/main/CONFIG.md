@@ -366,7 +366,6 @@ accumulates the GPU work edits imply.
 | `update_param(path, value)` | one value; a history entry, coalesced (below). Returns `Result<UpdateType, ConfigError>`; an unchanged value (`ConfigValue::approx_eq`) returns `UpdateType::None` and records nothing. |
 | `update_batch(changes, description)` | several values as one history entry under the given description; each delta's update type is recorded separately, so the actions are their union. The changes apply in order, each one's old value read as the earlier ones left the config, so a later path whose default depends on an earlier one (a colouring and its parameters) is never dropped as a false no-op. A batch holding a setter that changes more than its own field (the simulation's model, a layer's model, the grid mode, the init kind) is recorded as the config before and after, as a single such edit is. A change that fails leaves the config as it was. Coalesces like a single edit when consecutive batches change the same paths, or carry the same gesture description. |
 | `update_param_silent`, `update_param_silent_on(target, …)` | no history: animation playback, and tracks aimed at a subflame |
-| `apply_value_detached(config, target, path, value)` | apply one value to a detached config with the manager's own setters and clamps, no history or disk; the video exporter's way to apply tracks |
 | `remove_variation(xref, name)` | removes a variation and records the whole transform before and after, so undo restores its parameters and order |
 | `load_config(config, description)` | a new picture (file, preset, browser): one full-config snapshot, editing target reset to `Main`, `load_generation` bumped, every update action plus `reset_accumulation` and `structural_changed` |
 | `apply_config_edit(config, description)` | an edit no single path carries (a simulation's layers, couplings or colour layers added, removed or reordered): a full-config snapshot without the side effects of a load |
@@ -488,7 +487,8 @@ compiler lists every place a new variant needs an arm:
 | `to_i18n_key()`, `Display` | `delta.rs` | history labels (`history.param.*` in `locales/*.yml`) |
 | `to_string_key()`, `from_string_key()` | `delta.rs` | stable string keys for animation files (`"Transform.0.Affine.A"`); legacy un-indexed `FinalTransform.*` keys map to index 0 |
 | `json_to_config_value()` | `delta.rs` | converts a track's JSON value; the paths it returns `None` for are not animatable |
-| `get_value_from_config()`, `set_value()` | `manager.rs` | read and write, with the setters' clamps and side effects |
+| `get_value_from_config()` | `manager.rs` | read a path's value (undo's old value, the panels) |
+| `config::apply(config, target, path, value)` | `apply.rs` | **the setter**: write one value with its clamps and side effects, no history, preview or disk. `ConfigManager` wraps it; the video export, the cameras and every edit made on a config outside the manager (a mode's look, a fly-mode step) call it directly |
 
 `ConfigValue` is the value side: `Unit`, `Float(f32)`, `Int`, `UInt`,
 `UInt64`, `Bool`, `String`, `StringList`, `Vec2(f64, f64)`,

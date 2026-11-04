@@ -362,7 +362,7 @@ pub fn enter(before: &FractalConfig, after: &mut FractalConfig, mode: RenderMode
     };
     if !was_lit && surface_3d(after) {
         for (path, value) in look_3d_changes(after) {
-            let _ = ConfigManager::apply_value_detached(after, EditingTarget::Main, &path, value);
+            let _ = crate::config::apply(after, EditingTarget::Main, &path, value);
         }
     }
 }
@@ -396,7 +396,7 @@ impl ConfigManager {
         }
         let mut after = before.clone();
         for (path, value) in &changes {
-            let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, path, value.clone());
+            let _ = crate::config::apply(&mut after, EditingTarget::Main, path, value.clone());
         }
         if before.render_mode == mode && !wants_seed(&after, mode) {
             changes.extend(look_3d(&before, &after));

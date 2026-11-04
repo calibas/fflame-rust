@@ -241,18 +241,19 @@ separate piece of code:
    it returns `None` for a path that cannot be animated, and its match
    over `ConfigPath` is exhaustive with no wildcard, so a new path must
    be classified there.
-3. **Something applies it.** In the app, `ConfigManager`'s own setter,
-   silently. In video export, the exporter's `apply_config_value`, which
-   handles the common paths directly and hands everything else to
-   `ConfigManager::apply_value_detached` — the manager's setter run on a
-   detached copy, same clamps and side effects.
+3. **The setter applies it**: `config::apply`
+   ([apply.rs](../../src/config/apply.rs)), the program's one setter --
+   in the app through `ConfigManager`, silently; in video export on the
+   frame's copy of the config, directly. The exporter kept arms of its
+   own until 2026-11-04, and they fell behind more than once.
 
-Two tests in [export.rs](../../src/animation/export.rs) hold the third
+Tests in [export.rs](../../src/animation/export.rs) hold the third
 to the first:
 `every_offered_target_renders_in_the_video_as_in_the_app` applies every
 offered target, in every render mode, through both the exporter and the
-manager and requires identical configs; the escape and simulation
-variants require every offered target to move the config at all.
+setter, requires identical configs and refuses a target that carries no
+value; the escape and simulation variants require every offered target
+to move the config at all.
 
 ### Value conversion
 
