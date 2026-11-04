@@ -137,6 +137,7 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | path | what it is | read |
 | --- | --- | --- |
 | `src/effects/` | `EffectRegistry`, the built-in effects (`register_builtin_effects`), density and colour chains; WGSL in `shaders/effects/` | [EFFECTS.md](main/EFFECTS.md) |
+| `src/params/` | The one parameter system every kind with parameters shares -- variations, effects, escape formulas and colourings, simulations, CPU scripts: `ParamDef` and `ParamKind` (a built-in's in one const call, `Spec`), `Value` (a script's run input; a GPU kind's f32 slot read as its kind), layouts (`layout.rs`: conditions, grids), the wire spellings (`api_json`, `script_json`, `wire_type`) and the parse of a given value (`parse`, `coerce`). Drawn by one renderer, `ui::params`; a script's become definitions by `lang::ir::Program::param_defs` | [one-parameter-system.md](projects/one-parameter-system.md) |
 | `src/export/` | High-resolution export: `pick_strategy` (`Direct`, `ParallelTiles`, `SerialTiles`), `HighResExporter` (`high_res.rs`, tiled and CPU-histogram paths), the sample-scatter pass (`accumulate.rs`), 2x supersampling (`supersample.rs`) | [EXPORT.md](main/EXPORT.md) |
 | `src/png_metadata.rs` | Writing and reading the tEXt chunks every exported PNG carries | [EXPORT.md](main/EXPORT.md) |
 | `src/animation/` | `Animation`, `Track`, keyframes and interpolation; `AnimationController` (playback); `export.rs`, the one video loop | [ANIMATION.md](main/ANIMATION.md) |

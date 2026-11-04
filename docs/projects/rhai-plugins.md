@@ -949,6 +949,8 @@ under each branch.
      panel, and a cell at a computed row in every kind, come with it.
    - Depends on nothing. Comes first, so the twin branches after it add
      parameters to one system, not to five.
+   - **Done on the branch (2026-11-03)**, steps 1-10; a grid's fill and
+     warning outside a simulation stay a simulation's (recorded there).
 2. **`rhai-escape-colourings`** -- P7 step 2: twins of the 28 escape
    colourings, and Edit as Rhai in the Escape panel's colouring.
    - About 20 accumulate over the orbit, which `start`, `step` and

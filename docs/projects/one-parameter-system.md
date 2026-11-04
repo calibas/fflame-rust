@@ -9,7 +9,15 @@ Branch `params-one-system`, the first of the Rhai branches in
 replaces branch 1 there (`rhai-layouts-everywhere`): with one renderer,
 conditions and grids in every panel come with it.
 
-## Where it stands (2026-11-03, read from the code)
+**Status (2026-11-03): steps 1-10 done** -- one definition
+(`params::ParamDef`), one renderer (`ui::params`), one converter from the
+compiler (`ir::Program::param_defs`); step 11's docs and gates done: the
+contract's shape unchanged, the visual suite 383 of 383 (a first run's
+one throughput flag, `spray_blur` at a cold start, passed on its rerun). Each
+step's record is under it below; what was found and left is under
+*Found on the way*.
+
+## Where it stood (2026-11-03, before the branch, read from the code)
 
 Five definition types, a sixth in the compiler, and four widget sets:
 
