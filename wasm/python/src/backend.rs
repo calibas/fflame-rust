@@ -821,12 +821,11 @@ impl CommandEncoderInterface for Enc {
     }
 
     fn begin_compute_pass(&self, desc: &wgpu::ComputePassDescriptor<'_>) -> DispatchComputePass {
-        DispatchComputePass::custom(Pass {
-            into: self.cmds.clone(),
-            keep: self.keep.clone(),
-            head: json!({ "op": "compute_pass", "label": label(desc.label) }),
-            cmds: Vec::new(),
-        })
+        DispatchComputePass::custom(Pass::new(
+            self.cmds.clone(),
+            self.keep.clone(),
+            json!({ "op": "compute_pass", "label": label(desc.label) }),
+        ))
     }
 
     fn begin_render_pass(&self, desc: &wgpu::RenderPassDescriptor<'_>) -> DispatchRenderPass {
@@ -857,12 +856,11 @@ impl CommandEncoderInterface for Enc {
                 None => Value::Null,
             })
             .collect();
-        DispatchRenderPass::custom(Pass {
-            into: self.cmds.clone(),
-            keep: self.keep.clone(),
-            head: json!({ "op": "render_pass", "label": label(desc.label), "color_attachments": colors }),
-            cmds: Vec::new(),
-        })
+        DispatchRenderPass::custom(Pass::new(
+            self.cmds.clone(),
+            self.keep.clone(),
+            json!({ "op": "render_pass", "label": label(desc.label), "color_attachments": colors }),
+        ))
     }
 
     fn finish(&mut self) -> DispatchCommandBuffer {
@@ -942,6 +940,12 @@ pub struct Pass {
     keep: Keep,
     head: Value,
     cmds: Vec<Value>,
+    /// The pass's state, so a call setting it again to what it already
+    /// is is not recorded: a simulation sets the same pipeline before
+    /// each of thousands of steps, and each recorded call is a call the
+    /// host makes into wgpu-py.
+    pipeline: Option<u32>,
+    bind_groups: Vec<Option<(Option<u32>, Vec<u32>)>>,
 }
 
 impl Drop for Pass {
@@ -953,19 +957,41 @@ impl Drop for Pass {
 }
 
 impl Pass {
+    fn new(into: Commands, keep: Keep, head: Value) -> Self {
+        Pass { into, keep, head, cmds: Vec::new(), pipeline: None, bind_groups: Vec::new() }
+    }
+
+    /// Records a pipeline unless it is the one already set (whose handle
+    /// the pass already holds).
+    fn pipeline<T: Clone + 'static>(&mut self, id: u32, pipeline: &T) {
+        if self.pipeline != Some(id) {
+            self.pipeline = Some(id);
+            hold(&self.keep, pipeline);
+            self.cmds.push(json!(["pipeline", id]));
+        }
+    }
+
     fn bind_group(&mut self, index: u32, bind_group: Option<&DispatchBindGroup>, offsets: &[wgpu::DynamicOffset]) {
+        let id = bind_group.map(|b| handle(b.as_custom::<Handle>(), b));
+        let state = Some((id, offsets.to_vec()));
+        let i = index as usize;
+        if self.bind_groups.len() <= i {
+            self.bind_groups.resize(i + 1, None);
+        }
+        if self.bind_groups[i] == state {
+            return;
+        }
+        self.bind_groups[i] = state;
         if let Some(b) = bind_group {
             hold(&self.keep, b);
         }
-        let id = bind_group.map(|b| handle(b.as_custom::<Handle>(), b));
         self.cmds.push(json!(["bind_group", index, id, offsets]));
     }
 }
 
 impl ComputePassInterface for Pass {
     fn set_pipeline(&mut self, pipeline: &DispatchComputePipeline) {
-        hold(&self.keep, pipeline);
-        self.cmds.push(json!(["pipeline", handle(pipeline.as_custom::<Handle>(), pipeline)]));
+        self.pipeline(handle(pipeline.as_custom::<Handle>(), pipeline), pipeline);
     }
     fn set_bind_group(&mut self, index: u32, bind_group: Option<&DispatchBindGroup>, offsets: &[wgpu::DynamicOffset]) {
         self.bind_group(index, bind_group, offsets);
@@ -990,8 +1016,7 @@ impl ComputePassInterface for Pass {
 
 impl RenderPassInterface for Pass {
     fn set_pipeline(&mut self, pipeline: &DispatchRenderPipeline) {
-        hold(&self.keep, pipeline);
-        self.cmds.push(json!(["pipeline", handle(pipeline.as_custom::<Handle>(), pipeline)]));
+        self.pipeline(handle(pipeline.as_custom::<Handle>(), pipeline), pipeline);
     }
     fn set_bind_group(&mut self, index: u32, bind_group: Option<&DispatchBindGroup>, offsets: &[wgpu::DynamicOffset]) {
         self.bind_group(index, bind_group, offsets);

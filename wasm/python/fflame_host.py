@@ -308,16 +308,23 @@ class GpuHost:
         return True
 
     def enc_compute_pass(self, enc, c):
+        # The hot loop (a simulation's pass holds thousands of steps):
+        # methods bound once, the commonest command tested first.
         p = enc.begin_compute_pass(label=c["label"] or "")
+        objs = self.objs
+        dispatch, set_bind_group, set_pipeline = p.dispatch_workgroups, p.set_bind_group, p.set_pipeline
         for k in c["cmds"]:
-            if self.pass_common(p, k):
-                continue
-            if k[0] == "dispatch":
-                p.dispatch_workgroups(k[1], k[2], k[3])
-            elif k[0] == "dispatch_indirect":
-                p.dispatch_workgroups_indirect(self.objs[k[1]], k[2])
+            op = k[0]
+            if op == "dispatch":
+                dispatch(k[1], k[2], k[3])
+            elif op == "bind_group":
+                set_bind_group(k[1], objs[k[2]] if k[2] is not None else None, k[3])
+            elif op == "pipeline":
+                set_pipeline(objs[k[1]])
+            elif op == "dispatch_indirect":
+                p.dispatch_workgroups_indirect(objs[k[1]], k[2])
             else:
-                raise NotImplementedError(k[0])
+                raise NotImplementedError(op)
         p.end()
 
     def enc_render_pass(self, enc, c):
