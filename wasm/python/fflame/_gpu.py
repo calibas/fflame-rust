@@ -1,26 +1,24 @@
-"""SPIKE (branch python-wasm-spike): run the engine's WASI module in
-Python, its GPU calls made with wgpu-py.
+"""The GPU side of the module: every GPU call the engine makes arrives
+here as a JSON command (with a block of bytes when it carries data) and
+is made with wgpu-py.
 
-The module (src/lib.rs) imports two functions, `fflame_gpu.call` and
-`fflame_gpu.take`; each call is one JSON command, with a block of bytes
-beside it when the command carries data. Objects are integer handles the
-module allocates; `GpuHost.objs` holds the wgpu-py objects under them.
-A command buffer arrives whole at submit and is replayed here on a
-wgpu-py encoder.
-
-    python wasm/python/fflame_host.py CONFIG.fflame OUT.png [WIDTH HEIGHT [ITERATIONS]]
+The module imports two functions, `fflame_gpu.call` and `fflame_gpu.take`.
+Objects are integer handles the module allocates; `GpuHost.objs` holds
+the wgpu-py objects under them. A command buffer arrives whole at submit
+and is replayed on a wgpu-py encoder.
 """
 
 import json
-import struct
 import sys
 import time
-import zlib
 
-import wasmtime
 import wgpu
 
-MODULE = "wasm/target-gallery/wasm32-wasip1/release/fflame_python.wasm"
+# One adapter and device per process: a host made after the module
+# trapped (a panic leaves an instance unusable) reuses them rather than
+# paying the GPU's start-up again.
+_DEVICE = None
+
 
 # Bytes per texel, for clear_texture (which WebGPU lacks: emulated by a
 # copy from a zeroed buffer).
@@ -82,6 +80,9 @@ class GpuHost:
     # --- the device ------------------------------------------------------
 
     def op_init(self, cmd, data):
+        global _DEVICE
+        if self.device is None and _DEVICE is not None:
+            self.adapter, self.device = _DEVICE
         if self.device is None:
             adapter = wgpu.gpu.request_adapter_sync(power_preference="high-performance")
             features = [f for f in ("float32-filterable",) if f in adapter.features]
@@ -96,6 +97,7 @@ class GpuHost:
             limits = {k: adapter.limits[k] for k in wanted if k in adapter.limits}
             self.device = adapter.request_device_sync(required_features=features, required_limits=limits)
             self.adapter = adapter
+            _DEVICE = (adapter, self.device)
         d = self.device
         info = {k: v for k, v in dict(self.adapter.info).items() if isinstance(v, (str, int))}
         return {"features": sorted(d.features), "limits": dict(d.limits), "info": info}
@@ -353,86 +355,3 @@ class GpuHost:
             else:
                 raise NotImplementedError(k[0])
         p.end()
-
-
-class Engine:
-    """The module, instantiated, with a GPU host behind it."""
-
-    def __init__(self, path=MODULE):
-        t0 = time.perf_counter()
-        engine = wasmtime.Engine()
-        module = wasmtime.Module.from_file(engine, path)
-        self.store = wasmtime.Store(engine)
-        wasi = wasmtime.WasiConfig()
-        wasi.inherit_stdout()
-        wasi.inherit_stderr()
-        self.store.set_wasi(wasi)
-        linker = wasmtime.Linker(engine)
-        linker.define_wasi()
-        self.gpu = GpuHost()
-        i32 = wasmtime.ValType.i32()
-        linker.define_func("fflame_gpu", "call", wasmtime.FuncType([i32] * 4, [i32]), self.gpu.call)
-        linker.define_func("fflame_gpu", "take", wasmtime.FuncType([i32], []), self.gpu.take)
-        self.instance = linker.instantiate(self.store, module)
-        self.exports = self.instance.exports(self.store)
-        self.gpu.store = self.store
-        self.gpu.memory = self.exports["memory"]
-        if "_initialize" in self.exports:
-            self.exports["_initialize"](self.store)
-        self.load_seconds = time.perf_counter() - t0
-
-    def _fn(self, name, *args):
-        return self.exports[name](self.store, *args)
-
-    def _read(self, ptr_fn, len_fn):
-        ptr = self._fn(ptr_fn) & 0xFFFFFFFF
-        n = self._fn(len_fn)
-        return bytes(self.gpu.memory.read(self.store, ptr, ptr + n))
-
-    def render(self, config_json, width, height, iterations=0):
-        data = config_json.encode()
-        ptr = self._fn("fflame_alloc", len(data))
-        self.gpu.memory.write(self.store, data, ptr & 0xFFFFFFFF)
-        status = self._fn("fflame_render", ptr, len(data), width, height, iterations)
-        self._fn("fflame_free", ptr, len(data))
-        out = self._read("fflame_output_ptr", "fflame_output_len")
-        if status != 0:
-            raise RuntimeError(out.decode(errors="replace"))
-        info = json.loads(self._read("fflame_info_ptr", "fflame_info_len"))
-        return out, info
-
-
-def write_png(path, rgba, width, height):
-    raw = b"".join(b"\x00" + rgba[y * width * 4:(y + 1) * width * 4] for y in range(height))
-    def chunk(kind, body):
-        c = struct.pack(">I", len(body)) + kind + body
-        return c + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
-    with open(path, "wb") as f:
-        f.write(b"\x89PNG\r\n\x1a\n")
-        f.write(chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)))
-        f.write(chunk(b"IDAT", zlib.compress(raw, 6)))
-        f.write(chunk(b"IEND", b""))
-
-
-def main():
-    cfg_path, out_path = sys.argv[1], sys.argv[2]
-    width = int(sys.argv[3]) if len(sys.argv) > 3 else 512
-    height = int(sys.argv[4]) if len(sys.argv) > 4 else 512
-    iterations = int(sys.argv[5]) if len(sys.argv) > 5 else 0
-    config = open(cfg_path, encoding="utf-8").read()
-    eng = Engine()
-    print(f"module loaded in {eng.load_seconds:.2f}s")
-    for attempt in ("first", "second"):
-        t0 = time.perf_counter()
-        calls0, secs0 = eng.gpu.calls, eng.gpu.call_seconds
-        pixels, info = eng.render(config, width, height, iterations)
-        wall = time.perf_counter() - t0
-        print(f"{attempt} render: {wall:.2f}s wall, engine says {info['ms']:.0f} ms, "
-              f"{info['iterations']:,} iterations, {eng.gpu.calls - calls0} host calls "
-              f"({eng.gpu.call_seconds - secs0:.2f}s in them)")
-    write_png(out_path, pixels, info["width"], info["height"])
-    print(f"wrote {out_path}")
-
-
-if __name__ == "__main__":
-    main()

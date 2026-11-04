@@ -2,49 +2,47 @@
 //! Python. wasmtime runs it; its GPU calls go to the host through a wgpu
 //! custom backend (`backend`), and the host makes them with wgpu-py.
 //!
-//! The exports are a C ABI over linear memory: the host allocates with
-//! `fflame_alloc`, writes a config, calls `fflame_render`, and reads the
-//! output (`fflame_output_*`: pixels on success, the error's text on
-//! failure) and a JSON note about the render (`fflame_info_*`).
+//! One call crosses the boundary: `fflame_call`, a JSON request
+//! (`{"fn": ..., ...}`) and a block of bytes beside it (pixels to encode),
+//! both in this module's memory. It answers with a status (0, or 1 with
+//! the error's text as the output), an output of bytes (pixels, a PNG)
+//! and a JSON note (`{"result": ...}` for the calls whose answer is data,
+//! a render's numbers for the rest). The host allocates with
+//! `fflame_alloc` and frees with `fflame_free`.
+//!
+//! The calls:
+//! - `info`, `default_config`, `presets`
+//! - `flame_import {xml}` (a `.flame` file's configs), `flame_export {config}`
+//! - `render {config, width, height, sequence?, iterations?,
+//!   iterations_per_thread?, transparent?, premultiplied?, sticky?}`:
+//!   RGBA. `sequence` continues the last sequence frame's engine state
+//!   -- a Python program animating a config.
+//! - `encode_png {config, width, height, iterations, ms,
+//!   iterations_per_thread}` + RGBA: the PNG the CLI writes, metadata
+//!   and all.
+//! - `animation_open {animation, config?, width, height, fps?, ...}`,
+//!   `animation_frame {id, frame}`, `animation_config {id, frame}`,
+//!   `animation_close {id}`: the animation engine's frames, as the video
+//!   export renders them.
+//! - `scripts`, `script_source {id}`, `script_params {source}`,
+//!   `script_run {stages: [{source, params?}], seed?, base?}`: Rhai.
 
 mod backend;
 mod host;
+mod render;
+mod scripts;
 
 use std::cell::RefCell;
-use std::future::Future;
-use std::task::{Context, Poll, Waker};
 
 use fractal_flame_wgpu::config::FractalConfig;
-use fractal_flame_wgpu::renderer::compute_kernel::FlameRenderer;
-use fractal_flame_wgpu::renderer::render::{render_with, NoProgress, RenderJob};
+use serde_json::{json, Value};
 
-struct Live {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    /// The renderer, the size it was built for, and whether it is the
-    /// tail an escape or simulation render needs rather than a flame's.
-    renderer: Option<(FlameRenderer, u32, u32, bool)>,
-}
+use render::{Frame, Gpu, Options};
 
 thread_local! {
-    static LIVE: RefCell<Option<Live>> = const { RefCell::new(None) };
+    static GPU: RefCell<Option<Gpu>> = const { RefCell::new(None) };
     static OUTPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static INFO: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Runs a future to completion. Everything the engine awaits resolves
-/// once the backend's queued maps and callbacks run, so a pending poll
-/// runs them and tries again.
-fn block_on<F: Future>(f: F) -> F::Output {
-    let mut f = std::pin::pin!(f);
-    let mut cx = Context::from_waker(Waker::noop());
-    for _ in 0..1000 {
-        if let Poll::Ready(v) = f.as_mut().poll(&mut cx) {
-            return v;
-        }
-        backend::flush();
-    }
-    panic!("a future never completed");
 }
 
 #[no_mangle]
@@ -82,70 +80,134 @@ pub extern "C" fn fflame_info_len() -> usize {
     INFO.with(|o| o.borrow().len())
 }
 
-/// Renders a config (JSON, `len` bytes at `ptr`) at `width` x `height`;
-/// `iterations` 0 keeps the config's own. Returns 0 on success.
+/// One call: the request is `len` bytes of JSON at `ptr`. Returns 0, or
+/// 1 with the error's text as the output.
 ///
 /// # Safety
-/// `ptr`/`len` a UTF-8 string in this module's memory.
+/// `ptr`/`len` a UTF-8 string, `data`/`data_len` bytes, in this module's
+/// memory.
 #[no_mangle]
-pub unsafe extern "C" fn fflame_render(ptr: *const u8, len: usize, width: u32, height: u32, iterations: u64) -> i32 {
-    let json = std::str::from_utf8(std::slice::from_raw_parts(ptr, len)).unwrap_or("");
-    match render(json, width, height, iterations) {
-        Ok((pixels, info)) => {
-            OUTPUT.with(|o| *o.borrow_mut() = pixels);
-            INFO.with(|o| *o.borrow_mut() = info.into_bytes());
-            0
-        }
-        Err(e) => {
-            OUTPUT.with(|o| *o.borrow_mut() = e.into_bytes());
-            INFO.with(|o| o.borrow_mut().clear());
-            1
-        }
-    }
+pub unsafe extern "C" fn fflame_call(ptr: *const u8, len: usize, data: *const u8, data_len: usize) -> i32 {
+    let text = std::str::from_utf8(std::slice::from_raw_parts(ptr, len)).unwrap_or("");
+    let data = if data_len == 0 { Vec::new() } else { std::slice::from_raw_parts(data, data_len).to_vec() };
+    let outcome = serde_json::from_str::<Value>(text).map_err(|e| format!("request is not JSON: {e}")).and_then(|r| call(&r, data));
+    let (status, output, info) = match outcome {
+        Ok((output, info)) => (0, output, info.to_string().into_bytes()),
+        Err(e) => (1, e.into_bytes(), Vec::new()),
+    };
+    OUTPUT.with(|o| *o.borrow_mut() = output);
+    INFO.with(|o| *o.borrow_mut() = info);
+    status
 }
 
-fn render(json: &str, width: u32, height: u32, iterations: u64) -> Result<(Vec<u8>, String), String> {
-    if width == 0 || height == 0 {
-        return Err("width and height must be nonzero".into());
-    }
-    let config = FractalConfig::from_json(json).map_err(|e| format!("config did not parse: {e}"))?;
-    if LIVE.with(|l| l.borrow().is_none()) {
-        let (device, queue) = backend::device()?;
-        LIVE.with(|l| *l.borrow_mut() = Some(Live { device, queue, renderer: None }));
-    }
-    let mut live = LIVE.with(|l| l.borrow_mut().take()).ok_or("a render is already running")?;
-    let out = render_live(&mut live, &config, width, height, iterations);
-    LIVE.with(|l| *l.borrow_mut() = Some(live));
-    out
+fn str_arg<'a>(r: &'a Value, key: &str) -> Result<&'a str, String> {
+    r[key].as_str().ok_or_else(|| format!("`{key}` (a string) is missing"))
 }
 
-fn render_live(
-    live: &mut Live,
-    config: &FractalConfig,
-    width: u32,
-    height: u32,
-    iterations: u64,
-) -> Result<(Vec<u8>, String), String> {
-    let tail = config.render_mode.is_non_flame();
-    let needs_new = !matches!(&live.renderer, Some((_, w, h, t)) if *w == width && *h == height && *t == tail);
-    if needs_new {
-        if let Some((old, ..)) = live.renderer.take() {
-            old.destroy();
+fn u32_arg(r: &Value, key: &str) -> Result<u32, String> {
+    r[key].as_u64().map(|n| n as u32).ok_or_else(|| format!("`{key}` (a number) is missing"))
+}
+
+fn config_arg(r: &Value, key: &str) -> Result<FractalConfig, String> {
+    FractalConfig::from_json(str_arg(r, key)?).map_err(|e| format!("`{key}` did not parse: {e}"))
+}
+
+/// Data, as the note's `result`.
+fn data(v: Value) -> (Vec<u8>, Value) {
+    (Vec::new(), json!({ "result": v }))
+}
+
+/// A frame: its pixels, and its numbers as the note.
+fn frame_output(frame: Frame) -> Result<(Vec<u8>, Value), String> {
+    let info = frame.info();
+    Ok((frame.out.rgba_data, info))
+}
+
+fn with_gpu<R>(f: impl FnOnce(&mut Gpu) -> Result<R, String>) -> Result<R, String> {
+    GPU.with(|g| {
+        let mut g = g.borrow_mut();
+        if g.is_none() {
+            *g = Some(Gpu::new()?);
         }
-        let renderer =
-            FlameRenderer::for_job(&live.device, &live.queue, wgpu::TextureFormat::Rgba8Unorm, width, height, config);
-        live.renderer = Some((renderer, width, height, tail));
-    }
-    let (renderer, ..) = live.renderer.as_mut().expect("built above");
-    let mut job = RenderJob::new(config, width, height);
-    if iterations > 0 {
-        job = job.with_iterations(iterations);
-    }
-    let out = block_on(render_with(renderer, &live.device, &live.queue, job, &mut NoProgress)).map_err(|e| e.to_string())?;
-    let info = serde_json::json!({
-        "width": out.width, "height": out.height,
-        "iterations": out.total_iterations, "ms": out.render_time_ms,
+        f(g.as_mut().expect("made above"))
     })
-    .to_string();
-    Ok((out.rgba_data, info))
+}
+
+fn call(r: &Value, bytes: Vec<u8>) -> Result<(Vec<u8>, Value), String> {
+    let f = r["fn"].as_str().ok_or("`fn` is missing")?;
+    match f {
+        "info" => {
+            let v = fractal_flame_wgpu::version::get_version_info();
+            Ok(data(json!({
+                "version": v.version, "git_hash": v.git_hash,
+                "engines": ["flame", "escape", "simulation", "terrain"],
+            })))
+        }
+        "default_config" => Ok(data(json!(FractalConfig::default().to_json().map_err(|e| e.to_string())?))),
+        "presets" => {
+            let presets = fractal_flame_wgpu::resources::presets::load_embedded_presets().map_err(|e| e.to_string())?;
+            let list: Result<Vec<Value>, String> = presets
+                .iter()
+                .map(|c| Ok(json!({ "name": c.flame.name, "config": c.to_json().map_err(|e| e.to_string())? })))
+                .collect();
+            Ok(data(Value::Array(list?)))
+        }
+        "flame_import" => {
+            let configs = fractal_flame_wgpu::flame_xml::parse_flame_xml(str_arg(r, "xml")?).map_err(|e| e.to_string())?;
+            let list: Result<Vec<Value>, String> = configs.iter().map(|c| c.to_json().map(Value::String).map_err(|e| e.to_string())).collect();
+            Ok(data(Value::Array(list?)))
+        }
+        "flame_export" => Ok(data(json!(fractal_flame_wgpu::flame_xml::write_flame_xml(&config_arg(r, "config")?)))),
+        "render" => {
+            let config = config_arg(r, "config")?;
+            let (w, h) = (u32_arg(r, "width")?, u32_arg(r, "height")?);
+            let sequence = r["sequence"].as_bool().unwrap_or(false);
+            let frame = with_gpu(|g| g.render(config, w, h, &Options::from_json(r), sequence))?;
+            frame_output(frame)
+        }
+        "encode_png" => {
+            let config = config_arg(r, "config")?;
+            let n = |k: &str| r[k].as_f64().unwrap_or(0.0);
+            let png = render::png(bytes, u32_arg(r, "width")?, u32_arg(r, "height")?, n("iterations") as u64, n("ms"), n("iterations_per_thread") as u32, &config)?;
+            Ok((png, Value::Null))
+        }
+        "animation_open" => {
+            let (w, h) = (u32_arg(r, "width")?, u32_arg(r, "height")?);
+            let fps = r["fps"].as_u64().unwrap_or(30) as u32;
+            let (_, info) = with_gpu(|g| g.open(str_arg(r, "animation")?, r["config"].as_str(), w, h, fps, Options::from_json(r)))?;
+            Ok(data(info))
+        }
+        "animation_frame" => {
+            let frame = with_gpu(|g| g.frame(u32_arg(r, "id")?, u32_arg(r, "frame")?))?;
+            frame_output(frame)
+        }
+        "animation_config" => {
+            let config = with_gpu(|g| g.frame_config(u32_arg(r, "id")?, u32_arg(r, "frame")?))?;
+            Ok(data(json!(config.to_json().map_err(|e| e.to_string())?)))
+        }
+        "animation_close" => {
+            with_gpu(|g| {
+                g.close(u32_arg(r, "id")?);
+                Ok(())
+            })?;
+            Ok(data(Value::Null))
+        }
+        "scripts" => Ok(data(scripts::list()?)),
+        "script_source" => Ok(data(scripts::source(str_arg(r, "id")?)?)),
+        "script_params" => Ok(data(scripts::params(str_arg(r, "source")?)?)),
+        "script_run" => {
+            let stages: Vec<(String, Value)> = r["stages"]
+                .as_array()
+                .ok_or("`stages` ([{source, params?}]) is missing")?
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let source = s["source"].as_str().ok_or_else(|| format!("stage {i}: `source` is missing"))?;
+                    Ok((source.to_string(), s["params"].clone()))
+                })
+                .collect::<Result<_, String>>()?;
+            Ok(data(scripts::run(&stages, r["seed"].as_u64().unwrap_or(0), r["base"].as_str())?))
+        }
+        other => Err(format!("unknown call `{other}`")),
+    }
 }
