@@ -3,7 +3,9 @@
 Recorded 2026-10-18 as the direction, from the user's statement of where
 the program is going. Reviewed against the code and turned into a plan
 on 2026-11-01; the user's decisions the same day are at the end and are
-folded into the steps. **Nothing under *The plan* is built yet.**
+folded into the steps. **As of 2026-11-04, P0 to P4 are built, and P7
+for the simulations; P5 and P6 and the rest of P7 are not** (*What is
+left, as branches*, below).
 
 ## The goal, in the user's words
 
@@ -938,7 +940,8 @@ from `main`. The order is the user's to pick: D5 put P5 tracks and then
 P6 the API next, and D7 came after it. The dependencies are listed
 under each branch.
 
-1. **`params-one-system`** -- one parameter system for every kind
+1. **`params-one-system`** -- **merged 2026-11-03** (PR #148). One
+   parameter system for every kind
    ([one-parameter-system.md](one-parameter-system.md); the user,
    2026-11-03).
    - One definition, one renderer and one compiler converter for the

@@ -104,7 +104,7 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | path | what it is | read |
 | --- | --- | --- |
 | `src/app/` | The running editor. `mod.rs` (about 4,800 lines) holds `App`, the winit event loop, the frame (`App::render`) and the frame governor (`Batch`, `Knee`, `adjust_iter_scale`). Beside it: `ui_handlers.rs` (acting on `UiResponse`), `gpu_updates.rs` (applying `UpdateAction` to the GPU, the overwrite window, `freeze_viewport`), `config.rs` (load/import/export, undo/redo glue, background export launch), `export.rs` (headless export and `ExportEngine`), `input.rs` (keyboard, fullscreen), `fly_camera.rs`, `animation_update.rs`, `governor.rs` (the quality governor: escape-time's, terrains', simulations' rungs, a flame's render scale and its batch's pacing cap), `aa_governor.rs` (its fallback without a GPU timer), `render_mode.rs` (the Normal/Animating/Overwrite state machine; not the render-mode policy), `render_progress.rs`, `texture_sync.rs`, `variation_fetch.rs`, `effect_fetch.rs`, `script_cloud.rs` | [UI.md](main/UI.md), [RENDERER.md](main/RENDERER.md) |
-| `src/ui/` | 51 files: the egui_dock workspace and every panel. Coordination: `mod.rs`, `workspace.rs` (`PanelType`, 30 panels; `WorkspaceLayout`), `panel_viewer.rs`, `menu_bar.rs`, `compact_menu.rs`, `response.rs` (`UiResponse`). Policy: `render_mode.rs`, `visibility.rs`. Panels include `transforms`, `triangle_editor`, `view` and `view_controls`, `tone_mapping`, `palette_editor`, `palette_library`, `fractal_browser` (with `fractal_gallery`), `escape_panel`, `sim_panel`, `textures_panel`, `lighting_panel` (Lighting), `effects_panel`, `animation_panel`, `track_editor`, `signal_panel`, `scripts_panel`, `paths_panel`, `xaos_editor`, `subflames`, `variations`, `random_generator`, `undo_history`, `export_panel` | [UI.md](main/UI.md), [FRACTAL-BROWSER.md](main/FRACTAL-BROWSER.md) |
+| `src/ui/` | 56 files: the egui_dock workspace and every panel. Coordination: `mod.rs`, `workspace.rs` (`PanelType`, 32 panels; `WorkspaceLayout`), `panel_viewer.rs`, `menu_bar.rs`, `compact_menu.rs`, `response.rs` (`UiResponse`). Policy: `render_mode.rs`, `visibility.rs`. Panels include `transforms`, `triangle_editor`, `view` and `view_controls`, `tone_mapping`, `palette_editor`, `palette_library`, `fractal_browser` (with `fractal_gallery`), `escape_panel`, `sim_panel`, `textures_panel`, `lighting_panel` (Lighting), `effects_panel`, `animation_panel`, `track_editor`, `signal_panel`, `scripts_panel`, `paths_panel`, `xaos_editor`, `subflames`, `variations`, `random_generator`, `undo_history`, `export_panel` | [UI.md](main/UI.md), [FRACTAL-BROWSER.md](main/FRACTAL-BROWSER.md) |
 | `src/i18n.rs` | rust-i18n setup and locale switching; strings in `locales/*.yml` | [I18N.md](main/I18N.md) |
 
 ### Model and state
@@ -153,9 +153,11 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | `src/storage/` | `SystemSettings`, the storage backend (files on desktop, localStorage in the browser), custom palettes, the thumbnail cache, caches and catalogs of API-loaded variations and effects, encrypted credentials (desktop) | [CONFIG.md](main/CONFIG.md), [ONLINE.md](main/ONLINE.md) |
 | `src/resources/` | Fetching shipped and remote resources on both platforms: palette packs (`palettes.rs`), presets, where `assets/` lives at runtime (`bundled.rs`) | [PALETTE_LIBRARY.md](main/PALETTE_LIBRARY.md) |
 | `src/api/` | The online API client: auth, HTTP client, health, `FractalConfig` to API conversion (`sync.rs`), wire types | [ONLINE.md](main/ONLINE.md) |
-| `src/provenance.rs` | Where a variation or effect came from: `Builtin`, `Api { version }`, `Local` | [ONLINE.md](main/ONLINE.md) |
+| `src/provenance.rs` | Where a variation or effect came from: `Builtin`, `Api { version }`, `Custom` (the user's own, written in Rhai) | [ONLINE.md](main/ONLINE.md) |
 | `src/contract.rs` | Generates the client/API contract, `docs/generated/engine-contract.json` | [RELEASE.md](RELEASE.md) |
 | `src/script/` | Sandboxed Rhai scripting: the host and seeded RNG (`host.rs`), the registered API (`api.rs`, `builtins.rs`, `color.rs`, `anim.rs`), the script library and store, the `generate` CLI (`cli.rs`) | [SCRIPTING.md](main/SCRIPTING.md), [SCRIPTING-GUIDE.md](main/SCRIPTING-GUIDE.md) |
+| `src/lang/` (`lang`, brought by `engine-escape`) | The formula language, the GPU dialect: Rhai, Ultra Fractal's and Fractint's compiled to WGSL, for escape formulas, colourings and solids, flame variations, effects, and simulation models and colourings. Rhai is only parsed, never run: its syntax tree is lowered to the language's IR (lexer, parser, checker, `ir.rs`, `wgsl.rs`; the CPU interpreter `interp.rs` and the deep-zoom passes beside them) | [ESCAPE.md](main/ESCAPE.md#the-formula-language), [rhai-plugins.md](projects/rhai-plugins.md) |
+| `src/scripted.rs` | What every user-written script shares: its UUID (`mint_id`), its version (the SHA-256 of its source), its labels by locale (`Label`), its registry key `u<uuid>_<hash8>` (`key`), and the `Ledger` of what is registered | [rhai-plugins.md](projects/rhai-plugins.md) |
 
 ### Verification and diagnostics
 
@@ -167,9 +169,6 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | `src/sim_microbench.rs` | Stencil-step cost measurement (test-only) | |
 | `src/profiler.rs`, `src/util.rs`, `src/version.rs` | GPU timestamp and CPU scope profiling; frame metrics; build information captured by `build.rs` | |
 
-`src/undo.rs` is in the tree but not in `src/lib.rs`'s module list, so
-it is not compiled. Undo lives in `ConfigManager`.
-
 ### Outside `src/`
 
 | path | what it is |
@@ -179,7 +178,7 @@ it is not compiled. Undo lives in `ConfigManager`.
 | `build.rs` | Build provenance (version, git hash, profile), the WASM palette manifest, embedded texture presets, asset and shader copies into the target directory, the Windows icon |
 | `wasm/` | Gallery crates `script`, `render`, `flame`, `escape`, `sim`; see [wasm/README.md](../wasm/README.md). `python`: the library for WASI, pyfflame's engine |
 | `python/` | `pyfflame`: the WASI module run by wasmtime, its GPU work by wgpu-py -- config editing, `.flame` conversion, scripts, rendering, animation, video; [projects/pyfflame.md](projects/pyfflame.md) |
-| `tests/` | `regression.rs`, `shader_dumps/`, `test_configs/`, and `visual/` (374 configs in `2d`, `3d`, `escape`, `sim`, `solid`, `tonemap`, `variations`) |
+| `tests/` | `regression.rs`, `shader_dumps/`, `test_configs/`, and `visual/` (383 configs in `2d`, `3d`, `escape`, `sim`, `solid`, `tonemap`, `variations`) |
 | `benches/` | `flame_bench.rs` (Criterion) |
 | `scripts/` | `release.py`, `run_benchmarks.py`, `check_doc_links.py`, audits and one-shot codemods |
 
@@ -194,11 +193,30 @@ colourings, and effects all follow one pattern: a `static` definition
 per entry carrying its WGSL inline and its parameters described well
 enough for the UI to build controls, collected in an ordered,
 append-only list and looked up by name. The shader for a frame is
-assembled from the entries it uses. Variations and effects can also
-arrive at runtime from the online API
-(`storage::load_installed_resources`, called by every entry point that
-renders), and Rhai variations from configs and the Formula Editor, which is why `global_registry()` and `global_effect_registry()`
-return lock guards.
+assembled from the entries it uses.
+
+More and more of the built-ins are Rhai in the GPU dialect
+([Scripting](#scripting)). The one-pass built-in effects are their Rhai
+sources (`assets/effects/*.rhai`, `effects::custom::BUILTIN_TWINS`),
+with the WGSL kept as the reference they are tested against
+(`effects::wgsl_builtins`; `distance_field` stays WGSL). Every
+simulation model and colouring (`assets/sim/`) and every escape formula
+(`assets/formulas/twins/`) has a Rhai twin held to its built-in by
+tests, which Edit as Rhai or Edit as Formula puts in the built-in's
+place.
+
+The registries also change at runtime, which is why
+`global_registry()` and `global_effect_registry()` return lock guards:
+- Downloaded variations and effects, cached from the online API, and
+  the user's Rhai plug-ins (Load at start, `storage::library::load_plugins`)
+  register through `storage::load_installed_resources`. The app calls
+  it at start, and so do the CLI's `export` and `export-animation`
+  (`report_installed_resources` in `src/lib.rs`); `generate`, the
+  gallery modules and the Python module have no store and do not.
+- A config carries the Rhai sources it uses, and each kind registers
+  them with its own `ensure` where a path reads the config
+  (`variations::custom`, `escape::custom`, `sim::custom`,
+  `effects::custom`), under keys from `scripted::key`.
 
 ### Configuration and undo
 
@@ -287,9 +305,13 @@ scripts see ordinary edits. Detail: [CAMERA.md](main/CAMERA.md).
   orbit, the terrains), so a video continues a simulation instead of
   reseeding it every frame.
 
-Users: `app/export.rs` (CLI and headless export), `renderer/thumbnail.rs`,
-`animation/export.rs`, `wasm/render` and its siblings. The interactive
-viewport does not use it; `App::render` drives the renderers directly.
+Users: `app/export.rs` (CLI and headless export), the web app's
+custom-size PNG export (`render()` on the app's device, in
+`src/app/mod.rs`), `renderer/thumbnail.rs`, `animation/export.rs`,
+`app/texture_sync.rs` (caching a saved texture's image from the
+viewport's simulation run), `wasm/render` and its siblings, and
+`wasm/python`. The interactive viewport does not use it; `App::render`
+drives the renderers directly.
 
 ### Export
 
@@ -334,6 +356,16 @@ the API checks against. Detail: [ONLINE.md](main/ONLINE.md); release
 procedure in [RELEASE.md](RELEASE.md).
 
 ### Scripting
+
+Rhai is used in two separate ways. **The GPU dialect** (`src/lang/`,
+feature `lang`) is a typed subset of Rhai that is parsed, lowered and
+compiled to WGSL, never run: it is how variations, escape formulas,
+colourings and solids, effects and simulation models and colourings are
+written, built-in twins and the user's own alike, edited in the Formula
+Editor. **The scripting API** (`src/script/`) is full Rhai on the CPU,
+sandboxed: generators, modifiers and libraries, below.
+The direction, every kind written in Rhai, is
+[projects/rhai-plugins.md](projects/rhai-plugins.md).
 
 Rhai scripts generate a config (generators) or change a copy of the
 current one (modifiers), under execution budgets and with a pinned PRNG,
@@ -408,9 +440,12 @@ since the export competes for the same GPU.
 
 With an engine off, `render_with` returns `RenderError::EngineMissing`
 for configs in that mode. `python scripts/release.py check` compiles the
-library with each single engine (`--no-default-features --features
-engine-X`), because a `#[cfg]` on the wrong item compiles in every other
-combination.
+five gallery crates and their tests, each at its own feature set (render
+and script with every engine, flame, escape and sim with one each): that
+is the engine feature matrix, because a `#[cfg]` on the wrong item
+compiles in every other combination. It also checks the WASI module
+(the `python module (WASI)` gate). The gallery crates' own tests and
+pyfflame's run under `python scripts/release.py gallery`.
 
 | target | how | notes |
 | --- | --- | --- |
@@ -432,8 +467,8 @@ exported PNG. Release procedure: [RELEASE.md](RELEASE.md).
 | --- | --- | --- |
 | Add a variation | new `src/variations/defs/<name>.rs`; register at the end of `ALL_VARIATIONS` in `src/variations/defs/mod.rs` (append-only); unit conversions in `src/flame_xml.rs` if the foreign app differs | [VARIATIONS.md](main/VARIATIONS.md) |
 | Add an escape formula or colouring | `src/escape/formulas.rs` or `colorings.rs`; append to `FORMULAS` / `COLORINGS` in `src/escape/mod.rs` | [ESCAPE.md](main/ESCAPE.md) |
-| Add a simulation model or colouring | `src/sim/models.rs` or `colorings.rs`; append to `MODELS` / `COLORINGS` in `src/sim/mod.rs` | [SIMULATION.md](main/SIMULATION.md) |
-| Add an effect | WGSL in `shaders/effects/density/` or `color/`; register in `register_builtin_effects` in `src/effects/mod.rs`; regenerate with `export_effects_json` | [EFFECTS.md](main/EFFECTS.md) |
+| Add a simulation model or colouring | `src/sim/models.rs` or `colorings.rs`; append to `MODELS` / `COLORINGS` in `src/sim/mod.rs`; its Rhai twin in `assets/sim/<name>.rhai`, listed in `sim::custom` (`SHIPPED_MODELS` / `SHIPPED`) and held to the built-in by the twin tests | [SIMULATION.md](main/SIMULATION.md) |
+| Add an effect | a one-pass built-in is its Rhai source, `assets/effects/<name>.rhai`, listed in `effects::custom::BUILTIN_TWINS`; its WGSL in `shaders/effects/density/` or `color/`, added to `wgsl_builtins` in `src/effects/mod.rs`, is the reference the pixel compares hold it to and the fallback without `lang`; English labels in `locales/en.yml`; regenerate with `export_effects_json` | [EFFECTS.md](main/EFFECTS.md) |
 | Add a panel | `src/ui/<panel>.rs`; a `PanelType` in `src/ui/workspace.rs`; dispatch in `src/ui/panel_viewer.rs`; availability in `visibility::panel` and a `WINDOW_MENU` row | [UI.md](main/UI.md) |
 | Add a config field | the struct in `src/config/fractal_config.rs` (or `escape.rs`, `sim.rs`), skip-if-default so old files stay stable | [CONFIG.md](main/CONFIG.md) |
 | Make a field editable | a `ConfigPath` variant in `src/config/delta.rs` (history label, string key, `update_type`); read and write in `get_value` / `set_value` in `src/config/manager.rs` | [CONFIG.md](main/CONFIG.md) |
@@ -451,7 +486,7 @@ exported PNG. Release procedure: [RELEASE.md](RELEASE.md).
 ## 7. Testing
 
 - Unit tests live beside the code: `cargo test`.
-- Visual regression: `tests/visual/run_tests.py` renders 374 configs
+- Visual regression: `tests/visual/run_tests.py` renders 383 configs
   through the CLI and compares them with a tolerance against small,
   metadata-free baseline thumbnails; `run_all_tests.py` adds WASM
   (Playwright). It does not build the binary first.
@@ -462,8 +497,10 @@ exported PNG. Release procedure: [RELEASE.md](RELEASE.md).
   cross-platform comparison of variation maths; the census writes
   `docs/generated/variation-census-*.txt`.
 - `python scripts/release.py check` runs the fast gates (unit tests,
-  WASM check, contract, shader dumps, doc links, the engine feature
-  matrix, the gallery crates' tests).
+  WASM check, contract, shader dumps, doc links, the gallery crates
+  compiled at their feature sets -- the engine feature matrix -- and the
+  WASI module). `python scripts/release.py gallery` runs the gallery
+  crates' tests and pyfflame's.
 
 Detail: [TESTING-GUIDE.md](TESTING-GUIDE.md).
 

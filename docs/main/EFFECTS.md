@@ -368,8 +368,9 @@ Effects", available in every render mode:
   list of the config's instances by their translated names (the raw
   key for an effect this build lacks), with an enable box, up/down
   reorder, remove, and a control per parameter while enabled. The
-  controls are the variation parameters' (`variation_params`, through
-  an `EffectTarget`): a slider for a Float (0 to 1 where its range is
+  controls are the one parameter renderer's (`ui::params::list` over a
+  `ConfigStore` addressed through an `EffectTarget`, with a Rhai
+  effect's conditions and grids): a slider for a Float (0 to 1 where its range is
   absent), an integer slider for an Integer, a dropdown for an Enum,
   a checkbox for a Boolean, degrees for an Angle, with the description
   as the tooltip. Every `blend_mode`, `mode` and `color_mode` is an

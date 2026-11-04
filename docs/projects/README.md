@@ -37,6 +37,7 @@ which rewrites the references in code comments too).
 
 | Doc | What it tracks |
 |---|---|
+| [architecture-review.md](architecture-review.md) | The 2026-11-04 architecture review: the docs against the code, five parallel systems (config writes, the headless facade, the render tail, carried sources, origins), the WASM modules, every surface against animation and scripting, the governors, the plans, and a proposed order. |
 | [doc-review-findings.md](doc-review-findings.md) | What the October 2026 doc refresh found wrong in the code, and what the fix pass that followed left open (its *Still open* section). |
 | [escape-sim-followups.md](escape-sim-followups.md) | Escape-time and simulation decisions to make, what is left of the path tracer's speed, the 3D views' and the escape engine's unbuilt items, known gaps. |
 | [solid-rendering-todo.md](solid-rendering-todo.md) | Solid rendering for 3D flames: what is left. |

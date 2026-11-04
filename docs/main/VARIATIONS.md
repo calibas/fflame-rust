@@ -97,8 +97,8 @@ linker drops the other definitions.
 register downloads and plugins at run time and to clear the download
 cache. Every runtime add or remove bumps `version()`, which the shader
 cache watches. Drop a read guard before anything that may take the write
-lock; `local_plugin_dependencies` drops its guard before moving on to
-the effect registry for that reason.
+lock -- `variations::custom::ensure`, which registers a config's Rhai
+variations, does.
 
 **Lookups.**
 - `get(name)` and `has(name)` resolve aliases.

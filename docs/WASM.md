@@ -248,10 +248,14 @@ that gave confident wrong answers on the way — is recorded in
 ## Testing
 
 - `python scripts/release.py check` compiles the library for
-  `wasm32-unknown-unknown` and runs all five gallery crates' tests:
-  script parity, and the smoke tests of `wasm/render` and of the three
-  single-engine modules, which also build the library at each
-  single-engine feature combination.
+  `wasm32-unknown-unknown`, compiles all five gallery crates and their
+  tests, each at its own feature set (which builds the library at each
+  single-engine feature combination), and checks the WASI module for
+  pyfflame (the `python module (WASI)` gate).
+- `python scripts/release.py gallery` runs the gallery crates' tests
+  before the modules deploy -- script parity, and the smoke tests of
+  `wasm/render` and of the three single-engine modules -- and then
+  builds pyfflame and runs its tests.
 - `tests/visual/wasm/test_wasm.py` renders the visual-suite configs in
   Chrome through `WasmApi.export_png`, driven by Selenium, and
   compares exact pixel hashes against `tests/visual/baseline/wasm/`.

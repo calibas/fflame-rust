@@ -164,9 +164,11 @@ version first; this path does not normalize the numbers).
 file.
 
 `serde_json::to_string(&config)` — the plain derive — writes **no
-`version`** and strips no defaults. The PNG metadata's `Config` chunk is
-written this way (`PngMetadata::from_app_state`); see the warning under
-*Versioning*.
+`version`** and strips no defaults. The PNG metadata's `Config` chunk
+is the canonical form instead: `PngMetadata::from_app_state` writes
+`to_json_value()` (versioned, defaults stripped, unindented), so it
+reloads through the same migration as a file. Older PNGs carry the
+plain-derive JSON; see *Versioning*.
 
 ### Reading
 
@@ -437,7 +439,7 @@ to `Main`.
 ## ConfigPath and ConfigValue
 
 `ConfigPath` (`src/config/delta.rs`) names every editable parameter:
-372 variants, many carrying an index or a name.
+413 variants, many carrying an index or a name.
 
 | family | examples | update type |
 | --- | --- | --- |
@@ -451,8 +453,8 @@ to `Main`.
 | flame and scene | `RenderMode`, `PerspectiveStrength`, `DepthDensityCompensation`, `FarDensityFade`(`Start`), `PreserveZ`, `Xaos { src, dst }`, `SoloTransform`, `PostSymmetry*`, `SolidStrength`, `SurfaceThickness` | `IterationReset` |
 | solid lighting | `ShadingStrength`, `SolidAmbient`, `SolidDiffuse`, `SolidSpecular`, `SolidShininess`, `SolidGloss`, `SolidRoughness`, `SolidGlow`, `Ssao*`, `NormalSmoothing`, `GapFill`, `SolidShadowStrength`, `SolidLight*` | `ShadingOnly` |
 | effects | `DensityEffectEnabled`/`Param`, `ColorEffectEnabled`/`Param`, `Add`/`Remove*Effect` | `ToneMappingOnly` |
-| escape-time | about a hundred `Escape*` paths: formula, view, solid camera, colouring, relief shading, contrast, palette map, texture overlay, terrain, path tracer, lens | `EscapeRerender` |
-| simulation | about eighty `Sim*` paths: model, grid, seed, init, steps, warp, view, matte, resolve, layers, couplings, colour layers, terrain, path tracer | `SimRerender`, `SimResample` or `SimReseed` (see [SIMULATION.md](SIMULATION.md)) |
+| escape-time | 127 `Escape*` paths: formula, view, solid camera, colouring, relief shading, contrast, palette map, texture overlay, terrain, path tracer, lens | `EscapeRerender` |
+| simulation | 93 `Sim*` paths: model, grid, seed, init, steps, warp, view, matte, resolve, layers, couplings, colour layers, terrain, path tracer | `SimRerender`, `SimResample` or `SimReseed` (see [SIMULATION.md](SIMULATION.md)) |
 | system | 17 `System*` paths | see *SystemSettings* |
 
 What a path supports is spread over several exhaustive matches, so the
@@ -542,7 +544,7 @@ if ui.add(egui::Slider::new(&mut value, 0.1..=5.0)).changed() {
 ## Presets
 
 The shipped presets are one file, `assets/presets.fflame`: a JSON array
-of configs (twenty at present). `src/resources/presets.rs` loads it:
+of configs (84 at present). `src/resources/presets.rs` loads it:
 
 - **Desktop** reads the file at runtime (resolved against the working
   directory and the executable's location), so editing it needs no
@@ -600,7 +602,7 @@ the file, and returns the path's update type:
 | `SystemOrbitCacheMb` | `None` | pushed into the escape engine's orbit store (desktop) |
 | `SystemVsyncEnabled`, `SystemTargetFps`, `SystemFly*` | `ViewOnly` | |
 | `SystemPngStripMetadata` | `None` | mirrored into the PNG encoder's global switch at once |
-| `SystemExportWidth`, `SystemExportHeight`, `SystemLanguage`, `SystemShowHelpOnStartup` | `None` | |
+| `SystemLanguage`, `SystemShowHelpOnStartup` | `None` | |
 
 Fields without a path (compact mode, the online and sign-in state) are
 written through `system_settings_mut()` by their owners.

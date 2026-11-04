@@ -29,7 +29,7 @@ for [the catalogue]" is no longer true:
 | Escape transformations (Plane / Orbit / Iteration) | `escape.transforms[]` | Dropped (`drawn_transforms`, `map_usable`) |
 | Mode D, the Flame Attractor (2D and solid) | `escape.formula` = `ifs_flame` / `ifs_flame_3d`, reading `config.flame` | **Blank** unless every variation is `linear`: the analysis refuses an unknown name (`NotAffine::Variation`), `pack_for` returns None, the renderer draws nothing. The inverse kernels themselves are in the binary |
 | A Rhai solid's `vary("name", v)` of a built-in | `escape.custom_formula` (e.g. `solid-inverted-menger.rhai`) | **A Mandelbrot**: the compile fails, `custom::ensure` logs it, `get_formula` falls back to `FORMULAS[0]` |
-| Rhai custom variations | `flame.custom_variations` | Work in the escape module; **lost in the sim and flame modules** -- `variations::custom` is gated on `engine-escape` |
+| Rhai custom variations | `flame.custom_variations` | Work in the escape module; **lost in the sim and flame modules** -- `variations::custom` is gated on `engine-escape`. *Fixed 2026-11-02: `variations::custom` is gated on `lang` now, and `wasm/flame` and `wasm/sim` build with it* |
 | Simulation layers warped by the flame | `sim.use_transforms` | Affine only: the variations are skipped (`build_layer_map`) |
 | Escape textures from a simulation recipe | `escape.texture` | Missing in the escape module: the recipe renders through `render()`, which returns `EngineMissing("simulation")`; a warning only |
 

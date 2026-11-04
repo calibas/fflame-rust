@@ -51,9 +51,10 @@ Constructors:
 
 | constructor | per-pixel flame state | used by |
 | --- | --- | --- |
-| `FlameRenderer::new(device, queue, format, w, h, flame)` | full | the WASM custom-size export |
-| `FlameRenderer::with_palette_size(..., palette_size)` | full | the app's viewport, `render()` for flames, video, the gallery module, tools |
-| `FlameRenderer::for_tail(..., palette_size)` | 1x1 | `render()` for escape and simulation configs |
+| `FlameRenderer::new(device, queue, format, w, h, flame)` | full | no caller (`with_palette_size` at the default palette size) |
+| `FlameRenderer::with_palette_size(..., palette_size)` | full | the app's viewport, the gallery module (`wasm/render`), tools; `for_job` for a flame config |
+| `FlameRenderer::for_tail(..., palette_size)` | 1x1 | `for_job` for an escape or simulation config |
+| `FlameRenderer::for_job(..., config)` | either | `render()`, the video loop (`animation/export.rs`) and `wasm/python`: picks `with_palette_size` or `for_tail` by the config's render mode |
 
 `for_tail` builds `FlameBuffers` at 1x1 — the two histograms and the
 accumulator pair, 64 bytes a pixel, are never read when another engine
@@ -451,7 +452,9 @@ See [ESCAPE.md](ESCAPE.md), [SIMULATION.md](SIMULATION.md) and
 
 Every headless render goes through `src/renderer/render.rs`: CLI
 export, the WASM API's export, thumbnails, the in-app PNG export on the
-desktop, the gallery module (`wasm/render`) and video.
+desktop and the web app's custom-size export (`render()` on the app's
+device, `src/app/mod.rs`), the gallery module (`wasm/render`),
+`wasm/python` and video.
 
 ```rust
 let job = RenderJob::new(&config, 1920, 1080)
@@ -754,10 +757,11 @@ export are in [EXPORT.md](EXPORT.md). Points that touch the renderer:
 - The video loop (`src/animation/export.rs`) owns one renderer and one
   `RenderEngines` for the whole video and calls `render_with` per
   frame, with sticky off.
-- On the web, the app's custom-size PNG export (`src/app/mod.rs`) runs
-  its own copy of the flame loop and tail rather than calling `render`,
-  and frees the iteration buffers (`free_iteration_buffers`) before
-  colour effects allocate.
+- On the web, the app's custom-size PNG export (`src/app/mod.rs`) calls
+  `render` on the app's device. `render` marks its own renderer
+  throwaway (`job.throwaway_renderer`), and `render_with` then frees the
+  iteration buffers (`free_iteration_buffers`) after the tone map,
+  before colour effects allocate.
 - `destroy()` releases the renderer's buffers explicitly; on WebGPU a
   dropped buffer is freed only when the JS garbage collector notices.
 

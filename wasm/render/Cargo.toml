@@ -26,8 +26,9 @@ crate-type = ["cdylib", "rlib"]
 # off, as in every gallery module: a terrain config renders as its 2D
 # picture.
 fractal_flame_wgpu = { path = "../..", default-features = false, features = ["engine-flame", "engine-escape", "engine-sim"] }
-# The main crate's render API speaks `egui_wgpu::wgpu` types; using the
-# same re-export guarantees type identity. default-features = false —
+# This crate reaches wgpu through `egui_wgpu::wgpu` (src/lib.rs). The
+# main crate's render API names `wgpu` directly; egui-wgpu re-exports
+# that same crate, so the types are identical. default-features = false —
 # egui itself is never referenced and the linker drops it (verified by
 # string scan, as with wasm/script).
 egui-wgpu = { version = "0.34", default-features = false }
