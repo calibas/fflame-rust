@@ -90,15 +90,8 @@ fn effects(rows: &mut Vec<Value>) {
     }
 }
 
-fn escape_row(rows: &mut Vec<Value>, kind: &str, owner: &str, params: &'static [crate::escape::EscapeParamDef]) {
-    for p in params {
-        let control = if p.choices.is_empty() { "float" } else { "choice" };
-        let slow = crate::escape::is_slow_param(owner, p.name);
-        // `escape_panel::param_slider`: five decades, or declared.
-        let log = p.min > 0.0 && (p.max / p.min >= 1e5 || crate::escape::custom::is_exponential(p));
-        let choices = p.choices.iter().map(|c| c.to_string()).collect();
-        rows.push(row(kind, owner, p.name, p.display_name, p.tooltip, control, f64::from(p.default), (f64::from(p.min), f64::from(p.max)), choices, slow, log));
-    }
+fn escape_row(rows: &mut Vec<Value>, kind: &str, owner: &str, params: &[crate::params::ParamDef]) {
+    rows.extend(params.iter().map(|p| def_row(kind, owner, p)));
 }
 
 fn escape(rows: &mut Vec<Value>) {

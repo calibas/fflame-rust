@@ -341,59 +341,32 @@ pub fn render_escape_content(
     // Formula parameters, straight from the def (slider bounds and
     // tooltips included). Values read def defaults when unset — the
     // same value the shader's packer uses.
-    let (formula_params, owner) = match (ifs_def, field) {
-        (Some(d), _) => (d.parameters, d.name),
-        (None, Some(f)) => (f.parameters, f.name),
-        (None, None) => formula.map_or((&[][..], ""), |m| (m.parameters, m.name)),
+    let formula_params = match (ifs_def, field) {
+        (Some(d), _) => d.parameters,
+        (None, Some(f)) => f.parameters,
+        (None, None) => formula.map_or(&[][..], |m| m.parameters),
     };
     let program = formula.is_some_and(|m| m.has_feature(crate::escape::FormulaFeature::Program));
-    for p in formula_params {
-        // A compiled formula's `bailout` parameter is the bailout control
-        // below (the renderer binds it), so it has no slider of its own.
-        if program && matches!(p.name, "bailout" | "bailout.re" | "bailout.im") {
-            continue;
-        }
-        // A solid's shadows and occlusion are the Lighting panel's
-        // (3d-look-and-tools P3): formula parameters in the file,
-        // drawn with the rest of the light.
-        if ifs_def.is_some() && crate::escape::ifs::LIGHTING_PARAMS.contains(&p.name) {
-            continue;
-        }
-        let mut v = esc.formula_params.get(p.name).copied().unwrap_or(p.default);
-        let slow = crate::escape::is_slow_param(owner, p.name);
-        if param_control(ui, &mut v, p, "formula", slow) {
-            let _ = config_manager.update_param(
-                ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
-                v.into(),
-            );
-        }
-        // A complex parameter, after its two parts: the same point in
-        // polar form (radius, angle), what animating it around the origin
-        // keys (`EscapeConfig::formula_param`).
-        if let Some(base) = p.name.strip_suffix(".im") {
-            if formula_params.iter().any(|q| q.name.strip_suffix(".re") == Some(base)) {
-                let get = |part: &str| {
-                    f32::try_from(config_manager.get_value(&ConfigPath::EscapeFormulaParam { param: format!("{base}.{part}") }).unwrap_or(ConfigValue::Float(0.0))).unwrap_or(0.0)
-                };
-                let (mut r, mut angle) = (get("r"), get("angle"));
-                let mut changed = None;
-                ui.horizontal(|ui| {
-                    ui.weak(t!("escape_panel.as_a_point"));
-                    if ui.add(egui::DragValue::new(&mut r).speed(0.005).max_decimals(4).prefix("r ")).on_hover_text(t!("escape_panel.radius_tip")).changed() {
-                        changed = Some(("r", r));
-                    }
-                    if ui.add(egui::DragValue::new(&mut angle).speed(0.5).max_decimals(2).suffix("°")).on_hover_text(t!("escape_panel.angle_tip")).changed() {
-                        changed = Some(("angle", angle));
-                    }
-                });
-                if let Some((part, v)) = changed {
-                    let _ = config_manager.update_param(ConfigPath::EscapeFormulaParam { param: format!("{base}.{part}") }, v.into());
-                }
-            }
-        }
+    // A compiled formula's `bailout` parameter is the bailout control
+    // below (the renderer binds it), so it has no slider of its own. A
+    // solid's shadows and occlusion are the Lighting panel's
+    // (3d-look-and-tools P3): formula parameters in the file, drawn with
+    // the rest of the light.
+    let hide = |p: &crate::params::ParamDef| {
+        (program && matches!(&*p.name, "bailout" | "bailout.re" | "bailout.im"))
+            || (ifs_def.is_some() && crate::escape::ifs::LIGHTING_PARAMS.contains(&&*p.name))
+    };
+    {
+        let mut store = super::params::ConfigStore::new(
+            &mut *config_manager,
+            |_, d| Some(esc.formula_params.get(&*d.name).copied().unwrap_or(d.slot_default())),
+            |n| ConfigPath::EscapeFormulaParam { param: n.to_string() },
+        );
+        let list = super::params::List::new(formula_params, "formula").hide(&hide);
+        super::params::list_with(ui, &mut store, &list, |ui, store, p| polar_row(ui, store.manager, formula_params, p));
     }
 
-    if ifs_def.is_some_and(|d| d.parameters.iter().any(|p| crate::escape::ifs::LIGHTING_PARAMS.contains(&p.name))) {
+    if ifs_def.is_some_and(|d| d.parameters.iter().any(|p| crate::escape::ifs::LIGHTING_PARAMS.contains(&&*p.name))) {
         ui.label(egui::RichText::new(t!("escape_panel.lighting_elsewhere")).small().weak());
     }
 
@@ -1245,107 +1218,45 @@ pub fn render_escape_content(
     }
 }
 
-/// A starting `scale` for a coloring, from the iteration cap.
-///
-/// The scale/offset pair is the panel's least guessable control: it
-/// maps an escape value onto the palette, and the useful range depends
-/// on how long pixels actually take to escape -- which the user cannot
-/// see. Picking the Ducks showcase's 1.86/11.6 took a numpy probe.
-///
-/// This is a STARTING POINT, not a measurement. The honest version
-/// reads the rendered value distribution back off the GPU; until that
-/// exists, this puts a few palette cycles across the range typical of
-/// a view at this iteration cap, which is what the shipped configs
-/// use. Smooth and escape-count colorings scale with the COUNT (most
-/// pixels escape in a few hundred iterations however high the cap is),
-/// while the orbit-trap and average families produce O(1) values and
-/// want a scale near 1.
-/// Slider for one escape parameter, logarithmic when its range spans
-/// enough decades that a linear one is useless.
-///
-/// An iteration-scaled `scale` runs from 1e-6 to 1: linearly, the
-/// entire useful deep-zoom range lives in the leftmost thousandth of
-/// the track. The threshold is high enough (1e5) that every existing
-/// range keeps the linear feel it had.
-fn param_slider<'a>(
-    v: &'a mut f32,
-    p: &'static crate::escape::EscapeParamDef,
-) -> egui::Slider<'a> {
-    let decades = p.min > 0.0 && p.max / p.min >= 1e5;
-    // A custom formula's parameter declared `exponential` (phase 4,
-    // step 8).
-    #[cfg(feature = "engine-escape")]
-    let declared = p.min > 0.0 && crate::escape::custom::is_exponential(p);
-    #[cfg(not(feature = "engine-escape"))]
-    let declared = false;
-    egui::Slider::new(v, p.min..=p.max)
-        .text(p.display_name)
-        .logarithmic(decades || declared)
+/// One section's parameters (a colouring's, the texture layer's), read
+/// from `values` (the default where unset) and written at `path`.
+fn param_list(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    defs: &[crate::params::ParamDef],
+    salt: &str,
+    values: &std::collections::BTreeMap<String, f32>,
+    path: impl Fn(&str) -> ConfigPath,
+) {
+    let mut store = super::params::ConfigStore::new(config_manager, |_, d| Some(values.get(&*d.name).copied().unwrap_or(d.slot_default())), path);
+    super::params::list(ui, &mut store, &super::params::List::new(defs, salt));
 }
 
-/// One escape parameter's control: a DROPDOWN when the definition
-/// names discrete choices, the slider otherwise. Returns whether the
-/// value changed.
-///
-/// The stored value is identical either way — the choice index, in the
-/// same f32 the shader reads — so this changes presentation only. A
-/// slider over "0: Burning Ship, 1: Perpendicular Mandelbrot, ... 5:
-/// Perpendicular Celtic" let you land on 2.4, which is variant 2 with
-/// no indication that it was not something in its own right, and hid
-/// the roster behind the tooltip.
-///
-/// `salt` separates the formula and coloring sections: both can define
-/// a parameter called `variant`, and two combo boxes sharing an egui
-/// id would share their popup state.
-///
-/// A `slow` parameter (`escape::SLOW_PARAMS`) makes the next frame slow,
-/// so a live drag would overshoot: a small whole-number range is a
-/// dropdown, anything else commits when the drag ends
-/// (`slow_controls`).
-pub(crate) fn param_control(
-    ui: &mut egui::Ui,
-    v: &mut f32,
-    p: &'static crate::escape::EscapeParamDef,
-    salt: &str,
-    slow: bool,
-) -> bool {
-    if p.choices.is_empty() && slow {
-        if super::slow_controls::fits_a_dropdown(p.min, p.max) {
-            return super::slow_controls::whole_numbers(ui, (salt, p.name), p.display_name, Some(p.tooltip), v, p.min as i32, p.max as i32);
-        }
-        let id = ui.id().with((salt, p.name, "on_release"));
-        return super::slow_controls::on_release(ui, id, v, |ui, v| ui.add(param_slider(v, p)).on_hover_text(p.tooltip)).1;
+/// After a complex parameter's two parts, `p` its `.im`: the same point
+/// in polar form (radius, angle), what animating it around the origin
+/// keys (`EscapeConfig::formula_param`).
+fn polar_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, formula_params: &[crate::params::ParamDef], p: &crate::params::ParamDef) {
+    let Some(base) = p.name.strip_suffix(".im") else { return };
+    if !formula_params.iter().any(|q| q.name.strip_suffix(".re") == Some(base)) {
+        return;
     }
-    if p.choices.is_empty() {
-        return ui.add(param_slider(v, p)).on_hover_text(p.tooltip).changed();
-    }
-    // Round rather than truncate, and clamp: a config written before
-    // the choice list existed (or hand-edited) can hold anything, and
-    // it must land on a real entry rather than panicking the index.
-    let last = p.choices.len() - 1;
-    let mut idx = if v.is_finite() {
-        (v.round().max(0.0) as usize).min(last)
-    } else {
-        0
+    let get = |part: &str| {
+        f32::try_from(config_manager.get_value(&ConfigPath::EscapeFormulaParam { param: format!("{base}.{part}") }).unwrap_or(ConfigValue::Float(0.0))).unwrap_or(0.0)
     };
-    let before = idx;
+    let (mut r, mut angle) = (get("r"), get("angle"));
+    let mut changed = None;
     ui.horizontal(|ui| {
-        ui.label(p.display_name);
-        egui::ComboBox::from_id_salt((salt, p.name))
-            .selected_text(p.choices[idx])
-            .show_ui(ui, |ui| {
-                for (i, c) in p.choices.iter().enumerate() {
-                    ui.selectable_value(&mut idx, i, *c);
-                }
-            })
-            .response
-            .on_hover_text(p.tooltip);
+        ui.weak(t!("escape_panel.as_a_point"));
+        if ui.add(egui::DragValue::new(&mut r).speed(0.005).max_decimals(4).prefix("r ")).on_hover_text(t!("escape_panel.radius_tip")).changed() {
+            changed = Some(("r", r));
+        }
+        if ui.add(egui::DragValue::new(&mut angle).speed(0.5).max_decimals(2).suffix("°")).on_hover_text(t!("escape_panel.angle_tip")).changed() {
+            changed = Some(("angle", angle));
+        }
     });
-    if idx != before {
-        *v = idx as f32;
-        return true;
+    if let Some((part, v)) = changed {
+        let _ = config_manager.update_param(ConfigPath::EscapeFormulaParam { param: format!("{base}.{part}") }, v.into());
     }
-    false
 }
 
 /// Pick `coloring`, and with it the bailout it is best drawn at
@@ -1443,6 +1354,21 @@ fn palette_map_controls(
     }
 }
 
+/// A starting `scale` for a coloring, from the iteration cap.
+///
+/// The scale/offset pair is the panel's least guessable control: it
+/// maps an escape value onto the palette, and the useful range depends
+/// on how long pixels actually take to escape -- which the user cannot
+/// see. Picking the Ducks showcase's 1.86/11.6 took a numpy probe.
+///
+/// This is a STARTING POINT, not a measurement. The honest version
+/// reads the rendered value distribution back off the GPU; until that
+/// exists, this puts a few palette cycles across the range typical of
+/// a view at this iteration cap, which is what the shipped configs
+/// use. Smooth and escape-count colorings scale with the COUNT (most
+/// pixels escape in a few hundred iterations however high the cap is),
+/// while the orbit-trap and average families produce O(1) values and
+/// want a scale near 1.
 fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
     match coloring {
         "smooth" | "escape_count" | "period" => {
@@ -2424,15 +2350,7 @@ fn show_coloring_section(
                     }
                 });
         });
-        for p in coloring.parameters {
-            let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
-            if param_control(ui, &mut v, p, "coloring", crate::escape::is_slow_param(coloring.name, p.name)) {
-                let _ = config_manager.update_param(
-                    ConfigPath::EscapeColoringParam { param: p.name.to_string() },
-                    v.into(),
-                );
-            }
-        }
+        param_list(ui, config_manager, coloring.parameters, "coloring", &esc.coloring_params, |n| ConfigPath::EscapeColoringParam { param: n.to_string() });
         return;
     }
     if let Some(f) = field {
@@ -2486,15 +2404,7 @@ fn show_coloring_section(
                 }
             });
         }
-        for p in coloring.parameters {
-            let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
-            if param_control(ui, &mut v, p, "coloring", crate::escape::is_slow_param(coloring.name, p.name)) {
-                let _ = config_manager.update_param(
-                    ConfigPath::EscapeColoringParam { param: p.name.to_string() },
-                    v.into(),
-                );
-            }
-        }
+        param_list(ui, config_manager, coloring.parameters, "coloring", &esc.coloring_params, |n| ConfigPath::EscapeColoringParam { param: n.to_string() });
         return;
     }
     let coloring = crate::escape::get_coloring(&esc.coloring);
@@ -2602,15 +2512,7 @@ fn show_coloring_section(
             }
         });
     }
-    for p in coloring.parameters {
-        let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
-        if param_control(ui, &mut v, p, "coloring", crate::escape::is_slow_param(coloring.name, p.name)) {
-            let _ = config_manager.update_param(
-                ConfigPath::EscapeColoringParam { param: p.name.to_string() },
-                v.into(),
-            );
-        }
-    }
+    param_list(ui, config_manager, coloring.parameters, "coloring", &esc.coloring_params, |n| ConfigPath::EscapeColoringParam { param: n.to_string() });
 
     // ---- Texture layer ----
     // A second colouring blended into this one before the palette, so
@@ -2726,15 +2628,7 @@ fn texture_layer_controls(
             let _ = config_manager.update_param(ConfigPath::EscapeLayerWeight, w.into());
         }
     });
-    for p in l.parameters {
-        let mut v = layer.params.get(p.name).copied().unwrap_or(p.default);
-        if param_control(ui, &mut v, p, "layer", crate::escape::is_slow_param(l.name, p.name)) {
-            let _ = config_manager.update_param(
-                ConfigPath::EscapeLayerParam { param: p.name.to_string() },
-                v.into(),
-            );
-        }
-    }
+    param_list(ui, config_manager, l.parameters, "layer", &layer.params, |n| ConfigPath::EscapeLayerParam { param: n.to_string() });
 }
 
 /// Pick a texture layer colouring as one undo step, with the values a
@@ -2747,7 +2641,7 @@ fn pick_layer(config_manager: &mut ConfigManager, c: &crate::escape::ColoringDef
             .pick_params
             .iter()
             .find(|(k, _)| *k == p.name)
-            .map_or(p.default, |(_, v)| *v);
+            .map_or(p.slot_default(), |(_, v)| *v);
         changes.push((ConfigPath::EscapeLayerParam { param: p.name.to_string() }, v.into()));
     }
     let _ = config_manager.update_batch(changes, "history.param.escape_layer_coloring".to_string());
@@ -2823,7 +2717,7 @@ pub fn apply_preset(
             .iter()
             .find(|(k, _)| *k == p.name)
             .map(|(_, v)| *v)
-            .unwrap_or(p.default);
+            .unwrap_or(p.slot_default());
         changes.push((
             ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
             v.into(),
@@ -2836,7 +2730,7 @@ pub fn apply_preset(
             .pick_params
             .iter()
             .find(|(k, _)| *k == p.name)
-            .map_or(p.default, |(_, v)| *v);
+            .map_or(p.slot_default(), |(_, v)| *v);
         let v = preset
             .coloring_params
             .iter()
@@ -2876,7 +2770,7 @@ pub fn apply_field_preset(
             .iter()
             .find(|(k, _)| *k == p.name)
             .map(|(_, v)| *v)
-            .unwrap_or(p.default);
+            .unwrap_or(p.slot_default());
         changes.push((
             ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
             v.into(),
@@ -2888,7 +2782,7 @@ pub fn apply_field_preset(
             .iter()
             .find(|(k, _)| *k == p.name)
             .map(|(_, v)| *v)
-            .unwrap_or(p.default);
+            .unwrap_or(p.slot_default());
         changes.push((
             ConfigPath::EscapeColoringParam { param: p.name.to_string() },
             v.into(),
@@ -3321,11 +3215,11 @@ mod tests {
             for max_iter in [64u32, 256, 4000, 60_000] {
                 let v = suggested_coloring_scale(c.name, max_iter);
                 assert!(
-                    v >= p.min && v <= p.max,
+                    v >= p.slot_range().0 && v <= p.slot_range().1,
                     "{}: suggested scale {v} is outside the slider's {}..={}",
                     c.name,
-                    p.min,
-                    p.max
+                    p.slot_range().0,
+                    p.slot_range().1
                 );
             }
         }

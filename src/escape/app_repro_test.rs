@@ -157,7 +157,7 @@ mod tests {
         assert!(esc.formula_params.is_empty());
         let p = {
             let defs = crate::escape::get_formula("phoenix").parameters;
-            (defs[0].default as f64, defs[1].default as f64)
+            (defs[0].slot_default() as f64, defs[1].slot_default() as f64)
         };
 
         let (w, h) = (96u32, 72u32);
@@ -354,7 +354,7 @@ mod tests {
         esc.max_iter = 256;
         let p = {
             let defs = crate::escape::get_formula("phoenix").parameters;
-            (defs[0].default as f64, defs[1].default as f64)
+            (defs[0].slot_default() as f64, defs[1].slot_default() as f64)
         };
 
         let (w, h) = (640u32, 480u32);
@@ -14591,7 +14591,7 @@ fn main() {
                         .iter()
                         .find(|(k, _)| *k == p.name)
                         .map(|(_, v)| *v)
-                        .unwrap_or(p.default);
+                        .unwrap_or(p.slot_default());
                     esc.formula_params.insert(p.name.to_string(), v);
                 }
                 for p in coloring.parameters {
@@ -14600,7 +14600,7 @@ fn main() {
                         .iter()
                         .find(|(k, _)| *k == p.name)
                         .map(|(_, v)| *v)
-                        .unwrap_or(p.default);
+                        .unwrap_or(p.slot_default());
                     esc.coloring_params.insert(p.name.to_string(), v);
                 }
                 let (lit_frac, distinct) = shoot(&esc, &mut renderer);
@@ -14652,7 +14652,7 @@ fn main() {
                         .iter()
                         .find(|(k, _)| *k == p.name)
                         .map(|(_, v)| *v)
-                        .unwrap_or(p.default);
+                        .unwrap_or(p.slot_default());
                     esc.formula_params.insert(p.name.to_string(), v);
                 }
                 for p in coloring.parameters {
@@ -14661,7 +14661,7 @@ fn main() {
                         .iter()
                         .find(|(k, _)| *k == p.name)
                         .map(|(_, v)| *v)
-                        .unwrap_or(p.default);
+                        .unwrap_or(p.slot_default());
                     esc.coloring_params.insert(p.name.to_string(), v);
                 }
 

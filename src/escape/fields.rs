@@ -30,7 +30,7 @@
 //!   palette position (wrapped), `lum` multiplies the sampled color
 //!   (hillshading). Params via `cparam(slot)`.
 
-use super::EscapeParamDef;
+use crate::params::{ParamDef, Spec};
 
 /// A mode-B field definition.
 pub struct FieldDef {
@@ -44,7 +44,7 @@ pub struct FieldDef {
     /// Coloring used when `EscapeConfig::coloring` names a mode-A
     /// coloring (the usual state right after switching formulas).
     pub default_coloring: &'static str,
-    pub parameters: &'static [EscapeParamDef],
+    pub parameters: &'static [ParamDef],
     /// Named starting points, first = the default applied on a switch
     /// (see [`super::EscapePreset`]). A field's natural view and term
     /// count are as particular as any formula's.
@@ -57,7 +57,7 @@ pub struct FieldDef {
 pub struct FieldColoringDef {
     pub name: &'static str,
     pub display_name: &'static str,
-    pub parameters: &'static [EscapeParamDef],
+    pub parameters: &'static [ParamDef],
     pub wgsl: &'static str,
 }
 
@@ -81,44 +81,32 @@ pub static WEIERSTRASS: FieldDef = FieldDef {
     default_coloring: "field_hillshade",
     presets: super::presets::WEIERSTRASS,
     parameters: &[
-        EscapeParamDef {
-            name: "a",
-            display_name: "Amplitude Ratio",
-            default: 0.55,
-            min: 0.05,
-            max: 0.95,
-            tooltip: "Per-octave amplitude factor a. Roughness rises toward 1 \
+        ParamDef::new(
+            "a",
+            "Amplitude Ratio",
+            "Per-octave amplitude factor a. Roughness rises toward 1 \
                       (the sum stays convergent below 1).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "b",
-            display_name: "Frequency Ratio",
-            default: 2.0,
-            min: 1.2,
-            max: 8.0,
-            tooltip: "Per-octave frequency factor b (the lacunary sequence bⁿ). \
+            Spec::float(0.55, 0.05, 0.95),
+        ),
+        ParamDef::new(
+            "b",
+            "Frequency Ratio",
+            "Per-octave frequency factor b (the lacunary sequence bⁿ). \
                       Classic Weierstrass needs ab ≥ 1 for nowhere-differentiability.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "generator",
-            display_name: "Generator",
-            default: 0.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "0 = cosine, 1 = sine, 2 = triangle wave (Takagi/blancmange).",
-            choices: &["Cosine", "Sine", "Triangle (Takagi)"],
-        },
-        EscapeParamDef {
-            name: "phase",
-            display_name: "Phase",
-            default: 0.0,
-            min: 0.0,
-            max: 6.28318,
-            tooltip: "Phase offset added inside every octave's generator.",
-            choices: &[],
-        },
+            Spec::float(2.0, 1.2, 8.0),
+        ),
+        ParamDef::new(
+            "generator",
+            "Generator",
+            "0 = cosine, 1 = sine, 2 = triangle wave (Takagi/blancmange).",
+            Spec::choice(0, &["Cosine", "Sine", "Triangle (Takagi)"]),
+        ),
+        ParamDef::new(
+            "phase",
+            "Phase",
+            "Phase offset added inside every octave's generator.",
+            Spec::float(0.0, 0.0, 6.28318),
+        ),
     ],
     wgsl: r#"
 // Generator pair: g(t) and g'(t), selected by fparam(2). `t` arrives
@@ -191,36 +179,27 @@ pub static MARKUS_LYAPUNOV: FieldDef = FieldDef {
     default_coloring: "field_diverging",
     presets: super::presets::MARKUS_LYAPUNOV,
     parameters: &[
-        EscapeParamDef {
-            name: "seq_bits",
-            display_name: "Sequence Bits",
-            default: 2.0,
-            min: 0.0,
-            max: 1023.0,
-            tooltip: "The A/B forcing sequence as a bit pattern (bit n of the \
+        ParamDef::new(
+            "seq_bits",
+            "Sequence Bits",
+            "The A/B forcing sequence as a bit pattern (bit n of the \
                       integer: 0 = A, 1 = B), read LSB-first over the sequence \
                       length. 2 with length 2 = the classic \"AB\".",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "seq_len",
-            display_name: "Sequence Length",
-            default: 2.0,
-            min: 1.0,
-            max: 10.0,
-            tooltip: "How many bits of the pattern form the repeating sequence.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "warmup",
-            display_name: "Warmup",
-            default: 50.0,
-            min: 0.0,
-            max: 500.0,
-            tooltip: "Transient iterations discarded before the exponent \
+            Spec::float(2.0, 0.0, 1023.0),
+        ),
+        ParamDef::new(
+            "seq_len",
+            "Sequence Length",
+            "How many bits of the pattern form the repeating sequence.",
+            Spec::float(2.0, 1.0, 10.0),
+        ),
+        ParamDef::new(
+            "warmup",
+            "Warmup",
+            "Transient iterations discarded before the exponent \
                       accumulates (lets the orbit settle onto its attractor).",
-            choices: &[],
-        },
+            Spec::float(50.0, 0.0, 500.0),
+        ),
     ],
     wgsl: r#"
 fn lyap_r(n: u32, p: vec2<f32>) -> f32 {
@@ -268,16 +247,13 @@ pub static STANDARD_MAP_FTLE: FieldDef = FieldDef {
     has_gradient: false,
     default_coloring: "field_diverging",
     presets: super::presets::STANDARD_MAP_FTLE,
-    parameters: &[EscapeParamDef {
-        name: "k",
-        display_name: "Kick Strength",
-        default: 1.0,
-        min: 0.0,
-        max: 10.0,
-        tooltip: "Chirikov K. Islands dominate below ~0.97; the chaotic sea \
+    parameters: &[ParamDef::new(
+        "k",
+        "Kick Strength",
+        "Chirikov K. Islands dominate below ~0.97; the chaotic sea \
                   takes over above it.",
-        choices: &[],
-    }],
+        Spec::float(1.0, 0.0, 10.0),
+    )],
     wgsl: r#"
 fn field_init(p: vec2<f32>) -> FieldState {
     // a = (theta, I); b = tangent matrix (m00, m01, m10, m11) = identity.
@@ -330,24 +306,18 @@ pub static FIELD_VALUE: FieldColoringDef = FieldColoringDef {
     name: "field_value",
     display_name: "Field Value",
     parameters: &[
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette cycles per unit of field value.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "offset",
-            display_name: "Offset",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Palette phase offset.",
-            choices: &[],
-        },
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette cycles per unit of field value.",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
+        ParamDef::new(
+            "offset",
+            "Offset",
+            "Palette phase offset.",
+            Spec::float(0.0, 0.0, 1.0),
+        ),
     ],
     wgsl: r#"
 fn field_color(sum: f32, grad: vec2<f32>, n_terms: u32) -> FieldShade {
@@ -362,16 +332,13 @@ fn field_color(sum: f32, grad: vec2<f32>, n_terms: u32) -> FieldShade {
 pub static FIELD_DIVERGING: FieldColoringDef = FieldColoringDef {
     name: "field_diverging",
     display_name: "Diverging",
-    parameters: &[EscapeParamDef {
-        name: "scale",
-        display_name: "Scale",
-        default: 3.0,
-        min: 0.01,
-        max: 100.0,
-        tooltip: "Sensitivity: how fast the field value saturates toward the \
+    parameters: &[ParamDef::new(
+        "scale",
+        "Scale",
+        "Sensitivity: how fast the field value saturates toward the \
                   palette's ends.",
-        choices: &[],
-    }],
+        Spec::float(3.0, 0.01, 100.0),
+    )],
     wgsl: r#"
 fn field_color(sum: f32, grad: vec2<f32>, n_terms: u32) -> FieldShade {
     // atan squash: (-inf, inf) -> (0, 1) with 0 at exactly 0.5. The
@@ -389,43 +356,31 @@ pub static FIELD_HILLSHADE: FieldColoringDef = FieldColoringDef {
     name: "field_hillshade",
     display_name: "Hillshade",
     parameters: &[
-        EscapeParamDef {
-            name: "azimuth",
-            display_name: "Light Azimuth",
-            default: 315.0,
-            min: 0.0,
-            max: 360.0,
-            tooltip: "Light direction, degrees clockwise from north (the \
+        ParamDef::new(
+            "azimuth",
+            "Light Azimuth",
+            "Light direction, degrees clockwise from north (the \
                       cartography convention; 315 = upper-left).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "elevation",
-            display_name: "Light Elevation",
-            default: 45.0,
-            min: 5.0,
-            max: 90.0,
-            tooltip: "Light height above the horizon, degrees.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "relief",
-            display_name: "Relief",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Vertical exaggeration of the surface before lighting.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Palette Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette cycles per unit of field value.",
-            choices: &[],
-        },
+            Spec::float(315.0, 0.0, 360.0),
+        ),
+        ParamDef::new(
+            "elevation",
+            "Light Elevation",
+            "Light height above the horizon, degrees.",
+            Spec::float(45.0, 5.0, 90.0),
+        ),
+        ParamDef::new(
+            "relief",
+            "Relief",
+            "Vertical exaggeration of the surface before lighting.",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
+        ParamDef::new(
+            "scale",
+            "Palette Scale",
+            "Palette cycles per unit of field value.",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
     ],
     wgsl: r#"
 fn field_color(sum: f32, grad: vec2<f32>, n_terms: u32) -> FieldShade {

@@ -2000,14 +2000,14 @@ fn register_escape(engine: &mut Engine) {
             .map(|p| {
                 let mut m = rhai::Map::new();
                 m.insert("name".into(), Dynamic::from(p.name.to_string()));
-                m.insert("caption".into(), Dynamic::from(p.display_name.to_string()));
-                m.insert("min".into(), Dynamic::from(f64::from(p.min)));
-                m.insert("max".into(), Dynamic::from(f64::from(p.max)));
-                m.insert("default".into(), Dynamic::from(f64::from(p.default)));
-                m.insert("value".into(), Dynamic::from(f64::from(cfg.escape.formula_params.get(p.name).copied().unwrap_or(p.default))));
-                m.insert("choices".into(), Dynamic::from(p.choices.iter().map(|c| Dynamic::from(c.to_string())).collect::<Array>()));
-                #[cfg(feature = "engine-escape")]
-                m.insert("exponential".into(), Dynamic::from(crate::escape::custom::is_exponential(p)));
+                m.insert("caption".into(), Dynamic::from(p.label.to_string()));
+                m.insert("min".into(), Dynamic::from(f64::from(p.slot_range().0)));
+                m.insert("max".into(), Dynamic::from(f64::from(p.slot_range().1)));
+                m.insert("default".into(), Dynamic::from(f64::from(p.slot_default())));
+                m.insert("value".into(), Dynamic::from(f64::from(cfg.escape.formula_params.get(&*p.name).copied().unwrap_or(p.slot_default()))));
+                let choices = p.options().map(|o| o.iter().map(|c| Dynamic::from(c.to_string())).collect::<Array>()).unwrap_or_default();
+                m.insert("choices".into(), Dynamic::from(choices));
+                m.insert("exponential".into(), Dynamic::from(matches!(p.kind, crate::params::ParamKind::Float { log: true, .. })));
                 Dynamic::from(m)
             })
             .collect()
@@ -2361,7 +2361,7 @@ fn register_escape(engine: &mut Engine) {
             let polar = name.strip_suffix(".r").or_else(|| name.strip_suffix(".angle"));
             let complex = polar.is_some_and(|base| def.parameters.iter().any(|p| p.name.strip_suffix(".re") == Some(base)));
             if !complex && !def.parameters.iter().any(|p| p.name == name) {
-                let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
+                let known: Vec<&str> = def.parameters.iter().map(|p| &*p.name).collect();
                 return Err(err(format!(
                     "`{}` has no parameter `{name}` (it has: {})",
                     def.name,
@@ -2369,7 +2369,7 @@ fn register_escape(engine: &mut Engine) {
                 )));
             }
             enter(&mut cfg);
-            let defaults = |p: &str| def.parameters.iter().find(|q| q.name == p).map(|q| q.default);
+            let defaults = |p: &str| def.parameters.iter().find(|q| q.name == p).map(|q| q.slot_default());
             for (k, v) in cfg.escape.formula_param_writes(name, value as f32, defaults) {
                 cfg.escape.formula_params.insert(k, v);
             }
@@ -2384,7 +2384,7 @@ fn register_escape(engine: &mut Engine) {
             let def = crate::escape::find_coloring(&cfg.escape.coloring)
                 .ok_or_else(|| err(format!("no such coloring `{}`", cfg.escape.coloring)))?;
             if !def.parameters.iter().any(|p| p.name == name) {
-                let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
+                let known: Vec<&str> = def.parameters.iter().map(|p| &*p.name).collect();
                 return Err(err(format!(
                     "coloring `{}` has no parameter `{name}` (it has: {})",
                     def.name,
@@ -2437,7 +2437,7 @@ fn register_escape(engine: &mut Engine) {
             let def = crate::escape::find_coloring(&cfg.escape.layer.coloring)
                 .ok_or_else(|| err("no texture layer - call escape.layer(...) first"))?;
             if !def.parameters.iter().any(|p| p.name == name) {
-                let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
+                let known: Vec<&str> = def.parameters.iter().map(|p| &*p.name).collect();
                 return Err(err(format!(
                     "layer coloring `{}` has no parameter `{name}` (it has: {})",
                     def.name,

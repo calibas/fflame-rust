@@ -424,7 +424,7 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
     // Mode D was missing entirely, which is what hid Inverse Depth,
     // Beam Width, March Steps, Shadows, Shadow Sharpness, Occlusion
     // Reach and Slice Value -- every parameter the solid walk has.
-    let (formula_params, formula_label): (&[crate::escape::EscapeParamDef], &str) =
+    let (formula_params, formula_label): (&[crate::params::ParamDef], &str) =
         match (ifs, crate::escape::fields::get_field(&esc.formula)) {
             (Some(d), _) => (d.parameters, d.display_name),
             (None, Some(f)) => (f.parameters, f.display_name),
@@ -436,13 +436,13 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
     for p in formula_params {
         items.push(TargetItem::new(
             ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
-            &format!("{}: {}", formula_label, p.display_name),
+            &format!("{}: {}", formula_label, p.label),
         ));
         // A complex parameter also as a point in polar form, to animate
         // around the origin (`EscapeConfig::formula_param`).
         if let Some(base) = p.name.strip_suffix(".im") {
             if formula_params.iter().any(|q| q.name.strip_suffix(".re") == Some(base)) {
-                let caption = p.display_name.strip_suffix(" (im)").unwrap_or(p.display_name);
+                let caption = p.label.strip_suffix(" (im)").unwrap_or(&*p.label);
                 for (part, label) in [("r", "radius"), ("angle", "angle, degrees")] {
                     items.push(TargetItem::new(
                         ConfigPath::EscapeFormulaParam { param: format!("{base}.{part}") },
@@ -452,7 +452,7 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             }
         }
     }
-    let coloring_params: &[crate::escape::EscapeParamDef] =
+    let coloring_params: &[crate::params::ParamDef] =
         match (ifs, crate::escape::fields::get_field(&esc.formula)) {
             (Some(d), _) => crate::escape::ifs::get_ifs_coloring(&esc.coloring, d).parameters,
             (None, Some(f)) => crate::escape::fields::get_field_coloring(&esc.coloring, f).parameters,
@@ -461,7 +461,7 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
     for p in coloring_params {
         items.push(TargetItem::new(
             ConfigPath::EscapeColoringParam { param: p.name.to_string() },
-            &format!("Coloring: {}", p.display_name),
+            &format!("Coloring: {}", p.label),
         ));
     }
 
@@ -484,7 +484,7 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
         for p in layer.parameters {
             items.push(TargetItem::new(
                 ConfigPath::EscapeLayerParam { param: p.name.to_string() },
-                &format!("Layer {}: {}", layer.display_name, p.display_name),
+                &format!("Layer {}: {}", layer.display_name, p.label),
             ));
         }
     }

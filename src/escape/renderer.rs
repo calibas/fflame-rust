@@ -4127,7 +4127,7 @@ impl EscapeRenderer {
         };
         let param = |name: &str, fallback: f32| {
             escape.formula_params.get(name).copied().unwrap_or_else(|| {
-                def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.default)
+                def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.slot_default())
             })
         };
         let beam = param("beam", 1.0).clamp(1.0, 8.0) as u32;
@@ -4298,7 +4298,7 @@ impl EscapeRenderer {
         def.parameters
             .iter()
             .map(|p| {
-                let v = escape.formula_params.get(p.name).copied().unwrap_or(p.default);
+                let v = escape.formula_params.get(&*p.name).copied().unwrap_or(p.slot_default());
                 if def.solid && p.name == "shadow" {
                     format!("{}={}", p.name, v > 0.0)
                 } else {
@@ -4751,7 +4751,7 @@ impl EscapeRenderer {
         self.ifs_chain_key.clear();
         let param = |name: &str, fallback: f32| {
             escape.formula_params.get(name).copied().unwrap_or_else(|| {
-                def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.default)
+                def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.slot_default())
             })
         };
         let beam = param("beam", 8.0).clamp(1.0, 8.0) as u32;
@@ -4902,7 +4902,7 @@ impl EscapeRenderer {
                     def.parameters
                         .iter()
                         .find(|p| p.name == name)
-                        .map_or(fallback, |p| p.default)
+                        .map_or(fallback, |p| p.slot_default())
                 })
             };
             // A solid render's per-pixel cost has the march in it, and
@@ -4981,7 +4981,7 @@ impl EscapeRenderer {
             let defs = super::get_formula(&escape.formula).parameters;
             let get = |name: &str| {
                 escape.formula_params.get(name).copied().unwrap_or_else(|| {
-                    defs.iter().find(|d| d.name == name).map_or(0.0, |d| d.default)
+                    defs.iter().find(|d| d.name == name).map_or(0.0, |d| d.slot_default())
                 })
             };
             return [get("relax_re"), get("relax_im")];
@@ -4995,7 +4995,7 @@ impl EscapeRenderer {
             let name = if escape.formula == "kaliset" { "plus_c" } else { "variant" };
             let defs = super::get_formula(&escape.formula).parameters;
             let v = escape.formula_params.get(name).copied().unwrap_or_else(|| {
-                defs.iter().find(|d| d.name == name).map_or(0.0, |d| d.default)
+                defs.iter().find(|d| d.name == name).map_or(0.0, |d| d.slot_default())
             });
             return [v, 0.0];
         }
@@ -5016,7 +5016,7 @@ impl EscapeRenderer {
                     super::get_formula("magnet")
                         .parameters
                         .first()
-                        .map_or(0.0, |d| d.default)
+                        .map_or(0.0, |d| d.slot_default())
                 });
             return [v, 0.0];
         }
@@ -5030,7 +5030,7 @@ impl EscapeRenderer {
                         .parameters
                         .iter()
                         .find(|d| d.name == "m")
-                        .map_or(3.0, |d| d.default)
+                        .map_or(3.0, |d| d.slot_default())
                 });
             return [m, 0.0];
         }
@@ -5051,9 +5051,9 @@ impl EscapeRenderer {
         for (i, def) in defs.iter().take(2).enumerate() {
             out[i] = escape
                 .formula_params
-                .get(def.name)
+                .get(&*def.name)
                 .copied()
-                .unwrap_or(def.default);
+                .unwrap_or(def.slot_default());
         }
         out
     }
@@ -7835,7 +7835,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     def.parameters
                         .iter()
                         .find(|p| p.name == "beam")
-                        .map_or(1.0, |p| p.default)
+                        .map_or(1.0, |p| p.slot_default())
                 })
                 .clamp(1.0, assembler::IFS_MAX_BEAM as f32) as u32;
             let lens_registry = crate::variations::global_registry();
@@ -7852,7 +7852,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     def.parameters
                         .iter()
                         .find(|p| p.name == "delta")
-                        .map_or(0.0, |p| p.default)
+                        .map_or(0.0, |p| p.slot_default())
                 })
                 > 0.5;
             // ...and what the SEEDS decided, so the pipeline and the
@@ -9359,9 +9359,9 @@ mod tests {
                     // default) is caught.
                     for (i, d) in super::super::get_formula(formula).parameters.iter().enumerate() {
                         let v = if d.name == "m" || d.name == "n" {
-                            (d.default + 1.0).min(d.max)
+                            (d.slot_default() + 1.0).min(d.slot_range().1)
                         } else {
-                            d.default + 0.125 * (i as f32 + 1.0)
+                            d.slot_default() + 0.125 * (i as f32 + 1.0)
                         };
                         esc.formula_params.insert(d.name.to_string(), v);
                     }
