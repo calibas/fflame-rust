@@ -46,8 +46,10 @@ def native(cfg, name, w, h):
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work + "/in")
     shutil.copy(cfg, work + "/in/")
-    r = subprocess.run([EXE, "export", "-i", work + "/in", "-o", work, "--width", str(w), "--height", str(h)],
-                       capture_output=True, text=True)
+    # 256 iterations a thread: `RenderJob::new`'s, which the module renders
+    # with (the CLI's own default is 1024, another flame sample set).
+    r = subprocess.run([EXE, "export", "-i", work + "/in", "-o", work, "--width", str(w), "--height", str(h),
+                        "--iterations-per-thread", "256"], capture_output=True, text=True)
     pngs = [f for f in os.listdir(work) if f.endswith(".png")]
     if not pngs:
         return None, None, (r.stdout + r.stderr).strip().splitlines()[-1:]
