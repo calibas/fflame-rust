@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use super::lang::{self, ir, Diag, Dialect, EntryKind};
 use super::{ColoringDef, ColoringFeature, EscapeMetric, FormulaDef, FormulaFeature};
-use crate::params::{Options, ParamDef, ParamKind};
+use crate::params::{ParamDef, ParamKind};
 use crate::config::escape::{CustomDialect, CustomSource, EscapeConfig};
 
 /// What a registry name starts with when it names a compiled entry.
@@ -327,48 +327,11 @@ fn leak_params(p: &ir::Program) -> &'static [ParamDef] {
 }
 
 /// The panel's view of a program's parameters: one def per float slot,
-/// in slot order, as `pack_params` packs them. A complex parameter is
-/// two (`name.re`, `name.im`); a bool an Off/On choice; a user function
-/// a choice over the functions it may be.
+/// in slot order, as `pack_params` packs them, as every kind takes a
+/// script's (`ir::Program::param_defs`). A complex parameter is two
+/// (`name.re`, `name.im`).
 fn param_defs(p: &ir::Program) -> Vec<ParamDef> {
-    let mut out = Vec::new();
-    let range = |min: Option<f64>, max: Option<f64>, default: f64| -> (f32, f32) {
-        let reach = default.abs().max(1.0) * 4.0;
-        let lo = min.unwrap_or_else(|| max.map_or(-reach, |m| m - 2.0 * reach).min(default));
-        let hi = max.unwrap_or_else(|| min.map_or(reach, |m| m + 2.0 * reach).max(default));
-        (lo as f32, hi as f32)
-    };
-    for param in &p.params {
-        let caption = param.caption.clone();
-        let hint = param.hint.clone();
-        match param.kind {
-            ir::ParamKind::Complex => {
-                for (part, value, label) in [("re", param.default.0, "re"), ("im", param.default.1, "im")] {
-                    let kind = float_kind(value, range(param.min, param.max, value), param.exponential);
-                    out.push(ParamDef::owned(format!("{}.{part}", param.name), format!("{} ({label})", param.caption), hint.clone(), kind));
-                }
-            }
-            ir::ParamKind::Bool => {
-                let kind = ParamKind::Choice { default: param.default.0 as usize, options: Options::Static(&["Off", "On"]) };
-                out.push(ParamDef::owned(param.name.clone(), caption, hint, kind));
-            }
-            ir::ParamKind::Enum => {
-                let last = param.choices.len().max(1) - 1;
-                let kind = ParamKind::Choice { default: (param.default.0.round().max(0.0) as usize).min(last), options: Options::Owned(param.choices.clone()) };
-                out.push(ParamDef::owned(param.name.clone(), caption, hint, kind));
-            }
-            ir::ParamKind::Int | ir::ParamKind::Float => {
-                let kind = float_kind(param.default.0, range(param.min, param.max, param.default.0), param.exponential);
-                out.push(ParamDef::owned(param.name.clone(), caption, hint, kind));
-            }
-        }
-    }
-    let names: Vec<String> = lang::builtins::USER_FUNCTIONS.iter().map(|b| b.name().to_string()).collect();
-    for f in &p.funcs {
-        let kind = ParamKind::Choice { default: f.default as usize, options: Options::Owned(names.clone()) };
-        out.push(ParamDef::owned(f.name.clone(), f.caption.clone(), f.hint.clone(), kind));
-    }
-    out
+    p.param_defs(ir::ComplexParams::Split(".")).expect("a formula splits a complex parameter")
 }
 
 fn display_name(p: &ir::Program) -> &'static str {

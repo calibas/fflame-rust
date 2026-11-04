@@ -22,7 +22,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::api::types::VariationDownload;
 use crate::config::escape::{CustomDialect, CustomSource};
-use crate::lang::{self, ir::ParamKind, EntryKind};
+use crate::lang::{self, EntryKind};
 use crate::provenance::Provenance;
 use crate::scene::transforms::Flame;
 
@@ -95,54 +95,9 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
     #[cfg(not(target_arch = "wasm32"))]
     lang::wgsl::validate_variation(&wgsl).map_err(|e| format!("the compiler produced invalid WGSL (a bug): {e}"))?;
 
-    let mut parameters = Vec::new();
-    for param in &p.params {
-        let tip = (!param.hint.is_empty()).then(|| param.hint.clone());
-        let caption = if param.caption.is_empty() { param.name.clone() } else { param.caption.clone() };
-        let float = |name: String, display: String, value: f64| {
-            let bounded = param.min.is_some() && param.max.is_some();
-            serde_json::json!({
-                "name": name,
-                "display_name": display,
-                "param_type": if param.angle { "angle" } else if bounded { "float" } else { "unlimited_float" },
-                "default_value": value,
-                "min_value": param.min,
-                "max_value": param.max,
-                "description": tip,
-            })
-        };
-        match param.kind {
-            ParamKind::Complex => {
-                for (part, value) in [("re", param.default.0), ("im", param.default.1)] {
-                    parameters.push(float(format!("{}_{part}", param.name), format!("{caption} ({part})"), value));
-                }
-            }
-            ParamKind::Float => parameters.push(float(param.name.clone(), caption, param.default.0)),
-            ParamKind::Int => parameters.push(serde_json::json!({
-                "name": param.name,
-                "display_name": caption,
-                "param_type": if param.min.is_some() && param.max.is_some() { "integer" } else { "unlimited_integer" },
-                "default_value": param.default.0,
-                "min_value": param.min,
-                "max_value": param.max,
-                "description": tip,
-            })),
-            ParamKind::Bool => parameters.push(serde_json::json!({
-                "name": param.name,
-                "display_name": caption,
-                "param_type": "boolean",
-                "default_value": param.default.0,
-                "description": tip,
-            })),
-            ParamKind::Enum => parameters.push(serde_json::json!({
-                "name": param.name,
-                "display_name": caption,
-                "param_type": { "enum": { "choices": param.choices } },
-                "default_value": param.default.0,
-                "description": tip,
-            })),
-        }
-    }
+    // As every kind takes a script's (`ir::Program::param_defs`), on the
+    // wire a downloaded variation's parameters are.
+    let parameters: Vec<serde_json::Value> = p.param_defs(lang::ir::ComplexParams::Split("_"))?.iter().map(crate::params::api_json).collect();
     // Its flag for the renderer: orbits started afresh every dispatch.
     let mut features = wgsl.features.clone();
     if lang::rhai::info_bool(source, "resets_orbits") == Some(true) {

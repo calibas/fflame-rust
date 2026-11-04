@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use super::{ColoringFeature, ModelDef, ModelFeature, SimColoringDef, SimPreset, StateKind};
-use crate::params::{Options, ParamDef};
+use crate::params::ParamDef;
 use crate::config::escape::{CustomDialect, CustomSource};
 use crate::lang::{self, ir::ParamKind, EntryKind};
 
@@ -88,32 +88,11 @@ fn leak(s: impl Into<String>) -> &'static str {
     Box::leak(s.into().into_boxed_str())
 }
 
-/// A Rhai script's `PARAMS` as the simulation's parameters: numbers,
-/// bools and choices, a slider's ends the declared ones or a span around
-/// the default. Its numbers are f32s, as a built-in's: the slots its
-/// values are. A bool is an Off/On choice and an int a float, as the
-/// built-ins' twins declare them.
+/// A Rhai script's `PARAMS` as the simulation's parameters, as every
+/// kind takes a script's (`ir::Program::param_defs`): numbers, bools
+/// and choices.
 fn sim_params(program: &lang::ir::Program) -> Result<Vec<ParamDef>, String> {
-    use crate::params::ParamKind as K;
-    let mut parameters = Vec::new();
-    for param in &program.params {
-        let caption = if param.caption.is_empty() { param.name.clone() } else { param.caption.clone() };
-        let default = param.default.0 as f32;
-        let kind = match param.kind {
-            ParamKind::Enum => K::Choice { default: default as usize, options: Options::Owned(param.choices.clone()) },
-            ParamKind::Bool => K::Choice { default: default as usize, options: Options::Static(&["Off", "On"]) },
-            ParamKind::Float | ParamKind::Int => {
-                let span = default.abs().max(1.0) * 10.0;
-                let (min, max) = (param.min.map_or(default - span, |v| v as f32), param.max.map_or(default + span, |v| v as f32));
-                K::Float { default: default.into(), min: min.into(), max: max.into(), free: false, log: false, angle: false }
-            }
-            ParamKind::Complex => {
-                return Err(format!("`{}`: a simulation's parameters are numbers, bools and choices, not complex numbers", param.name));
-            }
-        };
-        parameters.push(ParamDef::owned(param.name.clone(), caption, param.hint.clone(), kind));
-    }
-    Ok(parameters)
+    program.param_defs(lang::ir::ComplexParams::Refuse("a simulation's parameters are numbers, bools and choices"))
 }
 
 /// A source compiled to the definition it registers as, under `name`.
