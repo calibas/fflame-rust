@@ -14,7 +14,7 @@
 //! `present` copies a finished average aside, for a viewport to show while
 //! the next one builds in the pair.
 
-use egui_wgpu::wgpu::{
+use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferBindingType,
     BufferDescriptor, BufferUsages, CommandEncoder, ComputePassDescriptor, ComputePipeline,

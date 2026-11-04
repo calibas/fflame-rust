@@ -1948,7 +1948,6 @@ pub async fn export_animation(
 ) -> Result<AnimationExportResult, AnimationExportError> {
     export_config.force_even_dimensions();
     use crate::renderer::compute_kernel::FlameRenderer;
-    use egui_wgpu::wgpu;
     use std::io::Write;
     use std::process::Stdio;
     use std::sync::mpsc;

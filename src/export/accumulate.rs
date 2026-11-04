@@ -13,7 +13,7 @@
 //!
 //! See `docs/archive/projects/unified-render-pipeline.md`.
 
-use egui_wgpu::wgpu::*;
+use wgpu::*;
 
 /// Parameters uniform consumed by `accumulate_samples.wgsl`. Layout
 /// must match the WGSL `AccumulateParams` struct exactly — ordered for

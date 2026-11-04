@@ -170,7 +170,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_wgpu::wgpu;
 
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {

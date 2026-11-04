@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::mem::ManuallyDrop;
 use winit::window::Window;
-use egui_wgpu::wgpu::*;
+use wgpu::*;
 
 /// Append a GPU event to crash.log in the app data directory.
 /// The GUI build is a windows-subsystem binary: without CLI arguments

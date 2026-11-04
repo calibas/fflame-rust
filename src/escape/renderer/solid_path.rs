@@ -62,7 +62,7 @@
 use crate::config::escape::RenderTier;
 use crate::config::FractalConfig;
 use crate::escape::path_core::{self, PathParamsGpu, PathSum, PATH_SHOW_SAMPLES};
-use egui_wgpu::wgpu::{
+use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferBindingType, BufferDescriptor,
     BufferUsages, CommandEncoderDescriptor, ComputePassDescriptor, ComputePipelineDescriptor, Device,
@@ -974,7 +974,7 @@ mod tests {
     use super::*;
     use crate::config::escape::RenderTier;
     use crate::scene::transforms::{Flame, RenderMode, Transform};
-    use egui_wgpu::wgpu::{
+    use wgpu::{
         Backends, Extent3d, Features, Instance, InstanceDescriptor, MapMode, MemoryHints, PowerPreference,
         RequestAdapterOptions, TexelCopyBufferInfo, TexelCopyBufferLayout, TextureDescriptor, TextureDimension,
         TextureFormat, TextureUsages, TextureViewDescriptor,
@@ -992,7 +992,7 @@ mod tests {
             compatible_surface: None,
         }))
         .ok()?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&egui_wgpu::wgpu::DeviceDescriptor {
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("solid path tests"),
             required_features: adapter.features() & Features::CLEAR_TEXTURE,
             required_limits: adapter.limits(),
@@ -1006,7 +1006,7 @@ mod tests {
     }
 
     fn wait(device: &Device) {
-        let _ = device.poll(egui_wgpu::wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     }
 
     fn read_buffer(device: &Device, queue: &Queue, src: &Buffer, size: u64) -> Vec<u8> {
@@ -3245,8 +3245,8 @@ mod tests {
             eprintln!("no GPU adapter; skipping");
             return;
         };
-        let limits = egui_wgpu::wgpu::Limits { max_storage_buffer_binding_size: (w * h * 24) as u64, ..adapter.limits() };
-        let (device, queue) = pollster::block_on(adapter.request_device(&egui_wgpu::wgpu::DeviceDescriptor {
+        let limits = wgpu::Limits { max_storage_buffer_binding_size: (w * h * 24) as u64, ..adapter.limits() };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("solid path tests (small bindings)"),
             required_features: adapter.features() & Features::CLEAR_TEXTURE,
             required_limits: limits,

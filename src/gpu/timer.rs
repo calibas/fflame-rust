@@ -16,7 +16,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use egui_wgpu::wgpu::{
+use wgpu::{
     Buffer, BufferDescriptor, BufferUsages, CommandEncoder, ComputePassTimestampWrites, Device, Features, MapMode,
     QuerySet, QuerySetDescriptor, QueryType, Queue,
 };
@@ -277,7 +277,7 @@ impl FrameTimer {
     }
 
     fn mark_slot(&self, encoder: &mut CommandEncoder, slot: usize, index: u32) {
-        encoder.begin_compute_pass(&egui_wgpu::wgpu::ComputePassDescriptor {
+        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Frame Timer Mark"),
             timestamp_writes: Some(ComputePassTimestampWrites {
                 query_set: &self.slots[slot].query_set,
@@ -334,7 +334,7 @@ impl FrameTimer {
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "web-app"))]
 mod tests {
     use super::*;
-    use egui_wgpu::wgpu::PollType;
+    use wgpu::PollType;
 
     /// Frames marked around work the GPU does come back, each once, with
     /// the engine's span covering that work; a frame whose encoder was

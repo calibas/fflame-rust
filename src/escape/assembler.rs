@@ -9572,7 +9572,7 @@ pub fn assemble_layered(
 mod tests {
     use super::*;
     use crate::escape::{COLORINGS, FORMULAS};
-    use egui_wgpu::wgpu::naga;
+    use wgpu::naga;
 
     /// The `fdata` slot (row, component) a one-line accessor reads.
     fn fdata_slot(src: &str, name: &str) -> (usize, usize) {

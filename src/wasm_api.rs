@@ -481,7 +481,6 @@ pub struct PlanBench {
 impl PlanBench {
     /// A bench for `config_json`, on a WebGPU device of its own.
     pub async fn create(config_json: String) -> Result<PlanBench, JsValue> {
-        use egui_wgpu::wgpu;
         let config = FractalConfig::from_json(&config_json)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse config: {e}")))?;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {

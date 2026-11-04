@@ -4,7 +4,7 @@
 //! All export paths (CLI, WASM, thumbnails, video) should use this API to ensure
 //! consistent behavior and reduce code duplication.
 
-use egui_wgpu::wgpu::{CommandEncoderDescriptor, Device, PollType, Queue, TextureFormat};
+use wgpu::{CommandEncoderDescriptor, Device, PollType, Queue, TextureFormat};
 
 use crate::config::FractalConfig;
 use crate::renderer::compute_kernel::FlameRenderer;
@@ -1877,17 +1877,17 @@ mod motion_tests {
 
     fn device() -> Option<(Device, Queue)> {
         pollster::block_on(async {
-            let instance = egui_wgpu::wgpu::Instance::new(egui_wgpu::wgpu::InstanceDescriptor {
-                backends: egui_wgpu::wgpu::Backends::all(),
-                ..egui_wgpu::wgpu::InstanceDescriptor::new_without_display_handle()
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
             });
-            let adapter = instance.request_adapter(&egui_wgpu::wgpu::RequestAdapterOptions::default()).await.ok()?;
+            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.ok()?;
             adapter
-                .request_device(&egui_wgpu::wgpu::DeviceDescriptor {
+                .request_device(&wgpu::DeviceDescriptor {
                     label: Some("motion blur tests"),
-                    required_features: adapter.features() & egui_wgpu::wgpu::Features::CLEAR_TEXTURE,
+                    required_features: adapter.features() & wgpu::Features::CLEAR_TEXTURE,
                     required_limits: adapter.limits(),
-                    memory_hints: egui_wgpu::wgpu::MemoryHints::Performance,
+                    memory_hints: wgpu::MemoryHints::Performance,
                     experimental_features: Default::default(),
                     trace: Default::default(),
                 })
@@ -1969,8 +1969,8 @@ mod motion_tests {
         assert!(moved > 1.0, "the blur changed the frame by only {moved:.3} a channel");
     }
 
-    fn read(device: &Device, queue: &Queue, tex: &egui_wgpu::wgpu::Texture) -> Vec<f32> {
-        use egui_wgpu::wgpu::*;
+    fn read(device: &Device, queue: &Queue, tex: &wgpu::Texture) -> Vec<f32> {
+        use wgpu::*;
         let (w, h) = (tex.width(), tex.height());
         let row = (w * 16).div_ceil(256) * 256;
         let staging = device.create_buffer(&BufferDescriptor {
