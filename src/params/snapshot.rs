@@ -107,22 +107,11 @@ fn sim(rows: &mut Vec<Value>) {
 }
 
 fn scripts(rows: &mut Vec<Value>) {
-    use crate::script::ParamDecl as D;
     let host = crate::script::ScriptHost::new();
     let base = crate::config::FractalConfig::default();
     for (file, source) in crate::script::library::EMBEDDED {
         let meta = host.collect(source, &base).unwrap_or_else(|e| panic!("{file}: {e}"));
-        for p in &meta.params {
-            let (name, label, control, default, range, choices) = match p {
-                D::Float { key, label, default, min, max, angle } => (key, label, if *angle { "angle" } else { "float" }, *default, (*min, *max), Vec::new()),
-                D::Int { key, label, default, min, max } => (key, label, "integer", *default as f64, (*min as f64, *max as f64), Vec::new()),
-                D::Bool { key, label, default } => (key, label, "boolean", f64::from(u8::from(*default)), (0.0, 1.0), Vec::new()),
-                D::Choice { key, label, options, default } => (key, label, "choice", *default as f64, (0.0, 0.0), options.clone()),
-                D::Text { key, label, default, max_len } => (key, label, "text", 0.0, (0.0, *max_len as f64), vec![default.clone()]),
-                D::Color { key, label, default } => (key, label, "color", 0.0, (0.0, 0.0), default.iter().map(|c| c.to_string()).collect()),
-            };
-            rows.push(row("script", file, name, label, "", control, default, range, choices, false, false));
-        }
+        rows.extend(meta.params.iter().map(|p| def_row("script", file, p)));
     }
 }
 

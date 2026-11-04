@@ -37,9 +37,10 @@
 use std::collections::HashMap;
 
 use fractal_flame_wgpu::config::FractalConfig;
+use fractal_flame_wgpu::params::{Given, ParamDef};
 use fractal_flame_wgpu::scene::palette::PaletteLibrary;
 use fractal_flame_wgpu::script::{
-    library, parse_doc, ParamDecl, ParamValue, ScriptHost, ScriptKind,
+    library, parse_doc, ParamValue, ScriptHost, ScriptKind,
 };
 
 /// The host every call uses: the same palette library and the same
@@ -74,101 +75,16 @@ fn with_host<R>(f: impl FnOnce(&ScriptHost) -> R) -> R {
 
 /// Resolve a `{key: value}` JSON object against a script's declared
 /// parameters — the same semantics as the CLI's `--set`, with JSON
-/// types where the CLI has strings. Unknown keys are an error, not a
-/// warning: a gallery URL carrying a mistyped param should fail loudly.
-fn resolve_params(
-    params_json: &str,
-    decls: &[ParamDecl],
-) -> Result<HashMap<String, ParamValue>, String> {
+/// types where the CLI has strings (`params::parse_all`). Unknown keys
+/// are an error, not a warning: a gallery URL carrying a mistyped param
+/// should fail loudly.
+fn resolve_params(params_json: &str, decls: &[ParamDef]) -> Result<HashMap<String, ParamValue>, String> {
     let obj: serde_json::Map<String, serde_json::Value> = if params_json.trim().is_empty() {
         serde_json::Map::new()
     } else {
-        serde_json::from_str(params_json)
-            .map_err(|e| format!("params must be a JSON object: {e}"))?
+        serde_json::from_str(params_json).map_err(|e| format!("params must be a JSON object: {e}"))?
     };
-
-    let mut out = HashMap::new();
-    for (key, value) in &obj {
-        let decl = decls.iter().find(|d| d.key() == key).ok_or_else(|| {
-            let known: Vec<&str> = decls.iter().map(ParamDecl::key).collect();
-            format!(
-                "script has no parameter `{key}`{}",
-                if known.is_empty() {
-                    " (it declares none)".to_string()
-                } else {
-                    format!(" (has: {})", known.join(", "))
-                }
-            )
-        })?;
-
-        let parsed = match decl {
-            ParamDecl::Float { .. } => ParamValue::Float(
-                value
-                    .as_f64()
-                    .ok_or_else(|| format!("`{key}` expects a number, got {value}"))?,
-            ),
-            ParamDecl::Int { .. } => ParamValue::Int(
-                value
-                    .as_i64()
-                    .ok_or_else(|| format!("`{key}` expects a whole number, got {value}"))?,
-            ),
-            ParamDecl::Bool { .. } => ParamValue::Bool(
-                value
-                    .as_bool()
-                    .ok_or_else(|| format!("`{key}` expects true/false, got {value}"))?,
-            ),
-            ParamDecl::Text { .. } => ParamValue::Text(
-                value
-                    .as_str()
-                    .ok_or_else(|| format!("`{key}` expects a string, got {value}"))?
-                    .to_string(),
-            ),
-            // The option's name or its index, as with --set.
-            ParamDecl::Choice { options, .. } => {
-                let idx = if let Some(s) = value.as_str() {
-                    options.iter().position(|o| o.eq_ignore_ascii_case(s))
-                } else {
-                    value
-                        .as_u64()
-                        .map(|i| i as usize)
-                        .filter(|i| *i < options.len())
-                };
-                ParamValue::Choice(idx.ok_or_else(|| {
-                    format!(
-                        "`{key}` expects one of [{}], got {value}",
-                        options.join(", ")
-                    )
-                })?)
-            }
-            // A "#rrggbb" hex string (the CLI's form) or an [r, g, b]
-            // array of 0–1 floats.
-            ParamDecl::Color { .. } => {
-                if let Some(s) = value.as_str() {
-                    ParamValue::Color(
-                        fractal_flame_wgpu::script::color::ScriptColor::from_hex(s)
-                            .map_err(|e| format!("`{key}`: {e}"))?
-                            .to_rgb(),
-                    )
-                } else if let Some(a) = value.as_array() {
-                    let mut rgb = [0f32; 3];
-                    if a.len() != 3 {
-                        return Err(format!("`{key}` expects \"#rrggbb\" or [r, g, b]"));
-                    }
-                    for (i, v) in a.iter().enumerate() {
-                        rgb[i] = v
-                            .as_f64()
-                            .ok_or_else(|| format!("`{key}` expects numbers in [r, g, b]"))?
-                            as f32;
-                    }
-                    ParamValue::Color(rgb)
-                } else {
-                    return Err(format!("`{key}` expects \"#rrggbb\" or [r, g, b]"));
-                }
-            }
-        };
-        out.insert(key.clone(), parsed);
-    }
-    Ok(out)
+    fractal_flame_wgpu::params::parse_all(decls, obj.iter().map(|(k, v)| (k.as_str(), Given::Json(v))))
 }
 
 /// The embedded script library, with each script's kind, doc summary,
@@ -184,7 +100,7 @@ pub fn list_scripts_impl() -> Result<String, String> {
         let doc = parse_doc(&entry.source);
         let (params, flags) = match with_host(|h| h.collect(&entry.source, &base)) {
             Ok(meta) => (
-                meta.params.iter().map(ParamDecl::to_api_json).collect::<Vec<_>>(),
+                meta.params.iter().map(fractal_flame_wgpu::params::script_json).collect::<Vec<_>>(),
                 serde_json::json!({ "norng": meta.flags.no_rng, "palette": meta.flags.palette }),
             ),
             // A broken script still lists (its doc says what it meant
@@ -218,7 +134,7 @@ pub fn script_source_impl(id: &str) -> Result<String, String> {
 pub fn collect_params_impl(source: &str) -> Result<String, String> {
     let base = FractalConfig::default();
     let meta = with_host(|h| h.collect(source, &base)).map_err(|e| e.to_string())?;
-    let params: Vec<serde_json::Value> = meta.params.iter().map(ParamDecl::to_api_json).collect();
+    let params: Vec<serde_json::Value> = meta.params.iter().map(fractal_flame_wgpu::params::script_json).collect();
     serde_json::to_string(&serde_json::json!({
         "name": meta.name,
         "kind": meta.kind.map(ScriptKind::as_str),

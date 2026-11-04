@@ -9,7 +9,8 @@ use rhai::{Engine, Scope};
 
 use crate::config::fractal_config::FractalConfig;
 
-use super::{ParamDecl, ParamValue, ScriptError, ScriptKind, ScriptMeta};
+use super::{ParamValue, ScriptError, ScriptKind, ScriptMeta};
+use crate::params::ParamDef;
 
 /// Which pass is running.
 ///
@@ -153,93 +154,24 @@ impl ScriptState {
     }
 
     /// Record a declaration, or fetch the supplied value for it.
-    pub(crate) fn declare(&mut self, decl: ParamDecl) -> Result<ParamValue, String> {
-        let key = decl.key().to_string();
+    pub(crate) fn declare(&mut self, decl: ParamDef) -> Result<ParamValue, String> {
+        let key = decl.name.to_string();
         if !self.declared.insert(key.clone()) {
             return Err(format!("parameter `{key}` declared more than once"));
         }
-        let fallback = match &decl {
-            ParamDecl::Float { default, .. } => ParamValue::Float(*default),
-            ParamDecl::Int { default, .. } => ParamValue::Int(*default),
-            ParamDecl::Bool { default, .. } => ParamValue::Bool(*default),
-            ParamDecl::Color { default, .. } => ParamValue::Color(*default),
-            ParamDecl::Choice { default, .. } => ParamValue::Choice(*default),
-            ParamDecl::Text { default, .. } => ParamValue::Text(default.clone()),
-        };
+        let fallback = decl.kind.default_value();
         if self.mode == Mode::Collect {
             self.meta.params.push(decl);
             return Ok(fallback);
         }
         let supplied = self.provided.get(&key).cloned();
         let value = match supplied {
-            Some(v) => coerce_to_decl(&key, v, &decl)?,
+            Some(v) => crate::params::coerce(&decl, v)?,
             None => fallback,
         };
         self.meta.params.push(decl);
         Ok(value)
     }
-}
-
-/// Reconcile a supplied value with the declaration it lands on.
-///
-/// The DECLARATION decides the type, not the value: a caller cannot know
-/// what the script it is calling declares, so `run_script("x", #{ scheme:
-/// "Triadic" })` hands over a string where a choice is wanted. Resolving
-/// it here means every route in — the panel, `--set`, Python, and one
-/// script calling another — agrees, instead of each coercing its own way.
-fn coerce_to_decl(key: &str, value: ParamValue, decl: &ParamDecl) -> Result<ParamValue, String> {
-    Ok(match (decl, value) {
-        // Already right.
-        (ParamDecl::Float { .. }, v @ ParamValue::Float(_))
-        | (ParamDecl::Int { .. }, v @ ParamValue::Int(_))
-        | (ParamDecl::Bool { .. }, v @ ParamValue::Bool(_))
-        | (ParamDecl::Text { .. }, v @ ParamValue::Text(_))
-        | (ParamDecl::Color { .. }, v @ ParamValue::Color(_))
-        | (ParamDecl::Choice { .. }, v @ ParamValue::Choice(_)) => v,
-
-        // A choice named rather than numbered — how anyone would write
-        // it, and unreadable as an index.
-        (ParamDecl::Choice { options, .. }, ParamValue::Text(name)) => {
-            let found = options.iter().position(|o| o.eq_ignore_ascii_case(name.trim()));
-            match found {
-                Some(i) => ParamValue::Choice(i),
-                None => {
-                    return Err(format!(
-                        "`{key}` expects one of [{}], got `{name}`",
-                        options.join(", ")
-                    ))
-                }
-            }
-        }
-        (ParamDecl::Choice { options, .. }, ParamValue::Int(i)) => {
-            let i = i.max(0) as usize;
-            if i < options.len() {
-                ParamValue::Choice(i)
-            } else {
-                return Err(format!(
-                    "`{key}` expects one of [{}], got index {i}",
-                    options.join(", ")
-                ));
-            }
-        }
-
-        // Whole numbers are numbers.
-        (ParamDecl::Float { .. }, ParamValue::Int(i)) => ParamValue::Float(i as f64),
-        (ParamDecl::Int { .. }, ParamValue::Float(f)) => ParamValue::Int(f.round() as i64),
-        (ParamDecl::Color { .. }, ParamValue::Text(text)) => {
-            ParamValue::Color(super::color::ScriptColor::from_hex(&text)?.to_rgb())
-        }
-        (ParamDecl::Text { .. }, other) => ParamValue::Text(match other {
-            ParamValue::Float(f) => f.to_string(),
-            ParamValue::Int(i) => i.to_string(),
-            ParamValue::Bool(b) => b.to_string(),
-            _ => return Err(format!("`{key}` expects text")),
-        }),
-
-        (_, other) => {
-            return Err(format!("`{key}` was given an unusable value: {other:?}"))
-        }
-    })
 }
 
 /// The result of a successful run.

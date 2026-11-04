@@ -90,7 +90,6 @@ impl ParamStore for ConfigStore<'_> {
 /// set only where the user set one (so a script keeps its defaults). A
 /// value of another kind than its parameter's -- the script declared it
 /// anew since -- reads as the default.
-#[allow(dead_code)] // The Scripts panel's, from step 8 of the plan.
 pub struct LocalStore<'a>(pub &'a mut HashMap<String, Value>);
 
 impl ParamStore for LocalStore<'_> {

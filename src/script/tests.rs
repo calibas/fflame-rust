@@ -230,7 +230,7 @@ let n = param_int("count", 3, 1, 9);
         .expect("collects");
     assert_eq!(meta.kind, Some(ScriptKind::Generator));
     assert_eq!(meta.params.len(), 1);
-    assert_eq!(meta.params[0].key(), "count");
+    assert_eq!(meta.params[0].name, "count");
 }
 
 #[test]
@@ -379,18 +379,19 @@ fn an_angle_parameter_is_a_float_that_says_so() {
         t.weight = (a + b) / 100.0;
     "#;
     let meta = ScriptHost::new().collect(script, &FractalConfig::default()).expect("collect");
-    match &meta.params[0] {
-        ParamDecl::Float { default, min, max, angle, .. } => assert_eq!((*default, *min, *max, *angle), (45.0, 0.0, 360.0, true)),
+    use crate::params::{ParamDef, ParamKind};
+    match &meta.params[0].kind {
+        ParamKind::Float { default, min, max, angle, .. } => assert_eq!((*default, *min, *max, *angle), (45.0, 0.0, 360.0, true)),
         other => panic!("expected an angle, got {other:?}"),
     }
-    match &meta.params[1] {
-        ParamDecl::Float { min, max, angle, .. } => assert_eq!((*min, *max, *angle), (-90.0, 90.0, true)),
+    match &meta.params[1].kind {
+        ParamKind::Float { min, max, angle, .. } => assert_eq!((*min, *max, *angle), (-90.0, 90.0, true)),
         other => panic!("expected an angle, got {other:?}"),
     }
-    let json = meta.params[0].to_api_json();
+    let json = crate::params::script_json(&meta.params[0]);
     assert_eq!((json["type"].as_str(), json["angle"].as_bool()), (Some("float"), Some(true)));
     // A plain float's wire form is as it was.
-    let plain = ParamDecl::Float { key: "k".into(), label: "K".into(), default: 1.0, min: 0.0, max: 2.0, angle: false }.to_api_json();
+    let plain = crate::params::script_json(&ParamDef::owned("k", "K", "", ParamKind::Float { default: 1.0, min: 0.0, max: 2.0, free: false, log: false, angle: false }));
     assert!(plain.get("angle").is_none(), "{plain}");
     let out = run(script, 1).unwrap();
     assert_eq!(out.config.flame.transforms[0].weight, 0.55);
@@ -417,11 +418,11 @@ fn params_are_collected_then_supplied() {
         .collect(script, &FractalConfig::default())
         .expect("collect");
     assert_eq!(meta.params.len(), 4);
-    assert_eq!(meta.params[0].key(), "copies");
-    assert_eq!(meta.params[0].label(), "Copies", "label is humanized");
-    match &meta.params[3] {
-        ParamDecl::Choice { options, .. } => assert_eq!(options.len(), 2),
-        other => panic!("expected a choice, got {other:?}"),
+    assert_eq!(meta.params[0].name, "copies");
+    assert_eq!(meta.params[0].label, "Copies", "label is humanized");
+    match meta.params[3].options() {
+        Some(options) => assert_eq!(options.len(), 2),
+        None => panic!("expected a choice, got {:?}", meta.params[3]),
     }
 
     // Defaults when nothing is supplied.
@@ -2377,7 +2378,7 @@ fn color_params_round_trip() {
     let base = FractalConfig::default();
 
     let meta = host.collect(source, &base).unwrap();
-    assert!(matches!(meta.params[0], ParamDecl::Color { .. }));
+    assert!(matches!(meta.params[0].kind, crate::params::ParamKind::Color { .. }));
 
     let default_run = host.run(source, &base, 1, HashMap::new()).unwrap();
     let c = default_run.config.palette.stops[1].color;
@@ -2683,7 +2684,7 @@ fn a_callees_parameters_stay_out_of_the_callers_metadata() {
     let out = host
         .run(main, &FractalConfig::default(), 1, HashMap::new())
         .unwrap();
-    let keys: Vec<&str> = out.meta.params.iter().map(|p| p.key()).collect();
+    let keys: Vec<&str> = out.meta.params.iter().map(|p| &*p.name).collect();
     assert_eq!(keys, vec!["mine"], "the caller declares only its own");
     assert!(
         out.warnings.is_empty(),
@@ -3166,10 +3167,8 @@ fn every_lsystem_preset_builds_something() {
         let options = meta
             .params
             .iter()
-            .find_map(|p| match p {
-                ParamDecl::Choice { key, options, .. } if key == "preset" => Some(options.clone()),
-                _ => None,
-            })
+            .find(|p| p.name == "preset")
+            .and_then(|p| p.options().map(|o| o.iter().map(str::to_string).collect::<Vec<_>>()))
             .unwrap_or_else(|| panic!("{id} declares a preset parameter"));
 
         assert!(options.len() > 8, "{id}: expected a real list, got {options:?}");
@@ -4332,15 +4331,15 @@ fn every_shipped_script_declares_a_kind_and_serialisable_params() {
         );
 
         for p in &meta.params {
-            let json = p.to_api_json();
+            let json = crate::params::script_json(p);
             assert!(
                 json.get("type").and_then(|t| t.as_str()).is_some(),
                 "{name}: parameter `{}` serialised without a type: {json}",
-                p.key()
+                &*p.name
             );
             assert_eq!(
                 json.get("key").and_then(|k| k.as_str()),
-                Some(p.key()),
+                Some(&*p.name),
                 "{name}: parameter key did not survive serialisation"
             );
         }
@@ -4946,10 +4945,8 @@ fn shipped_scripts_give_the_clis_flames_for_their_seeds() {
             let index = meta
                 .params
                 .iter()
-                .find_map(|p| match p {
-                    ParamDecl::Choice { key: k, options, .. } if k == key => options.iter().position(|o| o.eq_ignore_ascii_case(option)),
-                    _ => None,
-                })
+                .find(|p| p.name == *key)
+                .and_then(|p| p.options()?.iter().position(|o| o.eq_ignore_ascii_case(option)))
                 .expect("the option");
             params.insert(key.to_string(), ParamValue::Choice(index));
         }
