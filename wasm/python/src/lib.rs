@@ -21,7 +21,9 @@ use fractal_flame_wgpu::renderer::render::{render_with, NoProgress, RenderJob};
 struct Live {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    renderer: Option<(FlameRenderer, u32, u32)>,
+    /// The renderer, the size it was built for, and whether it is the
+    /// tail an escape or simulation render needs rather than a flame's.
+    renderer: Option<(FlameRenderer, u32, u32, bool)>,
 }
 
 thread_local! {
@@ -124,23 +126,17 @@ fn render_live(
     height: u32,
     iterations: u64,
 ) -> Result<(Vec<u8>, String), String> {
-    let needs_new = !matches!(&live.renderer, Some((_, w, h)) if *w == width && *h == height);
+    let tail = config.render_mode.is_non_flame();
+    let needs_new = !matches!(&live.renderer, Some((_, w, h, t)) if *w == width && *h == height && *t == tail);
     if needs_new {
-        if let Some((old, _, _)) = live.renderer.take() {
+        if let Some((old, ..)) = live.renderer.take() {
             old.destroy();
         }
-        let renderer = FlameRenderer::with_palette_size(
-            &live.device,
-            &live.queue,
-            wgpu::TextureFormat::Rgba8Unorm,
-            width,
-            height,
-            &config.flame,
-            config.palette_size,
-        );
-        live.renderer = Some((renderer, width, height));
+        let renderer =
+            FlameRenderer::for_job(&live.device, &live.queue, wgpu::TextureFormat::Rgba8Unorm, width, height, config);
+        live.renderer = Some((renderer, width, height, tail));
     }
-    let (renderer, _, _) = live.renderer.as_mut().expect("built above");
+    let (renderer, ..) = live.renderer.as_mut().expect("built above");
     let mut job = RenderJob::new(config, width, height);
     if iterations > 0 {
         job = job.with_iterations(iterations);
