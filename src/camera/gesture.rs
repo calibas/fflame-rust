@@ -424,13 +424,13 @@ pub fn pinch(
     midpoint: [f32; 2],
     panel: [f32; 2],
 ) -> Option<CameraEdit> {
-    use crate::config::manager::{ConfigManager, EditingTarget};
+    use crate::config::manager::EditingTarget;
     let kind = view_kind(config);
     let mut work = config.clone();
     let mut changes: Vec<(ConfigPath, ConfigValue)> = Vec::new();
     let mut take = |edit: Option<CameraEdit>, work: &mut FractalConfig| {
         for (path, value) in edit.map(|e| e.changes).unwrap_or_default() {
-            let _ = ConfigManager::apply_value_detached(work, EditingTarget::Main, &path, value.clone());
+            let _ = crate::config::apply(work, EditingTarget::Main, &path, value.clone());
             match changes.iter_mut().find(|(p, _)| *p == path) {
                 Some(slot) => slot.1 = value,
                 None => changes.push((path, value)),
@@ -1069,13 +1069,13 @@ pub fn sim_terrain_dolly(config: &FractalConfig, factor: f64) -> Option<CameraEd
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::manager::{ConfigManager, EditingTarget};
+    use crate::config::manager::EditingTarget;
 
     /// The config after an edit, as the manager would write it.
     pub(crate) fn applied(config: &FractalConfig, edit: &CameraEdit) -> FractalConfig {
         let mut c = config.clone();
         for (path, value) in &edit.changes {
-            ConfigManager::apply_value_detached(&mut c, EditingTarget::Main, path, value.clone()).expect("a camera edit applies");
+            crate::config::apply(&mut c, EditingTarget::Main, path, value.clone()).expect("a camera edit applies");
         }
         c
     }

@@ -39,7 +39,7 @@ Project history is in git: `git log --oneline`.
 
 ### Module map
 - `src/app/` - the frame loop and event handling (mod.rs, ui_handlers.rs for `UiResponse`, gpu_updates.rs incl. `freeze_viewport`, input.rs, fly_camera.rs, export.rs, governor.rs + aa_governor.rs (the quality governor; its fallback without a GPU timer), config.rs, render_progress.rs, script_cloud.rs, variation/effect fetch)
-- `src/config/` - ConfigManager + undo (manager.rs), ConfigPath/ConfigValue/UpdateType (delta.rs), FractalConfig + versioned migration (fractal_config.rs), EscapeConfig (escape.rs), SimConfig (sim.rs), defaults.rs, slider.rs
+- `src/config/` - ConfigManager + undo (manager.rs) around the one setter `config::apply` (apply.rs: every path's clamps and side effects; the video export and the cameras call it directly), the render mode's rules (mode.rs), ConfigPath/ConfigValue/UpdateType (delta.rs), FractalConfig + versioned migration (fractal_config.rs), EscapeConfig (escape.rs), SimConfig (sim.rs), defaults.rs, slider.rs
 - `src/scene/` - the flame model (transforms.rs), xaos.rs, palettes, presets, randomize; the deep-zoom planners (cylinder, backward, plan_gpu, word_tree, final_map, importance) and IFS analysis (ifs_analysis, ifs_estimate, ifs_real)
 - `src/variations/` - registry (mod.rs, definition.rs), 647 defs in `defs/*.rs`, inverse/bound/derive (planner inputs), docs corpus
 - `src/renderer/` - FlameRenderer (compute_kernel.rs), the unified render API (render.rs), sticky.rs, shade_pass.rs, dof_pass.rs, effect_chain.rs, thumbnails

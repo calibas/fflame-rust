@@ -2515,7 +2515,7 @@ mod tests {
             old.escape.solid_tier = tier;
             let mut fixed = old.clone();
             for (path, value) in crate::config::mode::lights_to_world(&old) {
-                crate::config::ConfigManager::apply_value_detached(&mut fixed, crate::config::EditingTarget::Main, &path, value).expect("applies");
+                crate::config::apply(&mut fixed, crate::config::EditingTarget::Main, &path, value).expect("applies");
             }
             assert!(!fixed.solid_shading.lights_follow_camera, "the lights no longer follow");
             assert_ne!(fixed.solid_shading.lights[0].azimuth, old.solid_shading.lights[0].azimuth, "the angles turned");

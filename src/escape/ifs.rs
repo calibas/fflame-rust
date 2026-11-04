@@ -7068,7 +7068,7 @@ mod tests {
                     let mut plane = c.clone();
                     plane.escape.formula = "mandelbrot".to_string();
                     for (path, value) in crate::config::mode::look_3d(&plane, &flat) {
-                        let _ = crate::config::ConfigManager::apply_value_detached(&mut c, crate::config::EditingTarget::Main, &path, value);
+                        let _ = crate::config::apply(&mut c, crate::config::EditingTarget::Main, &path, value);
                     }
                     c.solid_shading.ambient = 0.0;
                 }

@@ -85,7 +85,7 @@ impl Rig {
         let take_over = super::render_mode::rig_taken_over(config);
         let mut after = config.clone();
         for (path, value) in &take_over {
-            let _ = ConfigManager::apply_value_detached(&mut after, crate::config::EditingTarget::Main, path, value.clone());
+            let _ = crate::config::apply(&mut after, crate::config::EditingTarget::Main, path, value.clone());
         }
         Self { shown: after.solid_shading, take_over, in_use: true, flame }
     }
