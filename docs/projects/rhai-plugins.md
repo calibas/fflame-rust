@@ -323,7 +323,10 @@ Before a fourth registry is written for effects:
   `INFO` lowering: a string or a locale map wherever a person reads it.
 - One registry for compiled Rhai entries, keyed by kind and id, with
   one `ensure` from a config's carried sources, one failure memory, one
-  error type (`Vec<Diag>`), and a provenance on every entry.
+  error type (`Vec<Diag>`), and a provenance on every entry. (The one
+  `ensure` is `FractalConfig::ensure_sources()`, 2026-11-04, over the
+  four kinds' own; the registry, failure memory and provenance are
+  still per kind.)
 - One parameter lowering from `PARAMS`, from which each kind's def is
   built; one complex-part naming (`.re`), reading `_re` as an alias so
   configs saved with Rhai variations keep their values.

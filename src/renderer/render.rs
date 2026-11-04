@@ -206,18 +206,16 @@ pub struct RenderOutput {
 /// which in the app comes with a warning -- and from the CLI was a
 /// Mandelbrot saved under the unknown formula's name, exit code 0.
 pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
-    // A variation the flame carries the source of is known (a lens).
-    #[cfg(feature = "lang")]
-    crate::variations::custom::ensure(&config.flame);
+    // Sources the config carries name entries of their own: a source that
+    // compiles is known (a lens's variation, a formula, a colouring); one
+    // that does not is not.
+    config.ensure_sources();
     #[allow(unused_mut)]
     let mut out = Vec::new();
     match config.render_mode {
         #[cfg(feature = "engine-escape")]
         crate::scene::transforms::RenderMode::Escape => {
             let e = &config.escape;
-            // Sources the config carries name entries of their own: a
-            // source that compiles is known; one that does not is not.
-            crate::escape::custom::ensure(e);
             let a = crate::escape::find_formula(&e.formula).is_some();
             let b = crate::escape::fields::get_field(&e.formula).is_some();
             let d = crate::escape::ifs::get_ifs(&e.formula).is_some();
@@ -245,9 +243,6 @@ pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
         #[cfg(feature = "engine-sim")]
         crate::scene::transforms::RenderMode::Simulation => {
             let s = &config.sim;
-            // A colouring the config carries is its own (P4).
-            #[cfg(feature = "lang")]
-            crate::sim::custom::ensure(s);
             let model = |name: &str| crate::sim::MODELS.iter().any(|m| m.name == name);
             let colouring = |name: &str| {
                 #[cfg(feature = "lang")]
@@ -495,10 +490,11 @@ pub async fn render_with(
     // Sizes in pixels, for every engine's tail (the effect chains read it
     // off the renderer) and the flame's own passes.
     renderer.set_pixel_scale(job.pixel_scale);
-    // The variations the flame carries the source of, registered for
-    // every engine: a flame's, an escape lens, a simulation's warp.
-    #[cfg(feature = "lang")]
-    crate::variations::custom::ensure(&job.config.flame);
+    // Every source the config carries, registered once for every engine
+    // below: the flame's variations (a flame's, an escape lens, a
+    // simulation's warp), the formula and colouring, the simulation's
+    // models and colourings, the effects.
+    job.config.ensure_sources();
 
     // Escape-time mode is a different generator with the same tail:
     // one compute pass instead of the chaos-game loop, then the shared
@@ -735,7 +731,6 @@ pub async fn render_with(
     }
 
     // Check for enabled effects
-    crate::effects::ensure_custom(&job.config);
     let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
     let has_color_effects = EffectChainRunner::has_enabled_effects(&job.config.color_effects);
 
@@ -1150,7 +1145,6 @@ async fn render_sim(
     });
 
     // Shared tail: density effects → tonemap → color effects → read.
-    crate::effects::ensure_custom(&job.config);
     let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
     let has_color_effects = EffectChainRunner::has_enabled_effects(&job.config.color_effects);
     let mut effect_chain = if has_density_effects || has_color_effects {
@@ -1296,9 +1290,8 @@ async fn render_escape(
     progress: &mut dyn RenderProgress,
     start_time: web_time::Instant,
 ) -> Result<RenderOutput, RenderError> {
-    // A formula or colouring the config carries as source, compiled
-    // before anything below resolves its name.
-    crate::escape::custom::ensure(&job.config.escape);
+    // A formula or colouring the config carries as source was compiled
+    // at `render_with`'s top (`ensure_sources`).
     log::info!(
         "Render: escape-time {}x{}, formula '{}', coloring '{}', max_iter {}",
         job.width,
@@ -1579,7 +1572,6 @@ async fn escape_tail(
     });
 
     // Shared tail: density effects → tonemap → color effects → read.
-    crate::effects::ensure_custom(&config);
     let has_density_effects = EffectChainRunner::has_enabled_effects(&config.density_effects);
     let has_color_effects = EffectChainRunner::has_enabled_effects(&config.color_effects);
     let mut effect_chain = if has_density_effects || has_color_effects {

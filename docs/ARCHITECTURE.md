@@ -213,10 +213,12 @@ The registries also change at runtime, which is why
   it at start, and so do the CLI's `export` and `export-animation`
   (`report_installed_resources` in `src/lib.rs`); `generate`, the
   gallery modules and the Python module have no store and do not.
-- A config carries the Rhai sources it uses, and each kind registers
-  them with its own `ensure` where a path reads the config
-  (`variations::custom`, `escape::custom`, `sim::custom`,
-  `effects::custom`), under keys from `scripted::key`.
+- A config carries the Rhai sources it uses, registered under keys
+  from `scripted::key` before anything draws them:
+  `FractalConfig::ensure_sources()` at an entry point that takes the
+  whole config (`render_with`, `unknown_names`), and each kind's own
+  `ensure` (`variations::custom`, `escape::custom`, `sim::custom`,
+  `effects::custom`) where an engine's entry point sees only its part.
 
 ### Configuration and undo
 

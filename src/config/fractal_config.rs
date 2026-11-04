@@ -1462,6 +1462,26 @@ pub(crate) fn migrate_custom_variation_keys(obj: &mut serde_json::Map<String, se
 }
 
 impl FractalConfig {
+    /// Register every source this config carries -- its flame's Rhai
+    /// variations, its escape formula and colouring, its simulation's
+    /// models and colourings, its effects -- so each name resolves to the
+    /// config's own entry before anything draws it. A path that missed
+    /// one kind drew that kind's built-in fallback (a Mandelbrot for a
+    /// formula), so an entry point taking a whole config makes this one
+    /// call; the engines' own entry points, which see only their part,
+    /// register that part (`variations::custom::ensure`,
+    /// `escape::custom::ensure`, `sim::custom::ensure`,
+    /// `effects::ensure_custom`). Cheap when there is nothing to register.
+    pub fn ensure_sources(&self) {
+        #[cfg(feature = "lang")]
+        crate::variations::custom::ensure(&self.flame);
+        #[cfg(feature = "engine-escape")]
+        crate::escape::custom::ensure(&self.escape);
+        #[cfg(all(feature = "engine-sim", feature = "lang"))]
+        crate::sim::custom::ensure(&self.sim);
+        crate::effects::ensure_custom(self);
+    }
+
     /// Whether this config's orbits start afresh every dispatch: its own
     /// `reset_orbits`, or a variation its flame uses that needs it
     /// (registered first, so one of the user's counts). Then a dispatch's
