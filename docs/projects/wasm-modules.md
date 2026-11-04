@@ -1,6 +1,10 @@
 # WASM modules: what they lack, and loading engines on demand
 
-Research 2026-10-23; nothing built. The user's words: "I want to review the
+Research 2026-10-23. **Section 1 decided 2026-11-04**: the user chose one
+gallery renderer, and `wasm/flame`, `wasm/escape` and `wasm/sim` were
+retired ("0.4 MB is a small price to avoid separate modules";
+[architecture-review.md](architecture-review.md) section 3, option (a)).
+Sections 2-4 are open. The user's words: "I want to review the
 WASM modules. We've added things like flame variations used in Simulation
 and Escape-time modes, and I think we skipped them. Could we do something
 like the flame variations themselves are their own WASM module, and it's
@@ -173,7 +177,9 @@ engine.
 - Is a quarter of the download (1.7 of 6.5 MB gzip) worth B and C's
   complexity, or is fixing the gallery modules (1) and variations as data
   (2) enough?
-- For 1: fetch variations in the gallery modules, or just build them with
-  the catalogue (+0.2-0.4 MB gzip each)?
+- For 1: ~~fetch variations in the gallery modules, or just build them with
+  the catalogue (+0.2-0.4 MB gzip each)?~~ Decided 2026-11-04: neither;
+  the single-engine modules are retired and `wasm/render` serves every
+  config.
 - Where built-in variation files are served from: `pkg/assets/` beside the
   module (offline-capable, versioned with it) or the API.

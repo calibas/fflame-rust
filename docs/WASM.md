@@ -2,16 +2,15 @@
 
 > **Two different WASM products.** This document is the **web app** —
 > the full editor in a browser, built by `build-wasm.sh` / `.bat`. The
-> other is the set of headless **gallery modules** under `wasm/`
-> (`render`, `flame`, `escape`, `sim`, `script`), which take config
-> JSON and return pixels; they are built with `wasm-pack` and
-> documented in [wasm/README.md](../wasm/README.md).
+> other is the pair of headless **gallery modules** under `wasm/`
+> (`render`, `script`), which take config JSON and return pixels; they
+> are built with `wasm-pack` and documented in
+> [wasm/README.md](../wasm/README.md).
 >
-> All three render engines work in the web app, and in the gallery
-> module `wasm/render` (its `Cargo.toml` features). The single-engine
-> modules (`wasm/flame`, `wasm/escape`, `wasm/sim`) exist only to cut
-> download size, and are not interchangeable: a module built without
-> an engine reports that the engine is missing
+> All three render engines work in the web app and in the gallery
+> renderer `wasm/render` (its `Cargo.toml` features). A build without
+> an engine -- none ships one since the single-engine gallery modules
+> were retired on 2026-11-04 -- reports that the engine is missing
 > (`RenderError::EngineMissing`) rather than rendering something the
 > file never described.
 
@@ -248,14 +247,14 @@ that gave confident wrong answers on the way — is recorded in
 ## Testing
 
 - `python scripts/release.py check` compiles the library for
-  `wasm32-unknown-unknown`, compiles all five gallery crates and their
-  tests, each at its own feature set (which builds the library at each
-  single-engine feature combination), and checks the WASI module for
-  pyfflame (the `python module (WASI)` gate).
+  `wasm32-unknown-unknown`, compiles both gallery crates and their
+  tests, then the library at each engine's features alone (the engine
+  feature matrix), and checks the WASI module for pyfflame (the
+  `python module (WASI)` gate).
 - `python scripts/release.py gallery` runs the gallery crates' tests
-  before the modules deploy -- script parity, and the smoke tests of
-  `wasm/render` and of the three single-engine modules -- and then
-  builds pyfflame and runs its tests.
+  before the modules deploy -- script parity, and `wasm/render`'s smoke
+  tests, which render every engine -- and then builds pyfflame and runs
+  its tests.
 - `tests/visual/wasm/test_wasm.py` renders the visual-suite configs in
   Chrome through `WasmApi.export_png`, driven by Selenium, and
   compares exact pixel hashes against `tests/visual/baseline/wasm/`.

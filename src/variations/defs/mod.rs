@@ -1308,9 +1308,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
 pub static ALL_VARIATIONS: &[&VariationDef] = &[&LINEAR];
 
 // The catalog is `engine-flame`'s whole seam, so it is checked wherever
-// the crate compiles -- the gallery modules' check in `release.py`
+// the crate compiles -- the engine feature matrix in `release.py`
 // included: every definition with the feature, `linear` alone without,
-// as the escape and sim modules' smoke tests once checked at run time.
+// as the retired escape and sim modules' smoke tests once checked at
+// run time.
 #[cfg(feature = "engine-flame")]
 const _: () = assert!(ALL_VARIATIONS.len() > 500, "engine-flame carries the whole catalog");
 #[cfg(not(feature = "engine-flame"))]
