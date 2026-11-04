@@ -11,6 +11,7 @@
 
 pub mod precision;
 mod apply;
+pub mod by_name;
 pub mod defaults;
 pub mod delta;
 pub mod escape;

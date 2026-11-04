@@ -12,8 +12,17 @@ effects and other kinds) line up with the code?
 
 Method: the docs first, then the code where a doc made a claim, plus two
 agents checking `docs/main/` against the code. An architecture review,
-not an audit of every file. Nothing here is decided; section 8 is a
+not an audit of every file. Nothing here is decided; section 9 is a
 proposed order for the user to pick from.
+
+**Status** (branch `architecture-pass`, 2026-11-04): the docs pass (1)
+is done. One applier (2.1) is done: `config::apply` is the setter, the
+video export's arms are gone, and scripts' `config.set` and Python's
+`Config.set` go through it by name (`config::by_name`). Beside the
+order, the mode switch was reworked at the user's request: each engine
+owns its settings, the switch is a whole-config undo step, and an empty
+flame is seeded where one is drawn (`config::mode`). Gallery correctness
+(3) waits on the user's choice of (a) or (b).
 
 ## Summary
 
