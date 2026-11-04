@@ -310,9 +310,17 @@ Each a commit, each behaviour-preserving and held by tests:
   conditions or grids to declare; a `param_show_if`-like call would
   give it them.
 
-- `quaternion_julia_solid` declares `w_slice` twice: the template's
-  slice slot (its 7th parameter) and again as its 15th, so two Slice
-  Value sliders write one key (read from the snapshot, step 5).
+- ~~`quaternion_julia_solid` declares `w_slice` twice~~ **fixed on
+  `main`, 2026-11-03**: the template's slice slot (its 7th parameter) and
+  again as its 15th, so two Slice Value sliders wrote one key (read from
+  the snapshot, step 5). Fixing it found a second fault: its walk read
+  the colour depth one slot past `colour_depth`, a slot never written,
+  so the depth was 1 whatever the slider said. The walk now reads the
+  slice at slot 6 and the depth at its slot; at depth 1 the fixed build
+  renders the old picture to the bit, and the shipped presets now colour
+  at their default depth of 3. Held by
+  `every_solid_reads_its_colour_depth_at_its_slot` and, for every kind,
+  `no_definition_declares_a_name_twice`.
 
 ## Out of it
 

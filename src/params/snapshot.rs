@@ -115,6 +115,23 @@ fn scripts(rows: &mut Vec<Value>) {
     }
 }
 
+/// No definition of any kind declares a parameter name twice: both would
+/// read and write one config key, two controls of one value, and the
+/// slots after them would be one off from what a reader of the list
+/// expects (the quaternion Julia solid's two `w_slice`s).
+#[test]
+fn no_definition_declares_a_name_twice() {
+    let mut seen = std::collections::HashSet::new();
+    let twice: Vec<String> = dump()
+        .iter()
+        .filter_map(|r| {
+            let key = format!("{} {}.{}", r["kind"].as_str()?, r["owner"].as_str()?, r["name"].as_str()?);
+            (!seen.insert(key.clone())).then_some(key)
+        })
+        .collect();
+    assert!(twice.is_empty(), "declared twice: {twice:?}");
+}
+
 #[test]
 #[ignore = "writes output/params-snapshot.json: run on the types before a migration step"]
 fn write_params_snapshot() {
