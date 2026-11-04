@@ -9,7 +9,7 @@
 //! module's output texture is the only standing allocation, created
 //! lazily on first use). See docs/archive/projects/solid-rendering.md.
 
-use egui_wgpu::wgpu::*;
+use wgpu::*;
 
 use crate::config::SolidShadingSettings;
 

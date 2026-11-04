@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use egui_wgpu::wgpu::*;
+use wgpu::*;
 use crate::shader_builder_v2::{ShaderBuilder, ShaderConstants};
 use crate::scene::transforms::{Flame, RenderMode};
 use crate::config::FractalConfig;

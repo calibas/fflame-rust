@@ -26,7 +26,7 @@ Four surfaces, built four different ways, from one repository.
 | Desktop app | `cargo build --profile dist` | `target/dist/FractalArtEditor(.exe)` | `Cargo.toml` |
 | Web app | `build-wasm.bat` / `.sh` — `--profile dist` | `pkg/` + `index.html`, `css/`, `js/` | `Cargo.toml` |
 | Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/sim`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
-| Python | `maturin build` in `python/` | a wheel | `python/pyproject.toml` |
+| Python | `python python/build.py --wheel` (the WASI module, then the wheel) | `python/dist/*.whl`, one for every platform | `python/pyproject.toml` |
 
 The three single-engine renderer modules (`flame`, `escape`, `sim`) are
 the SAME SOURCE as `wasm/render` built with different Cargo features;
@@ -40,13 +40,14 @@ and no escape caught it. See [wasm/README.md](../wasm/README.md).
 
 ### The version problem
 
-Eight manifests carry a version number, and one more file carries it
-as a cache-buster:
+Eight manifests carry a version number, one Python module carries it as
+`__version__`, and one more file carries it as a cache-buster:
 
 ```
 Cargo.toml                 0.5.0   ← desktop + web app, and what PNG metadata records
-python/Cargo.toml          0.5.0   ← what pyfflame.__version__ reports (CARGO_PKG_VERSION)
+wasm/python/Cargo.toml     0.5.0   ← pyfflame's engine module
 python/pyproject.toml      0.5.0   ← the wheel's version
+python/pyfflame/__init__.py 0.5.0  ← what pyfflame.__version__ reports
 wasm/render/Cargo.toml     0.5.0
 wasm/script/Cargo.toml     0.5.0
 wasm/flame/Cargo.toml      0.5.0
@@ -62,7 +63,7 @@ that could have come from any app version, because nothing records which.
 
 **Decided: lockstep.** One version for everything, bumped together.
 `release.py version` rewrites every file in its `VERSION_FILES` list
-(the nine above). It reads and checks all of them before writing any,
+(the ten above). It reads and checks all of them before writing any,
 so a file that has lost its version line fails the bump with nothing
 rewritten. `release.py versions` lists them, and the `versions agree`
 gate (§2) fails when any differs from `Cargo.toml` — or when a tracked
@@ -308,7 +309,7 @@ one per crate (`--only gallery` builds just those). Individually:
 | Windows zip | `python scripts/make_windows_zip.py` | Windows |
 | web app | `./build-wasm.sh` / `build-wasm.bat` (they build `--profile dist`) | either |
 | gallery modules | `wasm-pack build --target web --release` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/sim`, `wasm/script` | either |
-| python wheel | `maturin build --release` in `python/` | per-platform wheel |
+| python wheel | `python python/build.py --wheel` (needs `rustup target add wasm32-wasip1`) | one pure-Python wheel |
 
 `--profile dist`, never `--release`, for **desktop and web alike** — §4c
 says why, and has the measured numbers for each. The gallery modules are
@@ -331,7 +332,9 @@ Building is not shipping.
   that area changed.
 - **web:** serve the repository root (`index.html` loads `./pkg/`), load
   in Chrome and Firefox. Check undo (⌘/Ctrl+Z) and one export.
-- **python:** `import pyfflame`, run a script, compare against the app.
+- **python:** install the wheel, run `python/examples/`, and
+  `python/tools/compare_native.py` on a few configs against the app's
+  CLI (`release.py gallery` runs the package's tests).
 - **gallery modules:** `wasm/README.md` has an end-to-end example.
 
 ### 4.6 — Tag

@@ -370,6 +370,16 @@ pub fn render_escape_content(
     if ifs_def.is_some_and(|d| d.parameters.iter().any(|p| crate::escape::ifs::LIGHTING_PARAMS.contains(&&*p.name))) {
         ui.label(egui::RichText::new(t!("escape_panel.lighting_elsewhere")).small().weak());
     }
+    // Where a solid's surface is drawn, a share of a pixel
+    // (`EscapeConfig::solid_detail`).
+    if ifs_def.is_some_and(|d| d.solid) {
+        let (lo, hi) = crate::config::escape::SOLID_DETAIL_RANGE;
+        let mut v = esc.solid_detail;
+        let slider = super::VkbSlider::new(&mut v, lo..=hi).logarithmic(true).clamping(egui::SliderClamping::Always).text(t!("escape_panel.solid_detail"));
+        if ui.add(slider).on_hover_text(t!("escape_panel.solid_detail_tip")).changed() && v != esc.solid_detail {
+            let _ = config_manager.update_param(ConfigPath::EscapeSolidDetail, v.into());
+        }
+    }
 
     // ---- Julia toggle ----
     //
@@ -2347,7 +2357,7 @@ fn show_coloring_section(
             egui::ComboBox::from_id_salt("escape_coloring")
                 .selected_text(coloring.display_name)
                 .show_ui(ui, |ui| {
-                    for c in crate::escape::ifs::IFS_COLORINGS {
+                    for c in crate::escape::ifs::IFS_COLORINGS.iter().filter(|c| crate::escape::ifs::coloring_applies(d, c)) {
                         if ui
                             .selectable_label(c.name == coloring.name, c.display_name)
                             .clicked()

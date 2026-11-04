@@ -51,11 +51,15 @@ tests/visual/current/
 *.webm
 *.mov
 
-# pyfflame (standalone Python crate — its own target dir and artifacts)
-python/target/
-python/*.pyd
+# pyfflame: the engine module build.py packages, and the wheel's build output
+python/pyfflame/fflame.wasm
+python/dist/
+python/build/
+python/*.egg-info/
 python/**/__pycache__/
 python/.pytest_cache/
+# the old PyO3 crate's build directory, if it is still around
+python/target/
 
 # Infinite Gallery thin wasm crates (standalone, python/-style)
 wasm/*/target/

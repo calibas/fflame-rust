@@ -310,12 +310,24 @@ impl StickyVariations {
         let mut vars = union.len();
         let cap = STICKY_CAP.min(HARD_VARIATION_CAP);
 
+        // A 4D extra is not a skipped branch alone: any `NeedsW` variation
+        // in the map gives the whole shader its 4th coordinate, and a
+        // starting orbit draws `w` from the thread's random stream -- one
+        // draw that moves every random choice after it. So one stays out
+        // of a flame with no 4D variation of its own
+        // (`a_dead_4d_extra_never_changes_pixels`).
+        use crate::variations::definition::Feature;
+        let flame_has_w = union.iter().filter_map(|n| registry.get(n)).any(|i| i.has_feature(Feature::NeedsW));
+
         let mut keep: Vec<String> = Vec::new();
         for (name, _) in candidates {
             if vars >= cap {
                 break;
             }
             let Some(info) = registry.get(name) else { continue };
+            if !flame_has_w && info.has_feature(Feature::NeedsW) {
+                continue;
+            }
             if slots + info.slot_count() > HARD_SLOT_CAP {
                 // Skip the fat one; a smaller candidate may still fit.
                 continue;
@@ -773,6 +785,50 @@ mod sticky_tests {
             reference, sticky_px,
             "dead extras changed pixels — the branch-skip guarantee is broken"
         );
+    }
+
+    /// A dead 4D extra is not only a skipped branch: a `NeedsW` variation
+    /// anywhere in the map turns on the 4th coordinate (`HAS_W`) for the
+    /// whole shader, and a starting orbit draws its `w` from the thread's
+    /// random stream -- one draw that moves every random choice after it.
+    /// A 3D flame after a 4D one drew another sample set; such an extra
+    /// stays out of a flame that has no 4D variation of its own.
+    #[test]
+    fn a_dead_4d_extra_never_changes_pixels() {
+        let Some((device, queue)) = device() else {
+            eprintln!("skipped: no GPU adapter");
+            return;
+        };
+        let three_d = |flame: Flame| {
+            let mut c = FractalConfig::default();
+            c.flame = flame;
+            c.render_mode = crate::scene::transforms::RenderMode::ThreeD;
+            c.deterministic_rng = true;
+            c
+        };
+        // Several transforms: the random stream picks among them, so a
+        // stream moved by one draw is a different walk (with one, it only
+        // moves the starting points, which burn-in forgets).
+        let target = three_d(flame_of(&[&["linear", "spherical"], &["swirl"], &["linear"]]));
+        let four_d = three_d(flame_of(&[&["linear", "mobiq4d", "bubble"]]));
+
+        let mut r1 = renderer_for(&device, &queue, &target);
+        r1.set_sticky_enabled(false);
+        let reference = render_px(&mut r1, &device, &queue, &target);
+        r1.destroy();
+
+        let mut r2 = renderer_for(&device, &queue, &four_d);
+        {
+            let mut enc = device.create_command_encoder(&Default::default());
+            r2.load_config(&device, &mut enc, &queue, &four_d, &four_d.palette, 1, 0);
+            queue.submit(Some(enc.finish()));
+        }
+        let sticky_px = render_px(&mut r2, &device, &queue, &target);
+        let (_, extras) = r2.sticky_stats();
+        r2.destroy();
+
+        assert!(extras > 0, "the 3D extra must still have compiled in, or this proves nothing");
+        assert_eq!(reference, sticky_px, "a dead 4D extra changed a 3D flame's pixels");
     }
 
     /// The app-path regression: `update_path_features` and `resize` take

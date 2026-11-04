@@ -1,5 +1,6 @@
-# Build settings for the standalone gallery crates (render, script,
-# flame, escape, sim).
+# Build settings for the standalone crates here: the gallery modules
+# (render, script, flame, escape, sim) and pyfflame's engine (python,
+# whose own .cargo/config.toml adds its WASI target).
 #
 # They stay separate workspaces on purpose — the app must be unaffected
 # by anything here — but "separate workspace" defaulted to "separate

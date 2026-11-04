@@ -5,7 +5,6 @@
 //! - Color effects: Run on Rgba8Unorm after tonemap
 
 use std::collections::HashMap;
-use egui_wgpu::wgpu;
 
 // ============================================================================
 // Shader sources

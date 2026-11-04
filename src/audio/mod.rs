@@ -35,7 +35,7 @@ mod decode;
 // Platform-specific audio playback implementations
 #[cfg(not(target_arch = "wasm32"))]
 mod playback;
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 mod playback_wasm;
 
 // Shared audio capture types (always compiled)
@@ -44,7 +44,7 @@ mod capture_common;
 // Platform-specific audio capture implementations
 #[cfg(not(target_arch = "wasm32"))]
 mod capture_native;
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 mod capture_wasm;
 
 pub use analyzer::{AnalysisConfig, AudioAnalyzer};
@@ -53,7 +53,7 @@ pub use decode::{AudioData, AudioDecoder, DecodeError};
 // Re-export platform-specific playback types
 #[cfg(not(target_arch = "wasm32"))]
 pub use playback::{AudioPlayer, PlaybackError, PlaybackState};
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 pub use playback_wasm::{AudioPlayer, PlaybackError, PlaybackState};
 
 // Re-export shared capture types (from capture_common)
@@ -62,7 +62,7 @@ pub use capture_common::{AtomicSignals, CaptureConfig, CaptureError, CaptureStat
 // Re-export platform-specific AudioCapture
 #[cfg(not(target_arch = "wasm32"))]
 pub use capture_native::AudioCapture;
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 pub use capture_wasm::AudioCapture;
 
 use crate::signal::{Signal, SignalProducer};

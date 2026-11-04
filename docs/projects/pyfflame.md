@@ -1,195 +1,139 @@
 # pyfflame — Python bindings
 
-Status doc for the Python side. Phase 5 of
-[flame-scripting.md](../archive/projects/flame-scripting.md) shipped a working wheel; this
-tracks what is left, roughly in the order it is worth doing.
+Status doc for the Python side. User-facing usage lives in
+[`python/README.md`](../../python/README.md) and is not repeated here.
 
-User-facing usage lives in [`python/README.md`](../../python/README.md)
-and is not repeated here.
-
----
-
-## 1. What ships today
-
-`python/` is a **standalone crate with its own `[workspace]`**, depending
-on the main crate by path.
-
-- `Config` — flame model, camera, colour and render settings.
-- `.fflame` and `.flame` read/write, as files and as strings.
-- Transform editing by index: weight, colour, colour speed, opacity,
-  affine, variations, variation parameters — with registry validation.
-- `run_script(source, seed, params, base)` — the app's Rhai engine.
-- `variations()`, `variation_params(name)`.
-- `Animation` — a script-defined animation, with `save`/`load` for
-  `.anim`, its `duration`, `targets` and embedded `config`.
-- Ten Python tests; `run_script` output is byte-identical to
-  `FractalArtEditor generate` for the same script and seed.
-
-### The constraints this was built under
-
-The app must be **untouched**: no features toggled, no modules gated, so
-its build and codegen are byte-for-byte what they were, with zero
-performance impact and no rewrite risk. Everything below inherits that
-constraint — if a change would require editing the main crate, it needs
-justifying on its own terms, not smuggling in as "the Python work needs
-it".
-
-**The `gui` feature-gating refactor is not needed and should not be
-done for this.** It was in the original plan; measurement killed it. The
-core is nearly free-standing already (211 variation files with zero
-GUI/GPU references; exactly one code edge into GPU-land, the
-`MAX_BLUR_BUFFERS` const), and the linker drops what is never called —
-**the wheel is 2.6 MB** with no GPU or window code in it. Revisit only
-if Linux CI proves impossible (see §5).
+pyfflame was a PyO3 extension (Phase 5 of
+[flame-scripting.md](../archive/projects/flame-scripting.md)): config
+editing, `.flame` conversion and scripts, no rendering, a wheel per
+platform. Since 2026-11-04 it is the engine built as **one WebAssembly
+module for WASI** (`wasm/python`), which Python runs with wasmtime, its
+GPU work done by wgpu-py. Same name, same API (the PyO3 package's tests
+pass unchanged), plus rendering, the animation engine and video. The
+PyO3 crate had stopped compiling unnoticed (it was in no gate) and is
+gone.
 
 ---
 
-## 2. Tier 1 — ergonomics
+## 1. What ships
 
-The index-based API is correct but wordy. Everything here is additive.
+- **`python/`** — the package: pure Python plus `pyfflame/fflame.wasm`.
+  One wheel for every platform wasmtime and wgpu-py support.
+  `python/build.py` builds the module and puts it in the package
+  (`--wheel` builds the wheel).
+- **`wasm/python/`** — the module's crate, a standalone workspace like
+  the gallery crates (`cargo build --release` there targets
+  `wasm32-wasip1` through its `.cargo/config.toml`).
+- **The API.** `Config` (editing with registry checks, `.fflame` and
+  `.flame` files), `run_script` (byte-identical to the CLI's `generate`),
+  `variations()`, `Animation` (`.anim`), and new: `Engine.render`
+  (stills; `sequence=True` carries a simulation's run between frames),
+  `Image` (`save` writes the CLI's PNG with its metadata, `to_numpy`),
+  `Engine.open_animation` (the video export's frames), `VideoWriter`
+  (FFmpeg), presets, the script library.
+- **Tests.** `python/tests`: the PyO3 package's suite, unchanged, and
+  rendering (skipped without a GPU). Gates: `release.py check` compiles
+  the module; `release.py gallery` builds it and runs the tests.
 
-**Transform proxy.** `c.transforms[0].weight = 0.5` instead of
-`c.set_weight(0, 0.5)`, and iteration: `for t in c.transforms:`.
-A proxy holds `(Py<Config>, index)` and revalidates on every access.
+## 2. Design
 
-> Pitfall to design against: a proxy is a *reference by index*, so after
-> `remove_transform(0)` a live proxy silently addresses a different
-> transform. Revalidate the index on access and raise if it is out of
-> range; do not cache the transform itself. Document that proxies are
-> views, not values.
+**The engine builds for WASI.** WASI is wasm32 too, so the code split
+on `target_arch = "wasm32"` meant two things at once: single-threaded
+and async (which WASI is), and a web page with wasm-bindgen and web-sys
+(which it is not). `build.rs` sets `browser` (wasm32 minus WASI) for the
+second; only the 18 sites that call into the page say it. WASI has no
+store and no network: `storage::backend`, `resources::fetch` and
+`api::client` answer "not available" there, and Python does its own
+files and fetching. Window, file-dialog, audio-device and platform-folder
+crates are off for WASI in `Cargo.toml`; egui-wgpu assumes a browser on
+wasm32, so the engine names `wgpu` directly (the same crate everywhere).
 
-**Palette access.** Currently invisible from Python, though every flame
-carries one. Wants: read/write stops as `[(position, (r, g, b)), …]`,
-the palette name, load a `.palette` file, and list the built-in library.
-Also `palette_rotation` / `palette_reverse` / squeeze settings, which are
-plain `FractalConfig` fields.
+**Python to the module**: one export, `fflame_call`: a JSON request and
+a block of bytes; back a status, bytes and a JSON note
+(`wasm/python/src/lib.rs` lists the calls).
 
-**`render()` helper.** A thin subprocess wrapper around
-`FractalArtEditor export`, so the README's boilerplate becomes
-`c.render("out.png", width=1920, height=1080)`. Needs a binary-discovery
-rule: explicit argument → `FFLAME_BIN` env var → `PATH` → raise with a
-message naming all three. Deliberately still a subprocess: no GPU in the
-wheel.
+**The module to Python**: a wgpu custom backend
+(`wasm/python/src/backend.rs`) turns each GPU call into a JSON command
+for two imports, `fflame_gpu.call` / `take`; `python/pyfflame/_gpu.py`
+makes it with wgpu-py. Objects are integer handles. Command buffers are
+recorded in the module and replayed at submit (a Cahn-Hilliard render is
+16,000 dispatches; recording drops a pipeline or bind group the pass
+already has). Buffer maps and work-done callbacks run on the device's
+poll, as in wgpu-core.
 
-**Bulk property access.** `c.camera` / `c.tonemap` returning a dict-like
-view, rather than one getter per field, for the ~60 flat `FractalConfig`
-fields. Cheaper to maintain than 120 hand-written accessors.
+**Renders are the CLI's**: 1024 iterations per thread unless given, the
+sticky superset off unless asked for.
 
----
+## 3. Measured (2026-11-04, GTX 1660 SUPER, Windows)
 
-## 3. Tier 2 — model coverage
+- 254 visual-suite configs against the native CLI
+  (`python/tools/compare_native.py`), none failing: every escape render
+  (terrains, sky, the path-traced IFS solid) and all 107 simulations
+  bit-identical, but the two perturbed deep zooms (~5% of pixels in
+  chaotic regions; the CPU's libm is the likelier cause, unproven).
+  Flames bit-identical at the same iterations per thread.
+- A warm 1e9-iteration flame at 800x600: 507 ms (native CLI 585).
+  Cahn-Hilliard: 351 ms against 388. A flame whose variation set is new
+  costs a pipeline compile, 200-500 ms.
+- Module 15 MB, ~0.4 s to load; wgpu-py's device ~1 s.
 
-Real parts of the model Python cannot currently reach.
+## 4. Copied code — to review after the merge
 
-| Gap | Notes |
-| --- | --- |
-| **Linked / final transforms** | `flame.linked_transforms`, `flame.final_transforms` — same shape as `transforms`, so this falls out of the proxy work. |
-| **Post-affine** | Per-transform second affine; `post_affine_enabled` plus six coefficients. |
-| **Xaos** | `flame.xaos: Option<Vec<Vec<f32>>>` — a from/to matrix. Natural as `c.xaos[from][to]`, or get/set with a resize-aware setter. |
-| **Subflames** | `flame.subflames` — nested flames. Structural; needs its own thought about how a subflame is addressed. |
-| **Solo transform** | `flame.solo_transform: Option<usize>`. Trivial. |
-| **Post-symmetry** | `flame.post_symmetry`. Trivial. |
-| **Tone mapping / colour** | ~30 flat fields (exposure, gamma, vibrancy, levels, curve, background). Covered by the bulk-view idea above. |
-| **Effects chain** | `density_effects` / `color_effects` — `Vec<EffectInstance>`. Structural, lower value for a scripting audience. |
-| **Presets** | Read the shipped `.fflame` preset library as `Config`s. |
+Copies made to get the module working without touching their sources.
+Each should become one function of the engine's that every caller uses.
 
-Rough priority: proxy-driven items (linked/final, post-affine) first
-since they come nearly free; then xaos; then the flat-field bulk view;
-subflames and effects last.
+| Copy | Of | What differs |
+| --- | --- | --- |
+| `wasm/python/src/scripts.rs` (`with_host`, `resolve_params`, `list`, `source`, `params`, `run`) | `wasm/script/src/lib.rs` (`with_host`, `resolve_params`, `list_scripts_impl`, `script_source_impl`, `collect_params_impl`, `run_impl` + `run_chain_impl`) | `run` merges `run` and `run_chain`; results are `serde_json::Value`, not strings; a one-stage error carries no "stage 0:" |
+| `wasm/python/src/render.rs`: `Session`, `Gpu::open`, `Gpu::frame`, `Session::frame_config` | `src/animation/export.rs`, `export_animation`: track binding (`remove_broken_tracks`, `bind_to_config`), `export_signals` / `tracks_missing_signals`, `set_step`, the per-frame evaluate / `apply_animation_values` / `moment_configs` / `RenderJob` with engines and moments, sticky off | Left out: `ExportRung` (render scale, upscaler, escape supersampling), the deep-zoom size check, audio files, the pixel scale, the motion-blur inlined-constants switch |
+| `wasm/python/src/render.rs`: `renderer_for`, `Gpu::render` | `wasm/render/src/lib.rs`, `render_with_live` (a renderer kept per size, destroyed on resize) | Keyed on the engine family too (`for_job`'s tail); sticky set per call |
+| `python/pyfflame/__init__.py`: `Config`'s editing (`add_variation`, `set_variation_param`, transforms by index, the properties) and its error messages | `python/src/lib.rs` (the PyO3 crate, deleted; in git history) | Python over the config's JSON instead of Rust over `FractalConfig`; parsing, absent-field defaults and the registry still come from the engine (`config_normalize`, `defaults`, `variations`) |
+| `python/pyfflame/_gpu.py`, `op_init`: the device's limits and features | the native exports' device setup (`src/animation/export.rs`, `src/app/export.rs`): the adapter's buffer, binding and texture limits, `FLOAT32_FILTERABLE` | A parallel choice, not a line-for-line copy |
+| `python/tools/compare_native.py`, `png_text` | `src/png_metadata.rs`, `read_png_metadata` (the tEXt chunks) | Python, reading only |
+| WASI stubs in `src/resources/fetch.rs` (`mod wasi`) and `src/api/client.rs` (`mod wasi`) | the browser modules' signatures beside them | Not copies of behaviour, but signatures that must track the browser's |
 
----
+## 5. Known gaps
 
-## 4. Tier 3 — distribution
-
-**Type stubs (`.pyi`).** PyO3 generates none, so editors offer no
-completion and no signatures — the single biggest quality-of-life win
-per line of effort. Hand-written `pyfflame.pyi` shipped as package data,
-with a test that every exported name appears in it so the two cannot
-drift.
-
-**CI wheel matrix.** `maturin-action` / `cibuildwheel` across
-Windows / macOS / Linux, x86_64 + arm64. Already `abi3-py38`, so one
-wheel per platform covers every Python ≥ 3.8. **See §5 for the Linux
-risk before starting this.**
-
-**PyPI.** Needs a name check (`pyfflame` availability), a licence field,
-project URLs, and a long description. Trivial once wheels build.
-
-**Docs.** The README covers usage. A short API reference — generated
-from the docstrings already in `python/src/lib.rs` — would be worth it
-once the surface stops moving.
-
----
-
-## 5. Known risks
-
-**Linux CI is the real one.** Because the wheel links the whole crate,
-building it drags in `cpal`, which needs ALSA headers
-(`libasound2-dev`) at *build* time, and the wgpu/winit stack wants X11
-and Wayland dev packages. On `manylinux` those are not present by
-default. Three outs, in order of preference:
-
-1. Install the dev packages in the build container — a `before-all`
-   line in the CI config. Almost certainly enough.
-2. Build Linux wheels on plain Ubuntu runners rather than manylinux,
-   accepting a narrower glibc floor.
-3. Only if both fail: revisit feature-gating, scoped to making `cpal`
-   and the window stack optional. This is the one scenario where the
-   refactor earns its risk — and even then it should be driven by the
-   app's own needs, not by the wheel.
-
-**Wheel size if the linker stops being clever.** 2.6 MB today. If a
-future change makes the GPU code reachable from a path Python touches
-(anything that pulls in `renderer` or `gpu`), the wheel could balloon.
-Worth a CI assertion on wheel size so the regression is loud.
-
-**f32 storage** is documented in the README but will keep surprising
-people: set `-0.1`, read back `-0.10000000149011612`. If it becomes a
-support burden, consider rounding on read for display purposes only —
-though quietly lying about the stored value is probably worse.
+- **The backend forwards what the 254 configs use.** Not forwarded:
+  depth/stencil, vertex and index buffers, render bundles, timestamp
+  queries, immediates. Error scopes always report none, so the
+  engine's out-of-memory checks (`push_error_scope`) see no error; a
+  validation error raises in Python instead.
+- **wgpu-py quirks**: 0.32's `queue.on_submitted_work_done_sync` fails
+  (a cffi callback signature), so the host waits with the private
+  `device._poll_wait()`; `write_texture` needs `bytes_per_row` even for
+  one row; WebGPU has no `clear_texture` (emulated by a copy from a
+  zeroed buffer); wgpu's multisample mask is 64-bit, WebGPU's 32.
+- **Audio-driven signal tracks** (an audio file) are not loaded;
+  generator signals are.
+- **A panic traps the module**; the Engine starts a new one and raises,
+  and open animations are lost with the old.
 
 ---
 
-## 6. Tier 4 — nice-to-haves
+## 6. Backlog (carried over, still open)
 
-Genuinely optional; listed so they are not lost.
+**Ergonomics.** A transform proxy (`c.transforms[0].weight = 0.5`,
+revalidating its index on every access: a proxy is a view, and after
+`remove_transform(0)` it addresses another transform); palette access
+(stops, name, `.palette` files, the library); a bulk view of the ~60 flat
+fields (`c.camera`, `c.tonemap`). `Config.data` reaches all of it raw
+meanwhile.
 
-- **Built-ins as plain Python functions.** `lsystem()`,
-  `kleinian_generators()`, `hilbert3d_maps()`, `sphere_packing_mirrors()`
-  and friends are currently reachable only through Rhai. Exposing them
-  directly would let someone compute maps in Python and feed them to a
-  flame. Cost: a second registration surface alongside the Rhai one,
-  with the same drift risk `builtins.rs` already carries against its
-  shader sources.
-- **Animation editing.** Phase 6 landed the read side: a script's
-  animation arrives as `result.animation`, and `.anim` round-trips.
-  Still missing is *building* one from Python — adding tracks and
-  keyframes to an existing animation without going through a script.
-- **Batch helpers.** `run_script` over a seed range with
-  `multiprocessing`, returning a list of `Config`s. Note `run_script`
-  currently holds the GIL for its duration; the script budget bounds
-  that, but `py.allow_threads` would let real threading work.
-- **Notebook display.** `_repr_png_` on `Config`, rendering a small
-  preview via the CLI so a flame shows inline in Jupyter. Cute, and
-  probably the single best demo of the library.
-- **numpy interop.** Affines as `(2, 3)` arrays, palettes as `(N, 3)`.
-  Only worth it if a real workflow asks.
-- **CLI entry point.** `python -m pyfflame convert a.flame b.fflame` —
-  format conversion without writing a script. Small, and useful for
-  people who only want the converter.
-- **Palette generation.** Follows Phase 7 (colour-theory palettes),
-  which is shared with the Palette UI. Same rule as animation: arrive
-  through the shared implementation, not a Python-only one.
+**Model coverage** through `Config`: linked and final transforms,
+post-affine, xaos, subflames, solo, post-symmetry, effects.
 
----
+**Distribution.** Type stubs (a test that every exported name is in
+them); PyPI (the name, a licence field, URLs); an API reference from the
+docstrings.
 
-## 7. Explicitly not planned
+**Nice to have.** Building an animation from Python (tracks and keys
+without a script); batch helpers over seed ranges; `_repr_png_` for
+notebooks (now a real render); numpy affines and palettes; `python -m
+pyfflame convert a.flame b.fflame`.
 
-- **GPU rendering in the wheel.** Rendering stays in the CLI exporter,
-  called as a subprocess. Putting wgpu in a Python extension module
-  means device management, driver variance and a much larger wheel, for
-  a capability the subprocess already provides.
-- **A pure-Python reimplementation** of any part of the model. The whole
-  value of these bindings is that they are the *same* code as the app —
-  the same serde, the same XML quirks, the same registry, the same RNG.
-  Anything reimplemented is something that can silently disagree.
+**Not planned**: a pure-Python reimplementation of the model. The value
+is that this is the app's code -- its serde, its XML quirks, its
+registry, its RNG; anything reimplemented can silently disagree. The
+`Config` editing helpers are the one thin layer in Python, over the
+engine's JSON (section 4).

@@ -129,7 +129,7 @@ mod native {
 // WASM implementation (browser fetch API)
 // ============================================================================
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 mod wasm {
     use super::*;
     use wasm_bindgen::prelude::*;
@@ -205,8 +205,37 @@ mod wasm {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 pub use wasm::*;
+
+// ============================================================================
+// WASI implementation (wasm/python): no network
+// ============================================================================
+
+/// The browser's API shape, failing: the Python program fetches what it
+/// wants and hands the engine the text.
+#[cfg(target_os = "wasi")]
+mod wasi {
+    use super::*;
+
+    fn unavailable(url: &str) -> FetchError {
+        FetchError::Network(format!("No network in this build: {url}"))
+    }
+
+    pub async fn fetch_text(url: &str) -> FetchResult<String> {
+        Err(unavailable(url))
+    }
+
+    pub fn fetch_text_spawn(
+        url: String,
+        handle: std::rc::Rc<std::cell::RefCell<FetchHandle<String>>>,
+    ) {
+        handle.borrow_mut().set_failed(unavailable(&url));
+    }
+}
+
+#[cfg(target_os = "wasi")]
+pub use wasi::*;
 
 // ============================================================================
 // Unified API
@@ -222,7 +251,7 @@ pub fn fetch_text(url: &str) -> FetchResult<String> {
     native::fetch_text_sync(url)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(browser)]
 pub use wasm::fetch_text;
 
 /// Fetch and parse JSON from a URL (desktop - synchronous)

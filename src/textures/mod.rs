@@ -231,8 +231,8 @@ pub fn may_generate(recipe: &FractalConfig, key: &str) -> bool {
 /// path at its own size -- exactly what Simulation mode draws, at the
 /// step count the recipe names.
 pub async fn generate(
-    device: &egui_wgpu::wgpu::Device,
-    queue: &egui_wgpu::wgpu::Queue,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
     recipe: &FractalConfig,
 ) -> anyhow::Result<image::RgbaImage> {
     let (w, h) = texture_size(recipe);
@@ -246,8 +246,8 @@ pub async fn generate(
 
 /// A recipe's texture: from the cache, or generated and cached.
 pub async fn obtain(
-    device: &egui_wgpu::wgpu::Device,
-    queue: &egui_wgpu::wgpu::Queue,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
     recipe: &FractalConfig,
 ) -> anyhow::Result<image::RgbaImage> {
     let key = cache::key(recipe);
@@ -353,7 +353,6 @@ mod tests {
     #[ignore = "needs a GPU"]
     #[cfg(feature = "engine-sim")]
     fn textures_generate_deterministically_and_tile() {
-        use egui_wgpu::wgpu;
         // The adapter's own limits, as every renderer test asks for: the
         // defaults are below what the render path binds.
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -416,8 +415,7 @@ mod tests {
     /// The adapter's own limits, as every renderer test asks for, or
     /// None without an adapter.
     #[cfg(feature = "engine-sim")]
-    fn device_if_any() -> Option<(egui_wgpu::wgpu::Device, egui_wgpu::wgpu::Queue)> {
-        use egui_wgpu::wgpu;
+    fn device_if_any() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()

@@ -16,6 +16,18 @@ fn main() {
     let target = env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
     println!("cargo:rustc-env=BUILD_TARGET={}", target);
 
+    // `browser`: wasm32 in a web page, with wasm-bindgen and web-sys.
+    // WASI is wasm32 too (the engine as a module Python runs,
+    // wasm/python) and has neither, so code that calls into the page
+    // says `browser`, and code that is merely single-threaded and async
+    // keeps saying `target_arch = "wasm32"`.
+    println!("cargo::rustc-check-cfg=cfg(browser)");
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if arch == "wasm32" && os != "wasi" {
+        println!("cargo:rustc-cfg=browser");
+    }
+
     // Get build profile.
     //
     // NOT `PROFILE`: cargo sets that to "release" or "debug" only — a

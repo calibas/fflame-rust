@@ -31,7 +31,7 @@ which rewrites the references in code comments too).
 | [escape-formula-language.md](escape-formula-language.md) | Planned 2026-10-13: Ultra Fractal and Fractint formulas and colourings, compiled to WGSL and carried in the config. Built through item 3 and its follow-ups; further UF support paused 2026-10-17. |
 | [surface-textures.md](surface-textures.md) | A terrain's surface texture (bump): step 1 built; material maps and the rest paused -- texture materials go on in [online-assets.md](online-assets.md). |
 | [escape-coloring-survey.md](escape-coloring-survey.md) | The escape colouring survey: items 1-5 built, 6-7 partly. |
-| [pyfflame.md](pyfflame.md) | Python bindings: the tier 1-4 backlog, none of it built yet. |
+| [pyfflame.md](pyfflame.md) | Python: the engine as a WASI module (rendering, animation, scripts); the copied code awaiting review; the backlog. |
 
 ## Open lists
 

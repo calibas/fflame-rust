@@ -2599,7 +2599,7 @@ mod tests {
     use super::*;
     use crate::sim::{COLORINGS, MODELS};
 
-    use egui_wgpu::wgpu::naga;
+    use wgpu::naga;
 
     fn validate(src: &str, what: &str) {
         assert!(!src.contains("//__"), "{what} left an unspliced marker");

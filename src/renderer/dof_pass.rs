@@ -8,7 +8,7 @@
 //! then the disk gather. Runs between shade and tonemap. Zero cost
 //! when off: nothing is dispatched; textures are allocated lazily.
 
-use egui_wgpu::wgpu::*;
+use wgpu::*;
 
 /// Mirrors WGSL `DofParams` (dof.wgsl) — 32 bytes.
 #[repr(C)]
