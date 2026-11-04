@@ -24,8 +24,8 @@
 //!   - `output/variation-jwf-source/plot/parplot2d_wf_presets.txt`
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 

@@ -120,7 +120,7 @@ and a colouring share one module.
 | `escape_degree` | the degree at infinity, from the resolved params, for a formula that is polynomial there. The smooth count takes its logarithm in it (`escape_degree_of`, 2 otherwise), and only such a formula is offered a colouring's recommended bailout |
 | `derived_data` | a CPU function of the resolved params whose output (at most 256 floats) is uploaded to the uniform's `fdata`, read as `fdata4(i)`. Origami's fold lines live here |
 | `wgsl_derivative` | `fn formula_derivative(z, c, dz, is_julia)`, the derivative orbit, for distance estimation and analytic relief. Empty for 14 of the 26 formulas |
-| `parameters` | `EscapeParamDef`s (below) |
+| `parameters` | `ParamDef`s (below) |
 | `presets` | named starting points; the first is the formula's default (see [Presets](#presets)) |
 
 **`FormulaFeature`** — what the assembler compiles into the loop:
@@ -171,11 +171,15 @@ old file without the key meant).
 
 ### Parameters
 
-`EscapeParamDef` is `name`, `display_name`, `default`, `min`, `max`,
-`tooltip` and `choices`. Every parameter is an `f32`; a non-empty
-`choices` list makes it a dropdown over the integer values `0..n`, and
-`discrete_params_are_labelled_across_their_whole_range` holds `max` to
-the list. Slot *i* is `parameters[i]`, packed by `pack_params` with
+A parameter is a `params::ParamDef`, the one definition every kind
+shares ([one-parameter-system.md](../projects/one-parameter-system.md)):
+`ParamDef::new("scale", "Scale", "hint", Spec::float(0.05, 1e-6, 1.0).log())`.
+Every value is an `f32` slot; a float is a slider (`.log()` for one whose
+interesting band is decades below its maximum, `.slow()` for one whose
+next frame is slow -- an IFS walk's depth and beam, a march's steps),
+a `Spec::choice` a dropdown over the integer values `0..n`, and
+`discrete_params_are_labelled_across_their_whole_range` holds the
+range to the list. The panel draws them through `ui::params`. Slot *i* is `parameters[i]`, packed by `pack_params` with
 defaults for absent keys, and read in WGSL as `fparam(i)` / `cparam(i)`.
 There are 64 slots each for the formula and the colouring
 (`PARAM_VEC4S` = 16 vec4s, which UF's public formulas need) and 16 for
@@ -448,11 +452,16 @@ fn escaped(s, p) {
   `FormulaFeature::Convergent`.
 - **Parameters** in `PARAMS`: a value alone, or `value` with `min`,
   `max`, `caption`, `hint`, `choices` (an int's names), `exponential`
-  (the slider runs logarithmically, `custom::is_exponential`), `type:
-  "angle"` (a float in degrees, as stored and shown: `ParamType::Angle`
-  for an effect's or a variation's, `ir::Param::angle`), or
-  `function` (a user function, called `p.f(z)`). They are the panel's
-  controls, animation targets and script parameters
+  (the slider runs logarithmically: the definition's `log`), `type:
+  "angle"` (a float in degrees, as stored and shown, `ir::Param::angle`),
+  or `function` (a user function, called `p.f(z)`). Every kind reads a
+  script's `PARAMS` alike (`ir::Program::param_defs`): a number bounded
+  both ways keeps to its range, one not is free (a typed value may
+  leave it) with its missing end a reach around the default (an
+  angle's 0..360); a range spanning five decades from above zero is
+  logarithmic too; an int is an integer slider, a bool a checkbox, an
+  enum a dropdown. They are the panel's controls, animation targets and
+  script parameters
   (`escape.formula_params()`). A complex parameter is two, `name.re` and
   `name.im`, and also reads and sets as a point in polar form,
   `name.r` and `name.angle` (degrees; `EscapeConfig::formula_param`):
@@ -848,12 +857,16 @@ fn escaped(s, p) {
   the scalar path (`param_cell`); `lang::rhai::param_layout(source)`
   reads the layout -- conditions, grids, fills and warnings by function
   name -- checking every name it reads. In every kind `p.grid[2].column`
-  reads a cell by name; at a computed row, in a simulation model, the
-  checker resolves `__grid_param` to one read at the first row's slot
-  plus the clamped row times the stride (`Host::GridParam`: a clamp in
-  the read itself -- the lowering's `min`/`max`, a local and an `if`
-  each, measured up to 2.5% on McCabe's twin). Only the simulation panel draws a
-  layout yet; elsewhere a grid's cells are listed one by one.
+  reads a cell by name, and a computed row is one read at the first
+  row's slot plus the clamped row times the stride (`Host::GridParam`,
+  in the kind's own read: `fparam`/`cparam`, `get_param`, `mparam`; a
+  clamp in the read itself -- the lowering's `min`/`max`, a local and an
+  `if` each, measured up to 2.5% on McCabe's twin); the interpreter and
+  the big-float evaluator read the same parameter. Every panel draws a
+  script's conditions and grids (`ui::params`; a formula's, colouring's
+  or solid's layout by `escape::custom::param_layout`); a grid's fill
+  and warning are CPU functions only a simulation runs yet, refused
+  elsewhere (`LayoutSpec::without_cpu`).
 - **A helper takes `p` and `ctx` whole** (P4 step 9c): an argument that
   is the entry's parameters, its context or a colouring's sample binds
   the helper's parameter as it is bound at the call

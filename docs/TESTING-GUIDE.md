@@ -453,8 +453,8 @@ Design records: [variation-math-probe.md](archive/projects/variation-math-probe.
 `renderer::param_cost` times every whole-number parameter, and every
 one named like a count, at its default and at its maximum, with the
 variation alone in a small flame. It reports what the maximum adds to an
-app frame. A parameter that adds 15 ms or more belongs in
-`variations::SLOW_PARAMS` (UI.md, *Slow settings*). The dispatches are
+app frame. A parameter that adds 15 ms or more is written
+`param!(slow ...)` (UI.md, *Slow settings*). The dispatches are
 small, so no maximum comes near a GPU watchdog; the first figures are
 noisy until the GPU has clocked up, so run it twice and compare.
 

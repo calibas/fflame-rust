@@ -823,6 +823,9 @@ impl J<'_> {
             return Ok(None);
         }
         Ok(match &e.kind {
+            // A grid's cell at a computed row is a parameter: constant
+            // wherever its row is.
+            IExprKind::Host(crate::lang::builtins::Host::GridParam, _) => None,
             IExprKind::Host(..) => return Err(()),
             IExprKind::Complex(..) | IExprKind::Float(_) | IExprKind::Int(_) | IExprKind::Bool(_) | IExprKind::Param(_) | IExprKind::FuncChoice(_) | IExprKind::UserDeriv(..) | IExprKind::UserJac(..) => None,
             // The perturbation equations', which are not differentiated.

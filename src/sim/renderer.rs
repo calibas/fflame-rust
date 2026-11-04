@@ -2616,7 +2616,7 @@ impl SimRenderer {
             for (k, l) in cfg.color_layers.iter().take(crate::config::sim::MAX_COLOR_LAYERS).enumerate() {
                 let c = coloring_or_default(&l.coloring);
                 let mut block: Vec<f32> =
-                    c.parameters.iter().map(|p| l.coloring_params.get(p.name).copied().filter(|v| v.is_finite()).unwrap_or(p.default)).collect();
+                    c.parameters.iter().map(|p| l.coloring_params.get(&*p.name).copied().filter(|v| v.is_finite()).unwrap_or(p.slot_default())).collect();
                 block.resize(16, 0.0);
                 cp.extend_from_slice(&block);
                 records.push(SimColorLayerGpu {
@@ -3229,7 +3229,7 @@ impl SimRenderer {
                             .parameters
                             .iter()
                             .find(|p| p.name == name)
-                            .map(|p| params.get(p.name).copied().filter(|v| v.is_finite()).unwrap_or(p.default))
+                            .map(|p| params.get(&*p.name).copied().filter(|v| v.is_finite()).unwrap_or(p.slot_default()))
                             .unwrap_or(1.0)
                             .round()
                             .clamp(1.0, crate::sim::MAX_INNER_ITERATIONS as f32)

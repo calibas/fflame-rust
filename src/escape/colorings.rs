@@ -6,22 +6,20 @@
 //! `coloring_map(sum, state)` where `state` is the orbit accumulator, a
 //! `vec4` (meaningful only with `NeedsOrbitAccum`; zero otherwise).
 
-use super::{ColoringDef, ColoringFeature, EscapeParamDef};
+use super::{ColoringDef, ColoringFeature};
+use crate::params::{ParamDef, Spec};
 
 /// Discrete escape count: the classic banded look. `t = n · scale`.
 pub static ESCAPE_COUNT: ColoringDef = ColoringDef {
     name: "escape_count",
     display_name: "Escape Count",
     features: &[],
-    parameters: &[EscapeParamDef {
-        name: "scale",
-        display_name: "Scale",
-        default: 0.05,
-        min: 0.000001,
-        max: 1.0,
-        tooltip: "Palette distance per iteration band. Smaller = broader bands. Deep views need very small values -- the slider reaches 1e-6.",
-        choices: &[],
-    }],
+    parameters: &[ParamDef::new(
+        "scale",
+        "Scale",
+        "Palette distance per iteration band. Smaller = broader bands. Deep views need very small values -- the slider reaches 1e-6.",
+        Spec::float(0.05, 0.000001, 1.0).log(),
+    )],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     return f32(sum.n) * cparam(0u);
@@ -40,15 +38,12 @@ pub static SMOOTH: ColoringDef = ColoringDef {
     name: "smooth",
     display_name: "Smooth Iteration",
     features: &[],
-    parameters: &[EscapeParamDef {
-        name: "scale",
-        display_name: "Scale",
-        default: 0.05,
-        min: 0.000001,
-        max: 1.0,
-        tooltip: "Palette distance per iteration. Smaller = broader gradient. Deep views need very small values -- the slider reaches 1e-6.",
-        choices: &[],
-    }],
+    parameters: &[ParamDef::new(
+        "scale",
+        "Scale",
+        "Palette distance per iteration. Smaller = broader gradient. Deep views need very small values -- the slider reaches 1e-6.",
+        Spec::float(0.05, 0.000001, 1.0).log(),
+    )],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
     // |z|^2 at escape is > bailout >= 1, so log2 is safe; the max()
@@ -94,17 +89,14 @@ pub static ORBIT_TRAP: ColoringDef = ColoringDef {
     display_name: "Orbit Trap",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "shape",
-            display_name: "Trap shape",
-            default: 0.0,
-            min: 0.0,
-            max: 7.0,
-            tooltip: "The shape the orbit is measured against, at the trap's \
+        ParamDef::new(
+            "shape",
+            "Trap shape",
+            "The shape the orbit is measured against, at the trap's \
                       centre and rotation: a point, the axes' cross, the unit circle, \
                       a logarithmic spiral (golden by default), or a ring, box, line \
                       or diamond of the given radius.",
-            choices: &[
+            Spec::choice(0, &[
                 "Point",
                 "Cross (axes)",
                 "Unit circle",
@@ -113,87 +105,63 @@ pub static ORBIT_TRAP: ColoringDef = ColoringDef {
                 "Box",
                 "Line",
                 "Diamond",
-            ],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette distance per unit of trap distance.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "growth",
-            display_name: "Spiral growth",
-            default: 1.618_034,
-            min: 1.05,
-            max: 8.0,
-            tooltip: "Spiral shape 3 only: the factor the spiral widens by per \
+            ]),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of trap distance.",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
+        ParamDef::new(
+            "growth",
+            "Spiral growth",
+            "Spiral shape 3 only: the factor the spiral widens by per \
                       QUARTER turn. The default is the golden ratio, which makes \
                       it the golden spiral; 2 gives a doubling-per-quarter-turn \
                       spiral, and values near 1 wind tightly.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "center_re",
-            display_name: "Centre (re)",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Where the trap sits in the plane.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "center_im",
-            display_name: "Centre (im)",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Where the trap sits in the plane.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "rotation",
-            display_name: "Rotation",
-            default: 0.0,
-            min: -180.0,
-            max: 180.0,
-            tooltip: "The trap's rotation in degrees, about its centre.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "mode",
-            display_name: "Reduction",
-            default: 0.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "Which of the orbit's distances colours the pixel: the \
+            Spec::float(1.618_034, 1.05, 8.0),
+        ),
+        ParamDef::new(
+            "center_re",
+            "Centre (re)",
+            "Where the trap sits in the plane.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "center_im",
+            "Centre (im)",
+            "Where the trap sits in the plane.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "rotation",
+            "Rotation",
+            "The trap's rotation in degrees, about its centre.",
+            Spec::float(0.0, -180.0, 180.0),
+        ),
+        ParamDef::new(
+            "mode",
+            "Reduction",
+            "Which of the orbit's distances colours the pixel: the \
                       closest approach, the farthest, their mean, or the first \
                       that came within the threshold (the closest if none did).",
-            choices: &["Closest", "Farthest", "Average", "First within threshold"],
-        },
-        EscapeParamDef {
-            name: "threshold",
-            display_name: "Threshold",
-            default: 0.1,
-            min: 0.0001,
-            max: 4.0,
-            tooltip: "How close an iterate must come to count as caught, for the \
+            Spec::choice(0, &["Closest", "Farthest", "Average", "First within threshold"]),
+        ),
+        ParamDef::new(
+            "threshold",
+            "Threshold",
+            "How close an iterate must come to count as caught, for the \
                       First reduction.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "radius",
-            display_name: "Radius",
-            default: 1.0,
-            min: 0.001,
-            max: 4.0,
-            tooltip: "The size of the ring, box and diamond, and the line's offset \
+            Spec::float(0.1, 0.0001, 4.0),
+        ),
+        ParamDef::new(
+            "radius",
+            "Radius",
+            "The size of the ring, box and diamond, and the line's offset \
                       from the centre.",
-            choices: &[],
-        },
+            Spec::float(1.0, 0.001, 4.0),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -285,29 +253,23 @@ pub static ORBIT_AVERAGE: ColoringDef = ColoringDef {
     display_name: "Orbit Average",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette distance per unit of averaged trap value.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "deband",
-            display_name: "Deband",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Blends the mean with and without the orbit's last term by how \
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of averaged trap value.",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
+        ParamDef::new(
+            "deband",
+            "Deband",
+            "Blends the mean with and without the orbit's last term by how \
                       far through its last step the orbit escaped, so the colour \
                       moves smoothly across an iteration boundary instead of \
                       stepping (Ultra Fractal's smoothing of its Triangle \
                       Inequality Average). Works with the escape radius: the \
                       larger the bailout, the more terms there are to blend.",
-            choices: &["Off", "On"],
-        },
+            Spec::choice(0, &["Off", "On"]),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -335,38 +297,29 @@ pub static STRIPE_AVERAGE: ColoringDef = ColoringDef {
     display_name: "Stripe Average",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "density",
-            display_name: "Stripe density",
-            default: 4.0,
-            min: 0.5,
-            max: 32.0,
-            tooltip: "Angular frequency of the stripes (sin(density * arg z)).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette distance per unit of averaged stripe value.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "deband",
-            display_name: "Deband",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Blends the mean with and without the orbit's last term by how \
+        ParamDef::new(
+            "density",
+            "Stripe density",
+            "Angular frequency of the stripes (sin(density * arg z)).",
+            Spec::float(4.0, 0.5, 32.0),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of averaged stripe value.",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
+        ParamDef::new(
+            "deband",
+            "Deband",
+            "Blends the mean with and without the orbit's last term by how \
                       far through its last step the orbit escaped, so the colour \
                       moves smoothly across an iteration boundary instead of \
                       stepping (Ultra Fractal's smoothing of its Triangle \
                       Inequality Average). Works with the escape radius: the \
                       larger the bailout, the more terms there are to blend.",
-            choices: &["Off", "On"],
-        },
+            Spec::choice(0, &["Off", "On"]),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -403,42 +356,33 @@ pub static MAGNITUDE_AVERAGE: ColoringDef = ColoringDef {
     display_name: "Magnitude Average",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 100.0,
-            tooltip: "Palette distance per unit of averaged |z| (above the offset).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "offset",
-            display_name: "Offset",
-            default: 0.0,
-            min: -10.0,
-            max: 10.0,
-            tooltip: "Baseline subtracted from the mean before scaling. A Ducks \
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of averaged |z| (above the offset).",
+            Spec::float(1.0, 0.01, 100.0),
+        ),
+        ParamDef::new(
+            "offset",
+            "Offset",
+            "Baseline subtracted from the mean before scaling. A Ducks \
                       julia field can span only ~0.2 around a large mean -- offset \
                       to the field's floor, then scale up, to stretch that range \
                       across the palette (the reference images normalize contrast \
                       this way).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "deband",
-            display_name: "Deband",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Blends the mean with and without the orbit's last term by how \
+            Spec::float(0.0, -10.0, 10.0),
+        ),
+        ParamDef::new(
+            "deband",
+            "Deband",
+            "Blends the mean with and without the orbit's last term by how \
                       far through its last step the orbit escaped, so the colour \
                       moves smoothly across an iteration boundary instead of \
                       stepping (Ultra Fractal's smoothing of its Triangle \
                       Inequality Average). Works with the escape radius: the \
                       larger the bailout, the more terms there are to blend.",
-            choices: &["Off", "On"],
-        },
+            Spec::choice(0, &["Off", "On"]),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -466,42 +410,30 @@ pub static ROOT_BASIN: ColoringDef = ColoringDef {
     display_name: "Root Basin",
     features: &[ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "roots",
-            display_name: "Root count",
-            default: 3.0,
-            min: 2.0,
-            max: 12.0,
-            tooltip: "Number of basins to bucket the final angle into - match the formula's power.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "speed",
-            display_name: "Speed shading",
-            default: 0.01,
-            min: 0.0,
-            max: 0.2,
-            tooltip: "Palette offset per iteration of convergence time, shading within each basin.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "key",
-            display_name: "Basin key",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "0: Angle buckets - the true basin index, but only when the roots are evenly spaced on a circle (z^p - 1). 1: General - folds in log|z| so roots that share an angle still separate; use it for every other function.",
-            choices: &["Angle buckets", "General"],
-        },
-        EscapeParamDef {
-            name: "key_scale",
-            display_name: "Key scale",
-            default: 0.25,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "How strongly the General key weighs log|z| against the angle. Tune until neighbouring basins stop sharing a colour.",
-            choices: &[],
-        },
+        ParamDef::new(
+            "roots",
+            "Root count",
+            "Number of basins to bucket the final angle into - match the formula's power.",
+            Spec::float(3.0, 2.0, 12.0),
+        ),
+        ParamDef::new(
+            "speed",
+            "Speed shading",
+            "Palette offset per iteration of convergence time, shading within each basin.",
+            Spec::float(0.01, 0.0, 0.2),
+        ),
+        ParamDef::new(
+            "key",
+            "Basin key",
+            "0: Angle buckets - the true basin index, but only when the roots are evenly spaced on a circle (z^p - 1). 1: General - folds in log|z| so roots that share an angle still separate; use it for every other function.",
+            Spec::choice(0, &["Angle buckets", "General"]),
+        ),
+        ParamDef::new(
+            "key_scale",
+            "Key scale",
+            "How strongly the General key weighs log|z| against the angle. Tune until neighbouring basins stop sharing a colour.",
+            Spec::float(0.25, -2.0, 2.0),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -565,29 +497,23 @@ pub static TRIANGLE_INEQUALITY: ColoringDef = ColoringDef {
     display_name: "Triangle Inequality",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette distance per unit of averaged TIA value.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "deband",
-            display_name: "Deband",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Blends the mean with and without the orbit's last term by how \
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of averaged TIA value.",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
+        ParamDef::new(
+            "deband",
+            "Deband",
+            "Blends the mean with and without the orbit's last term by how \
                       far through its last step the orbit escaped, so the colour \
                       moves smoothly across an iteration boundary instead of \
                       stepping (Ultra Fractal's smoothing of its Triangle \
                       Inequality Average). Works with the escape radius: the \
                       larger the bailout, the more terms there are to blend.",
-            choices: &["Off", "On"],
-        },
+            Spec::choice(0, &["Off", "On"]),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -625,24 +551,18 @@ pub static PERIOD: ColoringDef = ColoringDef {
     display_name: "Period",
     features: &[ColoringFeature::NeedsPeriod, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Period scale",
-            default: 0.1,
-            min: 0.000001,
-            max: 1.0,
-            tooltip: "Palette distance per unit of detected cycle length.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "escape_scale",
-            display_name: "Escape scale",
-            default: 0.02,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Palette distance per iteration for pixels that escape instead of cycling.",
-            choices: &[],
-        },
+        ParamDef::new(
+            "scale",
+            "Period scale",
+            "Palette distance per unit of detected cycle length.",
+            Spec::float(0.1, 0.000001, 1.0).log(),
+        ),
+        ParamDef::new(
+            "escape_scale",
+            "Escape scale",
+            "Palette distance per iteration for pixels that escape instead of cycling.",
+            Spec::float(0.02, 0.0, 1.0),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -688,40 +608,31 @@ pub static DISTANCE_ESTIMATE: ColoringDef = ColoringDef {
     display_name: "Distance Estimate",
     features: &[ColoringFeature::NeedsDerivative],
     parameters: &[
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 0.05,
-            min: 0.000001,
-            max: 1.0,
-            tooltip: "Palette distance per doubling of boundary distance (Log), \
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per doubling of boundary distance (Log), \
                       or per unit of it (Linear, Square root).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "mapping",
-            display_name: "Mapping",
-            default: 0.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "How the distance becomes a palette position (Kalles \
+            Spec::float(0.05, 0.000001, 1.0).log(),
+        ),
+        ParamDef::new(
+            "mapping",
+            "Mapping",
+            "How the distance becomes a palette position (Kalles \
                       Fraktaler's distance colourings): Log, equal steps per \
                       doubling; Linear, the distance itself; Square root, between \
                       the two.",
-            choices: &["Log", "Linear", "Square root"],
-        },
-        EscapeParamDef {
-            name: "units",
-            display_name: "Units",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Measure the distance in the plane, or in pixels. In pixels \
+            Spec::choice(0, &["Log", "Linear", "Square root"]),
+        ),
+        ParamDef::new(
+            "units",
+            "Units",
+            "Measure the distance in the plane, or in pixels. In pixels \
                       the boundary is always about one pixel away, so the \
                       colours hold still as you zoom (as Fraktaler 3 and Kalles \
                       Fraktaler draw it).",
-            choices: &["Plane", "Pixels"],
-        },
+            Spec::choice(0, &["Plane", "Pixels"]),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -803,36 +714,27 @@ pub static NORMAL_MAP: ColoringDef = ColoringDef {
     display_name: "Normal Map (3D relief)",
     features: &[ColoringFeature::NeedsDerivative, ColoringFeature::Bounded],
     parameters: &[
-        EscapeParamDef {
-            name: "angle",
-            display_name: "Light angle",
-            default: 0.125,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Direction the light comes from, in TURNS (0.125 = 45°), \
+        ParamDef::new(
+            "angle",
+            "Light angle",
+            "Direction the light comes from, in TURNS (0.125 = 45°), \
                       measured counter-clockwise from the +x axis.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "height",
-            display_name: "Light height",
-            default: 1.5,
-            min: 0.0,
-            max: 8.0,
-            tooltip: "How high the light sits above the plane. Low values rake \
+            Spec::float(0.125, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "height",
+            "Light height",
+            "How high the light sits above the plane. Low values rake \
                       across the surface and exaggerate relief; high values \
                       flatten it toward even illumination.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette distance per unit of reflection (reflection runs 0..1).",
-            choices: &[],
-        },
+            Spec::float(1.5, 0.0, 8.0),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of reflection (reflection runs 0..1).",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -937,37 +839,28 @@ pub static POSITION_MAP: ColoringDef = ColoringDef {
         ColoringFeature::Bounded,
     ],
     parameters: &[
-        EscapeParamDef {
-            name: "freq_x",
-            display_name: "Frequency X",
-            default: 3.0,
-            min: 0.05,
-            max: 64.0,
-            tooltip: "Horizontal frequency of the projected colour source, in \
+        ParamDef::new(
+            "freq_x",
+            "Frequency X",
+            "Horizontal frequency of the projected colour source, in \
                       cycles per unit of the folded plane.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "freq_y",
-            display_name: "Frequency Y",
-            default: 2.0,
-            min: 0.05,
-            max: 64.0,
-            tooltip: "Vertical frequency of the projected colour source.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "address_mix",
-            display_name: "Address mix",
-            default: 0.0,
-            min: 0.0,
-            max: 8.0,
-            tooltip: "How strongly the orbit's branch address (which \
+            Spec::float(3.0, 0.05, 64.0),
+        ),
+        ParamDef::new(
+            "freq_y",
+            "Frequency Y",
+            "Vertical frequency of the projected colour source.",
+            Spec::float(2.0, 0.05, 64.0),
+        ),
+        ParamDef::new(
+            "address_mix",
+            "Address mix",
+            "How strongly the orbit's branch address (which \
                       iterations moved the point) shifts the palette. This is \
                       the channel that keeps detail alive under deep zoom; 0 \
                       is the pure projected source.",
-            choices: &[],
-        },
+            Spec::float(0.0, 0.0, 8.0),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -1034,58 +927,43 @@ pub static SPHERE_AVERAGE: ColoringDef = ColoringDef {
     display_name: "Sphere Average",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "target_re",
-            display_name: "Target (re)",
-            default: 0.0,
-            min: -8.0,
-            max: 8.0,
-            tooltip: "The sphere point distances are measured to, as a complex number. \
+        ParamDef::new(
+            "target_re",
+            "Target (re)",
+            "The sphere point distances are measured to, as a complex number. \
                       The origin and 1 are the usual choices; a point ON the attractor \
                       picks out where the orbit spends its time.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "target_im",
-            display_name: "Target (im)",
-            default: 0.0,
-            min: -8.0,
-            max: 8.0,
-            tooltip: "Imaginary part of the target point.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "at_infinity",
-            display_name: "Target infinity",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Measure to the sphere's north pole instead: d = 2/sqrt(1+|z|^2). \
+            Spec::float(0.0, -8.0, 8.0),
+        ),
+        ParamDef::new(
+            "target_im",
+            "Target (im)",
+            "Imaginary part of the target point.",
+            Spec::float(0.0, -8.0, 8.0),
+        ),
+        ParamDef::new(
+            "at_infinity",
+            "Target infinity",
+            "Measure to the sphere's north pole instead: d = 2/sqrt(1+|z|^2). \
                       Infinity is an ordinary point in the chordal metric, so this is a \
                       legitimate target rather than a special case.",
-            choices: &["Origin", "Infinity (north pole)"],
-        },
-        EscapeParamDef {
-            name: "stride",
-            display_name: "Iterate stride",
-            default: 1.0,
-            min: 1.0,
-            max: 64.0,
-            tooltip: "Average over every nth orbit point only, which shows the dynamics \
+            Spec::choice(0, &["Origin", "Infinity (north pole)"]),
+        ),
+        ParamDef::new(
+            "stride",
+            "Iterate stride",
+            "Average over every nth orbit point only, which shows the dynamics \
                       of f^n rather than f. 1 is the plain orbit.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 64.0,
-            tooltip: "Palette distance per unit of mean chordal distance. The metric is \
+            Spec::float(1.0, 1.0, 64.0),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of mean chordal distance. The metric is \
                       bounded by 2, so the whole useful range lands inside one palette \
                       turn at 1.0.",
-            choices: &[],
-        },
+            Spec::float(1.0, 0.01, 64.0),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -1131,43 +1009,34 @@ pub static POSITION_AVERAGE: ColoringDef = ColoringDef {
     display_name: "Position Average",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "mode",
-            display_name: "Component",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "0: angle of the average position (carries the fold seams), \
+        ParamDef::new(
+            "mode",
+            "Component",
+            "0: angle of the average position (carries the fold seams), \
                       1: its distance from the origin.",
-            choices: &["Angle", "Distance"],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 64.0,
-            tooltip: "Palette distance per unit. A whole turn of the angle \
+            Spec::choice(0, &["Angle", "Distance"]),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit. A whole turn of the angle \
                       spans the palette once at 1.0, but the average position \
                       often sweeps only a narrow arc across a given view -- \
                       a twentieth of a turn is typical on Origami -- so \
                       raising this is how the structure becomes visible.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "deband",
-            display_name: "Deband",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Blends the mean with and without the orbit's last term by how \
+            Spec::float(1.0, 0.01, 64.0),
+        ),
+        ParamDef::new(
+            "deband",
+            "Deband",
+            "Blends the mean with and without the orbit's last term by how \
                       far through its last step the orbit escaped, so the colour \
                       moves smoothly across an iteration boundary instead of \
                       stepping (Ultra Fractal's smoothing of its Triangle \
                       Inequality Average). Works with the escape radius: the \
                       larger the bailout, the more terms there are to blend.",
-            choices: &["Off", "On"],
-        },
+            Spec::choice(0, &["Off", "On"]),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -1211,27 +1080,21 @@ pub static CURVATURE_AVERAGE: ColoringDef = ColoringDef {
     display_name: "Curvature Average",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette distance per unit of averaged turn (a full reversal is 1).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "deband",
-            display_name: "Deband",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Blends the mean with and without the orbit's last term by how \
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of averaged turn (a full reversal is 1).",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
+        ParamDef::new(
+            "deband",
+            "Deband",
+            "Blends the mean with and without the orbit's last term by how \
                       far through its last step the orbit escaped, so the colour \
                       moves smoothly across an iteration boundary instead of \
                       stepping.",
-            choices: &["Off", "On"],
-        },
+            Spec::choice(0, &["Off", "On"]),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -1281,27 +1144,21 @@ pub static VELOCITY: ColoringDef = ColoringDef {
     display_name: "Velocity",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 0.25,
-            min: 0.001,
-            max: 20.0,
-            tooltip: "Palette distance per unit of averaged step length.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "deband",
-            display_name: "Deband",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Blends the mean with and without the orbit's last term by how \
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of averaged step length.",
+            Spec::float(0.25, 0.001, 20.0),
+        ),
+        ParamDef::new(
+            "deband",
+            "Deband",
+            "Blends the mean with and without the orbit's last term by how \
                       far through its last step the orbit escaped, so the colour \
                       moves smoothly across an iteration boundary instead of \
                       stepping.",
-            choices: &["Off", "On"],
-        },
+            Spec::choice(0, &["Off", "On"]),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -1330,36 +1187,27 @@ pub static THREADS: ColoringDef = ColoringDef {
     display_name: "Threads",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "width",
-            display_name: "Thread width",
-            default: 0.1,
-            min: 0.005,
-            max: 2.0,
-            tooltip: "How far from an axis an iterate still counts: the w of exp(-D^2 / w^2).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette distance per unit of averaged thread value.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "deband",
-            display_name: "Deband",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Blends the mean with and without the orbit's last term by how \
+        ParamDef::new(
+            "width",
+            "Thread width",
+            "How far from an axis an iterate still counts: the w of exp(-D^2 / w^2).",
+            Spec::float(0.1, 0.005, 2.0),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of averaged thread value.",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
+        ParamDef::new(
+            "deband",
+            "Deband",
+            "Blends the mean with and without the orbit's last term by how \
                       far through its last step the orbit escaped, so the colour \
                       moves smoothly across an iteration boundary instead of \
                       stepping.",
-            choices: &["Off", "On"],
-        },
+            Spec::choice(0, &["Off", "On"]),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -1391,26 +1239,20 @@ pub static EXPONENTIAL_SMOOTHING: ColoringDef = ColoringDef {
     display_name: "Exponential Smoothing",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "mode",
-            display_name: "Orbits",
-            default: 2.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "Which sum to keep: diverging orbits (exp(-|z|)), converging \
+        ParamDef::new(
+            "mode",
+            "Orbits",
+            "Which sum to keep: diverging orbits (exp(-|z|)), converging \
                       ones (exp(-1/|z - z_prev|)), or both, for formulas that do \
                       either.",
-            choices: &["Diverging", "Converging", "Both"],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 0.5,
-            min: 0.001,
-            max: 20.0,
-            tooltip: "Palette distance per unit of the sum.",
-            choices: &[],
-        },
+            Spec::choice(2, &["Diverging", "Converging", "Both"]),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of the sum.",
+            Spec::float(0.5, 0.001, 20.0),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -1446,25 +1288,19 @@ pub static DECOMPOSITION: ColoringDef = ColoringDef {
     display_name: "Decomposition",
     features: &[],
     parameters: &[
-        EscapeParamDef {
-            name: "sectors",
-            display_name: "Sectors",
-            default: 0.0,
-            min: 0.0,
-            max: 16.0,
-            tooltip: "0 draws the angle itself; 2 or more cuts it into that many \
+        ParamDef::new(
+            "sectors",
+            "Sectors",
+            "0 draws the angle itself; 2 or more cuts it into that many \
                       bands -- 2 is binary decomposition.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette turns per full turn of the angle.",
-            choices: &[],
-        },
+            Spec::float(0.0, 0.0, 16.0),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette turns per full turn of the angle.",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -1491,25 +1327,19 @@ pub static BASIC: ColoringDef = ColoringDef {
     display_name: "Basic",
     features: &[],
     parameters: &[
-        EscapeParamDef {
-            name: "part",
-            display_name: "Part",
-            default: 0.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "Which part of the escaped z: its real part, its imaginary \
+        ParamDef::new(
+            "part",
+            "Part",
+            "Which part of the escaped z: its real part, its imaginary \
                       part, or their sum.",
-            choices: &["Real", "Imaginary", "Sum"],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette distance per unit of 0.05 (4 + v).",
-            choices: &[],
-        },
+            Spec::choice(0, &["Real", "Imaginary", "Sum"]),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of 0.05 (4 + v).",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -1544,26 +1374,20 @@ pub static GAUSSIAN_INTEGER: ColoringDef = ColoringDef {
     display_name: "Gaussian Integer",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "reduction",
-            display_name: "Reduction",
-            default: 0.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "How the orbit's distances become one value: the smallest, \
+        ParamDef::new(
+            "reduction",
+            "Reduction",
+            "How the orbit's distances become one value: the smallest, \
                       their mean, the largest, or the direction from the lattice \
                       point at the smallest (techmatt's angle at minimum).",
-            choices: &["Smallest", "Mean", "Largest", "Angle at smallest"],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette distance per unit of the normalised value.",
-            choices: &[],
-        },
+            Spec::choice(0, &["Smallest", "Mean", "Largest", "Angle at smallest"]),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette distance per unit of the normalised value.",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -1613,26 +1437,20 @@ pub static EXTERNAL_RAYS: ColoringDef = ColoringDef {
     display_name: "External Rays",
     features: &[ColoringFeature::Bounded],
     parameters: &[
-        EscapeParamDef {
-            name: "width",
-            display_name: "Width",
-            default: 0.05,
-            min: 0.001,
-            max: 0.5,
-            tooltip: "Half the width of a ray, in turns of the escape angle, \
+        ParamDef::new(
+            "width",
+            "Width",
+            "Half the width of a ray, in turns of the escape angle, \
                       where the orbit has just escaped (Fraktaler 3 draws 0.05).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "count",
-            display_name: "Rays",
-            default: 1.0,
-            min: 1.0,
-            max: 64.0,
-            tooltip: "How many rays per turn of the angle: 1 is the one through \
+            Spec::float(0.05, 0.001, 0.5),
+        ),
+        ParamDef::new(
+            "count",
+            "Rays",
+            "How many rays per turn of the angle: 1 is the one through \
                       angle 0, 2 adds the one through a half turn, and so on.",
-            choices: &[],
-        },
+            Spec::float(1.0, 1.0, 64.0),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -1673,16 +1491,13 @@ pub static RAINBOW_FRINGE: ColoringDef = ColoringDef {
     name: "rainbow_fringe",
     display_name: "Rainbow Fringe",
     features: &[ColoringFeature::NeedsDerivative, ColoringFeature::DirectColor],
-    parameters: &[EscapeParamDef {
-        name: "gamma",
-        display_name: "Gamma",
-        default: 2.0,
-        min: 0.1,
-        max: 10.0,
-        tooltip: "The colour is raised to 1/gamma: higher lifts the fringe's \
+    parameters: &[ParamDef::new(
+        "gamma",
+        "Gamma",
+        "The colour is raised to 1/gamma: higher lifts the fringe's \
                   dark side toward the white. Fraktaler 3's example uses 2.",
-        choices: &[],
-    }],
+        Spec::float(2.0, 0.1, 10.0),
+    )],
     wgsl: r#"
 // Fraktaler 3's distance estimate, in output pixels (dz is per render
 // pixel).
@@ -1773,47 +1588,35 @@ pub static INFINITE_WAVES: ColoringDef = ColoringDef {
     display_name: "Infinite Waves",
     features: &[ColoringFeature::DirectColor],
     parameters: &[
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.0001,
-            max: 100.0,
-            tooltip: "Multiplies the iteration value before the waves read it \
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Multiplies the iteration value before the waves read it \
                       (Kalles Fraktaler's 1 / Iteration Division).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "offset",
-            display_name: "Offset",
-            default: 0.0,
-            min: -10000.0,
-            max: 10000.0,
-            tooltip: "Added to the iteration value, which shifts every wave's \
+            Spec::float(1.0, 0.0001, 100.0).log(),
+        ),
+        ParamDef::new(
+            "offset",
+            "Offset",
+            "Added to the iteration value, which shifts every wave's \
                       phase (Kalles Fraktaler's Color Offset).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "smooth",
-            display_name: "Waves",
-            default: 1.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Smooth follows the continuous iteration value; Stepped \
+            Spec::float(0.0, -10000.0, 10000.0),
+        ),
+        ParamDef::new(
+            "smooth",
+            "Waves",
+            "Smooth follows the continuous iteration value; Stepped \
                       takes it at whole iterations, so every band is flat.",
-            choices: &["Stepped", "Smooth"],
-        },
-        EscapeParamDef {
-            name: "blend",
-            display_name: "Palette",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Off draws the waves alone. Half mixes the palette in \
+            Spec::choice(1, &["Stepped", "Smooth"]),
+        ),
+        ParamDef::new(
+            "blend",
+            "Palette",
+            "Off draws the waves alone. Half mixes the palette in \
                       50/50, a cycle per 1024 of the iteration value, as \
                       Kalles Fraktaler's Blend does.",
-            choices: &["Off", "Half"],
-        },
+            Spec::choice(0, &["Off", "Half"]),
+        ),
         wave_period(0, 100.0),
         wave_channel(0, 0.0),
         wave_period(1, 111.0),
@@ -1873,35 +1676,29 @@ fn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {
     pick_params: &[],
 };
 
-const fn wave_period(i: usize, default: f32) -> EscapeParamDef {
+const fn wave_period(i: usize, default: f32) -> ParamDef {
     const NAMES: [&str; 6] = ["wave1", "wave2", "wave3", "wave4", "wave5", "wave6"];
     const LABELS: [&str; 6] = ["Wave 1", "Wave 2", "Wave 3", "Wave 4", "Wave 5", "Wave 6"];
-    EscapeParamDef {
-        name: NAMES[i],
-        display_name: LABELS[i],
-        default,
-        min: -100.0,
-        max: 100000.0,
-        tooltip: "The wave's period in iterations (a full cycle is twice \
+    ParamDef::new(
+        NAMES[i],
+        LABELS[i],
+        "The wave's period in iterations (a full cycle is twice \
                   it). Negative is a constant, -period/100. 0 is no wave.",
-        choices: &[],
-    }
+        Spec::float(default, -100.0, 100000.0),
+    )
 }
 
-const fn wave_channel(i: usize, default: f32) -> EscapeParamDef {
+const fn wave_channel(i: usize, default: f32) -> ParamDef {
     const NAMES: [&str; 6] = ["wave1_channel", "wave2_channel", "wave3_channel", "wave4_channel", "wave5_channel", "wave6_channel"];
     const LABELS: [&str; 6] = ["Wave 1 drives", "Wave 2 drives", "Wave 3 drives", "Wave 4 drives", "Wave 5 drives", "Wave 6 drives"];
-    EscapeParamDef {
-        name: NAMES[i],
-        display_name: LABELS[i],
-        default,
-        min: 0.0,
-        max: 2.0,
-        tooltip: "Which part of the colour the wave drives. The waves on \
+    ParamDef::new(
+        NAMES[i],
+        LABELS[i],
+        "Which part of the colour the wave drives. The waves on \
                   each are averaged; one with none is 0 (no saturation \
                   wave is grey).",
-        choices: &["Hue", "Saturation", "Brightness"],
-    }
+        Spec::choice((default) as usize, &["Hue", "Saturation", "Brightness"]),
+    )
 }
 
 /// Itinerary (survey C8), from techmatt's engine (`iterate.rs`
@@ -1932,48 +1729,36 @@ pub static ITINERARY: ColoringDef = ColoringDef {
     display_name: "Itinerary",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior],
     parameters: &[
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 1.0,
-            min: 0.001,
-            max: 100.0,
-            tooltip: "Palette turns across the whole address range, 0 to 1.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "sectors",
-            display_name: "Sectors",
-            default: 4.0,
-            min: 2.0,
-            max: 16.0,
-            tooltip: "How many equal angular sectors the plane is cut into: \
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "Palette turns across the whole address range, 0 to 1.",
+            Spec::float(1.0, 0.001, 100.0),
+        ),
+        ParamDef::new(
+            "sectors",
+            "Sectors",
+            "How many equal angular sectors the plane is cut into: \
                       each step's sector is the next digit of the address, in \
                       base sectors.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "depth",
-            display_name: "Symbols",
-            default: 12.0,
-            min: 1.0,
-            max: 24.0,
-            tooltip: "How many symbols the address holds. f32 holds 24 bits: \
+            Spec::float(4.0, 2.0, 16.0),
+        ),
+        ParamDef::new(
+            "depth",
+            "Symbols",
+            "How many symbols the address holds. f32 holds 24 bits: \
                       12 symbols at 4 sectors, 8 at 8. Past that the deepest \
                       symbols round.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "window",
-            display_name: "Window",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Head: the first symbols the orbit spells. Tail: the last \
+            Spec::float(12.0, 1.0, 24.0),
+        ),
+        ParamDef::new(
+            "window",
+            "Window",
+            "Head: the first symbols the orbit spells. Tail: the last \
                       ones before it stopped, which puts the structure where \
                       the orbits are long.",
-            choices: &["Head", "Tail"],
-        },
+            Spec::choice(0, &["Head", "Tail"]),
+        ),
     ],
     wgsl: r#"
 fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
@@ -2063,91 +1848,64 @@ pub static VOC_TRAPS: ColoringDef = ColoringDef {
     display_name: "Visions of Chaos Traps",
     features: &[ColoringFeature::NeedsOrbitAccum, ColoringFeature::ColorsInterior, ColoringFeature::DirectColor],
     parameters: &[
-        EscapeParamDef {
-            name: "shape",
-            display_name: "Trap",
-            default: 0.0,
-            min: 0.0,
-            max: 4.0,
-            tooltip: "Which of Visions of Chaos's orbit traps: circles, crosses, \
+        ParamDef::new(
+            "shape",
+            "Trap",
+            "Which of Visions of Chaos's orbit traps: circles, crosses, \
                       rings, squares or stalks.",
-            choices: &["Circles", "Crosses", "Rings", "Squares", "Stalks"],
-        },
-        EscapeParamDef {
-            name: "trap_x",
-            display_name: "Trap X",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "The trap's centre, as Visions of Chaos names it. Circles \
+            Spec::choice(0, &["Circles", "Crosses", "Rings", "Squares", "Stalks"]),
+        ),
+        ParamDef::new(
+            "trap_x",
+            "Trap X",
+            "The trap's centre, as Visions of Chaos names it. Circles \
                       and rings read it with X and Y swapped, as the original \
                       does, so the default puts them at (0.5, 0) and squares at \
                       (0, 0.5). Crosses and stalks do not use it.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "trap_y",
-            display_name: "Trap Y",
-            default: 0.5,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "The trap's centre, as Visions of Chaos names it (see Trap X).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "circle_size",
-            display_name: "Circle radius",
-            default: 0.5,
-            min: 0.001,
-            max: 4.0,
-            tooltip: "Circles: how far from the centre an iterate is caught.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "cross_size",
-            display_name: "Cross width",
-            default: 0.05,
-            min: 0.001,
-            max: 4.0,
-            tooltip: "Crosses: how near an axis an iterate is caught.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "ring_min",
-            display_name: "Ring inner radius",
-            default: 0.4,
-            min: 0.0,
-            max: 4.0,
-            tooltip: "Rings: the inner edge of the band that catches.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "ring_max",
-            display_name: "Ring outer radius",
-            default: 0.5,
-            min: 0.001,
-            max: 4.0,
-            tooltip: "Rings: the outer edge of the band that catches.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "square_size",
-            display_name: "Square half-size",
-            default: 0.4,
-            min: 0.001,
-            max: 4.0,
-            tooltip: "Squares: half the side of the square that catches.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "stalk_radius",
-            display_name: "Stalk width",
-            default: 0.05,
-            min: 0.001,
-            max: 4.0,
-            tooltip: "Stalks: how near |z| must come to |c| to be caught.",
-            choices: &[],
-        },
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "trap_y",
+            "Trap Y",
+            "The trap's centre, as Visions of Chaos names it (see Trap X).",
+            Spec::float(0.5, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "circle_size",
+            "Circle radius",
+            "Circles: how far from the centre an iterate is caught.",
+            Spec::float(0.5, 0.001, 4.0),
+        ),
+        ParamDef::new(
+            "cross_size",
+            "Cross width",
+            "Crosses: how near an axis an iterate is caught.",
+            Spec::float(0.05, 0.001, 4.0),
+        ),
+        ParamDef::new(
+            "ring_min",
+            "Ring inner radius",
+            "Rings: the inner edge of the band that catches.",
+            Spec::float(0.4, 0.0, 4.0),
+        ),
+        ParamDef::new(
+            "ring_max",
+            "Ring outer radius",
+            "Rings: the outer edge of the band that catches.",
+            Spec::float(0.5, 0.001, 4.0),
+        ),
+        ParamDef::new(
+            "square_size",
+            "Square half-size",
+            "Squares: half the side of the square that catches.",
+            Spec::float(0.4, 0.001, 4.0),
+        ),
+        ParamDef::new(
+            "stalk_radius",
+            "Stalk width",
+            "Stalks: how near |z| must come to |c| to be caught.",
+            Spec::float(0.05, 0.001, 4.0),
+        ),
     ],
     wgsl: r#"
 // Caught: the grey. Escaped uncaught: Visions of Chaos's smooth palette
@@ -2301,93 +2059,69 @@ pub static DIRECT_TRAPS: ColoringDef = ColoringDef {
         ColoringFeature::PaletteInLoop,
     ],
     parameters: &[
-        EscapeParamDef {
-            name: "shape",
-            display_name: "Trap shape",
-            default: 1.0,
-            min: 0.0,
-            max: 7.0,
-            tooltip: "The shape each iterate is measured against, at the origin: \
+        ParamDef::new(
+            "shape",
+            "Trap shape",
+            "The shape each iterate is measured against, at the origin: \
                       a point (beads), a ring of the given radius (overlapping \
                       scales), the axes' cross, the cross with its diagonals, \
                       diamond and square contours, a four-pointed astroid, or the \
                       real axis alone (horizontal bands).",
-            choices: &["Point", "Ring", "Cross", "Hypercross", "Diamond", "Box", "Astroid", "Lines"],
-        },
-        EscapeParamDef {
-            name: "radius",
-            display_name: "Ring radius",
-            default: 1.0,
-            min: 0.01,
-            max: 4.0,
-            tooltip: "The ring's radius (the other shapes do not use it).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "threshold",
-            display_name: "Threshold",
-            default: 0.0597,
-            min: 0.0,
-            max: 4.0,
-            tooltip: "How near an iterate must come to paint. 0 takes the shape's \
+            Spec::choice(1, &["Point", "Ring", "Cross", "Hypercross", "Diamond", "Box", "Astroid", "Lines"]),
+        ),
+        ParamDef::new(
+            "radius",
+            "Ring radius",
+            "The ring's radius (the other shapes do not use it).",
+            Spec::float(1.0, 0.01, 4.0),
+        ),
+        ParamDef::new(
+            "threshold",
+            "Threshold",
+            "How near an iterate must come to paint. 0 takes the shape's \
                       own default, calibrated so every shape paints about the \
                       same share of a frame: point 0.6, ring 0.078, cross 0.1, \
                       hypercross 0.074, diamond 0.8, box 0.55, astroid 1.06, \
                       lines 0.127.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "opacity",
-            display_name: "Opacity",
-            default: 0.45,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How strongly each near miss paints, before its feathering \
+            Spec::float(0.0597, 0.0, 4.0),
+        ),
+        ParamDef::new(
+            "opacity",
+            "Opacity",
+            "How strongly each near miss paints, before its feathering \
                       by closeness. A Screen cross is held to 0.15, where it \
                       would otherwise blow out to white.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "blend",
-            display_name: "Blend",
-            default: 2.0,
-            min: 0.0,
-            max: 5.0,
-            tooltip: "How each sample merges with the colour so far: Screen \
+            Spec::float(0.45, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "blend",
+            "Blend",
+            "How each sample merges with the colour so far: Screen \
                       brightens (start from black), Multiply darkens (start from \
                       white), Overlay does both, Min clamps, Add lifts by the same \
                       amount everywhere, Normal replaces.",
-            choices: &["Normal", "Multiply", "Screen", "Overlay", "Min", "Add"],
-        },
-        EscapeParamDef {
-            name: "order",
-            display_name: "Order",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Bottom up: each near miss goes over the ones before it. Top \
+            Spec::choice(2, &["Normal", "Multiply", "Screen", "Overlay", "Min", "Add"]),
+        ),
+        ParamDef::new(
+            "order",
+            "Order",
+            "Bottom up: each near miss goes over the ones before it. Top \
                       down: the earliest stays on top.",
-            choices: &["Bottom up", "Top down"],
-        },
-        EscapeParamDef {
-            name: "start",
-            display_name: "Start",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "The colour the samples land on, where no near miss paints.",
-            choices: &["Black", "White"],
-        },
-        EscapeParamDef {
-            name: "transform",
-            display_name: "Curve",
-            default: 0.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "A curve on the closeness before it picks the sample and its \
+            Spec::choice(0, &["Bottom up", "Top down"]),
+        ),
+        ParamDef::new(
+            "start",
+            "Start",
+            "The colour the samples land on, where no near miss paints.",
+            Spec::choice(0, &["Black", "White"]),
+        ),
+        ParamDef::new(
+            "transform",
+            "Curve",
+            "A curve on the closeness before it picks the sample and its \
                       feathering.",
-            choices: &["Linear", "Square root", "Log", "S-curve"],
-        },
+            Spec::choice(0, &["Linear", "Square root", "Log", "S-curve"]),
+        ),
     ],
     wgsl: r#"
 // The value the relief and auto contrast read: the colour's luminance.
@@ -2553,100 +2287,70 @@ pub static IMAGE_TRAP: ColoringDef = ColoringDef {
         ColoringFeature::SkipsEscapingIterate,
     ],
     parameters: &[
-        EscapeParamDef {
-            name: "trap_re",
-            display_name: "Trap center (re)",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Where the image sits in the complex plane: its centre.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "trap_im",
-            display_name: "Trap center (im)",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Where the image sits in the complex plane: its centre.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "trap_scale",
-            display_name: "Trap scale",
-            default: 1.0,
-            min: 0.01,
-            max: 10.0,
-            tooltip: "The image's size. At 1 it spans -1 to 1; smaller shrinks it.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "trap_rotation",
-            display_name: "Rotation",
-            default: 0.0,
-            min: -180.0,
-            max: 180.0,
-            tooltip: "The image's angle, in degrees.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "trap_aspect",
-            display_name: "Aspect ratio",
-            default: 1.0,
-            min: 0.1,
-            max: 10.0,
-            tooltip: "Squeezes the image vertically above 1, stretches it below.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "trap_skew",
-            display_name: "Skew",
-            default: 0.0,
-            min: -80.0,
-            max: 80.0,
-            tooltip: "Slants the image's vertical axis, in degrees.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "proportions",
-            display_name: "Proportions",
-            default: 1.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Keep the image's own proportions, or stretch it to a square.",
-            choices: &["Stretch to square", "Keep proportions"],
-        },
-        EscapeParamDef {
-            name: "opacity",
-            display_name: "Trap merge opacity",
-            default: 0.2,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How strongly each iterate's colour merges. Low values stack \
+        ParamDef::new(
+            "trap_re",
+            "Trap center (re)",
+            "Where the image sits in the complex plane: its centre.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "trap_im",
+            "Trap center (im)",
+            "Where the image sits in the complex plane: its centre.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "trap_scale",
+            "Trap scale",
+            "The image's size. At 1 it spans -1 to 1; smaller shrinks it.",
+            Spec::float(1.0, 0.01, 10.0),
+        ),
+        ParamDef::new(
+            "trap_rotation",
+            "Rotation",
+            "The image's angle, in degrees.",
+            Spec::float(0.0, -180.0, 180.0),
+        ),
+        ParamDef::new(
+            "trap_aspect",
+            "Aspect ratio",
+            "Squeezes the image vertically above 1, stretches it below.",
+            Spec::float(1.0, 0.1, 10.0),
+        ),
+        ParamDef::new(
+            "trap_skew",
+            "Skew",
+            "Slants the image's vertical axis, in degrees.",
+            Spec::float(0.0, -80.0, 80.0),
+        ),
+        ParamDef::new(
+            "proportions",
+            "Proportions",
+            "Keep the image's own proportions, or stretch it to a square.",
+            Spec::choice(1, &["Stretch to square", "Keep proportions"]),
+        ),
+        ParamDef::new(
+            "opacity",
+            "Trap merge opacity",
+            "How strongly each iterate's colour merges. Low values stack \
                       many translucent copies; 1 lets one copy cover the rest.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "order",
-            display_name: "Trap merge order",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Bottom-up merges each new iterate's colour on top of the \
+            Spec::float(0.2, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "order",
+            "Trap merge order",
+            "Bottom-up merges each new iterate's colour on top of the \
                       ones before; top-down merges it underneath, so the earliest \
                       stays on top. Top-down leaves the colour partly transparent \
                       where iterates miss the image, and the background shows.",
-            choices: &["Bottom-up", "Top-down"],
-        },
-        EscapeParamDef {
-            name: "merge",
-            display_name: "Trap color merge",
-            default: 0.0,
-            min: 0.0,
-            max: 10.0,
-            tooltip: "How an iterate's colour combines with the colour so far, as \
+            Spec::choice(0, &["Bottom-up", "Top-down"]),
+        ),
+        ParamDef::new(
+            "merge",
+            "Trap color merge",
+            "How an iterate's colour combines with the colour so far, as \
                       Ultra Fractal's layer merge modes do.",
-            choices: &[
+            Spec::choice(0, &[
                 "Normal",
                 "Multiply",
                 "Screen",
@@ -2658,35 +2362,26 @@ pub static IMAGE_TRAP: ColoringDef = ColoringDef {
                 "Red",
                 "Green",
                 "Blue",
-            ],
-        },
-        EscapeParamDef {
-            name: "base_r",
-            display_name: "Base color red",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "The colour the iterates' colours merge onto.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "base_g",
-            display_name: "Base color green",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "The colour the iterates' colours merge onto.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "base_b",
-            display_name: "Base color blue",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "The colour the iterates' colours merge onto.",
-            choices: &[],
-        },
+            ]),
+        ),
+        ParamDef::new(
+            "base_r",
+            "Base color red",
+            "The colour the iterates' colours merge onto.",
+            Spec::float(0.0, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "base_g",
+            "Base color green",
+            "The colour the iterates' colours merge onto.",
+            Spec::float(0.0, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "base_b",
+            "Base color blue",
+            "The colour the iterates' colours merge onto.",
+            Spec::float(0.0, 0.0, 1.0),
+        ),
     ],
     wgsl: r#"
 // The value the relief and auto contrast read: the colour's luminance.

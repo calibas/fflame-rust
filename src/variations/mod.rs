@@ -23,14 +23,11 @@ pub mod custom;
 use definition::VariationDef;
 pub use definition::{Feature, MAX_ORBIT_LENGTH, ORBIT_LENGTH_PARAM};
 
-/// Parameter type for variation parameters.
-///
-/// Note on `Enum.choices`: `&'static [&'static str]` so the type is
-/// `const`-compatible — enum params can live in `pub static
-/// VariationDef`. For API-loaded variations, the conversion in
-/// `api_param_type_to_runtime` leaks owned strings to obtain
-/// `&'static` lifetimes (memory cost is bounded by the number of
-/// distinct enum variations loaded — trivial in practice).
+/// The parameter types the contract publishes: the wire's vocabulary
+/// for a variation's and an effect's parameters, which `params::wire_type`
+/// spells a `ParamDef` in (`a_kind_is_spelled_in_the_published_vocabulary`).
+/// A parameter itself is a `params::ParamDef`
+/// (docs/projects/one-parameter-system.md).
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub enum ParamType {
     /// Continuous floating-point value with min/max bounds
@@ -82,34 +79,6 @@ impl ParamType {
             ParamType::Enum { .. } => "enum",
         }
     }
-}
-
-/// Definition of a single variation parameter
-#[derive(Clone, Debug, Serialize)]
-pub struct VariationParameter {
-    /// Parameter name (e.g., "power", "dist")
-    pub name: String,
-
-    /// Display name for UI (e.g., "Power", "Distance")
-    pub display_name: String,
-
-    /// Parameter type
-    pub param_type: ParamType,
-
-    /// Default value
-    pub default_value: f32,
-
-    /// Minimum value (None = no limit)
-    pub min_value: Option<f32>,
-
-    /// Maximum value (None = no limit)
-    pub max_value: Option<f32>,
-
-    /// Free-form help / tooltip prose shown under the parameter
-    /// control. Populated from `VariationParamDef.description` for
-    /// built-ins, from `ApiVariationParameter.description` for API
-    /// loads. `None` renders the control with no tooltip.
-    pub description: Option<String>,
 }
 
 /// Execution phase for variations (Apophysis XForm.pas:343-383)
@@ -243,7 +212,7 @@ pub struct VariationInfo {
     pub wgsl_source_state_init: Option<String>,
 
     /// Parameters for this variation
-    pub parameters: Vec<VariationParameter>,
+    pub parameters: Vec<crate::params::ParamDef>,
 
 }
 
@@ -262,11 +231,11 @@ impl VariationInfo {
         self.parameters
             .iter()
             .find(|p| p.name == param_name)
-            .map(|p| p.default_value)
+            .map(|p| p.slot_default())
     }
 
     /// Get parameter definition by name
-    pub fn get_param(&self, param_name: &str) -> Option<&VariationParameter> {
+    pub fn get_param(&self, param_name: &str) -> Option<&crate::params::ParamDef> {
         self.parameters.iter().find(|p| p.name == param_name)
     }
 
@@ -275,15 +244,8 @@ impl VariationInfo {
         dl: &crate::api::types::VariationDownload,
         provenance: crate::provenance::Provenance,
     ) -> Self {
-        let parameters = dl.parameters.iter().map(|p| VariationParameter {
-            name: p.name.clone(),
-            display_name: p.display_name.clone(),
-            param_type: api_param_type_to_runtime(&p.param_type),
-            default_value: p.default_value,
-            min_value: p.min_value,
-            max_value: p.max_value,
-            description: p.description.clone(),
-        }).collect();
+        // An unranged float as the Transforms panel has always drawn one.
+        let parameters = dl.parameters.iter().map(|p| crate::params::from_api(p, (-10.0, 10.0))).collect();
 
         let wgsl_function = format!("variation_{}", dl.name);
 
@@ -356,7 +318,7 @@ impl VariationInfo {
             init_param_count: def.init_param_count,
             state_count: def.state_count,
             wgsl_source_state_init: def.wgsl_state_init.map(|s| s.to_string()),
-            parameters: def.parameters_to_runtime(),
+            parameters: def.parameters.to_vec(),
         }
     }
 
@@ -414,38 +376,6 @@ pub enum VariationCategory {
 
     /// Plugin variations
     Plugin,
-}
-
-/// Convert API param type to runtime ParamType.
-///
-/// For `Enum`, leaks the choice strings to obtain the `&'static`
-/// lifetime that `ParamType::Enum.choices` requires. Memory is
-/// bounded by the count of distinct enum-bearing variations loaded
-/// from the API — small in practice (one allocation per choice plus
-/// one for the slice, freed never but never re-allocated either).
-pub fn api_param_type_to_runtime_pub(api: &crate::api::types::ApiParamType) -> ParamType {
-    api_param_type_to_runtime(api)
-}
-
-fn api_param_type_to_runtime(api: &crate::api::types::ApiParamType) -> ParamType {
-    use crate::api::types::ApiParamType;
-    match api {
-        ApiParamType::Float => ParamType::Float,
-        ApiParamType::UnlimitedFloat => ParamType::UnlimitedFloat,
-        ApiParamType::Integer => ParamType::Integer,
-        ApiParamType::UnlimitedInteger => ParamType::UnlimitedInteger,
-        ApiParamType::Boolean => ParamType::Boolean,
-        ApiParamType::Angle => ParamType::Angle,
-        ApiParamType::Enum { choices } => {
-            let leaked_strs: Vec<&'static str> = choices
-                .iter()
-                .map(|s| &*Box::leak(s.clone().into_boxed_str()))
-                .collect();
-            ParamType::Enum {
-                choices: Box::leak(leaked_strs.into_boxed_slice()),
-            }
-        }
-    }
 }
 
 /// Convert API phase to runtime VariationPhase
@@ -877,39 +807,6 @@ fn registry_lock() -> &'static RwLock<VariationRegistry> {
 
 /// Get a read guard to the global variation registry singleton.
 /// Initialized once, shared across all code paths.
-/// Parameters that bound a loop the variation runs every iteration, so
-/// raising one makes the next frame slow: dragged live they overshoot, and
-/// the panel commits them when the drag ends, or offers a small
-/// whole-number range as a dropdown (`ui::slow_controls`). Measured, not
-/// read off the WGSL (`renderer::param_cost`): each adds 15 ms or more to
-/// an app frame at its maximum, with the variation alone in the flame.
-/// The fract_* family shares one escape loop, so all of its `max_iter`
-/// are here whatever the one view measured. An exponent such as `power`
-/// that costs as much is left live: it is what a user scrubs.
-pub const SLOW_PARAMS: &[(&str, &str)] = &[
-    ("fract_dragon_wf", "max_iter"),
-    ("fract_julia_wf", "max_iter"),
-    ("fract_mandelbrot_wf", "max_iter"),
-    ("fract_meteors_wf", "max_iter"),
-    ("fract_pearls_wf", "max_iter"),
-    ("fract_salamander_wf", "max_iter"),
-    ("mandelbrot", "iter"),
-    ("polychoron", "steps"),
-    ("glsl_circlesblue", "bubles"),
-    ("glsl_acrilic", "steps"),
-    ("hofstadter", "depth"),
-    ("hofstadter3d", "depth"),
-    ("quaternion_julia_set", "escape_iters"),
-    ("mondrianomies", "depth"),
-    ("spray_blur", "count"),
-    ("jacobian_counterexample", "steps"),
-];
-
-/// Whether `param` of the variation `variation` is slow ([`SLOW_PARAMS`]).
-pub fn is_slow_param(variation: &str, param: &str) -> bool {
-    SLOW_PARAMS.iter().any(|&(v, p)| v == variation && p == param)
-}
-
 pub fn global_registry() -> RwLockReadGuard<'static, VariationRegistry> {
     registry_lock().read().expect("variation registry RwLock poisoned")
 }
@@ -1810,15 +1707,3 @@ pub(crate) mod shader_lint {
     }
 }
 
-#[cfg(all(test, feature = "engine-flame"))]
-mod slow_param_tests {
-    /// Every parameter marked slow names a real one.
-    #[test]
-    fn every_slow_param_names_a_real_parameter() {
-        let registry = super::global_registry();
-        for &(variation, param) in super::SLOW_PARAMS {
-            let v = registry.get(variation).unwrap_or_else(|| panic!("{variation} is not registered"));
-            assert!(v.parameters.iter().any(|p| p.name == param), "{variation}.{param} is marked slow but is not a parameter");
-        }
-    }
-}

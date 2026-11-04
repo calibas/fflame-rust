@@ -18,7 +18,7 @@ use crate::config::sim::{
     SimWarpFilter,
 };
 use crate::scene::transforms::RenderMode;
-use crate::sim::{SimParamDef, COLORINGS, MODELS};
+use crate::sim::{COLORINGS, MODELS};
 use rust_i18n::t;
 
 /// Transport state, owned by the App (it is view state, not config).
@@ -103,67 +103,6 @@ fn save_as_texture_row(ui: &mut egui::Ui, config: &crate::config::FractalConfig,
     }
 }
 
-/// A registry parameter control: dropdown when it has `choices`,
-/// slider otherwise. Same shape as the escape panel's, over this
-/// engine's param type. A `slow` parameter (`sim::SLOW_PARAMS`) is a
-/// dropdown over a small whole-number range, and otherwise commits when
-/// the drag ends (`slow_controls`).
-fn param_control(ui: &mut egui::Ui, v: &mut f32, p: &'static SimParamDef, salt: &str, slow: bool) -> bool {
-    if p.choices.is_empty() && slow {
-        if super::slow_controls::fits_a_dropdown(p.min, p.max) {
-            return super::slow_controls::whole_numbers(ui, (salt, p.name), p.display_name, Some(p.tooltip), v, p.min as i32, p.max as i32);
-        }
-        let speed = ((p.max - p.min) as f64 / 500.0).max(1e-6);
-        let id = ui.id().with((salt, p.name, "on_release"));
-        return super::slow_controls::on_release(ui, id, v, |ui, v| {
-            ui.add(egui::Slider::new(v, p.min..=p.max).text(p.display_name).drag_value_speed(speed))
-                .on_hover_text(p.tooltip)
-        })
-        .1;
-    }
-    if p.choices.is_empty() {
-        let range = p.min..=p.max;
-        // Logarithmic where the interesting band is orders of magnitude
-        // below the maximum; Gray-Scott's feed and kill are not, so
-        // this stays linear and the drag is fine-grained instead.
-        let speed = ((p.max - p.min) as f64 / 500.0).max(1e-6);
-        return ui
-            .add(
-                egui::Slider::new(v, range)
-                    .text(p.display_name)
-                    .drag_value_speed(speed),
-            )
-            .on_hover_text(p.tooltip)
-            .changed();
-    }
-    // Round rather than truncate, and clamp: a config written before
-    // the choice list existed (or hand-edited) must land on a real
-    // entry rather than panicking the index.
-    let last = p.choices.len() - 1;
-    let mut idx = if v.is_finite() {
-        (v.round().max(0.0) as usize).min(last)
-    } else {
-        0
-    };
-    let before = idx;
-    ui.horizontal(|ui| {
-        ui.label(p.display_name);
-        egui::ComboBox::from_id_salt((salt, p.name))
-            .selected_text(p.choices[idx])
-            .show_ui(ui, |ui| {
-                for (i, c) in p.choices.iter().enumerate() {
-                    ui.selectable_value(&mut idx, i, *c);
-                }
-            })
-            .response
-            .on_hover_text(p.tooltip);
-    });
-    if idx != before {
-        *v = idx as f32;
-        return true;
-    }
-    false
-}
 
 pub fn render_sim_content(
     ui: &mut egui::Ui,
@@ -843,8 +782,8 @@ fn render_scale_warp_target(ui: &mut egui::Ui, config_manager: &mut ConfigManage
     for field in crate::sim::SCALE_WARP_FIELDS {
         let name = sw.param(r, field);
         let Some(def) = model.parameters.iter().find(|p| p.name == name) else { continue };
-        let mut v = params.get(&name).copied().filter(|v| v.is_finite()).unwrap_or(def.default);
-        identity &= v == def.default;
+        let mut v = params.get(&name).copied().filter(|v| v.is_finite()).unwrap_or(def.slot_default());
+        identity &= v == def.slot_default();
         let text = match field {
             "zoom" => t!("sim_panel.warp_zoom"),
             "rotation" => t!("sim_panel.warp_rotation"),
@@ -853,8 +792,8 @@ fn render_scale_warp_target(ui: &mut egui::Ui, config_manager: &mut ConfigManage
             _ => t!("sim_panel.warp_flow"),
         };
         if ui
-            .add(egui::Slider::new(&mut v, def.min..=def.max).text(text.as_ref()).fixed_decimals(4).clamping(egui::SliderClamping::Edits))
-            .on_hover_text(def.tooltip)
+            .add(egui::Slider::new(&mut v, def.slot_range().0..=def.slot_range().1).text(text.as_ref()).fixed_decimals(4).clamping(egui::SliderClamping::Edits))
+            .on_hover_text(&*def.hint)
             .changed()
         {
             let _ = config_manager.update_param(slot.param_path(&name), v.into());
@@ -865,7 +804,7 @@ fn render_scale_warp_target(ui: &mut egui::Ui, config_manager: &mut ConfigManage
             .iter()
             .filter_map(|f| {
                 let name = sw.param(r, f);
-                model.parameters.iter().find(|p| p.name == name).map(|p| (slot.param_path(&name), p.default.into()))
+                model.parameters.iter().find(|p| p.name == name).map(|p| (slot.param_path(&name), p.slot_default().into()))
             })
             .collect();
         let _ = config_manager.update_batch(changes, "Reset scale warp".to_string());
@@ -1159,18 +1098,10 @@ fn render_coloring_section(
             // A Rhai colouring's layout (rhai-plugins P7): its conditions
             // and grids.
             let layout = crate::sim::param_layout(coloring.name);
-            let value = |n: &str| def_value(coloring.parameters, params, n);
-            for p in coloring.parameters {
-                if layout.as_ref().is_some_and(|l| !l.lists(p.name, &value)) {
-                    continue;
-                }
-                let mut v = params.get(p.name).copied().unwrap_or(p.default);
-                if param_control(ui, &mut v, p, &slot.salt(), false) {
-                    let _ = config_manager.update_param(slot.param_path(p.name), v.into());
-                }
-            }
-            for g in layout.iter().flat_map(|l| l.grids.iter()).filter(|g| g.drawn) {
-                render_param_grid(ui, config_manager, coloring.parameters, g, &value, &|n| slot.param_path(n), &slot.salt(), (0, 0));
+            let salt = slot.salt();
+            {
+                let mut store = super::params::ConfigStore::new(&mut *config_manager, |_, d| Some(def_value(params, d)), |n| slot.param_path(n));
+                super::params::list(ui, &mut store, &super::params::List::new(coloring.parameters, &salt).layout(layout.as_deref()));
             }
             // The matte: channel, invert and edge are snapshot edits on
             // a layer and paths on the flat fields; cutoff and softness
@@ -1494,77 +1425,12 @@ fn preset_changes(
 /// generated layout the rows are the ones the generator would fill.
 #[allow(clippy::too_many_arguments)]
 /// A parameter's value in force: the slot's, else its default.
-fn def_value(defs: &[crate::sim::SimParamDef], params: &std::collections::BTreeMap<String, f32>, name: &str) -> f32 {
-    params
-        .get(name)
-        .copied()
-        .filter(|v| v.is_finite())
-        .unwrap_or_else(|| defs.iter().find(|p| p.name == name).map_or(0.0, |p| p.default))
+/// A parameter's value in `params`, its default where unset or not
+/// finite.
+fn def_value(params: &std::collections::BTreeMap<String, f32>, def: &crate::params::ParamDef) -> f32 {
+    params.get(&*def.name).copied().filter(|v| v.is_finite()).unwrap_or(def.slot_default())
 }
 
-/// A parameter grid (rhai-plugins P7; McCabe's per-scale table, the
-/// mccabe-multiscale plan's section 3): its live rows by its shown
-/// columns, each cell its parameter's control, a row its grid warns of
-/// marked. Hidden, a grid with a fill draws the warning its fill earns --
-/// the coarsest row's -- in a line.
-#[allow(clippy::too_many_arguments)]
-fn render_param_grid(
-    ui: &mut egui::Ui,
-    config_manager: &mut ConfigManager,
-    defs: &[crate::sim::SimParamDef],
-    g: &crate::param_layout::ParamGrid,
-    value: &dyn Fn(&str) -> f32,
-    path: &dyn Fn(&str) -> ConfigPath,
-    salt: &str,
-    grid: (u32, u32),
-) {
-    let rows = g.live(value);
-    let warn = ui.visuals().warn_fg_color;
-    if !g.show_if.holds(value) {
-        if let (Some(f), Some(w)) = (&g.fill, &g.warn) {
-            if let Some(msg) = (0..rows).rev().find_map(|r| w(r, &(f.cells)(value, r), value, grid, true)) {
-                ui.label(egui::RichText::new(msg).small().color(warn));
-            }
-        }
-        return;
-    }
-    let def_of = |name: &str| defs.iter().find(|p| p.name == name);
-    let columns: Vec<&crate::param_layout::GridColumn> = g.columns.iter().filter(|c| c.show_if.holds(value)).collect();
-    egui::Grid::new(format!("{salt}_{}_grid", g.name))
-        .striped(true)
-        .spacing([6.0, 2.0])
-        .show(ui, |ui| {
-            ui.label("");
-            for c in &columns {
-                ui.label(egui::RichText::new(c.header.resolve()).small());
-            }
-            ui.end_row();
-            for r in 0..rows {
-                ui.label((r + 1).to_string());
-                for c in &columns {
-                    let name = g.cell(r, &c.key);
-                    let Some(def) = def_of(&name) else {
-                        ui.label("");
-                        continue;
-                    };
-                    let mut v = value(&name);
-                    let speed = if c.whole { 0.05 } else { ((def.max - def.min) as f64 / 1000.0).max(1e-4) };
-                    let mut dv = egui::DragValue::new(&mut v).range(def.min..=def.max).speed(speed);
-                    dv = if c.whole { dv.fixed_decimals(0) } else { dv.max_decimals(3) };
-                    if ui.add(dv).on_hover_text(def.tooltip).changed() {
-                        if c.whole {
-                            v = v.round();
-                        }
-                        let _ = config_manager.update_param(path(&name), v.into());
-                    }
-                }
-                if let Some(msg) = g.warn.as_ref().and_then(|w| w(r, &g.row(r, value), value, grid, false)) {
-                    ui.label(egui::RichText::new("⚠").color(warn)).on_hover_text(msg);
-                }
-                ui.end_row();
-            }
-        });
-}
 
 /// An Edit as Rhai the panel asked for (P7 step 5): a model (else a
 /// colouring), its layer or colour layer (`None`: the flat slot), and the
@@ -1738,34 +1604,13 @@ fn render_model_section(
             // shown only while others hold certain values, and its grids
             // (McCabe's per-scale table), drawn after the list.
             let layout = crate::sim::param_layout(model.name);
-            let value = |n: &str| def_value(model.parameters, params, n);
             let warps = crate::sim::scale_warps(model.name);
-            for p in model.parameters.iter() {
-                if layout.as_ref().is_some_and(|l| !l.lists(p.name, &value)) {
-                    continue;
-                }
-                // Per-scale warps live in the Warp section.
-                if warps.is_some_and(|w| w.is_param(p.name)) {
-                    continue;
-                }
-                let mut v = params.get(p.name).copied().unwrap_or(p.default);
-                if param_control(ui, &mut v, p, &slot.salt(), crate::sim::is_slow_param(model.name, p.name)) {
-                    // An edit that turns a grid on fills it in the same
-                    // undo step, so the switch changes nothing.
-                    let after = |n: &str| if n == p.name { v } else { value(n) };
-                    let fills = layout.as_ref().map(|l| l.fills(&value, &after)).unwrap_or_default();
-                    if fills.is_empty() {
-                        let _ = config_manager.update_param(slot.param_path(p.name), v.into());
-                    } else {
-                        let mut changes = vec![(slot.param_path(p.name), v.into())];
-                        changes.extend(fills.into_iter().map(|(name, value)| (slot.param_path(&name), value.into())));
-                        let _ = config_manager.update_batch(changes, "history.action.sim_table".to_string());
-                    }
-                }
-            }
-            for g in layout.iter().flat_map(|l| l.grids.iter()).filter(|g| g.drawn) {
-                render_param_grid(ui, config_manager, model.parameters, g, &value, &|n| slot.param_path(n), &slot.salt(), grid);
-            }
+            // Per-scale warps live in the Warp section.
+            let hide = |p: &crate::params::ParamDef| warps.is_some_and(|w| w.is_param(&p.name));
+            let salt = slot.salt();
+            let list = super::params::List::new(model.parameters, &salt).layout(layout.as_deref()).hide(&hide).grid_size(grid).fill_label("history.action.sim_table");
+            let mut store = super::params::ConfigStore::new(&mut *config_manager, |_, d| Some(def_value(params, d)), |n| slot.param_path(n));
+            super::params::list(ui, &mut store, &list);
         };
         if count > 1 {
             ui.indent(format!("{}_body", slot.salt()), |ui| body(ui, config_manager));

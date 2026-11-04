@@ -114,7 +114,7 @@ Add lists and the corpus exporter (sorted by name) read it.
 | `category` | `Density` or `Color`: the pipeline position |
 | `display_name` | Empty for built-ins, which are labelled from `locales/*.yml` (`effects.<name>.name`). A download or a Rhai effect carries its own |
 | `source` | `EffectSource::Builtin { embedded, path }` or `EffectSource::Owned(wgsl)` |
-| `parameters` | `EffectParameter`s, in slot order |
+| `parameters` | `ParamDef`s, in slot order |
 | `provenance` | `Builtin`, `Api { version }` or `Custom` (a Rhai effect) |
 | `labels` | A Rhai effect's labels as written, strings or by locale (`scripted::Labels`); `None` otherwise |
 
@@ -129,10 +129,15 @@ the runner keeps the revision a pipeline was built from and builds it
 again when the name is registered again -- a Rhai effect edited, a
 download updated. `remove_by_name` removes one.
 
-**`EffectParameter`** carries `name`, `display_name`, `param_type` (the
-variations' `ParamType`), `default_value`, optional `min_value` and
-`max_value`, and an optional `description` shown as the slider's
-tooltip. Only `distance_field`'s parameters have descriptions today.
+**A parameter** is a `params::ParamDef`, the definition every kind
+shares ([one-parameter-system.md](../projects/one-parameter-system.md)):
+name, label, hint (the control's tooltip; only `distance_field`'s
+parameters have hints today), and its kind with its default and range
+-- `Spec::float(0.5, 0.0, 1.0)`, `Spec::int`, `Spec::bool`,
+`Spec::angle`, `Spec::choice` (a blend mode). The Effects panel draws
+them through `ui::params`, and the API corpus spells them as before
+(`params::api_json`). A downloaded effect's unranged float is drawn
+0..1, as the panel always drew one (`params::from_api`).
 
 **Shader source.** Fifteen of the sixteen built-ins are Rhai
 (rhai-plugins.md, D1; [Effects written in Rhai](#effects-written-in-rhai)):

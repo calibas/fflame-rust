@@ -11,7 +11,8 @@
 //! limit for p > 0) so the polar `atan2` is never evaluated at a zero
 //! pair — the Metal fast-math hazard documented in CLAUDE.md.
 
-use super::{EscapeMetric, EscapeParamDef, FormulaDef, FormulaFeature};
+use super::{EscapeMetric, FormulaDef, FormulaFeature};
+use crate::params::{ParamDef, Spec};
 
 // Degrees at infinity, for the smooth count (`FormulaDef::escape_degree`).
 
@@ -77,15 +78,12 @@ pub static MULTIBROT: FormulaDef = FormulaDef {
     display_name: "Multibrot",
     presets: super::presets::MULTIBROT,
     features: &[],
-    parameters: &[EscapeParamDef {
-        name: "power",
-        display_name: "Power",
-        default: 3.0,
-        min: 2.0,
-        max: 12.0,
-        tooltip: "Exponent p in z^p + c. 2 is the Mandelbrot set; higher powers grow more lobes.",
-        choices: &[],
-    }],
+    parameters: &[ParamDef::new(
+        "power",
+        "Power",
+        "Exponent p in z^p + c. 2 is the Mandelbrot set; higher powers grow more lobes.",
+        Spec::float(3.0, 2.0, 12.0),
+    )],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     return esc_cpow(z, fparam(0u)) + c;
@@ -112,15 +110,12 @@ pub static TRICORN: FormulaDef = FormulaDef {
     display_name: "Tricorn",
     presets: super::presets::TRICORN,
     features: &[],
-    parameters: &[EscapeParamDef {
-        name: "power",
-        display_name: "Power",
-        default: 2.0,
-        min: 2.0,
-        max: 12.0,
-        tooltip: "Exponent p in conj(z)^p + c. 2 is the Tricorn; higher powers are the multicorns.",
-        choices: &[],
-    }],
+    parameters: &[ParamDef::new(
+        "power",
+        "Power",
+        "Exponent p in conj(z)^p + c. 2 is the Tricorn; higher powers are the multicorns.",
+        Spec::float(2.0, 2.0, 12.0),
+    )],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     return esc_cpow(vec2<f32>(z.x, -z.y), fparam(0u)) + c;
@@ -163,15 +158,12 @@ pub static BURNING_SHIP: FormulaDef = FormulaDef {
     display_name: "Burning Ship",
     presets: super::presets::BURNING_SHIP,
     features: &[],
-    parameters: &[EscapeParamDef {
-        name: "variant",
-        display_name: "Variant",
-        default: 0.0,
-        min: 0.0,
-        max: 5.0,
-        tooltip: "0 Burning Ship, 1 Perpendicular Mandelbrot, 2 Perpendicular Ship, 3 Celtic, 4 Buffalo, 5 Perpendicular Celtic.",
-        choices: &["Burning Ship", "Perpendicular Mandelbrot", "Perpendicular Ship", "Celtic", "Buffalo", "Perpendicular Celtic"],
-    }],
+    parameters: &[ParamDef::new(
+        "variant",
+        "Variant",
+        "0 Burning Ship, 1 Perpendicular Mandelbrot, 2 Perpendicular Ship, 3 Celtic, 4 Buffalo, 5 Perpendicular Celtic.",
+        Spec::choice(0, &["Burning Ship", "Perpendicular Mandelbrot", "Perpendicular Ship", "Celtic", "Buffalo", "Perpendicular Celtic"]),
+    )],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     let v = u32(clamp(fparam(0u), 0.0, 5.0));
@@ -233,24 +225,18 @@ pub static MCMULLEN: FormulaDef = FormulaDef {
     presets: super::presets::MCMULLEN,
     features: &[],
     parameters: &[
-        EscapeParamDef {
-            name: "n",
-            display_name: "n (numerator power)",
-            default: 2.0,
-            min: 2.0,
-            max: 8.0,
-            tooltip: "Power of the polynomial term z^n.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "m",
-            display_name: "m (pole power)",
-            default: 3.0,
-            min: 1.0,
-            max: 8.0,
-            tooltip: "Power of the pole term c / z^m. n=2, m=3 is the classic Sierpinski-carpet family.",
-            choices: &[],
-        },
+        ParamDef::new(
+            "n",
+            "n (numerator power)",
+            "Power of the polynomial term z^n.",
+            Spec::float(2.0, 2.0, 8.0),
+        ),
+        ParamDef::new(
+            "m",
+            "m (pole power)",
+            "Power of the pole term c / z^m. n=2, m=3 is the classic Sierpinski-carpet family.",
+            Spec::float(3.0, 1.0, 8.0),
+        ),
     ],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -297,15 +283,12 @@ pub static KALISET: FormulaDef = FormulaDef {
     display_name: "Kaliset",
     presets: super::presets::KALISET,
     features: &[FormulaFeature::NonEscaping],
-    parameters: &[EscapeParamDef {
-        name: "plus_c",
-        display_name: "Add c (instead of subtract)",
-        default: 0.0,
-        min: 0.0,
-        max: 1.0,
-        tooltip: "0: z <- |z|/<z,z> - c (classic). 1: the + c branch.",
-        choices: &["Subtract c (classic)", "Add c"],
-    }],
+    parameters: &[ParamDef::new(
+        "plus_c",
+        "Add c (instead of subtract)",
+        "0: z <- |z|/<z,z> - c (classic). 1: the + c branch.",
+        Spec::choice(0, &["Subtract c (classic)", "Add c"]),
+    )],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     let r2 = dot(z, z);
@@ -337,24 +320,18 @@ pub static PHOENIX: FormulaDef = FormulaDef {
     presets: super::presets::PHOENIX,
     features: &[FormulaFeature::NeedsPrevZ],
     parameters: &[
-        EscapeParamDef {
-            name: "p_re",
-            display_name: "p (re)",
-            default: -0.5,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "Real part of the previous-iterate coefficient. The classic Phoenix Julia uses c = 0.5667, p = -0.5.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "p_im",
-            display_name: "p (im)",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "Imaginary part of the previous-iterate coefficient.",
-            choices: &[],
-        },
+        ParamDef::new(
+            "p_re",
+            "p (re)",
+            "Real part of the previous-iterate coefficient. The classic Phoenix Julia uses c = 0.5667, p = -0.5.",
+            Spec::float(-0.5, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "p_im",
+            "p (im)",
+            "Imaginary part of the previous-iterate coefficient.",
+            Spec::float(0.0, -2.0, 2.0),
+        ),
     ],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>, z_prev: vec2<f32>) -> vec2<f32> {
@@ -465,15 +442,12 @@ pub static BARNSLEY: FormulaDef = FormulaDef {
     display_name: "Barnsley",
     presets: super::presets::BARNSLEY,
     features: &[],
-    parameters: &[EscapeParamDef {
-        name: "variant",
-        display_name: "Variant",
-        default: 0.0,
-        min: 0.0,
-        max: 2.0,
-        tooltip: "0: M1 (fold on Re z), 1: M2 (fold on a bilinear test), 2: M3 (quadratic with conditional c term).",
-        choices: &["M1 (fold on Re z)", "M2 (bilinear test)", "M3 (quadratic)"],
-    }],
+    parameters: &[ParamDef::new(
+        "variant",
+        "Variant",
+        "0: M1 (fold on Re z), 1: M2 (fold on a bilinear test), 2: M3 (quadratic with conditional c term).",
+        Spec::choice(0, &["M1 (fold on Re z)", "M2 (bilinear test)", "M3 (quadratic)"]),
+    )],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     let v = u32(clamp(fparam(0u), 0.0, 2.0));
@@ -605,15 +579,12 @@ pub static TRIG: FormulaDef = FormulaDef {
     display_name: "Sine / Cosine",
     presets: super::presets::TRIG,
     features: &[],
-    parameters: &[EscapeParamDef {
-        name: "variant",
-        display_name: "Function",
-        default: 0.0,
-        min: 0.0,
-        max: 1.0,
-        tooltip: "0: sin z + c, 1: cos z + c.",
-        choices: &["sin z + c", "cos z + c"],
-    }],
+    parameters: &[ParamDef::new(
+        "variant",
+        "Function",
+        "0: sin z + c, 1: cos z + c.",
+        Spec::choice(0, &["sin z + c", "cos z + c"]),
+    )],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     if (fparam(0u) < 0.5) {
@@ -763,27 +734,21 @@ pub static ORIGAMI: FormulaDef = FormulaDef {
         FormulaFeature::Creases,
     ],
     parameters: &[
-        EscapeParamDef {
-            name: "seed",
-            display_name: "Line seed",
-            default: 7.0,
-            min: 0.0,
-            max: 512.0,
-            tooltip: "Chooses the random fold arrangement. Every value is a \
+        ParamDef::new(
+            "seed",
+            "Line seed",
+            "Chooses the random fold arrangement. Every value is a \
                       different folding; scrub it to explore the family.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "spread",
-            display_name: "Line spread",
-            default: 2.0,
-            min: 0.05,
-            max: 4.0,
-            tooltip: "Half-size of the square the fold endpoints are drawn \
+            Spec::float(7.0, 0.0, 512.0),
+        ),
+        ParamDef::new(
+            "spread",
+            "Line spread",
+            "Half-size of the square the fold endpoints are drawn \
                       from, before being folded onto the wad. 2.0 matches the \
                       default view.",
-            choices: &[],
-        },
+            Spec::float(2.0, 0.05, 4.0),
+        ),
     ],
     wgsl: r#"
 // The fold: reflect p about the line through a-b, but ONLY from the
@@ -1075,38 +1040,29 @@ pub static LATTES: FormulaDef = FormulaDef {
     presets: super::presets::LATTES,
     features: &[FormulaFeature::NonEscaping, FormulaFeature::DynamicalOnly],
     parameters: &[
-        EscapeParamDef {
-            name: "variant",
-            display_name: "Variant",
-            default: 0.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "0: (z^2-a)^2 / 4z(z-1)(z-a). 1: (z + 1/z)/2i, which uses no a. \
+        ParamDef::new(
+            "variant",
+            "Variant",
+            "0: (z^2-a)^2 / 4z(z-1)(z-a). 1: (z + 1/z)/2i, which uses no a. \
                       2: (z^3+a)/(a z^3+1). All three are ergodic on the sphere, so \
                       keep the iteration count LOW (around 5) -- the structure is in \
                       the transient and long orbits average it away.",
-            choices: &["(z^2-a)^2 / 4z(z-1)(z-a)", "(z + 1/z)/2i", "(z^3+a)/(a z^3+1)"],
-        },
-        EscapeParamDef {
-            name: "a_re",
-            display_name: "a (re)",
-            default: -0.5,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "The map's modulus. Variant 2 is a Lattès map at the cube root of \
+            Spec::choice(0, &["(z^2-a)^2 / 4z(z-1)(z-a)", "(z + 1/z)/2i", "(z^3+a)/(a z^3+1)"]),
+        ),
+        ParamDef::new(
+            "a_re",
+            "a (re)",
+            "The map's modulus. Variant 2 is a Lattès map at the cube root of \
                       unity exp(2*pi*i/3) = -0.5 + 0.866i, which is the default; variant \
                       0 is one for any a outside {0, 1}.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "a_im",
-            display_name: "a (im)",
-            default: 0.8660254,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Imaginary part of the modulus.",
-            choices: &[],
-        },
+            Spec::float(-0.5, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "a_im",
+            "a (im)",
+            "Imaginary part of the modulus.",
+            Spec::float(0.8660254, -4.0, 4.0),
+        ),
     ],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -1185,16 +1141,13 @@ pub static DUCKS: FormulaDef = FormulaDef {
     display_name: "Ducks (Kali-log)",
     presets: super::presets::DUCKS,
     features: &[FormulaFeature::NonEscaping],
-    parameters: &[EscapeParamDef {
-        name: "variant",
-        display_name: "Variant",
-        default: 0.0,
-        min: 0.0,
-        max: 4.0,
-        tooltip: "0 classic log(f+c); 1 log(sin(f+c)); 2 log(f+c - sec(f+c)); \
+    parameters: &[ParamDef::new(
+        "variant",
+        "Variant",
+        "0 classic log(f+c); 1 log(sin(f+c)); 2 log(f+c - sec(f+c)); \
                   3 log(sin(f)+c); 4 log((f+c)^2). Softology's variation set.",
-        choices: &["log(f+c)", "log(sin(f+c))", "log(f+c - sec(f+c))", "log(sin(f)+c)", "log((f+c)^2)"],
-    }],
+        Spec::choice(0, &["log(f+c)", "log(sin(f+c))", "log(f+c - sec(f+c))", "log(sin(f)+c)", "log((f+c)^2)"]),
+    )],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     let f = vec2<f32>(z.x, abs(z.y));
@@ -1302,15 +1255,12 @@ pub static FEATHER: FormulaDef = FormulaDef {
     display_name: "Feather",
     presets: super::presets::FEATHER,
     features: &[],
-    parameters: &[EscapeParamDef {
-        name: "power",
-        display_name: "Power",
-        default: 3.0,
-        min: 2.0,
-        max: 8.0,
-        tooltip: "Exponent p in the numerator z^p. The classic feather uses 3.",
-        choices: &[],
-    }],
+    parameters: &[ParamDef::new(
+        "power",
+        "Power",
+        "Exponent p in the numerator z^p. The classic feather uses 3.",
+        Spec::float(3.0, 2.0, 8.0),
+    )],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     let num = esc_cpow(z, fparam(0u));
@@ -1355,51 +1305,36 @@ pub static NEWTON: FormulaDef = FormulaDef {
     presets: super::presets::NEWTON,
     features: &[FormulaFeature::Convergent, FormulaFeature::DynamicalOnly],
     parameters: &[
-        EscapeParamDef {
-            name: "power",
-            display_name: "Power",
-            default: 3.0,
-            min: 2.0,
-            max: 12.0,
-            tooltip: "Roots of z^p - 1: p basins of attraction.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "scheme",
-            display_name: "Scheme",
-            default: 0.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "0: Newton, 1: Halley, 2: Chebyshev.",
-            choices: &["Newton", "Halley", "Chebyshev"],
-        },
-        EscapeParamDef {
-            name: "relax_re",
-            display_name: "Relaxation (re)",
-            default: 1.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "Complex relaxation R multiplying the step. 1+0i is the plain scheme; the interesting galleries live away from it.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "relax_im",
-            display_name: "Relaxation (im)",
-            default: 0.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "Imaginary part of the relaxation.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "func",
-            display_name: "Function",
-            default: 0.0,
-            min: 0.0,
-            max: 5.0,
-            tooltip: "Which f(z) to find the roots of. 0: z^p - 1 (roots of unity), 1: z^3 - 2z + 2 (Newton's classic failure case), 2: z^8 + 15z^4 - 16, 3: sin z - 1, 4: cosh z - 1, 5: z^p sin z - 1. Only 0 has roots evenly spaced on a circle - for the others set the coloring's Basin Key to General.",
-            choices: &["z^p - 1", "z^3 - 2z + 2", "z^8 + 15z^4 - 16", "sin z - 1", "cosh z - 1", "z^p sin z - 1"],
-        },
+        ParamDef::new(
+            "power",
+            "Power",
+            "Roots of z^p - 1: p basins of attraction.",
+            Spec::float(3.0, 2.0, 12.0),
+        ),
+        ParamDef::new(
+            "scheme",
+            "Scheme",
+            "0: Newton, 1: Halley, 2: Chebyshev.",
+            Spec::choice(0, &["Newton", "Halley", "Chebyshev"]),
+        ),
+        ParamDef::new(
+            "relax_re",
+            "Relaxation (re)",
+            "Complex relaxation R multiplying the step. 1+0i is the plain scheme; the interesting galleries live away from it.",
+            Spec::float(1.0, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "relax_im",
+            "Relaxation (im)",
+            "Imaginary part of the relaxation.",
+            Spec::float(0.0, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "func",
+            "Function",
+            "Which f(z) to find the roots of. 0: z^p - 1 (roots of unity), 1: z^3 - 2z + 2 (Newton's classic failure case), 2: z^8 + 15z^4 - 16, 3: sin z - 1, 4: cosh z - 1, 5: z^p sin z - 1. Only 0 has roots evenly spaced on a circle - for the others set the coloring's Basin Key to General.",
+            Spec::choice(0, &["z^p - 1", "z^3 - 2z + 2", "z^8 + 15z^4 - 16", "sin z - 1", "cosh z - 1", "z^p sin z - 1"]),
+        ),
     ],
     wgsl: r#"
 // cosh/sinh through the guarded trig helpers: cosh z = cos(iz) and
@@ -1518,33 +1453,24 @@ pub static NOVA: FormulaDef = FormulaDef {
     presets: super::presets::NOVA,
     features: &[FormulaFeature::Convergent],
     parameters: &[
-        EscapeParamDef {
-            name: "power",
-            display_name: "Power",
-            default: 3.0,
-            min: 2.0,
-            max: 12.0,
-            tooltip: "Power of the underlying z^p - 1.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "relax_re",
-            display_name: "Relaxation (re)",
-            default: 1.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "Complex relaxation R multiplying the Newton step.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "relax_im",
-            display_name: "Relaxation (im)",
-            default: 0.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "Imaginary part of the relaxation.",
-            choices: &[],
-        },
+        ParamDef::new(
+            "power",
+            "Power",
+            "Power of the underlying z^p - 1.",
+            Spec::float(3.0, 2.0, 12.0),
+        ),
+        ParamDef::new(
+            "relax_re",
+            "Relaxation (re)",
+            "Complex relaxation R multiplying the Newton step.",
+            Spec::float(1.0, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "relax_im",
+            "Relaxation (im)",
+            "Imaginary part of the relaxation.",
+            Spec::float(0.0, -3.0, 3.0),
+        ),
     ],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
@@ -1572,15 +1498,12 @@ pub static MAGNET: FormulaDef = FormulaDef {
     display_name: "Magnet",
     presets: super::presets::MAGNET,
     features: &[FormulaFeature::Convergent],
-    parameters: &[EscapeParamDef {
-        name: "variant",
-        display_name: "Variant",
-        default: 0.0,
-        min: 0.0,
-        max: 1.0,
-        tooltip: "0: Magnet I, 1: Magnet II.",
-        choices: &["Magnet I", "Magnet II"],
-    }],
+    parameters: &[ParamDef::new(
+        "variant",
+        "Variant",
+        "0: Magnet I, 1: Magnet II.",
+        Spec::choice(0, &["Magnet I", "Magnet II"]),
+    )],
     wgsl: r#"
 fn formula_step(z: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
     if (fparam(0u) < 0.5) {
@@ -1672,15 +1595,12 @@ pub static LITTLEWOOD: FormulaDef = FormulaDef {
     display_name: "Littlewood",
     presets: super::presets::LITTLEWOOD,
     features: &[],
-    parameters: &[EscapeParamDef {
-        name: "digit_set",
-        display_name: "Digit set",
-        default: 0.0,
-        min: 0.0,
-        max: 2.0,
-        tooltip: "0: {+1,-1} (Littlewood), 1: {0,+1,-1}, 2: {+1,-1,+i,-i}.",
-        choices: &["{+1,-1} (Littlewood)", "{0,+1,-1}", "{+1,-1,+i,-i}"],
-    }],
+    parameters: &[ParamDef::new(
+        "digit_set",
+        "Digit set",
+        "0: {+1,-1} (Littlewood), 1: {0,+1,-1}, 2: {+1,-1,+i,-i}.",
+        Spec::choice(0, &["{+1,-1} (Littlewood)", "{0,+1,-1}", "{+1,-1,+i,-i}"]),
+    )],
     wgsl: r#"
 fn littlewood_pick(w: vec2<f32>, ds: u32) -> vec2<f32> {
     // Greedy: the digit minimizing |w + d|.

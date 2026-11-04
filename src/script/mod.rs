@@ -69,98 +69,8 @@ impl ScriptKind {
     }
 }
 
-/// A parameter the script declares for the UI to render.
-///
-/// Collected by running the script in [`host::Mode::Collect`] before the
-/// real run — see the two-phase design in the project doc.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ParamDecl {
-    /// `angle`: degrees, drawn with the angle control (`param_angle`).
-    Float { key: String, label: String, default: f64, min: f64, max: f64, angle: bool },
-    Int { key: String, label: String, default: i64, min: i64, max: i64 },
-    Bool { key: String, label: String, default: bool },
-    Choice { key: String, label: String, options: Vec<String>, default: usize },
-    /// Free text — L-system rules, names, anything the other kinds can't
-    /// express. `max_len` keeps a pasted novel out of the flame.
-    Text { key: String, label: String, default: String, max_len: usize },
-    /// A colour, rendered with the same picker the rest of the app uses.
-    Color { key: String, label: String, default: [f32; 3] },
-}
-
-impl ParamDecl {
-    pub fn key(&self) -> &str {
-        match self {
-            Self::Float { key, .. }
-            | Self::Int { key, .. }
-            | Self::Bool { key, .. }
-            | Self::Choice { key, .. }
-            | Self::Text { key, .. }
-            | Self::Color { key, .. } => key,
-        }
-    }
-
-    pub fn label(&self) -> &str {
-        match self {
-            Self::Float { label, .. }
-            | Self::Int { label, .. }
-            | Self::Bool { label, .. }
-            | Self::Choice { label, .. }
-            | Self::Text { label, .. }
-            | Self::Color { label, .. } => label,
-        }
-    }
-
-    /// The wire shape: what `list_scripts` hands the gallery, and what
-    /// the script corpus hands the API.
-    ///
-    /// Defined once because those two must agree — a parameter that
-    /// serialises one way for the browser and another for the database
-    /// is a bug that only shows up in whichever consumer was written
-    /// second.
-    pub fn to_api_json(&self) -> serde_json::Value {
-        match self {
-            // An angle is a float to anything that knows no more, and says
-            // so to what does.
-            Self::Float { key, label, default, min, max, angle: false } => serde_json::json!({
-                "type": "float", "key": key, "label": label,
-                "default": default, "min": min, "max": max,
-            }),
-            Self::Float { key, label, default, min, max, angle: true } => serde_json::json!({
-                "type": "float", "key": key, "label": label,
-                "default": default, "min": min, "max": max, "angle": true,
-            }),
-            Self::Int { key, label, default, min, max } => serde_json::json!({
-                "type": "int", "key": key, "label": label,
-                "default": default, "min": min, "max": max,
-            }),
-            Self::Bool { key, label, default } => serde_json::json!({
-                "type": "bool", "key": key, "label": label, "default": default,
-            }),
-            Self::Choice { key, label, options, default } => serde_json::json!({
-                "type": "choice", "key": key, "label": label,
-                "options": options, "default": default,
-            }),
-            Self::Text { key, label, default, max_len } => serde_json::json!({
-                "type": "text", "key": key, "label": label,
-                "default": default, "max_len": max_len,
-            }),
-            Self::Color { key, label, default } => serde_json::json!({
-                "type": "color", "key": key, "label": label, "default": default,
-            }),
-        }
-    }
-}
-
 /// A value supplied for a declared parameter (from the UI or `--set`).
-#[derive(Debug, Clone, PartialEq)]
-pub enum ParamValue {
-    Float(f64),
-    Int(i64),
-    Bool(bool),
-    Choice(usize),
-    Text(String),
-    Color([f32; 3]),
-}
+pub use crate::params::Value as ParamValue;
 
 /// Turn `trace_a` into `Trace A` for UI labels.
 pub(crate) fn humanize(key: &str) -> String {
@@ -183,7 +93,9 @@ pub struct ScriptMeta {
     pub name: String,
     /// `None` when the script never called `script(...)`.
     pub kind: Option<ScriptKind>,
-    pub params: Vec<ParamDecl>,
+    /// Its parameters, as it declared them: owned `params::ParamDef`s
+    /// (`param`, `param_int`, ...), built anew each time it runs.
+    pub params: Vec<crate::params::ParamDef>,
     /// Optional switches from `script(name, kind, [...])`.
     pub flags: ScriptFlags,
     /// Anything the collect pass wanted to say — an unknown flag, most

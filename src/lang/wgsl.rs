@@ -1852,6 +1852,25 @@ impl<'p> Gen<'p> {
         matches!(self.ctx, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe | Ctx::Creases)
     }
 
+    /// The kind's read of its parameter slot `slot` (a `u32`): a
+    /// variation's is its transform's (the flame's `get_param`), a
+    /// simulation model's `mparam`, a simulation colouring's `cparam`,
+    /// an effect's `get_param`, a formula side's `fparam`, a colouring
+    /// side's `cparam`.
+    fn slot_read(&self, slot: &str) -> String {
+        if self.ctx == Ctx::Variation {
+            format!("get_param(xform_id, variation_id, {slot})")
+        } else if self.ctx == Ctx::Effect && self.sim_model {
+            format!("mparam({slot})")
+        } else if self.ctx == Ctx::Effect && self.sim {
+            format!("cparam({slot})")
+        } else if self.ctx == Ctx::Effect {
+            format!("get_param({slot})")
+        } else {
+            format!("{}({slot})", self.param_fn())
+        }
+    }
+
     fn param_fn(&self) -> &'static str {
         if self.formula_side() {
             "fparam"
@@ -2037,7 +2056,13 @@ impl<'p> Gen<'p> {
             Host::AgentDeposit => format!("agent_deposit(vec2<i32>({}, {}), {})", a[0], a[1], a[2]),
             Host::ReadAt => format!("sim_read(vec2<i32>({}, {})).{}", a[0], a[1], part(2)),
             Host::PyrPrepare => "pyr_prepare()".to_string(),
-            Host::GridParam => format!("mparam(u32({} + clamp({}, 0i, {}) * {}))", a[0], a[3], a[2], a[1]),
+            Host::GridParam => {
+                let (Some(first), Some(next)) = (args.first().and_then(cell_index), args.get(1).and_then(cell_index)) else {
+                    unreachable!("a grid's cells, as the checker gives them")
+                };
+                let (s0, s1) = (self.slots[first], self.slots[next]);
+                self.slot_read(&format!("u32({s0}i + clamp({}, 0i, {}) * {}i)", a[3], a[2], s1 - s0))
+            }
         }
     }
 
@@ -2262,22 +2287,7 @@ impl<'p> Gen<'p> {
             IExprKind::Elem(v, index) => self.element(*v, index),
             IExprKind::Param(id) => {
                 let k = self.slots[*id];
-                let f = self.param_fn();
-                // A variation's parameters are its transform's: read by
-                // the flame's `get_param`.
-                let read = |k: usize| {
-                    if self.ctx == Ctx::Variation {
-                        format!("get_param(xform_id, variation_id, {k}u)")
-                    } else if self.ctx == Ctx::Effect && self.sim_model {
-                        format!("mparam({k}u)")
-                    } else if self.ctx == Ctx::Effect && self.sim {
-                        format!("cparam({k}u)")
-                    } else if self.ctx == Ctx::Effect {
-                        format!("get_param({k}u)")
-                    } else {
-                        format!("{f}({k}u)")
-                    }
-                };
+                let read = |k: usize| self.slot_read(&format!("{k}u"));
                 match self.p.params[*id].ty() {
                     Ty::Bool => format!("({} != 0.0)", read(k)),
                     Ty::Int => format!("i32(round({}))", read(k)),

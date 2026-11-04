@@ -443,23 +443,20 @@ fn ray_tolerance(ui: &mut egui::Ui, config_manager: &mut ConfigManager, value: f
     });
 }
 
-/// A solid's formula parameters named, from its def (its bounds and
-/// tooltips; the Escape panel's control).
+/// A solid's formula parameters named, in its def's order, drawn as the
+/// Escape panel draws the rest (`ui::params`).
 #[cfg(feature = "engine-escape")]
 fn solid_params(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &FractalConfig, names: &[&str]) {
     let Some(def) = crate::escape::ifs::get_ifs(&config.escape.formula) else {
         return;
     };
-    for name in names {
-        let Some(p) = def.parameters.iter().find(|p| p.name == *name) else {
-            continue;
-        };
-        let mut v = config.escape.formula_params.get(p.name).copied().unwrap_or(p.default);
-        let slow = crate::escape::is_slow_param(def.name, p.name);
-        if super::escape_panel::param_control(ui, &mut v, p, "lighting", slow) {
-            let _ = config_manager.update_param(ConfigPath::EscapeFormulaParam { param: p.name.to_string() }, v.into());
-        }
-    }
+    let hide = |p: &crate::params::ParamDef| !names.contains(&&*p.name);
+    let mut store = super::params::ConfigStore::new(
+        config_manager,
+        |_, d| Some(config.escape.formula_params.get(&*d.name).copied().unwrap_or(d.slot_default())),
+        |n| ConfigPath::EscapeFormulaParam { param: n.to_string() },
+    );
+    super::params::list(ui, &mut store, &super::params::List::new(def.parameters, "lighting").hide(&hide));
 }
 
 /// A terrain's traced shadows: `[shadow, sharpness]` and their paths.

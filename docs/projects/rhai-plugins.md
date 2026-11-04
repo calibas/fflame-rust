@@ -938,16 +938,19 @@ from `main`. The order is the user's to pick: D5 put P5 tracks and then
 P6 the API next, and D7 came after it. The dependencies are listed
 under each branch.
 
-1. **`rhai-layouts-everywhere`** -- the parameter layout in every panel
-   (small).
-   - Grids and `show_if` drawn by the Escape, Effects and variation
-     panels: one renderer, today's `render_param_grid`, moved out of
-     the simulation panel.
-   - A cell at a computed row in every kind: each kind's dynamic slot
-     read (`fparam`, `cparam`, `get_param`), as `Host::GridParam` is
-     the simulations'.
-   - Depends on nothing. Helps 2 and 4: a colouring or variation twin
-     with a table, as McCabe's is.
+1. **`params-one-system`** -- one parameter system for every kind
+   ([one-parameter-system.md](one-parameter-system.md); the user,
+   2026-11-03).
+   - One definition, one renderer and one compiler converter for the
+     variations, effects, escape formulas and colourings, simulations
+     and CPU scripts, which today have five definition types and four
+     widget sets.
+   - Replaces `rhai-layouts-everywhere`: grids and `show_if` in every
+     panel, and a cell at a computed row in every kind, come with it.
+   - Depends on nothing. Comes first, so the twin branches after it add
+     parameters to one system, not to five.
+   - **Done on the branch (2026-11-03)**, steps 1-10; a grid's fill and
+     warning outside a simulation stay a simulation's (recorded there).
 2. **`rhai-escape-colourings`** -- P7 step 2: twins of the 28 escape
    colourings, and Edit as Rhai in the Escape panel's colouring.
    - About 20 accumulate over the orbit, which `start`, `step` and

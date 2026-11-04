@@ -43,9 +43,10 @@
 //! Found by the variation math probe; see
 //! `docs/archive/projects/variation-math-probe.md`.
 
+use crate::params::{ParamDef, Spec};
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 
 // =============================================================================
@@ -114,10 +115,18 @@ pub static LOG_DB: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
-        VariationParamDef { name: "base", display_name: "Base", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(1e-6), max_value: Some(100.0), description: Some("Logarithm base. Larger values compress the output, smaller values stretch it. Mirrors the basic Log variation's `base`.") },
-        VariationParamDef { name: "fix_period", display_name: "Fix Period", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(0.0), max_value: Some(10.0), description: Some("How much random vertical shift gets added each iteration. 0 = no shift; higher = more striping.") },
+        ParamDef::new(
+            "base",
+            "Base",
+            "Logarithm base. Larger values compress the output, smaller values stretch it. Mirrors the basic Log variation's `base`.",
+            Spec::float(1.0, 1e-6, 100.0).free(),
+        ),
+        ParamDef::new(
+            "fix_period",
+            "Fix Period",
+            "How much random vertical shift gets added each iteration. 0 = no shift; higher = more striping.",
+            Spec::float(1.0, 0.0, 10.0).free(),
+        ),
     ],
     // 2 derived values stored in slots 2..4:
     //   2: denom    (0.5 / log(e · base), or 0.5 if base <= 0)
@@ -199,12 +208,24 @@ pub static LOG_TILE2: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
-        VariationParamDef { name: "spreadx", display_name: "Spread X", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("X-axis tile spacing. The random integer from the log-of-uniform draw is multiplied by this value.") },
-        VariationParamDef { name: "spready", display_name: "Spread Y", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Y-axis tile spacing.") },
-        VariationParamDef { name: "spreadz", display_name: "Spread Z", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Z-axis tile spacing (3D mode only).") },
+        ParamDef::new(
+            "spreadx",
+            "Spread X",
+            "X-axis tile spacing. The random integer from the log-of-uniform draw is multiplied by this value.",
+            Spec::float(2.0, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "spready",
+            "Spread Y",
+            "Y-axis tile spacing.",
+            Spec::float(2.0, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "spreadz",
+            "Spread Z",
+            "Z-axis tile spacing (3D mode only).",
+            Spec::float(0.0, -10.0, 10.0).free(),
+        ),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -255,8 +276,12 @@ pub static TILE_LOG: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
-        VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Tile spacing along X. The random integer from the log-of-uniform draw is multiplied by this value.") },
+        ParamDef::new(
+            "spread",
+            "Spread",
+            "Tile spacing along X. The random integer from the log-of-uniform draw is multiplied by this value.",
+            Spec::float(1.0, -10.0, 10.0).free(),
+        ),
     ],
     init_param_count: 0,
     wgsl_init: None,

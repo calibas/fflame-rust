@@ -18,7 +18,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
-use super::{ColoringFeature, ModelDef, ModelFeature, SimColoringDef, SimParamDef, SimPreset, StateKind};
+use super::{ColoringFeature, ModelDef, ModelFeature, SimColoringDef, SimPreset, StateKind};
+use crate::params::ParamDef;
 use crate::config::escape::{CustomDialect, CustomSource};
 use crate::lang::{self, ir::ParamKind, EntryKind};
 
@@ -59,11 +60,9 @@ struct Registry {
     /// The models with per-scale warps (`INFO.scale_warps`), by name (P4
     /// step 9c).
     warps: HashMap<String, &'static super::ScaleWarps>,
-    /// The models' slow parameters (`INFO.slow`), by name.
-    slow: HashMap<String, Vec<String>>,
     /// The models' and colourings' parameter layouts (`PARAMS`'
     /// conditions and grids; rhai-plugins P7), by name.
-    layouts: HashMap<String, Arc<crate::param_layout::ParamLayout>>,
+    layouts: HashMap<String, Arc<crate::params::layout::ParamLayout>>,
 }
 
 fn registry() -> &'static RwLock<Registry> {
@@ -89,31 +88,11 @@ fn leak(s: impl Into<String>) -> &'static str {
     Box::leak(s.into().into_boxed_str())
 }
 
-/// A Rhai script's `PARAMS` as the simulation's parameters: numbers,
-/// bools and choices, a slider's ends the declared ones or a span around
-/// the default.
-fn sim_params(program: &lang::ir::Program) -> Result<Vec<SimParamDef>, String> {
-    let mut parameters = Vec::new();
-    for param in &program.params {
-        let caption = if param.caption.is_empty() { param.name.clone() } else { param.caption.clone() };
-        let default = param.default.0 as f32;
-        let (min, max, choices): (f32, f32, &'static [&'static str]) = match param.kind {
-            ParamKind::Enum => {
-                let choices: Vec<&'static str> = param.choices.iter().map(|c| leak(c.clone())).collect();
-                (0.0, choices.len().saturating_sub(1) as f32, Box::leak(choices.into_boxed_slice()))
-            }
-            ParamKind::Bool => (0.0, 1.0, &["Off", "On"]),
-            ParamKind::Float | ParamKind::Int => {
-                let span = default.abs().max(1.0) * 10.0;
-                (param.min.map_or(default - span, |v| v as f32), param.max.map_or(default + span, |v| v as f32), &[])
-            }
-            ParamKind::Complex => {
-                return Err(format!("`{}`: a simulation's parameters are numbers, bools and choices, not complex numbers", param.name));
-            }
-        };
-        parameters.push(SimParamDef { name: leak(param.name.clone()), display_name: leak(caption), default, min, max, tooltip: leak(param.hint.clone()), choices });
-    }
-    Ok(parameters)
+/// A Rhai script's `PARAMS` as the simulation's parameters, as every
+/// kind takes a script's (`ir::Program::param_defs`): numbers, bools
+/// and choices.
+fn sim_params(program: &lang::ir::Program) -> Result<Vec<ParamDef>, String> {
+    program.param_defs(lang::ir::ComplexParams::Refuse("a simulation's parameters are numbers, bools and choices"))
 }
 
 /// A source compiled to the definition it registers as, under `name`.
@@ -345,14 +324,14 @@ fn cpu_engine() -> rhai::Engine {
 
 /// The parameters as `p`: each at `value(name)`, an int where the script
 /// reads one.
-fn params_map(params: &[SimParamDef], ints: &[String], grids: &[CpuGrid], value: impl Fn(&str) -> f32) -> rhai::Map {
+fn params_map(params: &[ParamDef], ints: &[String], grids: &[CpuGrid], value: impl Fn(&str) -> f32) -> rhai::Map {
     let mut map = rhai::Map::new();
     let at = |name: &str| {
         let v = value(name);
         if ints.iter().any(|n| n == name) { rhai::Dynamic::from_int(v.round() as rhai::INT) } else { rhai::Dynamic::from_float(f64::from(v)) }
     };
     for p in params {
-        map.insert(p.name.into(), at(p.name));
+        map.insert(p.name.as_ref().into(), at(&p.name));
     }
     // A grid: its rows, each a map of its cells by column.
     for g in grids {
@@ -368,7 +347,7 @@ fn params_map(params: &[SimParamDef], ints: &[String], grids: &[CpuGrid], value:
 }
 
 /// A grid's fill's result for a row: its cells' values by column.
-fn row_of(r: &rhai::Dynamic, f: &str) -> Result<crate::param_layout::Row, String> {
+fn row_of(r: &rhai::Dynamic, f: &str) -> Result<crate::params::layout::Row, String> {
     let what = || format!("`{f}(p, row)` gives a map of the row's values by column, `#{{ radius: 2.0 }}`");
     let m = r.clone().try_cast::<rhai::Map>().ok_or_else(what)?;
     m.iter().map(|(k, v)| number(v).map(|n| (k.to_string(), n as f32)).ok_or_else(what)).collect()
@@ -380,8 +359,8 @@ fn row_of(r: &rhai::Dynamic, f: &str) -> Result<crate::param_layout::Row, String
 /// the grid's size and the pyramid's reach, and whether the row is the
 /// fill's while the grid is hidden. A failure is logged once and gives
 /// nothing.
-fn bind_layout(name: &str, parameters: &'static [SimParamDef], spec: lang::rhai::LayoutSpec) -> crate::param_layout::ParamLayout {
-    use crate::param_layout::{GridFill, ParamLayout, Row};
+fn bind_layout(name: &str, parameters: &'static [ParamDef], spec: lang::rhai::LayoutSpec) -> crate::params::layout::ParamLayout {
+    use crate::params::layout::{GridFill, ParamLayout, Row};
     let grids = spec
         .grids
         .into_iter()
@@ -389,7 +368,7 @@ fn bind_layout(name: &str, parameters: &'static [SimParamDef], spec: lang::rhai:
             let mut grid = g.grid;
             grid.fill = g.fill.map(|(when, f)| {
                 let model = name.to_string();
-                let cells: crate::param_layout::FillFn = Arc::new(move |value: &dyn Fn(&str) -> f32, row: usize| -> Row {
+                let cells: crate::params::layout::FillFn = Arc::new(move |value: &dyn Fn(&str) -> f32, row: usize| -> Row {
                     let r = with_script(&model, |e, ast, s| {
                         let p = params_map(parameters, &s.ints, &s.grids, value);
                         call_cpu_with(e, ast, &f, (p, row as rhai::INT)).and_then(|r| row_of(&r, &f))
@@ -406,7 +385,7 @@ fn bind_layout(name: &str, parameters: &'static [SimParamDef], spec: lang::rhai:
             });
             grid.warn = g.warn.map(|f| {
                 let model = name.to_string();
-                let warn: crate::param_layout::WarnFn = Arc::new(move |row, cells: &Row, value: &dyn Fn(&str) -> f32, (w, h), preview| {
+                let warn: crate::params::layout::WarnFn = Arc::new(move |row, cells: &Row, value: &dyn Fn(&str) -> f32, (w, h), preview| {
                     let r = with_script(&model, |e, ast, s| {
                         let p = params_map(parameters, &s.ints, &s.grids, value);
                         let cells: rhai::Map = cells.iter().map(|(k, v)| (k.as_str().into(), rhai::Dynamic::from_float(f64::from(*v)))).collect();
@@ -535,7 +514,7 @@ fn script_dt_bound(p: &super::Params) -> f32 {
 /// thousands of taps of Rhai. A failure is logged once and gives
 /// `fallback`.
 fn cached<T: Clone + 'static>(cache: &'static std::thread::LocalKey<std::cell::RefCell<HashMap<String, (Vec<u32>, T)>>>, model: &ModelDef, values: &dyn Fn(&str) -> f32, f: &str, read: fn(&rhai::Dynamic) -> Result<T, String>, fallback: impl FnOnce() -> T) -> T {
-    let key: Vec<u32> = model.parameters.iter().map(|p| values(p.name).to_bits()).collect();
+    let key: Vec<u32> = model.parameters.iter().map(|p| values(&*p.name).to_bits()).collect();
     if let Some(hit) = cache.with(|c| c.borrow().get(model.name).filter(|(k, _)| *k == key).map(|(_, v)| v.clone())) {
         return hit;
     }
@@ -595,14 +574,8 @@ impl Clone for super::SimKernel {
 
 /// The parameter layout of the Rhai model or colouring `name`, when its
 /// `PARAMS` has conditions or grids (rhai-plugins P7).
-pub fn param_layout(name: &str) -> Option<Arc<crate::param_layout::ParamLayout>> {
+pub fn param_layout(name: &str) -> Option<Arc<crate::params::layout::ParamLayout>> {
     registry().read().ok()?.layouts.get(name).cloned()
-}
-
-/// Whether `param` of the Rhai model `name` is slow (`INFO.slow`): what
-/// `sim::SLOW_PARAMS` says of a built-in's.
-pub fn is_slow_param(name: &str, param: &str) -> bool {
-    registry().read().is_ok_and(|r| r.slow.get(name).is_some_and(|s| s.iter().any(|p| p == param)))
 }
 
 /// The per-scale warps of a Rhai model with `INFO.scale_warps` (P4 step
@@ -613,7 +586,7 @@ pub fn scale_warps(name: &str) -> Option<&'static super::ScaleWarps> {
 
 /// A script's `INFO.scale_warps` (P4 step 9c): the parameter counting the
 /// live rows and the rows, each row's five `s{i}_warp_*` in `PARAMS`.
-fn scale_warps_of(source: &str, name: &str, parameters: &[SimParamDef]) -> Result<Option<super::ScaleWarps>, String> {
+fn scale_warps_of(source: &str, name: &str, parameters: &[ParamDef]) -> Result<Option<super::ScaleWarps>, String> {
     let Some(v) = lang::rhai::info_json(source, "scale_warps") else { return Ok(None) };
     let what = "`INFO.scale_warps` is `#{ rows_param, rows }`";
     let m = v.as_object().ok_or(what)?;
@@ -651,7 +624,7 @@ pub fn discs(name: &str, params: &std::collections::BTreeMap<String, f32>) -> Op
 /// `title`, `params` (by name, of `PARAMS`), `steps`, `dt`, and the
 /// config's `boundary`, `init`, `coloring` (a built-in's name),
 /// `coloring_params`, `matte` and `warp` as a `.fflame` spells them.
-fn presets_of(source: &str, params: &[SimParamDef], default_steps: u32) -> Result<Vec<SimPreset>, String> {
+fn presets_of(source: &str, params: &[ParamDef], default_steps: u32) -> Result<Vec<SimPreset>, String> {
     use serde_json::Value;
     let Some(list) = lang::rhai::info_json(source, "presets") else { return Ok(Vec::new()) };
     let Value::Array(list) = list else { return Err("`INFO.presets` is a list of maps".to_string()) };
@@ -820,7 +793,12 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
             features.push(f);
         }
     }
-    let parameters: &'static [SimParamDef] = Box::leak(sim_params(&program)?.into_boxed_slice());
+    let mut parameters = sim_params(&program)?;
+    for s in lang::rhai::info_strings(source, "slow") {
+        let p = parameters.iter_mut().find(|p| p.name == s).ok_or_else(|| format!("`INFO.slow` names `{s}`, which is not in `PARAMS`"))?;
+        p.slow = true;
+    }
+    let parameters: &'static [ParamDef] = Box::leak(parameters.into_boxed_slice());
     // A pass run several times a step, its count a parameter (P4 step
     // 9a): `#{ pass: 2, param: "relax" }`, the pass numbered as the
     // functions are (`cell_step` is 1).
@@ -857,7 +835,7 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
     };
     let at_defaults_map = || {
         let (_, _, ints) = cpu.as_ref().expect("a CPU function");
-        params_map(parameters, ints, &grids, |n| parameters.iter().find(|p| p.name == n).map_or(0.0, |p| p.default))
+        params_map(parameters, ints, &grids, |n| parameters.iter().find(|p| p.name == n).map_or(0.0, |p| p.slot_default()))
     };
     // A grid's fill and warning run once here, on its first row at the
     // defaults: a script that cannot give them is a message now.
@@ -933,11 +911,6 @@ pub fn compile_model(source: &str, name: &str) -> Result<ModelDef, String> {
         }
         Some(_) => return Err("`INFO.measure` is `#{ param, slices }`".to_string()),
     };
-    for s in lang::rhai::info_strings(source, "slow") {
-        if !parameters.iter().any(|p| p.name == s) {
-            return Err(format!("`INFO.slow` names `{s}`, which is not in `PARAMS`"));
-        }
-    }
     if measure.is_none() && wgsl.contains("sim_scratch_") {
         return Err("the step reads a measure pass's scratch (`scratch`, `ctx.scratch_on`): it needs `INFO.measure`".to_string());
     }
@@ -1021,7 +994,6 @@ pub fn register_model_as(source: &str, name: &str) -> Result<(), String> {
             Some(w) => r.warps.insert(name.to_string(), w),
             None => r.warps.remove(name),
         };
-        r.slow.insert(name.to_string(), lang::rhai::info_strings(source, "slow"));
         match layout {
             Some(l) => r.layouts.insert(name.to_string(), l),
             None => r.layouts.remove(name),
@@ -1067,7 +1039,7 @@ mod tests {
     #[test]
     fn a_colouring_compiles_to_a_definition() {
         let def = compile(CHANNEL, "custom-test").unwrap_or_else(|e| panic!("{e}"));
-        let names: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = def.parameters.iter().map(|p| &*p.name).collect();
         assert_eq!(names, ["channel", "scale", "offset", "wrap"]);
         assert!(def.features.is_empty(), "it reads the state alone");
         let src = "const INFO = #{ title: \"Edges\" };\nfn cell_color(cell, p, ctx) {\n    let g = vec3(cell.gx.x, cell.gy.x, cell.dist);\n    \
@@ -1087,7 +1059,7 @@ mod tests {
     fn a_model_compiles_to_a_definition() {
         let def = compile_model(SHIPPED_MODELS[0].1, "custom-gs").unwrap_or_else(|e| panic!("{e}"));
         let builtin = &super::super::models::GRAY_SCOTT;
-        let names = |d: &ModelDef| d.parameters.iter().map(|p| (p.name, p.default, p.min, p.max)).collect::<Vec<_>>();
+        let names = |d: &ModelDef| d.parameters.iter().map(|p| (&*p.name, p.slot_default(), p.slot_range().0, p.slot_range().1)).collect::<Vec<_>>();
         assert_eq!(names(&def), names(builtin));
         assert_eq!((def.passes, def.default_dt, def.max_dt, def.default_steps), (1, 1.0, 1.25, 10000));
         assert_eq!(def.diffusion, builtin.diffusion);
@@ -1269,10 +1241,10 @@ fn discs(p) {
 }
 "#;
         let def = compile_model(src, "custom-grid").unwrap_or_else(|e| panic!("{e}"));
-        let names: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = def.parameters.iter().map(|p| &*p.name).collect();
         assert_eq!(names, ["scales", "base", "layout", "s0_radius", "s0_sym", "s1_radius", "s1_sym", "s2_radius", "s2_sym"]);
         let cell = def.parameters.iter().find(|p| p.name == "s2_radius").unwrap();
-        assert_eq!((cell.display_name, cell.default, cell.tooltip), ("Scale 3 radius", 4.0, "How far."));
+        assert_eq!((&*cell.label, cell.slot_default(), &*cell.hint), ("Scale 3 radius", 4.0, "How far."));
         // A computed row: one read, at the slot its row gives.
         assert!(def.wgsl.contains("mparam(u32(3i + clamp("), "{}", def.wgsl);
         register_model_as(src, "custom-grid").unwrap();
@@ -1289,7 +1261,7 @@ fn discs(p) {
         let filled = layout.fills(&ladder, &table);
         assert_eq!(filled.iter().find(|(n, _)| n == "s2_radius").map(|(_, v)| *v), Some(4.5), "{filled:?}");
         let warn = g.warn.as_ref().expect("a warning");
-        let wide: crate::param_layout::Row = [("radius".to_string(), 1.0e6), ("sym".to_string(), 0.0)].into();
+        let wide: crate::params::layout::Row = [("radius".to_string(), 1.0e6), ("sym".to_string(), 0.0)].into();
         assert_eq!(warn(0, &wide, &table, (64, 64), false).as_deref(), Some("too wide"));
         assert_eq!(warn(0, &g.row(0, &table), &table, (64, 64), false), None);
         // The CPU reads the grid as rows.
@@ -1303,7 +1275,9 @@ fn discs(p) {
             let e = compile_model(&bad, "custom-bad").expect_err(says);
             assert!(e.contains(says), "{says}: {e}");
         }
-        // A constant row anywhere; a computed one is a model's.
+        // A row constant or computed, in a colouring as in a model (one
+        // parameter system, step 10): the computed one is the colouring's
+        // `cparam` at the slot its row gives.
         let colouring = "const PARAMS = #{ g: #{ type: \"grid\", rows: 2, columns: #{ v: #{ value: 1.0 } } } };
 fn cell_color(cell, p, ctx) {
     rgba(p.g[1].v, cell.state.x, 0.0, 1.0)
@@ -1313,7 +1287,8 @@ fn cell_color(cell, p, ctx) {
             panic!("{e}");
         }
         let computed = colouring.replace("p.g[1].v", "p.g[to_int(cell.state.x)].v");
-        assert!(compile(&computed, "custom-gc2").is_err_and(|e| e.contains("simulation model")));
+        let def = compile(&computed, "custom-gc2").unwrap_or_else(|e| panic!("{e}"));
+        assert!(def.wgsl.contains("cparam(u32(0i + clamp("), "{}", def.wgsl);
     }
 
     /// A carried source registers under the name the config gives it, and
@@ -1470,16 +1445,19 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
         let mut s = String::new();
         let _ = writeln!(s, "const PARAMS = #{{");
         for p in m.parameters {
-            let value = if p.choices.is_empty() { float(f64::from(p.default)) } else { format!("{}", p.default as i64) };
+            let value = if p.options().is_none() { float(f64::from(p.slot_default())) } else { format!("{}", p.slot_default() as i64) };
             let _ = writeln!(s, "    {}: #{{", p.name);
             let _ = write!(s, "        value: {value}, ");
-            if p.choices.is_empty() {
-                let _ = write!(s, "min: {}, max: {}, ", float(f64::from(p.min)), float(f64::from(p.max)));
-            } else {
-                let _ = write!(s, "choices: {}, ", rhai_literal(&serde_json::json!(p.choices)));
+            match p.options() {
+                None => {
+                    let _ = write!(s, "min: {}, max: {}, ", float(f64::from(p.slot_range().0)), float(f64::from(p.slot_range().1)));
+                }
+                Some(o) => {
+                    let _ = write!(s, "choices: {}, ", rhai_literal(&serde_json::json!(o.iter().collect::<Vec<_>>())));
+                }
             }
-            let _ = writeln!(s, "caption: {:?},", p.display_name);
-            let _ = writeln!(s, "        hint: {:?},", p.tooltip);
+            let _ = writeln!(s, "caption: {:?},", p.label);
+            let _ = writeln!(s, "        hint: {:?},", p.hint);
             let _ = writeln!(s, "    }},");
         }
         let _ = writeln!(s, "}};\nconst INFO = #{{");
@@ -1509,7 +1487,7 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
         if let Some(w) = super::super::scale_warps(m.name) {
             let _ = writeln!(s, "    scale_warps: #{{ rows_param: {:?}, rows: {} }},", w.rows_param, w.rows);
         }
-        let slow: Vec<&str> = super::super::SLOW_PARAMS.iter().filter(|(model, _)| *model == m.name).map(|(_, p)| *p).collect();
+        let slow: Vec<&str> = m.parameters.iter().filter(|p| p.slow).map(|p| &*p.name).collect();
         if !slow.is_empty() {
             let _ = writeln!(s, "    slow: {},", rhai_literal(&serde_json::json!(slow)));
         }
@@ -1564,9 +1542,9 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
             // Its parameters by name -- a grid lays its cells out row by
             // row, where a built-in may have appended a column (McCabe's
             // lean) -- and in the order the panel lists them.
-            let params = |m: &ModelDef| {
-                let mut v = m.parameters.iter().map(|p| (p.name, p.display_name, p.default, p.min, p.max, p.tooltip, p.choices)).collect::<Vec<_>>();
-                v.sort_by(|a, b| a.0.cmp(b.0));
+            let params = |m: &'static ModelDef| {
+                let mut v = m.parameters.iter().collect::<Vec<_>>();
+                v.sort_by(|a, b| a.name.cmp(&b.name));
                 v
             };
             assert_eq!(params(twin), params(builtin), "{name}: parameters");
@@ -1574,7 +1552,7 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
                 let (layout, warps) = (super::super::param_layout(m.name), super::super::scale_warps(m.name));
                 m.parameters
                     .iter()
-                    .map(|p| p.name)
+                    .map(|p| &*p.name)
                     .filter(|n| !layout.as_ref().is_some_and(|l| l.grids.iter().any(|g| g.is_cell(n))) && !warps.is_some_and(|w| w.is_param(n)))
                     .collect::<Vec<_>>()
             };
@@ -1584,7 +1562,7 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
             // the warnings they give, at the defaults and at each preset.
             let shape = |m: &str| {
                 super::super::param_layout(m).map(|l| {
-                    let mut conditions: Vec<(String, crate::param_layout::ShowIf)> = l.show_if.clone();
+                    let mut conditions: Vec<(String, crate::params::layout::ShowIf)> = l.show_if.clone();
                     conditions.sort_by(|a, b| a.0.cmp(&b.0));
                     let grids: Vec<_> = l
                         .grids
@@ -1602,7 +1580,7 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
             if let (Some(a), Some(b)) = (super::super::param_layout(name), super::super::param_layout(&key)) {
                 let at_presets = std::iter::once(std::collections::BTreeMap::new()).chain(builtin.presets.iter().map(|p| p.params.iter().map(|(k, v)| (k.to_string(), *v)).collect()));
                 for at in at_presets {
-                    let value = |n: &str| at.get(n).copied().unwrap_or_else(|| builtin.parameters.iter().find(|p| p.name == n).map_or(0.0, |p| p.default));
+                    let value = |n: &str| at.get(n).copied().unwrap_or_else(|| builtin.parameters.iter().find(|p| p.name == n).map_or(0.0, |p| p.slot_default()));
                     for (ga, gb) in a.grids.iter().zip(b.grids.iter().filter(|g| g.drawn)) {
                         for r in 0..ga.rows {
                             // A built-in fills in f32 and a script in f64:
@@ -1619,7 +1597,7 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
                             // coarse scales reach past it.
                             let row = fa.unwrap_or_else(|| ga.row(r, &value));
                             for preview in [false, true] {
-                                let warn = |g: &crate::param_layout::ParamGrid| g.warn.as_ref().and_then(|w| w(r, &row, &value, (64, 64), preview));
+                                let warn = |g: &crate::params::layout::ParamGrid| g.warn.as_ref().and_then(|w| w(r, &row, &value, (64, 64), preview));
                                 assert_eq!(warn(gb), warn(ga), "{name}: row {r}'s warning at {at:?}");
                             }
                         }
@@ -1644,9 +1622,6 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
             assert_eq!(passes(twin), passes(builtin), "{name}: its passes");
             let warps = |m: &str| super::super::scale_warps(m).map(|w| (w.rows_param, w.rows));
             assert_eq!(warps(&key), warps(name), "{name}: its per-scale warps");
-            for p in builtin.parameters {
-                assert_eq!(super::super::is_slow_param(&key, p.name), super::super::is_slow_param(name, p.name), "{name}.{}: slow", p.name);
-            }
             // Its agents (P4 step 9d): their passes, and their number at
             // the defaults and at each preset, on a few grids.
             assert_eq!(twin.agents.map(|a| a.passes), builtin.agents.map(|a| a.passes), "{name}: its agents' passes");
@@ -1668,7 +1643,7 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
             assert_eq!(twin.dt_bound.is_some(), builtin.dt_bound.is_some(), "{name}: a time step of its own");
             let mut points = vec![std::collections::BTreeMap::new()];
             for p in builtin.parameters {
-                for v in [p.min, p.max] {
+                for v in [p.slot_range().0, p.slot_range().1] {
                     points.push([(p.name.to_string(), v)].into());
                 }
             }
@@ -1705,8 +1680,7 @@ fn cell_step(cell) { vec4(helper(cell.x), 0.0, 0.0, 0.0) }", "custom-x");
         for (name, source) in SHIPPED {
             let builtin = super::super::COLORINGS.iter().find(|c| c.name == *name).unwrap_or_else(|| panic!("`{name}` is a built-in"));
             let twin = compile(source, &format!("custom-twin-{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
-            let params = |c: &SimColoringDef| c.parameters.iter().map(|p| (p.name, p.display_name, p.default, p.min, p.max, p.tooltip, p.choices)).collect::<Vec<_>>();
-            assert_eq!(params(&twin), params(builtin), "{name}: parameters");
+            assert_eq!(twin.parameters, builtin.parameters, "{name}: parameters");
             assert_eq!((twin.display_name, twin.description), (builtin.display_name, builtin.description), "{name}: labels");
             let features = |c: &SimColoringDef| {
                 let mut f: Vec<String> = c.features.iter().map(|f| format!("{f:?}")).collect();

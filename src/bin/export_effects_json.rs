@@ -23,11 +23,11 @@
 //! Both are places where effects have not caught up with variations,
 //! and both are visible in the output as nulls rather than papered over.
 //!
-//! * **`EffectParameter::description` is never populated.** The field
-//!   exists — added in `5410c8a3`, alongside `display_name` — but all 76
-//!   shipped parameters leave it `None`, where `VariationParameter` has
-//!   prose in 2836 of 2971 `param!` macros. So this is a data-entry job,
-//!   not a schema change.
+//! * **A parameter's `description` (its definition's hint) is mostly
+//!   unpopulated.** The field exists — added in `5410c8a3`, alongside
+//!   `display_name` — but most shipped parameters leave it empty, where
+//!   the variations have prose in 2836 of 2971 `param!` macros. So this
+//!   is a data-entry job, not a schema change.
 //!
 //!   An earlier version of this comment claimed the field did not exist
 //!   at all. The emitted null was right for the wrong reason, which is
@@ -41,21 +41,8 @@
 //!   curated name for a built-in and the author's for anything else.
 
 use fractal_flame_wgpu::effects::{global_effect_registry, EffectCategory};
-use fractal_flame_wgpu::variations::ParamType;
 
 rust_i18n::i18n!("locales");
-
-fn param_type_to_wire(t: &ParamType) -> serde_json::Value {
-    match t {
-        ParamType::Float => serde_json::json!("float"),
-        ParamType::UnlimitedFloat => serde_json::json!("unlimited_float"),
-        ParamType::Integer => serde_json::json!("integer"),
-        ParamType::UnlimitedInteger => serde_json::json!("unlimited_integer"),
-        ParamType::Boolean => serde_json::json!("boolean"),
-        ParamType::Angle => serde_json::json!("angle"),
-        ParamType::Enum { choices } => serde_json::json!({ "enum": { "choices": choices } }),
-    }
-}
 
 fn main() {
     let out_path = std::env::args()
@@ -90,23 +77,9 @@ fn main() {
             over_param_cap.push(format!("{} ({})", info.name, info.parameters.len()));
         }
 
-        let parameters: Vec<serde_json::Value> = info
-            .parameters
-            .iter()
-            .map(|p| {
-                serde_json::json!({
-                    "name": p.name,
-                    "display_name": p.display_name,
-                    "param_type": param_type_to_wire(&p.param_type),
-                    "default_value": p.default_value,
-                    "min_value": p.min_value,
-                    "max_value": p.max_value,
-                    // Real field, simply not authored yet for any
-                    // shipped effect — see the module docs.
-                    "description": p.description,
-                })
-            })
-            .collect();
+        // `description` is a real field, simply not authored yet for
+        // every shipped effect -- see the module docs.
+        let parameters: Vec<serde_json::Value> = info.parameters.iter().map(fractal_flame_wgpu::params::api_json).collect();
 
         rows.push(serde_json::json!({
             "name": info.name,

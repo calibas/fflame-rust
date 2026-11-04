@@ -232,32 +232,6 @@ pub enum ColoringFeature {
     SkipsEscapingIterate,
 }
 
-/// A parameter a formula or coloring exposes. Same shape as variation
-/// parameters, minus the type zoo — everything is a float slot in v1
-/// (integers and small enums ride as floats the way variation
-/// `Integer`/`Enum` params ride their buffer).
-#[derive(Clone)]
-pub struct EscapeParamDef {
-    /// Key inside `EscapeConfig::formula_params` / `coloring_params`.
-    pub name: &'static str,
-    pub display_name: &'static str,
-    pub default: f32,
-    pub min: f32,
-    pub max: f32,
-    pub tooltip: &'static str,
-    /// Labels for a DISCRETE parameter, in index order; empty for a
-    /// continuous one.
-    ///
-    /// The stored value is unchanged — still the same `f32` index the
-    /// shader reads, still `min..max` — so this is presentation only.
-    /// What it fixes is that a set of named alternatives (Burning Ship
-    /// vs Celtic vs Buffalo; point vs cross vs circle) was being
-    /// offered as a continuum, where the user could land on 2.4 and
-    /// get variant 2 with no way to tell which choices existed short
-    /// of reading the tooltip.
-    pub choices: &'static [&'static str],
-}
-
 /// One named starting point for a formula.
 ///
 /// A formula's identity is not just its step: Origami wants a
@@ -410,7 +384,7 @@ pub struct FormulaDef {
     pub name: &'static str,
     pub display_name: &'static str,
     pub features: &'static [FormulaFeature],
-    pub parameters: &'static [EscapeParamDef],
+    pub parameters: &'static [crate::params::ParamDef],
     pub wgsl: &'static str,
     /// WGSL expression seeding `z₀` on the PARAMETER plane (`c` =
     /// pixel). Empty ⇒ the origin — right when 0 is the critical
@@ -487,7 +461,7 @@ pub struct ColoringDef {
     pub name: &'static str,
     pub display_name: &'static str,
     pub features: &'static [ColoringFeature],
-    pub parameters: &'static [EscapeParamDef],
+    pub parameters: &'static [crate::params::ParamDef],
     pub wgsl: &'static str,
     /// WGSL expression initializing the accumulator (e.g.
     /// `"vec4<f32>(1e30, 0.0, 0.0, 0.0)"` for a running min). Required
@@ -672,7 +646,7 @@ pub enum ParamOf {
 /// The undo history reads a value through this: a 0.0 stood in, and
 /// undoing a first edit wrote it (Smooth's Scale to 0, below its minimum).
 pub fn param_default(escape: &crate::config::escape::EscapeConfig, of: ParamOf, name: &str) -> Option<f32> {
-    let find = |ps: &[EscapeParamDef]| ps.iter().find(|p| p.name == name).map(|p| p.default);
+    let find = |ps: &[crate::params::ParamDef]| ps.iter().find(|p| p.name == name).map(|p| p.slot_default());
     let ifs = ifs::get_ifs(&escape.formula);
     let field = fields::get_field(&escape.formula);
     match of {
@@ -689,7 +663,7 @@ pub fn param_default(escape: &crate::config::escape::EscapeConfig, of: ParamOf, 
         ParamOf::Layer => layer_of(escape).and_then(|l| find(l.parameters)),
         ParamOf::Lens => {
             let registry = crate::variations::global_registry();
-            registry.get(&escape.lens).and_then(|v| v.parameters.iter().find(|p| p.name == name).map(|p| p.default_value))
+            registry.get(&escape.lens).and_then(|v| v.parameters.iter().find(|p| p.name == name).map(|p| p.slot_default()))
         }
     }
 }
@@ -799,37 +773,6 @@ pub static COLORINGS: &[&ColoringDef] = &[
 /// formula with a warning rather than failing the load — the same
 /// forward-compatibility posture `EscapeConfig::formula` documents
 /// (a file from a newer build should degrade, not error).
-/// Parameters whose next frame is slow, as (formula or colouring, param):
-/// dragged live they overshoot, so the panel commits them when the drag
-/// ends, or offers a small whole-number range as a dropdown
-/// (`ui::slow_controls`). An IFS walk's cost is its depth times its beam
-/// times its maps, and a solid's march multiplies that by its steps.
-pub const SLOW_PARAMS: &[(&str, &str)] = &[
-    ("ifs_flame", "levels"),
-    ("ifs_flame", "beam"),
-    ("ifs_flame_3d", "levels"),
-    ("ifs_flame_3d", "beam"),
-    ("ifs_flame_3d", "steps"),
-    ("quaternion_julia_solid", "levels"),
-    ("quaternion_julia_solid", "beam"),
-    ("quaternion_julia_solid", "steps"),
-    ("kifs_solid", "levels"),
-    ("kifs_solid", "beam"),
-    ("kifs_solid", "steps"),
-    ("mandelbox_solid", "levels"),
-    ("mandelbox_solid", "beam"),
-    ("mandelbox_solid", "steps"),
-    ("mandelbulb_solid", "levels"),
-    ("mandelbulb_solid", "beam"),
-    ("mandelbulb_solid", "steps"),
-];
-
-/// Whether `param` of the formula or colouring `def` is slow
-/// ([`SLOW_PARAMS`]).
-pub fn is_slow_param(def: &str, param: &str) -> bool {
-    SLOW_PARAMS.iter().any(|&(d, p)| d == def && p == param)
-}
-
 pub fn get_formula(name: &str) -> &'static FormulaDef {
     find_formula(name)
         .unwrap_or_else(|| {
@@ -851,7 +794,7 @@ pub fn get_coloring(name: &str) -> &'static ColoringDef {
 /// keys with defaults. Slot `i` is `parameters[i]` — the contract the
 /// WGSL `fparam`/`cparam` helpers index against.
 pub fn pack_params(
-    defs: &[EscapeParamDef],
+    defs: &[crate::params::ParamDef],
     values: &std::collections::BTreeMap<String, f32>,
     out: &mut [f32],
 ) {
@@ -861,7 +804,7 @@ pub fn pack_params(
             log::error!("Escape param '{}' exceeds the {}-slot budget", def.name, out.len());
             break;
         }
-        out[i] = values.get(def.name).copied().unwrap_or(def.default);
+        out[i] = values.get(&*def.name).copied().unwrap_or(def.slot_default());
     }
 }
 
@@ -910,7 +853,7 @@ mod tests {
     #[test]
     fn discrete_params_are_labelled_across_their_whole_range() {
         let mut checked = 0;
-        let mut params: Vec<(&str, &EscapeParamDef)> = Vec::new();
+        let mut params: Vec<(&str, &crate::params::ParamDef)> = Vec::new();
         for f in FORMULAS {
             params.extend(f.parameters.iter().map(|p| (f.name, p)));
         }
@@ -924,32 +867,32 @@ mod tests {
             params.extend(c.parameters.iter().map(|p| (c.name, p)));
         }
         for (owner, p) in params {
-            if p.choices.is_empty() {
+            let Some(choices) = p.options() else {
                 continue;
-            }
+            };
             checked += 1;
             assert_eq!(
-                p.min, 0.0,
+                p.slot_range().0, 0.0,
                 "{owner}.{}: a choice list indexes from 0, so min must be 0",
                 p.name
             );
             assert_eq!(
-                p.max,
-                (p.choices.len() - 1) as f32,
+                p.slot_range().1,
+                (choices.len() - 1) as f32,
                 "{owner}.{}: {} labels but the range runs to {} — the dropdown and the \
                  shader's clamp disagree",
                 p.name,
-                p.choices.len(),
-                p.max
+                choices.len(),
+                p.slot_range().1
             );
             assert!(
-                p.default >= 0.0 && p.default <= p.max && p.default.fract() == 0.0,
+                p.slot_default() >= 0.0 && p.slot_default() <= p.slot_range().1 && p.slot_default().fract() == 0.0,
                 "{owner}.{}: default {} is not one of the choices",
                 p.name,
-                p.default
+                p.slot_default()
             );
             assert!(
-                p.choices.iter().all(|c| !c.trim().is_empty()),
+                choices.iter().all(|c| !c.trim().is_empty()),
                 "{owner}.{}: a blank choice label",
                 p.name
             );
@@ -1024,11 +967,11 @@ mod tests {
                     .find(|p| p.name == *name)
                     .unwrap_or_else(|| panic!("{}: pick_params names `{name}`, which it does not have", c.name));
                 assert!(
-                    *v >= p.min && *v <= p.max,
+                    *v >= p.slot_range().0 && *v <= p.slot_range().1,
                     "{}.{name}: pick value {v} outside {}..{}",
                     c.name,
-                    p.min,
-                    p.max
+                    p.slot_range().0,
+                    p.slot_range().1
                 );
             }
         }
@@ -1073,24 +1016,3 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod slow_param_tests {
-    /// Every parameter marked slow names a real one: a renamed parameter
-    /// would otherwise go quietly back to a live slider.
-    #[test]
-    fn every_slow_param_names_a_real_parameter() {
-        for &(def, param) in super::SLOW_PARAMS {
-            let names: Vec<&str> = match super::ifs::get_ifs(def) {
-                Some(ifs) => ifs.parameters.iter().map(|p| p.name).collect(),
-                None => super::FORMULAS
-                    .iter()
-                    .filter(|f| f.name == def)
-                    .flat_map(|f| f.parameters.iter())
-                    .chain(super::COLORINGS.iter().filter(|c| c.name == def).flat_map(|c| c.parameters.iter()))
-                    .map(|p| p.name)
-                    .collect(),
-            };
-            assert!(names.contains(&param), "{def}.{param} is marked slow but is not a parameter");
-        }
-    }
-}

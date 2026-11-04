@@ -278,7 +278,7 @@ fn map_value(escape: &EscapeConfig, v: &crate::lang::ir::MapValue) -> f64 {
         MapValue::Param(name) => escape.formula_params.get(name).copied().map(f64::from).unwrap_or_else(|| {
             crate::escape::ifs::get_ifs(&escape.formula)
                 .and_then(|d| d.parameters.iter().find(|p| p.name == name.as_str()))
-                .map_or(0.0, |p| p.default as f64)
+                .map_or(0.0, |p| p.slot_default() as f64)
         }),
     }
 }
@@ -359,7 +359,7 @@ pub fn lens_flame(escape: &EscapeConfig, registry: &VariationRegistry) -> Option
         x.weight = t.amount.clamp(-LENS_AMOUNT_LIMIT, LENS_AMOUNT_LIMIT);
         x.set_variation(&t.variation, 1.0);
         for p in &info.parameters {
-            if let Some(v) = t.params.get(&p.name) {
+            if let Some(v) = t.params.get(&*p.name) {
                 x.set_variation_param(&t.variation, &p.name, *v);
             }
         }
@@ -431,7 +431,7 @@ fn lens_transform(escape: &EscapeConfig, registry: &VariationRegistry) -> Option
     t.variations.clear();
     t.set_variation(&escape.lens, 1.0);
     for p in &info.parameters {
-        if let Some(v) = escape.lens_params.get(&p.name) {
+        if let Some(v) = escape.lens_params.get(&*p.name) {
             t.set_variation_param(&escape.lens, &p.name, *v);
         }
     }
@@ -809,7 +809,7 @@ mod tests {
         let param = r.get(&name).unwrap().parameters[0].name.clone();
 
         let mut e = cfg(&name, 1.0);
-        e.lens_params.insert(param.clone(), 0.375);
+        e.lens_params.insert(param.to_string(), 0.375);
         let f = lens_flame(&e, &r).expect("a lens");
         let got = f.transforms[0].get_variation_param_or_default(&name, &param, &r);
         assert!((got - 0.375).abs() < 1e-6, "{name}.{param} read back {got}");

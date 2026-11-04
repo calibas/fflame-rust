@@ -15,15 +15,15 @@
 //! and [`ensure`] registers them before anything renders it, so a
 //! `.fflame` with an effect of the user's renders anywhere the app runs.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
-use super::{EffectCategory, EffectInfo, EffectParameter, EffectSource};
+use super::{EffectCategory, EffectInfo, EffectSource};
 use crate::renderer::effect_chain::MAX_EFFECT_PARAMS;
 use crate::config::escape::{CustomDialect, CustomSource};
-use crate::lang::{self, ir::ParamKind, EntryKind};
+use crate::lang::{self, EntryKind};
 use crate::provenance::Provenance;
 use crate::scripted::{self, Ledger};
-use crate::variations::ParamType;
 
 /// The effect template around a compiled effect's `fx_effect(uv)`.
 ///
@@ -91,39 +91,8 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
         _ => EffectCategory::Color,
     };
 
-    let mut parameters = Vec::new();
-    for param in &program.params {
-        let caption = if param.caption.is_empty() { param.name.clone() } else { param.caption.clone() };
-        let bounded = param.min.is_some() && param.max.is_some();
-        let param_type = match param.kind {
-            ParamKind::Float if param.angle => ParamType::Angle,
-            ParamKind::Float if bounded => ParamType::Float,
-            ParamKind::Float => ParamType::UnlimitedFloat,
-            ParamKind::Int if bounded => ParamType::Integer,
-            ParamKind::Int => ParamType::UnlimitedInteger,
-            ParamKind::Bool => ParamType::Boolean,
-            ParamKind::Enum => {
-                let choices: Vec<&'static str> = param.choices.iter().map(|c| &*Box::leak(c.clone().into_boxed_str())).collect();
-                ParamType::Enum { choices: Box::leak(choices.into_boxed_slice()) }
-            }
-            ParamKind::Complex => {
-                return Err(format!("`{}`: an effect's parameters are numbers, bools, choices and colours (`rgba`), not complex numbers", param.name))
-            }
-        };
-        let (min_value, max_value) = match &param_type {
-            ParamType::Enum { choices } => (Some(0.0), Some(choices.len().saturating_sub(1) as f32)),
-            _ => (param.min.map(|v| v as f32), param.max.map(|v| v as f32)),
-        };
-        parameters.push(EffectParameter {
-            name: param.name.clone(),
-            display_name: caption,
-            param_type,
-            default_value: param.default.0 as f32,
-            min_value,
-            max_value,
-            description: (!param.hint.is_empty()).then(|| param.hint.clone()),
-        });
-    }
+    // As every kind takes a script's (`ir::Program::param_defs`).
+    let parameters = program.param_defs(lang::ir::ComplexParams::Refuse("an effect's parameters are numbers, bools, choices and colours (`rgba`)"))?;
     if parameters.len() > MAX_EFFECT_PARAMS {
         return Err(format!("{} parameters: an effect has at most {MAX_EFFECT_PARAMS}", parameters.len()));
     }
@@ -136,10 +105,12 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
         lang::wgsl::validate_effect(&splice_blend_library(&wgsl)).map_err(|e| format!("the compiler produced invalid WGSL (a bug): {e}"))?;
     }
 
+    // Under its key: the version is its name's, so two versions of one
+    // effect live side by side (rule 7).
+    let name = if provenance.is_builtin() { id } else { key_for(&id, source) };
+    record_layout(&name, source)?;
     Ok(EffectInfo {
-        // Under its key: the version is its name's, so two versions of
-        // one effect live side by side (rule 7).
-        name: if provenance.is_builtin() { id } else { key_for(&id, source) },
+        name,
         category,
         display_name: program.name.clone(),
         source: EffectSource::Owned(wgsl),
@@ -147,6 +118,32 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
         provenance,
         labels: lang::rhai::source_labels(source).map(Arc::new),
     })
+}
+
+/// The Rhai sources' parameter layouts (their conditions and grids; one
+/// parameter system, step 10), by the name each registers under.
+fn layouts() -> &'static RwLock<HashMap<String, Arc<crate::params::layout::ParamLayout>>> {
+    static L: OnceLock<RwLock<HashMap<String, Arc<crate::params::layout::ParamLayout>>>> = OnceLock::new();
+    L.get_or_init(Default::default)
+}
+
+/// `source`'s layout, recorded under `name` (or forgotten, when it has
+/// none): what the panel draws its parameters by.
+fn record_layout(name: &str, source: &str) -> Result<(), String> {
+    let layout = lang::rhai::plain_layout(source)?;
+    if let Ok(mut l) = layouts().write() {
+        match layout {
+            Some(layout) => l.insert(name.to_string(), layout),
+            None => l.remove(name),
+        };
+    }
+    Ok(())
+}
+
+/// The parameter layout `name` registered with, when its `PARAMS` has
+/// conditions or grids.
+pub fn param_layout(name: &str) -> Option<Arc<crate::params::layout::ParamLayout>> {
+    layouts().read().ok()?.get(name).cloned()
 }
 
 /// The built-ins that are their Rhai twins (D1; docs/projects/
@@ -333,6 +330,7 @@ pub fn failure(id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::ParamKind as K;
 
     /// The built-ins that are their twins run on the web (a D1 check):
     /// each module, as the chain builds it, samples only at an explicit
@@ -418,10 +416,10 @@ fn effect(c, p, ctx) {
         assert_eq!(info.name, key_for("6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b", TINT), "under its key: id and version");
         assert_eq!(id_of(&info.name), "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b");
         assert_eq!(info.category, EffectCategory::Color);
-        let names: Vec<&str> = info.parameters.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = info.parameters.iter().map(|p| &*p.name).collect();
         assert_eq!(names, ["amount", "tint_r", "tint_g", "tint_b", "tint_a", "mode", "invert"]);
-        assert!(matches!(info.parameters[5].param_type, ParamType::Enum { choices } if choices.len() == 3));
-        assert!(matches!(info.parameters[6].param_type, ParamType::Boolean));
+        assert!(matches!(info.parameters[5].options(), Some(o) if o.len() == 3));
+        assert!(matches!(info.parameters[6].kind, K::Bool { .. }));
         let EffectSource::Owned(wgsl) = &info.source else { panic!("owned") };
         assert!(wgsl.contains("// INCLUDE_BLEND_MODES"), "it blends, so the library is spliced");
         assert!(wgsl.contains("fn fs_main") && wgsl.contains("fn vs_main"));

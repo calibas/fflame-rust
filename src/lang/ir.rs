@@ -587,7 +587,79 @@ pub fn size_value(e: &IExpr, param: &dyn Fn(ParamId) -> f64, maxiter: u32) -> Op
     })
 }
 
+/// How a kind lays a complex parameter in its slots: as two named parts
+/// (`name.re`, `name.im` for a formula; `name_re`, `name_im` for a
+/// variation), or not at all -- what the kind's parameters are instead.
+#[derive(Clone, Copy, Debug)]
+pub enum ComplexParams {
+    Split(&'static str),
+    Refuse(&'static str),
+}
+
+/// A number's kind from a `PARAMS` entry: its numbers as the f32 slots
+/// hold them. One the author did not bound both ways is free (a typed
+/// value may leave the range), its missing end a reach around the
+/// default so the slider holds it (an angle's 0 or 360). Logarithmic
+/// when declared `exponential`, or when the range spans five decades
+/// from above zero.
+fn number_kind(p: &Param, default: f64) -> crate::params::ParamKind {
+    let (lo, hi) = if p.angle {
+        (p.min.unwrap_or(0.0), p.max.unwrap_or(360.0))
+    } else {
+        let reach = default.abs().max(1.0) * 4.0;
+        let lo = p.min.unwrap_or_else(|| p.max.map_or(-reach, |m| m - 2.0 * reach).min(default));
+        let hi = p.max.unwrap_or_else(|| p.min.map_or(reach, |m| m + 2.0 * reach).max(default));
+        (lo, hi)
+    };
+    let (lo, hi) = (lo as f32, hi as f32);
+    let free = !(p.min.is_some() && p.max.is_some());
+    match p.kind {
+        ParamKind::Int => crate::params::ParamKind::Int { default: default.round() as i64, min: lo.round() as i64, max: hi.round() as i64, free },
+        _ => {
+            let log = lo > 0.0 && (p.exponential || hi / lo >= 1e5);
+            crate::params::ParamKind::Float { default: f64::from(default as f32), min: lo.into(), max: hi.into(), free: free && !p.angle, log, angle: p.angle }
+        }
+    }
+}
+
 impl Program {
+    /// Its parameters as the one parameter system's definitions, one per
+    /// slot in slot order -- what every kind registers a script's
+    /// parameters as (docs/projects/one-parameter-system.md, step 9): a
+    /// number ([`number_kind`]), a bool a switch, an enum a choice, a
+    /// complex number as `complex` says, a user function a choice over
+    /// the functions it may be.
+    pub fn param_defs(&self, complex: ComplexParams) -> Result<Vec<crate::params::ParamDef>, String> {
+        use crate::params::{Options, ParamDef, ParamKind as K};
+        let mut out = Vec::new();
+        for p in &self.params {
+            let caption = if p.caption.is_empty() { p.name.clone() } else { p.caption.clone() };
+            match p.kind {
+                ParamKind::Complex => match complex {
+                    ComplexParams::Refuse(what) => return Err(format!("`{}`: {what}, not complex numbers", p.name)),
+                    ComplexParams::Split(sep) => {
+                        for (part, value) in [("re", p.default.0), ("im", p.default.1)] {
+                            out.push(ParamDef::owned(format!("{}{sep}{part}", p.name), format!("{caption} ({part})"), p.hint.clone(), number_kind(p, value)));
+                        }
+                    }
+                },
+                ParamKind::Float | ParamKind::Int => out.push(ParamDef::owned(p.name.clone(), caption, p.hint.clone(), number_kind(p, p.default.0))),
+                ParamKind::Bool => out.push(ParamDef::owned(p.name.clone(), caption, p.hint.clone(), K::Bool { default: p.default.0 != 0.0 })),
+                ParamKind::Enum => {
+                    let last = p.choices.len().max(1) - 1;
+                    let kind = K::Choice { default: (p.default.0.round().max(0.0) as usize).min(last), options: Options::Owned(p.choices.clone()) };
+                    out.push(ParamDef::owned(p.name.clone(), caption, p.hint.clone(), kind));
+                }
+            }
+        }
+        let names: Vec<String> = super::builtins::USER_FUNCTIONS.iter().map(|b| b.name().to_string()).collect();
+        for f in &self.funcs {
+            let kind = K::Choice { default: f.default, options: Options::Owned(names.clone()) };
+            out.push(ParamDef::owned(f.name.clone(), f.caption.clone(), f.hint.clone(), kind));
+        }
+        Ok(out)
+    }
+
     /// Whether an array's size reads the settings (a parameter,
     /// `#maxiter`): the program is checked again at each settings' sizes
     /// (`custom::resolve`).
@@ -664,5 +736,47 @@ impl Program {
     /// a complex; one per user function.
     pub fn param_slots(&self) -> usize {
         self.params.iter().map(|p| p.ty().floats()).sum::<usize>() + self.funcs.len()
+    }
+}
+
+#[cfg(test)]
+mod param_defs_tests {
+    use super::ComplexParams;
+    use crate::params::{Options, ParamKind as K};
+
+    fn float(default: f64, min: f64, max: f64, free: bool, log: bool, angle: bool) -> K {
+        K::Float { default: f64::from(default as f32), min: f64::from(min as f32), max: f64::from(max as f32), free, log, angle }
+    }
+
+    /// One converter for every kind's script parameters: a number bounded
+    /// both ways is fixed to its range, one not is free with its missing
+    /// end a reach around the default (an angle's 0..360); five decades
+    /// or `exponential` is logarithmic; an int, a bool and an enum keep
+    /// their kinds; a complex number splits or is refused as the kind says.
+    #[test]
+    fn a_scripts_parameters_are_one_kind_of_definition() {
+        let src = "const PARAMS = #{\n    k: #{ value: 0.5, min: 0.0, max: 2.0, caption: \"Amount\", hint: \"How much.\" },\n    \
+                   big: #{ value: 500.0 },\n    low: #{ value: 4.0, min: 1.0 },\n    scale: #{ value: 0.01, min: 0.000001, max: 1.0 },\n    \
+                   curve: #{ value: 2.0, min: 1.0, max: 8.0, exponential: true },\n    turn: #{ value: 30.0, type: \"angle\" },\n    \
+                   c: #{ value: complex(0.1, -0.2) },\n    n: #{ value: 3, min: 1, max: 9 },\n    m: #{ value: 3 },\n    \
+                   flip: #{ value: false },\n    mode: #{ value: 1, choices: [\"A\", \"B\", \"C\"] },\n};\n\
+                   const INFO = #{ name: \"rhai_defs\" };\nfn variation(z, p) { z * p.k }\n";
+        let p = crate::lang::rhai::transformation(src).unwrap_or_else(|d| panic!("{d:?}"));
+        let defs = p.param_defs(ComplexParams::Split("_")).unwrap();
+        let by = |n: &str| defs.iter().find(|d| d.name == n).unwrap_or_else(|| panic!("no `{n}`"));
+        assert_eq!((&*by("k").label, by("k").hint()), ("Amount", Some("How much.")));
+        assert_eq!(by("k").kind, float(0.5, 0.0, 2.0, false, false, false));
+        assert_eq!(by("big").kind, float(500.0, -2000.0, 2000.0, true, false, false), "the slider holds its default");
+        assert_eq!(by("low").kind, float(4.0, 1.0, 33.0, true, false, false));
+        assert_eq!(by("scale").kind, float(0.01, 0.000001, 1.0, false, true, false), "five decades");
+        assert_eq!(by("curve").kind, float(2.0, 1.0, 8.0, false, true, false), "declared");
+        assert_eq!(by("turn").kind, float(30.0, 0.0, 360.0, false, false, true));
+        assert_eq!((&*by("c_re").label, by("c_re").slot_default(), by("c_im").slot_default()), ("c (re)", 0.1, -0.2));
+        assert_eq!(by("n").kind, K::Int { default: 3, min: 1, max: 9, free: false });
+        assert_eq!(by("m").kind, K::Int { default: 3, min: -12, max: 12, free: true });
+        assert_eq!(by("flip").kind, K::Bool { default: false });
+        assert_eq!(by("mode").kind, K::Choice { default: 1, options: Options::Static(&["A", "B", "C"]) });
+        let e = p.param_defs(ComplexParams::Refuse("its parameters are numbers")).unwrap_err();
+        assert_eq!(e, "`c`: its parameters are numbers, not complex numbers");
     }
 }

@@ -598,7 +598,7 @@ impl EscapeRenderer {
         let per_ray = 2.0 * (eye[3] * 0.5).tan() / h as f32;
         let param = |name: &str, fallback: f32| {
             escape.formula_params.get(name).copied().unwrap_or_else(|| {
-                def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.default)
+                def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.slot_default())
             })
         };
         let radius = path_core::light_radius(param("shadow_sharpness", 12.0));
@@ -854,7 +854,7 @@ impl EscapeRenderer {
     fn solid_path_rows(&self, escape: &crate::config::escape::EscapeConfig, def: &crate::escape::ifs::IfsDef, bounces: u32, w: u32) -> u32 {
         let param = |name: &str, fallback: f32| {
             escape.formula_params.get(name).copied().unwrap_or_else(|| {
-                def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.default)
+                def.parameters.iter().find(|p| p.name == name).map_or(fallback, |p| p.slot_default())
             })
         };
         let steps = param("steps", 96.0).max(4.0) as u64;
@@ -890,7 +890,7 @@ impl EscapeRenderer {
             .formula_params
             .get("beam")
             .copied()
-            .unwrap_or_else(|| def.parameters.iter().find(|p| p.name == "beam").map_or(1.0, |p| p.default))
+            .unwrap_or_else(|| def.parameters.iter().find(|p| p.name == "beam").map_or(1.0, |p| p.slot_default()))
             .clamp(1.0, assembler::IFS_MAX_BEAM as f32) as u32;
         let registry = crate::variations::global_registry();
         let lens_src = crate::escape::lens::lens_source(escape, &registry);

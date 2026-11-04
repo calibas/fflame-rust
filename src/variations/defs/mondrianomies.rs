@@ -50,8 +50,8 @@
 //!   rule is a random string, but seeds are not comparable to R runs.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 
@@ -72,7 +72,7 @@ pub static MONDRIANOMIES: VariationDef = VariationDef {
     features: &[Feature::NeedsRng, Feature::WritesColor],
     parameters: &[
         param!("seed", "Seed", int, 1.0, 0.0, 99999.0, "Seed for the random rule. Each seed is a different Mondrianomy: rule length 15-26, symbols from {F, +, -} with the source's 10/12/12 weights, three balanced bracket pairs at random positions."),
-        param!("depth", "Depth", int, 3.0, 1.0, 5.0, "How many times the rule substitutes F, starting from the axiom F-F-F-F (the R source picks 3 or 4). Segment count multiplies by the rule's F-count per level."),
+        param!(slow "depth", "Depth", int, 3.0, 1.0, 5.0, "How many times the rule substitutes F, starting from the axiom F-F-F-F (the R source picks 3 or 4). Segment count multiplies by the rule's F-count per level."),
         param!("drift", "Length Drift", float, 0.98, 0.9, 1.1, "Segment length = drift^d, where d counts segments drawn before this one (saved/restored with the bracket stack) — the source's ds = jitter(1). Exactly 1 gives the pure unit grid; small deviations make the grid drift and shear apart exponentially with drawing order."),
         param!("size", "Size", float, 0.3, 0.001, 2.0, "Output scale. Drawings span tens of units at unit segment length; 0.1 fits typical seeds near the frame."),
         param!("thickness", "Thickness", float, 0.0, 0.0, 0.5, "Jitter radius fattening the line skeleton into strokes (in un-scaled drawing units)."),
@@ -1070,7 +1070,7 @@ mod tests {
                 .iter()
                 .find(|p| p.name == k)
                 .unwrap_or_else(|| panic!("no param {k}"))
-                .default_value
+                .slot_default()
         };
         let mut flame = Flame::default();
         if flame.transforms.is_empty() {

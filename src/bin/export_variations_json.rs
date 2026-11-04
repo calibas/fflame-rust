@@ -33,7 +33,7 @@
 //! generated on demand rather than committed.
 
 use fractal_flame_wgpu::variations::docs::{parse_sources, VariationDoc};
-use fractal_flame_wgpu::variations::{global_registry, ParamType};
+use fractal_flame_wgpu::variations::global_registry;
 
 /// Read the prose out of `defs/*.rs`.
 ///
@@ -54,19 +54,6 @@ fn variation_docs() -> std::collections::BTreeMap<String, VariationDoc> {
         .filter_map(|p| std::fs::read_to_string(p).ok())
         .collect();
     parse_sources(sources.iter().map(String::as_str))
-}
-
-fn param_type_to_wire(t: &ParamType) -> serde_json::Value {
-    match t {
-        ParamType::Float => serde_json::json!("float"),
-        ParamType::UnlimitedFloat => serde_json::json!("unlimited_float"),
-        ParamType::Integer => serde_json::json!("integer"),
-        ParamType::UnlimitedInteger => serde_json::json!("unlimited_integer"),
-        ParamType::Boolean => serde_json::json!("boolean"),
-        ParamType::Angle => serde_json::json!("angle"),
-        // Externally tagged, matching ApiParamType's serde shape.
-        ParamType::Enum { choices } => serde_json::json!({ "enum": { "choices": choices } }),
-    }
 }
 
 fn main() {
@@ -90,21 +77,7 @@ fn main() {
             continue;
         }
 
-        let parameters: Vec<serde_json::Value> = info
-            .parameters
-            .iter()
-            .map(|p| {
-                serde_json::json!({
-                    "name": p.name,
-                    "display_name": p.display_name,
-                    "param_type": param_type_to_wire(&p.param_type),
-                    "default_value": p.default_value,
-                    "min_value": p.min_value,
-                    "max_value": p.max_value,
-                    "description": p.description,
-                })
-            })
-            .collect();
+        let parameters: Vec<serde_json::Value> = info.parameters.iter().map(fractal_flame_wgpu::params::api_json).collect();
 
         // Flag-like features as wire strings; the payload-carrying one
         // gets its own field, matching the wire format.

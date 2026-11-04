@@ -41,8 +41,8 @@
 //! No JWildfire/Apophysis equivalent — original to this project.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 
@@ -67,7 +67,7 @@ pub static HOFSTADTER3D: VariationDef = VariationDef {
     wgsl_state_init: None,
     parameters: &[
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Spatial scale: the butterfly (E −4..4, flux 0..1) spans size×size in x/y, and one full phase (or coupling) period spans size in z. Flux and phase both wrap, so the body tiles."),
-        param!("depth", "Max Denominator", int, 20.0, 2.0, 96.0, "Largest flux denominator q considered — hierarchy depth, band count per row, and compute cost."),
+        param!(slow "depth", "Max Denominator", int, 20.0, 2.0, 96.0, "Largest flux denominator q considered — hierarchy depth, band count per row, and compute cost."),
         param!("coupling", "Coupling", float, 1.0, 0.2, 3.0, "Almost-Mathieu coupling λ (at z = 0 in Coupling axis mode). 1 is the classic self-dual butterfly."),
         param!("hierarchy", "Hierarchy", float, 2.0, 0.5, 4.0, "Farey-basin weight exponent for the flux snap (see hofstadter)."),
         param!("snap", "Flux Snap", float, 1.0, 0.0, 1.0, "How hard y snaps to its rational flux row."),

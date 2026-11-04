@@ -24,8 +24,8 @@
 //! 2D mode is an identity pass-through (there is no `w` in the 2D pipeline).
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 
