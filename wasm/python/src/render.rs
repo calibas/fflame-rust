@@ -1,10 +1,9 @@
 //! Rendering: stills, sequences a Python program drives frame by frame,
-//! and animations the animation engine drives -- the video export's frame
-//! loop (`animation::export::export_animation`) without its encoder,
-//! which is the Python side's (frames to PNG files, or piped to FFmpeg).
+//! and animations the animation engine drives -- the video export's
+//! frames (`animation::frames::FrameSource`) without its encoder, which
+//! is the Python side's (frames to PNG files, or piped to FFmpeg).
 //!
-//! COPIED: `Gpu::open`/`Gpu::frame` from that export loop, and the
-//! renderer kept per size (`renderer_for`) from wasm/render's
+//! COPIED: the renderer kept per size (`renderer_for`) from wasm/render's
 //! `render_with_live`; listed for review in docs/projects/pyfflame.md,
 //! "Copied code".
 //!
@@ -16,13 +15,12 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
-use fractal_flame_wgpu::animation::export::{apply_animation_values, export_signals, moment_configs, tracks_missing_signals};
-use fractal_flame_wgpu::animation::{Animation, AnimationController};
+use fractal_flame_wgpu::animation::frames::FrameSource;
+use fractal_flame_wgpu::animation::Animation;
 use fractal_flame_wgpu::config::defaults::DEFAULT_EXPORT_ITERATIONS_PER_THREAD;
 use fractal_flame_wgpu::config::FractalConfig;
 use fractal_flame_wgpu::png_metadata::{encode_png_with_metadata, PngMetadata};
 use fractal_flame_wgpu::renderer::{render_with, FlameRenderer, NoProgress, RenderEngines, RenderJob, RenderOutput};
-use fractal_flame_wgpu::signal::SignalManager;
 use serde_json::{json, Value};
 
 use crate::backend;
@@ -133,35 +131,16 @@ fn renderer_for<'a>(
     &mut slot.as_mut().expect("made above").renderer
 }
 
-/// An animation, opened: the controller with its tracks bound, its
-/// signals, and the renderer and engines its frames share -- a
-/// simulation's field runs on from frame to frame rather than
+/// An animation, opened: its frames, and the renderer and engines they
+/// share -- a simulation's field runs on from frame to frame rather than
 /// restarting, as in a video.
 struct Session {
-    config: FractalConfig,
-    controller: AnimationController,
-    signals: Option<SignalManager>,
-    fps: u32,
-    frames: u32,
+    source: FrameSource,
     width: u32,
     height: u32,
     options: Options,
     target: Option<Target>,
     engines: RenderEngines,
-}
-
-impl Session {
-    fn frame_config(&mut self, frame: u32) -> (FractalConfig, Vec<FractalConfig>) {
-        let time = frame as f64 / self.fps as f64;
-        let values = match &self.signals {
-            Some(s) => self.controller.evaluate_at_time_with_signals(time, Some(s)),
-            None => self.controller.evaluate_at_time(time),
-        };
-        let mut config = self.config.clone();
-        apply_animation_values(&mut config, &values);
-        let moments = moment_configs(&self.config, &self.controller, time, self.signals.as_ref());
-        (config, moments)
-    }
 }
 
 /// The GPU and everything kept on it between calls.
@@ -201,41 +180,20 @@ impl Gpu {
     /// if given, else the one it embeds, as the CLI's export-animation.
     pub fn open(&mut self, animation: &str, config: Option<&str>, width: u32, height: u32, fps: u32, options: Options) -> Result<(u32, Value), String> {
         check_size(width, height)?;
-        let mut animation = Animation::from_json(animation).map_err(|e| format!("animation did not parse: {e}"))?;
+        let animation = Animation::from_json(animation).map_err(|e| format!("animation did not parse: {e}"))?;
         let config = match config {
             Some(json) => FractalConfig::from_json(json).map_err(|e| format!("config did not parse: {e}"))?,
             None => animation.base_config.clone().ok_or("the animation embeds no base config; pass one")?,
         };
-        let fps = fps.max(1);
-        let mut warnings: Vec<String> = animation
-            .remove_broken_tracks()
-            .into_iter()
-            .map(|t| format!("the track on `{}` lost its target and is left out", t.target))
-            .collect();
-        animation.bind_to_config(&config);
-        let signals = export_signals(&animation, &HashMap::new());
-        for (target, signal) in tracks_missing_signals(&animation, &signals) {
-            warnings.push(format!("the track on `{target}` reads signal `{signal}`, which is not available here"));
-        }
-        let manager = (!signals.is_empty()).then(|| {
-            let mut m = SignalManager::new();
-            for s in signals.values() {
-                m.insert(s.clone());
-            }
-            m
-        });
-        let frames = (animation.duration * fps as f64).ceil() as u32;
-        let duration = animation.duration;
-        let mut controller = AnimationController::new();
-        controller.load(animation);
-        controller.set_step(1.0 / fps as f64);
+        let source = FrameSource::new(&animation, config, fps, &HashMap::new());
         let id = self.next_session;
         self.next_session += 1;
-        self.sessions.insert(id, Session {
-            config, controller, signals: manager, fps, frames, width, height, options,
-            target: None, engines: RenderEngines::default(),
+        let out = json!({
+            "id": id, "frames": source.frames(), "fps": source.fps(),
+            "duration": source.duration(), "warnings": source.warnings,
         });
-        Ok((id, json!({ "id": id, "frames": frames, "fps": fps, "duration": duration, "warnings": warnings })))
+        self.sessions.insert(id, Session { source, width, height, options, target: None, engines: RenderEngines::default() });
+        Ok((id, out))
     }
 
     fn session(&mut self, id: u32) -> Result<&mut Session, String> {
@@ -246,10 +204,10 @@ impl Gpu {
     pub fn frame(&mut self, id: u32, frame: u32) -> Result<Frame, String> {
         let (device, queue) = (&self.device, &self.queue);
         let s = self.sessions.get_mut(&id).ok_or_else(|| format!("no open animation {id}"))?;
-        if frame >= s.frames {
-            return Err(format!("frame {frame} is past the animation's {} frames", s.frames));
+        if frame >= s.source.frames() {
+            return Err(format!("frame {frame} is past the animation's {} frames", s.source.frames()));
         }
-        let (config, moments) = s.frame_config(frame);
+        let (config, moments) = s.source.frame(frame);
         let renderer = renderer_for(&mut s.target, device, queue, &config, s.width, s.height);
         renderer.set_sticky_enabled(s.options.sticky);
         let job = s.options.job(&config, s.width, s.height).with_engines(&mut s.engines).with_moments(&moments);
@@ -260,7 +218,7 @@ impl Gpu {
 
     /// An animation's frame as a config, not rendered.
     pub fn frame_config(&mut self, id: u32, frame: u32) -> Result<FractalConfig, String> {
-        Ok(self.session(id)?.frame_config(frame).0)
+        Ok(self.session(id)?.source.frame(frame).0)
     }
 
     pub fn close(&mut self, id: u32) {

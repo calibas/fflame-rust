@@ -19,8 +19,10 @@ proposed order for the user to pick from.
 is done. One applier (2.1) is done: `config::apply` is the setter, the
 video export's arms are gone, and scripts' `config.set` and Python's
 `Config.set` go through it by name (`config::by_name`). The engine
-facade (2.2) has begun with the script calls: one home,
-`script::headless`, for `wasm/script` and `wasm/python`. Beside the
+facade (2.2) has begun: the script calls have one home,
+`script::headless`, for `wasm/script` and `wasm/python`, and the frame
+source is split out of the video export (`animation::frames`), Python's
+frames taken from it. Beside the
 order, the mode switch was reworked at the user's request: each engine
 owns its settings, the switch is a whole-config undo step, and an empty
 flame is seeded where one is drawn (`config::mode`). Gallery correctness

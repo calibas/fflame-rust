@@ -576,7 +576,10 @@ went missing from in-app video. Do not add one.
 
 Per frame: evaluate the animation tracks at that time, apply them to a
 copy of the config (`config::apply`, the editor's own setter), call
-`render_with`, hand the pixels to the writer thread.
+`render_with`, hand the pixels to the writer thread. The first two are
+`animation::frames::FrameSource` -- the tracks bound, the signals they
+read, each frame's config and motion-blur moments -- which Python's
+animation frames come from too, so a frame is one config on both.
 Which passes run is decided by reading that frame's config, exactly as
 a still render decides — that is what makes the video and a PNG of the
 same config identical.

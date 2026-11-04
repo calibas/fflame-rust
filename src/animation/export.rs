@@ -1201,43 +1201,19 @@ pub async fn export_animation(
         .await
         .map_err(|e| AnimationExportError::GpuError(format!("Failed to create device: {:?}", e)))?;
 
-    // Bind tracks against the export config so the apply path sees
-    // resolved IDs.
-    let mut controller = AnimationController::new();
-    let mut animation = export_config.animation.clone();
-    // A track the app marked broken holds a stale index, and binding
-    // afresh would resolve that index onto whatever item now sits
-    // there -- so it is left out, as it is left out of the preview.
-    for track in animation.remove_broken_tracks() {
-        log::warn!(
-            "Video export: the track on `{}` lost its target (deleted) and is left out",
-            track.target
-        );
+    // The frames, as configs: the tracks bound against the export config
+    // so the apply path sees resolved IDs, the signals they read, one
+    // frame's step at a time (`FrameSource`, which Python's frames come
+    // from too).
+    let mut source = super::frames::FrameSource::new(
+        &export_config.animation,
+        export_config.config.clone(),
+        export_config.fps,
+        &export_config.signals,
+    );
+    for warning in &source.warnings {
+        log::warn!("Video export: {warning}");
     }
-    animation.bind_to_config(&export_config.config);
-    // The deep-zoom check below walks every frame on a controller of its
-    // own: signal smoothing keeps state, and this one's must start clean.
-    #[cfg(feature = "engine-escape")]
-    let probe_animation = animation.clone();
-    controller.load(animation);
-    // The video steps one frame at a time. Signal smoothing is scaled
-    // by the step, and the controller's is 1/60 s until something
-    // calls `update` -- which nothing here does -- so a 30 fps video
-    // smoothed half as much per second as the preview.
-    controller.set_step(1.0 / export_config.fps.max(1) as f64);
-
-    let signals = export_signals(&export_config.animation, &export_config.signals);
-    for (target, signal) in tracks_missing_signals(&export_config.animation, &signals) {
-        log::warn!(
-            "Video export: the track on `{target}` reads signal `{signal}`, which is not \
-             exported (live signals never are), so it will not move in the video"
-        );
-    }
-    let mut signal_manager = SignalManager::new();
-    for signal in signals.values() {
-        signal_manager.insert(signal.clone());
-    }
-    let has_signals = !signals.is_empty();
 
     // A deep-zoom frame carries per-pixel resume state (48-72 bytes),
     // and past a device's buffer limit that allocation is a wgpu
@@ -1257,20 +1233,14 @@ pub async fn export_animation(
     // none. Checked on the base config alone, a video that only deepened
     // later passed and then failed, and one that never went deep was
     // refused for a state it would never allocate.
+    //
+    // It walks every frame afresh (`fresh`): signal smoothing keeps state,
+    // and the video's own walk must start clean.
     #[cfg(feature = "engine-escape")]
     if export_config.config.render_mode == crate::scene::transforms::RenderMode::Escape {
-        let mut probe = AnimationController::new();
-        probe.load(probe_animation);
-        probe.set_step(1.0 / export_config.fps.max(1) as f64);
+        let mut probe = source.fresh();
         let frames = (0..total_frames).map(|frame| {
-            let time = export_config.frame_time(frame);
-            let values = if has_signals {
-                probe.evaluate_at_time_with_signals(time, Some(&signal_manager))
-            } else {
-                probe.evaluate_at_time(time)
-            };
-            let mut c = export_config.config.clone();
-            apply_animation_values(&mut c, &values);
+            let mut c = probe.config(frame);
             export_config.rung.apply(&mut c);
             (frame, c.escape)
         });
@@ -1359,13 +1329,7 @@ pub async fn export_animation(
     // ULP-class trajectory change that is meaningless interactively and
     // wrong for an export, which must render exactly the specialized
     // shader its reproducibility contract was made with.
-    let first_values = if has_signals {
-        controller.evaluate_at_time_with_signals(0.0, Some(&signal_manager))
-    } else {
-        controller.evaluate_at_time(0.0)
-    };
-    let mut first_config = export_config.config.clone();
-    apply_animation_values(&mut first_config, &first_values);
+    let mut first_config = source.config(0);
 
     // The render mode is not a track target, so the first frame's holds
     // for the whole video; so does the size the rung renders at.
@@ -1407,28 +1371,14 @@ pub async fn export_animation(
         }
 
         let frame_start = Instant::now();
-        let time = export_config.frame_time(frame);
         reporter.progress(
             frame as f32 / total_frames as f32,
             &format!("Rendering frame {}/{}", frame + 1, total_frames),
         );
 
-        let values = if has_signals {
-            controller.evaluate_at_time_with_signals(time, Some(&signal_manager))
-        } else {
-            controller.evaluate_at_time(time)
-        };
-        let mut frame_config = export_config.config.clone();
-        apply_animation_values(&mut frame_config, &values);
+        // The frame and its motion-blur moments.
+        let (mut frame_config, mut moments) = source.frame(frame);
         rung.apply(&mut frame_config);
-        // Motion blur: the frame's moments, taken after the frame itself
-        // so its signal smoothing has advanced once (`evaluate_moment`).
-        let mut moments = moment_configs(
-            &export_config.config,
-            &controller,
-            time,
-            if has_signals { Some(&signal_manager) } else { None },
-        );
         for m in &mut moments {
             rung.apply(m);
         }
