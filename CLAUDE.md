@@ -46,6 +46,7 @@ Project history is in git: `git log --oneline`.
 - `src/shader_builder_v2.rs`, `src/shader_cache.rs`, `src/gpu/` (buffers.rs, pipelines.rs), `shaders/` - see [SHADERS.md](docs/main/SHADERS.md)
 - `src/escape/`, `src/sim/`, `src/camera/`, `src/textures/` (simulation recipes as textures)
 - `src/lang/` - the formula language (feature `lang`, brought by `engine-escape`): Rhai, UF and Fractint to WGSL, for formulas, colourings, solids, variations and effects; `src/scripted.rs` (ids, versions, labels shared by every user-written script)
+- `src/params/` - the one parameter system: `ParamDef`/`ParamKind` (built-ins in one const call via `Spec`), values, layouts (conditions, grids), wire spellings; every kind's parameters, drawn by one renderer (`src/ui/params.rs`). [one-parameter-system.md](docs/projects/one-parameter-system.md)
 - `src/export/` - high-res export (tiled GPU, CPU fallback), 2x AA (supersample.rs)
 - `src/ui/` - dockable panels (egui_dock); `src/animation/`, `src/signal/`, `src/audio/`; `src/effects/`
 - `src/script/` - Rhai scripting (api.rs registers every function; cli.rs; assets/scripts/)
@@ -193,7 +194,7 @@ Structural actions (transform add/delete, config import/export, preset loading) 
 - **A palette**: a pack JSON in `assets/palettes/packs/` (it appears on the next start), a loose `.palette` in `assets/palettes/`, or the Palette Editor's import/Save to Library.
 - **A preset**: add the config to `assets/presets.fflame` (one JSON array; desktop reads it at runtime, the binary embeds it as the fallback).
 - **Tone mapping**: `shaders/tonemap.wgsl`, `TonemapParams` in `src/gpu/buffers.rs`, controls in `src/ui/tone_mapping.rs`.
-- **UI controls**: in the panel's own `src/ui/*.rs`, writing through `update_param` / `update_batch`; cross-panel results via `UiResponse`, handled in `src/app/ui_handlers.rs`; availability per mode in `src/ui/visibility.rs`.
+- **UI controls**: in the panel's own `src/ui/*.rs`, writing through `update_param` / `update_batch`; cross-panel results via `UiResponse`, handled in `src/app/ui_handlers.rs`; availability per mode in `src/ui/visibility.rs`. A set of parameters is never drawn by hand: `ui::params::list` over its `ParamDef`s, through a `ConfigStore`.
 - **3D flame presets**: set the config's `render_mode = RenderMode::ThreeD` and `perspective_strength` (0 orthographic; ~0.1-0.3 typical); give Z structure with 3D variations (zcone, flatten, hemisphere, zscale, ...) and per-transform `g` offsets (`xform.variations.insert("zcone".into(), 0.5)`); check with camera pitch/yaw or fly mode.
 
 ## Dependencies

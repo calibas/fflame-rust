@@ -736,6 +736,19 @@ config_manager.update_batch(changes, "history.action.some_edit".to_string())?;
   History panel.
 - **Device preferences** (`SystemSettings`) go through
   `update_system_setting` and are not undoable.
+- **Parameters** ([src/ui/params.rs](../../src/ui/params.rs)): every
+  kind's -- a variation's (the Transforms panel, escape transformations,
+  the lens), an effect's, an escape formula's, colouring's or layer's, a
+  simulation model's or colouring's, a CPU script's -- are drawn by one
+  renderer from their `params::ParamDef`s
+  ([one-parameter-system.md](../projects/one-parameter-system.md)):
+  `control` per kind (every slider a `VkbSlider`; a choice a dropdown
+  labelled on its left), and `list` for a parameter set with its
+  layout's conditions and grids, through a `ParamStore` -- the config
+  (`ConfigStore`, by a read and a path) or a script's run inputs
+  (`LocalStore`). Drawing never edits a value (`Edits` clamping, `Never`
+  for a free number), a drag's release commits its preview, and an edit
+  that turns a grid on fills it in the same undo step.
 - **Slow settings** ([src/ui/slow_controls.rs](../../src/ui/slow_controls.rs)).
   A slider takes its value from the pointer every frame, so a setting
   that slows the next frame overshoots when dragged: the frame after each
