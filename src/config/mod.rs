@@ -16,6 +16,7 @@ pub mod escape;
 pub mod sim;
 pub mod fractal_config;
 pub mod manager;
+pub mod mode;
 // An egui widget, so it belongs to the editor surface rather
 // than to config: a rendering module has no sliders.
 #[cfg(feature = "web-app")]

@@ -6107,7 +6107,7 @@ fn pack_rig3(
             (35.0, 40.0)
         } else {
             // The world's default key, which taking the rig over writes to
-            // light 0 (`ui::render_mode::rig_taken_over`).
+            // light 0 (`config::mode::rig_taken_over`).
             default_world_key()
         };
         let (az, el) = (az.to_radians() as f64, el.to_radians() as f64);
@@ -6151,7 +6151,7 @@ fn world_light_dir(az: f64, el: f64) -> [f64; 3] {
 /// The fractal's-space angles, in degrees, of a light at `azimuth`,
 /// `elevation` degrees in this view's camera space: the same direction,
 /// so a picture whose lights stop following the camera is unchanged where
-/// it stands (`ui::render_mode::lights_to_world`).
+/// it stands (`config::mode::lights_to_world`).
 pub fn camera_light_to_world(escape: &crate::config::escape::EscapeConfig, azimuth: f32, elevation: f32) -> (f32, f32) {
     let (right, up, forward) = solid_frame(escape.cam_pitch as f64, escape.cam_yaw as f64, escape.cam_bank as f64, escape.rotation as f64);
     let d = camera_light_dir(right, up, forward, azimuth.to_radians() as f64, elevation.to_radians() as f64);
@@ -7067,7 +7067,7 @@ mod tests {
                     let flat = c.clone();
                     let mut plane = c.clone();
                     plane.escape.formula = "mandelbrot".to_string();
-                    for (path, value) in crate::ui::render_mode::look_3d(&plane, &flat) {
+                    for (path, value) in crate::config::mode::look_3d(&plane, &flat) {
                         let _ = crate::config::ConfigManager::apply_value_detached(&mut c, crate::config::EditingTarget::Main, &path, value);
                     }
                     c.solid_shading.ambient = 0.0;
