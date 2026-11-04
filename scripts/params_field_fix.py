@@ -15,6 +15,7 @@ from collections import defaultdict
 
 FIELDS = {
     "default": "slot_default()",
+    "default_value": "slot_default()",
     "min": "slot_range().0",
     "max": "slot_range().1",
     "display_name": "label",
@@ -33,6 +34,11 @@ for m in re.finditer(r"error\[E0(?:308|507)\]: (?:mismatched types|cannot move o
     path, line, col = m.group(1).replace("\\", "/"), int(m.group(2)), int(m.group(3))
     sites[path].add((line, col, "&*"))
 
+# A `Cow` cloned where a `String` was (`p.name.clone()` -> `p.name.to_string()`).
+for m in re.finditer(r"error\[E0308\]: mismatched types\n\s*--> ([^:\n]+):(\d+):(\d+)\n(?:.*\n){0,3}?.*expected `String`, found `Cow<'_, str>`", text):
+    path, line, col = m.group(1).replace("\\", "/"), int(m.group(2)), int(m.group(3))
+    sites[path].add((line, col, "to_string"))
+
 fixed = 0
 for path, at in sites.items():
     raw = open(path, "rb").read().decode("utf-8")
@@ -42,6 +48,14 @@ for path, at in sites.items():
         s = lines[line - 1]
         # rustc's column is 1-based, in chars.
         i = col - 1
+        if field == "to_string":
+            m = re.match(r"[A-Za-z_][\w.]*\.(?:name|label|hint)\.clone\(\)", s[i:])
+            if not m:
+                print(f"{path}:{line}:{col}: expected a cloned name, label or hint, left alone: {s.strip()}", file=sys.stderr)
+                continue
+            lines[line - 1] = s[:i] + m.group(0)[:-len("clone()")] + "to_string()" + s[i + m.end():]
+            fixed += 1
+            continue
         if field == "&*":
             if not re.match(r"[A-Za-z_][\w.]*\.(name|label|hint)\b", s[i:]):
                 print(f"{path}:{line}:{col}: expected a name, label or hint, left alone: {s.strip()}", file=sys.stderr)

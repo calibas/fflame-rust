@@ -1905,8 +1905,8 @@ fn lens_choice(name: &str) -> Vec<(ConfigPath, ConfigValue)> {
     if let Some(info) = crate::variations::global_registry().get(name) {
         for p in &info.parameters {
             changes.push((
-                ConfigPath::EscapeLensParam { param: p.name.clone() },
-                p.default_value.into(),
+                ConfigPath::EscapeLensParam { param: p.name.to_string() },
+                p.slot_default().into(),
             ));
         }
     }
@@ -1925,11 +1925,8 @@ fn lens_choice(name: &str) -> Vec<(ConfigPath, ConfigValue)> {
 ///
 /// The parameters are rendered by `render_variation_params`, the same
 /// code the transforms panel uses, through a `ParamTarget` that reads
-/// the escape config's map instead of a transform. That is the whole
-/// reason the trait exists: a second parameter renderer here would
-/// have to reproduce the ParamType zoo, the undo coalescing and the
-/// "a quantising widget must not rewrite the value merely by being
-/// drawn" rule, and would drift from the original.
+/// the escape config's map instead of a transform -- and so by the one
+/// parameter renderer every panel uses (`ui::params`).
 pub(super) fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
     use crate::ui::variation_params::{render_variation_params, LensTarget};
 
@@ -3728,9 +3725,9 @@ mod criterion_tests {
         let info = registry.get("curl").expect("curl");
         assert_eq!(changes.len(), 1 + info.parameters.len(), "not every parameter seeded");
         for p in &info.parameters {
-            let want = ConfigPath::EscapeLensParam { param: p.name.clone() };
+            let want = ConfigPath::EscapeLensParam { param: p.name.to_string() };
             let got = changes.iter().find(|(path, _)| *path == want).expect("seeded");
-            assert_eq!(got.1, ConfigValue::Float(p.default_value), "{} seeded wrong", p.name);
+            assert_eq!(got.1, ConfigValue::Float(p.slot_default()), "{} seeded wrong", p.name);
         }
         // Clearing the lens carries no parameters.
         assert_eq!(super::lens_choice("").len(), 1);

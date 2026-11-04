@@ -524,8 +524,8 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             items.push(TargetItem::new(ConfigPath::EscapeLensAmount, "Lens: Amount"));
             for p in &info.parameters {
                 items.push(TargetItem::new(
-                    ConfigPath::EscapeLensParam { param: p.name.clone() },
-                    &format!("Lens: {}", p.display_name),
+                    ConfigPath::EscapeLensParam { param: p.name.to_string() },
+                    &format!("Lens: {}", p.label),
                 ));
             }
         }
@@ -545,8 +545,8 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             items.push(TargetItem::new(ConfigPath::EscapeTransformAmount { index: i }, &format!("{label}: Amount")));
             for p in info.map(|v| v.parameters.as_slice()).unwrap_or_default() {
                 items.push(TargetItem::new(
-                    ConfigPath::EscapeTransformParam { index: i, param: p.name.clone() },
-                    &format!("{label}: {}", p.display_name),
+                    ConfigPath::EscapeTransformParam { index: i, param: p.name.to_string() },
+                    &format!("{label}: {}", p.label),
                 ));
             }
         }
@@ -1180,9 +1180,9 @@ fn get_transform_items(index: usize, transform: &crate::scene::transforms::Trans
                     ConfigPath::TransformVariationParam {
                         index,
                         variation: var_name.clone(),
-                        param: param.name.clone(),
+                        param: param.name.to_string(),
                     },
-                    &format!("{} → {}", capitalize_first(var_name), &param.display_name),
+                    &format!("{} → {}", capitalize_first(var_name), &param.label),
                 ));
             }
         }
@@ -1249,9 +1249,9 @@ fn get_linked_transform_items(index: usize, transform: &crate::scene::transforms
             for param in &info.parameters {
                 items.push(TargetItem::new(
                     ConfigPath::LinkedTransformVariationParam {
-                        index, variation: var_name.clone(), param: param.name.clone(),
+                        index, variation: var_name.clone(), param: param.name.to_string(),
                     },
-                    &format!("{} → {}", capitalize_first(var_name), &param.display_name),
+                    &format!("{} → {}", capitalize_first(var_name), &param.label),
                 ));
             }
         }
@@ -1318,9 +1318,9 @@ fn get_pool_final_transform_items(index: usize, transform: &crate::scene::transf
             for param in &info.parameters {
                 items.push(TargetItem::new(
                     ConfigPath::FinalTransformVariationParam {
-                        index, variation: var_name.clone(), param: param.name.clone(),
+                        index, variation: var_name.clone(), param: param.name.to_string(),
                     },
-                    &format!("{} → {}", capitalize_first(var_name), &param.display_name),
+                    &format!("{} → {}", capitalize_first(var_name), &param.label),
                 ));
             }
         }

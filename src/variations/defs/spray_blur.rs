@@ -35,8 +35,8 @@
 //! multi-emitters.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 
@@ -68,7 +68,7 @@ pub static SPRAY_BLUR: VariationDef = VariationDef {
     state_count: 0,
     wgsl_state_init: None,
     parameters: &[
-        param!("count", "Count", int, 8.0, 1.0, 16.0, "Jittered copies plotted per iteration. The blur fills in Count× faster than a one-sample stochastic blur at the same total density (each copy carries weight Brightness/Count). Mixes distortion-free with other variations (post phase, identity pass-through); copies center on the final plotted position (post-affine and Final chains included) and the trajectory continues un-blurred. A transform with ONLY spray needs a companion linear 1 (the post phase acts on the normal-phase result)."),
+        param!(slow "count", "Count", int, 8.0, 1.0, 16.0, "Jittered copies plotted per iteration. The blur fills in Count× faster than a one-sample stochastic blur at the same total density (each copy carries weight Brightness/Count). Mixes distortion-free with other variations (post phase, identity pass-through); copies center on the final plotted position (post-affine and Final chains included) and the trajectory continues un-blurred. A transform with ONLY spray needs a companion linear 1 (the post phase acts on the normal-phase result)."),
         param!("radius", "Radius", float, 0.15, 0.0, 2.0, "Kernel size in world units: Gaussian scale, Disc/Ring radius, Streak half-length."),
         param!("shape", "Shape", enum, 0, &["Gaussian", "Disc", "Ring", "Streak"], "Jitter kernel. Gaussian: soft falloff (the classic gaussian_blur distribution). Disc: uniform fill — flat bokeh. Ring: exact circle — bokeh rings / neon doubling. Streak: uniform line segment along Angle — motion blur."),
         param!("angle", "Angle", angle, 0.0, "Kernel orientation: the Streak direction, and the major-axis direction of an elliptical (Aspect ≠ 1) Gaussian/Disc/Ring."),

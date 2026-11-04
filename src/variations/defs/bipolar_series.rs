@@ -25,8 +25,8 @@
 //! "VVAR strictly outer multiplier" pattern.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 

@@ -369,7 +369,7 @@ impl Config {
             .get(var)
             .ok_or_else(|| PyValueError::new_err(format!("unknown variation {var:?}")))?;
         if info.get_param(param).is_none() {
-            let known: Vec<&str> = info.parameters.iter().map(|p| p.name.as_str()).collect();
+            let known: Vec<&str> = info.parameters.iter().map(|p| &*p.name).collect();
             return Err(PyValueError::new_err(format!(
                 "variation {var:?} has no parameter {param:?}; it has: {}",
                 known.join(", ")

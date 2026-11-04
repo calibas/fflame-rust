@@ -1870,7 +1870,7 @@ mod tests {
             let reg = crate::variations::global_registry();
             reg.get(name)
                 .and_then(|i| {
-                    i.parameters.iter().find(|q| q.name == p).map(|q| q.default_value as f64)
+                    i.parameters.iter().find(|q| q.name == p).map(|q| q.slot_default() as f64)
                 })
                 .unwrap_or(0.0)
         }
@@ -2096,7 +2096,7 @@ mod branch_tests {
                     .parameters
                     .iter()
                     .find(|p| p.name == q)
-                    .map_or(0.0, |p| p.default_value as f64),
+                    .map_or(0.0, |p| p.slot_default() as f64),
             }
         };
         println!("  julian, power 2, dist -1 -- image radius for a disc at distance 1");

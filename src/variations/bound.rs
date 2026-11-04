@@ -135,7 +135,7 @@ fn what_deriving_a_bound_costs() {
             info.parameters
                 .iter()
                 .find(|q| q.name == p)
-                .map(|q| q.default_value as f64)
+                .map(|q| q.slot_default() as f64)
                 .unwrap_or(0.0)
         };
         let mut worst: Option<(f64, f64, Ball)> = None;
@@ -600,7 +600,7 @@ mod gpu_tests {
                             let reg = crate::variations::global_registry();
                             reg.get(def.name)
                                 .and_then(|i| {
-                                    i.parameters.iter().find(|p| p.name == n).map(|p| p.default_value as f64)
+                                    i.parameters.iter().find(|p| p.name == n).map(|p| p.slot_default() as f64)
                                 })
                                 .unwrap_or(0.0)
                         })
@@ -802,7 +802,7 @@ mod derived_gate {
             let reg = crate::variations::global_registry();
             reg.get(name)
                 .and_then(|i| {
-                    i.parameters.iter().find(|q| q.name == p).map(|q| q.default_value as f64)
+                    i.parameters.iter().find(|q| q.name == p).map(|q| q.slot_default() as f64)
                 })
                 .unwrap_or(0.0)
         }

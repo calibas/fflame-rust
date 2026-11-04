@@ -207,6 +207,12 @@ impl ParamDef {
         Self { name: Cow::Borrowed(name), label: Cow::Borrowed(label), hint: Cow::Borrowed(hint), kind, slow: spec.slow }
     }
 
+    /// The same, slow (a variation's `param!(slow ...)`).
+    pub const fn slowed(mut self) -> Self {
+        self.slow = true;
+        self
+    }
+
     /// One built at run time: a script's, or one downloaded.
     pub fn owned(name: impl Into<Cow<'static, str>>, label: impl Into<Cow<'static, str>>, hint: impl Into<Cow<'static, str>>, kind: ParamKind) -> Self {
         Self { name: name.into(), label: label.into(), hint: hint.into(), kind, slow: false }
@@ -410,6 +416,36 @@ mod tests {
         assert_eq!(BUILT_INS[2].kind.bounds(), Some((1.0, 10.0)));
         assert_eq!(BUILT_INS[4].kind.bounds(), Some((0.0, 2.0)));
         assert_eq!(BUILT_INS[3].kind.bounds(), None);
+    }
+
+    /// Every kind a variation or an effect has is spelled in the
+    /// contract's published vocabulary (`variations::ParamType`), as the
+    /// corpora spell it.
+    #[test]
+    fn a_kind_is_spelled_in_the_published_vocabulary() {
+        let words: Vec<&str> = crate::variations::ParamType::ALL.iter().map(|t| t.to_api_str()).collect();
+        let kinds = [
+            ParamDef::new("a", "", "", Spec::float(0.0, 0.0, 1.0)),
+            ParamDef::new("b", "", "", Spec::float(0.0, 0.0, 1.0).free()),
+            ParamDef::new("c", "", "", Spec::angle(0.0, -360.0, 360.0)),
+            ParamDef::new("d", "", "", Spec::int(1, 1, 10)),
+            ParamDef::new("e", "", "", Spec::int(1, 1, 10).free()),
+            ParamDef::new("f", "", "", Spec::bool(false)),
+            ParamDef::new("g", "", "", Spec::choice(0, &["x", "y"])),
+        ];
+        let mut spelled = Vec::new();
+        for def in &kinds {
+            let wire = wire_type(&def.kind);
+            let word = match wire.as_str() {
+                Some(w) => w.to_string(),
+                None => wire.as_object().and_then(|o| o.keys().next().cloned()).unwrap_or_default(),
+            };
+            assert!(words.contains(&word.as_str()), "{}: `{word}` is not published", def.name);
+            spelled.push(word);
+        }
+        spelled.sort();
+        spelled.dedup();
+        assert_eq!(spelled.len(), words.len(), "every published word is a kind's: {spelled:?}");
     }
 
     /// A script's owned entries equal a built-in's static ones.

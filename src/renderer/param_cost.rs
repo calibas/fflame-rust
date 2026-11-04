@@ -20,7 +20,7 @@
 use crate::config::FractalConfig;
 use crate::renderer::compute_kernel::FlameRenderer;
 use crate::scene::transforms::{Flame, RenderMode, Transform};
-use crate::variations::ParamType;
+use crate::params::ParamKind;
 
 fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -105,8 +105,8 @@ fn measure_variation_param_costs() {
                 let params = v
                     .parameters
                     .iter()
-                    .filter(|p| matches!(p.param_type, ParamType::Integer | ParamType::UnlimitedInteger) || looks_like_a_count(&p.name))
-                    .filter_map(|p| p.max_value.map(|max| (p.name.clone(), p.default_value, max)))
+                    .filter(|p| matches!(p.kind, ParamKind::Int { .. }) || looks_like_a_count(&p.name))
+                    .filter_map(|p| p.kind.bounds().map(|(_, max)| (p.name.to_string(), p.slot_default(), max as f32)))
                     .filter(|(_, d, max)| max > d)
                     .collect::<Vec<_>>();
                 (v.name.clone(), params)

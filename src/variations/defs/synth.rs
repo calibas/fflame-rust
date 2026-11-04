@@ -20,8 +20,8 @@
 //! Source: `output/variation-jwf-source/SynthFunc.java`.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 
@@ -1065,7 +1065,7 @@ mod tests {
             .iter()
             .find(|p| p.name == "mode")
             .expect("synth has a mode param")
-            .default_value as i32;
+            .slot_default() as i32;
         let mut flame = Flame::default();
         if flame.transforms.is_empty() {
             flame.transforms.push(Transform::default());

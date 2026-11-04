@@ -218,6 +218,19 @@ Each a commit, each behaviour-preserving and held by tests:
    - the Transforms panel, escape transformations and the lens through
      the renderer;
    - `variations::is_slow_param` becomes flags.
+
+   **Done**: `param!` writes a `ParamDef` (its 2,976 uses unchanged;
+   `param!(slow ...)` marks the 16 slow ones, `fractwf_params!`'s
+   shared `max_iter` once for six), 159 literals by the codemod's typed
+   mode, the defs' imports trimmed (`scripts/params_variations_codemod.py`);
+   a downloaded or Rhai variation through `params::from_api` (an
+   unranged float -10..10, as the panel drew one). `ParamType` stays as
+   the contract's published vocabulary alone, which a test holds
+   `params::wire_type` to. The probe sweeps a definition's own bounds
+   (its fallback range is gone: every number has one). The variations
+   corpus is byte-identical. What the Transforms panel does differently:
+   a choice is labelled on its left, as in every other panel; a float's
+   value field drags at a 500th of its range.
 8. **Scripts**:
    - `ParamDecl` goes: the CPU API's `param_*` functions build owned
      `ParamDef`s;

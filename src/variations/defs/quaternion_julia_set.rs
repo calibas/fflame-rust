@@ -31,8 +31,8 @@
 //! Julia for `c = cx + i·cy`.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 
@@ -65,7 +65,7 @@ pub static QUATERNION_JULIA_SET: VariationDef = VariationDef {
         param!("cz", "Constant Z", float, 0.0, -2.0, 2.0, "Vector-k component of c. 3D only."),
         param!("cw", "Constant W", float, -1.0, -2.0, 2.0, "Scalar (real) component of c. Bourke writes c scalar-first, so his c=(-1,0.2,0,0) is cw=-1, cx=0.2. 2D mode ignores this (uses cx+i*cy)."),
         param!("power", "Power (N)", int, 2.0, 2.0, 8.0, "The Julia power n in q^n + c. 2 = the classic quadratic set; 3+ = higher-order. n=2 uses the exact Hamilton product."),
-        param!("escape_iters", "Escape Iterations", int, 16.0, 2.0, 64.0, "Membership-test depth: how many times to apply q -> q^n + c before declaring a sample interior. Higher = sharper boundary (fewer false-interior points) but thinner surviving interior and slower."),
+        param!(slow "escape_iters", "Escape Iterations", int, 16.0, 2.0, 64.0, "Membership-test depth: how many times to apply q -> q^n + c before declaring a sample interior. Higher = sharper boundary (fewer false-interior points) but thinner surviving interior and slower."),
         param!("bailout", "Bailout", float, 2.0, 1.0, 8.0, "Escape radius: a sample escapes (and is hidden) once |q| exceeds this. ~2 is standard for |c|~1."),
         param!("sample_range", "Sample Range", float, 2.0, 0.2, 4.0, "Radius of the BALL the samples are drawn from (a ball, not a cube — so no box-face clipping). The whole set lies within |q| <= bailout, so leaving this at the bailout radius (2) guarantees the entire cross-section is covered. Shrink it ONLY to trade coverage for density on a set you know is smaller — too small clips (now as a sphere, not a cube)."),
         param!("w_slice", "Slice Value", float, 0.0, -2.0, 2.0, "Position of the cutting hyperplane along the Slice Axis (3D only). Sweep it (e.g. -0.6..0.6) to walk Bourke's slice series through the 4D solid."),

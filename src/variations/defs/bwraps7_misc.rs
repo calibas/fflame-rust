@@ -18,8 +18,8 @@
 //! Source: `output/jwildfire-vars/output/bwraps7.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 

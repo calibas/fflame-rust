@@ -25,7 +25,8 @@ definitions, mostly ported from flam3, Apophysis and JWildfire.
 
 **Code locations:**
 - [src/variations/definition.rs](../../src/variations/definition.rs) —
-  `VariationDef`, `VariationParamDef`, `Feature`, the `param!` macro
+  `VariationDef`, `Feature`, the `param!` macro (a parameter is a
+  `params::ParamDef`, [src/params/mod.rs](../../src/params/mod.rs))
 - [src/variations/mod.rs](../../src/variations/mod.rs) —
   `VariationRegistry`, `VariationInfo`, `ParamType`, `VariationPhase`,
   `VariationCategory`, `global_registry()`, the shader lints
@@ -267,22 +268,26 @@ Three variations use it: `stereogram`, `multi_kaleidoscope`,
 
 ### Types
 
-`VariationParamDef` has `name`, `display_name`, `param_type`,
-`default_value`, `min_value`, `max_value` and an optional
-`description` (the tooltip). `param!` writes one:
+A parameter is a `params::ParamDef`, the definition every kind shares
+([one-parameter-system.md](../projects/one-parameter-system.md)): a
+name, a label, a hint (the tooltip), its kind with its default and
+range, and whether it is slow. `param!` writes one:
 
-| `param!` form | `ParamType` | stored as |
+| `param!` form | kind (on the wire) | stored as |
 | --- | --- | --- |
-| `float, default, min, max` | `Float` | the value; the slider is clamped to min–max |
-| `unlimited_float, default, min, max` | `UnlimitedFloat` | min–max is the slider range; any value can be typed |
-| `int, default, min, max` | `Integer` | an integer in an `f32` |
-| `unlimited_int, default, min, max` | `UnlimitedInteger` | as `Integer`, with typing past the slider |
-| `angle, default` | `Angle` | degrees, slider −360…360; the body converts |
-| `bool, default` | `Boolean` | 0.0 or 1.0 |
-| `enum, default, &[choices]` | `Enum { choices }` | the choice's index |
+| `float, default, min, max` | a float (`float`) | the value; the slider is clamped to min–max |
+| `unlimited_float, default, min, max` | a free float (`unlimited_float`) | min–max is the slider range; any value can be typed |
+| `int, default, min, max` | an int (`integer`) | an integer in an `f32` |
+| `unlimited_int, default, min, max` | a free int (`unlimited_integer`) | as an int, with typing past the slider |
+| `angle, default` | an angle (`angle`) | degrees, slider −360…360; the body converts |
+| `bool, default` | a switch (`boolean`) | 0.0 or 1.0 |
+| `enum, default, &[choices]` | a choice (`enum`) | the choice's index |
 
-Each form also takes a trailing description. The Transforms panel
-builds every slider from these definitions.
+Each form also takes a trailing description, and `param!(slow ...)`
+marks any form slow. The Transforms panel, the escape transformations
+and the lens draw them through the one renderer (`ui::params`). The
+wire names are the contract's vocabulary (`ParamType`), which
+`params::wire_type` spells a definition in.
 
 On a transform, values live in `Transform::variation_params` under
 `"variation.param"` keys. A missing key means the definition's default,
@@ -636,7 +641,7 @@ All four are described in [SHADERS.md](SHADERS.md) and
    If a parameter bounds a loop the variation runs every iteration, time
    it (`PARAM_COST_ONLY=<name> cargo test --release --lib -- --ignored
    --nocapture measure_variation_param_costs`). If its maximum adds 15 ms
-   or more to an app frame, list it in `variations::SLOW_PARAMS`, so its
+   or more to an app frame, write it `param!(slow ...)`, so its
    control commits on release (UI.md, *Slow settings*).
 7. **Regenerate the contract**
    (`UPDATE_CONTRACT=1 cargo test --lib contract_is_current`) and read

@@ -22,8 +22,8 @@
 use crate::scene::ifs_analysis::{Affine3, AffineRole};
 use crate::variations::inverse::{InverseDef, InverseKernel, ParamFn};
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 

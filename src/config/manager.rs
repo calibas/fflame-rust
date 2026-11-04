@@ -2351,7 +2351,7 @@ impl ConfigManager {
                 let default = || {
                     crate::variations::global_registry()
                         .get(&t.variation)
-                        .and_then(|v| v.parameters.iter().find(|p| p.name == *param).map(|p| p.default_value))
+                        .and_then(|v| v.parameters.iter().find(|p| p.name == *param).map(|p| p.slot_default()))
                 };
                 Ok(t.params.get(param).copied().or_else(default).unwrap_or(0.0).into())
             }
