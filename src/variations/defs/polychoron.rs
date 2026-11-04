@@ -32,8 +32,8 @@
 //! No JWildfire/Apophysis counterpart — original to this project.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 
@@ -60,7 +60,7 @@ pub static POLYCHORON: VariationDef = VariationDef {
         param!("shape", "Shape", enum, 2, &["5-Cell", "8-Cell (Tesseract)", "16-Cell", "24-Cell", "120-Cell", "600-Cell"], "Which regular 4-polytope's vertices to play the chaos game on. 16-Cell is the hyper-octahedron, 120-Cell the hyper-dodecahedron (600 vertices), 600-Cell the hyper-icosahedron (120 vertices); the 24-Cell is unique to 4D."),
         param!("contraction", "Contraction", float, 0.3333, 0.05, 0.9, "Scale factor per chaos-game round: q' = contraction·q + (1−contraction)·vertex. 1/3 gives the classic gasket; larger values fill toward the solid hull (useful for the vertex-rich 120-Cell), smaller ones scatter toward vertex dust."),
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Circumradius of the polytope."),
-        param!("steps", "Steps", int, 2.0, 1.0, 4.0, "Chaos-game rounds per call — sharper attractor for the same iteration budget."),
+        param!(slow "steps", "Steps", int, 2.0, 1.0, 4.0, "Chaos-game rounds per call — sharper attractor for the same iteration budget."),
         param!("rot_xw", "Rotate XW", angle, 20.0, "Rotation in the x–w plane, degrees. Rotates the entire 4D gasket before its shadow is taken — without any 4D rotation, axis-aligned shapes cast degenerate shadows."),
         param!("rot_yw", "Rotate YW", angle, 12.0, "Rotation in the y–w plane, degrees."),
         param!("rot_zw", "Rotate ZW", angle, 7.0, "Rotation in the z–w plane, degrees."),

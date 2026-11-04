@@ -1826,7 +1826,7 @@ fn path_thickness_defaults_off_and_is_appended() {
         assert_eq!(soft_at, thick_at + 1, "{name}: soft follows thickness");
 
         let thick = &info.parameters[thick_at];
-        assert_eq!(thick.default_value, 0.0, "{name}: thickness defaults to off");
+        assert_eq!(thick.slot_default(), 0.0, "{name}: thickness defaults to off");
 
         // Offsets are appended after soft, for the same positional reason,
         // and default to 0 so an untouched curve stays where it was.
@@ -1835,12 +1835,12 @@ fn path_thickness_defaults_off_and_is_appended() {
         assert_eq!(names[off_at + 1], "offset_y", "{name}: offset_y follows offset_x");
         for axis in ["offset_x", "offset_y"] {
             let p = info.parameters.iter().find(|p| p.name == axis).unwrap();
-            assert_eq!(p.default_value, 0.0, "{name}: {axis} defaults to no move");
+            assert_eq!(p.slot_default(), 0.0, "{name}: {axis} defaults to no move");
         }
         if name == "lsystem_path_3D" {
             assert_eq!(names[off_at + 2], "offset_z", "3D also offsets in z");
             let p = info.parameters.iter().find(|p| p.name == "offset_z").unwrap();
-            assert_eq!(p.default_value, 0.0);
+            assert_eq!(p.slot_default(), 0.0);
         }
     }
 }

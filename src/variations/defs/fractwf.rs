@@ -24,8 +24,8 @@
 //! `AbstractFractWFFunc.java`.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 
@@ -48,8 +48,8 @@ use crate::param;
 //   N+2 clip_iter_min       19  color_only
 // where N depends on the custom count.
 //
-// `VariationParamDef` doesn't derive Copy (it holds `Option<&str>` and
-// a `ParamType` enum with refs), so we can't define the common params
+// `ParamDef` isn't Copy (it holds `Cow` strings), so we can't define
+// the common params
 // once as a slice and index into them from a const expression — that
 // would be a move from a borrowed slice. Instead the macro expands
 // fresh `param!()` invocations inline at each variation declaration
@@ -58,7 +58,7 @@ use crate::param;
 macro_rules! fractwf_params {
     ($($custom:expr),* $(,)?) => {
         &[
-            param!("max_iter", "Max Iter", unlimited_int, 100.0, 1.0, 100000.0, "Maximum escape iterations per starting point. Higher values resolve finer detail near the fractal boundary but linearly increase per-sample cost. **GPU-clamped to 500** — values above 500 still parse and round-trip with JWildfire `.flame` XML but the inner loop runs no more than 500 iterations to stay within the GPU TDR budget."),
+            param!(slow "max_iter", "Max Iter", unlimited_int, 100.0, 1.0, 100000.0, "Maximum escape iterations per starting point. Higher values resolve finer detail near the fractal boundary but linearly increase per-sample cost. **GPU-clamped to 500** — values above 500 still parse and round-trip with JWildfire `.flame` XML but the inner loop runs no more than 500 iterations to stay within the GPU TDR budget."),
             param!("xmin", "X Min", unlimited_float, -1.6, -100.0, 100.0, "Lower X bound of the random-seed sampling rectangle. The variation picks (x0, y0) uniformly in [xmin, xmax] × [ymin, ymax] each call (or uses the affine input when `color_only` is on)."),
             param!("xmax", "X Max", unlimited_float, 1.6, -100.0, 100.0, "Upper X bound of the random-seed sampling rectangle."),
             param!("ymin", "Y Min", unlimited_float, -1.2, -100.0, 100.0, "Lower Y bound of the random-seed sampling rectangle."),

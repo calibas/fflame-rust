@@ -37,39 +37,12 @@ fn dump() -> Vec<Value> {
     rows
 }
 
-/// A variation's or an effect's control and the range its renderer
-/// uses (`ui::variation_params`: a missing bound filled by the control,
-/// or by the slow control's 1..100).
-fn control_of(t: &crate::variations::ParamType, min: Option<f32>, max: Option<f32>, slow: bool) -> (&'static str, (f64, f64), Vec<String>) {
-    use crate::variations::ParamType as T;
-    let (control, lo, hi) = match t {
-        T::Float => ("float", -10.0, 10.0),
-        T::UnlimitedFloat => ("unlimited_float", -10.0, 10.0),
-        T::Integer => ("integer", 1.0, 10.0),
-        T::UnlimitedInteger => ("unlimited_integer", -100.0, 100.0),
-        T::Boolean => ("boolean", 0.0, 1.0),
-        T::Angle => ("angle", 0.0, 360.0),
-        T::Enum { .. } => ("choice", 0.0, 0.0),
-    };
-    let (lo, hi) = if slow { (1.0, 100.0) } else { (lo, hi) };
-    let choices = match t {
-        T::Enum { choices } => choices.iter().map(|c| c.to_string()).collect(),
-        _ => Vec::new(),
-    };
-    let range = (f64::from(min.unwrap_or(lo)), f64::from(max.unwrap_or(hi)));
-    (control, range, choices)
-}
-
 fn variations(rows: &mut Vec<Value>) {
     let registry = crate::variations::global_registry();
     let mut all = registry.all();
     all.sort_by(|a, b| a.name.cmp(&b.name));
     for v in all.into_iter().filter(|v| v.provenance.is_builtin()) {
-        for p in &v.parameters {
-            let slow = crate::variations::is_slow_param(&v.name, &p.name);
-            let (control, range, choices) = control_of(&p.param_type, p.min_value, p.max_value, slow);
-            rows.push(row("variation", &v.name, &p.name, &p.display_name, p.description.as_deref().unwrap_or(""), control, f64::from(p.default_value), range, choices, slow, false));
-        }
+        rows.extend(v.parameters.iter().map(|p| def_row("variation", &v.name, p)));
     }
 }
 

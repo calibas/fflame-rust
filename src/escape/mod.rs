@@ -663,7 +663,7 @@ pub fn param_default(escape: &crate::config::escape::EscapeConfig, of: ParamOf, 
         ParamOf::Layer => layer_of(escape).and_then(|l| find(l.parameters)),
         ParamOf::Lens => {
             let registry = crate::variations::global_registry();
-            registry.get(&escape.lens).and_then(|v| v.parameters.iter().find(|p| p.name == name).map(|p| p.default_value))
+            registry.get(&escape.lens).and_then(|v| v.parameters.iter().find(|p| p.name == name).map(|p| p.slot_default()))
         }
     }
 }

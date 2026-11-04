@@ -30,8 +30,8 @@
 //! Source: `output/jwildfire-vars/output/complex.cpp`.
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 

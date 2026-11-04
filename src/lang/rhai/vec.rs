@@ -1165,7 +1165,7 @@ impl Lowerer<'_> {
             registry
                 .get(&vname)
                 .filter(|v| v.provenance != crate::provenance::Provenance::Custom && v.wgsl_source_3d.is_some())
-                .map(|v| v.parameters.iter().map(|x| x.name.clone()).collect())
+                .map(|v| v.parameters.iter().map(|x| x.name.to_string()).collect())
         };
         let Some(known) = known else {
             return self.err(

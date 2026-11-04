@@ -22,8 +22,8 @@
 //! cpp PluginVarCalc was empty unported_stub).
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 

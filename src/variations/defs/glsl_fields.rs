@@ -35,8 +35,8 @@
 //! - kabuto (original `glsl_grid3D` raymarching shadertoy)
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 
@@ -65,7 +65,7 @@ pub static GLSL_ACRILIC: VariationDef = VariationDef {
         param!("density_pixels", "Density Pixels", unlimited_int, 1000000.0, 100.0, 10000000.0, "Discrete grid resolution. See module-level doc."),
         param!("seed", "Seed", unlimited_int, 10000.0, 0.0, 10000.0, "JWildfire CPU-only — set `time` directly."),
         param!("time", "Time", unlimited_float, 0.0, -10000.0, 10000.0, "Animation parameter. Embedded into every perturbation step's sin/cos arguments."),
-        param!("steps", "Steps", unlimited_int, 30.0, 1.0, 100.0, "Inner perturbation iteration count. **GPU-clamped to ≤ 100.** Higher = more swirling distortion."),
+        param!(slow "steps", "Steps", unlimited_int, 30.0, 1.0, 100.0, "Inner perturbation iteration count. **GPU-clamped to ≤ 100.** Higher = more swirling distortion."),
         param!("p1", "p1", unlimited_float, 1.0, -10.0, 10.0, "Perturbation knob 1. Frequency multiplier on `p.y` in the X-update's sin term."),
         param!("p2", "p2", unlimited_float, 1.0, -10.0, 10.0, "Perturbation knob 2. Inverse-time scale (`time / (p2·i)`). p2 = 0 blows up — set away from 0."),
         param!("p3", "p3", unlimited_float, 1.0, -10.0, 10.0, "Perturbation knob 3. Frequency multiplier on `p.x` in the Y-update's cos term."),
@@ -192,7 +192,7 @@ pub static GLSL_CIRCLESBLUE: VariationDef = VariationDef {
         param!("seed", "Seed", unlimited_int, 10000.0, 0.0, 10000.0, "JWildfire CPU-only — set `time` directly."),
         param!("time", "Time", unlimited_float, 1.0, -10000.0, 10000.0, "Animation parameter. Drives the vertical scrolling (`time/5 · 0.1` per step) and the per-bubble color/size modulation."),
         param!("radius", "Radius", unlimited_float, 0.04, 0.0, 1.0, "Base bubble radius — each bubble's actual radius adds `sin(i)·0.12 + 0.08` on top. JWildfire's UI label is 'Radiusy' (typo in source kept for round-trip)."),
-        param!("bubles", "Bubles", unlimited_int, 40.0, 1.0, 200.0, "Bubble count. **GPU-clamped to ≤ 200.** JWildfire's UI label has the typo 'Bubles'; kept for round-trip."),
+        param!(slow "bubles", "Bubles", unlimited_int, 40.0, 1.0, 200.0, "Bubble count. **GPU-clamped to ≤ 200.** JWildfire's UI label has the typo 'Bubles'; kept for round-trip."),
         param!("gradient", "Gradient", unlimited_int, 0.0, 0.0, 1.0, "JWildfire color output mode. **Only mode 0 honored.**"),
     ],
     init_param_count: 0,

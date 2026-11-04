@@ -1,54 +1,35 @@
-//! Variation parameter rendering
-//!
-//! This module provides unified rendering for variation parameters,
-//! eliminating the need to duplicate parameter UI code across different
-//! variation categories.
+//! A variation's parameters, wherever they live -- a transform in the
+//! flame, an escape transformation, the camera lens -- drawn by the one
+//! parameter renderer (`ui::params`; docs/projects/one-parameter-system.md).
+//! What is a variation's own here is where its values are read and
+//! written ([`ParamTarget`]).
 
 use crate::{
     config::{ConfigManager, ConfigPath, TransformRef, UpdateType},
-    variations::{ParamType, VariationParameter},
+    params::ParamDef,
 };
 
-/// Where a variation's parameters are read from and written to.
-///
-/// The renderer below draws the whole `ParamType` zoo -- Float,
-/// UnlimitedFloat, Integer, UnlimitedInteger, Boolean, Angle, Enum --
-/// with tooltips, undo coalescing and the rule that a quantising
-/// widget must not rewrite the value merely by being drawn. None of
-/// that is specific to a transform, and a second copy of it elsewhere
-/// would drift from this one.
-///
-/// So the two things that WERE specific to a transform are this
-/// trait: where the current value lives, and which `ConfigPath` an
-/// edit writes to. `TransformRef` is one implementation; the escape
-/// engine's camera lens is another, reading a name-keyed map on the
-/// escape config instead of a transform in a flame.
+/// Where a variation's parameters are read from and written to: the
+/// current value, and the `ConfigPath` an edit writes. `TransformRef` is
+/// one implementation; the escape engine's camera lens is another,
+/// reading a name-keyed map on the escape config instead of a transform
+/// in a flame.
 pub trait ParamTarget {
     /// The value to show, or `None` if the target has gone (a pool
     /// member deleted under the panel), in which case rendering stops
     /// rather than inventing one.
-    fn stored(&self, config_manager: &ConfigManager, var_name: &str, param: &VariationParameter)
-        -> Option<f32>;
+    fn stored(&self, config_manager: &ConfigManager, var_name: &str, param: &ParamDef) -> Option<f32>;
 
     /// The path an edit writes to.
     fn path(&self, var_name: &str, param_name: &str) -> ConfigPath;
 }
 
 impl ParamTarget for TransformRef {
-    fn stored(
-        &self,
-        config_manager: &ConfigManager,
-        var_name: &str,
-        param: &VariationParameter,
-    ) -> Option<f32> {
+    fn stored(&self, config_manager: &ConfigManager, var_name: &str, param: &ParamDef) -> Option<f32> {
         // Routes through `active_flame()` -- when editing a subflame,
         // that is the subflame's slot; otherwise the main flame.
         let transform = self.get(config_manager.active_flame())?;
-        Some(transform.get_variation_param_or_default(
-            var_name,
-            &param.name,
-            &crate::variations::global_registry(),
-        ))
+        Some(transform.get_variation_param_or_default(var_name, &param.name, &crate::variations::global_registry()))
     }
 
     fn path(&self, var_name: &str, param_name: &str) -> ConfigPath {
@@ -56,61 +37,18 @@ impl ParamTarget for TransformRef {
     }
 }
 
-/// Render parameter controls for an active variation on any pool member.
-///
-/// `xref` selects which pool (Normal / Linked / Final) and index the
-/// transform lives in; the right ConfigPath variant is built via
-/// `TransformRef::variation_param_path`.
+/// Draw a variation's parameters on `target` (a pool member's, an escape
+/// transformation's, the lens's): the largest update the edits asked for.
 pub fn render_variation_params(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     target: &dyn ParamTarget,
     var_name: &str,
-    parameters: &[VariationParameter],
+    parameters: &[ParamDef],
 ) -> UpdateType {
-    let mut max_update = UpdateType::None;
-
-    for param in parameters {
-        // Current value from the target, for live preview.
-        let stored_value = match target.stored(config_manager, var_name, param) {
-            Some(v) => v,
-            None => return max_update, // Target missing — bail out.
-        };
-        let mut param_value = stored_value;
-
-        let (param_changed, drag_stopped) = match &param.param_type {
-            _ if crate::variations::is_slow_param(var_name, &param.name) => {
-                render_slow_param(ui, var_name, param, &mut param_value)
-            }
-            ParamType::Float => render_float_param(ui, param, &mut param_value),
-            ParamType::UnlimitedFloat => render_unlimited_float_param(ui, param, &mut param_value),
-            ParamType::Integer => render_integer_param(ui, param, &mut param_value),
-            ParamType::UnlimitedInteger => render_unlimited_integer_param(ui, param, &mut param_value),
-            ParamType::Boolean => render_boolean_param(ui, param, &mut param_value),
-            ParamType::Angle => render_angle_param(ui, param, &mut param_value),
-            ParamType::Enum { choices } => render_enum_param(ui, param, &mut param_value, choices),
-        };
-
-        let path = target.path(var_name, &param.name);
-
-        // Writing only on `changed()` isn't enough on its own: a widget that
-        // quantizes or clamps the value it was handed reports `changed()` on
-        // the frame it's first drawn, so merely EXPANDING a variation's
-        // parameter section would rewrite the flame (a step of 0.01 rounded
-        // Thickness 0.006 → 0.01, doubling the rendered line width). Require
-        // an actual difference so opening a panel can never edit a flame.
-        if param_changed && param_value != stored_value {
-            if let Ok(update_type) = config_manager.update_param(path.clone(), param_value.into()) {
-                max_update = max_update.max(update_type);
-            }
-        }
-
-        if drag_stopped {
-            let _ = config_manager.force_commit_preview(&path);
-        }
-    }
-
-    max_update
+    let mut store = super::params::ConfigStore::new(config_manager, |m, d| target.stored(m, var_name, d), |n| target.path(var_name, n));
+    super::params::list(ui, &mut store, &super::params::List::new(parameters, var_name));
+    store.update
 }
 
 /// The escape engine's **camera lens**.
@@ -128,16 +66,16 @@ impl ParamTarget for LensTarget {
         &self,
         config_manager: &ConfigManager,
         _var_name: &str,
-        param: &VariationParameter,
+        param: &ParamDef,
     ) -> Option<f32> {
         Some(
             config_manager
                 .active_config()
                 .escape
                 .lens_params
-                .get(&param.name)
+                .get(&*param.name)
                 .copied()
-                .unwrap_or(param.default_value),
+                .unwrap_or(param.slot_default()),
         )
     }
 
@@ -146,169 +84,6 @@ impl ParamTarget for LensTarget {
             param: param_name.to_string(),
         }
     }
-}
-
-/// Attach a hover tooltip to a widget response when the param has a
-/// description. No-op when description is None (no tooltip rendered).
-fn with_hover(response: egui::Response, param: &VariationParameter) -> egui::Response {
-    if let Some(desc) = &param.description {
-        response.on_hover_text(desc)
-    } else {
-        response
-    }
-}
-
-/// A slow parameter (`variations::SLOW_PARAMS`): it bounds a loop the
-/// variation runs every iteration, so each frame of a live drag that
-/// raised it would come later than the last, and the drag would overshoot.
-/// A small whole-number range is a dropdown; anything else commits when
-/// the drag ends (`slow_controls`). No preview either way: the value
-/// reaches the config once, as one undo step.
-/// Returns (changed, drag_stopped).
-fn render_slow_param(ui: &mut egui::Ui, var_name: &str, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
-    let min = param.min_value.unwrap_or(1.0);
-    let max = param.max_value.unwrap_or(100.0);
-    let integer = matches!(param.param_type, ParamType::Integer | ParamType::UnlimitedInteger);
-    // An unlimited type takes a typed value past its slider's range.
-    let clamping = if matches!(param.param_type, ParamType::UnlimitedInteger | ParamType::UnlimitedFloat) {
-        egui::SliderClamping::Never
-    } else {
-        egui::SliderClamping::Edits
-    };
-    if integer && super::slow_controls::fits_a_dropdown(min, max) {
-        let changed = super::slow_controls::whole_numbers(
-            ui,
-            ("slow_param", var_name, param.name.as_str()),
-            &param.display_name,
-            param.description.as_deref(),
-            value,
-            min as i32,
-            max as i32,
-        );
-        return (changed, changed);
-    }
-    let id = ui.id().with(("slow_param", var_name, param.name.as_str()));
-    let (_, changed) = super::slow_controls::on_release(ui, id, value, |ui, v| {
-        if integer {
-            let mut i = *v as i32;
-            let response = with_hover(
-                ui.add(super::VkbSlider::new(&mut i, min as i32..=max as i32).text(&param.display_name).clamping(clamping)),
-                param,
-            );
-            *v = i as f32;
-            response
-        } else {
-            with_hover(ui.add(super::VkbSlider::new(v, min..=max).text(&param.display_name).clamping(clamping)), param)
-        }
-    });
-    (changed, changed)
-}
-
-/// Render a float parameter slider
-/// Returns (changed, dragged, drag_stopped)
-fn render_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
-    let min = param.min_value.unwrap_or(-10.0);
-    let max = param.max_value.unwrap_or(10.0);
-    let response = with_hover(ui.add(
-        super::VkbSlider::new(value, min..=max)
-            .text(&param.display_name)
-            // No step_by: a fixed step rounds the STORED value (0.006 →
-            // 0.01 just by drawing the panel) and disables VkbSlider's own
-            // drag snapping, which derives a nice_step from the range —
-            // 0.001 for a 0..0.2 param — and applies it only while
-            // dragging, leaving typed values exact.
-            .clamping(egui::SliderClamping::Edits),
-    ), param);
-    (response.changed(), response.drag_stopped())
-}
-
-/// Render an integer parameter slider
-/// Returns (changed, dragged, drag_stopped)
-fn render_integer_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
-    let min = param.min_value.unwrap_or(1.0) as i32;
-    let max = param.max_value.unwrap_or(10.0) as i32;
-    let mut int_val = *value as i32;
-    let response = with_hover(
-        ui.add(
-            super::VkbSlider::new(&mut int_val, min..=max)
-                .text(&param.display_name)
-                .clamping(egui::SliderClamping::Edits),
-        ),
-        param,
-    );
-    *value = int_val as f32;
-    (response.changed(), response.drag_stopped())
-}
-
-/// Render an unlimited integer parameter (full i32 range)
-/// Uses min/max as slider range (default -100 to 100), but allows typing any i32 value
-/// Returns (changed, dragged, drag_stopped)
-fn render_unlimited_integer_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
-    let min = param.min_value.unwrap_or(-100.0) as i32;
-    let max = param.max_value.unwrap_or(100.0) as i32;
-    let mut int_val = *value as i32;
-
-    let response = with_hover(ui.add(
-        super::VkbSlider::new(&mut int_val, min..=max)
-            .text(&param.display_name)
-            .clamping(egui::SliderClamping::Never)  // Allow typing values outside slider range
-    ), param);
-
-    if response.changed() {
-        // Clamp to i32 limits (actual limits: -2,147,483,648 to 2,147,483,647)
-        *value = (int_val.clamp(i32::MIN, i32::MAX)) as f32;
-    } else {
-        *value = int_val as f32;
-    }
-
-    (response.changed(), response.drag_stopped())
-}
-
-/// Render an angle parameter slider (displays degrees, stores as value)
-/// Returns (changed, dragged, drag_stopped)
-fn render_angle_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
-    let min = param.min_value.unwrap_or(0.0);
-    let max = param.max_value.unwrap_or(360.0);
-    let response = with_hover(
-        ui.add(
-            super::VkbSlider::new(value, min..=max)
-                .text(&param.display_name)
-                .suffix("°")
-                .clamping(egui::SliderClamping::Edits),
-        ),
-        param,
-    );
-    (response.changed(), response.drag_stopped())
-}
-
-/// Render an unlimited float parameter (full f32 range)
-/// Uses min/max as slider range (default -10.0 to 10.0), but allows typing any f32 value
-/// Returns (changed, dragged, drag_stopped)
-fn render_unlimited_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
-    let min = param.min_value.unwrap_or(-10.0);
-    let max = param.max_value.unwrap_or(10.0);
-
-    let response = with_hover(ui.add(
-        super::VkbSlider::new(value, min..=max)
-            .text(&param.display_name)
-            .clamping(egui::SliderClamping::Never)  // Allow typing values outside slider range
-    ), param);
-
-    if response.changed() {
-        // Clamp to f32 limits (actual limits: -3.4E38 to 3.4E38)
-        *value = value.clamp(f32::MIN, f32::MAX);
-    }
-
-    (response.changed(), response.drag_stopped())
-}
-
-/// Render a boolean parameter (checkbox)
-/// Returns (changed, dragged=false, drag_stopped=false)
-fn render_boolean_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
-    let mut checked = *value > 0.5;
-    let response = with_hover(ui.checkbox(&mut checked, &param.display_name), param);
-    *value = if checked { 1.0 } else { 0.0 };
-    (response.changed(), false)  // Checkboxes don't have drag states
 }
 
 #[cfg(test)]
@@ -371,45 +146,6 @@ mod tests {
     }
 }
 
-/// Render an enum parameter (dropdown/combobox)
-/// Returns (changed, dragged=false, drag_stopped=false)
-fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32, choices: &[&'static str]) -> (bool, bool) {
-    if choices.is_empty() {
-        // Fallback if no choices provided
-        ui.label(format!("{}: (no choices)", param.display_name));
-        return (false, false);
-    }
-
-    // Round rather than truncate, and clamp (as escape_panel's choices):
-    // a value saved while the param was a number, or set by a script or
-    // an animation mid-key, must land on a real entry.
-    let last = choices.len() - 1;
-    let mut selected = if value.is_finite() {
-        (value.round().max(0.0) as usize).min(last)
-    } else {
-        0
-    };
-
-    let mut changed = false;
-    let combo = egui::ComboBox::from_label(&param.display_name)
-        .selected_text(choices[selected])
-        .show_ui(ui, |ui| {
-            for (idx, choice) in choices.iter().enumerate() {
-                if ui.selectable_value(&mut selected, idx, *choice).clicked() {
-                    changed = true;
-                }
-            }
-        });
-    // Attach hover tooltip to the closed combobox response.
-    let _ = with_hover(combo.response, param);
-
-    if changed {
-        *value = selected as f32;
-    }
-
-    (changed, false)  // Dropdowns don't have drag states
-}
-
 #[cfg(test)]
 mod target_tests {
     use super::*;
@@ -432,7 +168,7 @@ mod target_tests {
             .iter()
             .find(|p| p.name == "c1")
             .expect("c1");
-        assert_eq!(c1.default_value, 1.0, "curl's c1 default moved");
+        assert_eq!(c1.slot_default(), 1.0, "curl's c1 default moved");
 
         let got = LensTarget
             .stored(&cm, "curl", c1)

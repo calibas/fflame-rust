@@ -39,8 +39,8 @@
 //! No JWildfire/Apophysis equivalent — original to this project.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 
@@ -63,7 +63,7 @@ pub static HOFSTADTER: VariationDef = VariationDef {
     wgsl_state_init: None,
     parameters: &[
         param!("size", "Size", float, 1.0, 0.1, 4.0, "Spatial scale: the full butterfly (E from −4 to 4, flux from 0 to 1) spans size×size units, centered on the origin. The flux axis wraps, so the butterfly tiles vertically."),
-        param!("depth", "Max Denominator", int, 20.0, 2.0, 96.0, "Largest flux denominator q considered. Higher values add finer flux rows (each with q bands) — more hierarchy levels, thinner structure, and proportionally more computation."),
+        param!(slow "depth", "Max Denominator", int, 20.0, 2.0, 96.0, "Largest flux denominator q considered. Higher values add finer flux rows (each with q bands) — more hierarchy levels, thinner structure, and proportionally more computation."),
         param!("coupling", "Coupling", float, 1.0, 0.2, 3.0, "Almost-Mathieu coupling λ. 1 is the classic self-dual butterfly; < 1 fattens the bands (metallic regime), > 1 thins them (insulating regime)."),
         param!("hierarchy", "Hierarchy", float, 2.0, 0.5, 4.0, "Farey-basin weight exponent: flux snaps to the rational minimizing q^hierarchy·|α − p/q|. 2 is the natural Diophantine metric; lower values let fine rationals grab more territory (denser rows), higher values favor the simple fractions."),
         param!("snap", "Flux Snap", float, 1.0, 0.0, 1.0, "How hard the y coordinate snaps to its rational flux row. 1 collapses points onto discrete rows (the classic look); lower values leave vertical haze between rows."),

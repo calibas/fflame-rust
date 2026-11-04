@@ -20,8 +20,8 @@
 //! Source: `output/jwildfire-vars/output/glynnlissa.cpp`.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 

@@ -11,8 +11,8 @@
 //! McGregor & Watt, "The Art of Graphics for the IBM PC", pp. 162-205.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 
