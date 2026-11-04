@@ -857,12 +857,16 @@ fn escaped(s, p) {
   the scalar path (`param_cell`); `lang::rhai::param_layout(source)`
   reads the layout -- conditions, grids, fills and warnings by function
   name -- checking every name it reads. In every kind `p.grid[2].column`
-  reads a cell by name; at a computed row, in a simulation model, the
-  checker resolves `__grid_param` to one read at the first row's slot
-  plus the clamped row times the stride (`Host::GridParam`: a clamp in
-  the read itself -- the lowering's `min`/`max`, a local and an `if`
-  each, measured up to 2.5% on McCabe's twin). Only the simulation panel draws a
-  layout yet; elsewhere a grid's cells are listed one by one.
+  reads a cell by name, and a computed row is one read at the first
+  row's slot plus the clamped row times the stride (`Host::GridParam`,
+  in the kind's own read: `fparam`/`cparam`, `get_param`, `mparam`; a
+  clamp in the read itself -- the lowering's `min`/`max`, a local and an
+  `if` each, measured up to 2.5% on McCabe's twin); the interpreter and
+  the big-float evaluator read the same parameter. Every panel draws a
+  script's conditions and grids (`ui::params`; a formula's, colouring's
+  or solid's layout by `escape::custom::param_layout`); a grid's fill
+  and warning are CPU functions only a simulation runs yet, refused
+  elsewhere (`LayoutSpec::without_cpu`).
 - **A helper takes `p` and `ctx` whole** (P4 step 9c): an argument that
   is the entry's parameters, its context or a colouring's sample binds
   the helper's parameter as it is bound at the call

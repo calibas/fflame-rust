@@ -1275,7 +1275,9 @@ fn discs(p) {
             let e = compile_model(&bad, "custom-bad").expect_err(says);
             assert!(e.contains(says), "{says}: {e}");
         }
-        // A constant row anywhere; a computed one is a model's.
+        // A row constant or computed, in a colouring as in a model (one
+        // parameter system, step 10): the computed one is the colouring's
+        // `cparam` at the slot its row gives.
         let colouring = "const PARAMS = #{ g: #{ type: \"grid\", rows: 2, columns: #{ v: #{ value: 1.0 } } } };
 fn cell_color(cell, p, ctx) {
     rgba(p.g[1].v, cell.state.x, 0.0, 1.0)
@@ -1285,7 +1287,8 @@ fn cell_color(cell, p, ctx) {
             panic!("{e}");
         }
         let computed = colouring.replace("p.g[1].v", "p.g[to_int(cell.state.x)].v");
-        assert!(compile(&computed, "custom-gc2").is_err_and(|e| e.contains("simulation model")));
+        let def = compile(&computed, "custom-gc2").unwrap_or_else(|e| panic!("{e}"));
+        assert!(def.wgsl.contains("cparam(u32(0i + clamp("), "{}", def.wgsl);
     }
 
     /// A carried source registers under the name the config gives it, and

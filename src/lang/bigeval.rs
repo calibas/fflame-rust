@@ -366,6 +366,13 @@ impl BigMachine {
 
     fn eval(&self, e: &IExpr) -> R<BigValue> {
         Ok(match &e.kind {
+            IExprKind::Host(super::builtins::Host::GridParam, args) => {
+                let row = match self.eval(&args[3])? {
+                    BigValue::Int(i) => i,
+                    other => self.to_f(other).to_f64() as i32,
+                };
+                BigValue::Float(self.f(self.params.values[super::interp::grid_cell(args, row)].0))
+            }
             IExprKind::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             IExprKind::Bool(b) => BigValue::Bool(*b),
             IExprKind::Int(i) => BigValue::Int(*i as i32),

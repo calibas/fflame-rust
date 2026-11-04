@@ -38,6 +38,9 @@ struct Registry {
     /// The programs with `global:` values, which the renderer has the
     /// interpreter compute ([`globals`]).
     programs: HashMap<String, Arc<ir::Program>>,
+    /// A Rhai source's parameter layout (its conditions and grids; one
+    /// parameter system, step 10), which the panel draws by.
+    layouts: HashMap<String, Arc<crate::params::layout::ParamLayout>>,
     /// A solid's parameter block: where its own parameters start (after
     /// the template's), and where its globals do (after its parameters,
     /// its colour depth and its ball).
@@ -343,7 +346,31 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
     if let Some(def) = formula(name) {
         return Ok(def);
     }
-    compile_program(check_entry(EntryKind::Formula, src)?, name)
+    let p = check_entry(EntryKind::Formula, src)?;
+    record_layout(src, name)?;
+    compile_program(p, name)
+}
+
+/// A Rhai source's layout, recorded under `name` (or forgotten, when it
+/// has none or is another dialect's).
+fn record_layout(src: &CustomSource, name: &str) -> Result<(), Vec<Diag>> {
+    let layout = match src.dialect {
+        CustomDialect::Rhai => lang::rhai::plain_layout(&src.source).map_err(|e| vec![Diag::error(lang::Span::default(), e)])?,
+        _ => None,
+    };
+    if let Ok(mut r) = registry().write() {
+        match layout {
+            Some(l) => r.layouts.insert(name.to_string(), l),
+            None => r.layouts.remove(name),
+        };
+    }
+    Ok(())
+}
+
+/// The parameter layout of the custom formula, colouring or solid
+/// `name`, when its `PARAMS` has conditions or grids.
+pub fn param_layout(name: &str) -> Option<Arc<crate::params::layout::ParamLayout>> {
+    registry().read().ok()?.layouts.get(name).cloned()
 }
 
 /// Why a checked solid does not compile to its walk, if it does not (the
@@ -365,6 +392,7 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     }
     let fail = |m: String| vec![Diag::error(lang::Span::default(), m)];
     let p = check_entry(EntryKind::Solid, src)?;
+    record_layout(src, name)?;
     let template = super::ifs::template_parameters();
     let own = param_defs(&p);
     let depth_slot = template.len() + own.len();
@@ -1171,6 +1199,7 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
         return Ok(def);
     }
     let p = check_entry(EntryKind::Coloring, src)?;
+    record_layout(src, name)?;
     let c = lang::wgsl::coloring(&p);
     #[cfg(not(target_arch = "wasm32"))]
     if let Err(e) = lang::wgsl::validate_coloring(&c) {

@@ -1145,6 +1145,26 @@ pub struct LayoutSpec {
     pub grids: Vec<GridSpec>,
 }
 
+impl LayoutSpec {
+    /// The layout a kind draws without CPU functions: its conditions and
+    /// its grids (one parameter system, step 10). A grid's fill and
+    /// warning are functions the CPU runs, which a simulation's registry
+    /// alone does yet: refused elsewhere.
+    pub fn without_cpu(self) -> Result<crate::params::layout::ParamLayout, String> {
+        if let Some(g) = self.grids.iter().find(|g| g.fill.is_some() || g.warn.is_some()) {
+            return Err(format!("the grid `{}`: a fill and a warning run on the CPU, a simulation's alone for now", g.grid.name));
+        }
+        Ok(crate::params::layout::ParamLayout { show_if: self.show_if, grids: self.grids.into_iter().map(|g| g.grid).collect() })
+    }
+}
+
+/// A source's layout as a kind without CPU functions draws it
+/// ([`LayoutSpec::without_cpu`]); `None` when it has neither conditions
+/// nor grids.
+pub fn plain_layout(source: &str) -> Result<Option<std::sync::Arc<crate::params::layout::ParamLayout>>, String> {
+    param_layout(source)?.map(LayoutSpec::without_cpu).transpose().map(|l| l.map(std::sync::Arc::new))
+}
+
 /// A script's parameter layout from its `PARAMS` (rhai-plugins P7): each
 /// `show_if`, and each grid -- its cells, live rows, columns, headers,
 /// fill and warning -- every name it reads checked; `None` with neither.
@@ -3145,9 +3165,6 @@ impl<'s> Lowerer<'s> {
             }
             return Ok(mk(ExprKind::Param(g.cell(r as usize, col)), span));
         }
-        if !self.sim_model {
-            return self.err(p, "a grid's row by a computed index is a simulation model's; elsewhere, a constant row: `p.grid[2].column`");
-        }
         if g.rows == 1 {
             return Ok(mk(ExprKind::Param(g.cell(0, col)), span));
         }
@@ -4527,6 +4544,30 @@ fn escaped(s, p) {
     s.z.norm_sqr() > 4.0
 }
 "#;
+
+    /// A grid's cell at a row the formula computes (one parameter system,
+    /// step 10): one `fparam` read at the slot the row gives, clamped to
+    /// the grid; the interpreter reads the same parameter, so the CPU's
+    /// orbit is the formula's.
+    #[test]
+    fn a_formula_reads_a_grid_row_it_computes() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, Env, ParamValues};
+        let src = "const PARAMS = #{\n    pick: #{ value: 2, min: 0, max: 2 },\n    \
+                   table: #{ type: \"grid\", rows: 3, cell: \"t{row}_{column}\", columns: #{ k: #{ value: [0.0, 0.5, 0.25], min: 0.0, max: 1.0 } } },\n};\n\
+                   fn start(pixel, p) {\n    #{ z: complex(0.0, 0.0), c: pixel }\n}\n\
+                   fn step(s, p) {\n    s.z = s.z * s.z + s.c * p.table[p.pick].k;\n    s\n}\n\
+                   fn escaped(s, p) {\n    s.z.norm_sqr() > 4.0\n}\n";
+        let p = program(src).unwrap_or_else(|d| panic!("{d:?}"));
+        let wgsl = crate::lang::wgsl::formula(&p);
+        crate::lang::wgsl::validate_formula(&wgsl).unwrap_or_else(|e| panic!("{e}\n{wgsl}"));
+        assert!(wgsl.contains("fparam(u32(1i + clamp("), "{wgsl}");
+        // The same orbit as the formula with the row's value written in.
+        let plain = program(&src.replace("p.table[p.pick].k", "0.25")).unwrap();
+        let env = Env::at(C64::new(1.5, 0.7), 50);
+        let (a, b) = (run(&p, &ParamValues::defaults(&p), None, &env), run(&plain, &ParamValues::defaults(&plain), None, &env));
+        assert_eq!((a.n, a.z.re.to_bits(), a.z.im.to_bits()), (b.n, b.z.re.to_bits(), b.z.im.to_bits()));
+    }
 
     /// An early `return` leaves its own scope (rhai-plugins P7 step 1): a
     /// varied variation's -- directly, and from inside its own loop --

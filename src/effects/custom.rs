@@ -15,7 +15,8 @@
 //! and [`ensure`] registers them before anything renders it, so a
 //! `.fflame` with an effect of the user's renders anywhere the app runs.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use super::{EffectCategory, EffectInfo, EffectSource};
 use crate::renderer::effect_chain::MAX_EFFECT_PARAMS;
@@ -104,10 +105,12 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
         lang::wgsl::validate_effect(&splice_blend_library(&wgsl)).map_err(|e| format!("the compiler produced invalid WGSL (a bug): {e}"))?;
     }
 
+    // Under its key: the version is its name's, so two versions of one
+    // effect live side by side (rule 7).
+    let name = if provenance.is_builtin() { id } else { key_for(&id, source) };
+    record_layout(&name, source)?;
     Ok(EffectInfo {
-        // Under its key: the version is its name's, so two versions of
-        // one effect live side by side (rule 7).
-        name: if provenance.is_builtin() { id } else { key_for(&id, source) },
+        name,
         category,
         display_name: program.name.clone(),
         source: EffectSource::Owned(wgsl),
@@ -115,6 +118,32 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
         provenance,
         labels: lang::rhai::source_labels(source).map(Arc::new),
     })
+}
+
+/// The Rhai sources' parameter layouts (their conditions and grids; one
+/// parameter system, step 10), by the name each registers under.
+fn layouts() -> &'static RwLock<HashMap<String, Arc<crate::params::layout::ParamLayout>>> {
+    static L: OnceLock<RwLock<HashMap<String, Arc<crate::params::layout::ParamLayout>>>> = OnceLock::new();
+    L.get_or_init(Default::default)
+}
+
+/// `source`'s layout, recorded under `name` (or forgotten, when it has
+/// none): what the panel draws its parameters by.
+fn record_layout(name: &str, source: &str) -> Result<(), String> {
+    let layout = lang::rhai::plain_layout(source)?;
+    if let Ok(mut l) = layouts().write() {
+        match layout {
+            Some(layout) => l.insert(name.to_string(), layout),
+            None => l.remove(name),
+        };
+    }
+    Ok(())
+}
+
+/// The parameter layout `name` registered with, when its `PARAMS` has
+/// conditions or grids.
+pub fn param_layout(name: &str) -> Option<Arc<crate::params::layout::ParamLayout>> {
+    layouts().read().ok()?.get(name).cloned()
 }
 
 /// The built-ins that are their Rhai twins (D1; docs/projects/
