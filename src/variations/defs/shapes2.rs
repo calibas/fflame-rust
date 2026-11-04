@@ -21,9 +21,10 @@
 //!     formula (internal-weight watchlist material), and `target`/`yin_yang`
 //!     need init-time precomputed fields recovered from the Java source.
 
+use crate::params::{ParamDef, Spec};
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 
 // =============================================================================
@@ -422,8 +423,12 @@ pub static CELL: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[],
     parameters: &[
-        VariationParamDef { name: "size", display_name: "Size", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.6, min_value: Some(0.01), max_value: Some(10.0), description: Some("Width of each cell in the grid.") },
+        ParamDef::new(
+            "size",
+            "Size",
+            "Width of each cell in the grid.",
+            Spec::float(0.6, 0.01, 10.0).free(),
+        ),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -492,12 +497,24 @@ pub static ENNEPERS2: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
-        VariationParamDef { name: "a", display_name: "A", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Coefficient on the X factor.") },
-        VariationParamDef { name: "b", display_name: "B", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.3333, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Coefficient on the Y factor.") },
-        VariationParamDef { name: "c", display_name: "C", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.075, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Square-root correction strength applied to both X and Y outputs.") },
+        ParamDef::new(
+            "a",
+            "A",
+            "Coefficient on the X factor.",
+            Spec::float(1.0, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "b",
+            "B",
+            "Coefficient on the Y factor.",
+            Spec::float(0.3333, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "c",
+            "C",
+            "Square-root correction strength applied to both X and Y outputs.",
+            Spec::float(0.075, -10.0, 10.0).free(),
+        ),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -555,10 +572,18 @@ pub static FLOWER: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
-        VariationParamDef { name: "holes", display_name: "Holes", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.4, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How hollow the center of the flower is. Higher = bigger center hole.") },
-        VariationParamDef { name: "petals", display_name: "Petals", param_type: ParamType::UnlimitedFloat,
-                            default_value: 7.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Number of petals around the flower.") },
+        ParamDef::new(
+            "holes",
+            "Holes",
+            "How hollow the center of the flower is. Higher = bigger center hole.",
+            Spec::float(0.4, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "petals",
+            "Petals",
+            "Number of petals around the flower.",
+            Spec::float(7.0, 1.0, 64.0).free(),
+        ),
     ],
     init_param_count: 0,
     wgsl_init: None,

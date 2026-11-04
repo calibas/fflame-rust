@@ -19,9 +19,10 @@
 //!   - `helix` / `helicoid` upstream Z preserves; 2D form falls out
 //!     trivially since `FTz = 0` collapses the trig terms.
 
+use crate::params::{ParamDef, Spec};
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 
 // =============================================================================
@@ -280,8 +281,12 @@ pub static CARDIOID: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[],
     parameters: &[
-        VariationParamDef { name: "a", display_name: "A", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Number of cusps/lobes in the cardioid shape. 1 = standard heart, 2 = figure-eight, higher values add more lobes.") },
+        ParamDef::new(
+            "a",
+            "A",
+            "Number of cusps/lobes in the cardioid shape. 1 = standard heart, 2 = figure-eight, higher values add more lobes.",
+            Spec::float(1.0, -10.0, 10.0).free(),
+        ),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -323,10 +328,18 @@ pub static HELIX: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
-        VariationParamDef { name: "frequency", display_name: "Frequency", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How many full turns the helix makes per unit of Z.") },
-        VariationParamDef { name: "width", display_name: "Width", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Radius of the helical winding around the Z axis.") },
+        ParamDef::new(
+            "frequency",
+            "Frequency",
+            "How many full turns the helix makes per unit of Z.",
+            Spec::float(1.0, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "width",
+            "Width",
+            "Radius of the helical winding around the Z axis.",
+            Spec::float(0.5, -10.0, 10.0).free(),
+        ),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -367,8 +380,12 @@ pub static HELICOID: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::AlwaysZ],
     parameters: &[
-        VariationParamDef { name: "frequency", display_name: "Frequency", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("How fast the (x, y) plane rotates as Z increases. Larger = tighter spiral.") },
+        ParamDef::new(
+            "frequency",
+            "Frequency",
+            "How fast the (x, y) plane rotates as Z increases. Larger = tighter spiral.",
+            Spec::float(1.0, -10.0, 10.0).free(),
+        ),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -413,10 +430,18 @@ pub static PARABOLA: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
-        VariationParamDef { name: "width", display_name: "Width", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Horizontal scaling of the parabolic envelope.") },
-        VariationParamDef { name: "height", display_name: "Height", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Vertical scaling of the parabolic envelope.") },
+        ParamDef::new(
+            "width",
+            "Width",
+            "Horizontal scaling of the parabolic envelope.",
+            Spec::float(1.0, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "height",
+            "Height",
+            "Vertical scaling of the parabolic envelope.",
+            Spec::float(0.5, -10.0, 10.0).free(),
+        ),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -466,12 +491,24 @@ pub static PIE: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
-        VariationParamDef { name: "slices", display_name: "Slices", param_type: ParamType::Float,
-                            default_value: 6.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Number of pie wedges (1-64).") },
-        VariationParamDef { name: "rotation", display_name: "Rotation", param_type: ParamType::Angle,
-                            default_value: 0.0, min_value: Some(0.0), max_value: Some(360.0), description: Some("Rotation angle of the whole pie in degrees.") },
-        VariationParamDef { name: "thickness", display_name: "Thickness", param_type: ParamType::Float,
-                            default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0), description: Some("Wedge thickness within its slice. 0 = razor-thin spokes, 1 = wedges fill their entire slice.") },
+        ParamDef::new(
+            "slices",
+            "Slices",
+            "Number of pie wedges (1-64).",
+            Spec::float(6.0, 1.0, 64.0),
+        ),
+        ParamDef::new(
+            "rotation",
+            "Rotation",
+            "Rotation angle of the whole pie in degrees.",
+            Spec::angle(0.0, 0.0, 360.0),
+        ),
+        ParamDef::new(
+            "thickness",
+            "Thickness",
+            "Wedge thickness within its slice. 0 = razor-thin spokes, 1 = wedges fill their entire slice.",
+            Spec::float(0.5, 0.0, 1.0),
+        ),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -516,12 +553,24 @@ pub static PIE3D: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
-        VariationParamDef { name: "slices", display_name: "Slices", param_type: ParamType::Float,
-                            default_value: 7.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Number of pie wedges (1-64).") },
-        VariationParamDef { name: "rotation", display_name: "Rotation", param_type: ParamType::Angle,
-                            default_value: 0.0, min_value: Some(0.0), max_value: Some(360.0), description: Some("Rotation angle of the whole pie in degrees.") },
-        VariationParamDef { name: "thickness", display_name: "Thickness", param_type: ParamType::Float,
-                            default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0), description: Some("Wedge thickness within its slice. 0 = razor-thin spokes, 1 = wedges fill their entire slice.") },
+        ParamDef::new(
+            "slices",
+            "Slices",
+            "Number of pie wedges (1-64).",
+            Spec::float(7.0, 1.0, 64.0),
+        ),
+        ParamDef::new(
+            "rotation",
+            "Rotation",
+            "Rotation angle of the whole pie in degrees.",
+            Spec::angle(0.0, 0.0, 360.0),
+        ),
+        ParamDef::new(
+            "thickness",
+            "Thickness",
+            "Wedge thickness within its slice. 0 = razor-thin spokes, 1 = wedges fill their entire slice.",
+            Spec::float(0.5, 0.0, 1.0),
+        ),
     ],
     init_param_count: 0,
     wgsl_init: None,

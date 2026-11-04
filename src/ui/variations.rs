@@ -308,7 +308,7 @@ pub fn render_variations_panel(
                                 for p in &v.parameters {
                                     ui.weak(format!(
                                         "  {} = {}",
-                                        p.display_name, p.default_value
+                                        p.label, p.slot_default()
                                     ));
                                 }
                             });

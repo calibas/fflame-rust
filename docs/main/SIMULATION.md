@@ -796,7 +796,7 @@ any model the built-ins are, each of the 31 with a twin.
   "scales", rows: 6 }` gives the per-scale warps (`ScaleWarps`): the
   Warp section draws `s{i}_warp_*` behind its target list, and
   `ctx.scale_warped` says whether any live row is off the identity.
-- **A parameter layout** (rhai-plugins P7; `param_layout`): a parameter
+- **A parameter layout** (rhai-plugins P7; `params::layout`): a parameter
   with `show_if: #{ layout: 0 }` (or a list of values,
   `#{ averaging: [1, 2] }`) is listed only while those hold; a `PARAMS`
   entry with `type: "grid"` is a grid of `rows` rows by its `columns`,
@@ -816,8 +816,8 @@ any model the built-ins are, each of the 31 with a twin.
   read at the slot the row gives, the row clamped (`Host::GridParam`);
   the CPU functions as `p.grid[i].column` too. The cells stay plain
   parameters: the config, undo, animation and presets see nothing new.
-  The panel draws a built-in's layout and a script's alike
-  (`render_param_grid`); McCabe's built-in table is one
+  The panel draws a built-in's layout and a script's alike, through
+  the one parameter renderer (`ui::params`); McCabe's built-in table is one
   (`models::mccabe_layout`), and its twin declares the same, its
   table and its warps grids.
 - **Agents** (P4 step 9d): `fn agent_seed(p, ctx)` gives each agent's
@@ -864,7 +864,7 @@ any model the built-ins are, each of the 31 with a twin.
   passes numbered as the functions are (`cell_step` is 1); `measure`
   and `scale_warps` (above); `slow: ["radius"]`, the parameters whose
   every value is a slow step, which the panel commits when a drag ends
-  (`SLOW_PARAMS` for a built-in). `agents` is refused: a model's agents
+  (a built-in's `.slow()`). `agents` is refused: a model's agents
   are its functions (below).
 - **Its own stable time step**: `fn max_dt(p)`, the bound at the
   parameters in force, which a built-in writes as a `dt_bound` closure.
@@ -961,9 +961,10 @@ any model the built-ins are, each of the 31 with a twin.
    can see whether a preset draws anything at all, and it has caught a
    model rendering black that no name check could.
 5. A parameter that multiplies a step's work -- a kernel radius read
-   cell by cell, an agent count -- goes in `SLOW_PARAMS` in
-   [src/sim/mod.rs](../../src/sim/mod.rs), so the panel commits it when
-   a drag ends instead of overshooting (UI.md, *Slow settings*).
+   cell by cell, an agent count -- is marked `.slow()`
+   (`Spec::float(..).slow()`, [src/params/mod.rs](../../src/params/mod.rs)),
+   so the panel commits it when a drag ends instead of overshooting
+   (UI.md, *Slow settings*).
 
 ---
 

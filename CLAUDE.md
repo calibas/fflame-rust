@@ -46,6 +46,7 @@ Project history is in git: `git log --oneline`.
 - `src/shader_builder_v2.rs`, `src/shader_cache.rs`, `src/gpu/` (buffers.rs, pipelines.rs), `shaders/` - see [SHADERS.md](docs/main/SHADERS.md)
 - `src/escape/`, `src/sim/`, `src/camera/`, `src/textures/` (simulation recipes as textures)
 - `src/lang/` - the formula language (feature `lang`, brought by `engine-escape`): Rhai, UF and Fractint to WGSL, for formulas, colourings, solids, variations and effects; `src/scripted.rs` (ids, versions, labels shared by every user-written script)
+- `src/params/` - the one parameter system: `ParamDef`/`ParamKind` (built-ins in one const call via `Spec`), values, layouts (conditions, grids), wire spellings; every kind's parameters, drawn by one renderer (`src/ui/params.rs`). [one-parameter-system.md](docs/projects/one-parameter-system.md)
 - `src/export/` - high-res export (tiled GPU, CPU fallback), 2x AA (supersample.rs)
 - `src/ui/` - dockable panels (egui_dock); `src/animation/`, `src/signal/`, `src/audio/`; `src/effects/`
 - `src/script/` - Rhai scripting (api.rs registers every function; cli.rs; assets/scripts/)
@@ -68,7 +69,7 @@ Opt-in, 2D flames only (config `cylinder_targeting`; code says "cylinder targeti
 - 647 `static VariationDef`s in `src/variations/defs/*.rs` (flam3 / Apophysis / JWildfire), inline WGSL (2D + 3D), registered by appending to `defs/mod.rs` (**append-only**: registration order is the stable ID order). With the `engine-flame` feature off only `linear` is registered.
 - `global_registry()` returns a read guard; the registry changes at runtime -- API-downloaded variations register through `global_registry_mut()`, and so do **Rhai variations** (`variations::custom`, `Provenance::Custom`: a Formula Editor transformation `fn variation(z, p)`; the flame carries the source in `Flame::custom_variations` and `custom::ensure` registers it wherever a flame is read; `.flame` export drops them).
 - Up to `MAX_VARIATIONS_PER_FLAME = 100` per flame, with a **per-flame local index map** (no global indices). The shader is the **sticky superset**: a canonical union of the flame's variations plus retained extras at weight 0, so edits rarely recompile (`src/renderer/sticky.rs`); chained pre/post order falls back to a specialized compile.
-- Parameters: per-transform `HashMap` with `"varname.param"` keys, packed into `MAX_VARIATION_PARAM_SLOTS = 1600` floats (user params, then `wgsl_init`-derived); shaders read `get_param(xform_id, variation_id, slot)`. Per-thread state (`state_count`) is not in that buffer: it is a `var<private> thread_state` array, read via `get_state`/`set_state` and saved with the orbit in the orbit buffer. ParamType: Float, UnlimitedFloat, Integer, UnlimitedInteger, Angle, Boolean, Enum.
+- Parameters: per-transform `HashMap` with `"varname.param"` keys, packed into `MAX_VARIATION_PARAM_SLOTS = 1600` floats (user params, then `wgsl_init`-derived); shaders read `get_param(xform_id, variation_id, slot)`. Per-thread state (`state_count`) is not in that buffer: it is a `var<private> thread_state` array, read via `get_state`/`set_state` and saved with the orbit in the orbit buffer. A parameter is a `params::ParamDef` (the one definition every kind -- variations, effects, escape, simulations, scripts -- shares; one renderer, `ui::params`): float (free, log, angle), int (free), bool, choice; on the wire `ParamType`'s names (float, unlimited_float, integer, unlimited_integer, angle, boolean, enum). `param!(slow ...)` marks a slow one.
 - UI ordering: by category, then registration order -- never HashMap order.
 
 ### Colour, palettes, tone
@@ -193,7 +194,7 @@ Structural actions (transform add/delete, config import/export, preset loading) 
 - **A palette**: a pack JSON in `assets/palettes/packs/` (it appears on the next start), a loose `.palette` in `assets/palettes/`, or the Palette Editor's import/Save to Library.
 - **A preset**: add the config to `assets/presets.fflame` (one JSON array; desktop reads it at runtime, the binary embeds it as the fallback).
 - **Tone mapping**: `shaders/tonemap.wgsl`, `TonemapParams` in `src/gpu/buffers.rs`, controls in `src/ui/tone_mapping.rs`.
-- **UI controls**: in the panel's own `src/ui/*.rs`, writing through `update_param` / `update_batch`; cross-panel results via `UiResponse`, handled in `src/app/ui_handlers.rs`; availability per mode in `src/ui/visibility.rs`.
+- **UI controls**: in the panel's own `src/ui/*.rs`, writing through `update_param` / `update_batch`; cross-panel results via `UiResponse`, handled in `src/app/ui_handlers.rs`; availability per mode in `src/ui/visibility.rs`. A set of parameters is never drawn by hand: `ui::params::list` over its `ParamDef`s, through a `ConfigStore`.
 - **3D flame presets**: set the config's `render_mode = RenderMode::ThreeD` and `perspective_strength` (0 orthographic; ~0.1-0.3 typical); give Z structure with 3D variations (zcone, flatten, hemisphere, zscale, ...) and per-transform `g` offsets (`xform.variations.insert("zcone".into(), 0.5)`); check with camera pitch/yaw or fly mode.
 
 ## Dependencies

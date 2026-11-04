@@ -424,7 +424,7 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
     // Mode D was missing entirely, which is what hid Inverse Depth,
     // Beam Width, March Steps, Shadows, Shadow Sharpness, Occlusion
     // Reach and Slice Value -- every parameter the solid walk has.
-    let (formula_params, formula_label): (&[crate::escape::EscapeParamDef], &str) =
+    let (formula_params, formula_label): (&[crate::params::ParamDef], &str) =
         match (ifs, crate::escape::fields::get_field(&esc.formula)) {
             (Some(d), _) => (d.parameters, d.display_name),
             (None, Some(f)) => (f.parameters, f.display_name),
@@ -436,13 +436,13 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
     for p in formula_params {
         items.push(TargetItem::new(
             ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
-            &format!("{}: {}", formula_label, p.display_name),
+            &format!("{}: {}", formula_label, p.label),
         ));
         // A complex parameter also as a point in polar form, to animate
         // around the origin (`EscapeConfig::formula_param`).
         if let Some(base) = p.name.strip_suffix(".im") {
             if formula_params.iter().any(|q| q.name.strip_suffix(".re") == Some(base)) {
-                let caption = p.display_name.strip_suffix(" (im)").unwrap_or(p.display_name);
+                let caption = p.label.strip_suffix(" (im)").unwrap_or(&*p.label);
                 for (part, label) in [("r", "radius"), ("angle", "angle, degrees")] {
                     items.push(TargetItem::new(
                         ConfigPath::EscapeFormulaParam { param: format!("{base}.{part}") },
@@ -452,7 +452,7 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             }
         }
     }
-    let coloring_params: &[crate::escape::EscapeParamDef] =
+    let coloring_params: &[crate::params::ParamDef] =
         match (ifs, crate::escape::fields::get_field(&esc.formula)) {
             (Some(d), _) => crate::escape::ifs::get_ifs_coloring(&esc.coloring, d).parameters,
             (None, Some(f)) => crate::escape::fields::get_field_coloring(&esc.coloring, f).parameters,
@@ -461,7 +461,7 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
     for p in coloring_params {
         items.push(TargetItem::new(
             ConfigPath::EscapeColoringParam { param: p.name.to_string() },
-            &format!("Coloring: {}", p.display_name),
+            &format!("Coloring: {}", p.label),
         ));
     }
 
@@ -484,7 +484,7 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
         for p in layer.parameters {
             items.push(TargetItem::new(
                 ConfigPath::EscapeLayerParam { param: p.name.to_string() },
-                &format!("Layer {}: {}", layer.display_name, p.display_name),
+                &format!("Layer {}: {}", layer.display_name, p.label),
             ));
         }
     }
@@ -524,8 +524,8 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             items.push(TargetItem::new(ConfigPath::EscapeLensAmount, "Lens: Amount"));
             for p in &info.parameters {
                 items.push(TargetItem::new(
-                    ConfigPath::EscapeLensParam { param: p.name.clone() },
-                    &format!("Lens: {}", p.display_name),
+                    ConfigPath::EscapeLensParam { param: p.name.to_string() },
+                    &format!("Lens: {}", p.label),
                 ));
             }
         }
@@ -545,8 +545,8 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             items.push(TargetItem::new(ConfigPath::EscapeTransformAmount { index: i }, &format!("{label}: Amount")));
             for p in info.map(|v| v.parameters.as_slice()).unwrap_or_default() {
                 items.push(TargetItem::new(
-                    ConfigPath::EscapeTransformParam { index: i, param: p.name.clone() },
-                    &format!("{label}: {}", p.display_name),
+                    ConfigPath::EscapeTransformParam { index: i, param: p.name.to_string() },
+                    &format!("{label}: {}", p.label),
                 ));
             }
         }
@@ -662,9 +662,9 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
                 ConfigPath::SimModelParam { param: p.name.to_string() }
             };
             let label = if layered {
-                format!("Layer {} {}: {}", l + 1, model.display_name, p.display_name)
+                format!("Layer {} {}: {}", l + 1, model.display_name, p.label)
             } else {
-                format!("{}: {}", model.display_name, p.display_name)
+                format!("{}: {}", model.display_name, p.label)
             };
             items.push(TargetItem::new(path, &label));
         }
@@ -678,7 +678,7 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
         for p in coloring.parameters {
             items.push(TargetItem::new(
                 ConfigPath::SimColoringParam { param: p.name.to_string() },
-                &format!("Coloring: {}", p.display_name),
+                &format!("Coloring: {}", p.label),
             ));
         }
     } else {
@@ -687,7 +687,7 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
             for p in coloring.parameters {
                 items.push(TargetItem::new(
                     ConfigPath::SimColorLayerParam { index: k, param: p.name.to_string() },
-                    &format!("Colour {} {}: {}", k + 1, coloring.display_name, p.display_name),
+                    &format!("Colour {} {}: {}", k + 1, coloring.display_name, p.label),
                 ));
             }
             items.push(TargetItem::new(
@@ -1024,9 +1024,9 @@ fn get_effects_items(config: &FractalConfig) -> Vec<TargetItem> {
                 items.push(TargetItem::new(
                     ConfigPath::DensityEffectParam {
                         index,
-                        param: param.name.clone(),
+                        param: param.name.to_string(),
                     },
-                    &format!("{} (Density) → {}", effect_name, param.display_name),
+                    &format!("{} (Density) → {}", effect_name, param.label),
                 ));
             }
         }
@@ -1052,9 +1052,9 @@ fn get_effects_items(config: &FractalConfig) -> Vec<TargetItem> {
                 items.push(TargetItem::new(
                     ConfigPath::ColorEffectParam {
                         index,
-                        param: param.name.clone(),
+                        param: param.name.to_string(),
                     },
-                    &format!("{} (Color) → {}", effect_name, param.display_name),
+                    &format!("{} (Color) → {}", effect_name, param.label),
                 ));
             }
         }
@@ -1180,9 +1180,9 @@ fn get_transform_items(index: usize, transform: &crate::scene::transforms::Trans
                     ConfigPath::TransformVariationParam {
                         index,
                         variation: var_name.clone(),
-                        param: param.name.clone(),
+                        param: param.name.to_string(),
                     },
-                    &format!("{} → {}", capitalize_first(var_name), &param.display_name),
+                    &format!("{} → {}", capitalize_first(var_name), &param.label),
                 ));
             }
         }
@@ -1249,9 +1249,9 @@ fn get_linked_transform_items(index: usize, transform: &crate::scene::transforms
             for param in &info.parameters {
                 items.push(TargetItem::new(
                     ConfigPath::LinkedTransformVariationParam {
-                        index, variation: var_name.clone(), param: param.name.clone(),
+                        index, variation: var_name.clone(), param: param.name.to_string(),
                     },
-                    &format!("{} → {}", capitalize_first(var_name), &param.display_name),
+                    &format!("{} → {}", capitalize_first(var_name), &param.label),
                 ));
             }
         }
@@ -1318,9 +1318,9 @@ fn get_pool_final_transform_items(index: usize, transform: &crate::scene::transf
             for param in &info.parameters {
                 items.push(TargetItem::new(
                     ConfigPath::FinalTransformVariationParam {
-                        index, variation: var_name.clone(), param: param.name.clone(),
+                        index, variation: var_name.clone(), param: param.name.to_string(),
                     },
-                    &format!("{} → {}", capitalize_first(var_name), &param.display_name),
+                    &format!("{} → {}", capitalize_first(var_name), &param.label),
                 ));
             }
         }

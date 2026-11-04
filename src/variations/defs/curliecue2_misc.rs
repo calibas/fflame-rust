@@ -23,8 +23,8 @@
 //! Reference: https://oolong.co.uk/curlicue.htm
 
 use crate::variations::{
-    definition::{VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 

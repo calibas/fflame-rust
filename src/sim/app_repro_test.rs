@@ -224,11 +224,12 @@ fn the_rhai_colourings_colour_as_the_built_ins() {
         let carried = crate::sim::custom::carried(source);
         let mut settings: Vec<(String, f32)> = vec![(String::new(), 0.0)];
         for p in builtin.parameters {
-            if p.choices.is_empty() {
-                settings.push((p.name.to_string(), p.min + 0.7 * (p.max - p.min)));
-            } else {
-                for k in (0..p.choices.len()).filter(|k| *k as f32 != p.default) {
-                    settings.push((p.name.to_string(), k as f32));
+            match p.options() {
+                None => settings.push((p.name.to_string(), p.slot_range().0 + 0.7 * (p.slot_range().1 - p.slot_range().0))),
+                Some(o) => {
+                    for k in (0..o.len()).filter(|k| *k as f32 != p.slot_default()) {
+                        settings.push((p.name.to_string(), k as f32));
+                    }
                 }
             }
         }
@@ -1712,7 +1713,7 @@ fn rd_models_stay_stable_at_the_diffusion_slider_maxima() {
         cfg.init = crate::config::sim::SimInit::Noise { amplitude: 1.0 };
         for name in m.diffusion {
             let def = m.parameters.iter().find(|p| p.name == *name).unwrap();
-            cfg.model_params.insert(def.name.into(), def.max);
+            cfg.model_params.insert(def.name.to_string(), def.slot_range().1);
         }
         // Ask for far more than the cap; the engine must clamp.
         cfg.dt = m.max_dt;

@@ -8,7 +8,7 @@
 //! colouring's `final:`.
 
 use super::ast::{BinOp, UnOp};
-use super::builtins::{Builtin, C64, USER_FUNCTIONS};
+use super::builtins::{Builtin, Host, C64, USER_FUNCTIONS};
 use super::check::LOOP_CAP;
 use super::ir::*;
 use super::Dialect;
@@ -90,6 +90,18 @@ impl Env {
     pub fn at(pixel: C64, maxiter: u32) -> Self {
         Env { pixel, maxiter, center: C64::ZERO, magn: 1.0, x: 0, y: 0, width: 1, height: 1, random: C64::ZERO, julia: false, julia_c: C64::ZERO, rotation: 0.0 }
     }
+}
+
+/// A grid's cell at a computed row (`Host::GridParam`): its first row's
+/// cell plus the row, clamped to the grid's, times the stride to the
+/// next row's -- the parameter the GPU reads at that slot.
+pub(crate) fn grid_cell(args: &[IExpr], row: i32) -> usize {
+    let int = |k: usize| match args[k].kind {
+        IExprKind::Int(i) => i,
+        _ => unreachable!("a grid's cells, as the checker gives them"),
+    };
+    let (first, next, last) = (int(0), int(1), int(2));
+    (first + i64::from(row).clamp(0, last) * (next - first)) as usize
 }
 
 /// A program's parameter values and user-function choices, by id.
@@ -833,6 +845,7 @@ impl<'p> Machine<'p> {
 
     fn eval(&self, e: &IExpr, sh: &Shared) -> Value {
         match &e.kind {
+            IExprKind::Host(Host::GridParam, args) => Value::Float(self.params.values[grid_cell(args, self.eval(&args[3], sh).as_int())].0),
             IExprKind::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             IExprKind::Bool(b) => Value::Bool(*b),
             IExprKind::Int(i) => Value::Int(*i as i32),

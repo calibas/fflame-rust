@@ -93,7 +93,7 @@ impl HybridDesignerPanel {
                 }
                 let (own, blended) = (format!("g{}_", g + 1), format!("g{}b_", g + 1));
                 for p in def.parameters.iter().filter(|p| p.name.starts_with(&own) || p.name.starts_with(&blended)) {
-                    changes.push((ConfigPath::EscapeFormulaParam { param: p.name.to_string() }, p.default.into()));
+                    changes.push((ConfigPath::EscapeFormulaParam { param: p.name.to_string() }, p.slot_default().into()));
                 }
             }
         }
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(in_use(&cm), Some(h.clone()), "{:?}", panel.status);
         let escape = &cm.config().escape;
         let def = custom::formula(&escape.formula).expect("compiled and registered");
-        assert!(def.parameters.iter().any(|p| p.name == "g2_variant"), "{:?}", def.parameters.iter().map(|p| p.name).collect::<Vec<_>>());
+        assert!(def.parameters.iter().any(|p| p.name == "g2_variant"), "{:?}", def.parameters.iter().map(|p| &*p.name).collect::<Vec<_>>());
         frame(&ctx, &mut panel, &mut cm);
         let get = |cm: &ConfigManager, p: &str| f32::try_from(cm.get_value(&ConfigPath::EscapeFormulaParam { param: p.into() }).unwrap()).unwrap();
 

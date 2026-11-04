@@ -55,8 +55,8 @@
 //!     appears to be a JWF GPU-port bug; we match the CPU behavior.)
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 

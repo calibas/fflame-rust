@@ -25,8 +25,8 @@
 //! Source: `output/jwildfire-vars/output/siercarpet_js.cpp`.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 

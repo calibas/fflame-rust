@@ -13,8 +13,8 @@
 //! `tx,ty,tz,tw`. 2D mode uses the top-left 2×2 plus `(tx, ty)`.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 

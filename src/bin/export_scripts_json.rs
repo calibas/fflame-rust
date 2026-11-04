@@ -85,7 +85,7 @@ fn main() {
         }
 
         let parameters: Vec<serde_json::Value> =
-            meta.params.iter().map(|p| p.to_api_json()).collect();
+            meta.params.iter().map(fractal_flame_wgpu::params::script_json).collect();
 
         rows.push(serde_json::json!({
             "id": id,

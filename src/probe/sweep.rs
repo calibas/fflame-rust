@@ -17,7 +17,8 @@
 //! sweep step is a buffer write, not a shader rebuild. The sweep costs
 //! dispatches; it does not cost the 14 compiles again.
 
-use crate::variations::{ParamType, VariationInfo, VariationParameter};
+use crate::params::{ParamDef, ParamKind};
+use crate::variations::VariationInfo;
 
 /// Enums with more choices than this are truncated. No enum ships near
 /// it today; the cap exists so that adding a 200-choice parameter
@@ -25,10 +26,6 @@ use crate::variations::{ParamType, VariationInfo, VariationParameter};
 /// reported rather than silent.
 pub const MAX_ENUM_STEPS: usize = 8;
 
-/// Fallback bounds for the unlimited types, whose `min`/`max` are slider
-/// hints rather than limits, and for parameters that declare neither.
-const FALLBACK_LOW: f32 = -10.0;
-const FALLBACK_HIGH: f32 = 10.0;
 
 /// One parameter's sweep.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,30 +44,26 @@ pub struct ParamPlan {
 /// Numeric parameters get their extremes plus zero — extremes because
 /// that is where a formula overflows or a domain check bites, and zero
 /// because it is where things get divided by.
-pub fn sweep_values(p: &VariationParameter) -> (Vec<f32>, usize) {
+/// A free number's bounds are its slider's, so the sweep's.
+pub fn sweep_values(p: &ParamDef) -> (Vec<f32>, usize) {
     let mut dropped = 0;
-    let mut values: Vec<f32> = match &p.param_type {
+    let mut values: Vec<f32> = match &p.kind {
         // Both arms, always — the whole point.
-        ParamType::Boolean => vec![0.0, 1.0],
+        ParamKind::Bool { .. } => vec![0.0, 1.0],
 
-        ParamType::Enum { choices } => {
-            let n = choices.len();
+        ParamKind::Choice { options, .. } => {
+            let n = options.len();
             let take = n.min(MAX_ENUM_STEPS);
             dropped = n - take;
             (0..take).map(|i| i as f32).collect()
         }
 
-        ParamType::Integer | ParamType::UnlimitedInteger => {
-            let low = p.min_value.unwrap_or(FALLBACK_LOW).round();
-            let high = p.max_value.unwrap_or(FALLBACK_HIGH).round();
-            with_zero_between(low, high)
-        }
+        ParamKind::Int { min, max, .. } => with_zero_between(*min as f32, *max as f32),
 
-        ParamType::Float | ParamType::UnlimitedFloat | ParamType::Angle => {
-            let low = p.min_value.unwrap_or(FALLBACK_LOW);
-            let high = p.max_value.unwrap_or(FALLBACK_HIGH);
-            with_zero_between(low, high)
-        }
+        ParamKind::Float { min, max, .. } => with_zero_between(*min as f32, *max as f32),
+
+        // A script's alone: no variation's.
+        ParamKind::Text { .. } | ParamKind::Color { .. } => Vec::new(),
     };
 
     // A parameter whose bounds collapse (min == max, or min > max in a
@@ -149,7 +142,7 @@ pub fn plan_for(info: &VariationInfo) -> Vec<ParamPlan> {
         .map(|p| {
             let (values, dropped) = sweep_values(p);
             ParamPlan {
-                param: p.name.clone(),
+                param: p.name.to_string(),
                 values,
                 dropped,
             }
@@ -163,32 +156,27 @@ mod tests {
     use super::*;
     use crate::probe::batch::builtin_targets;
 
-    fn param(name: &str, ty: ParamType, min: Option<f32>, max: Option<f32>) -> VariationParameter {
-        VariationParameter {
-            name: name.to_string(),
-            display_name: name.to_string(),
-            param_type: ty,
-            default_value: 0.0,
-            min_value: min,
-            max_value: max,
-            description: None,
-        }
+    fn param(name: &'static str, kind: ParamKind) -> ParamDef {
+        ParamDef::owned(name, name, "", kind)
+    }
+
+    fn float(min: f64, max: f64) -> ParamKind {
+        ParamKind::Float { default: 0.0, min, max, free: false, log: false, angle: false }
+    }
+
+    fn choice(options: &'static [&'static str]) -> ParamKind {
+        ParamKind::Choice { default: 0, options: crate::params::Options::Static(options) }
     }
 
     #[test]
     fn booleans_get_both_arms() {
-        let (v, _) = sweep_values(&param("flag", ParamType::Boolean, None, None));
+        let (v, _) = sweep_values(&param("flag", ParamKind::Bool { default: false }));
         assert_eq!(v, vec![0.0, 1.0], "a branch tested on one side is untested");
     }
 
     #[test]
     fn enums_get_every_choice() {
-        let (v, dropped) = sweep_values(&param(
-            "mode",
-            ParamType::Enum { choices: &["a", "b", "c"] },
-            None,
-            None,
-        ));
+        let (v, dropped) = sweep_values(&param("mode", choice(&["a", "b", "c"])));
         assert_eq!(v, vec![0.0, 1.0, 2.0]);
         assert_eq!(dropped, 0);
     }
@@ -198,32 +186,26 @@ mod tests {
         const MANY: &[&str] = &[
             "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11",
         ];
-        let (v, dropped) = sweep_values(&param("mode", ParamType::Enum { choices: MANY }, None, None));
+        let (v, dropped) = sweep_values(&param("mode", choice(MANY)));
         assert_eq!(v.len(), MAX_ENUM_STEPS);
         assert_eq!(dropped, MANY.len() - MAX_ENUM_STEPS, "silent truncation reads as coverage");
     }
 
     #[test]
     fn zero_is_included_only_when_the_range_spans_it() {
-        let (spanning, _) = sweep_values(&param("x", ParamType::Float, Some(-2.0), Some(3.0)));
+        let (spanning, _) = sweep_values(&param("x", float(-2.0, 3.0)));
         assert_eq!(spanning, vec![-2.0, 0.0, 3.0]);
 
         // A parameter that must stay positive should not be probed at
         // zero: a NaN there would describe a state the app cannot reach.
-        let (positive, _) = sweep_values(&param("scale", ParamType::Float, Some(0.5), Some(4.0)));
+        let (positive, _) = sweep_values(&param("scale", float(0.5, 4.0)));
         assert_eq!(positive, vec![0.5, 4.0]);
     }
 
     #[test]
     fn a_collapsed_range_does_not_produce_duplicate_steps() {
-        let (v, _) = sweep_values(&param("fixed", ParamType::Float, Some(1.0), Some(1.0)));
+        let (v, _) = sweep_values(&param("fixed", float(1.0, 1.0)));
         assert_eq!(v, vec![1.0], "duplicate values are duplicate dispatches");
-    }
-
-    #[test]
-    fn unbounded_parameters_fall_back_to_a_usable_range() {
-        let (v, _) = sweep_values(&param("free", ParamType::UnlimitedFloat, None, None));
-        assert_eq!(v, vec![FALLBACK_LOW, 0.0, FALLBACK_HIGH]);
     }
 
     #[test]

@@ -194,7 +194,7 @@ impl EscapeRenderer {
             .formula_params
             .get("beam")
             .copied()
-            .unwrap_or_else(|| def.parameters.iter().find(|p| p.name == "beam").map_or(1.0, |p| p.default))
+            .unwrap_or_else(|| def.parameters.iter().find(|p| p.name == "beam").map_or(1.0, |p| p.slot_default()))
             .clamp(1.0, assembler::IFS_MAX_BEAM as f32) as u32;
         let registry = crate::variations::global_registry();
         let lens_src = crate::escape::lens::lens_source(escape, &registry);

@@ -17,7 +17,8 @@
 //! * `sim_dt()` — the config's `dt`.
 //! * `sim_rng()` / `sim_step_index()` — for `NeedsRng` models only.
 
-use super::{ModelDef, ModelFeature, SimParamDef, SimPreset, MAX_KERNEL_RADIUS, StateKind};
+use super::{ModelDef, ModelFeature, SimPreset, MAX_KERNEL_RADIUS, StateKind};
+use crate::params::{ParamDef, Spec};
 
 /// Gray–Scott reaction–diffusion, in Karl Sims' discretisation.
 ///
@@ -46,46 +47,34 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
                   worms, mazes and mitosis — the classic reaction–diffusion patterns.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "feed",
-            display_name: "Feed (F)",
-            default: 0.0545,
-            min: 0.0,
-            max: 0.11,
-            tooltip: "Rate at which A is replenished. With kill, selects the pattern class: \
+        ParamDef::new(
+            "feed",
+            "Feed (F)",
+            "Rate at which A is replenished. With kill, selects the pattern class: \
                       the interesting band is roughly 0.01–0.07.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kill",
-            display_name: "Kill (k)",
-            default: 0.062,
-            min: 0.0,
-            max: 0.073,
-            tooltip: "Rate at which B is removed. Small changes cross between spots, worms \
+            Spec::float(0.0545, 0.0, 0.11),
+        ),
+        ParamDef::new(
+            "kill",
+            "Kill (k)",
+            "Rate at which B is removed. Small changes cross between spots, worms \
                       and mazes; most of the plane outside 0.04–0.07 decays to empty.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "diffusion_a",
-            display_name: "Diffusion A",
-            default: 1.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How fast A spreads. 1.0 is the standard scheme; the explicit solver \
+            Spec::float(0.062, 0.0, 0.073),
+        ),
+        ParamDef::new(
+            "diffusion_a",
+            "Diffusion A",
+            "How fast A spreads. 1.0 is the standard scheme; the explicit solver \
                       is unstable above it at dt = 1.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "diffusion_b",
-            display_name: "Diffusion B",
-            default: 0.5,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How fast B spreads. The A:B ratio sets the feature size; equal rates \
+            Spec::float(1.0, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "diffusion_b",
+            "Diffusion B",
+            "How fast B spreads. The A:B ratio sets the feature size; equal rates \
                       give no pattern at all.",
-            choices: &[],
-        },
+            Spec::float(0.5, 0.0, 1.0),
+        ),
     ],
     // Every preset here was run on the CPU prototype at 256x256 before
     // being written down (docs/main/SIMULATION-CATALOG.md section 1);
@@ -242,63 +231,45 @@ pub static FITZHUGH_NAGUMO: ModelDef = ModelDef {
                   Needs a cut wavefront to nucleate — from noise it relaxes flat.",
     features: &[ModelFeature::NeverStills],
     parameters: &[
-        SimParamDef {
-            name: "a",
-            display_name: "a",
-            default: 0.7,
-            min: 0.0,
-            max: 1.5,
-            tooltip: "Offset in the recovery equation. With b, sets where the rest state sits.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "b",
-            display_name: "b",
-            default: 0.8,
-            min: 0.0,
-            max: 1.5,
-            tooltip: "Recovery decay. Larger values damp the slow variable faster.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "tau",
-            display_name: "τ (recovery time)",
-            default: 12.5,
-            min: 1.0,
-            max: 100.0,
-            tooltip: "How much slower recovery is than excitation. The separation of \
+        ParamDef::new(
+            "a",
+            "a",
+            "Offset in the recovery equation. With b, sets where the rest state sits.",
+            Spec::float(0.7, 0.0, 1.5),
+        ),
+        ParamDef::new(
+            "b",
+            "b",
+            "Recovery decay. Larger values damp the slow variable faster.",
+            Spec::float(0.8, 0.0, 1.5),
+        ),
+        ParamDef::new(
+            "tau",
+            "τ (recovery time)",
+            "How much slower recovery is than excitation. The separation of \
                       timescales is what makes the medium excitable rather than oscillatory.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "drive",
-            display_name: "Drive (I)",
-            default: 0.5,
-            min: -1.0,
-            max: 2.0,
-            tooltip: "External current. Around 0.5 the medium is excitable with a stable \
+            Spec::float(12.5, 1.0, 100.0),
+        ),
+        ParamDef::new(
+            "drive",
+            "Drive (I)",
+            "External current. Around 0.5 the medium is excitable with a stable \
                       rest state; higher values make it oscillate on its own.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "diffusion_v",
-            display_name: "Diffusion v",
-            default: 1.0,
-            min: 0.0,
-            max: 4.0,
-            tooltip: "Spread of the excitation variable. Sets the wave speed and width.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "diffusion_w",
-            display_name: "Diffusion w",
-            default: 0.0,
-            min: 0.0,
-            max: 4.0,
-            tooltip: "Spread of the recovery variable. 0 is the classic excitable choice; \
+            Spec::float(0.5, -1.0, 2.0),
+        ),
+        ParamDef::new(
+            "diffusion_v",
+            "Diffusion v",
+            "Spread of the excitation variable. Sets the wave speed and width.",
+            Spec::float(1.0, 0.0, 4.0),
+        ),
+        ParamDef::new(
+            "diffusion_w",
+            "Diffusion w",
+            "Spread of the recovery variable. 0 is the classic excitable choice; \
                       raising it is the Turing direction, which is unverified here.",
-            choices: &[],
-        },
+            Spec::float(0.0, 0.0, 4.0),
+        ),
     ],
     presets: &[SimPreset {
         name: "spiral",
@@ -413,55 +384,40 @@ pub static BRUSSELATOR: ModelDef = ModelDef {
                   than X, bulk oscillation when it does not.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "feed_a",
-            display_name: "A",
-            default: 1.0,
-            min: 0.1,
-            max: 3.0,
-            tooltip: "Constant supply of X. The fixed point sits at X = A.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "feed_b",
-            display_name: "B",
-            default: 3.0,
-            min: 0.1,
-            max: 20.0,
-            tooltip: "Drives the instability. Above 1 + A² the uniform state oscillates; \
+        ParamDef::new(
+            "feed_a",
+            "A",
+            "Constant supply of X. The fixed point sits at X = A.",
+            Spec::float(1.0, 0.1, 3.0),
+        ),
+        ParamDef::new(
+            "feed_b",
+            "B",
+            "Drives the instability. Above 1 + A² the uniform state oscillates; \
                       with unequal diffusion it forms stationary spots instead.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "diffusion_x",
-            display_name: "Diffusion X",
-            default: 1.0,
-            min: 0.0,
-            max: 100.0,
-            tooltip: "Spread of the activator.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "diffusion_y",
-            display_name: "Diffusion Y",
-            default: 8.0,
-            min: 0.0,
-            max: 400.0,
-            tooltip: "Spread of the inhibitor. It must exceed X's for a Turing pattern; \
+            Spec::float(3.0, 0.1, 20.0),
+        ),
+        ParamDef::new(
+            "diffusion_x",
+            "Diffusion X",
+            "Spread of the activator.",
+            Spec::float(1.0, 0.0, 100.0),
+        ),
+        ParamDef::new(
+            "diffusion_y",
+            "Diffusion Y",
+            "Spread of the inhibitor. It must exceed X's for a Turing pattern; \
                       equal rates give bulk oscillation and no structure.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "stencil",
-            display_name: "Laplacian",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "The 9-point Sims stencil (this model's own) or the plain 5-point one the \
+            Spec::float(8.0, 0.0, 400.0),
+        ),
+        ParamDef::new(
+            "stencil",
+            "Laplacian",
+            "The 9-point Sims stencil (this model's own) or the plain 5-point one the \
                       coupled-layer papers use. Two Brusselator layers on the 5-point stencil \
                       under a cubic coupling are the two-layer Brusselator model.",
-            choices: &["9-point (Sims)", "5-point"],
-        },
+            Spec::choice(0, &["9-point (Sims)", "5-point"]),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -592,44 +548,32 @@ pub static SCHNAKENBERG: ModelDef = ModelDef {
                   scales as the square root of the diffusion rates.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "a",
-            display_name: "a",
-            default: 0.1,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Supply of u. With b it fixes the uniform state at u = a + b.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "b",
-            display_name: "b",
-            default: 0.9,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "Supply of v. The a:b ratio decides whether spots or gaps form.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "diffusion_u",
-            display_name: "Diffusion u",
-            default: 1.0,
-            min: 0.0,
-            max: 4.0,
-            tooltip: "Spread of the activator.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "diffusion_v",
-            display_name: "Diffusion v",
-            default: 40.0,
-            min: 0.0,
-            max: 80.0,
-            tooltip: "Spread of the inhibitor; about 40x the activator's for spots. \
+        ParamDef::new(
+            "a",
+            "a",
+            "Supply of u. With b it fixes the uniform state at u = a + b.",
+            Spec::float(0.1, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "b",
+            "b",
+            "Supply of v. The a:b ratio decides whether spots or gaps form.",
+            Spec::float(0.9, 0.0, 2.0),
+        ),
+        ParamDef::new(
+            "diffusion_u",
+            "Diffusion u",
+            "Spread of the activator.",
+            Spec::float(1.0, 0.0, 4.0),
+        ),
+        ParamDef::new(
+            "diffusion_v",
+            "Diffusion v",
+            "Spread of the inhibitor; about 40x the activator's for spots. \
                       Scaling BOTH rates together grows the features — measured, 16x the \
                       rates gives 4.6x the wavelength, and costs proportionally more steps.",
-            choices: &[],
-        },
+            Spec::float(40.0, 0.0, 80.0),
+        ),
     ],
     presets: &[SimPreset {
         name: "turing_spots",
@@ -759,61 +703,46 @@ pub static HODGEPODGE: ModelDef = ModelDef {
                   spirals and scrolls in an excitable integer medium.",
     features: &[ModelFeature::NeverStills, ModelFeature::NoTimeStep],
     parameters: &[
-        SimParamDef {
-            name: "states",
-            display_name: "States (q)",
-            default: 200.0,
-            min: 4.0,
-            max: 512.0,
-            tooltip: "How many levels of infection. Larger q gives smoother spiral arms \
+        ParamDef::new(
+            "states",
+            "States (q)",
+            "How many levels of infection. Larger q gives smoother spiral arms \
                       and a longer refractory period.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "k1",
-            display_name: "k₁",
-            default: 2.0,
-            min: 1.0,
-            max: 16.0,
-            tooltip: "Divides a neighbour count when a healthy cell catches the infection — \
+            Spec::float(200.0, 4.0, 512.0),
+        ),
+        ParamDef::new(
+            "k1",
+            "k₁",
+            "Divides a neighbour count when a healthy cell catches the infection — \
                       the ill count under Gerhardt–Schuster's rule, the infected count under \
                       Dewdney's, which is one of the three places the two differ. Larger \
                       values make infection harder to catch.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "k2",
-            display_name: "k₂",
-            default: 3.0,
-            min: 1.0,
-            max: 16.0,
-            tooltip: "Divides the other neighbour count — infected under Gerhardt–Schuster, \
+            Spec::float(2.0, 1.0, 16.0),
+        ),
+        ParamDef::new(
+            "k2",
+            "k₂",
+            "Divides the other neighbour count — infected under Gerhardt–Schuster, \
                       ill under Dewdney. With k₁ it sets how readily waves nucleate.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "g",
-            display_name: "g (rate)",
-            default: 25.0,
-            min: 1.0,
-            max: 200.0,
-            tooltip: "How fast an infected cell progresses toward ill. Sets the wave speed \
+            Spec::float(3.0, 1.0, 16.0),
+        ),
+        ParamDef::new(
+            "g",
+            "g (rate)",
+            "How fast an infected cell progresses toward ill. Sets the wave speed \
                       and therefore the spiral pitch.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "variant",
-            display_name: "Rule",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Which published rule to run. Gerhardt–Schuster is the 1989 paper's \
+            Spec::float(25.0, 1.0, 200.0),
+        ),
+        ParamDef::new(
+            "variant",
+            "Rule",
+            "Which published rule to run. Gerhardt–Schuster is the 1989 paper's \
                       own: k₁ divides the ill count, and an infected cell averages the \
                       states of the infected cells around it. Dewdney's is the version that \
                       circulated afterwards — the counts swapped, and the average taken over \
                       every neighbour — and gives coarser, rounder scrolls.",
-            choices: &["Gerhardt–Schuster", "Dewdney"],
-        },
+            Spec::choice(0, &["Gerhardt–Schuster", "Dewdney"]),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -983,45 +912,34 @@ pub static CYCLIC_CA: ModelDef = ModelDef {
                   and then into spirals whose cores never settle.",
     features: &[ModelFeature::NeverStills, ModelFeature::NoTimeStep],
     parameters: &[
-        SimParamDef {
-            name: "states",
-            display_name: "States (N)",
-            default: 14.0,
-            min: 3.0,
-            max: 24.0,
-            tooltip: "Length of the cycle. More states means a longer path back around, \
+        ParamDef::new(
+            "states",
+            "States (N)",
+            "Length of the cycle. More states means a longer path back around, \
                       so spirals have more arms and take longer to form.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "range",
-            display_name: "Range (R)",
-            default: 1.0,
-            min: 1.0,
-            max: 5.0,
-            tooltip: "Neighbourhood radius. Cost grows as R²: range 5 is 121 taps a cell.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "threshold",
-            display_name: "Threshold (T)",
-            default: 1.0,
-            min: 1.0,
-            max: 25.0,
-            tooltip: "How many neighbours must already hold the next state. Written R/T/N \
+            Spec::float(14.0, 3.0, 24.0),
+        ),
+        ParamDef::new(
+            "range",
+            "Range (R)",
+            "Neighbourhood radius. Cost grows as R²: range 5 is 121 taps a cell.",
+            // Slow: the neighbourhood is read cell by cell, a cost in R².
+            Spec::float(1.0, 1.0, 5.0).slow(),
+        ),
+        ParamDef::new(
+            "threshold",
+            "Threshold (T)",
+            "How many neighbours must already hold the next state. Written R/T/N \
                       in the literature.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "neighbourhood",
-            display_name: "Neighbourhood",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Von Neumann counts the diamond (|dx| + |dy| ≤ R) and gives 45° \
+            Spec::float(1.0, 1.0, 25.0),
+        ),
+        ParamDef::new(
+            "neighbourhood",
+            "Neighbourhood",
+            "Von Neumann counts the diamond (|dx| + |dy| ≤ R) and gives 45° \
                       fronts; Moore counts the square.",
-            choices: &["Von Neumann", "Moore"],
-        },
+            Spec::choice(0, &["Von Neumann", "Moore"]),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -1153,35 +1071,26 @@ pub static SPATIAL_RPS: ModelDef = ModelDef {
         ModelFeature::NoTimeStep,
     ],
     parameters: &[
-        SimParamDef {
-            name: "species",
-            display_name: "Species",
-            default: 3.0,
-            min: 3.0,
-            max: 5.0,
-            tooltip: "Length of the dominance cycle. Five species (rock-paper-scissors-\
+        ParamDef::new(
+            "species",
+            "Species",
+            "Length of the dominance cycle. Five species (rock-paper-scissors-\
                       lizard-Spock) forms two nested levels of spiral.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "p_select",
-            display_name: "Predation rate",
-            default: 1.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Chance a cell is taken over by a neighbour that beats it. Lower \
+            Spec::float(3.0, 3.0, 5.0),
+        ),
+        ParamDef::new(
+            "p_select",
+            "Predation rate",
+            "Chance a cell is taken over by a neighbour that beats it. Lower \
                       values slow the fronts and widen the domains.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "p_reproduce",
-            display_name: "Colonisation rate",
-            default: 1.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Chance an empty cell is colonised by a neighbour.",
-            choices: &[],
-        },
+            Spec::float(1.0, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "p_reproduce",
+            "Colonisation rate",
+            "Chance an empty cell is colonised by a neighbour.",
+            Spec::float(1.0, 0.0, 1.0),
+        ),
     ],
     presets: &[SimPreset {
         name: "three_species",
@@ -1283,37 +1192,28 @@ pub static ISING: ModelDef = ModelDef {
                   point, are fractal at it, and are noise above it.",
     features: &[ModelFeature::NeedsRng, ModelFeature::NoTimeStep],
     parameters: &[
-        SimParamDef {
-            name: "temperature",
-            display_name: "Temperature",
-            default: 2.269,
-            min: 0.2,
-            max: 5.0,
-            tooltip: "Onsager's critical temperature is 2.269. Below it domains coarsen; \
+        ParamDef::new(
+            "temperature",
+            "Temperature",
+            "Onsager's critical temperature is 2.269. Below it domains coarsen; \
                       at it the clusters are fractal at every scale; above it the lattice \
                       is uncorrelated noise.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "field",
-            display_name: "External field (H)",
-            default: 0.0,
-            min: -1.0,
-            max: 1.0,
-            tooltip: "Biases one spin direction. Any nonzero value eventually magnetises \
+            Spec::float(2.269, 0.2, 5.0),
+        ),
+        ParamDef::new(
+            "field",
+            "External field (H)",
+            "Biases one spin direction. Any nonzero value eventually magnetises \
                       the whole lattice.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "coupling",
-            display_name: "Coupling (J)",
-            default: 1.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "Positive couples neighbours (ferromagnetic); negative anti-couples \
+            Spec::float(0.0, -1.0, 1.0),
+        ),
+        ParamDef::new(
+            "coupling",
+            "Coupling (J)",
+            "Positive couples neighbours (ferromagnetic); negative anti-couples \
                       them and gives a checkerboard ground state.",
-            choices: &[],
-        },
+            Spec::float(1.0, -2.0, 2.0),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -1426,17 +1326,14 @@ pub static EDEN: ModelDef = ModelDef {
     description: "A cluster grown one site at a time into its neighbourhood. Compact, with \
                   a rough interface — the growth rings are the subject.",
     features: &[ModelFeature::NeedsRng, ModelFeature::NoTimeStep],
-    parameters: &[SimParamDef {
-        name: "p_grow",
-        display_name: "Growth probability",
-        default: 0.3,
-        min: 0.01,
-        max: 1.0,
-        tooltip: "Chance an eligible empty site is occupied each step. Lower values are \
+    parameters: &[ParamDef::new(
+        "p_grow",
+        "Growth probability",
+        "Chance an eligible empty site is occupied each step. Lower values are \
                   closer to the sequential Eden process and take proportionally longer; \
                   at 1.0 the cluster is a diamond, because every front site fires at once.",
-        choices: &[],
-    }],
+        Spec::float(0.3, 0.01, 1.0),
+    )],
     presets: &[
         SimPreset {
             name: "cluster",
@@ -1553,27 +1450,21 @@ pub static BALLISTIC_DEPOSITION: ModelDef = ModelDef {
                   overhangs and a correlated surface; without it the columns are independent.",
     features: &[ModelFeature::NeedsRng, ModelFeature::NoTimeStep],
     parameters: &[
-        SimParamDef {
-            name: "p_drop",
-            display_name: "Drop probability",
-            default: 0.5,
-            min: 0.01,
-            max: 1.0,
-            tooltip: "Chance each column receives a particle per step. Lower values are \
+        ParamDef::new(
+            "p_drop",
+            "Drop probability",
+            "Chance each column receives a particle per step. Lower values are \
                       closer to the sequential process, where one particle lands at a time.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "sideways",
-            display_name: "Sticking",
-            default: 1.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Lateral sticking is what makes deposition BALLISTIC: a particle \
+            Spec::float(0.5, 0.01, 1.0),
+        ),
+        ParamDef::new(
+            "sideways",
+            "Sticking",
+            "Lateral sticking is what makes deposition BALLISTIC: a particle \
                       catches on a taller neighbour and leaves a void. Off, the columns \
                       never interact and the surface is uncorrelated.",
-            choices: &["Vertical only", "Lateral (ballistic)"],
-        },
+            Spec::choice(1, &["Vertical only", "Lateral (ballistic)"]),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -1695,17 +1586,14 @@ pub static WOLFRAM_ECA: ModelDef = ModelDef {
     description: "One-dimensional binary automata drawn as space-time: rule 90 is \
                   Sierpinski's triangle, rule 30 is chaotic, rule 110 is Turing-complete.",
     features: &[ModelFeature::NoTimeStep],
-    parameters: &[SimParamDef {
-        name: "rule",
-        display_name: "Rule",
-        default: 90.0,
-        min: 0.0,
-        max: 255.0,
-        tooltip: "The 8-bit rule number: bit (4·left + 2·self + right) gives the next \
+    parameters: &[ParamDef::new(
+        "rule",
+        "Rule",
+        "The 8-bit rule number: bit (4·left + 2·self + right) gives the next \
                   state. 90 draws Sierpinski's triangle, 30 is chaotic, 110 is \
                   Turing-complete, 184 models traffic.",
-        choices: &[],
-    }],
+        Spec::float(90.0, 0.0, 255.0),
+    )],
     presets: &[
         SimPreset {
             name: "rule_90",
@@ -1836,17 +1724,14 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
     description: "Hexagonal solidification: a vacant cell freezes on a chosen count of \
                   frozen neighbours. Plates, branches and dendrites.",
     features: &[ModelFeature::NoTimeStep],
-    parameters: &[SimParamDef {
-        name: "rule_mask",
-        display_name: "Freeze on",
-        default: 2.0,
-        min: 1.0,
-        max: 126.0,
-        tooltip: "A 6-bit mask: bit n set means a cell freezes when exactly n of its six \
+    parameters: &[ParamDef::new(
+        "rule_mask",
+        "Freeze on",
+        "A 6-bit mask: bit n set means a cell freezes when exactly n of its six \
                   neighbours are frozen. 2 is Packard's rule 1 (one neighbour), 10 is \
                   rule 13, 26 is rule 134.",
-        choices: &[],
-    }],
+        Spec::float(2.0, 1.0, 126.0),
+    )],
     presets: &[
         SimPreset {
             name: "rule_1",
@@ -2003,17 +1888,14 @@ pub static PERCOLATION: ModelDef = ModelDef {
     // Brusselator's and the hodgepodge's seeds do (the flag says the step
     // draws, and changes only a comment in the step shader).
     features: &[ModelFeature::NoTimeStep],
-    parameters: &[SimParamDef {
-        name: "p_open",
-        display_name: "Open probability",
-        default: 0.592746,
-        min: 0.3,
-        max: 0.9,
-        tooltip: "Fraction of sites that are open. The square-lattice site threshold is \
+    parameters: &[ParamDef::new(
+        "p_open",
+        "Open probability",
+        "Fraction of sites that are open. The square-lattice site threshold is \
                   0.592746: below it every cluster is finite, above it one spans the \
                   grid, and at it the spanning cluster is fractal at every scale.",
-        choices: &[],
-    }],
+        Spec::float(0.592746, 0.3, 0.9),
+    )],
     presets: &[
         SimPreset {
             name: "critical",
@@ -2177,44 +2059,35 @@ pub static SWIFT_HOHENBERG: ModelDef = ModelDef {
                   every other damped, giving a labyrinth with a definite spacing.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "wavelength",
-            display_name: "Wavelength (cells)",
-            default: 16.0,
-            min: 6.0,
-            max: 64.0,
-            tooltip: "The spacing the equation selects, in cells — it is 2π/q₀, and the \
+        ParamDef::new(
+            "wavelength",
+            "Wavelength (cells)",
+            "The spacing the equation selects, in cells — it is 2π/q₀, and the \
                       measurement agrees with it to 3%. Larger wavelengths need \
                       proportionally more steps, because the pattern grows on a 1/r \
                       timescale and r falls as the fourth power of 1/wavelength.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "drive",
-            display_name: "Drive (r / q₀⁴)",
-            default: 2.0,
-            min: 0.05,
-            max: 4.0,
-            tooltip: "How hard the pattern is driven, in units of the band's own \
+            Spec::float(16.0, 6.0, 64.0),
+        ),
+        ParamDef::new(
+            "drive",
+            "Drive (r / q₀⁴)",
+            "How hard the pattern is driven, in units of the band's own \
                       selectivity — the literal r is this times q₀⁴. Low values grow \
                       slowly and give a faint, very regular pattern; above about 4 the \
                       uniform mode grows nearly as fast as the pattern and the field \
                       phase-separates into blobs instead.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "asymmetry",
-            display_name: "Asymmetry (g)",
-            default: 0.0,
-            min: 0.0,
-            max: 0.35,
-            tooltip: "Breaks the symmetry between peaks and troughs. At 0 there is no \
+            Spec::float(2.0, 0.05, 4.0),
+        ),
+        ParamDef::new(
+            "asymmetry",
+            "Asymmetry (g)",
+            "Breaks the symmetry between peaks and troughs. At 0 there is no \
                       reason to prefer either and the field makes a labyrinth of equal \
                       stripes; raising it pinches the stripes into spots. Past about \
                       0.35 the quadratic term overwhelms the cubic and the field goes \
                       uniform — measured, so the slider stops below it.",
-            choices: &[],
-        },
+            Spec::float(0.0, 0.0, 0.35),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -2364,38 +2237,29 @@ pub static CAHN_HILLIARD: ModelDef = ModelDef {
                   an even mix, droplets of the minority phase away from it.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "mobility",
-            display_name: "Mobility (D)",
-            default: 1.0,
-            min: 0.1,
-            max: 4.0,
-            tooltip: "How fast material moves down the chemical-potential gradient. It \
+        ParamDef::new(
+            "mobility",
+            "Mobility (D)",
+            "How fast material moves down the chemical-potential gradient. It \
                       scales time — but it scales the stable dt down by exactly as much, \
                       so raising it buys no speed.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "gamma",
-            display_name: "γ (interface width)",
-            default: 0.5,
-            min: 0.1,
-            max: 4.0,
-            tooltip: "Sets the width of the boundary between the phases, which goes as √γ. \
+            Spec::float(1.0, 0.1, 4.0),
+        ),
+        ParamDef::new(
+            "gamma",
+            "γ (interface width)",
+            "Sets the width of the boundary between the phases, which goes as √γ. \
                       Larger values give thicker, softer interfaces and a coarser pattern.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "mean",
-            display_name: "Mean composition",
-            default: 0.0,
-            min: -0.6,
-            max: 0.6,
-            tooltip: "The mixture's overall balance, which the equation conserves exactly. \
+            Spec::float(0.5, 0.1, 4.0),
+        ),
+        ParamDef::new(
+            "mean",
+            "Mean composition",
+            "The mixture's overall balance, which the equation conserves exactly. \
                       At 0 the phases are even and interleave as a labyrinth; past about \
                       ±0.3 the minority phase pinches off into droplets.",
-            choices: &[],
-        },
+            Spec::float(0.0, -0.6, 0.6),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -2550,57 +2414,42 @@ pub static OREGONATOR: ModelDef = ModelDef {
                   automaton: an oscillating medium that carries travelling wave trains.",
     features: &[ModelFeature::NeverStills],
     parameters: &[
-        SimParamDef {
-            name: "epsilon",
-            display_name: "ε (timescale)",
-            default: 0.04,
-            min: 0.005,
-            max: 0.3,
-            tooltip: "How much faster the activator moves than the catalyst. Small values \
+        ParamDef::new(
+            "epsilon",
+            "ε (timescale)",
+            "How much faster the activator moves than the catalyst. Small values \
                       give sharp wave fronts and a stiffer solve — the stable time step is \
                       proportional to this.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "q",
-            display_name: "q",
-            default: 0.002,
-            min: 0.0002,
-            max: 0.05,
-            tooltip: "The reaction's small parameter. It sets the activator's threshold, \
+            Spec::float(0.04, 0.005, 0.3),
+        ),
+        ParamDef::new(
+            "q",
+            "q",
+            "The reaction's small parameter. It sets the activator's threshold, \
                       and the stable time step is proportional to it.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "f",
-            display_name: "f (stoichiometry)",
-            default: 1.4,
-            min: 0.4,
-            max: 3.5,
-            tooltip: "Selects the regime. Around 1 the medium oscillates on its own and \
+            Spec::float(0.002, 0.0002, 0.05),
+        ),
+        ParamDef::new(
+            "f",
+            "f (stoichiometry)",
+            "Selects the regime. Around 1 the medium oscillates on its own and \
                       fills with travelling wave trains; above about 2.5 it is merely \
                       excitable, so a seed fires one wave and the field goes quiet.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "diffusion_u",
-            display_name: "Diffusion u",
-            default: 1.0,
-            min: 0.1,
-            max: 2.0,
-            tooltip: "Activator diffusion, which sets the wave speed.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "diffusion_v",
-            display_name: "Diffusion v",
-            default: 0.6,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "Catalyst diffusion. The real catalyst is a large ion and barely \
+            Spec::float(1.4, 0.4, 3.5),
+        ),
+        ParamDef::new(
+            "diffusion_u",
+            "Diffusion u",
+            "Activator diffusion, which sets the wave speed.",
+            Spec::float(1.0, 0.1, 2.0),
+        ),
+        ParamDef::new(
+            "diffusion_v",
+            "Diffusion v",
+            "Catalyst diffusion. The real catalyst is a large ion and barely \
                       diffuses; zero is a defensible setting.",
-            choices: &[],
-        },
+            Spec::float(0.6, 0.0, 2.0),
+        ),
     ],
     presets: &[SimPreset {
         name: "waves",
@@ -2748,48 +2597,36 @@ pub static KOBAYASHI: ModelDef = ModelDef {
                   with the anisotropy that turns a blob into a snowflake.",
     features: &[ModelFeature::NeedsRng],
     parameters: &[
-        SimParamDef {
-            name: "latent_heat",
-            display_name: "Latent heat (K)",
-            default: 1.6,
-            min: 0.5,
-            max: 2.5,
-            tooltip: "How much heat solidification releases, which is what stops the \
+        ParamDef::new(
+            "latent_heat",
+            "Latent heat (K)",
+            "How much heat solidification releases, which is what stops the \
                       crystal. Below 1 the whole vessel freezes; above it roughly 1/K of \
                       the region solidifies and the arms stay slender.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "delta",
-            display_name: "Anisotropy (δ)",
-            default: 0.04,
-            min: 0.0,
-            max: 0.08,
-            tooltip: "Strength of the directional preference. At 0 the growth is isotropic \
+            Spec::float(1.6, 0.5, 2.5),
+        ),
+        ParamDef::new(
+            "delta",
+            "Anisotropy (δ)",
+            "Strength of the directional preference. At 0 the growth is isotropic \
                       and splits like viscous fingering; the paper's ice dendrites use \
                       0.040 and its four-fold ones 0.020.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "mode",
-            display_name: "Symmetry (j)",
-            default: 2.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "How many directions the crystal prefers. Six-fold is the snowflake; \
+            Spec::float(0.04, 0.0, 0.08),
+        ),
+        ParamDef::new(
+            "mode",
+            "Symmetry (j)",
+            "How many directions the crystal prefers. Six-fold is the snowflake; \
                       four-fold is the metallic dendrite of the paper's figure 7.",
-            choices: &["2-fold", "4-fold", "6-fold", "8-fold"],
-        },
-        SimParamDef {
-            name: "theta0",
-            display_name: "Orientation (θ₀)",
-            default: 1.5708,
-            min: 0.0,
-            max: 6.2832,
-            tooltip: "Rotates the preferred directions. The paper's ice dendrites use π/2 \
+            Spec::choice(2, &["2-fold", "4-fold", "6-fold", "8-fold"]),
+        ),
+        ParamDef::new(
+            "theta0",
+            "Orientation (θ₀)",
+            "Rotates the preferred directions. The paper's ice dendrites use π/2 \
                       and its four-fold ones 0.",
-            choices: &[],
-        },
+            Spec::float(1.5708, 0.0, 6.2832),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -3018,37 +2855,29 @@ pub static LENIA: ModelDef = ModelDef {
                   giving soft filaments and cells that crawl.",
     features: &[ModelFeature::NeverStills],
     parameters: &[
-        SimParamDef {
-            name: "radius",
-            display_name: "Kernel radius (R)",
-            default: 13.0,
-            min: 4.0,
-            max: 32.0,
-            tooltip: "Half-width of the ring, in cells — it sets the size of everything the \
+        ParamDef::new(
+            "radius",
+            "Kernel radius (R)",
+            "Half-width of the ring, in cells — it sets the size of everything the \
                       rule builds. Cost grows as R²: 729 taps a cell at 13, 4,225 at 32.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "mu",
-            display_name: "μ (growth centre)",
-            default: 0.15,
-            min: 0.0,
-            max: 0.5,
-            tooltip: "The neighbourhood average a cell is rewarded for having. Higher values \
+            // Slow: the kernel is read cell by cell, a cost in R².
+            Spec::float(13.0, 4.0, 32.0).slow(),
+        ),
+        ParamDef::new(
+            "mu",
+            "μ (growth centre)",
+            "The neighbourhood average a cell is rewarded for having. Higher values \
                       need a denser neighbourhood to survive.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "sigma",
-            display_name: "σ (growth width)",
-            default: 0.015,
-            min: 0.001,
-            max: 0.1,
-            tooltip: "How forgiving that reward is, and the parameter that decides whether \
+            Spec::float(0.15, 0.0, 0.5),
+        ),
+        ParamDef::new(
+            "sigma",
+            "σ (growth width)",
+            "How forgiving that reward is, and the parameter that decides whether \
                       there is anything to look at — measured, 0.015 gives a living field \
                       and 0.03 upward freezes into saturated blobs.",
-            choices: &[],
-        },
+            Spec::float(0.015, 0.001, 0.1),
+        ),
     ],
     presets: &[SimPreset {
         name: "soup",
@@ -3186,132 +3015,97 @@ pub static SMOOTHLIFE: ModelDef = ModelDef {
                   read as smooth thresholds, giving gliders and rolling labyrinths.",
     features: &[ModelFeature::NeverStills, ModelFeature::ExactDiscs],
     parameters: &[
-        SimParamDef {
-            name: "inner_radius",
-            display_name: "Inner radius (rᵢ)",
-            default: 7.0,
-            min: 2.0,
-            max: 10.0,
-            tooltip: "Radius of the disc a cell measures itself over. The outer radius is \
+        ParamDef::new(
+            "inner_radius",
+            "Inner radius (rᵢ)",
+            "Radius of the disc a cell measures itself over. The outer radius is \
                       three times it, as in the paper, so this sets the whole scale — and \
                       the cost, which grows as rᵢ².",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "b1",
-            display_name: "Birth low (b₁)",
-            default: 0.278,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Lower edge of the window in which an empty cell is born.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "b2",
-            display_name: "Birth high (b₂)",
-            default: 0.365,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Upper edge of that window.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "d1",
-            display_name: "Survive low (d₁)",
-            default: 0.267,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Lower edge of the window in which a filled cell survives.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "d2",
-            display_name: "Survive high (d₂)",
-            default: 0.445,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Upper edge of that window. The gap between it and b₂ is what lets \
+            // Slow: the discs are read cell by cell, a cost in rᵢ².
+            Spec::float(7.0, 2.0, 10.0).slow(),
+        ),
+        ParamDef::new(
+            "b1",
+            "Birth low (b₁)",
+            "Lower edge of the window in which an empty cell is born.",
+            Spec::float(0.278, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "b2",
+            "Birth high (b₂)",
+            "Upper edge of that window.",
+            Spec::float(0.365, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "d1",
+            "Survive low (d₁)",
+            "Lower edge of the window in which a filled cell survives.",
+            Spec::float(0.267, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "d2",
+            "Survive high (d₂)",
+            "Upper edge of that window. The gap between it and b₂ is what lets \
                       structures persist without filling the plane.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "alpha_n",
-            display_name: "Neighbourhood softness (αₙ)",
-            default: 0.028,
-            min: 0.001,
-            max: 0.3,
-            tooltip: "How sharply the neighbourhood threshold switches. Small values are \
+            Spec::float(0.445, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "alpha_n",
+            "Neighbourhood softness (αₙ)",
+            "How sharply the neighbourhood threshold switches. Small values are \
                       nearly a hard rule.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "alpha_m",
-            display_name: "Filling softness (αₘ)",
-            default: 0.147,
-            min: 0.001,
-            max: 0.3,
-            tooltip: "How sharply a cell's own filling picks between the birth and survival \
+            Spec::float(0.028, 0.001, 0.3),
+        ),
+        ParamDef::new(
+            "alpha_m",
+            "Filling softness (αₘ)",
+            "How sharply a cell's own filling picks between the birth and survival \
                       windows.",
-            choices: &[],
-        },
+            Spec::float(0.147, 0.001, 0.3),
+        ),
         // Appended after the paper's seven, so a saved run's parameters
         // keep their slots; each default is the model as it was.
-        SimParamDef {
-            name: "ratio",
-            display_name: "Outer / inner radius",
-            default: 3.0,
-            min: 1.5,
-            max: 5.0,
-            tooltip: "How much wider the neighbourhood ring reaches than the inner disc. \
+        ParamDef::new(
+            "ratio",
+            "Outer / inner radius",
+            "How much wider the neighbourhood ring reaches than the inner disc. \
                       The paper's is 3; other rule sets use 2.3 to 4. The outer radius \
                       stops at 30 cells.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "stepping",
-            display_name: "Time stepping",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How a step moves a cell toward the rule. Relax: f + dt·(s − f), which \
+            Spec::float(3.0, 1.5, 5.0),
+        ),
+        ParamDef::new(
+            "stepping",
+            "Time stepping",
+            "How a step moves a cell toward the rule. Relax: f + dt·(s − f), which \
                       at dt 1 is Rafler's discrete SmoothLife, f = s. Increment: \
                       f + dt·(2s − 1), the paper's continuous scheme and SmoothLifeL's. \
                       A rule set's gliders exist in one scheme and not the other.",
-            choices: &["Relax", "Increment"],
-        },
-        SimParamDef {
-            name: "blend",
-            display_name: "Window blend",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How a cell's own filling chooses between birth and survival. \
+            Spec::choice(0, &["Relax", "Increment"]),
+        ),
+        ParamDef::new(
+            "blend",
+            "Window blend",
+            "How a cell's own filling chooses between birth and survival. \
                       Thresholds: the window's edges slide from birth's to survival's \
                       (the 2011 paper). Windows: the birth and survival windows are each \
                       computed and mixed (SmoothLifeL).",
-            choices: &["Thresholds (2011)", "Windows (SmoothLifeL)"],
-        },
-        SimParamDef {
-            name: "fill",
-            display_name: "Initial density",
-            default: 0.5,
-            min: 0.05,
-            max: 0.95,
-            tooltip: "How much of the field the seed fills.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "seed_shape",
-            display_name: "Seed",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "What the run starts from. Patches: squares the size of the inner disc, \
+            Spec::choice(0, &["Thresholds (2011)", "Windows (SmoothLifeL)"]),
+        ),
+        ParamDef::new(
+            "fill",
+            "Initial density",
+            "How much of the field the seed fills.",
+            Spec::float(0.5, 0.05, 0.95),
+        ),
+        ParamDef::new(
+            "seed_shape",
+            "Seed",
+            "What the run starts from. Patches: squares the size of the inner disc, \
                       each filled at the density. Blobs: smooth noise a little wider than the \
                       outer ring, thresholded at the density with a soft edge, as Reusser's \
                       notebook seeds -- the structures the rules' gliders grow out of.",
-            choices: &["Patches", "Blobs"],
-        },
+            Spec::choice(0, &["Patches", "Blobs"]),
+        ),
     ],
     // Rafler's own set, and two from Ricky Reusser's SmoothLife notebook
     // (rreusser.github.io/notebooks/smooth-life), run here before shipping.
@@ -3610,8 +3404,8 @@ pub static MCCABE_WARPS: crate::sim::ScaleWarps = crate::sim::ScaleWarps {
 /// columns shape the spectral stage's discs, so they show under Exact
 /// discs alone; a scale whose inhibitor reaches past the pyramid is
 /// warned of, row by row, or -- under the ladder -- the coarsest such.
-pub fn mccabe_layout() -> std::sync::Arc<crate::param_layout::ParamLayout> {
-    use crate::param_layout::{GridColumn, GridFill, ParamGrid, ParamLayout, ShowIf, Text};
+pub fn mccabe_layout() -> std::sync::Arc<crate::params::layout::ParamLayout> {
+    use crate::params::layout::{GridColumn, GridFill, ParamGrid, ParamLayout, ShowIf, Text};
     use std::sync::{Arc, OnceLock};
     static LAYOUT: OnceLock<Arc<ParamLayout>> = OnceLock::new();
     LAYOUT
@@ -3637,7 +3431,7 @@ pub fn mccabe_layout() -> std::sync::Arc<crate::param_layout::ParamLayout> {
                 fill: Some(GridFill {
                     when: when("layout", 1.0),
                     cells: Arc::new(|value, row| {
-                        let params = MCCABE.parameters.iter().map(|p| (p.name.to_string(), value(p.name))).collect();
+                        let params = MCCABE.parameters.iter().map(|p| (p.name.to_string(), value(&*p.name))).collect();
                         let prefix = format!("s{row}_");
                         mccabe_table_from_ladder(&params).into_iter().filter_map(|(k, v)| k.strip_prefix(&prefix).map(|c| (c.to_string(), v))).collect()
                     }),
@@ -3671,7 +3465,7 @@ pub fn mccabe_layout() -> std::sync::Arc<crate::param_layout::ParamLayout> {
 /// fills renders what the ladder did.
 pub fn mccabe_table_from_ladder(params: &std::collections::BTreeMap<String, f32>) -> Vec<(String, f32)> {
     let get = |name: &str| -> f32 {
-        let def = MCCABE.parameters.iter().find(|p| p.name == name).map(|p| p.default).unwrap_or(0.0);
+        let def = MCCABE.parameters.iter().find(|p| p.name == name).map(|p| p.slot_default()).unwrap_or(0.0);
         params.get(name).copied().filter(|v| v.is_finite()).unwrap_or(def)
     };
     let n = get("scales").round().clamp(1.0, 6.0) as i32;
@@ -3714,7 +3508,7 @@ pub fn smoothlife_discs(params: &std::collections::BTreeMap<String, f32>) -> Vec
 pub fn mccabe_scale_discs(params: &std::collections::BTreeMap<String, f32>) -> Vec<crate::sim::spectral::SpectralScale> {
     use crate::sim::spectral::SpectralScale;
     let get = |name: &str| -> f32 {
-        let def = MCCABE.parameters.iter().find(|p| p.name == name).map(|p| p.default).unwrap_or(0.0);
+        let def = MCCABE.parameters.iter().find(|p| p.name == name).map(|p| p.slot_default()).unwrap_or(0.0);
         params.get(name).copied().filter(|v| v.is_finite()).unwrap_or(def)
     };
     let n = get("scales").round().clamp(1.0, 6.0) as u32;
@@ -3755,375 +3549,258 @@ pub static MCCABE: ModelDef = ModelDef {
         ModelFeature::Memory,
     ],
     parameters: &[
-        SimParamDef {
-            name: "scales",
-            display_name: "Scales",
-            default: 5.0,
-            min: 1.0,
-            max: 6.0,
-            tooltip: "How many scales compete. Each is twice the radius of the last, so five \
+        ParamDef::new(
+            "scales",
+            "Scales",
+            "How many scales compete. Each is twice the radius of the last, so five \
                       scales span a factor of sixteen.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "base_radius",
-            display_name: "Finest radius",
-            default: 1.0,
-            min: 0.5,
-            max: 8.0,
-            tooltip: "Activator radius of the finest scale, in cells. Everything else is \
+            Spec::float(5.0, 1.0, 6.0),
+        ),
+        ParamDef::new(
+            "base_radius",
+            "Finest radius",
+            "Activator radius of the finest scale, in cells. Everything else is \
                       built from it.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "ratio",
-            display_name: "Inhibitor ratio",
-            default: 2.0,
-            min: 1.25,
-            max: 4.0,
-            tooltip: "Inhibitor radius over activator radius, at every scale. The paper's \
+            Spec::float(1.0, 0.5, 8.0),
+        ),
+        ParamDef::new(
+            "ratio",
+            "Inhibitor ratio",
+            "Inhibitor radius over activator radius, at every scale. The paper's \
                       figures use 2.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "amount",
-            display_name: "Step (finest)",
-            default: 0.05,
-            min: 0.001,
-            max: 0.2,
-            tooltip: "How far the finest scale moves a cell per step. Larger is faster and \
+            Spec::float(2.0, 1.25, 4.0),
+        ),
+        ParamDef::new(
+            "amount",
+            "Step (finest)",
+            "How far the finest scale moves a cell per step. Larger is faster and \
                       grainier.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "amount_min",
-            display_name: "Step (coarsest)",
-            default: 0.01,
-            min: 0.001,
-            max: 0.2,
-            tooltip: "The coarsest scale's step; scales in between interpolate. Coarse \
+            Spec::float(0.05, 0.001, 0.2),
+        ),
+        ParamDef::new(
+            "amount_min",
+            "Step (coarsest)",
+            "The coarsest scale's step; scales in between interpolate. Coarse \
                       scales moving slowly is what lets fine detail live inside them.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "symmetry",
-            display_name: "Symmetry",
-            default: 0.0,
-            min: 0.0,
-            max: 8.0,
-            tooltip: "n-fold rotational symmetry about the centre — the paper's own \
+            Spec::float(0.01, 0.001, 0.2),
+        ),
+        ParamDef::new(
+            "symmetry",
+            "Symmetry",
+            "n-fold rotational symmetry about the centre — the paper's own \
                       contribution. 0 or 1 is none. Costs n times the reads, and a \
                       periodic field that is rotated about its centre no longer tiles, \
                       so the corners stay asymmetric.",
-            choices: &[],
-        },
+            Spec::float(0.0, 0.0, 8.0),
+        ),
         // Appended, so the parameters above keep their slots.
-        SimParamDef {
-            name: "memory",
-            display_name: "Colour memory",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How far each cell's colour moves toward the winning scale's colour per \
+        ParamDef::new(
+            "memory",
+            "Colour memory",
+            "How far each cell's colour moves toward the winning scale's colour per \
                       step — Softology's colour bump. Small values give smooth blends of the \
                       scales that have been winning; 1 is the latest winner alone. Colour \
                       with Scale Memory. 0 is off. Switching it on or off restarts the run, \
                       and on it keeps two more slices of the field (about 130 MB at a \
                       1080p grid).",
-            choices: &[],
-        },
+            Spec::float(0.0, 0.0, 1.0),
+        ),
         // The per-scale table (mccabe-multiscale plan, section 3).
-        SimParamDef {
-            name: "layout",
-            display_name: "Scales from",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Ladder builds every scale from the finest radius, doubling. Table sets \
+        ParamDef::new(
+            "layout",
+            "Scales from",
+            "Ladder builds every scale from the finest radius, doubling. Table sets \
                       each scale's radius, ratio, step, weight and symmetry on its own, as \
                       Softology and Reusser do; switching to it fills it from the ladder, so \
                       nothing changes until you edit it.",
-            choices: &["Ladder", "Table"],
-        },
-        SimParamDef {
-            name: "s0_radius",
-            display_name: "Scale 1 activator radius",
-            default: 1.0,
-            min: 0.5,
-            max: 256.0,
-            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s0_ratio",
-            display_name: "Scale 1 inhibitor ratio",
-            default: 2.0,
-            min: 1.25,
-            max: 4.0,
-            tooltip: "Inhibitor radius over activator radius for this scale.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s0_amount",
-            display_name: "Scale 1 step",
-            default: 0.05,
-            min: -0.2,
-            max: 0.2,
-            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s0_weight",
-            display_name: "Scale 1 weight",
-            default: 1.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s0_symmetry",
-            display_name: "Scale 1 symmetry",
-            default: 0.0,
-            min: 0.0,
-            max: 12.0,
-            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s1_radius",
-            display_name: "Scale 2 activator radius",
-            default: 2.0,
-            min: 0.5,
-            max: 256.0,
-            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s1_ratio",
-            display_name: "Scale 2 inhibitor ratio",
-            default: 2.0,
-            min: 1.25,
-            max: 4.0,
-            tooltip: "Inhibitor radius over activator radius for this scale.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s1_amount",
-            display_name: "Scale 2 step",
-            default: 0.04,
-            min: -0.2,
-            max: 0.2,
-            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s1_weight",
-            display_name: "Scale 2 weight",
-            default: 1.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s1_symmetry",
-            display_name: "Scale 2 symmetry",
-            default: 0.0,
-            min: 0.0,
-            max: 12.0,
-            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s2_radius",
-            display_name: "Scale 3 activator radius",
-            default: 4.0,
-            min: 0.5,
-            max: 256.0,
-            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s2_ratio",
-            display_name: "Scale 3 inhibitor ratio",
-            default: 2.0,
-            min: 1.25,
-            max: 4.0,
-            tooltip: "Inhibitor radius over activator radius for this scale.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s2_amount",
-            display_name: "Scale 3 step",
-            default: 0.03,
-            min: -0.2,
-            max: 0.2,
-            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s2_weight",
-            display_name: "Scale 3 weight",
-            default: 1.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s2_symmetry",
-            display_name: "Scale 3 symmetry",
-            default: 0.0,
-            min: 0.0,
-            max: 12.0,
-            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s3_radius",
-            display_name: "Scale 4 activator radius",
-            default: 8.0,
-            min: 0.5,
-            max: 256.0,
-            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s3_ratio",
-            display_name: "Scale 4 inhibitor ratio",
-            default: 2.0,
-            min: 1.25,
-            max: 4.0,
-            tooltip: "Inhibitor radius over activator radius for this scale.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s3_amount",
-            display_name: "Scale 4 step",
-            default: 0.02,
-            min: -0.2,
-            max: 0.2,
-            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s3_weight",
-            display_name: "Scale 4 weight",
-            default: 1.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s3_symmetry",
-            display_name: "Scale 4 symmetry",
-            default: 0.0,
-            min: 0.0,
-            max: 12.0,
-            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s4_radius",
-            display_name: "Scale 5 activator radius",
-            default: 16.0,
-            min: 0.5,
-            max: 256.0,
-            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s4_ratio",
-            display_name: "Scale 5 inhibitor ratio",
-            default: 2.0,
-            min: 1.25,
-            max: 4.0,
-            tooltip: "Inhibitor radius over activator radius for this scale.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s4_amount",
-            display_name: "Scale 5 step",
-            default: 0.01,
-            min: -0.2,
-            max: 0.2,
-            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s4_weight",
-            display_name: "Scale 5 weight",
-            default: 1.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s4_symmetry",
-            display_name: "Scale 5 symmetry",
-            default: 0.0,
-            min: 0.0,
-            max: 12.0,
-            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s5_radius",
-            display_name: "Scale 6 activator radius",
-            default: 32.0,
-            min: 0.5,
-            max: 256.0,
-            tooltip: "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s5_ratio",
-            display_name: "Scale 6 inhibitor ratio",
-            default: 2.0,
-            min: 1.25,
-            max: 4.0,
-            tooltip: "Inhibitor radius over activator radius for this scale.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s5_amount",
-            display_name: "Scale 6 step",
-            default: 0.01,
-            min: -0.2,
-            max: 0.2,
-            tooltip: "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s5_weight",
-            display_name: "Scale 6 weight",
-            default: 1.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s5_symmetry",
-            display_name: "Scale 6 symmetry",
-            default: 0.0,
-            min: 0.0,
-            max: 12.0,
-            tooltip: "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
-            choices: &[],
-        },
+            Spec::choice(0, &["Ladder", "Table"]),
+        ),
+        ParamDef::new(
+            "s0_radius",
+            "Scale 1 activator radius",
+            "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            Spec::float(1.0, 0.5, 256.0),
+        ),
+        ParamDef::new(
+            "s0_ratio",
+            "Scale 1 inhibitor ratio",
+            "Inhibitor radius over activator radius for this scale.",
+            Spec::float(2.0, 1.25, 4.0),
+        ),
+        ParamDef::new(
+            "s0_amount",
+            "Scale 1 step",
+            "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            Spec::float(0.05, -0.2, 0.2),
+        ),
+        ParamDef::new(
+            "s0_weight",
+            "Scale 1 weight",
+            "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            Spec::float(1.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s0_symmetry",
+            "Scale 1 symmetry",
+            "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            Spec::float(0.0, 0.0, 12.0),
+        ),
+        ParamDef::new(
+            "s1_radius",
+            "Scale 2 activator radius",
+            "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            Spec::float(2.0, 0.5, 256.0),
+        ),
+        ParamDef::new(
+            "s1_ratio",
+            "Scale 2 inhibitor ratio",
+            "Inhibitor radius over activator radius for this scale.",
+            Spec::float(2.0, 1.25, 4.0),
+        ),
+        ParamDef::new(
+            "s1_amount",
+            "Scale 2 step",
+            "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            Spec::float(0.04, -0.2, 0.2),
+        ),
+        ParamDef::new(
+            "s1_weight",
+            "Scale 2 weight",
+            "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            Spec::float(1.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s1_symmetry",
+            "Scale 2 symmetry",
+            "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            Spec::float(0.0, 0.0, 12.0),
+        ),
+        ParamDef::new(
+            "s2_radius",
+            "Scale 3 activator radius",
+            "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            Spec::float(4.0, 0.5, 256.0),
+        ),
+        ParamDef::new(
+            "s2_ratio",
+            "Scale 3 inhibitor ratio",
+            "Inhibitor radius over activator radius for this scale.",
+            Spec::float(2.0, 1.25, 4.0),
+        ),
+        ParamDef::new(
+            "s2_amount",
+            "Scale 3 step",
+            "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            Spec::float(0.03, -0.2, 0.2),
+        ),
+        ParamDef::new(
+            "s2_weight",
+            "Scale 3 weight",
+            "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            Spec::float(1.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s2_symmetry",
+            "Scale 3 symmetry",
+            "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            Spec::float(0.0, 0.0, 12.0),
+        ),
+        ParamDef::new(
+            "s3_radius",
+            "Scale 4 activator radius",
+            "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            Spec::float(8.0, 0.5, 256.0),
+        ),
+        ParamDef::new(
+            "s3_ratio",
+            "Scale 4 inhibitor ratio",
+            "Inhibitor radius over activator radius for this scale.",
+            Spec::float(2.0, 1.25, 4.0),
+        ),
+        ParamDef::new(
+            "s3_amount",
+            "Scale 4 step",
+            "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            Spec::float(0.02, -0.2, 0.2),
+        ),
+        ParamDef::new(
+            "s3_weight",
+            "Scale 4 weight",
+            "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            Spec::float(1.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s3_symmetry",
+            "Scale 4 symmetry",
+            "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            Spec::float(0.0, 0.0, 12.0),
+        ),
+        ParamDef::new(
+            "s4_radius",
+            "Scale 5 activator radius",
+            "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            Spec::float(16.0, 0.5, 256.0),
+        ),
+        ParamDef::new(
+            "s4_ratio",
+            "Scale 5 inhibitor ratio",
+            "Inhibitor radius over activator radius for this scale.",
+            Spec::float(2.0, 1.25, 4.0),
+        ),
+        ParamDef::new(
+            "s4_amount",
+            "Scale 5 step",
+            "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            Spec::float(0.01, -0.2, 0.2),
+        ),
+        ParamDef::new(
+            "s4_weight",
+            "Scale 5 weight",
+            "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            Spec::float(1.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s4_symmetry",
+            "Scale 5 symmetry",
+            "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            Spec::float(0.0, 0.0, 12.0),
+        ),
+        ParamDef::new(
+            "s5_radius",
+            "Scale 6 activator radius",
+            "Activator radius of this scale, in cells. The inhibitor's is this times the ratio. Past the pyramid's reach at the current grid (the panel warns) both averages clamp to its top level and the scale wins everywhere.",
+            Spec::float(32.0, 0.5, 256.0),
+        ),
+        ParamDef::new(
+            "s5_ratio",
+            "Scale 6 inhibitor ratio",
+            "Inhibitor radius over activator radius for this scale.",
+            Spec::float(2.0, 1.25, 4.0),
+        ),
+        ParamDef::new(
+            "s5_amount",
+            "Scale 6 step",
+            "How far this scale moves a cell when it wins. Negative inverts it: the cell moves away from the activator, as one of Reusser's default scales does.",
+            Spec::float(0.01, -0.2, 0.2),
+        ),
+        ParamDef::new(
+            "s5_weight",
+            "Scale 6 weight",
+            "Softology's weight: both averages are multiplied by it before they are compared. Larger makes the scale's variation larger, so it wins less often; negative also flips its direction; 0 makes it win everywhere.",
+            Spec::float(1.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s5_symmetry",
+            "Scale 6 symmetry",
+            "n-fold rotational symmetry of this scale's averages about the centre; 0 or 1 is none. McCabe's fig. 14 puts 3-fold on the small scales and 9-fold on the large. Costs n times this scale's reads.",
+            Spec::float(0.0, 0.0, 12.0),
+        ),
         // Slot 38 (mccabe-multiscale plan, section 6). The renderer reads
         // it, not the shader: it decides how the pyramid is built and read.
-        SimParamDef {
-            name: "averaging",
-            display_name: "Averaging",
-            default: 0.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "How the averages are taken. Pyramid is the original: fast, but its \
+        ParamDef::new(
+            "averaging",
+            "Averaging",
+            "How the averages are taken. Pyramid is the original: fast, but its \
                       fixed grid of texels leaves faint creases that patterns can lock onto, \
                       so a table whose coarse scales move fastest leans toward the grid \
                       axes. Shifted grid moves the pyramid's grid every few steps, so \
@@ -4133,402 +3810,273 @@ pub static MCCABE: ModelDef = ModelDef {
                       cells with nested detail, at 1.7x the step and ~150 MB at 1080p. \
                       Shifted grid and Exact discs need the wrap-around boundary; a grid \
                       whose size has a prime factor above 64 keeps the pyramid.",
-            choices: &["Pyramid", "Pyramid, shifted grid", "Exact discs"],
-        },
+            Spec::choice(0, &["Pyramid", "Pyramid, shifted grid", "Exact discs"]),
+        ),
         // Slots 39-50 (mccabe-multiscale plan, section 9): each scale's
         // lean. The renderer reads them, not the shader: they shape the
         // spectral stage's discs, so they do nothing outside Exact discs.
-        SimParamDef {
-            name: "s0_stretch",
-            display_name: "Scale 1 stretch",
-            default: 1.0,
-            min: 1.0,
-            max: 4.0,
-            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s1_stretch",
-            display_name: "Scale 2 stretch",
-            default: 1.0,
-            min: 1.0,
-            max: 4.0,
-            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s2_stretch",
-            display_name: "Scale 3 stretch",
-            default: 1.0,
-            min: 1.0,
-            max: 4.0,
-            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s3_stretch",
-            display_name: "Scale 4 stretch",
-            default: 1.0,
-            min: 1.0,
-            max: 4.0,
-            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s4_stretch",
-            display_name: "Scale 5 stretch",
-            default: 1.0,
-            min: 1.0,
-            max: 4.0,
-            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s5_stretch",
-            display_name: "Scale 6 stretch",
-            default: 1.0,
-            min: 1.0,
-            max: 4.0,
-            tooltip: "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s0_angle",
-            display_name: "Scale 1 angle",
-            default: 0.0,
-            min: 0.0,
-            max: 180.0,
-            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s1_angle",
-            display_name: "Scale 2 angle",
-            default: 0.0,
-            min: 0.0,
-            max: 180.0,
-            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s2_angle",
-            display_name: "Scale 3 angle",
-            default: 0.0,
-            min: 0.0,
-            max: 180.0,
-            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s3_angle",
-            display_name: "Scale 4 angle",
-            default: 0.0,
-            min: 0.0,
-            max: 180.0,
-            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s4_angle",
-            display_name: "Scale 5 angle",
-            default: 0.0,
-            min: 0.0,
-            max: 180.0,
-            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s5_angle",
-            display_name: "Scale 6 angle",
-            default: 0.0,
-            min: 0.0,
-            max: 180.0,
-            tooltip: "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
-            choices: &[],
-        },
+        ParamDef::new(
+            "s0_stretch",
+            "Scale 1 stretch",
+            "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            Spec::float(1.0, 1.0, 4.0),
+        ),
+        ParamDef::new(
+            "s1_stretch",
+            "Scale 2 stretch",
+            "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            Spec::float(1.0, 1.0, 4.0),
+        ),
+        ParamDef::new(
+            "s2_stretch",
+            "Scale 3 stretch",
+            "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            Spec::float(1.0, 1.0, 4.0),
+        ),
+        ParamDef::new(
+            "s3_stretch",
+            "Scale 4 stretch",
+            "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            Spec::float(1.0, 1.0, 4.0),
+        ),
+        ParamDef::new(
+            "s4_stretch",
+            "Scale 5 stretch",
+            "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            Spec::float(1.0, 1.0, 4.0),
+        ),
+        ParamDef::new(
+            "s5_stretch",
+            "Scale 6 stretch",
+            "Stretches this scale's discs into ellipses of the same area, this many times longer than wide, so its pattern grains along the angle: the lean, on purpose. 1 is round. Exact discs averaging only; the pyramid's averages are round.",
+            Spec::float(1.0, 1.0, 4.0),
+        ),
+        ParamDef::new(
+            "s0_angle",
+            "Scale 1 angle",
+            "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            Spec::float(0.0, 0.0, 180.0),
+        ),
+        ParamDef::new(
+            "s1_angle",
+            "Scale 2 angle",
+            "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            Spec::float(0.0, 0.0, 180.0),
+        ),
+        ParamDef::new(
+            "s2_angle",
+            "Scale 3 angle",
+            "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            Spec::float(0.0, 0.0, 180.0),
+        ),
+        ParamDef::new(
+            "s3_angle",
+            "Scale 4 angle",
+            "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            Spec::float(0.0, 0.0, 180.0),
+        ),
+        ParamDef::new(
+            "s4_angle",
+            "Scale 5 angle",
+            "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            Spec::float(0.0, 0.0, 180.0),
+        ),
+        ParamDef::new(
+            "s5_angle",
+            "Scale 6 angle",
+            "The direction of this scale's stretch, in degrees counter-clockwise from horizontal, so 90 is vertical. Nothing at stretch 1. Exact discs averaging only.",
+            Spec::float(0.0, 0.0, 180.0),
+        ),
         // Slot 51 (mccabe-multiscale plan, section 9): P3.
-        SimParamDef {
-            name: "variation",
-            display_name: "Variation radius",
-            default: 0.0,
-            min: 0.0,
-            max: 4.0,
-            tooltip: "Averages each scale's variation over a disc of this radius, in cells, before the scales are compared: the paper's variation around the pixel, Softology's variation radius. The winner is then decided by its neighbourhood rather than the cell alone, so each scale holds larger, smoother regions with less speckle. 0 is off. While on it costs a pass a step and two more field slices (about 130 MB on a 1080p grid).",
-            choices: &[],
-        },
+        ParamDef::new(
+            "variation",
+            "Variation radius",
+            "Averages each scale's variation over a disc of this radius, in cells, before the scales are compared: the paper's variation around the pixel, Softology's variation radius. The winner is then decided by its neighbourhood rather than the cell alone, so each scale holds larger, smoother regions with less speckle. 0 is off. While on it costs a pass a step and two more field slices (about 130 MB on a 1080p grid).",
+            Spec::float(0.0, 0.0, 4.0),
+        ),
         // Slots 52-81 (mccabe-multiscale plan, section 10): each scale's
         // warp, the field warp's map applied to where that scale reads
         // its averages. Drawn by the Warp section, not the model's list.
-        SimParamDef {
-            name: "s0_warp_zoom",
-            display_name: "Scale 1 warp zoom",
-            default: 1.0,
-            min: 0.9,
-            max: 1.1,
-            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s0_warp_rotation",
-            display_name: "Scale 1 warp rotation",
-            default: 0.0,
-            min: -0.25,
-            max: 0.25,
-            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s0_warp_pan_x",
-            display_name: "Scale 1 warp pan x",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s0_warp_pan_y",
-            display_name: "Scale 1 warp pan y",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s0_warp_flow",
-            display_name: "Scale 1 warp swirl",
-            default: 0.0,
-            min: -0.5,
-            max: 0.5,
-            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s1_warp_zoom",
-            display_name: "Scale 2 warp zoom",
-            default: 1.0,
-            min: 0.9,
-            max: 1.1,
-            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s1_warp_rotation",
-            display_name: "Scale 2 warp rotation",
-            default: 0.0,
-            min: -0.25,
-            max: 0.25,
-            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s1_warp_pan_x",
-            display_name: "Scale 2 warp pan x",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s1_warp_pan_y",
-            display_name: "Scale 2 warp pan y",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s1_warp_flow",
-            display_name: "Scale 2 warp swirl",
-            default: 0.0,
-            min: -0.5,
-            max: 0.5,
-            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s2_warp_zoom",
-            display_name: "Scale 3 warp zoom",
-            default: 1.0,
-            min: 0.9,
-            max: 1.1,
-            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s2_warp_rotation",
-            display_name: "Scale 3 warp rotation",
-            default: 0.0,
-            min: -0.25,
-            max: 0.25,
-            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s2_warp_pan_x",
-            display_name: "Scale 3 warp pan x",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s2_warp_pan_y",
-            display_name: "Scale 3 warp pan y",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s2_warp_flow",
-            display_name: "Scale 3 warp swirl",
-            default: 0.0,
-            min: -0.5,
-            max: 0.5,
-            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s3_warp_zoom",
-            display_name: "Scale 4 warp zoom",
-            default: 1.0,
-            min: 0.9,
-            max: 1.1,
-            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s3_warp_rotation",
-            display_name: "Scale 4 warp rotation",
-            default: 0.0,
-            min: -0.25,
-            max: 0.25,
-            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s3_warp_pan_x",
-            display_name: "Scale 4 warp pan x",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s3_warp_pan_y",
-            display_name: "Scale 4 warp pan y",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s3_warp_flow",
-            display_name: "Scale 4 warp swirl",
-            default: 0.0,
-            min: -0.5,
-            max: 0.5,
-            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s4_warp_zoom",
-            display_name: "Scale 5 warp zoom",
-            default: 1.0,
-            min: 0.9,
-            max: 1.1,
-            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s4_warp_rotation",
-            display_name: "Scale 5 warp rotation",
-            default: 0.0,
-            min: -0.25,
-            max: 0.25,
-            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s4_warp_pan_x",
-            display_name: "Scale 5 warp pan x",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s4_warp_pan_y",
-            display_name: "Scale 5 warp pan y",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s4_warp_flow",
-            display_name: "Scale 5 warp swirl",
-            default: 0.0,
-            min: -0.5,
-            max: 0.5,
-            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s5_warp_zoom",
-            display_name: "Scale 6 warp zoom",
-            default: 1.0,
-            min: 0.9,
-            max: 1.1,
-            tooltip: "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s5_warp_rotation",
-            display_name: "Scale 6 warp rotation",
-            default: 0.0,
-            min: -0.25,
-            max: 0.25,
-            tooltip: "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s5_warp_pan_x",
-            display_name: "Scale 6 warp pan x",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s5_warp_pan_y",
-            display_name: "Scale 6 warp pan y",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "Cells a step this scale's reading moves up or down. 0 is none.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "s5_warp_flow",
-            display_name: "Scale 6 warp swirl",
-            default: 0.0,
-            min: -0.5,
-            max: 0.5,
-            tooltip: "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
-            choices: &[],
-        },
+        ParamDef::new(
+            "s0_warp_zoom",
+            "Scale 1 warp zoom",
+            "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            Spec::float(1.0, 0.9, 1.1),
+        ),
+        ParamDef::new(
+            "s0_warp_rotation",
+            "Scale 1 warp rotation",
+            "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            Spec::float(0.0, -0.25, 0.25),
+        ),
+        ParamDef::new(
+            "s0_warp_pan_x",
+            "Scale 1 warp pan x",
+            "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s0_warp_pan_y",
+            "Scale 1 warp pan y",
+            "Cells a step this scale's reading moves up or down. 0 is none.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s0_warp_flow",
+            "Scale 1 warp swirl",
+            "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            Spec::float(0.0, -0.5, 0.5),
+        ),
+        ParamDef::new(
+            "s1_warp_zoom",
+            "Scale 2 warp zoom",
+            "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            Spec::float(1.0, 0.9, 1.1),
+        ),
+        ParamDef::new(
+            "s1_warp_rotation",
+            "Scale 2 warp rotation",
+            "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            Spec::float(0.0, -0.25, 0.25),
+        ),
+        ParamDef::new(
+            "s1_warp_pan_x",
+            "Scale 2 warp pan x",
+            "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s1_warp_pan_y",
+            "Scale 2 warp pan y",
+            "Cells a step this scale's reading moves up or down. 0 is none.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s1_warp_flow",
+            "Scale 2 warp swirl",
+            "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            Spec::float(0.0, -0.5, 0.5),
+        ),
+        ParamDef::new(
+            "s2_warp_zoom",
+            "Scale 3 warp zoom",
+            "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            Spec::float(1.0, 0.9, 1.1),
+        ),
+        ParamDef::new(
+            "s2_warp_rotation",
+            "Scale 3 warp rotation",
+            "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            Spec::float(0.0, -0.25, 0.25),
+        ),
+        ParamDef::new(
+            "s2_warp_pan_x",
+            "Scale 3 warp pan x",
+            "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s2_warp_pan_y",
+            "Scale 3 warp pan y",
+            "Cells a step this scale's reading moves up or down. 0 is none.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s2_warp_flow",
+            "Scale 3 warp swirl",
+            "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            Spec::float(0.0, -0.5, 0.5),
+        ),
+        ParamDef::new(
+            "s3_warp_zoom",
+            "Scale 4 warp zoom",
+            "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            Spec::float(1.0, 0.9, 1.1),
+        ),
+        ParamDef::new(
+            "s3_warp_rotation",
+            "Scale 4 warp rotation",
+            "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            Spec::float(0.0, -0.25, 0.25),
+        ),
+        ParamDef::new(
+            "s3_warp_pan_x",
+            "Scale 4 warp pan x",
+            "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s3_warp_pan_y",
+            "Scale 4 warp pan y",
+            "Cells a step this scale's reading moves up or down. 0 is none.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s3_warp_flow",
+            "Scale 4 warp swirl",
+            "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            Spec::float(0.0, -0.5, 0.5),
+        ),
+        ParamDef::new(
+            "s4_warp_zoom",
+            "Scale 5 warp zoom",
+            "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            Spec::float(1.0, 0.9, 1.1),
+        ),
+        ParamDef::new(
+            "s4_warp_rotation",
+            "Scale 5 warp rotation",
+            "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            Spec::float(0.0, -0.25, 0.25),
+        ),
+        ParamDef::new(
+            "s4_warp_pan_x",
+            "Scale 5 warp pan x",
+            "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s4_warp_pan_y",
+            "Scale 5 warp pan y",
+            "Cells a step this scale's reading moves up or down. 0 is none.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s4_warp_flow",
+            "Scale 5 warp swirl",
+            "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            Spec::float(0.0, -0.5, 0.5),
+        ),
+        ParamDef::new(
+            "s5_warp_zoom",
+            "Scale 6 warp zoom",
+            "This scale reads its averages through a zoom about the centre each step, so its structure drifts outward (above 1) or inward, as the field warp's zoom would move the whole field. 1 is none.",
+            Spec::float(1.0, 0.9, 1.1),
+        ),
+        ParamDef::new(
+            "s5_warp_rotation",
+            "Scale 6 warp rotation",
+            "Radians a step this scale's reading turns about the centre, so its structure turns while the other scales stay. 0 is none.",
+            Spec::float(0.0, -0.25, 0.25),
+        ),
+        ParamDef::new(
+            "s5_warp_pan_x",
+            "Scale 6 warp pan x",
+            "Cells a step this scale's reading moves sideways, so its structure drifts across the others. 0 is none.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s5_warp_pan_y",
+            "Scale 6 warp pan y",
+            "Cells a step this scale's reading moves up or down. 0 is none.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "s5_warp_flow",
+            "Scale 6 warp swirl",
+            "A swirl of this scale's reading: extra radians a step at the rim, none at the centre. Strong values make a vortex of this scale alone. 0 is none.",
+            Spec::float(0.0, -0.5, 0.5),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -5070,78 +4618,58 @@ pub static PHYSARUM: ModelDef = ModelDef {
         ModelFeature::NoTimeStep,
     ],
     parameters: &[
-        SimParamDef {
-            name: "population",
-            display_name: "Population (% of grid)",
-            default: 5.0,
-            min: 0.5,
-            max: 25.0,
-            tooltip: "Agents as a percentage of the grid's cells — the paper's %p, whose \
+        ParamDef::new(
+            "population",
+            "Population (% of grid)",
+            "Agents as a percentage of the grid's cells — the paper's %p, whose \
                       useful range is 3 to 15. Too few and the trails never meet; too many \
                       and the network fills in.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "sensor_angle",
-            display_name: "Sensor angle (SA)",
-            default: 22.5,
-            min: 5.0,
-            max: 90.0,
-            tooltip: "How far to each side an agent looks, in degrees. One of the three \
+            // Slow: it is the agent count.
+            Spec::float(5.0, 0.5, 25.0).slow(),
+        ),
+        ParamDef::new(
+            "sensor_angle",
+            "Sensor angle (SA)",
+            "How far to each side an agent looks, in degrees. One of the three \
                       parameters the paper says actually change the pattern; it uses 22.5 \
                       or 45.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "rotation_angle",
-            display_name: "Rotation angle (RA)",
-            default: 45.0,
-            min: 5.0,
-            max: 90.0,
-            tooltip: "How far an agent turns when it turns, in degrees. The paper uses 45.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "sensor_offset",
-            display_name: "Sensor distance (SO)",
-            default: 9.0,
-            min: 1.0,
-            max: 32.0,
-            tooltip: "How far ahead the sensors sit, in cells. The paper uses 9, and notes \
+            Spec::float(22.5, 5.0, 90.0),
+        ),
+        ParamDef::new(
+            "rotation_angle",
+            "Rotation angle (RA)",
+            "How far an agent turns when it turns, in degrees. The paper uses 45.",
+            Spec::float(45.0, 5.0, 90.0),
+        ),
+        ParamDef::new(
+            "sensor_offset",
+            "Sensor distance (SO)",
+            "How far ahead the sensors sit, in cells. The paper uses 9, and notes \
                       that a distance of at least 3 is what makes the population couple \
                       strongly enough for networks to form at all.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "step_size",
-            display_name: "Step size (SS)",
-            default: 1.0,
-            min: 0.25,
-            max: 4.0,
-            tooltip: "How far an agent moves per step, in cells.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "deposit",
-            display_name: "Deposit (depT)",
-            default: 5.0,
-            min: 0.5,
-            max: 40.0,
-            tooltip: "How much trail an agent lays each step. Scales against the decay: \
+            Spec::float(9.0, 1.0, 32.0),
+        ),
+        ParamDef::new(
+            "step_size",
+            "Step size (SS)",
+            "How far an agent moves per step, in cells.",
+            Spec::float(1.0, 0.25, 4.0),
+        ),
+        ParamDef::new(
+            "deposit",
+            "Deposit (depT)",
+            "How much trail an agent lays each step. Scales against the decay: \
                       what matters is the ratio.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "decay",
-            display_name: "Decay (decayT)",
-            default: 0.1,
-            min: 0.005,
-            max: 0.5,
-            tooltip: "How fast the trail fades. The other parameter the paper says matters: \
+            Spec::float(5.0, 0.5, 40.0),
+        ),
+        ParamDef::new(
+            "decay",
+            "Decay (decayT)",
+            "How fast the trail fades. The other parameter the paper says matters: \
                       low values let old trails persist into thick networks, high values \
                       keep only what is currently travelled.",
-            choices: &[],
-        },
+            Spec::float(0.1, 0.005, 0.5),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -5395,51 +4923,39 @@ pub static DLA: ModelDef = ModelDef {
         ModelFeature::NoTimeStep,
     ],
     parameters: &[
-        SimParamDef {
-            name: "walkers",
-            display_name: "Walkers (% of grid)",
-            default: 4.0,
-            min: 0.1,
-            max: 20.0,
-            tooltip: "How many walkers are in flight at once, as a percentage of the grid's \
+        ParamDef::new(
+            "walkers",
+            "Walkers (% of grid)",
+            "How many walkers are in flight at once, as a percentage of the grid's \
                       cells. More is faster but crowds the cluster, which thickens the \
                       branches — the aggregate's dimension depends on walkers arriving one \
                       at a time.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "p_stick",
-            display_name: "Sticking probability",
-            default: 1.0,
-            min: 0.02,
-            max: 1.0,
-            tooltip: "Chance a walker that touches the cluster actually sticks. Below 1 a \
+            Spec::float(4.0, 0.1, 20.0),
+        ),
+        ParamDef::new(
+            "p_stick",
+            "Sticking probability",
+            "Chance a walker that touches the cluster actually sticks. Below 1 a \
                       walker explores further before attaching, which fills the fjords and \
                       makes a denser, less branched cluster.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "crowding",
-            display_name: "Crowding",
-            default: 5.0,
-            min: 0.5,
-            max: 16.0,
-            tooltip: "How many walkers may work the cluster at once, per cell of its \
+            Spec::float(1.0, 0.02, 1.0),
+        ),
+        ParamDef::new(
+            "crowding",
+            "Crowding",
+            "How many walkers may work the cluster at once, per cell of its \
                       circumference. This is the speed-against-fidelity knob: DLA is what \
                       it is because particles arrive ONE AT A TIME, so low values grow a \
                       truer aggregate slowly and high values grow a denser, blunter one \
                       fast.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "launch_gap",
-            display_name: "Launch gap",
-            default: 2.0,
-            min: 2.0,
-            max: 40.0,
-            tooltip: "How far outside the cluster's current radius walkers are launched.",
-            choices: &[],
-        },
+            Spec::float(5.0, 0.5, 16.0),
+        ),
+        ParamDef::new(
+            "launch_gap",
+            "Launch gap",
+            "How far outside the cluster's current radius walkers are launched.",
+            Spec::float(2.0, 2.0, 40.0),
+        ),
     ],
     presets: &[SimPreset {
         name: "cluster",
@@ -5637,35 +5153,29 @@ pub static SANDPILE: ModelDef = ModelDef {
                   height field is a fractal limit shape; the edges are sinks.",
     features: &[ModelFeature::NoTimeStep],
     parameters: &[
-        SimParamDef {
-            name: "grains_log2",
-            display_name: "Grains (2ⁿ)",
-            default: 16.0,
-            min: 10.0,
-            max: 24.0,
-            tooltip: "How many grains land on the seed, as a power of two. THE COST IS \
+        ParamDef::new(
+            "grains_log2",
+            "Grains (2ⁿ)",
+            "How many grains land on the seed, as a power of two. THE COST IS \
                       QUADRATIC IN THE PICTURE'S RADIUS: measured, 2¹⁶ stabilises in 12,837 \
                       rounds and 2²⁰ in 190,006, so raising this by one costs roughly twice \
                       the steps and needs a grid √2 wider. Raise Steps with it — a pile that \
                       runs out of steps is simply unfinished. 24 is the ceiling because the \
                       field is f32, which counts exactly to 2²⁴ and no further.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "neighbourhood",
-            display_name: "Neighbourhood",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "The graph the pile topples on. Von Neumann is the classic square \
+            Spec::float(16.0, 10.0, 24.0),
+        ),
+        ParamDef::new(
+            "neighbourhood",
+            "Neighbourhood",
+            "The graph the pile topples on. Von Neumann is the classic square \
                       lattice: topple at 4, one grain to each edge neighbour, and stable \
                       heights are 0–3. Moore is the same rule on the 8-neighbour graph — \
                       topple at 8, stable heights 0–7 — so the same mass settles denser \
                       and over a smaller, rounder shape (measured at 2¹⁶: 133 cells across \
                       in 4,652 rounds, against 189 in 12,837). Colouring by height wants a \
                       scale of 1/7 rather than 1/3.",
-            choices: &["Von Neumann (4)", "Moore (8)"],
-        },
+            Spec::choice(0, &["Von Neumann (4)", "Moore (8)"]),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -5830,34 +5340,28 @@ pub static INVASION_PERCOLATION: ModelDef = ModelDef {
                   fjords and dangling ends.",
     features: &[ModelFeature::NoTimeStep],
     parameters: &[
-        SimParamDef {
-            name: "dp",
-            display_name: "Threshold rise per step",
-            default: 0.0005,
-            min: 0.00002,
-            max: 0.05,
-            tooltip: "How fast the invasion threshold climbs. This is a RATE, not a shape — \
+        ParamDef::new(
+            "dp",
+            "Threshold rise per step",
+            "How fast the invasion threshold climbs. This is a RATE, not a shape — \
                       the final cluster is the same set however slowly you reach the ceiling \
                       — but it decides what Age draws. Slow, and the front is never the \
                       constraint, so Age records the order sites were invaded in, which is \
                       the sequential model's own picture. Fast, and everything is eligible \
                       at once and Age just measures distance from the seed.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "p_max",
-            display_name: "Threshold ceiling",
-            default: 0.60,
-            min: 0.45,
-            max: 0.80,
-            tooltip: "Where the threshold stops climbing, letting the remaining steps finish \
+            Spec::float(0.0005, 0.00002, 0.05),
+        ),
+        ParamDef::new(
+            "p_max",
+            "Threshold ceiling",
+            "Where the threshold stops climbing, letting the remaining steps finish \
                       the front. THE INTERESTING WINDOW IS NARROW: the infinite lattice's \
                       site threshold is 0.5927, and measured on a 256² grid the cluster \
                       spans between 0.600 and 0.610. Below that it is ramified and full of \
                       fjords; a few hundredths above, it is half the grid and reads as a \
                       solid with holes. Far below, the invasion dies at once.",
-            choices: &[],
-        },
+            Spec::float(0.60, 0.45, 0.80),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -6052,108 +5556,84 @@ pub static SNOWFAKE: ModelDef = ModelDef {
                   than in a valley. Plates, stars, dendrites and sectored plates.",
     features: &[ModelFeature::NeedsRng, ModelFeature::NoTimeStep],
     parameters: &[
-        SimParamDef {
-            name: "rho",
-            display_name: "Vapour density ρ",
-            default: 0.65,
-            min: 0.10,
-            max: 1.00,
-            tooltip: "How much vapour the cloud starts with, at every cell that is not the \
+        ParamDef::new(
+            "rho",
+            "Vapour density ρ",
+            "How much vapour the cloud starts with, at every cell that is not the \
                       seed. The paper's crystals use 0.35 to 0.8, and it is the easiest \
                       parameter to read: more vapour grows faster and pushes the form from \
                       plate to sectored plate to dendrite. It is read by the SEED, so a                       change to it shows on the next Reset rather than in the running                       crystal.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "beta",
-            display_name: "Anisotropy β",
-            default: 1.75,
-            min: 1.0,
-            max: 4.0,
-            tooltip: "How much boundary mass a site with one or two attached neighbours needs \
+            Spec::float(0.65, 0.10, 1.00),
+        ),
+        ParamDef::new(
+            "beta",
+            "Anisotropy β",
+            "How much boundary mass a site with one or two attached neighbours needs \
                       before it joins — a tip or a flat face, where attachment is hard. A \
                       valley's threshold is 1, so it is the EXCESS OVER 1 that makes the \
                       crystal faceted. Raising it delays the first instability, grows the \
                       central plate larger, and moves the form from fern to dendrite to \
                       sectored plate. The paper uses 1.05 to 3.2.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "alpha",
-            display_name: "Knife-edge mass α",
-            default: 0.2,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "The reduced boundary-mass threshold a concave site may attach at once \
+            Spec::float(1.75, 1.0, 4.0),
+        ),
+        ParamDef::new(
+            "alpha",
+            "Knife-edge mass α",
+            "The reduced boundary-mass threshold a concave site may attach at once \
                       the vapour around it has run out — the knife-edge instability, by which \
                       a very thin plate spreads on almost no vapour. It is what fills the \
                       regions between the six main branches long after they have passed. \
                       Below the valley threshold of 1, and the paper's figures use 0 to 0.6.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "theta",
-            display_name: "Knife-edge vapour θ",
-            default: 0.026,
-            min: 0.0,
-            max: 0.5,
-            tooltip: "How depleted the vapour in a site's neighbourhood must be before that \
+            Spec::float(0.2, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "theta",
+            "Knife-edge vapour θ",
+            "How depleted the vapour in a site's neighbourhood must be before that \
                       reduced threshold applies. It is compared against the SUM over the site \
                       and its six neighbours, which far from the crystal is about 7ρ, so the \
                       paper's values of 0.003 to 0.11 mean 'almost nothing left'. Set it too \
                       high and the crystal fills into a featureless plate, because every \
                       concavity qualifies as soon as it forms.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kappa",
-            display_name: "Freezing κ",
-            default: 0.15,
-            min: 0.0,
-            max: 0.5,
-            tooltip: "The proportion of vapour arriving at the boundary that freezes straight \
+            Spec::float(0.026, 0.0, 0.5),
+        ),
+        ParamDef::new(
+            "kappa",
+            "Freezing κ",
+            "The proportion of vapour arriving at the boundary that freezes straight \
                       to ice; the rest becomes quasi-liquid and is what attachment weighs. \
                       Ice deposited this way waits rather than attaching, so raising κ starves \
                       the fastest tips of boundary mass and — up to a point — encourages side \
                       branching. The paper's figures span 0 to 0.15.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "mu",
-            display_name: "Melting μ",
-            default: 0.015,
-            min: 0.0,
-            max: 0.3,
-            tooltip: "The proportion of boundary mass that returns to vapour each step. It \
+            Spec::float(0.15, 0.0, 0.5),
+        ),
+        ParamDef::new(
+            "mu",
+            "Melting μ",
+            "The proportion of boundary mass that returns to vapour each step. It \
                       opposes freezing, and raising it promotes faceting: the paper's sequence \
                       from 0.04 to 0.09 turns a stellar dendrite with parabolic tips into a \
                       stellar plate with hexagonal ones.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "gamma",
-            display_name: "Sublimation γ",
-            default: 0.0001,
-            min: 0.0,
-            max: 0.01,
-            tooltip: "The proportion of unattached ICE at the boundary that returns to vapour \
+            Spec::float(0.015, 0.0, 0.3),
+        ),
+        ParamDef::new(
+            "gamma",
+            "Sublimation γ",
+            "The proportion of unattached ICE at the boundary that returns to vapour \
                       each step. It acts like melting but is typically far smaller — the \
                       paper's figures use 0.000001 to 0.01 — and it is included for \
                       completeness rather than for its effect.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "sigma",
-            display_name: "Vapour noise σ",
-            default: 0.0,
-            min: 0.0,
-            max: 0.1,
-            tooltip: "Multiplies the vapour at every site by 1 ± σ each step, each sign \
+            Spec::float(0.0001, 0.0, 0.01),
+        ),
+        ParamDef::new(
+            "sigma",
+            "Vapour noise σ",
+            "Multiplies the vapour at every site by 1 ± σ each step, each sign \
                       equally likely. The paper's own parameter studies are deterministic \
                       (σ = 0) and complex without it; a little noise is how it studies how \
                       much of a real snowflake's asymmetry chance accounts for.",
-            choices: &[],
-        },
+            Spec::float(0.0, 0.0, 0.1),
+        ),
     ],
     presets: &[
         // Every row here is the appendix's, in its own column order:
@@ -6497,87 +5977,69 @@ pub static DBM: ModelDef = ModelDef {
         ModelFeature::NoTimeStep,
     ],
     parameters: &[
-        SimParamDef {
-            name: "eta",
-            display_name: "Field exponent η",
-            default: 1.0,
-            min: 0.0,
-            max: 4.0,
-            tooltip: "How sharply growth prefers a strong field. THE DIMENSION DEPENDS ON IT \
+        ParamDef::new(
+            "eta",
+            "Field exponent η",
+            "How sharply growth prefers a strong field. THE DIMENSION DEPENDS ON IT \
                       and the paper tabulates it: 2 at η = 0, 1.89 at 0.5, 1.75 at 1, about \
                       1.6 at 2. η = 1 is growth proportional to the field — the realistic case \
                       for a discharge, and the one whose pattern and dimension match both a \
                       photographed Lichtenberg figure and DLA. Higher makes the structure more \
                       nearly linear.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "relax",
-            display_name: "Relaxation sweeps",
-            default: 10.0,
-            min: 1.0,
-            max: 200.0,
-            tooltip: "How many times Laplace's equation is iterated between one growth and the \
+            Spec::float(1.0, 0.0, 4.0),
+        ),
+        ParamDef::new(
+            "relax",
+            "Relaxation sweeps",
+            "How many times Laplace's equation is iterated between one growth and the \
                       next. The paper's own note: 'typically good convergence is obtained with \
                       a number of iterations between 5 and 50'. It is warm-started from the \
                       last solution, and the cost is proportional: measured at 1080p, 1.8 ms a \
                       step at 5 sweeps, 5.5 at 20, 12.8 at 50 — while the pattern's dimension \
                       at η = 1 is the same from 3 sweeps to 150 (1.69 to 1.71, within sample \
                       noise). Ten is inside the paper's range and twice as fast as twenty.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "surface_tension",
-            display_name: "Tip penalty d₀",
-            default: 0.0,
-            min: 0.0,
-            max: 0.1,
-            tooltip: "Holds the pattern at −d₀ × curvature instead of at 0, so a protruding tip \
+            Spec::float(10.0, 1.0, 200.0),
+        ),
+        ParamDef::new(
+            "surface_tension",
+            "Tip penalty d₀",
+            "Holds the pattern at −d₀ × curvature instead of at 0, so a protruding tip \
                       sits at a lower potential and grows more slowly. It thins and straightens \
                       the pattern. IT IS NOT SAFFMAN–TAYLOR: it was added as the lattice \
                       analogue of their surface-tension boundary condition and measurably does \
                       not reproduce their finger — see the model's notes. Above about 0.05 it \
                       stops growth altogether. Zero is the dielectric breakdown model as \
                       published.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "selection",
-            display_name: "Growth",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How many sites join per step. One site is the paper's rule exactly — a \
+            Spec::float(0.0, 0.0, 0.1),
+        ),
+        ParamDef::new(
+            "selection",
+            "Growth",
+            "How many sites join per step. One site is the paper's rule exactly — a \
                       single bond added per step, chosen among all candidates in proportion to \
                       the field — and it is what a branching DISCHARGE is. All sites advances \
                       the whole interface at once, each candidate independently at a rate \
                       proportional to the field, which is what a moving FLUID interface is. \
                       They are different processes, not an approximation of one another.",
-            choices: &["One site (race)", "All sites (rate)"],
-        },
-        SimParamDef {
-            name: "rate",
-            display_name: "Growth rate",
-            default: 0.05,
-            min: 0.001,
-            max: 1.0,
-            tooltip: "In All-sites mode, the chance per step that a candidate with unit field \
+            Spec::choice(0, &["One site (race)", "All sites (rate)"]),
+        ),
+        ParamDef::new(
+            "rate",
+            "Growth rate",
+            "In All-sites mode, the chance per step that a candidate with unit field \
                       joins. Small keeps the interface smooth and costs steps; large advances \
                       it in coarse jumps. Ignored in One-site mode.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "electrode",
-            display_name: "Far electrode",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Where the potential is held at 1. Radial is the paper's figure 2 — a \
+            Spec::float(0.05, 0.001, 1.0),
+        ),
+        ParamDef::new(
+            "electrode",
+            "Far electrode",
+            "Where the potential is held at 1. Radial is the paper's figure 2 — a \
                       circle at large enough distance, with the discharge starting from a \
                       point at the centre. Channel is one plate along an edge, for a \
                       discharge from a line — seed it with one.",
-            choices: &["Radial", "Channel"],
-        },
+            Spec::choice(0, &["Radial", "Channel"]),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -6891,67 +6353,52 @@ pub static FINGERING: ModelDef = ModelDef {
                   neighbours. Saffman–Taylor's instability, as a miscible displacement.",
     features: &[ModelFeature::NeedsMinMax, ModelFeature::NoTimeStep],
     parameters: &[
-        SimParamDef {
-            name: "log_mobility",
-            display_name: "Log mobility ratio R",
-            default: 2.0,
-            min: -3.0,
-            max: 5.0,
-            tooltip: "ln of the viscosity ratio between the displaced fluid and the displacing \
+        ParamDef::new(
+            "log_mobility",
+            "Log mobility ratio R",
+            "ln of the viscosity ratio between the displaced fluid and the displacing \
                       one: mobility is exp(R × concentration), so R > 0 means the entering \
                       fluid is thinner. THIS IS THE INSTABILITY: positive and the front \
                       fingers, negative and it flattens, zero and it just advects. Larger \
                       makes fingers narrower and faster.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "speed",
-            display_name: "Peak speed (cells/step)",
-            default: 0.3,
-            min: 0.02,
-            max: 0.5,
-            tooltip: "How far the fastest cell moves in one step. The flow is rescaled to \
+            Spec::float(2.0, -3.0, 5.0),
+        ),
+        ParamDef::new(
+            "speed",
+            "Peak speed (cells/step)",
+            "How far the fastest cell moves in one step. The flow is rescaled to \
                       this every step, which is a choice of time unit and also the Courant \
                       number of the advection — so it is capped at one half, where an upwind \
                       step stays stable.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "diffusion",
-            display_name: "Diffusion",
-            default: 0.02,
-            min: 0.0,
-            max: 0.2,
-            tooltip: "Isotropic mixing of the two fluids, per step. It sets the smallest \
+            Spec::float(0.3, 0.02, 0.5),
+        ),
+        ParamDef::new(
+            "diffusion",
+            "Diffusion",
+            "Isotropic mixing of the two fluids, per step. It sets the smallest \
                       finger that can survive: less and the front breaks into many fine \
                       fingers, more and only a few broad ones grow. Capped at 0.2, where the \
                       explicit five-point step is still stable.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "disturbance",
-            display_name: "Inlet disturbance ζ",
-            default: 0.05,
-            min: 0.0,
-            max: 0.5,
-            tooltip: "Random noise on the initial concentration next to the inlet, which the \
+            Spec::float(0.02, 0.0, 0.2),
+        ),
+        ParamDef::new(
+            "disturbance",
+            "Inlet disturbance ζ",
+            "Random noise on the initial concentration next to the inlet, which the \
                       instability amplifies. Zero is a perfectly flat front, which stays flat: \
                       the fingers need something to grow from. Holzbecher uses 0.01 with a \
                       much finer mesh than a grid this size has.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "relax",
-            display_name: "Pressure sweeps",
-            default: 20.0,
-            min: 1.0,
-            max: 200.0,
-            tooltip: "Jacobi iterations of the pressure equation per step, warm-started from \
+            Spec::float(0.05, 0.0, 0.5),
+        ),
+        ParamDef::new(
+            "relax",
+            "Pressure sweeps",
+            "Jacobi iterations of the pressure equation per step, warm-started from \
                       the last step. Darcy flow is quasi-static, so the pressure has to be \
                       re-solved every time the concentration moves; too few sweeps and the \
                       flow lags the front.",
-            choices: &[],
-        },
+            Spec::float(20.0, 1.0, 200.0),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -7172,297 +6619,222 @@ pub static LATTICE4: ModelDef = ModelDef {
     // draws; it changes only a comment in the step shader).
     features: &[ModelFeature::NeedsRng],
     parameters: &[
-        SimParamDef {
-            name: "kaa",
-            display_name: "A ← A",
-            default: 1.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field A follows its own Turing signal (activator minus \
+        ParamDef::new(
+            "kaa",
+            "A ← A",
+            "How much field A follows its own Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kab",
-            display_name: "A ← B",
-            default: -1.5,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field A follows the next field's Turing signal (activator minus \
+            Spec::float(1.0, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kab",
+            "A ← B",
+            "How much field A follows the next field's Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kac",
-            display_name: "A ← C",
-            default: 0.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field A follows the opposite field's Turing signal (activator minus \
+            Spec::float(-1.5, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kac",
+            "A ← C",
+            "How much field A follows the opposite field's Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kad",
-            display_name: "A ← D",
-            default: 1.5,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field A follows the previous field's Turing signal (activator minus \
+            Spec::float(0.0, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kad",
+            "A ← D",
+            "How much field A follows the previous field's Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kba",
-            display_name: "B ← A",
-            default: 1.5,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field B follows the previous field's Turing signal (activator minus \
+            Spec::float(1.5, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kba",
+            "B ← A",
+            "How much field B follows the previous field's Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kbb",
-            display_name: "B ← B",
-            default: 1.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field B follows its own Turing signal (activator minus \
+            Spec::float(1.5, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kbb",
+            "B ← B",
+            "How much field B follows its own Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kbc",
-            display_name: "B ← C",
-            default: -1.5,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field B follows the next field's Turing signal (activator minus \
+            Spec::float(1.0, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kbc",
+            "B ← C",
+            "How much field B follows the next field's Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kbd",
-            display_name: "B ← D",
-            default: 0.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field B follows the opposite field's Turing signal (activator minus \
+            Spec::float(-1.5, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kbd",
+            "B ← D",
+            "How much field B follows the opposite field's Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kca",
-            display_name: "C ← A",
-            default: 0.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field C follows the opposite field's Turing signal (activator minus \
+            Spec::float(0.0, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kca",
+            "C ← A",
+            "How much field C follows the opposite field's Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kcb",
-            display_name: "C ← B",
-            default: 1.5,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field C follows the previous field's Turing signal (activator minus \
+            Spec::float(0.0, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kcb",
+            "C ← B",
+            "How much field C follows the previous field's Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kcc",
-            display_name: "C ← C",
-            default: 1.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field C follows its own Turing signal (activator minus \
+            Spec::float(1.5, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kcc",
+            "C ← C",
+            "How much field C follows its own Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kcd",
-            display_name: "C ← D",
-            default: -1.5,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field C follows the next field's Turing signal (activator minus \
+            Spec::float(1.0, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kcd",
+            "C ← D",
+            "How much field C follows the next field's Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kda",
-            display_name: "D ← A",
-            default: -1.5,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field D follows the next field's Turing signal (activator minus \
+            Spec::float(-1.5, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kda",
+            "D ← A",
+            "How much field D follows the next field's Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kdb",
-            display_name: "D ← B",
-            default: 0.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field D follows the opposite field's Turing signal (activator minus \
+            Spec::float(-1.5, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kdb",
+            "D ← B",
+            "How much field D follows the opposite field's Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kdc",
-            display_name: "D ← C",
-            default: 1.5,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field D follows the previous field's Turing signal (activator minus \
+            Spec::float(0.0, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kdc",
+            "D ← C",
+            "How much field D follows the previous field's Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "kdd",
-            display_name: "D ← D",
-            default: 1.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much field D follows its own Turing signal (activator minus \
+            Spec::float(1.5, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "kdd",
+            "D ← D",
+            "How much field D follows its own Turing signal (activator minus \
                       inhibitor). Positive follows it, negative pushes against it. The \
                       diagonal at 1 is a plain Turing pattern; following the previous field \
                       and opposing the next, all the way round, is the ring that cycles.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "radius",
-            display_name: "Activator radius",
-            default: 4.0,
-            min: 1.0,
-            max: 15.0,
-            tooltip: "The averaging radius of every field's activator, in cells: the size of \
+            Spec::float(1.0, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "radius",
+            "Activator radius",
+            "The averaging radius of every field's activator, in cells: the size of \
                       the pattern. Under inflation it must stay well above the edge's per-step \
                       displacement, or the resample blurs the pattern away.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "ratio",
-            display_name: "Inhibitor ratio",
-            default: 2.0,
-            min: 1.2,
-            max: 4.0,
-            tooltip: "Inhibitor radius over activator radius. McCabe's 2.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "amount",
-            display_name: "Step",
-            default: 0.05,
-            min: 0.001,
-            max: 0.5,
-            tooltip: "How far a field moves per step, in a range of 2. Larger is faster and \
+            Spec::float(4.0, 1.0, 15.0),
+        ),
+        ParamDef::new(
+            "ratio",
+            "Inhibitor ratio",
+            "Inhibitor radius over activator radius. McCabe's 2.",
+            Spec::float(2.0, 1.2, 4.0),
+        ),
+        ParamDef::new(
+            "amount",
+            "Step",
+            "How far a field moves per step, in a range of 2. Larger is faster and \
                       coarser-grained in time.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "noise",
-            display_name: "Fluctuations",
-            default: 0.01,
-            min: 0.0,
-            max: 0.5,
-            tooltip: "Random perturbation of every field every step — the microscopic \
+            Spec::float(0.05, 0.001, 0.5),
+        ),
+        ParamDef::new(
+            "noise",
+            "Fluctuations",
+            "Random perturbation of every field every step — the microscopic \
                       fluctuations. Under inflation these are what grow into structure.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "gain",
-            display_name: "Gain",
-            default: 4.0,
-            min: 0.5,
-            max: 50.0,
-            tooltip: "Multiplies the coupled Turing signal before it saturates. High gain is \
+            Spec::float(0.01, 0.0, 0.5),
+        ),
+        ParamDef::new(
+            "gain",
+            "Gain",
+            "Multiplies the coupled Turing signal before it saturates. High gain is \
                       McCabe's all-or-nothing step and a hard-edged picture; low gain is \
                       graded, with amplitude falling to nothing where activator and inhibitor \
                       cancel — the membranes.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "decay",
-            display_name: "Decay",
-            default: 1.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "Pulls every field back toward zero each step, as a fraction of the step \
+            Spec::float(4.0, 0.5, 50.0),
+        ),
+        ParamDef::new(
+            "decay",
+            "Decay",
+            "Pulls every field back toward zero each step, as a fraction of the step \
                       amount. With decay the amplitude settles where the drive balances it; \
                       without it every field saturates at its bounds.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "quadratic",
-            display_name: "Quadratic",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "An even term in the saturation, x + q·x². Turing theory: an odd \
+            Spec::float(1.0, 0.0, 2.0),
+        ),
+        ParamDef::new(
+            "quadratic",
+            "Quadratic",
+            "An even term in the saturation, x + q·x². Turing theory: an odd \
                       nonlinearity selects stripes, an even one selects spots. Which sign \
                       gives spots rather than holes depends on the palette's reading of a \
                       lead.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "memory",
-            display_name: "Field D is",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "A fourth Turing pattern, or a MEMORY: a moving average of what the \
+            Spec::float(0.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "memory",
+            "Field D is",
+            "A fourth Turing pattern, or a MEMORY: a moving average of what the \
                       patterns did — row D weights their values, and D ← D weights their \
                       amplitude, which is the geometry and does not average away as a \
                       cycling field does — so under inflation it holds old, magnified \
                       structure. Column D is how it biases each pattern, place by place: \
                       different dynamics in different areas.",
-            choices: &["Turing pattern", "Memory"],
-        },
-        SimParamDef {
-            name: "leak",
-            display_name: "Memory leak",
-            default: 0.05,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How fast the memory fades, as a fraction of the step amount: at 0.05 \
+            Spec::choice(0, &["Turing pattern", "Memory"]),
+        ),
+        ParamDef::new(
+            "leak",
+            "Memory leak",
+            "How fast the memory fades, as a fraction of the step amount: at 0.05 \
                       and step 0.05 it remembers about 400 steps.",
-            choices: &[],
-        },
+            Spec::float(0.05, 0.0, 1.0),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -7710,86 +7082,62 @@ pub static BRUSSELATOR2: ModelDef = ModelDef {
                   boats and beans.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "a",
-            display_name: "a",
-            default: 3.0,
-            min: 0.5,
-            max: 8.0,
-            tooltip: "The Brusselator's feed. The fixed point of both layers is (a, b/a).",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "b",
-            display_name: "b",
-            default: 9.0,
-            min: 1.0,
-            max: 20.0,
-            tooltip: "The Brusselator's control parameter. Turing patterns need b above \
+        ParamDef::new(
+            "a",
+            "a",
+            "The Brusselator's feed. The fixed point of both layers is (a, b/a).",
+            Spec::float(3.0, 0.5, 8.0),
+        ),
+        ParamDef::new(
+            "b",
+            "b",
+            "The Brusselator's control parameter. Turing patterns need b above \
                       1 + a²·D_u/D_v for the layer; Hopf oscillations above 1 + a².",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "du1",
-            display_name: "Layer 1 D_u",
-            default: 1.85,
-            min: 0.1,
-            max: 100.0,
-            tooltip: "Activator diffusion of layer 1, in cells² per unit time.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "dv1",
-            display_name: "Layer 1 D_v",
-            default: 5.66,
-            min: 0.1,
-            max: 400.0,
-            tooltip: "Inhibitor diffusion of layer 1. The ratio to D_u sets the layer's \
+            Spec::float(9.0, 1.0, 20.0),
+        ),
+        ParamDef::new(
+            "du1",
+            "Layer 1 D_u",
+            "Activator diffusion of layer 1, in cells² per unit time.",
+            Spec::float(1.85, 0.1, 100.0),
+        ),
+        ParamDef::new(
+            "dv1",
+            "Layer 1 D_v",
+            "Inhibitor diffusion of layer 1. The ratio to D_u sets the layer's \
                       wavelength.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "du2",
-            display_name: "Layer 2 D_u",
-            default: 50.6,
-            min: 0.1,
-            max: 100.0,
-            tooltip: "Activator diffusion of layer 2.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "dv2",
-            display_name: "Layer 2 D_v",
-            default: 186.0,
-            min: 0.1,
-            max: 400.0,
-            tooltip: "Inhibitor diffusion of layer 2. The largest diffusion sets the time \
+            Spec::float(5.66, 0.1, 400.0),
+        ),
+        ParamDef::new(
+            "du2",
+            "Layer 2 D_u",
+            "Activator diffusion of layer 2.",
+            Spec::float(50.6, 0.1, 100.0),
+        ),
+        ParamDef::new(
+            "dv2",
+            "Layer 2 D_v",
+            "Inhibitor diffusion of layer 2. The largest diffusion sets the time \
                       step: 0.25 / D_max on this stencil, 0.0013 at 186.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "coupling",
-            display_name: "Coupling",
-            default: 1.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Linear is diffusion between the layers, q·(u₂ − u₁): the strength hardly \
+            Spec::float(186.0, 0.1, 400.0),
+        ),
+        ParamDef::new(
+            "coupling",
+            "Coupling",
+            "Linear is diffusion between the layers, q·(u₂ − u₁): the strength hardly \
                       matters and the patterns superimpose. Cubic is an active middle layer, \
                       q·u₁·u₂·(u₂ − u₁): the strength selects the pattern.",
-            choices: &["Linear", "Cubic"],
-        },
-        SimParamDef {
-            name: "q",
-            display_name: "Strength (q)",
-            default: 0.15,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "The coupling strength, the same for both morphogens. Under cubic \
+            Spec::choice(1, &["Linear", "Cubic"]),
+        ),
+        ParamDef::new(
+            "q",
+            "Strength (q)",
+            "The coupling strength, the same for both morphogens. Under cubic \
                       coupling at the default parameters: 0.01–0.05 superimposed stripes, \
                       0.09 spots with inner structure, 0.15 boats, 0.19 elongated boats, \
                       0.27–0.29 long stripes.",
-            choices: &[],
-        },
+            Spec::float(0.15, 0.0, 1.0),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -8023,78 +7371,57 @@ pub static ROSSLER: ModelDef = ModelDef {
                   pattern — Xiao et al.'s chaotic Turing patterns.",
     features: &[],
     parameters: &[
-        SimParamDef {
-            name: "a",
-            display_name: "a",
-            default: 0.2,
-            min: 0.05,
-            max: 0.5,
-            tooltip: "Rössler's a. The paper's 0.2.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "b",
-            display_name: "b",
-            default: 0.2,
-            min: 0.05,
-            max: 2.0,
-            tooltip: "Rössler's b. The paper's 0.2.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "c",
-            display_name: "c",
-            default: 4.5,
-            min: 2.0,
-            max: 8.0,
-            tooltip: "Rössler's c: the route to chaos. With a = b = 0.2, period one near 2.3, \
+        ParamDef::new(
+            "a",
+            "a",
+            "Rössler's a. The paper's 0.2.",
+            Spec::float(0.2, 0.05, 0.5),
+        ),
+        ParamDef::new(
+            "b",
+            "b",
+            "Rössler's b. The paper's 0.2.",
+            Spec::float(0.2, 0.05, 2.0),
+        ),
+        ParamDef::new(
+            "c",
+            "c",
+            "Rössler's c: the route to chaos. With a = b = 0.2, period one near 2.3, \
                       period doubling past 3, chaos by the paper's 4.5.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "duv",
-            display_name: "D_u = D_v",
-            default: 0.017,
-            min: 0.0,
-            max: 0.1,
-            tooltip: "Diffusion of u and v, in the paper's units (domain length 10). Its \
+            Spec::float(4.5, 2.0, 8.0),
+        ),
+        ParamDef::new(
+            "duv",
+            "D_u = D_v",
+            "Diffusion of u and v, in the paper's units (domain length 10). Its \
                       Fig. 3 runs 0.003 to 0.048; above the Fig. 1(a) threshold the lattice \
                       synchronises and there is no pattern.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "dw",
-            display_name: "D_w",
-            default: 1.25,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "Diffusion of w, in the paper's units. Its Fig. 3 runs 0.25 to 2.5. \
+            Spec::float(0.017, 0.0, 0.1),
+        ),
+        ParamDef::new(
+            "dw",
+            "D_w",
+            "Diffusion of w, in the paper's units. Its Fig. 3 runs 0.25 to 2.5. \
                       The largest diffusion sets the time step through the spacing.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "spacing",
-            display_name: "Cell spacing",
-            default: 0.25,
-            min: 0.05,
-            max: 1.0,
-            tooltip: "Physical size of a cell: the paper's 40 cells for a domain of 10 is \
+            Spec::float(1.25, 0.0, 3.0),
+        ),
+        ParamDef::new(
+            "spacing",
+            "Cell spacing",
+            "Physical size of a cell: the paper's 40 cells for a domain of 10 is \
                       0.25. Diffusion in cells is D / spacing², so a coarser spacing allows a \
                       larger time step and a shorter run, at the cost of the paper's \
                       resolution.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "forget",
-            display_name: "Envelope forgetting",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How fast the time-maximum in the fourth channel decays, per unit time. \
+            Spec::float(0.25, 0.05, 1.0),
+        ),
+        ParamDef::new(
+            "forget",
+            "Envelope forgetting",
+            "How fast the time-maximum in the fourth channel decays, per unit time. \
                       0 is the paper's lifetime maximum; a small value makes it an envelope \
                       of the recent past that keeps following the pattern.",
-            choices: &[],
-        },
+            Spec::float(0.0, 0.0, 1.0),
+        ),
     ],
     presets: &[
         SimPreset {
@@ -8345,88 +7672,64 @@ pub static TURING: ModelDef = ModelDef {
     // `NeedsRng`: its step draws its noise, by its own hash.
     features: &[ModelFeature::NeedsRng, ModelFeature::TakesDrive, ModelFeature::PublishesSignal],
     parameters: &[
-        SimParamDef {
-            name: "self",
-            display_name: "Self",
-            default: 1.0,
-            min: -3.0,
-            max: 3.0,
-            tooltip: "How much the field follows its own Turing signal (activator minus \
+        ParamDef::new(
+            "self",
+            "Self",
+            "How much the field follows its own Turing signal (activator minus \
                       inhibitor). 1 is a plain Turing pattern; the other fields' signals \
                       arrive through Signal couplings at their strengths.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "radius",
-            display_name: "Activator radius",
-            default: 4.0,
-            min: 1.0,
-            max: 15.0,
-            tooltip: "The averaging radius of the activator, in cells: the size of the \
+            Spec::float(1.0, -3.0, 3.0),
+        ),
+        ParamDef::new(
+            "radius",
+            "Activator radius",
+            "The averaging radius of the activator, in cells: the size of the \
                       pattern. Differs per layer, so coupled fields can be multi-scale.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "ratio",
-            display_name: "Inhibitor ratio",
-            default: 2.0,
-            min: 1.2,
-            max: 4.0,
-            tooltip: "Inhibitor radius over activator radius. McCabe's 2.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "amount",
-            display_name: "Step",
-            default: 0.05,
-            min: 0.001,
-            max: 0.5,
-            tooltip: "How far the field moves per step, in a range of 2. Larger is faster and \
+            Spec::float(4.0, 1.0, 15.0),
+        ),
+        ParamDef::new(
+            "ratio",
+            "Inhibitor ratio",
+            "Inhibitor radius over activator radius. McCabe's 2.",
+            Spec::float(2.0, 1.2, 4.0),
+        ),
+        ParamDef::new(
+            "amount",
+            "Step",
+            "How far the field moves per step, in a range of 2. Larger is faster and \
                       coarser-grained in time.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "noise",
-            display_name: "Fluctuations",
-            default: 0.01,
-            min: 0.0,
-            max: 0.5,
-            tooltip: "Random perturbation every step — the microscopic fluctuations. Under \
+            Spec::float(0.05, 0.001, 0.5),
+        ),
+        ParamDef::new(
+            "noise",
+            "Fluctuations",
+            "Random perturbation every step — the microscopic fluctuations. Under \
                       inflation these are what grow into structure.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "gain",
-            display_name: "Gain",
-            default: 4.0,
-            min: 0.5,
-            max: 50.0,
-            tooltip: "Multiplies the drive before it saturates. High gain is an all-or-nothing \
+            Spec::float(0.01, 0.0, 0.5),
+        ),
+        ParamDef::new(
+            "gain",
+            "Gain",
+            "Multiplies the drive before it saturates. High gain is an all-or-nothing \
                       step and a hard-edged picture; low gain is graded, with amplitude \
                       falling to nothing where activator and inhibitor cancel.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "decay",
-            display_name: "Decay",
-            default: 1.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "Pulls the field back toward zero each step, as a fraction of the step \
+            Spec::float(4.0, 0.5, 50.0),
+        ),
+        ParamDef::new(
+            "decay",
+            "Decay",
+            "Pulls the field back toward zero each step, as a fraction of the step \
                       amount. With decay the amplitude settles where the drive balances it; \
                       without it the field saturates at its bounds.",
-            choices: &[],
-        },
-        SimParamDef {
-            name: "quadratic",
-            display_name: "Quadratic",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "An even term in the saturation, x + q·x². An odd nonlinearity selects \
+            Spec::float(1.0, 0.0, 2.0),
+        ),
+        ParamDef::new(
+            "quadratic",
+            "Quadratic",
+            "An even term in the saturation, x + q·x². An odd nonlinearity selects \
                       stripes, an even one selects spots.",
-            choices: &[],
-        },
+            Spec::float(0.0, -2.0, 2.0),
+        ),
     ],
     presets: &[
         SimPreset {

@@ -20,9 +20,10 @@
 //!   - `cpow3` body uses a local `d_calc` since the user-param `d` is
 //!     reassigned by the init step.
 
+use crate::params::{ParamDef, Spec};
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 
 // =============================================================================
@@ -59,14 +60,30 @@ pub static CPOW2: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
-        VariationParamDef { name: "r", display_name: "R", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Magnitude of the complex exponent.") },
-        VariationParamDef { name: "a", display_name: "A", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Argument (angle) of the complex exponent — multiplied by π/2 internally, so `a = 1` gives a 90° rotation.") },
-        VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Number of rotational branches.") },
-        VariationParamDef { name: "range", display_name: "Range", param_type: ParamType::Integer,
-                            default_value: 1.0, min_value: Some(1.0), max_value: Some(64.0), description: Some("Random branch range — each iteration picks an integer in `[0, range)` to shift the angle.") },
+        ParamDef::new(
+            "r",
+            "R",
+            "Magnitude of the complex exponent.",
+            Spec::float(1.0, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "a",
+            "A",
+            "Argument (angle) of the complex exponent — multiplied by π/2 internally, so `a = 1` gives a 90° rotation.",
+            Spec::float(0.0, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "divisor",
+            "Divisor",
+            "Number of rotational branches.",
+            Spec::float(1.0, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "range",
+            "Range",
+            "Random branch range — each iteration picks an integer in `[0, range)` to shift the angle.",
+            Spec::int(1, 1, 64),
+        ),
     ],
     // 7 derived values stored in slots 4..11 of this variation's slot range:
     //   4: ang        (2π / divisor)
@@ -185,14 +202,30 @@ pub static CPOW3: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
-        VariationParamDef { name: "r", display_name: "R", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Magnitude of the complex exponent.") },
-        VariationParamDef { name: "d", display_name: "D", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Logarithmic argument scaling. Negative values are absorbed via `-log(-d)`.") },
-        VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Number of rotational branches.") },
-        VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,
-                            default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Logarithmic spread of the random angle perturbation.") },
+        ParamDef::new(
+            "r",
+            "R",
+            "Magnitude of the complex exponent.",
+            Spec::float(1.0, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "d",
+            "D",
+            "Logarithmic argument scaling. Negative values are absorbed via `-log(-d)`.",
+            Spec::float(1.0, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "divisor",
+            "Divisor",
+            "Number of rotational branches.",
+            Spec::float(1.0, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "spread",
+            "Spread",
+            "Logarithmic spread of the random angle perturbation.",
+            Spec::float(1.0, -10.0, 10.0).free(),
+        ),
     ],
     // 6 derived values stored in slots 4..10 of this variation's slot range:
     //   4: ang        (2π / divisor)
@@ -301,10 +334,18 @@ pub static DISC2: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[],
     parameters: &[
-        VariationParamDef { name: "rot", display_name: "Rot", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Wave frequency for the disc pattern — multiplied by π internally.") },
-        VariationParamDef { name: "twist", display_name: "Twist", param_type: ParamType::UnlimitedFloat,
-                            default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0), description: Some("Rotational drift added to the disc output. Beyond ±2π the effect amplifies linearly.") },
+        ParamDef::new(
+            "rot",
+            "Rot",
+            "Wave frequency for the disc pattern — multiplied by π internally.",
+            Spec::float(2.0, -10.0, 10.0).free(),
+        ),
+        ParamDef::new(
+            "twist",
+            "Twist",
+            "Rotational drift added to the disc output. Beyond ±2π the effect amplifies linearly.",
+            Spec::float(0.5, -10.0, 10.0).free(),
+        ),
     ],
     // 3 derived values stored in slots 2..5:
     //   2: timespi  (rot · π)

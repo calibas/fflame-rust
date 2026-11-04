@@ -14,7 +14,7 @@
 use crate::config::escape::{EscapeTransform, TransformStage};
 use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::ui::variation_params::{render_variation_params, ParamTarget};
-use crate::variations::{VariationCategory, VariationParameter};
+use crate::variations::VariationCategory;
 
 use egui_dock::egui;
 use rust_i18n::t;
@@ -26,9 +26,9 @@ struct TransformTarget {
 }
 
 impl ParamTarget for TransformTarget {
-    fn stored(&self, config_manager: &ConfigManager, _var_name: &str, param: &VariationParameter) -> Option<f32> {
+    fn stored(&self, config_manager: &ConfigManager, _var_name: &str, param: &crate::params::ParamDef) -> Option<f32> {
         let t = config_manager.active_config().escape.transforms.get(self.index)?;
-        Some(t.params.get(&param.name).copied().unwrap_or(param.default_value))
+        Some(t.params.get(&*param.name).copied().unwrap_or(param.slot_default()))
     }
 
     fn path(&self, _var_name: &str, param_name: &str) -> ConfigPath {
@@ -70,7 +70,7 @@ fn entry(stage: TransformStage, variation: &str, amount: f32) -> EscapeTransform
     let mut t = EscapeTransform::new(stage, variation, amount);
     if let Some(info) = crate::variations::global_registry().get(variation) {
         for p in &info.parameters {
-            t.params.insert(p.name.clone(), p.default_value);
+            t.params.insert(p.name.to_string(), p.slot_default());
         }
     }
     t

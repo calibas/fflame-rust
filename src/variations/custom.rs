@@ -18,11 +18,11 @@
 //! what a formula's `vary("name", z)` calls it by.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::api::types::VariationDownload;
 use crate::config::escape::{CustomDialect, CustomSource};
-use crate::lang::{self, ir::ParamKind, EntryKind};
+use crate::lang::{self, EntryKind};
 use crate::provenance::Provenance;
 use crate::scene::transforms::Flame;
 
@@ -53,6 +53,32 @@ pub fn id_of_source(source: &str) -> Option<String> {
 /// version (`scripted::key`).
 pub fn key_of(source: &str) -> Option<String> {
     id_of_source(source).map(|id| crate::scripted::key(&id, source))
+}
+
+/// The Rhai sources' parameter layouts (their conditions and grids; one
+/// parameter system, step 10), by the name each registers under.
+fn layouts() -> &'static RwLock<HashMap<String, Arc<crate::params::layout::ParamLayout>>> {
+    static L: OnceLock<RwLock<HashMap<String, Arc<crate::params::layout::ParamLayout>>>> = OnceLock::new();
+    L.get_or_init(Default::default)
+}
+
+/// `source`'s layout, recorded under `name` (or forgotten, when it has
+/// none): what the panel draws its parameters by.
+fn record_layout(name: &str, source: &str) -> Result<(), String> {
+    let layout = lang::rhai::plain_layout(source)?;
+    if let Ok(mut l) = layouts().write() {
+        match layout {
+            Some(layout) => l.insert(name.to_string(), layout),
+            None => l.remove(name),
+        };
+    }
+    Ok(())
+}
+
+/// The parameter layout `name` registered with, when its `PARAMS` has
+/// conditions or grids.
+pub fn param_layout(name: &str) -> Option<Arc<crate::params::layout::ParamLayout>> {
+    layouts().read().ok()?.get(name).cloned()
 }
 
 /// A transformation's source compiled to the payload a plug-in is, under
@@ -95,54 +121,10 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
     #[cfg(not(target_arch = "wasm32"))]
     lang::wgsl::validate_variation(&wgsl).map_err(|e| format!("the compiler produced invalid WGSL (a bug): {e}"))?;
 
-    let mut parameters = Vec::new();
-    for param in &p.params {
-        let tip = (!param.hint.is_empty()).then(|| param.hint.clone());
-        let caption = if param.caption.is_empty() { param.name.clone() } else { param.caption.clone() };
-        let float = |name: String, display: String, value: f64| {
-            let bounded = param.min.is_some() && param.max.is_some();
-            serde_json::json!({
-                "name": name,
-                "display_name": display,
-                "param_type": if param.angle { "angle" } else if bounded { "float" } else { "unlimited_float" },
-                "default_value": value,
-                "min_value": param.min,
-                "max_value": param.max,
-                "description": tip,
-            })
-        };
-        match param.kind {
-            ParamKind::Complex => {
-                for (part, value) in [("re", param.default.0), ("im", param.default.1)] {
-                    parameters.push(float(format!("{}_{part}", param.name), format!("{caption} ({part})"), value));
-                }
-            }
-            ParamKind::Float => parameters.push(float(param.name.clone(), caption, param.default.0)),
-            ParamKind::Int => parameters.push(serde_json::json!({
-                "name": param.name,
-                "display_name": caption,
-                "param_type": if param.min.is_some() && param.max.is_some() { "integer" } else { "unlimited_integer" },
-                "default_value": param.default.0,
-                "min_value": param.min,
-                "max_value": param.max,
-                "description": tip,
-            })),
-            ParamKind::Bool => parameters.push(serde_json::json!({
-                "name": param.name,
-                "display_name": caption,
-                "param_type": "boolean",
-                "default_value": param.default.0,
-                "description": tip,
-            })),
-            ParamKind::Enum => parameters.push(serde_json::json!({
-                "name": param.name,
-                "display_name": caption,
-                "param_type": { "enum": { "choices": param.choices } },
-                "default_value": param.default.0,
-                "description": tip,
-            })),
-        }
-    }
+    record_layout(&name, source)?;
+    // As every kind takes a script's (`ir::Program::param_defs`), on the
+    // wire a downloaded variation's parameters are.
+    let parameters: Vec<serde_json::Value> = p.param_defs(lang::ir::ComplexParams::Split("_"))?.iter().map(crate::params::api_json).collect();
     // Its flag for the renderer: orbits started afresh every dispatch.
     let mut features = wgsl.features.clone();
     if lang::rhai::info_bool(source, "resets_orbits") == Some(true) {
@@ -338,6 +320,50 @@ mod tests {
     fn named(src: &str) -> VariationDownload {
         let name = lang::rhai::variation_name(src).expect("a name");
         compile_as(src, &name).unwrap_or_else(|e| panic!("{name}: {e}"))
+    }
+
+    /// A variation's `PARAMS` layout -- a condition and a grid -- is
+    /// recorded for its panel (one parameter system, step 10); a grid's
+    /// fill, a function only a simulation's CPU runs yet, is refused.
+    #[test]
+    fn a_variations_layout_is_its_panels() {
+        let src = "const PARAMS = #{\n    mode: #{ value: 0, choices: [\"Plain\", \"Table\"] },\n    \
+                   k: #{ value: 1.0, min: 0.0, max: 2.0, show_if: #{ mode: 0 } },\n    \
+                   table: #{ type: \"grid\", rows: 2, cell: \"t{row}_{column}\", show_if: #{ mode: 1 }, columns: #{ a: #{ value: [1.0, 2.0], min: 0.0, max: 4.0 } } },\n};\n\
+                   const INFO = #{ name: \"rhai_layout\" };\nfn variation(z, p) {\n    z * p.k * p.table[1].a\n}\n";
+        named(src);
+        let layout = param_layout("rhai_layout").expect("a layout");
+        let at = |mode: f32| move |n: &str| if n == "mode" { mode } else { 0.0 };
+        assert!(layout.lists("k", &at(0.0)) && !layout.lists("k", &at(1.0)));
+        assert!(!layout.lists("t0_a", &at(1.0)), "a grid's cells are the grid's");
+        assert_eq!((layout.grids.len(), layout.grids[0].rows, layout.grids[0].show_if.holds(&at(1.0))), (1, 2, true));
+        let filled = src
+            .replace("show_if: #{ mode: 1 },", "show_if: #{ mode: 1 }, fill: #{ when: #{ mode: 1 }, from: \"ladder\" },")
+            .replace("fn variation", "fn ladder(p, row) {\n    #{ a: 1.0 }\n}\nfn variation");
+        let e = compile_as(&filled, "rhai_layout_fill").unwrap_err();
+        assert!(e.contains("a simulation's alone"), "{e}");
+    }
+
+    /// A grid's cell at a row the variation computes (one parameter
+    /// system, step 10): its WGSL reads the transform's slot the row
+    /// gives, clamped to the grid, and the CPU reads the same parameter.
+    #[test]
+    fn a_variation_reads_a_grid_row_it_computes() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{transform, ParamValues};
+        let src = "const PARAMS = #{\n    pick: #{ value: 1, min: 0, max: 2 },\n    \
+                   table: #{ type: \"grid\", rows: 3, cell: \"t{row}_{column}\", columns: #{ k: #{ value: [0.5, 2.0, 3.0], min: 0.0, max: 4.0 } } },\n};\n\
+                   const INFO = #{ name: \"rhai_grid_row\" };\nfn variation(z, p) {\n    z * p.table[p.pick].k\n}\n";
+        let dl = named(src);
+        let names: Vec<&str> = dl.parameters.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, ["pick", "t0_k", "t1_k", "t2_k"]);
+        let wgsl = dl.shader_2d.as_deref().unwrap_or_default();
+        assert!(wgsl.contains("get_param(xform_id, variation_id, u32(1i + clamp("), "{wgsl}");
+        let p = lang::rhai::transformation(src).unwrap();
+        let mut values = ParamValues::defaults(&p);
+        assert_eq!(transform(&p, &values, C64::new(1.0, 0.5)), C64::new(2.0, 1.0), "row 1");
+        values.values[0].0 = 7.0;
+        assert_eq!(transform(&p, &values, C64::new(1.0, 0.5)), C64::new(3.0, 1.5), "clamped to the last row");
     }
 
     /// A source registers under its id and version: two versions are two

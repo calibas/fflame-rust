@@ -21,8 +21,8 @@
 //! Source: `output/jwildfire-vars/output/pre_wave3d_wf.cpp`.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 

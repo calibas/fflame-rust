@@ -96,12 +96,10 @@ mod tests {
             assert_eq!(builtin.name, *name);
             for b in builtin.parameters {
                 let t = p.params.iter().find(|x| x.name == b.name).unwrap_or_else(|| panic!("{name}: no `{}`", b.name));
-                assert_eq!(t.default.0 as f32, b.default, "{name}.{}", b.name);
-                if b.choices.is_empty() {
-                    assert_eq!((t.min.map(|v| v as f32), t.max.map(|v| v as f32)), (Some(b.min), Some(b.max)), "{name}.{}", b.name);
-                } else {
-                    let want: Vec<String> = b.choices.iter().map(|c| c.to_string()).collect();
-                    assert_eq!(t.choices, want, "{name}.{}", b.name);
+                assert_eq!(t.default.0 as f32, b.slot_default(), "{name}.{}", b.name);
+                match b.options() {
+                    None => assert_eq!((t.min.map(|v| v as f32), t.max.map(|v| v as f32)), (Some(b.slot_range().0), Some(b.slot_range().1)), "{name}.{}", b.name),
+                    Some(o) => assert_eq!(t.choices, o.iter().map(str::to_string).collect::<Vec<_>>(), "{name}.{}", b.name),
                 }
             }
             // A built-in that never escapes has no bailout, nor its twin.
@@ -109,7 +107,7 @@ mod tests {
             assert_eq!(p.params.iter().any(|x| x.name == "bailout"), escapes, "{name}: the panel's bailout");
             assert_eq!(p.params.len(), builtin.parameters.len() + usize::from(escapes), "{name}: no other parameters");
             // The degree, at the defaults and at a power.
-            let mut slots: Vec<f32> = builtin.parameters.iter().map(|b| b.default).collect();
+            let mut slots: Vec<f32> = builtin.parameters.iter().map(|b| b.slot_default()).collect();
             let deg = |slots: &[f32]| {
                 let params = ParamValues::from_slots(&p, slots);
                 // Undeclared, 2: the smooth colourings' default, as the

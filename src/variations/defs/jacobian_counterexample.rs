@@ -78,8 +78,8 @@
 //! Jacobian-conjecture counterexample announcement.
 
 use crate::variations::{
-    definition::{Feature, VariationDef, VariationParamDef},
-    ParamType, VariationCategory, VariationPhase,
+    definition::{Feature, VariationDef},
+    VariationCategory, VariationPhase,
 };
 use crate::param;
 
@@ -115,7 +115,7 @@ pub static JACOBIAN_COUNTEREXAMPLE: VariationDef = VariationDef {
         param!("scale", "Scale", float, 1.0, 0.05, 4.0, "Similarity conjugation: world point = (math point − center) × scale."),
         param!("center_x", "Center re", unlimited_float, -1.0, -4.0, 4.0, "Real part of the view center in math coordinates, subtracted before plotting. The attractor rim is pinned at a = −1 (a structural rigidity of the map), so the default centers it on the origin."),
         param!("center_y", "Center im", unlimited_float, 0.0, -4.0, 4.0, "Imaginary part of the view center."),
-        param!("steps", "Steps", int, 1.0, 1.0, 8.0, "Inverse applications per call (fresh random branch each). Higher values pull stray trajectories onto the attractor harder — sharpens the halo the 2D hidden-fiber desync paints — at proportional GPU cost. Forward mode: leave at 1 (degree 6 per step compounds fast)."),
+        param!(slow "steps", "Steps", int, 1.0, 1.0, 8.0, "Inverse applications per call (fresh random branch each). Higher values pull stray trajectories onto the attractor harder — sharpens the halo the 2D hidden-fiber desync paints — at proportional GPU cost. Forward mode: leave at 1 (degree 6 per step compounds fast)."),
         param!("w1", "Branch 1", float, 1.0, 0.0, 1.0, "Selection weight of inverse branch 1 (Cardano root ω⁰). Biasing or zeroing branch weights selects sub-semigroups of the inverse monoid — genuinely different sub-self-similar limit sets. The strongest shape knob this map has (the map itself has no free constants)."),
         param!("w2", "Branch 2", float, 1.0, 0.0, 1.0, "Selection weight of inverse branch 2 (Cardano root ω¹)."),
         param!("w3", "Branch 3", float, 1.0, 0.0, 1.0, "Selection weight of inverse branch 3 (Cardano root ω²)."),
