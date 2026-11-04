@@ -1846,7 +1846,8 @@ pub static IFS_QUATERNION_JULIA: IfsDef = IfsDef {
         ParamDef::new(
             "w_slice",
             "Slice Value",
-            "Unused here; the quaternion Julia solid's own slice follows.",
+            "Where along the slice axis the 3D slice sits. Sweep it to walk \
+                      through the 4D solid.",
             Spec::float(0.0, -2.0, 2.0),
         ),
         ParamDef::new(
@@ -1896,13 +1897,6 @@ pub static IFS_QUATERNION_JULIA: IfsDef = IfsDef {
             Spec::choice(3, &["Scalar", "i", "j", "k"]),
         ),
         ParamDef::new(
-            "w_slice",
-            "Slice Value",
-            "Where along the slice axis the 3D slice sits. Sweep it to walk \
-                      through the 4D solid.",
-            Spec::float(0.0, -2.0, 2.0),
-        ),
-        ParamDef::new(
             "colour_depth",
             "Colour Depth",
             "How many of the first iterations the colourings read: the orbit trap's \
@@ -1948,7 +1942,7 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
     let n = clamp(round(fparam(11u)), 2.0, 8.0);
     let bail = max(fparam(12u), 1.0);
     let axis = u32(clamp(fparam(13u), 0.0, 3.0));
-    let slice = fparam(14u);
+    let slice = fparam(6u);
 
     // Lift to 4D: the slice axis takes the slice value and the other
     // three take the point, in order.
@@ -1971,7 +1965,7 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
     // set's own symmetry keeps -- rotations about the axis of c's
     // vector part commute with q -> q^n + c, so what is kept is the
     // scalar part, the part along that axis and the rest's length.
-    let depth = u32(clamp(round(fparam(16u)), 1.0, 12.0));
+    let depth = u32(clamp(round(fparam(14u)), 1.0, 12.0));
     let vlen = length(c.yzw);
     let axis_v = select(vec3<f32>(1.0, 0.0, 0.0), c.yzw / vlen, vlen > 1e-12);
     var trap_r = 1.0e30;
@@ -6482,6 +6476,23 @@ pub fn pack_maps(
 
 #[cfg(test)]
 mod tests {
+    /// Every solid's walk reads its colour depth at its `colour_depth`
+    /// parameter's slot. The quaternion Julia's read one past it, a slot
+    /// never written, so its colour depth was 1 whatever the slider said.
+    #[test]
+    fn every_solid_reads_its_colour_depth_at_its_slot() {
+        let mut checked = 0;
+        for def in super::IFS_DEFS {
+            let Some(k) = def.parameters.iter().position(|p| p.name == "colour_depth") else {
+                continue;
+            };
+            let read = format!("let depth = u32(clamp(round(fparam({k}u)), 1.0, 12.0));");
+            assert!(def.wgsl.contains(&read), "{}: colour_depth is slot {k}; its walk does not read `{read}`", def.name);
+            checked += 1;
+        }
+        assert!(checked >= 5, "{checked} solids with a colour depth");
+    }
+
     /// A solid's directional lights (2026-10-19): fixed in the fractal's
     /// space, the rig's light rows are the same from every camera; following
     /// the camera, they turn with it -- as they did before, to the bit. And a
