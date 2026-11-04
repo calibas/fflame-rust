@@ -186,7 +186,18 @@ Each a commit, each behaviour-preserving and held by tests:
 5. **Escape**: 248 `EscapeParamDef` literals; `is_exponential`'s pointer
    set becomes `log`; `escape::SLOW_PARAMS`; the escape panel's formula,
    colouring and layer sections, the lighting panel, the animation
-   target selector.
+   target selector. **Done**: 236 literals and two const-fn helpers'
+   (infinite_waves' waves) by the codemod, the slow list as `.slow()`;
+   `log` is what the slider did -- declared `exponential`, or a range
+   spanning five decades from above zero, counted in f32 as the slider
+   counted it (0.001..100 is not five decades there, so the itinerary's
+   scale stays linear); a compiled formula's builder sets it the same
+   way. The formula section is `list_with`, its polar row the `after`
+   hook. The script API's `exponential` reports the slider's `log`
+   (declared, or five decades). One change the snapshot shows, wanted:
+   the solids' template (`ifs::template_parameters`, Mandelbox's first
+   seven) now carries its levels, beam and steps as slow, so a user's
+   solid commits them on release as the built-in solids do.
 6. **Effects**: 84 `EffectParameter` literals, Rhai effects, the
    Effects panel (`widget_param` goes), `export_effects_json` (its
    output unchanged).

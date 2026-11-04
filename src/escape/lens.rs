@@ -278,7 +278,7 @@ fn map_value(escape: &EscapeConfig, v: &crate::lang::ir::MapValue) -> f64 {
         MapValue::Param(name) => escape.formula_params.get(name).copied().map(f64::from).unwrap_or_else(|| {
             crate::escape::ifs::get_ifs(&escape.formula)
                 .and_then(|d| d.parameters.iter().find(|p| p.name == name.as_str()))
-                .map_or(0.0, |p| p.default as f64)
+                .map_or(0.0, |p| p.slot_default() as f64)
         }),
     }
 }

@@ -47,7 +47,7 @@
 //! Params reach both through `fparam(i)` / `cparam(i)`, exactly as in
 //! modes A and B.
 
-use super::EscapeParamDef;
+use crate::params::{ParamDef, Spec};
 use crate::scene::ifs_analysis::{Affine2, Affine3, Ifs2, Ifs3, Map2, Map3};
 
 /// A mode-D distance function.
@@ -73,7 +73,7 @@ pub struct IfsDef {
     /// Coloring used when `EscapeConfig::coloring` names another
     /// registry's entry (the usual state right after a switch).
     pub default_coloring: &'static str,
-    pub parameters: &'static [EscapeParamDef],
+    pub parameters: &'static [ParamDef],
     pub presets: &'static [super::EscapePreset],
     pub wgsl: &'static str,
     /// A solid whose distance is a safe step and no more (a Rhai solid's
@@ -91,7 +91,7 @@ pub struct IfsDef {
 pub struct IfsColoringDef {
     pub name: &'static str,
     pub display_name: &'static str,
-    pub parameters: &'static [EscapeParamDef],
+    pub parameters: &'static [ParamDef],
     pub wgsl: &'static str,
 }
 
@@ -113,25 +113,19 @@ pub static IFS_FLAME: IfsDef = IfsDef {
     default_coloring: "ifs_distance",
     presets: &[],
     parameters: &[
-        EscapeParamDef {
-            name: "levels",
-            display_name: "Inverse Depth",
-            default: 24.0,
-            min: 1.0,
-            max: 256.0,
-            tooltip: "How many inverse maps to apply before giving up and calling the \
+        ParamDef::new(
+            "levels",
+            "Inverse Depth",
+            "How many inverse maps to apply before giving up and calling the \
                       pixel part of the set. Deeper resolves finer structure and is \
                       never less sound; the depth a zoom needs grows like \
                       log(1/zoom)/log(1/sigma).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "beam",
-            display_name: "Beam Width",
-            default: 4.0,
-            min: 1.0,
-            max: 8.0,
-            tooltip: "How many branch addresses the walk follows at once. Every \
+            Spec::float(24.0, 1.0, 256.0).slow(),
+        ),
+        ParamDef::new(
+            "beam",
+            "Beam Width",
+            "How many branch addresses the walk follows at once. Every \
                       address bounds the distance to ITS piece and the truth is the \
                       smallest, so following one can only read too far -- which \
                       erodes an attractor whose pieces share a boundary. 1 is the \
@@ -144,15 +138,12 @@ pub static IFS_FLAME: IfsDef = IfsDef {
                       pieces touch at points. Raise it to 8 for a still of an \
                       overlapping set; lower it to 1 when the picture does not \
                       change.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "delta",
-            display_name: "Delta Walk",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "EXPERIMENTAL. Carry each pixel as an OFFSET from the centre's \
+            Spec::float(4.0, 1.0, 8.0).slow(),
+        ),
+        ParamDef::new(
+            "delta",
+            "Delta Walk",
+            "EXPERIMENTAL. Carry each pixel as an OFFSET from the centre's \
                       own walk, level by level, instead of starting it from an \
                       absolute position at one handed-over level. The offset's step \
                       is the kernel's exact difference form, so there is no \
@@ -161,15 +152,12 @@ pub static IFS_FLAME: IfsDef = IfsDef {
                       of the ball, which happens deeper the deeper the view. Off by \
                       default while the shader half is measured; see \
                       `ifs-perturbation-delta.md`.",
-            choices: &["Off", "On"],
-        },
-        EscapeParamDef {
-            name: "extent",
-            display_name: "Extent",
-            default: 0.0,
-            min: 0.0,
-            max: 100.0,
-            tooltip: "The radius of the ball the set is cut at, about its measured \
+            Spec::choice(0, &["Off", "On"]),
+        ),
+        ParamDef::new(
+            "extent",
+            "Extent",
+            "The radius of the ball the set is cut at, about its measured \
                       centre; 0 measures it from the flame. For an affine set the \
                       measurement is exact and this changes nothing worth having. \
                       For a set with inversions (a julia of negative distance, \
@@ -181,8 +169,8 @@ pub static IFS_FLAME: IfsDef = IfsDef {
                       six-degree turn of one transform, measured, while the set \
                       there moved 94. The criterion above shows the measured \
                       value; set it here to hold it through an animation.",
-            choices: &[],
-        },
+            Spec::float(0.0, 0.0, 100.0),
+        ),
     ],
     wgsl: r#"
 // The kernel's inverse on v, along the row's branch (plan 8.8 J1,
@@ -817,102 +805,78 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
     default_coloring: "ifs_address",
     presets: &[],
     parameters: &[
-        EscapeParamDef {
-            name: "levels",
-            display_name: "Inverse Depth",
-            default: 24.0,
-            min: 1.0,
-            max: 256.0,
-            tooltip: "How many inverse maps to apply before calling the point part of \
+        ParamDef::new(
+            "levels",
+            "Inverse Depth",
+            "How many inverse maps to apply before calling the point part of \
                       the set. Every march step pays this, so it costs more here than \
                       in the plane.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "beam",
-            display_name: "Beam Width",
-            default: 1.0,
-            min: 1.0,
-            max: 8.0,
-            tooltip: "How many branch addresses the walk follows at once. Every address \
+            Spec::float(24.0, 1.0, 256.0).slow(),
+        ),
+        ParamDef::new(
+            "beam",
+            "Beam Width",
+            "How many branch addresses the walk follows at once. Every address \
                       bounds the distance to ITS piece and the truth is the smallest, so \
                       following one can only read too far -- which a marcher turns into \
                       a surface that is not there. Raise it for a solid whose pieces \
                       OVERLAP; one whose pieces TILE needs nothing, and a march \
                       pays the beam on every step rather than once per pixel -- \
                       measured at 2.8x the time for two bytes of difference.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "steps",
-            display_name: "March Steps",
-            default: 96.0,
-            min: 4.0,
-            max: 512.0,
-            tooltip: "How many times a ray may step before giving up. A ray that runs \
+            Spec::float(1.0, 1.0, 8.0).slow(),
+        ),
+        ParamDef::new(
+            "steps",
+            "March Steps",
+            "How many times a ray may step before giving up. A ray that runs \
                       out is left as a miss, so too few steps eat holes in a surface \
                       seen at a glancing angle, where a ray travels furthest for the \
                       distance it closes.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "shadow",
-            display_name: "Shadows",
-            default: 0.98,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How dark a shadowed surface goes. 0 skips the shadow march \
+            Spec::float(96.0, 4.0, 512.0).slow(),
+        ),
+        ParamDef::new(
+            "shadow",
+            "Shadows",
+            "How dark a shadowed surface goes. 0 skips the shadow march \
                       entirely, and that march is what shadows cost -- one more walk \
                       of the distance function per LIGHT per lit pixel, so the price \
                       is set by how many lights you switch on.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "shadow_sharpness",
-            display_name: "Shadow Sharpness",
-            default: 12.0,
-            min: 1.0,
-            max: 128.0,
-            tooltip: "How sharply a shadow's edge falls off. The march already knows \
+            Spec::float(0.98, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "shadow_sharpness",
+            "Shadow Sharpness",
+            "How sharply a shadow's edge falls off. The march already knows \
                       how close it passed to the surface, so the penumbra costs \
                       nothing. The number stands for the inverse of the light's own \
                       SIZE -- a broad light makes soft edges -- so small values \
                       spread the penumbra and large ones harden it.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "occlusion",
-            display_name: "Occlusion Reach",
-            default: 0.15,
-            min: 0.0,
-            max: 0.5,
-            tooltip: "How far to look for the walls that enclose a point, as a \
+            Spec::float(12.0, 1.0, 128.0),
+        ),
+        ParamDef::new(
+            "occlusion",
+            "Occlusion Reach",
+            "How far to look for the walls that enclose a point, as a \
                       fraction of the whole attractor. It has to be comparable to the \
                       feature you want shaded: small values darken only the tightest \
                       crevices, and a hollow wider than this reads as open -- which, \
                       at that reach, it is. 0 turns occlusion off. Occlusion answers \
                       for the sky; a cavity goes properly dark because the LIGHT \
                       cannot reach into it, and that is Shadows.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "w_slice",
-            display_name: "Slice Value",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "For a solid of quaternion maps (plan 8.11 step 3): the scalar \
+            Spec::float(0.15, 0.0, 0.5),
+        ),
+        ParamDef::new(
+            "w_slice",
+            "Slice Value",
+            "For a solid of quaternion maps (plan 8.11 step 3): the scalar \
                       coordinate the 3D picture is a slice of. Sweep it to walk \
                       through the 4D set. Nothing else reads it.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "extent",
-            display_name: "Extent",
-            default: 0.0,
-            min: 0.0,
-            max: 100.0,
-            tooltip: "The radius of the ball the set is cut at, about its measured \
+            Spec::float(0.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "extent",
+            "Extent",
+            "The radius of the ball the set is cut at, about its measured \
                       centre; 0 measures it from the flame. For an affine set the \
                       measurement is exact and this changes nothing worth having. \
                       For a set with inversions (a julia of negative distance, \
@@ -924,29 +888,23 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
                       six-degree turn of one transform, measured, while the set \
                       there moved 94. The criterion above shows the measured \
                       value; set it here to hold it through an animation.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "colour_depth",
-            display_name: "Colour Depth",
-            default: 3.0,
-            min: 1.0,
-            max: 12.0,
-            tooltip: "How many of the first inverse maps the orbit trap and the escape level \
+            Spec::float(0.0, 0.0, 100.0),
+        ),
+        ParamDef::new(
+            "colour_depth",
+            "Colour Depth",
+            "How many of the first inverse maps the orbit trap and the escape level \
                       read. The surface is drawn a pixel from the set, and past a few levels \
                       that pixel decides where the walk escapes, so deeper colours change with \
                       the camera. Raise it when zoomed in.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "address_start",
-            display_name: "Address Start",
-            default: 0.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "Which inverse map the branch address starts from. From the second, every                       copy of the set's first pieces is coloured alike (the sponge's twenty                       cubes, the tetrahedron's four); from the third, their pieces too.",
-            choices: &["First map", "Second map", "Third map"],
-        },
+            Spec::float(3.0, 1.0, 12.0),
+        ),
+        ParamDef::new(
+            "address_start",
+            "Address Start",
+            "Which inverse map the branch address starts from. From the second, every                       copy of the set's first pieces is coloured alike (the sponge's twenty                       cubes, the tetrahedron's four); from the third, their pieces too.",
+            Spec::choice(0, &["First map", "Second map", "Third map"]),
+        ),
     ],
     wgsl: r#"
 // Inverse of map i, in three dimensions.
@@ -1633,39 +1591,30 @@ pub static IFS_DISTANCE: IfsColoringDef = IfsColoringDef {
     name: "ifs_distance",
     display_name: "Distance",
     parameters: &[
-        EscapeParamDef {
-            name: "edge",
-            display_name: "Edge Width",
-            default: 1.0,
-            min: 0.0,
-            max: 8.0,
-            tooltip: "Antialiasing width in pixels. The set's boundary is where the \
+        ParamDef::new(
+            "edge",
+            "Edge Width",
+            "Antialiasing width in pixels. The set's boundary is where the \
                       distance crosses zero, so this is a real sub-pixel coverage, \
                       not a blur.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "bands",
-            display_name: "Contour Spacing",
-            default: 0.0,
-            min: 0.0,
-            max: 40.0,
-            tooltip: "Exterior contour bands per unit of log distance. 0 = a flat \
+            Spec::float(1.0, 0.0, 8.0),
+        ),
+        ParamDef::new(
+            "bands",
+            "Contour Spacing",
+            "Exterior contour bands per unit of log distance. 0 = a flat \
                       exterior (the background shows through).",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "interior",
-            display_name: "Interior Palette",
-            default: 0.5,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Palette position for the set itself. Not 0 by default: most \
+            Spec::float(0.0, 0.0, 40.0),
+        ),
+        ParamDef::new(
+            "interior",
+            "Interior Palette",
+            "Palette position for the set itself. Not 0 by default: most \
                       palettes are black at their low end, so a set drawn there is \
                       invisible against the background and the render reads as \
                       empty.",
-            choices: &[],
-        },
+            Spec::float(0.5, 0.0, 1.0),
+        ),
     ],
     wgsl: r#"
 fn ifs_color(res: IfsResult) -> IfsShade {
@@ -1697,34 +1646,25 @@ pub static IFS_LEVEL: IfsColoringDef = IfsColoringDef {
     name: "ifs_level",
     display_name: "Escape Level",
     parameters: &[
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Palette Scale",
-            default: 0.12,
-            min: 0.005,
-            max: 2.0,
-            tooltip: "Palette cycles per inverse-iteration level.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "offset",
-            display_name: "Palette Offset",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Rotates the band colours.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "smooth",
-            display_name: "Smooth Bands",
-            default: 1.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "Use the continuous residual across the annulus (smooth) or \
+        ParamDef::new(
+            "scale",
+            "Palette Scale",
+            "Palette cycles per inverse-iteration level.",
+            Spec::float(0.12, 0.005, 2.0),
+        ),
+        ParamDef::new(
+            "offset",
+            "Palette Offset",
+            "Rotates the band colours.",
+            Spec::float(0.0, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "smooth",
+            "Smooth Bands",
+            "Use the continuous residual across the annulus (smooth) or \
                       the integer level (hard bands).",
-            choices: &["Hard", "Smooth"],
-        },
+            Spec::choice(1, &["Hard", "Smooth"]),
+        ),
     ],
     wgsl: r#"
 fn ifs_color(res: IfsResult) -> IfsShade {
@@ -1747,38 +1687,29 @@ pub static IFS_ADDRESS: IfsColoringDef = IfsColoringDef {
     name: "ifs_address",
     display_name: "Branch Address",
     parameters: &[
-        EscapeParamDef {
-            name: "source",
-            display_name: "Source",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "The full address as a base-N fraction, or just the coarsest \
+        ParamDef::new(
+            "source",
+            "Source",
+            "The full address as a base-N fraction, or just the coarsest \
                       branch's transform colour (which is what a flame would show).",
-            choices: &["Address fraction", "First transform colour"],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Palette Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette cycles across the address range.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "reach",
-            display_name: "Halo Reach",
-            default: 6.0,
-            min: 0.0,
-            max: 200.0,
-            tooltip: "How far from the set, in pixels, the colouring stays lit. \
+            Spec::choice(0, &["Address fraction", "First transform colour"]),
+        ),
+        ParamDef::new(
+            "scale",
+            "Palette Scale",
+            "Palette cycles across the address range.",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
+        ParamDef::new(
+            "reach",
+            "Halo Reach",
+            "How far from the set, in pixels, the colouring stays lit. \
                       The quantity is defined everywhere, but it only MEANS \
                       anything near the attractor — without this the picture is \
                       the exterior's branch partition rather than the set. \
                       0 = no fade, light the whole plane.",
-            choices: &[],
-        },
+            Spec::float(6.0, 0.0, 200.0),
+        ),
     ],
     wgsl: r#"
 fn ifs_color(res: IfsResult) -> IfsShade {
@@ -1807,37 +1738,28 @@ pub static IFS_TRAP: IfsColoringDef = IfsColoringDef {
     name: "ifs_trap",
     display_name: "Orbit Trap",
     parameters: &[
-        EscapeParamDef {
-            name: "shape",
-            display_name: "Trap Shape",
-            default: 0.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "What the expanded point is measured against.",
-            choices: &["Distance to centre", "Cross (axes)", "Angle"],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Palette Scale",
-            default: 1.0,
-            min: 0.01,
-            max: 20.0,
-            tooltip: "Palette cycles per unit of trap value.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "reach",
-            display_name: "Halo Reach",
-            default: 6.0,
-            min: 0.0,
-            max: 200.0,
-            tooltip: "How far from the set, in pixels, the colouring stays lit. \
+        ParamDef::new(
+            "shape",
+            "Trap Shape",
+            "What the expanded point is measured against.",
+            Spec::choice(0, &["Distance to centre", "Cross (axes)", "Angle"]),
+        ),
+        ParamDef::new(
+            "scale",
+            "Palette Scale",
+            "Palette cycles per unit of trap value.",
+            Spec::float(1.0, 0.01, 20.0),
+        ),
+        ParamDef::new(
+            "reach",
+            "Halo Reach",
+            "How far from the set, in pixels, the colouring stays lit. \
                       The quantity is defined everywhere, but it only MEANS \
                       anything near the attractor — without this the picture is \
                       the exterior's branch partition rather than the set. \
                       0 = no fade, light the whole plane.",
-            choices: &[],
-        },
+            Spec::float(6.0, 0.0, 200.0),
+        ),
     ],
     wgsl: r#"
 fn ifs_color(res: IfsResult) -> IfsShade {
@@ -1881,163 +1803,115 @@ pub static IFS_QUATERNION_JULIA: IfsDef = IfsDef {
     default_coloring: "ifs_level",
     presets: &[],
     parameters: &[
-        EscapeParamDef {
-            name: "levels",
-            display_name: "Iterations",
-            default: 32.0,
-            min: 1.0,
-            max: 256.0,
-            tooltip: "How many times to apply q -> q^n + c before calling the point \
+        ParamDef::new(
+            "levels",
+            "Iterations",
+            "How many times to apply q -> q^n + c before calling the point \
                       part of the set. The distance is taken where |q| has run past \
                       10^4, so a few beyond the bailout are spent sharpening it.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "beam",
-            display_name: "Beam Width",
-            default: 1.0,
-            min: 1.0,
-            max: 8.0,
-            tooltip: "Unused here: a quaternion power has one inverse orbit. Kept so \
+            Spec::float(32.0, 1.0, 256.0).slow(),
+        ),
+        ParamDef::new(
+            "beam",
+            "Beam Width",
+            "Unused here: a quaternion power has one inverse orbit. Kept so \
                       the march, shadow and occlusion slots line up with the flame \
                       solid's.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "steps",
-            display_name: "March Steps",
-            default: 96.0,
-            min: 4.0,
-            max: 512.0,
-            tooltip: "How many times a ray may step before giving up.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "shadow",
-            display_name: "Shadows",
-            default: 0.98,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "shadow_sharpness",
-            display_name: "Shadow Sharpness",
-            default: 12.0,
-            min: 1.0,
-            max: 64.0,
-            tooltip: "Penumbra width: higher is harder-edged.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "occlusion",
-            display_name: "Occlusion Reach",
-            default: 0.15,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How far the ambient occlusion probes, as a fraction of the set.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "w_slice",
-            display_name: "Slice Value",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "Unused here; the quaternion Julia solid's own slice follows.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "cx",
-            display_name: "Constant X",
-            default: -1.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "The scalar (real) part of the Julia constant c. Bourke writes \
+            Spec::float(1.0, 1.0, 8.0).slow(),
+        ),
+        ParamDef::new(
+            "steps",
+            "March Steps",
+            "How many times a ray may step before giving up.",
+            Spec::float(96.0, 4.0, 512.0).slow(),
+        ),
+        ParamDef::new(
+            "shadow",
+            "Shadows",
+            "How dark a traced shadow is. 0 skips the shadow march.",
+            Spec::float(0.98, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "shadow_sharpness",
+            "Shadow Sharpness",
+            "Penumbra width: higher is harder-edged.",
+            Spec::float(12.0, 1.0, 64.0),
+        ),
+        ParamDef::new(
+            "occlusion",
+            "Occlusion Reach",
+            "How far the ambient occlusion probes, as a fraction of the set.",
+            Spec::float(0.15, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "w_slice",
+            "Slice Value",
+            "Unused here; the quaternion Julia solid's own slice follows.",
+            Spec::float(0.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "cx",
+            "Constant X",
+            "The scalar (real) part of the Julia constant c. Bourke writes \
                       c scalar-first; his (-1, 0.2, 0, 0) is this at -1.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "cy",
-            display_name: "Constant Y",
-            default: 0.2,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "The i component of c.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "cz",
-            display_name: "Constant Z",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "The j component of c.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "cw",
-            display_name: "Constant W",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "The k component of c.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "power",
-            display_name: "Power",
-            default: 2.0,
-            min: 2.0,
-            max: 8.0,
-            tooltip: "The n in q^n + c. 2 is the classic quadratic set.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "bailout",
-            display_name: "Bailout",
-            default: 2.0,
-            min: 1.0,
-            max: 8.0,
-            tooltip: "A point whose orbit passes this radius is outside the set. Also \
+            Spec::float(-1.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "cy",
+            "Constant Y",
+            "The i component of c.",
+            Spec::float(0.2, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "cz",
+            "Constant Z",
+            "The j component of c.",
+            Spec::float(0.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "cw",
+            "Constant W",
+            "The k component of c.",
+            Spec::float(0.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "power",
+            "Power",
+            "The n in q^n + c. 2 is the classic quadratic set.",
+            Spec::float(2.0, 2.0, 8.0),
+        ),
+        ParamDef::new(
+            "bailout",
+            "Bailout",
+            "A point whose orbit passes this radius is outside the set. Also \
                       the radius of the ball the camera frames.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "slice_axis",
-            display_name: "Slice Axis",
-            default: 3.0,
-            min: 0.0,
-            max: 3.0,
-            tooltip: "Which quaternion component the 3D slice pins: 0 = scalar, \
+            Spec::float(2.0, 1.0, 8.0),
+        ),
+        ParamDef::new(
+            "slice_axis",
+            "Slice Axis",
+            "Which quaternion component the 3D slice pins: 0 = scalar, \
                       1 = i, 2 = j, 3 = k. For a complex c (j = k = 0) the k slice \
                       contains the complex plane and shows the classic solid.",
-            choices: &["Scalar", "i", "j", "k"],
-        },
-        EscapeParamDef {
-            name: "w_slice",
-            display_name: "Slice Value",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "Where along the slice axis the 3D slice sits. Sweep it to walk \
+            Spec::choice(3, &["Scalar", "i", "j", "k"]),
+        ),
+        ParamDef::new(
+            "w_slice",
+            "Slice Value",
+            "Where along the slice axis the 3D slice sits. Sweep it to walk \
                       through the 4D solid.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "colour_depth",
-            display_name: "Colour Depth",
-            default: 3.0,
-            min: 1.0,
-            max: 12.0,
-            tooltip: "How many of the first iterations the colourings read: the orbit trap's \
+            Spec::float(0.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "colour_depth",
+            "Colour Depth",
+            "How many of the first iterations the colourings read: the orbit trap's \
                       closest approach, the level's bands and the address's angle. The \
                       surface is drawn a pixel from the set, and past a few iterations that \
                       pixel decides the orbit, so deeper colours change with the camera. \
                       Raise it when zoomed in.",
-            choices: &[],
-        },
+            Spec::float(3.0, 1.0, 12.0),
+        ),
     ],
     wgsl: r#"
 // The quaternion as (scalar, i, j, k) in a vec4's (x, y, z, w). A
@@ -2202,198 +2076,138 @@ pub static IFS_KIFS: IfsDef = IfsDef {
     default_coloring: "ifs_level",
     presets: &[],
     parameters: &[
-        EscapeParamDef {
-            name: "levels",
-            display_name: "Iterations",
-            default: 12.0,
-            min: 1.0,
-            max: 64.0,
-            tooltip: "How many folds and scalings before calling the point part of the set. Each one \
+        ParamDef::new(
+            "levels",
+            "Iterations",
+            "How many folds and scalings before calling the point part of the set. Each one \
                       resolves the set a scale finer: past about a dozen the detail is below a pixel.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "beam",
-            display_name: "Beam Width",
-            default: 1.0,
-            min: 1.0,
-            max: 8.0,
-            tooltip: "Unused here: a fold has one orbit. Kept so the march, shadow and occlusion slots \
+            Spec::float(12.0, 1.0, 64.0).slow(),
+        ),
+        ParamDef::new(
+            "beam",
+            "Beam Width",
+            "Unused here: a fold has one orbit. Kept so the march, shadow and occlusion slots \
                       line up with the flame solid's.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "steps",
-            display_name: "March Steps",
-            default: 128.0,
-            min: 4.0,
-            max: 512.0,
-            tooltip: "How many times a ray may step before giving up.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "shadow",
-            display_name: "Shadows",
-            default: 0.98,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "shadow_sharpness",
-            display_name: "Shadow Sharpness",
-            default: 12.0,
-            min: 1.0,
-            max: 64.0,
-            tooltip: "Penumbra width: higher is harder-edged.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "occlusion",
-            display_name: "Occlusion Reach",
-            default: 0.15,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How far the ambient occlusion probes, as a fraction of the set.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "w_slice",
-            display_name: "Slice Value",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "Unused here: a KIFS is three-dimensional. Kept for the slot.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "fold",
-            display_name: "Fold",
-            default: 3.0,
-            min: 0.0,
-            max: 5.0,
-            tooltip: "How each iteration folds space into one piece of it: the tetrahedron's three plane \
+            Spec::float(1.0, 1.0, 8.0).slow(),
+        ),
+        ParamDef::new(
+            "steps",
+            "March Steps",
+            "How many times a ray may step before giving up.",
+            Spec::float(128.0, 4.0, 512.0).slow(),
+        ),
+        ParamDef::new(
+            "shadow",
+            "Shadows",
+            "How dark a traced shadow is. 0 skips the shadow march.",
+            Spec::float(0.98, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "shadow_sharpness",
+            "Shadow Sharpness",
+            "Penumbra width: higher is harder-edged.",
+            Spec::float(12.0, 1.0, 64.0),
+        ),
+        ParamDef::new(
+            "occlusion",
+            "Occlusion Reach",
+            "How far the ambient occlusion probes, as a fraction of the set.",
+            Spec::float(0.15, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "w_slice",
+            "Slice Value",
+            "Unused here: a KIFS is three-dimensional. Kept for the slot.",
+            Spec::float(0.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "fold",
+            "Fold",
+            "How each iteration folds space into one piece of it: the tetrahedron's three plane \
                       folds (the Sierpinski tetrahedron), each axis's mirror (cubic), the mirrors and \
                       the diagonal ones (octahedral), those with the sponge's correction (Menger), or \
                       the mirrors of the icosahedron or the dodecahedron (golden-ratio planes).",
-            choices: &["Tetrahedral", "Cubic", "Octahedral", "Menger", "Icosahedral", "Dodecahedral"],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 3.0,
-            min: 1.1,
-            max: 4.0,
-            tooltip: "How much each iteration enlarges space about the offset. 2 for the tetrahedron, 3 \
+            Spec::choice(3, &["Tetrahedral", "Cubic", "Octahedral", "Menger", "Icosahedral", "Dodecahedral"]),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "How much each iteration enlarges space about the offset. 2 for the tetrahedron, 3 \
                       for the sponge; between, the pieces overlap or part.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "offset_x",
-            display_name: "Offset X",
-            default: 1.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "The point each iteration scales about: the set's corner.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "offset_y",
-            display_name: "Offset Y",
-            default: 1.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "The offset's y.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "offset_z",
-            display_name: "Offset Z",
-            default: 1.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "The offset's z.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "rot1_x",
-            display_name: "Pre-Fold Rotation X",
-            default: 0.0,
-            min: -180.0,
-            max: 180.0,
-            tooltip: "Degrees about x before each fold (Knighty's rotation): small angles twist the set \
+            Spec::float(3.0, 1.1, 4.0),
+        ),
+        ParamDef::new(
+            "offset_x",
+            "Offset X",
+            "The point each iteration scales about: the set's corner.",
+            Spec::float(1.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "offset_y",
+            "Offset Y",
+            "The offset's y.",
+            Spec::float(1.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "offset_z",
+            "Offset Z",
+            "The offset's z.",
+            Spec::float(1.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "rot1_x",
+            "Pre-Fold Rotation X",
+            "Degrees about x before each fold (Knighty's rotation): small angles twist the set \
                       into new shapes.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "rot1_y",
-            display_name: "Pre-Fold Rotation Y",
-            default: 0.0,
-            min: -180.0,
-            max: 180.0,
-            tooltip: "Degrees about y before each fold.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "rot1_z",
-            display_name: "Pre-Fold Rotation Z",
-            default: 0.0,
-            min: -180.0,
-            max: 180.0,
-            tooltip: "Degrees about z before each fold.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "rot2_x",
-            display_name: "Post-Fold Rotation X",
-            default: 0.0,
-            min: -180.0,
-            max: 180.0,
-            tooltip: "Degrees about x after each fold, before the scaling.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "rot2_y",
-            display_name: "Post-Fold Rotation Y",
-            default: 0.0,
-            min: -180.0,
-            max: 180.0,
-            tooltip: "Degrees about y after each fold.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "rot2_z",
-            display_name: "Post-Fold Rotation Z",
-            default: 0.0,
-            min: -180.0,
-            max: 180.0,
-            tooltip: "Degrees about z after each fold.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "colour_depth",
-            display_name: "Colour Depth",
-            default: 3.0,
-            min: 1.0,
-            max: 12.0,
-            tooltip: "How many of the first iterations the colourings read: the orbit trap's \
+            Spec::float(0.0, -180.0, 180.0),
+        ),
+        ParamDef::new(
+            "rot1_y",
+            "Pre-Fold Rotation Y",
+            "Degrees about y before each fold.",
+            Spec::float(0.0, -180.0, 180.0),
+        ),
+        ParamDef::new(
+            "rot1_z",
+            "Pre-Fold Rotation Z",
+            "Degrees about z before each fold.",
+            Spec::float(0.0, -180.0, 180.0),
+        ),
+        ParamDef::new(
+            "rot2_x",
+            "Post-Fold Rotation X",
+            "Degrees about x after each fold, before the scaling.",
+            Spec::float(0.0, -180.0, 180.0),
+        ),
+        ParamDef::new(
+            "rot2_y",
+            "Post-Fold Rotation Y",
+            "Degrees about y after each fold.",
+            Spec::float(0.0, -180.0, 180.0),
+        ),
+        ParamDef::new(
+            "rot2_z",
+            "Post-Fold Rotation Z",
+            "Degrees about z after each fold.",
+            Spec::float(0.0, -180.0, 180.0),
+        ),
+        ParamDef::new(
+            "colour_depth",
+            "Colour Depth",
+            "How many of the first iterations the colourings read: the orbit trap's \
                       closest approach and the level's bands. The surface is drawn a pixel \
                       from the set, and past a few iterations that pixel decides the orbit, so \
                       deeper colours change with the camera. Raise it when zoomed in.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "address_symmetry",
-            display_name: "Address Symmetry",
-            default: 1.0,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "Which folds the branch address starts from. Mirror images share their \
+            Spec::float(3.0, 1.0, 12.0),
+        ),
+        ParamDef::new(
+            "address_symmetry",
+            "Address Symmetry",
+            "Which folds the branch address starts from. Mirror images share their \
                       orbit after the first fold, so starting after it colours every mirror \
                       copy alike; after the second, each piece's copies too.",
-            choices: &["Off", "Whole object", "Each piece"],
-        },
+            Spec::choice(1, &["Off", "Whole object", "Each piece"]),
+        ),
     ],
     wgsl: r#"
 // A rotation by Euler angles in degrees, x first, then y, then z
@@ -2625,158 +2439,110 @@ pub static IFS_MANDELBOX: IfsDef = IfsDef {
     default_coloring: "ifs_trap",
     presets: &[],
     parameters: &[
-        EscapeParamDef {
-            name: "levels",
-            display_name: "Iterations",
-            default: 16.0,
-            min: 1.0,
-            max: 64.0,
-            tooltip: "How many folds and scalings before calling the point part of the set.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "beam",
-            display_name: "Beam Width",
-            default: 1.0,
-            min: 1.0,
-            max: 8.0,
-            tooltip: "Unused here: the set has one orbit per point. Kept so the march, shadow and \
+        ParamDef::new(
+            "levels",
+            "Iterations",
+            "How many folds and scalings before calling the point part of the set.",
+            Spec::float(16.0, 1.0, 64.0).slow(),
+        ),
+        ParamDef::new(
+            "beam",
+            "Beam Width",
+            "Unused here: the set has one orbit per point. Kept so the march, shadow and \
                       occlusion slots line up with the flame solid's.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "steps",
-            display_name: "March Steps",
-            default: 192.0,
-            min: 4.0,
-            max: 512.0,
-            tooltip: "How many times a ray may step before giving up.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "shadow",
-            display_name: "Shadows",
-            default: 0.98,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "shadow_sharpness",
-            display_name: "Shadow Sharpness",
-            default: 12.0,
-            min: 1.0,
-            max: 64.0,
-            tooltip: "Penumbra width: higher is harder-edged.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "occlusion",
-            display_name: "Occlusion Reach",
-            default: 0.15,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How far the ambient occlusion probes, as a fraction of the set.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "w_slice",
-            display_name: "Slice Value",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "Unused here: the set is three-dimensional. Kept for the slot.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Scale",
-            default: 2.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "How much each iteration enlarges space after the folds. 2 is Lowe's box; \
+            Spec::float(1.0, 1.0, 8.0).slow(),
+        ),
+        ParamDef::new(
+            "steps",
+            "March Steps",
+            "How many times a ray may step before giving up.",
+            Spec::float(192.0, 4.0, 512.0).slow(),
+        ),
+        ParamDef::new(
+            "shadow",
+            "Shadows",
+            "How dark a traced shadow is. 0 skips the shadow march.",
+            Spec::float(0.98, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "shadow_sharpness",
+            "Shadow Sharpness",
+            "Penumbra width: higher is harder-edged.",
+            Spec::float(12.0, 1.0, 64.0),
+        ),
+        ParamDef::new(
+            "occlusion",
+            "Occlusion Reach",
+            "How far the ambient occlusion probes, as a fraction of the set.",
+            Spec::float(0.15, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "w_slice",
+            "Slice Value",
+            "Unused here: the set is three-dimensional. Kept for the slot.",
+            Spec::float(0.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "scale",
+            "Scale",
+            "How much each iteration enlarges space after the folds. 2 is Lowe's box; \
                       negative scales (-1.5 is the classic) turn it inside out. Between -1 and 1 \
                       nothing escapes, so the magnitude is held to 1.05 at least.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "min_radius",
-            display_name: "Minimum Radius",
-            default: 0.5,
-            min: 0.0,
-            max: 2.0,
-            tooltip: "Inside this radius the sphere fold scales linearly; between it and the fixed \
+            Spec::float(2.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "min_radius",
+            "Minimum Radius",
+            "Inside this radius the sphere fold scales linearly; between it and the fixed \
                       radius, it inverts.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "fixed_radius",
-            display_name: "Fixed Radius",
-            default: 1.0,
-            min: 0.1,
-            max: 3.0,
-            tooltip: "The radius the sphere fold inverts in.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "fold_limit",
-            display_name: "Folding Limit",
-            default: 1.0,
-            min: 0.1,
-            max: 3.0,
-            tooltip: "Where the box fold reflects each axis.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "mode",
-            display_name: "Mode",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "The Mandelbox adds the point itself each iteration; its Julia adds the \
+            Spec::float(0.5, 0.0, 2.0),
+        ),
+        ParamDef::new(
+            "fixed_radius",
+            "Fixed Radius",
+            "The radius the sphere fold inverts in.",
+            Spec::float(1.0, 0.1, 3.0),
+        ),
+        ParamDef::new(
+            "fold_limit",
+            "Folding Limit",
+            "Where the box fold reflects each axis.",
+            Spec::float(1.0, 0.1, 3.0),
+        ),
+        ParamDef::new(
+            "mode",
+            "Mode",
+            "The Mandelbox adds the point itself each iteration; its Julia adds the \
                       constant below, the same for every point.",
-            choices: &["Mandelbox", "Julia"],
-        },
-        EscapeParamDef {
-            name: "cx",
-            display_name: "Julia X",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "The Julia constant's x.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "cy",
-            display_name: "Julia Y",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "The Julia constant's y.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "cz",
-            display_name: "Julia Z",
-            default: 0.0,
-            min: -4.0,
-            max: 4.0,
-            tooltip: "The Julia constant's z.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "colour_depth",
-            display_name: "Colour Depth",
-            default: 3.0,
-            min: 1.0,
-            max: 12.0,
-            tooltip: "How many of the first iterations the colourings read: the orbit trap's \
+            Spec::choice(0, &["Mandelbox", "Julia"]),
+        ),
+        ParamDef::new(
+            "cx",
+            "Julia X",
+            "The Julia constant's x.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "cy",
+            "Julia Y",
+            "The Julia constant's y.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "cz",
+            "Julia Z",
+            "The Julia constant's z.",
+            Spec::float(0.0, -4.0, 4.0),
+        ),
+        ParamDef::new(
+            "colour_depth",
+            "Colour Depth",
+            "How many of the first iterations the colourings read: the orbit trap's \
                       closest approach, the level's stretch and the address. The surface is drawn \
                       a pixel from the set, and past a few iterations that pixel decides the \
                       orbit, so deeper colours change with the camera. Raise it when zoomed in.",
-            choices: &[],
-        },
+            Spec::float(3.0, 1.0, 12.0),
+        ),
     ],
     wgsl: r#"
 fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
@@ -2909,138 +2675,96 @@ pub static IFS_MANDELBULB: IfsDef = IfsDef {
     default_coloring: "ifs_trap",
     presets: &[],
     parameters: &[
-        EscapeParamDef {
-            name: "levels",
-            display_name: "Iterations",
-            default: 12.0,
-            min: 1.0,
-            max: 64.0,
-            tooltip: "How many powers before calling the point part of the set.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "beam",
-            display_name: "Beam Width",
-            default: 1.0,
-            min: 1.0,
-            max: 8.0,
-            tooltip: "Unused here: the set has one orbit per point. Kept so the march, shadow and \
+        ParamDef::new(
+            "levels",
+            "Iterations",
+            "How many powers before calling the point part of the set.",
+            Spec::float(12.0, 1.0, 64.0).slow(),
+        ),
+        ParamDef::new(
+            "beam",
+            "Beam Width",
+            "Unused here: the set has one orbit per point. Kept so the march, shadow and \
                       occlusion slots line up with the flame solid's.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "steps",
-            display_name: "March Steps",
-            default: 160.0,
-            min: 4.0,
-            max: 512.0,
-            tooltip: "How many times a ray may step before giving up.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "shadow",
-            display_name: "Shadows",
-            default: 0.98,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "shadow_sharpness",
-            display_name: "Shadow Sharpness",
-            default: 12.0,
-            min: 1.0,
-            max: 64.0,
-            tooltip: "Penumbra width: higher is harder-edged.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "occlusion",
-            display_name: "Occlusion Reach",
-            default: 0.15,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "How far the ambient occlusion probes, as a fraction of the set.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "w_slice",
-            display_name: "Slice Value",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "Unused here: the set is three-dimensional. Kept for the slot.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "power",
-            display_name: "Power",
-            default: 8.0,
-            min: 2.0,
-            max: 16.0,
-            tooltip: "The n in White and Nylander's power: 8 is the bulb everyone knows, 2 the \
+            Spec::float(1.0, 1.0, 8.0).slow(),
+        ),
+        ParamDef::new(
+            "steps",
+            "March Steps",
+            "How many times a ray may step before giving up.",
+            Spec::float(160.0, 4.0, 512.0).slow(),
+        ),
+        ParamDef::new(
+            "shadow",
+            "Shadows",
+            "How dark a traced shadow is. 0 skips the shadow march.",
+            Spec::float(0.98, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "shadow_sharpness",
+            "Shadow Sharpness",
+            "Penumbra width: higher is harder-edged.",
+            Spec::float(12.0, 1.0, 64.0),
+        ),
+        ParamDef::new(
+            "occlusion",
+            "Occlusion Reach",
+            "How far the ambient occlusion probes, as a fraction of the set.",
+            Spec::float(0.15, 0.0, 1.0),
+        ),
+        ParamDef::new(
+            "w_slice",
+            "Slice Value",
+            "Unused here: the set is three-dimensional. Kept for the slot.",
+            Spec::float(0.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "power",
+            "Power",
+            "The n in White and Nylander's power: 8 is the bulb everyone knows, 2 the \
                       quadratic one.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "mode",
-            display_name: "Mode",
-            default: 0.0,
-            min: 0.0,
-            max: 1.0,
-            tooltip: "The Mandelbulb adds the point itself each iteration; its Julia adds the \
+            Spec::float(8.0, 2.0, 16.0),
+        ),
+        ParamDef::new(
+            "mode",
+            "Mode",
+            "The Mandelbulb adds the point itself each iteration; its Julia adds the \
                       constant below, the same for every point.",
-            choices: &["Mandelbulb", "Julia"],
-        },
-        EscapeParamDef {
-            name: "cx",
-            display_name: "Julia X",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "The Julia constant's x.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "cy",
-            display_name: "Julia Y",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "The Julia constant's y.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "cz",
-            display_name: "Julia Z",
-            default: 0.0,
-            min: -2.0,
-            max: 2.0,
-            tooltip: "The Julia constant's z.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "colour_depth",
-            display_name: "Colour Depth",
-            default: 3.0,
-            min: 1.0,
-            max: 12.0,
-            tooltip: "How many of the first iterations the colourings read: the orbit trap's \
+            Spec::choice(0, &["Mandelbulb", "Julia"]),
+        ),
+        ParamDef::new(
+            "cx",
+            "Julia X",
+            "The Julia constant's x.",
+            Spec::float(0.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "cy",
+            "Julia Y",
+            "The Julia constant's y.",
+            Spec::float(0.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "cz",
+            "Julia Z",
+            "The Julia constant's z.",
+            Spec::float(0.0, -2.0, 2.0),
+        ),
+        ParamDef::new(
+            "colour_depth",
+            "Colour Depth",
+            "How many of the first iterations the colourings read: the orbit trap's \
                       closest approach, the level's stretch and the address. The surface is drawn \
                       a pixel from the set, and past a few iterations that pixel decides the \
                       orbit, so deeper colours change with the camera. Raise it when zoomed in.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "step_factor",
-            display_name: "Step Factor",
-            default: 1.0,
-            min: 0.25,
-            max: 1.0,
-            tooltip: "Scales the distance the march steps by. The bulb's estimate is not a                       bound: beside thin parts it was measured at 1.7 times the true distance,                       so a ray can step past a hair. Lower it if thin parts break up, at the                       cost of more steps.",
-            choices: &[],
-        },
+            Spec::float(3.0, 1.0, 12.0),
+        ),
+        ParamDef::new(
+            "step_factor",
+            "Step Factor",
+            "Scales the distance the march steps by. The bulb's estimate is not a                       bound: beside thin parts it was measured at 1.7 times the true distance,                       so a ray can step past a hair. Lower it if thin parts break up, at the                       cost of more steps.",
+            Spec::float(1.0, 0.25, 1.0),
+        ),
     ],
     wgsl: r#"
 fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
@@ -3176,7 +2900,7 @@ pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfi
 pub fn standalone_radius(def: &IfsDef, escape: &crate::config::escape::EscapeConfig) -> f64 {
     let value = |name: &str| -> Option<f64> {
         let p = def.parameters.iter().find(|p| p.name == name)?;
-        Some(escape.formula_params.get(name).copied().unwrap_or(p.default) as f64)
+        Some(escape.formula_params.get(name).copied().unwrap_or(p.slot_default()) as f64)
     };
     let julia = || value("mode").unwrap_or(0.0) > 0.5;
     let constant = || [value("cx"), value("cy"), value("cz")].map(|v| v.unwrap_or(0.0));
@@ -3340,32 +3064,26 @@ pub static IFS_MEASURE_COLORING: IfsColoringDef = IfsColoringDef {
     name: "ifs_measure",
     display_name: "Measure",
     parameters: &[
-        EscapeParamDef {
-            name: "cells",
-            display_name: "Lookup Region",
-            default: 4.0,
-            min: 1.0,
-            max: 64.0,
-            tooltip: "How many cells of the coarse pass a lineage's region must reach \
+        ParamDef::new(
+            "cells",
+            "Lookup Region",
+            "How many cells of the coarse pass a lineage's region must reach \
                       before its measure is read. One is wrong -- at one cell nothing \
                       is integrated and the density reads a quarter of the truth. \
                       Sixteen suits a set of affine maps, four a curved one, whose \
                       first-order footprint outgrows the map sooner.",
-            choices: &[],
-        },
-        EscapeParamDef {
-            name: "scale",
-            display_name: "Brightness",
-            default: 0.0,
-            min: 0.0,
-            max: 64.0,
-            tooltip: "Multiplies the density. ZERO means automatic: the view's own \
+            Spec::float(4.0, 1.0, 64.0),
+        ),
+        ParamDef::new(
+            "scale",
+            "Brightness",
+            "Multiplies the density. ZERO means automatic: the view's own \
                       median density is divided out, so zooming does not change the \
                       exposure. Density per unit area CLIMBS as the zoom deepens -- \
                       six to seven stops over fifteen levels, at a rate set by the \
                       attractor's dimension -- so a fixed value brightens as you go in.",
-            choices: &[],
-        },
+            Spec::float(0.0, 0.0, 64.0),
+        ),
     ],
     wgsl: r#"
 fn ifs_color(res: IfsResult) -> IfsShade {
@@ -3414,7 +3132,7 @@ pub fn register_custom_solid(def: &'static IfsDef) {
 /// The parameters every solid starts with, the template's (levels,
 /// beam, steps, shadow, shadow sharpness, occlusion, slice): a user's
 /// solid takes them as the built-ins do, its own from slot 7.
-pub fn template_parameters() -> &'static [EscapeParamDef] {
+pub fn template_parameters() -> &'static [ParamDef] {
     &IFS_MANDELBOX.parameters[..7]
 }
 
@@ -7480,7 +7198,7 @@ mod tests {
                 .parameters
                 .iter()
                 .find(|p| p.name == name)
-                .map(|p| p.default)
+                .map(|p| p.slot_default())
                 .expect("parameter present")
         };
         assert_eq!(get("beam"), gpu_tests::BEAM as f32);
@@ -14267,7 +13985,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
         /// The march's step budget, the def's default.
         fn steps(&self) -> u32 {
-            self.def().parameters.iter().find(|p| p.name == "steps").map_or(128, |p| p.default as u32)
+            self.def().parameters.iter().find(|p| p.name == "steps").map_or(128, |p| p.slot_default() as u32)
         }
 
         pub(super) fn config(&self, coloring: &str) -> crate::config::FractalConfig {
@@ -14469,14 +14187,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         };
         let mut rows = Vec::new();
         for (name, mut solid) in solid_cases().into_iter().chain([("quaternion", Solid::Quat(QuatJulia::bourke()))]) {
-            let default = solid.def().parameters.iter().find(|p| p.name == "colour_depth").map(|p| p.default as u32).expect("a colour depth");
+            let default = solid.def().parameters.iter().find(|p| p.name == "colour_depth").map(|p| p.slot_default() as u32).expect("a colour depth");
             solid.set_depth(depth.unwrap_or(default));
             rows.push(measure(name.to_string(), &|p| solid.distance(p), &|p| solid.colour(p), [0.0; 3], solid.radius()));
         }
         // The flame solids (the KIFS plan, A5), at their defaults: the
         // walk's depth and a beam of one, the march's distance the
         // reference walk's.
-        let param = |name: &str| IFS_FLAME_3D.parameters.iter().find(|p| p.name == name).map(|p| p.default as u32).expect(name);
+        let param = |name: &str| IFS_FLAME_3D.parameters.iter().find(|p| p.name == name).map(|p| p.slot_default() as u32).expect(name);
         let (levels, flame_depth) = (param("levels"), depth.unwrap_or(param("colour_depth")));
         for (name, ifs) in flame_solid_cases() {
             let de = |p: [f64; 3]| crate::scene::ifs_estimate::estimate_aux(&ifs, p, ifs.aux_centre, levels, 1).distance;

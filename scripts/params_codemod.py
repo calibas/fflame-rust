@@ -23,6 +23,7 @@ compares the (owner, name) pairs found with the snapshot's, and
 import argparse
 import json
 import re
+import struct
 import sys
 
 
@@ -134,6 +135,16 @@ def fields(src, code, open_brace, end):
     return out
 
 
+def f32(x):
+    return struct.unpack("f", struct.pack("f", x))[0]
+
+
+def five_decades(lo, hi):
+    """`escape_panel::param_slider`'s rule, in its f32s: 0.001..100 is
+    not five decades there."""
+    return lo > 0 and f32(f32(hi) / f32(lo)) >= f32(1e5)
+
+
 def number(text):
     try:
         return float(text.rstrip("f32").rstrip("_"))
@@ -179,7 +190,7 @@ def rewrite(src, struct, slow, log, log_decades):
         if choices.replace(" ", "") in ("&[]",):
             spec = f"Spec::float({f['default']}, {f['min']}, {f['max']})"
             lo, hi = number(f["min"]), number(f["max"])
-            if f"{owner}.{name}" in log or (log_decades and lo is not None and hi is not None and lo > 0 and hi / lo >= 1e5):
+            if f"{owner}.{name}" in log or (log_decades and lo is not None and hi is not None and five_decades(lo, hi)):
                 spec += ".log()"
         else:
             spec = f"Spec::choice({as_index(f['default'])}, {choices})"

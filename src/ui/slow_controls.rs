@@ -6,8 +6,8 @@
 //! pointer has moved on meanwhile, and the value jumps: the user sees
 //! nothing, keeps dragging, and the setting runs to its maximum before
 //! the picture has caught up once. Two remedies, for the settings marked
-//! slow (a parameter's `slow` flag, `escape::SLOW_PARAMS`,
-//! `variations::SLOW_PARAMS`, and a few config controls):
+//! slow (a parameter's `slow` flag, `variations::SLOW_PARAMS`, and a
+//! few config controls):
 //! - [`on_release`]: the control moves and shows its value while dragged,
 //!   and the value reaches the config when the drag ends (at once for a
 //!   click, an arrow key or a typed number);

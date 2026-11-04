@@ -154,7 +154,7 @@ fn the_solids_ball_follows_its_cut() {
     let def = super::custom::compile_solid(&src, &name).unwrap_or_else(|e| panic!("{:?}", e.iter().map(|d| d.render(&src.source)).collect::<Vec<_>>()));
     assert!(def.march_inside);
     assert!(def.parameters.iter().all(|p| p.name != "radius"), "no Ball Radius");
-    assert_eq!(def.parameters.iter().find(|p| p.name == "colour_depth").map(|p| p.default), Some(12.0));
+    assert_eq!(def.parameters.iter().find(|p| p.name == "colour_depth").map(|p| p.slot_default()), Some(12.0));
     let mut escape = crate::config::escape::EscapeConfig { formula: name, ..Default::default() };
     for (cut, size, want) in [(0.0, 1.5, 1.5 * 3f64.sqrt()), (0.0, 3.0, 3.0 * 3f64.sqrt()), (1.0, 2.6, 2.6)] {
         escape.formula_params.insert("cut".into(), cut as f32);

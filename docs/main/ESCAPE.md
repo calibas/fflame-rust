@@ -120,7 +120,7 @@ and a colouring share one module.
 | `escape_degree` | the degree at infinity, from the resolved params, for a formula that is polynomial there. The smooth count takes its logarithm in it (`escape_degree_of`, 2 otherwise), and only such a formula is offered a colouring's recommended bailout |
 | `derived_data` | a CPU function of the resolved params whose output (at most 256 floats) is uploaded to the uniform's `fdata`, read as `fdata4(i)`. Origami's fold lines live here |
 | `wgsl_derivative` | `fn formula_derivative(z, c, dz, is_julia)`, the derivative orbit, for distance estimation and analytic relief. Empty for 14 of the 26 formulas |
-| `parameters` | `EscapeParamDef`s (below) |
+| `parameters` | `ParamDef`s (below) |
 | `presets` | named starting points; the first is the formula's default (see [Presets](#presets)) |
 
 **`FormulaFeature`** — what the assembler compiles into the loop:
@@ -171,11 +171,15 @@ old file without the key meant).
 
 ### Parameters
 
-`EscapeParamDef` is `name`, `display_name`, `default`, `min`, `max`,
-`tooltip` and `choices`. Every parameter is an `f32`; a non-empty
-`choices` list makes it a dropdown over the integer values `0..n`, and
-`discrete_params_are_labelled_across_their_whole_range` holds `max` to
-the list. Slot *i* is `parameters[i]`, packed by `pack_params` with
+A parameter is a `params::ParamDef`, the one definition every kind
+shares ([one-parameter-system.md](../projects/one-parameter-system.md)):
+`ParamDef::new("scale", "Scale", "hint", Spec::float(0.05, 1e-6, 1.0).log())`.
+Every value is an `f32` slot; a float is a slider (`.log()` for one whose
+interesting band is decades below its maximum, `.slow()` for one whose
+next frame is slow -- an IFS walk's depth and beam, a march's steps),
+a `Spec::choice` a dropdown over the integer values `0..n`, and
+`discrete_params_are_labelled_across_their_whole_range` holds the
+range to the list. The panel draws them through `ui::params`. Slot *i* is `parameters[i]`, packed by `pack_params` with
 defaults for absent keys, and read in WGSL as `fparam(i)` / `cparam(i)`.
 There are 64 slots each for the formula and the colouring
 (`PARAM_VEC4S` = 16 vec4s, which UF's public formulas need) and 16 for
@@ -448,7 +452,7 @@ fn escaped(s, p) {
   `FormulaFeature::Convergent`.
 - **Parameters** in `PARAMS`: a value alone, or `value` with `min`,
   `max`, `caption`, `hint`, `choices` (an int's names), `exponential`
-  (the slider runs logarithmically, `custom::is_exponential`), `type:
+  (the slider runs logarithmically: the definition's `log`), `type:
   "angle"` (a float in degrees, as stored and shown: `ParamType::Angle`
   for an effect's or a variation's, `ir::Param::angle`), or
   `function` (a user function, called `p.f(z)`). They are the panel's

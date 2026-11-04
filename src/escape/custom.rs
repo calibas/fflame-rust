@@ -19,7 +19,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use super::lang::{self, ir, Diag, Dialect, EntryKind};
-use super::{ColoringDef, ColoringFeature, EscapeMetric, EscapeParamDef, FormulaDef, FormulaFeature};
+use super::{ColoringDef, ColoringFeature, EscapeMetric, FormulaDef, FormulaFeature};
+use crate::params::{Options, ParamDef, ParamKind};
 use crate::config::escape::{CustomDialect, CustomSource, EscapeConfig};
 
 /// What a registry name starts with when it names a compiled entry.
@@ -311,38 +312,25 @@ fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
+/// A float slot's kind: its numbers f32s, the slot's; logarithmic when
+/// declared `exponential` (UF's `exponential = true`, a Rhai `PARAMS`
+/// entry's `exponential: true`) or when its range spans five decades,
+/// from above zero.
+fn float_kind(default: f64, (min, max): (f32, f32), exponential: bool) -> ParamKind {
+    let log = min > 0.0 && (exponential || max / min >= 1e5);
+    ParamKind::Float { default: f64::from(default as f32), min: min.into(), max: max.into(), free: false, log, angle: false }
+}
+
+/// A program's parameter definitions, leaked for the registry.
+fn leak_params(p: &ir::Program) -> &'static [ParamDef] {
+    Box::leak(param_defs(p).into_boxed_slice())
+}
+
 /// The panel's view of a program's parameters: one def per float slot,
 /// in slot order, as `pack_params` packs them. A complex parameter is
-/// two (`name.re`, `name.im`); a user function an enum over the
-/// functions it may be.
-/// The custom parameters declared `exponential`, by their definitions'
-/// addresses (leaked, so fixed for the run): their sliders run
-/// logarithmically (`is_exponential`).
-static EXPONENTIAL: std::sync::Mutex<std::collections::BTreeSet<usize>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
-
-/// A program's parameter definitions, leaked for the registry, its
-/// `exponential` ones noted.
-fn leak_params(p: &ir::Program) -> &'static [EscapeParamDef] {
-    let defs: &'static [EscapeParamDef] = Box::leak(param_defs(p).into_boxed_slice());
-    if let Ok(mut set) = EXPONENTIAL.lock() {
-        for d in defs {
-            let base = d.name.strip_suffix(".re").or_else(|| d.name.strip_suffix(".im")).unwrap_or(d.name);
-            if p.params.iter().any(|q| q.name == base && q.exponential) {
-                set.insert(d as *const EscapeParamDef as usize);
-            }
-        }
-    }
-    defs
-}
-
-/// Whether a parameter was declared `exponential` (UF's `exponential =
-/// true`, a Rhai `PARAMS` entry's `exponential: true`): its slider runs
-/// logarithmically.
-pub fn is_exponential(d: &EscapeParamDef) -> bool {
-    EXPONENTIAL.lock().is_ok_and(|set| set.contains(&(d as *const EscapeParamDef as usize)))
-}
-
-fn param_defs(p: &ir::Program) -> Vec<EscapeParamDef> {
+/// two (`name.re`, `name.im`); a bool an Off/On choice; a user function
+/// a choice over the functions it may be.
+fn param_defs(p: &ir::Program) -> Vec<ParamDef> {
     let mut out = Vec::new();
     let range = |min: Option<f64>, max: Option<f64>, default: f64| -> (f32, f32) {
         let reach = default.abs().max(1.0) * 4.0;
@@ -351,70 +339,34 @@ fn param_defs(p: &ir::Program) -> Vec<EscapeParamDef> {
         (lo as f32, hi as f32)
     };
     for param in &p.params {
-        let caption = leak(param.caption.clone());
-        let tooltip = leak(param.hint.clone());
+        let caption = param.caption.clone();
+        let hint = param.hint.clone();
         match param.kind {
             ir::ParamKind::Complex => {
                 for (part, value, label) in [("re", param.default.0, "re"), ("im", param.default.1, "im")] {
-                    let (min, max) = range(param.min, param.max, value);
-                    out.push(EscapeParamDef {
-                        name: leak(format!("{}.{part}", param.name)),
-                        display_name: leak(format!("{} ({label})", param.caption)),
-                        default: value as f32,
-                        min,
-                        max,
-                        tooltip,
-                        choices: &[],
-                    });
+                    let kind = float_kind(value, range(param.min, param.max, value), param.exponential);
+                    out.push(ParamDef::owned(format!("{}.{part}", param.name), format!("{} ({label})", param.caption), hint.clone(), kind));
                 }
             }
-            ir::ParamKind::Bool => out.push(EscapeParamDef {
-                name: leak(param.name.clone()),
-                display_name: caption,
-                default: param.default.0 as f32,
-                min: 0.0,
-                max: 1.0,
-                tooltip,
-                choices: &["Off", "On"],
-            }),
+            ir::ParamKind::Bool => {
+                let kind = ParamKind::Choice { default: param.default.0 as usize, options: Options::Static(&["Off", "On"]) };
+                out.push(ParamDef::owned(param.name.clone(), caption, hint, kind));
+            }
             ir::ParamKind::Enum => {
-                let choices: Vec<&'static str> = param.choices.iter().map(|c| leak(c.clone())).collect();
-                out.push(EscapeParamDef {
-                    name: leak(param.name.clone()),
-                    display_name: caption,
-                    default: (param.default.0.round() as f32).clamp(0.0, (choices.len().max(1) - 1) as f32),
-                    min: 0.0,
-                    max: (choices.len().max(1) - 1) as f32,
-                    tooltip,
-                    choices: Box::leak(choices.into_boxed_slice()),
-                });
+                let last = param.choices.len().max(1) - 1;
+                let kind = ParamKind::Choice { default: (param.default.0.round().max(0.0) as usize).min(last), options: Options::Owned(param.choices.clone()) };
+                out.push(ParamDef::owned(param.name.clone(), caption, hint, kind));
             }
             ir::ParamKind::Int | ir::ParamKind::Float => {
-                let (min, max) = range(param.min, param.max, param.default.0);
-                out.push(EscapeParamDef {
-                    name: leak(param.name.clone()),
-                    display_name: caption,
-                    default: param.default.0 as f32,
-                    min,
-                    max,
-                    tooltip,
-                    choices: &[],
-                });
+                let kind = float_kind(param.default.0, range(param.min, param.max, param.default.0), param.exponential);
+                out.push(ParamDef::owned(param.name.clone(), caption, hint, kind));
             }
         }
     }
-    let names: &'static [&'static str] =
-        Box::leak(lang::builtins::USER_FUNCTIONS.iter().map(|b| b.name()).collect::<Vec<_>>().into_boxed_slice());
+    let names: Vec<String> = lang::builtins::USER_FUNCTIONS.iter().map(|b| b.name().to_string()).collect();
     for f in &p.funcs {
-        out.push(EscapeParamDef {
-            name: leak(f.name.clone()),
-            display_name: leak(f.caption.clone()),
-            default: f.default as f32,
-            min: 0.0,
-            max: (names.len() - 1) as f32,
-            tooltip: leak(f.hint.clone()),
-            choices: names,
-        });
+        let kind = ParamKind::Choice { default: f.default as usize, options: Options::Owned(names.clone()) };
+        out.push(ParamDef::owned(f.name.clone(), f.caption.clone(), f.hint.clone(), kind));
     }
     out
 }
@@ -481,30 +433,24 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     }
     let radius = radius.unwrap_or(2.0).max(1e-3);
     let depth = lang::rhai::info_number(&src.source, "depth").unwrap_or(3.0).clamp(1.0, 12.0).round();
-    let mut parameters: Vec<EscapeParamDef> = template.to_vec();
+    let mut parameters: Vec<ParamDef> = template.to_vec();
     parameters.extend(own);
-    parameters.push(EscapeParamDef {
-        name: "colour_depth",
-        display_name: "Colour Depth",
-        default: depth as f32,
-        min: 1.0,
-        max: 12.0,
-        tooltip: "How many of the first iterations the colourings read: the orbit trap's closest approach, the level's \
-                  running derivative and the address. Raise it when zoomed in.",
-        choices: &[],
-    });
+    parameters.push(ParamDef::owned(
+        "colour_depth",
+        "Colour Depth",
+        "How many of the first iterations the colourings read: the orbit trap's closest approach, the level's \
+         running derivative and the address. Raise it when zoomed in.",
+        float_kind(depth, (1.0, 12.0), false),
+    ));
     // Its slot is kept without it: `prepare`'s values start after it.
     if ball.is_none() {
-        parameters.push(EscapeParamDef {
-            name: "radius",
-            display_name: "Ball Radius",
-            default: radius as f32,
-            min: 0.01,
-            max: (radius * 4.0).max(4.0) as f32,
-            tooltip: "The ball the set lies in, which the march starts from (INFO.radius). Too small cuts the solid; too \
-                      large spends steps on empty space.",
-            choices: &[],
-        });
+        parameters.push(ParamDef::owned(
+            "radius",
+            "Ball Radius",
+            "The ball the set lies in, which the march starts from (INFO.radius). Too small cuts the solid; too \
+             large spends steps on empty space.",
+            float_kind(radius, (0.01, (radius * 4.0).max(4.0) as f32), false),
+        ));
     }
     let def = super::ifs::IfsDef {
         name: leak(name.to_string()),
@@ -1894,9 +1840,9 @@ fn escaped(s, p) {
         let def = compile_formula(&s, &name).expect("compiles; the broken entry beside it is not its business");
         assert!(std::ptr::eq(def, super::super::get_formula(&name)), "get_formula finds it");
         assert!(def.has_feature(FormulaFeature::Program));
-        let names: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
+        let names: Vec<&str> = def.parameters.iter().map(|p| &*p.name).collect();
         assert_eq!(names, ["power", "seed.re", "seed.im", "bailout", "fn"]);
-        assert_eq!((def.parameters[0].min, def.parameters[0].max, def.parameters[0].default), (2.0, 8.0, 3.0));
+        assert_eq!((def.parameters[0].slot_range().0, def.parameters[0].slot_range().1, def.parameters[0].slot_default()), (2.0, 8.0, 3.0));
         let Err(e) = compile_formula(&src(text, "missing"), "custom-x") else { panic!("a missing entry compiled") };
         assert!(e[0].message.contains("no entry named"));
     }
