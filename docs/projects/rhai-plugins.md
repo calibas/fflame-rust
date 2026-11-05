@@ -834,7 +834,7 @@ needs the census did not, the int step and `ctx.layer`):
 |---|---|---|---|
 | Effects | 15 | all 15, the definitions (D1) | yes, the Effects panel |
 | Escape formulas | 26 | all 26 (`escape::twins`) | yes, Edit as Formula |
-| Escape colourings | 28 | 23 (batches 1-4 of 5, branch `rhai-escape-colourings`; plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
+| Escape colourings | 28 | 27 (all five batches, branch `rhai-escape-colourings`; Image Trap out, plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
 | Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
@@ -869,11 +869,13 @@ Steps, in the order that unlocks the most first (the user picks):
    a scope. Open: a colouring's own `finish` and the escape colourings'
    sections returning early (P7 step 2 will want them).
 2. **Escape colourings** (28), branch `rhai-escape-colourings` (begun
-   2026-11-05). A census of the 28 against the dialect (2026-11-05)
-   corrected the estimate: 7 can be twins today, not about 20. The rest
-   need values the loop has and a Rhai colouring cannot read.
+   2026-11-05; **all five batches built 2026-11-05**: 27 twins, every
+   colouring but Image Trap, to merge). A census of the 28 against the
+   dialect (2026-11-05) corrected the estimate: 7 could be twins then,
+   not about 20. The rest needed values the loop has and a Rhai
+   colouring could not read.
 
-   **What a Rhai colouring has today.** `start(z, p)`, `step(s, z, p)`
+   **What a Rhai colouring had then.** `start(z, p)`, `step(s, z, p)`
    and `finish(s, z, p)`, each with an optional `ctx`. `finish` returns
    a palette position or `#{ index, solid }`. `ctx` has `c`, `julia`,
    `angle`, `maxiter`, `center`, `magn`, the pixel's place, `random`,
@@ -955,7 +957,28 @@ Steps, in the order that unlocks the most first (the user picks):
        template's has-a-derivative flag.
      - The supersample factor and the render pixel's size.
      - The twins it unlocks: Distance Estimate, Normal Map.
-   - **Batch 5: a colour as the result.**
+   - **Batch 5: a colour as the result.** **Built 2026-11-05**: all
+     four match their built-ins on every pixel at every setting tried, on
+     the five views; Direct Orbit Traps' twin re-iterates on a palette
+     edit. Speed within 2% (Rainbow Fringe, Infinite Waves) or faster
+     (Visions of Chaos Traps 7%, Direct Orbit Traps 20%). As built, it
+     differs from the plan below in two places:
+     - The colour is a function of its own, `fn color(s, z, p[, ctx])`
+       ending with a `vec3`, not a value `finish` returns beside the
+       index: the colour reads the value after the transfer
+       (`ctx.value`), which exists only once `finish` has given the
+       index. It is the program's transform section, through the same
+       result handling as effects and simulation colourings
+       (`put_result`).
+     - The palette is four reads -- `palette`, `palette_srgb`,
+       `palette_table`, `palette_curve` -- host calls, each read once
+       into a slot for its parts. Three reads a part cost Visions of
+       Chaos Traps' twin 40%. A read in `start` or `step` brings
+       `PaletteInLoop`.
+     The measure was fixed on the way: it made a renderer for each run,
+     so it timed the pipelines' building too, which read as up to 60% on
+     the short renders; with one renderer the earlier batches' figures
+     hold (Itinerary 28%, Curvature Average 12%, Stripe Average 8-12%).
      - `finish` returning an `rgb` beside the index, through the result
        handling effects and simulation colourings share (`put_result`).
      - The palette in `finish`, and in `step` with `PaletteInLoop`, so a

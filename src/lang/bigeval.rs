@@ -501,7 +501,8 @@ impl BigMachine {
             Predef::Period => BigValue::Int(0),
             Predef::Prev | Predef::StepC | Predef::OrbitDz => BigValue::Complex(BigComplex::zero(self.n)),
             Predef::HasDerivative => BigValue::Bool(false),
-            Predef::RenderPx | Predef::Supersample => BigValue::Float(BigFloat::zero(self.n)),
+            Predef::RenderPx | Predef::Supersample | Predef::Value => BigValue::Float(BigFloat::zero(self.n)),
+            Predef::Rotation => BigValue::Complex(BigComplex::zero(self.n)),
         }
     }
 

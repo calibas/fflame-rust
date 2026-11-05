@@ -1228,6 +1228,15 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
     if p.reads(ir::Predef::OrbitDz) {
         features.push(ColoringFeature::NeedsDerivative);
     }
+    // `fn color` draws a colour (batch 5); a palette read in `start` or
+    // `step` makes the palette part of the iteration, so a palette edit
+    // re-iterates.
+    if !p.transform.is_empty() {
+        features.push(ColoringFeature::DirectColor);
+    }
+    if ir::Program::calls_host(&p.init, lang::builtins::Host::escape) || ir::Program::calls_host(&p.loop_body, lang::builtins::Host::escape) {
+        features.push(ColoringFeature::PaletteInLoop);
+    }
     // What a Rhai colouring's `INFO` says of it beside the program (the
     // lowering checked them): a level clamped rather than wrapped, and
     // what picking it sets.

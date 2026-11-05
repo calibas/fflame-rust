@@ -221,6 +221,11 @@ pub enum Predef {
     HasDerivative,
     RenderPx,
     Supersample,
+    /// A colour colouring's (batch 5): in its `color`, the value `finish`
+    /// gave after the value transfer; anywhere, the view's rotation as a
+    /// unit complex (cos, sin), the uniform's own.
+    Value,
+    Rotation,
 }
 
 impl Predef {
@@ -239,7 +244,8 @@ impl Predef {
             Predef::Period => Ty::Int,
             Predef::Prev | Predef::StepC | Predef::OrbitDz => Ty::Complex,
             Predef::HasDerivative => Ty::Bool,
-            Predef::RenderPx | Predef::Supersample => Ty::Float,
+            Predef::RenderPx | Predef::Supersample | Predef::Value => Ty::Float,
+            Predef::Rotation => Ty::Complex,
             Predef::WhiteSq
             | Predef::ScrnMax
             | Predef::IsMand
@@ -761,6 +767,29 @@ impl Program {
             || s(&self.perturb_loop, p)
             || s(&self.creases, p)
             || s(&self.transform, p)
+    }
+
+    /// Whether `body` calls a host function `which` picks (an escape
+    /// colouring's palette read in its `step`: `PaletteInLoop`).
+    pub fn calls_host(body: &[IStmt], which: fn(super::builtins::Host) -> bool) -> bool {
+        fn e(x: &IExpr, w: fn(super::builtins::Host) -> bool) -> bool {
+            match &x.kind {
+                IExprKind::Host(h, args) => w(*h) || args.iter().any(|a| e(a, w)),
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) | IExprKind::Elem(_, a) => e(a, w),
+                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => e(a, w) || e(b, w),
+                _ => false,
+            }
+        }
+        body.iter().any(|x| match x {
+            IStmt::Scope(b) => Self::calls_host(b, which),
+            IStmt::Host(h, args) => which(*h) || args.iter().any(|x| e(x, which)),
+            IStmt::Break | IStmt::Continue | IStmt::Return => false,
+            IStmt::Assign(_, v) => e(v, which),
+            IStmt::SetElem { index, value, .. } => e(index, which) || e(value, which),
+            IStmt::If { arms, otherwise } => arms.iter().any(|(c, b)| e(c, which) || Self::calls_host(b, which)) || Self::calls_host(otherwise, which),
+            IStmt::While { cond, body } | IStmt::Repeat { body, cond } => e(cond, which) || Self::calls_host(body, which),
+            IStmt::Map { input, .. } => input.iter().any(|x| e(x, which)),
+        })
     }
 
     /// Slots the parameters take in a 16-float block: one each, two for

@@ -3499,6 +3499,30 @@ mod tests {
         }
         cases.push(("normal_map", vec![]));
         cases.push(("normal_map", vec![("angle", 0.7), ("height", 0.5), ("scale", 2.0)]));
+        // Batch 5: a colour as the result, and the palette in it.
+        cases.push(("rainbow_fringe", vec![]));
+        cases.push(("rainbow_fringe", vec![("gamma", 1.0)]));
+        cases.push(("infinite_waves", vec![]));
+        cases.push(("infinite_waves", vec![("smooth", 0.0), ("scale", 0.3), ("offset", 20.0)]));
+        cases.push(("infinite_waves", vec![("blend", 1.0), ("wave4", -50.0), ("wave4_channel", 1.0)]));
+        for shape in 0..5 {
+            cases.push(("voc_traps", vec![("shape", shape as f32)]));
+        }
+        cases.push(("voc_traps", vec![("shape", 0.0), ("trap_x", -0.3), ("trap_y", 0.2), ("circle_size", 0.3)]));
+        cases.push(("voc_traps", vec![("shape", 2.0), ("ring_min", 0.1), ("ring_max", 0.9)]));
+        // Every shape at its own threshold, every blend, the order, the
+        // start, the curves, and the held Screen cross.
+        for shape in 0..8 {
+            cases.push(("direct_traps", vec![("shape", shape as f32), ("threshold", 0.0)]));
+        }
+        for blend in 0..6 {
+            cases.push(("direct_traps", vec![("blend", blend as f32), ("start", if blend == 1 { 1.0 } else { 0.0 })]));
+        }
+        cases.push(("direct_traps", vec![("order", 1.0), ("blend", 3.0)]));
+        for transform in 1..4 {
+            cases.push(("direct_traps", vec![("transform", transform as f32), ("threshold", 0.3)]));
+        }
+        cases.push(("direct_traps", vec![("shape", 2.0), ("blend", 2.0), ("opacity", 0.9), ("threshold", 0.3)]));
 
         let mut whole = crate::config::escape::EscapeConfig::default();
         whole.formula = "mandelbrot".into();
@@ -13337,7 +13361,9 @@ fn main() {
 
     /// Direct orbit traps sample the palette inside the loop, so a palette
     /// edit must re-iterate: recolouring the records would keep the old
-    /// palette's colours. Changed, the render matches a fresh one.
+    /// palette's colours. Changed, the render matches a fresh one -- the
+    /// built-in's, and its Rhai twin's, whose `palette_table` in `step`
+    /// makes it `PaletteInLoop` (P7 step 2, batch 5).
     #[test]
     #[ignore = "needs a GPU"]
     fn a_palette_edit_re_iterates_direct_traps() {
@@ -13350,44 +13376,54 @@ fn main() {
             &config.flame, config.palette_size,
         );
         renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
-        let mut esc = crate::config::escape::EscapeConfig::default();
-        esc.center_re = "-0.6".to_string();
-        esc.center_im = "0.1".to_string();
-        esc.zoom_log2 = 0.4;
-        esc.max_iter = 100;
-        esc.coloring = "direct_traps".to_string();
-        let settle = |escape: &mut crate::escape::EscapeRenderer, renderer: &mut crate::renderer::compute_kernel::FlameRenderer| {
-            let mut guard = 0u32;
-            loop {
-                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("palette edit") });
-                let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.escape_palette_view(false), renderer.palette_generation());
-                queue.submit(std::iter::once(enc.finish()));
-                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-                if settled {
-                    break;
+        let mut builtin = crate::config::escape::EscapeConfig::default();
+        builtin.center_re = "-0.6".to_string();
+        builtin.center_im = "0.1".to_string();
+        builtin.zoom_log2 = 0.4;
+        builtin.max_iter = 100;
+        builtin.coloring = "direct_traps".to_string();
+        let mut twin = builtin.clone();
+        let src = crate::escape::twins::coloring_custom_source("direct_traps").unwrap();
+        twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
+        twin.custom_coloring = Some(src);
+        for esc in [builtin, twin] {
+            config.palette_reverse = false;
+            renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
+                config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
+                config.palette_log_strength, config.palette_reverse);
+            let settle = |escape: &mut crate::escape::EscapeRenderer, renderer: &mut crate::renderer::compute_kernel::FlameRenderer| {
+                let mut guard = 0u32;
+                loop {
+                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("palette edit") });
+                    let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.escape_palette_view(false), renderer.palette_generation());
+                    queue.submit(std::iter::once(enc.finish()));
+                    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                    if settled {
+                        break;
+                    }
+                    guard += 1;
+                    assert!(guard < 100_000, "render did not settle");
                 }
-                guard += 1;
-                assert!(guard < 100_000, "render did not settle");
-            }
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("palette edit tonemap") });
-            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
-            queue.submit(std::iter::once(enc.finish()));
-            pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0])).expect("readback").2
-        };
-        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
-        let before = settle(&mut escape, &mut renderer);
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("palette edit tonemap") });
+                renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+                queue.submit(std::iter::once(enc.finish()));
+                pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0])).expect("readback").2
+            };
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let before = settle(&mut escape, &mut renderer);
 
-        config.palette_reverse = true;
-        renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
-            config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
-            config.palette_log_strength, config.palette_reverse);
-        let after = settle(&mut escape, &mut renderer);
-        assert_ne!(escape.last_path, "recolor", "a palette edit recoloured the baked colours");
-        assert_ne!(before, after, "the palette edit changed nothing");
-        let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
-        assert_eq!(after, settle(&mut fresh, &mut renderer), "the re-iterated picture differs from a fresh one");
-        fresh.destroy();
-        escape.destroy();
+            config.palette_reverse = true;
+            renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
+                config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
+                config.palette_log_strength, config.palette_reverse);
+            let after = settle(&mut escape, &mut renderer);
+            assert_ne!(escape.last_path, "recolor", "a palette edit recoloured the baked colours");
+            assert_ne!(before, after, "the palette edit changed nothing");
+            let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+            assert_eq!(after, settle(&mut fresh, &mut renderer), "the re-iterated picture differs from a fresh one");
+            fresh.destroy();
+            escape.destroy();
+        }
     }
 
     /// The texture overlay is Kalles Fraktaler's: each pixel shows the
@@ -17404,7 +17440,12 @@ fn main() {
     /// MEASUREMENT (P7 step 2): each colouring twin against its built-in,
     /// at its defaults, on the direct path: the Mandelbrot's whole set at
     /// 4000 iterations, where most pixels run long and the colouring's
-    /// step is a large share of the work. The best of five, shaders warm.
+    /// step is a large share of the work. The best of nine, alternating.
+    /// One renderer for every run, so its pipelines are warm: a renderer
+    /// made for each run timed its pipelines' building, about 2 ms here
+    /// and more for a twin's longer WGSL, which read as a colouring's cost.
+    /// The bailout moves by a part in a million between runs, so each
+    /// iterates afresh.
     #[test]
     #[ignore = "measurement: needs a GPU"]
     fn measure_colouring_twins_against_their_builtins() {
@@ -17412,24 +17453,28 @@ fn main() {
         let (w, h) = (1024u32, 768u32);
         let config = crate::config::FractalConfig::default();
         let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
-        let run = |esc: &crate::config::escape::EscapeConfig| -> f64 {
-            let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
-            r.force_direct = true;
+        let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+        r.force_direct = true;
+        let mut fresh = false;
+        let mut run = |esc: &crate::config::escape::EscapeConfig| -> f64 {
+            let mut esc = esc.clone();
+            fresh = !fresh;
+            if fresh {
+                esc.bailout *= 1.000001;
+            }
             let start = std::time::Instant::now();
             loop {
                 let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
-                let settled = r.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                let settled = r.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
                 queue.submit(std::iter::once(enc.finish()));
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 if settled {
                     break;
                 }
             }
-            let t = start.elapsed().as_secs_f64();
-            r.destroy();
-            t
+            start.elapsed().as_secs_f64() * 1000.0
         };
-        println!("{w}x{h}, the Mandelbrot at 4000 iterations, direct; ms, the best of five");
+        println!("{w}x{h}, the Mandelbrot at 4000 iterations, direct; ms, the best of nine, pipelines warm");
         for (name, _) in crate::escape::twins::COLORING_TWINS {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.formula = "mandelbrot".into();
@@ -17442,12 +17487,18 @@ fn main() {
             let mut twin = esc.clone();
             twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
             twin.custom_coloring = Some(src);
-            let _ = run(&esc);
-            let _ = run(&twin);
-            let best = |c: &crate::config::escape::EscapeConfig| (0..5).map(|_| run(c)).fold(f64::MAX, f64::min) * 1000.0;
-            let (b, t) = (best(&esc), best(&twin));
-            println!("{name:18} built-in {b:7.1}  twin {t:7.1}  ({:+.1}%)", (t / b - 1.0) * 100.0);
+            for _ in 0..2 {
+                run(&esc);
+                run(&twin);
+            }
+            let (mut b, mut t) = (f64::MAX, f64::MAX);
+            for _ in 0..9 {
+                b = b.min(run(&esc));
+                t = t.min(run(&twin));
+            }
+            println!("{name:21} built-in {b:6.2}  twin {t:6.2}  ({:+.1}%)", (t / b - 1.0) * 100.0);
         }
+        r.destroy();
     }
 
     /// MEASUREMENT (the speed work after phase 4, step 9e): each twin

@@ -123,6 +123,26 @@ const FX_RETURN: &str = "return FxOut(vec4<f32>(effect_r, effect_g, effect_b, ef
 /// The line that ends a simulation's colouring or model function, and an
 /// early `return` in it.
 const SIM_RETURN: &str = "return vec4<f32>(effect_r, effect_g, effect_b, effect_a);";
+/// How many palette reads an escape colouring makes once each
+/// (`Host::EscPaletteLoad`), by their slots.
+fn palette_slots(p: &Program) -> usize {
+    fn s(st: &[IStmt]) -> usize {
+        st.iter()
+            .map(|x| match x {
+                IStmt::Host(Host::EscPaletteLoad, args) => args.get(2).and_then(cell_index).map_or(0, |k| k + 1),
+                IStmt::Scope(b) => s(b),
+                IStmt::If { arms, otherwise } => arms.iter().map(|(_, b)| s(b)).max().unwrap_or(0).max(s(otherwise)),
+                IStmt::While { body, .. } | IStmt::Repeat { body, .. } => s(body),
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+    [&p.init, &p.loop_body, &p.final_body, &p.transform].into_iter().map(|b| s(b)).max().unwrap_or(0)
+}
+
+/// What ends an escape colouring's `coloring_color` (batch 5).
+const COLOR_RETURN: &str = "return vec3<f32>(effect_r, effect_g, effect_b);";
 
 /// The line that ends an agent's function (P4 step 9d): its record from
 /// the vector of four, position, heading and state.
@@ -1564,6 +1584,10 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
              var<private> uf_ext: array<vec4<f32>, {ext_vec4s}>;\n\n"
         );
     }
+    // Each palette read's colour, read once (batch 5).
+    for k in 0..palette_slots(p) {
+        let _ = writeln!(body, "var<private> ufc_pal{k}: vec3<f32>;");
+    }
     let mut g = Gen::new(p, Ctx::ColoringInit, "ufc_");
     body.push_str("fn ufc_init(z_init: vec2<f32>) -> vec4<f32> {\n");
     for &(v, _) in &offsets {
@@ -1599,6 +1623,18 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
         let _ = write!(body, "    {SOLID_FLAG} = solid;\n    if (solid) {{\n        return 0.0;\n    }}\n");
     }
     body.push_str("    return index;\n}\n");
+    // A colour, not a palette position (batch 5, `DirectColor`): `color`
+    // as `coloring_color`, its result in the effect places.
+    if !p.transform.is_empty() {
+        g.ctx = Ctx::ColoringColor;
+        g.ret = COLOR_RETURN;
+        body.push_str("\nfn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {\n");
+        unpack(&mut body);
+        locals(&mut body);
+        body.push_str("    var effect_r = 0.0;\n    var effect_g = 0.0;\n    var effect_b = 0.0;\n    var effect_a = 1.0;\n");
+        g.stmts(&p.transform, 1, &mut body);
+        let _ = writeln!(body, "    {COLOR_RETURN}\n}}");
+    }
 
     let wgsl = g.finish(&format!("// custom colouring: {}\n", sanitize(&p.name)), body);
     ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init: format!("ufc_init({COLORING_Z0})"), needs_accum, ext_vec4s }
@@ -1610,6 +1646,9 @@ enum Ctx {
     ColoringInit,
     ColoringLoop,
     ColoringFinal,
+    /// A colouring's `color` (batch 5), `coloring_color(sum, state, v)`:
+    /// the summary as `finish` has it, and the value after the transfer.
+    ColoringColor,
     /// The perturbation equations: `#z` is the reference's `z_ref`,
     /// variables are the functions' locals.
     Perturb,
@@ -2063,6 +2102,25 @@ impl<'p> Gen<'p> {
             Host::AgentDeposit => format!("agent_deposit(vec2<i32>({}, {}), {})", a[0], a[1], a[2]),
             Host::ReadAt => format!("sim_read(vec2<i32>({}, {})).{}", a[0], a[1], part(2)),
             Host::PyrPrepare => "pyr_prepare()".to_string(),
+            // An escape colouring's palette, the template's (batch 5).
+            Host::EscPalette => {
+                let f = match args.get(1).and_then(cell_index) {
+                    Some(1) => "esc_palette_srgb",
+                    Some(2) => self.use_(Helper::PaletteTable),
+                    _ => "esc_palette",
+                };
+                format!("{f}({}).{}", a[0], part(2))
+            }
+            Host::EscPaletteCurve => format!("esc_palette_curve({})", a[0]),
+            Host::EscPaletteLoad => {
+                let f = match args.get(1).and_then(cell_index) {
+                    Some(1) => "esc_palette_srgb",
+                    Some(2) => self.use_(Helper::PaletteTable),
+                    _ => "esc_palette",
+                };
+                format!("ufc_pal{} = {f}({})", args.get(2).and_then(cell_index).unwrap_or(0), a[0])
+            }
+            Host::EscPalettePart => format!("ufc_pal{}.{}", args.first().and_then(cell_index).unwrap_or(0), part(1)),
             Host::GridParam => {
                 let (Some(first), Some(next)) = (args.first().and_then(cell_index), args.get(1).and_then(cell_index)) else {
                     unreachable!("a grid's cells, as the checker gives them")
@@ -2439,7 +2497,7 @@ impl<'p> Gen<'p> {
             // and a variation its point.
             (Predef::Z, Ctx::Creases | Ctx::Variation | Ctx::Effect) => "pixel".into(),
             (Predef::Z, Ctx::ColoringLoop) => "z".into(),
-            (Predef::Z, Ctx::ColoringFinal) => "sum.z".into(),
+            (Predef::Z, Ctx::ColoringFinal | Ctx::ColoringColor) => "sum.z".into(),
             // A colouring's init runs before the first iterate, on the
             // formula's starting z: the template passes it
             // ([`COLORING_Z0`]), as the interpreter's init sees it.
@@ -2462,6 +2520,8 @@ impl<'p> Gen<'p> {
             (Predef::HasDerivative, _) => "HAS_DERIVATIVE".into(),
             (Predef::RenderPx, _) => "esc_render_px()".into(),
             (Predef::Supersample, _) => "esc_supersample()".into(),
+            (Predef::Value, _) => "v".into(),
+            (Predef::Rotation, _) => "params.rot_cs".into(),
             (Predef::Pass, Ctx::Formula) => "s.npass".into(),
             // The perturbation equations read the reference's pass.
             (Predef::Pass, _) => "pass_index".into(),
@@ -3709,6 +3769,8 @@ enum Helper {
     Reduce,
     /// The effects' noise hash (`Builtin::Hash2`).
     Hash2,
+    /// An escape colouring's clamped palette table read (`palette_table`).
+    PaletteTable,
     Atan2,
     Round,
     IsNan,
@@ -3786,6 +3848,7 @@ impl Helper {
         match self {
             Reduce => "uf_reduce",
             Hash2 => "uf_hash2",
+            PaletteTable => "uf_palette_table",
             FSin => "uf_sin",
             FSinh => "uf_sinh",
             FExpm1 => "uf_expm1",
@@ -3893,6 +3956,14 @@ impl Helper {
             // Cody-Waite reduction of a trig argument: the template's
             // `esc_reduce`, which the measured M2 cos error needed.
             // As the built-in noise shaders write it, to the operation.
+            // The palette as a table, CLAMPED rather than wrapped: position
+            // k (N - 1) over the N entries, which sit at i/(N-1), at their
+            // texel centres, as stored (the Direct Orbit Traps' lookup).
+            PaletteTable => "fn uf_palette_table(k: f32) -> vec3<f32> {
+    let n = f32(textureDimensions(palette_texture).x);
+    let u = (clamp(k, 0.0, 1.0) * (n - 1.0) + 0.5) / n;
+    return textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(u, 0.5), 0.0).rgb;
+}",
             Hash2 => "fn uf_hash2(p: vec2<f32>) -> vec2<f32> {
     var n = vec2<f32>(dot(p, vec2<f32>(127.1, 311.7)), dot(p, vec2<f32>(269.5, 183.3)));
     return fract(sin(n) * 43758.5453);
@@ -4323,6 +4394,17 @@ fn esc_escape_fraction(sum: OrbitSummary) -> f32 {
     return 1.0;
 }
 const HAS_DERIVATIVE: bool = true;
+@group(0) @binding(1) var palette_texture: texture_2d<f32>;
+@group(0) @binding(2) var palette_sampler: sampler;
+fn esc_palette_curve(t: f32) -> f32 {
+    return t;
+}
+fn esc_palette_srgb(t: f32) -> vec3<f32> {
+    return vec3<f32>(t);
+}
+fn esc_palette(t: f32) -> vec3<f32> {
+    return vec3<f32>(t);
+}
 fn esc_render_px() -> f32 {
     return 1.0;
 }
