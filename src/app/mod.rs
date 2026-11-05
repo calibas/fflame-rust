@@ -13,7 +13,6 @@ mod motion_blur;
 mod frame_log;
 mod governor;
 mod render_scale;
-#[cfg(feature = "engine-sim")]
 mod sim_lock;
 mod render_progress;
 pub mod script_cloud;
@@ -420,7 +419,6 @@ fn escape_view<'a>(
 
 /// The simulation's image for the tail: its terrain's while the config
 /// draws one, the grid's picture otherwise.
-#[cfg(feature = "engine-sim")]
 fn sim_view<'a>(
     sim: &'a Option<crate::sim::SimRenderer>,
     #[cfg(feature = "terrain")] terrain: &'a Option<crate::sim::terrain::SimTerrain>,
@@ -495,15 +493,13 @@ pub struct App {
 
     /// The simulation's grid and step state. Lazily created on first
     /// use so a flame session never allocates it.
-    #[cfg(feature = "engine-sim")]
     pub(super) sim_renderer: Option<crate::sim::SimRenderer>,
     /// An active run's hold on its grid, and the scale it was taken at
     /// (sim_lock.rs): a resize letterboxes instead of restarting it.
-    #[cfg(feature = "engine-sim")]
     pub(super) sim_lock: Option<(crate::ui::SimLock, f32)>,
     /// The simulation's 3D terrain (heightfield plan T4), while the config
     /// draws one.
-    #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+    #[cfg(feature = "terrain")]
     pub(super) sim_terrain: Option<crate::sim::terrain::SimTerrain>,
     /// Whether the Run button is engaged. Deliberately NOT in the
     /// config: it is a view state like the playhead, not part of the
@@ -543,7 +539,6 @@ pub struct App {
     /// "cap" to the transport and "target" to the timeline, and the
     /// only honest way to tell them apart is to record which one is
     /// driving (`docs/archive/projects/video-loop-and-sim-timeline.md` D4).
-    #[cfg(feature = "engine-sim")]
     pub(super) sim_timeline_target: Option<u32>,
     /// Wall time accumulated while an animation frame is still coming
     /// into being -- an escape render that has not settled, or a
@@ -947,11 +942,9 @@ impl App {
             escape_motion: None,
             sim_motion: None,
             escape_last_edit: None,
-            #[cfg(feature = "engine-sim")]
             sim_renderer: None,
-            #[cfg(feature = "engine-sim")]
             sim_lock: None,
-            #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+            #[cfg(feature = "terrain")]
             sim_terrain: None,
             // Runs on entry: a simulation that sits still looks broken,
             // and the first thing anyone does is press Run anyway.
@@ -961,7 +954,6 @@ impl App {
             sim_resample: false,
             sim_last_edit: None,
             sim_grid_at: None,
-            #[cfg(feature = "engine-sim")]
             sim_timeline_target: None,
             paced_anim_pending: 0.0,
             flame,
@@ -1306,13 +1298,10 @@ impl App {
                                 // The field lives in GPU textures that
                                 // just went away; the run cannot be
                                 // recovered, only restarted.
-                                #[cfg(feature = "engine-sim")]
+                                app.sim_renderer = None;
+                                #[cfg(feature = "terrain")]
                                 {
-                                    app.sim_renderer = None;
-                                    #[cfg(feature = "terrain")]
-                                    {
-                                        app.sim_terrain = None;
-                                    }
+                                    app.sim_terrain = None;
                                 }
                                 app.sim_reseed = true;
 
@@ -1492,10 +1481,7 @@ impl App {
                     // is the same need: the grid only advances when
                     // render() runs, and a scrub that lands mid-jump
                     // must not stall because the window went to sleep.
-                    #[cfg(feature = "engine-sim")]
                     let sim_catching_up = app.sim_timeline_target.is_some();
-                    #[cfg(not(feature = "engine-sim"))]
-                    let sim_catching_up = false;
                     let sim_active = (app.sim_running || sim_catching_up)
                         && app.config_manager.active_config().render_mode
                             == crate::scene::transforms::RenderMode::Simulation;
@@ -1654,7 +1640,6 @@ impl App {
             // Rebuilt lazily; the flag makes the first frame back render.
             self.escape_dirty = true;
         }
-        #[cfg(feature = "engine-sim")]
         if !crate::ui::render_mode::keeps_sim_engine(mode) {
             #[cfg(feature = "terrain")]
             if let Some(t) = self.sim_terrain.take() {
@@ -1758,12 +1743,9 @@ impl App {
         // UI displays PREVIOUS frame's fractal while we prepare CURRENT frame
         // An active simulation's grid, which the viewport letterboxes to
         // after a resize (sim_lock.rs): decided before the UI draws it.
-        #[cfg(feature = "engine-sim")]
-        {
-            // The governor's grid scale first: the lock holds the run's.
-            self.govern_sim();
-            self.update_sim_lock();
-        }
+        // The governor's grid scale first: the lock holds the run's.
+        self.govern_sim();
+        self.update_sim_lock();
         let t_ui_start = Instant::now();
         let can_undo = self.can_undo();
         let can_redo = self.can_redo();
@@ -1854,20 +1836,13 @@ impl App {
         // pressed into the hold. The target itself feeds the readout.
         let sim_timeline_driven = self.timeline_owns_sim();
         let sim_timeline_holding = {
-            #[cfg(feature = "engine-sim")]
-            {
-                let cfg = self.config_manager.active_config();
-                cfg.render_mode == crate::scene::transforms::RenderMode::Simulation
-                    && self.animation_controller.is_playing()
-                    && self
-                        .sim_renderer
-                        .as_ref()
-                        .is_some_and(|s| cfg.sim.steps < s.step_index())
-            }
-            #[cfg(not(feature = "engine-sim"))]
-            {
-                false
-            }
+            let cfg = self.config_manager.active_config();
+            cfg.render_mode == crate::scene::transforms::RenderMode::Simulation
+                && self.animation_controller.is_playing()
+                && self
+                    .sim_renderer
+                    .as_ref()
+                    .is_some_and(|s| cfg.sim.steps < s.step_index())
         };
 
         let ui_response = self.egui_layer.render_ui(
@@ -1906,36 +1881,9 @@ impl App {
             self.effect_catalog.as_ref(),
             signed_in,
             self.sim_running,
-            {
-                #[cfg(feature = "engine-sim")]
-                {
-                    self.sim_renderer.as_ref().map_or(0, |s| s.step_index())
-                }
-                #[cfg(not(feature = "engine-sim"))]
-                {
-                    0
-                }
-            },
-            {
-                #[cfg(feature = "engine-sim")]
-                {
-                    self.sim_renderer.as_ref().map_or((0, 0), |s| s.grid_size())
-                }
-                #[cfg(not(feature = "engine-sim"))]
-                {
-                    (0, 0)
-                }
-            },
-            {
-                #[cfg(feature = "engine-sim")]
-                {
-                    self.sim_timeline_target
-                }
-                #[cfg(not(feature = "engine-sim"))]
-                {
-                    None
-                }
-            },
+            self.sim_renderer.as_ref().map_or(0, |s| s.step_index()),
+            self.sim_renderer.as_ref().map_or((0, 0), |s| s.grid_size()),
+            self.sim_timeline_target,
             sim_timeline_holding,
             sim_timeline_driven,
             {
@@ -1974,7 +1922,7 @@ impl App {
         if ui_response.sim_reseed {
             self.sim_reseed = true;
         }
-        #[cfg(all(feature = "engine-sim", not(target_arch = "wasm32")))]
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(name) = ui_response.sim_saved_texture.as_deref() {
             self.cache_saved_texture_from_run(name);
         }
@@ -2445,7 +2393,6 @@ impl App {
         let upscaler = self.config_manager.system_settings().upscaler;
         // Read before the renderer is borrowed: the simulation driver
         // below needs it and the method takes `&self`.
-        #[cfg(feature = "engine-sim")]
         let timeline_owns_sim = self.timeline_owns_sim();
 
         // Run flame compute shader with progressive refinement
@@ -2880,12 +2827,8 @@ impl App {
             // is visible without advancing the simulation. Stepping to
             // show an edit would make the picture depend on how long
             // the user looked at it.
-            #[cfg(feature = "engine-sim")]
             let is_sim = final_config.render_mode
                 == crate::scene::transforms::RenderMode::Simulation;
-            #[cfg(not(feature = "engine-sim"))]
-            let is_sim = false;
-            #[cfg(feature = "engine-sim")]
             if is_sim {
                 let (w, h) = (renderer.width, renderer.height);
                 // A frame part-way through its moments went with the
@@ -3706,7 +3649,6 @@ impl App {
                 shade_ran,
                 final_config.zoom,
             );
-            #[cfg(feature = "engine-sim")]
             let sim_view = if is_sim {
                 Some(
                     sim_view(
@@ -3720,8 +3662,6 @@ impl App {
             } else {
                 None
             };
-            #[cfg(not(feature = "engine-sim"))]
-            let sim_view: Option<&wgpu::TextureView> = None;
             let picture = if is_escape {
                 crate::renderer::tail::Picture::Image(
                     escape_view(

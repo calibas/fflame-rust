@@ -26,11 +26,9 @@ use crate::renderer::tail::{Picture, Tail};
 pub struct RenderEngines {
     /// The simulation's field and step counter. `render_sim` advances
     /// this to the frame's `sim.steps` rather than reseeding.
-    #[cfg(feature = "engine-sim")]
     pub sim: Option<crate::sim::SimRenderer>,
     /// The escape renderer, kept for its allocations and its warm
     /// reference orbit; each frame still renders to settlement.
-    #[cfg(feature = "engine-escape")]
     pub escape: Option<crate::escape::EscapeRenderer>,
     /// The escape terrain: its footprint is re-rendered only when the
     /// 2D picture changes, so a camera move between frames is a 3D
@@ -38,7 +36,7 @@ pub struct RenderEngines {
     #[cfg(feature = "terrain")]
     pub terrain: Option<crate::escape::footprint::EscapeTerrain>,
     /// A simulation's terrain, beside the simulation it is made from.
-    #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+    #[cfg(feature = "terrain")]
     pub sim_terrain: Option<crate::sim::terrain::SimTerrain>,
 }
 
@@ -211,10 +209,8 @@ pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
     // compiles is known (a lens's variation, a formula, a colouring); one
     // that does not is not.
     config.ensure_sources();
-    #[allow(unused_mut)]
     let mut out = Vec::new();
     match config.render_mode {
-        #[cfg(feature = "engine-escape")]
         crate::scene::transforms::RenderMode::Escape => {
             let e = &config.escape;
             let a = crate::escape::find_formula(&e.formula).is_some();
@@ -241,12 +237,10 @@ pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
                 out.push(format!("escape lens `{}`", e.lens));
             }
         }
-        #[cfg(feature = "engine-sim")]
         crate::scene::transforms::RenderMode::Simulation => {
             let s = &config.sim;
             let model = |name: &str| crate::sim::MODELS.iter().any(|m| m.name == name);
             let colouring = |name: &str| {
-                #[cfg(feature = "lang")]
                 if crate::sim::custom::coloring(name).is_some() {
                     return true;
                 }
@@ -300,13 +294,6 @@ pub enum RenderError {
     NoPaletteFound,
     PixelReadFailed(String),
     Cancelled,
-    /// The config asks for an engine this build does not carry.
-    ///
-    /// A module without the escape engine still PARSES an escape
-    /// config -- the mode round-trips, so a file is never silently
-    /// rewritten -- and reports this rather than rendering a flame the
-    /// file never described.
-    EngineMissing(&'static str),
     /// A GPU allocation failed part-way through.
     ///
     /// Worth its own variant because the alternative is what it used
@@ -329,9 +316,6 @@ impl std::fmt::Display for RenderError {
             RenderError::NoPaletteFound => write!(f, "No palette found"),
             RenderError::PixelReadFailed(msg) => write!(f, "Failed to read pixels: {}", msg),
             RenderError::Cancelled => write!(f, "Render cancelled"),
-            RenderError::EngineMissing(what) => {
-                write!(f, "this build has no {what} engine")
-            }
             RenderError::OutOfMemory(what) => write!(
                 f,
                 "the GPU ran out of memory ({what}); try a smaller size or less antialiasing"
@@ -388,7 +372,6 @@ pub async fn render(
             return Err(RenderError::TooLarge(why));
         }
     }
-    #[cfg(feature = "engine-escape")]
     if job.config.render_mode == crate::scene::transforms::RenderMode::Escape && !job.config.escape.terrain_active() {
         if let Some(why) = crate::escape::EscapeRenderer::allocation_error(
             device,
@@ -409,7 +392,6 @@ pub async fn render(
         }
     }
 
-    #[cfg(feature = "engine-sim")]
     if job.config.render_mode == crate::scene::transforms::RenderMode::Simulation {
         if let Some(why) = crate::sim::SimRenderer::allocation_error(
             device,
@@ -502,25 +484,15 @@ pub async fn render_with(
     // density-effects → tonemap → color-effects → readback pipeline.
     // Dispatching here is what gives thumbnails, CLI export, video and
     // the gallery escape rendering for free (plan: integration map).
-    #[cfg(feature = "engine-escape")]
     if job.config.render_mode == crate::scene::transforms::RenderMode::Escape {
         return render_escape(renderer, device, queue, job, progress, start_time).await;
-    }
-    #[cfg(not(feature = "engine-escape"))]
-    if job.config.render_mode == crate::scene::transforms::RenderMode::Escape {
-        return Err(RenderError::EngineMissing("escape-time"));
     }
 
     // Simulation mode: a third generator on the same tail. Dispatching
     // here is what gives thumbnails, CLI export, video and the gallery
     // simulation rendering for free, exactly as it did for escape.
-    #[cfg(feature = "engine-sim")]
     if job.config.render_mode == crate::scene::transforms::RenderMode::Simulation {
         return render_sim(renderer, device, queue, job, progress, start_time).await;
-    }
-    #[cfg(not(feature = "engine-sim"))]
-    if job.config.render_mode == crate::scene::transforms::RenderMode::Simulation {
-        return Err(RenderError::EngineMissing("simulation"));
     }
 
     let target = job.target_iterations.unwrap_or(job.config.max_iterations);
@@ -818,7 +790,6 @@ pub async fn render_with(
 /// Shares escape's tail verbatim: density effects → tonemap → colour
 /// effects → readback, all fed from an `Rgba32Float` image in the flame
 /// accumulator's layout.
-#[cfg(feature = "engine-sim")]
 async fn render_sim(
     renderer: &mut FlameRenderer,
     device: &Device,
@@ -1103,7 +1074,6 @@ async fn render_sim(
 /// itself is created per call and destroyed after readback, the same
 /// one-shot discipline as `EffectChainRunner` — the interactive app
 /// will hold a persistent one instead.
-#[cfg(feature = "engine-escape")]
 async fn render_escape(
     renderer: &mut FlameRenderer,
     device: &Device,
@@ -1492,7 +1462,6 @@ async fn finish(
 /// What any escape render needs before its first chunk: a qualifying
 /// flame's IFS analysis (mode D, and the 2D IFS formulas) and a
 /// texture layer's image.
-#[cfg(feature = "engine-escape")]
 async fn prepare_escape(
     escape_renderer: &mut crate::escape::EscapeRenderer,
     device: &Device,
@@ -1696,7 +1665,7 @@ async fn render_escape_terrain(
 }
 
 /// Motion blur through `render` (docs/archive/projects/motion-blur.md).
-#[cfg(all(test, feature = "engine-escape"))]
+#[cfg(test)]
 mod motion_tests {
     use super::*;
 
@@ -1902,7 +1871,6 @@ mod motion_tests {
     }
 
     /// Gray-Scott at `steps`, linear tone mapping (as `view`).
-    #[cfg(feature = "engine-sim")]
     fn grid(steps: u32) -> FractalConfig {
         let mut c = FractalConfig::default();
         c.render_mode = crate::scene::transforms::RenderMode::Simulation;
@@ -1916,7 +1884,6 @@ mod motion_tests {
     /// A simulation's moments are its field at their step counts: a
     /// blurred frame is the mean of their light, each drawn on its own,
     /// and one whose moments are all the frame is the frame.
-    #[cfg(feature = "engine-sim")]
     #[test]
     fn a_blurred_simulation_is_the_mean_of_its_step_counts() {
         let Some((device, queue)) = device() else {
@@ -1948,7 +1915,7 @@ mod motion_tests {
     /// A simulation's terrain blurs too: moments that are all the frame
     /// are the frame; a camera's move, drawn on one ground, and the field
     /// moving, a ground a moment, each change it.
-    #[cfg(all(feature = "engine-sim", feature = "terrain"))]
+    #[cfg(feature = "terrain")]
     #[test]
     fn a_simulation_terrain_blurs_over_its_moments() {
         let Some((device, queue)) = device() else {

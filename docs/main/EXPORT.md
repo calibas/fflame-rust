@@ -123,9 +123,6 @@ caller-owned renderer of the right size. It dispatches on the mode:
 - **Simulation** → `render_sim`: seed (or continue), step to `sim.steps`
   in progress batches of 512, colour, draw the terrain if it is on.
 - **2D and 3D flames** → the chaos game below.
-- A build without the escape or simulation engine returns
-  `RenderError::EngineMissing` for that mode rather than rendering the
-  config's flame.
 
 The flame path: `load_config`; for a solid flame with shadows, six
 warm-up batches to measure the attractor's bounds and refit the shadow
@@ -142,7 +139,6 @@ The escape and simulation paths run the same tail on their own
 
 | variant | when |
 | --- | --- |
-| `EngineMissing(engine)` | the config's mode needs an engine this build does not have |
 | `TooLarge(reason)` | a size the device's limits refuse, found before allocating — a texture side, a binding, a simulation grid |
 | `OutOfMemory(what)` | a GPU allocation failed. Caught by an error scope, so the export fails rather than writing an all-black PNG |
 | `Cancelled` | the progress callback cancelled |

@@ -15,7 +15,7 @@ requires.
 cargo test --release --lib
 
 # Every fast gate: versions, tests, wasm build, generated files, doc
-# links, the gallery modules checked (also the engine feature matrix)
+# links, the gallery modules and the WASI module checked
 python scripts/release.py check
 python scripts/release.py check --fix      # ...and regenerate stale generated files
 python scripts/release.py gallery          # the gallery modules' own tests, before they deploy
@@ -59,10 +59,6 @@ before you go looking for a simulation or escape failure:
 
   It has caught a model rendering black that no name check could. See
   [SIMULATION.md](main/SIMULATION.md) ("Adding a model").
-- **`release.py check` checks the library at each engine's features
-  alone** (`engine-flame`, `engine-escape`, `engine-sim`). No shipped
-  build drops an engine, but a `#[cfg]` attached to the wrong item
-  compiles fine in every all-engines build.
 
 Engine-specific testing notes live with each engine:
 [ESCAPE.md](main/ESCAPE.md), [SIMULATION.md](main/SIMULATION.md),
@@ -166,16 +162,15 @@ pass or FAIL with its time; any failure exits 1.
 | generated contract | `cargo test --release --lib contract_is_current` |
 | shader dumps | `cargo test --release --lib canonical_shader_dumps` |
 | doc links | `python scripts/check_doc_links.py` |
-| gallery modules | `cargo check --profile gallery-test --tests` with `CARGO_INCREMENTAL=1`, in each of `wasm/{render,script}`; then `cargo check --manifest-path ../../Cargo.toml --lib --no-default-features --features <set>` from `wasm/render`, for `engine-flame,lang`, `engine-escape` and `engine-sim,lang` |
+| gallery modules | `cargo check --profile gallery-test --tests` with `CARGO_INCREMENTAL=1`, in each of `wasm/{render,script}` |
+| python module (WASI) | `cargo check` in `wasm/python`, whose `.cargo/config.toml` names `wasm32-wasip1` |
 
-The second half is the engine feature matrix: the library with
-`default-features` off and one engine on, which catches a `#[cfg]` on
-the wrong item that every all-engines build hides, and evaluates the
-compile-time assertion that the flame catalog is whole with
-`engine-flame` and `linear` alone without. Every command runs from
-inside `wasm/`, where cargo finds `wasm/.cargo/config.toml` and its
-shared target directory ([RELEASE.md §5](RELEASE.md)); incremental, a
-check is 14-15s after an edit.
+The gallery check is the one build of the library without `web-app`
+and `terrain`, which catches a `#[cfg]` on the wrong item that the
+desktop build hides. It runs from inside `wasm/`, where cargo finds
+`wasm/.cargo/config.toml` and its shared target directory
+([RELEASE.md §5](RELEASE.md)); incremental, a check is 14-15s after an
+edit.
 
 `python scripts/release.py gallery` runs the gallery crates' own tests,
 before the modules deploy (minutes: each compiles the library with

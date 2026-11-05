@@ -154,10 +154,8 @@ preference under `shaders/` (`EffectSource::Builtin { embedded, path }`).
 
 The WGSL the fifteen replaced stays, as **the reference**
 (`effects::wgsl_builtins`, the definitions in registration order): what
-a build without the compiler (`lang` off: only the engine test matrix's
-`engine-flame` and `engine-sim` alone; every shipped module has it)
-registers, and what each Rhai built-in is held to pixel for pixel. An
-edit to one of those files reaches neither, and each says so in its
+each Rhai built-in is held to pixel for pixel. An edit to one of those
+files reaches neither the app nor the twin, and each says so in its
 header. A download carries its WGSL in `EffectSource::Owned`.
 
 ---

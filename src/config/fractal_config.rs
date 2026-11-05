@@ -1473,11 +1473,8 @@ impl FractalConfig {
     /// `escape::custom::ensure`, `sim::custom::ensure`,
     /// `effects::ensure_custom`). Cheap when there is nothing to register.
     pub fn ensure_sources(&self) {
-        #[cfg(feature = "lang")]
         crate::variations::custom::ensure(&self.flame);
-        #[cfg(feature = "engine-escape")]
         crate::escape::custom::ensure(&self.escape);
-        #[cfg(all(feature = "engine-sim", feature = "lang"))]
         crate::sim::custom::ensure(&self.sim);
         crate::effects::ensure_custom(self);
     }
@@ -1487,7 +1484,6 @@ impl FractalConfig {
     /// (registered first, so one of the user's counts). Then a dispatch's
     /// length is the orbits' length, which every path renders with.
     pub fn resets_orbits(&self) -> bool {
-        #[cfg(feature = "lang")]
         crate::variations::custom::ensure(&self.flame);
         self.reset_orbits || self.flame.needs_fresh_orbits(&crate::variations::global_registry())
     }

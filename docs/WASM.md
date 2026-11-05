@@ -8,11 +8,7 @@
 > [wasm/README.md](../wasm/README.md).
 >
 > All three render engines work in the web app and in the gallery
-> renderer `wasm/render` (its `Cargo.toml` features). A build without
-> an engine -- none ships one since the single-engine gallery modules
-> were retired on 2026-11-04 -- reports that the engine is missing
-> (`RenderError::EngineMissing`) rather than rendering something the
-> file never described.
+> renderer `wasm/render`: every build carries them.
 
 The live web app is `https://fractalsforall.com/editor/`; how it gets
 there is [RELEASE.md §5](RELEASE.md).
@@ -248,8 +244,7 @@ that gave confident wrong answers on the way — is recorded in
 
 - `python scripts/release.py check` compiles the library for
   `wasm32-unknown-unknown`, compiles both gallery crates and their
-  tests, then the library at each engine's features alone (the engine
-  feature matrix), and checks the WASI module for pyfflame (the
+  tests, and checks the WASI module for pyfflame (the
   `python module (WASI)` gate).
 - `python scripts/release.py gallery` runs the gallery crates' tests
   before the modules deploy -- script parity, and `wasm/render`'s smoke

@@ -111,7 +111,6 @@ pub fn save(key: &str, image: &image::RgbaImage) {
 /// picture -- Rust that sets the shaders' parameters is not in it -- but
 /// the usual way the simulation's output changes. Line endings are
 /// normalised, so a checkout's CRLF does not make it a platform's.
-#[cfg(feature = "engine-sim")]
 pub fn engine_fingerprint() -> String {
     use crate::config::sim::{SimBoundary, SimDownscale, SimInit, SimUpscale};
     use crate::sim::assembler;
@@ -138,7 +137,7 @@ pub fn engine_fingerprint() -> String {
     hasher.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
-#[cfg(all(test, feature = "engine-sim"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

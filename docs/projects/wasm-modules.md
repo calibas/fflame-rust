@@ -3,8 +3,9 @@
 Research 2026-10-23. **Section 1 decided 2026-11-04**: the user chose one
 gallery renderer, and `wasm/flame`, `wasm/escape` and `wasm/sim` were
 retired ("0.4 MB is a small price to avoid separate modules";
-[architecture-review.md](architecture-review.md) section 3, option (a)).
-Sections 2-4 are open. The user's words: "I want to review the
+[architecture-review.md](architecture-review.md) section 3, option (a)),
+and the engine features with them: every build carries every engine.
+Section 1 below is the problem as it stood. Sections 2-4 are open. The user's words: "I want to review the
 WASM modules. We've added things like flame variations used in Simulation
 and Escape-time modes, and I think we skipped them. Could we do something
 like the flame variations themselves are their own WASM module, and it's

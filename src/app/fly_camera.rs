@@ -61,32 +61,26 @@ impl App {
     /// last measure that landed (`EscapeRenderer::probe_clearance`), when
     /// the camera shown is a solid's and the flight uses it.
     fn probe_fly_clearance(&mut self) {
-        #[cfg(feature = "engine-escape")]
-        {
-            let s = self.config_manager.system_settings();
-            if !(s.fly_collisions || s.fly_proximity) {
-                return;
-            }
-            let config = self.config_manager.active_config();
-            if crate::camera::gesture::view_kind(config) != crate::camera::gesture::ViewKind::Solid {
-                return;
-            }
-            if let Some(r) = self.escape_renderer.as_mut() {
-                r.poll_clearance(&self.gpu.device);
-                r.probe_clearance(&self.gpu.device, &self.gpu.queue, &config.escape);
-            }
+        let s = self.config_manager.system_settings();
+        if !(s.fly_collisions || s.fly_proximity) {
+            return;
+        }
+        let config = self.config_manager.active_config();
+        if crate::camera::gesture::view_kind(config) != crate::camera::gesture::ViewKind::Solid {
+            return;
+        }
+        if let Some(r) = self.escape_renderer.as_mut() {
+            r.poll_clearance(&self.gpu.device);
+            r.probe_clearance(&self.gpu.device, &self.gpu.queue, &config.escape);
         }
     }
 
     /// The clearance the flight steps within: the last a solid's probe
     /// measured, or None.
     fn fly_clearance(&self) -> Option<crate::camera::fly::Clearance> {
-        #[cfg(feature = "engine-escape")]
-        {
-            let config = self.config_manager.active_config();
-            if crate::camera::gesture::view_kind(config) == crate::camera::gesture::ViewKind::Solid {
-                return self.escape_renderer.as_ref().and_then(|r| r.clearance());
-            }
+        let config = self.config_manager.active_config();
+        if crate::camera::gesture::view_kind(config) == crate::camera::gesture::ViewKind::Solid {
+            return self.escape_renderer.as_ref().and_then(|r| r.clearance());
         }
         None
     }
@@ -101,7 +95,6 @@ impl App {
             use crate::camera::gesture::ViewKind;
             match crate::camera::gesture::view_kind(self.config_manager.active_config()) {
                 ViewKind::EscapeTerrain => return self.escape_terrain.as_ref().and_then(|t| t.ground_under_eye()).map(f64::from),
-                #[cfg(feature = "engine-sim")]
                 ViewKind::SimTerrain => return self.sim_terrain.as_ref().and_then(|t| t.ground_under_eye()).map(f64::from),
                 _ => {}
             }

@@ -173,11 +173,8 @@ impl super::App {
             RenderMode::Simulation => "sim",
         };
         let preview = self.escape_last_edit.is_some_and(|t| t.elapsed() < super::ESCAPE_INTERACTION_WINDOW);
-        #[cfg(feature = "engine-sim")]
         let (sim_grid, sim_step, sim_step_ms) =
             self.sim_renderer.as_ref().map_or(((0, 0), 0, 0.0), |s| (s.grid_size(), s.step_index(), s.last_step().1));
-        #[cfg(not(feature = "engine-sim"))]
-        let (sim_grid, sim_step, sim_step_ms) = ((0, 0), 0, 0.0);
         FrameState {
             interval_ms,
             cpu_ms,

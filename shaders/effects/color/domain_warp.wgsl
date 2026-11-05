@@ -2,9 +2,8 @@
 //
 // The REFERENCE, not what the app runs: the built-in is its Rhai twin,
 // assets/effects/domain_warp.rhai (docs/main/EFFECTS.md, Rhai effects). This
-// WGSL is what a build without the compiler (`lang`) registers, and what
-// the twin is held to (`the_rhai_twins_match_their_wgsl`): an edit here
-// changes neither the app nor the twin.
+// WGSL is what the twin is held to (`the_rhai_twins_match_their_wgsl`):
+// an edit here changes neither the app nor the twin.
 //
 // Creates organic flowing distortion using fractal Brownian motion (FBM) noise.
 // Parameters:

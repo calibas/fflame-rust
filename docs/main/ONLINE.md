@@ -524,16 +524,16 @@ generated contract.
 The `wasm/` crates are standalone modules for web embedding (the
 Endless Gallery). Each depends on this crate with
 `default-features = false`, which drops `web-app` (the editor's
-wasm-bindgen exports, and the `app` and `ui` modules), and picks
-engines by feature:
+wasm-bindgen exports, and the `app` and `ui` modules) and `terrain`;
+both carry every engine:
 
-| crate | package | engine features |
+| crate | package | what it does |
 | --- | --- | --- |
-| `wasm/script` | `fflame-script` | `engine-flame`, `engine-escape`, `engine-sim` — script + seed + params → config JSON |
-| `wasm/render` | `fflame-render` | `engine-flame`, `engine-escape`, `engine-sim` |
+| `wasm/script` | `fflame-script` | script + seed + params → config JSON |
+| `wasm/render` | `fflame-render` | config → pixels, every mode |
 
 `wasm/python` is under `wasm/` too but is not a web module: it is the
-library built for WASI (every engine plus `terrain`), the engine of the
+library built for WASI (with `terrain`), the engine of the
 Python package (`python/`).
 
 `fflame-render` has all three engines and renders every mode. It is

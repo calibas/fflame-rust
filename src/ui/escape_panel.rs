@@ -1232,13 +1232,7 @@ pub fn render_escape_content(
 /// A custom formula's, colouring's or solid's parameter layout, by its
 /// name: its conditions and grids (`escape::custom::param_layout`).
 fn layout_of(name: &str) -> Option<std::sync::Arc<crate::params::layout::ParamLayout>> {
-    #[cfg(feature = "lang")]
     return crate::escape::custom::param_layout(name);
-    #[cfg(not(feature = "lang"))]
-    {
-        let _ = name;
-        None
-    }
 }
 
 /// One section's parameters (a colouring's, the texture layer's, by

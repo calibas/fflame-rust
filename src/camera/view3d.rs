@@ -125,7 +125,6 @@ pub fn flame_angles(config: &crate::config::FractalConfig) -> (Convention, Angle
 }
 
 /// Mode D's solid camera's angles (`escape::ifs::solid_camera`).
-#[cfg(feature = "engine-escape")]
 pub fn solid_angles(escape: &crate::config::escape::EscapeConfig) -> (Convention, Angles) {
     (
         Convention::Solid { yaw_offset: 0.0 },
@@ -150,7 +149,7 @@ pub fn escape_terrain_angles(escape: &crate::config::escape::EscapeConfig) -> (C
 
 /// A simulation terrain's camera's angles (`sim::terrain::sim_terrain_camera`):
 /// yaw 0 looking north, no roll.
-#[cfg(all(feature = "terrain", feature = "engine-sim"))]
+#[cfg(feature = "terrain")]
 pub fn sim_terrain_angles(terrain: &crate::config::sim::SimTerrainConfig) -> (Convention, Angles) {
     (
         Convention::Solid { yaw_offset: -FRAC_PI_2 },
@@ -203,7 +202,6 @@ mod tests {
     }
 
     /// Mode D's frame is `solid_frame`'s, for every angle and roll.
-    #[cfg(feature = "engine-escape")]
     #[test]
     fn the_solids_frame_is_solid_frame() {
         let mut esc = crate::config::escape::EscapeConfig::default();
@@ -251,7 +249,7 @@ mod tests {
     }
 
     /// A simulation terrain's frame is `sim_terrain_camera`'s.
-    #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+    #[cfg(feature = "terrain")]
     #[test]
     fn the_sim_terrains_frame_is_sim_terrain_camera() {
         let mut c = crate::config::FractalConfig::default();

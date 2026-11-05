@@ -1549,7 +1549,6 @@ impl SimConfig {
     /// (`SimRenderer` picks it per batch); this is the same question
     /// asked where the value is offered and clamped, so the panel
     /// cannot show a step one layer will not survive.
-    #[cfg(feature = "engine-sim")]
     pub fn max_dt_ceiling(&self) -> f32 {
         // Floored as `max_dt_for` is: the manager and `sim.dt()` clamp
         // into [1e-4, this].
@@ -1561,7 +1560,6 @@ impl SimConfig {
 
     /// The tightest cap at the layers' current parameters -- what the
     /// solver will actually run at.
-    #[cfg(feature = "engine-sim")]
     pub fn effective_max_dt(&self) -> f32 {
         (0..self.layer_count())
             .map(|l| {
@@ -1575,7 +1573,6 @@ impl SimConfig {
     ///
     /// An automaton advances by a generation. With layers, the slider
     /// is worth showing if ANY of them reads it.
-    #[cfg(feature = "engine-sim")]
     pub fn any_layer_has_a_time_step(&self) -> bool {
         (0..self.layer_count()).any(|l| {
             !crate::sim::model_or_default(self.layer_model_name(l))
@@ -1654,7 +1651,6 @@ mod tests {
     /// are different fields and a merge that dropped one would still
     /// look right for a model whose parameters are all defaults.
     #[test]
-    #[cfg(feature = "engine-sim")]
     fn promotion_then_demotion_round_trips_the_config() {
         for m in crate::sim::MODELS {
             let mut before = SimConfig::default();
@@ -1681,7 +1677,6 @@ mod tests {
     /// Promotion is idempotent, so a second "add layer" cannot bury
     /// layer 0 inside another one.
     #[test]
-    #[cfg(feature = "engine-sim")]
     fn promotion_is_idempotent() {
         let mut cfg = SimConfig::default();
         cfg.model_params.insert("feed".into(), 0.037);
@@ -1694,7 +1689,6 @@ mod tests {
     /// Demotion only fires at exactly one layer: with two it would
     /// silently discard the second.
     #[test]
-    #[cfg(feature = "engine-sim")]
     fn demotion_leaves_a_real_stack_alone() {
         let mut cfg = SimConfig::default();
         cfg.promote_model_to_layers();
@@ -1713,7 +1707,6 @@ mod tests {
     /// growth model's figure uncut and still pass a check that only
     /// looked at the colouring's name.
     #[test]
-    #[cfg(feature = "engine-sim")]
     fn colour_promotion_then_demotion_round_trips_the_config() {
         for c in crate::sim::COLORINGS {
             let mut before = SimConfig::default();
@@ -1744,7 +1737,6 @@ mod tests {
     /// Colour promotion is idempotent and demotion refuses a real
     /// stack, for the same reasons as the model side.
     #[test]
-    #[cfg(feature = "engine-sim")]
     fn colour_promotion_is_idempotent_and_demotion_spares_a_stack() {
         let mut cfg = SimConfig::default();
         cfg.promote_coloring_to_layers();
@@ -1941,7 +1933,6 @@ mod tests {
     /// If a path is deliberately not on the panel, exempt it BY NAME
     /// with the reason, so the decision is visible.
     #[test]
-    #[cfg(feature = "engine-sim")]
     fn the_panel_writes_every_sim_path() {
         // The panel, and the shared view controls it draws.
         let ui = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("ui");

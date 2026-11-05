@@ -47,7 +47,6 @@ pub fn render_view_content(
 
     // ── What each engine draws the picture with.
     match kind {
-        #[cfg(feature = "engine-escape")]
         ViewKind::EscapePlane | ViewKind::Solid | ViewKind::EscapeTerrain => {
             // A lens bends a plane's pixels and a solid's rays; a
             // terrain's camera has none.
@@ -58,7 +57,6 @@ pub fn render_view_content(
                 .default_open(true)
                 .show(ui, |ui| super::view_controls::escape_image(ui, config_manager, escape_aa));
         }
-        #[cfg(feature = "engine-sim")]
         ViewKind::Sim2d => {
             egui::CollapsingHeader::new(t!("view.image").as_ref())
                 .default_open(true)
@@ -346,32 +344,26 @@ mod tests {
         let mut d = FractalConfig::default();
         d.render_mode = RenderMode::ThreeD;
         configs.push(("default 3D".into(), d));
-        #[cfg(feature = "engine-escape")]
+        let mut e = FractalConfig::default();
+        e.render_mode = RenderMode::Escape;
+        e.escape.formula = "quaternion_julia_solid".to_string();
+        configs.push(("default solid".into(), e.clone()));
+        e.escape.solid_tier = crate::config::escape::RenderTier::PathTraced;
+        e.escape.path.environment_map = "sunflowers".to_string();
+        e.escape.path.environment_horizon = 60.0;
+        e.escape.path.environment_stars = 8.0;
+        configs.push(("solid under a sky past its sliders".into(), e));
+        #[cfg(feature = "terrain")]
         {
-            let mut e = FractalConfig::default();
-            e.render_mode = RenderMode::Escape;
-            e.escape.formula = "quaternion_julia_solid".to_string();
-            configs.push(("default solid".into(), e.clone()));
-            e.escape.solid_tier = crate::config::escape::RenderTier::PathTraced;
-            e.escape.path.environment_map = "sunflowers".to_string();
-            e.escape.path.environment_horizon = 60.0;
-            e.escape.path.environment_stars = 8.0;
-            configs.push(("solid under a sky past its sliders".into(), e));
-            #[cfg(feature = "terrain")]
-            {
-                let mut t = FractalConfig::default();
-                t.render_mode = RenderMode::Escape;
-                t.escape.terrain.enabled = true;
-                configs.push(("default terrain".into(), t));
-            }
+            let mut t = FractalConfig::default();
+            t.render_mode = RenderMode::Escape;
+            t.escape.terrain.enabled = true;
+            configs.push(("default terrain".into(), t));
         }
-        #[cfg(feature = "engine-sim")]
-        {
-            let mut s = FractalConfig::default();
-            s.render_mode = RenderMode::Simulation;
-            s.sim.terrain.enabled = true;
-            configs.push(("default simulation terrain".into(), s));
-        }
+        let mut s = FractalConfig::default();
+        s.render_mode = RenderMode::Simulation;
+        s.sim.terrain.enabled = true;
+        configs.push(("default simulation terrain".into(), s));
         let mut offenders = Vec::new();
         for (name, config) in configs {
             let before = serde_json::to_value(&config).expect("serializes");
@@ -463,28 +455,22 @@ mod tests {
         lay_out(c.clone());
         c.render_mode = RenderMode::ThreeD;
         lay_out(c.clone());
-        #[cfg(feature = "engine-escape")]
+        let mut e = FractalConfig::default();
+        e.render_mode = RenderMode::Escape;
+        lay_out(e.clone());
+        e.escape.formula = "quaternion_julia_solid".to_string();
+        lay_out(e.clone());
+        #[cfg(feature = "terrain")]
         {
-            let mut e = FractalConfig::default();
-            e.render_mode = RenderMode::Escape;
-            lay_out(e.clone());
-            e.escape.formula = "quaternion_julia_solid".to_string();
-            lay_out(e.clone());
-            #[cfg(feature = "terrain")]
-            {
-                let mut t = FractalConfig::default();
-                t.render_mode = RenderMode::Escape;
-                t.escape.terrain.enabled = true;
-                lay_out(t);
-            }
+            let mut t = FractalConfig::default();
+            t.render_mode = RenderMode::Escape;
+            t.escape.terrain.enabled = true;
+            lay_out(t);
         }
-        #[cfg(feature = "engine-sim")]
-        {
-            let mut s = FractalConfig::default();
-            s.render_mode = RenderMode::Simulation;
-            lay_out(s.clone());
-            s.sim.terrain.enabled = true;
-            lay_out(s);
-        }
+        let mut s = FractalConfig::default();
+        s.render_mode = RenderMode::Simulation;
+        lay_out(s.clone());
+        s.sim.terrain.enabled = true;
+        lay_out(s);
     }
 }
