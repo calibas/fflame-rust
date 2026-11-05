@@ -194,6 +194,19 @@ pub enum Host {
     /// read from there, one texture read rather than one a part.
     EscPaletteLoad,
     EscPalettePart,
+    /// A texture read (batch 6), for every kind whose template binds a
+    /// texture -- an escape colouring's loop today -- through one portable
+    /// read (`wgsl::texture_wgsl`): the texture at `(u, v)` in 0..1,
+    /// bilinear between the texel centres and clamped at the edges, and
+    /// the texel at whole `(x, y)`, each into the call site's slot, its
+    /// parts read from there; the same one a part where no statement may
+    /// go; and the texture's size, part 0 its width, 1 its height.
+    TextureLoad,
+    TexelLoad,
+    TexturePart,
+    Texture,
+    Texel,
+    TextureSize,
 }
 
 /// Every host call by its lowered name.
@@ -218,6 +231,12 @@ pub const HOSTS: &[(&str, Host)] = &[
     ("__esc_palette_curve", Host::EscPaletteCurve),
     ("__esc_palette_load", Host::EscPaletteLoad),
     ("__esc_palette_part", Host::EscPalettePart),
+    ("__texture_load", Host::TextureLoad),
+    ("__texel_load", Host::TexelLoad),
+    ("__texture_part", Host::TexturePart),
+    ("__texture", Host::Texture),
+    ("__texel", Host::Texel),
+    ("__texture_size", Host::TextureSize),
 ];
 
 impl Host {
@@ -241,6 +260,10 @@ impl Host {
             EscPalette | EscPaletteLoad => &[F, I, I],
             EscPaletteCurve => &[F],
             EscPalettePart => &[I, I],
+            TextureLoad | Texture => &[F, F, I],
+            TexelLoad | Texel => &[I, I, I],
+            TexturePart => &[I, I],
+            TextureSize => &[I],
             TakeDeposit | PyrPrepare => &[],
             AgentDeposit => &[I, I, F],
             ReadAt => &[I, I, I],
@@ -251,7 +274,7 @@ impl Host {
     pub fn result(self) -> Option<Ty> {
         use Host::*;
         match self {
-            ScratchWrite | MemWrite | AgentClaim | AgentDeposit | PyrPrepare | EscPaletteLoad => None,
+            ScratchWrite | MemWrite | AgentClaim | AgentDeposit | PyrPrepare | EscPaletteLoad | TextureLoad | TexelLoad => None,
             Outside | AgentClaimCheck => Some(Ty::Bool),
             _ => Some(Ty::Float),
         }
@@ -259,12 +282,26 @@ impl Host {
 
     /// Whether its last argument is a vector read's part, a literal 0-3.
     pub fn parts(self) -> bool {
-        matches!(self, Host::ScratchRead | Host::MemRead | Host::ReadAt | Host::EscPalette | Host::EscPalettePart)
+        matches!(
+            self,
+            Host::ScratchRead | Host::MemRead | Host::ReadAt | Host::EscPalette | Host::EscPalettePart | Host::TexturePart | Host::Texture | Host::Texel | Host::TextureSize
+        )
     }
 
     /// Whether an escape colouring's (else a simulation model's).
     pub fn escape(self) -> bool {
         matches!(self, Host::EscPalette | Host::EscPaletteCurve | Host::EscPaletteLoad | Host::EscPalettePart)
+    }
+
+    /// Whether a texture read, any kind's whose template binds one.
+    pub fn texture(self) -> bool {
+        matches!(self, Host::TextureLoad | Host::TexelLoad | Host::TexturePart | Host::Texture | Host::Texel | Host::TextureSize)
+    }
+
+    /// A read of what the GPU alone holds -- the palette, a texture --
+    /// which the evaluators read as 0.
+    pub fn gpu_read(self) -> bool {
+        self.escape() || self.texture()
     }
 
     /// Whether an agent function's (else a model step's).

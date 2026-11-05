@@ -624,6 +624,24 @@ fn escaped(s, p) {
     interpreter has no palette, and reads 0.
   - `ctx.rotation`, anywhere: the view's rotation as (cos, sin), the
     uniform's own -- not `cos(ctx.angle)`, which rounds again.
+  - **The config's texture** (batch 6), in `start` and `step` alone --
+    the iterate passes bind it (slot 14), the recolour pass, which runs
+    `finish` and `color` again, does not: `texture(uv)`, an `rgba` at uv
+    in 0..1, bilinear between the texel centres and clamped at the
+    edges; `texel(x, y)`, the texel at whole coordinates, clamped;
+    `texture_size()`, (width, height). Reading it brings
+    `TextureInLoop`: the texture is part of the iteration. The read is
+    the language's for every kind (`lang::wgsl::texture_wgsl`):
+    bilinear by hand in f32 from `textureLoad`, not through the sampler,
+    whose filtering weights each vendor rounds its own way, so WebGPU,
+    Metal and Vulkan read the same. Each read is one, held in a slot for
+    its parts. The interpreter has no texture, and reads 0.
+  - `color` may end with an `rgba` instead, its `a` the pixel's coverage
+    (`DirectAlpha`: transparent, the background shows); the template's
+    `coloring_alpha` takes the transferred value as `coloring_color`
+    does. `INFO.skips_escaping: true` makes `step` see only the iterates
+    that did not bail out, as Ultra Fractal runs a colouring's `loop:`
+    (`SkipsEscapingIterate`).
   - The state is packed under the same 32-float cap as UF's.
   - Examples: `assets/formulas/smooth.rhai`, `orbit-trap.rhai`; the
     test file `tests/formulas/rhai/coloring.rhai` runs on the GPU as the
@@ -1153,18 +1171,20 @@ fn escaped(s, p) {
     parted by whole units after the first few lines.
 - **The built-in colourings' twins** (`escape::twins::COLORING_TWINS`,
   `assets/formulas/twins/colorings/*.rhai`; P7 step 2 in
-  [rhai-plugins.md](../projects/rhai-plugins.md), five batches): every
-  built-in colouring but Image Trap, which reads the config's texture,
-  as the dialect cannot yet (rhai-plugins.md, step 2) -- Escape
+  [rhai-plugins.md](../projects/rhai-plugins.md), six batches): every
+  built-in colouring -- Escape
   Count, Orbit Trap, Sphere Average, Decomposition, Basic, Gaussian
   Integer, Itinerary, (reading the loop's values, `ctx` above) Smooth,
   Orbit, Stripe, Magnitude and Position Average, Root Basin, Triangle
   Inequality, Period, Curvature Average, Velocity, Threads and
   Exponential Smoothing, (bounded, `INFO` above) Position Map and
   External Rays, (the derivative, `ctx.dz`) Distance Estimate and Normal
-  Map, and (a colour, `fn color`, and the palette) Rainbow Fringe,
-  Infinite Waves, Visions of Chaos Traps and Direct Orbit Traps -- each a
-  Rhai colouring that renders as its built-in.
+  Map, (a colour, `fn color`, and the palette) Rainbow Fringe, Infinite
+  Waves, Visions of Chaos Traps and Direct Orbit Traps, and (the
+  texture, the coverage) Image Trap -- each a Rhai colouring that renders
+  as its built-in. The built-in Image Trap reads its texture as the
+  language does, bilinear by hand
+  (`the_image_trap_reads_the_texture_as_the_language_does`).
   - Each has its built-in's parameters exactly -- names, captions,
     hints, ranges, choices, a log slider -- its interior, accumulator,
     period, bounded, derivative, colour and palette-in-the-loop flags,

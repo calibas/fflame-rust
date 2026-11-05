@@ -2269,7 +2269,8 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32
 /// rectangle.
 ///
 /// Not ported:
-/// - UF reads the image bicubically; this uses the bilinear sampler.
+/// - UF reads the image bicubically; this reads it bilinearly, by hand
+///   in f32 as the formula language does, not through the sampler.
 /// - The merge modes UF documents without a formula: Overlay, Hard and
 ///   Soft Light, and the HSL modes.
 /// - TrapTransform's per-iteration steps (drift, rotation step, skew
@@ -2394,7 +2395,7 @@ fn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {
     return pow(clamp(state.xyz, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(2.2));
 }
 
-fn coloring_alpha(sum: OrbitSummary, state: vec4<f32>) -> f32 {
+fn coloring_alpha(sum: OrbitSummary, state: vec4<f32>, v: f32) -> f32 {
     return state.w;
 }
 "#,
@@ -2404,6 +2405,29 @@ fn coloring_alpha(sum: OrbitSummary, state: vec4<f32>) -> f32 {
 // The config's texture, declared here so only this colouring's iterate
 // passes bind it (the layouts carry the slot; see TextureInLoop).
 @group(0) @binding(14) var esc_texture: texture_2d<f32>;
+
+// The texture at uv, as the formula language reads one
+// (`lang::wgsl::texture_wgsl`'s `uf_texture`, kept identical by
+// `the_image_trap_reads_the_texture_as_the_language_does`): bilinear by
+// hand in f32, so every platform reads the same where the sampler's
+// filtering weights are each vendor's own rounding.
+fn image_trap_texture(uv: vec2<f32>) -> vec4<f32> {
+    let dims = vec2<i32>(textureDimensions(esc_texture));
+    let size = vec2<f32>(dims);
+    var p = uv * size - 0.5;
+    p = select(vec2<f32>(-1.0), clamp(p, vec2<f32>(-1.0), size), abs(p) <= vec2<f32>(1e30));
+    let f = floor(p);
+    let t = p - f;
+    let i0 = clamp(vec2<i32>(f), vec2<i32>(0), dims - 1);
+    let i1 = clamp(vec2<i32>(f) + 1, vec2<i32>(0), dims - 1);
+    let a = textureLoad(esc_texture, i0, 0);
+    let b = textureLoad(esc_texture, vec2<i32>(i1.x, i0.y), 0);
+    let c = textureLoad(esc_texture, vec2<i32>(i0.x, i1.y), 0);
+    let d = textureLoad(esc_texture, i1, 0);
+    let top = a + (b - a) * t.x;
+    let bottom = c + (d - c) * t.x;
+    return top + (bottom - top) * t.y;
+}
 
 // common.ulb TrapTransform: (z - centre) * rotation * recip(scale), then
 // the aspect on the imaginary part, then the skew on the real part.
@@ -2435,7 +2459,7 @@ fn image_trap_color(zt: vec2<f32>) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
     let uv = vec2<f32>((p.x + 1.0) * 0.5, (1.0 - p.y) * 0.5);
-    return textureSampleLevel(esc_texture, palette_sampler, uv, 0.0);
+    return image_trap_texture(uv);
 }
 
 // mergeX(bottom, top): UF's layer merge modes, the ones its help defines

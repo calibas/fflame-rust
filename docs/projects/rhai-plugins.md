@@ -834,7 +834,7 @@ needs the census did not, the int step and `ctx.layer`):
 |---|---|---|---|
 | Effects | 15 | all 15, the definitions (D1) | yes, the Effects panel |
 | Escape formulas | 26 | all 26 (`escape::twins`) | yes, Edit as Formula |
-| Escape colourings | 28 | 27 (all five batches, branch `rhai-escape-colourings`; Image Trap out, plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
+| Escape colourings | 28 | 28 (six batches, branch `rhai-escape-colourings`; plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
 | Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
@@ -869,8 +869,8 @@ Steps, in the order that unlocks the most first (the user picks):
    a scope. Open: a colouring's own `finish` and the escape colourings'
    sections returning early (P7 step 2 will want them).
 2. **Escape colourings** (28), branch `rhai-escape-colourings` (begun
-   2026-11-05; **all five batches built 2026-11-05**: 27 twins, every
-   colouring but Image Trap, to merge). A census of the 28 against the
+   2026-11-05; **all six batches built 2026-11-05**: every colouring
+   twinned, to merge). A census of the 28 against the
    dialect (2026-11-05) corrected the estimate: 7 could be twins then,
    not about 20. The rest needed values the loop has and a Rhai
    colouring could not read.
@@ -987,10 +987,23 @@ Steps, in the order that unlocks the most first (the user picks):
      - The view's rotation as cosine and sine.
      - The twins it unlocks: Rainbow Fringe, Infinite Waves, Visions of
        Chaos Traps, Direct Orbit Traps.
-   - **Image Trap, not in the five** (corrected 2026-11-05): the census
-     had it reading a user image, but it reads the config's simulation
-     texture (`EscapeConfig::texture`), so it can be twinned. What it
-     needs, a sixth batch:
+   - **Batch 6: Image Trap** (corrected 2026-11-05: the census had it
+     reading a user image, but it reads the config's simulation texture,
+     `EscapeConfig::texture`). **Built 2026-11-05**, all 28 colourings now
+     twinned: the twin matches the built-in on every pixel, on every
+     merge mode, both orders, both proportions and a moved trap, direct,
+     perturbed and on a Julia set (`the_image_trap_twin_renders_as_its_builtin`),
+     and recolours on a palette edit (`a_texture_reading_twin_recolours`).
+     18% slower, its trap's rotation and skew through the reduced trig
+     each iteration as the built-in's are. The texture read is the
+     language's, for every kind (below). The built-in now reads the
+     texture as the language does -- bilinear by hand in f32 from
+     `textureLoad`, not through the sampler, whose filtering weights each
+     vendor rounds its own way -- so the two agree and both agree across
+     platforms (`the_image_trap_reads_the_texture_as_the_language_does`;
+     the visual config moved by one 8-bit level on 535 of 307,200
+     pixels, the Ultra Fractal trace's agreement unchanged). What it
+     needed:
      - `texture(uv)`, an `rgba`, and `texture_size()`, in `start` and
        `step` alone (the colouring's iterate passes bind slot 14; the
        recolour pass does not), each read once per call site as the
@@ -1005,6 +1018,32 @@ Steps, in the order that unlocks the most first (the user picks):
        `the_image_trap_draws_what_ultra_fractals_source_says` sets one:
        every merge mode, both orders, both proportions, the trap's
        transform.
+
+   **Textures in other kinds** (the user's ask, 2026-11-05: one way to
+   read a texture, usable by variations too). The language side is
+   kind-free: `texture(uv)`, `texel(x, y)` and `texture_size()` lower to
+   host calls (`Host::texture`), each read once per call site into a
+   slot, and every kind's WGSL reads through the one portable
+   `lang::wgsl::texture_wgsl(decl, var)` -- the bilinear JWildfire's
+   texture variations do on the CPU, so a port can match them, and
+   `texel` for one that interpolates its own way. A kind opts in with
+   four things:
+   1. the checker allows its kind and sections (`check::host_args`);
+   2. its generator emits `texture_wgsl` with its own binding and the
+      slots' declarations (as `wgsl::coloring` does for slot 14);
+   3. a feature, from `wgsl::reads_texture`, that makes its passes bind
+      the texture and makes the texture part of what it renders;
+   4. a texture to read.
+   For **flame variations** (`colormap_wf`, `displacemap_wf`,
+   `post_bumpmap_wf` ... in variation-port-blockers.md, blocker 2) the
+   first three are small: the Variation context in the generator, a
+   `Feature` (append-only; the API repository is told), and a binding
+   the compute layout holds only for a flame that uses it
+   (`used_bindings`). The fourth is the user's decision: where a flame's
+   texture comes from -- one per config, as escape's is (a simulation
+   recipe, embedded), or one per variation, which JWildfire's are -- and
+   with it the UI to pick it and every path that renders a flame (export,
+   video, thumbnails, the gallery modules, pyfflame) baking it first.
 
    **Numerics to write by hand in a twin.** WGSL's `round` rounds half
    to even, the dialect's half away from zero. A real `sin`/`cos` is

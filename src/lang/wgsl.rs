@@ -123,26 +123,81 @@ const FX_RETURN: &str = "return FxOut(vec4<f32>(effect_r, effect_g, effect_b, ef
 /// The line that ends a simulation's colouring or model function, and an
 /// early `return` in it.
 const SIM_RETURN: &str = "return vec4<f32>(effect_r, effect_g, effect_b, effect_a);";
-/// How many palette reads an escape colouring makes once each
-/// (`Host::EscPaletteLoad`), by their slots.
-fn palette_slots(p: &Program) -> usize {
-    fn s(st: &[IStmt]) -> usize {
+/// How many reads made once each (`Host::EscPaletteLoad`, a texture's
+/// load) the program makes of the kind `which` picks, by their slots --
+/// each a load's third argument.
+fn load_slots(p: &Program, which: fn(Host) -> bool) -> usize {
+    fn s(st: &[IStmt], w: fn(Host) -> bool) -> usize {
         st.iter()
             .map(|x| match x {
-                IStmt::Host(Host::EscPaletteLoad, args) => args.get(2).and_then(cell_index).map_or(0, |k| k + 1),
-                IStmt::Scope(b) => s(b),
-                IStmt::If { arms, otherwise } => arms.iter().map(|(_, b)| s(b)).max().unwrap_or(0).max(s(otherwise)),
-                IStmt::While { body, .. } | IStmt::Repeat { body, .. } => s(body),
+                IStmt::Host(h, args) if w(*h) => args.get(2).and_then(cell_index).map_or(0, |k| k + 1),
+                IStmt::Scope(b) => s(b, w),
+                IStmt::If { arms, otherwise } => arms.iter().map(|(_, b)| s(b, w)).max().unwrap_or(0).max(s(otherwise, w)),
+                IStmt::While { body, .. } | IStmt::Repeat { body, .. } => s(body, w),
                 _ => 0,
             })
             .max()
             .unwrap_or(0)
     }
-    [&p.init, &p.loop_body, &p.final_body, &p.transform].into_iter().map(|b| s(b)).max().unwrap_or(0)
+    [&p.init, &p.loop_body, &p.final_body, &p.transform].into_iter().map(|b| s(b, which)).max().unwrap_or(0)
 }
 
-/// What ends an escape colouring's `coloring_color` (batch 5).
+/// Whether the program reads a texture (batch 6).
+pub fn reads_texture(p: &Program) -> bool {
+    [&p.global_body, &p.init, &p.loop_body, &p.final_body, &p.transform, &p.creases].into_iter().any(|b| Program::calls_host(b, Host::texture))
+}
+
+/// Whether a colouring's `color` sets the coverage (an `rgba`:
+/// `DirectAlpha`).
+pub fn writes_alpha(p: &Program) -> bool {
+    writes(&p.transform, Place::Effect(Predef::EffectA))
+}
+
+/// A texture's reads as one kind's template gives them (batch 6): `decl`
+/// the binding the kind's passes bind, `var` its name. The same portable
+/// read for every kind: `uf_texture(uv)`, bilinear between the texel
+/// centres at `(i + 0.5) / size` and clamped at the edges, by hand in f32
+/// from `textureLoad` -- not the sampler, whose filtering weights each
+/// vendor rounds its own way, so WebGPU, Metal and Vulkan read the same
+/// -- and the interpolation as JWildfire's texture variations do theirs;
+/// `uf_texel(xy)` the texel, clamped to the texture; `uf_texture_size()`.
+/// A position that is not finite or far outside reads the edge: no such
+/// float converts to an int the same way everywhere.
+pub fn texture_wgsl(decl: &str, var: &str) -> String {
+    format!(
+        "{decl}
+fn uf_texture_size() -> vec2<f32> {{
+    return vec2<f32>(textureDimensions({var}));
+}}
+fn uf_texel(xy: vec2<i32>) -> vec4<f32> {{
+    let dims = vec2<i32>(textureDimensions({var}));
+    return textureLoad({var}, clamp(xy, vec2<i32>(0), dims - 1), 0);
+}}
+fn uf_texture(uv: vec2<f32>) -> vec4<f32> {{
+    let dims = vec2<i32>(textureDimensions({var}));
+    let size = vec2<f32>(dims);
+    var p = uv * size - 0.5;
+    p = select(vec2<f32>(-1.0), clamp(p, vec2<f32>(-1.0), size), abs(p) <= vec2<f32>(1e30));
+    let f = floor(p);
+    let t = p - f;
+    let i0 = clamp(vec2<i32>(f), vec2<i32>(0), dims - 1);
+    let i1 = clamp(vec2<i32>(f) + 1, vec2<i32>(0), dims - 1);
+    let a = textureLoad({var}, i0, 0);
+    let b = textureLoad({var}, vec2<i32>(i1.x, i0.y), 0);
+    let c = textureLoad({var}, vec2<i32>(i0.x, i1.y), 0);
+    let d = textureLoad({var}, i1, 0);
+    let top = a + (b - a) * t.x;
+    let bottom = c + (d - c) * t.x;
+    return top + (bottom - top) * t.y;
+}}
+"
+    )
+}
+
+/// What ends an escape colouring's `coloring_color` (batch 5), and its
+/// colour with the coverage (batch 6).
 const COLOR_RETURN: &str = "return vec3<f32>(effect_r, effect_g, effect_b);";
+const COLOR4_RETURN: &str = "return vec4<f32>(effect_r, effect_g, effect_b, effect_a);";
 
 /// The line that ends an agent's function (P4 step 9d): its record from
 /// the vector of four, position, heading and state.
@@ -1584,9 +1639,19 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
              var<private> uf_ext: array<vec4<f32>, {ext_vec4s}>;\n\n"
         );
     }
-    // Each palette read's colour, read once (batch 5).
-    for k in 0..palette_slots(p) {
+    // Each palette read's colour, read once (batch 5), and each texture
+    // read's (batch 6).
+    for k in 0..load_slots(p, |h| h == Host::EscPaletteLoad) {
         let _ = writeln!(body, "var<private> ufc_pal{k}: vec3<f32>;");
+    }
+    for k in 0..load_slots(p, |h| matches!(h, Host::TextureLoad | Host::TexelLoad)) {
+        let _ = writeln!(body, "var<private> ufc_tex{k}: vec4<f32>;");
+    }
+    // The texture the loop reads: the config's, slot 14, which the iterate
+    // passes bind (`TextureInLoop`). The recolour pass declares it unread.
+    if reads_texture(p) {
+        body.push_str(&texture_wgsl("@group(0) @binding(14) var esc_texture: texture_2d<f32>;", "esc_texture"));
+        body.push('\n');
     }
     let mut g = Gen::new(p, Ctx::ColoringInit, "ufc_");
     body.push_str("fn ufc_init(z_init: vec2<f32>) -> vec4<f32> {\n");
@@ -1625,15 +1690,28 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
     body.push_str("    return index;\n}\n");
     // A colour, not a palette position (batch 5, `DirectColor`): `color`
     // as `coloring_color`, its result in the effect places.
+    // An `rgba` sets the coverage too (`DirectAlpha`): one function for
+    // both, which the colour and the alpha read.
     if !p.transform.is_empty() {
+        let alpha = writes_alpha(p);
         g.ctx = Ctx::ColoringColor;
-        g.ret = COLOR_RETURN;
-        body.push_str("\nfn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {\n");
+        g.ret = if alpha { COLOR4_RETURN } else { COLOR_RETURN };
+        if alpha {
+            body.push_str("\nfn ufc_rgba(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec4<f32> {\n");
+        } else {
+            body.push_str("\nfn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {\n");
+        }
         unpack(&mut body);
         locals(&mut body);
         body.push_str("    var effect_r = 0.0;\n    var effect_g = 0.0;\n    var effect_b = 0.0;\n    var effect_a = 1.0;\n");
         g.stmts(&p.transform, 1, &mut body);
-        let _ = writeln!(body, "    {COLOR_RETURN}\n}}");
+        let _ = writeln!(body, "    {}\n}}", g.ret);
+        if alpha {
+            body.push_str(
+                "\nfn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {\n    return ufc_rgba(sum, state, v).xyz;\n}\n\
+                 \nfn coloring_alpha(sum: OrbitSummary, state: vec4<f32>, v: f32) -> f32 {\n    return ufc_rgba(sum, state, v).w;\n}\n",
+            );
+        }
     }
 
     let wgsl = g.finish(&format!("// custom colouring: {}\n", sanitize(&p.name)), body);
@@ -2121,6 +2199,14 @@ impl<'p> Gen<'p> {
                 format!("ufc_pal{} = {f}({})", args.get(2).and_then(cell_index).unwrap_or(0), a[0])
             }
             Host::EscPalettePart => format!("ufc_pal{}.{}", args.first().and_then(cell_index).unwrap_or(0), part(1)),
+            // A texture, through the kind's own `uf_texture` and `uf_texel`
+            // ([`texture_wgsl`]).
+            Host::TextureLoad => format!("{}tex{} = uf_texture(vec2<f32>({}, {}))", self.prefix, args.get(2).and_then(cell_index).unwrap_or(0), a[0], a[1]),
+            Host::TexelLoad => format!("{}tex{} = uf_texel(vec2<i32>({}, {}))", self.prefix, args.get(2).and_then(cell_index).unwrap_or(0), a[0], a[1]),
+            Host::TexturePart => format!("{}tex{}.{}", self.prefix, args.first().and_then(cell_index).unwrap_or(0), part(1)),
+            Host::Texture => format!("uf_texture(vec2<f32>({}, {})).{}", a[0], a[1], part(2)),
+            Host::Texel => format!("uf_texel(vec2<i32>({}, {})).{}", a[0], a[1], part(2)),
+            Host::TextureSize => format!("uf_texture_size().{}", part(0)),
             Host::GridParam => {
                 let (Some(first), Some(next)) = (args.first().and_then(cell_index), args.get(1).and_then(cell_index)) else {
                     unreachable!("a grid's cells, as the checker gives them")

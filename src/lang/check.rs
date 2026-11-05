@@ -1791,7 +1791,19 @@ impl Checker {
     /// to a float where a float is taken; a float where an int is, refused),
     /// a vector read's part a literal 0-3; a simulation model's alone.
     fn host_args(&mut self, h: Host, args: &[Expr], span: Span) -> Option<Vec<IExpr>> {
-        if h.escape() {
+        if h.texture() {
+            // A kind reads a texture where its template binds one: an
+            // escape colouring's iterate passes (slot 14). The recolour
+            // pass runs `finish` and `color` again, and binds none.
+            if self.kind != EntryKind::Coloring {
+                self.error(span, "a texture is read where the template binds one: an escape colouring's `start` and `step`");
+                return None;
+            }
+            if !matches!(self.section, SectionKind::Init | SectionKind::Loop) {
+                self.error(span, "a colouring reads the texture in `start` and `step`: the recolour pass, which runs `finish` and `color` again, has none");
+                return None;
+            }
+        } else if h.escape() {
             if self.kind != EntryKind::Coloring {
                 self.error(span, "the escape palette is an escape colouring's");
                 return None;
