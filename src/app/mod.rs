@@ -3722,65 +3722,36 @@ impl App {
             };
             #[cfg(not(feature = "engine-sim"))]
             let sim_view: Option<&wgpu::TextureView> = None;
-            let pre_tonemap_view = if is_escape {
-                escape_view(
-                    &self.escape_renderer,
-                    #[cfg(feature = "terrain")]
-                    &self.escape_terrain,
-                    final_config,
+            let picture = if is_escape {
+                crate::renderer::tail::Picture::Image(
+                    escape_view(
+                        &self.escape_renderer,
+                        #[cfg(feature = "terrain")]
+                        &self.escape_terrain,
+                        final_config,
+                    )
+                    .expect("escape branch above created it"),
                 )
-                .expect("escape branch above created it")
             } else if let Some(v) = sim_view {
-                v
-            } else if dof_ran {
-                renderer.dof_output_view()
-            } else if shade_ran {
-                renderer.shade_output_view()
+                crate::renderer::tail::Picture::Image(v)
             } else {
-                renderer.get_accumulation_view()
+                crate::renderer::tail::Picture::flame(shade_ran, dof_ran)
             };
 
-            // Run density effects (before tonemap, on HDR accumulation data).
-            // A flame's alpha is a hit count, measured against its mean; an
-            // escape or simulation image's is not, and is read as it is.
+            // The tail (renderer::tail), into this frame's encoder with the
+            // app's persistent effect chain: density effects, the tone map
+            // into the renderer's picture, colour effects. A flame's alpha
+            // is a hit count, measured against its mean; an escape or
+            // simulation image's is not, and is read as it is.
             crate::effects::ensure_custom(&final_config);
             let density_mean = if is_non_flame { 1.0 } else { renderer.mean_density() };
-            let density_effects_ran = self.effect_chain.run_density_effects(
-                &self.gpu.device,
-                &self.gpu.queue,
-                &mut render_encoder,
-                pre_tonemap_view,
-                &final_config.density_effects,
-                density_mean,
-            );
-
-            // Render to internal fractal texture with tone mapping.
-            // Input priority: density-effect output > shade output > accumulator.
-            if density_effects_ran {
-                if let Some(density_output) = self.effect_chain.get_density_output() {
-                    renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, density_output);
-                } else if is_non_flame || dof_ran || shade_ran {
-                    renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, pre_tonemap_view);
-                } else {
-                    renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
-                }
-            } else if is_non_flame || dof_ran || shade_ran {
-                renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut render_encoder, pre_tonemap_view);
-            } else {
-                renderer.tonemap_pass(&self.gpu.queue, &mut render_encoder);
-            }
+            let tail = crate::renderer::tail::Tail::new(final_config, density_mean);
+            tail.tone_map(renderer, &self.gpu.device, &self.gpu.queue, &mut render_encoder, Some(&mut self.effect_chain), picture);
 
             self.metrics.record_tonemap_time(t_tonemap.elapsed().as_secs_f64() * 1000.0);
 
-            // Run color effects (after tonemap)
             let color_effect_count = final_config.color_effects.iter().filter(|e| e.enabled).count();
-            let effects_ran = self.effect_chain.run_color_effects(
-                &self.gpu.device,
-                &self.gpu.queue,
-                &mut render_encoder,
-                renderer.get_fractal_texture_view(),
-                &final_config.color_effects,
-            );
+            let effects_ran = tail.color(renderer, &self.gpu.device, &self.gpu.queue, &mut render_encoder, Some(&mut self.effect_chain));
 
             // If effects ran, re-register the effect output texture with egui
             if effects_ran {

@@ -9,6 +9,7 @@ use wgpu::{CommandEncoderDescriptor, Device, PollType, Queue, TextureFormat};
 use crate::config::FractalConfig;
 use crate::renderer::compute_kernel::FlameRenderer;
 use crate::renderer::effect_chain::EffectChainRunner;
+use crate::renderer::tail::{Picture, Tail};
 
 /// Engine state a caller keeps ALIVE across renders.
 ///
@@ -730,38 +731,17 @@ pub async fn render_with(
         renderer.set_transparent_mode(queue, true, job.premultiplied, job.config, job.iterations_per_thread);
     }
 
-    // Check for enabled effects
-    let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
-    let has_color_effects = EffectChainRunner::has_enabled_effects(&job.config.color_effects);
-
-    // The effect chain only exists when an effect is actually enabled,
-    // and it is destroyed after the pixel read below. It used to be
-    // constructed unconditionally per render and never destroyed — on
-    // WebGPU that leaked its params buffer every render (drop frees
-    // nothing there; see the gallery module's docs), measured as one of
-    // the two per-render buffers growing without bound in the client.
-    let mut effect_chain = if has_density_effects || has_color_effects {
-        Some(EffectChainRunner::new(device, job.width, job.height))
-    } else {
-        None
-    };
-
     log::info!(
         "Render: Effects - density: {} enabled, color: {} enabled",
         job.config.density_effects.iter().filter(|e| e.enabled).count(),
         job.config.color_effects.iter().filter(|e| e.enabled).count()
     );
 
-    // Run density effects (before tonemap, on HDR accumulation data)
+    // The solid passes go first into the tail's encoder: shade, then
+    // depth of field, then the tail's density effects and tone map.
     let mut tonemap_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("Final Tonemap"),
     });
-
-    // Reset effect slot counter (allows multiple effects with unique params in same submit)
-    if let Some(chain) = effect_chain.as_mut() {
-        chain.reset_slots();
-        chain.set_pixel_scale(renderer.pixel_scale());
-    }
 
     // Solid brightness renormalization: exact accepted-density measurement
     // before the single final tonemap.
@@ -793,109 +773,20 @@ pub async fn render_with(
         shade_ran,
         job.config.zoom,
     );
-    let pre_tonemap_view = if dof_ran {
-        renderer.dof_output_view()
-    } else if shade_ran {
-        renderer.shade_output_view()
-    } else {
-        renderer.get_accumulation_view()
-    };
-
-    if has_density_effects {
-        let chain = effect_chain.as_mut().expect("built above: has_density_effects");
-        let density_ran = chain.run_density_effects(
-            device,
-            queue,
-            &mut tonemap_encoder,
-            pre_tonemap_view,
-            &job.config.density_effects,
-            renderer.mean_density(),
-        );
-
-        if density_ran {
-            if let Some(density_output) = chain.get_density_output() {
-                renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, density_output);
-            } else if dof_ran || shade_ran {
-                renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, pre_tonemap_view);
-            } else {
-                renderer.tonemap_pass(queue, &mut tonemap_encoder);
-            }
-        } else if dof_ran || shade_ran {
-            renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, pre_tonemap_view);
-        } else {
-            renderer.tonemap_pass(queue, &mut tonemap_encoder);
-        }
-    } else if dof_ran || shade_ran {
-        renderer.tonemap_pass_with_input(device, queue, &mut tonemap_encoder, pre_tonemap_view);
-    } else {
-        renderer.tonemap_pass(queue, &mut tonemap_encoder);
-    }
-
-    queue.submit(std::iter::once(tonemap_encoder.finish()));
-
-    // A throwaway renderer's iteration buffers -- several gigabytes at 8K
-    // -- are dead once the tone map has run. Free them before the colour
-    // chain allocates its full-size ping-pong: beside them, a browser ran
-    // out of GPU memory and the 8K export came back black. A destroyed
-    // buffer is freed only when the GPU is done with it, so wait for the
-    // tone map first.
-    if has_color_effects && job.throwaway_renderer {
-        let (tx, rx) = futures::channel::oneshot::channel();
-        queue.on_submitted_work_done(move || {
-            let _ = tx.send(());
-        });
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-        let _ = rx.await;
-        renderer.free_iteration_buffers();
-    }
-
-    // Run color effects (after tonemap)
-    let color_effects_ran = if has_color_effects {
-        let chain = effect_chain.as_mut().expect("built above: has_color_effects");
-        let mut color_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Color Effects"),
-        });
-
-        let ran = chain.run_color_effects(
-            device,
-            queue,
-            &mut color_encoder,
-            renderer.get_fractal_texture_view(),
-            &job.config.color_effects,
-        );
-
-        queue.submit(std::iter::once(color_encoder.finish()));
-        ran
-    } else {
-        false
-    };
-
-    // Read pixels from appropriate source
-    let pixels = if color_effects_ran {
-        // Read from color effect output
-        effect_chain
-            .as_ref()
-            .expect("color_effects_ran implies a chain")
-            .read_color_output_pixels(device, queue)
-            .await
-            .map_err(RenderError::PixelReadFailed)
-    } else {
-        // Read from renderer's fractal texture (persistent staging,
-        // reused across renders)
-        renderer
-            .read_fractal_pixels(device, queue, job.transparent, job.config.background_color)
-            .await
-            .map_err(|e| RenderError::PixelReadFailed(e.to_string()))
-    };
-
-    // The completed readback proves every submission that used the
-    // chain has finished, so this is the safe point to destroy it —
-    // on the error path too, where nothing was read but nothing is
-    // owed either.
-    if let Some(chain) = &effect_chain {
-        chain.destroy();
-    }
-    let (width, height, rgba_data) = pixels?;
+    let density_mean = renderer.mean_density();
+    let (width, height, rgba_data) = finish(
+        renderer,
+        device,
+        queue,
+        job.config,
+        (job.width, job.height, job.transparent),
+        Some(tonemap_encoder),
+        Picture::flame(shade_ran, dof_ran),
+        density_mean,
+        job.throwaway_renderer,
+        None,
+    )
+    .await?;
 
     let render_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
 
@@ -1140,23 +1031,6 @@ async fn render_sim(
         }
     }
 
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("Sim Tail"),
-    });
-
-    // Shared tail: density effects → tonemap → color effects → read.
-    let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
-    let has_color_effects = EffectChainRunner::has_enabled_effects(&job.config.color_effects);
-    let mut effect_chain = if has_density_effects || has_color_effects {
-        Some(EffectChainRunner::new(device, job.width, job.height))
-    } else {
-        None
-    };
-    if let Some(chain) = effect_chain.as_mut() {
-        chain.reset_slots();
-        chain.set_pixel_scale(renderer.pixel_scale());
-    }
-
     let picture = match sim.moments_view() {
         Some(v) if blurred => v,
         _ => sim.output_view(),
@@ -1169,76 +1043,24 @@ async fn render_sim(
     };
     #[cfg(not(feature = "terrain"))]
     let sim_view = picture;
-    if has_density_effects {
-        let chain = effect_chain.as_mut().expect("built above: has_density_effects");
-        let density_ran = chain.run_density_effects(
-            device,
-            queue,
-            &mut encoder,
-            sim_view,
-            &job.config.density_effects,
-            1.0, // a simulation's alpha is not a hit count
-        );
-        match (density_ran, chain.get_density_output()) {
-            (true, Some(density_output)) => {
-                renderer.tonemap_pass_with_input(device, queue, &mut encoder, density_output)
-            }
-            _ => renderer.tonemap_pass_with_input(device, queue, &mut encoder, sim_view),
-        }
-    } else {
-        renderer.tonemap_pass_with_input(device, queue, &mut encoder, sim_view);
-    }
-    queue.submit(std::iter::once(encoder.finish()));
+    // A simulation's alpha is not a hit count: density effects read it
+    // as it is.
+    let pixels = finish(
+        renderer,
+        device,
+        queue,
+        job.config,
+        (job.width, job.height, job.transparent),
+        None,
+        Picture::Image(sim_view),
+        1.0,
+        false,
+        Some(oom_scope),
+    )
+    .await;
 
-    let color_effects_ran = if has_color_effects {
-        let chain = effect_chain.as_mut().expect("built above: has_color_effects");
-        let mut color_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Sim Color Effects"),
-        });
-        let ran = chain.run_color_effects(
-            device,
-            queue,
-            &mut color_encoder,
-            renderer.get_fractal_texture_view(),
-            &job.config.color_effects,
-        );
-        queue.submit(std::iter::once(color_encoder.finish()));
-        ran
-    } else {
-        false
-    };
-
-    if let Some(err) = oom_scope.pop().await {
-        if let Some(chain) = &effect_chain {
-            chain.destroy();
-        }
-        #[cfg(feature = "terrain")]
-        if let Some(t) = terrain_owned.as_ref() {
-            t.destroy();
-        }
-        if let Some(s) = owned.as_ref() {
-            s.destroy();
-        }
-        return Err(RenderError::OutOfMemory(err.to_string()));
-    }
-
-    let pixels = if color_effects_ran {
-        effect_chain
-            .as_ref()
-            .expect("color_effects_ran implies a chain")
-            .read_color_output_pixels(device, queue)
-            .await
-            .map_err(RenderError::PixelReadFailed)
-    } else {
-        renderer
-            .read_fractal_pixels(device, queue, job.transparent, job.config.background_color)
-            .await
-            .map_err(|e| RenderError::PixelReadFailed(e.to_string()))
-    };
-
-    if let Some(chain) = &effect_chain {
-        chain.destroy();
-    }
+    // Readback completion (or the memory error found before it) proves
+    // every submission finished -- the safe destroy point.
     #[cfg(feature = "terrain")]
     if let Some(t) = terrain_owned.as_ref() {
         t.destroy();
@@ -1524,7 +1346,9 @@ async fn render_escape(
         Some(v) if (renders > 1 && !solid_path) || solid_blurred => v,
         _ => escape_renderer.output_view(),
     };
-    let pixels = escape_tail(renderer, device, queue, config, (width, height, transparent), escape_view, oom_scope).await;
+    // An escape image's alpha is not a hit count: density effects read
+    // it as it is.
+    let pixels = finish(renderer, device, queue, config, (width, height, transparent), None, Picture::Image(escape_view), 1.0, false, Some(oom_scope)).await;
     // Readback completion (or the memory error found before it) proves
     // every submission finished -- the safe destroy point.
     if !caller_owned {
@@ -1553,70 +1377,73 @@ async fn render_escape(
     })
 }
 
-/// The escape engine's tail, shared by the 2D picture and the terrain:
-/// density effects -> tonemap -> colour effects -> read back. `input`
-/// is the generator's image in the accumulator's layout; the caller
-/// frees its own generator after this returns, either way.
-#[cfg(feature = "engine-escape")]
-async fn escape_tail(
+/// The headless tail: [`Tail`]'s stages recorded after whatever the
+/// generator left in `encoder` (its last passes; `None` for a generator
+/// that has submitted everything), an effect chain for this call only,
+/// then the pixels read back -- from the colour effects' output when
+/// they ran. Every headless render ends here: the flame, the simulation,
+/// the escape picture and terrain.
+///
+/// A `throwaway` renderer's iteration buffers go between the tone map
+/// and the colour effects. `oom_scope`, the render's memory error
+/// scope, is checked before anything is read. The caller frees its own
+/// generator after this returns, either way.
+#[allow(clippy::too_many_arguments)]
+async fn finish(
     renderer: &mut FlameRenderer,
     device: &Device,
     queue: &Queue,
     config: &FractalConfig,
     (width, height, transparent): (u32, u32, bool),
-    escape_view: &wgpu::TextureView,
-    oom_scope: wgpu::ErrorScopeGuard,
+    encoder: Option<wgpu::CommandEncoder>,
+    picture: Picture<'_>,
+    density_mean: f32,
+    throwaway: bool,
+    oom_scope: Option<wgpu::ErrorScopeGuard>,
 ) -> Result<(u32, u32, Vec<u8>), RenderError> {
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("Escape Tail"),
-    });
+    let tail = Tail::new(config, density_mean);
 
-    // Shared tail: density effects → tonemap → color effects → read.
-    let has_density_effects = EffectChainRunner::has_enabled_effects(&config.density_effects);
-    let has_color_effects = EffectChainRunner::has_enabled_effects(&config.color_effects);
-    let mut effect_chain = if has_density_effects || has_color_effects {
-        Some(EffectChainRunner::new(device, width, height))
-    } else {
-        None
-    };
+    // The effect chain only exists when an effect is actually enabled,
+    // and it is destroyed after the pixel read below. It used to be
+    // constructed unconditionally per render and never destroyed — on
+    // WebGPU that leaked its params buffer every render (drop frees
+    // nothing there; see the gallery module's docs), measured as one of
+    // the two per-render buffers growing without bound in the client.
+    let mut effect_chain = tail.has_effects().then(|| EffectChainRunner::new(device, width, height));
     if let Some(chain) = effect_chain.as_mut() {
+        // Reset effect slot counter (allows multiple effects with unique
+        // params in same submit).
         chain.reset_slots();
         chain.set_pixel_scale(renderer.pixel_scale());
     }
 
-    if has_density_effects {
-        let chain = effect_chain.as_mut().expect("built above: has_density_effects");
-        let density_ran = chain.run_density_effects(
-            device,
-            queue,
-            &mut encoder,
-            escape_view,
-            &config.density_effects,
-            1.0, // an escape image's alpha is not a hit count
-        );
-        match (density_ran, chain.get_density_output()) {
-            (true, Some(density_output)) => {
-                renderer.tonemap_pass_with_input(device, queue, &mut encoder, density_output)
-            }
-            _ => renderer.tonemap_pass_with_input(device, queue, &mut encoder, escape_view),
-        }
-    } else {
-        renderer.tonemap_pass_with_input(device, queue, &mut encoder, escape_view);
-    }
+    let mut encoder = encoder.unwrap_or_else(|| {
+        device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Tail") })
+    });
+    tail.tone_map(renderer, device, queue, &mut encoder, effect_chain.as_mut(), picture);
     queue.submit(std::iter::once(encoder.finish()));
 
-    let color_effects_ran = if has_color_effects {
-        let chain = effect_chain.as_mut().expect("built above: has_color_effects");
-        let mut color_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Escape Color Effects"),
+    // A throwaway renderer's iteration buffers -- several gigabytes at 8K
+    // -- are dead once the tone map has run. Free them before the colour
+    // chain allocates its full-size ping-pong: beside them, a browser ran
+    // out of GPU memory and the 8K export came back black. A destroyed
+    // buffer is freed only when the GPU is done with it, so wait for the
+    // tone map first.
+    if throwaway && tail.has_color_effects() {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        queue.on_submitted_work_done(move || {
+            let _ = tx.send(());
         });
-        let ran = chain.run_color_effects(
-            device,
-            queue,
-            &mut color_encoder,
-            renderer.get_fractal_texture_view(),
-            &config.color_effects,
-        );
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let _ = rx.await;
+        renderer.free_iteration_buffers();
+    }
+
+    let color_effects_ran = if tail.has_color_effects() {
+        let mut color_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Color Effects"),
+        });
+        let ran = tail.color(renderer, device, queue, &mut color_encoder, effect_chain.as_mut());
         queue.submit(std::iter::once(color_encoder.finish()));
         ran
     } else {
@@ -1627,11 +1454,13 @@ async fn escape_tail(
     // for? Checked here rather than at each allocation because the
     // scope covers the whole render, the per-sample accumulation
     // passes included.
-    if let Some(err) = oom_scope.pop().await {
-        if let Some(chain) = &effect_chain {
-            chain.destroy();
+    if let Some(scope) = oom_scope {
+        if let Some(err) = scope.pop().await {
+            if let Some(chain) = &effect_chain {
+                chain.destroy();
+            }
+            return Err(RenderError::OutOfMemory(err.to_string()));
         }
-        return Err(RenderError::OutOfMemory(err.to_string()));
     }
 
     let pixels = if color_effects_ran {
@@ -1642,14 +1471,18 @@ async fn escape_tail(
             .await
             .map_err(RenderError::PixelReadFailed)
     } else {
+        // The renderer's picture (persistent staging, reused across
+        // renders).
         renderer
             .read_fractal_pixels(device, queue, transparent, config.background_color)
             .await
             .map_err(|e| RenderError::PixelReadFailed(e.to_string()))
     };
 
-    // Readback completion proves every submission finished — the safe
-    // destroy point for the per-call GPU objects, error path included.
+    // The completed readback proves every submission that used the
+    // chain has finished, so this is the safe point to destroy it —
+    // on the error path too, where nothing was read but nothing is
+    // owed either.
     if let Some(chain) = &effect_chain {
         chain.destroy();
     }
@@ -1835,7 +1668,7 @@ async fn render_escape_terrain(
         Some(v) if separate => v,
         _ => terrain.output_view(),
     };
-    let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), picture, oom_scope).await;
+    let pixels = finish(renderer, device, queue, config, (job_w, job_h, transparent), None, Picture::Image(picture), 1.0, false, Some(oom_scope)).await;
     if !caller_owned {
         terrain.destroy();
     }
