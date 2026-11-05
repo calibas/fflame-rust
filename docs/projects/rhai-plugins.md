@@ -987,8 +987,24 @@ Steps, in the order that unlocks the most first (the user picks):
      - The view's rotation as cosine and sine.
      - The twins it unlocks: Rainbow Fringe, Infinite Waves, Visions of
        Chaos Traps, Direct Orbit Traps.
-   - **Out:** Image Trap. It reads a user image, which stays out with
-     user image files (decided 2026-10-02).
+   - **Image Trap, not in the five** (corrected 2026-11-05): the census
+     had it reading a user image, but it reads the config's simulation
+     texture (`EscapeConfig::texture`), so it can be twinned. What it
+     needs, a sixth batch:
+     - `texture(uv)`, an `rgba`, and `texture_size()`, in `start` and
+       `step` alone (the colouring's iterate passes bind slot 14; the
+       recolour pass does not), each read once per call site as the
+       palette's are; reading it brings `TextureInLoop`.
+     - `color` ending with an `rgba`, its `a` the pixel's coverage
+       (`DirectAlpha`), as a simulation colouring's does. The template's
+       `coloring_alpha(sum, state)` gains `v`, so it can be written from
+       the same body; Image Trap's own changes to match.
+     - An `INFO` key for `SkipsEscapingIterate` (UF's loop section: the
+       step sees only the iterates that did not bail out).
+     - The compare with a texture on the renderer, as
+       `the_image_trap_draws_what_ultra_fractals_source_says` sets one:
+       every merge mode, both orders, both proportions, the trap's
+       transform.
 
    **Numerics to write by hand in a twin.** WGSL's `round` rounds half
    to even, the dialect's half away from zero. A real `sin`/`cos` is
