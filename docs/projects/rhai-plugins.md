@@ -188,8 +188,10 @@ effect that is not built in renders only where that effect is installed.
 
 - ~~An effect plug-in's install checks only `check_download`, not the
   name~~ -- gone with the WGSL plug-ins (D3).
-- Effect downloads need a token and are gated by online mode only at the
-  caller; variation downloads need neither.
+- ~~Effect downloads need a token and are gated by online mode only at the
+  caller; variation downloads need neither~~ -- since 2026-11-04 neither
+  needs a token or the account: a guest fetches both (ONLINE.md, *The
+  online account, and guests*).
 - ~~Updates and Clear Cache exist for variations only~~ -- fixed in P3
   step 3: the Effects panel updates a download and clears the cache
   (`EffectRegistry::clear_api`; revisions and `remove_by_name` came
@@ -952,7 +954,7 @@ under each branch.
 
 1. **`params-one-system`** -- **merged 2026-11-03** (PR #148). One
    parameter system for every kind
-   ([one-parameter-system.md](one-parameter-system.md); the user,
+   ([one-parameter-system.md](../archive/projects/one-parameter-system.md); the user,
    2026-11-03).
    - One definition, one renderer and one compiler converter for the
      variations, effects, escape formulas and colourings, simulations
@@ -962,8 +964,20 @@ under each branch.
      panel, and a cell at a computed row in every kind, come with it.
    - Depends on nothing. Comes first, so the twin branches after it add
      parameters to one system, not to five.
-   - **Done on the branch (2026-11-03)**, steps 1-10; a grid's fill and
-     warning outside a simulation stay a simulation's (recorded there).
+   - **Done on the branch (2026-11-03)**, steps 1-11, merged (PR #148);
+     the record is [one-parameter-system.md](../archive/projects/one-parameter-system.md).
+     Left from it:
+     - **A grid's fill and warning outside a simulation.** They are Rhai
+       functions the CPU runs, and only the simulation registry holds a
+       CPU script for a source (`sim::custom::with_script`, `params_map`,
+       the warning's `ctx` with the grid's size and pyramid reach). Every
+       other kind refuses them (`LayoutSpec::without_cpu`) rather than
+       dropping them; moving that CPU machinery out of `sim::custom`
+       would give them to every kind.
+     - **A CPU script's layout.** A script declares its parameters by
+       calls (`param`, `param_choice`, ...), not a `PARAMS` map, so it
+       has no conditions or grids to declare; a `param_show_if`-like
+       call would give it them.
 2. **`rhai-escape-colourings`** -- P7 step 2: twins of the 28 escape
    colourings, and Edit as Rhai in the Escape panel's colouring.
    - About 20 accumulate over the orbit, which `start`, `step` and

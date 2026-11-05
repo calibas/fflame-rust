@@ -1,6 +1,6 @@
 //! The tail every generator's picture goes through: density effects, the
 //! tone map into the renderer's picture, then colour effects
-//! (docs/projects/architecture-review.md, 2.3).
+//! (docs/archive/projects/architecture-review.md, 2.3).
 //!
 //! The flame, escape-time and simulation generators each leave an
 //! `Rgba32Float` image in the accumulator's layout; from there the

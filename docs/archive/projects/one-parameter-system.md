@@ -1,11 +1,13 @@
 # One parameter system
 
+> **Archived 2026-11-04** -- finished: steps 1-11 built and merged 2026-11-03 (branch `params-one-system`, PR #148) -- one definition (`params::ParamDef`), one renderer (`ui::params`), one converter from the compiler. What it left -- a grid's fill outside a simulation, a CPU script's layout -- is in [rhai-plugins.md](../../projects/rhai-plugins.md) (*What is left, as branches*, branch 1). Read [UI.md](../../main/UI.md) and [VARIATIONS.md](../../main/VARIATIONS.md) for how parameters work now; this is the record of the survey, the design and the steps.
+
 > For the parameter systems and the UI that's derived, I want to see if
 > we can use a single system, and not multiple parallel systems. (The
 > user, 2026-11-03.)
 
 Branch `params-one-system`, the first of the Rhai branches in
-[rhai-plugins.md](rhai-plugins.md) ("What is left, as branches"). It
+[rhai-plugins.md](../../projects/rhai-plugins.md) ("What is left, as branches"). It
 replaces branch 1 there (`rhai-layouts-everywhere`): with one renderer,
 conditions and grids in every panel come with it.
 
@@ -305,7 +307,7 @@ Each a commit, each behaviour-preserving and held by tests:
   no gate built them, and they predated the escape and simulation
   render modes. Resolved by replacing them: pyfflame is now the engine
   built for WASI (`wasm/python`), which a gate compiles
-  ([pyfflame.md](pyfflame.md), 2026-11-04).
+  ([pyfflame.md](../../projects/pyfflame.md), 2026-11-04).
 - **A CPU script's layout**: a script declares its parameters by calls
   (`param`, `param_choice`, ...), not a `PARAMS` map, so it has no
   conditions or grids to declare; a `param_show_if`-like call would

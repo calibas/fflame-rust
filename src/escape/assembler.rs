@@ -7308,12 +7308,14 @@ fn ifs_rig(colour: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
     var rgb = mix(colour, lit_rgb, clamp(ifs_shading_strength(), 0.0, 1.0));
     // Depth fog AFTER lighting, so distant lit surfaces fade toward
     // the background like atmosphere rather than being lit on top of
-    // it -- the ordering the shade pass settled on. The fog colour is
-    // the background as picked (sRGB); `rgb` is linear, so decode it
-    // the way the tonemap does before it composites the background.
+    // it -- the ordering the shade pass settled on. The fog colour
+    // arrives as the accumulator holds what the tonemap shows as the
+    // background (`path_core::solid_fog`: the sRGB decode, the
+    // exposure and the gamma inverted), so `rgb` fades toward exactly
+    // the colour drawn behind it.
     if (ifs_fog_strength() > 0.0) {
         let f = ifs_fog_amount(t * dot(dir, ifs_forward()));
-        rgb = mix(rgb, pow(max(ifs_fog_color(), vec3<f32>(0.0)), vec3<f32>(2.2)), f);
+        rgb = mix(rgb, ifs_fog_color(), f);
     }
     return rgb;
 }
@@ -8345,7 +8347,7 @@ fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32,
 // it to a 256th. A true distance stops the march short of the surface,
 // so this is for a distance that bounds the step without measuring the
 // way -- a solid marched in fixed steps through space it cannot
-// measure (docs/projects/quaternions.md) -- which would otherwise land
+// measure (docs/archive/projects/quaternions.md) -- which would otherwise land
 // as much as a step past it: terraces that shift as the camera moves.
 fn ifs_refine(o: vec3<f32>, d: vec3<f32>, t_out: f32, t_in: f32, eps: f32) -> f32 {
     var a = t_out;
@@ -9085,11 +9087,12 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     let h = pt_ifs_surface(ray.o + ray.d * t, t, t);
     pt_first(h, ray.d);
     var l = pt_clamp(pt_path(ray.o, ray.d, h));
-    // Fog toward the background, decoded from the sRGB it was picked in
-    // to the linear `l` (as the lit tier's rig does): the fog is diffuse.
+    // Fog toward the background as the tonemap shows it (the colour
+    // arrives in the accumulator's terms, `path_core::solid_fog`, as the
+    // lit tier's rig takes it): the fog is diffuse.
     if (ifs_fog_strength() > 0.0) {
         let f = ifs_fog_amount(t * dot(ray.d, ifs_forward()));
-        l = mix(l, pow(max(ifs_fog_color(), vec3<f32>(0.0)), vec3<f32>(2.2)), f);
+        l = mix(l, ifs_fog_color(), f);
         pt_spec = pt_spec * (1.0 - f);
     }
     return vec4<f32>(l, 1.0);

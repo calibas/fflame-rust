@@ -1,5 +1,5 @@
 //! Rendering a script's declared parameters, by the one parameter
-//! renderer (`ui::params`; docs/projects/one-parameter-system.md) with
+//! renderer (`ui::params`; docs/archive/projects/one-parameter-system.md) with
 //! the script's run inputs as its store ([`super::params::LocalStore`]).
 //!
 //! Shared, because the Scripts panel is no longer the only surface that

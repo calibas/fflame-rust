@@ -476,7 +476,7 @@ impl VariationDef {
 }
 
 /// A variation's parameter, as the one parameter system's definition
-/// (`params::ParamDef`; docs/projects/one-parameter-system.md).
+/// (`params::ParamDef`; docs/archive/projects/one-parameter-system.md).
 ///
 /// Each typed form has two arms: one without a description (no
 /// tooltip), one with a trailing `$desc:expr`. Pick whichever matches

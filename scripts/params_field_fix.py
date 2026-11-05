@@ -1,5 +1,5 @@
 """One-shot fixer for the one-parameter-system plan's migration steps
-(docs/projects/one-parameter-system.md): read `cargo check`'s
+(docs/archive/projects/one-parameter-system.md): read `cargo check`'s
 `no field `X` on type `...ParamDef`` errors and rewrite exactly those
 field accesses as `ParamDef`'s -- `.default` -> `.slot_default()`,
 `.min` / `.max` -> `.slot_range().0` / `.1`, `.display_name` ->

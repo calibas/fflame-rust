@@ -1168,7 +1168,7 @@ mod tests {
         let packed = crate::escape::ifs::pack_for(def, c, &registry);
         assert!(packed.is_some(), "the cube does not qualify");
         r.set_ifs(packed);
-        r.set_solid_lighting(&c.solid_shading, (c.fog_strength, c.fog_start, c.background_color));
+        r.set_solid_lighting(&c.solid_shading, crate::escape::path_core::solid_fog(&c));
         r.set_solid_sky(crate::escape::path_core::sky_seen(&c.escape.path, c));
         r.set_solid_material(crate::escape::path_core::lit_material(c));
         r.set_solid_studio(crate::escape::path_core::studio_level(&c.escape.path, c));
@@ -1309,6 +1309,47 @@ mod tests {
                 let drawn = lit.iter().filter(|p| p[3] > 0.0 && p[3] < 1.0).count();
                 assert!(drawn > (w * h / 8) as usize, "the gradient shows: {drawn}");
             }
+        }
+    }
+
+    /// A solid fogged through reads as the background behind it, at any
+    /// exposure and gamma of the Linear tone map, in both tiers. The fog
+    /// decoded the picked colour with `pow(2.2)` alone, which matches
+    /// only at exposure 1 and gamma 1; at gamma 2.2 and exposure 2, as
+    /// here, it faded toward a lighter colour than the background.
+    #[test]
+    fn a_solid_fogged_through_reads_as_the_background() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (48u32, 32u32);
+        let bg = [0.6f32, 0.4, 0.2];
+        let want = bg.map(|v| (v * 255.0).round() as i32);
+        let off = |p: &[u8]| (0..3).map(|k| (p[k] as i32 - want[k]).abs()).max().unwrap_or(0);
+        for tier in [RenderTier::Lit, RenderTier::PathTraced] {
+            let mut c = cube_config();
+            c.escape.solid_tier = tier;
+            c.escape.path.samples = 4;
+            c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            c.gamma = 2.2;
+            c.exposure = 2.0;
+            c.background_color = bg;
+            let render = |c: &FractalConfig| {
+                let job = crate::renderer::RenderJob::new(c, w, h);
+                pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data
+            };
+            // Without fog the cube shows...
+            let clear = render(&c);
+            let cube = clear.chunks(4).filter(|p| off(p) > 8).count();
+            assert!(cube > (w * h / 8) as usize, "{tier:?}: the cube shows in {cube} pixels");
+            // ...and fog so dense the surface is all fog (1 - exp(-50 d)
+            // at the cube's depth) leaves the background alone.
+            c.fog_strength = 50.0;
+            c.fog_start = 0.0;
+            let worst = render(&c).chunks(4).map(off).max().unwrap_or(0);
+            println!("{tier:?}: the cube in {cube} pixels; fogged, the worst is {worst} levels from the background");
+            assert!(worst <= 2, "{tier:?}: a fogged pixel is {worst} levels from the background");
         }
     }
 
@@ -3155,7 +3196,7 @@ mod tests {
         let registry = crate::variations::global_registry();
         r.set_ifs(crate::escape::ifs::pack_for(def, c, &registry));
         drop(registry);
-        r.set_solid_lighting(&c.solid_shading, (c.fog_strength, c.fog_start, c.background_color));
+        r.set_solid_lighting(&c.solid_shading, crate::escape::path_core::solid_fog(&c));
         r.set_solid_sky(crate::escape::path_core::sky_seen(&c.escape.path, c));
         r.set_solid_material(crate::escape::path_core::lit_material(c));
         r.set_solid_studio(crate::escape::path_core::studio_level(&c.escape.path, c));

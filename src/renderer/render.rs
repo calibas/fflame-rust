@@ -1481,14 +1481,7 @@ async fn prepare_escape(
         escape_renderer.ensure_coarse(device, queue, &config.escape, &config.flame);
         // A SOLID walk lights itself, from the app's own lighting
         // settings rather than a second vocabulary of its own.
-        escape_renderer.set_solid_lighting(
-            &config.solid_shading,
-            (
-                config.fog_strength,
-                config.fog_start,
-                config.background_color,
-            ),
-        );
+        escape_renderer.set_solid_lighting(&config.solid_shading, crate::escape::path_core::solid_fog(config));
         escape_renderer.set_solid_sky(crate::escape::path_core::sky_seen(&config.escape.path, config));
         escape_renderer.set_solid_material(crate::escape::path_core::lit_material(config));
         escape_renderer.set_solid_studio(crate::escape::path_core::studio_level(&config.escape.path, config));

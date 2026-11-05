@@ -3,7 +3,7 @@
 Research 2026-10-23. **Section 1 decided 2026-11-04**: the user chose one
 gallery renderer, and `wasm/flame`, `wasm/escape` and `wasm/sim` were
 retired ("0.4 MB is a small price to avoid separate modules";
-[architecture-review.md](architecture-review.md) section 3, option (a)),
+[architecture-review.md](../archive/projects/architecture-review.md) section 3, option (a)),
 and the engine features with them: every build carries every engine.
 Section 1 below is the problem as it stood. Sections 2-4 are open. The user's words: "I want to review the
 WASM modules. We've added things like flame variations used in Simulation
@@ -51,7 +51,10 @@ once variations are fetched (section 4).
 
 ## 2. The web app against the desktop
 
-Video export (ffmpeg) aside, by intent:
+What the web app lacks, video export (ffmpeg) aside by intent. A
+WebCodecs encoder on `animation::frames::FrameSource` -- the frames the
+desktop export and Python already share -- would give it video too (the
+architecture review, 2026-11-04, section 4).
 
 | Feature | Web app |
 |---|---|

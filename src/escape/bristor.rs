@@ -1,4 +1,4 @@
-//! The Bristorbrot and the Quaternionbrot (docs/projects/bristorbrot.md):
+//! The Bristorbrot and the Quaternionbrot (docs/archive/projects/bristorbrot.md):
 //! the example solids (`assets/formulas/solid-bristorbrot.rhai`,
 //! `solid-quaternionbrot.rhai`) against their algebras written here in
 //! f64 -- the Bristorian product from its rule, not from the script's

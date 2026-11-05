@@ -1,6 +1,6 @@
 //! Escape panel — the whole editing surface for escape-time mode,
 //! drawn in every mode: outside Escape its choices enter the mode
-//! (`render_mode::choose`; docs/projects/one-workspace.md).
+//! (`render_mode::choose`; docs/archive/projects/one-workspace.md).
 //!
 //! Every control writes through `config_manager.update_param` with an
 //! `Escape*` ConfigPath, so undo/redo, coalescing, animation tracks and

@@ -547,6 +547,21 @@ impl ApiState {
 
     // --- Helpers ---
 
+    /// A GET the server answers without a sign-in -- the catalogs, a
+    /// download, a public script -- with the token when there is one (it
+    /// may also see the caller's private rows), unauthenticated when
+    /// not: signed out, or a guest. On WASM the cookie decides either way.
+    async fn public_get<T: serde::de::DeserializeOwned>(&self, url: &str) -> FetchResult<T> {
+        #[cfg(target_arch = "wasm32")]
+        return client::api_get(url, "").await;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        match self.auth.get_token() {
+            Some(token) => client::api_get(url, token).await,
+            None => client::api_get_unauth(url).await,
+        }
+    }
+
     fn require_token(&self) -> FetchResult<String> {
         // On WASM, auth is handled via cookies — no token needed.
         // Return empty string so the client signature is satisfied (it ignores the token).
@@ -597,9 +612,8 @@ impl ApiState {
 
     /// Fetch one script, source included.
     pub async fn load_script(&self, id: &str) -> FetchResult<types::ScriptResponse> {
-        let token = self.require_token()?;
         let url = build_url(API_BASE_URL, &format!("/api/scripts/{id}"));
-        client::api_get(&url, &token).await
+        self.public_get(&url).await
     }
 
     /// Update a script, optimistically.
@@ -647,7 +661,6 @@ impl ApiState {
         page: u32,
         per_page: u32,
     ) -> FetchResult<Vec<types::ScriptListItem>> {
-        let token = self.require_token()?;
         let url = build_url(
             API_BASE_URL,
             &format!(
@@ -655,7 +668,7 @@ impl ApiState {
                 urlencode(query)
             ),
         );
-        client::api_get(&url, &token).await
+        self.public_get(&url).await
     }
 
     // ========================================================================
@@ -664,9 +677,8 @@ impl ApiState {
 
     /// The effect catalog — everything the server knows, without shaders.
     pub async fn list_effects(&self) -> FetchResult<Vec<types::EffectListItem>> {
-        let token = self.require_token()?;
         let url = build_url(API_BASE_URL, "/api/effects");
-        client::api_get(&url, &token).await
+        self.public_get(&url).await
     }
 
     /// One effect, with its WGSL.
@@ -676,9 +688,8 @@ impl ApiState {
     /// refuses a null one rather than adding an effect that renders
     /// nothing.
     pub async fn fetch_effect(&self, name: &str) -> FetchResult<types::EffectDownload> {
-        let token = self.require_token()?;
         let url = build_url(API_BASE_URL, &format!("/api/effects/{name}"));
-        client::api_get(&url, &token).await
+        self.public_get(&url).await
     }
 
     pub async fn fetch_variation(&self, name: &str) -> FetchResult<types::VariationDownload> {

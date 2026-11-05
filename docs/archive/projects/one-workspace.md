@@ -1,7 +1,9 @@
 # One workspace, every panel in every mode
 
+> **Archived 2026-11-04** -- finished: every step of the order of work built 2026-10-22 (branch `one-workspace`). Read [UI.md](../../main/UI.md) (layouts, menus, render modes) and `src/ui/visibility.rs` for how it works now; this is the record of what was decided and why.
+
 Decided 2026-10-22. It replaces the render-mode UI policy of
-[ui-render-modes.md](../archive/projects/ui-render-modes.md) (panels
+[ui-render-modes.md](ui-render-modes.md) (panels
 greyed by mode, a workspace per mode, the Mode menu) with one workspace
 in which every panel works or says why not.
 

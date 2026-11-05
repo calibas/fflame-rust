@@ -1,5 +1,5 @@
 """One-shot codemod for the one-parameter-system plan's variations step
-(docs/projects/one-parameter-system.md, step 7), run after
+(docs/archive/projects/one-parameter-system.md, step 7), run after
 `params_codemod.py --struct VariationParamDef`:
 
 - each parameter `variations::SLOW_PARAMS` names becomes slow where it

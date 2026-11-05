@@ -44,15 +44,12 @@ impl App {
         self.handle_variation_updates(ui_response);
         self.handle_clear_effect_cache(ui_response);
         self.handle_effect_updates(ui_response);
-        // Online mode off: no catalog fetches, and an effect a flame
-        // lacks stays in the missing set rather than being fetched, so
-        // turning online mode on fetches it then. (Results already in
-        // flight are folded in when it is back on.)
-        if self.config_manager.system_settings().online_mode {
-            self.refresh_variation_catalog();
-            self.handle_effect_fetches();
-            self.refresh_effect_catalog();
-        }
+        // The catalogs and a missing effect's fetch are a guest's too
+        // (`online_account` off): the server serves them without a
+        // sign-in, and a request then carries no token.
+        self.refresh_variation_catalog();
+        self.handle_effect_fetches();
+        self.refresh_effect_catalog();
         self.poll_script_cloud();
         self.handle_script_cloud_request(ui_response.script_cloud_request.clone());
     }
@@ -1451,7 +1448,7 @@ impl App {
             let has_auth = settings.is_signed_in();
             let interval = self.health_policy.interval();
 
-            let should_check = settings.online_mode
+            let should_check = settings.online_account
                 && has_auth
                 && self.last_health_check
                     .map(|t| t.elapsed() >= interval)
@@ -1581,7 +1578,7 @@ impl App {
         }
     }
 
-    /// Trigger a health check if conditions are met (has token/cookies, online mode, not in flight).
+    /// Trigger a health check if conditions are met (has token/cookies, the online account on, not in flight).
     /// Called once at startup — on WASM, always tries (cookies may already be valid).
     pub(super) fn maybe_trigger_health_check(&mut self) {
         // On WASM, always try at startup — cookies may hold a valid session
@@ -1592,7 +1589,7 @@ impl App {
         let has_auth = self.config_manager.system_settings().is_signed_in();
 
         if !self.health_check_in_progress
-            && self.config_manager.system_settings().online_mode
+            && self.config_manager.system_settings().online_account
             && has_auth
         {
             self.trigger_health_check();

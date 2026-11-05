@@ -70,22 +70,22 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                // The one switch for everything that talks to the online
-                // service (ONLINE.md, Online mode). It had no control:
-                // the setting changed only by editing the settings file.
-                let mut online = menu_state.online_mode;
+                // The online account (ONLINE.md, Online account): off,
+                // the app is a guest of the online service -- downloads
+                // still work, nothing signs in or saves online.
+                let mut online = menu_state.online_account;
                 if ui
-                    .checkbox(&mut online, t!("menu.online_features").as_ref())
-                    .on_hover_text(t!("menu.tooltip_online_features").as_ref())
+                    .checkbox(&mut online, t!("menu.online_account").as_ref())
+                    .on_hover_text(t!("menu.tooltip_online_account").as_ref())
                     .changed()
                 {
-                    menu_actions.file.set_online_mode = Some(online);
+                    menu_actions.file.set_online_account = Some(online);
                 }
 
-                // Present whenever online mode is on, signed in or not —
+                // Present whenever the online account is on, signed in or not —
                 // hiding it while signed out makes the feature look
                 // absent. Signed out it opens the login panel instead.
-                if menu_state.online_mode {
+                if menu_state.online_account {
                     let signed_in = menu_state.auth_email.is_some();
                     let api_available = menu_state.api_connectivity == crate::api::ApiConnectivity::Online;
 
@@ -362,8 +362,8 @@ pub fn render_menu_bar(
                 // does not use says so on hover, and at its own top.
                 let mode = menu_state.render_mode;
                 for row in super::visibility::WINDOW_MENU {
-                    if row.online_only {
-                        if !menu_state.online_mode {
+                    if row.account_only {
+                        if !menu_state.online_account {
                             continue;
                         }
                         ui.separator();
@@ -531,7 +531,7 @@ pub fn render_menu_bar(
                 });
 
                 // Auth status display (left of language selector)
-                if menu_state.online_mode {
+                if menu_state.online_account {
                     ui.separator();
 
                     // Connectivity indicator

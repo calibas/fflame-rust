@@ -267,7 +267,7 @@ Three variations use it: `stereogram`, `multi_kaleidoscope`,
 ### Types
 
 A parameter is a `params::ParamDef`, the definition every kind shares
-([one-parameter-system.md](../projects/one-parameter-system.md)): a
+([one-parameter-system.md](../archive/projects/one-parameter-system.md)): a
 name, a label, a hint (the tooltip), its kind with its default and
 range, and whether it is slow. `param!` writes one:
 
