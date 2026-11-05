@@ -36,7 +36,32 @@ fn edit_as_formula(
         return;
     }
     let file = crate::storage::formula_store::file_name_for(&format!("{builtin}.rhai")).unwrap_or_else(|| "formula.rhai".into());
-    formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_in_use(file, &src);
+    formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_in_use(EntryKind::Formula, file, &src);
+    *open_formula_editor = true;
+}
+
+/// The colouring's Edit as Rhai (P7 step 2): the built-in colouring
+/// `builtin`'s twin becomes the config's colouring, one undo step (its
+/// parameters carry over by name, the formula and the view stay), and the
+/// Formula Editor opens it in use.
+fn edit_coloring_as_rhai(
+    config_manager: &mut ConfigManager,
+    builtin: &str,
+    src: crate::config::escape::CustomSource,
+    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
+    open_formula_editor: &mut bool,
+) {
+    use crate::lang::EntryKind;
+    let name = crate::escape::custom::name_of(EntryKind::Coloring, &src);
+    let changes = vec![
+        (ConfigPath::EscapeCustomColoring, ConfigValue::String(crate::config::manager::custom_source_json(&Some(src.clone())))),
+        (ConfigPath::EscapeColoring, ConfigValue::String(name)),
+    ];
+    if super::render_mode::choose(config_manager, changes, "history.action.edit_coloring_as_rhai", RenderMode::Escape).is_err() {
+        return;
+    }
+    let file = crate::storage::formula_store::file_name_for(&format!("{builtin}-coloring.rhai")).unwrap_or_else(|| "coloring.rhai".into());
+    formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_in_use(EntryKind::Coloring, file, &src);
     *open_formula_editor = true;
 }
 
@@ -1218,7 +1243,7 @@ pub fn render_escape_content(
     ui.separator();
 
     // ---- Coloring ----
-    show_coloring_section(ui, config_manager, &esc, field, ifs_def);
+    show_coloring_section(ui, config_manager, &esc, field, ifs_def, formula_editor, open_formula_editor);
 
     // ---- Transformations (the KIFS plan, C4): mode A's formulas, and a
     // solid's Orbit stage (3d-look-and-tools P5) ----
@@ -2343,6 +2368,8 @@ fn show_coloring_section(
     esc: &crate::config::escape::EscapeConfig,
     field: Option<&'static crate::escape::fields::FieldDef>,
     ifs_def: Option<&'static crate::escape::ifs::IfsDef>,
+    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
+    open_formula_editor: &mut bool,
 ) {
     if let Some(d) = ifs_def {
         let coloring = crate::escape::ifs::get_ifs_coloring(&esc.coloring, d);
@@ -2450,6 +2477,14 @@ fn show_coloring_section(
                 }
                 plugin_entries(ui, config_manager, &esc.coloring, false);
             });
+        // A built-in with a twin in Rhai (`escape::twins::COLORING_TWINS`):
+        // put the twin in its place, the picture unchanged, and open it in
+        // the Formula Editor as the user's own to change.
+        if let Some(src) = crate::escape::twins::coloring_custom_source(&esc.coloring) {
+            if ui.button(t!("escape_panel.edit_as_rhai")).on_hover_text(t!("escape_panel.edit_coloring_as_rhai_tip")).clicked() {
+                edit_coloring_as_rhai(config_manager, &esc.coloring, src, formula_editor, open_formula_editor);
+            }
+        }
     });
     // The saved coloring may predate the formula it is paired with (an
     // older config, or a formula switch). Say so and offer the fix,
@@ -2938,6 +2973,33 @@ mod tests {
         let _ = manager.undo();
         assert_eq!(manager.config().escape.formula, "burning_ship", "one undo step");
         assert_eq!(manager.config().render_mode, RenderMode::TwoD);
+    }
+
+    /// The colouring's Edit as Rhai puts its twin in place: the settings
+    /// carry over by name, the formula stays, the editor opens on it in
+    /// use as a colouring, and one undo restores the built-in.
+    #[test]
+    fn edit_coloring_as_rhai_puts_the_twin_in_place_and_opens_it() {
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = RenderMode::Escape;
+        config.escape.formula = "multibrot".into();
+        config.escape.coloring = "orbit_trap".into();
+        config.escape.coloring_params.insert("shape".into(), 4.0);
+        config.escape.coloring_params.insert("radius".into(), 0.7);
+        let mut manager = ConfigManager::new(config);
+        let (mut editor, mut open) = (None, false);
+        let src = crate::escape::twins::coloring_custom_source("orbit_trap").unwrap();
+        edit_coloring_as_rhai(&mut manager, "orbit_trap", src.clone(), &mut editor, &mut open);
+        let esc = &manager.config().escape;
+        assert!(esc.coloring.starts_with(crate::escape::custom::PREFIX), "{}", esc.coloring);
+        assert_eq!(esc.custom_coloring.as_ref().map(|s| s.source.as_str()), Some(src.source.as_str()));
+        assert_eq!((esc.coloring_params.get("shape"), esc.coloring_params.get("radius")), (Some(&4.0), Some(&0.7)), "the settings carry over");
+        assert_eq!(esc.formula, "multibrot", "the formula stays");
+        assert!(open && editor.is_some(), "the editor opens");
+        crate::escape::custom::ensure(esc);
+        assert_eq!(crate::escape::get_coloring(&esc.coloring).name, esc.coloring, "the twin is the colouring in use");
+        let _ = manager.undo();
+        assert_eq!(manager.config().escape.coloring, "orbit_trap", "one undo step");
     }
 
     /// Drawn in every mode (one-workspace plan): outside Escape the panel

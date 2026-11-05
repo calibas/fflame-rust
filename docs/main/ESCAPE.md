@@ -914,6 +914,12 @@ fn escaped(s, p) {
   noise to the bit -- where the language's own `sin`, range-reduced
   (`uf_reduce`, for Metal's error), would make it a different noise.
   Fast, not good: hash a lattice point, as noise does.
+- **`round_even(x)`** (WGSL's `round`, each part of a complex): halves to
+  even, and a float -- where `round` (UF's) takes halves away from zero
+  and gives an int. So a twin of a built-in that rounds rounds as it
+  does, and an iterate past an int's range rounds to itself (the
+  Gaussian Integer colouring's twin). Deep zoom declines a formula that
+  uses it, as it declines `round`.
 - **Labels by locale** (design rule 8): `INFO.title`, `INFO.description`
   and a parameter's `caption`, `hint` and each choice may be a map of
   locale to string,
@@ -1083,6 +1089,33 @@ fn escaped(s, p) {
     CPU in f32, and each line folds through every earlier one, so `prepare`
     computes in f32 an operation at a time (`to_f32`) -- in f64 the tables
     parted by whole units after the first few lines.
+- **The built-in colourings' twins** (`escape::twins::COLORING_TWINS`,
+  `assets/formulas/twins/colorings/*.rhai`; P7 step 2 in
+  [rhai-plugins.md](../projects/rhai-plugins.md), batch 1 of five):
+  Escape Count, Orbit Trap, Sphere Average, Decomposition, Basic,
+  Gaussian Integer and Itinerary, each a Rhai colouring that renders as
+  its built-in. The other colourings read what the dialect cannot yet
+  (the escape fraction, `z_prev`, `dz`, a colour as the result), and
+  come in the later batches.
+  - Each has its built-in's parameters exactly -- names, captions,
+    hints, ranges, choices, a log slider -- and its interior and
+    accumulator flags (`every_colouring_twin_compiles_as_its_builtin`).
+  - The colouring section's **Edit as Rhai** puts the twin in the
+    built-in's place, one undo step: the settings carry over by name,
+    and the formula and the view stay. It opens the twin in the Formula
+    Editor in use as a colouring, so with Live on an edit re-renders.
+  - Through the renderer each matches its built-in on every pixel, at
+    every setting that takes another path through the code, on the
+    Mandelbrot inside and out, a Julia set, deep on the perturbed path,
+    at a bailout of 1e8, and on the exponential
+    (`builtin_colouring_twins_render_as_their_builtins`).
+  - Their speed, the best of five at 1024x768 and 4000 iterations, the
+    Mandelbrot's whole set, direct
+    (`measure_colouring_twins_against_their_builtins`, 2026-11-05, GTX
+    1660 SUPER): within a few percent of their built-ins, but for
+    Itinerary, 25% slower. Its angle goes through the language's
+    zero-pair-exact `atan2` (Metal's fails at a zero pair), which the
+    built-in avoids by its own guard.
 - **UF and Fractint formulas and colourings convert** (`lang/to_rhai.rs`;
   the Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
   checked program is printed in these shapes, the file opened left as

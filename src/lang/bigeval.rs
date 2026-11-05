@@ -726,6 +726,7 @@ impl BigMachine {
             Trunc => self.round_each(z, f64::trunc),
             Ceil => self.round_each(z, f64::ceil),
             Floor => self.round_each(z, f64::floor),
+            RoundEven => self.round_each(z, f64::round_ties_even),
             Real => real(z.re.clone()),
             Imag => real(z.im.clone()),
             Conj => BigComplex { re: z.re.clone(), im: z.im.neg() },

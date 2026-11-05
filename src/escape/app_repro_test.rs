@@ -3415,6 +3415,114 @@ mod tests {
         assert!(d == 0.0, "the custom colouring at depth differs on {:.3}% of pixels", d * 100.0);
     }
 
+    /// The built-in colourings' twins (`escape::twins::COLORING_TWINS`,
+    /// P7 step 2) render as their built-ins: every setting that takes
+    /// another path through the code, on the Mandelbrot inside and out, a
+    /// Julia set, and deep on the perturbed path.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn builtin_colouring_twins_render_as_their_builtins() {
+        use crate::lang::EntryKind;
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let twin_of = |mut esc: crate::config::escape::EscapeConfig| {
+            let src = crate::escape::twins::coloring_custom_source(&esc.coloring).expect("a twin");
+            esc.coloring = crate::escape::custom::name_of(EntryKind::Coloring, &src);
+            esc.custom_coloring = Some(src);
+            esc
+        };
+        // (colouring, its settings)
+        let mut cases: Vec<(&str, Vec<(&str, f32)>)> = vec![
+            ("escape_count", vec![]),
+            ("basic", vec![]),
+            ("basic", vec![("part", 1.0)]),
+            ("basic", vec![("part", 2.0), ("scale", 3.0)]),
+            ("decomposition", vec![]),
+            ("decomposition", vec![("sectors", 2.0)]),
+            // A half: WGSL's round goes to even, 2 sectors.
+            ("decomposition", vec![("sectors", 2.5)]),
+            ("decomposition", vec![("sectors", 5.0), ("scale", 2.0)]),
+            ("sphere_average", vec![]),
+            ("sphere_average", vec![("at_infinity", 1.0)]),
+            ("sphere_average", vec![("target_re", 0.5), ("target_im", -0.25), ("stride", 3.0)]),
+            ("gaussian_integer", vec![]),
+            ("itinerary", vec![]),
+            ("itinerary", vec![("window", 1.0)]),
+            ("itinerary", vec![("sectors", 3.0), ("depth", 5.0), ("scale", 4.0)]),
+        ];
+        for shape in 0..8 {
+            cases.push(("orbit_trap", vec![("shape", shape as f32), ("radius", 0.6), ("scale", 3.0)]));
+        }
+        for mode in 1..4 {
+            cases.push(("orbit_trap", vec![("mode", mode as f32), ("threshold", 0.05)]));
+        }
+        cases.push(("orbit_trap", vec![("shape", 4.0), ("rotation", 30.0), ("center_re", 0.3), ("center_im", -0.2)]));
+        cases.push(("orbit_trap", vec![("shape", 3.0), ("growth", 2.0), ("rotation", -45.0)]));
+        for reduction in 1..4 {
+            cases.push(("gaussian_integer", vec![("reduction", reduction as f32)]));
+        }
+
+        let mut whole = crate::config::escape::EscapeConfig::default();
+        whole.formula = "mandelbrot".into();
+        whole.max_iter = 200;
+        whole.bailout = 4.0;
+        whole.center_re = "-0.6".into();
+        whole.center_im = "0".into();
+        whole.zoom_log2 = 0.4;
+        let mut julia = whole.clone();
+        julia.julia = true;
+        julia.julia_re = -0.8;
+        julia.julia_im = 0.156;
+        julia.center_re = "0".into();
+        julia.zoom_log2 = 0.0;
+        let mut deep = whole.clone();
+        deep.center_re = "-0.743643887037158704752191506114774".into();
+        deep.center_im = "0.131825904205311970493132056385139".into();
+        deep.zoom_log2 = 20.0;
+        deep.max_iter = 1500;
+        // Iterates far past an int's range: a rounding of z is a float's.
+        let mut far = whole.clone();
+        far.bailout = 1e8;
+        // Escaping to infinity: past any meaning, as Basic's guard says.
+        let mut exponential = whole.clone();
+        exponential.formula = "exponential".into();
+        exponential.center_re = "0".into();
+        exponential.zoom_log2 = -1.0;
+        let views = [
+            ("the whole set", whole, false),
+            ("a Julia set", julia, false),
+            ("deep, perturbed", deep, true),
+            ("bailout 1e8", far, false),
+            ("the exponential", exponential, false),
+        ];
+
+        let mut worst = 0.0f64;
+        for (name, settings) in &cases {
+            for (view, base, perturbed) in &views {
+                let mut esc = base.clone();
+                esc.coloring = name.to_string();
+                for (k, v) in settings {
+                    esc.coloring_params.insert(k.to_string(), *v);
+                }
+                let want = output_on(&device, &queue, &renderer, &esc, w, h, *perturbed);
+                let twin = twin_of(esc);
+                let got = output_on(&device, &queue, &renderer, &twin, w, h, *perturbed);
+                assert_eq!(crate::escape::get_coloring(&twin.coloring).name, twin.coloring, "{name} did not compile");
+                let covered = want.chunks(4).filter(|p| p[3] > 0.5).count();
+                assert!(covered > 100, "{name} {settings:?} on {view}: too little shows ({covered})");
+                let d = differing(&want, &got);
+                println!("{name} {settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
+                worst = worst.max(d);
+                assert!(d == 0.0, "{name} {settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
+            }
+        }
+        println!("worst: {:.3}%", worst * 100.0);
+    }
+
     /// Arrays through the renderer (plan, item 3, step 3a): a formula
     /// whose step reads global tables and keeps a per-pixel history
     /// renders as the built-in Mandelbrot it equals -- a table picks the
@@ -17162,6 +17270,55 @@ fn main() {
                     if floatexp { "floatexp rung" } else { "scaled rung" }
                 );
             }
+        }
+    }
+
+    /// MEASUREMENT (P7 step 2): each colouring twin against its built-in,
+    /// at its defaults, on the direct path: the Mandelbrot's whole set at
+    /// 4000 iterations, where most pixels run long and the colouring's
+    /// step is a large share of the work. The best of five, shaders warm.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn measure_colouring_twins_against_their_builtins() {
+        let (device, queue) = repro_device();
+        let (w, h) = (1024u32, 768u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
+        let run = |esc: &crate::config::escape::EscapeConfig| -> f64 {
+            let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+            r.force_direct = true;
+            let start = std::time::Instant::now();
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
+                let settled = r.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+            }
+            let t = start.elapsed().as_secs_f64();
+            r.destroy();
+            t
+        };
+        println!("{w}x{h}, the Mandelbrot at 4000 iterations, direct; ms, the best of five");
+        for (name, _) in crate::escape::twins::COLORING_TWINS {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "mandelbrot".into();
+            esc.max_iter = 4000;
+            esc.center_re = "-0.6".into();
+            esc.center_im = "0".into();
+            esc.zoom_log2 = 0.4;
+            esc.coloring = name.to_string();
+            let src = crate::escape::twins::coloring_custom_source(name).unwrap();
+            let mut twin = esc.clone();
+            twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
+            twin.custom_coloring = Some(src);
+            let _ = run(&esc);
+            let _ = run(&twin);
+            let best = |c: &crate::config::escape::EscapeConfig| (0..5).map(|_| run(c)).fold(f64::MAX, f64::min) * 1000.0;
+            let (b, t) = (best(&esc), best(&twin));
+            println!("{name:18} built-in {b:7.1}  twin {t:7.1}  ({:+.1}%)", (t / b - 1.0) * 100.0);
         }
     }
 
