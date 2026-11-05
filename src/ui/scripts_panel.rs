@@ -651,12 +651,13 @@ impl ScriptsPanel {
         }
     }
 
-/// The online library: what you have published, and what other
+    /// The online library: what you have published, and what other
     /// people have.
     ///
-    /// Drawn only when signed in. Offering Publish to somebody who
-    /// cannot use it is worse than not showing it — the local store is
-    /// the whole feature for a signed-out user, and it works.
+    /// Public scripts are anybody's to search and open, a guest's
+    /// (`online_account` off) included. What you have published, and
+    /// Publish, are drawn only when signed in: offering Publish to
+    /// somebody who cannot use it is worse than not showing it.
     fn render_cloud(
         &mut self,
         ui: &mut egui::Ui,
@@ -665,10 +666,6 @@ impl ScriptsPanel {
         request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
     ) {
         use crate::app::script_cloud::ScriptCloudRequest as Req;
-
-        if !signed_in {
-            return;
-        }
 
         ui.separator();
         egui::CollapsingHeader::new("Online library")
@@ -688,34 +685,36 @@ impl ScriptsPanel {
                     self.render_conflict(ui, stem, c, cloud.busy, request);
                 }
 
-                ui.add_space(4.0);
-                self.render_publish_controls(ui, cloud, request);
+                if signed_in {
+                    ui.add_space(4.0);
+                    self.render_publish_controls(ui, cloud, request);
 
-                ui.add_space(6.0);
-                ui.separator();
+                    ui.add_space(6.0);
+                    ui.separator();
 
-                // ---- mine -------------------------------------------
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Published by you").strong());
-                    if ui
-                        .add_enabled(!cloud.busy, egui::Button::new("Refresh").small())
-                        .clicked()
-                    {
-                        *request = Some(Req::ListMine);
+                    // ---- mine ---------------------------------------
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Published by you").strong());
+                        if ui
+                            .add_enabled(!cloud.busy, egui::Button::new("Refresh").small())
+                            .clicked()
+                        {
+                            *request = Some(Req::ListMine);
+                        }
+                    });
+                    if !cloud.mine_loaded {
+                        ui.weak("Not loaded — press Refresh.");
+                    } else if cloud.mine.is_empty() {
+                        ui.weak("You have not published any scripts.");
+                    } else {
+                        for item in &cloud.mine {
+                            Self::render_cloud_row(ui, item, false, cloud.busy, request);
+                        }
                     }
-                });
-                if !cloud.mine_loaded {
-                    ui.weak("Not loaded — press Refresh.");
-                } else if cloud.mine.is_empty() {
-                    ui.weak("You have not published any scripts.");
-                } else {
-                    for item in &cloud.mine {
-                        Self::render_cloud_row(ui, item, false, cloud.busy, request);
-                    }
+
+                    ui.add_space(6.0);
+                    ui.separator();
                 }
-
-                ui.add_space(6.0);
-                ui.separator();
 
                 // ---- browse -----------------------------------------
                 ui.label(egui::RichText::new("Public scripts").strong());
