@@ -1154,7 +1154,8 @@ fn escaped(s, p) {
 - **The built-in colourings' twins** (`escape::twins::COLORING_TWINS`,
   `assets/formulas/twins/colorings/*.rhai`; P7 step 2 in
   [rhai-plugins.md](../projects/rhai-plugins.md), five batches): every
-  built-in colouring but Image Trap, which reads a user image -- Escape
+  built-in colouring but Image Trap, which reads the config's texture,
+  as the dialect cannot yet (rhai-plugins.md, step 2) -- Escape
   Count, Orbit Trap, Sphere Average, Decomposition, Basic, Gaussian
   Integer, Itinerary, (reading the loop's values, `ctx` above) Smooth,
   Orbit, Stripe, Magnitude and Position Average, Root Basin, Triangle
