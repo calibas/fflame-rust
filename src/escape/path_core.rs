@@ -315,6 +315,18 @@ fn shown(config: &FractalConfig, c: [f32; 3]) -> [f32; 3] {
     c.map(|v| v.max(0.0).powf(2.2).powf(gamma) / exposure)
 }
 
+/// A solid's depth fog, as `set_solid_lighting` takes it: its strength,
+/// its start, and its colour -- the background as the accumulator holds
+/// what the tonemap shows as it ([`shown`]), so a surface fogged
+/// through reads as the background behind it.
+///
+/// The shaders decoded the picked colour with `pow(2.2)` alone, which
+/// matches only at exposure 1 and gamma 1: at the escape engine's gamma
+/// 2.2 the fog faded toward a lighter colour than the background.
+pub fn solid_fog(config: &FractalConfig) -> (f32, f32, [f32; 3]) {
+    (config.fog_strength, config.fog_start, shown(config, config.background_color))
+}
+
 /// A picture's material (docs/archive/projects/materials.md): the coat -- its
 /// reflectance at normal incidence and its roughness -- the albedo's glow,
 /// how much of it is metal (P4), and how much of its colour it reflects
