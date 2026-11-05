@@ -48,9 +48,6 @@ VERSION_FILES = [
     ("python/pyfflame/__init__.py", re.compile(r'^(__version__\s*=\s*")([^"]+)(")', re.M), 1),
     ("wasm/render/Cargo.toml", _MANIFEST_VERSION, 1),
     ("wasm/script/Cargo.toml", _MANIFEST_VERSION, 1),
-    ("wasm/flame/Cargo.toml", _MANIFEST_VERSION, 1),
-    ("wasm/escape/Cargo.toml", _MANIFEST_VERSION, 1),
-    ("wasm/sim/Cargo.toml", _MANIFEST_VERSION, 1),
     # The web app's cache-busters on css/ and js/ (every `?v=`): browsers
     # keep those through ordinary reloads, so a new release must change
     # the URL or a stale vkb.js silently downgrades the keyboard.
@@ -145,33 +142,22 @@ GATES = [
          why="generated WGSL changed"),
     Gate("doc links", [sys.executable, "scripts/check_doc_links.py"],
          why="live docs pointing nowhere"),
-    # The gallery modules: one check of all five crates, each at its own
-    # feature set -- render and script with every engine and no web app,
-    # flame, escape and sim with one engine each. That is the engine
-    # feature matrix, and it is not hypothetical: `render_sim` and
-    # `register_sim` both silently required the ESCAPE feature for
-    # months, because a doc comment was inserted between an escape
-    # item's `#[cfg]` and the item, leaving the attribute on the
-    # simulation item that followed. Nothing failed until the first
-    # build with simulation and no escape. Checking the crates rather
-    # than the library alone also compiles their own code and tests.
+    # The gallery modules: one check of both crates (render and script,
+    # every engine and no web app or terrain), the build the library
+    # gets nowhere else.
     #
-    # A check, not the crates' test runs: those compile the library at
-    # four feature sets with codegen, 7 minutes a release check
-    # (2026-11-03: script parity 125s, renderer 12s, sim 100s, escape
-    # 103s, flame 93s). Incremental, the check is 14-15s after an edit
-    # and 3s with none. What their runs asserted is kept where it costs
-    # nothing:
-    # - the flame catalog present or gone: a compile-time assertion
-    #   (`variations::defs`), which this check evaluates per module;
+    # A check, not the crates' test runs: those compile the library with
+    # codegen (2026-11-03: script parity 125s, renderer 12s).
+    # Incremental, a check is 14-15s after an edit and 3s with none.
+    # What their runs asserted is kept where it costs nothing:
     # - script + seed reproducing the CLI's flames: the main suite
     #   compares the same fixtures (`shipped_scripts_give_the_clis_
     #   flames_for_their_seeds`);
-    # - the rest -- each module rendering on a GPU, the renderer's clamps
-    #   and device reuse, the script module's parameters and envelope --
-    #   runs before the modules deploy: `release.py gallery`.
+    # - the rest -- the renderer drawing every engine on a GPU, its
+    #   clamps and device reuse, the script module's parameters and
+    #   envelope -- runs before the modules deploy: `release.py gallery`.
     Gate("gallery modules", lambda: gallery_compiles(),
-         why="each module at its own feature set: a cfg on the wrong item compiles everywhere else"),
+         why="the library without the web app or terrain: a cfg on the wrong item compiles everywhere else"),
     # pyfflame's engine: the one WASI build, with code (`browser` versus
     # wasm32 cfgs, its storage and fetch stubs) nothing else compiles.
     # The PyO3 crate it replaced fell out of every gate and stopped
@@ -183,7 +169,7 @@ GATES = [
 
 # The gallery crates, each a workspace of its own sharing
 # wasm/target-gallery.
-GALLERY_CRATES = ["render", "script", "flame", "escape", "sim"]
+GALLERY_CRATES = ["render", "script"]
 
 
 def gallery_compiles():
@@ -209,10 +195,9 @@ def gallery_compiles():
 # gallery`), not in every check: each compiles the library at its
 # module's feature set with codegen, a minute or two a crate. wasm/script's
 # CLI parity covers the module's parameters and envelope; wasm/render's
-# smoke tests its clamps and device reuse (a regression froze real
-# galleries once); the single-engine smoke tests render on the GPU and
-# refuse a config of an engine they lack. The GPU tests skip without an
-# adapter. `--profile gallery-test`, not `--release`: the crates' own
+# smoke renders every engine (a Flame Attractor that needs the catalog
+# among them), its clamps and device reuse (a regression froze real
+# galleries once). The GPU tests skip without an adapter. `--profile gallery-test`, not `--release`: the crates' own
 # [profile.release] is tuned to ship a small .wasm (opt-level="z", fat
 # LTO, one codegen unit), and testing under it spent minutes optimizing
 # the parent crate for download size (178s -> 73s from the profile).
@@ -221,12 +206,6 @@ GALLERY_TESTS = [
          why="script + seed is a shareable artifact; drift redefines every published seed"),
     Gate("gallery renderer smoke", ["cargo", "test", "--profile", "gallery-test"], cwd="wasm/render",
          why="the device-reuse regression froze real galleries once already"),
-    Gate("gallery sim smoke", ["cargo", "test", "--profile", "gallery-test"], cwd="wasm/sim",
-         why="engine-sim alone renders, and refuses an escape config"),
-    Gate("gallery escape smoke", ["cargo", "test", "--profile", "gallery-test"], cwd="wasm/escape",
-         why="engine-escape alone renders"),
-    Gate("gallery flame smoke", ["cargo", "test", "--profile", "gallery-test"], cwd="wasm/flame",
-         why="engine-flame alone renders, and refuses an escape config"),
     # pyfflame: its module built and packaged, then its tests -- the old
     # PyO3 package's, which the WASI one passes unchanged, and rendering.
     Gate("python package", lambda: python_tests(),
@@ -489,10 +468,8 @@ def cmd_version(args):
 
 # ----------------------------------------------------------------- build
 
-# (name, command, note, directory). The five gallery modules are
-# five wasm-pack builds — the three single-engine ones are the same
-# source as wasm/render with fewer engines, and each is a module of its
-# own to ship. Each runs from its crate directory, where cargo finds
+# (name, command, note, directory). The two gallery modules are two
+# wasm-pack builds, each run from its crate directory, where cargo finds
 # wasm/.cargo/config.toml and its shared target directory.
 BUILDS = [
     ("desktop (dist)", ["cargo", "build", "--profile", "dist", "--bin", "FractalArtEditor"],
@@ -502,12 +479,6 @@ BUILDS = [
      "in wasm/render", "wasm/render"),
     ("gallery: script", ["wasm-pack", "build", "--target", "web", "--release"],
      "in wasm/script", "wasm/script"),
-    ("gallery: flame", ["wasm-pack", "build", "--target", "web", "--release"],
-     "in wasm/flame", "wasm/flame"),
-    ("gallery: escape", ["wasm-pack", "build", "--target", "web", "--release"],
-     "in wasm/escape", "wasm/escape"),
-    ("gallery: sim", ["wasm-pack", "build", "--target", "web", "--release"],
-     "in wasm/sim", "wasm/sim"),
     ("python wheel", [sys.executable, "python/build.py", "--wheel"],
      "the WASI module + one pure-Python wheel -> python/dist", None),
 ]

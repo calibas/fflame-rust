@@ -51,9 +51,10 @@ Constructors:
 
 | constructor | per-pixel flame state | used by |
 | --- | --- | --- |
-| `FlameRenderer::new(device, queue, format, w, h, flame)` | full | the WASM custom-size export |
-| `FlameRenderer::with_palette_size(..., palette_size)` | full | the app's viewport, `render()` for flames, video, the gallery module, tools |
-| `FlameRenderer::for_tail(..., palette_size)` | 1x1 | `render()` for escape and simulation configs |
+| `FlameRenderer::new(device, queue, format, w, h, flame)` | full | no caller (`with_palette_size` at the default palette size) |
+| `FlameRenderer::with_palette_size(..., palette_size)` | full | the app's viewport, the gallery module (`wasm/render`), tools; `for_job` for a flame config |
+| `FlameRenderer::for_tail(..., palette_size)` | 1x1 | `for_job` for an escape or simulation config |
+| `FlameRenderer::for_job(..., config)` | either | `render()`, the video loop (`animation/export.rs`) and `wasm/python`: picks `with_palette_size` or `for_tail` by the config's render mode |
 
 `for_tail` builds `FlameBuffers` at 1x1 — the two histograms and the
 accumulator pair, 64 bytes a pixel, are never read when another engine
@@ -84,14 +85,15 @@ compute_pass ×N ──▶ accumulate_pass ──▶ sample density ──▶ sh
 | 5. sample-density fractions | `update_density_stats` (app, async) / `apply_exact_density_fraction` (one-shot, blocking) | every frame / once before the final tone map |
 | 6. shade | `run_shade_pass` | 3D, lighting active, depth region present |
 | 7. depth of field | `run_dof_pass` | 3D, `dof_blur_strength > 0`, depth region present |
-| 8. density effects | `EffectChainRunner::run_density_effects` | any enabled |
-| 9. tone map | `tonemap_pass` / `tonemap_pass_with_input` | every frame |
-| 10. colour effects | `EffectChainRunner::run_color_effects` | any enabled |
+| 8. density effects | `Tail::tone_map` → `EffectChainRunner::run_density_effects` | any enabled |
+| 9. tone map | `Tail::tone_map` → `tonemap_pass` / `tonemap_pass_with_input` | every frame |
+| 10. colour effects | `Tail::color` → `EffectChainRunner::run_color_effects` | any enabled |
 | 11. readback | `read_fractal_pixels` or the effect chain's `read_color_output_pixels` | exports |
 
 The tone map's input is the first that exists of: the density-effect
 output, the DoF output, the shade output, the current accumulator.
-Both `App::render` and `render_with` make that choice the same way;
+`Picture::flame` makes that choice for `App::render` and `render_with`
+alike, and `Tail` the rest (steps 8-10, `src/renderer/tail.rs`);
 steps 2–7 are flame-only.
 
 ### 1. The compute pass
@@ -428,11 +430,22 @@ and from there the flame renderer does the rest: density effects, the
 tone map (`tonemap_pass_with_input`), colour effects, readback. Steps
 1–7 do not run for them.
 
+The sequence is one, `Tail` (`src/renderer/tail.rs`), for every engine
+and both callers: `Tail::tone_map` (density effects on the `Picture`,
+then the tone map of their output or of the picture) and `Tail::color`.
+A `Picture` is the accumulator (the renderer's own bind group), the
+shade or DoF output, or another engine's image. The viewport records
+both stages into the frame's encoder with the app's effect chain; a
+headless render ends in `render::finish`, which makes an effect chain
+for the call, frees a throwaway renderer's iteration buffers between
+the stages, checks the memory scope and reads the pixels back.
+
 | | headless (`render_with`) | interactive (`App::render`) |
 | --- | --- | --- |
-| escape, 2D | `render_escape` → `escape_tail` | the app's lazy `escape_renderer`, re-rendered while `escape_dirty` |
-| escape terrain | `render_escape_terrain` → `escape_tail` | `escape_terrain` |
-| simulation (and its terrain) | `render_sim`, whose tail is inline | `sim_renderer`, `sim_terrain` |
+| flame | the flame path → `finish` (`Picture::flame`) | `Picture::flame(shade_ran, dof_ran)` |
+| escape, 2D | `render_escape` → `finish` | the app's lazy `escape_renderer`, re-rendered while `escape_dirty` |
+| escape terrain | `render_escape_terrain` → `finish` | `escape_terrain` |
+| simulation (and its terrain) | `render_sim` → `finish` | `sim_renderer`, `sim_terrain` |
 
 The headless paths call `load_config` first: it is the one call that
 keeps every tail input — palette texture, tonemap uniform, curve LUT,
@@ -441,7 +454,9 @@ renderer: `palette_view`, `escape_palette_view(stepped)`, and
 `palette_generation`, a counter bumped on every palette write that the
 escape engine keys its row bands on.
 
-If you add a pass to the tail, say what it does for all three engines.
+If you add a pass to the tail, add it to `Tail` and say what it does
+for all three engines; `HighResExporter` calls `Tail::density` and
+`Tail::color_on` around its own tone map.
 See [ESCAPE.md](ESCAPE.md), [SIMULATION.md](SIMULATION.md) and
 [TERRAIN.md](TERRAIN.md).
 
@@ -451,7 +466,9 @@ See [ESCAPE.md](ESCAPE.md), [SIMULATION.md](SIMULATION.md) and
 
 Every headless render goes through `src/renderer/render.rs`: CLI
 export, the WASM API's export, thumbnails, the in-app PNG export on the
-desktop, the gallery module (`wasm/render`) and video.
+desktop and the web app's custom-size export (`render()` on the app's
+device, `src/app/mod.rs`), the gallery module (`wasm/render`),
+`wasm/python` and video.
 
 ```rust
 let job = RenderJob::new(&config, 1920, 1080)
@@ -488,7 +505,6 @@ video loop passes one; still renders pass none.
 the non-flame engines).
 
 **`RenderError`**: `NoPaletteFound`, `PixelReadFailed`, `Cancelled`,
-`EngineMissing` (the config names an engine this build lacks),
 `OutOfMemory` (an allocation failed — caught with a wgpu error scope
 rather than rendering black), `TooLarge` (refused before allocating).
 `RenderProgress` reports progress and carries cancellation; `NoProgress`
@@ -510,8 +526,7 @@ this build has no entry for.
 **`render_with(renderer, device, queue, job, progress)`** renders into
 a caller-owned renderer of the right size (call `resize` first if the
 size changed). Escape configs go to `render_escape`, simulation configs
-to `render_sim`; a build without the engine returns `EngineMissing`.
-For a flame:
+to `render_sim`. For a flame:
 
 1. `load_config`, which also plans Focused Rendering inline.
 2. If shadows are wanted, the shadow warm-up described above.
@@ -754,10 +769,11 @@ export are in [EXPORT.md](EXPORT.md). Points that touch the renderer:
 - The video loop (`src/animation/export.rs`) owns one renderer and one
   `RenderEngines` for the whole video and calls `render_with` per
   frame, with sticky off.
-- On the web, the app's custom-size PNG export (`src/app/mod.rs`) runs
-  its own copy of the flame loop and tail rather than calling `render`,
-  and frees the iteration buffers (`free_iteration_buffers`) before
-  colour effects allocate.
+- On the web, the app's custom-size PNG export (`src/app/mod.rs`) calls
+  `render` on the app's device. `render` marks its own renderer
+  throwaway (`job.throwaway_renderer`), and `render_with` then frees the
+  iteration buffers (`free_iteration_buffers`) after the tone map,
+  before colour effects allocate.
 - `destroy()` releases the renderer's buffers explicitly; on WebGPU a
   dropped buffer is freed only when the JS garbage collector notices.
 
@@ -787,7 +803,7 @@ Layouts and fixed-size buffers: [BUFFERS.md](BUFFERS.md).
 
 | task | where |
 | --- | --- |
-| Add a pass to the tail | `render_with` and `App::render` (and `escape_tail`, `render_sim` if it applies to them); keep the input-priority chain identical in both |
+| Add a pass to the tail | `Tail` (`src/renderer/tail.rs`): the viewport and every headless render take it from there; `HighResExporter` if the pass is not one of the tail's stages it calls |
 | Change the accumulation formula | `shaders/accumulate.wgsl`, `AccumulateParams` in `gpu/buffers.rs`, `accumulate_pass` |
 | Change brightness normalisation | `refresh_sample_density`; [TONE-MAPPING.md](TONE-MAPPING.md) |
 | Add a per-frame uniform | `GpuParams` and `header.wgsl` together, and every `GpuParams { … }` literal (five in `compute_kernel.rs`, one each in `gpu/buffers.rs` and `export/high_res.rs`) — see [BUFFERS.md](BUFFERS.md) |

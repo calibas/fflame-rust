@@ -201,52 +201,20 @@ base64 = "0.22"
 # wasm/script) depend on this crate with default-features = false —
 # without the gate they would silently inherit the whole application.
 #
-# It also gates `mod app` and `mod ui` themselves. Those are compiled
-# even for a module that links none of them, and being compiled is
-# what makes them count: they are most of the surface any
-# engine-level feature has to thread `#[cfg]` through. Off, a
-# rendering module compiles the engine and nothing else.
-default = ["web-app", "engine-flame", "engine-escape", "engine-sim", "terrain"]
+# It also gates `mod app` and `mod ui` themselves: off, a rendering
+# module compiles the engines and nothing else.
+#
+# Every build carries all three engines and the formula language
+# (`crate::lang`); the per-engine features retired on 2026-11-04, when
+# the single-engine gallery modules did (one gallery renderer: the
+# engines use each other).
+default = ["web-app", "terrain"]
 web-app = []
-# The flame engine's VARIATION CATALOG. On by default, so the app and
-# every existing build are unchanged.
-#
-# Off, the registry holds `linear` alone and the other 646 defs become
-# unreachable, so the linker drops them: measured at HALF the gallery
-# renderer's download (0.80 MB gzip to 0.41 MB). That is the entire
-# point of the flag -- an escape-time module has no use for 1.1 MB of
-# flame shader source.
-#
-# One entry rather than none: a default FractalConfig carries a flame
-# whose transforms name `linear`, and code that resolves it should
-# find a variation rather than a hole. Nothing in an escape render
-# reaches it.
-engine-flame = []
-# The escape-time engine: formulas, colorings, and the perturbation
-# machinery (fixed point, reference orbits, the double-double shadow,
-# the orbit store). Its shader source is under 1% of a module's
-# download; the deep-zoom code is the weight. Its formulas are written
-# in the formula language, so it brings `lang`.
-engine-escape = ["lang"]
-# The formula language (`crate::lang`): Rhai -- and Ultra Fractal's and
-# Fractint's formulas -- compiled to WGSL, with the f64 interpreter as
-# its CPU back end. What makes an effect or a variation written in Rhai
-# work in a build: a gallery module without the escape engine turns
-# this on to compile them (docs/projects/rhai-plugins.md). Its
-# deep-zoom passes (big-float reference orbits, the nucleus search)
-# come with `engine-escape` alone.
-lang = []
-# The simulation engine: the model/colouring registries, the assembler
-# and SimRenderer. Like the escape engine its shader source is a small
-# fraction of a module's download; unlike it, there is no deep-zoom
-# machinery, so the whole thing is light.
-engine-sim = []
-# The 3D terrain view (docs/archive/terrain/heightfield-3d.md): an escape
-# picture, and later a simulation's, as a lit height field on the
-# escape engine's solid camera. ON by default; the gallery modules
-# build without it (the plan's H2) and render a terrain config as its
-# 2D picture.
-terrain = ["engine-escape"]
+# The 3D terrain view (docs/main/TERRAIN.md): an escape or simulation
+# picture as a lit height field on the escape engine's solid camera.
+# ON by default; the gallery modules build without it (the plan's H2)
+# and render a terrain config as its 2D picture.
+terrain = []
 
 [build-dependencies]
 chrono = "0.4"

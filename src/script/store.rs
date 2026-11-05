@@ -166,7 +166,8 @@ pub fn load(stem: &str) -> Option<String> {
 /// Only ever reaches the user's own store: the key is built from a stem,
 /// so there is no path for a caller to aim somewhere else. That is the
 /// structural replacement for the old canonicalize-and-compare guard,
-/// which existed because `ScriptOrigin::File` covered shipped files too.
+/// which existed because `ScriptOrigin::File` (now `library::ScriptHome`)
+/// covered shipped files too.
 pub fn delete(stem: &str) -> Result<(), String> {
     backend::delete_file(&key_for(stem)).map_err(|e| format!("cannot delete `{stem}`: {e}"))?;
     // Forget the link as well, or a stem reused later inherits the

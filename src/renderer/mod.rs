@@ -1,4 +1,3 @@
-#[cfg(any(feature = "engine-escape", feature = "engine-sim"))]
 pub mod average;
 pub mod coat;
 pub mod compute_kernel;
@@ -7,6 +6,7 @@ pub mod histogram;
 pub mod render;
 pub mod shade_pass;
 pub mod sticky;
+pub mod tail;
 pub mod dof_pass;
 pub mod density_stats;
 pub mod thumbnail;
@@ -17,7 +17,7 @@ pub(crate) mod density_gates;
 mod orbit_gates;
 #[cfg(test)]
 mod param_cost;
-#[cfg(all(test, not(target_arch = "wasm32"), feature = "web-app", feature = "engine-flame", feature = "engine-escape", feature = "engine-sim"))]
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "web-app"))]
 mod calibration;
 
 pub use compute_kernel::{FlameRenderer, TargetingState};

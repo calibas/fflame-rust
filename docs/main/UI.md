@@ -184,40 +184,50 @@ listing four modes by hand.
 
 ### Changing the mode
 
-[src/ui/render_mode.rs](../../src/ui/render_mode.rs) is the only place
-that writes `ConfigPath::RenderMode`, and a test
+[src/config/mode.rs](../../src/config/mode.rs) is the only place that
+writes `ConfigPath::RenderMode`, and a test
 (`nothing_outside_this_module_writes_the_render_mode`) scans the source
 tree to keep it that way. Whole-config load paths are exempt by name:
-they carry a mode in from a file rather than switching.
+they carry a mode in from a file rather than switching. `ui::render_mode`
+keeps what a mode means for the UI and calls into it.
 
-`switch_render_mode` exists because the switch is not just a field
-write. Both non-flame engines produce a unit-range image, and a flame's
-Log-calibrated exposure renders that black. So entering either from a
-flame mode while the tone map is Logarithmic sets it to Linear at the
-mode's own calibration (`config::defaults::entry_tone_mapping`: escape's
-exposure and gamma, or the flame defaults for a simulation), batched
-with the mode change into one undo entry. Switching between the two
-non-flame modes does not reset, and **leaving does not restore**; the
-function's doc comment records why.
+The switch is not just a field write: **each engine owns its settings**
+-- the palette and its settings, the tone map, the background, the
+effects, the lighting rig (`config::mode::ENGINE_OWNED`). They work
+differently for a flame, an escape-time picture and a simulation, so a
+switch copies none of them. Leaving an engine stashes its settings in
+the config (`FractalConfig::engine_settings`); entering one restores its
+own, or, the first time, its defaults -- for escape-time and a
+simulation a Linear tone map at the engine's calibration, since a
+flame's Log mapping renders their unit-range image black. 2D and 3D
+flames are one engine and share them. The switch is one whole-config
+undo step, so undo and redo move the stash with the mode, and a saved
+file keeps every engine's settings.
 
 The mode button in the menu bar (desktop and compact), an unused panel's
 Switch button, and the View panel's 2D/3D switch all go through
-`switch_render_mode`. A script sets the mode in the config it returns,
-applying the same tone-map rule (`entry_tone_mapping`), and that config
+`ConfigManager::switch_mode` (`ui::render_mode::switch_render_mode`). A
+script sets the mode in the config it returns, with the tone map an
+escape or simulation picture needs (`entry_tone_mapping`) rather than
+the swap, which would undo what it set before (a palette); that config
 loads as a whole.
 
-Entering a lit 3D view (a solid formula, a terrain) from one that is not
-sets **the 3D look** (`look_3d`: Linear, exposure 2, gamma 1, saturation
-1, no hue shift, an untouched rig at strength 1 and ambient 0) in the
-same undo entry.
+Entering a lit 3D view (a solid formula, a terrain) the engine was not
+showing sets **the 3D look** (`look_3d`: Linear, exposure 2, gamma 1,
+saturation 1, no hue shift, an untouched rig at strength 1 and ambient
+0) in the same undo entry. An engine restored as a lit view keeps the
+look it was left with.
 
 **Choosing something for an engine enters its mode; tweaking does not.**
-`choose(manager, changes, description, mode)` makes the changes, the
-mode, and what entering implies (the 3D look, or else the tone map's
-rescue) one undo step; `switch_render_mode` is `choose` with no changes,
-and `apply_with_look` is `choose` in the current mode (a terrain
-switched on). `enter_snapshot` does the same to a whole-config edit.
-The choices:
+`ConfigManager::choose(changes, description, mode)` makes the changes,
+the mode, and what entering implies (the engines' settings swapped, the
+3D look) one undo step, and what the choice set of an engine's settings
+-- a preset's exposure -- wins over the entered engine's own;
+`switch_mode` is `choose` with no changes, and `apply_with_look` is
+`choose` in the current mode (a terrain switched on). `enter_snapshot`
+does the same to a whole-config edit. Where the result draws the flame
+and the flame is empty (a simulation's), it is given the first preset's
+in the same step (`seed_flame`; [CONFIG.md](CONFIG.md)). The choices:
 
 | Panel | Choices that enter the mode |
 |---|---|

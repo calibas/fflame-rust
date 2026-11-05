@@ -1,256 +1,49 @@
-//! Switching the render mode, and what the mode implies for the UI.
+//! What a render mode means for the UI: the panel it brings forward,
+//! the engines kept resident, its labels and tips.
 //!
-//! The four modes (`RenderMode::ALL`) are peers, and this is the one
-//! place that moves between them. Before this module the mode was
-//! written from five sites that did not share code -- the View menu,
-//! the compact menu, the View panel, and enter/leave buttons inside
-//! the Escape and Simulation panels -- and only the last two reset the
-//! tone mapping, so leaving Escape by the menu left a flame wearing
-//! escape-calibrated exposure. See `docs/archive/projects/ui-render-modes.md`
-//! section 3.1.
+//! What entering a mode does to the CONFIG -- the mode itself, the 3D
+//! look, the tone map -- is `config::mode`, with the switch itself a
+//! `ConfigManager` operation (`choose`, `switch_mode`), so every surface
+//! applies the same rules. The wrappers below keep the panels' calls.
+//! Before one place wrote the mode, five sites did without sharing code,
+//! and only two reset the tone mapping (docs/archive/projects/ui-render-modes.md
+//! section 3.1).
 
 use crate::config::delta::{ConfigPath, ConfigValue, UpdateType};
-use crate::config::manager::{ConfigError, ConfigManager, EditingTarget};
-use crate::config::FractalConfig;
+use crate::config::manager::{ConfigError, ConfigManager};
 use crate::scene::transforms::RenderMode;
 
-/// Whether a config draws a lit 3D surface of the escape or the
-/// simulation engine: a solid formula, or a terrain. A 3D flame is not
-/// one -- its look is the flame's own.
-pub fn surface_3d(config: &FractalConfig) -> bool {
-    match config.render_mode {
-        #[cfg(feature = "engine-escape")]
-        RenderMode::Escape => crate::escape::ifs::formula_is_solid(&config.escape.formula) || config.escape.terrain_active(),
-        #[cfg(feature = "engine-sim")]
-        RenderMode::Simulation => cfg!(feature = "terrain") && config.sim.terrain_active(),
-        _ => false,
-    }
-}
+pub use crate::config::mode::{enter_snapshot, rig_taken_over};
+pub use crate::config::mode::lights_to_world;
 
-/// The 3D look (docs/archive/projects/3d-look-and-tools.md, P2), for a config
-/// that `after` enters a lit 3D view `before` did not draw: the tone map
-/// Linear at exposure 2 and gamma 1 -- the escape image is linear light
-/// and the tone map encodes sRGB itself, so gamma 1 is the one correct
-/// encode -- saturation 1 and no hue shift, none of which a flame's values
-/// suit; and, when the lighting rig is untouched (a flame's default, no
-/// lighting at all), the rig taken over ([`rig_taken_over`]). Nothing
-/// when it enters no such view, or was in one already.
-pub fn look_3d(before: &FractalConfig, after: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
-    use crate::config::defaults::{DEFAULT_HUE_SHIFT, DEFAULT_SATURATION, ESCAPE_EXPOSURE, ESCAPE_GAMMA};
-    if surface_3d(before) || !surface_3d(after) {
-        return Vec::new();
-    }
-    let mut changes = vec![
-        (ConfigPath::TonemapMode, crate::scene::tonemap::ToneMapMode::Linear.into()),
-        (ConfigPath::Exposure, ESCAPE_EXPOSURE.into()),
-        (ConfigPath::Gamma, ESCAPE_GAMMA.into()),
-        (ConfigPath::Saturation, DEFAULT_SATURATION.into()),
-        (ConfigPath::HueShift, DEFAULT_HUE_SHIFT.into()),
-    ];
-    if after.solid_shading.rig_untouched() {
-        changes.extend(rig_taken_over(after));
-    }
-    // A new solid's lights are the fractal's, whatever an older file left.
-    if after.solid_shading.lights_follow_camera {
-        changes.push((ConfigPath::SolidLightsFollowCamera, false.into()));
-    }
-    changes
-}
-
-/// What an untouched lighting rig becomes when a lit 3D view takes it
-/// over -- on entry (the 3D look) and at the Lighting panel's
-/// first change of it: full strength and no ambient (3d-look-and-tools
-/// P2), the rest as stored, and light 0 where the untouched rig's key
-/// light was, so taking the rig over does not swing it: on a terrain the
-/// sun (`DEFAULT_SUN`; light 0 ships at mode D's camera key light), on a
-/// solid whose lights are the fractal's the world's key
-/// (`ifs::default_world_key`).
-pub fn rig_taken_over(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
-    #[allow(unused_mut)]
-    let mut changes = vec![(ConfigPath::ShadingStrength, 1.0f32.into()), (ConfigPath::SolidAmbient, 0.0f32.into())];
-    #[allow(unused_variables)]
-    let light = |param: &str| ConfigPath::SolidLightParam { index: 0, param: param.to_string() };
-    #[cfg(feature = "engine-escape")]
-    if crate::camera::gesture::view_kind(config) == crate::camera::gesture::ViewKind::Solid && !config.solid_shading.lights_follow_camera {
-        let (azimuth, elevation) = crate::escape::ifs::default_world_key();
-        changes.push((light("azimuth"), azimuth.into()));
-        changes.push((light("elevation"), elevation.into()));
-    }
-    #[cfg(feature = "terrain")]
-    {
-        use crate::camera::gesture::{view_kind, ViewKind};
-        if matches!(view_kind(config), ViewKind::EscapeTerrain | ViewKind::SimTerrain) {
-            let (azimuth, elevation) = crate::escape::terrain::DEFAULT_SUN;
-            changes.push((light("azimuth"), azimuth.into()));
-            changes.push((light("elevation"), elevation.into()));
-        }
-    }
-    #[cfg(not(any(feature = "terrain", feature = "engine-escape")))]
-    let _ = config;
-    changes
-}
-
-/// A solid's lights fixed in the fractal's space where they are now (the
-/// View panel's Fly Mode section, for a solid saved while lights turned
-/// with the camera): each directional light's angles turned from the
-/// camera's space into the fractal's at this camera, and
-/// `lights_follow_camera` off -- the picture as it stands, and from then on
-/// the lights stay put as the camera moves. An untouched rig is taken
-/// over first: its key light is light 0 as it ships.
-#[cfg(feature = "engine-escape")]
-pub fn lights_to_world(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
-    let mut changes = Vec::new();
-    if config.solid_shading.rig_untouched() {
-        changes.extend(rig_taken_over(config));
-    }
-    for (index, l) in config.solid_shading.lights.iter().enumerate() {
-        if l.kind != crate::config::LightKind::Directional {
-            continue;
-        }
-        let (azimuth, elevation) = crate::escape::ifs::camera_light_to_world(&config.escape, l.azimuth, l.elevation);
-        changes.push((ConfigPath::SolidLightParam { index, param: "azimuth".to_string() }, azimuth.into()));
-        changes.push((ConfigPath::SolidLightParam { index, param: "elevation".to_string() }, elevation.into()));
-    }
-    changes.push((ConfigPath::SolidLightsFollowCamera, false.into()));
-    changes
-}
-
-/// `changes` as one undo step, with the 3D look ([`look_3d`]) when they
-/// take the config into a lit 3D view: the formula picker choosing a
-/// solid, a terrain switched on, a Rhai solid put to use.
+/// `changes` as one undo step, with the 3D look when they take the
+/// config into a lit 3D view: the formula picker choosing a solid, a
+/// terrain switched on, a Rhai solid put to use.
 pub fn apply_with_look(
     config_manager: &mut ConfigManager,
     changes: Vec<(ConfigPath, ConfigValue)>,
     description: &str,
 ) -> Result<UpdateType, ConfigError> {
     let mode = config_manager.active_config().render_mode;
-    choose(config_manager, changes, description, mode)
+    config_manager.choose(changes, description, mode)
 }
 
-/// What else `changes` imply when they take `before` into `mode`: the
-/// mode itself if it is another, and then the 3D look ([`look_3d`]) when
-/// the result is a lit 3D view `before` did not draw, or else the tone
-/// map's rescue (`entry_tone_mapping`: a flame's Log-calibrated mapping
-/// renders a non-flame engine's unit-range image black). In `mode`
-/// already, only the look the changes themselves bring.
-///
-/// For a caller that cannot go through [`choose`] -- a structural
-/// snapshot applies these to its `after` detached.
-pub fn entering_changes(
-    before: &FractalConfig,
-    changes: &[(ConfigPath, ConfigValue)],
-    mode: RenderMode,
-) -> Vec<(ConfigPath, ConfigValue)> {
-    let mut after = before.clone();
-    for (path, value) in changes {
-        let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, path, value.clone());
-    }
-    implied(before, after, mode)
-}
-
-/// [`entering_changes`] for a choice made as a whole-config snapshot (a
-/// layered simulation preset, a texture): what entering `mode` implies,
-/// applied to `after` in place, so the snapshot is still one undo step.
-pub fn enter_snapshot(before: &FractalConfig, after: &mut FractalConfig, mode: RenderMode) {
-    for (path, value) in implied(before, after.clone(), mode) {
-        let _ = ConfigManager::apply_value_detached(after, EditingTarget::Main, &path, value);
-    }
-}
-
-/// What entering `mode` adds to `after`, which is `before` with a choice
-/// made in it.
-fn implied(before: &FractalConfig, mut after: FractalConfig, mode: RenderMode) -> Vec<(ConfigPath, ConfigValue)> {
-    let entering = after.render_mode != mode;
-    let mut out = Vec::new();
-    if entering {
-        out.push((ConfigPath::RenderMode, mode.into()));
-        let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, &ConfigPath::RenderMode, mode.into());
-    }
-    let look = look_3d(before, &after);
-    if !look.is_empty() {
-        out.extend(look);
-    } else if entering {
-        // Escape output has its own calibration; a simulation keeps the
-        // flame defaults (`entry_tone_mapping`, shared with the script
-        // handles).
-        if let Some((exposure, gamma)) = crate::config::defaults::entry_tone_mapping(before, mode) {
-            out.push((ConfigPath::TonemapMode, crate::scene::tonemap::ToneMapMode::Linear.into()));
-            out.push((ConfigPath::Exposure, exposure.into()));
-            out.push((ConfigPath::Gamma, gamma.into()));
-        }
-    }
-    out
-}
-
-/// `changes` made in `mode`, as one undo step: choosing something for an
-/// engine takes the config into its mode (one-workspace plan, decision
-/// 4) -- a formula picked, a Rhai entry put to use, a simulation model, a
-/// texture -- with what entering implies ([`entering_changes`]). In the
-/// mode already, the changes with the look they bring.
+/// `changes` made in `mode`, as one undo step (`ConfigManager::choose`).
 pub fn choose(
     config_manager: &mut ConfigManager,
-    mut changes: Vec<(ConfigPath, ConfigValue)>,
+    changes: Vec<(ConfigPath, ConfigValue)>,
     description: &str,
     mode: RenderMode,
 ) -> Result<UpdateType, ConfigError> {
-    let extra = entering_changes(config_manager.active_config(), &changes, mode);
-    changes.extend(extra);
-    if changes.is_empty() {
-        return Ok(UpdateType::None);
-    }
-    config_manager.update_batch(changes, description.to_string())
+    config_manager.choose(changes, description, mode)
 }
 
-/// Change the render mode.
-///
-/// Both non-flame engines write a unit-range image, and a flame's
-/// Log-calibrated exposure renders that black. Entering EITHER from a
-/// flame mode resets the tonemap once, batched into a single undo
-/// entry with the mode change; switching between the two non-flame
-/// modes does not, because the values are already right.
-///
-/// The reset is one-way on purpose, and the reason is worth keeping
-/// because "just restore it on the way out" looks obviously right and
-/// is not.
-///
-/// What would have to be restored is session state: the config holds
-/// exactly one tone-mapping triple, and two mode families take turns
-/// owning it. A saved escape or simulation config carries its Linear
-/// mapping legitimately -- that is part of how it looks -- so the
-/// previous flame's values belong nowhere on disk. Remembering them
-/// anywhere else makes a side channel that undo cannot see, and the
-/// mode change is then recorded in two places that drift apart: redo
-/// re-applies the batch without going through here, so the memory and
-/// the history disagree after any undo tour. There are sharper edges
-/// too. The reset is conditional on Logarithmic, so a naive memory
-/// would not refresh when it does not fire and would later restore
-/// over a mapping the user chose deliberately. And loading a different
-/// fractal while in Escape would hand ITS tone mapping to the config
-/// that arrives.
-///
-/// Against all that: the tone-map MODE selector is already disabled in
-/// the non-flame modes, so a round trip cannot lose a chosen mapping.
-/// It loses exposure and gamma, two sliders, and it is visible the
-/// instant it happens because the picture changes.
-///
-/// If it is ever fixed, the shape is a per-mode stash: recorded on
-/// every entry rather than only when the reset fires, stamped with the
-/// config's load generation so a load invalidates it, and applied
-/// inside the same batch as the mode change so one undo still reverses
-/// the whole thing.
+/// Change the render mode (`ConfigManager::switch_mode`).
 pub fn switch_render_mode(
     config_manager: &mut ConfigManager,
     mode: RenderMode,
 ) -> Result<(), ConfigError> {
-    // Into a lit 3D view (a solid, a terrain): its look, which includes
-    // the tone map's reset, in the same undo step.
-    choose(config_manager, Vec::new(), "history.param.render_mode", mode).map(|_| ())
-}
-
-/// The two engines that are not the chaos game.
-#[cfg(test)]
-pub fn is_non_flame(mode: RenderMode) -> bool {
-    mode.is_non_flame()
+    config_manager.switch_mode(mode)
 }
 
 /// The panel that edits a mode's picture, which a change into the mode
@@ -325,6 +118,8 @@ pub fn mode_label_key(mode: RenderMode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::config::mode::{look_3d, surface_3d};
     use crate::config::FractalConfig;
     use crate::scene::tonemap::ToneMapMode;
 
@@ -332,7 +127,6 @@ mod tests {
     /// fractal's whatever an older file left; an untouched rig taken over
     /// keeps its key light where it was -- the world's key when the lights
     /// are the fractal's, light 0 as it ships when they follow the camera.
-    #[cfg(feature = "engine-escape")]
     #[test]
     fn a_solid_enters_with_its_lights_in_the_fractal() {
         let mut solid = FractalConfig::default();
@@ -361,7 +155,7 @@ mod tests {
     /// one undo step: by the mode switch with a solid formula, by the
     /// formula picker, by a terrain switched on. A touched rig is the
     /// user's and stays; a view already 3D keeps what it has.
-    #[cfg(all(feature = "engine-escape", feature = "terrain"))]
+    #[cfg(feature = "terrain")]
     #[test]
     fn entering_a_3d_view_gives_it_the_3d_look() {
         use crate::config::ConfigValue;
@@ -445,41 +239,6 @@ mod tests {
         }
     }
 
-    /// Entering a non-flame mode from a flame mode rescues the tone
-    /// mapping; every other pair leaves it alone.
-    #[test]
-    fn only_entering_a_non_flame_mode_resets_the_tone_mapping() {
-        for from in RenderMode::ALL {
-            for to in RenderMode::ALL {
-                if from == to {
-                    continue;
-                }
-                let mut m = manager_in(*from);
-                // Start Logarithmic, as a flame preset would.
-                m.update_param(ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into())
-                    .expect("tonemap");
-                switch_render_mode(&mut m, *to).expect("switch");
-                let want_reset = is_non_flame(*to) && !is_non_flame(*from);
-                let got = m.active_config().tonemap_mode;
-                if want_reset {
-                    assert_eq!(got, ToneMapMode::Linear, "{from:?} -> {to:?} should reset");
-                    // Escape has its own exposure and gamma; a simulation
-                    // keeps the flame defaults.
-                    use crate::config::defaults::{DEFAULT_EXPOSURE, DEFAULT_GAMMA, ESCAPE_EXPOSURE, ESCAPE_GAMMA};
-                    let want = if *to == RenderMode::Escape { (ESCAPE_EXPOSURE, ESCAPE_GAMMA) } else { (DEFAULT_EXPOSURE, DEFAULT_GAMMA) };
-                    let c = m.active_config();
-                    assert_eq!((c.exposure, c.gamma), want, "{from:?} -> {to:?}: exposure and gamma");
-                } else {
-                    assert_eq!(
-                        got,
-                        ToneMapMode::Logarithmic,
-                        "{from:?} -> {to:?} should not touch the tone mapping"
-                    );
-                }
-            }
-        }
-    }
-
     /// A mode change is its own undo entry. Coalescing used to merge
     /// consecutive switches into one, so two changes of mind cost one
     /// undo and landed you two modes back.
@@ -541,7 +300,9 @@ mod tests {
                     continue;
                 }
                 let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                if name == "render_mode.rs" || name == "delta.rs" || name == "manager.rs" {
+                // `config/mode.rs` writes it; `delta.rs`, `manager.rs` and
+                // `apply.rs` (the setter) define it.
+                if name == "render_mode.rs" || name == "mode.rs" || name == "delta.rs" || name == "manager.rs" || name == "apply.rs" {
                     continue;
                 }
                 let rel = path.strip_prefix(&root).unwrap_or(&path).to_string_lossy().to_string();
@@ -562,8 +323,8 @@ mod tests {
         }
         assert!(
             offenders.is_empty(),
-            "these write the render mode directly instead of calling \
-             switch_render_mode, so they skip the tone-map rescue: {offenders:?}"
+            "these write the render mode directly instead of going through \
+             ConfigManager::choose, so they skip the engines' settings swap: {offenders:?}"
         );
     }
 

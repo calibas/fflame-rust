@@ -36,8 +36,7 @@ pub enum Kind {
     UfFormulas,
     UfColorings,
     Fractint,
-    /// A file whose kind could not be read (it does not parse, or this
-    /// build has no compiler).
+    /// A file whose kind could not be read (it does not parse).
     Unknown,
 }
 
@@ -48,16 +47,9 @@ impl Kind {
     }
 }
 
-/// Where an entry came from (design rule 7's namespaces, D6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Origin {
-    /// Ships with the app: read-only, edited as a copy.
-    Shipped,
-    /// The user's own.
-    Yours,
-    /// Somebody else's, adopted from the online library.
-    Downloaded,
-}
+/// Where an entry came from (design rule 7's namespaces, D6): the one
+/// origin model every kind shares.
+pub use crate::provenance::Origin;
 
 /// One file of the library, as a person reads it.
 #[derive(Debug, Clone)]
@@ -85,18 +77,16 @@ pub struct Entry {
 pub fn scan() -> Vec<Entry> {
     let mut out = Vec::new();
     for (name, source) in crate::script::library::EMBEDDED {
-        out.push(script_entry(name, source, Origin::Shipped, Link::default()));
+        out.push(script_entry(name, source, Origin::Builtin, Link::default()));
     }
     for (name, source) in crate::storage::formula_store::EXAMPLES {
-        out.push(formula_entry(name, source, Origin::Shipped, Link::default()));
+        out.push(formula_entry(name, source, Origin::Builtin, Link::default()));
     }
-    #[cfg(feature = "lang")]
     for (name, source) in crate::effects::custom::BUILTIN_TWINS {
-        out.push(formula_entry(&format!("{name}.rhai"), source, Origin::Shipped, Link::default()));
+        out.push(formula_entry(&format!("{name}.rhai"), source, Origin::Builtin, Link::default()));
     }
-    #[cfg(all(feature = "lang", feature = "engine-sim"))]
     for (name, source) in crate::sim::custom::SHIPPED.iter().chain(crate::sim::custom::SHIPPED_MODELS) {
-        out.push(formula_entry(&format!("sim-{name}.rhai"), source, Origin::Shipped, Link::default()));
+        out.push(formula_entry(&format!("sim-{name}.rhai"), source, Origin::Builtin, Link::default()));
     }
     let script_links = crate::script::store::load_links();
     for (stem, source) in crate::script::store::list() {
@@ -109,21 +99,15 @@ pub fn scan() -> Vec<Entry> {
         let link = formula_links.get(&file).cloned().unwrap_or_default();
         out.push(formula_entry(&file, &source, origin_of_link(&link), link));
     }
-    out.sort_by_key(|e| (e.origin != Origin::Shipped, e.store == Store::Formulas, e.title.to_lowercase()));
+    out.sort_by_key(|e| (e.origin != Origin::Builtin, e.store == Store::Formulas, e.title.to_lowercase()));
     out
 }
 
 /// What a list shows after an entry's title -- the Scripts panel's and
-/// the Formula Editor's alike (P3, step 4): ` ↓` for somebody else's,
-/// ` *` for the user's own, nothing for a shipped one; and whether it is
-/// a plug-in.
+/// the Formula Editor's alike (P3, step 4): the origin's mark
+/// ([`Origin::mark`]), and whether it is a plug-in.
 pub fn marks(origin: Origin, plugin: bool) -> String {
-    let mut out = match origin {
-        Origin::Downloaded => " ↓",
-        Origin::Yours => " *",
-        Origin::Shipped => "",
-    }
-    .to_string();
+    let mut out = origin.mark().to_string();
     if plugin {
         out.push(' ');
         out.push_str(&rust_i18n::t!("library.plugin"));
@@ -134,9 +118,9 @@ pub fn marks(origin: Origin, plugin: bool) -> String {
 /// A stored file's origin, from its link.
 pub fn origin_of_link(link: &Link) -> Origin {
     if link.from_others {
-        Origin::Downloaded
+        Origin::Api
     } else {
-        Origin::Yours
+        Origin::Local
     }
 }
 
@@ -200,29 +184,26 @@ fn formula_entry(file: &str, source: &str, origin: Origin, link: Link) -> Entry 
         };
         return e;
     }
-    #[cfg(feature = "lang")]
-    {
-        use crate::lang::{rhai, EntryKind};
-        e.kind = match rhai::kind_of(source) {
-            Some(EntryKind::Formula) => Kind::Formula,
-            Some(EntryKind::Coloring) => Kind::Coloring,
-            Some(EntryKind::Transform) => Kind::Variation,
-            Some(EntryKind::Solid) => Kind::Solid,
-            Some(EntryKind::Effect) => Kind::Effect,
-            Some(EntryKind::SimColoring) => Kind::SimColoring,
-            Some(EntryKind::SimModel) => Kind::SimModel,
-            None => Kind::Unknown,
-        };
-        if let Some(labels) = rhai::source_labels(source) {
-            let title = labels.title.resolve();
-            if !title.is_empty() {
-                e.title = title;
-            }
-            e.description = labels.description.resolve();
-            e.author = labels.author;
+    use crate::lang::{rhai, EntryKind};
+    e.kind = match rhai::kind_of(source) {
+        Some(EntryKind::Formula) => Kind::Formula,
+        Some(EntryKind::Coloring) => Kind::Coloring,
+        Some(EntryKind::Transform) => Kind::Variation,
+        Some(EntryKind::Solid) => Kind::Solid,
+        Some(EntryKind::Effect) => Kind::Effect,
+        Some(EntryKind::SimColoring) => Kind::SimColoring,
+        Some(EntryKind::SimModel) => Kind::SimModel,
+        None => Kind::Unknown,
+    };
+    if let Some(labels) = rhai::source_labels(source) {
+        let title = labels.title.resolve();
+        if !title.is_empty() {
+            e.title = title;
         }
-        e.id = rhai::info_string(source, "id");
+        e.description = labels.description.resolve();
+        e.author = labels.author;
     }
+    e.id = rhai::info_string(source, "id");
     e
 }
 
@@ -305,10 +286,10 @@ pub fn plugin_failures() -> Vec<String> {
 /// Register one formula store file as a plug-in, replacing what it
 /// registered before (an edit is a new version: a new key). A variation
 /// or an effect registers in its registry under its key (`Provenance::
-/// Custom`, the user's namespace); a formula, colouring or solid in the
+/// Local`, the user's namespace); a formula, colouring or solid in the
 /// escape engine's under its slot name.
 pub fn register_plugin(file: &str, source: &str) -> Result<Plugin, String> {
-    let entry = formula_entry(file, source, Origin::Yours, Link::default());
+    let entry = formula_entry(file, source, Origin::Local, Link::default());
     if !entry.kind.can_be_plugin() {
         return Err("a plug-in is a Rhai variation, effect, formula, colouring or solid".to_string());
     }
@@ -330,12 +311,6 @@ pub fn unlist_plugin(file: &str) {
     }
 }
 
-#[cfg(not(feature = "lang"))]
-fn register_kind(_kind: Kind, _title: &str, _source: &str) -> Result<(String, crate::config::escape::CustomSource), String> {
-    Err("this build has no compiler for Rhai".to_string())
-}
-
-#[cfg(feature = "lang")]
 fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate::config::escape::CustomSource), String> {
     match kind {
         Kind::Variation => {
@@ -345,12 +320,11 @@ fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate
             Ok((key, carried))
         }
         Kind::Effect => {
-            let key = crate::effects::custom::register(source, crate::provenance::Provenance::Custom)?;
+            let key = crate::effects::custom::register(source, crate::provenance::Provenance::Local)?;
             let mut carried = crate::effects::custom::carried(source).ok_or("it has no id")?;
             carried.entry = key.clone();
             Ok((key, carried))
         }
-        #[cfg(feature = "engine-escape")]
         Kind::Formula | Kind::Coloring | Kind::Solid => {
             use crate::config::escape::{CustomDialect, CustomSource};
             use crate::escape::custom;
@@ -370,20 +344,15 @@ fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate
             compiled.map_err(|d| d.first().map(|x| x.render(source)).unwrap_or_else(|| "it does not compile".to_string()))?;
             Ok((name, src))
         }
-        #[cfg(feature = "engine-sim")]
         Kind::SimColoring => {
             let name = crate::sim::custom::register(source)?;
             Ok((name, crate::sim::custom::carried(source)))
         }
-        #[cfg(feature = "engine-sim")]
         Kind::SimModel => {
             let name = crate::sim::custom::register_model(source)?;
             Ok((name, crate::sim::custom::carried(source)))
         }
-        _ => {
-            let _ = title;
-            Err("this build has no engine for it".to_string())
-        }
+        _ => Err("not a kind of plug-in".to_string()),
     }
 }
 
@@ -397,28 +366,25 @@ mod tests {
     #[test]
     fn the_scan_reads_every_shipped_entry() {
         let all = scan();
-        let shipped: Vec<&Entry> = all.iter().filter(|e| e.origin == Origin::Shipped).collect();
+        let shipped: Vec<&Entry> = all.iter().filter(|e| e.origin == Origin::Builtin).collect();
         let scripts = shipped.iter().filter(|e| e.store == Store::Scripts).count();
         assert_eq!(scripts, crate::script::library::EMBEDDED.len());
         assert!(shipped.iter().filter(|e| e.store == Store::Scripts).all(|e| e.kind != Kind::Unknown && !e.title.is_empty()));
         let basic = shipped.iter().find(|e| e.file == "basic_random.rhai").expect("a starter");
         assert_eq!((basic.kind, basic.title.as_str()), (Kind::Generator, "Basic Random"));
-        #[cfg(feature = "lang")]
-        {
-            let vignette = shipped.iter().find(|e| e.file == "vignette.rhai" && e.kind == Kind::Effect).expect("the effect");
-            assert_eq!((vignette.title.as_str(), vignette.id.as_deref()), ("Vignette", Some("vignette")));
-            assert_eq!(vignette.version.len(), 8);
-            assert!(shipped.iter().any(|e| e.kind == Kind::Formula), "the formula examples");
-        }
+        let vignette = shipped.iter().find(|e| e.file == "vignette.rhai" && e.kind == Kind::Effect).expect("the effect");
+        assert_eq!((vignette.title.as_str(), vignette.id.as_deref()), ("Vignette", Some("vignette")));
+        assert_eq!(vignette.version.len(), 8);
+        assert!(shipped.iter().any(|e| e.kind == Kind::Formula), "the formula examples");
     }
 
     /// Both lists mark an entry alike: whose it is, and a plug-in.
     #[test]
     fn the_marks_say_whose_it_is_and_a_plugin() {
-        assert_eq!(marks(Origin::Shipped, false), "");
-        assert_eq!(marks(Origin::Yours, false), " *");
-        assert_eq!(marks(Origin::Downloaded, false), " ↓");
-        let plugin = marks(Origin::Yours, true);
+        assert_eq!(marks(Origin::Builtin, false), "");
+        assert_eq!(marks(Origin::Local, false), " *");
+        assert_eq!(marks(Origin::Api, false), " ↓");
+        let plugin = marks(Origin::Local, true);
         assert!(plugin.starts_with(" * ") && plugin.contains("plug-in"), "{plugin}");
     }
 
@@ -432,7 +398,7 @@ mod tests {
         let file = store::save("__library link test__.rhai", "fn variation(z, p) { z }\n").expect("save");
         store::set_link(&file, Link { plugin: true, ..Default::default() }).expect("link");
         assert!(store::link_of(&file).is_some_and(|l| l.plugin));
-        assert!(scan().iter().any(|e| e.file == file && e.origin == Origin::Yours && e.link.plugin), "the scan reads it");
+        assert!(scan().iter().any(|e| e.file == file && e.origin == Origin::Local && e.link.plugin), "the scan reads it");
         store::delete(&file).expect("delete");
         assert!(store::link_of(&file).is_none(), "deleting the file forgets its link");
         // An empty link is no entry at all.
@@ -445,13 +411,12 @@ mod tests {
     /// An effect plug-in registers under its key, its source carried
     /// under it, and is offered as one; a file of no plug-in's kind is
     /// refused; unlisting stops the offer.
-    #[cfg(feature = "lang")]
     #[test]
     fn an_effect_plugin_registers_and_is_offered() {
         let src = "const INFO = #{ title: \"Tint test\", id: \"1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a\" };\nfn effect(c, p) { c }\n";
         let p = register_plugin("__tint test__.rhai", src).expect("registers");
         assert_eq!(p.kind, Kind::Effect);
-        assert!(crate::effects::global_effect_registry().get(&p.key).is_some_and(|i| i.provenance == crate::provenance::Provenance::Custom));
+        assert!(crate::effects::global_effect_registry().get(&p.key).is_some_and(|i| i.provenance == crate::provenance::Provenance::Local));
         assert_eq!(p.carried.entry, p.key);
         assert!(plugins_of(Kind::Effect).iter().any(|q| q.file == p.file));
         unlist_plugin(&p.file);
@@ -462,7 +427,6 @@ mod tests {
 
     /// A formula and a colouring plug-in register in the escape engine's
     /// registry under their slot names, which a config names.
-    #[cfg(feature = "engine-escape")]
     #[test]
     fn an_escape_plugin_registers_in_its_slot() {
         let formula = "const INFO = #{ title: \"Plug test\" };\nfn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
@@ -477,7 +441,6 @@ mod tests {
 
     /// A variation plug-in registers under its key. Writes the global
     /// variation registry: run alone (VARIATIONS.md, Testing).
-    #[cfg(feature = "lang")]
     #[test]
     #[ignore = "writes the global variation registry: run alone"]
     fn a_variation_plugin_registers_under_its_key() {
@@ -492,15 +455,14 @@ mod tests {
 
     /// `INFO.description` and `INFO.author` reach the entry, a
     /// description in the current language.
-    #[cfg(feature = "lang")]
     #[test]
     fn a_formula_entry_reads_its_info() {
         let src = "const INFO = #{ title: \"Spiral\", description: #{ en: \"A spiral\", ja: \"螺旋\" }, author: \"Ada\" };\n\
                    fn variation(z, p) { z }\n";
-        let e = formula_entry("spiral.rhai", src, Origin::Yours, Link::default());
+        let e = formula_entry("spiral.rhai", src, Origin::Local, Link::default());
         assert_eq!((e.kind, e.title.as_str(), e.description.as_str(), e.author.as_str()), (Kind::Variation, "Spiral", "A spiral", "Ada"));
         assert!(crate::lang::rhai::transformation_any(src).is_ok(), "the checker accepts both");
-        let uf = formula_entry("traps.ucl", "x {\n}\n", Origin::Downloaded, Link::default());
+        let uf = formula_entry("traps.ucl", "x {\n}\n", Origin::Api, Link::default());
         assert_eq!(uf.kind, Kind::UfColorings);
     }
 }

@@ -1,11 +1,13 @@
-//! Where a resource came from — shared by variations and effects.
+//! Where a thing came from: one answer for every kind -- variations,
+//! effects, formulas, scripts, textures -- in three values, [`Origin`]:
+//! built in, local, or from the online API. The library's lists, the
+//! Scripts panel and the Textures panel read it; a registry entry
+//! carries it as a [`Provenance`], which adds the server's version to a
+//! download (what an update compares).
 //!
-//! Defined once, in a neutral place, because both subsystems need the
-//! same three answers and a per-subsystem enum would drift. Scripts
-//! deliberately do **not** use this: their provenance question is
-//! narrower ("did somebody else write this", answered by
-//! `script::store::ScriptLink::from_others`) and their storage is not a
-//! cache.
+//! Where a thing is KEPT is a different question, answered per store:
+//! a CPU script's file is compiled in, on disk with the app, in the
+//! user's store or outside every store (`script::library::ScriptHome`).
 //!
 //! # Why this replaces `is_core: bool`
 //!
@@ -24,12 +26,44 @@
 //! The user's own is code the app did not ship, but Clear Cache must not
 //! remove it and no update can be offered for it.
 //!
-//! (A `Local` variant, for WGSL plug-in files, was retired with them on
-//! 2026-11-01; docs/projects/rhai-plugins.md.)
+//! (A `Local` provenance for WGSL plug-in files was retired with them
+//! on 2026-11-01, and the user's Rhai entries were `Custom` until the
+//! one origin model of 2026-11-04 named them `Local`.)
 
 use serde::{Deserialize, Serialize};
 
-/// Where a variation or effect came from.
+/// Where a thing came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Origin {
+    /// Ships with the app: read-only, edited as a copy.
+    Builtin,
+    /// The user's: a file in their stores, a plug-in, or a source a
+    /// config carries (the config is its home, wherever the config came
+    /// from).
+    Local,
+    /// Somebody else's, from the online library: a download in the
+    /// cache, or a file adopted into the user's stores (adopting it does
+    /// not make it theirs: they chose to keep it, they did not write it).
+    Api,
+}
+
+impl Origin {
+    /// What a list shows after an entry's title: ` ↓` for somebody
+    /// else's, ` *` for the user's own, nothing for a built-in.
+    pub fn mark(self) -> &'static str {
+        match self {
+            Self::Api => " ↓",
+            Self::Local => " *",
+            Self::Builtin => "",
+        }
+    }
+}
+
+/// A registry entry's origin, with the server's version on a download.
+///
+/// A plug-in is `Local` whoever wrote it: the registry's question is who
+/// keeps the entry -- Clear Cache leaves it, no catalog update is offered
+/// -- and the user does. Who wrote it is the library file's [`Origin`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Provenance {
@@ -39,14 +73,25 @@ pub enum Provenance {
     /// Fetched from the online library. Lives in the download cache,
     /// carries the server's version, and can be updated or cleared.
     Api { version: u32 },
-    /// Written by the user in the formula language and carried in the
+    /// The user's, written in the formula language: carried in the
     /// config that uses it (a Rhai transformation as a flame variation,
-    /// `variations::custom`). Not a file, not a download: the config is
-    /// its home, and loading the config registers it again.
-    Custom,
+    /// `variations::custom`), or a plug-in from their formulas. Not a
+    /// download: the config or the file is its home, and loading either
+    /// registers it again.
+    #[serde(alias = "custom")]
+    Local,
 }
 
 impl Provenance {
+    /// The [`Origin`] this is.
+    pub fn origin(&self) -> Origin {
+        match self {
+            Self::Builtin => Origin::Builtin,
+            Self::Api { .. } => Origin::Api,
+            Self::Local => Origin::Local,
+        }
+    }
+
     /// Did this ship with the app?
     pub fn is_builtin(&self) -> bool {
         matches!(self, Self::Builtin)
@@ -86,7 +131,7 @@ impl Provenance {
         match self {
             Self::Builtin => "built-in".to_string(),
             Self::Api { version } => format!("API v{version}"),
-            Self::Custom => "custom".to_string(),
+            Self::Local => "local".to_string(),
         }
     }
 }
@@ -99,7 +144,7 @@ mod tests {
     /// is not a bool.
     #[test]
     fn the_users_own_is_third_party_but_not_cache_and_not_updatable() {
-        let own = Provenance::Custom;
+        let own = Provenance::Local;
         assert!(own.is_third_party(), "the user must be told it is not ours");
         assert!(!own.is_cached_download(), "Clear Cache must not remove the user's work");
         assert!(own.version().is_none(), "no update can be offered for it");
@@ -127,7 +172,8 @@ mod tests {
     fn the_wire_spelling_is_stable() {
         let j = |p: &Provenance| serde_json::to_string(p).unwrap();
         assert_eq!(j(&Provenance::Builtin), "\"builtin\"");
-        assert_eq!(j(&Provenance::Custom), "\"custom\"");
+        assert_eq!(j(&Provenance::Local), "\"local\"");
+        assert_eq!(serde_json::from_str::<Provenance>("\"custom\"").unwrap(), Provenance::Local, "the old spelling still reads");
         assert_eq!(j(&Provenance::Api { version: 2 }), "{\"api\":{\"version\":2}}");
     }
 }

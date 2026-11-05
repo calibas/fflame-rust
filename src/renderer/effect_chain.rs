@@ -1686,7 +1686,6 @@ mod gpu_tests {
 
     /// A Rhai effect (P2) renders through the colour chain as its source
     /// says: an inversion, and a blend over the input by the library.
-    #[cfg(feature = "lang")]
     #[test]
     fn a_rhai_effect_renders_through_the_colour_chain() {
         let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
@@ -1698,7 +1697,7 @@ mod gpu_tests {
         let (_input, view) = filled(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &[200, 120, 40, 255]);
         let register = |id: &str, body: &str| {
             let src = format!("const INFO = #{{ id: \"{id}\" }};\n{body}");
-            crate::effects::custom::register(&src, crate::provenance::Provenance::Custom).unwrap_or_else(|e| panic!("{e}"))
+            crate::effects::custom::register(&src, crate::provenance::Provenance::Local).unwrap_or_else(|e| panic!("{e}"))
         };
         let invert = register("3c1b5f0e-2a4d-4e6f-8a9b-0c1d2e3f4a5b", "fn effect(c, p) { rgba(vec3(1.0) - c.rgb, c.a) }");
         let out = run_colour(&device, &queue, &view, W, H, &[EffectInstance::new(&invert)]);
@@ -1720,7 +1719,6 @@ mod gpu_tests {
 
     /// What a config reads of an effect: its parameters' definitions --
     /// name, kind, default, range, label and hint -- in order.
-    #[cfg(feature = "lang")]
     fn values(i: &crate::effects::EffectInfo) -> &[crate::params::ParamDef] {
         &i.parameters
     }
@@ -1734,7 +1732,6 @@ mod gpu_tests {
     /// gives the names, `(twin, WGSL)`, the one registered here second
     /// for a replaced one and first for a pending one -- [`TestPair::extra`]
     /// is which to remove; what differs goes in `failures`.
-    #[cfg(feature = "lang")]
     fn reference_beside_twin(builtin: &str, source: &str, failures: &mut Vec<String>) -> TestPair {
         let mut twin = crate::effects::custom::compile(source, crate::provenance::Provenance::Builtin).unwrap_or_else(|e| panic!("{builtin}: {e}"));
         assert_eq!(twin.name, builtin, "a twin's id is its built-in's name");
@@ -1775,7 +1772,6 @@ mod gpu_tests {
 
     /// A twin and its WGSL by the names they run under in a test, and the
     /// one the test registered.
-    #[cfg(feature = "lang")]
     struct TestPair {
         twin: String,
         wgsl: String,
@@ -1784,7 +1780,6 @@ mod gpu_tests {
 
     /// The Rhai twins of the built-ins (assets/effects/*.rhai) and how
     /// each is driven: settings away from the defaults, blends among them.
-    #[cfg(feature = "lang")]
     const TWINS: &[(&str, &str, &[&[(&str, f32)]])] = &[
         (
             "vignette",
@@ -1853,7 +1848,6 @@ mod gpu_tests {
     /// settings above, under the built-in's name with the same values
     /// ([`reference_beside_twin`]) -- the D1 checks a twin passes to
     /// replace its built-in, held now against a compiler change.
-    #[cfg(feature = "lang")]
     #[test]
     fn the_rhai_twins_match_their_wgsl() {
         let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
@@ -1897,7 +1891,6 @@ mod gpu_tests {
     }
 
     /// The density effects' twins, as [`TWINS`] the colour ones'.
-    #[cfg(feature = "lang")]
     const DENSITY_TWINS: &[(&str, &str, &[&[(&str, f32)]])] = &[
         (
             "density_blur",
@@ -1919,7 +1912,6 @@ mod gpu_tests {
     /// Each density twin gives its WGSL's floats, to a part in a thousand
     /// of the larger: the accumulation's colours and hit counts, through
     /// sums of Gaussian taps the two sum in their own order.
-    #[cfg(feature = "lang")]
     #[test]
     fn the_density_twins_match_their_wgsl() {
         let Some((device, queue)) = device_with(wgpu::Features::FLOAT32_FILTERABLE) else {
@@ -1988,7 +1980,6 @@ mod gpu_tests {
     /// reported, ready to replace its WGSL once it passes. A measurement
     /// on the GPU: run it alone, with the app closed --
     /// `cargo test --release --lib -- --ignored --nocapture the_twins_are_no_slower`.
-    #[cfg(feature = "lang")]
     #[test]
     #[ignore = "a measurement on the GPU: run alone, with the app closed"]
     fn the_twins_are_no_slower() {
@@ -2078,7 +2069,6 @@ mod gpu_tests {
     /// `3840x2160`). Writes `wgsl.wgsl`
     /// and `twin.wgsl` beside the variants first, to start from. Files,
     /// not code, so an experiment needs no rebuild.
-    #[cfg(feature = "lang")]
     #[test]
     #[ignore = "a tool: a measurement on the GPU, run alone with the app closed"]
     fn time_effect_variants() {

@@ -10,17 +10,21 @@
 /// - Centralized lazy undo throttling
 
 pub mod precision;
+mod apply;
+pub mod by_name;
 pub mod defaults;
 pub mod delta;
 pub mod escape;
 pub mod sim;
 pub mod fractal_config;
 pub mod manager;
+pub mod mode;
 // An egui widget, so it belongs to the editor surface rather
 // than to config: a rendering module has no sliders.
 #[cfg(feature = "web-app")]
 pub mod slider;
 
+pub use apply::apply;
 pub use defaults::*;
 pub use delta::{
     AffineParam, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, I18nKey, SnapshotData,

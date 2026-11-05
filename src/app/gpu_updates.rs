@@ -580,7 +580,7 @@ impl App {
             if let Some(t) = self.escape_terrain.take() {
                 t.destroy();
             }
-            #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+            #[cfg(feature = "terrain")]
             if let Some(t) = self.sim_terrain.take() {
                 t.destroy();
             }

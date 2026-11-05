@@ -73,7 +73,6 @@ pub fn view_kind(config: &FractalConfig) -> ViewKind {
             if config.escape.terrain_active() {
                 return ViewKind::EscapeTerrain;
             }
-            #[cfg(feature = "engine-escape")]
             if crate::escape::ifs::formula_is_solid(&config.escape.formula) {
                 return ViewKind::Solid;
             }
@@ -118,13 +117,11 @@ impl TurnSettings {
 pub fn pan(config: &FractalConfig, drag: [f32; 2], panel: [f32; 2]) -> Option<CameraEdit> {
     match view_kind(config) {
         ViewKind::Flame2d | ViewKind::Flame3d => flame_pan(config, drag, panel),
-        #[cfg(feature = "engine-escape")]
         ViewKind::EscapePlane | ViewKind::Solid | ViewKind::EscapeTerrain => escape_pan(config, drag, panel),
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        #[cfg(feature = "terrain")]
         ViewKind::SimTerrain => sim_terrain_pan(config, drag, panel),
-        #[cfg(feature = "engine-sim")]
         ViewKind::Sim2d => sim_view::pan(config, drag, panel),
-        // Reached when an engine feature is compiled out.
+        // Reached without `terrain`.
         #[allow(unreachable_patterns)]
         _ => None,
     }
@@ -142,15 +139,12 @@ pub fn zoom(config: &FractalConfig, factor: f64, cursor: Option<[f32; 2]>, panel
     }
     match view_kind(config) {
         ViewKind::Flame2d | ViewKind::Flame3d => flame_zoom(config, factor, cursor, panel),
-        #[cfg(feature = "engine-escape")]
         ViewKind::EscapePlane | ViewKind::Solid => escape_zoom(config, factor, cursor, panel),
-        #[cfg(feature = "engine-escape")]
         ViewKind::EscapeTerrain => escape_zoom(config, factor, None, panel),
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        #[cfg(feature = "terrain")]
         ViewKind::SimTerrain => sim_terrain_dolly(config, factor),
-        #[cfg(feature = "engine-sim")]
         ViewKind::Sim2d => sim_view::zoom(config, factor, cursor, panel),
-        // Reached when an engine feature is compiled out.
+        // Reached without `terrain`.
         #[allow(unreachable_patterns)]
         _ => None,
     }
@@ -202,7 +196,6 @@ fn rotate_2d(config: &FractalConfig, kind: ViewKind, swept: f64) -> Option<Camer
 /// in `sim::assembler`) between panel pixels and grid cells -- the fit
 /// times the zoom, the turn undone, the grid's y running down as the
 /// screen's does.
-#[cfg(feature = "engine-sim")]
 mod sim_view {
     use super::*;
 
@@ -296,7 +289,6 @@ fn turnable(config: &FractalConfig, kind: ViewKind) -> Option<Turnable> {
                 pitch_range: None,
             })
         }
-        #[cfg(feature = "engine-escape")]
         ViewKind::Solid => {
             let (conv, angles) = view3d::solid_angles(&config.escape);
             Some(Turnable {
@@ -317,7 +309,7 @@ fn turnable(config: &FractalConfig, kind: ViewKind) -> Option<Turnable> {
                 pitch_range: above_ground(lift, crate::escape::footprint::FRAME_DISTANCE, angles.pitch),
             })
         }
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        #[cfg(feature = "terrain")]
         ViewKind::SimTerrain => {
             let (conv, angles) = view3d::sim_terrain_angles(&config.sim.terrain);
             let t = &config.sim.terrain;
@@ -424,13 +416,13 @@ pub fn pinch(
     midpoint: [f32; 2],
     panel: [f32; 2],
 ) -> Option<CameraEdit> {
-    use crate::config::manager::{ConfigManager, EditingTarget};
+    use crate::config::manager::EditingTarget;
     let kind = view_kind(config);
     let mut work = config.clone();
     let mut changes: Vec<(ConfigPath, ConfigValue)> = Vec::new();
     let mut take = |edit: Option<CameraEdit>, work: &mut FractalConfig| {
         for (path, value) in edit.map(|e| e.changes).unwrap_or_default() {
-            let _ = ConfigManager::apply_value_detached(work, EditingTarget::Main, &path, value.clone());
+            let _ = crate::config::apply(work, EditingTarget::Main, &path, value.clone());
             match changes.iter_mut().find(|(p, _)| *p == path) {
                 Some(slot) => slot.1 = value,
                 None => changes.push((path, value)),
@@ -499,7 +491,6 @@ pub fn reset(config: &FractalConfig) -> Option<CameraEdit> {
                 }
             }
         }
-        #[cfg(feature = "engine-sim")]
         ViewKind::Sim2d => {
             // The whole grid again; tiling is the picture's choice, kept.
             let home = crate::config::sim::SimView::default();
@@ -508,7 +499,6 @@ pub fn reset(config: &FractalConfig) -> Option<CameraEdit> {
             changes.push((ConfigPath::SimViewZoom, home.zoom.into()));
             changes.push((ConfigPath::SimViewRotation, home.rotation.into()));
         }
-        #[cfg(feature = "engine-sim")]
         ViewKind::SimTerrain => {
             let home = crate::config::sim::SimTerrainConfig::default();
             changes.push((ConfigPath::SimTerrainCamPitch, home.cam_pitch.into()));
@@ -519,9 +509,6 @@ pub fn reset(config: &FractalConfig) -> Option<CameraEdit> {
             changes.push((ConfigPath::SimTerrainTargetY, home.target_y.into()));
             changes.push((ConfigPath::SimTerrainTargetLift, home.target_lift.into()));
         }
-        // Reached when an engine feature is compiled out.
-        #[allow(unreachable_patterns)]
-        _ => return None,
     }
     Some(CameraEdit::batch(changes, RESET))
 }
@@ -559,7 +546,6 @@ pub fn flame_zoom(config: &FractalConfig, factor: f64, cursor: Option<[f32; 2]>,
     Some(CameraEdit::batch(changes, ZOOM))
 }
 
-#[cfg(feature = "engine-escape")]
 mod escape {
     use super::*;
     use crate::config::escape::EscapeConfig;
@@ -1026,7 +1012,6 @@ mod escape {
     }
 }
 
-#[cfg(feature = "engine-escape")]
 pub use escape::{escape_pan, escape_pan_plane, escape_zoom, place_solid_eye, screen_to_world as escape_screen_to_world};
 #[cfg(feature = "terrain")]
 pub use escape::terrain_pan;
@@ -1034,7 +1019,7 @@ pub use escape::terrain_pan;
 /// Slide a simulation terrain's target across the grid so the ground under
 /// the cursor follows it -- in grid fractions, at the pixel's step at the
 /// target's depth.
-#[cfg(all(feature = "terrain", feature = "engine-sim"))]
+#[cfg(feature = "terrain")]
 pub fn sim_terrain_pan(config: &FractalConfig, drag: [f32; 2], panel: [f32; 2]) -> Option<CameraEdit> {
     let (gw, gh) = crate::sim::SimRenderer::grid_for(&config.sim, panel[0].max(1.0) as u32, panel[1].max(1.0) as u32);
     let cam = crate::sim::terrain::sim_terrain_camera(config, gw, gh);
@@ -1059,7 +1044,7 @@ pub fn sim_terrain_pan(config: &FractalConfig, drag: [f32; 2], panel: [f32; 2]) 
 
 /// Move a simulation terrain's camera toward its target (`factor` above
 /// one) or away.
-#[cfg(all(feature = "terrain", feature = "engine-sim"))]
+#[cfg(feature = "terrain")]
 pub fn sim_terrain_dolly(config: &FractalConfig, factor: f64) -> Option<CameraEdit> {
     let d = config.sim.terrain.cam_distance;
     let next = (d / factor as f32).clamp(0.01, 100.0);
@@ -1069,13 +1054,13 @@ pub fn sim_terrain_dolly(config: &FractalConfig, factor: f64) -> Option<CameraEd
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::manager::{ConfigManager, EditingTarget};
+    use crate::config::manager::EditingTarget;
 
     /// The config after an edit, as the manager would write it.
     pub(crate) fn applied(config: &FractalConfig, edit: &CameraEdit) -> FractalConfig {
         let mut c = config.clone();
         for (path, value) in &edit.changes {
-            ConfigManager::apply_value_detached(&mut c, EditingTarget::Main, path, value.clone()).expect("a camera edit applies");
+            crate::config::apply(&mut c, EditingTarget::Main, path, value.clone()).expect("a camera edit applies");
         }
         c
     }
@@ -1123,14 +1108,12 @@ mod tests {
     }
 
     /// The escape plane's point under a screen offset (from the centre).
-    #[cfg(feature = "engine-escape")]
     fn escape_point(c: &FractalConfig, panel: [f32; 2], off: [f32; 2]) -> (f64, f64) {
         let (cx, cy) = c.escape.center_f64();
         let (wx, wy) = escape_screen_to_world(&c.escape, off[0] as f64, off[1] as f64, panel);
         (cx + wx, cy + wy)
     }
 
-    #[cfg(feature = "engine-escape")]
     fn rotated_plane() -> FractalConfig {
         let mut c = FractalConfig::default();
         c.render_mode = crate::scene::transforms::RenderMode::Escape;
@@ -1142,7 +1125,6 @@ mod tests {
     }
 
     /// The escape plane's pan carries the picture, as the flame's does.
-    #[cfg(feature = "engine-escape")]
     #[test]
     fn an_escape_pan_carries_the_picture() {
         let c = rotated_plane();
@@ -1157,7 +1139,6 @@ mod tests {
 
     /// Zooming the escape plane in toward the cursor keeps the point
     /// under it.
-    #[cfg(feature = "engine-escape")]
     #[test]
     fn an_escape_zoom_keeps_the_point_under_the_cursor() {
         let c = rotated_plane();
@@ -1181,16 +1162,13 @@ mod tests {
         flame.camera_rotation_y = 0.4;
         flame.rotation = 0.5;
         out.push(("flame", flame));
-        #[cfg(feature = "engine-escape")]
-        {
-            let mut solid = FractalConfig::default();
-            solid.render_mode = crate::scene::transforms::RenderMode::Escape;
-            solid.escape.formula = "ifs_flame_3d".to_string();
-            solid.escape.cam_pitch = 0.4;
-            solid.escape.cam_yaw = 0.9;
-            solid.escape.rotation = -0.6;
-            out.push(("solid", solid));
-        }
+        let mut solid = FractalConfig::default();
+        solid.render_mode = crate::scene::transforms::RenderMode::Escape;
+        solid.escape.formula = "ifs_flame_3d".to_string();
+        solid.escape.cam_pitch = 0.4;
+        solid.escape.cam_yaw = 0.9;
+        solid.escape.rotation = -0.6;
+        out.push(("solid", solid));
         #[cfg(feature = "terrain")]
         {
             let mut terrain = FractalConfig::default();
@@ -1201,7 +1179,7 @@ mod tests {
             terrain.escape.rotation = 0.7;
             out.push(("escape terrain", terrain));
         }
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        #[cfg(feature = "terrain")]
         {
             let mut sim = FractalConfig::default();
             sim.render_mode = crate::scene::transforms::RenderMode::Simulation;
@@ -1217,7 +1195,6 @@ mod tests {
     /// -- its target moving by the same offset, the angles and the zoom
     /// kept; an empty target (the attractor's centre) becomes explicit.
     #[test]
-    #[cfg(feature = "engine-escape")]
     fn a_solids_eye_goes_where_it_is_put() {
         let (_, mut c) = cameras_3d().into_iter().find(|(n, _)| *n == "solid").expect("a solid");
         // A solid that needs no flame: the default flame qualifies for none.
@@ -1375,7 +1352,6 @@ mod tests {
     }
 
     /// And the escape plane's, whose screen draws Im up.
-    #[cfg(feature = "engine-escape")]
     #[test]
     fn an_escape_turn_rotates_the_picture_with_the_pointer() {
         let settings = TurnSettings { radians_per_pixel: 0.005, invert_y: false };
@@ -1403,7 +1379,6 @@ mod tests {
         let still = flame_point(&after, panel, cur);
         assert!(after.zoom < c.zoom);
         assert!((before.0 - still.0).abs() < 1e-6 && (before.1 - still.1).abs() < 1e-6, "{before:?} vs {still:?}");
-        #[cfg(feature = "engine-escape")]
         {
             let c = rotated_plane();
             let before = escape_point(&c, panel, cur);
@@ -1435,7 +1410,6 @@ mod tests {
         let c = rotated_flame();
         let after = applied(&c, &reset(&c).expect("a flame resets"));
         assert_eq!((after.zoom, after.pan_x, after.pan_y, after.rotation), (1.0, 0.0, 0.0, 0.0));
-        #[cfg(feature = "engine-escape")]
         {
             let c = rotated_plane();
             let after = applied(&c, &reset(&c).expect("the plane resets"));
@@ -1445,7 +1419,6 @@ mod tests {
                 (home.center_re.as_str(), 0.0, 0.0)
             );
         }
-        #[cfg(feature = "engine-sim")]
         {
             let mut sim = FractalConfig::default();
             sim.render_mode = crate::scene::transforms::RenderMode::Simulation;
@@ -1459,7 +1432,6 @@ mod tests {
 
     /// The simulation's picture point under a screen offset, in grid
     /// fractions: the colour pass's mapping.
-    #[cfg(feature = "engine-sim")]
     fn sim_point(c: &FractalConfig, panel: [f32; 2], off: [f32; 2]) -> (f64, f64) {
         let (gw, gh) = crate::sim::SimRenderer::grid_for(&c.sim, panel[0] as u32, panel[1] as u32);
         let fit = (panel[0] as f64 / gw as f64).min(panel[1] as f64 / gh as f64) * c.sim.view.zoom as f64;
@@ -1471,7 +1443,6 @@ mod tests {
         )
     }
 
-    #[cfg(feature = "engine-sim")]
     fn viewed_sim() -> FractalConfig {
         let mut c = FractalConfig::default();
         c.render_mode = crate::scene::transforms::RenderMode::Simulation;
@@ -1486,7 +1457,6 @@ mod tests {
     /// The simulation's view pans, zooms and turns as the other 2D views
     /// do: the picture follows a drag, the point under the cursor stays
     /// under it, and a twist keeps the point under the pointer.
-    #[cfg(feature = "engine-sim")]
     #[test]
     fn the_simulation_view_moves_as_the_other_2d_views_do() {
         let panel = [800.0f32, 600.0];

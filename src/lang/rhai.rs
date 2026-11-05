@@ -4047,7 +4047,7 @@ impl<'s> Lowerer<'s> {
         let Expr::StringConstant(vname, _) = &f.args[0] else { return self.err(p, FORM) };
         let vname = vname.to_string();
         let Some(source) = variation_source(&vname) else {
-            let builtin = crate::variations::global_registry().get(&vname).is_some_and(|v| v.provenance != crate::provenance::Provenance::Custom);
+            let builtin = crate::variations::global_registry().get(&vname).is_some_and(|v| v.provenance != crate::provenance::Provenance::Local);
             return self.err(
                 p,
                 if builtin {

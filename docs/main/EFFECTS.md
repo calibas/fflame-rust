@@ -64,8 +64,8 @@ generator ──▶ [density effects] ──▶ tonemap ──▶ [colour effect
 | --- | --- | --- | --- |
 | App frame | The accumulator; in solid mode the shade or DoF output; the escape or simulation image | The tone map's output; the result is registered with egui for the viewport | `src/app/mod.rs` |
 | Flame render (`render_with`: CLI, thumbnails, video) | Same order as the app: shade, DoF, density effects, tonemap | The tone map's output, then read back | `src/renderer/render.rs` |
-| Escape render, 2D and terrain | The escape image (`escape_tail`) | The tone map's output | `render.rs`, `escape_tail` |
-| Simulation render | The resolved field, or its terrain | The tone map's output | `render.rs`, an inline copy of the same tail |
+| Escape render, 2D and terrain | The escape image | The tone map's output | `render.rs`, `finish` |
+| Simulation render | The resolved field, or its terrain | The tone map's output | `render.rs`, `finish` |
 | Tiled exporter | The full-resolution accumulation, after the histogram is freed | The whole output, after any tiling: colour effects are not local | `src/export/high_res.rs` |
 
 **The headless tails build a runner only when an effect is enabled**,
@@ -115,7 +115,7 @@ Add lists and the corpus exporter (sorted by name) read it.
 | `display_name` | Empty for built-ins, which are labelled from `locales/*.yml` (`effects.<name>.name`). A download or a Rhai effect carries its own |
 | `source` | `EffectSource::Builtin { embedded, path }` or `EffectSource::Owned(wgsl)` |
 | `parameters` | `ParamDef`s, in slot order |
-| `provenance` | `Builtin`, `Api { version }` or `Custom` (a Rhai effect) |
+| `provenance` | `Builtin`, `Api { version }` or `Local` (a Rhai effect the config carries, or a plug-in) |
 | `labels` | A Rhai effect's labels as written, strings or by locale (`scripted::Labels`); `None` otherwise |
 
 `EffectInfo::translated_name` reads the locale first, then the labels'
@@ -154,10 +154,8 @@ preference under `shaders/` (`EffectSource::Builtin { embedded, path }`).
 
 The WGSL the fifteen replaced stays, as **the reference**
 (`effects::wgsl_builtins`, the definitions in registration order): what
-a build without the compiler (`lang` off: only the engine test matrix's
-`engine-flame` and `engine-sim` alone; every shipped module has it)
-registers, and what each Rhai built-in is held to pixel for pixel. An
-edit to one of those files reaches neither, and each says so in its
+each Rhai built-in is held to pixel for pixel. An edit to one of those
+files reaches neither the app nor the twin, and each says so in its
 header. A download carries its WGSL in `EffectSource::Owned`.
 
 ---
@@ -368,8 +366,9 @@ Effects", available in every render mode:
   list of the config's instances by their translated names (the raw
   key for an effect this build lacks), with an enable box, up/down
   reorder, remove, and a control per parameter while enabled. The
-  controls are the variation parameters' (`variation_params`, through
-  an `EffectTarget`): a slider for a Float (0 to 1 where its range is
+  controls are the one parameter renderer's (`ui::params::list` over a
+  `ConfigStore` addressed through an `EffectTarget`, with a Rhai
+  effect's conditions and grids): a slider for a Float (0 to 1 where its range is
   absent), an integer slider for an Integer, a dropdown for an Enum,
   a checkbox for a Boolean, degrees for an Angle, with the description
   as the tooltip. Every `blend_mode`, `mode` and `color_mode` is an
@@ -435,7 +434,7 @@ seeded, and the panel counts those as "not available to download yet".
 Local WGSL plug-in files (`plugins/effects/<name>.json`) were
 retired 2026-11-01 ([rhai-plugins.md](../projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them.
 
-**Rhai plug-ins** ([rhai-plugins.md](../projects/rhai-plugins.md), P3): a Rhai variation, effect, formula, colouring, solid or simulation colouring in the user's formulas with **Load at start** set in the Formula Editor (`formulas/_links.json`, `storage::links::Link::plugin`) is registered at every start, after the downloads (`storage::library::load_plugins`, from `load_installed_resources`: desktop, web and headless), under its key in the user's namespace (`Provenance::Custom`). It is then in the lists without a config carrying it -- the variation pickers, the Effects panel's Add lists and the escape panel's formula and colouring pickers, each under "Your plug-ins" -- and choosing it carries its source into the config, as Use does. Saving the file registers the new version; turning it off unlists it; deleting it forgets the flag. One that does not register is named at start (a notice; stderr headless: `storage::library::plugin_failures`).
+**Rhai plug-ins** ([rhai-plugins.md](../projects/rhai-plugins.md), P3): a Rhai variation, effect, formula, colouring, solid or simulation colouring in the user's formulas with **Load at start** set in the Formula Editor (`formulas/_links.json`, `storage::links::Link::plugin`) is registered at every start, after the downloads (`storage::library::load_plugins`, from `load_installed_resources`: desktop, web and headless), under its key in the user's namespace (`Provenance::Local`). It is then in the lists without a config carrying it -- the variation pickers, the Effects panel's Add lists and the escape panel's formula and colouring pickers, each under "Your plug-ins" -- and choosing it carries its source into the config, as Use does. Saving the file registers the new version; turning it off unlists it; deleting it forgets the flag. One that does not register is named at start (a notice; stderr headless: `storage::library::plugin_failures`).
 
 **Refusals** (`effects::check_download`, `register_from_api`):
 

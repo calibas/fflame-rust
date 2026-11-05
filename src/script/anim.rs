@@ -154,39 +154,15 @@ impl AnimBuilder {
     }
 }
 
-/// snake_case → PascalCase, so the names a script already uses for
-/// `config.set` also name animation targets.
-///
-/// `config.set` addresses fields by their serde name (`camera_rotation_x`)
-/// while tracks use `ConfigPath` keys (`CameraRotationX`). Asking authors
-/// to know both spellings would be a trap, and the two happen to differ
-/// only by case and separators.
-fn pascal_case(s: &str) -> String {
-    s.split('_')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str().to_lowercase().as_str(),
-                None => String::new(),
-            }
-        })
-        .collect()
-}
-
 /// Resolve a flame-level parameter name to a track target.
 ///
 /// Accepts the script's own spelling (`"camera_rotation_x"`) and the
 /// `ConfigPath` key (`"CameraRotationX"`), so neither is wrong.
 pub(crate) fn resolve_flame_target(name: &str) -> Result<String, String> {
-    // And a dotted name segment by segment: "escape.zoom_log2" is
-    // "Escape.ZoomLog2", "sim.terrain.height" "Sim.Terrain.Height".
-    let dotted = name.split('.').map(pascal_case).collect::<Vec<_>>().join(".");
-    let candidates = [name.to_string(), pascal_case(name), dotted];
-    for candidate in &candidates {
-        if let Some(path) = ConfigPath::from_string_key(candidate) {
-            return Ok(path.to_string_key());
-        }
+    // The names `config.set` takes (`config::by_name`): "escape.zoom_log2"
+    // is "Escape.ZoomLog2", "sim.terrain.height" "Sim.Terrain.Height".
+    if let Some(path) = crate::config::by_name::path_named(name) {
+        return Ok(path.to_string_key());
     }
     Err(format!(
         "`{name}` is not an animatable setting. Use the same name `config.set` takes \

@@ -557,6 +557,15 @@ pub struct FractalConfig {
     /// with the coverage curve in hand rather than in advance.
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_exposure: bool,
+
+    /// The settings each engine owns -- the palette, the tone map, the
+    /// background, the effects, the lighting rig (`config::mode::
+    /// ENGINE_OWNED`) -- of the engines not shown, keyed by engine
+    /// (`flame`, `escape`, `simulation`), in this file's own JSON. A mode
+    /// change swaps them (`config::mode::enter`), so no engine's look is
+    /// copied into another's. Empty until the config has changed engine.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub engine_settings: std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Biased transform selection with a windowed likelihood-ratio
@@ -1114,7 +1123,7 @@ pub struct SolidShadingSettings {
     /// every orbit, as every solid was lit before; a solid saved then
     /// loads with it on (the v5 -> v6 migration), and the View panel's Fly
     /// Mode section fixes its lights where they are
-    /// (`ui::render_mode::lights_to_world`). A solid's alone: a terrain's
+    /// (`config::mode::lights_to_world`). A solid's alone: a terrain's
     /// lights are always the world's, a 3D flame's always the camera's
     /// (its shade pass lights the projected picture). Not a touch of the
     /// rig (`rig_untouched`).
@@ -1342,6 +1351,7 @@ impl Default for FractalConfig {
             cylinder_trim_levels: default_trim_levels(),
             word_removals: Vec::new(),
             auto_exposure: false,
+            engine_settings: Default::default(),
         }
     }
 }
@@ -1452,12 +1462,28 @@ pub(crate) fn migrate_custom_variation_keys(obj: &mut serde_json::Map<String, se
 }
 
 impl FractalConfig {
+    /// Register every source this config carries -- its flame's Rhai
+    /// variations, its escape formula and colouring, its simulation's
+    /// models and colourings, its effects -- so each name resolves to the
+    /// config's own entry before anything draws it. A path that missed
+    /// one kind drew that kind's built-in fallback (a Mandelbrot for a
+    /// formula), so an entry point taking a whole config makes this one
+    /// call; the engines' own entry points, which see only their part,
+    /// register that part (`variations::custom::ensure`,
+    /// `escape::custom::ensure`, `sim::custom::ensure`,
+    /// `effects::ensure_custom`). Cheap when there is nothing to register.
+    pub fn ensure_sources(&self) {
+        crate::variations::custom::ensure(&self.flame);
+        crate::escape::custom::ensure(&self.escape);
+        crate::sim::custom::ensure(&self.sim);
+        crate::effects::ensure_custom(self);
+    }
+
     /// Whether this config's orbits start afresh every dispatch: its own
     /// `reset_orbits`, or a variation its flame uses that needs it
     /// (registered first, so one of the user's counts). Then a dispatch's
     /// length is the orbits' length, which every path renders with.
     pub fn resets_orbits(&self) -> bool {
-        #[cfg(feature = "lang")]
         crate::variations::custom::ensure(&self.flame);
         self.reset_orbits || self.flame.needs_fresh_orbits(&crate::variations::global_registry())
     }

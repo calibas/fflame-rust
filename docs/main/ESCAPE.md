@@ -29,7 +29,7 @@ here, with deep zoom by perturbation to effectively unlimited depth.
 - [src/escape/formulas.rs](../../src/escape/formulas.rs) — 26 formulas, inline WGSL
 - [src/escape/colorings.rs](../../src/escape/colorings.rs) — 28 colourings
 - [src/escape/fields.rs](../../src/escape/fields.rs) — mode B: 3 fields, 3 colourings
-- [src/escape/ifs.rs](../../src/escape/ifs.rs) — mode D: 3 distance functions, 5 colourings
+- [src/escape/ifs.rs](../../src/escape/ifs.rs) — mode D: 6 distance functions (`IFS_DEFS`), 5 colourings
 - [src/escape/assembler.rs](../../src/escape/assembler.rs) — WGSL assembly, every template
 - [src/escape/renderer.rs](../../src/escape/renderer.rs) — `EscapeRenderer`
 - [src/escape/lens.rs](../../src/escape/lens.rs) — the camera lens and the transformations' maps flame
@@ -1933,7 +1933,7 @@ colours.
 state made 1×1, since only the tonemap of another engine's image is used
 — loads the config (palette, tonemap uniform, curve, background), and
 dispatches `render_escape`. That renders to settlement and calls
-`escape_tail`: density effects, `tonemap_pass_with_input` on the escape
+the tail (`render::finish`, `renderer::tail`): density effects, `tonemap_pass_with_input` on the escape
 image, colour effects, readback. The palette an escape render binds is
 `escape_palette_view(stepped)`: the ordinary palette texture, or the
 stepped table when `palette_map.stepped` is on.

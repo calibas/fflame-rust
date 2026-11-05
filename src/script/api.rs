@@ -96,14 +96,12 @@ pub struct ConfigHandle {
 /// The CENTRE IS A STRING on purpose. It is the deep-zoom payload:
 /// zoom 60 needs about 20 significant digits and an f64 carries 15,
 /// so every accessor here keeps it as text end to end.
-#[cfg(feature = "engine-escape")]
 #[derive(Clone)]
 pub struct EscapeHandle {
     cfg: Rc<RefCell<FractalConfig>>,
 }
 
 /// The `sim` global: simulation mode from a script.
-#[cfg(feature = "engine-sim")]
 #[derive(Clone)]
 pub struct SimHandle {
     cfg: Rc<RefCell<FractalConfig>>,
@@ -358,9 +356,7 @@ pub(crate) fn push_globals(
     state: Rc<RefCell<ScriptState>>,
 ) {
     scope.push("flame", FlameHandle { cfg: Rc::clone(&cfg) });
-    #[cfg(feature = "engine-escape")]
     scope.push("escape", EscapeHandle { cfg: Rc::clone(&cfg) });
-    #[cfg(feature = "engine-sim")]
     scope.push("sim", SimHandle { cfg: Rc::clone(&cfg) });
     scope.push("config", ConfigHandle { cfg });
     scope.push("anim", AnimHandle { state });
@@ -375,9 +371,7 @@ pub(crate) fn register(
     engine.register_type_with_name::<TransformHandle>("Transform");
     engine.register_type_with_name::<ConfigHandle>("Config");
     engine.register_type_with_name::<AnimHandle>("Anim");
-    #[cfg(feature = "engine-escape")]
     engine.register_type_with_name::<EscapeHandle>("Escape");
-    #[cfg(feature = "engine-sim")]
     engine.register_type_with_name::<SimHandle>("Sim");
     register_anim(engine, Rc::clone(&state));
 
@@ -386,9 +380,7 @@ pub(crate) fn register(
     register_flame(engine);
     register_transform(engine);
     register_config(engine, Rc::clone(&state));
-    #[cfg(feature = "engine-escape")]
     register_escape(engine);
-    #[cfg(feature = "engine-sim")]
     register_sim(engine);
     register_run_script(engine, Rc::clone(&cfg), Rc::clone(&state));
     register_colors(engine, Rc::clone(&state));
@@ -1437,13 +1429,17 @@ fn validate_variation_param(var: &str, param: &str) -> Result<(), Box<EvalAltRes
 /// handle does, so a script that sets only a model produces a picture
 /// rather than a black frame: flame presets carry Log-calibrated tone
 /// mapping, which renders a unit-range simulation field invisible.
-#[cfg(feature = "engine-sim")]
 fn register_sim(engine: &mut Engine) {
     use crate::scene::transforms::RenderMode;
 
     fn enter(cfg: &mut FractalConfig) {
         if cfg.render_mode != RenderMode::Simulation {
-            // As the Mode menu enters it (`entry_tone_mapping`).
+            // The tone map a simulation's picture needs
+            // (`entry_tone_mapping`). Not the Mode menu's swap of every
+            // engine's settings (`config::mode::enter`): a script builds
+            // one config, and the swap would undo what it set before
+            // choosing the engine (a palette) -- and change what a
+            // published script and seed make.
             if let Some((exposure, gamma)) = crate::config::defaults::entry_tone_mapping(cfg, RenderMode::Simulation) {
                 cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
                 cfg.exposure = exposure;
@@ -1701,7 +1697,6 @@ fn register_sim(engine: &mut Engine) {
 
 /// A relief blend by name. Unknown names fell back to Multiply, so a
 /// typo -- or "Screen" with a capital -- darkened the highlights.
-#[cfg(feature = "engine-escape")]
 fn blend_named(blend: &str) -> Result<crate::config::escape::ShadingBlend, Box<EvalAltResult>> {
     const BLENDS: [&str; 6] = ["multiply", "screen", "overlay", "mix", "soft_light", "hard_light"];
     let b = blend.trim().to_ascii_lowercase();
@@ -1719,16 +1714,15 @@ fn blend_named(blend: &str) -> Result<crate::config::escape::ShadingBlend, Box<E
 /// alternative is a config carrying escape settings while rendering a
 /// flame, which reads as a bug in the script rather than a missing
 /// line.
-#[cfg(feature = "engine-escape")]
 fn register_escape(engine: &mut Engine) {
     use crate::scene::transforms::RenderMode;
 
     fn enter(cfg: &mut FractalConfig) {
         if cfg.render_mode != RenderMode::Escape {
             // Flame presets carry Log-calibrated tone mapping, which
-            // renders Linear escape output invisibly: switched as the
-            // Mode menu switches it (`entry_tone_mapping`), so a script
-            // and a click agree.
+            // renders Linear escape output invisibly: the tone map an
+            // escape picture needs (`entry_tone_mapping`), not the Mode
+            // menu's swap of every engine's settings -- see `register_sim`.
             if let Some((exposure, gamma)) = crate::config::defaults::entry_tone_mapping(cfg, RenderMode::Escape) {
                 cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
                 cfg.exposure = exposure;
@@ -1791,7 +1785,6 @@ fn register_escape(engine: &mut Engine) {
     // Fractint's), compiled here and carried in the config as source
     // (escape::custom). A compile error throws, with each message's
     // line and column in the source.
-    #[cfg(feature = "engine-escape")]
     fn custom_source(
         source: &str,
         entry: &str,
@@ -1806,7 +1799,6 @@ fn register_escape(engine: &mut Engine) {
         };
         Ok(crate::config::escape::CustomSource { dialect, entry: entry.to_string(), source: source.to_string(), variations: Vec::new() })
     }
-    #[cfg(feature = "engine-escape")]
     fn compile_error(src: &crate::config::escape::CustomSource, diags: &[crate::lang::Diag]) -> Box<EvalAltResult> {
         let lines: Vec<String> = diags
             .iter()
@@ -1815,7 +1807,6 @@ fn register_escape(engine: &mut Engine) {
             .collect();
         err(format!("`{}` does not compile:\n{}", src.entry, lines.join("\n")))
     }
-    #[cfg(feature = "engine-escape")]
     fn set_custom_formula(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
         use crate::lang::EntryKind;
         // With the variations it calls (`vary`), which the config carries.
@@ -1833,7 +1824,6 @@ fn register_escape(engine: &mut Engine) {
         cfg.escape.custom_formula = Some(src);
         Ok(())
     }
-    #[cfg(feature = "engine-escape")]
     fn set_custom_coloring(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
         use crate::lang::EntryKind;
         let src = crate::escape::custom::with_called_variations(EntryKind::Coloring, src);
@@ -1850,67 +1840,63 @@ fn register_escape(engine: &mut Engine) {
         cfg.escape.custom_coloring = Some(src);
         Ok(())
     }
-    #[cfg(feature = "engine-escape")]
-    {
-        engine.register_fn(
-            "custom_formula",
-            |e: &mut EscapeHandle, source: &str, entry: &str| -> Result<(), Box<EvalAltResult>> {
-                set_custom_formula(e, custom_source(source, entry, "uf")?)
-            },
-        );
-        engine.register_fn(
-            "custom_formula",
-            |e: &mut EscapeHandle, source: &str, entry: &str, dialect: &str| -> Result<(), Box<EvalAltResult>> {
-                set_custom_formula(e, custom_source(source, entry, dialect)?)
-            },
-        );
-        engine.register_fn(
-            "custom_coloring",
-            |e: &mut EscapeHandle, source: &str, entry: &str| -> Result<(), Box<EvalAltResult>> {
-                set_custom_coloring(e, custom_source(source, entry, "uf")?)
-            },
-        );
-        // A Rhai formula: its source alone, one formula to a source
-        // (phase 4, step 8).
-        engine.register_fn("custom_formula", |e: &mut EscapeHandle, source: &str| -> Result<(), Box<EvalAltResult>> {
-            let entry = crate::lang::rhai::title(source).unwrap_or_else(|| "Formula".into());
-            set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry, source: source.to_string(), variations: Vec::new() })
-        });
-        // A formula from the script's own function `f(z, c)`, its step:
-        // the Mandelbrot's shape on both planes. The config carries it as
-        // Rhai source, so the saved file renders anywhere.
-        engine.register_fn("formula_fn", |ctx: rhai::NativeCallContext, e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
-            let mut fns: Vec<(String, rhai::ScriptFuncDef)> = Vec::new();
-            let mut found = false;
-            for m in ctx.iter_namespaces() {
-                for (_, _, n, params, def) in m.iter_script_fn_info() {
-                    found |= n == name && params == 2;
-                    fns.push((n.to_string(), (**def).clone()));
-                }
+    engine.register_fn(
+        "custom_formula",
+        |e: &mut EscapeHandle, source: &str, entry: &str| -> Result<(), Box<EvalAltResult>> {
+            set_custom_formula(e, custom_source(source, entry, "uf")?)
+        },
+    );
+    engine.register_fn(
+        "custom_formula",
+        |e: &mut EscapeHandle, source: &str, entry: &str, dialect: &str| -> Result<(), Box<EvalAltResult>> {
+            set_custom_formula(e, custom_source(source, entry, dialect)?)
+        },
+    );
+    engine.register_fn(
+        "custom_coloring",
+        |e: &mut EscapeHandle, source: &str, entry: &str| -> Result<(), Box<EvalAltResult>> {
+            set_custom_coloring(e, custom_source(source, entry, "uf")?)
+        },
+    );
+    // A Rhai formula: its source alone, one formula to a source
+    // (phase 4, step 8).
+    engine.register_fn("custom_formula", |e: &mut EscapeHandle, source: &str| -> Result<(), Box<EvalAltResult>> {
+        let entry = crate::lang::rhai::title(source).unwrap_or_else(|| "Formula".into());
+        set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry, source: source.to_string(), variations: Vec::new() })
+    });
+    // A formula from the script's own function `f(z, c)`, its step:
+    // the Mandelbrot's shape on both planes. The config carries it as
+    // Rhai source, so the saved file renders anywhere.
+    engine.register_fn("formula_fn", |ctx: rhai::NativeCallContext, e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+        let mut fns: Vec<(String, rhai::ScriptFuncDef)> = Vec::new();
+        let mut found = false;
+        for m in ctx.iter_namespaces() {
+            for (_, _, n, params, def) in m.iter_script_fn_info() {
+                found |= n == name && params == 2;
+                fns.push((n.to_string(), (**def).clone()));
             }
-            if !found {
-                return Err(err(format!("no function `{name}(z, c)` in the script")));
-            }
-            let p = crate::lang::rhai::program_from_fn(name, &fns).map_err(|d| {
-                err(format!("`{name}` does not make a formula: {}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>().join("; ")))
-            })?;
-            let source = crate::lang::to_rhai::formula(&p, &[]).map_err(|e| err(format!("`{name}`: {e}")))?;
-            set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: name.to_string(), source, variations: Vec::new() })
-        });
-        // A hybrid composed in the script: the Hybrid Designer's groups.
-        engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array| -> Result<(), Box<EvalAltResult>> {
-            set_custom_formula(e, hybrid_source(&groups, 0)?)
-        });
-        engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array, loop_start: i64| -> Result<(), Box<EvalAltResult>> {
-            set_custom_formula(e, hybrid_source(&groups, loop_start)?)
-        });
-    }
+        }
+        if !found {
+            return Err(err(format!("no function `{name}(z, c)` in the script")));
+        }
+        let p = crate::lang::rhai::program_from_fn(name, &fns).map_err(|d| {
+            err(format!("`{name}` does not make a formula: {}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>().join("; ")))
+        })?;
+        let source = crate::lang::to_rhai::formula(&p, &[]).map_err(|e| err(format!("`{name}`: {e}")))?;
+        set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: name.to_string(), source, variations: Vec::new() })
+    });
+    // A hybrid composed in the script: the Hybrid Designer's groups.
+    engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array| -> Result<(), Box<EvalAltResult>> {
+        set_custom_formula(e, hybrid_source(&groups, 0)?)
+    });
+    engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array, loop_start: i64| -> Result<(), Box<EvalAltResult>> {
+        set_custom_formula(e, hybrid_source(&groups, loop_start)?)
+    });
 
     // A hybrid's groups from a script's maps: `repeats`, and what the
     // group runs -- `formula` (Rhai source) or `twin` (a built-in's
     // name), optionally `blend` / `blend_twin` to mix with, or KF's
     // `lines` as the hybrid's JSON has them.
-    #[cfg(feature = "engine-escape")]
     fn hybrid_source(groups: &Array, loop_start: i64) -> Result<crate::config::escape::CustomSource, Box<EvalAltResult>> {
         use crate::lang::hybrid::{Hybrid, Member};
         let member = |source: Option<String>, twin: Option<String>| -> Result<Option<serde_json::Value>, Box<EvalAltResult>> {
@@ -2456,9 +2442,9 @@ fn register_config(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         "set",
         move |c: &mut ConfigHandle, key: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
             let mut cfg = c.cfg.borrow_mut();
-            match set_config_field(&mut cfg, key, dynamic_to_json(&value)?) {
-                Ok(Applied::Changed) => Ok(()),
-                Ok(Applied::NoVisibleChange) => {
+            match crate::config::by_name::set(&mut cfg, key, dynamic_to_json(&value)?) {
+                Ok(crate::config::by_name::Applied::Changed) => Ok(()),
+                Ok(crate::config::by_name::Applied::NoVisibleChange) => {
                     // Either a no-op (already that value / equals the
                     // default of a skip-if-default field) or a bad key.
                     // Can't tell them apart from the JSON alone, so warn
@@ -2478,7 +2464,7 @@ fn register_config(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         |c: &mut ConfigHandle, key: &str| -> Result<Dynamic, Box<EvalAltResult>> {
             let cfg = c.cfg.borrow();
             let root = serde_json::to_value(&*cfg).map_err(|e| err(e.to_string()))?;
-            match json_at(&root, key) {
+            match crate::config::by_name::json_at(&root, key) {
                 Some(v) => Ok(json_to_dynamic(v)),
                 None => Err(err(format!(
                     "`{key}` is not set (it may be at its default and omitted, or misspelled)"
@@ -2493,9 +2479,9 @@ fn register_config(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
     engine.register_indexer_set(
         move |c: &mut ConfigHandle, key: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
             let mut cfg = c.cfg.borrow_mut();
-            match set_config_field(&mut cfg, key, dynamic_to_json(&value)?) {
-                Ok(Applied::Changed) => Ok(()),
-                Ok(Applied::NoVisibleChange) => {
+            match crate::config::by_name::set(&mut cfg, key, dynamic_to_json(&value)?) {
+                Ok(crate::config::by_name::Applied::Changed) => Ok(()),
+                Ok(crate::config::by_name::Applied::NoVisibleChange) => {
                     s.borrow_mut().warnings.push(format!(
                         "config[\"{key}\"] = … changed nothing — check the setting name"
                     ));
@@ -2505,84 +2491,6 @@ fn register_config(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
             }
         },
     );
-}
-
-enum Applied {
-    Changed,
-    NoVisibleChange,
-}
-
-/// Set any `FractalConfig` field by its `.fflame` JSON path.
-///
-/// Goes through serde rather than a hand-written table so the whole
-/// config is reachable and the key names are the ones users already see
-/// in saved files. The flame itself is excluded: it has richer structure
-/// (and session-local IDs that a JSON round trip would reset), so it is
-/// edited through the typed `flame` handle instead.
-fn set_config_field(
-    cfg: &mut FractalConfig,
-    key: &str,
-    value: serde_json::Value,
-) -> Result<Applied, String> {
-    if key == "flame" || key.starts_with("flame.") {
-        return Err("use the `flame` object to edit the flame, not config.set".to_string());
-    }
-
-    let before = serde_json::to_value(&*cfg).map_err(|e| e.to_string())?;
-    // A key already present in the JSON is a known setting, even if the
-    // assignment turns out to be a no-op (setting brightness to the value
-    // it already has). Only a key that is BOTH absent and produced no
-    // change is ambiguous enough to warn about.
-    let key_existed = json_at(&before, key).is_some();
-    let mut patched = before.clone();
-
-    // Walk to the parent, creating a missing group as an empty object: a
-    // group at its defaults is omitted from the JSON entirely (`sim`,
-    // `escape`, `solid_shading`, `sim.terrain` all skip-if-default), and
-    // each deserializes from a partial object, as a compact save loads.
-    // A misspelt group lands as an unknown key serde ignores, which the
-    // "changed nothing" warning below then reports.
-    let parts: Vec<&str> = key.split('.').collect();
-    let (last, parents) = parts.split_last().ok_or("empty setting name")?;
-    let mut cur = &mut patched;
-    for p in parents {
-        cur = cur
-            .as_object_mut()
-            .ok_or_else(|| format!("`{key}` is not a settable field"))?
-            .entry((*p).to_string())
-            .or_insert_with(|| serde_json::Value::Object(Default::default()));
-    }
-    let obj = cur
-        .as_object_mut()
-        .ok_or_else(|| format!("`{key}` is not a settable field"))?;
-    // Insert rather than require presence: fields sitting at their
-    // default are omitted from the JSON entirely (skip-if-default).
-    obj.insert((*last).to_string(), value);
-
-    let flame = cfg.flame.clone();
-    let mut next: FractalConfig = serde_json::from_value(patched)
-        .map_err(|e| format!("invalid value for `{key}`: {e}"))?;
-    // Session-local IDs are #[serde(skip)]; restore the flame wholesale
-    // and re-issue IDs for anything the round trip blanked.
-    next.flame = flame;
-    next.fixup_ids();
-
-    let after = serde_json::to_value(&next).map_err(|e| e.to_string())?;
-    let changed = after != before;
-    *cfg = next;
-    Ok(if changed || key_existed {
-        Applied::Changed
-    } else {
-        Applied::NoVisibleChange
-    })
-}
-
-fn json_at<'a>(root: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
-    let mut cur = root;
-    for p in key.split('.') {
-        cur = cur.get(p)?;
-    }
-    Some(cur)
 }
 
 fn dynamic_to_json(d: &Dynamic) -> Result<serde_json::Value, Box<EvalAltResult>> {

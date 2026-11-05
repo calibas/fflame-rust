@@ -80,7 +80,7 @@ pub fn merge_state<T: CatalogItem>(
     match installed {
         Some(Provenance::Builtin) => CatalogState::BuiltIn,
         // The user's own: never an update candidate.
-        Some(Provenance::Custom) => CatalogState::LocalOverride,
+        Some(Provenance::Local) => CatalogState::LocalOverride,
         Some(Provenance::Api { version: have }) => {
             if item.version() > *have {
                 CatalogState::UpdateAvailable { have: *have, available: item.version() }
@@ -298,12 +298,12 @@ mod tests {
     fn the_users_own_is_reported_not_updated() {
         // Catalog says v99; the user's own still wins its name.
         assert_eq!(
-            merge_state(&variation("mine", 99, true), Some(&Provenance::Custom)),
+            merge_state(&variation("mine", 99, true), Some(&Provenance::Local)),
             CatalogState::LocalOverride
         );
 
         let items = vec![variation("mine", 99, true), variation("theirs", 1, true)];
-        let s = summarize(&items, |n| (n == "mine").then_some(Provenance::Custom));
+        let s = summarize(&items, |n| (n == "mine").then_some(Provenance::Local));
         assert_eq!(s.local_overrides.len(), 1);
         assert_eq!(s.local_overrides[0].name, "mine");
         assert!(s.updatable.is_empty(), "a local plugin is not updatable");

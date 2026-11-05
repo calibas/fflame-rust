@@ -1032,7 +1032,6 @@ pub fn specialize_mondrian_wgsl_3d(flame: &Flame) -> String {
 }
 
 // Reads the catalog's definition defaults.
-#[cfg(feature = "engine-flame")]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1922,7 +1922,6 @@ fn a_script_can_define_an_animation_the_app_can_play() {
 /// one. Checked against the source rather than a hand-kept list, so
 /// adding a script can't quietly make this vacuous.
 // Runs every shipped script, one of which needs the escape engine.
-#[cfg(all(feature = "engine-flame", feature = "engine-escape"))]
 #[test]
 fn scripts_produce_an_animation_only_when_they_ask_for_one() {
     let host = ScriptHost::new();
@@ -2107,7 +2106,6 @@ fn unknown_script_flags_are_reported_by_the_collect_pass() {
 /// declares it must genuinely produce the same flame for any seed. This
 /// checks the claim against the shipped scripts rather than trusting it.
 // Runs every shipped script, one of which needs the escape engine.
-#[cfg(all(feature = "engine-flame", feature = "engine-escape"))]
 #[test]
 fn scripts_declaring_norng_really_ignore_the_seed() {
     let host = ScriptHost::new();
@@ -2242,10 +2240,10 @@ fn show_shipped_docs() {
 /// deleted.
 ///
 /// This used to be enforced by canonicalizing a path and checking it
-/// against the user folder, because `ScriptOrigin::File` covered the
+/// against the user folder, because `ScriptOrigin::File` (now `ScriptHome`) covered the
 /// shipped `assets/scripts/` copies too. It is now structural: `delete`
 /// takes a stem and builds the key itself, so there is no path for a
-/// caller to aim elsewhere, and `ScriptOrigin::User` is the only origin
+/// caller to aim elsewhere, and `ScriptHome::Store` is the only home
 /// the panel offers a Delete button for.
 ///
 /// What is left to test is that the structure actually holds — a stem
@@ -2292,7 +2290,7 @@ script(\"Visibility Test\", \"generator\");
         .find(|e| e.id == stem)
         .expect("a saved script must be listed");
     assert_eq!(found.display_name, "Visibility Test");
-    assert_eq!(found.origin, super::library::ScriptOrigin::User);
+    assert_eq!(found.home, super::library::ScriptHome::Store);
     // The picker marks the user's own with a trailing asterisk.
     assert!(found.label().ends_with(" *"), "{}", found.label());
 
@@ -3945,7 +3943,7 @@ fn link_test_lock() -> std::sync::MutexGuard<'static, ()> {
 ///
 /// This is the hole that would otherwise open the moment browsing
 /// lands: a downloaded script saved locally becomes
-/// `ScriptOrigin::User`, and if trust were read from the origin, Save
+/// `ScriptHome::Store`, and if trust were read from the home, Save
 /// would launder away the cross-call restriction. The user chose to
 /// keep the script; they did not read it.
 #[test]
@@ -3973,7 +3971,8 @@ fn adopting_a_downloaded_script_keeps_it_untrusted() {
     let entries = super::library::discover(&crate::config::FractalConfig::default());
     let e = entries.iter().find(|e| e.id == stem).expect("listed");
     assert!(e.untrusted, "the library must carry it through to the panel");
-    assert_eq!(e.origin, super::library::ScriptOrigin::User, "it IS the user's copy");
+    assert_eq!(e.home, super::library::ScriptHome::Store, "it IS the user's copy");
+    assert_eq!(e.origin(), crate::provenance::Origin::Api, "but somebody else wrote it");
     assert!(e.label().ends_with(" ↓"), "and it is marked as such: {}", e.label());
 
     store::delete(stem).expect("cleanup");
@@ -4309,7 +4308,6 @@ fn post_rotate_matches_pre_rotate_math() {
 /// right for a script someone is editing and wrong for one we ship,
 /// where it would put a modifier in the corpus as a generator.
 // Runs every shipped script, one of which needs the escape engine.
-#[cfg(all(feature = "engine-flame", feature = "engine-escape"))]
 #[test]
 fn every_shipped_script_declares_a_kind_and_serialisable_params() {
     let base = FractalConfig::default();
@@ -4350,7 +4348,6 @@ fn every_shipped_script_declares_a_kind_and_serialisable_params() {
 
 /// A script can build an escape-time config, and building one puts the
 /// config in escape mode without the author saying so.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_script_sets_the_formula_and_the_mode() {
     let out = run(
@@ -4387,7 +4384,6 @@ fn escape_script_sets_the_formula_and_the_mode() {
 /// This is the whole reason `center` takes strings: 31 significant
 /// digits is a zoom-100 payload, and an f64 round trip would silently
 /// truncate it to 15 and cap the script at about zoom 50.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_centre_keeps_every_digit() {
     const RE: &str = "-1.99999999999999999999999999999123456789";
@@ -4410,7 +4406,6 @@ fn escape_centre_keeps_every_digit() {
 }
 
 /// Unknown names fail loudly rather than sitting in the config.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_rejects_names_that_do_not_exist() {
     for (src, expect) in [
@@ -4438,7 +4433,6 @@ fn escape_rejects_names_that_do_not_exist() {
 
 /// The palette map is reachable from a script, and a misspelt curve
 /// fails rather than quietly drawing Linear.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_palette_map_from_a_script() {
     let out = run(
@@ -4470,7 +4464,6 @@ fn escape_palette_map_from_a_script() {
 
 /// A script's colouring pick matches the panel's: the averages start
 /// debanded, and a value the script sets afterwards still wins.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_coloring_takes_the_panels_pick_values() {
     let out = run(
@@ -4496,7 +4489,6 @@ fn escape_coloring_takes_the_panels_pick_values() {
 
 /// A texture layer from a script: named, blended, weighted, with its
 /// own parameters -- and a misspelt name or blend fails.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_texture_layer_from_a_script() {
     let out = run(
@@ -4539,7 +4531,6 @@ fn escape_texture_layer_from_a_script() {
 
 /// The relief's lighting model, slope stencil and height curve from a
 /// script, with misspelt names failing.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_relief_lighting_from_a_script() {
     let out = run(
@@ -4575,7 +4566,6 @@ fn escape_relief_lighting_from_a_script() {
 
 /// Every escape number takes an int where it takes a float, as the
 /// reference promises: these used to fail with "function not found".
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_numbers_accept_ints() {
     let out = run(
@@ -4616,7 +4606,6 @@ fn escape_numbers_accept_ints() {
 /// They are keyed by name and belong to the formula that declared
 /// them; carrying `p_re` into a map that has no such parameter leaves
 /// a value in the config that nothing reads and the UI cannot show.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_switching_formula_clears_its_parameters() {
     let out = run(
@@ -4635,7 +4624,6 @@ fn escape_switching_formula_clears_its_parameters() {
 /// The catalog is reachable from a script, which is what makes the
 /// formula set programmatically explorable rather than a list to copy
 /// out of the docs.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_lists_its_formulas_and_colorings() {
     let out = run(
@@ -4657,7 +4645,6 @@ fn escape_lists_its_formulas_and_colorings() {
 }
 
 /// Same script + same seed = same escape config, exactly as for flames.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_scripts_are_reproducible() {
     const SRC: &str = r#"
@@ -4675,7 +4662,6 @@ fn escape_scripts_are_reproducible() {
 /// A script enters escape and simulation mode as the Mode menu does:
 /// the same tone mapping, so a scripted picture and a clicked one are
 /// the same picture (it set exposure 1 where the app sets escape's 2).
-#[cfg(all(feature = "engine-escape", feature = "engine-sim"))]
 #[test]
 fn a_script_enters_a_mode_as_the_app_does() {
     use crate::scene::transforms::RenderMode;
@@ -4691,7 +4677,6 @@ fn a_script_enters_a_mode_as_the_app_does() {
 
 /// The `sim` handle takes whole numbers where it takes numbers, as the
 /// escape handle does: `sim.param("feed", 1)` was "function not found".
-#[cfg(feature = "engine-sim")]
 #[test]
 fn sim_numbers_accept_ints() {
     let out = run(
@@ -4714,7 +4699,6 @@ fn sim_numbers_accept_ints() {
 /// On a layered simulation the handle writes the first layer and the
 /// first colour layer, which are what render: written flat, the edits
 /// had no visible effect.
-#[cfg(feature = "engine-sim")]
 #[test]
 fn sim_setters_reach_a_layered_simulation() {
     let mut base = FractalConfig::default();
@@ -4741,7 +4725,6 @@ fn sim_setters_reach_a_layered_simulation() {
 
 /// What would save as `null` and not load again is refused: a NaN or an
 /// infinite number, and a centre deep zoom cannot read.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_refuses_what_would_not_load() {
     for bad in [
@@ -4758,7 +4741,6 @@ fn escape_refuses_what_would_not_load() {
 
 /// A relief blend or field by a name that does not exist is an error,
 /// not Multiply or Smooth in silence; a capital is fine.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn escape_relief_names_are_checked() {
     let ok = run(
@@ -4784,7 +4766,6 @@ fn anim_keys_take_dotted_snake_case() {
 /// A script can write its own formula and colouring in Ultra Fractal's
 /// language; the config carries the source, and a compile error throws
 /// with the line and column.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn a_script_compiles_a_custom_formula_and_colouring() {
     let out = run(
@@ -4834,7 +4815,6 @@ bailout:
 /// read back with their metadata, a hybrid composed in the script (twins
 /// taking turns, a blend), and a complex parameter set as a point in
 /// polar form.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn a_script_writes_rhai_formulas_and_composes_hybrids() {
     let out = run(
@@ -4891,7 +4871,6 @@ fn escaped(s, p) { s.z.norm_sqr() > 16.0 }`);
 /// A formula from the script's own function (phase 4, step 8): the
 /// Burning Ship written as `f(z, c)` runs as the Ship's twin does, and
 /// the config carries it as Rhai source.
-#[cfg(feature = "engine-escape")]
 #[test]
 fn a_script_function_becomes_a_formula() {
     let out = run(

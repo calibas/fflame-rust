@@ -56,7 +56,6 @@ fn stage_tip(stage: TransformStage) -> String {
 /// now used -- its source carried in the flame, one undo step.
 fn write_list(config_manager: &mut ConfigManager, list: &[EscapeTransform], description: &str) {
     let mut changes = vec![(ConfigPath::EscapeTransforms, ConfigValue::String(crate::config::escape::transforms_to_wire(list)))];
-    #[cfg(feature = "engine-escape")]
     if let Some(carry) = crate::variations::custom::carry_change(config_manager.active_config(), list.iter().map(|t| t.variation.as_str())) {
         changes.push(carry);
     }

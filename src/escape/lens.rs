@@ -214,7 +214,7 @@ pub fn lens_menu(registry: &VariationRegistry) -> Vec<String> {
     }
     for name in registry.names() {
         // A 3D variation only has no 2D body for the lens (B2).
-        if registry.get(name).is_some_and(|v| v.provenance == crate::provenance::Provenance::Custom && v.category != crate::variations::VariationCategory::Only3D) {
+        if registry.get(name).is_some_and(|v| v.provenance == crate::provenance::Provenance::Local && v.category != crate::variations::VariationCategory::Only3D) {
             out.push(name.clone());
         }
     }

@@ -180,6 +180,19 @@ fn call(r: &Value, bytes: Vec<u8>) -> Result<(Vec<u8>, Value), String> {
         // The config as the app writes it: parsed (so a broken one is
         // refused) and serialized again.
         "config_normalize" => Ok(data(json!(config_arg(r, "config")?.to_json().map_err(|e| e.to_string())?))),
+        // A setting by name (`Config.set`): the names and rules a script's
+        // `config.set` has (`config::by_name`, through the app's one
+        // setter). The config back as the app writes it, and whether the
+        // write did anything a name the config knows would.
+        "config_set" => {
+            use fractal_flame_wgpu::config::by_name;
+            let mut config = config_arg(r, "config")?;
+            let applied = by_name::set(&mut config, str_arg(r, "key")?, r["value"].clone())?;
+            Ok(data(json!({
+                "config": config.to_json().map_err(|e| e.to_string())?,
+                "changed": applied == by_name::Applied::Changed,
+            })))
+        }
         // Every variation in registration order, with its parameters' names.
         "variations" => {
             let registry = fractal_flame_wgpu::variations::global_registry();

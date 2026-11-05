@@ -20,7 +20,7 @@ which rewrites the references in code comments too).
 | [bristorbrot.md](bristorbrot.md) | Built 2026-10-23 (branch `bristorbrot`): Doug Bristor's Bristorbrot and the Quaternionbrot beside it, as Rhai solids -- 3D sections of 4D iterations, Mandelbrot and Julia, the square and both cubes -- with eight presets; why the Bristorian distance needs care (the product stretches by up to 3.3 \|z\|). |
 | [quaternions.md](quaternions.md) | Decided and built 2026-10-22 (branch `quaternions`): a `quat` type in Rhai solids and 3D variations; Halayka's (2009) quaternion sets as a solid, his (2018) escape paths as a flame variation, with presets. |
 | [online-assets.md](online-assets.md) | Planned 2026-10-21, decided the same day, not started: skies and textures listed by providers (Poly Haven first), downloaded and kept locally; every resolution; textures on solids and terrains with valley, slope and plateau targets. |
-| [wasm-modules.md](wasm-modules.md) | Researched 2026-10-23, nothing built: the gallery modules silently drop flame variations escape and simulation configs use; what the web app lacks; what its 6.5 MB gzip is made of; four ways to load parts on demand, an order of work, decisions to make. |
+| [wasm-modules.md](wasm-modules.md) | Researched 2026-10-23. Section 1 done 2026-11-04: the gallery modules dropped flame variations escape and simulation configs use, so one renderer replaced them and the engine features went. Open: what the web app lacks; what its 6.5 MB gzip is made of; four ways to load parts on demand, an order of work, decisions to make. |
 | [one-workspace.md](one-workspace.md) | Decided and built 2026-10-22 (branch `one-workspace`): one workspace for every mode, every panel drawn in every mode with a banner where unused, choosing enters the mode, the mode button in the menu bar; Flames, Escape Time and Simulation as layouts to pick. |
 
 ## Paused
@@ -37,6 +37,7 @@ which rewrites the references in code comments too).
 
 | Doc | What it tracks |
 |---|---|
+| [architecture-review.md](architecture-review.md) | The 2026-11-04 architecture review: the docs against the code, five parallel systems (config writes, the headless facade, the render tail, carried sources, origins), the WASM modules, every surface against animation and scripting, the governors, the plans, and a proposed order. |
 | [doc-review-findings.md](doc-review-findings.md) | What the October 2026 doc refresh found wrong in the code, and what the fix pass that followed left open (its *Still open* section). |
 | [escape-sim-followups.md](escape-sim-followups.md) | Escape-time and simulation decisions to make, what is left of the path tracer's speed, the 3D views' and the escape engine's unbuilt items, known gaps. |
 | [solid-rendering-todo.md](solid-rendering-todo.md) | Solid rendering for 3D flames: what is left. |

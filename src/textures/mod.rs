@@ -43,20 +43,13 @@ fn library_changed() {
     LIBRARY_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Where a library entry came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextureOrigin {
-    /// Shipped with the app.
-    Preset,
-    /// Saved by the user from Simulation mode.
-    User,
-}
-
 /// One texture the panel offers.
 #[derive(Debug, Clone)]
 pub struct TextureEntry {
     pub name: String,
-    pub origin: TextureOrigin,
+    /// `Builtin` for a preset, `Local` for one the user saved from
+    /// Simulation mode.
+    pub origin: crate::provenance::Origin,
     pub config: FractalConfig,
 }
 
@@ -73,7 +66,7 @@ impl TextureLibrary {
         let mut entries = Vec::new();
         for (name, json) in TEXTURE_PRESETS {
             match FractalConfig::from_json(json) {
-                Ok(config) => entries.push(TextureEntry { name: name.to_string(), origin: TextureOrigin::Preset, config }),
+                Ok(config) => entries.push(TextureEntry { name: name.to_string(), origin: crate::provenance::Origin::Builtin, config }),
                 Err(e) => log::warn!("texture preset {name} does not parse: {e}"),
             }
         }
@@ -84,7 +77,7 @@ impl TextureLibrary {
                 let name = file.strip_suffix(&format!(".{EXT}"))?.to_string();
                 let json = crate::storage::backend::read_file(&user_path(&name)).ok()?;
                 match FractalConfig::from_json(&json) {
-                    Ok(config) => Some(TextureEntry { name, origin: TextureOrigin::User, config }),
+                    Ok(config) => Some(TextureEntry { name, origin: crate::provenance::Origin::Local, config }),
                     Err(e) => {
                         log::warn!("user texture {name} does not parse: {e}");
                         None
@@ -298,7 +291,6 @@ mod tests {
     /// are. Writes `assets/textures/<name>.fflame`; run deliberately.
     #[test]
     #[ignore = "writes assets/textures"]
-    #[cfg(feature = "engine-sim")]
     fn write_texture_presets() {
         let chosen: &[(&str, &str, &str)] = &[
             ("Mitosis", "gray_scott", "mitosis"),
@@ -351,7 +343,6 @@ mod tests {
     /// into each other about as smoothly as its inside does.
     #[test]
     #[ignore = "needs a GPU"]
-    #[cfg(feature = "engine-sim")]
     fn textures_generate_deterministically_and_tile() {
         // The adapter's own limits, as every renderer test asks for: the
         // defaults are below what the render path binds.
@@ -414,7 +405,6 @@ mod tests {
 
     /// The adapter's own limits, as every renderer test asks for, or
     /// None without an adapter.
-    #[cfg(feature = "engine-sim")]
     fn device_if_any() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -445,7 +435,6 @@ mod tests {
     /// its recipe does not reproduce. And a run with a step taken under
     /// other settings is not the recipe's, until it is reseeded.
     #[test]
-    #[cfg(feature = "engine-sim")]
     fn a_live_run_continued_to_its_recipe_draws_what_generating_it_draws() {
         let Some((device, queue)) = device_if_any() else {
             eprintln!("no GPU adapter; skipping");

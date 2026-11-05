@@ -59,7 +59,6 @@ impl App {
                 // A committed target that has not been cleared means
                 // the grid is still walking toward it -- or, blurred,
                 // through the frame's moments (motion_blur.rs).
-                #[cfg(feature = "engine-sim")]
                 crate::scene::transforms::RenderMode::Simulation => {
                     self.sim_timeline_target.is_none() && self.sim_motion.is_none()
                 }
@@ -105,7 +104,6 @@ impl App {
             // leg, after playback stopped -- and the run would carry
             // on from wherever it was under a button nobody pressed.
             // The user re-engages Run afterwards if they want it.
-            #[cfg(feature = "engine-sim")]
             if self.config_manager.active_config().render_mode
                 == crate::scene::transforms::RenderMode::Simulation
                 && self.animation_has_step_track()
@@ -183,25 +181,18 @@ impl App {
     /// simulation the moment Play was pressed would make "animate a
     /// parameter over a running simulation" impossible -- which it
     /// was not before this work, and should not become.
-    #[cfg(feature = "engine-sim")]
     pub(super) fn timeline_owns_sim(&self) -> bool {
         (self.animation_controller.is_playing() && self.animation_has_step_track())
             || self.sim_timeline_target.is_some()
     }
 
     /// Whether the loaded animation animates `Sim.Steps` at all.
-    #[cfg(feature = "engine-sim")]
     pub(super) fn animation_has_step_track(&self) -> bool {
         let key = crate::config::ConfigPath::SimSteps.to_string_key();
         self.animation_controller
             .animation
             .as_ref()
             .is_some_and(|a| a.tracks.iter().any(|t| t.target == key))
-    }
-
-    #[cfg(not(feature = "engine-sim"))]
-    pub(super) fn timeline_owns_sim(&self) -> bool {
-        false
     }
 
     /// Hand the timeline's step count to the grid -- or hold it.
@@ -214,7 +205,6 @@ impl App {
     ///
     /// Holding leaves the PREVIOUS commitment in place, so the picture
     /// stays where it was rather than freezing mid-restart.
-    #[cfg(feature = "engine-sim")]
     pub(super) fn commit_timeline_sim_target(&mut self, motion: crate::sim::Motion) {
         let config = self.config_manager.active_config();
         if config.render_mode != crate::scene::transforms::RenderMode::Simulation {
@@ -241,9 +231,6 @@ impl App {
             self.sim_timeline_target = Some(target);
         }
     }
-
-    #[cfg(not(feature = "engine-sim"))]
-    pub(super) fn commit_timeline_sim_target(&mut self, _motion: crate::sim::Motion) {}
 
     /// Advance animation playback and apply values.
     ///

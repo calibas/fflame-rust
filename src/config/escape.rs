@@ -454,12 +454,9 @@ impl EscapeConfig {
     /// GPU: the overlay, the relief's bump, or a colouring that reads it
     /// (the image trap).
     pub fn uses_texture(&self) -> bool {
-        #[cfg(feature = "engine-escape")]
         let coloring = crate::escape::COLORINGS
             .iter()
             .any(|c| c.name == self.coloring && c.has_feature(crate::escape::ColoringFeature::TextureInLoop));
-        #[cfg(not(feature = "engine-escape"))]
-        let coloring = false;
         // The relief's simulation micro-texture, or a terrain's (which
         // lights its own surface whether the 2D relief is on or not).
         let surface = self.shading.texture_kind == ShadingTexture::Simulation
@@ -1817,10 +1814,8 @@ pub fn biomorph_from_str(s: &str) -> Option<BiomorphMode> {
 /// Positive bulges the middle out and negative pinches it in; past 1
 /// either way the lens overshoots rather than blends.
 ///
-/// Here rather than beside the lens engine because the config module
-/// is compiled whether or not `engine-escape` is, and the clamp on
-/// the write path lives in the config manager. `escape::lens`
-/// re-exports it.
+/// Here rather than beside the lens engine because the clamp on the
+/// write path lives in the config manager. `escape::lens` re-exports it.
 pub const LENS_AMOUNT_LIMIT: f32 = 5.0;
 
 /// A lens at full strength. One rather than zero so that choosing a

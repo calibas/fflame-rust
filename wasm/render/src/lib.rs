@@ -39,7 +39,7 @@
 //! error rather than sharing the renderer — see `render_impl`. `release()`
 //! frees everything for a page that is done.
 
-use egui_wgpu::wgpu;
+use fractal_flame_wgpu::config::defaults::DEFAULT_EXPORT_ITERATIONS_PER_THREAD;
 use fractal_flame_wgpu::config::FractalConfig;
 use fractal_flame_wgpu::renderer::compute_kernel::FlameRenderer;
 use fractal_flame_wgpu::renderer::render::{render_with, NoProgress, RenderJob};
@@ -239,8 +239,11 @@ pub async fn render_impl(
                 .to_string()
         })?;
 
+    // The CLI's and Python's default when the caller names none, so a
+    // tile matches their pictures pixel for pixel.
     let ipt = iterations_per_thread
-        .map(|v| v.clamp(MIN_ITERATIONS_PER_THREAD, MAX_ITERATIONS_PER_THREAD));
+        .unwrap_or(DEFAULT_EXPORT_ITERATIONS_PER_THREAD)
+        .clamp(MIN_ITERATIONS_PER_THREAD, MAX_ITERATIONS_PER_THREAD);
 
     let outcome = render_with_live(&mut live, &config, width, height, iters, ipt).await;
 
@@ -254,7 +257,7 @@ async fn render_with_live(
     width: u32,
     height: u32,
     target_iterations: Option<u64>,
-    iterations_per_thread: Option<u32>,
+    iterations_per_thread: u32,
 ) -> Result<RenderedTile, String> {
     // Build the renderer on first use, or resize it if the tile geometry
     // changed. `load_config` is a full reset for everything else —
@@ -295,9 +298,7 @@ async fn render_with_live(
     if let Some(iters) = target_iterations {
         job = job.with_iterations(iters);
     }
-    if let Some(ipt) = iterations_per_thread {
-        job = job.with_iterations_per_thread(ipt);
-    }
+    job = job.with_iterations_per_thread(iterations_per_thread);
 
     let out = render_with(renderer, &live.device, &live.queue, job, &mut NoProgress)
         .await
@@ -378,7 +379,8 @@ mod wasm {
     /// Render a config. `iterations` caps the chaos-game budget
     /// (defaults to the config's own `max_iterations`).
     /// `iterations_per_thread` is how many iterations each GPU thread
-    /// runs per dispatch (default 256, clamped to 64–4096). Orbits
+    /// runs per dispatch (default 1024, the CLI's and Python's; clamped
+    /// to 64–4096). Orbits
     /// persist across dispatches and burn-in is paid once, so it slices
     /// the budget rather than setting orbit depth: the picture does not
     /// depend on it, though the exact pixels do (each dispatch seeds its

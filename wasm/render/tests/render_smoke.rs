@@ -193,9 +193,7 @@ async fn many_renders_in_a_row_reuse_the_device() {
 }
 
 /// This module carries EVERY engine, so an escape config renders here
-/// rather than reporting a missing engine — the difference from
-/// ../flame, and the reason ../render is the one a general viewer
-/// should embed.
+/// rather than reporting a missing engine.
 #[pollster::test]
 async fn an_escape_config_also_renders() {
     let config = include_str!("../../../tests/visual/configs/escape/mandelbrot-smooth.fflame");
@@ -214,10 +212,7 @@ async fn an_escape_config_also_renders() {
     );
 }
 
-/// And a simulation config. This module was once built without
-/// `engine-sim` while its README promised every mode, so a simulation
-/// came back as `EngineMissing("simulation")` from the one renderer a
-/// gallery is told to embed when it does not know what the config is.
+/// And a simulation config.
 #[pollster::test]
 async fn a_simulation_config_also_renders() {
     let config = include_str!("../../../tests/visual/configs/sim/brusselator-turing.fflame");
@@ -234,5 +229,75 @@ async fn a_simulation_config_also_renders() {
     assert!(
         tile.pixels.chunks(4).any(|px| px[0] > 0 || px[1] > 0 || px[2] > 0),
         "all pixels black — the simulation render produced nothing"
+    );
+}
+
+/// A Flame Attractor naming a variation besides `linear`: the case the
+/// escape-only module drew blank, since the attractor's analysis refuses
+/// a name the registry lacks.
+#[pollster::test]
+async fn a_flame_attractor_with_a_catalog_variation_renders() {
+    let presets: serde_json::Value =
+        serde_json::from_str(include_str!("../../../assets/presets.fflame")).expect("the presets parse");
+    let attractor = presets
+        .as_array()
+        .expect("the presets are an array")
+        .iter()
+        .find(|c| {
+            c["escape"]["formula"] == "ifs_flame"
+                && c["flame"]["transforms"].as_array().is_some_and(|ts| {
+                    ts.iter().any(|t| {
+                        t["variations"].as_object().is_some_and(|vs| vs.keys().any(|k| k != "linear"))
+                    })
+                })
+        })
+        .expect("a Flame Attractor preset names a variation besides linear");
+
+    let tile = match fflame_render::render_impl(&attractor.to_string(), 64, 64, None, None).await {
+        Ok(t) => t,
+        Err(e) if e.contains("no GPU adapter") => {
+            eprintln!("skipped: {e}");
+            return;
+        }
+        Err(e) => panic!("Flame Attractor render failed: {e}"),
+    };
+    assert!(
+        tile.pixels.chunks(4).any(|px| px[0] > 0 || px[1] > 0 || px[2] > 0),
+        "all pixels black — the Flame Attractor drew nothing"
+    );
+}
+
+/// A simulation is a RUN, not a formula: the same config at two step
+/// counts is two different pictures. A broken build would most
+/// plausibly lose this (a grid that never steps still renders — as its
+/// seed).
+#[pollster::test]
+async fn the_grid_actually_steps() {
+    let base: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/visual/configs/sim/brusselator-turing.fflame"
+    ))
+    .expect("the shipped config parses");
+
+    let at = |steps: u64| {
+        let mut c = base.clone();
+        c["sim"]["steps"] = serde_json::json!(steps);
+        c.to_string()
+    };
+
+    let early = match fflame_render::render_impl(&at(20), 64, 64, None, None).await {
+        Ok(t) => t,
+        Err(e) if e.contains("no GPU adapter") => {
+            eprintln!("skipped: {e}");
+            return;
+        }
+        Err(e) => panic!("render failed: {e}"),
+    };
+    let late = fflame_render::render_impl(&at(2000), 64, 64, None, None)
+        .await
+        .expect("the second render");
+
+    assert_ne!(
+        early.pixels, late.pixels,
+        "20 steps and 2000 steps gave the same image — the grid is not stepping"
     );
 }
