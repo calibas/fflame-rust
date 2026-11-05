@@ -295,10 +295,16 @@ impl HighResExporter {
         let sample_size = std::mem::size_of::<Sample>() as u64; // 32 bytes
         let samples_per_workgroup =
             Self::THREADS_PER_WORKGROUP * iterations_per_thread as u64 * emit_mult.max(1);
-        let bytes_per_workgroup = samples_per_workgroup * sample_size;
-
-        // Calculate workgroups to fill target buffer
-        let workgroups = Self::TARGET_BUFFER_SIZE / bytes_per_workgroup;
+        // Workgroups to fill the target buffer, holding no more samples
+        // than the accumulate pass can take in one dispatch: a thread a
+        // sample, at most 65,535 workgroups of 64 (wgpu's limit on a
+        // dispatch dimension). 128 MB of 32-byte samples is exactly 2^22,
+        // which asked for 65,536 and panicked whenever every sample of a
+        // dispatch landed in frame (a flame inside the frame, at the
+        // default 1024 iterations a thread).
+        let max_samples = (Self::TARGET_BUFFER_SIZE / sample_size)
+            .min(65_535 * crate::export::accumulate::ACCUMULATE_WORKGROUP_SIZE as u64);
+        let workgroups = max_samples / samples_per_workgroup;
 
         // Budget wins over occupancy. The old floor of 128 workgroups
         // silently overrode the 128 MB target once a single workgroup's
