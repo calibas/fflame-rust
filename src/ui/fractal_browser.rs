@@ -27,10 +27,9 @@ pub enum BrowserTab {
 }
 
 /// **The Presets tab's categories**, each its own gallery and tab. A
-/// gallery makes every thumbnail it is missing before it shows any, and
-/// makes them only once it is shown, so a category's are made when it is
-/// first opened -- not every preset's at once, path-traced solids among
-/// them.
+/// gallery makes its missing previews only while it is shown, those on
+/// screen first, so a category's are made when it is opened -- not every
+/// preset's at once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PresetCategory {
     #[default]
@@ -88,15 +87,6 @@ fn runs_a_rhai_solid(config: &FractalConfig) -> bool {
             .custom_formula
             .as_ref()
             .is_some_and(|src| src.dialect == CustomDialect::Rhai && rhai::kind_of(&src.source) == Some(EntryKind::Solid))
-}
-
-/// Which gallery a thumbnail is made for (desktop).
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GalleryId {
-    Preset(PresetCategory),
-    Batch,
-    Files,
 }
 
 /// The Online tab's render-mode filter: the value sent as
@@ -159,16 +149,10 @@ pub struct FractalBrowserPanel {
     preset_galleries: Vec<FractalConfigGallery>,
     /// The category shown.
     preset_category: PresetCategory,
-    /// WASM: the categories whose thumbnails are not started yet. Each is
-    /// started when it is first shown.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    presets_unstarted: [bool; 5],
 
     // --- Batch tab ---
     /// Gallery for batch generation results
     batch_gallery: FractalConfigGallery,
-    /// Whether batch thumbnails need generation
-    batch_needs_generation: bool,
 
     // --- Files tab ---
     /// Gallery for loaded file contents
@@ -238,10 +222,8 @@ impl FractalBrowserPanel {
 
             preset_galleries: by_category.into_iter().map(FractalConfigGallery::new).collect(),
             preset_category,
-            presets_unstarted: [true; 5],
 
             batch_gallery: FractalConfigGallery::default(),
-            batch_needs_generation: false,
 
             files_gallery: FractalConfigGallery::default(),
             files_current_path: None,
@@ -285,7 +267,6 @@ impl FractalBrowserPanel {
         }
         log::info!("Loaded {} config(s) into batch", configs.len());
         self.batch_gallery = FractalConfigGallery::new(configs);
-        self.batch_needs_generation = true;
         // Auto-switch to batch tab
         self.current_tab = BrowserTab::Batch;
     }
@@ -382,86 +363,44 @@ impl FractalBrowserPanel {
         self.online_search_render_mode = None;
     }
 
-    // ========== Thumbnail generation (desktop) ==========
+    // ========== Previews ==========
 
-    /// The gallery `id` names.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn gallery(&self, id: GalleryId) -> &FractalConfigGallery {
-        match id {
-            GalleryId::Preset(c) => &self.preset_galleries[c.index()],
-            GalleryId::Batch => &self.batch_gallery,
-            GalleryId::Files => &self.files_gallery,
+    /// The gallery drawn this frame, if any, every gallery's flag taken
+    /// (`FractalConfigGallery::take_shown`): only it makes previews, so
+    /// a closed panel or another tab makes none.
+    fn shown_gallery(&mut self) -> Option<&mut FractalConfigGallery> {
+        let mut shown = None;
+        let galleries = self.preset_galleries.iter_mut().chain([&mut self.batch_gallery, &mut self.files_gallery]);
+        for g in galleries {
+            if g.take_shown() {
+                shown = Some(g);
+            }
         }
-    }
-
-    /// Check if any gallery is generating thumbnails (desktop only). A
-    /// gallery queues its missing thumbnails only once shown, so a preset
-    /// category never opened is not generating.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn is_generating(&self) -> bool {
-        self.preset_galleries.iter().any(|g| g.is_generating())
-            || self.batch_gallery.is_generating()
-            || self.files_gallery.is_generating()
-    }
-
-    /// Get the next config that needs thumbnail generation (desktop only):
-    /// the shown gallery's first, then any other's that was shown and is
-    /// not finished.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn next_pending_config(&self) -> Option<(GalleryId, &FractalConfig)> {
-        let shown = match self.current_tab {
-            BrowserTab::Presets => Some(GalleryId::Preset(self.preset_category)),
-            BrowserTab::Batch => Some(GalleryId::Batch),
-            BrowserTab::Files => Some(GalleryId::Files),
-            // The Online tab doesn't use FractalConfigGallery for thumbnails.
-            BrowserTab::Online => None,
-        };
-        let rest = PresetCategory::ALL.into_iter().map(GalleryId::Preset).chain([GalleryId::Batch, GalleryId::Files]);
         shown
-            .into_iter()
-            .chain(rest)
-            .find_map(|id| self.gallery(id).next_pending_config().map(|config| (id, config)))
     }
 
-    /// Generate one thumbnail for the specified gallery (desktop only)
+    /// Desktop: make one preview for the gallery drawn this frame (one
+    /// call a frame, after the UI). Returns whether one was made.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn generate_one_thumbnail<F>(
-        &mut self,
-        id: GalleryId,
-        ctx: &egui::Context,
-        render_fn: F,
-    ) -> bool
+    pub fn generate_one_preview<F>(&mut self, ctx: &egui::Context, render_fn: F) -> bool
     where
         F: FnOnce(&FractalConfig) -> image::RgbaImage,
     {
-        match id {
-            GalleryId::Preset(c) => self.preset_galleries[c.index()].generate_one_thumbnail(ctx, render_fn),
-            GalleryId::Batch => self.batch_gallery.generate_one_thumbnail(ctx, render_fn),
-            GalleryId::Files => self.files_gallery.generate_one_thumbnail(ctx, render_fn),
-        }
+        self.shown_gallery().is_some_and(|g| g.generate_one_preview(ctx, render_fn))
     }
 
-    /// WASM: Start async thumbnail generation for all galleries
+    /// WASM: spawn the next preview of the gallery drawn this frame, one
+    /// at a time.
     #[cfg(target_arch = "wasm32")]
-    pub fn start_async_thumbnails(
+    pub fn start_next_preview(
         &mut self,
         device: &egui_wgpu::wgpu::Device,
         queue: &egui_wgpu::wgpu::Queue,
+        ctx: &egui::Context,
     ) {
-        // A preset category's, the first time it is shown.
-        let shown = self.preset_category.index();
-        if self.current_tab == BrowserTab::Presets && self.presets_unstarted[shown] {
-            self.preset_galleries[shown].start_async_thumbnail_generation(device, queue);
-            self.presets_unstarted[shown] = false;
+        if let Some(g) = self.shown_gallery() {
+            g.start_next_preview(device, queue, ctx);
         }
-        if self.batch_needs_generation {
-            self.batch_gallery
-                .start_async_thumbnail_generation(device, queue);
-            self.batch_needs_generation = false;
-        }
-        // Files gallery starts generation when files are loaded
-        self.files_gallery
-            .start_async_thumbnail_generation(device, queue);
     }
 
     // ========== Rendering ==========

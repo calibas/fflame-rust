@@ -23,7 +23,7 @@ mod calibration;
 pub use compute_kernel::{FlameRenderer, TargetingState};
 pub use histogram::{compute_histogram_async, DensityHistogram, HISTOGRAM_BINS};
 pub use render::{render, render_with, NoProgress, RenderEngines, RenderError, RenderJob, RenderOutput, RenderProgress};
-pub use thumbnail::{render_thumbnail_async, THUMBNAIL_ITERATIONS, THUMBNAIL_ITERATIONS_PER_THREAD, THUMBNAIL_SIZE};
+pub use thumbnail::{render_preview_async, render_thumbnail_async, PREVIEW_SIZE, THUMBNAIL_ITERATIONS, THUMBNAIL_ITERATIONS_PER_THREAD, THUMBNAIL_SIZE};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use thumbnail::render_thumbnail;
+pub use thumbnail::render_preview;

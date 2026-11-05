@@ -20,8 +20,10 @@
 //! the wrong format here regardless: flame output is noisy and
 //! gradient-heavy, which is where lossless compression does worst.
 //!
-//! The RENDER stays at 512 ([`crate::renderer::THUMBNAIL_SIZE`]) because
-//! the API upload wants that size. Only the local cache shrinks.
+//! The upload's render stays at 512 ([`crate::renderer::THUMBNAIL_SIZE`]),
+//! the size the API wants. The gallery's previews render at the cache's
+//! size ([`crate::renderer::PREVIEW_SIZE`]), so none of a preview's
+//! pixels are rendered to be thrown away.
 //!
 //! # One index for every gallery
 //!
@@ -239,12 +241,18 @@ impl ThumbnailCache {
             // Downscale to what the UI can actually show, then JPEG.
             // Lanczos3 because a thumbnail is looked at, and the cheaper
             // filters visibly alias on the fine structure flames produce.
-            let scaled = image::imageops::resize(
-                image,
-                CACHE_PIXELS,
-                CACHE_PIXELS,
-                image::imageops::FilterType::Lanczos3,
-            );
+            // A gallery preview arrives at that size already
+            // (`renderer::PREVIEW_SIZE`).
+            let scaled = if image.dimensions() == (CACHE_PIXELS, CACHE_PIXELS) {
+                image.clone()
+            } else {
+                image::imageops::resize(
+                    image,
+                    CACHE_PIXELS,
+                    CACHE_PIXELS,
+                    image::imageops::FilterType::Lanczos3,
+                )
+            };
 
             // JPEG has no alpha, which is exactly right — see the module
             // docs. `into_rgb8`-equivalent conversion drops the constant
