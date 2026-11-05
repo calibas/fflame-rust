@@ -179,13 +179,19 @@ impl FormulaEditorPanel {
         self.status = None;
     }
 
-    /// Open a formula the config now uses (the Escape panel's Edit as
-    /// Formula): unsaved, and in use, so Live re-applies its edits.
-    pub fn open_in_use(&mut self, file: String, src: &CustomSource) {
+    /// Open a formula or colouring the config now uses (the Escape
+    /// panel's Edit as Formula, its colouring's Edit as Rhai): unsaved,
+    /// and in use as `kind`, so Live re-applies its edits.
+    pub fn open_in_use(&mut self, kind: EntryKind, file: String, src: &CustomSource) {
         self.adopt(None, file, src.source.clone());
-        self.in_use.retain(|(k, _, _)| *k != EntryKind::Formula);
-        self.in_use.push((EntryKind::Formula, None, src.entry.clone()));
-        self.status = Some(t!("formula_editor.editing_builtin", entry = src.entry).to_string());
+        self.in_use.retain(|(k, _, _)| *k != kind);
+        self.in_use.push((kind, None, src.entry.clone()));
+        let status = if kind == EntryKind::Coloring {
+            t!("formula_editor.editing_builtin_coloring", entry = src.entry)
+        } else {
+            t!("formula_editor.editing_builtin", entry = src.entry)
+        };
+        self.status = Some(status.to_string());
     }
 
     fn open_stored(&mut self, file: &str) {

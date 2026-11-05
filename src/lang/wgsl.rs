@@ -3167,6 +3167,8 @@ impl<'p> Gen<'p> {
                 Abs => format!("abs({v})"),
                 Atan2 => format!("{}({v})", self.use_(Helper::CArg)),
                 Fract => format!("fract({v})"),
+                // Component by component, halves to even.
+                RoundEven => format!("round({v})"),
                 Hash2 => format!("{}({v})", self.use_(Helper::Hash2)),
                 IsNan => format!("{}({v})", self.use_(Helper::CIsNan)),
                 IsInf => format!("{}({v})", self.use_(Helper::CIsInf)),
@@ -3227,6 +3229,8 @@ impl<'p> Gen<'p> {
             Trunc => format!("trunc({v})"),
             Ceil => format!("ceil({v})"),
             Floor => format!("floor({v})"),
+            // WGSL's own: halves to even.
+            RoundEven => format!("round({v})"),
             IsNan => return format!("{}({v})", self.use_(Helper::IsNan)),
             IsInf => return format!("{}({v})", self.use_(Helper::IsInf)),
             Expm1 => format!("{}({v})", self.use_(Helper::FExpm1)),
@@ -3248,7 +3252,7 @@ fn complex_helper(f: Builtin) -> Helper {
     match f {
         SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Tap | Disc => unreachable!("an image read, emitted by `Gen::call`"),
         Hash2 => Helper::Hash2,
-        Fract => unreachable!("emitted by `Gen::call`, real or complex"),
+        Fract | RoundEven => unreachable!("emitted by `Gen::call`, real or complex"),
         // `Gen::call` passes the value through.
         F32 => Helper::CIdent,
         Sqr => Helper::CSqr,

@@ -834,7 +834,7 @@ needs the census did not, the int step and `ctx.layer`):
 |---|---|---|---|
 | Effects | 15 | all 15, the definitions (D1) | yes, the Effects panel |
 | Escape formulas | 26 | all 26 (`escape::twins`) | yes, Edit as Formula |
-| Escape colourings | 28 | in progress (branch `rhai-escape-colourings`; plan in step 2) | no |
+| Escape colourings | 28 | 7 (batch 1 of 5, branch `rhai-escape-colourings`; plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
 | Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
@@ -886,7 +886,15 @@ Steps, in the order that unlocks the most first (the user picks):
 
    **The order of work**, each batch ending with the twins it unlocks:
    - **Batch 1: the seven writable today**, with the machinery every
-     batch uses.
+     batch uses. **Built 2026-11-05**: every twin matches its built-in on
+     every pixel, at every setting that takes another path, on five views
+     (`builtin_colouring_twins_render_as_their_builtins`). They are
+     within a few percent of their built-ins' speed, but for Itinerary,
+     25% slower through the language's zero-pair-exact `atan2`
+     (ESCAPE.md). `round_even` came forward from batch 2's numerics: the
+     dialect's `floor` and `round` give an int, which overflowed on
+     Gaussian Integer's iterates at a large bailout, and a helper
+     branching to even cost it 45%.
      - The twins: Escape Count, Orbit Trap, Sphere Average,
        Decomposition, Basic, Gaussian Integer, Itinerary.
      - A registry beside the formulas' (`escape::twins`,
@@ -907,7 +915,8 @@ Steps, in the order that unlocks the most first (the user picks):
        it (`esc_escape_fraction`, its never-escaping case included).
      - `c` and the previous `z` in `step`, and the formula's starting z
        in `start` (the bug above).
-     - `log2` and `inverseSqrt`, so twins round as their built-ins.
+     - `log2`, so twins round as their built-ins. (`inverseSqrt` is not
+       needed: Sphere Average's `1 / sqrt` matched to the pixel.)
      - The twins it unlocks: Smooth, the five deband averages (Orbit,
        Stripe, Magnitude, Position, Threads), Triangle Inequality,
        Curvature Average, Velocity, Exponential Smoothing, Root Basin,
