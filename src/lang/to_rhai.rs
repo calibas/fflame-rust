@@ -991,6 +991,14 @@ impl<'p> Printer<'p> {
                 _ => return Err("`#z` is read where it has no value".into()),
             },
             Predef::NumIter => self.ctx_field("numiter"),
+            Predef::Bailout => self.ctx_field("bailout"),
+            Predef::Degree => self.ctx_field("degree"),
+            Predef::Escaped => self.ctx_field("escaped"),
+            Predef::Converged => self.ctx_field("converged"),
+            Predef::Period => self.ctx_field("period"),
+            Predef::EscapeFraction => self.ctx_field("escape_fraction"),
+            Predef::Prev => self.ctx_field("prev"),
+            Predef::StepC => self.ctx_field("step_c"),
             Predef::Index | Predef::Solid if self.fun == Fun::Finish => {
                 P::atom(self.slot_decl(if q == Predef::Index { Slot::Index } else { Slot::Solid }).0)
             }

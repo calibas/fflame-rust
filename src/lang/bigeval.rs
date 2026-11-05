@@ -494,6 +494,12 @@ impl BigMachine {
             }
             Predef::EffectBlend => BigValue::Int(0),
             Predef::Accum => BigValue::Complex(BigComplex::zero(self.n)),
+            // A colouring's view of the loop: a reference orbit is a
+            // formula's.
+            Predef::Bailout | Predef::Degree | Predef::EscapeFraction => BigValue::Float(BigFloat::zero(self.n)),
+            Predef::Escaped | Predef::Converged => BigValue::Bool(false),
+            Predef::Period => BigValue::Int(0),
+            Predef::Prev | Predef::StepC => BigValue::Complex(BigComplex::zero(self.n)),
         }
     }
 
@@ -683,7 +689,7 @@ impl BigMachine {
             F32 => self.c(z.re.to_f64() as f32 as f64, z.im.to_f64() as f32 as f64),
             // An effect's image, and the noise functions: never in a
             // reference orbit.
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Tap | Disc | Fract | Hash2 => return Err(Stop),
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Tap | Disc | Fract | Hash2 | Log2 => return Err(Stop),
             Sin => {
                 let (s, c) = z.re.sin_cos();
                 let (ch, sh) = self.cosh_sinh(&z.im)?;

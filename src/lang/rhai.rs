@@ -711,6 +711,16 @@ const CTX_FIELDS: &[(&str, &str)] = &[
     ("pixel", "pixel"),
     // A colouring's, in `finish`.
     ("numiter", "numiter"),
+    // A colouring's view of the loop (P7 step 2): anywhere, in `finish`,
+    // in `step`.
+    ("bailout", "bailout"),
+    ("degree", "degree"),
+    ("escaped", "escaped"),
+    ("converged", "converged"),
+    ("period", "period"),
+    ("escape_fraction", "escape_fraction"),
+    ("prev", "prev"),
+    ("step_c", "step_c"),
     // The panel's crease settings, in `creases`.
     ("crease_decay", "crease_decay"),
     ("crease_pattern", "crease_pattern"),
@@ -4195,7 +4205,11 @@ impl<'s> Lowerer<'s> {
             ExprKind::Name(n) if n == "ismand" => TypeName::Complex,
             ExprKind::Name(n) => self.types.get(n).copied().unwrap_or(TypeName::Complex),
             ExprKind::Predef(n) => match n.as_str() {
-                "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" | "crease_pattern" | "effect_blend" => TypeName::Int,
+                "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" | "crease_pattern" | "effect_blend" | "period" => TypeName::Int,
+                // A colouring's view of the loop (P7 step 2); `prev` and
+                // `step_c` are complex, the default.
+                "bailout" | "degree" | "escape_fraction" => TypeName::Float,
+                "escaped" | "converged" => TypeName::Bool,
                 "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" => TypeName::Float,
                 // An effect's (P2).
                 "density_mean" | "pixel_scale" | "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_amount" => TypeName::Float,

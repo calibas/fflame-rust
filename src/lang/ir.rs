@@ -196,6 +196,21 @@ pub enum Predef {
     /// for a colour effect) and how many pixels one picture pixel is.
     DensityMean,
     PixelScale,
+    /// A colouring's view of what the loop knows (P7 step 2, batch 2):
+    /// the panel's squared bailout and the formula's degree at infinity,
+    /// in any section; in its `finish`, whether the orbit escaped,
+    /// converged, the period detected (0 for none; reading it compiles
+    /// the detection in, `NeedsPeriod`), and the escape fraction the
+    /// debanded colourings blend by; in its `step`, the iterate before
+    /// the step and the `c` the formula used. No names in UF.
+    Bailout,
+    Degree,
+    Escaped,
+    Converged,
+    Period,
+    EscapeFraction,
+    Prev,
+    StepC,
 }
 
 impl Predef {
@@ -209,6 +224,10 @@ impl Predef {
             Predef::Pi | Predef::E | Predef::Magn | Predef::Index | Predef::CreaseDecay | Predef::CreaseSign | Predef::CreaseReach | Predef::CreaseHeight => Ty::Float,
             Predef::CreaseSlope => Ty::Complex,
             Predef::Solid => Ty::Bool,
+            Predef::Bailout | Predef::Degree | Predef::EscapeFraction => Ty::Float,
+            Predef::Escaped | Predef::Converged => Ty::Bool,
+            Predef::Period => Ty::Int,
+            Predef::Prev | Predef::StepC => Ty::Complex,
             Predef::WhiteSq
             | Predef::ScrnMax
             | Predef::IsMand

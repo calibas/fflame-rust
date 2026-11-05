@@ -978,6 +978,33 @@ impl Checker {
                 }
             }
             "juliac" if self.internal => Predef::JuliaC,
+            // What the loop knows, a colouring's (P7 step 2): the bailout
+            // and degree anywhere, the orbit's ending in `finish`, the
+            // step's own values in `step`.
+            "bailout" | "degree" | "escaped" | "converged" | "period" | "escape_fraction" | "prev" | "step_c" if self.internal => {
+                if self.kind != EntryKind::Coloring {
+                    self.error(span, format!("`{name}` is a colouring's"));
+                    return None;
+                }
+                let (p, section) = match name {
+                    "bailout" => (Predef::Bailout, None),
+                    "degree" => (Predef::Degree, None),
+                    "escaped" => (Predef::Escaped, Some(SectionKind::Final)),
+                    "converged" => (Predef::Converged, Some(SectionKind::Final)),
+                    "period" => (Predef::Period, Some(SectionKind::Final)),
+                    "escape_fraction" => (Predef::EscapeFraction, Some(SectionKind::Final)),
+                    "prev" => (Predef::Prev, Some(SectionKind::Loop)),
+                    _ => (Predef::StepC, Some(SectionKind::Loop)),
+                };
+                if let Some(s) = section {
+                    if self.section != s {
+                        let f = if s == SectionKind::Final { "finish" } else { "step" };
+                        self.error(span, format!("`ctx.{name}` belongs to `{f}`"));
+                        return None;
+                    }
+                }
+                p
+            }
             "crease_decay" | "crease_pattern" | "crease_sign" | "crease_reach" | "crease_height" | "crease_slope"
                 if self.internal =>
             {
@@ -2412,7 +2439,7 @@ fn real_valued(e: &IExpr, real: &HashSet<VarId>) -> bool {
         IExprKind::Call(f, a) => {
             use Builtin::*;
             match f {
-                Zero | Real | Imag | Cabs | Atan2 => true,
+                Zero | Real | Imag | Cabs | Atan2 | Log2 => true,
                 Sqr | Exp | Expm1 | Sin | Cos | Tan | Cotan | Sinh | Cosh | Tanh | Cotanh | Atan | Asinh | Abs | Ident | Recip | Conj | Round | Trunc | Ceil | Floor | RoundEven | Cosxx => {
                     real_valued(a, real)
                 }

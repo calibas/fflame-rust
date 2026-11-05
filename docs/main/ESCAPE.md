@@ -558,13 +558,30 @@ fn escaped(s, p) {
   fn finish(s, z, p) { s.closest.sqrt() * p.scale }
   ```
 
-  - `start` (the state the pixel keeps) and `step` (after each of the
-    formula's passes) are optional, as UF's `init:` and `loop:` are.
+  - `start` (the state the pixel keeps; its `z` the formula's starting
+    z -- on the GPU it was 0 until 2026-11-05, where the interpreter
+    already gave the starting z) and `step` (after each of the formula's
+    passes) are optional, as UF's `init:` and `loop:` are.
   - `finish` returns the palette position (the index; it wraps), or
     `#{ index, solid }`, `solid` leaving the pixel to the solid colour.
     It may end in an `if` whose arms give either.
-  - The context adds `ctx.numiter` (the passes run, in `finish`); a
-    colouring counts its own passes in its state.
+  - The context adds what the built-in colourings read (batch 2 of the
+    colouring twins):
+    - in `finish`: `ctx.numiter` (the passes run), `ctx.escaped`,
+      `ctx.converged` (a convergent formula's orbit settled),
+      `ctx.period` (the period the orbit was found to repeat at, an
+      int, 0 if none; reading it turns the period check on,
+      `NeedsPeriod`) and `ctx.escape_fraction` (the smooth count's
+      fraction, `1 - log_degree(log|z|^2 / log bailout)` clamped to 0
+      to 1, 0 inside: the debanded averages' weight,
+      `esc_escape_fraction`);
+    - in `step`: `ctx.prev` (z before this pass) and `ctx.step_c` (the c
+      the renderer hands the colouring's step: a built-in formula's c,
+      the pixel or the Julia constant; a custom formula's, the pixel);
+    - anywhere: `ctx.bailout` (the panel's) and `ctx.degree` (the
+      formula's degree at infinity, as the smooth colourings divide by).
+
+    A colouring counts its own passes in its state.
   - The state is packed under the same 32-float cap as UF's.
   - Examples: `assets/formulas/smooth.rhai`, `orbit-trap.rhai`; the
     test file `tests/formulas/rhai/coloring.rhai` runs on the GPU as the
@@ -920,6 +937,9 @@ fn escaped(s, p) {
   does, and an iterate past an int's range rounds to itself (the
   Gaussian Integer colouring's twin). Deep zoom declines a formula that
   uses it, as it declines `round`.
+- **`log2(x)`** (WGSL's, a real): the base-2 logarithm in one
+  instruction, as the smooth colouring takes it; a complex is refused
+  (`ln(z) / ln(2.0)`). Deep zoom declines a formula that uses it.
 - **Labels by locale** (design rule 8): `INFO.title`, `INFO.description`
   and a parameter's `caption`, `hint` and each choice may be a map of
   locale to string,
@@ -1091,12 +1111,15 @@ fn escaped(s, p) {
     parted by whole units after the first few lines.
 - **The built-in colourings' twins** (`escape::twins::COLORING_TWINS`,
   `assets/formulas/twins/colorings/*.rhai`; P7 step 2 in
-  [rhai-plugins.md](../projects/rhai-plugins.md), batch 1 of five):
-  Escape Count, Orbit Trap, Sphere Average, Decomposition, Basic,
-  Gaussian Integer and Itinerary, each a Rhai colouring that renders as
-  its built-in. The other colourings read what the dialect cannot yet
-  (the escape fraction, `z_prev`, `dz`, a colour as the result), and
-  come in the later batches.
+  [rhai-plugins.md](../projects/rhai-plugins.md), batches 1 and 2 of
+  five): Escape Count, Orbit Trap, Sphere Average, Decomposition, Basic,
+  Gaussian Integer, Itinerary, and (reading the loop's values, `ctx`
+  above) Smooth, Orbit, Stripe, Magnitude and Position Average, Root
+  Basin, Triangle Inequality, Period, Curvature Average, Velocity,
+  Threads and Exponential Smoothing, each a Rhai colouring that renders
+  as its built-in. The other colourings read what the dialect cannot yet
+  (INFO's bounded flag, `dz`, a colour as the result), and come in the
+  later batches.
   - Each has its built-in's parameters exactly -- names, captions,
     hints, ranges, choices, a log slider -- and its interior and
     accumulator flags (`every_colouring_twin_compiles_as_its_builtin`).
@@ -1107,15 +1130,26 @@ fn escaped(s, p) {
   - Through the renderer each matches its built-in on every pixel, at
     every setting that takes another path through the code, on the
     Mandelbrot inside and out, a Julia set, deep on the perturbed path,
-    at a bailout of 1e8, and on the exponential
-    (`builtin_colouring_twins_render_as_their_builtins`).
+    at a bailout of 1e8, and on the exponential, and those of a
+    convergent formula on Newton's basins
+    (`builtin_colouring_twins_render_as_their_builtins`). Stripe Average
+    is the exception, under 0.25% of pixels by an ulp: its `sin` takes
+    up to 32 pi, and the language's is range-reduced (for Metal's error)
+    where the built-in's is the hardware's.
+  - Two more rules for a twin to match to the bit, each the GPU fusing a
+    multiply and an add: a blend is written `prev + (mean - prev) * f`,
+    as WGSL's `mix` (`prev * (1 - f) + mean * f` parted on 0.016% of
+    pixels), and a term the built-in adds in one expression is added in
+    one (Root Basin's `t + n * speed`: kept apart in a `let`, it rounded
+    once more and a whole-number position wrapped).
   - Their speed, the best of five at 1024x768 and 4000 iterations, the
     Mandelbrot's whole set, direct
     (`measure_colouring_twins_against_their_builtins`, 2026-11-05, GTX
     1660 SUPER): within a few percent of their built-ins, but for
-    Itinerary, 25% slower. Its angle goes through the language's
-    zero-pair-exact `atan2` (Metal's fails at a zero pair), which the
-    built-in avoids by its own guard.
+    Itinerary, 27% slower, and Curvature Average, 14%. Their angles go
+    through the language's zero-pair-exact `atan2` (Metal's fails at a
+    zero pair), which the built-ins avoid by their own guards. Stripe
+    Average's range-reduced `sin` costs it 9%.
 - **UF and Fractint formulas and colourings convert** (`lang/to_rhai.rs`;
   the Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
   checked program is printed in these shapes, the file opened left as

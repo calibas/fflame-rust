@@ -640,6 +640,9 @@ fn reference_inputs(escape: &EscapeConfig, prog: &Arc<ir::Program>) -> Option<Re
         julia: escape.julia,
         julia_c: lang::builtins::C64::new(f64::from(escape.julia_re), f64::from(escape.julia_im)),
         rotation: f64::from(escape.rotation),
+        // A colouring's; a formula reads neither.
+        bailout: f64::from(escape.bailout),
+        degree: 2.0,
     };
     Some(ReferenceInputs { prog: prog.clone(), params, env })
 }
@@ -1211,6 +1214,11 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
     }
     if p.region != ir::Region::Outside {
         features.push(ColoringFeature::ColorsInterior);
+    }
+    // `ctx.period` reads the period the loop detects, which the template
+    // compiles in only for a colouring that asks.
+    if p.reads(ir::Predef::Period) {
+        features.push(ColoringFeature::NeedsPeriod);
     }
     let def: &'static ColoringDef = Box::leak(Box::new(ColoringDef {
         name: leak(name.to_string()),

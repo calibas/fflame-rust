@@ -79,6 +79,20 @@ pub const COLORING_TWINS: &[(&str, &str)] = &[
     ("basic", include_str!("../../assets/formulas/twins/colorings/basic.rhai")),
     ("gaussian_integer", include_str!("../../assets/formulas/twins/colorings/gaussian_integer.rhai")),
     ("itinerary", include_str!("../../assets/formulas/twins/colorings/itinerary.rhai")),
+    // Batch 2: what the loop knows -- the escape fraction, the degree,
+    // the orbit's ending, the step's previous iterate and c.
+    ("smooth", include_str!("../../assets/formulas/twins/colorings/smooth.rhai")),
+    ("orbit_average", include_str!("../../assets/formulas/twins/colorings/orbit_average.rhai")),
+    ("stripe_average", include_str!("../../assets/formulas/twins/colorings/stripe_average.rhai")),
+    ("magnitude_average", include_str!("../../assets/formulas/twins/colorings/magnitude_average.rhai")),
+    ("root_basin", include_str!("../../assets/formulas/twins/colorings/root_basin.rhai")),
+    ("triangle_inequality", include_str!("../../assets/formulas/twins/colorings/triangle_inequality.rhai")),
+    ("period", include_str!("../../assets/formulas/twins/colorings/period.rhai")),
+    ("position_average", include_str!("../../assets/formulas/twins/colorings/position_average.rhai")),
+    ("curvature_average", include_str!("../../assets/formulas/twins/colorings/curvature_average.rhai")),
+    ("velocity", include_str!("../../assets/formulas/twins/colorings/velocity.rhai")),
+    ("threads", include_str!("../../assets/formulas/twins/colorings/threads.rhai")),
+    ("exponential_smoothing", include_str!("../../assets/formulas/twins/colorings/exponential_smoothing.rhai")),
 ];
 
 /// The twin of the built-in formula `name`, when it has one.
@@ -120,8 +134,8 @@ mod tests {
     /// Each colouring twin compiles as the app compiles it (its WGSL
     /// validated), with its built-in's name in the panel, its parameters
     /// exactly -- names, captions, hints, kinds, defaults, ranges,
-    /// choices, a log slider -- and its features: an orbit accumulator
-    /// and the interior coloured as the built-in's.
+    /// choices, a log slider -- and its features as the built-in's: an
+    /// orbit accumulator, the interior coloured, period detection.
     #[test]
     fn every_colouring_twin_compiles_as_its_builtin() {
         use super::super::ColoringFeature as F;
@@ -134,7 +148,7 @@ mod tests {
                 .unwrap_or_else(|d| panic!("{name}: {:?}", d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>()));
             assert_eq!(twin.display_name, builtin.display_name, "{name}: its title");
             assert_eq!(twin.parameters, builtin.parameters, "{name}: its parameters");
-            for f in [F::NeedsOrbitAccum, F::ColorsInterior] {
+            for f in [F::NeedsOrbitAccum, F::ColorsInterior, F::NeedsPeriod] {
                 assert_eq!(twin.features.contains(&f), builtin.features.contains(&f), "{name}: {f:?}");
             }
         }

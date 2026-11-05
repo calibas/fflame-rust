@@ -284,6 +284,9 @@ pub enum Builtin {
     /// built-in that rounds an iterate (the Gaussian integer colouring)
     /// rounds as it does, at any size.
     RoundEven,
+    /// The base-2 log of a real, WGSL's own: what the smooth and
+    /// debanded colourings take, so their twins round as they do.
+    Log2,
     Real,
     Imag,
     Conj,
@@ -415,6 +418,7 @@ pub const BUILTINS: &[(&str, Builtin)] = &[
     ("ceil", Builtin::Ceil),
     ("floor", Builtin::Floor),
     ("round_even", Builtin::RoundEven),
+    ("log2", Builtin::Log2),
     ("real", Builtin::Real),
     ("imag", Builtin::Imag),
     ("conj", Builtin::Conj),
@@ -510,6 +514,8 @@ impl Builtin {
             // A float, whatever it is given: an int rounds to itself.
             RoundEven if arg == Ty::Complex => Ty::Complex,
             RoundEven => Ty::Float,
+            Log2 if arg == Ty::Complex => return Err("`log2` takes a real: `ln(z) / ln(2.0)` for a complex".to_string()),
+            Log2 => Ty::Float,
             _ => {
                 if arg == Ty::Complex {
                     Ty::Complex
@@ -562,6 +568,7 @@ impl Builtin {
             Ceil => C64::new(z.re.ceil(), z.im.ceil()),
             Floor => C64::new(z.re.floor(), z.im.floor()),
             RoundEven => C64::new(z.re.round_ties_even(), z.im.round_ties_even()),
+            Log2 => z.ln().scale(std::f64::consts::LOG2_E),
             Real => C64::real(z.re),
             Imag => C64::real(z.im),
             Conj => z.conj(),
@@ -598,6 +605,7 @@ impl Builtin {
             Sqr => z.scale(2.0),
             Sqrt => C64::real(0.5).div(z.sqrt()),
             Log => one.div(z),
+            Log2 => one.div(z).scale(std::f64::consts::LOG2_E),
             Exp => z.exp(),
             Recip => one.div(z.mul(z)).neg(),
             Ident => one,
@@ -660,6 +668,7 @@ impl Builtin {
             Ceil => x.ceil(),
             Floor => x.floor(),
             RoundEven => x.round_ties_even(),
+            Log2 => x.log2(),
             Real => x,
             Imag => 0.0,
             IsInf => f64::from(u8::from(x.is_infinite())),
