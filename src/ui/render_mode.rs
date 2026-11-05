@@ -14,7 +14,6 @@ use crate::config::manager::{ConfigError, ConfigManager};
 use crate::scene::transforms::RenderMode;
 
 pub use crate::config::mode::{enter_snapshot, rig_taken_over};
-#[cfg(feature = "engine-escape")]
 pub use crate::config::mode::lights_to_world;
 
 /// `changes` as one undo step, with the 3D look when they take the
@@ -128,7 +127,6 @@ mod tests {
     /// fractal's whatever an older file left; an untouched rig taken over
     /// keeps its key light where it was -- the world's key when the lights
     /// are the fractal's, light 0 as it ships when they follow the camera.
-    #[cfg(feature = "engine-escape")]
     #[test]
     fn a_solid_enters_with_its_lights_in_the_fractal() {
         let mut solid = FractalConfig::default();
@@ -157,7 +155,7 @@ mod tests {
     /// one undo step: by the mode switch with a solid formula, by the
     /// formula picker, by a terrain switched on. A touched rig is the
     /// user's and stays; a view already 3D keeps what it has.
-    #[cfg(all(feature = "engine-escape", feature = "terrain"))]
+    #[cfg(feature = "terrain")]
     #[test]
     fn entering_a_3d_view_gives_it_the_3d_look() {
         use crate::config::ConfigValue;

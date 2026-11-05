@@ -39,9 +39,7 @@ use crate::scene::transforms::RenderMode;
 /// one -- its look is the flame's own.
 pub fn surface_3d(config: &FractalConfig) -> bool {
     match config.render_mode {
-        #[cfg(feature = "engine-escape")]
         RenderMode::Escape => crate::escape::ifs::formula_is_solid(&config.escape.formula) || config.escape.terrain_active(),
-        #[cfg(feature = "engine-sim")]
         RenderMode::Simulation => cfg!(feature = "terrain") && config.sim.terrain_active(),
         _ => false,
     }
@@ -91,11 +89,8 @@ fn look_3d_changes(after: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
 /// solid whose lights are the fractal's the world's key
 /// (`ifs::default_world_key`).
 pub fn rig_taken_over(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
-    #[allow(unused_mut)]
     let mut changes = vec![(ConfigPath::ShadingStrength, 1.0f32.into()), (ConfigPath::SolidAmbient, 0.0f32.into())];
-    #[allow(unused_variables)]
     let light = |param: &str| ConfigPath::SolidLightParam { index: 0, param: param.to_string() };
-    #[cfg(feature = "engine-escape")]
     if crate::camera::gesture::view_kind(config) == crate::camera::gesture::ViewKind::Solid && !config.solid_shading.lights_follow_camera {
         let (azimuth, elevation) = crate::escape::ifs::default_world_key();
         changes.push((light("azimuth"), azimuth.into()));
@@ -110,8 +105,6 @@ pub fn rig_taken_over(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> 
             changes.push((light("elevation"), elevation.into()));
         }
     }
-    #[cfg(not(any(feature = "terrain", feature = "engine-escape")))]
-    let _ = config;
     changes
 }
 
@@ -122,7 +115,6 @@ pub fn rig_taken_over(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> 
 /// `lights_follow_camera` off -- the picture as it stands, and from then on
 /// the lights stay put as the camera moves. An untouched rig is taken
 /// over first: its key light is light 0 as it ships.
-#[cfg(feature = "engine-escape")]
 pub fn lights_to_world(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
     let mut changes = Vec::new();
     if config.solid_shading.rig_untouched() {
@@ -280,12 +272,8 @@ fn first_entry(config: &mut FractalConfig, engine: Engine) {
 pub fn needs_flame(config: &FractalConfig) -> bool {
     match config.render_mode {
         RenderMode::TwoD | RenderMode::ThreeD => true,
-        #[cfg(feature = "engine-escape")]
         RenderMode::Escape => crate::escape::ifs::get_ifs(&config.escape.formula).is_some_and(|d| d.needs_flame),
-        #[cfg(feature = "engine-sim")]
         RenderMode::Simulation => config.sim.use_transforms,
-        #[allow(unreachable_patterns)]
-        _ => false,
     }
 }
 
@@ -563,7 +551,6 @@ mod tests {
     /// The 3D look is for a lit view the engine was not showing: a solid
     /// entered for the first time gets it; a solid left and returned to
     /// keeps the look it was given since.
-    #[cfg(feature = "engine-escape")]
     #[test]
     fn a_lit_view_gets_the_3d_look_once() {
         let mut flame = in_mode(RenderMode::TwoD);
@@ -634,7 +621,6 @@ mod tests {
         assert_eq!(serde_json::to_value(&m.active_config().flame).expect("flame"), flame);
 
         // The Flame Attractor, chosen in escape-time.
-        #[cfg(feature = "engine-escape")]
         {
             let mut escape = empty_flame_in(RenderMode::Escape);
             escape.exposure = 3.0;
@@ -647,7 +633,6 @@ mod tests {
         }
 
         // A simulation warped by the flame's transforms.
-        #[cfg(feature = "engine-sim")]
         {
             let mut m = ConfigManager::new(empty_flame_in(RenderMode::Simulation));
             m.choose(vec![(ConfigPath::SimUseTransforms, true.into())], "history.param.sim_use_transforms", RenderMode::Simulation)

@@ -47,10 +47,7 @@ pub fn render_variation_params(
     parameters: &[ParamDef],
 ) -> UpdateType {
     // A Rhai variation's conditions and grids.
-    #[cfg(feature = "lang")]
     let layout = crate::variations::custom::param_layout(var_name);
-    #[cfg(not(feature = "lang"))]
-    let layout: Option<std::sync::Arc<crate::params::layout::ParamLayout>> = None;
     let mut store = super::params::ConfigStore::new(config_manager, |m, d| target.stored(m, var_name, d), |n| target.path(var_name, n));
     super::params::list(ui, &mut store, &super::params::List::new(parameters, var_name).layout(layout.as_deref()));
     store.update

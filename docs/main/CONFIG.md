@@ -255,11 +255,7 @@ at runtime on every f32 path.
 ## The other engines' configs
 
 `escape: EscapeConfig` and `sim: SimConfig` sit beside the flame. Both
-are skip-if-default — a flame file never grows them — and both are
-compiled into every build, engine or not: a build without the escape or
-simulation engine still parses such a config, so the file round-trips
-unchanged, and rendering it returns `RenderError::EngineMissing` rather
-than drawing the flame (see [EXPORT.md](EXPORT.md)). Switching modes
+are skip-if-default — a flame file never grows them. Switching modes
 leaves the inactive engine's block in place, so a round trip keeps it.
 
 ### EscapeConfig

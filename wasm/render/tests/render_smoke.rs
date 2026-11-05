@@ -212,10 +212,7 @@ async fn an_escape_config_also_renders() {
     );
 }
 
-/// And a simulation config. This module was once built without
-/// `engine-sim` while its README promised every mode, so a simulation
-/// came back as `EngineMissing("simulation")` from the one renderer a
-/// gallery is told to embed when it does not know what the config is.
+/// And a simulation config.
 #[pollster::test]
 async fn a_simulation_config_also_renders() {
     let config = include_str!("../../../tests/visual/configs/sim/brusselator-turing.fflame");
@@ -232,22 +229,6 @@ async fn a_simulation_config_also_renders() {
     assert!(
         tile.pixels.chunks(4).any(|px| px[0] > 0 || px[1] > 0 || px[2] > 0),
         "all pixels black — the simulation render produced nothing"
-    );
-}
-
-/// The whole variation catalog is here. Escape and simulation configs
-/// use flame variations too (a lens, a transformation, the Flame
-/// Attractor, a layer's warp), which is why this is the one gallery
-/// renderer: the single-engine modules retired on 2026-11-04 carried
-/// `linear` alone and drew those configs wrong without saying so.
-#[test]
-fn the_whole_flame_catalog_is_present() {
-    let registry = fractal_flame_wgpu::variations::global_registry();
-    let n = registry.names().len();
-    assert!(
-        n > 500,
-        "the gallery renderer carries only {n} variations — engine-flame is off, \
-         and configs using anything but `linear` will render wrong"
     );
 }
 

@@ -31,9 +31,13 @@ flame is seeded where one is drawn (`config::mode`).
 The user's decisions of 2026-11-04, built the same day:
 - **Gallery (3): option (a)**, "0.4 MB is a small price to avoid
   separate modules". `wasm/flame`, `wasm/escape` and `wasm/sim` are
-  retired, `wasm/render` serves every config, and `release.py check`
-  keeps the engine feature matrix by checking the library at each
-  engine's features alone.
+  retired and `wasm/render` serves every config.
+- **Engine features**: removed. With no build dropping an engine,
+  `engine-flame`, `engine-escape`, `engine-sim` and `lang` (which the
+  escape engine needs) are gone, with their cfgs and the fallbacks
+  behind them (`RenderError::EngineMissing`, the `linear`-only catalog);
+  `web-app` and `terrain` remain, and the gallery check is their one
+  build without either.
 - **Headless defaults (2.2)**: the gallery's iterations per thread are
   1024, the CLI's and Python's; the other defaults stay per surface
   (sticky on or off, unknown-name refusal, the gallery's renderer

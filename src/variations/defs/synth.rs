@@ -1046,7 +1046,6 @@ fn extract_case_body(source: &str, mode: i32) -> Option<&str> {
 }
 
 // Reads the catalog's definition defaults.
-#[cfg(feature = "engine-flame")]
 #[cfg(test)]
 mod tests {
     use super::*;

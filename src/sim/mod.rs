@@ -41,7 +41,6 @@ pub mod assembler;
 mod app_repro_test;
 pub mod colorings;
 /// Simulation colourings written in Rhai (P4).
-#[cfg(feature = "lang")]
 pub mod custom;
 pub mod fft;
 pub mod models;
@@ -361,7 +360,6 @@ pub static SCALE_WARPS: &[&ScaleWarps] = &[&models::MCCABE_WARPS];
 /// The per-scale warps of `model`, if it has them.
 pub fn scale_warps(model: &str) -> Option<&'static ScaleWarps> {
     // A Rhai model's `INFO.scale_warps` (P4 step 9c).
-    #[cfg(feature = "lang")]
     if model.starts_with(custom::PREFIX) {
         return custom::scale_warps(model);
     }
@@ -381,7 +379,6 @@ pub fn spectral_scales(
         "mccabe" => Some(models::mccabe_scale_discs(params)),
         "smoothlife" => Some(models::smoothlife_discs(params)),
         // A Rhai model's `fn discs(p)` (P4 step 9b).
-        #[cfg(feature = "lang")]
         name if name.starts_with(custom::PREFIX) => custom::discs(name, params),
         _ => None,
     }
@@ -393,7 +390,6 @@ pub fn spectral_scales(
 /// field on every `ModelDef`), a Rhai model's from its `PARAMS`.
 pub fn param_layout(model: &str) -> Option<std::sync::Arc<crate::params::layout::ParamLayout>> {
     // A Rhai model's or colouring's (both named `custom-`).
-    #[cfg(feature = "lang")]
     if model.starts_with(custom::PREFIX) {
         return custom::param_layout(model);
     }
@@ -1249,7 +1245,6 @@ pub static COLORINGS: &[&SimColoringDef] =
 pub fn model_or_default(name: &str) -> &'static ModelDef {
     // One written in Rhai, registered from the config that carries it
     // (P4).
-    #[cfg(feature = "lang")]
     if let Some(def) = custom::model(name) {
         return def;
     }
@@ -1262,7 +1257,6 @@ pub fn model_or_default(name: &str) -> &'static ModelDef {
 pub fn coloring_or_default(name: &str) -> &'static SimColoringDef {
     // One written in Rhai, registered from the config that carries it
     // (P4).
-    #[cfg(feature = "lang")]
     if let Some(def) = custom::coloring(name) {
         return def;
     }
@@ -1657,7 +1651,6 @@ mod tests {
             );
         }
         // A Rhai model's cap is the same room (P4 step 9c).
-        #[cfg(feature = "lang")]
         assert_eq!(crate::lang::check::SIM_MODEL_PARAM_SLOTS, room, "the checker's cap on a model's parameters");
     }
 

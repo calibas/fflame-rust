@@ -17,19 +17,13 @@ use rust_i18n::t;
 use crate::params::{ParamDef, Spec};
 
 /// Effects written in Rhai, compiled by the formula language (P2).
-#[cfg(feature = "lang")]
 pub mod custom;
 
 /// Register the effects a config carries (`FractalConfig::custom_effects`)
 /// before its chains are built: every path that renders a config's effects
-/// calls this. Without the formula language (a build without
-/// `engine-escape`) a carried effect cannot compile, and renders as an
-/// unknown one does.
+/// calls this.
 pub fn ensure_custom(config: &crate::config::FractalConfig) {
-    #[cfg(feature = "lang")]
     custom::ensure(config);
-    #[cfg(not(feature = "engine-escape"))]
-    let _ = config;
 }
 
 /// The blend modes a colour effect's `blend_mode` picks, in the order
@@ -651,14 +645,11 @@ impl EffectRegistry {
     }
 }
 
-/// Register all built-in effects
 /// Register the built-in effects: each one-pass effect as its Rhai twin
-/// where the build has the compiler (`lang`; D1, docs/projects/
-/// rhai-plugins.md P2 step 7: [`custom::builtin_twin`]), its WGSL
-/// otherwise; `distance_field`, three passes, as its WGSL always.
+/// (D1, docs/projects/rhai-plugins.md P2 step 7: [`custom::builtin_twin`]);
+/// `distance_field`, three passes, as its WGSL.
 fn register_builtin_effects(registry: &mut EffectRegistry) {
     for info in wgsl_builtins() {
-        #[cfg(feature = "lang")]
         if let Some(twin) = custom::builtin_twin(&info.name) {
             registry.register(twin);
             continue;
@@ -668,8 +659,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
 }
 
 /// The built-in effects as their WGSL, in the order the lists show them:
-/// what a build without the compiler registers, and the reference each
-/// Rhai twin is held to (`the_rhai_twins_match_their_wgsl`).
+/// the reference each Rhai twin is held to
+/// (`the_rhai_twins_match_their_wgsl`).
 pub fn wgsl_builtins() -> Vec<EffectInfo> {
     let mut out = Vec::new();
     // === Color Effects (after tonemap) ===
@@ -1787,7 +1778,6 @@ mod label_tests {
         assert_eq!(sobel.translated_name(), "Edge Glow");
         let wgsl = wgsl_builtins().into_iter().find(|i| i.name == "distance_field").expect("ships");
         assert!(wgsl.display_name.is_empty(), "a WGSL built-in carries no inline label");
-        #[cfg(feature = "lang")]
         for (name, source) in custom::all_twins() {
             let twin = custom::compile(source, crate::provenance::Provenance::Builtin).expect("compiles");
             let info = reg.get(name).expect("ships");

@@ -143,24 +143,13 @@ GATES = [
     Gate("doc links", [sys.executable, "scripts/check_doc_links.py"],
          why="live docs pointing nowhere"),
     # The gallery modules: one check of both crates (render and script,
-    # every engine and no web app), then the library alone at each
-    # engine's own feature set. That is the engine feature matrix, and
-    # it is not hypothetical: `render_sim` and `register_sim` both
-    # silently required the ESCAPE feature for months, because a doc
-    # comment was inserted between an escape item's `#[cfg]` and the
-    # item, leaving the attribute on the simulation item that followed.
-    # Nothing failed until the first build with simulation and no
-    # escape. The single-engine modules that once exercised it were
-    # retired on 2026-11-04 (one gallery renderer: the engines use each
-    # other now), so no build ships those sets; they are checked so the
-    # features stay true for whoever turns one off next.
+    # every engine and no web app or terrain), the build the library
+    # gets nowhere else.
     #
     # A check, not the crates' test runs: those compile the library with
     # codegen (2026-11-03: script parity 125s, renderer 12s).
     # Incremental, a check is 14-15s after an edit and 3s with none.
     # What their runs asserted is kept where it costs nothing:
-    # - the flame catalog present or gone: a compile-time assertion
-    #   (`variations::defs`), which this check evaluates per set;
     # - script + seed reproducing the CLI's flames: the main suite
     #   compares the same fixtures (`shipped_scripts_give_the_clis_
     #   flames_for_their_seeds`);
@@ -168,7 +157,7 @@ GATES = [
     #   clamps and device reuse, the script module's parameters and
     #   envelope -- runs before the modules deploy: `release.py gallery`.
     Gate("gallery modules", lambda: gallery_compiles(),
-         why="each crate and each engine's feature set: a cfg on the wrong item compiles everywhere else"),
+         why="the library without the web app or terrain: a cfg on the wrong item compiles everywhere else"),
     # pyfflame's engine: the one WASI build, with code (`browser` versus
     # wasm32 cfgs, its storage and fetch stubs) nothing else compiles.
     # The PyO3 crate it replaced fell out of every gate and stopped
@@ -181,10 +170,6 @@ GATES = [
 # The gallery crates, each a workspace of its own sharing
 # wasm/target-gallery.
 GALLERY_CRATES = ["render", "script"]
-
-# Each engine alone, as the library's features allow (Cargo.toml): the
-# sets the retired single-engine modules built with.
-ENGINE_FEATURE_SETS = ["engine-flame,lang", "engine-escape", "engine-sim,lang"]
 
 
 def gallery_compiles():
@@ -203,16 +188,6 @@ def gallery_compiles():
                       env={"CARGO_INCREMENTAL": "1"}, cwd=f"wasm/{crate}")
         if not ok:
             return False, f"wasm/{crate}:\n{out}"
-    # The library alone, run from inside wasm/ for the shared target
-    # directory (the manifest path names the library; the cwd finds the
-    # config). The dev profile: the library's manifest has no
-    # `gallery-test`, and a check does no codegen for it to matter.
-    for features in ENGINE_FEATURE_SETS:
-        ok, out = run(["cargo", "check", "--manifest-path", "../../Cargo.toml", "--lib",
-                       "--no-default-features", "--features", features],
-                      cwd="wasm/render")
-        if not ok:
-            return False, f"the library at {features}:\n{out}"
     return True, ""
 
 

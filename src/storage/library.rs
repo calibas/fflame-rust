@@ -36,8 +36,7 @@ pub enum Kind {
     UfFormulas,
     UfColorings,
     Fractint,
-    /// A file whose kind could not be read (it does not parse, or this
-    /// build has no compiler).
+    /// A file whose kind could not be read (it does not parse).
     Unknown,
 }
 
@@ -83,11 +82,9 @@ pub fn scan() -> Vec<Entry> {
     for (name, source) in crate::storage::formula_store::EXAMPLES {
         out.push(formula_entry(name, source, Origin::Builtin, Link::default()));
     }
-    #[cfg(feature = "lang")]
     for (name, source) in crate::effects::custom::BUILTIN_TWINS {
         out.push(formula_entry(&format!("{name}.rhai"), source, Origin::Builtin, Link::default()));
     }
-    #[cfg(all(feature = "lang", feature = "engine-sim"))]
     for (name, source) in crate::sim::custom::SHIPPED.iter().chain(crate::sim::custom::SHIPPED_MODELS) {
         out.push(formula_entry(&format!("sim-{name}.rhai"), source, Origin::Builtin, Link::default()));
     }
@@ -187,29 +184,26 @@ fn formula_entry(file: &str, source: &str, origin: Origin, link: Link) -> Entry 
         };
         return e;
     }
-    #[cfg(feature = "lang")]
-    {
-        use crate::lang::{rhai, EntryKind};
-        e.kind = match rhai::kind_of(source) {
-            Some(EntryKind::Formula) => Kind::Formula,
-            Some(EntryKind::Coloring) => Kind::Coloring,
-            Some(EntryKind::Transform) => Kind::Variation,
-            Some(EntryKind::Solid) => Kind::Solid,
-            Some(EntryKind::Effect) => Kind::Effect,
-            Some(EntryKind::SimColoring) => Kind::SimColoring,
-            Some(EntryKind::SimModel) => Kind::SimModel,
-            None => Kind::Unknown,
-        };
-        if let Some(labels) = rhai::source_labels(source) {
-            let title = labels.title.resolve();
-            if !title.is_empty() {
-                e.title = title;
-            }
-            e.description = labels.description.resolve();
-            e.author = labels.author;
+    use crate::lang::{rhai, EntryKind};
+    e.kind = match rhai::kind_of(source) {
+        Some(EntryKind::Formula) => Kind::Formula,
+        Some(EntryKind::Coloring) => Kind::Coloring,
+        Some(EntryKind::Transform) => Kind::Variation,
+        Some(EntryKind::Solid) => Kind::Solid,
+        Some(EntryKind::Effect) => Kind::Effect,
+        Some(EntryKind::SimColoring) => Kind::SimColoring,
+        Some(EntryKind::SimModel) => Kind::SimModel,
+        None => Kind::Unknown,
+    };
+    if let Some(labels) = rhai::source_labels(source) {
+        let title = labels.title.resolve();
+        if !title.is_empty() {
+            e.title = title;
         }
-        e.id = rhai::info_string(source, "id");
+        e.description = labels.description.resolve();
+        e.author = labels.author;
     }
+    e.id = rhai::info_string(source, "id");
     e
 }
 
@@ -292,7 +286,7 @@ pub fn plugin_failures() -> Vec<String> {
 /// Register one formula store file as a plug-in, replacing what it
 /// registered before (an edit is a new version: a new key). A variation
 /// or an effect registers in its registry under its key (`Provenance::
-/// Custom`, the user's namespace); a formula, colouring or solid in the
+/// Local`, the user's namespace); a formula, colouring or solid in the
 /// escape engine's under its slot name.
 pub fn register_plugin(file: &str, source: &str) -> Result<Plugin, String> {
     let entry = formula_entry(file, source, Origin::Local, Link::default());
@@ -317,12 +311,6 @@ pub fn unlist_plugin(file: &str) {
     }
 }
 
-#[cfg(not(feature = "lang"))]
-fn register_kind(_kind: Kind, _title: &str, _source: &str) -> Result<(String, crate::config::escape::CustomSource), String> {
-    Err("this build has no compiler for Rhai".to_string())
-}
-
-#[cfg(feature = "lang")]
 fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate::config::escape::CustomSource), String> {
     match kind {
         Kind::Variation => {
@@ -337,7 +325,6 @@ fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate
             carried.entry = key.clone();
             Ok((key, carried))
         }
-        #[cfg(feature = "engine-escape")]
         Kind::Formula | Kind::Coloring | Kind::Solid => {
             use crate::config::escape::{CustomDialect, CustomSource};
             use crate::escape::custom;
@@ -357,20 +344,15 @@ fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate
             compiled.map_err(|d| d.first().map(|x| x.render(source)).unwrap_or_else(|| "it does not compile".to_string()))?;
             Ok((name, src))
         }
-        #[cfg(feature = "engine-sim")]
         Kind::SimColoring => {
             let name = crate::sim::custom::register(source)?;
             Ok((name, crate::sim::custom::carried(source)))
         }
-        #[cfg(feature = "engine-sim")]
         Kind::SimModel => {
             let name = crate::sim::custom::register_model(source)?;
             Ok((name, crate::sim::custom::carried(source)))
         }
-        _ => {
-            let _ = title;
-            Err("this build has no engine for it".to_string())
-        }
+        _ => Err("not a kind of plug-in".to_string()),
     }
 }
 
@@ -390,13 +372,10 @@ mod tests {
         assert!(shipped.iter().filter(|e| e.store == Store::Scripts).all(|e| e.kind != Kind::Unknown && !e.title.is_empty()));
         let basic = shipped.iter().find(|e| e.file == "basic_random.rhai").expect("a starter");
         assert_eq!((basic.kind, basic.title.as_str()), (Kind::Generator, "Basic Random"));
-        #[cfg(feature = "lang")]
-        {
-            let vignette = shipped.iter().find(|e| e.file == "vignette.rhai" && e.kind == Kind::Effect).expect("the effect");
-            assert_eq!((vignette.title.as_str(), vignette.id.as_deref()), ("Vignette", Some("vignette")));
-            assert_eq!(vignette.version.len(), 8);
-            assert!(shipped.iter().any(|e| e.kind == Kind::Formula), "the formula examples");
-        }
+        let vignette = shipped.iter().find(|e| e.file == "vignette.rhai" && e.kind == Kind::Effect).expect("the effect");
+        assert_eq!((vignette.title.as_str(), vignette.id.as_deref()), ("Vignette", Some("vignette")));
+        assert_eq!(vignette.version.len(), 8);
+        assert!(shipped.iter().any(|e| e.kind == Kind::Formula), "the formula examples");
     }
 
     /// Both lists mark an entry alike: whose it is, and a plug-in.
@@ -432,7 +411,6 @@ mod tests {
     /// An effect plug-in registers under its key, its source carried
     /// under it, and is offered as one; a file of no plug-in's kind is
     /// refused; unlisting stops the offer.
-    #[cfg(feature = "lang")]
     #[test]
     fn an_effect_plugin_registers_and_is_offered() {
         let src = "const INFO = #{ title: \"Tint test\", id: \"1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a\" };\nfn effect(c, p) { c }\n";
@@ -449,7 +427,6 @@ mod tests {
 
     /// A formula and a colouring plug-in register in the escape engine's
     /// registry under their slot names, which a config names.
-    #[cfg(feature = "engine-escape")]
     #[test]
     fn an_escape_plugin_registers_in_its_slot() {
         let formula = "const INFO = #{ title: \"Plug test\" };\nfn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
@@ -464,7 +441,6 @@ mod tests {
 
     /// A variation plug-in registers under its key. Writes the global
     /// variation registry: run alone (VARIATIONS.md, Testing).
-    #[cfg(feature = "lang")]
     #[test]
     #[ignore = "writes the global variation registry: run alone"]
     fn a_variation_plugin_registers_under_its_key() {
@@ -479,7 +455,6 @@ mod tests {
 
     /// `INFO.description` and `INFO.author` reach the entry, a
     /// description in the current language.
-    #[cfg(feature = "lang")]
     #[test]
     fn a_formula_entry_reads_its_info() {
         let src = "const INFO = #{ title: \"Spiral\", description: #{ en: \"A spiral\", ja: \"螺旋\" }, author: \"Ada\" };\n\

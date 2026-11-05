@@ -1481,7 +1481,6 @@ pub fn get_current_value(
         // and never a track's.)
         // The solid's camera target: an exact decimal, or empty for the
         // attractor's own centre, where the camera looks (`solid_camera`).
-        #[cfg(feature = "engine-escape")]
         ConfigPath::EscapeCamTargetX | ConfigPath::EscapeCamTargetY | ConfigPath::EscapeCamTargetZ => {
             let k = match path {
                 ConfigPath::EscapeCamTargetX => 0,

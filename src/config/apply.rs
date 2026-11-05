@@ -1,5 +1,5 @@
 //! The config's rules: what a value may be and what changing it implies,
-//! for every [`ConfigPath`] -- the program's one setter. [`ConfigManager`]
+//! for every [`ConfigPath`] -- the program's one setter. [`ConfigManager`](super::ConfigManager)
 //! wraps it with history, preview and [`UpdateType`]; the video export, the
 //! cameras and every edit made on a config outside the manager (a mode's
 //! look, a fly-mode step) call it directly, so a value means the same
@@ -10,7 +10,7 @@
 
 use super::delta::{AffineParam, ConfigPath, ConfigValue};
 use super::fractal_config::FractalConfig;
-use super::manager::{custom_source_from_json, ConfigError, ConfigManager, EditingTarget, EscapeParamOf};
+use super::manager::{custom_source_from_json, ConfigError, EditingTarget};
 use crate::scene::transforms::{Flame, Transform};
 
 /// Apply one value to `config` at `path`, against the flame `target`
@@ -351,12 +351,9 @@ pub fn apply(config: &mut FractalConfig, target: EditingTarget, path: &ConfigPat
                     // diverges above 0.02, so carrying one model's
                     // settings into another is unusable either way.
                     config.sim.model_params.clear();
-                    #[cfg(feature = "engine-sim")]
-                    {
-                        let m = crate::sim::model_or_default(&name);
-                        config.sim.dt = m.default_dt;
-                        config.sim.steps = m.default_steps;
-                    }
+                    let m = crate::sim::model_or_default(&name);
+                    config.sim.dt = m.default_dt;
+                    config.sim.steps = m.default_steps;
                 }
                 config.sim.model = name;
             }
@@ -620,10 +617,7 @@ pub fn apply(config: &mut FractalConfig, target: EditingTarget, path: &ConfigPat
                 // config runs at the tightest of them, and reading
                 // `sim.model` here let the clamp accept a dt one layer
                 // could not survive.
-                #[cfg(feature = "engine-sim")]
                 let ceiling = config.sim.max_dt_ceiling();
-                #[cfg(not(feature = "engine-sim"))]
-                let ceiling = 10.0f32;
                 config.sim.dt = if d.is_finite() { d.clamp(1e-4, ceiling) } else { 1.0 };
             }
             ConfigPath::SimBoundary => {
@@ -1251,7 +1245,7 @@ pub fn apply(config: &mut FractalConfig, target: EditingTarget, path: &ConfigPat
             ConfigPath::EscapeFormulaParam { param } => {
                 let v: f32 = value.try_into()?;
                 // `name.r` / `name.angle` write a complex parameter's parts.
-                let writes = config.escape.formula_param_writes(param, v, |p| ConfigManager::escape_param_default(config, EscapeParamOf::Formula, p));
+                let writes = config.escape.formula_param_writes(param, v, |p| crate::escape::param_default(&config.escape, crate::escape::ParamOf::Formula, p));
                 for (k, x) in writes {
                     config.escape.formula_params.insert(k, x);
                 }

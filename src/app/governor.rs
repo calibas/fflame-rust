@@ -1475,7 +1475,6 @@ impl super::App {
     /// far wrong; the config's scale again when it stops, the field carried
     /// back. Never during a background export, which has the GPU. Also
     /// *Fit to target*'s scale, for the Simulation panel.
-    #[cfg(feature = "engine-sim")]
     pub(super) fn govern_sim(&mut self) {
         use crate::config::sim::SimGrid;
         if self.export_status.lock().map(|s| s.active).unwrap_or(false) {

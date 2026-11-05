@@ -146,7 +146,6 @@ impl App {
             self.gpu.queue.submit(std::iter::once(encoder.finish()));
         }
 
-        #[cfg(feature = "engine-sim")]
         if restart_sim {
             // The field, the step count and the transport state are
             // all the old picture's. Nothing here is worth carrying
@@ -155,8 +154,6 @@ impl App {
             self.sim_running = true;
             self.sim_step_once = false;
         }
-        #[cfg(not(feature = "engine-sim"))]
-        let _ = restart_sim;
     }
 
     /// Undo to previous state
@@ -711,7 +708,6 @@ impl App {
     /// config's cap -- so the PNG re-renders as saved.
     fn current_image_config(&self) -> FractalConfig {
         let config = self.export_config();
-        #[cfg(feature = "engine-sim")]
         if let (Some(sim), crate::scene::transforms::RenderMode::Simulation) = (&self.sim_renderer, config.render_mode) {
             if sim.step_index() > 0 {
                 let mut c = config;

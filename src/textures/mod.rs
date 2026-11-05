@@ -291,7 +291,6 @@ mod tests {
     /// are. Writes `assets/textures/<name>.fflame`; run deliberately.
     #[test]
     #[ignore = "writes assets/textures"]
-    #[cfg(feature = "engine-sim")]
     fn write_texture_presets() {
         let chosen: &[(&str, &str, &str)] = &[
             ("Mitosis", "gray_scott", "mitosis"),
@@ -344,7 +343,6 @@ mod tests {
     /// into each other about as smoothly as its inside does.
     #[test]
     #[ignore = "needs a GPU"]
-    #[cfg(feature = "engine-sim")]
     fn textures_generate_deterministically_and_tile() {
         // The adapter's own limits, as every renderer test asks for: the
         // defaults are below what the render path binds.
@@ -407,7 +405,6 @@ mod tests {
 
     /// The adapter's own limits, as every renderer test asks for, or
     /// None without an adapter.
-    #[cfg(feature = "engine-sim")]
     fn device_if_any() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -438,7 +435,6 @@ mod tests {
     /// its recipe does not reproduce. And a run with a step taken under
     /// other settings is not the recipe's, until it is reseeded.
     #[test]
-    #[cfg(feature = "engine-sim")]
     fn a_live_run_continued_to_its_recipe_draws_what_generating_it_draws() {
         let Some((device, queue)) = device_if_any() else {
             eprintln!("no GPU adapter; skipping");

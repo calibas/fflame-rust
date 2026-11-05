@@ -87,9 +87,7 @@ the names in registration order, and a version counter.
 registration order is the stable order the registry reports
 (`names()`), the fallback dispatch order and the UI order within a
 category, and legacy configs that stored weights as an array are read
-by it. With the `engine-flame` cargo feature off, `ALL_VARIATIONS` is
-`[&LINEAR]` alone — a default config still names `linear` — and the
-linker drops the other definitions.
+by it.
 
 **Global access.** The registry is a process-wide
 `RwLock<VariationRegistry>`. `global_registry()` returns a

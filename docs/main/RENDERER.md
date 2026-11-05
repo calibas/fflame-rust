@@ -505,7 +505,6 @@ video loop passes one; still renders pass none.
 the non-flame engines).
 
 **`RenderError`**: `NoPaletteFound`, `PixelReadFailed`, `Cancelled`,
-`EngineMissing` (the config names an engine this build lacks),
 `OutOfMemory` (an allocation failed — caught with a wgpu error scope
 rather than rendering black), `TooLarge` (refused before allocating).
 `RenderProgress` reports progress and carries cancellation; `NoProgress`
@@ -527,8 +526,7 @@ this build has no entry for.
 **`render_with(renderer, device, queue, job, progress)`** renders into
 a caller-owned renderer of the right size (call `resize` first if the
 size changed). Escape configs go to `render_escape`, simulation configs
-to `render_sim`; a build without the engine returns `EngineMissing`.
-For a flame:
+to `render_sim`. For a flame:
 
 1. `load_config`, which also plans Focused Rendering inline.
 2. If shadows are wanted, the shadow warm-up described above.

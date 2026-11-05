@@ -416,7 +416,9 @@ option): `src/escape/lang/` is `src/lang/`, the `lang` feature, which
 the interpreter's steppers) stay with `engine-escape`; Rhai variations
 and effects need `lang` alone, and the flame and simulation gallery
 modules turn it on. **Its price**: the flame module from 1.21 MB to 1.55
-MB gzipped (5.2 to 6.3 MB raw), measured before `wasm-opt`. The CPU
+MB gzipped (5.2 to 6.3 MB raw), measured before `wasm-opt`. (The `lang`
+feature went with the engine features on 2026-11-04, when the
+single-engine modules retired: every build has the compiler.) The CPU
 scripting module (`src/script`) is compiled into every build and linked
 only where something calls it (wasm/script, the app), so it is already
 an option by use; a `scripting` feature would make it one by name.

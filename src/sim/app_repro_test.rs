@@ -189,7 +189,6 @@ fn small_config() -> SimConfig {
 /// arithmetic is the built-in's but for the language's own `mix`, `length`
 /// and the like, written out, whose last bit may differ: a picture does
 /// not feed back. Each twin is the one that ran.
-#[cfg(feature = "lang")]
 #[test]
 fn the_rhai_colourings_colour_as_the_built_ins() {
     use crate::config::sim::{SimMatte, SimMatteChannel};
@@ -266,7 +265,6 @@ fn the_rhai_colourings_colour_as_the_built_ins() {
 /// straight after the built-in, the median of the rounds' ratios, more
 /// than 5% slower a failure. Ignored: it times the GPU (the app closed).
 /// `SIM_TWINS=a,b` times those alone.
-#[cfg(feature = "lang")]
 #[test]
 #[ignore]
 fn the_rhai_colourings_are_no_slower() {
@@ -326,7 +324,6 @@ fn the_rhai_colourings_are_no_slower() {
 /// A built-in model's config at a preset (or its defaults): the
 /// preset's parameters, time step, initial field, boundary and warp, on
 /// a square grid of `n`.
-#[cfg(feature = "lang")]
 fn preset_config(m: &crate::sim::ModelDef, pre: Option<&crate::sim::SimPreset>, n: u32) -> SimConfig {
     let mut cfg = small_config();
     cfg.grid = SimGrid::Fixed { width: n, height: n };
@@ -352,7 +349,6 @@ fn preset_config(m: &crate::sim::ModelDef, pre: Option<&crate::sim::SimPreset>, 
 /// bit for bit where the state is discrete, to 1e-5 of its size where it
 /// is continuous, the age channel included. Each twin is the one that ran
 /// (not the default's fallback), and each run moved.
-#[cfg(feature = "lang")]
 #[test]
 fn the_rhai_models_step_as_the_built_ins() {
     use crate::sim::StateKind;
@@ -419,7 +415,6 @@ fn the_rhai_models_step_as_the_built_ins() {
 /// Channel's twin against the built-in -- every slice and the picture as
 /// the built-ins make them, each twin registered from the source its
 /// entry carries.
-#[cfg(feature = "lang")]
 #[test]
 fn rhai_models_and_colourings_run_in_layers() {
     use crate::config::sim::{SimBlend, SimColorLayer, SimCoupling, SimCouplingForm, SimLayer};
@@ -481,7 +476,6 @@ fn rhai_models_and_colourings_run_in_layers() {
 /// each built-in against itself, the measurement's own noise;
 /// `SIM_TWIN_PARAMS=variation=1.5,memory=0.3` sets parameters over the
 /// preset's, to time another path.
-#[cfg(feature = "lang")]
 #[test]
 #[ignore]
 fn the_rhai_models_are_no_slower() {
@@ -8983,7 +8977,6 @@ fn turing_layers_of(lattice: &SimConfig) -> SimConfig {
 /// signal read by the couplings and the drive folded in by the step, on
 /// the built-in's own kernel table (`swap_kernel`), every slice
 /// bit-identical after 200 steps.
-#[cfg(feature = "lang")]
 #[test]
 fn a_rhai_turing_couples_as_the_built_in() {
     let Some((device, queue)) = repro_device() else {
@@ -9028,7 +9021,6 @@ fn a_rhai_turing_couples_as_the_built_in() {
 /// radius too) -- the field, and the memory where it is on, bit-identical
 /// to the built-in's after 150 steps; each case a run of its own on the
 /// built-in, so every path ran.
-#[cfg(feature = "lang")]
 #[test]
 fn a_rhai_mccabe_runs_every_path_as_the_built_in() {
     let Some((device, queue)) = repro_device() else {
@@ -9110,7 +9102,6 @@ fn a_rhai_mccabe_runs_every_path_as_the_built_in() {
 /// (the moves a wall refuses, which neither pass may claim), and DLA
 /// grown long enough that walkers stick, wake and are killed -- every
 /// agent's record and every cell bit-identical to the built-in's.
-#[cfg(feature = "lang")]
 #[test]
 fn the_rhai_agent_models_move_as_the_built_ins() {
     let Some((device, queue)) = repro_device() else {

@@ -1835,7 +1835,6 @@ fn write_palette(out: &mut String, palette: &crate::scene::palette::Palette) {
 
 // Every test here parses a .flame naming real variations, so the
 // whole module is about the flame catalog.
-#[cfg(feature = "engine-flame")]
 #[cfg(test)]
 mod tests {
     use super::*;

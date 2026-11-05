@@ -45,7 +45,7 @@ Project history is in git: `git log --oneline`.
 - `src/renderer/` - FlameRenderer (compute_kernel.rs), the unified render API (render.rs), the tail every picture goes through (tail.rs), sticky.rs, shade_pass.rs, dof_pass.rs, effect_chain.rs, thumbnails
 - `src/shader_builder_v2.rs`, `src/shader_cache.rs`, `src/gpu/` (buffers.rs, pipelines.rs), `shaders/` - see [SHADERS.md](docs/main/SHADERS.md)
 - `src/escape/`, `src/sim/`, `src/camera/`, `src/textures/` (simulation recipes as textures)
-- `src/lang/` - the formula language (feature `lang`, brought by `engine-escape`): Rhai, UF and Fractint to WGSL, for formulas, colourings, solids, variations and effects; `src/scripted.rs` (ids, versions, labels shared by every user-written script)
+- `src/lang/` - the formula language: Rhai, UF and Fractint to WGSL, for formulas, colourings, solids, variations and effects; `src/scripted.rs` (ids, versions, labels shared by every user-written script)
 - `src/params/` - the one parameter system: `ParamDef`/`ParamKind` (built-ins in one const call via `Spec`), values, layouts (conditions, grids), wire spellings; every kind's parameters, drawn by one renderer (`src/ui/params.rs`). [one-parameter-system.md](docs/projects/one-parameter-system.md)
 - `src/export/` - high-res export (tiled GPU, CPU fallback), 2x AA (supersample.rs)
 - `src/ui/` - dockable panels (egui_dock); `src/animation/`, `src/signal/`, `src/audio/`; `src/effects/`
@@ -66,7 +66,7 @@ Between them: analytic blur, the solid shade pass and DoF (3D), density effects;
 Opt-in, 2D flames only (config `cylinder_targeting`; code says "cylinder targeting"). A **plan** enumerates the words -- sequences of transforms -- whose images reach the view; each sample runs the free orbit and plots its point forced through a word drawn from the plan, so samples land in frame at zooms where the plain chaos game lands almost none. Brightness stays unbiased (`Cylinders::iteration_scale`; off-probability words deposit the inverse of their draw rate). Two shader arms: composed (affine words) and replay (`shaders/core/replay.wgsl`; offsets from reference orbits past f32). Works for a narrow range of flames; **coverage work is paused** -- status and order of work in [docs/projects/deep-zoom/deep-zoom-tracker.md](docs/projects/deep-zoom/deep-zoom-tracker.md). Compare pictures by density, not the tone map (`read_density_blocking`, `compare_blocks`). Unrelated to the escape engine's perturbation deep zoom.
 
 ### Variations ([VARIATIONS.md](docs/main/VARIATIONS.md))
-- 647 `static VariationDef`s in `src/variations/defs/*.rs` (flam3 / Apophysis / JWildfire), inline WGSL (2D + 3D), registered by appending to `defs/mod.rs` (**append-only**: registration order is the stable ID order). With the `engine-flame` feature off only `linear` is registered.
+- 647 `static VariationDef`s in `src/variations/defs/*.rs` (flam3 / Apophysis / JWildfire), inline WGSL (2D + 3D), registered by appending to `defs/mod.rs` (**append-only**: registration order is the stable ID order).
 - `global_registry()` returns a read guard; the registry changes at runtime -- API-downloaded variations register through `global_registry_mut()`, and so do **Rhai variations** (`variations::custom`, `Provenance::Local`: a Formula Editor transformation `fn variation(z, p)`; the flame carries the source in `Flame::custom_variations` and `custom::ensure` registers it wherever a flame is read; `.flame` export drops them).
 - Up to `MAX_VARIATIONS_PER_FLAME = 100` per flame, with a **per-flame local index map** (no global indices). The shader is the **sticky superset**: a canonical union of the flame's variations plus retained extras at weight 0, so edits rarely recompile (`src/renderer/sticky.rs`); chained pre/post order falls back to a specialized compile.
 - Parameters: per-transform `HashMap` with `"varname.param"` keys, packed into `MAX_VARIATION_PARAM_SLOTS = 1600` floats (user params, then `wgsl_init`-derived); shaders read `get_param(xform_id, variation_id, slot)`. Per-thread state (`state_count`) is not in that buffer: it is a `var<private> thread_state` array, read via `get_state`/`set_state` and saved with the orbit in the orbit buffer. A parameter is a `params::ParamDef` (the one definition every kind -- variations, effects, escape, simulations, scripts -- shares; one renderer, `ui::params`): float (free, log, angle), int (free), bool, choice; on the wire `ParamType`'s names (float, unlimited_float, integer, unlimited_integer, angle, boolean, enum). `param!(slow ...)` marks a slow one.
@@ -110,7 +110,7 @@ CLI flags (`--width`, `-H`, `--supersample`, `--transparent`, `--premultiplied`,
 ### Releasing, and changing anything the API sees
 **See [docs/RELEASE.md](docs/RELEASE.md).** Nothing runs on push or on a timer.
 ```bash
-python scripts/release.py check      # every fast gate (versions agree, tests, wasm builds, contract, shader dumps, doc links, the two gallery crates checked, and the library at each engine's features alone -- the engine feature matrix)
+python scripts/release.py check      # every fast gate (versions agree, tests, wasm builds, contract, shader dumps, doc links, the two gallery crates checked -- the library without `web-app` and `terrain` -- and the WASI module)
 python scripts/release.py gallery    # the gallery crates' own tests (GPU smoke, script parity), before the modules deploy
 python scripts/release.py            # ...and a changelog preview
 ```
@@ -147,7 +147,7 @@ The API's corpora come from `cargo run --release --bin export_variations_json` /
 ### Rust Code
 - `bytemuck::Pod` / `Zeroable` for GPU structs; vec3 needs 16-byte alignment -- add explicit padding and mirror it in the WGSL header.
 - Prefer `Queue::write_buffer()` over buffer mapping for updates.
-- Cargo features `web-app`, `engine-flame`, `engine-escape`, `engine-sim`, `terrain` (all default) gate whole engines. The gallery modules build without `web-app` and `terrain`; no shipped build drops an engine since the single-engine gallery modules retired (2026-11-04), but new engine code still needs its `#[cfg]`, and `release.py check` checks each engine alone.
+- Cargo features: `web-app` (the editor: `mod app`, `mod ui`, the wasm-bindgen app surface) and `terrain`, both default. The gallery modules build without either. Every build carries all three engines and the formula language; the per-engine features (`engine-flame`, `engine-escape`, `engine-sim`, `lang`) were removed on 2026-11-04, once the single-engine gallery modules retired.
 
 ### State Management
 ```rust

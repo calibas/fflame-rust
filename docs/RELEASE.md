@@ -88,10 +88,9 @@ python scripts/release.py check --fix    # ...and regenerate the generated files
 The gates, in order: every version agrees (§1), unit tests
 (`cargo test --release --lib`), the library compiled for
 `wasm32-unknown-unknown`, the generated contract, the shader dumps, doc
-links, and the gallery modules: one incremental `cargo check` of both
-gallery crates and their tests, then of the library at each engine's
-features alone, which is the engine feature matrix. The gallery crates' own test
-runs are `python scripts/release.py gallery`, before the modules deploy.
+links, the gallery modules (one incremental `cargo check` of both
+gallery crates and their tests) and pyfflame's WASI module. The gallery
+crates' own test runs are `python scripts/release.py gallery`, before the modules deploy.
 The commands are in [TESTING-GUIDE.md §2](TESTING-GUIDE.md).
 
 **Nothing runs on push, on commit, or on a timer.** That is deliberate:
@@ -653,13 +652,10 @@ own `wasm-opt`, so binaryen need not be on PATH. The
 `Cargo.toml` are load-bearing: the bundled wasm-opt 117 predates
 rustc's bulk-memory default and rejects the module without them.
 
-**Gated.** `release.py check` checks both crates and their tests, then
-the library at each engine's features alone (`gallery modules`:
-incremental, 14-15s a check after an edit, 3s with none). That is the
-engine feature matrix, and it evaluates the compile-time assertion that
-the flame catalog is whole with `engine-flame` and `linear` alone
-without (`variations::defs`). The
-CLI-parity fixtures §6 names as the guard for `script + seed`
+**Gated.** `release.py check` checks both crates and their tests
+(`gallery modules`: incremental, 14-15s a check after an edit, 3s with
+none), the one build of the library without `web-app` and `terrain`.
+The CLI-parity fixtures §6 names as the guard for `script + seed`
 reproducibility are compared in the main suite too
 (`shipped_scripts_give_the_clis_flames_for_their_seeds`), so every check
 runs them. The crates' own test runs -- compiling the library with

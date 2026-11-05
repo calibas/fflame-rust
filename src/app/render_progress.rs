@@ -73,7 +73,7 @@ impl App {
             RenderMode::Simulation => {
                 // A terrain's path tracer, once it is the one working: the
                 // run at rest (a running one shows the lit tier).
-                #[cfg(all(feature = "engine-sim", feature = "terrain"))]
+                #[cfg(feature = "terrain")]
                 if config.sim.terrain_active()
                     && config.sim.terrain.tier != crate::config::escape::RenderTier::Lit
                     && !self.sim_running
@@ -87,18 +87,11 @@ impl App {
                         }
                     }
                 }
-                #[cfg(feature = "engine-sim")]
-                {
-                    RenderProgress::Sim {
-                        step: self.sim_renderer.as_ref().map_or(0, |s| s.step_index()),
-                        cap: config.sim.steps,
-                        // Catching up to a scrubbed step count runs too.
-                        running: self.sim_running || self.sim_timeline_target.is_some(),
-                    }
-                }
-                #[cfg(not(feature = "engine-sim"))]
-                {
-                    RenderProgress::Idle
+                RenderProgress::Sim {
+                    step: self.sim_renderer.as_ref().map_or(0, |s| s.step_index()),
+                    cap: config.sim.steps,
+                    // Catching up to a scrubbed step count runs too.
+                    running: self.sim_running || self.sim_timeline_target.is_some(),
                 }
             }
             RenderMode::TwoD | RenderMode::ThreeD => match self.flame_renderer.as_ref() {

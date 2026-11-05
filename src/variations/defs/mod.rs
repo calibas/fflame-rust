@@ -443,13 +443,6 @@ use super::definition::VariationDef;
 ///
 /// IMPORTANT: Never reorder existing entries - only append new ones.
 /// The order determines variation indices for preset compatibility.
-///
-/// This array is the ONLY thing that reaches the 647 definitions, so
-/// it is also the whole seam for `engine-flame`: without it the defs
-/// are unreachable and the linker drops them, catalog and inline WGSL
-/// together. Measured on the gallery renderer: 3.29 MB raw / 0.80 MB
-/// gzip with the catalog, 1.22 MB / 0.41 MB without it.
-#[cfg(feature = "engine-flame")]
 pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // Basic 2D (0-4)
     &LINEAR,
@@ -1295,24 +1288,3 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &LSYSTEM_TREE,
     &CRACKLE_FAST,
 ];
-
-/// Without the flame engine: `linear` alone.
-///
-/// Not an EMPTY slice, deliberately. A default `FractalConfig` still
-/// carries a flame whose transforms name `linear`, and every lookup
-/// path expects that name to resolve; an empty catalog would turn a
-/// config load into a hole to handle rather than a variation to
-/// ignore. One def costs about a hundred bytes and keeps the
-/// escape-only module's flame surface INERT rather than BROKEN.
-#[cfg(not(feature = "engine-flame"))]
-pub static ALL_VARIATIONS: &[&VariationDef] = &[&LINEAR];
-
-// The catalog is `engine-flame`'s whole seam, so it is checked wherever
-// the crate compiles -- the engine feature matrix in `release.py`
-// included: every definition with the feature, `linear` alone without,
-// as the retired escape and sim modules' smoke tests once checked at
-// run time.
-#[cfg(feature = "engine-flame")]
-const _: () = assert!(ALL_VARIATIONS.len() > 500, "engine-flame carries the whole catalog");
-#[cfg(not(feature = "engine-flame"))]
-const _: () = assert!(ALL_VARIATIONS.len() == 1, "without engine-flame the catalog is `linear` alone");

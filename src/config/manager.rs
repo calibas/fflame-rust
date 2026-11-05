@@ -435,18 +435,6 @@ struct ModifySession {
     initial_transform: crate::scene::transforms::Transform,
 }
 
-#[cfg(feature = "engine-escape")]
-pub(super) use crate::escape::ParamOf as EscapeParamOf;
-/// Stand-in when the escape engine is not built.
-#[cfg(not(feature = "engine-escape"))]
-#[derive(Debug, Clone, Copy)]
-pub(super) enum EscapeParamOf {
-    Formula,
-    Coloring,
-    Layer,
-    Lens,
-}
-
 impl ConfigManager {
     pub fn new(config: FractalConfig) -> Self {
         // Load system settings from disk (or use defaults)
@@ -455,7 +443,6 @@ impl ConfigManager {
         // the saved preference has to be pushed into it here as well
         // as on every later edit.
         #[cfg(not(target_arch = "wasm32"))]
-        #[cfg(feature = "engine-escape")]
         crate::escape::orbit_store::set_max_total_mb(system_settings.orbit_cache_mb);
 
         Self {
@@ -1046,7 +1033,6 @@ impl ConfigManager {
                 let value: u32 = new_value.try_into()?;
                 self.system_settings.orbit_cache_mb = value;
                 #[cfg(not(target_arch = "wasm32"))]
-                #[cfg(feature = "engine-escape")]
                 crate::escape::orbit_store::set_max_total_mb(value);
             }
             ConfigPath::SystemVsyncEnabled => {
@@ -1763,40 +1749,21 @@ impl ConfigManager {
         true
     }
 
-    /// Extract value from any FractalConfig by path (helper for undo/redo)
-    /// The default of an escape parameter the config does not hold (the
-    /// panel's, `escape::param_default`): what reading it must give, or
-    /// undoing its first edit wrote 0 -- Smooth's Scale below its minimum.
-    #[cfg(feature = "engine-escape")]
-    pub(super) fn escape_param_default(config: &FractalConfig, of: EscapeParamOf, name: &str) -> Option<f32> {
-        crate::escape::param_default(&config.escape, of, name)
-    }
-    #[cfg(not(feature = "engine-escape"))]
-    pub(super) fn escape_param_default(_config: &FractalConfig, _of: EscapeParamOf, _name: &str) -> Option<f32> {
-        None
-    }
-
     /// The default of a simulation model's parameter the config does not
     /// hold: undoing a first edit wrote 0, and Gray-Scott's pattern died.
-    #[cfg(feature = "engine-sim")]
     fn sim_model_default(model: &str, name: &str) -> Option<f32> {
         crate::sim::model_or_default(model).parameters.iter().find(|p| p.name == name).map(|p| p.slot_default())
     }
-    #[cfg(not(feature = "engine-sim"))]
-    fn sim_model_default(_model: &str, _name: &str) -> Option<f32> {
-        None
-    }
 
     /// The same for a simulation colouring's parameter.
-    #[cfg(feature = "engine-sim")]
     fn sim_coloring_default(coloring: &str, name: &str) -> Option<f32> {
         crate::sim::coloring_or_default(coloring).parameters.iter().find(|p| p.name == name).map(|p| p.slot_default())
     }
-    #[cfg(not(feature = "engine-sim"))]
-    fn sim_coloring_default(_coloring: &str, _name: &str) -> Option<f32> {
-        None
-    }
 
+    /// Extract value from any FractalConfig by path (helper for undo/redo).
+    /// A parameter the config does not hold reads as its default (for an
+    /// escape one the panel's, `escape::param_default`): undoing its first
+    /// edit otherwise wrote 0 -- Smooth's Scale below its minimum.
     pub(crate) fn get_value_from_config(
         config: &FractalConfig,
         path: &ConfigPath,
@@ -2248,12 +2215,11 @@ impl ConfigManager {
                 crate::config::escape::biomorph_to_str(config.escape.biomorph).to_string(),
             )),
             ConfigPath::EscapeColoring => Ok(ConfigValue::String(config.escape.coloring.clone())),
-            // Absent parameter reads as 0.0; the formula's declared
-            // default is a registry concern (the panel resolves it),
-            // mirroring how effect params behave here.
+            // An absent parameter reads as its declared default, 0.0 only
+            // when nothing declares one.
             ConfigPath::EscapeFormulaParam { param } => Ok(config
                 .escape
-                .formula_param(param, |p| Self::escape_param_default(config, EscapeParamOf::Formula, p))
+                .formula_param(param, |p| crate::escape::param_default(&config.escape, crate::escape::ParamOf::Formula, p))
                 .unwrap_or(0.0)
                 .into()),
             ConfigPath::EscapeColoringParam { param } => Ok(config
@@ -2261,7 +2227,7 @@ impl ConfigManager {
                 .coloring_params
                 .get(param)
                 .copied()
-                .or_else(|| Self::escape_param_default(config, EscapeParamOf::Coloring, param))
+                .or_else(|| crate::escape::param_default(&config.escape, crate::escape::ParamOf::Coloring, param))
                 .unwrap_or(0.0)
                 .into()),
             ConfigPath::EscapeLayerColoring => Ok(config.escape.layer.coloring.clone().into()),
@@ -2271,7 +2237,7 @@ impl ConfigManager {
                 .params
                 .get(param)
                 .copied()
-                .or_else(|| Self::escape_param_default(config, EscapeParamOf::Layer, param))
+                .or_else(|| crate::escape::param_default(&config.escape, crate::escape::ParamOf::Layer, param))
                 .unwrap_or(0.0)
                 .into()),
             ConfigPath::EscapeLayerBlend => Ok(ConfigValue::String(
@@ -2286,7 +2252,7 @@ impl ConfigManager {
                 .lens_params
                 .get(param)
                 .copied()
-                .or_else(|| Self::escape_param_default(config, EscapeParamOf::Lens, param))
+                .or_else(|| crate::escape::param_default(&config.escape, crate::escape::ParamOf::Lens, param))
                 .unwrap_or(0.0)
                 .into()),
             ConfigPath::EscapeTransforms => Ok(ConfigValue::String(crate::config::escape::transforms_to_wire(&config.escape.transforms))),
@@ -3662,7 +3628,6 @@ mod tests {
     /// at 0 is below its minimum.
     #[test]
     fn undoing_a_first_edit_restores_the_default() {
-        #[cfg(feature = "engine-sim")]
         {
             let mut c = FractalConfig::default();
             c.render_mode = crate::scene::transforms::RenderMode::Simulation;
@@ -3674,7 +3639,6 @@ mod tests {
             m.undo().unwrap();
             assert_eq!(m.config().sim.model_params.get("feed").copied().unwrap_or(want), want);
         }
-        #[cfg(feature = "engine-escape")]
         {
             let mut c = FractalConfig::default();
             c.render_mode = crate::scene::transforms::RenderMode::Escape;
@@ -3690,7 +3654,6 @@ mod tests {
 
     /// A model pick resets the new model's parameters, time step and steps;
     /// undoing it puts back the old model's tuned values with its name.
-    #[cfg(feature = "engine-sim")]
     #[test]
     fn undoing_a_model_pick_restores_its_tuning() {
         let mut c = FractalConfig::default();
@@ -3714,7 +3677,6 @@ mod tests {
     /// default, so a preset's `mask_channel` 0 is not dropped as a no-op
     /// against the old colouring's 0 (field-reported: Percolation's
     /// presets showed 1 until applied twice).
-    #[cfg(feature = "engine-sim")]
     #[test]
     fn a_batch_reads_each_old_value_after_the_changes_before_it() {
         let mut c = FractalConfig::default();
@@ -3737,7 +3699,6 @@ mod tests {
 
     /// A batch that picks a model is undone whole, as a single pick is:
     /// the old model's tuned parameters come back with its name.
-    #[cfg(feature = "engine-sim")]
     #[test]
     fn undoing_a_batched_model_pick_restores_its_tuning() {
         let mut c = FractalConfig::default();
@@ -4182,7 +4143,6 @@ mod tests {
     /// Every parameter of every model is swept to its extremes here,
     /// because the bug was not visible at the default of the one
     /// parameter it was written for.
-    #[cfg(feature = "engine-sim")]
     #[test]
     fn a_sim_model_parameter_never_moves_the_time_step() {
         for m in crate::sim::MODELS {
@@ -4219,7 +4179,6 @@ mod tests {
     /// every path -- that is what keeps the run stable, and
     /// `rd_models_stay_stable_at_the_diffusion_slider_maxima` is the
     /// test which pins it.
-    #[cfg(feature = "engine-sim")]
     #[test]
     fn a_requested_time_step_is_stored_as_requested() {
         let mut config = FractalConfig::default();

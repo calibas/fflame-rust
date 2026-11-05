@@ -16,7 +16,7 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-fractal_flame_wgpu = { path = "../..", default-features = false, features = ["engine-flame", "engine-escape", "engine-sim", "terrain"] }
+fractal_flame_wgpu = { path = "../..", default-features = false, features = ["terrain"] }
 serde = "1.0"
 serde_json = "1.0"
 # The same wgpu as the engine's; `serde` gives wgpu's enums their WebGPU

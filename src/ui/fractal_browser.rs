@@ -80,22 +80,14 @@ impl PresetCategory {
 /// solid. The source stays in the config when another formula is picked
 /// (undo finds it), so the formula's name has to be a custom one too.
 fn runs_a_rhai_solid(config: &FractalConfig) -> bool {
-    #[cfg(feature = "engine-escape")]
-    {
-        use crate::config::escape::CustomDialect;
-        use crate::lang::{rhai, EntryKind};
-        let escape = &config.escape;
-        escape.formula.starts_with("custom-")
-            && escape
-                .custom_formula
-                .as_ref()
-                .is_some_and(|src| src.dialect == CustomDialect::Rhai && rhai::kind_of(&src.source) == Some(EntryKind::Solid))
-    }
-    #[cfg(not(feature = "engine-escape"))]
-    {
-        let _ = config;
-        false
-    }
+    use crate::config::escape::CustomDialect;
+    use crate::lang::{rhai, EntryKind};
+    let escape = &config.escape;
+    escape.formula.starts_with("custom-")
+        && escape
+            .custom_formula
+            .as_ref()
+            .is_some_and(|src| src.dialect == CustomDialect::Rhai && rhai::kind_of(&src.source) == Some(EntryKind::Solid))
 }
 
 /// Which gallery a thumbnail is made for (desktop).

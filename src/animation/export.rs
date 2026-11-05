@@ -1236,7 +1236,6 @@ pub async fn export_animation(
     //
     // It walks every frame afresh (`fresh`): signal smoothing keeps state,
     // and the video's own walk must start clean.
-    #[cfg(feature = "engine-escape")]
     if export_config.config.render_mode == crate::scene::transforms::RenderMode::Escape {
         let mut probe = source.fresh();
         let frames = (0..total_frames).map(|frame| {
@@ -1805,7 +1804,6 @@ fn build_ffmpeg_args(config: &AnimationExportConfig) -> Vec<String> {
 /// state -- the first whose per-pixel state is past the device's buffer
 /// limits. A frame short of the perturbation threshold renders direct and
 /// carries none. None when every frame fits.
-#[cfg(feature = "engine-escape")]
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn deep_zoom_misfit(
     device: &wgpu::Device,
@@ -2503,7 +2501,6 @@ mod escape_export_tests {
     }
 
     /// The same for a simulation's targets, its terrain's among them.
-    #[cfg(feature = "engine-sim")]
     #[test]
     fn every_offered_sim_target_reaches_the_exporter() {
         let mut base = FractalConfig::default();

@@ -27,7 +27,6 @@ pub fn render_lighting_panel_content(ui: &mut egui::Ui, config_manager: &mut Con
         }
     };
 
-    #[cfg(feature = "engine-escape")]
     if let Some((pt, paths, tier_path, tier, id)) = super::view_controls::path_of(&config) {
         section(ui, "lighting.rendering", &mut |ui| {
             super::escape_panel::show_render_tier(ui, config_manager, &pt, &paths, tier_path.clone(), tier, id)
@@ -221,14 +220,13 @@ fn shading(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &Fract
     if lit_tier_runs(config, view) {
         rig.slider(ui, config_manager, ConfigPath::SsaoStrength, "view.occlusion_strength", "lighting.occlusion_strength_tip", shading.ssao_strength, 0.0..=1.0, 0.01);
         match view {
-            #[cfg(feature = "engine-escape")]
             ViewKind::Solid => solid_params(ui, config_manager, config, &["occlusion"]),
             #[cfg(feature = "terrain")]
             ViewKind::EscapeTerrain => {
                 let t = &config.escape.terrain;
                 float_row(ui, config_manager, "escape_panel.terrain_occlusion", "escape_panel.terrain_occlusion_tip", ConfigPath::EscapeTerrainOcclusion, t.occlusion, 0.0..=0.05);
             }
-            #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+            #[cfg(feature = "terrain")]
             ViewKind::SimTerrain => {
                 let t = &config.sim.terrain;
                 float_row(ui, config_manager, "escape_panel.terrain_occlusion", "sim_panel.terrain_occlusion_tip", ConfigPath::SimTerrainOcclusion, t.occlusion, 0.0..=0.2);
@@ -250,7 +248,6 @@ fn shadows(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &Fract
                 ui.label(egui::RichText::new(t!("lighting.flame_unlit")).small().weak());
             }
         }
-        #[cfg(feature = "engine-escape")]
         ViewKind::Solid => {
             solid_params(ui, config_manager, config, &["shadow", "shadow_sharpness"]);
             ray_tolerance(ui, config_manager, config.solid_shading.ray_tolerance);
@@ -260,7 +257,7 @@ fn shadows(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &Fract
             let t = &config.escape.terrain;
             terrain_shadows(ui, config_manager, [t.shadow, t.shadow_sharpness], [ConfigPath::EscapeTerrainShadow, ConfigPath::EscapeTerrainShadowSharpness]);
         }
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        #[cfg(feature = "terrain")]
         ViewKind::SimTerrain => {
             let t = &config.sim.terrain;
             terrain_shadows(ui, config_manager, [t.shadow, t.shadow_sharpness], [ConfigPath::SimTerrainShadow, ConfigPath::SimTerrainShadowSharpness]);
@@ -317,7 +314,7 @@ fn surface(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &Fract
             row(ui, config_manager, ConfigPath::SolidStrength, "view.solid_strength", "view.tooltip_solid_strength", config.solid_strength, 0.0..=1.0, 0.01);
             row(ui, config_manager, ConfigPath::SurfaceThickness, "view.surface_thickness", "view.tooltip_surface_thickness", config.surface_thickness, 0.001..=0.5, 0.001);
         }
-        #[cfg(all(feature = "terrain", feature = "engine-escape"))]
+        #[cfg(feature = "terrain")]
         ViewKind::EscapeTerrain => {
             let esc = &config.escape;
             super::escape_panel::surface_texture_controls(ui, config_manager, esc, &esc.shading);
@@ -365,7 +362,6 @@ fn lit_tier_runs(config: &FractalConfig, view: ViewKind) -> bool {
 /// A solid's HDRI sky (docs/archive/projects/hdri-environment.md): which bundled
 /// one, its turn, whether the camera sees it, and its credit. True when one
 /// is in force.
-#[cfg(feature = "engine-escape")]
 fn environment(ui: &mut egui::Ui, config_manager: &mut ConfigManager, pt: &crate::config::escape::PathTraceConfig, paths: &super::escape_panel::PathPaths) -> bool {
     use crate::escape::environment::{get, ENVIRONMENTS};
     let current = get(&pt.environment_map);
@@ -422,7 +418,6 @@ fn environment(ui: &mut egui::Ui, config_manager: &mut ConfigManager, pt: &crate
 /// tracer's bounces -- may pass it and count as a hit
 /// (`SolidShadingSettings::ray_tolerance`): Fine is the exact one,
 /// Medium and Coarse march fewer steps.
-#[cfg(feature = "engine-escape")]
 fn ray_tolerance(ui: &mut egui::Ui, config_manager: &mut ConfigManager, value: f32) {
     const STEPS: [(f32, &str); 3] = [(1.0, "lighting.ray_tolerance_fine"), (3.0, "lighting.ray_tolerance_medium"), (10.0, "lighting.ray_tolerance_coarse")];
     // The nearest step names a value a file holds between them.
@@ -445,7 +440,6 @@ fn ray_tolerance(ui: &mut egui::Ui, config_manager: &mut ConfigManager, value: f
 
 /// A solid's formula parameters named, in its def's order, drawn as the
 /// Escape panel draws the rest (`ui::params`).
-#[cfg(feature = "engine-escape")]
 fn solid_params(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &FractalConfig, names: &[&str]) {
     let Some(def) = crate::escape::ifs::get_ifs(&config.escape.formula) else {
         return;
@@ -487,18 +481,10 @@ fn float_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, label: &str,
 /// point light is placed, and the scale its controls move in. None where
 /// the config renders no solid.
 fn solid_eye(config: &FractalConfig) -> Option<([f64; 3], f64)> {
-    #[cfg(feature = "engine-escape")]
-    {
-        let registry = crate::variations::global_registry();
-        let ifs3 = crate::escape::ifs::solid_analysis(config, &registry)?;
-        let cam = crate::escape::ifs::solid_camera(&config.escape, &ifs3);
-        Some((cam.eye, cam.distance))
-    }
-    #[cfg(not(feature = "engine-escape"))]
-    {
-        let _ = config;
-        None
-    }
+    let registry = crate::variations::global_registry();
+    let ifs3 = crate::escape::ifs::solid_analysis(config, &registry)?;
+    let cam = crate::escape::ifs::solid_camera(&config.escape, &ifs3);
+    Some((cam.eye, cam.distance))
 }
 
 fn light_kind_label(kind: crate::config::LightKind) -> String {
@@ -662,7 +648,6 @@ mod tests {
         drawn(&mut m, &mut |ui, m| render_lighting_panel_content(ui, m))
     }
 
-    #[cfg(feature = "engine-escape")]
     fn escape_text(config: &FractalConfig) -> Vec<String> {
         let mut m = ConfigManager::new(config.clone());
         drawn(&mut m, &mut |ui, m| super::super::escape_panel::render_escape_content(ui, m, None, &mut None, &mut false))
@@ -708,7 +693,6 @@ mod tests {
     /// (3d-look-and-tools P3): its Shadows, Shadow Sharpness and Occlusion
     /// Reach -- formula parameters -- there and not among the Escape
     /// panel's parameters, and the rig no longer in the View panel.
-    #[cfg(feature = "engine-escape")]
     #[test]
     fn a_solids_light_is_drawn_in_the_lighting_panel_alone() {
         let mut c = FractalConfig::default();
@@ -739,7 +723,7 @@ mod tests {
 
     /// A terrain's surface texture and its lake are the panel's Surface,
     /// not the Escape panel's.
-    #[cfg(all(feature = "engine-escape", feature = "terrain"))]
+    #[cfg(feature = "terrain")]
     #[test]
     fn a_terrains_surface_is_drawn_in_the_lighting_panel() {
         let mut c = FractalConfig::default();

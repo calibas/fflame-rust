@@ -784,7 +784,6 @@ impl FlameRenderer {
         state: (u32, u32),
     ) -> Self {
         // The variations the user wrote, as `load_config` registers them.
-        #[cfg(feature = "lang")]
         crate::variations::custom::ensure(flame);
         let pipelines = FlamePipelines::new(device, surface_format, flame);
         let buffers = FlameBuffers::with_palette_size(device, queue, state.0, state.1, flame, palette_size);
@@ -2718,7 +2717,6 @@ impl FlameRenderer {
         // clone and compile specialized, unchanged.
         // The variations the user wrote, registered before anything reads
         // the registry for this flame (the KIFS plan, C1).
-        #[cfg(feature = "lang")]
         crate::variations::custom::ensure(&config.flame);
         self.resets_orbits = config.reset_orbits || config.flame.needs_fresh_orbits(&crate::variations::global_registry());
         self.orbit_length = config.flame.orbit_length_source(&crate::variations::global_registry()).map(|(_, n)| n);
@@ -3075,7 +3073,6 @@ impl FlameRenderer {
         self.flame_hash = Self::orbit_flame_hash(flame);
         self.orbit_refresh_period = orbit_refresh_period_of(flame);
         // The variations the user wrote, as `load_config` registers them.
-        #[cfg(feature = "lang")]
         crate::variations::custom::ensure(flame);
         // After `ensure`: a variation of the user's can need it too.
         self.resets_orbits = reset_orbits || flame.needs_fresh_orbits(&crate::variations::global_registry());

@@ -152,10 +152,7 @@ fn render_effect_params(
     ui.indent(&salt, |ui| {
         let target = EffectTarget { list, index };
         // A Rhai effect's conditions and grids.
-        #[cfg(feature = "lang")]
         let layout = crate::effects::custom::param_layout(effect_type);
-        #[cfg(not(feature = "lang"))]
-        let layout: Option<std::sync::Arc<crate::params::layout::ParamLayout>> = None;
         let mut store = super::params::ConfigStore::new(config_manager, move |m, d| target.stored(m, d), move |n| target.path(n));
         super::params::list(ui, &mut store, &super::params::List::new(&params, &salt).layout(layout.as_deref()));
         store.update

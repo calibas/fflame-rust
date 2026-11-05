@@ -96,14 +96,12 @@ pub struct ConfigHandle {
 /// The CENTRE IS A STRING on purpose. It is the deep-zoom payload:
 /// zoom 60 needs about 20 significant digits and an f64 carries 15,
 /// so every accessor here keeps it as text end to end.
-#[cfg(feature = "engine-escape")]
 #[derive(Clone)]
 pub struct EscapeHandle {
     cfg: Rc<RefCell<FractalConfig>>,
 }
 
 /// The `sim` global: simulation mode from a script.
-#[cfg(feature = "engine-sim")]
 #[derive(Clone)]
 pub struct SimHandle {
     cfg: Rc<RefCell<FractalConfig>>,
@@ -358,9 +356,7 @@ pub(crate) fn push_globals(
     state: Rc<RefCell<ScriptState>>,
 ) {
     scope.push("flame", FlameHandle { cfg: Rc::clone(&cfg) });
-    #[cfg(feature = "engine-escape")]
     scope.push("escape", EscapeHandle { cfg: Rc::clone(&cfg) });
-    #[cfg(feature = "engine-sim")]
     scope.push("sim", SimHandle { cfg: Rc::clone(&cfg) });
     scope.push("config", ConfigHandle { cfg });
     scope.push("anim", AnimHandle { state });
@@ -375,9 +371,7 @@ pub(crate) fn register(
     engine.register_type_with_name::<TransformHandle>("Transform");
     engine.register_type_with_name::<ConfigHandle>("Config");
     engine.register_type_with_name::<AnimHandle>("Anim");
-    #[cfg(feature = "engine-escape")]
     engine.register_type_with_name::<EscapeHandle>("Escape");
-    #[cfg(feature = "engine-sim")]
     engine.register_type_with_name::<SimHandle>("Sim");
     register_anim(engine, Rc::clone(&state));
 
@@ -386,9 +380,7 @@ pub(crate) fn register(
     register_flame(engine);
     register_transform(engine);
     register_config(engine, Rc::clone(&state));
-    #[cfg(feature = "engine-escape")]
     register_escape(engine);
-    #[cfg(feature = "engine-sim")]
     register_sim(engine);
     register_run_script(engine, Rc::clone(&cfg), Rc::clone(&state));
     register_colors(engine, Rc::clone(&state));
@@ -1437,7 +1429,6 @@ fn validate_variation_param(var: &str, param: &str) -> Result<(), Box<EvalAltRes
 /// handle does, so a script that sets only a model produces a picture
 /// rather than a black frame: flame presets carry Log-calibrated tone
 /// mapping, which renders a unit-range simulation field invisible.
-#[cfg(feature = "engine-sim")]
 fn register_sim(engine: &mut Engine) {
     use crate::scene::transforms::RenderMode;
 
@@ -1706,7 +1697,6 @@ fn register_sim(engine: &mut Engine) {
 
 /// A relief blend by name. Unknown names fell back to Multiply, so a
 /// typo -- or "Screen" with a capital -- darkened the highlights.
-#[cfg(feature = "engine-escape")]
 fn blend_named(blend: &str) -> Result<crate::config::escape::ShadingBlend, Box<EvalAltResult>> {
     const BLENDS: [&str; 6] = ["multiply", "screen", "overlay", "mix", "soft_light", "hard_light"];
     let b = blend.trim().to_ascii_lowercase();
@@ -1724,7 +1714,6 @@ fn blend_named(blend: &str) -> Result<crate::config::escape::ShadingBlend, Box<E
 /// alternative is a config carrying escape settings while rendering a
 /// flame, which reads as a bug in the script rather than a missing
 /// line.
-#[cfg(feature = "engine-escape")]
 fn register_escape(engine: &mut Engine) {
     use crate::scene::transforms::RenderMode;
 
@@ -1796,7 +1785,6 @@ fn register_escape(engine: &mut Engine) {
     // Fractint's), compiled here and carried in the config as source
     // (escape::custom). A compile error throws, with each message's
     // line and column in the source.
-    #[cfg(feature = "engine-escape")]
     fn custom_source(
         source: &str,
         entry: &str,
@@ -1811,7 +1799,6 @@ fn register_escape(engine: &mut Engine) {
         };
         Ok(crate::config::escape::CustomSource { dialect, entry: entry.to_string(), source: source.to_string(), variations: Vec::new() })
     }
-    #[cfg(feature = "engine-escape")]
     fn compile_error(src: &crate::config::escape::CustomSource, diags: &[crate::lang::Diag]) -> Box<EvalAltResult> {
         let lines: Vec<String> = diags
             .iter()
@@ -1820,7 +1807,6 @@ fn register_escape(engine: &mut Engine) {
             .collect();
         err(format!("`{}` does not compile:\n{}", src.entry, lines.join("\n")))
     }
-    #[cfg(feature = "engine-escape")]
     fn set_custom_formula(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
         use crate::lang::EntryKind;
         // With the variations it calls (`vary`), which the config carries.
@@ -1838,7 +1824,6 @@ fn register_escape(engine: &mut Engine) {
         cfg.escape.custom_formula = Some(src);
         Ok(())
     }
-    #[cfg(feature = "engine-escape")]
     fn set_custom_coloring(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
         use crate::lang::EntryKind;
         let src = crate::escape::custom::with_called_variations(EntryKind::Coloring, src);
@@ -1855,67 +1840,63 @@ fn register_escape(engine: &mut Engine) {
         cfg.escape.custom_coloring = Some(src);
         Ok(())
     }
-    #[cfg(feature = "engine-escape")]
-    {
-        engine.register_fn(
-            "custom_formula",
-            |e: &mut EscapeHandle, source: &str, entry: &str| -> Result<(), Box<EvalAltResult>> {
-                set_custom_formula(e, custom_source(source, entry, "uf")?)
-            },
-        );
-        engine.register_fn(
-            "custom_formula",
-            |e: &mut EscapeHandle, source: &str, entry: &str, dialect: &str| -> Result<(), Box<EvalAltResult>> {
-                set_custom_formula(e, custom_source(source, entry, dialect)?)
-            },
-        );
-        engine.register_fn(
-            "custom_coloring",
-            |e: &mut EscapeHandle, source: &str, entry: &str| -> Result<(), Box<EvalAltResult>> {
-                set_custom_coloring(e, custom_source(source, entry, "uf")?)
-            },
-        );
-        // A Rhai formula: its source alone, one formula to a source
-        // (phase 4, step 8).
-        engine.register_fn("custom_formula", |e: &mut EscapeHandle, source: &str| -> Result<(), Box<EvalAltResult>> {
-            let entry = crate::lang::rhai::title(source).unwrap_or_else(|| "Formula".into());
-            set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry, source: source.to_string(), variations: Vec::new() })
-        });
-        // A formula from the script's own function `f(z, c)`, its step:
-        // the Mandelbrot's shape on both planes. The config carries it as
-        // Rhai source, so the saved file renders anywhere.
-        engine.register_fn("formula_fn", |ctx: rhai::NativeCallContext, e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
-            let mut fns: Vec<(String, rhai::ScriptFuncDef)> = Vec::new();
-            let mut found = false;
-            for m in ctx.iter_namespaces() {
-                for (_, _, n, params, def) in m.iter_script_fn_info() {
-                    found |= n == name && params == 2;
-                    fns.push((n.to_string(), (**def).clone()));
-                }
+    engine.register_fn(
+        "custom_formula",
+        |e: &mut EscapeHandle, source: &str, entry: &str| -> Result<(), Box<EvalAltResult>> {
+            set_custom_formula(e, custom_source(source, entry, "uf")?)
+        },
+    );
+    engine.register_fn(
+        "custom_formula",
+        |e: &mut EscapeHandle, source: &str, entry: &str, dialect: &str| -> Result<(), Box<EvalAltResult>> {
+            set_custom_formula(e, custom_source(source, entry, dialect)?)
+        },
+    );
+    engine.register_fn(
+        "custom_coloring",
+        |e: &mut EscapeHandle, source: &str, entry: &str| -> Result<(), Box<EvalAltResult>> {
+            set_custom_coloring(e, custom_source(source, entry, "uf")?)
+        },
+    );
+    // A Rhai formula: its source alone, one formula to a source
+    // (phase 4, step 8).
+    engine.register_fn("custom_formula", |e: &mut EscapeHandle, source: &str| -> Result<(), Box<EvalAltResult>> {
+        let entry = crate::lang::rhai::title(source).unwrap_or_else(|| "Formula".into());
+        set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry, source: source.to_string(), variations: Vec::new() })
+    });
+    // A formula from the script's own function `f(z, c)`, its step:
+    // the Mandelbrot's shape on both planes. The config carries it as
+    // Rhai source, so the saved file renders anywhere.
+    engine.register_fn("formula_fn", |ctx: rhai::NativeCallContext, e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+        let mut fns: Vec<(String, rhai::ScriptFuncDef)> = Vec::new();
+        let mut found = false;
+        for m in ctx.iter_namespaces() {
+            for (_, _, n, params, def) in m.iter_script_fn_info() {
+                found |= n == name && params == 2;
+                fns.push((n.to_string(), (**def).clone()));
             }
-            if !found {
-                return Err(err(format!("no function `{name}(z, c)` in the script")));
-            }
-            let p = crate::lang::rhai::program_from_fn(name, &fns).map_err(|d| {
-                err(format!("`{name}` does not make a formula: {}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>().join("; ")))
-            })?;
-            let source = crate::lang::to_rhai::formula(&p, &[]).map_err(|e| err(format!("`{name}`: {e}")))?;
-            set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: name.to_string(), source, variations: Vec::new() })
-        });
-        // A hybrid composed in the script: the Hybrid Designer's groups.
-        engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array| -> Result<(), Box<EvalAltResult>> {
-            set_custom_formula(e, hybrid_source(&groups, 0)?)
-        });
-        engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array, loop_start: i64| -> Result<(), Box<EvalAltResult>> {
-            set_custom_formula(e, hybrid_source(&groups, loop_start)?)
-        });
-    }
+        }
+        if !found {
+            return Err(err(format!("no function `{name}(z, c)` in the script")));
+        }
+        let p = crate::lang::rhai::program_from_fn(name, &fns).map_err(|d| {
+            err(format!("`{name}` does not make a formula: {}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>().join("; ")))
+        })?;
+        let source = crate::lang::to_rhai::formula(&p, &[]).map_err(|e| err(format!("`{name}`: {e}")))?;
+        set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: name.to_string(), source, variations: Vec::new() })
+    });
+    // A hybrid composed in the script: the Hybrid Designer's groups.
+    engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array| -> Result<(), Box<EvalAltResult>> {
+        set_custom_formula(e, hybrid_source(&groups, 0)?)
+    });
+    engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array, loop_start: i64| -> Result<(), Box<EvalAltResult>> {
+        set_custom_formula(e, hybrid_source(&groups, loop_start)?)
+    });
 
     // A hybrid's groups from a script's maps: `repeats`, and what the
     // group runs -- `formula` (Rhai source) or `twin` (a built-in's
     // name), optionally `blend` / `blend_twin` to mix with, or KF's
     // `lines` as the hybrid's JSON has them.
-    #[cfg(feature = "engine-escape")]
     fn hybrid_source(groups: &Array, loop_start: i64) -> Result<crate::config::escape::CustomSource, Box<EvalAltResult>> {
         use crate::lang::hybrid::{Hybrid, Member};
         let member = |source: Option<String>, twin: Option<String>| -> Result<Option<serde_json::Value>, Box<EvalAltResult>> {
