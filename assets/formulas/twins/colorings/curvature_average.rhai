@@ -15,7 +15,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Curvature Average" };
+const INFO = #{ title: "Curvature Average", bailout: 1.0e4, pick: #{ deband: 1 } };
 
 // The sum of the turns, the last of them, and the iterate two steps back
 // (none yet: 1e30).

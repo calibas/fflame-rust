@@ -14,7 +14,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Basic", region: "outside" };
+const INFO = #{ title: "Basic", region: "outside", bailout: 4.0 };
 
 fn finish(s, z, p) {
     let v = if p.part == 1 {

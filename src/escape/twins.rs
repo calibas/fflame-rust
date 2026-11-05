@@ -93,6 +93,10 @@ pub const COLORING_TWINS: &[(&str, &str)] = &[
     ("velocity", include_str!("../../assets/formulas/twins/colorings/velocity.rhai")),
     ("threads", include_str!("../../assets/formulas/twins/colorings/threads.rhai")),
     ("exponential_smoothing", include_str!("../../assets/formulas/twins/colorings/exponential_smoothing.rhai")),
+    // Batch 3: what `INFO` says beside the program -- a level clamped
+    // rather than wrapped, and what picking it sets.
+    ("position_map", include_str!("../../assets/formulas/twins/colorings/position_map.rhai")),
+    ("external_rays", include_str!("../../assets/formulas/twins/colorings/external_rays.rhai")),
 ];
 
 /// The twin of the built-in formula `name`, when it has one.
@@ -134,8 +138,10 @@ mod tests {
     /// Each colouring twin compiles as the app compiles it (its WGSL
     /// validated), with its built-in's name in the panel, its parameters
     /// exactly -- names, captions, hints, kinds, defaults, ranges,
-    /// choices, a log slider -- and its features as the built-in's: an
-    /// orbit accumulator, the interior coloured, period detection.
+    /// choices, a log slider -- its features as the built-in's (an
+    /// orbit accumulator, the interior coloured, period detection, a
+    /// bounded value), and what picking it sets: the recommended bailout
+    /// and the values a fresh pick takes.
     #[test]
     fn every_colouring_twin_compiles_as_its_builtin() {
         use super::super::ColoringFeature as F;
@@ -148,9 +154,12 @@ mod tests {
                 .unwrap_or_else(|d| panic!("{name}: {:?}", d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>()));
             assert_eq!(twin.display_name, builtin.display_name, "{name}: its title");
             assert_eq!(twin.parameters, builtin.parameters, "{name}: its parameters");
-            for f in [F::NeedsOrbitAccum, F::ColorsInterior, F::NeedsPeriod] {
+            for f in [F::NeedsOrbitAccum, F::ColorsInterior, F::NeedsPeriod, F::Bounded] {
                 assert_eq!(twin.features.contains(&f), builtin.features.contains(&f), "{name}: {f:?}");
             }
+            // What picking it sets (`INFO.bailout`, `INFO.pick`).
+            assert_eq!(twin.recommended_bailout, builtin.recommended_bailout, "{name}: its recommended bailout");
+            assert_eq!(twin.pick_params, builtin.pick_params, "{name}: what a fresh pick sets");
         }
     }
 

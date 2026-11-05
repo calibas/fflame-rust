@@ -1220,6 +1220,21 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
     if p.reads(ir::Predef::Period) {
         features.push(ColoringFeature::NeedsPeriod);
     }
+    // What a Rhai colouring's `INFO` says of it beside the program (the
+    // lowering checked them): a level clamped rather than wrapped, and
+    // what picking it sets.
+    let rhai = src.dialect == CustomDialect::Rhai;
+    if rhai && lang::rhai::info_bool(&src.source, "bounded") == Some(true) {
+        features.push(ColoringFeature::Bounded);
+    }
+    let recommended_bailout = if rhai { lang::rhai::info_number(&src.source, "bailout").map(|b| b as f32) } else { None };
+    let pick: Vec<(&'static str, f32)> = match rhai.then(|| lang::rhai::info_json(&src.source, "pick")).flatten() {
+        Some(serde_json::Value::Object(m)) => m
+            .into_iter()
+            .filter_map(|(k, v)| Some((leak(k), v.as_f64().or_else(|| v.as_bool().map(f64::from))? as f32)))
+            .collect(),
+        _ => Vec::new(),
+    };
     let def: &'static ColoringDef = Box::leak(Box::new(ColoringDef {
         name: leak(name.to_string()),
         display_name: display_name(&p),
@@ -1228,8 +1243,8 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
         wgsl: leak(c.wgsl),
         accum_init: leak(c.accum_init),
         wgsl_accum: leak(c.wgsl_accum),
-        recommended_bailout: None,
-        pick_params: &[],
+        recommended_bailout,
+        pick_params: Box::leak(pick.into_boxed_slice()),
     }));
     if let Ok(mut r) = registry().write() {
         r.colorings.insert(name.to_string(), def);

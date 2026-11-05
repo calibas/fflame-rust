@@ -3484,6 +3484,13 @@ mod tests {
         }
         cases.push(("root_basin", vec![]));
         cases.push(("root_basin", vec![("key", 1.0)]));
+        // Batch 3: bounded, so clamped; External Rays' count rounding
+        // half to even.
+        cases.push(("position_map", vec![]));
+        cases.push(("position_map", vec![("address_mix", 1.5), ("freq_x", 7.0)]));
+        cases.push(("external_rays", vec![]));
+        cases.push(("external_rays", vec![("count", 3.0), ("width", 0.2)]));
+        cases.push(("external_rays", vec![("count", 2.5), ("width", 0.1)]));
 
         let mut whole = crate::config::escape::EscapeConfig::default();
         whole.formula = "mandelbrot".into();
@@ -3520,15 +3527,27 @@ mod tests {
         ];
 
         // The share of pixels a twin may differ on: none, but where the
-        // language cannot say the built-in's arithmetic. Stripe Average's
-        // sin takes density times the angle, up to 32 pi, and the
-        // language's sin is range-reduced (for Metal's error) where the
-        // built-in's is the hardware's: an ulp, which crosses the
-        // compare's 1e-4 on a few pixels.
-        let allowed = |name: &str| if name == "stripe_average" { 0.01 } else { 0.0 };
+        // language cannot say the built-in's arithmetic. The language's
+        // sin is range-reduced (for Metal's error) where the built-in's is
+        // the hardware's, whose error grows with the argument: Stripe
+        // Average's takes density times the angle, up to 32 pi, Position
+        // Map's 2 pi times a frequency times the final z. An ulp, which
+        // the palette carries across the compare's 1e-4 on a few pixels.
+        let allowed = |name: &str| match name {
+            "stripe_average" => 0.01,
+            "position_map" => 0.02,
+            _ => 0.0,
+        };
         let mut worst = 0.0f64;
         for (name, settings) in &cases {
             for (view, base, perturbed) in &views {
+                // Position Map's sines of an escaped z of 1e4 and more,
+                // arguments past 1e5, are noise on every platform, a
+                // different noise each way: it is for folds, whose z
+                // stays near the paper (Origami, below).
+                if *name == "position_map" && matches!(*view, "bailout 1e8" | "the exponential") {
+                    continue;
+                }
                 let mut esc = base.clone();
                 esc.coloring = name.to_string();
                 for (k, v) in settings {
@@ -3556,8 +3575,10 @@ mod tests {
                 assert!(d <= allowed(name), "{name} {settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
             }
         }
-        // The colourings of a convergent formula on one: Newton's basins,
-        // its orbits settling (`ctx.converged`, `ctx.prev`).
+        // The colourings of a formula made for them: Newton's basins,
+        // its orbits settling (`ctx.converged`, `ctx.prev`), and
+        // Origami's folds, which steps moved the point (Position Map's
+        // branch address).
         let mut newton = crate::config::escape::EscapeConfig::default();
         newton.formula = "newton".into();
         newton.max_iter = 100;
@@ -3565,15 +3586,24 @@ mod tests {
         newton.center_im = "0".into();
         newton.zoom_log2 = -0.5;
         newton.julia = true;
-        let convergent: [(&str, Vec<(&str, f32)>); 5] = [
-            ("root_basin", vec![]),
-            ("root_basin", vec![("key", 1.0), ("key_scale", 0.6)]),
-            ("exponential_smoothing", vec![("mode", 1.0)]),
-            ("exponential_smoothing", vec![]),
-            ("velocity", vec![("deband", 1.0)]),
+        let mut origami = crate::config::escape::EscapeConfig::default();
+        origami.formula = "origami".into();
+        origami.max_iter = 32;
+        origami.center_re = "0".into();
+        origami.center_im = "0".into();
+        origami.zoom_log2 = -1.0;
+        let made_for: [(&str, &crate::config::escape::EscapeConfig, &str, Vec<(&str, f32)>); 8] = [
+            ("Newton", &newton, "root_basin", vec![]),
+            ("Newton", &newton, "root_basin", vec![("key", 1.0), ("key_scale", 0.6)]),
+            ("Newton", &newton, "exponential_smoothing", vec![("mode", 1.0)]),
+            ("Newton", &newton, "exponential_smoothing", vec![]),
+            ("Newton", &newton, "velocity", vec![("deband", 1.0)]),
+            ("Origami", &origami, "position_map", vec![]),
+            ("Origami", &origami, "position_map", vec![("address_mix", 2.0)]),
+            ("Origami", &origami, "position_map", vec![("address_mix", 0.5), ("freq_x", 12.0), ("freq_y", 9.0)]),
         ];
-        for (name, settings) in &convergent {
-            let mut esc = newton.clone();
+        for (view, base, name, settings) in &made_for {
+            let mut esc = (*base).clone();
             esc.coloring = name.to_string();
             for (k, v) in settings {
                 esc.coloring_params.insert(k.to_string(), *v);
@@ -3581,11 +3611,16 @@ mod tests {
             let want = output_on(&device, &queue, &renderer, &esc, w, h, false);
             let got = output_on(&device, &queue, &renderer, &twin_of(esc), w, h, false);
             let covered = want.chunks(4).filter(|p| p[3] > 0.5).count();
-            assert!(covered > 100, "{name} {settings:?} on Newton: too little shows ({covered})");
+            assert!(covered > 100, "{name} {settings:?} on {view}: too little shows ({covered})");
             let d = differing(&want, &got);
-            println!("{name} {settings:?} on Newton: the twin differs on {:.3}% of pixels", d * 100.0);
-            worst = worst.max(d);
-            assert!(d == 0.0, "{name} {settings:?} on Newton: the twin differs on {:.3}% of pixels", d * 100.0);
+            println!("{name} {settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
+            if allowed(name) == 0.0 {
+                worst = worst.max(d);
+            } else {
+                let far = want.iter().zip(&got).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                println!("  (allowed {:.1}%; the largest difference {far:.5})", allowed(name) * 100.0);
+            }
+            assert!(d <= allowed(name), "{name} {settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
         }
         println!("worst: {:.3}%", worst * 100.0);
     }

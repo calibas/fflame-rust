@@ -68,7 +68,8 @@ fn edit_coloring_as_rhai(
 /// The user's plug-ins in the formula picker (formulas and solids) or the
 /// colouring picker (P3), after a separator. Choosing one is the Formula
 /// Editor's Use: its source carried in the config, its slot named, and
-/// Escape entered in the same undo step.
+/// Escape entered in the same undo step -- a colouring with what a fresh
+/// pick of it sets, as a built-in's.
 fn plugin_entries(ui: &mut egui::Ui, config_manager: &mut ConfigManager, current: &str, formulas: bool) {
     use crate::storage::library::{plugins, Kind};
     let list: Vec<_> = plugins()
@@ -86,7 +87,12 @@ fn plugin_entries(ui: &mut egui::Ui, config_manager: &mut ConfigManager, current
             let (changes, description) = if formulas {
                 (vec![(ConfigPath::EscapeCustomFormula, source), (ConfigPath::EscapeFormula, ConfigValue::String(p.key.clone()))], "history.action.use_custom_formula")
             } else {
-                (vec![(ConfigPath::EscapeCustomColoring, source), (ConfigPath::EscapeColoring, ConfigValue::String(p.key.clone()))], "history.action.use_custom_coloring")
+                let mut changes = vec![(ConfigPath::EscapeCustomColoring, source), (ConfigPath::EscapeColoring, ConfigValue::String(p.key.clone()))];
+                if let Ok(def) = crate::escape::custom::compile_coloring(&p.carried, &p.key) {
+                    let esc = &config_manager.active_config().escape;
+                    changes.extend(pick_changes(crate::escape::get_formula(&esc.formula), esc, def));
+                }
+                (changes, "history.action.use_custom_coloring")
             };
             let _ = super::render_mode::choose(config_manager, changes, description, RenderMode::Escape);
         }
@@ -1304,10 +1310,8 @@ fn polar_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, formula_para
     }
 }
 
-/// Pick `coloring`, and with it the bailout it is best drawn at
-/// (`suggested_bailout`) -- one undo step. The smooth count bands at a
-/// small escape radius, so a smooth colouring brings a large one; the
-/// bailout stays editable after.
+/// Pick `coloring`, and with it what a fresh pick sets ([`pick_changes`])
+/// -- one undo step.
 fn pick_coloring(
     config_manager: &mut ConfigManager,
     formula: &crate::escape::FormulaDef,
@@ -1315,6 +1319,21 @@ fn pick_coloring(
     coloring: &crate::escape::ColoringDef,
 ) {
     let mut changes = vec![(ConfigPath::EscapeColoring, ConfigValue::String(coloring.name.to_string()))];
+    changes.extend(pick_changes(formula, esc, coloring));
+    let _ = super::render_mode::choose(config_manager, changes, "history.param.escape_coloring", RenderMode::Escape);
+}
+
+/// What a fresh pick of `coloring` sets beside it, a built-in or a Rhai
+/// colouring's `INFO` alike: the values it takes (`pick_params`), and
+/// the bailout it is best drawn at (`suggested_bailout`). The smooth
+/// count bands at a small escape radius, so a smooth colouring brings a
+/// large one; the bailout stays editable after.
+pub(super) fn pick_changes(
+    formula: &crate::escape::FormulaDef,
+    esc: &crate::config::escape::EscapeConfig,
+    coloring: &crate::escape::ColoringDef,
+) -> Vec<(ConfigPath, ConfigValue)> {
+    let mut changes = Vec::new();
     for (param, v) in coloring.pick_params {
         changes.push((ConfigPath::EscapeColoringParam { param: param.to_string() }, (*v).into()));
     }
@@ -1325,7 +1344,7 @@ fn pick_coloring(
             changes.push((ConfigPath::EscapeBailout, b.into()));
         }
     }
-    let _ = super::render_mode::choose(config_manager, changes, "history.param.escape_coloring", RenderMode::Escape);
+    changes
 }
 
 /// The Palette mapping section: the value transfer and its pivot, the

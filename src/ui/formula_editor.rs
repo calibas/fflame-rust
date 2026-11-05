@@ -435,10 +435,19 @@ impl FormulaEditorPanel {
         // without (another dialect's) by its entry name.
         let ident = entry_ident(&src);
         let first_use = current.is_none_or(|c| entry_ident(c) != ident);
+        // A colouring's first use is a fresh pick of it, as the panel's: the
+        // values its `INFO.pick` gives and its bailout.
+        let picked = match (first_use, kind) {
+            (true, EntryKind::Coloring) => custom::compile_coloring(&src, &name)
+                .map(|def| super::escape_panel::pick_changes(crate::escape::get_formula(&escape.formula), escape, def))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
         let mut changes = vec![
             (path_src, ConfigValue::String(custom_source_json(&Some(src.clone())))),
             (path_name, ConfigValue::String(name)),
         ];
+        changes.extend(picked);
         if first_use && kind == EntryKind::Formula {
             // The entry's own view. UF's `magn` is not applied: what span
             // its magnification 1 shows is still to be verified (plan,
@@ -1387,6 +1396,33 @@ mod tests {
         let c = cm.config();
         assert_eq!(c.render_mode, RenderMode::Escape, "{:?}", panel.status);
         assert!(c.escape.formula.starts_with(custom::PREFIX), "{}", c.escape.formula);
+    }
+
+    /// A colouring's first Use is a fresh pick of it, as the panel's: the
+    /// values its `INFO.pick` gives and the bailout `INFO.bailout` asks
+    /// for (batch 3 of the colouring twins). Used again, as Live does on
+    /// an edit, it leaves the settings alone.
+    #[test]
+    fn a_colourings_first_use_sets_what_a_pick_sets() {
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = RenderMode::Escape;
+        config.escape.formula = "mandelbrot".into();
+        config.escape.bailout = 4.0;
+        let mut cm = ConfigManager::new(config);
+        let mut panel = FormulaEditorPanel::new();
+        panel.adopt(None, "stripe.rhai".into(), crate::escape::twins::coloring_source("stripe_average").unwrap().into());
+        panel.recheck();
+        panel.use_entry(&mut cm, EntryKind::Coloring, 0);
+        let esc = &cm.config().escape;
+        assert!(esc.coloring.starts_with(custom::PREFIX), "{:?}", panel.status);
+        assert_eq!(esc.coloring_params.get("deband"), Some(&1.0), "INFO.pick");
+        assert_eq!(esc.bailout, 1.0e4, "INFO.bailout");
+        cm.update_param(ConfigPath::EscapeBailout, 9.0f32.into()).unwrap();
+        cm.update_param(ConfigPath::EscapeColoringParam { param: "deband".into() }, 0.0f32.into()).unwrap();
+        panel.recheck();
+        panel.use_entry(&mut cm, EntryKind::Coloring, 0);
+        let esc = &cm.config().escape;
+        assert_eq!((esc.bailout, esc.coloring_params.get("deband")), (9.0, Some(&0.0)), "{:?}", panel.status);
     }
 
     /// An effect opened with an id that is not one of the user's -- a copy
