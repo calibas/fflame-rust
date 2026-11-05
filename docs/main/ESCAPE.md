@@ -629,7 +629,11 @@ fn escaped(s, p) {
     `finish` and `color` again, does not: `texture(uv)`, an `rgba` at uv
     in 0..1, bilinear between the texel centres and clamped at the
     edges; `texel(x, y)`, the texel at whole coordinates, clamped;
-    `texture_size()`, (width, height). Reading it brings
+    `texture_size()`, (width, height). A last argument names the
+    texture -- `texture(uv, 0)`, `texel(x, y, 0)`, `texture_size(0)` --
+    and 0 is the default: one texture exists yet, so its index is 0
+    written out, and more are planned (rhai-plugins.md, step 2). Reading
+    it brings
     `TextureInLoop`: the texture is part of the iteration. The read is
     the language's for every kind (`lang::wgsl::texture_wgsl`):
     bilinear by hand in f32 from `textureLoad`, not through the sampler,

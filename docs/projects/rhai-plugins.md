@@ -1039,11 +1039,18 @@ Steps, in the order that unlocks the most first (the user picks):
    first three are small: the Variation context in the generator, a
    `Feature` (append-only; the API repository is told), and a binding
    the compute layout holds only for a flame that uses it
-   (`used_bindings`). The fourth is the user's decision: where a flame's
-   texture comes from -- one per config, as escape's is (a simulation
-   recipe, embedded), or one per variation, which JWildfire's are -- and
-   with it the UI to pick it and every path that renders a flame (export,
-   video, thumbnails, the gallery modules, pyfflame) baking it first.
+   (`used_bindings`). The fourth is where a flame's texture comes from:
+   the user plans several (2026-11-05), so the reads already name theirs
+   -- `texture(uv, k)`, `texel(x, y, k)`, `texture_size(k)`, k 0 by
+   default and 0 alone yet, a literal. When more come, the index may
+   become any expression (a variation's parameter picking its texture per
+   instance, as JWildfire's each have one), the config holds a list
+   (escape's one texture its first), and the shader binds the list --
+   separate bindings under a switch, or a `texture_2d_array` if the
+   textures share a size (WebGPU's default limit is 16 sampled textures a
+   stage). Every path that renders (export, video, thumbnails, the
+   gallery modules, pyfflame) bakes the list first, and the UI picks into
+   it.
 
    **Numerics to write by hand in a twin.** WGSL's `round` rounds half
    to even, the dialect's half away from zero. A real `sin`/`cos` is

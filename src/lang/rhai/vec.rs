@@ -154,6 +154,18 @@ fn bin(op: BinOp, a: ast::Expr, b: ast::Expr, span: Span) -> ast::Expr {
     mk(ExprKind::Binary(op, Box::new(a), Box::new(b)), span)
 }
 
+/// Which texture a read names (batch 6): one exists yet, the config's, so
+/// its index is 0 written out. More are planned; a script naming its
+/// texture now keeps working when they come, and the index may become any
+/// expression (a variation's parameter, say) then.
+pub(super) fn texture_index(k: &ast::Expr) -> Result<(), String> {
+    match k.kind {
+        ExprKind::Int(0) => Ok(()),
+        ExprKind::Int(_) => Err("one texture exists yet: its index is 0".into()),
+        _ => Err("a texture's index is a whole number written out, `0`, for now".into()),
+    }
+}
+
 fn call1(name: &str, a: ast::Expr, span: Span) -> ast::Expr {
     mk(ExprKind::Call { name: name.to_string(), args: vec![a], user: false }, span)
 }
@@ -909,11 +921,16 @@ impl Lowerer<'_> {
             }
             // A texture (batch 6): at a point in 0..1, bilinear, or the
             // texel at whole coordinates, read once into the call site's
-            // slot where statements may go.
-            ("texture", 1) | ("texel", 2) if !self.coloring => {
+            // slot where statements may go. A last argument picks which
+            // texture, 0 by default ([`texture_index`]).
+            ("texture", 1 | 2) | ("texel", 2 | 3) if !self.coloring => {
                 return self.err(p, format!("`{name}` reads a texture where the template binds one: an escape colouring's `start` and `step`"));
             }
-            ("texture", 1) | ("texel", 2) => {
+            ("texture", 1 | 2) | ("texel", 2 | 3) => {
+                if args.len() == if name == "texture" { 2 } else { 3 } {
+                    let Some(S(k)) = args.pop() else { return self.err(p, "a texture's index is a whole number") };
+                    texture_index(&k).map_err(|m| Diag::error(span, m))?;
+                }
                 let call = |name: &str, args: Vec<ast::Expr>| mk(ExprKind::Call { name: name.into(), args, user: false }, span);
                 let (a, b) = if name == "texture" {
                     let S(uv) = args.remove(0) else { return self.err(p, "`texture(uv)` takes a point, `complex(u, v)`, from 0 to 1") };

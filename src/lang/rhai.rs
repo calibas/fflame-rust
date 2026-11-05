@@ -4122,8 +4122,10 @@ impl<'s> Lowerer<'s> {
                 if !self.coloring {
                     return self.err(p, "`texture_size()` is a texture's: an escape colouring's, in `start` and `step`");
                 }
-                if !args.is_empty() {
-                    return self.err(p, "`texture_size()` takes no argument");
+                match args.as_slice() {
+                    [] => {}
+                    [k] => vec::texture_index(k).map_err(|m| Diag::error(span, m))?,
+                    _ => return self.err(p, "`texture_size()`, or `texture_size(k)` for texture `k`"),
                 }
                 let part = |k: i64| mk(ExprKind::Call { name: "__texture_size".into(), args: vec![mk(ExprKind::Int(k), span)], user: false }, span);
                 mk(ExprKind::Complex(Box::new(part(0)), Box::new(part(1))), span)
@@ -5192,6 +5194,25 @@ fn escaped(s, p) { s.z.re > 1e9 }
             let err = coloring(src).err().unwrap_or_else(|| panic!("{src}: compiled"));
             let text: Vec<String> = err.iter().map(|d| d.message.clone()).collect();
             assert!(text.iter().any(|m| m.contains(says)), "{src}: {text:?}");
+        }
+    }
+
+    /// A texture read names its texture by a last argument, 0 by default
+    /// (batch 6): one exists yet, so 0 alone, written out -- and a script
+    /// written so keeps working when more come.
+    #[test]
+    fn a_texture_is_named_by_its_index() {
+        let with = |k: &str| {
+            coloring(&format!(
+                "fn start(z, p) {{ #{{ r: 0.0 }} }}\nfn step(s, z, p) {{ let t = texture(z{k}); let u = texel(1, 2{k}); let w = texture_size({}); s.r = t.r + u.g + w.re; s }}\nfn finish(s, z, p) {{ s.r }}",
+                k.trim_start_matches(", ")
+            ))
+        };
+        assert!(with("").is_ok(), "{:?}", with("").err().map(|d| d.iter().map(|x| x.message.clone()).collect::<Vec<_>>()));
+        assert!(with(", 0").is_ok(), "texture 0, named");
+        for (k, says) in [(", 1", "one texture exists yet"), (", 1 - 1", "written out")] {
+            let err = with(k).err().unwrap_or_else(|| panic!("texture{k} compiled"));
+            assert!(err.iter().any(|d| d.message.contains(says)), "{k}: {:?}", err.iter().map(|d| &d.message).collect::<Vec<_>>());
         }
     }
 
