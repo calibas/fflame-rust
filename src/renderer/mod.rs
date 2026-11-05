@@ -7,6 +7,7 @@ pub mod histogram;
 pub mod render;
 pub mod shade_pass;
 pub mod sticky;
+pub mod tail;
 pub mod dof_pass;
 pub mod density_stats;
 pub mod thumbnail;

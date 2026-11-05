@@ -26,8 +26,26 @@ frames taken from it. One `ensure` (2.4): `FractalConfig::ensure_sources()`
 at the whole-config entry points. Beside the
 order, the mode switch was reworked at the user's request: each engine
 owns its settings, the switch is a whole-config undo step, and an empty
-flame is seeded where one is drawn (`config::mode`). Gallery correctness
-(3) waits on the user's choice of (a) or (b).
+flame is seeded where one is drawn (`config::mode`).
+
+The user's decisions of 2026-11-04, built the same day:
+- **Gallery (3): option (a)**, "0.4 MB is a small price to avoid
+  separate modules". `wasm/flame`, `wasm/escape` and `wasm/sim` are
+  retired, `wasm/render` serves every config, and `release.py check`
+  keeps the engine feature matrix by checking the library at each
+  engine's features alone.
+- **Headless defaults (2.2)**: the gallery's iterations per thread are
+  1024, the CLI's and Python's; the other defaults stay per surface
+  (sticky on or off, unknown-name refusal, the gallery's renderer
+  reuse).
+- **Origins (2.5)**: one model, `provenance::Origin` -- Builtin, Local,
+  Api -- for registry entries, library files, scripts and textures.
+  `ScriptOrigin` had four values because it answered where a script's
+  file is kept, not who wrote it; it is `ScriptHome` now.
+- **The tail (2.3)**: one sequence, `renderer::tail::Tail`, for the
+  viewport and every headless render (`render::finish`);
+  `HighResExporter` keeps its own tone map and calls the tail's density
+  and colour stages around it.
 
 ## Summary
 

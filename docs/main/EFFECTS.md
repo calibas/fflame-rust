@@ -64,8 +64,8 @@ generator ──▶ [density effects] ──▶ tonemap ──▶ [colour effect
 | --- | --- | --- | --- |
 | App frame | The accumulator; in solid mode the shade or DoF output; the escape or simulation image | The tone map's output; the result is registered with egui for the viewport | `src/app/mod.rs` |
 | Flame render (`render_with`: CLI, thumbnails, video) | Same order as the app: shade, DoF, density effects, tonemap | The tone map's output, then read back | `src/renderer/render.rs` |
-| Escape render, 2D and terrain | The escape image (`escape_tail`) | The tone map's output | `render.rs`, `escape_tail` |
-| Simulation render | The resolved field, or its terrain | The tone map's output | `render.rs`, an inline copy of the same tail |
+| Escape render, 2D and terrain | The escape image | The tone map's output | `render.rs`, `finish` |
+| Simulation render | The resolved field, or its terrain | The tone map's output | `render.rs`, `finish` |
 | Tiled exporter | The full-resolution accumulation, after the histogram is freed | The whole output, after any tiling: colour effects are not local | `src/export/high_res.rs` |
 
 **The headless tails build a runner only when an effect is enabled**,

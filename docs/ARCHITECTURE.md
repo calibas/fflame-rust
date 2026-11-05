@@ -65,11 +65,15 @@ PNG metadata.
 `render_with` in `src/renderer/render.rs` is where a non-interactive
 render picks its generator. CLI export, thumbnails, the Fractal Browser,
 video export and the gallery modules all go through it, so they render
-every engine the build has. The tail's stages are shared, but the
-sequence that calls them is written out per generator: the flame path
-in `render_with`, `render_sim`, and `escape_tail` (shared by the escape
-picture and its terrain), plus the app's own frame loop. A new tail
-stage must be added to each.
+every engine the build has. The tail -- density effects, the tone map,
+colour effects -- is one sequence, `renderer::tail::Tail`, over a
+`Picture` (the flame's accumulator, its shade or depth-of-field output,
+or another engine's image). The app's frame loop records it into the
+frame's encoder; every headless render ends in `render::finish`, which
+adds the effect chain's lifetime, the memory check and the readback.
+`HighResExporter` tone maps its own histogram (in strips when large)
+and calls the tail's density and colour stages around it. A new tail
+stage goes in `Tail`.
 
 Each engine is a Cargo feature (`engine-flame`, `engine-escape`,
 `engine-sim`), all on by default; see [section 5](#5-cargo-features-and-build-targets).
@@ -484,7 +488,7 @@ exported PNG. Release procedure: [RELEASE.md](RELEASE.md).
 | Gate a control by mode | a case in `src/ui/visibility.rs` | [UI.md](main/UI.md) |
 | Change tone mapping | `shaders/tonemap.wgsl`; `TonemapParams` in `src/gpu/buffers.rs`; controls in `src/ui/tone_mapping.rs` | [TONE-MAPPING.md](main/TONE-MAPPING.md) |
 | Add a GPU binding to the flame shader | `compute_layout_entries` / `compute_entries` in `src/gpu/pipelines.rs`, the declaration in `shaders/core/header.wgsl` | [BUFFERS.md](main/BUFFERS.md) |
-| Add a stage to the render tail | the flame path in `render_with`, `render_sim` and `escape_tail` in `src/renderer/render.rs`, and the viewport in `src/app/mod.rs` | [RENDERER.md](main/RENDERER.md) |
+| Add a stage to the render tail | `Tail` in `src/renderer/tail.rs` (the viewport and every headless render); `HighResExporter` (`src/export/high_res.rs`) if it reaches the exporter's own tone map | [RENDERER.md](main/RENDERER.md) |
 | Add a keyboard shortcut | `handle_keyboard` in `src/app/input.rs` | [UI.md](main/UI.md) |
 | Add a palette or preset | a pack in `assets/palettes/packs/` or a `.palette` file; presets in `assets/presets.fflame` | [PALETTE_LIBRARY.md](main/PALETTE_LIBRARY.md), [CONFIG.md](main/CONFIG.md) |
 | Expose something to scripts | `src/script/api.rs` | [SCRIPTING.md](main/SCRIPTING.md) |

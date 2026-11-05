@@ -1933,7 +1933,7 @@ colours.
 state made 1×1, since only the tonemap of another engine's image is used
 — loads the config (palette, tonemap uniform, curve, background), and
 dispatches `render_escape`. That renders to settlement and calls
-`escape_tail`: density effects, `tonemap_pass_with_input` on the escape
+the tail (`render::finish`, `renderer::tail`): density effects, `tonemap_pass_with_input` on the escape
 image, colour effects, readback. The palette an escape render binds is
 `escape_palette_view(stepped)`: the ordinary palette texture, or the
 stepped table when `palette_map.stepped` is on.
