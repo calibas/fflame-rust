@@ -218,6 +218,16 @@ From finished plans, archived 2026-10-21:
 - **From [hdri-environment.md](../archive/projects/hdri-environment.md):** presets that show
   the skies; the web build's skies and skies past 1K are in
   [online-assets.md](online-assets.md).
+- **From [quaternions.md](../archive/projects/quaternions.md)** (archived 2026-11-04): Halayka's
+  sets (`assets/formulas/solid-halayka-quaternions.rhai`) draw the shell's
+  other face, on the escaped side, as a level of the outside reading,
+  which is piecewise -- the step an orbit escapes at changes across a
+  seam -- so it has a cliff where a seam meets it (11-21% of its
+  crossings for steps 0-2; none for 3 and 5, the presets' surfaces), and
+  it lies a step off the true surface. The principled surface is a march
+  of its own: a hit at the first change of sign from either side, no
+  shell, the normal turned to the ray -- an engine change through the
+  march, the shadows, the occlusion and the path tracer.
 
 ## Known gaps, not fixed in PR #129
 

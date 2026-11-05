@@ -177,6 +177,9 @@ with these starting points.
 
 - **A solid's targets**: the same three by orientation and concavity, as
   above, or one texture all over.
+- **One cache, one origin** (the architecture review, 2026-11-04,
+  section 2.6): the downloads should live in the download cache and be
+  marked by `provenance::Origin` (Api), not be a sixth way to keep files.
 - **Our site's part**, for later: none in the path now (decision 1); a
   provider of its own one day (curated or user skies), through the same
   interface.

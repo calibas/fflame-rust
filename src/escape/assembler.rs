@@ -8345,7 +8345,7 @@ fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32,
 // it to a 256th. A true distance stops the march short of the surface,
 // so this is for a distance that bounds the step without measuring the
 // way -- a solid marched in fixed steps through space it cannot
-// measure (docs/projects/quaternions.md) -- which would otherwise land
+// measure (docs/archive/projects/quaternions.md) -- which would otherwise land
 // as much as a step past it: terraces that shift as the camera moves.
 fn ifs_refine(o: vec3<f32>, d: vec3<f32>, t_out: f32, t_in: f32, eps: f32) -> f32 {
     var a = t_out;

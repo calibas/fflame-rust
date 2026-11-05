@@ -49,7 +49,7 @@ use says so at its top — see
 ### Workspace layouts
 
 One workspace serves every mode
-([one-workspace.md](../projects/one-workspace.md)). `WorkspaceLayout`
+([one-workspace.md](../archive/projects/one-workspace.md)). `WorkspaceLayout`
 (same file) holds seven presets:
 
 | Layout | Left dock (tabs) | Right dock (tabs) | Other |
@@ -272,7 +272,7 @@ Each `&'static str` is a `visibility.*` locale key naming the
 nothing here instead of wondering whether it exists.
 
 **Every panel is drawn in every mode, its controls editable**
-([one-workspace.md](../projects/one-workspace.md)). `panel` says whether
+([one-workspace.md](../archive/projects/one-workspace.md)). `panel` says whether
 it acts on the picture; an `Inactive` one wears a banner at its top
 (`PanelViewer::render_panel` draws `inactive_banner`): "Not used in
 *mode* mode", the reason, and a Switch to *mode* button for each mode
@@ -751,7 +751,7 @@ config_manager.update_batch(changes, "history.action.some_edit".to_string())?;
   the lens), an effect's, an escape formula's, colouring's or layer's, a
   simulation model's or colouring's, a CPU script's -- are drawn by one
   renderer from their `params::ParamDef`s
-  ([one-parameter-system.md](../projects/one-parameter-system.md)):
+  ([one-parameter-system.md](../archive/projects/one-parameter-system.md)):
   `control` per kind (every slider a `VkbSlider`; a choice a dropdown
   labelled on its left), and `list` for a parameter set with its
   layout's conditions and grids, through a `ParamStore` -- the config
@@ -774,7 +774,7 @@ config_manager.update_batch(changes, "history.action.some_edit".to_string())?;
     frame, the grid's size, and the variations' iteration counts.
 
   What is slow is a parameter's own flag (`ParamDef::slow`;
-  [one-parameter-system.md](../projects/one-parameter-system.md)): a
+  [one-parameter-system.md](../archive/projects/one-parameter-system.md)): a
   built-in's `.slow()`, a variation's `param!(slow ...)` (measured,
   `renderer::param_cost`), a simulation script's `INFO.slow`.
 

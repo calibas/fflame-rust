@@ -172,7 +172,7 @@ old file without the key meant).
 ### Parameters
 
 A parameter is a `params::ParamDef`, the one definition every kind
-shares ([one-parameter-system.md](../projects/one-parameter-system.md)):
+shares ([one-parameter-system.md](../archive/projects/one-parameter-system.md)):
 `ParamDef::new("scale", "Scale", "hint", Spec::float(0.05, 1e-6, 1.0).log())`.
 Every value is an `f32` slot; a float is a slider (`.log()` for one whose
 interesting band is decades below its maximum, `.slow()` for one whose
@@ -740,7 +740,7 @@ fn escaped(s, p) {
   `prepare` gives is read as `p.name` as any. `escaped` stays one test:
   a helper there may give a vector from `let`s, not from an `if`.
 - **Quaternions** (`rhai/vec.rs`, the same machinery: a vector is a kind
-  and its parts; [quaternions.md](../projects/quaternions.md)), in
+  and its parts; [quaternions.md](../archive/projects/quaternions.md)), in
   solids and in 3D variations: `quat(w, x, y, z)`, `quat(w, v)` (`v` a
   `vec3`) or `quat(w)`, `w` the scalar part; `q.w`, `q.x`, `q.y`, `q.z`
   read and set, `q.v` the vector part (a `vec3`, settable); `+` and `-`
@@ -771,7 +771,7 @@ fn escaped(s, p) {
   `halaykas_sets_are_never_stepped_through`,
   `the_escape_paths_lie_on_their_orbits_paths`.
   And Doug Bristor's sets (bristorbrot.org;
-  [bristorbrot.md](../projects/bristorbrot.md)), each a 3D section of a
+  [bristorbrot.md](../archive/projects/bristorbrot.md)), each a 3D section of a
   4D iteration, Mandelbrot or Julia: `solid-bristorbrot.rhai`, his
   numbers' `z^2 + c` and two cubes, a product of its own written part by
   part over a `quat` (his rule e_a e_b = sgn(b - a) e_b, not Hamilton's);

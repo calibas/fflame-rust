@@ -8,7 +8,7 @@
 //! one-line stub -- and the stub's text was a single shared string that
 //! was wrong in two of the three places it appeared.
 //!
-//! Every panel is drawn in every mode (`docs/projects/one-workspace.md`):
+//! Every panel is drawn in every mode (`docs/archive/projects/one-workspace.md`):
 //! [`panel`] says whether it acts on the picture, and one that does not
 //! wears a banner saying so ([`inactive_banner`]) above its controls,
 //! which stay editable. Controls depend on the tone-map mode too,

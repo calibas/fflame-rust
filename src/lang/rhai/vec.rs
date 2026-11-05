@@ -1,5 +1,5 @@
 //! Vectors and quaternions in the Rhai dialect (the KIFS plan, B1; the
-//! quaternions plan, docs/projects/quaternions.md): `vec3` and `quat`,
+//! quaternions plan, docs/archive/projects/quaternions.md): `vec3` and `quat`,
 //! split into their parts by the lowering.
 //!
 //! A vector local is three float locals and a quaternion local four; a
@@ -1626,7 +1626,7 @@ fn escaped(s, p) { s.z.norm_sqr() + length(s.w) * 0.0 > p.bailout }
         assert!(r.escaped);
     }
 
-    // ---- quaternions (docs/projects/quaternions.md) ----
+    // ---- quaternions (docs/archive/projects/quaternions.md) ----
 
     type Q = [f64; 4];
 
@@ -2102,7 +2102,7 @@ fn distance(s, p) {
     /// toward the axes. The surface's other face, the shell's escaped side,
     /// is a level of a piecewise reading -- the step an orbit escapes at
     /// changes across a seam -- and has a cliff where a seam meets it, so
-    /// it is not held here (docs/projects/quaternions.md).
+    /// it is not held here (docs/archive/projects/quaternions.md).
     #[test]
     fn halaykas_distance_has_no_jump_at_the_sets_boundary() {
         use crate::lang::interp;

@@ -625,7 +625,7 @@ fn number_kind(p: &Param, default: f64) -> crate::params::ParamKind {
 impl Program {
     /// Its parameters as the one parameter system's definitions, one per
     /// slot in slot order -- what every kind registers a script's
-    /// parameters as (docs/projects/one-parameter-system.md, step 9): a
+    /// parameters as (docs/archive/projects/one-parameter-system.md, step 9): a
     /// number ([`number_kind`]), a bool a switch, an enum a choice, a
     /// complex number as `complex` says, a user function a choice over
     /// the functions it may be.
