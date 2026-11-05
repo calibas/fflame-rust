@@ -97,6 +97,9 @@ pub const COLORING_TWINS: &[(&str, &str)] = &[
     // rather than wrapped, and what picking it sets.
     ("position_map", include_str!("../../assets/formulas/twins/colorings/position_map.rhai")),
     ("external_rays", include_str!("../../assets/formulas/twins/colorings/external_rays.rhai")),
+    // Batch 4: the derivative, and the pixel it is measured in.
+    ("distance_estimate", include_str!("../../assets/formulas/twins/colorings/distance_estimate.rhai")),
+    ("normal_map", include_str!("../../assets/formulas/twins/colorings/normal_map.rhai")),
 ];
 
 /// The twin of the built-in formula `name`, when it has one.
@@ -140,7 +143,7 @@ mod tests {
     /// exactly -- names, captions, hints, kinds, defaults, ranges,
     /// choices, a log slider -- its features as the built-in's (an
     /// orbit accumulator, the interior coloured, period detection, a
-    /// bounded value), and what picking it sets: the recommended bailout
+    /// bounded value, the derivative), and what picking it sets: the recommended bailout
     /// and the values a fresh pick takes.
     #[test]
     fn every_colouring_twin_compiles_as_its_builtin() {
@@ -154,7 +157,7 @@ mod tests {
                 .unwrap_or_else(|d| panic!("{name}: {:?}", d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>()));
             assert_eq!(twin.display_name, builtin.display_name, "{name}: its title");
             assert_eq!(twin.parameters, builtin.parameters, "{name}: its parameters");
-            for f in [F::NeedsOrbitAccum, F::ColorsInterior, F::NeedsPeriod, F::Bounded] {
+            for f in [F::NeedsOrbitAccum, F::ColorsInterior, F::NeedsPeriod, F::Bounded, F::NeedsDerivative] {
                 assert_eq!(twin.features.contains(&f), builtin.features.contains(&f), "{name}: {f:?}");
             }
             // What picking it sets (`INFO.bailout`, `INFO.pick`).

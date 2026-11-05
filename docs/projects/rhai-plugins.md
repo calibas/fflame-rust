@@ -834,7 +834,7 @@ needs the census did not, the int step and `ctx.layer`):
 |---|---|---|---|
 | Effects | 15 | all 15, the definitions (D1) | yes, the Effects panel |
 | Escape formulas | 26 | all 26 (`escape::twins`) | yes, Edit as Formula |
-| Escape colourings | 28 | 21 (batches 1-3 of 5, branch `rhai-escape-colourings`; plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
+| Escape colourings | 28 | 23 (batches 1-4 of 5, branch `rhai-escape-colourings`; plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
 | Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
@@ -944,7 +944,13 @@ Steps, in the order that unlocks the most first (the user picks):
        takes (the averages' deband).
      - The twins it unlocks: Position Map, External Rays. With it, a
        twin also picks as its built-in does.
-   - **Batch 4: the derivative.**
+   - **Batch 4: the derivative.** **Built 2026-11-05**: `ctx.dz`,
+     `ctx.has_derivative`, `ctx.render_px`, `ctx.supersample`. Distance
+     Estimate matches its built-in on every pixel at every mapping and
+     unit, on the five views and over the Mandelbrot's Rhai twin (its
+     derivative derived); Normal Map too, but by an ulp on under 0.06%
+     with its light past a half turn (the range-reduced `cos`/`sin`;
+     allowed 0.2%). Speed within 6%.
      - `dz` in `finish`, which brings `NeedsDerivative`, with the
        template's has-a-derivative flag.
      - The supersample factor and the render pixel's size.

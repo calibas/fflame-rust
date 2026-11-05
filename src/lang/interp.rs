@@ -87,12 +87,16 @@ pub struct Env {
     /// as a colouring reads them (`ctx.bailout`, `ctx.degree`).
     pub bailout: f64,
     pub degree: f64,
+    /// A render pixel's size in the plane, and the render pixels per
+    /// output pixel (`ctx.render_px`, `ctx.supersample`).
+    pub render_px: f64,
+    pub supersample: f64,
 }
 
 impl Env {
     /// A pixel with nothing else set: tests that only need `#pixel`.
     pub fn at(pixel: C64, maxiter: u32) -> Self {
-        Env { pixel, maxiter, center: C64::ZERO, magn: 1.0, x: 0, y: 0, width: 1, height: 1, random: C64::ZERO, julia: false, julia_c: C64::ZERO, rotation: 0.0, bailout: 4.0, degree: 2.0 }
+        Env { pixel, maxiter, center: C64::ZERO, magn: 1.0, x: 0, y: 0, width: 1, height: 1, random: C64::ZERO, julia: false, julia_c: C64::ZERO, rotation: 0.0, bailout: 4.0, degree: 2.0, render_px: 1.0, supersample: 1.0 }
     }
 }
 
@@ -221,6 +225,11 @@ struct Shared<'e> {
     /// whether the orbit escaped (`ctx.prev`, `ctx.escaped`).
     prev: C64,
     escaped: bool,
+    /// The orbit's derivative per render pixel, and whether there is one,
+    /// as a colouring's `finish` reads them (`ctx.dz`,
+    /// `ctx.has_derivative`).
+    orbit_dz: C64,
+    has_derivative: bool,
 }
 
 impl<'e> Shared<'e> {
@@ -233,6 +242,8 @@ impl<'e> Shared<'e> {
             accum_z: 0.0,
             prev: C64::ZERO,
             escaped: false,
+            orbit_dz: C64::ZERO,
+            has_derivative: false,
             pixel: env.pixel,
             env,
             z: C64::ZERO,
@@ -697,7 +708,7 @@ pub fn run(
         sh.numiter = i + 1;
         if let Some(c) = c.as_mut() {
             let prog = c.prog;
-        c.exec(&prog.loop_body, &mut sh);
+            c.exec(&prog.loop_body, &mut sh);
         }
         let go = formula.bailout.as_ref().map_or(true, |t| f.eval(t, &sh).as_bool());
         if !go {
@@ -709,6 +720,16 @@ pub fn run(
         sh.numiter = env.maxiter;
     }
     sh.escaped = escaped;
+    let dz = formula.dz_var.map_or(C64::ZERO, |v| f.vars[v].as_c64());
+    // A Jacobian's, as a colouring reads it (`derive::effective_dz`).
+    let dz = match formula.dzq_var {
+        Some(q) => super::derive::effective_dz(sh.z, dz, f.vars[q].as_c64()),
+        None => dz,
+    };
+    // As the template's: per render pixel, and compiled in for a
+    // colouring that reads it.
+    sh.has_derivative = formula.dz_var.is_some() && coloring.is_some_and(|(p, _)| p.reads(Predef::OrbitDz));
+    sh.orbit_dz = if sh.has_derivative { dz.scale(env.render_px) } else { C64::new(env.render_px, 0.0) };
     if let Some(c) = c.as_mut() {
         let prog = c.prog;
         c.exec(&prog.final_body, &mut sh);
@@ -718,12 +739,6 @@ pub fn run(
             sh.solid = true;
         }
     }
-    let dz = formula.dz_var.map_or(C64::ZERO, |v| f.vars[v].as_c64());
-    // A Jacobian's, as a colouring reads it (`derive::effective_dz`).
-    let dz = match formula.dzq_var {
-        Some(q) => super::derive::effective_dz(sh.z, dz, f.vars[q].as_c64()),
-        None => dz,
-    };
     Run { z: sh.z, n: sh.numiter, escaped, index: sh.index, solid: sh.solid, dz }
 }
 
@@ -980,6 +995,10 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::EscapeFraction => Value::Float(escape_fraction(sh)),
         Predef::Prev => Value::Complex(sh.prev),
         Predef::StepC => Value::Complex(sh.pixel),
+        Predef::OrbitDz => Value::Complex(sh.orbit_dz),
+        Predef::HasDerivative => Value::Bool(sh.has_derivative),
+        Predef::RenderPx => Value::Float(env.render_px),
+        Predef::Supersample => Value::Float(env.supersample),
     }
 }
 
@@ -1448,5 +1467,34 @@ mod tests {
         let p = program("R {\ninit:\n int k = 0\n while true\n  k = k + 1\n endwhile\n z = k\nloop:\n z = z\nbailout:\n false\n}", EntryKind::Formula);
         let r = run(&p, &ParamValues::defaults(&p), None, &Env::at(C64::ZERO, 1));
         assert_eq!(r.z, C64::real(f64::from(LOOP_CAP)));
+    }
+
+    /// A colouring's `ctx.dz` is the orbit's derivative per render pixel,
+    /// as the template's `sum.dz` (P7 step 2, batch 4): the derivative
+    /// pass's dz/dc times the pixel's size. Without a derivative it is the
+    /// seed, 1, times that size, and `ctx.has_derivative` is false.
+    #[test]
+    fn a_colouring_reads_the_derivative_per_render_pixel() {
+        let m = program("M {
+init:
+ z = 0
+loop:
+ z = sqr(z) + #pixel
+bailout:
+ |z| < 1e4
+}", EntryKind::Formula);
+        let d = super::super::derive::with_derivative(&m).expect("the Mandelbrot has a derivative");
+        let c = super::super::rhai::coloring(
+            "fn finish(s, z, p, ctx) { if ctx.has_derivative { ctx.dz.re * 1000.0 + ctx.dz.im } else { -ctx.dz.re - ctx.supersample } }",
+        )
+        .unwrap();
+        let cp = ParamValues::defaults(&c);
+        let env = Env { render_px: 0.01, supersample: 2.0, ..Env::at(C64::new(0.5, 0.5), 60) };
+        let r = run(&d, &ParamValues::defaults(&d), Some((&c, &cp)), &env);
+        assert!(r.escaped && r.dz.abs() > 1.0, "{r:?}");
+        let want = r.dz.scale(0.01);
+        assert!((r.index - (want.re * 1000.0 + want.im)).abs() < 1e-6 * r.index.abs(), "{} vs {want:?}", r.index);
+        let plain = run(&m, &ParamValues::defaults(&m), Some((&c, &cp)), &env);
+        assert_eq!(plain.index, -0.01 - 2.0, "the seed's, per render pixel, and the supersample factor");
     }
 }

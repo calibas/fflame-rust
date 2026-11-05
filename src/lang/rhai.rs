@@ -723,6 +723,12 @@ const CTX_FIELDS: &[(&str, &str)] = &[
     ("escape_fraction", "escape_fraction"),
     ("prev", "prev"),
     ("step_c", "step_c"),
+    // The derivative's (batch 4): `#dz` is the perturbation equations'
+    // deviation, so the checker calls the orbit's `orbit_dz`.
+    ("orbit_dz", "dz"),
+    ("has_derivative", "has_derivative"),
+    ("render_px", "render_px"),
+    ("supersample", "supersample"),
     // The panel's crease settings, in `creases`.
     ("crease_decay", "crease_decay"),
     ("crease_pattern", "crease_pattern"),
@@ -4242,8 +4248,8 @@ impl<'s> Lowerer<'s> {
                 "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" | "crease_pattern" | "effect_blend" | "period" => TypeName::Int,
                 // A colouring's view of the loop (P7 step 2); `prev` and
                 // `step_c` are complex, the default.
-                "bailout" | "degree" | "escape_fraction" => TypeName::Float,
-                "escaped" | "converged" => TypeName::Bool,
+                "bailout" | "degree" | "escape_fraction" | "render_px" | "supersample" => TypeName::Float,
+                "escaped" | "converged" | "has_derivative" => TypeName::Bool,
                 "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" => TypeName::Float,
                 // An effect's (P2).
                 "density_mean" | "pixel_scale" | "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_amount" => TypeName::Float,

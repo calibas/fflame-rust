@@ -2456,6 +2456,12 @@ impl<'p> Gen<'p> {
             (Predef::EscapeFraction, _) => "esc_escape_fraction(sum)".into(),
             (Predef::Prev, _) => "z_prev".into(),
             (Predef::StepC, _) => "c".into(),
+            // The derivative's (batch 4): the summary's, per render pixel,
+            // and the template's own flag and pixel helpers.
+            (Predef::OrbitDz, _) => "sum.dz".into(),
+            (Predef::HasDerivative, _) => "HAS_DERIVATIVE".into(),
+            (Predef::RenderPx, _) => "esc_render_px()".into(),
+            (Predef::Supersample, _) => "esc_supersample()".into(),
             (Predef::Pass, Ctx::Formula) => "s.npass".into(),
             // The perturbation equations read the reference's pass.
             (Predef::Pass, _) => "pass_index".into(),
@@ -4314,6 +4320,13 @@ struct HarnessParams {
 }
 @group(0) @binding(0) var<uniform> params: HarnessParams;
 fn esc_escape_fraction(sum: OrbitSummary) -> f32 {
+    return 1.0;
+}
+const HAS_DERIVATIVE: bool = true;
+fn esc_render_px() -> f32 {
+    return 1.0;
+}
+fn esc_supersample() -> f32 {
     return 1.0;
 }
 fn fparam(i: u32) -> f32 {

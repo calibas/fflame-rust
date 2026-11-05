@@ -981,7 +981,10 @@ impl Checker {
             // What the loop knows, a colouring's (P7 step 2): the bailout
             // and degree anywhere, the orbit's ending in `finish`, the
             // step's own values in `step`.
-            "bailout" | "degree" | "escaped" | "converged" | "period" | "escape_fraction" | "prev" | "step_c" if self.internal => {
+            "bailout" | "degree" | "escaped" | "converged" | "period" | "escape_fraction" | "prev" | "step_c" | "orbit_dz" | "has_derivative"
+            | "render_px" | "supersample"
+                if self.internal =>
+            {
                 if self.kind != EntryKind::Coloring {
                     self.error(span, format!("`{name}` is a colouring's"));
                     return None;
@@ -994,12 +997,20 @@ impl Checker {
                     "period" => (Predef::Period, Some(SectionKind::Final)),
                     "escape_fraction" => (Predef::EscapeFraction, Some(SectionKind::Final)),
                     "prev" => (Predef::Prev, Some(SectionKind::Loop)),
+                    // The derivative's (batch 4).
+                    "orbit_dz" => (Predef::OrbitDz, Some(SectionKind::Final)),
+                    "has_derivative" => (Predef::HasDerivative, None),
+                    "render_px" => (Predef::RenderPx, None),
+                    "supersample" => (Predef::Supersample, None),
                     _ => (Predef::StepC, Some(SectionKind::Loop)),
                 };
                 if let Some(s) = section {
                     if self.section != s {
                         let f = if s == SectionKind::Final { "finish" } else { "step" };
-                        self.error(span, format!("`ctx.{name}` belongs to `{f}`"));
+                        // `#dz` is the perturbation equations' deviation:
+                        // the colouring's is `ctx.dz` by another name.
+                        let shown = if name == "orbit_dz" { "dz" } else { name };
+                        self.error(span, format!("`ctx.{shown}` belongs to `{f}`"));
                         return None;
                     }
                 }

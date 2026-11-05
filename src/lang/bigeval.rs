@@ -499,7 +499,9 @@ impl BigMachine {
             Predef::Bailout | Predef::Degree | Predef::EscapeFraction => BigValue::Float(BigFloat::zero(self.n)),
             Predef::Escaped | Predef::Converged => BigValue::Bool(false),
             Predef::Period => BigValue::Int(0),
-            Predef::Prev | Predef::StepC => BigValue::Complex(BigComplex::zero(self.n)),
+            Predef::Prev | Predef::StepC | Predef::OrbitDz => BigValue::Complex(BigComplex::zero(self.n)),
+            Predef::HasDerivative => BigValue::Bool(false),
+            Predef::RenderPx | Predef::Supersample => BigValue::Float(BigFloat::zero(self.n)),
         }
     }
 
