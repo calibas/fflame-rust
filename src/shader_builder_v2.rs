@@ -2875,14 +2875,10 @@ fn flame_map3(xform_id: u32, u: vec3<f32>, seed: u32) -> vec3<f32> {{\n\
                     None => format!("xform.variations[{}] != 0.0", idx),
                 };
                 // Native pre bakes weight (`temp = f(temp)`); an Any variation
-                // moved into pre applies its weight + honors Feature::Replace.
+                // moved into pre applies its weight + honors Feature::Replace,
+                // and the normal phase's z rule (`moved_body_3d`).
                 let body = if placed.moved {
-                    let w = format!("xform.variations[{}]", idx);
-                    if info.has_feature(Feature::Replace) {
-                        format!("temp = {} * {};", w, call)
-                    } else {
-                        format!("temp = temp + {} * {};", w, call)
-                    }
+                    moved_body_3d("temp", info, idx, &call, gate_2d_z)
                 } else {
                     format!("temp = {};", call)
                 };
@@ -2940,8 +2936,7 @@ fn flame_map3(xform_id: u32, u: vec3<f32>, seed: u32) -> vec3<f32> {{\n\
             // which also killed the z compounding JWF gets through
             // unconditional z-writers like linear3D / julia3D.
             let _ = name;
-            let zero_z = info.has_feature(Feature::NeverZ)
-                || (gate_2d_z && !info.has_feature(Feature::AlwaysZ));
+            let zero_z = zeroes_z(info, gate_2d_z);
             let contrib = if zero_z {
                 format!("vec3<f32>(({}).xy, 0.0)", call)
             } else {
@@ -3080,14 +3075,10 @@ fn flame_map3(xform_id: u32, u: vec3<f32>, seed: u32) -> vec3<f32> {{\n\
                     None => format!("xform.variations[{}] != 0.0", idx),
                 };
                 // Native post bakes weight; an Any variation moved into post
-                // applies its weight + honors Feature::Replace.
+                // applies its weight + honors Feature::Replace, and the normal
+                // phase's z rule (`moved_body_3d`).
                 let body = if placed.moved {
-                    let w = format!("xform.variations[{}]", idx);
-                    if info.has_feature(Feature::Replace) {
-                        format!("result = {} * {};", w, call)
-                    } else {
-                        format!("result = result + {} * {};", w, call)
-                    }
+                    moved_body_3d("result", info, idx, &call, gate_2d_z)
                 } else {
                     format!("result = {};", call)
                 };
@@ -3110,6 +3101,37 @@ fn flame_map3(xform_id: u32, u: vec3<f32>, seed: u32) -> vec3<f32> {{\n\
         code
     }
 
+}
+
+/// Whether a 3D variation's z contribution is dropped -- JWF's z rule,
+/// driven by per-variation metadata (`Feature::AlwaysZ` /
+/// `Feature::NeverZ`): a NeverZ source never touches z, and a default
+/// one writes it only under `isPreserveZCoordinate()`, which
+/// `gate_2d_z` (3D with `preserve_z` off) turns off. An AlwaysZ
+/// variation writes z unconditionally and keeps it.
+fn zeroes_z(info: &crate::variations::VariationInfo, gate_2d_z: bool) -> bool {
+    info.has_feature(Feature::NeverZ) || (gate_2d_z && !info.has_feature(Feature::AlwaysZ))
+}
+
+/// The 3D body of an `Any` variation moved into pre or post, onto `pt`
+/// (`temp` or `result`).
+///
+/// JWF runs a normal variation moved there through
+/// `EnforcedPreVariationTransformationStep` /
+/// `EnforcedPostVariationTransformationStep`: the point is copied, and
+/// the variation's own `transform` runs from the copy back onto the
+/// point -- `pt += w * f(pt)`, or `pt = w * f(pt)` for a Replace. A z
+/// the variation does not write ([`zeroes_z`]) is left as the point had
+/// it, as in the normal phase; it used to grow by `w * z`.
+fn moved_body_3d(pt: &str, info: &crate::variations::VariationInfo, idx: u32, call: &str, gate_2d_z: bool) -> String {
+    let w = format!("xform.variations[{}]", idx);
+    let zero_z = zeroes_z(info, gate_2d_z);
+    match (info.has_feature(Feature::Replace), zero_z) {
+        (true, false) => format!("{pt} = {w} * {call};"),
+        (true, true) => format!("{pt} = vec3<f32>(({w} * {call}).xy, {pt}.z);"),
+        (false, false) => format!("{pt} = {pt} + {w} * {call};"),
+        (false, true) => format!("{pt} = {pt} + {w} * vec3<f32>(({call}).xy, 0.0);"),
+    }
 }
 
 // The flame engine's own tests: they build flames, compile flame
@@ -3358,11 +3380,16 @@ mod tests {
     /// only parses, and a call to an undefined function or with an
     /// argument missing parses fine.
     fn validated_flame_shader(flame: &crate::scene::transforms::Flame, render_3d: bool) -> String {
+        validated_flame_shader_z(flame, render_3d, false)
+    }
+
+    /// [`validated_flame_shader`] at a `preserve_z` of its own.
+    fn validated_flame_shader_z(flame: &crate::scene::transforms::Flame, render_3d: bool, preserve_z: bool) -> String {
         use crate::scene::transforms::RenderMode;
         let registry = crate::variations::global_registry();
         let builder = ShaderBuilder::new((*registry).clone());
         let mode = if render_3d { RenderMode::ThreeD } else { RenderMode::TwoD };
-        let constants = ShaderConstants::with_inlined_transforms(flame, &registry, 0, mode, false);
+        let constants = ShaderConstants::with_inlined_transforms(flame, &registry, 0, mode, preserve_z);
         drop(registry);
         let shader = builder.build_from_template(flame, &HashMap::new(), render_3d, false, false, true, &constants);
         let module = wgpu::naga::front::wgsl::parse_str(&shader)
@@ -3407,6 +3434,30 @@ mod tests {
                 let phase = if prio < 0 { "PRE MOVED" } else { "POST MOVED" };
                 assert!(shader.contains(phase), "{name} at {prio} (3d={render_3d}) was not moved");
             }
+        }
+    }
+
+    /// A variation moved to pre or post keeps the normal phase's z rule
+    /// in 3D. JWF runs it through `EnforcedPre/PostVariationTransformationStep`,
+    /// its own `transform` onto the point, so a z it writes only under
+    /// `isPreserveZCoordinate()` (julia's) stays as the point had it with
+    /// preserve_z off; the moved placement added `w * z` to it. An
+    /// AlwaysZ variation (linear3D) keeps its z either way.
+    #[test]
+    fn a_moved_variation_keeps_the_normal_phases_z_rule_in_3d() {
+        let moved_block = |shader: &str, tag: &str| -> String {
+            let at = shader.find(tag).unwrap_or_else(|| panic!("no {tag}"));
+            let rest = &shader[at..];
+            rest[..rest.find("\n\n").unwrap_or(rest.len())].to_string()
+        };
+        for (prio, tag) in [(-1, "(PRE MOVED)"), (1, "(POST MOVED)")] {
+            let julia = flame_moving("julia", prio);
+            let gated = moved_block(&validated_flame_shader_z(&julia, true, false), tag);
+            assert!(gated.contains(".xy, 0.0)"), "julia at {prio}, preserve_z off, adds its z:\n{gated}");
+            let kept = moved_block(&validated_flame_shader_z(&julia, true, true), tag);
+            assert!(!kept.contains(".xy, 0.0)"), "julia at {prio}, preserve_z on, drops its z:\n{kept}");
+            let always = moved_block(&validated_flame_shader_z(&flame_moving("linear3D", prio), true, false), tag);
+            assert!(!always.contains(".xy, 0.0)"), "linear3D at {prio} (AlwaysZ) drops its z:\n{always}");
         }
     }
 

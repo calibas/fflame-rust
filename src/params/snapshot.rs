@@ -1,6 +1,6 @@
 //! Every built-in parameter of every kind, as one list, to hold the move
 //! to one parameter system to what each kind declared (step 1 of
-//! docs/projects/one-parameter-system.md).
+//! docs/archive/projects/one-parameter-system.md).
 //!
 //! `write_params_snapshot` writes `output/params-snapshot.json` (run it
 //! on the types before a step); `params_match_the_snapshot` compares

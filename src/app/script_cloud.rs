@@ -45,6 +45,18 @@ pub enum ScriptCloudRequest {
     Unpublish { stem: String, cloud_id: String },
 }
 
+impl ScriptCloudRequest {
+    /// Whether it needs a signed-in account. Searching and opening a
+    /// public script do not: the server serves them to anyone, so a
+    /// guest (`online_account` off) and a signed-out user can browse.
+    pub fn needs_account(&self) -> bool {
+        match self {
+            Self::Search(_) | Self::Adopt { .. } | Self::Refetch { .. } => false,
+            Self::ListMine | Self::Publish { .. } | Self::Update { .. } | Self::Unpublish { .. } => true,
+        }
+    }
+}
+
 /// What the panel renders.
 #[derive(Default)]
 pub struct ScriptCloudState {
@@ -124,8 +136,17 @@ impl App {
             // that is about to change.
             return;
         }
-        if !self.config_manager.system_settings().online_mode {
-            self.script_cloud.fail(rust_i18n::t!("api.online_features_off").to_string());
+        // WASM authenticates by cookie, so `get_auth_token` yields an
+        // empty string there rather than None. Searching and opening a
+        // public script are a guest's too; the rest is your account's.
+        let token = self.config_manager.system_settings().get_auth_token();
+        if token.is_none() && req.needs_account() {
+            let why = if self.config_manager.system_settings().online_account {
+                "Sign in to publish scripts and see your own.".to_string()
+            } else {
+                rust_i18n::t!("api.online_account_off").to_string()
+            };
+            self.script_cloud.fail(why);
             return;
         }
         self.script_cloud.busy = true;
@@ -134,20 +155,12 @@ impl App {
         let slot = self.script_cloud_results.clone();
         let window = self.window.clone();
         let base = crate::api::API_BASE_URL.to_string();
-        // WASM authenticates by cookie, so `get_auth_token` yields an
-        // empty string there rather than None.
-        let token = match self.config_manager.system_settings().get_auth_token() {
-            Some(t) => t,
-            None => {
-                self.script_cloud.busy = false;
-                self.script_cloud.fail("Sign in to use the online script library.");
-                return;
-            }
-        };
 
         let job = async move {
             let mut api = crate::api::ApiState::new(&base);
-            api.set_token(&token);
+            if let Some(t) = token {
+                api.set_token(&t);
+            }
             run_request(&api, req).await
         };
 

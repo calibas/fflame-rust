@@ -36,7 +36,7 @@ pub mod script;
 /// What every user-written script shares: its identity and labels.
 pub mod scripted;
 /// One parameter system for every kind: definitions, values, layouts
-/// (docs/projects/one-parameter-system.md).
+/// (docs/archive/projects/one-parameter-system.md).
 pub mod params;
 pub mod probe;
 pub mod census;

@@ -1,5 +1,7 @@
 # The Bristorbrot and the Quaternionbrot
 
+> **Archived 2026-11-04** -- finished: the Bristorbrot and the Quaternionbrot built 2026-10-23 (branch `bristorbrot`) as Rhai solids with eight presets. Its *Not built* list is deliberate scope, kept here. Read [ESCAPE.md](../../main/ESCAPE.md) for the solids as they are; this is the record of the distance measured and why it needs care.
+
 Built 2026-10-23 (branch `bristorbrot`). The user's words: "Next up, I
 want to add the Bristorbrot and the Quaternionbrot. Implementation should
 be similar to the quaternion work we just did. I'd like Rhai versions for

@@ -8,7 +8,7 @@
 //! one-line stub -- and the stub's text was a single shared string that
 //! was wrong in two of the three places it appeared.
 //!
-//! Every panel is drawn in every mode (`docs/projects/one-workspace.md`):
+//! Every panel is drawn in every mode (`docs/archive/projects/one-workspace.md`):
 //! [`panel`] says whether it acts on the picture, and one that does not
 //! wears a banner saying so ([`inactive_banner`]) above its controls,
 //! which stay editable. Controls depend on the tone-map mode too,
@@ -529,12 +529,12 @@ pub fn gated<R>(
 pub struct WindowMenuRow {
     pub panel: PanelType,
     pub label_key: &'static str,
-    /// Drawn only when online mode is on.
-    pub online_only: bool,
+    /// Drawn only with the online account on (a guest has no account).
+    pub account_only: bool,
 }
 
 const fn row(panel: PanelType, label_key: &'static str) -> WindowMenuRow {
-    WindowMenuRow { panel, label_key, online_only: false }
+    WindowMenuRow { panel, label_key, account_only: false }
 }
 
 /// The desktop Window menu, in order. The single source of which
@@ -572,7 +572,7 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     WindowMenuRow {
         panel: PanelType::LoginDialog,
         label_key: "menu.window_account",
-        online_only: true,
+        account_only: true,
     },
 ];
 
@@ -969,7 +969,7 @@ mod tests {
         for p in COMPACT_WINDOW_MENU {
             let row = WINDOW_MENU.iter().find(|r| r.panel == *p);
             let row = row.unwrap_or_else(|| panic!("{p:?} is in the compact menu but not the desktop one"));
-            assert!(!row.online_only, "{p:?}: the compact menu has no online gate");
+            assert!(!row.account_only, "{p:?}: the compact menu has no account gate");
             assert_eq!(label_key_of(*p), row.label_key);
         }
     }

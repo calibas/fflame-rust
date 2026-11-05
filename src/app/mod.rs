@@ -1124,9 +1124,10 @@ impl App {
         // Trigger initial API health check if a token exists (desktop: Bearer token, WASM: cookie)
         app.maybe_trigger_health_check();
 
-        // Desktop: attempt auto-login from saved encrypted credentials
+        // Desktop: attempt auto-login from saved encrypted credentials --
+        // not as a guest (`online_account` off), who never signs in.
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        if app.config_manager.system_settings().online_account {
             crate::ui::login_dialog::try_auto_login(
                 app.egui_layer.login_dialog_state_mut(),
                 &app.config_manager,
@@ -2664,11 +2665,7 @@ impl App {
                     );
                     if escape.set_solid_lighting(
                         &final_config.solid_shading,
-                        (
-                            final_config.fog_strength,
-                            final_config.fog_start,
-                            final_config.background_color,
-                        ),
+                        crate::escape::path_core::solid_fog(final_config),
                     ) {
                         self.escape_dirty = true;
                     }

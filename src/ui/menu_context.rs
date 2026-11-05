@@ -15,8 +15,8 @@ pub struct FileMenuActions {
     pub export_png: bool,
     pub export_png_transparent: bool,
     pub sign_out: bool,
-    /// The Online features checkbox was toggled to this value.
-    pub set_online_mode: Option<bool>,
+    /// The Online account checkbox was toggled to this value.
+    pub set_online_account: Option<bool>,
     pub quit: bool,
 }
 
@@ -125,7 +125,7 @@ pub struct MenuState {
     /// does not settle on its own: escape mode is not
     /// three-dimensional, one formula in it is.
     pub solid: crate::ui::visibility::Solid,
-    pub online_mode: bool,
+    pub online_account: bool,
     pub has_api_flame_id: bool,
     pub api_flame_id: Option<String>,
     pub api_flame_is_public: Option<bool>,

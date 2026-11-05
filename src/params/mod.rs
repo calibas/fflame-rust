@@ -1,6 +1,6 @@
 //! One parameter system for every kind that has parameters -- flame
 //! variations, effects, escape formulas and colourings, simulations,
-//! CPU scripts (docs/projects/one-parameter-system.md): one definition
+//! CPU scripts (docs/archive/projects/one-parameter-system.md): one definition
 //! ([`ParamDef`]), one layout ([`layout`]), one renderer (`ui::params`).
 //!
 //! Each kind keeps its values where they were: a GPU kind's are f32

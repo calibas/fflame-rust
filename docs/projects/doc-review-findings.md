@@ -9,11 +9,16 @@ one could be written.
 ## Still open
 
 From this list:
-- **R12** -- a moved pre/post variation in 3D does not get the normal
-  phase's z gating. (Subflame transforms' `fx_priority` is fixed.)
 - **A13** -- the effect compile cache is keyed by name; harmless until
   something can update an installed effect.
 - **B6** -- the deep-zoom gates read gitignored fixtures.
+
+From the architecture review ([architecture-review.md](../archive/projects/architecture-review.md)
+section 7, archived 2026-11-04):
+- The flame's dispatch governor (`Batch`, `Knee`, `adjust_iter_scale`)
+  lives inside `app/mod.rs`. Moved beside `app/governor.rs`, the app's
+  governing would be one module; device safety stays in the engines,
+  where headless renders need it too.
 
 Found while fixing:
 - `density_blur.wgsl` compared the raw hit count with a 0-1 threshold, so
@@ -21,10 +26,16 @@ Found while fixing:
   recorded nowhere. Fixed: threshold and falloff are multiples of the
   frame's mean density, the unit Levels uses, passed to density effects
   as `density_mean`.
-- Escape fog decodes the background with `pow(2.2)`, which matches the
-  tonemap exactly only at exposure 1 and gamma 1.
+- Escape fog decoded the background with `pow(2.2)`, which matches the
+  tonemap exactly only at exposure 1 and gamma 1. Fixed 2026-11-04: the
+  fog colour arrives as the accumulator holds what the tonemap shows as
+  the background (`path_core::solid_fog`, the sky's `shown`), in both
+  tiers.
 - With online features off, web deep links (`?flame=`) are still
-  followed.
+  followed. Not a bug, by decision (the user, 2026-11-04: "Web links
+  are fine"): the switch became the online account, off a guest of
+  the service, under which a link loads as before
+  ([ONLINE.md](../main/ONLINE.md), *The online account, and guests*).
 - `FlameRenderer::resize` replaced its output texture without destroying
   the old one: 4 bytes a pixel per resize waited for the garbage collector
   on WebGPU. Fixed: the app destroys it right after submitting the paint
@@ -66,7 +77,7 @@ check before it is fixed.
 | R9 | **Turning on post-symmetry keeps a Focused Rendering plan.** Neither `flame_key` nor `enumeration_key` hashes `post_symmetry`, so the old plan stays instead of declining with `NoCylinders::PostSymmetry`. | `src/renderer/compute_kernel.rs` | fixed |
 | R10 | **More than 128 transforms panics.** `update_transforms` panics past 128 normals + linked + finals. Nothing earlier on import or load validates the count. | `src/gpu/buffers.rs` | fixed |
 | R11 | **u32 overflow in buffer sizes**: the histogram and path-buffer sizes are `width * height * 16` in u32, which wraps at 16384². | `FlameBuffers::with_palette_size`, `create_path_buffers` | fixed |
-| R12 | **Phase overrides.** These look like problems:<br>- The pre-phase call hard-codes `variation_{name}` instead of `info.wgsl_function`, so `julia` moved to pre emits a call to a function that does not exist.<br>- `vrc` is missing in the post phase (2D, 3D) and the 3D pre phase.<br>- `fx_priority` on a Linked or Final transform never reaches the shader: `collect_phase_overrides` reads only the normal transforms. | `src/shader_builder_v2.rs` | fixed, subflame transforms' fx_priority too (3D z gating of a moved variation: open) |
+| R12 | **Phase overrides.** These look like problems:<br>- The pre-phase call hard-codes `variation_{name}` instead of `info.wgsl_function`, so `julia` moved to pre emits a call to a function that does not exist.<br>- `vrc` is missing in the post phase (2D, 3D) and the 3D pre phase.<br>- `fx_priority` on a Linked or Final transform never reaches the shader: `collect_phase_overrides` reads only the normal transforms. | `src/shader_builder_v2.rs` | fixed, subflame transforms' fx_priority too, and a moved variation's 3D z gating (2026-11-04: JWF's Enforced pre/post steps leave a z the variation does not write) |
 | R13 | **Subflame prefuse is 20 iterations**, though the header says JWildfire's 42 and "we do the same". Inside a subflame the post-Final point is what the state keeps, so subflame Finals feed the next step, unlike the parent's. Check against JWF's `SubFlameWFFunc`. | `shaders/core/subflame.wgsl` | fixed: finals, prefuse, NaN re-prefuse; then opacity, the weight, the finals' colour and `pre_subflame_wf`'s placement |
 | R14 | **`render_with` counts dispatched iterations** (burn-in included) where the app counts plotted ones (`total_iterations()`). | `src/renderer/render.rs` | fixed |
 | R15 | **`load_config` checks the render mode before updating it.** It tests `current_render_mode.is_non_flame()` for the path buffers before setting the mode from the config. | `src/renderer/compute_kernel.rs` | fixed |
