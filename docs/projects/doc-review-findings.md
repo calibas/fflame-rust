@@ -32,7 +32,10 @@ Found while fixing:
   the background (`path_core::solid_fog`, the sky's `shown`), in both
   tiers.
 - With online features off, web deep links (`?flame=`) are still
-  followed.
+  followed. Not a bug, by decision (the user, 2026-11-04: "Web links
+  are fine"): the switch became the online account, off a guest of
+  the service, under which a link loads as before
+  ([ONLINE.md](../main/ONLINE.md), *The online account, and guests*).
 - `FlameRenderer::resize` replaced its output texture without destroying
   the old one: 4 bytes a pixel per resize waited for the garbage collector
   on WebGPU. Fixed: the app destroys it right after submitting the paint

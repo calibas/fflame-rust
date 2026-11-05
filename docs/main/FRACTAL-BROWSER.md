@@ -42,7 +42,7 @@ It is available in every render mode.
 | Presets | `Presets` | The built-in presets, a tab per category (see [Presets](#presets)) |
 | Random | `Batch` | The last batch from the Random Generator or a Scripts batch, until the next one replaces it. The label shows the count |
 | Files | `Files` | The configs from one file: **Open File...** on the tab, a multi-config `.fflame` or multi-flame `.flame` opened with File ▸ Open, or a multi-flame `.flame` from Import Apophysis. The label shows the count |
-| Online | `Online` | The signed-in user's flames from the API. Shown only in online mode |
+| Online | `Online` | The signed-in user's flames from the API. Shown only with the online account on (a guest has none) |
 
 The code calls the second tab `Batch`; its label (`browser.tab_batch`)
 is "Random".

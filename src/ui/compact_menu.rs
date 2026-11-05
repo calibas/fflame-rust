@@ -160,21 +160,21 @@ fn render_compact_menu_items(
             ui.close();
         }
 
-        // The switch for everything online, as in the desktop File menu.
-        let mut online = menu_state.online_mode;
+        // The online account, as in the desktop File menu.
+        let mut online = menu_state.online_account;
         if ui
-            .checkbox(&mut online, t!("menu.online_features").as_ref())
-            .on_hover_text(t!("menu.tooltip_online_features").as_ref())
+            .checkbox(&mut online, t!("menu.online_account").as_ref())
+            .on_hover_text(t!("menu.tooltip_online_account").as_ref())
             .changed()
         {
-            menu_actions.file.set_online_mode = Some(online);
+            menu_actions.file.set_online_account = Some(online);
         }
 
-        // Shown whenever online mode is on, signed in or not: hiding it
+        // Shown whenever the online account is on, signed in or not: hiding it
         // when signed out (the old gate) made the feature look absent —
         // the reported "Save Online missing from the mobile File menu".
         // Signed out, it routes to the login panel instead.
-        if menu_state.online_mode {
+        if menu_state.online_account {
             let signed_in = menu_state.auth_email.is_some();
             let api_available = menu_state.api_connectivity == crate::api::ApiConnectivity::Online;
 
@@ -270,7 +270,7 @@ fn render_compact_menu_items(
     ui.separator();
 
     // --- Account ---
-    if menu_state.online_mode {
+    if menu_state.online_account {
         if let Some(ref email) = menu_state.auth_email {
             if ui.small_button(email.as_str()).clicked() {
                 workspace.open_compact_panel(PanelType::LoginDialog, ctx);

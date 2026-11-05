@@ -188,8 +188,10 @@ effect that is not built in renders only where that effect is installed.
 
 - ~~An effect plug-in's install checks only `check_download`, not the
   name~~ -- gone with the WGSL plug-ins (D3).
-- Effect downloads need a token and are gated by online mode only at the
-  caller; variation downloads need neither.
+- ~~Effect downloads need a token and are gated by online mode only at the
+  caller; variation downloads need neither~~ -- since 2026-11-04 neither
+  needs a token or the account: a guest fetches both (ONLINE.md, *The
+  online account, and guests*).
 - ~~Updates and Clear Cache exist for variations only~~ -- fixed in P3
   step 3: the Effects panel updates a download and clears the cache
   (`EffectRegistry::clear_api`; revisions and `remove_by_name` came

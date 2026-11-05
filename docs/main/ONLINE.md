@@ -94,27 +94,33 @@ an empty success.
 
 ---
 
-## Online mode
+## The online account, and guests
 
-`SystemSettings::online_mode` (default `true`) gates everything that
-talks to the online service. File → **Online features** (a checkbox,
-also in the compact menu's File section) switches it; like any device
-preference it is saved at once and is not undoable.
+`SystemSettings::online_account` (default `true`) is the account: File →
+**Online account** (a checkbox, also in the compact menu's File section)
+switches it; like any device preference it is saved at once and is not
+undoable. Off, the app is a **guest** of the online service: it never
+signs in (`is_signed_in` is false, so no request carries a token, and
+the desktop's auto-login is skipped) and offers nothing that needs an
+account, while everything the server serves without a sign-in keeps
+working. The stored sign-in is kept for when the account is turned back
+on. (It was `online_mode`, which switched everything online off; a
+settings file that says so reads as a guest.)
 
-| gated on online mode | not gated |
+| the account's (off: hidden or refused) | a guest's too |
 | --- | --- |
-| File → **Save Online** | loading a web deep link |
-| Window → **Account** | |
-| the Fractal Browser's **Online** tab | |
-| Palette Library → **Cloud Palettes** | |
-| the menu bar's connection and account indicator | |
+| File → **Save Online** | loading a web deep link (`?flame=`, `?animation=`) |
+| Window → **Account**, the startup auto-login | the variation catalog, fetched once per session |
+| the Fractal Browser's **Online** tab (your flames, flame search) | fetching a variation a loaded flame names but the app lacks, and updating stale downloads |
+| Palette Library → **Cloud Palettes** (your palette library) | the effect catalog, fetching a missing effect, updating downloaded effects |
+| the menu bar's connection and account indicator | the Scripts panel's **Public scripts**: searching and opening one |
 | the periodic health check | |
-| the variation catalog, fetched once per session | |
-| fetching a variation a loaded flame names but the app lacks: off, the flame renders without it and a notice names it (`api.variations_need_online`), with no fetch and no pause | |
-| updating downloaded variations the catalog says are stale | |
-| the effect catalog, fetched once per session (on desktop it needs sign-in: `list_effects` requires a token) | |
-| fetching a missing effect (needs sign-in); off, the name stays recorded and is fetched when online mode is turned on | |
-| the Scripts panel's online library (needs sign-in); off, a request reports that online features are off | |
+| the Scripts panel's publishing and **Published by you** | |
+
+A guest's request goes unauthenticated (`ApiState::public_get`); signed
+in, the same request carries the token, so the server can also answer
+with the caller's private rows. The server needs no sign-in for the
+catalogs, the downloads and published scripts.
 
 ---
 
@@ -166,7 +172,7 @@ in, the Save Online menu item is enabled only when connectivity is
 (`TokenExpired`) clears the sign-in, clears the cloud state in the UI,
 and says the session expired.
 
-The check runs only in online mode and while signed in; on the web the
+The check runs only with the online account on and signed in; on the web the
 startup check runs whether or not a sign-in is known.
 
 ---

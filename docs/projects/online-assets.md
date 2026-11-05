@@ -78,9 +78,9 @@ picker opens and kept for the session.
 `polyhaven:<id>` (the bundled ones keep their short ids) and the
 resolution chosen (`environment_resolution`, e.g. `4k`); a texture
 likewise. The `.fflame` stays small and opens anywhere that can fetch
-it. Opening one whose asset is not stored: with online mode on, it is
-downloaded (a notice, a progress bar) and the picture fills in; without,
-the background stands in, as for a missing bundled sky now.
+it. Opening one whose asset is not stored: it is downloaded (a notice,
+a progress bar) and the picture fills in, the background standing in
+meanwhile, as for a missing bundled sky now.
 
 **Fetching and keeping** (any provider):
 - Desktop: ureq on a background thread, identified as
@@ -94,8 +94,9 @@ the background stands in, as for a missing bundled sky now.
   bundled skies are fetched from `pkg/assets/environments/` when picked,
   so the web app's download does not grow.
 - Downloads run off the frame, with progress and cancel, as exports do.
-  Only in online mode (`SystemSettings::online_mode`), as every other
-  network call.
+  A guest's too: since 2026-11-04 no switch turns the network off, and
+  the online account (`SystemSettings::online_account`) is the sign-in
+  and saving online alone (ONLINE.md).
 
 **Every resolution, made usable** (decision 3). What a GPU and memory
 hold sets two limits a large file meets: WebGPU's default texture side is

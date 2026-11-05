@@ -1657,7 +1657,7 @@ impl EguiLayer {
             fly_available: crate::ui::visibility::fly_mode(crate::camera::gesture::view_kind(config_manager.config())).is_show(),
             tonemap_mode: config_manager.config().tonemap_mode,
             solid: crate::ui::visibility::Solid::of(config_manager.config()),
-            online_mode: config_manager.system_settings().online_mode,
+            online_account: config_manager.system_settings().online_account,
             has_api_flame_id: api_state.flame_id.is_some(),
             api_flame_id: api_state.flame_id.clone(),
             api_flame_is_public: api_state.flame_is_public,
@@ -2466,12 +2466,12 @@ impl EguiLayer {
             api_animation_save_action = action;
         }
 
-        // The Online features switch. A device preference: written to
+        // The Online account switch. A device preference: written to
         // SystemSettings and saved at once, outside the undo history,
         // as signing out does.
-        if let Some(on) = menu_actions.file.set_online_mode {
+        if let Some(on) = menu_actions.file.set_online_account {
             let settings = config_manager.system_settings_mut();
-            settings.online_mode = on;
+            settings.online_account = on;
             let _ = settings.save();
         }
 
