@@ -8056,7 +8056,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let mut lparams = [[0.0f32; 4]; LAYER_PARAM_VEC4S];
         let mut fdata = [[0.0f32; 4]; FDATA_VEC4S];
         // What a custom entry's `global:` (`prepare`) reads of the image.
-        let image = super::lang::interp::Env {
+        let mut image = super::lang::interp::Env {
             pixel: super::lang::builtins::C64::ZERO,
             maxiter: escape.max_iter.max(1),
             center: super::lang::builtins::C64::new(cx, cy),
@@ -8070,6 +8070,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             julia: escape.julia,
             julia_c: super::lang::builtins::C64::new(f64::from(escape.julia_re), f64::from(escape.julia_im)),
             rotation: f64::from(escape.rotation),
+            // A colouring's `prepare` may read them; the degree is set
+            // below, once the formula's parameters are packed.
+            bailout: f64::from(escape.bailout),
+            degree: 2.0,
         };
         // The smooth count's log base: the formula's degree in mode A, 2
         // elsewhere.
@@ -8197,6 +8201,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 super::pack_params(layer.parameters, &escape.layer.params, lparams.as_flattened_mut());
             }
             degree = super::escape_degree_of(formula, fparams.as_flattened());
+            image.degree = f64::from(degree);
 
             if let Some(derive) = formula.derived_data {
                 let flat = fdata.as_flattened_mut();

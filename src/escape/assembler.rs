@@ -6016,9 +6016,13 @@ pub fn assemble_perturbed_full(
             }
             "//__ACCUM_DECL__" => {
                 if let Some((o, _)) = &owner {
+                    // A custom colouring's `start` takes the pixel's
+                    // starting z: the reference's first point plus the
+                    // pixel's offset from it, as the loop forms z.
+                    let z0 = if floatexp { "(ref_z(0u) + cfe2_to_f32(w))" } else { "(ref_z(0u) + perturb.s * w)" };
                     out.push(format!(
                         "    var accum_state: vec4<f32> = {};",
-                        o.accum_init
+                        o.accum_init.replace(crate::lang::wgsl::COLORING_Z0, z0)
                     ));
                 } else {
                     // `var`, not `let`: the perturbed templates' chunk
@@ -9399,9 +9403,11 @@ pub fn assemble_layered(
             }
             "//__ACCUM_DECL__" => {
                 if let Some((o, _)) = &owner {
+                    // A custom colouring's `start` takes the starting z,
+                    // seeded (and a program's `formula_init` run) above.
                     out.push(format!(
                         "    var accum_state: vec4<f32> = {};",
-                        o.accum_init
+                        o.accum_init.replace(crate::lang::wgsl::COLORING_Z0, "z")
                     ));
                 } else {
                     // `var`, not `let`: the perturbed templates' chunk

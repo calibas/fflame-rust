@@ -488,7 +488,7 @@ impl D<'_> {
                     Expm1 => call(Exp, a),
                     Log1p => bin(BinOp::Div, one.clone(), bin(BinOp::Add, one, a)),
                     // Folds, parts, roundings: not complex-differentiable.
-                    Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | RoundEven | Cosxx | IsInf | IsNan => {
+                    Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | RoundEven | Log2 | Cosxx | IsInf | IsNan => {
                         return Err(())
                     }
                 };
@@ -749,7 +749,7 @@ impl J<'_> {
         let factor = match fun {
             Sqr => times(konst(2.0, 0.0), a),
             Ident | F32 => return Some(da),
-            Zero | Round | Trunc | Ceil | Floor | RoundEven | IsInf | IsNan => return None,
+            Zero | Round | Trunc | Ceil | Floor | RoundEven | Log2 | IsInf | IsNan => return None,
             SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Tap | Disc | Hash2 => return None,
             Fract => return Some(da),
             Sqrt => bin(BinOp::Div, konst(0.5, 0.0), call(Sqrt, a)),

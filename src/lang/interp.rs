@@ -83,12 +83,16 @@ pub struct Env {
     pub julia_c: C64,
     /// The view's rotation, radians.
     pub rotation: f64,
+    /// The panel's squared bailout and the formula's degree at infinity,
+    /// as a colouring reads them (`ctx.bailout`, `ctx.degree`).
+    pub bailout: f64,
+    pub degree: f64,
 }
 
 impl Env {
     /// A pixel with nothing else set: tests that only need `#pixel`.
     pub fn at(pixel: C64, maxiter: u32) -> Self {
-        Env { pixel, maxiter, center: C64::ZERO, magn: 1.0, x: 0, y: 0, width: 1, height: 1, random: C64::ZERO, julia: false, julia_c: C64::ZERO, rotation: 0.0 }
+        Env { pixel, maxiter, center: C64::ZERO, magn: 1.0, x: 0, y: 0, width: 1, height: 1, random: C64::ZERO, julia: false, julia_c: C64::ZERO, rotation: 0.0, bailout: 4.0, degree: 2.0 }
     }
 }
 
@@ -213,6 +217,10 @@ struct Shared<'e> {
     /// A 3D variation's point's and accumulator's third parts (B2).
     pixel_z: f64,
     accum_z: f64,
+    /// A colouring's view of the loop: the iterate before the step, and
+    /// whether the orbit escaped (`ctx.prev`, `ctx.escaped`).
+    prev: C64,
+    escaped: bool,
 }
 
 impl<'e> Shared<'e> {
@@ -223,6 +231,8 @@ impl<'e> Shared<'e> {
             vcolor: None,
             pixel_z: 0.0,
             accum_z: 0.0,
+            prev: C64::ZERO,
+            escaped: false,
             pixel: env.pixel,
             env,
             z: C64::ZERO,
@@ -681,6 +691,7 @@ pub fn run(
     let mut escaped = false;
     for i in 0..env.maxiter {
         sh.pass = i;
+        sh.prev = sh.z;
         f.exec(&formula.loop_body, &mut sh);
         sh.pass = i + 1;
         sh.numiter = i + 1;
@@ -697,6 +708,7 @@ pub fn run(
     if !escaped {
         sh.numiter = env.maxiter;
     }
+    sh.escaped = escaped;
     if let Some(c) = c.as_mut() {
         let prog = c.prog;
         c.exec(&prog.final_body, &mut sh);
@@ -957,7 +969,30 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::CreaseReach => Value::Float(sh.crease[3]),
         Predef::CreaseHeight => Value::Float(sh.crease_height),
         Predef::CreaseSlope => Value::Complex(sh.crease_slope),
+        // A colouring's view of the loop (P7 step 2). The interpreter
+        // tests no convergence and detects no period; the `c` it steps
+        // by is the pixel, as a program's on the GPU.
+        Predef::Bailout => Value::Float(env.bailout),
+        Predef::Degree => Value::Float(env.degree),
+        Predef::Escaped => Value::Bool(sh.escaped),
+        Predef::Converged => Value::Bool(false),
+        Predef::Period => Value::Int(0),
+        Predef::EscapeFraction => Value::Float(escape_fraction(sh)),
+        Predef::Prev => Value::Complex(sh.prev),
+        Predef::StepC => Value::Complex(sh.pixel),
     }
+}
+
+/// How far through its last step the orbit had gone when it escaped, as
+/// the template's `esc_escape_fraction`: 1 for an orbit that did not.
+fn escape_fraction(sh: &Shared) -> f64 {
+    if !sh.escaped {
+        return 1.0;
+    }
+    let lr = sh.env.bailout.max(1.0000001).log2();
+    let lz = (sh.z.re * sh.z.re + sh.z.im * sh.z.im).max(1.0000001).log2();
+    let f = 1.0 - (lz / lr).max(1e-6).log2() / sh.env.degree.max(1.0001).log2();
+    f.clamp(0.0, 1.0)
 }
 
 /// `|c + d| - |c|` by sign case, as the GPU's `uf_diffabs`: exact

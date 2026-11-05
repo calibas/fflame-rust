@@ -61,6 +61,13 @@ var<private> esc_env_solid: bool;
 /// flat there, as an interior pixel's.
 pub const SOLID_FLAG: &str = "esc_env_solid";
 
+/// The token a custom colouring's `accum_init` holds where the formula's
+/// starting z goes (`ufc_init(ESC_Z0)`): each template puts its own
+/// expression in its place, the direct path's `z` and the perturbed
+/// rungs' reference start plus the pixel's offset. A built-in's
+/// `accum_init` is a constant and holds none.
+pub const COLORING_Z0: &str = "ESC_Z0";
+
 /// A custom colouring's three pieces, as `ColoringDef` holds them.
 #[derive(Clone, Debug)]
 pub struct ColoringWgsl {
@@ -69,7 +76,7 @@ pub struct ColoringWgsl {
     /// Empty: `coloring_accum` is in `wgsl`, which the templates splice
     /// before the accumulator marker.
     pub wgsl_accum: String,
-    /// `ufc_init()`.
+    /// `ufc_init(ESC_Z0)`, [`COLORING_Z0`] the formula's starting z.
     pub accum_init: String,
     /// The colouring keeps state or has a loop: it needs the
     /// accumulator compiled in.
@@ -1558,7 +1565,7 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
         );
     }
     let mut g = Gen::new(p, Ctx::ColoringInit, "ufc_");
-    body.push_str("fn ufc_init() -> vec4<f32> {\n");
+    body.push_str("fn ufc_init(z_init: vec2<f32>) -> vec4<f32> {\n");
     for &(v, _) in &offsets {
         let _ = writeln!(body, "    {};", var_decl(v, &p.vars[v]));
     }
@@ -1594,7 +1601,7 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
     body.push_str("    return index;\n}\n");
 
     let wgsl = g.finish(&format!("// custom colouring: {}\n", sanitize(&p.name)), body);
-    ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init: "ufc_init()".to_string(), needs_accum, ext_vec4s }
+    ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init: format!("ufc_init({COLORING_Z0})"), needs_accum, ext_vec4s }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2433,9 +2440,22 @@ impl<'p> Gen<'p> {
             (Predef::Z, Ctx::Creases | Ctx::Variation | Ctx::Effect) => "pixel".into(),
             (Predef::Z, Ctx::ColoringLoop) => "z".into(),
             (Predef::Z, Ctx::ColoringFinal) => "sum.z".into(),
-            // A colouring's init runs before the first iterate.
-            (Predef::Z, Ctx::ColoringInit) => "vec2<f32>(0.0, 0.0)".into(),
+            // A colouring's init runs before the first iterate, on the
+            // formula's starting z: the template passes it
+            // ([`COLORING_Z0`]), as the interpreter's init sees it.
+            (Predef::Z, Ctx::ColoringInit) => "z_init".into(),
             (Predef::NumIter, _) => "i32(sum.n)".into(),
+            // What the loop knows (P7 step 2): the panel's, anywhere; the
+            // orbit's ending in `finish`, from its summary; the step's own
+            // in `step`, the accumulator's arguments.
+            (Predef::Bailout, _) => "params.bailout".into(),
+            (Predef::Degree, _) => "params.degree".into(),
+            (Predef::Escaped, _) => "sum.escaped".into(),
+            (Predef::Converged, _) => "sum.converged".into(),
+            (Predef::Period, _) => "i32(sum.period)".into(),
+            (Predef::EscapeFraction, _) => "esc_escape_fraction(sum)".into(),
+            (Predef::Prev, _) => "z_prev".into(),
+            (Predef::StepC, _) => "c".into(),
             (Predef::Pass, Ctx::Formula) => "s.npass".into(),
             // The perturbation equations read the reference's pass.
             (Predef::Pass, _) => "pass_index".into(),
@@ -3201,6 +3221,7 @@ impl<'p> Gen<'p> {
             Sqr => format!("{}({v})", self.use_(Helper::FSq)),
             Sqrt => format!("sqrt({v})"),
             Log => format!("log({v})"),
+            Log2 => format!("log2({v})"),
             Exp => format!("exp({v})"),
             Abs | Cabs => format!("abs({v})"),
             Recip => format!("(1.0 / {v})"),
@@ -3253,6 +3274,7 @@ fn complex_helper(f: Builtin) -> Helper {
         SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Tap | Disc => unreachable!("an image read, emitted by `Gen::call`"),
         Hash2 => Helper::Hash2,
         Fract | RoundEven => unreachable!("emitted by `Gen::call`, real or complex"),
+        Log2 => unreachable!("a real's alone (`Builtin::result_ty`)"),
         // `Gen::call` passes the value through.
         F32 => Helper::CIdent,
         Sqr => Helper::CSqr,
@@ -4286,9 +4308,14 @@ struct HarnessParams {
     flags: u32,
     rot_cs: vec2<f32>,
     julia_c: vec2<f32>,
+    bailout: f32,
+    degree: f32,
     crease: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> params: HarnessParams;
+fn esc_escape_fraction(sum: OrbitSummary) -> f32 {
+    return 1.0;
+}
 fn fparam(i: u32) -> f32 {
     return f32(i);
 }
@@ -4356,7 +4383,7 @@ pub fn validate_coloring(c: &ColoringWgsl) -> Result<(), String> {
         "{HARNESS}{ENV_DECLS}{}\n@compute @workgroup_size(1)\nfn main() {{\n    var st = {};\n    \
          st = coloring_accum(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), st);\n    \
          let v = coloring_map(OrbitSummary(vec2<f32>(1.0, 1.0), 3u, true, false, 0u, vec2<f32>(1.0, 1.0)), st);\n}}\n",
-        c.wgsl, c.accum_init
+        c.wgsl, c.accum_init.replace(COLORING_Z0, "vec2<f32>(0.0, 0.0)")
     ))
 }
 
@@ -4406,7 +4433,7 @@ pub(crate) mod tests {
             "{HARNESS}{ENV_DECLS}{}\n@compute @workgroup_size(1)\nfn main() {{\n    var st = {};\n    \
              st = coloring_accum(vec2<f32>(0.1, 0.2), vec2<f32>(0.0), vec2<f32>(0.1, 0.2), st);\n    \
              let v = coloring_map(OrbitSummary(vec2<f32>(1.0), 3u, true, false, 0u, vec2<f32>(1.0)), st);\n}}\n",
-            c.wgsl, c.accum_init
+            c.wgsl, c.accum_init.replace(COLORING_Z0, "vec2<f32>(0.1, 0.2)")
         )
     }
 
@@ -4418,7 +4445,10 @@ pub(crate) mod tests {
         // An effect's reads of its image are an effect's alone
         // (`an_effect_compiles_to_a_module_naga_accepts`).
         for (name, _) in super::super::builtins::BUILTINS.iter().filter(|(n, _)| !n.starts_with("__")) {
-            let _ = writeln!(calls, "  c = c + {name}(z)");
+            // A real's alone: `log2`.
+            if *name != "log2" {
+                let _ = writeln!(calls, "  c = c + {name}(z)");
+            }
             if !matches!(*name, "conj" | "flip" | "cosxx" | "isnan" | "isinf") {
                 let _ = writeln!(calls, "  f = f + real({name}(f))");
             }
@@ -4934,6 +4964,9 @@ fn step(s, p) {
             // The tests are bools: used as one.
             let body = if matches!(b, Builtin::IsInf | Builtin::IsNan) {
                 format!("if {name}(z)\n  z = 0\n endif")
+            } else if *b == Builtin::Log2 {
+                // A real's alone.
+                format!("z = {name}(real(z)) + #pixel")
             } else {
                 format!("z = {name}(z) + #pixel")
             };
@@ -5285,7 +5318,7 @@ fn step(s, p) {
             cblock.resize(64, 0.0);
             blocks.extend(cblock);
             let cw = coloring(c);
-            let body = "    var s = formula_init(px);\n    var z = s.z;\n    var st = ufc_init();\n    var n = 0u;\n    var escaped = false;\n\
+            let body = "    var s = formula_init(px);\n    var z = s.z;\n    var st = ufc_init(z);\n    var n = 0u;\n    var escaped = false;\n\
                         \x20   for (var i = 0u; i < params.max_iter; i = i + 1u) {\n        let zp = z;\n        s = formula_loop(s, px);\n        z = s.z;\n\
                         \x20       st = coloring_accum(z, zp, px, st);\n        if (!formula_bailout(s, px)) {\n            escaped = true;\n            n = i + 1u;\n            break;\n        }\n    }\n\
                         \x20   if (!escaped) {\n        n = params.max_iter;\n    }\n\

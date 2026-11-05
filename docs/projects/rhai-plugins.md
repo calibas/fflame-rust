@@ -834,7 +834,7 @@ needs the census did not, the int step and `ctx.layer`):
 |---|---|---|---|
 | Effects | 15 | all 15, the definitions (D1) | yes, the Effects panel |
 | Escape formulas | 26 | all 26 (`escape::twins`) | yes, Edit as Formula |
-| Escape colourings | 28 | 7 (batch 1 of 5, branch `rhai-escape-colourings`; plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
+| Escape colourings | 28 | 19 (batches 1-2 of 5, branch `rhai-escape-colourings`; plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
 | Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
@@ -882,7 +882,10 @@ Steps, in the order that unlocks the most first (the user picks):
 
    **A bug found.** On the GPU, `start`'s `z` is the literal 0, while
    the interpreter gives it the formula's starting z. No test catches
-   it, because the test's formula starts at 0. Fixed in batch 2.
+   it, because the test's formula starts at 0. Fixed in batch 2: each
+   template hands `start` its starting z (the perturbed path the
+   reference's first point plus the pixel's offset). It changes the Point
+   Trap example on a formula that does not start at 0.
 
    **The order of work**, each batch ending with the twins it unlocks:
    - **Batch 1: the seven writable today**, with the machinery every
@@ -907,7 +910,15 @@ Steps, in the order that unlocks the most first (the user picks):
      - A printed timing, as the formula twins have.
      - The Escape panel's **Edit as Rhai** for the colouring; the
        Formula Editor's `open_in_use` takes the entry's kind.
-   - **Batch 2: what the loop knows.**
+   - **Batch 2: what the loop knows.** **Built 2026-11-05**: all twelve
+     match their built-ins on every pixel on the five views and Newton's
+     basins, but Stripe Average, under 0.25% of pixels by an ulp (its
+     range-reduced `sin` at up to 32 pi; allowed 1%). Speed within a few
+     percent, but Curvature Average 14% slower (`atan2`, as Itinerary)
+     and Stripe Average 9% (`sin`). Two rules found for matching to the
+     bit, both the GPU's fused multiply-add: a blend as `prev + (mean -
+     prev) * f` (WGSL's `mix`), and a term the built-in adds in one
+     expression added in one (Root Basin's shading by time).
      - `ctx.escaped`, `ctx.converged`, and `ctx.period`, which brings
        `NeedsPeriod`.
      - `ctx.degree` and `ctx.bailout` in every function.
