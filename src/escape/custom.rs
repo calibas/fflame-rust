@@ -640,9 +640,11 @@ fn reference_inputs(escape: &EscapeConfig, prog: &Arc<ir::Program>) -> Option<Re
         julia: escape.julia,
         julia_c: lang::builtins::C64::new(f64::from(escape.julia_re), f64::from(escape.julia_im)),
         rotation: f64::from(escape.rotation),
-        // A colouring's; a formula reads neither.
+        // A colouring's; a formula reads none of them.
         bailout: f64::from(escape.bailout),
         degree: 2.0,
+        render_px: 1.0,
+        supersample: 1.0,
     };
     Some(ReferenceInputs { prog: prog.clone(), params, env })
 }
@@ -1219,6 +1221,12 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
     // compiles in only for a colouring that asks.
     if p.reads(ir::Predef::Period) {
         features.push(ColoringFeature::NeedsPeriod);
+    }
+    // `ctx.dz` reads the derivative orbit, which the template compiles in
+    // for a colouring that asks and a formula that has one
+    // (`ctx.has_derivative` says which).
+    if p.reads(ir::Predef::OrbitDz) {
+        features.push(ColoringFeature::NeedsDerivative);
     }
     // What a Rhai colouring's `INFO` says of it beside the program (the
     // lowering checked them): a level clamped rather than wrapped, and

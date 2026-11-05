@@ -3491,6 +3491,14 @@ mod tests {
         cases.push(("external_rays", vec![]));
         cases.push(("external_rays", vec![("count", 3.0), ("width", 0.2)]));
         cases.push(("external_rays", vec![("count", 2.5), ("width", 0.1)]));
+        // Batch 4: the derivative, in the plane and in pixels, and a
+        // light past a half turn (its angle range-reduced).
+        for mapping in 0..3 {
+            cases.push(("distance_estimate", vec![("mapping", mapping as f32)]));
+            cases.push(("distance_estimate", vec![("mapping", mapping as f32), ("units", 1.0), ("scale", 0.3)]));
+        }
+        cases.push(("normal_map", vec![]));
+        cases.push(("normal_map", vec![("angle", 0.7), ("height", 0.5), ("scale", 2.0)]));
 
         let mut whole = crate::config::escape::EscapeConfig::default();
         whole.formula = "mandelbrot".into();
@@ -3531,11 +3539,13 @@ mod tests {
         // sin is range-reduced (for Metal's error) where the built-in's is
         // the hardware's, whose error grows with the argument: Stripe
         // Average's takes density times the angle, up to 32 pi, Position
-        // Map's 2 pi times a frequency times the final z. An ulp, which
-        // the palette carries across the compare's 1e-4 on a few pixels.
+        // Map's 2 pi times a frequency times the final z, Normal Map's a
+        // light angle past a half turn. An ulp, which the palette carries
+        // across the compare's 1e-4 on a few pixels.
         let allowed = |name: &str| match name {
             "stripe_average" => 0.01,
             "position_map" => 0.02,
+            "normal_map" => 0.002,
             _ => 0.0,
         };
         let mut worst = 0.0f64;
@@ -3592,7 +3602,13 @@ mod tests {
         origami.center_re = "0".into();
         origami.center_im = "0".into();
         origami.zoom_log2 = -1.0;
-        let made_for: [(&str, &crate::config::escape::EscapeConfig, &str, Vec<(&str, f32)>); 8] = [
+        // A formula's derivative derived from its program, not written
+        // (`ctx.dz` through `derive`): the Mandelbrot's own twin.
+        let mut program = crate::config::escape::EscapeConfig { max_iter: 200, center_re: "-0.6".into(), zoom_log2: 0.4, ..Default::default() };
+        let msrc = crate::escape::twins::custom_source("mandelbrot").unwrap();
+        program.formula = crate::escape::custom::name_of(EntryKind::Formula, &msrc);
+        program.custom_formula = Some(msrc);
+        let made_for: [(&str, &crate::config::escape::EscapeConfig, &str, Vec<(&str, f32)>); 11] = [
             ("Newton", &newton, "root_basin", vec![]),
             ("Newton", &newton, "root_basin", vec![("key", 1.0), ("key_scale", 0.6)]),
             ("Newton", &newton, "exponential_smoothing", vec![("mode", 1.0)]),
@@ -3601,6 +3617,9 @@ mod tests {
             ("Origami", &origami, "position_map", vec![]),
             ("Origami", &origami, "position_map", vec![("address_mix", 2.0)]),
             ("Origami", &origami, "position_map", vec![("address_mix", 0.5), ("freq_x", 12.0), ("freq_y", 9.0)]),
+            ("the Mandelbrot's twin", &program, "distance_estimate", vec![]),
+            ("the Mandelbrot's twin", &program, "distance_estimate", vec![("units", 1.0), ("mapping", 2.0)]),
+            ("the Mandelbrot's twin", &program, "normal_map", vec![]),
         ];
         for (view, base, name, settings) in &made_for {
             let mut esc = (*base).clone();
@@ -3612,6 +3631,13 @@ mod tests {
             let got = output_on(&device, &queue, &renderer, &twin_of(esc), w, h, false);
             let covered = want.chunks(4).filter(|p| p[3] > 0.5).count();
             assert!(covered > 100, "{name} {settings:?} on {view}: too little shows ({covered})");
+            // Shaded by a derivative, not the flat light of none.
+            if matches!(*name, "distance_estimate" | "normal_map") {
+                let mut values: Vec<u32> = want.chunks(4).map(|p| p[0].to_bits()).collect();
+                values.sort_unstable();
+                values.dedup();
+                assert!(values.len() > 50, "{name} on {view}: flat ({} values), no derivative", values.len());
+            }
             let d = differing(&want, &got);
             println!("{name} {settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
             if allowed(name) == 0.0 {

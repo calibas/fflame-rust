@@ -567,7 +567,11 @@ fn escaped(s, p) {
     It may end in an `if` whose arms give either.
   - The context adds what the built-in colourings read (batch 2 of the
     colouring twins):
-    - in `finish`: `ctx.numiter` (the passes run), `ctx.escaped`,
+    - in `finish`: `ctx.numiter` (the passes run), `ctx.dz` (the
+      orbit's derivative per render pixel; reading it compiles the
+      derivative in, `NeedsDerivative`, on a formula that has one --
+      a built-in's, or one derived from a custom formula's program),
+      `ctx.escaped`,
       `ctx.converged` (a convergent formula's orbit settled),
       `ctx.period` (the period the orbit was found to repeat at, an
       int, 0 if none; reading it turns the period check on,
@@ -578,8 +582,14 @@ fn escaped(s, p) {
     - in `step`: `ctx.prev` (z before this pass) and `ctx.step_c` (the c
       the renderer hands the colouring's step: a built-in formula's c,
       the pixel or the Julia constant; a custom formula's, the pixel);
-    - anywhere: `ctx.bailout` (the panel's) and `ctx.degree` (the
-      formula's degree at infinity, as the smooth colourings divide by).
+    - anywhere: `ctx.bailout` (the panel's), `ctx.degree` (the
+      formula's degree at infinity, as the smooth colourings divide by),
+      `ctx.has_derivative` (whether `ctx.dz` is a derivative or its seed,
+      1, per render pixel: a colouring built on it draws flat without),
+      `ctx.render_px` (a render pixel's size in the plane) and
+      `ctx.supersample` (render pixels per output pixel: the supersample
+      factor times the render scale, so a distance in output pixels holds
+      still as antialiasing changes).
 
     A colouring counts its own passes in its state.
   - `INFO` takes, beside the title: `region` (`"inside"`, `"outside"`
@@ -1121,15 +1131,16 @@ fn escaped(s, p) {
     parted by whole units after the first few lines.
 - **The built-in colourings' twins** (`escape::twins::COLORING_TWINS`,
   `assets/formulas/twins/colorings/*.rhai`; P7 step 2 in
-  [rhai-plugins.md](../projects/rhai-plugins.md), batches 1-3 of five):
+  [rhai-plugins.md](../projects/rhai-plugins.md), batches 1-4 of five):
   Escape Count, Orbit Trap, Sphere Average, Decomposition, Basic,
   Gaussian Integer, Itinerary, (reading the loop's values, `ctx` above)
   Smooth, Orbit, Stripe, Magnitude and Position Average, Root Basin,
   Triangle Inequality, Period, Curvature Average, Velocity, Threads and
-  Exponential Smoothing, and (bounded, `INFO` above) Position Map and
-  External Rays, each a Rhai colouring that renders as its built-in.
-  The other colourings read what the dialect cannot yet (`dz`, a colour
-  as the result), and come in the later batches.
+  Exponential Smoothing, (bounded, `INFO` above) Position Map and
+  External Rays, and (the derivative, `ctx.dz`) Distance Estimate and
+  Normal Map, each a Rhai colouring that renders as its built-in. The
+  other four draw a colour, not a palette position, which the dialect
+  cannot yet, and come in the last batch.
   - Each has its built-in's parameters exactly -- names, captions,
     hints, ranges, choices, a log slider -- its interior, accumulator,
     period and bounded flags, and its recommended bailout and pick
@@ -1141,16 +1152,19 @@ fn escaped(s, p) {
   - Through the renderer each matches its built-in on every pixel, at
     every setting that takes another path through the code, on the
     Mandelbrot inside and out, a Julia set, deep on the perturbed path,
-    at a bailout of 1e8, and on the exponential, and those of a
-    convergent formula on Newton's basins
-    (`builtin_colouring_twins_render_as_their_builtins`). Stripe Average
-    and Position Map are the exceptions, by an ulp the palette carries
-    to 1e-3: the language's `sin` is range-reduced (for Metal's error)
-    where the built-ins' is the hardware's, whose error grows with the
-    argument -- Stripe's up to 32 pi (under 0.25% of pixels), Position
-    Map's 2 pi times a frequency times the final z (under 1.7% on
-    Origami at frequency 12). Position Map is not compared where z
-    escapes to 1e4 and more: sines of 1e5 are noise on every platform.
+    at a bailout of 1e8, and on the exponential; those of a formula made
+    for them on it (Newton's basins, Origami's folds); and the
+    derivative's on the Mandelbrot's Rhai twin, whose derivative is
+    derived (`builtin_colouring_twins_render_as_their_builtins`). Stripe
+    Average, Position Map and Normal Map are the exceptions, by an ulp
+    the palette carries to 1e-3: the language's `sin` and `cos` are
+    range-reduced (for Metal's error) where the built-ins' are the
+    hardware's, whose error grows with the argument -- Stripe's up to
+    32 pi (under 0.25% of pixels), Position Map's 2 pi times a
+    frequency times the final z (under 1.7% on Origami at frequency
+    12), Normal Map's a light angle past a half turn (under 0.06%;
+    exact at its default). Position Map is not compared where z escapes
+    to 1e4 and more: sines of 1e5 are noise on every platform.
   - Two more rules for a twin to match to the bit, each the GPU fusing a
     multiply and an add: a blend is written `prev + (mean - prev) * f`,
     as WGSL's `mix` (`prev * (1 - f) + mean * f` parted on 0.016% of

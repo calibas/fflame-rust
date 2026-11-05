@@ -8074,6 +8074,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             // below, once the formula's parameters are packed.
             bailout: f64::from(escape.bailout),
             degree: 2.0,
+            render_px: span_y / self.height.max(1) as f64,
+            supersample: f64::from(self.display_factor()),
         };
         // The smooth count's log base: the formula's degree in mode A, 2
         // elsewhere.

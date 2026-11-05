@@ -211,6 +211,16 @@ pub enum Predef {
     EscapeFraction,
     Prev,
     StepC,
+    /// What the derivative gives a colouring (P7 step 2, batch 4): in its
+    /// `finish`, the orbit's derivative per render pixel (reading it
+    /// compiles the derivative in, `NeedsDerivative`); anywhere, whether
+    /// one was compiled, a render pixel's size in the plane, and the
+    /// render pixels per output pixel (the supersample factor times the
+    /// render scale). No names in UF.
+    OrbitDz,
+    HasDerivative,
+    RenderPx,
+    Supersample,
 }
 
 impl Predef {
@@ -227,7 +237,9 @@ impl Predef {
             Predef::Bailout | Predef::Degree | Predef::EscapeFraction => Ty::Float,
             Predef::Escaped | Predef::Converged => Ty::Bool,
             Predef::Period => Ty::Int,
-            Predef::Prev | Predef::StepC => Ty::Complex,
+            Predef::Prev | Predef::StepC | Predef::OrbitDz => Ty::Complex,
+            Predef::HasDerivative => Ty::Bool,
+            Predef::RenderPx | Predef::Supersample => Ty::Float,
             Predef::WhiteSq
             | Predef::ScrnMax
             | Predef::IsMand
