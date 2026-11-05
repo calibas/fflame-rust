@@ -2701,37 +2701,19 @@ impl EguiLayer {
         }
     }
 
-    /// Check if fractal browser panel needs thumbnail generation
+    /// Desktop: make one Fractal Browser preview, for the gallery drawn
+    /// this frame (call once a frame, after the UI). Returns whether one
+    /// was made, so the caller asks for the next frame.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn fractal_browser_needs_thumbnails(&self) -> bool {
-        if let Some(ref panel) = self.fractal_browser_panel {
-            panel.is_generating()
-        } else {
-            false
-        }
-    }
-
-    /// Generate one thumbnail for the fractal browser (call once per frame)
-    /// Returns true if generation is complete
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn generate_fractal_browser_thumbnail(
+    pub fn generate_fractal_browser_preview(
         &mut self,
         device: &egui_wgpu::wgpu::Device,
         queue: &egui_wgpu::wgpu::Queue,
-        palette_library: &crate::scene::palette::PaletteLibrary,
     ) -> bool {
-        if let Some(ref mut panel) = self.fractal_browser_panel {
-            // Get which tab/config needs generation
-            if let Some((tab, _config)) = panel.next_pending_config() {
-                panel.generate_one_thumbnail(tab, &self.ctx, |config| {
-                    crate::renderer::render_thumbnail(device, queue, config, palette_library)
-                })
-            } else {
-                true // Nothing to generate
-            }
-        } else {
-            true // No panel, nothing to generate
-        }
+        let ctx = self.ctx.clone();
+        self.fractal_browser_panel.as_mut().is_some_and(|panel| {
+            panel.generate_one_preview(&ctx, |config| crate::renderer::render_preview(device, queue, config))
+        })
     }
 
     /// Desktop: whether the Texture panel still owes a preview.
@@ -2756,15 +2738,17 @@ impl EguiLayer {
         }
     }
 
-    /// WASM: Start async thumbnail generation for fractal browser
+    /// WASM: spawn the Fractal Browser's next preview, for the gallery
+    /// drawn this frame, one at a time.
     #[cfg(target_arch = "wasm32")]
-    pub fn start_fractal_browser_thumbnails(
+    pub fn start_fractal_browser_preview(
         &mut self,
         device: &egui_wgpu::wgpu::Device,
         queue: &egui_wgpu::wgpu::Queue,
     ) {
+        let ctx = self.ctx.clone();
         if let Some(ref mut panel) = self.fractal_browser_panel {
-            panel.start_async_thumbnails(device, queue);
+            panel.start_next_preview(device, queue, &ctx);
         }
     }
 

@@ -3847,24 +3847,16 @@ impl App {
         }
 
         // Generate thumbnails for fractal browser (unified panel)
-        // Desktop: Blocking generation, one per frame
-        // WASM: Async generation via spawn_local
+        // The Fractal Browser's previews, for the gallery drawn this
+        // frame. Desktop: one a frame, blocking -- and the next frame
+        // asked for while one was made. WASM: one spawned at a time.
         #[cfg(not(target_arch = "wasm32"))]
-        if self.egui_layer.fractal_browser_needs_thumbnails() {
-            self.egui_layer.generate_fractal_browser_thumbnail(
-                &self.gpu.device,
-                &self.gpu.queue,
-                &self.palette_library,
-            );
-            // Request immediate repaint to continue generation next frame
+        if self.egui_layer.generate_fractal_browser_preview(&self.gpu.device, &self.gpu.queue) {
             window.request_redraw();
         }
 
         #[cfg(target_arch = "wasm32")]
-        self.egui_layer.start_fractal_browser_thumbnails(
-            &self.gpu.device,
-            &self.gpu.queue,
-        );
+        self.egui_layer.start_fractal_browser_preview(&self.gpu.device, &self.gpu.queue);
 
         // Texture previews (the Texture panel): the same pattern -- one
         // blocking generation a frame on desktop, spawned on the web.

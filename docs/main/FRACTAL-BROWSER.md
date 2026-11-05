@@ -110,29 +110,44 @@ its thumbnail hash) and draws:
 
 ### Rendering
 
-Every thumbnail is a real render through the unified render API
-(`renderer::render` with a `RenderJob`): 512 × 512 pixels, 50 million
-iterations, 256 iterations per thread (`THUMBNAIL_SIZE`,
-`THUMBNAIL_ITERATIONS`, `THUMBNAIL_ITERATIONS_PER_THREAD`). The render
-dispatches by mode, so escape-time and simulation configs render
-through their own engines.
+A gallery's thumbnails are **previews**, real renders through the
+unified render API (`renderer::render_preview_async`, a `RenderJob` into
+`renderer::render`) at the gallery's size, cheaper than an export:
 
-- **Desktop**: one thumbnail a frame, blocking
-  (`render_thumbnail`, which wraps the async function in
-  `pollster::block_on`). A gallery queues its missing thumbnails when it
-  is first drawn, so a preset category's are made when it is opened. The
-  shown gallery's queue goes first, then any other that was shown and is
-  not finished (`next_pending_config`, a `GalleryId` each). While a
-  gallery has thumbnails pending it shows a "Generating Thumbnails..."
-  window with a progress bar and the name being rendered, instead of its
-  contents.
-- **Web**: every missing thumbnail is spawned as an async render
-  (`render_thumbnail_async`), and finished ones are picked up on later
-  frames. The gallery stays usable meanwhile. A preset category's are
-  spawned the first time it is shown.
+- 256 x 256 pixels (`PREVIEW_SIZE`, the largest the gallery shows and
+  what the disk cache keeps);
+- for a flame, 12.5 million iterations (`PREVIEW_ITERATIONS`: the
+  512-pixel thumbnail's 50 million, scaled to the area, so the same
+  density a pixel), 256 iterations per thread;
+- every lit 3D view in the Lit tier -- a solid, an escape terrain, a
+  simulation's terrain -- rather than path traced, which their default
+  `Auto` tier gives an export (256 samples). So a preview of a
+  path-traced picture shows its lit look;
+- a simulation runs its whole step count: its picture is the run at that
+  count.
 
-Save Online uploads a thumbnail rendered by the same function, at the
-same 512 pixels, as a JPEG.
+Measured 2026-11-04 (GTX 1660 SUPER, a render with its shader compile),
+the 512 thumbnail against the preview: 145 and 35 ms for Grand Julian,
+189 and 46 ms for Quaternion Julia, 394 and 46 ms for KIFS Menger, and
+108 and 106 ms for Gray-Scott Coral.
+
+**The cards show at once.** A card without a preview is a placeholder,
+and the line under the toolbar counts those still to make. Previews are
+made one at a time, and only for the gallery drawn this frame
+(`FractalConfigGallery::take_shown`): a card on screen first, in the
+order drawn, then the rest of the gallery in its order (`next_missing`),
+so a scroll finds them made. Closing the panel or switching its tab
+stops them.
+
+- **Desktop**: one a frame, blocking (`render_preview`, which wraps the
+  async function in `pollster::block_on`), after the UI; the app asks
+  for the next frame while one is made.
+- **Web**: one spawned at a time (`start_next_preview`); a finished one
+  is picked up when the gallery is next drawn, and asks for that frame.
+
+Save Online uploads a thumbnail of its own, rendered at 512 pixels
+(`render_thumbnail_async`, `THUMBNAIL_SIZE`, the size the API wants) by
+the export's path, as a JPEG.
 
 ### The disk cache (desktop)
 

@@ -5,10 +5,13 @@
 //! - User Library panel (saved fractals)
 //! - Backup Library panel (auto-saved backups)
 //!
-//! On desktop: Thumbnails are rendered synchronously using pollster
-//! On WASM: Thumbnails are rendered asynchronously using wasm_bindgen_futures
-
-use std::collections::VecDeque;
+//! Previews (`renderer::render_preview_async`) are made one at a time,
+//! and only while the gallery is drawn: the cards show at once, a
+//! placeholder where a preview is missing, and the missing ones fill in
+//! -- those on screen first, then the rest of the gallery. Closing the
+//! panel or switching its tab stops them. On desktop the app renders one
+//! a frame, blocking (`generate_one_preview`); on WASM one is spawned at
+//! a time (`start_next_preview`).
 
 use egui::{self, Color32, CursorIcon, Sense, Vec2};
 use rust_i18n::t;
@@ -74,11 +77,13 @@ pub struct FractalConfigGallery {
     /// `shared_thumbnail_cache`, one for every gallery.
     texture_cache: TextureCache,
 
-    /// Queue of items pending thumbnail generation (desktop only)
-    pending_generation: VecDeque<usize>,
+    /// Drawn since the app last asked (`take_shown`): a gallery makes
+    /// previews only while it is on screen.
+    shown: bool,
 
-    /// Total items that needed generation (for progress calculation)
-    total_to_generate: usize,
+    /// The items whose card was on screen without a preview at the last
+    /// draw, in the order they were drawn: made first.
+    visible_missing: Vec<usize>,
 
     /// WASM: Shared state for receiving async thumbnail results
     #[cfg(target_arch = "wasm32")]
@@ -100,8 +105,8 @@ impl FractalConfigGallery {
             search_query: String::new(),
             thumbnail_size: 128.0,
             texture_cache: TextureCache::new(),
-            pending_generation: VecDeque::new(),
-            total_to_generate: 0,
+            shown: false,
+            visible_missing: Vec::new(),
             #[cfg(target_arch = "wasm32")]
             async_results: Rc::new(RefCell::new(HashMap::new())),
             #[cfg(target_arch = "wasm32")]
@@ -134,60 +139,99 @@ impl FractalConfigGallery {
         self.items.is_empty()
     }
 
-    /// Check if thumbnail generation is in progress (desktop only)
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn is_generating(&self) -> bool {
-        !self.pending_generation.is_empty()
+    /// Whether it was drawn since the last call, and forget that it was:
+    /// the app asks once a frame, after the UI, so a gallery not drawn
+    /// this frame -- its panel closed, another tab shown -- makes nothing.
+    pub fn take_shown(&mut self) -> bool {
+        std::mem::take(&mut self.shown)
     }
 
-    /// WASM: Start async thumbnail generation for items that need it
-    ///
-    /// This spawns async tasks to render thumbnails in the background.
-    /// Results are polled in `render()` via `poll_async_thumbnails()`.
-    #[cfg(target_arch = "wasm32")]
-    pub fn start_async_thumbnail_generation(
-        &mut self,
-        device: &egui_wgpu::wgpu::Device,
-        queue: &egui_wgpu::wgpu::Queue,
-    ) {
-        use wasm_bindgen_futures::spawn_local;
-
-        for item in &self.items {
-            let hash = item.hash.clone();
-
-            // Skip if already cached or in-flight
-            if self.texture_cache.contains(&hash) {
-                continue;
-            }
-            if self.in_flight.contains(&hash) {
-                continue;
-            }
-
-            // Mark as in-flight
-            self.in_flight.insert(hash.clone());
-
-            // Clone what we need for the async task
-            let config = item.config.clone();
-            let results = Rc::clone(&self.async_results);
-
-            // We need to clone device/queue handles for the async task
-            // Note: wgpu Device and Queue are internally Arc-wrapped, so this is cheap
-            let device = device.clone();
-            let queue = queue.clone();
-
-            spawn_local(async move {
-                let image = crate::renderer::render_thumbnail_async(&device, &queue, &config).await;
-
-                // Store result for pickup on next frame
-                results.borrow_mut().insert(hash, image);
-            });
+    /// Whether `index` has no preview yet: none uploaded, none on disk
+    /// (a disk hit loads when its card is drawn), none being made.
+    fn is_missing(&self, index: usize) -> bool {
+        let hash = &self.items[index].hash;
+        if self.texture_cache.contains(hash) {
+            return false;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            !shared_thumbnail_cache().exists(hash)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            !self.in_flight.contains(hash)
         }
     }
 
-    /// Get generation progress (completed, total)
-    pub fn generation_progress(&self) -> (usize, usize) {
-        let completed = self.total_to_generate - self.pending_generation.len();
-        (completed, self.total_to_generate)
+    /// The next preview to make: a card on screen first, then the rest
+    /// of the gallery in its order, so a scroll finds them made.
+    fn next_missing(&self) -> Option<usize> {
+        self.next_of(|i| self.is_missing(i))
+    }
+
+    /// [`next_missing`](Self::next_missing)'s order, over any `missing`.
+    fn next_of(&self, missing: impl Fn(usize) -> bool) -> Option<usize> {
+        self.visible_missing
+            .iter()
+            .copied()
+            .find(|&i| missing(i))
+            .or_else(|| (0..self.items.len()).find(|&i| missing(i)))
+    }
+
+    /// How many previews are still to make.
+    fn missing_count(&self) -> usize {
+        (0..self.items.len()).filter(|&i| self.is_missing(i)).count()
+    }
+
+    /// Desktop: make the next missing preview with `render_fn` (one call
+    /// a frame, blocking), save it to the disk cache and upload it.
+    /// Returns whether one was made.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn generate_one_preview<F>(&mut self, ctx: &egui::Context, render_fn: F) -> bool
+    where
+        F: FnOnce(&FractalConfig) -> image::RgbaImage,
+    {
+        let Some(index) = self.next_missing() else {
+            return false;
+        };
+        let hash = self.items[index].hash.clone();
+        let image = render_fn(&self.items[index].config);
+        shared_thumbnail_cache().save(&hash, &image).ok();
+        self.upload_texture(ctx, &hash, image);
+        true
+    }
+
+    /// WASM: spawn the next missing preview, one at a time; its result
+    /// is taken in `render()` (`poll_async_thumbnails`).
+    #[cfg(target_arch = "wasm32")]
+    pub fn start_next_preview(
+        &mut self,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+        ctx: &egui::Context,
+    ) {
+        use wasm_bindgen_futures::spawn_local;
+
+        if !self.in_flight.is_empty() {
+            return;
+        }
+        let Some(index) = self.next_missing() else { return };
+        let hash = self.items[index].hash.clone();
+        self.in_flight.insert(hash.clone());
+
+        let config = self.items[index].config.clone();
+        let results = Rc::clone(&self.async_results);
+        // wgpu's Device and Queue are internally Arc-wrapped, so these
+        // clones are cheap.
+        let device = device.clone();
+        let queue = queue.clone();
+        let ctx = ctx.clone();
+        spawn_local(async move {
+            let image = crate::renderer::render_preview_async(&device, &queue, &config).await;
+            results.borrow_mut().insert(hash, image);
+            // Drawn again, the gallery takes it and starts the next.
+            ctx.request_repaint();
+        });
     }
 
     /// Render the gallery UI
@@ -197,21 +241,16 @@ impl FractalConfigGallery {
         #[cfg(target_arch = "wasm32")]
         self.poll_async_thumbnails(ui.ctx());
 
-        // Desktop: Queue missing thumbnails for synchronous generation
-        #[cfg(not(target_arch = "wasm32"))]
-        self.queue_missing_thumbnails();
-
-        // Desktop only: If generating, show progress modal and wait
-        #[cfg(not(target_arch = "wasm32"))]
-        if !self.pending_generation.is_empty() {
-            self.show_generation_progress(ui);
-            // Note: Actual generation happens in generate_one_thumbnail()
-            // which must be called by the parent with access to the renderer
-            return GalleryResponse::default();
-        }
+        self.shown = true;
+        self.visible_missing.clear();
 
         // Render toolbar
         self.render_toolbar(ui);
+
+        let left = self.missing_count();
+        if left > 0 {
+            ui.weak(t!("fractal_gallery.previews_left", count = left));
+        }
 
         ui.separator();
 
@@ -220,77 +259,6 @@ impl FractalConfigGallery {
             GalleryViewMode::Grid => self.render_grid(ui),
             GalleryViewMode::List => self.render_list(ui),
         }
-    }
-
-    /// Generate one thumbnail (call once per frame during generation)
-    /// Returns true if generation is complete
-    pub fn generate_one_thumbnail<F>(&mut self, ctx: &egui::Context, render_fn: F) -> bool
-    where
-        F: FnOnce(&FractalConfig) -> image::RgbaImage,
-    {
-        let Some(index) = self.pending_generation.pop_front() else {
-            return true; // Nothing to generate
-        };
-
-        // Clone what we need to avoid borrow issues
-        let hash = self.items[index].hash.clone();
-        let config = self.items[index].config.clone();
-
-        // Check disk cache first
-        let cached = shared_thumbnail_cache().load(&hash);
-        if let Some(image) = cached {
-            self.upload_texture(ctx, &hash, image);
-            return self.pending_generation.is_empty();
-        }
-
-        // Render thumbnail
-        let image = render_fn(&config);
-
-        // Save to disk cache
-        shared_thumbnail_cache().save(&hash, &image).ok();
-
-        // Upload to GPU texture
-        self.upload_texture(ctx, &hash, image);
-
-        self.pending_generation.is_empty()
-    }
-
-    /// Get the next config that needs thumbnail generation (if any)
-    pub fn next_pending_config(&self) -> Option<&FractalConfig> {
-        self.pending_generation
-            .front()
-            .map(|&index| &self.items[index].config)
-    }
-
-    /// Get the name of the config currently being generated
-    pub fn current_generating_name(&self) -> Option<&str> {
-        self.pending_generation
-            .front()
-            .map(|&index| self.items[index].config.flame.name.as_str())
-    }
-
-    /// Desktop: Queue missing thumbnails for synchronous generation
-    #[cfg(not(target_arch = "wasm32"))]
-    fn queue_missing_thumbnails(&mut self) {
-        // Only queue if not already generating
-        if !self.pending_generation.is_empty() {
-            return;
-        }
-
-        let disk_cache = shared_thumbnail_cache();
-        for (index, item) in self.items.iter().enumerate() {
-            // Skip if already in texture cache or disk cache
-            if self.texture_cache.contains(&item.hash) {
-                continue;
-            }
-            if disk_cache.exists(&item.hash) {
-                // Will load from disk on first access
-                continue;
-            }
-            self.pending_generation.push_back(index);
-        }
-
-        self.total_to_generate = self.pending_generation.len();
     }
 
     /// WASM: Poll for completed async thumbnail results and upload them
@@ -307,30 +275,6 @@ impl FractalConfigGallery {
             self.in_flight.remove(&hash);
             self.upload_texture(ctx, &hash, image);
         }
-    }
-
-    fn show_generation_progress(&self, ui: &mut egui::Ui) {
-        let (completed, total) = self.generation_progress();
-        let progress = if total > 0 {
-            completed as f32 / total as f32
-        } else {
-            0.0
-        };
-
-        let name = self.current_generating_name().unwrap_or("...");
-
-        egui::Window::new(t!("fractal_gallery.generating_title"))
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ui.ctx(), |ui| {
-                ui.add(
-                    egui::ProgressBar::new(progress)
-                        .text(format!("{}/{}", completed, total))
-                        .animate(true),
-                );
-                ui.label(t!("fractal_gallery.rendering", name = name));
-            });
     }
 
     fn render_toolbar(&mut self, ui: &mut egui::Ui) {
@@ -428,8 +372,8 @@ impl FractalConfigGallery {
         let card_cap = (ui.available_width() - 12.0).max(64.0);
 
         ui.horizontal_wrapped(|ui| {
-            for (_original_index, hash, name, config) in &filtered {
-                let card_response = self.render_grid_card(ui, hash, name, card_cap);
+            for (original_index, hash, name, config) in &filtered {
+                let card_response = self.render_grid_card(ui, *original_index, hash, name, card_cap);
                 if card_response.clicked() {
                     response.selected = Some(config.clone());
                 }
@@ -442,6 +386,7 @@ impl FractalConfigGallery {
     fn render_grid_card(
         &mut self,
         ui: &mut egui::Ui,
+        index: usize,
         hash: &str,
         name: &str,
         card_cap: f32,
@@ -491,7 +436,9 @@ impl FractalConfigGallery {
                     Color32::WHITE,
                 );
             } else {
-                // Placeholder
+                // Placeholder, until its preview is made: on screen, it
+                // is made first.
+                self.visible_missing.push(index);
                 ui.painter().rect_filled(img_rect, 4.0, Color32::DARK_GRAY);
                 // Spinner in center
                 let spinner_pos = img_rect.center();
@@ -570,9 +517,12 @@ impl FractalConfigGallery {
                     ui.label(line);
                 }
 
-                // Small thumbnail if available
+                // Small thumbnail if available; open without one, it is
+                // made first.
                 if let Some(texture) = self.texture_cache.get(hash) {
                     ui.image((texture.id(), Vec2::new(64.0, 64.0)));
+                } else {
+                    self.visible_missing.push(*original_index);
                 }
             });
 
@@ -685,6 +635,25 @@ fn list_details(config: &FractalConfig) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::scene::transforms::RenderMode;
+
+    /// The next preview made is a card on screen without one, in the
+    /// order they were drawn, then the rest of the gallery in its order;
+    /// and a gallery not drawn since the app last asked makes none.
+    #[test]
+    fn the_next_preview_is_one_on_screen_then_the_gallerys_order() {
+        let mut g = FractalConfigGallery::new(vec![FractalConfig::default(); 5]);
+        let missing = |set: &'static [usize]| move |i: usize| set.contains(&i);
+        g.visible_missing = vec![3, 1];
+        assert_eq!(g.next_of(missing(&[0, 1, 3, 4])), Some(3), "on screen first");
+        assert_eq!(g.next_of(missing(&[0, 1, 4])), Some(1), "then the next on screen");
+        assert_eq!(g.next_of(missing(&[0, 4])), Some(0), "then the gallery's order");
+        assert_eq!(g.next_of(missing(&[])), None);
+
+        assert!(!g.take_shown(), "never drawn");
+        g.shown = true;
+        assert!(g.take_shown());
+        assert!(!g.take_shown(), "drawn once, asked once");
+    }
 
     #[test]
     fn an_escape_row_describes_its_formula_not_the_flame_it_carries() {

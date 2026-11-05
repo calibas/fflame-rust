@@ -1699,9 +1699,8 @@ fractal_gallery:
   # Size slider
   size: "Size:"
 
-  # Generation progress
-  generating_title: "Generating Thumbnails..."
-  rendering: "Rendering \"%{name}\"..."
+  # Previews still to make, under the toolbar
+  previews_left: "Rendering previews: %{count} left"
 
   # List view details
   transforms_count: "%{count} transforms"
