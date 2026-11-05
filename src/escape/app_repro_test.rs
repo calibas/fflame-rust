@@ -3675,6 +3675,151 @@ mod tests {
         println!("worst: {:.3}%", worst * 100.0);
     }
 
+    /// Image Trap's twin (P7 step 2, batch 6) renders as the built-in:
+    /// the config's texture read in its `step` (`texture`,
+    /// `texture_size`), the colour's coverage (an `rgba`), UF's loop order
+    /// (`INFO.skips_escaping`), on every merge mode, both orders, both
+    /// proportions and a moved trap, on the Mandelbrot direct and
+    /// perturbed and a Julia set. The texture, wider than tall and
+    /// transparent in a disc, is the Ultra Fractal test's.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_image_trap_twin_renders_as_its_builtin() {
+        use crate::config::escape::EscapeTexture;
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let (tw, th) = (48u32, 32u32);
+        let tex = image::RgbaImage::from_fn(tw, th, |x, y| {
+            let (u, v) = (x as f32 / (tw - 1) as f32, y as f32 / (th - 1) as f32);
+            let (dx, dy) = (u - 0.35, v - 0.5);
+            let a = if dx * dx + dy * dy < 0.04 { 0 } else { ((1.0 - 0.6 * u * v) * 255.0) as u8 };
+            image::Rgba([(u * 230.0 + 20.0) as u8, (v * 200.0 + 40.0) as u8, ((1.0 - u) * 120.0 + v * 100.0) as u8, a])
+        });
+        let recipe = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        let key = crate::textures::cache::key(&recipe);
+        let mut whole = crate::config::escape::EscapeConfig::default();
+        whole.formula = "mandelbrot".into();
+        whole.coloring = "image_trap".into();
+        whole.center_re = "-0.6".into();
+        whole.center_im = "0.1".into();
+        whole.zoom_log2 = 0.6;
+        whole.max_iter = 48;
+        whole.bailout = 4.0;
+        whole.texture = Some(EscapeTexture { name: "synthetic".into(), config: Box::new(recipe) });
+        let mut julia = whole.clone();
+        julia.julia = true;
+        julia.julia_re = -0.8;
+        julia.julia_im = 0.156;
+        julia.center_re = "0".into();
+        julia.center_im = "0".into();
+        julia.zoom_log2 = 0.0;
+        let mut deep = whole.clone();
+        deep.center_re = "-0.743643887037158704752191506114774".into();
+        deep.center_im = "0.131825904205311970493132056385139".into();
+        deep.zoom_log2 = 20.0;
+        deep.max_iter = 400;
+        let views = [("the whole set", whole, false), ("a Julia set", julia, false), ("deep, perturbed", deep, true)];
+        // On a grey base, so the darkening modes show.
+        let mut cases: Vec<Vec<(&str, f32)>> =
+            (0..11).map(|m| vec![("merge", m as f32), ("opacity", 0.6), ("base_r", 0.5), ("base_g", 0.5), ("base_b", 0.5)]).collect();
+        for m in [0.0, 1.0, 5.0] {
+            cases.push(vec![("order", 1.0), ("merge", m), ("opacity", 0.5), ("base_r", 0.2), ("base_g", 0.4), ("base_b", 0.6)]);
+        }
+        cases.push(vec![("proportions", 0.0)]);
+        cases.push(vec![("trap_re", 0.2), ("trap_im", -0.1), ("trap_scale", 0.7), ("trap_rotation", 30.0), ("trap_aspect", 1.5), ("trap_skew", 20.0), ("opacity", 0.8)]);
+        let src = crate::escape::twins::coloring_custom_source("image_trap").unwrap();
+        for settings in &cases {
+            for (view, base, perturbed) in &views {
+                let mut esc = base.clone();
+                for (k, v) in settings {
+                    esc.coloring_params.insert(k.to_string(), *v);
+                }
+                assert!(esc.uses_texture());
+                let mut twin = esc.clone();
+                twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
+                twin.custom_coloring = Some(src.clone());
+                let set = |r: &mut crate::escape::EscapeRenderer| assert!(r.set_texture(&device, &queue, &key, &tex));
+                let want = output_with(&device, &queue, &renderer, &esc, w, h, *perturbed, set);
+                let got = output_with(&device, &queue, &renderer, &twin, w, h, *perturbed, set);
+                assert_eq!(crate::escape::get_coloring(&twin.coloring).name, twin.coloring, "the twin did not compile");
+                // Deep, the long orbits multiply and darken to black: there
+                // the coverage shows, and the colour on the shallow views.
+                let painted = want.chunks(4).filter(|p| p[3] > 0.0 && (*perturbed || (p[0] + p[1] + p[2]) > 0.01)).count();
+                assert!(painted > 100, "{settings:?} on {view}: too little shows ({painted})");
+                let d = differing(&want, &got);
+                println!("image_trap {settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
+                if d > 0.0 {
+                    for i in (0..want.len() / 4).filter(|&i| (0..4).any(|k| (want[i * 4 + k] - got[i * 4 + k]).abs() > 1e-4)).take(4) {
+                        println!("  pixel {} ({}, {}): {:?} vs {:?}", i, i as u32 % w, i as u32 / w, &want[i * 4..i * 4 + 4], &got[i * 4..i * 4 + 4]);
+                    }
+                }
+                assert!(d == 0.0, "{settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
+            }
+        }
+    }
+
+    /// A colouring that reads the texture in its loop recolours: its WGSL
+    /// declares the texture's slot in every pass, and the recolour pass,
+    /// which binds none, never reads it (batch 6). A palette edit recolours
+    /// Image Trap's twin, as the built-in's, to the picture a fresh render
+    /// gives.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_texture_reading_twin_recolours() {
+        use crate::config::escape::EscapeTexture;
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let tex = image::RgbaImage::from_fn(32, 32, |x, y| image::Rgba([(x * 8) as u8, (y * 8) as u8, 128, 255]));
+        let recipe = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        let key = crate::textures::cache::key(&recipe);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.6".into();
+        esc.zoom_log2 = 0.4;
+        esc.max_iter = 64;
+        esc.texture = Some(EscapeTexture { name: "synthetic".into(), config: Box::new(recipe) });
+        let src = crate::escape::twins::coloring_custom_source("image_trap").unwrap();
+        esc.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
+        esc.custom_coloring = Some(src);
+        let settle = |escape: &mut crate::escape::EscapeRenderer, renderer: &mut crate::renderer::compute_kernel::FlameRenderer| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("recolour") });
+                let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.escape_palette_view(false), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let px: Vec<f32> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_texture(&device, &queue, escape.output_texture_for_test(), 0, w, h, 16)).to_vec();
+            px
+        };
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        assert!(escape.set_texture(&device, &queue, &key, &tex));
+        let _ = settle(&mut escape, &mut renderer);
+        config.palette_reverse = true;
+        renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
+            config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse);
+        let after = settle(&mut escape, &mut renderer);
+        assert_eq!(escape.last_path, "recolor", "a palette edit should recolour a colouring that does not read the palette in its loop");
+        let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+        assert!(fresh.set_texture(&device, &queue, &key, &tex));
+        assert_eq!(after, settle(&mut fresh, &mut renderer), "the recoloured picture differs from a fresh one");
+        fresh.destroy();
+        escape.destroy();
+    }
+
     /// Arrays through the renderer (plan, item 3, step 3a): a formula
     /// whose step reads global tables and keeps a per-pixel history
     /// renders as the built-in Mandelbrot it equals -- a table picks the

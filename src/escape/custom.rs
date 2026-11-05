@@ -1237,12 +1237,24 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
     if ir::Program::calls_host(&p.init, lang::builtins::Host::escape) || ir::Program::calls_host(&p.loop_body, lang::builtins::Host::escape) {
         features.push(ColoringFeature::PaletteInLoop);
     }
+    // A texture read (in `start` and `step` alone, the checker says) makes
+    // the config's texture part of the iteration, bound in its passes; an
+    // `rgba` colour sets the coverage (batch 6).
+    if lang::wgsl::reads_texture(&p) {
+        features.push(ColoringFeature::TextureInLoop);
+    }
+    if lang::wgsl::writes_alpha(&p) {
+        features.push(ColoringFeature::DirectAlpha);
+    }
     // What a Rhai colouring's `INFO` says of it beside the program (the
     // lowering checked them): a level clamped rather than wrapped, and
     // what picking it sets.
     let rhai = src.dialect == CustomDialect::Rhai;
     if rhai && lang::rhai::info_bool(&src.source, "bounded") == Some(true) {
         features.push(ColoringFeature::Bounded);
+    }
+    if rhai && lang::rhai::info_bool(&src.source, "skips_escaping") == Some(true) {
+        features.push(ColoringFeature::SkipsEscapingIterate);
     }
     let recommended_bailout = if rhai { lang::rhai::info_number(&src.source, "bailout").map(|b| b as f32) } else { None };
     let pick: Vec<(&'static str, f32)> = match rhai.then(|| lang::rhai::info_json(&src.source, "pick")).flatten() {

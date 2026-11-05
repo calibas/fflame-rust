@@ -106,6 +106,9 @@ pub const COLORING_TWINS: &[(&str, &str)] = &[
     ("infinite_waves", include_str!("../../assets/formulas/twins/colorings/infinite_waves.rhai")),
     ("voc_traps", include_str!("../../assets/formulas/twins/colorings/voc_traps.rhai")),
     ("direct_traps", include_str!("../../assets/formulas/twins/colorings/direct_traps.rhai")),
+    // Batch 6: the config's texture, read in the loop, and the colour's
+    // coverage.
+    ("image_trap", include_str!("../../assets/formulas/twins/colorings/image_trap.rhai")),
 ];
 
 /// The twin of the built-in formula `name`, when it has one.
@@ -149,8 +152,9 @@ mod tests {
     /// exactly -- names, captions, hints, kinds, defaults, ranges,
     /// choices, a log slider -- its features as the built-in's (an
     /// orbit accumulator, the interior coloured, period detection, a
-    /// bounded value, the derivative, a colour, the palette in the loop),
-    /// and what picking it sets: the recommended bailout
+    /// bounded value, the derivative, a colour, the palette or the texture
+    /// in the loop, the coverage, UF's loop order), and what picking it
+    /// sets: the recommended bailout
     /// and the values a fresh pick takes.
     #[test]
     fn every_colouring_twin_compiles_as_its_builtin() {
@@ -164,13 +168,42 @@ mod tests {
                 .unwrap_or_else(|d| panic!("{name}: {:?}", d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>()));
             assert_eq!(twin.display_name, builtin.display_name, "{name}: its title");
             assert_eq!(twin.parameters, builtin.parameters, "{name}: its parameters");
-            for f in [F::NeedsOrbitAccum, F::ColorsInterior, F::NeedsPeriod, F::Bounded, F::NeedsDerivative, F::DirectColor, F::PaletteInLoop] {
+            for f in [
+                F::NeedsOrbitAccum,
+                F::ColorsInterior,
+                F::NeedsPeriod,
+                F::Bounded,
+                F::NeedsDerivative,
+                F::DirectColor,
+                F::PaletteInLoop,
+                F::TextureInLoop,
+                F::DirectAlpha,
+                F::SkipsEscapingIterate,
+            ] {
                 assert_eq!(twin.features.contains(&f), builtin.features.contains(&f), "{name}: {f:?}");
             }
             // What picking it sets (`INFO.bailout`, `INFO.pick`).
             assert_eq!(twin.recommended_bailout, builtin.recommended_bailout, "{name}: its recommended bailout");
             assert_eq!(twin.pick_params, builtin.pick_params, "{name}: what a fresh pick sets");
         }
+    }
+
+    /// The built-in Image Trap reads the config's texture as the formula
+    /// language reads one (batch 6): its `image_trap_texture` is the
+    /// language's `uf_texture`, function for function, so its twin and it
+    /// agree -- and both agree across platforms, the filtering done by hand.
+    #[test]
+    fn the_image_trap_reads_the_texture_as_the_language_does() {
+        let body = |src: &str, name: &str| {
+            let at = src.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("no fn {name}"));
+            let end = src[at..].find("
+}
+").expect("its end");
+            src[at + 3 + name.len()..at + end].to_string()
+        };
+        let builtin = super::super::get_coloring("image_trap").wgsl_accum;
+        let lang = super::super::lang::wgsl::texture_wgsl("", "esc_texture");
+        assert_eq!(body(builtin, "image_trap_texture"), body(&lang, "uf_texture"));
     }
 
     /// Each twin compiles, and keeps its built-in's parameters (names,

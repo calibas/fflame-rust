@@ -785,7 +785,7 @@ impl<'p> Machine<'p> {
                     let _ = self.exec(body, sh);
                 }
                 // An escape colouring's palette read: none here.
-                IStmt::Host(h, _) if h.escape() => {}
+                IStmt::Host(h, _) if h.gpu_read() => {}
                 IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
                 // The loop or the function around it takes these (P7
                 // step 1), as the GPU's do.
@@ -873,7 +873,7 @@ impl<'p> Machine<'p> {
             IExprKind::Host(Host::GridParam, args) => Value::Float(self.params.values[grid_cell(args, self.eval(&args[3], sh).as_int())].0),
             // An escape colouring's palette: the GPU's, with no palette
             // here.
-            IExprKind::Host(h, _) if h.escape() => Value::Float(0.0),
+            IExprKind::Host(h, _) if h.gpu_read() => Value::Float(0.0),
             IExprKind::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             IExprKind::Bool(b) => Value::Bool(*b),
             IExprKind::Int(i) => Value::Int(*i as i32),

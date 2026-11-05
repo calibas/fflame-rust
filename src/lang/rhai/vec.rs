@@ -317,6 +317,7 @@ impl Lowerer<'_> {
             "quat" => Some(Kind::Quat),
             "rgba" | "vec4" | "input" | "input_at" | "read" | "read_at" | "drive" | "scratch" | "memory" => Some(Kind::Rgba),
             "palette" | "palette_srgb" | "palette_table" => Some(Kind::Vec3),
+            "texture" | "texel" => Some(Kind::Rgba),
             "normalize" | "abs" | "floor" | "min" | "max" | "clamp" | "mix" => first(),
             "conj" | "inv" | "pow" => first().filter(|k| *k == Kind::Quat),
             _ if PLANE_FUNCTIONS.contains(&n) => first().filter(|k| *k == Kind::Quat),
@@ -906,6 +907,36 @@ impl Lowerer<'_> {
             ("palette_srgb" | "palette_table", 1) => {
                 return self.err(p, format!("`{name}(t)` is an escape colouring's"));
             }
+            // A texture (batch 6): at a point in 0..1, bilinear, or the
+            // texel at whole coordinates, read once into the call site's
+            // slot where statements may go.
+            ("texture", 1) | ("texel", 2) if !self.coloring => {
+                return self.err(p, format!("`{name}` reads a texture where the template binds one: an escape colouring's `start` and `step`"));
+            }
+            ("texture", 1) | ("texel", 2) => {
+                let call = |name: &str, args: Vec<ast::Expr>| mk(ExprKind::Call { name: name.into(), args, user: false }, span);
+                let (a, b) = if name == "texture" {
+                    let S(uv) = args.remove(0) else { return self.err(p, "`texture(uv)` takes a point, `complex(u, v)`, from 0 to 1") };
+                    let uv = self.hold(uv, "uv");
+                    (call1("real", uv.clone(), span), call1("imag", uv, span))
+                } else {
+                    let (S(x), S(y)) = (args.remove(0), args.remove(0)) else { return self.err(p, "`texel(x, y)` takes two whole numbers") };
+                    (self.hold(x, "x"), self.hold(y, "y"))
+                };
+                if self.pure {
+                    // No statement here: a read a part.
+                    let host = if name == "texture" { "__texture" } else { "__texel" };
+                    let part = |c: i64| call(host, vec![a.clone(), b.clone(), mk(ExprKind::Int(c), span)]);
+                    V(Vector::new(Kind::Rgba, (0..4).map(part).collect()))
+                } else {
+                    let slot = self.texture_reads;
+                    self.texture_reads += 1;
+                    let host = if name == "texture" { "__texture_load" } else { "__texel_load" };
+                    self.pending.push(ast::Stmt::Expr(call(host, vec![a, b, mk(ExprKind::Int(slot), span)])));
+                    let part = |c: i64| call("__texture_part", vec![mk(ExprKind::Int(slot), span), mk(ExprKind::Int(c), span)]);
+                    V(Vector::new(Kind::Rgba, (0..4).map(part).collect()))
+                }
+            }
             // A simulation colouring's palette (P4): the shared one at `t`.
             ("palette", 1) if !self.sim_coloring => {
                 return self.err(p, "`palette(t)` is a simulation colouring's: in `fn cell_color` alone, or an escape colouring's");
@@ -1141,7 +1172,7 @@ impl Lowerer<'_> {
                 }
             }
             (n, k) => {
-                if matches!(n, "vec3" | "quat" | "rgba" | "mix" | "input" | "input_at" | "palette" | "palette_srgb" | "palette_table" | "read" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp" | "abs" | "floor" | "conj" | "inv" | "pow" | "complex") {
+                if matches!(n, "vec3" | "quat" | "rgba" | "mix" | "input" | "input_at" | "palette" | "palette_srgb" | "palette_table" | "texture" | "texel" | "read" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp" | "abs" | "floor" | "conj" | "inv" | "pow" | "complex") {
                     return self.err(p, format!("`{n}` does not take {k} argument{}", if k == 1 { "" } else { "s" }));
                 }
                 if first_kind == Some(Kind::Quat) {

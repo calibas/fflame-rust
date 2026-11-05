@@ -1337,7 +1337,7 @@ fn with_alpha(template: String, coloring: &ColoringDef, state: &str) -> String {
     }
     template.replace(
         "coverage = 1.0;",
-        &format!("coverage = clamp(coloring_alpha(summary, {state}), 0.0, 1.0);"),
+        &format!("coverage = clamp(coloring_alpha(summary, {state}, esc_transfer(raw)), 0.0, 1.0);"),
     )
 }
 
@@ -9965,7 +9965,7 @@ mod tests {
         let f = crate::escape::get_formula("mandelbrot");
         let tier = crate::escape::EscapeRenderer::perturb_tier(&crate::config::escape::EscapeConfig::default())
             .expect("the Mandelbrot perturbs");
-        let alpha = "coverage = clamp(coloring_alpha(summary, accum_state), 0.0, 1.0);";
+        let alpha = "coverage = clamp(coloring_alpha(summary, accum_state, esc_transfer(raw)), 0.0, 1.0);";
         let cases = [
             ("direct", assemble(f, trap, false), assemble(f, other, false), "if (esc_metric > params.bailout)"),
             (
@@ -9992,7 +9992,7 @@ mod tests {
             assert!(plain.contains("coverage = 1.0;") && !plain.contains("coloring_alpha"), "{name}");
         }
         let recolor = assemble_recolor(trap, false);
-        assert!(recolor.contains("coverage = clamp(coloring_alpha(summary, state), 0.0, 1.0);"));
+        assert!(recolor.contains("coverage = clamp(coloring_alpha(summary, state, esc_transfer(raw)), 0.0, 1.0);"));
         assert!(!recolor.contains("esc_texture"), "the recolour pass must not declare the loop's texture");
         assert!(assemble_recolor(other, false).contains("coverage = 1.0;"));
     }
