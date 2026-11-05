@@ -23,6 +23,7 @@ pub mod builtins;
 /// Headless `generate` command (desktop only — needs the filesystem).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
+pub mod headless;
 pub mod host;
 pub mod library;
 pub mod store;
@@ -30,7 +31,6 @@ pub mod store;
 // The flame engine's own tests: they build flames, compile flame
 // shaders, or exercise the flame renderer's caches, all of which
 // need the variation catalog.
-#[cfg(feature = "engine-flame")]
 #[cfg(test)]
 mod tests;
 

@@ -539,6 +539,7 @@ fn parse_flame_element(
         cylinder_trim_levels: 2,
         word_removals: Vec::new(),
         auto_exposure: false,
+        engine_settings: Default::default(),
         blend_factor: 0.1,
         use_dynamic_blend: true,
         alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,
@@ -1609,7 +1610,7 @@ fn collect_plugin_names(flame: &Flame) -> String {
     }
     // Not the user's own (`write_xform` drops them).
     let registry = crate::variations::global_registry();
-    names.retain(|n| !carries_custom(flame, n) && registry.get(n).is_none_or(|v| v.provenance != crate::provenance::Provenance::Custom));
+    names.retain(|n| !carries_custom(flame, n) && registry.get(n).is_none_or(|v| v.provenance != crate::provenance::Provenance::Local));
     names.into_iter().collect::<Vec<_>>().join(" ")
 }
 
@@ -1655,7 +1656,7 @@ fn write_xform(
     // its parameters both. The `.fflame` carries its source. Known by the
     // config carrying it, or by the registry's provenance.
     let custom = |name: &str| {
-        carries_custom(&parent_config.flame, name) || registry.get(name).is_some_and(|v| v.provenance == crate::provenance::Provenance::Custom)
+        carries_custom(&parent_config.flame, name) || registry.get(name).is_some_and(|v| v.provenance == crate::provenance::Provenance::Local)
     };
     for name in xform.variations.keys().filter(|n| custom(n)) {
         log::warn!("`.flame` export: the custom variation `{name}` is not written (only a .fflame carries it)");
@@ -1834,7 +1835,6 @@ fn write_palette(out: &mut String, palette: &crate::scene::palette::Palette) {
 
 // Every test here parses a .flame naming real variations, so the
 // whole module is about the flame catalog.
-#[cfg(feature = "engine-flame")]
 #[cfg(test)]
 mod tests {
     use super::*;

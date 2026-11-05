@@ -94,8 +94,8 @@ layout: rgb linear, alpha coverage. Coverage 0 lets the tonemap's
 background through, which is how a sky, a hole and a transparent PNG
 work.
 
-The terrains are built under the `terrain` cargo feature (on by default;
-it implies `engine-escape`). The gallery's wasm modules build without it
+The terrains are built under the `terrain` cargo feature (on by
+default). The gallery's wasm modules build without it
 and render a terrain config as its 2D picture.
 
 ---

@@ -123,13 +123,13 @@ defaults for Simulation. A Log-calibrated flame tone map renders either
 engine's unit-range image black.
 
 Entering a lit 3D view -- a solid formula, an escape or simulation
-terrain -- from a view that draws none sets **the 3D look**
-(`ui::render_mode::look_3d`) in the same undo step: Linear, exposure 2.0,
+terrain -- the engine was not showing sets **the 3D look**
+(`config::mode::look_3d`) in the same undo step: Linear, exposure 2.0,
 gamma 1.0, saturation 1.0, no hue shift, and, when the lighting rig is
 untouched, shading strength 1.0 and ambient 0.0. The mode switch, the
 Escape panel's formula picker and terrain switch, the Simulation panel's
 terrain switch and the Formula Editor's Use go through it
-(`apply_with_look`).
+(`ConfigManager::choose`).
 
 **Changing a default changes old files.** Serialization omits values
 equal to their default, so a file saved before the change and relying
@@ -164,9 +164,11 @@ version first; this path does not normalize the numbers).
 file.
 
 `serde_json::to_string(&config)` — the plain derive — writes **no
-`version`** and strips no defaults. The PNG metadata's `Config` chunk is
-written this way (`PngMetadata::from_app_state`); see the warning under
-*Versioning*.
+`version`** and strips no defaults. The PNG metadata's `Config` chunk
+is the canonical form instead: `PngMetadata::from_app_state` writes
+`to_json_value()` (versioned, defaults stripped, unindented), so it
+reloads through the same migration as a file. Older PNGs carry the
+plain-derive JSON; see *Versioning*.
 
 ### Reading
 
@@ -253,11 +255,7 @@ at runtime on every f32 path.
 ## The other engines' configs
 
 `escape: EscapeConfig` and `sim: SimConfig` sit beside the flame. Both
-are skip-if-default — a flame file never grows them — and both are
-compiled into every build, engine or not: a build without the escape or
-simulation engine still parses such a config, so the file round-trips
-unchanged, and rendering it returns `RenderError::EngineMissing` rather
-than drawing the flame (see [EXPORT.md](EXPORT.md)). Switching modes
+are skip-if-default — a flame file never grows them. Switching modes
 leaves the inactive engine's block in place, so a round trip keeps it.
 
 ### EscapeConfig
@@ -298,15 +296,37 @@ cap to the panel's transport and a target to the timeline and exporters
 
 ## Who changes the render mode
 
-The render mode has exactly one writer: `switch_render_mode` in
-`src/ui/render_mode.rs`. It applies the tone-map reset on entering a
-non-flame mode in the same undo entry as the mode change, and a mode
-change never coalesces with another. The test
-`nothing_outside_this_module_writes_the_render_mode` scans the source
-tree and fails on any mention of `ConfigPath::RenderMode` outside that
-module, except the config module itself (`delta.rs`, `manager.rs`) and
-the whole-config load paths (`ui_handlers.rs`, `panel_viewer.rs`,
-`api/`), which bring a mode in with a file rather than switch one.
+The render mode has exactly one writer: `config::mode`, through
+`ConfigManager::choose` and `switch_mode` (`ui::render_mode` delegates).
+A mode change is one whole-config undo step and never coalesces with
+another. The test `nothing_outside_this_module_writes_the_render_mode`
+scans the source tree and fails on any mention of `ConfigPath::RenderMode`
+outside it, except the rest of the config module (`delta.rs`,
+`manager.rs`), `ui::render_mode`, and the whole-config load paths
+(`ui_handlers.rs`, `panel_viewer.rs`, `api/`), which bring a mode in with
+a file rather than switch one.
+
+**Each engine owns its settings.** The palette and its settings, the
+background, the tone map, the effects and the lighting rig
+(`config::mode::ENGINE_OWNED`) belong to the engine shown: a switch to
+another engine stashes them in `engine_settings` (keyed `flame`,
+`escape`, `simulation`, in the file's own JSON) and restores the entered
+engine's, or its defaults the first time -- nothing is copied between
+engines. 2D and 3D flames are one engine. What the flame alone reads
+(`FLAME_ONLY`) is untouched by a switch; `image_size` and
+`deterministic_rng` are shared. `every_config_field_is_classified` holds
+every field of `FractalConfig` to one of these classes. A migration that
+renames an engine-owned field must also migrate the stash's copies.
+
+**A drawn flame is never empty.** A config made in another engine (a
+simulation, a script's escape picture) has a flame with no transforms.
+Where a choice makes the config draw its flame -- a flame mode, a
+formula that reads it (`IfsDef::needs_flame`: the Flame Attractor), a
+simulation warped by its transforms -- an empty flame is given the app's
+first preset's (`config::mode::seed_flame`), with its camera and
+iteration settings, and on the flame engine's first entry its look, in
+the same undo step. A flame with transforms is never replaced, and
+choosing the mode already shown changes nothing.
 
 What a mode makes available — which panels, which controls, whether fly
 mode is offered — is answered only by `src/ui/visibility.rs`
@@ -342,7 +362,6 @@ accumulates the GPU work edits imply.
 | `update_param(path, value)` | one value; a history entry, coalesced (below). Returns `Result<UpdateType, ConfigError>`; an unchanged value (`ConfigValue::approx_eq`) returns `UpdateType::None` and records nothing. |
 | `update_batch(changes, description)` | several values as one history entry under the given description; each delta's update type is recorded separately, so the actions are their union. The changes apply in order, each one's old value read as the earlier ones left the config, so a later path whose default depends on an earlier one (a colouring and its parameters) is never dropped as a false no-op. A batch holding a setter that changes more than its own field (the simulation's model, a layer's model, the grid mode, the init kind) is recorded as the config before and after, as a single such edit is. A change that fails leaves the config as it was. Coalesces like a single edit when consecutive batches change the same paths, or carry the same gesture description. |
 | `update_param_silent`, `update_param_silent_on(target, …)` | no history: animation playback, and tracks aimed at a subflame |
-| `apply_value_detached(config, target, path, value)` | apply one value to a detached config with the manager's own setters and clamps, no history or disk; the video exporter's way to apply tracks |
 | `remove_variation(xref, name)` | removes a variation and records the whole transform before and after, so undo restores its parameters and order |
 | `load_config(config, description)` | a new picture (file, preset, browser): one full-config snapshot, editing target reset to `Main`, `load_generation` bumped, every update action plus `reset_accumulation` and `structural_changed` |
 | `apply_config_edit(config, description)` | an edit no single path carries (a simulation's layers, couplings or colour layers added, removed or reordered): a full-config snapshot without the side effects of a load |
@@ -437,7 +456,7 @@ to `Main`.
 ## ConfigPath and ConfigValue
 
 `ConfigPath` (`src/config/delta.rs`) names every editable parameter:
-372 variants, many carrying an index or a name.
+413 variants, many carrying an index or a name.
 
 | family | examples | update type |
 | --- | --- | --- |
@@ -451,8 +470,8 @@ to `Main`.
 | flame and scene | `RenderMode`, `PerspectiveStrength`, `DepthDensityCompensation`, `FarDensityFade`(`Start`), `PreserveZ`, `Xaos { src, dst }`, `SoloTransform`, `PostSymmetry*`, `SolidStrength`, `SurfaceThickness` | `IterationReset` |
 | solid lighting | `ShadingStrength`, `SolidAmbient`, `SolidDiffuse`, `SolidSpecular`, `SolidShininess`, `SolidGloss`, `SolidRoughness`, `SolidGlow`, `Ssao*`, `NormalSmoothing`, `GapFill`, `SolidShadowStrength`, `SolidLight*` | `ShadingOnly` |
 | effects | `DensityEffectEnabled`/`Param`, `ColorEffectEnabled`/`Param`, `Add`/`Remove*Effect` | `ToneMappingOnly` |
-| escape-time | about a hundred `Escape*` paths: formula, view, solid camera, colouring, relief shading, contrast, palette map, texture overlay, terrain, path tracer, lens | `EscapeRerender` |
-| simulation | about eighty `Sim*` paths: model, grid, seed, init, steps, warp, view, matte, resolve, layers, couplings, colour layers, terrain, path tracer | `SimRerender`, `SimResample` or `SimReseed` (see [SIMULATION.md](SIMULATION.md)) |
+| escape-time | 127 `Escape*` paths: formula, view, solid camera, colouring, relief shading, contrast, palette map, texture overlay, terrain, path tracer, lens | `EscapeRerender` |
+| simulation | 93 `Sim*` paths: model, grid, seed, init, steps, warp, view, matte, resolve, layers, couplings, colour layers, terrain, path tracer | `SimRerender`, `SimResample` or `SimReseed` (see [SIMULATION.md](SIMULATION.md)) |
 | system | 17 `System*` paths | see *SystemSettings* |
 
 What a path supports is spread over several exhaustive matches, so the
@@ -464,7 +483,8 @@ compiler lists every place a new variant needs an arm:
 | `to_i18n_key()`, `Display` | `delta.rs` | history labels (`history.param.*` in `locales/*.yml`) |
 | `to_string_key()`, `from_string_key()` | `delta.rs` | stable string keys for animation files (`"Transform.0.Affine.A"`); legacy un-indexed `FinalTransform.*` keys map to index 0 |
 | `json_to_config_value()` | `delta.rs` | converts a track's JSON value; the paths it returns `None` for are not animatable |
-| `get_value_from_config()`, `set_value()` | `manager.rs` | read and write, with the setters' clamps and side effects |
+| `get_value_from_config()` | `manager.rs` | read a path's value (undo's old value, the panels) |
+| `config::apply(config, target, path, value)` | `apply.rs` | **the setter**: write one value with its clamps and side effects, no history, preview or disk. `ConfigManager` wraps it; the video export, the cameras and every edit made on a config outside the manager (a mode's look, a fly-mode step) call it directly |
 
 `ConfigValue` is the value side: `Unit`, `Float(f32)`, `Int`, `UInt`,
 `UInt64`, `Bool`, `String`, `StringList`, `Vec2(f64, f64)`,
@@ -542,7 +562,7 @@ if ui.add(egui::Slider::new(&mut value, 0.1..=5.0)).changed() {
 ## Presets
 
 The shipped presets are one file, `assets/presets.fflame`: a JSON array
-of configs (twenty at present). `src/resources/presets.rs` loads it:
+of configs (84 at present). `src/resources/presets.rs` loads it:
 
 - **Desktop** reads the file at runtime (resolved against the working
   directory and the executable's location), so editing it needs no
@@ -600,7 +620,7 @@ the file, and returns the path's update type:
 | `SystemOrbitCacheMb` | `None` | pushed into the escape engine's orbit store (desktop) |
 | `SystemVsyncEnabled`, `SystemTargetFps`, `SystemFly*` | `ViewOnly` | |
 | `SystemPngStripMetadata` | `None` | mirrored into the PNG encoder's global switch at once |
-| `SystemExportWidth`, `SystemExportHeight`, `SystemLanguage`, `SystemShowHelpOnStartup` | `None` | |
+| `SystemLanguage`, `SystemShowHelpOnStartup` | `None` | |
 
 Fields without a path (compact mode, the online and sign-in state) are
 written through `system_settings_mut()` by their owners.

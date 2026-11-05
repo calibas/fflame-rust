@@ -159,7 +159,7 @@ impl TextureSync {
 /// texture generates as any other when asked for. The run's flame (layer
 /// transforms) and a terrain are outside what is checked, so a recipe
 /// with either is left to generate too.
-#[cfg(all(feature = "engine-sim", not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 impl super::App {
     pub(super) fn cache_saved_texture_from_run(&mut self, name: &str) {
         let Some(entry) = crate::textures::TextureLibrary::load().find(name).cloned() else {

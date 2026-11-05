@@ -153,7 +153,6 @@ pub fn camera_2d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
                 }
                 ui.label(egui::RichText::new(super::escape_panel::magnification_label(config.escape.zoom_log10())).weak());
             }
-            #[cfg(feature = "engine-sim")]
             ViewKind::Sim2d => {
                 if let Some(z) = zoom_slider(ui, config.sim.view.zoom, t!("view.zoom").as_ref(), 0.1..=64.0) {
                     let _ = config_manager.update_param(ConfigPath::SimViewZoom, z.into());
@@ -192,7 +191,6 @@ pub fn camera_2d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
                 });
             }
         }
-        #[cfg(feature = "engine-sim")]
         ViewKind::Sim2d => {
             let v = config.sim.view.clone();
             ui.horizontal(|ui| {
@@ -224,7 +222,6 @@ pub fn camera_2d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
     // ---- Turn ----
     let (rotation, path) = match kind {
         ViewKind::EscapePlane => (config.escape.rotation, ConfigPath::EscapeRotation),
-        #[cfg(feature = "engine-sim")]
         ViewKind::Sim2d => (config.sim.view.rotation, ConfigPath::SimViewRotation),
         _ => (config.rotation, ConfigPath::Rotation),
     };
@@ -250,7 +247,6 @@ pub fn camera_2d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
 
 /// How the escape picture is drawn: its antialiasing, what the view is
 /// drawn at when that is not the setting, and how the samples combine.
-#[cfg(feature = "engine-escape")]
 pub fn escape_image(ui: &mut egui::Ui, config_manager: &mut ConfigManager, viewport_aa: Option<super::EscapeAa>) {
     use crate::config::escape::DownsampleMode;
     let esc = config_manager.active_config().escape.clone();
@@ -328,7 +324,6 @@ pub fn escape_image(ui: &mut egui::Ui, config_manager: &mut ConfigManager, viewp
 
 /// How a simulation's grid is shown: the resolve filters either way of
 /// the fit, the fit itself, and tiling a periodic field.
-#[cfg(feature = "engine-sim")]
 pub fn sim_image(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
     use crate::config::sim::{SimDownscale, SimFit, SimUpscale};
     let sim = config_manager.active_config().sim.clone();
@@ -469,7 +464,6 @@ fn lift_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, path: ConfigP
 
 /// An escape zoom as 10^n, the plane's way: for a solid it sets the
 /// distance to the target, for a terrain the world's scale.
-#[cfg(feature = "engine-escape")]
 fn escape_zoom_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, esc: &crate::config::escape::EscapeConfig) {
     ui.horizontal(|ui| {
         ui.label(t!("view.zoom").as_ref());
@@ -525,7 +519,6 @@ pub fn camera_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager, fly_mode
                 let _ = config_manager.update_param(ConfigPath::PerspectiveStrength, perspective.into());
             }
         }
-        #[cfg(feature = "engine-escape")]
         ViewKind::Solid => {
             let esc = config.escape.clone();
             let cam = {
@@ -600,7 +593,7 @@ pub fn camera_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager, fly_mode
             angle_row(ui, config_manager, &t!("escape_panel.camera_bank"), &t!("escape_panel.camera_bank_tip"), ConfigPath::EscapeCamBank, esc.cam_bank);
             fov_row(ui, config_manager, ConfigPath::EscapeCamFov, esc.cam_fov);
         }
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        #[cfg(feature = "terrain")]
         ViewKind::SimTerrain => {
             let t = config.sim.terrain.clone();
             // The eye in grid widths from the grid's corner. A grid bound
@@ -661,7 +654,6 @@ fn fly_controls(
     // A solid saved while its lights turned with the camera: flying swings
     // them. One click fixes them in the fractal where they are, the picture
     // as it stands.
-    #[cfg(feature = "engine-escape")]
     if kind == crate::camera::gesture::ViewKind::Solid && config_manager.active_config().solid_shading.lights_follow_camera {
         if ui.button(t!("view.lights_to_world").as_ref()).on_hover_text(t!("view.lights_to_world_tip")).clicked() {
             let changes = super::render_mode::lights_to_world(config_manager.active_config());
@@ -777,7 +769,7 @@ pub fn atmosphere_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
             float_row(ui, config_manager, &t!("view.far"), &t!("escape_panel.terrain_far_tip"), ConfigPath::EscapeTerrainFar, t.far, 0.5..=64.0, true);
             float_row(ui, config_manager, &t!("escape_panel.terrain_haze"), &t!("escape_panel.terrain_haze_tip"), ConfigPath::EscapeTerrainHaze, t.haze, 0.0..=1.0, false);
         }
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        #[cfg(feature = "terrain")]
         ViewKind::SimTerrain => {
             let t = &config.sim.terrain;
             // A single grid ends at its edge; only a repeated one reaches
@@ -795,7 +787,6 @@ pub fn atmosphere_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
 
 /// The path tracer's settings, their paths, and the tier for a 3D view
 /// other than a flame.
-#[cfg(feature = "engine-escape")]
 pub(super) type PathOf = (
     crate::config::escape::PathTraceConfig,
     super::escape_panel::PathPaths,
@@ -804,7 +795,6 @@ pub(super) type PathOf = (
     &'static str,
 );
 
-#[cfg(feature = "engine-escape")]
 pub(super) fn path_of(config: &crate::config::FractalConfig) -> Option<PathOf> {
     use crate::camera::gesture::{self, ViewKind};
     match gesture::view_kind(config) {
@@ -823,7 +813,7 @@ pub(super) fn path_of(config: &crate::config::FractalConfig) -> Option<PathOf> {
             config.escape.terrain.tier,
             "terrain_tier",
         )),
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        #[cfg(feature = "terrain")]
         ViewKind::SimTerrain => Some((
             config.sim.terrain.path.clone(),
             super::escape_panel::PathPaths {
@@ -862,7 +852,6 @@ pub fn depth_of_field_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) 
         float_row(ui, config_manager, &t!("view.dof_blur_strength"), &t!("view.tooltip_dof_blur_strength"), ConfigPath::DofBlurStrength, config.dof_blur_strength, 0.0..=1.0, false);
         return;
     }
-    #[cfg(feature = "engine-escape")]
     if let Some((pt, paths, _, tier, _)) = path_of(&config) {
         if tier == crate::config::escape::RenderTier::Lit {
             ui.label(egui::RichText::new(t!("view.dof_needs_path")).small().weak());

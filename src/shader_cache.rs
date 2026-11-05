@@ -931,7 +931,7 @@ impl ShaderCache {
 }
 
 // The flame renderer's caches, which need the variation catalog.
-#[cfg(all(test, not(target_arch = "wasm32"), feature = "engine-flame"))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod pipeline_lru_tests {
     //! Layer A of docs/archive/projects/sticky-shader-compilation.md, tested
     //! through the real path: a FlameRenderer on a real device, configs

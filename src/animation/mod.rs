@@ -10,6 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 mod controller;
 mod interpolation;
 pub mod export;
+pub mod frames;
 
 pub use controller::AnimationController;
 pub use interpolation::{EasingFunction, Interpolation};

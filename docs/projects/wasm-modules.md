@@ -1,6 +1,11 @@
 # WASM modules: what they lack, and loading engines on demand
 
-Research 2026-10-23; nothing built. The user's words: "I want to review the
+Research 2026-10-23. **Section 1 decided 2026-11-04**: the user chose one
+gallery renderer, and `wasm/flame`, `wasm/escape` and `wasm/sim` were
+retired ("0.4 MB is a small price to avoid separate modules";
+[architecture-review.md](architecture-review.md) section 3, option (a)),
+and the engine features with them: every build carries every engine.
+Section 1 below is the problem as it stood. Sections 2-4 are open. The user's words: "I want to review the
 WASM modules. We've added things like flame variations used in Simulation
 and Escape-time modes, and I think we skipped them. Could we do something
 like the flame variations themselves are their own WASM module, and it's
@@ -29,7 +34,7 @@ for [the catalogue]" is no longer true:
 | Escape transformations (Plane / Orbit / Iteration) | `escape.transforms[]` | Dropped (`drawn_transforms`, `map_usable`) |
 | Mode D, the Flame Attractor (2D and solid) | `escape.formula` = `ifs_flame` / `ifs_flame_3d`, reading `config.flame` | **Blank** unless every variation is `linear`: the analysis refuses an unknown name (`NotAffine::Variation`), `pack_for` returns None, the renderer draws nothing. The inverse kernels themselves are in the binary |
 | A Rhai solid's `vary("name", v)` of a built-in | `escape.custom_formula` (e.g. `solid-inverted-menger.rhai`) | **A Mandelbrot**: the compile fails, `custom::ensure` logs it, `get_formula` falls back to `FORMULAS[0]` |
-| Rhai custom variations | `flame.custom_variations` | Work in the escape module; **lost in the sim and flame modules** -- `variations::custom` is gated on `engine-escape` |
+| Rhai custom variations | `flame.custom_variations` | Work in the escape module; **lost in the sim and flame modules** -- `variations::custom` is gated on `engine-escape`. *Fixed 2026-11-02: `variations::custom` is gated on `lang` now, and `wasm/flame` and `wasm/sim` build with it* |
 | Simulation layers warped by the flame | `sim.use_transforms` | Affine only: the variations are skipped (`build_layer_map`) |
 | Escape textures from a simulation recipe | `escape.texture` | Missing in the escape module: the recipe renders through `render()`, which returns `EngineMissing("simulation")`; a warning only |
 
@@ -173,7 +178,9 @@ engine.
 - Is a quarter of the download (1.7 of 6.5 MB gzip) worth B and C's
   complexity, or is fixing the gallery modules (1) and variations as data
   (2) enough?
-- For 1: fetch variations in the gallery modules, or just build them with
-  the catalogue (+0.2-0.4 MB gzip each)?
+- For 1: ~~fetch variations in the gallery modules, or just build them with
+  the catalogue (+0.2-0.4 MB gzip each)?~~ Decided 2026-11-04: neither;
+  the single-engine modules are retired and `wasm/render` serves every
+  config.
 - Where built-in variation files are served from: `pkg/assets/` beside the
   module (offline-capable, versioned with it) or the API.

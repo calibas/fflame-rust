@@ -682,7 +682,6 @@ impl SimRenderer {
         // The colouring and model a config carries, registered before
         // anything here resolves their names (P4); each entry point that
         // takes a config does the same, as a test may skip the others.
-        #[cfg(feature = "lang")]
         crate::sim::custom::ensure(cfg);
         let (grid_w, grid_h) = Self::allocatable_grid(cfg, out_w, out_h);
         // Every slice: the user's layers, their memory and their scratch.
@@ -1659,7 +1658,6 @@ impl SimRenderer {
     }
 
     pub fn resize(&mut self, device: &Device, cfg: &SimConfig, out_w: u32, out_h: u32) -> bool {
-        #[cfg(feature = "lang")]
         crate::sim::custom::ensure(cfg);
         let resample = std::mem::take(&mut self.resample_requested);
         let (gw, gh) = Self::allocatable_grid(cfg, out_w, out_h);
@@ -3005,7 +3003,6 @@ impl SimRenderer {
     }
 
     pub fn seed(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig) {
-        #[cfg(feature = "lang")]
         crate::sim::custom::ensure(cfg);
         // A seed is a new run: a field waiting to be carried is not one.
         self.carry_from = None;
@@ -3178,7 +3175,6 @@ impl SimRenderer {
     /// blocking poll in WebGPU), the measured cost is ~0, and the
     /// batch sits at the ceiling; browsers have no 2 s reset to avoid.
     pub fn run_steps(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig, count: u32) {
-        #[cfg(feature = "lang")]
         crate::sim::custom::ensure(cfg);
         self.carry_field(device, queue);
         if count == 0 {
@@ -3511,7 +3507,6 @@ impl SimRenderer {
         cfg: &SimConfig,
         palette_view: &TextureView,
     ) {
-        #[cfg(feature = "lang")]
         crate::sim::custom::ensure(cfg);
         self.carry_field(device, queue);
         self.ensure_pipelines(device, cfg);
@@ -3622,7 +3617,6 @@ impl SimRenderer {
         steps: u32,
     ) {
         // Before `will_reseed` reads the config (`new`).
-        #[cfg(feature = "lang")]
         crate::sim::custom::ensure(cfg);
         if self.will_reseed(cfg) {
             self.seed(device, queue, cfg);

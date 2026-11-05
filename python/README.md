@@ -38,8 +38,16 @@ c.zoom = 1.5
 
 c.save("mine.fflame")                      # the app's JSON
 c.save_flame_xml("mine.flame")             # Apophysis / JWildfire XML
-c.data["exposure"] = 0.8                   # every field the properties do not name
+c.set("exposure", 0.8)                     # any setting, by the app's rules
+c.set("Sim.Terrain.Height", 0.25)          # the file's name or the track's
 ```
+
+`Config.set(key, value)` is a script's `config.set`: a setting the
+panels edit is clamped and applied as the panel applies it (a time step
+of 0 is held to the solver's floor), the flame is refused (use the
+transform calls), and a name that changes nothing warns. The properties
+(`zoom`, `pan_x`, ...) set through it. `c.data` is the file's JSON, for
+reading anything, or writing a field as given.
 
 `Config.load` / `from_json`, `load_flame_xml` / `parse_flame_xml` (a
 list: one file may hold several flames); transforms by index:

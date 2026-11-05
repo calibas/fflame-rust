@@ -295,10 +295,16 @@ impl HighResExporter {
         let sample_size = std::mem::size_of::<Sample>() as u64; // 32 bytes
         let samples_per_workgroup =
             Self::THREADS_PER_WORKGROUP * iterations_per_thread as u64 * emit_mult.max(1);
-        let bytes_per_workgroup = samples_per_workgroup * sample_size;
-
-        // Calculate workgroups to fill target buffer
-        let workgroups = Self::TARGET_BUFFER_SIZE / bytes_per_workgroup;
+        // Workgroups to fill the target buffer, holding no more samples
+        // than the accumulate pass can take in one dispatch: a thread a
+        // sample, at most 65,535 workgroups of 64 (wgpu's limit on a
+        // dispatch dimension). 128 MB of 32-byte samples is exactly 2^22,
+        // which asked for 65,536 and panicked whenever every sample of a
+        // dispatch landed in frame (a flame inside the frame, at the
+        // default 1024 iterations a thread).
+        let max_samples = (Self::TARGET_BUFFER_SIZE / sample_size)
+            .min(65_535 * crate::export::accumulate::ACCUMULATE_WORKGROUP_SIZE as u64);
+        let workgroups = max_samples / samples_per_workgroup;
 
         // Budget wins over occupancy. The old floor of 128 workgroups
         // silently overrode the 128 MB target once a single workgroup's
@@ -2901,9 +2907,10 @@ impl HighResExporter {
         Ok(texture)
     }
 
-    /// Shared tonemap tail: run color effects on the tonemapped output (if any),
-    /// then read it back to RGBA8. Color effects are non-local so they always
-    /// run on the full output, after any tiling.
+    /// The export's end, after the tone map (full or strip-tiled): the
+    /// tail's colour stage on the tone-mapped output (`renderer::tail`;
+    /// colour effects are non-local, so they always run on the full
+    /// output, after any tiling), then the picture read back to RGBA8.
     async fn finish_output(
         &self,
         output_texture: &Texture,
@@ -2911,9 +2918,10 @@ impl HighResExporter {
         config: &FractalConfig,
     ) -> Result<Vec<u8>, String> {
         crate::effects::ensure_custom(&config);
-        let has_color_effects = EffectChainRunner::has_enabled_effects(&config.color_effects);
+        // The colour stage reads no density mean.
+        let tail = crate::renderer::tail::Tail::new(config, 1.0);
         let mut effect_chain: Option<EffectChainRunner> = None;
-        let color_effects_ran = if has_color_effects {
+        let color_effects_ran = if tail.has_color_effects() {
             log::info!("High-res export: Running {} color effect(s)",
                 config.color_effects.iter().filter(|e| e.enabled).count());
             let mut chain = EffectChainRunner::new(&self.device, self.width, self.height);
@@ -2921,13 +2929,7 @@ impl HighResExporter {
                 label: Some("Export Color Effects Encoder"),
             });
             chain.reset_slots();
-            let ran = chain.run_color_effects(
-                &self.device,
-                &self.queue,
-                &mut effect_encoder,
-                output_view,
-                &config.color_effects,
-            );
+            let ran = tail.color_on(&self.device, &self.queue, &mut effect_encoder, &mut chain, output_view);
             self.queue.submit(std::iter::once(effect_encoder.finish()));
             effect_chain = Some(chain);
             ran
@@ -3538,23 +3540,18 @@ impl HighResExporter {
         // (textureLoad, so no filtering needed). Guarded by a resolution
         // ceiling so the extra texture memory doesn't OOM at extreme sizes.
         crate::effects::ensure_custom(&config);
-        let has_density_effects = EffectChainRunner::has_enabled_effects(&config.density_effects);
+        // The tail's density stage (`renderer::tail`), measured against
+        // the export's own mean density.
+        let tail = crate::renderer::tail::Tail::new(config, tonemap_params.levels_density);
         let mut density_chain: Option<EffectChainRunner> = None;
-        if has_density_effects {
+        if tail.has_density_effects() {
             if Self::density_effects_fit(self.width, self.height) {
                 let mut chain = EffectChainRunner::new(&self.device, self.width, self.height);
                 let mut density_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
                     label: Some("Export Density Effects Encoder"),
                 });
                 chain.reset_slots();
-                let ran = chain.run_density_effects(
-                    &self.device,
-                    &self.queue,
-                    &mut density_encoder,
-                    base_accum_view,
-                    &config.density_effects,
-                    tonemap_params.levels_density,
-                );
+                let ran = tail.density(&self.device, &self.queue, &mut density_encoder, &mut chain, base_accum_view).is_some();
                 self.queue.submit(std::iter::once(density_encoder.finish()));
                 if ran {
                     log::info!(
@@ -3692,114 +3689,8 @@ impl HighResExporter {
         drop(accumulation_texture);
         let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
 
-        // ===== Step 5.5: Run color effects (if enabled) =====
-        crate::effects::ensure_custom(&config);
-        let has_color_effects = EffectChainRunner::has_enabled_effects(&config.color_effects);
-        let mut effect_chain: Option<EffectChainRunner> = None;
-        let color_effects_ran = if has_color_effects {
-            log::info!("High-res export: Running {} color effect(s)",
-                config.color_effects.iter().filter(|e| e.enabled).count());
-
-            let mut chain = EffectChainRunner::new(&self.device, self.width, self.height);
-
-            let mut effect_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("Export Color Effects Encoder"),
-            });
-
-            chain.reset_slots();
-            let ran = chain.run_color_effects(
-                &self.device,
-                &self.queue,
-                &mut effect_encoder,
-                &output_view,
-                &config.color_effects,
-            );
-
-            self.queue.submit(std::iter::once(effect_encoder.finish()));
-            effect_chain = Some(chain);
-            ran
-        } else {
-            false
-        };
-
-        // ===== Step 6: Read back result =====
-        // If color effects ran, read from effect chain output; otherwise read from tonemap output
-        if color_effects_ran {
-            if let Some(chain) = effect_chain.as_ref() {
-                return chain.read_color_output_pixels(&self.device, &self.queue).await
-                    .map(|(_, _, pixels)| pixels);
-            }
-        }
-
-        // Read from tonemap output texture
-        let bytes_per_pixel = 4u32; // RGBA8
-        let unpadded_bytes_per_row = self.width * bytes_per_pixel;
-        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
-        let buffer_size = (padded_bytes_per_row * self.height) as u64;
-
-        let readback_buffer = self.device.create_buffer(&BufferDescriptor {
-            label: Some("Export Tonemap Readback Buffer"),
-            size: buffer_size,
-            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let mut copy_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Export Readback Encoder"),
-        });
-
-        copy_encoder.copy_texture_to_buffer(
-            TexelCopyTextureInfo {
-                texture: &output_texture,
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            TexelCopyBufferInfo {
-                buffer: &readback_buffer,
-                layout: TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(self.height),
-                },
-            },
-            Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        self.queue.submit(std::iter::once(copy_encoder.finish()));
-
-        // Map and read pixels
-        let buffer_slice = readback_buffer.slice(..);
-        let (tx, rx) = futures::channel::oneshot::channel();
-        buffer_slice.map_async(MapMode::Read, move |result| {
-            tx.send(result).ok();
-        });
-
-        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
-
-        rx.await
-            .map_err(|_| "Failed to receive tonemap readback result".to_string())?
-            .map_err(|e| format!("Failed to map tonemap readback buffer: {:?}", e))?;
-
-        let data = buffer_slice.get_mapped_range();
-
-        // Copy pixels, removing row padding
-        let mut pixels = Vec::with_capacity((self.width * self.height * 4) as usize);
-        for y in 0..self.height {
-            let row_start = (y * padded_bytes_per_row) as usize;
-            let row_end = row_start + (self.width * bytes_per_pixel) as usize;
-            pixels.extend_from_slice(&data[row_start..row_end]);
-        }
-
-        drop(data);
-        readback_buffer.unmap();
-
-        Ok(pixels)
+        // ===== Steps 5.5 and 6: colour effects, then the read back =====
+        self.finish_output(&output_texture, &output_view, config).await
     }
 }
 

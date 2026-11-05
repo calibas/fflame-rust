@@ -419,7 +419,6 @@ mod tests {
     /// generated with default features, so a module build with an
     /// engine gated off would compare against a document that was never
     /// meant to describe it (the built-in script kinds differ, for one).
-    #[cfg(all(feature = "engine-flame", feature = "engine-escape"))]
     #[test]
     fn contract_is_current() {
         let fresh = serde_json::to_string_pretty(&generate()).expect("serialize");
@@ -466,7 +465,6 @@ mod tests {
     // and the built-in script set are generated with default features, so
     // a module build with an engine gated off compares against a file that
     // was never meant to describe it.
-    #[cfg(all(feature = "engine-flame", feature = "engine-escape"))]
     #[test]
     fn the_contract_reserves_exactly_what_the_client_refuses() {
         let doc = generate();
@@ -640,7 +638,6 @@ mod tests {
     /// name or another alias — correct, but it means adding one is not
     /// self-verifying: the warning goes to a log nobody reads.
     // Resolves names from the catalog.
-    #[cfg(feature = "engine-flame")]
     #[test]
     fn lowercase_aliases_resolve_to_their_capital_d_variations() {
         let reg = crate::variations::global_registry();

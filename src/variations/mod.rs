@@ -17,7 +17,6 @@ pub mod defs;
 pub mod docs;
 pub mod analytic_blur;
 /// Variations written in the formula language (the KIFS plan, C1).
-#[cfg(feature = "lang")]
 pub mod custom;
 
 use definition::VariationDef;
@@ -554,7 +553,7 @@ impl VariationRegistry {
             // Collisions are reported, never shadowed, and silently
             // replacing something the user wrote with something they did
             // not is the worse direction.
-            if existing.provenance == crate::provenance::Provenance::Custom && provenance != crate::provenance::Provenance::Custom {
+            if existing.provenance == crate::provenance::Provenance::Local && provenance != crate::provenance::Provenance::Local {
                 log::warn!("Cannot register variation '{}' — a custom variation has that name", dl.name);
                 return;
             }
@@ -860,7 +859,6 @@ pub fn classify_missing(
 pub fn missing_variations_in(flame: &crate::scene::transforms::Flame) -> Vec<String> {
     // The variations the flame carries the source of are not missing:
     // registered here, they are not fetched.
-    #[cfg(feature = "lang")]
     custom::ensure(flame);
     let registry = global_registry();
     let mut missing = std::collections::HashSet::new();
@@ -878,41 +876,6 @@ pub fn missing_variations_in(flame: &crate::scene::transforms::Flame) -> Vec<Str
     for xform in &flame.linked_transforms { scan(xform); }
     for xform in &flame.final_transforms { scan(xform); }
     missing.into_iter().collect()
-}
-
-#[cfg(test)]
-mod engine_feature_tests {
-    /// The catalog is complete when the flame engine is on, and is
-    /// down to `linear` when it is off.
-    ///
-    /// This is the whole `engine-flame` contract in one place. A
-    /// module that forgets the feature does not fail to build -- it
-    /// builds a renderer whose catalog is one variation, and every
-    /// config naming anything else renders WRONG rather than
-    /// erroring. That already happened once: the scripting module
-    /// inherited `default-features = false` and its scripts started
-    /// failing on `spherical`, caught by CLI parity rather than by
-    /// anything here.
-    #[test]
-    fn the_catalog_matches_the_engine_feature() {
-        let n = crate::variations::global_registry().names().len();
-        if cfg!(feature = "engine-flame") {
-            assert!(
-                n > 500,
-                "engine-flame is on but the catalog holds {n} variations"
-            );
-        } else {
-            assert!(
-                n <= 2,
-                "engine-flame is off but the catalog still holds {n} variations -- \
-                 the module is paying for a catalog it cannot use"
-            );
-            assert!(
-                crate::variations::global_registry().get("linear").is_some(),
-                "`linear` must survive: a default config's transforms name it"
-            );
-        }
-    }
 }
 
 #[cfg(test)]

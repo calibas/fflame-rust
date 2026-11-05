@@ -25,22 +25,22 @@ Four surfaces, built four different ways, from one repository.
 |---|---|---|---|
 | Desktop app | `cargo build --profile dist` | `target/dist/FractalArtEditor(.exe)` | `Cargo.toml` |
 | Web app | `build-wasm.bat` / `.sh` — `--profile dist` | `pkg/` + `index.html`, `css/`, `js/` | `Cargo.toml` |
-| Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/sim`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
+| Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
 | Python | `python python/build.py --wheel` (the WASI module, then the wheel) | `python/dist/*.whl`, one for every platform | `python/pyproject.toml` |
 
-The three single-engine renderer modules (`flame`, `escape`, `sim`) are
-the SAME SOURCE as `wasm/render` built with different Cargo features;
-each drops the engines it does not need, which is roughly half the
-gzipped download. (`wasm/render` itself is built with all three
-engines.) `release.py check` compiles the
-library at each of those feature combinations, because a `#[cfg]`
-attached to the wrong item is invisible in every build that has all
-three engines on — that has happened, and only a build with simulation
-and no escape caught it. See [wasm/README.md](../wasm/README.md).
+`wasm/render` is built with all three engines and is the one gallery
+renderer: the single-engine modules (`flame`, `escape`, `sim`) were
+retired on 2026-11-04, because the engines use each other now and a
+module without the variation catalog drew escape and simulation
+configs wrong. `release.py check` still compiles the library at each
+engine's features alone, because a `#[cfg]` attached to the wrong item
+is invisible in every build that has all three engines on — that has
+happened, and only a build with simulation and no escape caught it.
+See [wasm/README.md](../wasm/README.md).
 
 ### The version problem
 
-Eight manifests carry a version number, one Python module carries it as
+Five manifests carry a version number, one Python module carries it as
 `__version__`, and one more file carries it as a cache-buster:
 
 ```
@@ -50,9 +50,6 @@ python/pyproject.toml      0.5.0   ← the wheel's version
 python/pyfflame/__init__.py 0.5.0  ← what pyfflame.__version__ reports
 wasm/render/Cargo.toml     0.5.0
 wasm/script/Cargo.toml     0.5.0
-wasm/flame/Cargo.toml      0.5.0
-wasm/escape/Cargo.toml     0.5.0
-wasm/sim/Cargo.toml        0.5.0
 index.html                 ?v=0.5.0 on css/vkb.css and js/vkb.js
 ```
 
@@ -63,7 +60,7 @@ that could have come from any app version, because nothing records which.
 
 **Decided: lockstep.** One version for everything, bumped together.
 `release.py version` rewrites every file in its `VERSION_FILES` list
-(the ten above). It reads and checks all of them before writing any,
+(the seven above). It reads and checks all of them before writing any,
 so a file that has lost its version line fails the bump with nothing
 rewritten. `release.py versions` lists them, and the `versions agree`
 gate (§2) fails when any differs from `Cargo.toml` — or when a tracked
@@ -91,11 +88,9 @@ python scripts/release.py check --fix    # ...and regenerate the generated files
 The gates, in order: every version agrees (§1), unit tests
 (`cargo test --release --lib`), the library compiled for
 `wasm32-unknown-unknown`, the generated contract, the shader dumps, doc
-links, and the gallery modules: one incremental `cargo check` of all
-five gallery crates and their tests, each at its own feature set, which
-is the engine feature matrix (`wasm/flame`, `wasm/escape` and `wasm/sim`
-build the library with one engine each). The gallery crates' own test
-runs are `python scripts/release.py gallery`, before the modules deploy.
+links, the gallery modules (one incremental `cargo check` of both
+gallery crates and their tests) and pyfflame's WASI module. The gallery
+crates' own test runs are `python scripts/release.py gallery`, before the modules deploy.
 The commands are in [TESTING-GUIDE.md §2](TESTING-GUIDE.md).
 
 **Nothing runs on push, on commit, or on a timer.** That is deliberate:
@@ -293,13 +288,13 @@ cargo run --release --bin variation_probe -- census --corpus
 ### 4.4 — Build
 
 ```bash
-python scripts/release.py build     # desktop, packaging, web, five gallery modules, wheel
+python scripts/release.py build     # desktop, packaging, web, two gallery modules, wheel
 python scripts/release.py build --only desktop   # only surfaces whose name contains this
 ```
 
 Host-specific packaging runs automatically as the second step — the
 `.app` bundle on macOS, the zip on Windows. The web app step runs
-`bash build-wasm.sh`. The gallery modules are five `wasm-pack` builds,
+`bash build-wasm.sh`. The gallery modules are two `wasm-pack` builds,
 one per crate (`--only gallery` builds just those). Individually:
 
 | surface | command | where |
@@ -308,7 +303,7 @@ one per crate (`--only gallery` builds just those). Individually:
 | macOS bundle | `python3 scripts/make_macos_app.py --zip` | macOS |
 | Windows zip | `python scripts/make_windows_zip.py` | Windows |
 | web app | `./build-wasm.sh` / `build-wasm.bat` (they build `--profile dist`) | either |
-| gallery modules | `wasm-pack build --target web --release` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/sim`, `wasm/script` | either |
+| gallery modules | `wasm-pack build --target web --release` in `wasm/render`, `wasm/script` | either |
 | python wheel | `python python/build.py --wheel` (needs `rustup target add wasm32-wasip1`) | one pure-Python wheel |
 
 `--profile dist`, never `--release`, for **desktop and web alike** — §4c
@@ -629,17 +624,13 @@ build. Retiring it is a release step, not a cleanup task — a redirect to
 `fractalsforall.com/editor/` is better than a 404 for anyone holding the
 old link.
 
-### Gallery modules — five `pkg/` directories, built with wasm-pack
+### Gallery modules — two `pkg/` directories, built with wasm-pack
 
-The Endless Gallery's renderers and script engine. Separate crates, so
+The Endless Gallery's renderer and script engine. Separate crates, so
 they are the one surface that does **not** use `build-wasm.sh`:
 
 ```bash
 cd wasm/render && wasm-pack build --target web --release   # every engine
-# ...and the single-engine modules, same source, different Cargo features:
-cd wasm/flame  && wasm-pack build --target web --release   # flame only
-cd wasm/escape && wasm-pack build --target web --release   # escape-time only
-cd wasm/sim    && wasm-pack build --target web --release   # simulation only
 cd wasm/script && wasm-pack build --target web --release   # script + seed -> config
 ```
 
@@ -661,27 +652,23 @@ own `wasm-opt`, so binaryen need not be on PATH. The
 `Cargo.toml` are load-bearing: the bundled wasm-opt 117 predates
 rustc's bulk-memory default and rejects the module without them.
 
-**Gated.** `release.py check` checks all five crates and their tests,
-each at its own feature set (`gallery modules`: incremental, 14-15s
-after an edit, 3s with none). That is the engine feature matrix, and it
-evaluates the compile-time assertion that the flame catalog is whole
-with `engine-flame` and `linear` alone without (`variations::defs`). The
-CLI-parity fixtures §6 names as the guard for `script + seed`
+**Gated.** `release.py check` checks both crates and their tests
+(`gallery modules`: incremental, 14-15s a check after an edit, 3s with
+none), the one build of the library without `web-app` and `terrain`.
+The CLI-parity fixtures §6 names as the guard for `script + seed`
 reproducibility are compared in the main suite too
 (`shipped_scripts_give_the_clis_flames_for_their_seeds`), so every check
-runs them. The crates' own test runs -- compiling the library at four
-feature sets with codegen, 7 minutes, which is why they left `check` on
-2026-11-03 -- are `python scripts/release.py gallery`, run before the
-modules deploy: the script module's parity (its parameters and
-envelope), the renderer's clamps and device reuse, each single-engine
-module rendering on the GPU and refusing a config of an engine it lacks.
+runs them. The crates' own test runs -- compiling the library with
+codegen, minutes, which is why they left `check` on 2026-11-03 -- are
+`python scripts/release.py gallery`, run before the modules deploy: the
+script module's parity (its parameters and envelope), and the renderer
+drawing every engine on the GPU, its clamps and device reuse.
 The GPU tests skip cleanly on a machine with no adapter. To run one by
 hand:
 
 ```bash
 cd wasm/script && cargo test --profile gallery-test   # byte-identical flames
 cd wasm/render && cargo test --profile gallery-test   # GPU smoke + device reuse
-cd wasm/sim    && cargo test --profile gallery-test   # likewise wasm/flame, wasm/escape
 ```
 
 **Run them from the crate directory, and with that profile** — both

@@ -16,7 +16,7 @@
 //! declares them.
 
 pub mod layout;
-#[cfg(all(test, feature = "engine-flame", feature = "engine-escape", feature = "engine-sim"))]
+#[cfg(test)]
 mod snapshot;
 
 use std::borrow::Cow;

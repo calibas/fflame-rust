@@ -241,18 +241,19 @@ separate piece of code:
    it returns `None` for a path that cannot be animated, and its match
    over `ConfigPath` is exhaustive with no wildcard, so a new path must
    be classified there.
-3. **Something applies it.** In the app, `ConfigManager`'s own setter,
-   silently. In video export, the exporter's `apply_config_value`, which
-   handles the common paths directly and hands everything else to
-   `ConfigManager::apply_value_detached` — the manager's setter run on a
-   detached copy, same clamps and side effects.
+3. **The setter applies it**: `config::apply`
+   ([apply.rs](../../src/config/apply.rs)), the program's one setter --
+   in the app through `ConfigManager`, silently; in video export on the
+   frame's copy of the config, directly. The exporter kept arms of its
+   own until 2026-11-04, and they fell behind more than once.
 
-Two tests in [export.rs](../../src/animation/export.rs) hold the third
+Tests in [export.rs](../../src/animation/export.rs) hold the third
 to the first:
 `every_offered_target_renders_in_the_video_as_in_the_app` applies every
 offered target, in every render mode, through both the exporter and the
-manager and requires identical configs; the escape and simulation
-variants require every offered target to move the config at all.
+setter, requires identical configs and refuses a target that carries no
+value; the escape and simulation variants require every offered target
+to move the config at all.
 
 ### Value conversion
 
@@ -267,7 +268,7 @@ Keyframe values are JSON, and interpolation produces floats. Per path:
 | booleans | a JSON `true`/`false` only |
 | enums (`TonemapMode`, `ColorMode`, `RenderMode`, …) | the serde name |
 | `Pan`, `BackgroundColor`, escape shading colours | `[x, y]` / `[r, g, b]` arrays |
-| `Escape.CamTargetX/Y/Z` | a finite number, stored as the decimal **string** the config uses |
+| `Escape.CamTargetX/Y/Z`, `Escape.CenterRe/Im` | a finite number, stored as the decimal **string** the config uses; a moving centre is as precise as an f64 (about 16 digits), and a frame holding the centre's own value leaves its exact decimal alone (`holds_exact_centre`) |
 
 ### Not animatable
 
@@ -278,8 +279,7 @@ Keyframe values are JSON, and interpolation produces floats. Per path:
   enables, coupling endpoints, warp and matte modes, shading model,
   transfer curve, terrain source and tier, path-tracer sample and bounce
   counts, and the like.
-- **Exact or structural state:** the escape centre strings
-  (`Escape.CenterRe/Im`), the reference-period hint, the terrain lock,
+- **Exact or structural state:** the reference-period hint, the terrain lock,
   the palette and tone curve, add/remove effect, variation phase
   priority and order, word removals.
 - **Settings that re-render everything** on each change, such as the
@@ -296,7 +296,7 @@ The picker groups targets by category and filters by the current mode:
 | Tone Mapping | always | exposure, gamma, threshold, brightness, vibrancy, saturation, hue shift, density scale, levels |
 | Rendering | flame modes; 3D adds projection and depth weighting | blend factor, solo transform, perspective, depth-density compensation, far-density fade |
 | Effects | when the config has effects | each effect's Enabled and parameters |
-| Escape | Escape mode | zoom (log2), rotation, iterations, bailout, Julia seed, damping, the active formula's and colouring's parameters; then, as they apply, the solid or terrain camera, terrain and path-tracer controls, palette-map pivot, contrast, colouring layer, texture overlay, relief, the lens amount and parameters, and each transformation's amount and parameters (mode A) |
+| Escape | Escape mode | zoom (log10), the centre (not on a solid, which has a camera), rotation, iterations, bailout, Julia seed, damping, the active formula's and colouring's parameters; then, as they apply, the solid or terrain camera, terrain and path-tracer controls, palette-map pivot, contrast, colouring layer, texture overlay, relief, the lens amount and parameters, and each transformation's amount and parameters (mode A) |
 | Simulation | Simulation mode | steps, dt (when a layer has one), view and warp rates, matte, each layer's model parameters, each colour layer's parameters, opacity and matte, coupling strengths, the terrain camera and ground |
 | Xaos, Transform *n*, Linked *n*, Final *n* | wherever the flame is drawn: flame modes, an escape IFS formula, a simulation with `use_transforms` | weights, colour, opacity, affine and post-affine (raw and as origin/rotation/scale), active variations and their parameters |
 

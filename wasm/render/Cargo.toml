@@ -19,18 +19,17 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 # default-features = false turns off `web-app`: without that, this
 # module would inherit the full application's wasm-bindgen exports.
-# All three engines explicitly: this module renders EVERY mode, so it
-# carries the variation catalog, the escape-time engine and the
-# simulation engine. The single-engine siblings (../flame, ../escape,
-# ../sim) are the same source with one of these each. `terrain` stays
-# off, as in every gallery module: a terrain config renders as its 2D
-# picture.
-fractal_flame_wgpu = { path = "../..", default-features = false, features = ["engine-flame", "engine-escape", "engine-sim"] }
-# The main crate's render API speaks `egui_wgpu::wgpu` types; using the
-# same re-export guarantees type identity. default-features = false —
-# egui itself is never referenced and the linker drops it (verified by
-# string scan, as with wasm/script).
-egui-wgpu = { version = "0.34", default-features = false }
+# It is the one gallery renderer, for every mode: the single-engine
+# modules (wasm/flame, wasm/escape, wasm/sim) were retired on
+# 2026-11-04, because the engines now use each other -- an escape lens,
+# transformation or Flame Attractor names flame variations, a
+# simulation layer is warped by the flame -- and a module without the
+# catalog drew those configs wrong without saying so. `terrain` stays
+# off: a terrain config renders as its 2D picture.
+fractal_flame_wgpu = { path = "../..", default-features = false }
+# The main crate's wgpu; its features (webgpu on wasm32, the native
+# backends otherwise) come from the main crate and unify with this.
+wgpu = { version = "29.0", default-features = false }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
@@ -41,6 +40,10 @@ console_error_panic_hook = "0.1"
 
 [dev-dependencies]
 pollster = { version = "0.4", features = ["macro"] }
+# The smoke tests edit a shipped config (a simulation's step count) and
+# pick a preset out of the bundled file. Test-only: the module itself
+# takes config JSON as a string.
+serde_json = "1.0"
 
 # Tests are not a shipping artifact. `cargo test --release` would pick
 # up [profile.release] below — opt-level="z", fat LTO, one codegen unit

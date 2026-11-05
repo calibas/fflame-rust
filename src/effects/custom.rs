@@ -311,9 +311,9 @@ pub fn ensure(config: &crate::config::FractalConfig) {
         }
         // Under the key the config names, which its instances run (a
         // config edited by hand may name one its text no longer hashes to).
-        let result = compile(&src.source, Provenance::Custom).and_then(|mut info| {
+        let result = compile(&src.source, Provenance::Local).and_then(|mut info| {
             info.name = src.entry.clone();
-            register_info(info, Provenance::Custom).map(|_| ())
+            register_info(info, Provenance::Local).map(|_| ())
         });
         if let Err(e) = &result {
             log::warn!("Custom effect `{}` did not register: {e}", src.entry);
@@ -373,7 +373,7 @@ fn effect(c, p, ctx) {
     if on { rgba(vec3(y), c.a) } else { c }
 }
 "#;
-        let wgsl = compile(src, Provenance::Custom).unwrap_or_else(|e| panic!("{e}")).source.wgsl();
+        let wgsl = compile(src, Provenance::Local).unwrap_or_else(|e| panic!("{e}")).source.wgsl();
         for want in ["round(get_param(0u))", "f32(effect_params.width)", "(round(get_param(0u)) > 2.0)", "max(", "min(", "sin("] {
             assert!(wgsl.contains(want), "{want} in\n{wgsl}");
         }
@@ -412,7 +412,7 @@ fn effect(c, p, ctx) {
 
     #[test]
     fn an_effect_compiles_to_a_module_naga_accepts() {
-        let info = compile(TINT, Provenance::Custom).unwrap_or_else(|e| panic!("{e}"));
+        let info = compile(TINT, Provenance::Local).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(info.name, key_for("6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b", TINT), "under its key: id and version");
         assert_eq!(id_of(&info.name), "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b");
         assert_eq!(info.category, EffectCategory::Color);
@@ -433,7 +433,7 @@ fn effect(c, p, ctx) {
     fn an_effect_without_a_blend_returns_its_colour() {
         let src = "const INFO = #{ id: \"0e5c6b2a-1d3f-4a7e-9b8c-2f4d6a8c0e1b\", category: \"density\" };\n\
                    fn effect(c, p, ctx) {\n    let n = input_at(ctx.width - 1, 0);\n    rgba(c.r, c.g, c.b, (c.a + n.a) * 0.5 * ctx.density_mean)\n}\n";
-        let info = compile(src, Provenance::Custom).unwrap_or_else(|e| panic!("{e}"));
+        let info = compile(src, Provenance::Local).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(info.category, EffectCategory::Density);
         let EffectSource::Owned(wgsl) = &info.source else { panic!("owned") };
         assert!(!wgsl.contains("INCLUDE_BLEND_MODES"));
@@ -445,7 +445,7 @@ fn effect(c, p, ctx) {
         let id = "0e5c6b2a-1d3f-4a7e-9b8c-2f4d6a8c0e1b";
         let with = |body: &str| format!("const INFO = #{{ id: \"{id}\" }};\n{body}");
         let refused = |src: &str, why: &str| {
-            let e = compile(src, Provenance::Custom).expect_err(src);
+            let e = compile(src, Provenance::Local).expect_err(src);
             assert!(e.contains(why), "expected `{why}` in: {e}");
         };
         refused("fn effect(c, p) { c }", "names itself");

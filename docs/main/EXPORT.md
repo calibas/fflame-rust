@@ -123,9 +123,6 @@ caller-owned renderer of the right size. It dispatches on the mode:
 - **Simulation** → `render_sim`: seed (or continue), step to `sim.steps`
   in progress batches of 512, colour, draw the terrain if it is on.
 - **2D and 3D flames** → the chaos game below.
-- A build without the escape or simulation engine returns
-  `RenderError::EngineMissing` for that mode rather than rendering the
-  config's flame.
 
 The flame path: `load_config`; for a solid flame with shadows, six
 warm-up batches to measure the attractor's bounds and refit the shadow
@@ -142,7 +139,6 @@ The escape and simulation paths run the same tail on their own
 
 | variant | when |
 | --- | --- |
-| `EngineMissing(engine)` | the config's mode needs an engine this build does not have |
 | `TooLarge(reason)` | a size the device's limits refuse, found before allocating — a texture side, a binding, a simulation grid |
 | `OutOfMemory(what)` | a GPU allocation failed. Caught by an error scope, so the export fails rather than writing an all-black PNG |
 | `Cancelled` | the progress callback cancelled |
@@ -575,8 +571,11 @@ went missing from in-app video. Do not add one.
 ### What a frame is
 
 Per frame: evaluate the animation tracks at that time, apply them to a
-copy of the config (`ConfigManager::apply_value_detached`, the editor's
-own setters), call `render_with`, hand the pixels to the writer thread.
+copy of the config (`config::apply`, the editor's own setter), call
+`render_with`, hand the pixels to the writer thread. The first two are
+`animation::frames::FrameSource` -- the tracks bound, the signals they
+read, each frame's config and motion-blur moments -- which Python's
+animation frames come from too, so a frame is one config on both.
 Which passes run is decided by reading that frame's config, exactly as
 a still render decides — that is what makes the video and a PNG of the
 same config identical.

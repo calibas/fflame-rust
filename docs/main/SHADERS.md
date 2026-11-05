@@ -68,8 +68,7 @@ cached and bound with a layout of exactly the bindings it names.
 Variation WGSL is not in a shader file. Each variation carries its 2D
 and 3D bodies inline in its `VariationDef` in `src/variations/defs/*.rs`;
 647 are registered (`ALL_VARIATIONS` in
-[src/variations/defs/mod.rs](../../src/variations/defs/mod.rs), with
-the `engine-flame` feature; without it, `linear` alone).
+[src/variations/defs/mod.rs](../../src/variations/defs/mod.rs)).
 
 ### The other passes (`shaders/`)
 

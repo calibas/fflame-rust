@@ -464,7 +464,7 @@ mod tests {
 /// 1 and gamma 1, read back -- each pixel's scene value recovered from the
 /// same render under Clip (the output encode undone), and its AgX pixel
 /// the curve of it, to the 8-bit rounding.
-#[cfg(all(test, feature = "engine-escape"))]
+#[cfg(test)]
 mod agx_gpu_tests {
     use super::*;
 

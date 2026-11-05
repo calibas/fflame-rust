@@ -43,11 +43,8 @@ pub mod census;
 /// The formula language: Rhai (and UF's and Fractint's formulas) to WGSL,
 /// for every kind written in it -- formulas, colourings, solids,
 /// variations, effects (docs/projects/rhai-plugins.md, rule 1).
-#[cfg(feature = "lang")]
 pub mod lang;
-#[cfg(feature = "engine-escape")]
 pub mod escape;
-#[cfg(feature = "engine-sim")]
 pub mod sim;
 #[cfg(not(target_arch = "wasm32"))]
 pub use script::cli::generate_mode;
@@ -56,7 +53,7 @@ mod shader_builder_v2;
 mod shader_cache;
 /// Golden-file dumps of the generated WGSL (see `tests/shader_dumps/`).
 // Canonical WGSL for the SHIPPED flame catalog.
-#[cfg(all(test, feature = "engine-flame"))]
+#[cfg(test)]
 mod shader_dumps;
 // Phase-0 measurement for simulation mode. Test-only on purpose: it
 // answers what a stencil step costs before the driver is designed

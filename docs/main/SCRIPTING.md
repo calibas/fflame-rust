@@ -203,12 +203,21 @@ that normals are what finals attach **to**.
 ## The `config` object
 
 Everything outside the flame structure, by the exact key names a saved
-`.fflame` uses (dotted paths reach nested groups). The flame itself is
-refused here — use `flame`.
+`.fflame` uses (dotted paths reach nested groups), or by a setting's
+track name (`"Sim.Terrain.Height"`, `"Escape.ZoomLog10"`). The flame
+itself is refused here — use `flame`.
+
+A setting the panels edit is set **by the panels' rules**
+(`config::by_name`, through the app's one setter): its clamps and what
+changing it implies, so `config.set("sim.dt", 0)` is held to the
+solver's floor, a palette size to the panel's range, and picking a
+simulation model starts its parameters at that model's defaults, as
+the panel does. A field no panel edits as one value (a group, a list,
+an enum, a colour) is written into the file's JSON as given.
 
 | call | returns | what it does |
 |---|---|---|
-| `config.set(key, value)` | — | Sets a field. A key that changes nothing warns (it may be misspelled — or a legitimate no-op). |
+| `config.set(key, value)` | — | Sets a field. A key that changes nothing warns (it may be misspelled — or a legitimate no-op). An element the config does not have (`"Sim.Layer.3.Param.feed"` with two layers) is an error. |
 | `config["key"] = value` | — | The same, as an index assignment. |
 | `config.get(key)` | any | Reads a field. **Throws when the field is unset** — defaults are omitted from storage — so wrap in `try`/`catch` with a fallback. |
 

@@ -3,7 +3,9 @@
 Recorded 2026-10-18 as the direction, from the user's statement of where
 the program is going. Reviewed against the code and turned into a plan
 on 2026-11-01; the user's decisions the same day are at the end and are
-folded into the steps. **Nothing under *The plan* is built yet.**
+folded into the steps. **As of 2026-11-04, P0 to P4 are built, and P7
+for the simulations; P5 and P6 and the rest of P7 are not** (*What is
+left, as branches*, below).
 
 ## The goal, in the user's words
 
@@ -143,7 +145,9 @@ become one (P3).
 3. **CPU Rhai** (`scripts/`, `script::store`, 18 embedded). Its own
    origin model (`ScriptOrigin` plus `ScriptLink` in `_links.json`),
    deliberately outside `Provenance`; the only kind with an online
-   library both ways.
+   library both ways. (One origin model since 2026-11-04:
+   `provenance::Origin`, `Builtin` / `Local` / `Api`, for every kind;
+   `ScriptOrigin` is `ScriptHome`, where the file is kept.)
 
 ### Inside the GPU dialect: one compiler, two of everything below it
 
@@ -151,7 +155,7 @@ One front end (`lang/rhai.rs`), checker, IR and WGSL back end.
 Below that:
 - **Three registries**: `escape::custom::Registry` (content-hash names,
   `custom-<fnv>`), `ifs::custom_solids`, and the variation registry with
-  `Provenance::Custom` plus `variations::custom`'s own source map.
+  `Provenance::Local` (was `Custom`) plus `variations::custom`'s own source map.
 - **Two ensure paths** with different failure memory, and **two
   outputs**: leaked `FormulaDef` / `ColoringDef` / `IfsDef`, or a
   synthesized `VariationDownload` pushed through `register_from_api` --
@@ -313,7 +317,10 @@ Before a fourth registry is written for effects:
   ids, so every existing config and `.flame` reads unchanged;
   everything else is keyed by the UUID in its source, with the source's
   SHA-256 as its version, and carries an origin (built in, mine,
-  downloaded, carried by a config) that every list shows. The WGSL
+  downloaded, carried by a config) that every list shows. (Built
+  2026-11-04 as three, at the user's choice: `provenance::Origin`'s
+  `Builtin`, `Local` -- mine, and a source a config carries -- and
+  `Api`.) The WGSL
   variation and effect catalogs are server copies of the program's own
   built-ins, so what they fetch is a built-in this build lacks, under
   its string id.
@@ -321,7 +328,10 @@ Before a fourth registry is written for effects:
   `INFO` lowering: a string or a locale map wherever a person reads it.
 - One registry for compiled Rhai entries, keyed by kind and id, with
   one `ensure` from a config's carried sources, one failure memory, one
-  error type (`Vec<Diag>`), and a provenance on every entry.
+  error type (`Vec<Diag>`), and a provenance on every entry. (The one
+  `ensure` is `FractalConfig::ensure_sources()`, 2026-11-04, over the
+  four kinds' own; the registry, failure memory and provenance are
+  still per kind.)
 - One parameter lowering from `PARAMS`, from which each kind's def is
   built; one complex-part naming (`.re`), reading `_re` as an alias so
   configs saved with Rhai variations keep their values.
@@ -406,7 +416,9 @@ option): `src/escape/lang/` is `src/lang/`, the `lang` feature, which
 the interpreter's steppers) stay with `engine-escape`; Rhai variations
 and effects need `lang` alone, and the flame and simulation gallery
 modules turn it on. **Its price**: the flame module from 1.21 MB to 1.55
-MB gzipped (5.2 to 6.3 MB raw), measured before `wasm-opt`. The CPU
+MB gzipped (5.2 to 6.3 MB raw), measured before `wasm-opt`. (The `lang`
+feature went with the engine features on 2026-11-04, when the
+single-engine modules retired: every build has the compiler.) The CPU
 scripting module (`src/script`) is compiled into every build and linked
 only where something calls it (wasm/script, the app), so it is already
 an option by use; a `scripting` feature would make it one by name.
@@ -425,7 +437,7 @@ Step 7 can now go ahead.
    library spliced only when called); at most 48 parameters
    (`MAX_EFFECT_PARAMS`).
 3. **Registry**: a Rhai effect becomes an `EffectInfo` with
-   `EffectSource::Owned` WGSL and its carried source, `Provenance::Custom`,
+   `EffectSource::Owned` WGSL and its carried source, `Provenance::Local`,
    colour or density from `INFO`.
 4. **Carrying**: `FractalConfig::custom_effects: Vec<CustomSource>`
    (skip-if-empty), ensured in `render_with` so the CLI, video and
@@ -938,7 +950,8 @@ from `main`. The order is the user's to pick: D5 put P5 tracks and then
 P6 the API next, and D7 came after it. The dependencies are listed
 under each branch.
 
-1. **`params-one-system`** -- one parameter system for every kind
+1. **`params-one-system`** -- **merged 2026-11-03** (PR #148). One
+   parameter system for every kind
    ([one-parameter-system.md](one-parameter-system.md); the user,
    2026-11-03).
    - One definition, one renderer and one compiler converter for the

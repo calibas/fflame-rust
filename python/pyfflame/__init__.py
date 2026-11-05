@@ -31,6 +31,7 @@ Render, animate, and write video::
 import copy
 import json
 import os
+import warnings
 
 import wasmtime
 
@@ -355,12 +356,24 @@ class Config:
             raise ValueError(f'render_mode must be "2d", "3d", "escape" or "simulation", got {value!r}')
         self.data["render_mode"] = mode
 
+    def set(self, key, value):
+        """Set a setting by name -- the file's (`"sim.terrain.height"`) or
+        its track's (`"Sim.Terrain.Height"`) -- by the app's rules, as a
+        script's `config.set` sets it: the panels' clamps, and what a
+        change implies (a simulation model starts at its defaults). A
+        field no panel edits as one value is written as given. The flame
+        is refused: use the transform calls."""
+        out = _engine()._data({"fn": "config_set", "config": json.dumps(self.data), "key": key, "value": value})
+        self.data = json.loads(out["config"])
+        if not out["changed"]:
+            warnings.warn(f"Config.set({key!r}, ...) changed nothing -- check the setting name", stacklevel=2)
+
     def _prop(key, doc=""):
         def get(self):
             return self._get(key)
 
         def put(self, value):
-            self.data[key] = value
+            self.set(key, value)
         return property(get, put, doc=doc)
 
     zoom = _prop("zoom")

@@ -432,9 +432,9 @@ counter-clockwise from east, 135 by default.
 **`use_transforms`** makes the flame's transforms the layers' per-step
 maps: transform *i* warps layer *i*, by its affine **and its
 variations**, at a rate that is its weight. Off by default. Note this is
-the one place a simulation reaches into the variation registry — which
-is why the single-engine `wasm/sim` module, built without
-`engine-flame`, can only apply `linear` there.
+the one place a simulation reaches into the variation registry — one
+reason the single-engine `wasm/sim` module, built without the flame
+catalog, was retired (2026-11-04): it could only apply `linear` there.
 
 ---
 

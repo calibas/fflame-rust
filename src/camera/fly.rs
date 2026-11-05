@@ -87,7 +87,6 @@ fn flyer(config: &FractalConfig, kind: ViewKind) -> Option<(Convention, Angles, 
             let (c, a) = view3d::flame_angles(config);
             Some((c, a, [ConfigPath::CameraRotationX, ConfigPath::CameraRotationY, ConfigPath::CameraBank]))
         }
-        #[cfg(feature = "engine-escape")]
         ViewKind::Solid => {
             let (c, a) = view3d::solid_angles(&config.escape);
             Some((c, a, [ConfigPath::EscapeCamPitch, ConfigPath::EscapeCamYaw, ConfigPath::EscapeCamBank]))
@@ -97,7 +96,7 @@ fn flyer(config: &FractalConfig, kind: ViewKind) -> Option<(Convention, Angles, 
             let (c, a) = view3d::escape_terrain_angles(&config.escape);
             Some((c, a, [ConfigPath::EscapeCamPitch, ConfigPath::EscapeCamYaw, ConfigPath::EscapeCamBank]))
         }
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        #[cfg(feature = "terrain")]
         ViewKind::SimTerrain => {
             let (c, a) = view3d::sim_terrain_angles(&config.sim.terrain);
             Some((c, a, [ConfigPath::SimTerrainCamPitch, ConfigPath::SimTerrainCamYaw, ConfigPath::SimTerrainCamBank]))
@@ -307,7 +306,6 @@ fn pivot_moved(config: &FractalConfig, kind: ViewKind, v: [f64; 3], panel: [f32;
         None => v,
     };
     match kind {
-        #[cfg(feature = "engine-escape")]
         ViewKind::Solid => {
             use crate::escape::fixedpoint::FixedPoint;
             let esc = &config.escape;
@@ -373,7 +371,7 @@ fn pivot_moved(config: &FractalConfig, kind: ViewKind, v: [f64; 3], panel: [f32;
             }
             out
         }
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        #[cfg(feature = "terrain")]
         ViewKind::SimTerrain => {
             let t = &config.sim.terrain;
             let (gw, gh) = crate::sim::SimRenderer::grid_for(&config.sim, panel[0].max(1.0) as u32, panel[1].max(1.0) as u32);
@@ -450,9 +448,6 @@ pub fn fly(config: &FractalConfig, thrust: Thrust, step: f64, panel: [f32; 2], l
     if v == [0.0; 3] || !v.iter().all(|c| c.is_finite()) {
         return None;
     }
-    #[cfg(not(feature = "engine-escape"))]
-    let _ = limits;
-    #[cfg(feature = "engine-escape")]
     if kind == ViewKind::Solid && (limits.collisions || limits.proximity) {
         if let Some(c) = limits.clearance {
             let changes = solid_flight(config, v, f.forward, c, limits, panel);
@@ -480,7 +475,6 @@ pub fn fly(config: &FractalConfig, thrust: Thrust, step: f64, panel: [f32; 2], l
 /// the target, as every flight is, made a share of the clearance under
 /// proximity speed, then kept inside it under collisions; and under
 /// proximity the zoom eased toward the clearance, the eye held.
-#[cfg(feature = "engine-escape")]
 fn solid_flight(config: &FractalConfig, v: [f64; 3], forward: [f64; 3], c: Clearance, limits: FlyLimits, panel: [f32; 2]) -> Vec<(ConfigPath, ConfigValue)> {
     let esc = &config.escape;
     let registry = crate::variations::global_registry();
@@ -526,12 +520,12 @@ fn solid_flight(config: &FractalConfig, v: [f64; 3], forward: [f64; 3], c: Clear
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::manager::{ConfigManager, EditingTarget};
+    use crate::config::manager::EditingTarget;
 
     fn applied(c: &FractalConfig, e: &CameraEdit) -> FractalConfig {
         let mut out = c.clone();
         for (p, v) in &e.changes {
-            ConfigManager::apply_value_detached(&mut out, EditingTarget::Main, p, v.clone()).expect("applies");
+            crate::config::apply(&mut out, EditingTarget::Main, p, v.clone()).expect("applies");
         }
         out
     }
@@ -548,7 +542,6 @@ mod tests {
     /// nothing -- and without them it goes as before; with proximity the
     /// step is a share of the clearance and the zoom eases toward it, the
     /// eye held. Other cameras ignore a clearance.
-    #[cfg(feature = "engine-escape")]
     #[test]
     fn a_solid_flies_within_its_clearance() {
         use crate::scene::transforms::RenderMode;
@@ -664,16 +657,13 @@ mod tests {
         flame.perspective_strength = 0.25;
         flame.camera_x = 0.2;
         v.push(("flame", flame));
-        #[cfg(feature = "engine-escape")]
-        {
-            let mut solid = FractalConfig::default();
-            solid.render_mode = RenderMode::Escape;
-            solid.escape.formula = "quaternion_julia_solid".to_string();
-            solid.escape.cam_pitch = 0.4;
-            solid.escape.cam_yaw = 0.7;
-            solid.escape.rotation = 0.2;
-            v.push(("solid", solid));
-        }
+        let mut solid = FractalConfig::default();
+        solid.render_mode = RenderMode::Escape;
+        solid.escape.formula = "quaternion_julia_solid".to_string();
+        solid.escape.cam_pitch = 0.4;
+        solid.escape.cam_yaw = 0.7;
+        solid.escape.rotation = 0.2;
+        v.push(("solid", solid));
         #[cfg(feature = "terrain")]
         {
             let mut t = FractalConfig::default();
@@ -684,7 +674,7 @@ mod tests {
             t.escape.terrain.target_lift = 0.5;
             v.push(("escape terrain", t));
         }
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+        #[cfg(feature = "terrain")]
         {
             let mut s = FractalConfig::default();
             s.render_mode = RenderMode::Simulation;
@@ -711,7 +701,6 @@ mod tests {
                 let p = [c.camera_x as f64, c.camera_y as f64, c.camera_z as f64];
                 std::array::from_fn(|k| p[k] - f.forward[k] / c.perspective_strength as f64)
             }
-            #[cfg(feature = "engine-escape")]
             ViewKind::Solid => {
                 let registry = crate::variations::global_registry();
                 let ifs3 = crate::escape::ifs::solid_analysis(c, &registry).expect("a solid");
@@ -724,7 +713,7 @@ mod tests {
                 let (cx, cy) = c.escape.center_f64();
                 [cx + cam.eye_rel[0] * unit, cy + cam.eye_rel[1] * unit, cam.eye[2] * unit]
             }
-            #[cfg(all(feature = "terrain", feature = "engine-sim"))]
+            #[cfg(feature = "terrain")]
             ViewKind::SimTerrain => {
                 let (gw, gh) = crate::sim::SimRenderer::grid_for(&c.sim, PANEL[0] as u32, PANEL[1] as u32);
                 crate::sim::terrain::sim_terrain_camera(c, gw, gh).eye
@@ -853,7 +842,6 @@ mod tests {
 
     /// Mode D flies at a depth f64 cannot step: the target is a decimal,
     /// and a flight adds to it in fixed point.
-    #[cfg(feature = "engine-escape")]
     #[test]
     fn a_deep_solid_flies() {
         let (_, mut c) = cameras().into_iter().find(|(n, _)| *n == "solid").unwrap();
@@ -895,7 +883,6 @@ mod tests {
     /// far enough down, the pitch passes 90 degrees and the view keeps
     /// turning (mode D's pitch has no poles; a terrain's does).
     #[test]
-    #[cfg(feature = "engine-escape")]
     fn a_solid_turns_over_the_top() {
         let (_, solid) = cameras().into_iter().find(|(n, _)| *n == "solid").expect("a solid");
         // An orbit: the drag down tips the camera over the target.

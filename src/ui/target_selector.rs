@@ -272,7 +272,6 @@ fn render_flame_group(
                 &escape_items, filter, has_filter, local_selection,
             ) { selected = Some(path); }
         }
-        #[cfg(feature = "engine-sim")]
         if config.render_mode == crate::scene::transforms::RenderMode::Simulation {
             let sim_items = get_sim_items(config);
             if let Some(path) = render_category(
@@ -287,11 +286,8 @@ fn render_flame_group(
     // an IFS, a simulation whose layers map by its transforms.
     let flame_drawn = match config.render_mode {
         crate::scene::transforms::RenderMode::TwoD | crate::scene::transforms::RenderMode::ThreeD => true,
-        #[cfg(feature = "engine-escape")]
         crate::scene::transforms::RenderMode::Escape => crate::escape::ifs::get_ifs(&config.escape.formula).is_some(),
         crate::scene::transforms::RenderMode::Simulation => config.sim.use_transforms,
-        #[allow(unreachable_patterns)]
-        _ => false,
     };
     if !flame_drawn {
         return selected;
@@ -566,11 +562,9 @@ pub fn all_items_for_test(config: &FractalConfig) -> Vec<ConfigPath> {
     items.extend(get_tonemapping_items());
     items.extend(get_rendering_items(config));
     items.extend(get_effects_items(config));
-    #[cfg(feature = "engine-escape")]
     if config.render_mode == crate::scene::transforms::RenderMode::Escape {
         items.extend(get_escape_items(config));
     }
-    #[cfg(feature = "engine-sim")]
     if config.render_mode == crate::scene::transforms::RenderMode::Simulation {
         items.extend(get_sim_items(config));
     }
@@ -606,7 +600,6 @@ pub fn escape_items_for_test(config: &FractalConfig) -> Vec<ConfigPath> {
 /// grid mode and its sizes (they reseed), the grid scale (it
 /// resamples), and steps-per-frame, which is the interactive Run speed
 /// and would make the picture depend on the frame rate.
-#[cfg(feature = "engine-sim")]
 fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
     let sim = &config.sim;
     let mut items = vec![
@@ -744,7 +737,7 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
 }
 
 /// The simulation targets' paths, for the exporter's coverage test.
-#[cfg(all(test, feature = "engine-sim"))]
+#[cfg(test)]
 pub fn sim_items_for_test(config: &FractalConfig) -> Vec<ConfigPath> {
     get_sim_items(config).into_iter().map(|i| i.path).collect()
 }
@@ -1387,13 +1380,10 @@ mod escape_target_tests {
         for c in [escape.clone(), terrain] {
             paths.extend(get_escape_items(&c).into_iter().map(|i| (c.clone(), i.path)));
         }
-        #[cfg(feature = "engine-sim")]
-        {
-            let mut sim = FractalConfig::default();
-            sim.render_mode = crate::scene::transforms::RenderMode::Simulation;
-            sim.sim.terrain.enabled = true;
-            paths.extend(get_sim_items(&sim).into_iter().map(|i| (sim.clone(), i.path)));
-        }
+        let mut sim = FractalConfig::default();
+        sim.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        sim.sim.terrain.enabled = true;
+        paths.extend(get_sim_items(&sim).into_iter().map(|i| (sim.clone(), i.path)));
         for (c, path) in &paths {
             let v = super::super::track_editor::get_current_value(c, EditingTarget::Main, path);
             assert!(v.is_some(), "`{}` has no current value", path.to_string_key());
