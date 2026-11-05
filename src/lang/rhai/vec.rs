@@ -316,7 +316,7 @@ impl Lowerer<'_> {
             "vec3" | "cross" => Some(Kind::Vec3),
             "quat" => Some(Kind::Quat),
             "rgba" | "vec4" | "input" | "input_at" | "read" | "read_at" | "drive" | "scratch" | "memory" => Some(Kind::Rgba),
-            "palette" => Some(Kind::Vec3),
+            "palette" | "palette_srgb" | "palette_table" => Some(Kind::Vec3),
             "normalize" | "abs" | "floor" | "min" | "max" | "clamp" | "mix" => first(),
             "conj" | "inv" | "pow" => first().filter(|k| *k == Kind::Quat),
             _ if PLANE_FUNCTIONS.contains(&n) => first().filter(|k| *k == Kind::Quat),
@@ -875,9 +875,40 @@ impl Lowerer<'_> {
                     .collect();
                 V(Vector::new(Kind::Rgba, parts))
             }
+            // An escape colouring's palette (batch 5), through the
+            // template's: at a cycle position in linear light, the same as
+            // stored (display space), or a table read clamped at 0..1.
+            ("palette" | "palette_srgb" | "palette_table", 1) if self.coloring => match args.remove(0) {
+                S(t) => {
+                    let t = self.hold(t, "t");
+                    let how = mk(ExprKind::Int(match name {
+                        "palette" => 0,
+                        "palette_srgb" => 1,
+                        _ => 2,
+                    }), span);
+                    let call = |name: &str, args: Vec<ast::Expr>| mk(ExprKind::Call { name: name.into(), args, user: false }, span);
+                    if self.pure {
+                        // No statement here: a texture read a part.
+                        let part = |c: i64| call("__esc_palette", vec![t.clone(), how.clone(), mk(ExprKind::Int(c), span)]);
+                        V(Vector::new(Kind::Vec3, (0..3).map(part).collect()))
+                    } else {
+                        // Read once into the call site's slot, its parts
+                        // from there.
+                        let slot = self.palette_reads;
+                        self.palette_reads += 1;
+                        self.pending.push(ast::Stmt::Expr(call("__esc_palette_load", vec![t, how, mk(ExprKind::Int(slot), span)])));
+                        let part = |c: i64| call("__esc_palette_part", vec![mk(ExprKind::Int(slot), span), mk(ExprKind::Int(c), span)]);
+                        V(Vector::new(Kind::Vec3, (0..3).map(part).collect()))
+                    }
+                }
+                V(_) => return self.err(p, format!("`{name}(t)` takes a number")),
+            },
+            ("palette_srgb" | "palette_table", 1) => {
+                return self.err(p, format!("`{name}(t)` is an escape colouring's"));
+            }
             // A simulation colouring's palette (P4): the shared one at `t`.
             ("palette", 1) if !self.sim_coloring => {
-                return self.err(p, "`palette(t)` is a simulation colouring's: in `fn cell_color` alone");
+                return self.err(p, "`palette(t)` is a simulation colouring's: in `fn cell_color` alone, or an escape colouring's");
             }
             ("palette", 1) => match args.remove(0) {
                 S(t) => {
@@ -1110,7 +1141,7 @@ impl Lowerer<'_> {
                 }
             }
             (n, k) => {
-                if matches!(n, "vec3" | "quat" | "rgba" | "mix" | "input" | "input_at" | "palette" | "read" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp" | "abs" | "floor" | "conj" | "inv" | "pow" | "complex") {
+                if matches!(n, "vec3" | "quat" | "rgba" | "mix" | "input" | "input_at" | "palette" | "palette_srgb" | "palette_table" | "read" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp" | "abs" | "floor" | "conj" | "inv" | "pow" | "complex") {
                     return self.err(p, format!("`{n}` does not take {k} argument{}", if k == 1 { "" } else { "s" }));
                 }
                 if first_kind == Some(Kind::Quat) {

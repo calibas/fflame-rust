@@ -671,6 +671,7 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         solid: kind == EntryKind::Solid,
         effect: kind == EntryKind::Effect,
         sim_coloring: kind == EntryKind::SimColoring,
+        palette_reads: 0,
         sim_model: kind == EntryKind::SimModel,
         sim_fn,
         probe: std::cell::Cell::new(0),
@@ -729,6 +730,10 @@ const CTX_FIELDS: &[(&str, &str)] = &[
     ("has_derivative", "has_derivative"),
     ("render_px", "render_px"),
     ("supersample", "supersample"),
+    // A colour colouring's (batch 5): the value after the transfer, in
+    // `color`; the view's rotation, (cos, sin).
+    ("value", "value"),
+    ("rotation", "rotation"),
     // The panel's crease settings, in `creases`.
     ("crease_decay", "crease_decay"),
     ("crease_pattern", "crease_pattern"),
@@ -868,6 +873,8 @@ enum Returns {
     /// A simulation colouring: an `rgba` (its `a` the coverage), a `vec3`,
     /// or `#{ color, coverage }`.
     SimColoring,
+    /// An escape colouring's `color` (batch 5): a `vec3`, linear light.
+    Color,
     /// A simulation model's function: a vector of four (`result` says so).
     SimModel { result: String },
     /// An inlined body that returns early (rhai-plugins P7 step 1): its
@@ -925,6 +932,9 @@ struct Lowerer<'s> {
     /// Lowering a simulation's colouring (P4): `fn cell_color`, its reads
     /// of the sample.
     sim_coloring: bool,
+    /// An escape colouring's palette reads made so far (batch 5): each
+    /// call site's slot, read once.
+    palette_reads: i64,
     /// Lowering a simulation's model (P4), and which of its functions.
     sim_model: bool,
     sim_fn: SimFn,
@@ -2172,6 +2182,15 @@ impl<'s> Lowerer<'s> {
                 }
                 parts
             }
+            Returns::Color => {
+                let color = self.final_vec(f, scope)?;
+                if color.kind != vec::Kind::Vec3 {
+                    return self.err(p, "`color` ends with the colour: a `vec3`, in linear light");
+                }
+                let mut parts = color.parts;
+                parts.push(mk(ExprKind::Float(1.0), at));
+                parts
+            }
             Returns::SimModel { result } => {
                 let state = self.final_vec(f, scope)?;
                 if state.kind != vec::Kind::Rgba {
@@ -2484,6 +2503,26 @@ impl<'s> Lowerer<'s> {
         let mut body = Vec::new();
         self.result_body(&finish.body, &mut scope, &mut body)?;
         sections.push(Section { kind: SectionKind::Final, span, body, last_is_bailout: false, labelled: true });
+        // A colour, not a palette position (batch 5, `DirectColor`):
+        // `color(s, z, p, ctx)`, beside `finish`, which still gives the
+        // value the relief reads and `ctx.value` is after the transfer.
+        if let Some(color) = get(self, "color") {
+            let mut scope = Scope::new(Fn3::Finish, scope.fields.clone());
+            if color.params.len() < 3 || color.params.len() > 4 {
+                return self.err(color.body.position(), "`color(s, z, p)` or `color(s, z, p, ctx)`");
+            }
+            for (name, role) in color.params.iter().zip([Binding::State, Binding::Z, Binding::Params, Binding::Ctx]) {
+                scope.bind(name, role);
+            }
+            const RESULT: &str = "`color` ends with the colour: a `vec3`, in linear light";
+            let stmts = color.body.statements();
+            let Some((last, rest)) = stmts.split_last() else { return self.err(color.body.position(), RESULT) };
+            let mut body = Vec::new();
+            self.body_returning(rest, &Returns::Color, &mut scope, &mut body)?;
+            let Some(f) = final_value(last) else { return self.err(last.position(), RESULT) };
+            self.put_result(&Returns::Color, f, last.position(), &mut scope, &mut body)?;
+            sections.push(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true });
+        }
         Ok(sections)
     }
 
@@ -3946,7 +3985,7 @@ impl<'s> Lowerer<'s> {
         }
         // Numbers of vectors (`dot`, `length`), and the functions that came
         // with them (`min`, `max`, `clamp` of numbers) (B1).
-        if matches!(name, "vec3" | "vec4" | "quat" | "rgba" | "input" | "input_at" | "palette" | "read" | "read_at" | "drive" | "scratch" | "memory" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
+        if matches!(name, "vec3" | "vec4" | "quat" | "rgba" | "input" | "input_at" | "palette" | "palette_srgb" | "palette_table" | "read" | "read_at" | "drive" | "scratch" | "memory" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
             || f.args.iter().any(|a| self.is_vec(a, scope))
         {
             let mut vals: Vec<Val> = args.drain(..).map(Val::S).collect();
@@ -4066,6 +4105,14 @@ impl<'s> Lowerer<'s> {
                 self.binary(BinOp::Add, a, m, p)?
             }
             "norm_sqr" => mk(ExprKind::Modulus(Box::new(one(&mut args, self)?)), span),
+            // The palette mapping's curve (an escape colouring's, batch 5).
+            "palette_curve" => {
+                if !self.coloring {
+                    return self.err(p, "`palette_curve(t)` is an escape colouring's");
+                }
+                let a = one(&mut args, self)?;
+                mk(ExprKind::Call { name: "__esc_palette_curve".into(), args: vec![a], user: false }, span)
+            }
             "fold" => {
                 let a = one(&mut args, self)?;
                 let part = |n: &str| call("abs", call(n, a.clone()));
@@ -4248,7 +4295,7 @@ impl<'s> Lowerer<'s> {
                 "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" | "crease_pattern" | "effect_blend" | "period" => TypeName::Int,
                 // A colouring's view of the loop (P7 step 2); `prev` and
                 // `step_c` are complex, the default.
-                "bailout" | "degree" | "escape_fraction" | "render_px" | "supersample" => TypeName::Float,
+                "bailout" | "degree" | "escape_fraction" | "render_px" | "supersample" | "value" => TypeName::Float,
                 "escaped" | "converged" | "has_derivative" => TypeName::Bool,
                 "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" => TypeName::Float,
                 // An effect's (P2).
@@ -5103,6 +5150,12 @@ fn escaped(s, p) { s.z.re > 1e9 }
             ("const INFO = #{ center: complex(0.0, 0.0) };\nfn finish(s, z, p) { 0.0 }", "`bailout` and `pick`"),
             ("const INFO = #{ region: \"left\" };\nfn finish(s, z, p) { 0.0 }", "`region` is"),
             ("const INFO = #{ bounded: 1 };\nfn finish(s, z, p) { 0.0 }", "`bounded` is true or false"),
+            // A colour (batch 5): `color` ends with a `vec3`, and its
+            // value after the transfer is its alone.
+            ("fn finish(s, z, p) { 0.0 }\nfn color(s, z, p) { 1.0 }", "a number where a vector is wanted"),
+            ("fn finish(s, z, p) { 0.0 }\nfn color(s, z, p) { rgba(1.0, 1.0, 1.0, 1.0) }", "a `vec3`, in linear light"),
+            ("fn finish(s, z, p, ctx) { ctx.value }", "`ctx.value` belongs to `color`"),
+            ("fn step(s, z, p, ctx) { s }\nfn finish(s, z, p, ctx) { 0.0 }\nfn color(s, z, p, ctx) { vec3(ctx.prev.re, 0.0, 0.0) }", "`ctx.prev` belongs to `step`"),
             ("const INFO = #{ bailout: -4.0 };\nfn finish(s, z, p) { 0.0 }", "`bailout` is a positive number"),
             ("const INFO = #{ pick: #{ deband: 1 } };\nfn finish(s, z, p) { 0.0 }", "`deband`, which is not a parameter"),
             ("const PARAMS = #{ deband: #{ value: 0 } };\nconst INFO = #{ pick: #{ deband: \"on\" } };\nfn finish(s, z, p) { 0.0 }", "a number, or true or false"),

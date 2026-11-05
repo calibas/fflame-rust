@@ -182,6 +182,18 @@ pub enum Host {
     /// slot, the stride, the last row, the row -- clamped to the grid's in
     /// the read itself.
     GridParam,
+    /// An escape colouring's palette (P7 step 2, batch 5): the palette at
+    /// `t`, how (a literal: 0 a cycle position in linear light, 1 the
+    /// same as stored, display space, 2 a table read clamped at
+    /// `t` in 0..1, its entries at i/(N-1), as stored), part `c`; and the
+    /// palette mapping's curve at `t`.
+    EscPalette,
+    EscPaletteCurve,
+    /// The same read made once (where statements may go): the colour into
+    /// the call site's slot, a literal -- a private `vec3` -- and its parts
+    /// read from there, one texture read rather than one a part.
+    EscPaletteLoad,
+    EscPalettePart,
 }
 
 /// Every host call by its lowered name.
@@ -202,6 +214,10 @@ pub const HOSTS: &[(&str, Host)] = &[
     ("__read_at", Host::ReadAt),
     ("__pyr_prepare", Host::PyrPrepare),
     ("__grid_cell", Host::GridParam),
+    ("__esc_palette", Host::EscPalette),
+    ("__esc_palette_curve", Host::EscPaletteCurve),
+    ("__esc_palette_load", Host::EscPaletteLoad),
+    ("__esc_palette_part", Host::EscPalettePart),
 ];
 
 impl Host {
@@ -222,6 +238,9 @@ impl Host {
             MemRead => &[I, I],
             Outside | AgentClaim | AgentClaimCheck => &[I, I],
             Param => &[I],
+            EscPalette | EscPaletteLoad => &[F, I, I],
+            EscPaletteCurve => &[F],
+            EscPalettePart => &[I, I],
             TakeDeposit | PyrPrepare => &[],
             AgentDeposit => &[I, I, F],
             ReadAt => &[I, I, I],
@@ -232,7 +251,7 @@ impl Host {
     pub fn result(self) -> Option<Ty> {
         use Host::*;
         match self {
-            ScratchWrite | MemWrite | AgentClaim | AgentDeposit | PyrPrepare => None,
+            ScratchWrite | MemWrite | AgentClaim | AgentDeposit | PyrPrepare | EscPaletteLoad => None,
             Outside | AgentClaimCheck => Some(Ty::Bool),
             _ => Some(Ty::Float),
         }
@@ -240,7 +259,12 @@ impl Host {
 
     /// Whether its last argument is a vector read's part, a literal 0-3.
     pub fn parts(self) -> bool {
-        matches!(self, Host::ScratchRead | Host::MemRead | Host::ReadAt)
+        matches!(self, Host::ScratchRead | Host::MemRead | Host::ReadAt | Host::EscPalette | Host::EscPalettePart)
+    }
+
+    /// Whether an escape colouring's (else a simulation model's).
+    pub fn escape(self) -> bool {
+        matches!(self, Host::EscPalette | Host::EscPaletteCurve | Host::EscPaletteLoad | Host::EscPalettePart)
     }
 
     /// Whether an agent function's (else a model step's).

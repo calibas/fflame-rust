@@ -602,6 +602,28 @@ fn escaped(s, p) {
     plug-ins and the Formula Editor's first Use of a colouring apply
     them as they do a built-in's (`escape_panel::pick_changes`); Edit as
     Rhai does not, keeping the settings in use.
+  - **A colour, not a palette position** (batch 5): beside `finish`,
+    `fn color(s, z, p[, ctx])` ends with a `vec3` in linear light, the
+    pixel's colour (`ColoringFeature::DirectColor`; it lowers to the
+    template's `coloring_color`, the program's transform section).
+    `finish` still gives the value the relief and auto contrast read;
+    `ctx.value` in `color` is that value after the Palette mapping's
+    transfer. `color` reads the state and the orbit's ending as `finish`
+    does (`ctx.dz`, `ctx.escaped`, `ctx.numiter` ...). A separate function
+    rather than a colour `finish` returns, because the colour reads the
+    transferred value, which only exists once `finish` has given it.
+  - **The palette**, through the template's own reads: `palette(t)` (a
+    cycle position, linear light), `palette_srgb(t)` (the same as stored,
+    display space), `palette_table(k)` (the table read CLAMPED at k in
+    0..1, its N entries at i/(N-1), as stored: a colormap lookup) and
+    `palette_curve(t)` (the Palette mapping's curve). Each read is one
+    texture read, held in a slot of its own for its parts
+    (`Host::EscPaletteLoad`; three reads a part cost Visions of Chaos
+    Traps' twin 40%). Read in `start` or `step`, the palette is part of
+    the iteration (`PaletteInLoop`): a palette edit re-iterates. The
+    interpreter has no palette, and reads 0.
+  - `ctx.rotation`, anywhere: the view's rotation as (cos, sin), the
+    uniform's own -- not `cos(ctx.angle)`, which rounds again.
   - The state is packed under the same 32-float cap as UF's.
   - Examples: `assets/formulas/smooth.rhai`, `orbit-trap.rhai`; the
     test file `tests/formulas/rhai/coloring.rhai` runs on the GPU as the
@@ -1131,20 +1153,24 @@ fn escaped(s, p) {
     parted by whole units after the first few lines.
 - **The built-in colourings' twins** (`escape::twins::COLORING_TWINS`,
   `assets/formulas/twins/colorings/*.rhai`; P7 step 2 in
-  [rhai-plugins.md](../projects/rhai-plugins.md), batches 1-4 of five):
-  Escape Count, Orbit Trap, Sphere Average, Decomposition, Basic,
-  Gaussian Integer, Itinerary, (reading the loop's values, `ctx` above)
-  Smooth, Orbit, Stripe, Magnitude and Position Average, Root Basin,
-  Triangle Inequality, Period, Curvature Average, Velocity, Threads and
+  [rhai-plugins.md](../projects/rhai-plugins.md), five batches): every
+  built-in colouring but Image Trap, which reads a user image -- Escape
+  Count, Orbit Trap, Sphere Average, Decomposition, Basic, Gaussian
+  Integer, Itinerary, (reading the loop's values, `ctx` above) Smooth,
+  Orbit, Stripe, Magnitude and Position Average, Root Basin, Triangle
+  Inequality, Period, Curvature Average, Velocity, Threads and
   Exponential Smoothing, (bounded, `INFO` above) Position Map and
-  External Rays, and (the derivative, `ctx.dz`) Distance Estimate and
-  Normal Map, each a Rhai colouring that renders as its built-in. The
-  other four draw a colour, not a palette position, which the dialect
-  cannot yet, and come in the last batch.
+  External Rays, (the derivative, `ctx.dz`) Distance Estimate and Normal
+  Map, and (a colour, `fn color`, and the palette) Rainbow Fringe,
+  Infinite Waves, Visions of Chaos Traps and Direct Orbit Traps -- each a
+  Rhai colouring that renders as its built-in.
   - Each has its built-in's parameters exactly -- names, captions,
     hints, ranges, choices, a log slider -- its interior, accumulator,
-    period and bounded flags, and its recommended bailout and pick
-    values (`every_colouring_twin_compiles_as_its_builtin`).
+    period, bounded, derivative, colour and palette-in-the-loop flags,
+    and its recommended bailout and pick values
+    (`every_colouring_twin_compiles_as_its_builtin`). Direct Orbit
+    Traps' twin re-iterates on a palette edit as the built-in does
+    (`a_palette_edit_re_iterates_direct_traps`).
   - The colouring section's **Edit as Rhai** puts the twin in the
     built-in's place, one undo step: the settings carry over by name,
     and the formula and the view stay. It opens the twin in the Formula
@@ -1171,14 +1197,18 @@ fn escaped(s, p) {
     pixels), and a term the built-in adds in one expression is added in
     one (Root Basin's `t + n * speed`: kept apart in a `let`, it rounded
     once more and a whole-number position wrapped).
-  - Their speed, the best of five at 1024x768 and 4000 iterations, the
-    Mandelbrot's whole set, direct
+  - Their speed, the best of nine at 1024x768 and 4000 iterations, the
+    Mandelbrot's whole set, direct, pipelines warm
     (`measure_colouring_twins_against_their_builtins`, 2026-11-05, GTX
-    1660 SUPER): within a few percent of their built-ins, but for
-    Itinerary, 27% slower, and Curvature Average, 14%. Their angles go
-    through the language's zero-pair-exact `atan2` (Metal's fails at a
-    zero pair), which the built-ins avoid by their own guards. Stripe
-    Average's range-reduced `sin` costs it 9%.
+    1660 SUPER): most within 5% of their built-ins; Orbit Trap,
+    Gaussian Integer, Visions of Chaos Traps and Direct Orbit Traps 8 to
+    20% faster. Slower: Itinerary 28% and Curvature Average 12%, their
+    angles through the language's zero-pair-exact `atan2` (Metal's fails
+    at a zero pair), which the built-ins avoid by their own guards;
+    Stripe Average 8-12% by its range-reduced `sin`; Sphere Average 7%.
+    The measure made a renderer for each run until batch 5, so it timed
+    the pipelines' building too (about 2 ms, more for a twin's longer
+    WGSL), which read as the colourings' cost on the short renders.
 - **UF and Fractint formulas and colourings convert** (`lang/to_rhai.rs`;
   the Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
   checked program is printed in these shapes, the file opened left as

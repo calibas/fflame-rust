@@ -1003,6 +1003,8 @@ impl<'p> Printer<'p> {
             Predef::HasDerivative => self.ctx_field("has_derivative"),
             Predef::RenderPx => self.ctx_field("render_px"),
             Predef::Supersample => self.ctx_field("supersample"),
+            Predef::Value => self.ctx_field("value"),
+            Predef::Rotation => self.ctx_field("rotation"),
             Predef::Index | Predef::Solid if self.fun == Fun::Finish => {
                 P::atom(self.slot_decl(if q == Predef::Index { Slot::Index } else { Slot::Solid }).0)
             }

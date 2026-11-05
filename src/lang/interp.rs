@@ -784,6 +784,8 @@ impl<'p> Machine<'p> {
                 IStmt::Scope(body) => {
                     let _ = self.exec(body, sh);
                 }
+                // An escape colouring's palette read: none here.
+                IStmt::Host(h, _) if h.escape() => {}
                 IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
                 // The loop or the function around it takes these (P7
                 // step 1), as the GPU's do.
@@ -869,6 +871,9 @@ impl<'p> Machine<'p> {
     fn eval(&self, e: &IExpr, sh: &Shared) -> Value {
         match &e.kind {
             IExprKind::Host(Host::GridParam, args) => Value::Float(self.params.values[grid_cell(args, self.eval(&args[3], sh).as_int())].0),
+            // An escape colouring's palette: the GPU's, with no palette
+            // here.
+            IExprKind::Host(h, _) if h.escape() => Value::Float(0.0),
             IExprKind::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             IExprKind::Bool(b) => Value::Bool(*b),
             IExprKind::Int(i) => Value::Int(*i as i32),
@@ -999,6 +1004,8 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::HasDerivative => Value::Bool(sh.has_derivative),
         Predef::RenderPx => Value::Float(env.render_px),
         Predef::Supersample => Value::Float(env.supersample),
+        Predef::Value => Value::Float(sh.index),
+        Predef::Rotation => Value::Complex(C64::new(env.rotation.cos(), env.rotation.sin())),
     }
 }
 
