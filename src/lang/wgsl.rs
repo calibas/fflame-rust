@@ -680,7 +680,7 @@ pub fn solid(p: &Program, base: usize, depth_slot: usize) -> Result<String, Stri
     let (Some(zx), Some(zy), Some(zz)) = (find("s_z__x"), find("s_z__y"), find("s_z__z")) else {
         return Err("the state needs `z`, the iterate, a vector or a quaternion".into());
     };
-    // A quaternion's scalar part (docs/projects/quaternions.md): the trap
+    // A quaternion's scalar part (docs/archive/projects/quaternions.md): the trap
     // reads its vector part, and the escape test its whole length.
     let zw = find("s_z__w");
     let dr = find("s_dr");

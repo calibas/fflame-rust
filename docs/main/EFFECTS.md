@@ -130,7 +130,7 @@ again when the name is registered again -- a Rhai effect edited, a
 download updated. `remove_by_name` removes one.
 
 **A parameter** is a `params::ParamDef`, the definition every kind
-shares ([one-parameter-system.md](../projects/one-parameter-system.md)):
+shares ([one-parameter-system.md](../archive/projects/one-parameter-system.md)):
 name, label, hint (the control's tooltip; only `distance_field`'s
 parameters have hints today), and its kind with its default and range
 -- `Spec::float(0.5, 0.0, 1.0)`, `Spec::int`, `Spec::bool`,

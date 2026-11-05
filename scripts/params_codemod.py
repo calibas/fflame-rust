@@ -1,5 +1,5 @@
 """One-shot codemod for the one-parameter-system plan
-(docs/projects/one-parameter-system.md, steps 4 and 5): rewrite every
+(docs/archive/projects/one-parameter-system.md, steps 4 and 5): rewrite every
 `<Struct> { name, display_name, default, min, max, tooltip, choices }`
 literal -- `sim::SimParamDef`, `escape::EscapeParamDef`, which share the
 shape -- as `ParamDef::new(name, label, hint, Spec::...)`.

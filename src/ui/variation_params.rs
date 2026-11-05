@@ -1,6 +1,6 @@
 //! A variation's parameters, wherever they live -- a transform in the
 //! flame, an escape transformation, the camera lens -- drawn by the one
-//! parameter renderer (`ui::params`; docs/projects/one-parameter-system.md).
+//! parameter renderer (`ui::params`; docs/archive/projects/one-parameter-system.md).
 //! What is a variation's own here is where its values are read and
 //! written ([`ParamTarget`]).
 

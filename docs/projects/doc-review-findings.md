@@ -15,6 +15,13 @@ From this list:
   something can update an installed effect.
 - **B6** -- the deep-zoom gates read gitignored fixtures.
 
+From the architecture review ([architecture-review.md](../archive/projects/architecture-review.md)
+section 7, archived 2026-11-04):
+- The flame's dispatch governor (`Batch`, `Knee`, `adjust_iter_scale`)
+  lives inside `app/mod.rs`. Moved beside `app/governor.rs`, the app's
+  governing would be one module; device safety stays in the engines,
+  where headless renders need it too.
+
 Found while fixing:
 - `density_blur.wgsl` compared the raw hit count with a 0-1 threshold, so
   a pixel with a hit or more never blurred, and its intended unit was

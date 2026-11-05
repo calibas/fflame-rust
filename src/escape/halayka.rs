@@ -1,4 +1,4 @@
-//! Halayka's quaternion sets and escape paths (docs/projects/quaternions.md):
+//! Halayka's quaternion sets and escape paths (docs/archive/projects/quaternions.md):
 //! the presets that show them, written from the example files
 //! (`assets/formulas/solid-halayka-quaternions.rhai`,
 //! `variation-escape-paths.rhai`), and the test that keeps the bundled

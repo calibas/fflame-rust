@@ -26,7 +26,7 @@ pub use definition::{Feature, MAX_ORBIT_LENGTH, ORBIT_LENGTH_PARAM};
 /// for a variation's and an effect's parameters, which `params::wire_type`
 /// spells a `ParamDef` in (`a_kind_is_spelled_in_the_published_vocabulary`).
 /// A parameter itself is a `params::ParamDef`
-/// (docs/projects/one-parameter-system.md).
+/// (docs/archive/projects/one-parameter-system.md).
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub enum ParamType {
     /// Continuous floating-point value with min/max bounds

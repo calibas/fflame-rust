@@ -1,5 +1,5 @@
 //! One renderer for every kind's parameters
-//! (docs/projects/one-parameter-system.md): a control per
+//! (docs/archive/projects/one-parameter-system.md): a control per
 //! [`ParamKind`] ([`control`]), and a parameter set drawn whole
 //! ([`list`]) -- its definitions in order, its layout's conditions and
 //! grids -- through a [`ParamStore`], where the values live: the config
