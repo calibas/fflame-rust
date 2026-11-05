@@ -945,9 +945,9 @@ impl<'a> PanelViewer<'a> {
             self.context.open_palette_editor,
         );
 
-        let (online_mode, auth_pair) = {
+        let (online_account, auth_pair) = {
             let settings = self.context.config_manager.system_settings();
-            let online = settings.online_mode;
+            let online = settings.online_account;
             let auth = if settings.is_signed_in() {
                 let token = settings.auth_token.clone().unwrap_or_default();
                 Some((crate::api::API_BASE_URL.to_string(), token))
@@ -956,7 +956,7 @@ impl<'a> PanelViewer<'a> {
             };
             (online, auth)
         };
-        if online_mode {
+        if online_account {
             let auth = auth_pair.as_ref().map(|(b, t)| (b.as_str(), t.as_str()));
             super::palette_library::render_cloud_palettes_section(
                 ui,
@@ -1909,14 +1909,14 @@ impl<'a> PanelViewer<'a> {
 
         if let Some(panel) = self.context.fractal_browser_panel.as_mut() {
             let settings = self.context.config_manager.system_settings();
-            let online_mode = settings.online_mode;
+            let online_account = settings.online_account;
             let auth: Option<(&str, &str)> = if settings.is_signed_in() {
                 let token = settings.auth_token.as_deref().unwrap_or("");
                 Some((crate::api::API_BASE_URL, token))
             } else {
                 None
             };
-            let response = panel.render(ui, online_mode, auth);
+            let response = panel.render(ui, online_account, auth);
 
             // Handle file open request from Files tab
             if panel.take_open_file_request() {

@@ -103,9 +103,15 @@ pub struct SystemSettings {
     pub compact_mode: Option<bool>,
 
     // Online / API
-    /// Enable online features (cloud save, browse, palettes)
-    #[serde(default = "default_online_mode")]
-    pub online_mode: bool,
+    /// The online account: signing in, saving flames and scripts online,
+    /// your online flames and palettes. Off, the app uses the online
+    /// service as a guest -- the catalogs, downloads of variations,
+    /// effects and public scripts, web links -- and never signs in
+    /// (`is_signed_in` is false, so no request carries a token); the
+    /// stored sign-in is kept for when it is turned back on. Was
+    /// `online_mode`, which switched everything online off.
+    #[serde(default = "default_online_account", alias = "online_mode")]
+    pub online_account: bool,
 
     /// Deprecated: API URL is now hard-coded in api::API_BASE_URL.
     /// Kept for deserialization compatibility with existing settings files.
@@ -303,7 +309,7 @@ fn default_show_help_on_startup() -> bool {
     true
 }
 
-fn default_online_mode() -> bool {
+fn default_online_account() -> bool {
     true
 }
 
@@ -354,7 +360,7 @@ impl Default for SystemSettings {
             language: default_language(),
             show_help_on_startup: default_show_help_on_startup(),
             compact_mode: None,
-            online_mode: default_online_mode(),
+            online_account: default_online_account(),
             api_base_url: default_api_base_url(),
             auth_token: None,
             auth_email: None,
@@ -387,7 +393,11 @@ impl Default for SystemSettings {
 impl SystemSettings {
     /// Check if the user is signed in (cross-platform).
     /// Desktop: requires auth_token. WASM: requires auth_email (cookies handle auth).
+    /// Never as a guest (`online_account` off): the stored sign-in waits.
     pub fn is_signed_in(&self) -> bool {
+        if !self.online_account {
+            return false;
+        }
         #[cfg(target_arch = "wasm32")]
         { self.auth_email.is_some() }
         #[cfg(not(target_arch = "wasm32"))]
@@ -467,8 +477,8 @@ impl SystemSettings {
         }
 
         // Online / API
-        if current.online_mode == defaults.online_mode {
-            obj.remove("online_mode");
+        if current.online_account == defaults.online_account {
+            obj.remove("online_account");
         }
         // api_base_url: skip_serializing handles this (deprecated field)
         // auth_token and auth_email use skip_serializing_if = "Option::is_none"
@@ -734,6 +744,23 @@ mod tests {
         assert_eq!(settings.target_fps, 120.0);
         assert_eq!(settings.iterations_per_thread, 512);
         assert_eq!(settings.language, "es");
+    }
+
+    /// The online account was `online_mode`, the switch for everything
+    /// online: a file that turned it off reads as a guest, and a guest
+    /// is never signed in -- no request carries the token it keeps for
+    /// when the account is turned back on.
+    #[test]
+    fn a_guest_keeps_its_sign_in_and_never_uses_it() {
+        let json = r#"{"version": 2, "online_mode": false, "auth_token": "t", "auth_email": "a@b.c"}"#;
+        let mut settings = SystemSettings::from_json(json).unwrap();
+        assert!(!settings.online_account, "the old key still reads");
+        assert!(!settings.is_signed_in());
+        assert_eq!(settings.get_auth_token(), None);
+        settings.online_account = true;
+        assert!(settings.is_signed_in(), "the sign-in waited");
+        let saved = settings.to_json().unwrap();
+        assert!(!saved.contains("online_mode"), "written under its new name: {saved}");
     }
 
     #[test]
