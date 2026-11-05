@@ -834,7 +834,7 @@ needs the census did not, the int step and `ctx.layer`):
 |---|---|---|---|
 | Effects | 15 | all 15, the definitions (D1) | yes, the Effects panel |
 | Escape formulas | 26 | all 26 (`escape::twins`) | yes, Edit as Formula |
-| Escape colourings | 28 | none (two examples, `smooth`, `orbit-trap`) | no |
+| Escape colourings | 28 | in progress (branch `rhai-escape-colourings`; plan in step 2) | no |
 | Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
@@ -868,22 +868,82 @@ Steps, in the order that unlocks the most first (the user picks):
    loop moves a multiply-add's fusion). Deep zoom declines a formula with
    a scope. Open: a colouring's own `finish` and the escape colourings'
    sections returning early (P7 step 2 will want them).
-2. **Escape colourings** (28). About 20 accumulate over the orbit, which
-   `start` / `step` / `finish` already do. The rest need:
-   - a colour as the result, not a palette position (Rainbow Fringe,
-     Infinite Waves, VOC Traps, Direct Traps, Image Trap): `finish`
-     ending with an `rgba` or a `vec3`, through the result handling the
-     effects and simulation colourings share (`put_result`);
-   - the palette inside the loop (Direct Traps): P4's `palette(t)`;
-   - the formula's derivative (Distance Estimate, Normal Map, Rainbow
-     Fringe): a read of `dz` outside the perturbation sections -- the
-     compiler derives a custom formula's, a built-in has its
-     `wgsl_derivative`;
-   - `INFO` flags for `Bounded`, `ColorsInterior`, `DirectAlpha` and
-     `SkipsEscapingIterate`.
-   Image Trap reads an image, which stays out with user image files
-   (decided 2026-10-02). Then the twins, and Edit as Rhai for the
-   colouring in the Escape panel.
+2. **Escape colourings** (28), branch `rhai-escape-colourings` (begun
+   2026-11-05). A census of the 28 against the dialect (2026-11-05)
+   corrected the estimate: 7 can be twins today, not about 20. The rest
+   need values the loop has and a Rhai colouring cannot read.
+
+   **What a Rhai colouring has today.** `start(z, p)`, `step(s, z, p)`
+   and `finish(s, z, p)`, each with an optional `ctx`. `finish` returns
+   a palette position or `#{ index, solid }`. `ctx` has `c`, `julia`,
+   `angle`, `maxiter`, `center`, `magn`, the pixel's place, `random`,
+   and `numiter` (in `finish` only). `INFO` takes `region`.
+   `compile_coloring` sets only `NeedsOrbitAccum` and `ColorsInterior`.
+
+   **A bug found.** On the GPU, `start`'s `z` is the literal 0, while
+   the interpreter gives it the formula's starting z. No test catches
+   it, because the test's formula starts at 0. Fixed in batch 2.
+
+   **The order of work**, each batch ending with the twins it unlocks:
+   - **Batch 1: the seven writable today**, with the machinery every
+     batch uses.
+     - The twins: Escape Count, Orbit Trap, Sphere Average,
+       Decomposition, Basic, Gaussian Integer, Itinerary.
+     - A registry beside the formulas' (`escape::twins`,
+       `COLORING_TWINS`), with sources in
+       `assets/formulas/twins/colorings/`.
+     - A CPU test that each twin compiles with its built-in's
+       parameters.
+     - A GPU picture compare against the built-in, on more than one
+       formula.
+     - A printed timing, as the formula twins have.
+     - The Escape panel's **Edit as Rhai** for the colouring; the
+       Formula Editor's `open_in_use` takes the entry's kind.
+   - **Batch 2: what the loop knows.**
+     - `ctx.escaped`, `ctx.converged`, and `ctx.period`, which brings
+       `NeedsPeriod`.
+     - `ctx.degree` and `ctx.bailout` in every function.
+     - The escape fraction the debanding uses, as the template computes
+       it (`esc_escape_fraction`, its never-escaping case included).
+     - `c` and the previous `z` in `step`, and the formula's starting z
+       in `start` (the bug above).
+     - `log2` and `inverseSqrt`, so twins round as their built-ins.
+     - The twins it unlocks: Smooth, the five deband averages (Orbit,
+       Stripe, Magnitude, Position, Threads), Triangle Inequality,
+       Curvature Average, Velocity, Exponential Smoothing, Root Basin,
+       Period.
+   - **Batch 3: `INFO` keys.**
+     - `bounded`: clamp rather than wrap, the `Bounded` flag.
+     - The recommended bailout, and the pick parameters a fresh pick
+       takes (the averages' deband).
+     - The twins it unlocks: Position Map, External Rays. With it, a
+       twin also picks as its built-in does.
+   - **Batch 4: the derivative.**
+     - `dz` in `finish`, which brings `NeedsDerivative`, with the
+       template's has-a-derivative flag.
+     - The supersample factor and the render pixel's size.
+     - The twins it unlocks: Distance Estimate, Normal Map.
+   - **Batch 5: a colour as the result.**
+     - `finish` returning an `rgb` beside the index, through the result
+       handling effects and simulation colourings share (`put_result`).
+     - The palette in `finish`, and in `step` with `PaletteInLoop`, so a
+       palette edit re-iterates.
+     - The value after the transfer.
+     - The view's rotation as cosine and sine.
+     - The twins it unlocks: Rainbow Fringe, Infinite Waves, Visions of
+       Chaos Traps, Direct Orbit Traps.
+   - **Out:** Image Trap. It reads a user image, which stays out with
+     user image files (decided 2026-10-02).
+
+   **Numerics to write by hand in a twin.** WGSL's `round` rounds half
+   to even, the dialect's half away from zero. A real `sin`/`cos` is
+   range-reduced past pi. A number `min`/`max` is an `if`, so NaN
+   differs. Where a twin cannot match bit for bit, its compare names
+   the share it allows, as the formula twins' table does.
+
+   **Stays beside the built-ins.** Whether the twins then replace them
+   is D7's, decided later, as for the formulas.
+
 3. **Flame variations' hooks.** 339 of the 647 use nothing a Rhai
    variation cannot say today; the other 308 need at least one of:
    - **derived parameters** (134 built-ins, `wgsl_init`): a variation's
