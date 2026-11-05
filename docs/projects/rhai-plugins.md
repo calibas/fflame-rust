@@ -834,7 +834,7 @@ needs the census did not, the int step and `ctx.layer`):
 |---|---|---|---|
 | Effects | 15 | all 15, the definitions (D1) | yes, the Effects panel |
 | Escape formulas | 26 | all 26 (`escape::twins`) | yes, Edit as Formula |
-| Escape colourings | 28 | 19 (batches 1-2 of 5, branch `rhai-escape-colourings`; plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
+| Escape colourings | 28 | 21 (batches 1-3 of 5, branch `rhai-escape-colourings`; plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
 | Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
@@ -932,7 +932,13 @@ Steps, in the order that unlocks the most first (the user picks):
        Stripe, Magnitude, Position, Threads), Triangle Inequality,
        Curvature Average, Velocity, Exponential Smoothing, Root Basin,
        Period.
-   - **Batch 3: `INFO` keys.**
+   - **Batch 3: `INFO` keys.** **Built 2026-11-05**: External Rays
+     matches its built-in on every pixel; Position Map differs by an ulp
+     on under 1.7% of pixels on Origami, its `sin` range-reduced as
+     Stripe Average's (allowed 2%). The batch 1 and 2 twins gained their
+     built-ins' `bailout` and `pick`, which the compile test now checks.
+     A Rhai colouring picked from the panel's plug-ins, or first Used in
+     the Formula Editor, applies them as a built-in's pick does.
      - `bounded`: clamp rather than wrap, the `Bounded` flag.
      - The recommended bailout, and the pick parameters a fresh pick
        takes (the averages' deband).

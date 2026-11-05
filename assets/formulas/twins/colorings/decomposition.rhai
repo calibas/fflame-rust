@@ -16,7 +16,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Decomposition", region: "outside" };
+const INFO = #{ title: "Decomposition", region: "outside", bailout: 4.0 };
 
 fn finish(s, z, p) {
     // An escaped z is far from the origin: no zero pair reaches the angle.

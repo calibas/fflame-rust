@@ -582,6 +582,16 @@ fn escaped(s, p) {
       formula's degree at infinity, as the smooth colourings divide by).
 
     A colouring counts its own passes in its state.
+  - `INFO` takes, beside the title: `region` (`"inside"`, `"outside"`
+    or `"both"`, the default), `bounded: true` (the value is a level,
+    0 to 1, clamped rather than wrapped through the palette:
+    `ColoringFeature::Bounded`), and what picking the colouring sets --
+    `bailout` (the squared bailout it is best drawn at, as a built-in's
+    `recommended_bailout`) and `pick` (`#{ deband: 1 }`, the values a
+    fresh pick takes, `pick_params`). The panel's colouring picker, its
+    plug-ins and the Formula Editor's first Use of a colouring apply
+    them as they do a built-in's (`escape_panel::pick_changes`); Edit as
+    Rhai does not, keeping the settings in use.
   - The state is packed under the same 32-float cap as UF's.
   - Examples: `assets/formulas/smooth.rhai`, `orbit-trap.rhai`; the
     test file `tests/formulas/rhai/coloring.rhai` runs on the GPU as the
@@ -1111,18 +1121,19 @@ fn escaped(s, p) {
     parted by whole units after the first few lines.
 - **The built-in colourings' twins** (`escape::twins::COLORING_TWINS`,
   `assets/formulas/twins/colorings/*.rhai`; P7 step 2 in
-  [rhai-plugins.md](../projects/rhai-plugins.md), batches 1 and 2 of
-  five): Escape Count, Orbit Trap, Sphere Average, Decomposition, Basic,
-  Gaussian Integer, Itinerary, and (reading the loop's values, `ctx`
-  above) Smooth, Orbit, Stripe, Magnitude and Position Average, Root
-  Basin, Triangle Inequality, Period, Curvature Average, Velocity,
-  Threads and Exponential Smoothing, each a Rhai colouring that renders
-  as its built-in. The other colourings read what the dialect cannot yet
-  (INFO's bounded flag, `dz`, a colour as the result), and come in the
-  later batches.
+  [rhai-plugins.md](../projects/rhai-plugins.md), batches 1-3 of five):
+  Escape Count, Orbit Trap, Sphere Average, Decomposition, Basic,
+  Gaussian Integer, Itinerary, (reading the loop's values, `ctx` above)
+  Smooth, Orbit, Stripe, Magnitude and Position Average, Root Basin,
+  Triangle Inequality, Period, Curvature Average, Velocity, Threads and
+  Exponential Smoothing, and (bounded, `INFO` above) Position Map and
+  External Rays, each a Rhai colouring that renders as its built-in.
+  The other colourings read what the dialect cannot yet (`dz`, a colour
+  as the result), and come in the later batches.
   - Each has its built-in's parameters exactly -- names, captions,
-    hints, ranges, choices, a log slider -- and its interior and
-    accumulator flags (`every_colouring_twin_compiles_as_its_builtin`).
+    hints, ranges, choices, a log slider -- its interior, accumulator,
+    period and bounded flags, and its recommended bailout and pick
+    values (`every_colouring_twin_compiles_as_its_builtin`).
   - The colouring section's **Edit as Rhai** puts the twin in the
     built-in's place, one undo step: the settings carry over by name,
     and the formula and the view stay. It opens the twin in the Formula
@@ -1133,9 +1144,13 @@ fn escaped(s, p) {
     at a bailout of 1e8, and on the exponential, and those of a
     convergent formula on Newton's basins
     (`builtin_colouring_twins_render_as_their_builtins`). Stripe Average
-    is the exception, under 0.25% of pixels by an ulp: its `sin` takes
-    up to 32 pi, and the language's is range-reduced (for Metal's error)
-    where the built-in's is the hardware's.
+    and Position Map are the exceptions, by an ulp the palette carries
+    to 1e-3: the language's `sin` is range-reduced (for Metal's error)
+    where the built-ins' is the hardware's, whose error grows with the
+    argument -- Stripe's up to 32 pi (under 0.25% of pixels), Position
+    Map's 2 pi times a frequency times the final z (under 1.7% on
+    Origami at frequency 12). Position Map is not compared where z
+    escapes to 1e4 and more: sines of 1e5 are noise on every platform.
   - Two more rules for a twin to match to the bit, each the GPU fusing a
     multiply and an add: a blend is written `prev + (mean - prev) * f`,
     as WGSL's `mix` (`prev * (1 - f) + mean * f` parted on 0.016% of

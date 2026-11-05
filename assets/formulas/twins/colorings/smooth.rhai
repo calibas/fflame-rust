@@ -11,7 +11,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Smooth Iteration", region: "outside" };
+const INFO = #{ title: "Smooth Iteration", region: "outside", bailout: 1.0e4 };
 
 fn finish(s, z, p, ctx) {
     // |z|^2 past a bailout below 1 is the corner the max guards.

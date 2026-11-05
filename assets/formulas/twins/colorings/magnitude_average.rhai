@@ -19,7 +19,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Magnitude Average" };
+const INFO = #{ title: "Magnitude Average", pick: #{ deband: 1 } };
 
 // The mean of the terms, or with Deband the template's debanded mean:
 // the mean without the last term and with it, blended by how far through

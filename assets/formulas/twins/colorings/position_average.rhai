@@ -19,7 +19,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Position Average" };
+const INFO = #{ title: "Position Average", pick: #{ deband: 1 } };
 
 // The running sum of the orbit's positions, and the last of them.
 fn start(z, p) {

@@ -101,7 +101,9 @@
 //! `finish(s, z, p)` returns the palette position -- the index -- or
 //! `#{ index, solid }` (solid: the pixel left to the solid colour). The
 //! context adds `ctx.numiter` (the passes run, in `finish`); `INFO.region`
-//! is `"inside"`, `"outside"` or `"both"`. A state field may be called
+//! is `"inside"`, `"outside"` or `"both"`, `INFO.bounded` clamps the
+//! value rather than wrapping it, and `INFO.bailout` and `INFO.pick` are
+//! what picking it sets. A state field may be called
 //! `z`: in a colouring that name is the colouring's own.
 //!
 //! UF and Fractint formulas and colourings convert to these shapes
@@ -1566,7 +1568,39 @@ impl<'s> Lowerer<'s> {
                     Expr::StringConstant(r, _) if matches!(r.as_str(), "inside" | "outside" | "both") => region = Some(r.to_string()),
                     _ => return self.err(*p, "`region` is \"inside\", \"outside\" or \"both\""),
                 },
-                o if self.coloring => return self.err(*p, format!("a colouring's `INFO` has `title`, `id`, `description`, `author` and `region`, not `{o}`")),
+                // A level, clamped to 0..1 rather than wrapped
+                // (`ColoringFeature::Bounded`), and what picking the
+                // colouring sets: the squared bailout it is best drawn at
+                // and the values a fresh pick takes (`recommended_bailout`,
+                // `pick_params`). `custom::compile_coloring` reads them
+                // apart.
+                "bounded" if self.coloring => match v {
+                    Expr::BoolConstant(..) => {}
+                    _ => return self.err(*p, "`bounded` is true or false: a value from 0 to 1, clamped rather than wrapped through the palette"),
+                },
+                "bailout" if self.coloring => match v {
+                    Expr::FloatConstant(f, _) if **f > 0.0 => {}
+                    Expr::IntegerConstant(i, _) if *i > 0 => {}
+                    _ => return self.err(*p, "`bailout` is a positive number: the squared bailout the colouring is best drawn at, which picking it sets"),
+                },
+                "pick" if self.coloring => {
+                    let Expr::Map(m, _) = v else {
+                        return self.err(*p, "`pick` is a map of parameter to value, `#{ deband: 1 }`: what a fresh pick of the colouring sets");
+                    };
+                    for (k, x) in &m.0 {
+                        if !params.iter().any(|(n, _, _)| n.as_str() == k.name.as_str()) {
+                            return self.err(k.pos, format!("`pick` sets `{}`, which is not a parameter", k.name));
+                        }
+                        let number = |e: &Expr| matches!(e, Expr::FloatConstant(..) | Expr::IntegerConstant(..) | Expr::BoolConstant(..));
+                        let negated = matches!(x, Expr::FnCall(f, _) if f.name == "-" && f.args.len() == 1 && number(&f.args[0]));
+                        if !number(x) && !negated {
+                            return self.err(k.pos, "a value `pick` sets is a number, or true or false");
+                        }
+                    }
+                }
+                o if self.coloring => {
+                    return self.err(*p, format!("a colouring's `INFO` has `title`, `id`, `description`, `author`, `region`, `bounded`, `bailout` and `pick`, not `{o}`"))
+                }
                 o => return self.err(*p, format!("`INFO` has `title`, `id`, `description`, `author`, `center`, `magn`, `maxiter`, `angle` and `cycle`, not `{o}`")),
             }
         }
@@ -5060,8 +5094,12 @@ fn escaped(s, p) { s.z.re > 1e9 }
             ("fn finish(s, z, p, ctx) { to_float(ctx.pass) }", "counts its own passes"),
             ("fn step(s, z, p) { s }", "needs `fn finish`"),
             ("fn finish(s, z, p) { z = complex(1.0, 0.0); 0.0 }", "not a variable to set"),
-            ("const INFO = #{ center: complex(0.0, 0.0) };\nfn finish(s, z, p) { 0.0 }", "`author` and `region`"),
+            ("const INFO = #{ center: complex(0.0, 0.0) };\nfn finish(s, z, p) { 0.0 }", "`bailout` and `pick`"),
             ("const INFO = #{ region: \"left\" };\nfn finish(s, z, p) { 0.0 }", "`region` is"),
+            ("const INFO = #{ bounded: 1 };\nfn finish(s, z, p) { 0.0 }", "`bounded` is true or false"),
+            ("const INFO = #{ bailout: -4.0 };\nfn finish(s, z, p) { 0.0 }", "`bailout` is a positive number"),
+            ("const INFO = #{ pick: #{ deband: 1 } };\nfn finish(s, z, p) { 0.0 }", "`deband`, which is not a parameter"),
+            ("const PARAMS = #{ deband: #{ value: 0 } };\nconst INFO = #{ pick: #{ deband: \"on\" } };\nfn finish(s, z, p) { 0.0 }", "a number, or true or false"),
             ("fn finish(s, z, p) { let t = 1.0; }", "ends with the index"),
         ] {
             let err = coloring(src).err().unwrap_or_else(|| panic!("{src}: compiled"));
