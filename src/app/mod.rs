@@ -2664,11 +2664,7 @@ impl App {
                     );
                     if escape.set_solid_lighting(
                         &final_config.solid_shading,
-                        (
-                            final_config.fog_strength,
-                            final_config.fog_start,
-                            final_config.background_color,
-                        ),
+                        crate::escape::path_core::solid_fog(final_config),
                     ) {
                         self.escape_dirty = true;
                     }

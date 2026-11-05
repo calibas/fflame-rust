@@ -26,8 +26,11 @@ Found while fixing:
   recorded nowhere. Fixed: threshold and falloff are multiples of the
   frame's mean density, the unit Levels uses, passed to density effects
   as `density_mean`.
-- Escape fog decodes the background with `pow(2.2)`, which matches the
-  tonemap exactly only at exposure 1 and gamma 1.
+- Escape fog decoded the background with `pow(2.2)`, which matches the
+  tonemap exactly only at exposure 1 and gamma 1. Fixed 2026-11-04: the
+  fog colour arrives as the accumulator holds what the tonemap shows as
+  the background (`path_core::solid_fog`, the sky's `shown`), in both
+  tiers.
 - With online features off, web deep links (`?flame=`) are still
   followed.
 - `FlameRenderer::resize` replaced its output texture without destroying
