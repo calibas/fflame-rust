@@ -105,7 +105,7 @@ actions by folding them into the frame's `UiResponse`.
 
 | Menu | Holds |
 |---|---|
-| File | New, Open, Save As, Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Online features (the `online_mode` switch; [ONLINE.md](ONLINE.md)), Save Online (online mode only), Export PNG (the Export panel), Config Import/Export, Quit |
+| File | New, Open, Save As, Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Online account (the `online_account` switch, off a guest; [ONLINE.md](ONLINE.md)), Save Online (the account's), Export PNG (the Export panel), Config Import/Export, Quit |
 | Edit | Undo, Redo (Preferences is a disabled stub) |
 | View | Reset View, Zoom In, Zoom Out — present in every mode (`Control::ViewNavigation`) |
 | Rendering | First the viewport's **Render Scale** (100/75/50%), its **Upscaler** (Catmull-Rom, the default, bilinear, nearest, or FSR 1: AMD's edge-adaptive upscale and sharpening, `shaders/upscale_fsr.wgsl`) and **Render at Physical Pixels** (`SystemSettings::render_scale`, `upscaler`, `render_physical_pixels`, saved at once; `app/render_scale.rs`, `renderer::upscale`): the picture renders at that share of the viewport each side and is drawn up to the screen's pixels; disabled in Simulation, whose grid scale is its render scale (`Control::RenderScale`). Then the **Quality Governor**, on or off in every mode (`SystemSettings::frame_governor`; off, nothing is governed: the flame's batch, its render scale, escape-time's antialiasing and render scale), and the **Target Frame Rate** it holds (`SystemSettings::target_rate`: the display's refresh, the video export's frame rate, or 24/30/60/120; `app/governor.rs`). Then Pause/Resume, Reset Accumulation, Iterations per Thread (128 to 4096), **Reset Orbits Each Dispatch** (the flame's `reset_orbits`, also in the Settings panel under Iterations per Thread; disabled and on where a variation needs it, its tooltip naming the variation), the Workgroups a frame dispatches while the governor is off, Reset to Defaults. Those configure the chaos game, so outside the flame modes the menu says so and their rows are disabled; it is always there, so nothing after it moves with the mode |
@@ -121,7 +121,7 @@ the same, "Mode: 2D Flame", a submenu of the four.
 
 Right-aligned, when the window is at least 500 points wide, from the
 right: the progress bar, the language picker (a globe menu; see
-[I18N.md](I18N.md)), the connectivity and account status (online mode
+[I18N.md](I18N.md)), the connectivity and account status (the online account
 only), and the Fly Mode button, which is greyed in a 2D view
 (`MenuState::fly_available`, from `visibility::fly_mode`).
 
@@ -675,7 +675,7 @@ record: [mobile-ui-redesign.md](../archive/projects/mobile-ui-redesign.md).
 - **The menu** holds a Window submenu (`COMPACT_WINDOW_MENU`, with the
   same mode policy as the desktop rows), File, View (Reset View), Mode,
   the animation transport (Play/Pause, Stop), Reset Accumulation, Undo,
-  Redo, the account button (online mode), Help, and Desktop View. There
+  Redo, the account button (the online account), Help, and Desktop View. There
   is no language picker on the compact layout.
 - **Panels open docked**, not floating (`Workspace::open_panel` →
   `open_compact_panel`): the first splits off the viewport (below it at

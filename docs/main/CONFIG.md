@@ -607,7 +607,7 @@ no undo, saved on every change, the same for every picture.
 | UI | `language` | `"en"` |
 | | `show_help_on_startup` | true |
 | | `compact_mode` | detected on first run |
-| online | `online_mode`, `auth_token`, `auth_email`, `saved_credentials` (desktop) | see [ONLINE.md](ONLINE.md) |
+| online | `online_account` (was `online_mode`), `auth_token`, `auth_email`, `saved_credentials` (desktop) | see [ONLINE.md](ONLINE.md) |
 | files (desktop) | `recent_files`, `last_opened_file`, `default_save_location` | empty |
 
 `update_system_setting(path, value)` writes one `System*` path, saves

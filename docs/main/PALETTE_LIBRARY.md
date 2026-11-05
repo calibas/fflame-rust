@@ -173,7 +173,7 @@ library.
 
 ### Cloud palettes
 
-In online mode the panel ends with a **Cloud Palettes** section,
+With the online account on, the panel ends with a **Cloud Palettes** section,
 collapsed by default. On first expanding it fetches your palette
 library from the API (up to 100 entries, each a nickname and a content
 hash) and lists them with previews. A click loads one exactly as a pack

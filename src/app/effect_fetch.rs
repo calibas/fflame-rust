@@ -36,17 +36,9 @@ impl App {
             return;
         }
 
-        // Signed out is not a failure to report: a flame using an effect
-        // you do not have is uncommon, and a sign-in prompt triggered by
-        // opening someone's flame would be worse than the missing
-        // effect.
-        let Some(token) = self.config_manager.system_settings().get_auth_token() else {
-            for name in &fresh {
-                log::info!("Effect `{name}` is unknown and nobody is signed in to fetch it");
-                self.effect_fetch_attempted.insert(name.clone());
-            }
-            return;
-        };
+        // Effects are publicly readable: signed out, or a guest, the
+        // fetch goes without a token.
+        let token = self.config_manager.system_settings().get_auth_token();
 
         self.fetch_effects(fresh, token);
     }
@@ -58,14 +50,7 @@ impl App {
         if ui_response.effect_update_requested.is_empty() {
             return;
         }
-        if !self.config_manager.system_settings().online_mode {
-            self.egui_layer.show_api_notification(&rust_i18n::t!("api.online_features_off"), true);
-            return;
-        }
-        let Some(token) = self.config_manager.system_settings().get_auth_token() else {
-            self.egui_layer.show_api_notification(&rust_i18n::t!("api.effect_update_needs_sign_in"), true);
-            return;
-        };
+        let token = self.config_manager.system_settings().get_auth_token();
         // Only a download can be updated: a built-in cannot be replaced,
         // and one of the user's is theirs.
         let names: Vec<String> = {
@@ -105,7 +90,7 @@ impl App {
 
     /// Fetch effects from the API in the background, each result folded
     /// in by `poll_effect_fetches`.
-    fn fetch_effects(&mut self, names: Vec<String>, token: String) {
+    fn fetch_effects(&mut self, names: Vec<String>, token: Option<String>) {
         for name in names {
             self.effect_fetch_attempted.insert(name.clone());
             log::info!("Fetching effect `{name}` from the API");
@@ -118,7 +103,9 @@ impl App {
 
             let job = async move {
                 let mut api = crate::api::ApiState::new(&base);
-                api.set_token(&token);
+                if let Some(t) = token {
+                    api.set_token(&t);
+                }
                 let r = api.fetch_effect(&fetch_name).await.map_err(|e| e.to_string());
                 (fetch_name, r)
             };

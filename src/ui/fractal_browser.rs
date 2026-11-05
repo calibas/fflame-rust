@@ -468,7 +468,7 @@ impl FractalBrowserPanel {
 
     /// Render the panel
     /// `auth` is `Some((base_url, token))` when signed in, `None` otherwise.
-    pub fn render(&mut self, ui: &mut egui::Ui, online_mode: bool, auth: Option<(&str, &str)>) -> GalleryResponse {
+    pub fn render(&mut self, ui: &mut egui::Ui, online_account: bool, auth: Option<(&str, &str)>) -> GalleryResponse {
         // Cache auth credentials for use by trigger methods
         self.auth_credentials = auth.map(|(b, t)| (b.to_string(), t.to_string()));
 
@@ -508,8 +508,8 @@ impl FractalBrowserPanel {
                 self.current_tab = BrowserTab::Files;
             }
 
-            // Online tab (only shown when online mode is enabled)
-            if online_mode {
+            // Online tab (only with the online account on: your flames, flame search)
+            if online_account {
                 let online_label = if self.online_flames.is_empty() {
                     t!("browser.tab_online").to_string()
                 } else {
