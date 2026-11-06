@@ -1131,7 +1131,9 @@ Steps, in the order that unlocks the most first (the user picks):
      **V1 built 2026-11-05**: the registry, `probe::pairs` (the probe
      paired: the RNG seeded from the point, the colour written out),
      the compile, pair and density tests, Edit as Rhai in a variation's
-     settings menu, and seven twins by hand. Not yet: a timing.
+     settings menu, and seven twins by hand. The timing came later
+     (2026-11-06, `time_variation_twins`, VARIATIONS.md *Timed*): of
+     597, median ratio 1.002, 3 more than 25% slower (trig in a loop).
    - **V2. A WGSL-to-Rhai translator** for the regular subset (naga's
      parse of a def's WGSL to the dialect: a vector `p` a complex in 2D
      and a `vec3` in 3D, helpers kept, `PARAMS` from the def), so the
