@@ -571,18 +571,22 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 571 of the 647, each a Rhai variation under its
+  P7 step 3): 578 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
   (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
-  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`). Seven written by hand, 564 translated from the built-ins'
+  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`). Seven written by hand, 571 translated from the built-ins'
   WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
   reads them; its colour, direct colour and hide pointers locals from
   `ctx.color`, `ctx.rgb` and `ctx.hide`, returned as `#{ z, color, rgb,
   hide }`; its transform's coefficients (`transforms[xform_id].e`, or
   through a `let xf = transforms[xform_id]`) as `ctx.e`; a 3D body's
-  `point_w` as `ctx.w` and its `point_w_out` a local returned as `w`; a function WGSL takes part by part of a vector written out
+  `point_w` as `ctx.w` and its `point_w_out` a local returned as `w`; a
+  `vec4` the language's four-part kind (part by part, as WGSL's), a
+  part of one assigned; a `switch` whose every arm returns the body's
+  end; an integer vector (`vec2<u32>`) refused, as the language's
+  vectors are floats; a function WGSL takes part by part of a vector written out
   part by part where the language has no such vector form (`sin` of a
   complex is the complex sine); its temporaries never a name the WGSL
   uses; its state slots fields

@@ -1206,14 +1206,19 @@ Steps, in the order that unlocks the most first (the user picks):
      all, 9098 pairs, 0 apart. **The 4th coordinate** (`ctx.w`, `#{ z, w
      }`, a 3D body's; `NeedsW`), the 4D twins' flames rendered in 3D:
      jubiq4d, minkowski, minkowski_camera, mobiq4d, 571 in all, 9366
-     pairs, 0 apart.
+     pairs, 0 apart. **A vec4** as the language's four-part kind, in the
+     translator: 7 twins (the mandelbox and kaleidocomplex glsl,
+     cymatics3d, the hyperbolic and quaternion cameras, the quaternion
+     Julia set), 578 in all, 9672 pairs, 0 apart; sphere_packing's
+     `vec2<u32>` is refused, the language having no integer vectors.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 76, by count: the Möbius library (9), a vec4
-     (8, the next batch), arrays (8), a helper of the fract family (6),
+     passed through. Left, 69, by count: the Möbius library (9, its
+     struct and table), arrays (8, 5 the next batch), a helper of the
+     fract family (6, a struct too),
      a palette read in a variation (3, the quaternion family), a float's
      bits (3),
      a helper of the fract family (4), crackle's (3), plot emits (3), a
