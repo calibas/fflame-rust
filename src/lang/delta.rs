@@ -1161,7 +1161,7 @@ impl<'p> Deriver<'p> {
                             out.append(&mut self.pending);
                             let ty = self.p.vars[*v].ty;
                             let uniform = self.uniform_floats[*v] && self.carried[*v].is_none();
-                            if matches!(ty, Ty::Int | Ty::Bool) || uniform {
+                            if matches!(ty, Ty::Int | Ty::UInt | Ty::Bool) || uniform {
                                 // The same for every pixel (a pass's phase,
                                 // a count): one variable, no pair.
                                 if d.is_some() {
@@ -1646,7 +1646,7 @@ impl<'p> Deriver<'p> {
                 (mk(IExprKind::Unary(UnOp::Not, Box::new(r)), ty), None)
             }
             IExprKind::Binary(op, a, b) => {
-                if ty == Ty::Bool || ty == Ty::Int {
+                if ty == Ty::Bool || ty.is_integer() {
                     // A test or an int: fine while it is the same for
                     // every pixel.
                     let (ra, da) = self.pair(a, written, is_loop)?;

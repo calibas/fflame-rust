@@ -81,8 +81,11 @@
 //! `+ - * / %`, `**` the power, comparisons, `&& || !`; on ints, 32-bit
 //! as UF's (a literal past `i32::MAX` its pattern), the bit operations
 //! `^ & | << >>`, `>>` logical (on bools `& |` are and and or, `^` xor).
-//! Two ints divided is refused -- Rhai would truncate where a formula
-//! wants the quotient. Functions (and as methods, `z.sqr()`):
+//! Two ints divided truncate, as Rhai's do. `u32(x)` is an unsigned
+//! 32-bit int, as WGSL's (an int's bits, a float truncated and clamped):
+//! `+ - *` wrap, `/ %` and comparisons unsigned, `to_float` 0..2^32-1;
+//! one joins an int to a u32, and a u32 is an int again only by
+//! `to_int`. Functions (and as methods, `z.sqr()`):
 //! `sqr sqrt exp ln sin cos tan cot sinh cosh tanh coth asin acos atan
 //! asinh acosh atanh conj flip recip round floor ceiling trunc ident
 //! zero cosxx isinf isnan`; `abs` (of a complex, its modulus), `fold`
@@ -1494,6 +1497,12 @@ impl<'s> Lowerer<'s> {
                     Expr::StringConstant(s, _) if matches!(s.as_str(), "normal" | "any" | "pre" | "post") => {}
                     _ => return self.err(*p, "`phase` is \"normal\", \"any\" (the user may move it to pre or post), \"pre\" or \"post\""),
                 },
+                // The parameters a slider commits when its drag ends (a
+                // built-in's `slow`): `variations::custom::param_defs`.
+                "slow" if self.transform => match v {
+                    Expr::Array(items, _) if items.iter().all(|i| matches!(i, Expr::StringConstant(..))) => {}
+                    _ => return self.err(*p, "`slow` is a list of the parameters committed when a drag ends: `[\"depth\"]`"),
+                },
                 "category" if self.transform => match v {
                     Expr::StringConstant(s, _) if crate::variations::VariationCategory::from_api_str(s).to_api_str() == s.as_str() => {}
                     _ => {
@@ -1515,7 +1524,7 @@ impl<'s> Lowerer<'s> {
                     }
                 },
                 o if self.transform => {
-                    return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name`, `resets_orbits`, `replace`, `phase`, `category` and `z`, not `{o}`"))
+                    return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name`, `resets_orbits`, `replace`, `slow`, `phase`, `category` and `z`, not `{o}`"))
                 }
                 // An effect's identity (design rule 7: a UUID, or a
                 // built-in's name) and its place in the pipeline, read
@@ -4376,7 +4385,8 @@ impl<'s> Lowerer<'s> {
         let span = self.pos.span(p);
         // Two ints divided truncate, as Rhai's do (P4 step 9b): its own
         // operator, not UF's quotient.
-        if op == BinOp::Div && self.ty_of(&a) == TypeName::Int && self.ty_of(&b) == TypeName::Int {
+        let integer = |t: TypeName| matches!(t, TypeName::Int | TypeName::UInt);
+        if op == BinOp::Div && integer(self.ty_of(&a)) && integer(self.ty_of(&b)) {
             return Ok(mk(ExprKind::Binary(BinOp::IDiv, Box::new(a), Box::new(b)), span));
         }
         Ok(mk(ExprKind::Binary(op, Box::new(a), Box::new(b)), span))
@@ -4411,6 +4421,7 @@ impl<'s> Lowerer<'s> {
                 match name.as_str() {
                     "to_float" | "__grid_param" => return TypeName::Float,
                     "to_int" => return TypeName::Int,
+                    "u32" => return TypeName::UInt,
                     _ => {}
                 }
                 // A simulation's framework call (P4 steps 9c, 9d).
@@ -4439,10 +4450,8 @@ impl<'s> Lowerer<'s> {
                     (TypeName::Complex, _) | (_, TypeName::Complex) => TypeName::Complex,
                     _ => TypeName::Float,
                 },
-                BinOp::Div => match join(self.ty_of(a), self.ty_of(b)) {
-                    TypeName::Int => TypeName::Float,
-                    t => t,
-                },
+                // Two ints divided truncate (`binary`); two u32s, as WGSL's.
+                BinOp::Div => join(self.ty_of(a), self.ty_of(b)),
                 _ => join(self.ty_of(a), self.ty_of(b)),
             },
         }
@@ -4513,6 +4522,8 @@ fn rename_function(name: &str) -> Option<&'static str> {
         // number among them).
         "to_float" => "to_float",
         "to_int" => "to_int",
+        // An unsigned 32-bit int (`Ty::UInt`).
+        "u32" => "u32",
         "abs" => "abs",
         // A value at the GPU's precision (UF-side `f32`).
         "to_f32" => "f32",
@@ -4528,6 +4539,7 @@ fn join(a: TypeName, b: TypeName) -> TypeName {
         (Complex, _) | (_, Complex) => Complex,
         (Float, _) | (_, Float) => Float,
         (Int, Int) => Int,
+        (UInt, Int | UInt) | (Int, UInt) => UInt,
         (Bool, Bool) => Bool,
         _ => Float,
     }
@@ -4537,6 +4549,7 @@ fn to_ty(t: TypeName) -> Ty {
     match t {
         TypeName::Bool => Ty::Bool,
         TypeName::Int => Ty::Int,
+        TypeName::UInt => Ty::UInt,
         TypeName::Float => Ty::Float,
         _ => Ty::Complex,
     }
@@ -4546,6 +4559,7 @@ fn from_ty(t: Ty) -> TypeName {
     match t {
         Ty::Bool => TypeName::Bool,
         Ty::Int => TypeName::Int,
+        Ty::UInt => TypeName::UInt,
         Ty::Float => TypeName::Float,
         Ty::Complex => TypeName::Complex,
     }

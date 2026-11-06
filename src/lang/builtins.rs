@@ -551,10 +551,10 @@ impl Builtin {
             Cabs | Real | Imag | Atan2 => Ty::Float,
             // A simulation's (P4): a stream and a hash take an int, the
             // seed's words are ints.
-            SimRand if arg != Ty::Int => return Err("`rand(k)` takes an int: the stream's number".to_string()),
-            Tap | Disc if arg != Ty::Int => return Err(format!("`{}` takes an int: the index", if self == Tap { "tap(i)" } else { "disc(i)" })),
+            SimRand if !arg.is_integer() => return Err("`rand(k)` takes an int: the stream's number".to_string()),
+            Tap | Disc if !arg.is_integer() => return Err(format!("`{}` takes an int: the index", if self == Tap { "tap(i)" } else { "disc(i)" })),
             Tap | Disc => Ty::Float,
-            Pcg if arg != Ty::Int => return Err("`pcg(n)` takes an int: it hashes its 32 bits".to_string()),
+            Pcg if !arg.is_integer() => return Err("`pcg(n)` takes an int: it hashes its 32 bits".to_string()),
             SimRand => Ty::Float,
             Pcg | HostInt => Ty::Int,
             SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | InitAt => Ty::Float,

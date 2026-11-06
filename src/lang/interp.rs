@@ -17,6 +17,8 @@ use super::Dialect;
 pub enum Value {
     Bool(bool),
     Int(i32),
+    /// Rhai's `u32` (`Ty::UInt`), wrapping as WGSL's.
+    UInt(u32),
     Float(f64),
     Complex(C64),
 }
@@ -26,6 +28,7 @@ impl Value {
         match ty {
             Ty::Bool => Value::Bool(false),
             Ty::Int => Value::Int(0),
+            Ty::UInt => Value::UInt(0),
             Ty::Float => Value::Float(0.0),
             Ty::Complex => Value::Complex(C64::ZERO),
         }
@@ -35,6 +38,7 @@ impl Value {
         match self {
             Value::Bool(b) => b,
             Value::Int(i) => i != 0,
+            Value::UInt(u) => u != 0,
             Value::Float(f) => f != 0.0,
             Value::Complex(c) => c.re != 0.0 || c.im != 0.0,
         }
@@ -44,6 +48,7 @@ impl Value {
         match self {
             Value::Bool(b) => f64::from(u8::from(b)),
             Value::Int(i) => f64::from(i),
+            Value::UInt(u) => f64::from(u),
             Value::Float(f) => f,
             Value::Complex(c) => c.re,
         }
@@ -59,8 +64,22 @@ impl Value {
     fn as_int(self) -> i32 {
         match self {
             Value::Int(i) => i,
+            // Its bits.
+            Value::UInt(u) => u as i32,
             Value::Bool(b) => i32::from(b),
             other => other.as_f64() as i32,
+        }
+    }
+
+    /// As a u32: an int's bits, a float truncated and clamped to [0,
+    /// 2^32 - 256] (the largest f32 below 2^32), as the GPU's
+    /// `u32(clamp(x, 0.0, 4294967040.0))`.
+    fn as_uint(self) -> u32 {
+        match self {
+            Value::UInt(u) => u,
+            Value::Int(i) => i as u32,
+            Value::Bool(b) => u32::from(b),
+            other => other.as_f64().clamp(0.0, 4_294_967_040.0) as u32,
         }
     }
 }
@@ -907,6 +926,7 @@ impl<'p> Machine<'p> {
             IExprKind::Host(h, _) if h.gpu_read() => Value::Float(0.0),
             IExprKind::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             IExprKind::Bool(b) => Value::Bool(*b),
+            IExprKind::Int(i) if e.ty == Ty::UInt => Value::UInt(*i as u32),
             IExprKind::Int(i) => Value::Int(*i as i32),
             IExprKind::Float(f) => Value::Float(*f),
             IExprKind::Complex(re, im) => Value::Complex(C64::new(*re, *im)),
@@ -916,6 +936,7 @@ impl<'p> Machine<'p> {
                 match self.prog.params[*id].ty() {
                     Ty::Bool => Value::Bool(re != 0.0),
                     Ty::Int => Value::Int(re.round() as i32),
+                    Ty::UInt => Value::UInt(re.round().max(0.0) as u32),
                     Ty::Float => Value::Float(re),
                     Ty::Complex => Value::Complex(C64::new(re, im)),
                 }
@@ -938,6 +959,7 @@ impl<'p> Machine<'p> {
                     Ty::Bool if self.prog.dialect == Dialect::Fractint => Value::Bool(v.as_f64() != 0.0),
                     Ty::Bool => Value::Bool(v.as_bool()),
                     Ty::Int => Value::Int(v.as_int()),
+                    Ty::UInt => Value::UInt(v.as_uint()),
                     Ty::Float => Value::Float(v.as_f64()),
                     Ty::Complex => Value::Complex(v.as_c64()),
                 }
@@ -945,6 +967,7 @@ impl<'p> Machine<'p> {
             IExprKind::MakeComplex(a, b) => Value::Complex(C64::new(self.eval(a, sh).as_f64(), self.eval(b, sh).as_f64())),
             IExprKind::Unary(UnOp::Neg, a) => match self.eval(a, sh) {
                 Value::Int(i) => Value::Int(i.wrapping_neg()),
+                Value::UInt(u) => Value::UInt(u.wrapping_neg()),
                 Value::Float(f) => Value::Float(-f),
                 Value::Complex(c) => Value::Complex(c.neg()),
                 Value::Bool(b) => Value::Bool(b),
@@ -1101,8 +1124,20 @@ fn binary(op: BinOp, l: Value, r: Value, ty: Ty, dialect: Dialect) -> Value {
         Gt => Value::Bool(l.as_f64() > r.as_f64()),
         Ge => Value::Bool(l.as_f64() >= r.as_f64()),
         DiffAbs => Value::Float(diffabs(l.as_f64(), r.as_f64())),
+        BitAnd | BitOr | BitXor | Shl | Shr | IDiv if ty == Ty::UInt => Value::UInt(ubits(op, l.as_uint(), r.as_uint())),
         BitAnd | BitOr | BitXor | Shl | Shr | IDiv => Value::Int(bits(op, l.as_int(), r.as_int())),
         Add | Sub | Mul | Div | Mod | Pow => match ty {
+            Ty::UInt => {
+                let (a, b) = (l.as_uint(), r.as_uint());
+                Value::UInt(match op {
+                    Add => a.wrapping_add(b),
+                    Sub => a.wrapping_sub(b),
+                    Mul => a.wrapping_mul(b),
+                    // A zero divisor gives 0, in WGSL too.
+                    Mod => a.checked_rem(b).unwrap_or(0),
+                    _ => unreachable!("a u32's `/` is `IDiv`; powers are float"),
+                })
+            }
             Ty::Int => {
                 let (a, b) = (l.as_int(), r.as_int());
                 Value::Int(match op {
@@ -1161,6 +1196,15 @@ pub(crate) fn bits(op: BinOp, a: i32, b: i32) -> i32 {
         BinOp::IDiv if b == 0 || (a == i32::MIN && b == -1) => a,
         BinOp::IDiv => a / b,
         _ => unreachable!("a bit operation"),
+    }
+}
+
+/// [`bits`] of two u32s: `/` unsigned, a zero divisor giving the
+/// dividend, as WGSL's.
+pub(crate) fn ubits(op: BinOp, a: u32, b: u32) -> u32 {
+    match op {
+        BinOp::IDiv => a.checked_div(b).unwrap_or(a),
+        _ => bits(op, a as i32, b as i32) as u32,
     }
 }
 

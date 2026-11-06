@@ -196,6 +196,7 @@ fn zero(ty: Ty) -> &'static str {
     match ty {
         Ty::Bool => "false",
         Ty::Int => "0",
+        Ty::UInt => "u32(0)",
         Ty::Float => "0.0",
         Ty::Complex => "complex(0.0, 0.0)",
     }

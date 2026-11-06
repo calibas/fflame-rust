@@ -28,6 +28,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("exp", include_str!("../../assets/variations/twins/exp.rhai")),
     ("hyperbolic", include_str!("../../assets/variations/twins/hyperbolic.rhai")),
     // Translated from the built-ins' WGSL (V2, `scripts/translate_variation_twins.py`).
+    ("CircleTrans1", include_str!("../../assets/variations/twins/CircleTrans1.rhai")),
     ("acosech", include_str!("../../assets/variations/twins/acosech.rhai")),
     ("acosh", include_str!("../../assets/variations/twins/acosh.rhai")),
     ("acoth", include_str!("../../assets/variations/twins/acoth.rhai")),
@@ -40,6 +41,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("arcsech2", include_str!("../../assets/variations/twins/arcsech2.rhai")),
     ("arcsinh", include_str!("../../assets/variations/twins/arcsinh.rhai")),
     ("arctanh", include_str!("../../assets/variations/twins/arctanh.rhai")),
+    ("arctruchet", include_str!("../../assets/variations/twins/arctruchet.rhai")),
     ("asteria", include_str!("../../assets/variations/twins/asteria.rhai")),
     ("atan", include_str!("../../assets/variations/twins/atan.rhai")),
     ("atan2_spirals", include_str!("../../assets/variations/twins/atan2_spirals.rhai")),
@@ -81,8 +83,13 @@ pub const TWINS: &[(&str, &str)] = &[
     ("cardioid", include_str!("../../assets/variations/twins/cardioid.rhai")),
     ("cell", include_str!("../../assets/variations/twins/cell.rhai")),
     ("checkerboard_wf", include_str!("../../assets/variations/twins/checkerboard_wf.rhai")),
+    ("checks", include_str!("../../assets/variations/twins/checks.rhai")),
+    ("chladni", include_str!("../../assets/variations/twins/chladni.rhai")),
+    ("chladni_disc", include_str!("../../assets/variations/twins/chladni_disc.rhai")),
     ("chrysanthemum", include_str!("../../assets/variations/twins/chrysanthemum.rhai")),
     ("chunk", include_str!("../../assets/variations/twins/chunk.rhai")),
+    ("circleLinear", include_str!("../../assets/variations/twins/circleLinear.rhai")),
+    ("circleRand", include_str!("../../assets/variations/twins/circleRand.rhai")),
     ("circleblur", include_str!("../../assets/variations/twins/circleblur.rhai")),
     ("circlecrop", include_str!("../../assets/variations/twins/circlecrop.rhai")),
     ("circlesplit", include_str!("../../assets/variations/twins/circlesplit.rhai")),
@@ -127,11 +134,14 @@ pub const TWINS: &[(&str, &str)] = &[
     ("csch2_bs", include_str!("../../assets/variations/twins/csch2_bs.rhai")),
     ("cschq", include_str!("../../assets/variations/twins/cschq.rhai")),
     ("cscq", include_str!("../../assets/variations/twins/cscq.rhai")),
+    ("cubic3D", include_str!("../../assets/variations/twins/cubic3D.rhai")),
+    ("cubicLattice_3D", include_str!("../../assets/variations/twins/cubicLattice_3D.rhai")),
     ("curl3D", include_str!("../../assets/variations/twins/curl3D.rhai")),
     ("curl_sp", include_str!("../../assets/variations/twins/curl_sp.rhai")),
     ("curliecue2", include_str!("../../assets/variations/twins/curliecue2.rhai")),
     ("curve", include_str!("../../assets/variations/twins/curve.rhai")),
     ("cut_apollonian", include_str!("../../assets/variations/twins/cut_apollonian.rhai")),
+    ("cut_booleans", include_str!("../../assets/variations/twins/cut_booleans.rhai")),
     ("cut_celtic", include_str!("../../assets/variations/twins/cut_celtic.rhai")),
     ("cut_chains", include_str!("../../assets/variations/twins/cut_chains.rhai")),
     ("cut_circdes", include_str!("../../assets/variations/twins/cut_circdes.rhai")),
@@ -143,6 +153,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("cut_rgrid", include_str!("../../assets/variations/twins/cut_rgrid.rhai")),
     ("cut_sincos", include_str!("../../assets/variations/twins/cut_sincos.rhai")),
     ("cut_snowflake", include_str!("../../assets/variations/twins/cut_snowflake.rhai")),
+    ("cut_spiral", include_str!("../../assets/variations/twins/cut_spiral.rhai")),
     ("cut_sqcir", include_str!("../../assets/variations/twins/cut_sqcir.rhai")),
     ("cut_sqsplits", include_str!("../../assets/variations/twins/cut_sqsplits.rhai")),
     ("cut_tileillusion", include_str!("../../assets/variations/twins/cut_tileillusion.rhai")),
@@ -178,6 +189,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("eSwirl", include_str!("../../assets/variations/twins/eSwirl.rhai")),
     ("eclipse", include_str!("../../assets/variations/twins/eclipse.rhai")),
     ("edisc", include_str!("../../assets/variations/twins/edisc.rhai")),
+    ("electron_orbital", include_str!("../../assets/variations/twins/electron_orbital.rhai")),
     ("elliptic", include_str!("../../assets/variations/twins/elliptic.rhai")),
     ("elliptic2", include_str!("../../assets/variations/twins/elliptic2.rhai")),
     ("ennepers", include_str!("../../assets/variations/twins/ennepers.rhai")),
@@ -231,6 +243,8 @@ pub const TWINS: &[(&str, &str)] = &[
     ("helix", include_str!("../../assets/variations/twins/helix.rhai")),
     ("hemisphere", include_str!("../../assets/variations/twins/hemisphere.rhai")),
     ("henon", include_str!("../../assets/variations/twins/henon.rhai")),
+    ("hofstadter", include_str!("../../assets/variations/twins/hofstadter.rhai")),
+    ("hofstadter3d", include_str!("../../assets/variations/twins/hofstadter3d.rhai")),
     ("hole2", include_str!("../../assets/variations/twins/hole2.rhai")),
     ("holesq", include_str!("../../assets/variations/twins/holesq.rhai")),
     ("horseshoe", include_str!("../../assets/variations/twins/horseshoe.rhai")),
@@ -263,6 +277,8 @@ pub const TWINS: &[(&str, &str)] = &[
     ("julian", include_str!("../../assets/variations/twins/julian.rhai")),
     ("julian2", include_str!("../../assets/variations/twins/julian2.rhai")),
     ("julian3Dx", include_str!("../../assets/variations/twins/julian3Dx.rhai")),
+    ("juliascope", include_str!("../../assets/variations/twins/juliascope.rhai")),
+    ("juliascope3Db", include_str!("../../assets/variations/twins/juliascope3Db.rhai")),
     ("kaleidoscope", include_str!("../../assets/variations/twins/kaleidoscope.rhai")),
     ("lace_js", include_str!("../../assets/variations/twins/lace_js.rhai")),
     ("layered_spiral", include_str!("../../assets/variations/twins/layered_spiral.rhai")),
@@ -326,6 +342,8 @@ pub const TWINS: &[(&str, &str)] = &[
     ("plane_wf", include_str!("../../assets/variations/twins/plane_wf.rhai")),
     ("plusrecip", include_str!("../../assets/variations/twins/plusrecip.rhai")),
     ("poincare3D", include_str!("../../assets/variations/twins/poincare3D.rhai")),
+    ("pointgrid3d_wf", include_str!("../../assets/variations/twins/pointgrid3d_wf.rhai")),
+    ("pointgrid_wf", include_str!("../../assets/variations/twins/pointgrid_wf.rhai")),
     ("polar", include_str!("../../assets/variations/twins/polar.rhai")),
     ("polar2", include_str!("../../assets/variations/twins/polar2.rhai")),
     ("polarplot2d_wf", include_str!("../../assets/variations/twins/polarplot2d_wf.rhai")),
@@ -381,6 +399,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("pulse", include_str!("../../assets/variations/twins/pulse.rhai")),
     ("pyramid", include_str!("../../assets/variations/twins/pyramid.rhai")),
     ("q_ode", include_str!("../../assets/variations/twins/q_ode.rhai")),
+    ("quasiconformal", include_str!("../../assets/variations/twins/quasiconformal.rhai")),
     ("quaternion", include_str!("../../assets/variations/twins/quaternion.rhai")),
     ("r_circleblur", include_str!("../../assets/variations/twins/r_circleblur.rhai")),
     ("radial_blur", include_str!("../../assets/variations/twins/radial_blur.rhai")),
@@ -412,6 +431,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("shift", include_str!("../../assets/variations/twins/shift.rhai")),
     ("shredlin", include_str!("../../assets/variations/twins/shredlin.rhai")),
     ("shredrad", include_str!("../../assets/variations/twins/shredrad.rhai")),
+    ("siercarpet_js", include_str!("../../assets/variations/twins/siercarpet_js.rhai")),
     ("sigmoid", include_str!("../../assets/variations/twins/sigmoid.rhai")),
     ("sin", include_str!("../../assets/variations/twins/sin.rhai")),
     ("sin2_bs", include_str!("../../assets/variations/twins/sin2_bs.rhai")),
@@ -488,6 +508,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("sym_ng7", include_str!("../../assets/variations/twins/sym_ng7.rhai")),
     ("sym_ng8", include_str!("../../assets/variations/twins/sym_ng8.rhai")),
     ("sym_ng9", include_str!("../../assets/variations/twins/sym_ng9.rhai")),
+    ("szubieta", include_str!("../../assets/variations/twins/szubieta.rhai")),
     ("tan", include_str!("../../assets/variations/twins/tan.rhai")),
     ("tan2_bs", include_str!("../../assets/variations/twins/tan2_bs.rhai")),
     ("tancos", include_str!("../../assets/variations/twins/tancos.rhai")),
@@ -514,6 +535,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("unpolar", include_str!("../../assets/variations/twins/unpolar.rhai")),
     ("vibration2", include_str!("../../assets/variations/twins/vibration2.rhai")),
     ("vogel", include_str!("../../assets/variations/twins/vogel.rhai")),
+    ("voron", include_str!("../../assets/variations/twins/voron.rhai")),
     ("waffle", include_str!("../../assets/variations/twins/waffle.rhai")),
     ("wallpaper_js", include_str!("../../assets/variations/twins/wallpaper_js.rhai")),
     ("waveblur_wf", include_str!("../../assets/variations/twins/waveblur_wf.rhai")),
@@ -529,6 +551,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("wedge_sph", include_str!("../../assets/variations/twins/wedge_sph.rhai")),
     ("whitney_umbrella", include_str!("../../assets/variations/twins/whitney_umbrella.rhai")),
     ("whorl", include_str!("../../assets/variations/twins/whorl.rhai")),
+    ("woggle_js", include_str!("../../assets/variations/twins/woggle_js.rhai")),
     ("xerf", include_str!("../../assets/variations/twins/xerf.rhai")),
     ("xheart", include_str!("../../assets/variations/twins/xheart.rhai")),
     ("xheart_blur_wf", include_str!("../../assets/variations/twins/xheart_blur_wf.rhai")),
@@ -710,8 +733,11 @@ pub fn skeleton(name: &str, block: Option<&str>) -> Option<String> {
         super::VariationPhase::Normal => String::new(),
         ref p => format!(", phase: \"{}\"", p.clone().to_api_str()),
     };
+    // Its slow parameters, a slider's committed when the drag ends.
+    let slow: Vec<String> = info.parameters.iter().filter(|d| d.slow).map(|d| format!("\"{}\"", d.name)).collect();
+    let slow = if slow.is_empty() { String::new() } else { format!(", slow: [{}]", slow.join(", ")) };
     out += &format!(
-        "const INFO = #{{ title: {}, name: \"rhai_{}\", category: \"{}\"{phase} }};\n\n",
+        "const INFO = #{{ title: {}, name: \"rhai_{}\", category: \"{}\"{phase}{slow} }};\n\n",
         text(&info.display_name),
         name.to_ascii_lowercase(),
         info.category.to_api_str()
@@ -893,7 +919,7 @@ mod tests {
             };
             assert_eq!(dl.display_name, builtin.display_name, "{name}: its title");
             let p = crate::lang::rhai::transformation(src).or_else(|_| crate::lang::rhai::transformation3(src)).unwrap();
-            let params = p.param_defs(crate::lang::ir::ComplexParams::Split("_")).unwrap();
+            let params = super::super::custom::param_defs(&p, src).unwrap();
             assert_eq!(params.len(), builtin.parameters.len(), "{name}: its parameters");
             for (t, b) in params.iter().zip(&builtin.parameters) {
                 assert_eq!((&t.name, &t.label, &t.hint, &t.kind, t.slow), (&b.name, &b.label, &b.hint, &b.kind, b.slow), "{name}.{}", b.name);
