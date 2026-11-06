@@ -839,7 +839,7 @@ needs the census did not, the int step and `ctx.layer`):
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
 | Simulation colourings | 13 | all 13 | yes, the simulation panel (2026-11-03) |
-| Flame variations | 647 | 10, as test fixtures (linear, spherical, swirl, polar, horseshoe, blur, macmillan, spherical3D, hemisphere, zcone) | no |
+| Flame variations | 647 | 298 (`variations::twins`, branch `rhai-variation-hooks`; plan in step 3), besides the 10 test fixtures | yes, a transform's variation (2026-11-05) |
 
 Steps, in the order that unlocks the most first (the user picks):
 
@@ -1128,12 +1128,28 @@ Steps, in the order that unlocks the most first (the user picks):
      timing; and **Edit as Rhai** for a transform's variation, the twin
      in the built-in's place with its weight and parameters, the source
      carried.
+     **V1 built 2026-11-05**: the registry, `probe::pairs` (the probe
+     paired: the RNG seeded from the point, the colour written out),
+     the compile, pair and density tests, Edit as Rhai in a variation's
+     settings menu, and seven twins by hand. Not yet: a timing.
    - **V2. A WGSL-to-Rhai translator** for the regular subset (naga's
      parse of a def's WGSL to the dialect: a vector `p` a complex in 2D
      and a `vec3` in 3D, helpers kept, `PARAMS` from the def), so the
      337 come in batches by family, each translated twin held by V1's
      compare and read by eye; what it cannot say is listed, and written
      by hand.
+     **Built 2026-11-05**, as a text-level translator in Python
+     (`scripts/translate_variation_twins.py`: the author's names,
+     structure and comments kept, where naga's IR loses them): 291
+     twins, 298 with the seven. It found what the dialect and the compare
+     needed: `free` and `exponential: false` on a parameter; the float
+     `floor` everywhere; WGSL's `log` is Rhai's `ln`; a parameter WGSL
+     reads as an f32 is `to_float`; the compare's f64 judge, and density
+     for the twins that draw. Refused, 39 of the 337: a colour written
+     (11), a 3D body writing z without `AlwaysZ` (8), bit operations
+     (5) and hex literals (3), the coefficients (3), arrays (3), a
+     helper of its own kind (crackle's, synth's, ho's), state, a
+     non-range `for`. Read by eye: a sample, not all 291.
    - **V3. The hooks, each followed by the twins it unlocks**:
      derived parameters (`fn prepare(p)` lowered to the def's init
      setup, 134); the z rule, the phase and replace as `INFO` keys (61,
