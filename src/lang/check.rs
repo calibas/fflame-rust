@@ -1942,6 +1942,13 @@ impl Checker {
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 let l = self.numeric(l, a.span)?;
                 let r = self.numeric(r, b.span)?;
+                // UF and Fractint order a complex by its real part; in Rhai
+                // it is an error, where a slip (`u - d.abs()` for `(u -
+                // d).abs()`) would compile and compare the wrong thing.
+                if self.rhai && !matches!(op, BinOp::Eq | BinOp::Ne) && (l.ty == Ty::Complex || r.ty == Ty::Complex) {
+                    self.error(span, "a complex number has no order: compare `z.re`, or its size, `z.abs()`");
+                    return None;
+                }
                 let t = l.ty.join(r.ty);
                 let l = self.convert(l, t, a.span)?;
                 let r = self.convert(r, t, b.span)?;

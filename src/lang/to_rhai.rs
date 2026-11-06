@@ -1128,7 +1128,10 @@ impl<'p> Printer<'p> {
         };
         // Fractint compares complex values by their real parts, equality
         // too.
-        if matches!(op, BinOp::Eq | BinOp::Ne) && a.ty == Ty::Complex && self.p.dialect == Dialect::Fractint {
+        // Both order them by their real parts, which Rhai leaves unsaid
+        // no more: a complex there has no order.
+        let ordered = matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge);
+        if a.ty == Ty::Complex && (ordered || (matches!(op, BinOp::Eq | BinOp::Ne) && self.p.dialect == Dialect::Fractint)) {
             let (l, r) = (self.real_part(a)?, self.real_part(b)?);
             return Ok(P(format!("{} {sym} {}", l.at(prec), r.at(prec + 1)), prec));
         }
