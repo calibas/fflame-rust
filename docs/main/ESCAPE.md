@@ -533,7 +533,11 @@ fn escaped(s, p) {
   helpers; `escaped` is one test, its `let`s substituted.
 - Values are int, float, bool and complex (`complex(re, im)`); a bool
   and a number do not mix but by `to_float` / `to_int` (1 for true),
-  and two ints divided is refused (Rhai would truncate). `**` is the
+  and two ints divided is refused (Rhai would truncate). A complex has
+  no order: `<`, `<=`, `>`, `>=` on one is refused -- compare `z.re`, or
+  its size, `z.abs()` -- where UF and Fractint order it by its real part
+  and a slip (`u - d.abs()` for `(u - d).abs()`) would compile and
+  compare the wrong thing; the UF converter writes the `.re`. `**` is the
   power. Ints are 32-bit, as UF's: `+ - *` wrap, and a literal past
   `i32::MAX` (`0x846ca68b`) is its 32-bit pattern. Rhai's bit
   operations take ints as such patterns -- `^` xor, `&`, `|`, `<<`,
