@@ -1020,6 +1020,7 @@ impl<'p> Printer<'p> {
             Predef::Height => self.ctx_field("height"),
             Predef::Random => self.ctx_field("random"),
             Predef::Draw => P::atom("rand()"),
+            Predef::DrawU32 => P::atom("rand_u32()"),
             Predef::Accum => self.ctx_field("accum"),
             Predef::Weight => self.ctx_field("weight"),
             Predef::VarColor => return Err("a flame variation's colour is written in its result, `#{ z, color }`".into()),

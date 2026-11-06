@@ -1216,16 +1216,18 @@ Steps, in the order that unlocks the most first (the user picks):
      (`rand()` in `init`, the thread's stream, as the built-ins'
      `wgsl_state_init`); the shared complex helpers translated in;
      `loop` and `exp2`: 11 twins, 589 in all, 9990 pairs, 0 apart.
+     **The raw draw**, `rand_u32()` (the shader's `rng_next`, a `u32`
+     from the same stream as `rand()`): the juliaq family, cpow2,
+     log_db, 594 in all, 10052 pairs, 0 apart.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 58, by count (`translate_variation_twins.py
+     passed through. Left, 53, by count (`translate_variation_twins.py
      --report`): the Möbius library (9, its struct and table), the
      fract family's helper (6, a struct too), crackle's helper (3,
-     arrays as arguments), the raw draw (5: the juliaq family's bits of
-     it, cpow2, log_db), a parameter by a computed slot (3, the
+     arrays as arguments), a parameter by a computed slot (3, the
      lsystems), plot emits (3), a palette read in a variation (3, the
      quaternion family's `.rgb`), the renderer's hooks (6: the analytic
      blurs, the volume emitters, the subflames), arrays of vectors or as

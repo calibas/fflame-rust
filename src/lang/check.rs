@@ -980,6 +980,7 @@ impl Checker {
             // Rhai's `rand()` (C2a), and a variation's context and colour
             // (C2b, C2d).
             "draw" if self.internal => Predef::Draw,
+            "draw_u32" if self.internal && self.kind == EntryKind::Transform => Predef::DrawU32,
             // A solid's position's third part (B3).
             "pixelz" if self.internal && self.kind == EntryKind::Solid => Predef::PixelZ,
             "accum" | "weight" | "vcolor" | "vhide" | "vrgb_r" | "vrgb_g" | "vrgb_b" | "pixelz" | "accumz" | "coef_a" | "coef_b" | "coef_c" | "coef_d"
@@ -1151,7 +1152,7 @@ impl Checker {
             self.error(span, format!("a simulation model reads its cell, the grid's size, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
-        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::VarHide | Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::PointW | Predef::WOut | Predef::PixelZ | Predef::AccumZ) {
+        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::VarHide | Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::PointW | Predef::WOut | Predef::DrawU32 | Predef::PixelZ | Predef::AccumZ) {
             self.error(span, format!("a transformation reads `#pixel`, `#pi` and `#e`, not `#{name}`"));
             return None;
         }

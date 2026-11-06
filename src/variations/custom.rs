@@ -1182,6 +1182,28 @@ mod tests {
         assert!(compile(slip).is_err_and(|e| e.contains("a u32 where an int is wanted")), "{:?}", compile(slip).err());
     }
 
+    /// `rand_u32()` is the raw draw, the shader's `rng_next`: the stream's
+    /// next 32 bits, of which `rand()` keeps the top 24, so the two read
+    /// one stream; `prepare` draws neither.
+    #[test]
+    fn rand_u32_is_the_raw_draw() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let raw = "const INFO = #{ name: \"rhai_draw_u32\" };\nfn variation(z, p) {\n    let n = rand_u32();\n    complex(to_float(n >> 8) / 16777216.0, to_float(n % 10))\n}\n";
+        let dl = named(raw);
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("rng_next(rng)") && s.contains("rng: ptr<function, RngState>")), "{:?}", dl.shader_2d);
+        let flat = "const INFO = #{ name: \"rhai_draw_f\" };\nfn variation(z, p) { complex(rand(), 0.0) }\n";
+        let (pr, pf) = (lang::rhai::transformation(raw).unwrap(), lang::rhai::transformation(flat).unwrap());
+        for seed in [1, 2, 77] {
+            let (a, _) = VariationRun::new(&pr, &ParamValues::defaults(&pr), seed).call(C64::ZERO, C64::ZERO, 1.0);
+            let (b, _) = VariationRun::new(&pf, &ParamValues::defaults(&pf), seed).call(C64::ZERO, C64::ZERO, 1.0);
+            assert_eq!(a.re, b.re, "one stream, seed {seed}");
+            assert!(a.im.fract() == 0.0 && (0.0..10.0).contains(&a.im), "{}", a.im);
+        }
+        let prep = "const INFO = #{ name: \"rhai_draw_prep\" };\nfn prepare(p) { #{ k: to_float(rand_u32()) } }\nfn variation(z, p) { z * p.k }\n";
+        assert!(compile(prep).is_err_and(|e| e.contains("draws no random")), "{:?}", compile(prep).err());
+    }
+
     /// `INFO.z` is JWildfire's z rule, as the built-ins' features: by
     /// default a 3D body's z is always kept and a 2D body's only when the
     /// flame preserves z; `always`, `preserve_z` and `never` say so of

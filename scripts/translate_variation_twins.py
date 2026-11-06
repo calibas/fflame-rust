@@ -368,6 +368,7 @@ class Fn:
             if f.startswith("vec4"): return "vec4"
             if f in ("length", "dot", "distance", "get_param", "rng_nextf", "f32", "atan2"): return "f32"
             if f in ("i32", "u32"): return f
+            if f == "rng_next": return "u32"
             if f in ("select",): return self.ty(args[1])
             # A function WGSL takes part by part gives the vector it is of.
             if f in PARTWISE:
@@ -570,6 +571,9 @@ class Fn:
             return self.tr.param_read(int(slot[1].rstrip("u")))
         if f == "rng_nextf":
             return "rand()"
+        # The raw draw, the stream's next 32 bits.
+        if f == "rng_next":
+            return "rand_u32()"
         # The project's IEEE-exact atan2 is the language's.
         if f == "ff_atan2":
             return f"atan2({self.ex(args[0])}, {self.ex(args[1])})"

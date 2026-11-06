@@ -512,6 +512,7 @@ impl BigMachine {
             Predef::Draw | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ => BigValue::Float(BigFloat::zero(self.n)),
             Predef::VarHide => BigValue::Bool(false),
             Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::PointW | Predef::WOut => BigValue::Float(BigFloat::zero(self.n)),
+            Predef::DrawU32 => BigValue::UInt(0),
             // An effect's; a reference orbit is a formula's.
             Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {
                 BigValue::Float(BigFloat::zero(self.n))

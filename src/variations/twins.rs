@@ -121,6 +121,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("cothq", include_str!("../../assets/variations/twins/cothq.rhai")),
     ("cotq", include_str!("../../assets/variations/twins/cotq.rhai")),
     ("cpow", include_str!("../../assets/variations/twins/cpow.rhai")),
+    ("cpow2", include_str!("../../assets/variations/twins/cpow2.rhai")),
     ("cpow3", include_str!("../../assets/variations/twins/cpow3.rhai")),
     ("cpow3_wf", include_str!("../../assets/variations/twins/cpow3_wf.rhai")),
     ("crop", include_str!("../../assets/variations/twins/crop.rhai")),
@@ -309,10 +310,13 @@ pub const TWINS: &[(&str, &str)] = &[
     ("jubiQ", include_str!("../../assets/variations/twins/jubiQ.rhai")),
     ("jubiq4d", include_str!("../../assets/variations/twins/jubiq4d.rhai")),
     ("julia3D", include_str!("../../assets/variations/twins/julia3D.rhai")),
+    ("julia3Dq", include_str!("../../assets/variations/twins/julia3Dq.rhai")),
     ("julia3Dz", include_str!("../../assets/variations/twins/julia3Dz.rhai")),
+    ("juliac", include_str!("../../assets/variations/twins/juliac.rhai")),
     ("julian", include_str!("../../assets/variations/twins/julian.rhai")),
     ("julian2", include_str!("../../assets/variations/twins/julian2.rhai")),
     ("julian3Dx", include_str!("../../assets/variations/twins/julian3Dx.rhai")),
+    ("juliaq", include_str!("../../assets/variations/twins/juliaq.rhai")),
     ("juliascope", include_str!("../../assets/variations/twins/juliascope.rhai")),
     ("juliascope3Db", include_str!("../../assets/variations/twins/juliascope3Db.rhai")),
     ("kaleidoscope", include_str!("../../assets/variations/twins/kaleidoscope.rhai")),
@@ -330,6 +334,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("lissajous", include_str!("../../assets/variations/twins/lissajous.rhai")),
     ("littlewood", include_str!("../../assets/variations/twins/littlewood.rhai")),
     ("log", include_str!("../../assets/variations/twins/log.rhai")),
+    ("log_db", include_str!("../../assets/variations/twins/log_db.rhai")),
     ("log_tile2", include_str!("../../assets/variations/twins/log_tile2.rhai")),
     ("loonie", include_str!("../../assets/variations/twins/loonie.rhai")),
     ("loonie2", include_str!("../../assets/variations/twins/loonie2.rhai")),
@@ -1307,13 +1312,9 @@ mod tests {
 
     /// A 2D flame of three transforms: `variation` on a turning shrink,
     /// two linear shrinks keeping it bounded; a twin's flame carries its
-    /// source, which nothing registers but the renderer.
-    fn flame_with(variation: &str, carries: Option<CustomSource>) -> crate::config::FractalConfig {
-        flame_coloured(variation, carries, 0.0)
-    }
-
-    /// [`flame_with`], the variation's transform blending in the colour it
-    /// writes by `direct` (`Transform::direct_color`).
+    /// source, which nothing registers but the renderer. The variation's
+    /// transform blends in the colour it writes by `direct`
+    /// (`Transform::direct_color`).
     fn flame_coloured(variation: &str, carries: Option<CustomSource>, direct: f32) -> crate::config::FractalConfig {
         use crate::scene::transforms::{RenderMode, Transform};
         let mut cfg = crate::config::FractalConfig::default();
@@ -1466,12 +1467,97 @@ mod tests {
         assert_eq!(back.len(), defs.len());
     }
 
+    /// A tool for the twins' speed: each twin's flame dispatched beside its
+    /// built-in's -- the density compare's flame at 1024x1024, its
+    /// variation's transform weighted 8 to the linears' 1 so most
+    /// iterations run it -- interleaved, seven rounds of eight dispatches,
+    /// the median of the rounds' ratios; the slowest printed last.
+    /// `VARIATION_TWINS=a,b` times those alone. Measured, not held: a twin
+    /// is what an edit starts from, and the built-in still draws an
+    /// unedited one. Ignored: it times the GPU (the app closed).
     #[test]
-    #[ignore]
-    fn probe_wgsl() {
-        let dl = super::super::custom::compile(source("mobius_strip").unwrap()).unwrap();
-        for l in dl.shader_2d.unwrap().lines().filter(|l| l.contains("trunc")) {
-            println!("WGSL {l}");
+    #[ignore = "times the GPU"]
+    fn time_variation_twins() {
+        const N: u32 = 1024;
+        let (device, queue) = pollster::block_on(crate::probe::run::open_device("variation twin timing")).expect("a GPU");
+        let only: Option<Vec<String>> = std::env::var("VARIATION_TWINS").ok().map(|v| v.split(',').map(str::to_string).collect());
+        let wait = || {
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        };
+        let dispatch = |r: &mut crate::renderer::FlameRenderer, cfg: &crate::config::FractalConfig| {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("timed") });
+            r.compute_pass(
+                &mut enc, &queue, &device, 256, 1024, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation, cfg.camera_rotation_x,
+                cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z, cfg.speed_factor, true, false,
+            );
+            queue.submit(Some(enc.finish()));
+        };
+        let mut timed = Vec::new();
+        for (name, _) in TWINS {
+            if only.as_ref().is_some_and(|o| !o.iter().any(|n| n == name)) {
+                continue;
+            }
+            let three = super::super::global_registry().get(name).is_some_and(|v| v.has_feature(super::super::Feature::NeedsW));
+            let cfgs = [flame_coloured(name, None, 0.0), flame_coloured(&key(name).unwrap(), Some(super::carried(name).unwrap()), 0.0)].map(|mut cfg| {
+                cfg.deterministic_rng = false;
+                cfg.flame.transforms[0].weight = 8.0;
+                if three {
+                    cfg.render_mode = crate::scene::transforms::RenderMode::ThreeD;
+                }
+                cfg
+            });
+            let mut rs: Vec<_> = cfgs
+                .iter()
+                .map(|cfg| {
+                    let mut r = crate::renderer::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
+                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+                    r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 1, 0);
+                    queue.submit(Some(enc.finish()));
+                    for _ in 0..4 {
+                        dispatch(&mut r, cfg);
+                    }
+                    r
+                })
+                .collect();
+            wait();
+            let mut ratios = Vec::new();
+            let mut ms = [0.0f64; 2];
+            for _ in 0..7 {
+                for (i, r) in rs.iter_mut().enumerate() {
+                    let start = web_time::Instant::now();
+                    for _ in 0..8 {
+                        dispatch(r, &cfgs[i]);
+                    }
+                    wait();
+                    ms[i] = start.elapsed().as_secs_f64() * 1e3;
+                }
+                ratios.push(ms[1] / ms[0]);
+            }
+            ratios.sort_by(|a, b| a.total_cmp(b));
+            let ratio = ratios[ratios.len() / 2];
+            println!("{name:28} built-in {:8.2} ms   twin {:8.2} ms   median ratio {ratio:.3}", ms[0], ms[1]);
+            timed.push((*name, ratio));
+        }
+        timed.sort_by(|a, b| a.1.total_cmp(&b.1));
+        if timed.is_empty() {
+            return;
+        }
+        let at = |q: f64| timed[((timed.len() - 1) as f64 * q).round() as usize].1;
+        let over = |x: f64| timed.iter().filter(|t| t.1 > x).count();
+        println!(
+            "{} twins: median ratio {:.3}, quartiles {:.3} .. {:.3}; {} over 1.05, {} over 1.25, {} over 2; fastest {} {:.3}",
+            timed.len(),
+            at(0.5),
+            at(0.25),
+            at(0.75),
+            over(1.05),
+            over(1.25),
+            over(2.0),
+            timed[0].0,
+            timed[0].1
+        );
+        for (name, ratio) in timed.iter().rev().take(20) {
+            println!("  slowest: {name:28} {ratio:.3}");
         }
     }
 }
