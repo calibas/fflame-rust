@@ -265,6 +265,8 @@ class Fn:
         self.types = {}
         self.lines = []
         self.temps = 0
+        # The function's own names, which a temporary must not take.
+        self.taken = set()
         self.uses_ctx = False
         self.ret = vec_of(ret.strip()) if ret.strip() else None
         self.params = []
@@ -297,6 +299,10 @@ class Fn:
                 if helper:
                     raise Refuse("a helper hiding the point")
                 self.outs["hide"] = ["hide", None]
+            elif name == "vrc" and ty.replace(" ", "") == "ptr<function,vec3<f32>>":
+                if helper:
+                    raise Refuse("a helper writing the direct colour")
+                self.outs["vrc"] = ["rgb", None]
             elif ty.startswith("ptr"):
                 raise Refuse(f"a pointer argument `{name}: {ty}`")
             else:
@@ -344,6 +350,11 @@ class Fn:
             if f in ("length", "dot", "distance", "get_param", "rng_nextf", "f32", "atan2"): return "f32"
             if f in ("i32", "u32"): return f
             if f in ("select",): return self.ty(args[1])
+            # A function WGSL takes part by part gives the vector it is of.
+            if f in PARTWISE:
+                vk = next((k for k in (self.ty(a) for a in args) if k in ("vec2", "vec3", "vec4")), None)
+                if vk:
+                    return vk
             if f in ("normalize", "cross", "abs", "floor", "ceil", "fract", "sign", "round", "trunc", "sqrt", "exp", "sin", "cos", "min", "max", "clamp", "mix", "pow", "log"):
                 return self.ty(args[0]) if args else "f32"
             if f in ("all", "any"): return "bool"
@@ -357,12 +368,20 @@ class Fn:
         text = self.ex(e)
         return text if e[0] in ("id", "paren", "call", "field") else f"({text})"
 
+    def fresh(self):
+        """A temporary's name, none the WGSL's own: `let t1` there and a held
+        `t1` here would shadow one another."""
+        while True:
+            self.temps += 1
+            n = f"t{self.temps}"
+            if n not in self.taken:
+                return n
+
     def hold(self, e):
         """An operand used more than once, made a name."""
         if e[0] in ("id", "num"):
             return self.ex(e)
-        self.temps += 1
-        n = f"t{self.temps}"
+        n = self.fresh()
         self.lines.append(("let", n, self.ex(e)))
         self.types[n] = self.ty(e)
         return n
@@ -543,6 +562,24 @@ class Fn:
             if t0 == "vec2":
                 return f"({self.ex(args[0])} - {self.ex(args[1])}).abs()"
             return f"length({self.ex(args[0])} - {self.ex(args[1])})"
+        # A function WGSL takes part by part, of a vector: written out so,
+        # where the language has no such vector form or its complex one is
+        # another function (`sin` of a complex is the complex sine).
+        kinds = [self.ty(a) for a in args]
+        vk = next((k for k in kinds if k in ("vec2", "vec3")), None)
+        native = (
+            f in ("min", "max", "abs")
+            or (f == "clamp" and not any(k in ("vec2", "vec3") for k in kinds[1:]))
+            or (f == "mix" and len(kinds) == 3 and kinds[2] not in ("vec2", "vec3"))
+            or (f in ("floor", "ceil", "trunc", "smoothstep", "fract") and vk == "vec2")
+        )
+        if vk and f in PARTWISE and not native:
+            if any(k in ("vec2", "vec3") and k != vk for k in kinds):
+                raise Refuse(f"`{f}` of two kinds of vector")
+            held = [a if a[0] in ("id", "num") else ("id", self.hold(a)) for a in args]
+            comps = ("x", "y") if vk == "vec2" else ("x", "y", "z")
+            parts = [self.ex(("call", f, [("field", h, c) if k == vk else h for h, k in zip(held, kinds)])) for c in comps]
+            return f"complex({parts[0]}, {parts[1]})" if vk == "vec2" else f"vec3({', '.join(parts)})"
         if f in ("floor", "ceil", "trunc"):
             if t0 == "vec2": return f"{f}({self.ex(args[0])})"
             if t0 == "vec3": raise Refuse(f"`{f}` of a vec3")
@@ -570,8 +607,7 @@ class Fn:
             out = []
             for c in parts:
                 e0, e1, x = (h + c if self.ty(a) == "vec2" else h for h, a in zip(held, args))
-                self.temps += 1
-                t = f"t{self.temps}"
+                t = self.fresh()
                 self.lines.append(("let", t, f"clamp(({x} - {e0}) / ({e1} - {e0}), 0.0, 1.0)"))
                 self.types[t] = "f32"
                 out.append(f"{t} * {t} * (3.0 - 2.0 * {t})")
@@ -745,8 +781,7 @@ class Fn:
             raise Refuse("a `loop`")
         if k == "switch":
             _, e, cases = s
-            self.temps += 1
-            v = f"t{self.temps}"
+            v = self.fresh()
             self.line(depth, lambda: f"let {v} = {self.ex(e)};")
             self.types[v] = self.ty(e)
             first = True
@@ -834,6 +869,7 @@ class Translation:
             if "rng" in src:
                 raise Refuse("a state init that draws")
             fns = functions("fn state_init_() {\n" + src + "\n}")
+            f.taken = {tk[1] for tk in fns[0][3] if tk[0] == "id"}
             for s in block(P(fns[0][3])):
                 if s[0] == "expr" and s[1][0] == "call" and s[1][1] == "set_state":
                     values[self.state_field(s[1][2][2])] = s[1][2][3]
@@ -873,6 +909,7 @@ class Translation:
         toks = [("id", free) if t == ("id", "p") else t for t in toks]
         f = Fn(self, 2, [], "", True)
         f.init = True
+        f.taken = {tk[1] for tk in toks if tk[0] == "id"}
         ss = fold_returns(block(P(toks)))
         if not ss or ss[-1] != ("return", ("id", "out")):
             raise Refuse("an init that does not end returning `out`")
@@ -904,6 +941,7 @@ class Translation:
             self.helpers[fname] = vec_of(ret.strip()) if ret.strip() else None
             self.helper_args[fname] = args
             f = Fn(self, dim, args, ret, True)
+            f.taken = {tk[1] for tk in toks if tk[0] == "id"}
             p = P(toks)
             ss = block(p)
             f.stmts(ss, 1, last=True)
@@ -913,9 +951,12 @@ class Translation:
         fname, args, ret, toks = main
         f = Fn(self, dim, args, ret, False)
         used = {tk[1] for tk in toks if tk[0] == "id"}
-        f.point = next(n for n in (["z", "w", "q", "pt"] if dim == 2 else ["v", "q", "pt", "pv"]) if n not in used)
+        f.taken = set(used)
+        names = (["z", "w", "q", "pt"] if dim == 2 else ["v", "q", "pt", "pv"]) + [f"pt{k}" for k in range(2, 10)]
+        f.point = next(n for n in names if n not in used)
         for ptr, slot in f.outs.items():
-            slot[1] = next(n for n in ({"vc": ("color", "vcolor", "col"), "hide": ("hidden", "hide_v", "hid")}[ptr]) if n not in used)
+            slot[1] = next(n for n in ({"vc": ("color", "vcolor", "col"), "hide": ("hidden", "hide_v", "hid"), "vrc": ("rgb", "rgb_v", "direct")}[ptr]) if n not in used)
+            f.types[slot[1]] = {"vc": "f32", "hide": "bool", "vrc": "vec3"}[ptr]
             f.uses_ctx = True
         p = P(toks)
         ss = block(p)
@@ -998,6 +1039,10 @@ def derived_names(d):
             taken.add(name)
     return names
 
+# WGSL's functions of a number it takes part by part of a vector.
+PARTWISE = {"clamp", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "exp", "exp2", "log", "log2", "sqrt", "inverseSqrt",
+            "fract", "sign", "floor", "ceil", "trunc", "round", "step", "smoothstep", "pow", "fma", "radians", "degrees", "mix", "atan2"}
+
 def literal(e):
     """A number written out, or its negation: never NaN."""
     while e[0] in ("paren", "un") and (e[0] == "paren" or e[1] == "-"):
@@ -1018,7 +1063,7 @@ def passthrough_3d(two, three):
 
 def translate(d):
     f = set(d["features"])
-    for feat in ("writes_rgb", "needs_w", "needs_mobius_lib", "analytic_blur", "volume_side_emit"):
+    for feat in ("needs_w", "needs_mobius_lib", "analytic_blur", "volume_side_emit"):
         if feat in f: raise Refuse(f"the feature {feat}")
     if d.get("plot_emits"): raise Refuse("plot emits")
     for prm in d["parameters"]:

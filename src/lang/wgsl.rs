@@ -525,6 +525,9 @@ pub struct VariationShape {
     pub color: bool,
     /// `hide: ptr<function, bool>`: it hides its point (`CanHide`).
     pub hide: bool,
+    /// `vrc: ptr<function, vec3<f32>>`: it writes a direct colour
+    /// (`WritesRgb`).
+    pub rgb: bool,
     /// The state's variables (the fields `init` returns), each with its
     /// first slot; a complex one takes two.
     pub state: Vec<(VarId, u32)>,
@@ -602,6 +605,9 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
         color: writes(&p.transform, Place::Color) || p.reads(Predef::VarColor),
         // Its hide flag's (`#{ z, hide }`, `ctx.hide`).
         hide: writes(&p.transform, Place::Hide) || p.reads(Predef::VarHide),
+        // Its direct colour's (`#{ z, rgb }`, `ctx.rgb`).
+        rgb: [Place::RgbR, Place::RgbG, Place::RgbB].into_iter().any(|x| writes(&p.transform, x))
+            || [Predef::VarRgbR, Predef::VarRgbG, Predef::VarRgbB].into_iter().any(|x| p.reads(x)),
         state,
         state_slots: slots,
     })
@@ -627,6 +633,7 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
         rng: shapes.iter().any(|s| s.rng),
         color: shapes.iter().any(|s| s.color),
         hide: shapes.iter().any(|s| s.hide),
+        rgb: shapes.iter().any(|s| s.rgb),
         state: own.state.clone(),
         state_slots: shapes.iter().map(|s| s.state_slots).max().unwrap_or(0),
     };
@@ -652,7 +659,13 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
         args.push_str(", vc");
         args3.push_str(", vc");
     }
-    // After the colour's, as `shader_builder_v2::variation_call` passes it.
+    // After the colour's, as `shader_builder_v2::variation_call` passes
+    // them: the direct colour, then the hide flag.
+    if union.rgb {
+        sig.push_str(", vrc: ptr<function, vec3<f32>>");
+        args.push_str(", vrc");
+        args3.push_str(", vrc");
+    }
     if union.hide {
         sig.push_str(", hide: ptr<function, bool>");
         args.push_str(", hide");
@@ -696,6 +709,9 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
     }
     if union.color {
         features.push("writes_color");
+    }
+    if union.rgb {
+        features.push("writes_rgb");
     }
     if union.hide {
         features.push("can_hide");
@@ -2422,6 +2438,9 @@ impl<'p> Gen<'p> {
                     Place::Pixel => "pixel".to_string(),
                     Place::Color => "(*vc)".to_string(),
                     Place::Hide => "(*hide)".to_string(),
+                    Place::RgbR => "(*vrc).x".to_string(),
+                    Place::RgbG => "(*vrc).y".to_string(),
+                    Place::RgbB => "(*vrc).z".to_string(),
                     Place::PixelZ => "pixel_z".to_string(),
                     Place::Effect(p) => self.predef(*p),
                 };
@@ -2749,6 +2768,9 @@ impl<'p> Gen<'p> {
             (Predef::Weight, _) => "transforms[xform_id].variations[variation_id]".into(),
             (Predef::VarColor, _) => "(*vc)".into(),
             (Predef::VarHide, _) => "(*hide)".into(),
+            (Predef::VarRgbR, _) => "(*vrc).x".into(),
+            (Predef::VarRgbG, _) => "(*vrc).y".into(),
+            (Predef::VarRgbB, _) => "(*vrc).z".into(),
             // A 3D variation's (B2): the point's and the accumulator's
             // third parts.
             (Predef::PixelZ, _) => "pixel_z".into(),

@@ -276,7 +276,7 @@ fn place_slot(p: Place) -> Option<Slot> {
         Place::Index => Some(Slot::Index),
         Place::Solid => Some(Slot::Solid),
         // A Rhai formula's `creases`, which the converter does not write.
-        Place::CreaseHeight | Place::CreaseSlope | Place::Pixel | Place::Color | Place::Hide | Place::PixelZ | Place::Effect(_) => None,
+        Place::CreaseHeight | Place::CreaseSlope | Place::Pixel | Place::Color | Place::Hide | Place::RgbR | Place::RgbG | Place::RgbB | Place::PixelZ | Place::Effect(_) => None,
     }
 }
 
@@ -1024,6 +1024,7 @@ impl<'p> Printer<'p> {
             Predef::Weight => self.ctx_field("weight"),
             Predef::VarColor => return Err("a flame variation's colour is written in its result, `#{ z, color }`".into()),
             Predef::VarHide => return Err("a flame variation hides its point in its result, `#{ z, hide }`".into()),
+            Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB => return Err("a flame variation's direct colour is written in its result, `#{ z, rgb }`".into()),
             Predef::PixelZ | Predef::AccumZ => return Err("a 3D variation's point is a vector, `fn variation3(v, p)`".into()),
             Predef::EffectR
             | Predef::EffectG

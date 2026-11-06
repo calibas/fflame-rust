@@ -720,8 +720,14 @@ fn escaped(s, p) {
     `NeedsAccum`), `ctx.weight`, its own weight, `ctx.color`, the
     colour coordinate as it reaches the variation (`pVarTP.color`;
     `WritesColor`, as the colour pointer it reads; 0 inside a formula),
-    and `ctx.hide`, whether the point is hidden as it reaches it (an
-    earlier variation's);
+    `ctx.hide`, whether the point is hidden as it reaches it (an
+    earlier variation's), and `ctx.rgb`, the direct colour as it reaches
+    it (-1e30 each part until a variation writes one);
+  - a direct colour: the body may end with `#{ z: point, rgb: vec3(r,
+    g, b) }`, the colour the transform's `direct_color` blends in where
+    the palette's would be (JWildfire's `pVarTP.rgbColor`, `WritesRgb`:
+    the `glsl_*` family); a return without `rgb` writes none, so a
+    transform without one keeps its palette colour;
   - hiding the point: the body may end with `#{ z: point, hide: flag }`
     (with `color` or without), this iteration's splat skipped while the
     orbit goes on (JWildfire's `pVarTP.doHide`, `CanHide`); written

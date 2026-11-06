@@ -142,13 +142,17 @@ pub const TWINS: &[(&str, &str)] = &[
     ("curve", include_str!("../../assets/variations/twins/curve.rhai")),
     ("cut_apollonian", include_str!("../../assets/variations/twins/cut_apollonian.rhai")),
     ("cut_booleans", include_str!("../../assets/variations/twins/cut_booleans.rhai")),
+    ("cut_bricks", include_str!("../../assets/variations/twins/cut_bricks.rhai")),
     ("cut_celtic", include_str!("../../assets/variations/twins/cut_celtic.rhai")),
     ("cut_chains", include_str!("../../assets/variations/twins/cut_chains.rhai")),
     ("cut_circdes", include_str!("../../assets/variations/twins/cut_circdes.rhai")),
+    ("cut_fingerprint", include_str!("../../assets/variations/twins/cut_fingerprint.rhai")),
     ("cut_fractal", include_str!("../../assets/variations/twins/cut_fractal.rhai")),
     ("cut_glypho", include_str!("../../assets/variations/twins/cut_glypho.rhai")),
     ("cut_hexdots", include_str!("../../assets/variations/twins/cut_hexdots.rhai")),
+    ("cut_hextruchetflow", include_str!("../../assets/variations/twins/cut_hextruchetflow.rhai")),
     ("cut_jigsaw", include_str!("../../assets/variations/twins/cut_jigsaw.rhai")),
+    ("cut_metaballs", include_str!("../../assets/variations/twins/cut_metaballs.rhai")),
     ("cut_pattern", include_str!("../../assets/variations/twins/cut_pattern.rhai")),
     ("cut_rgrid", include_str!("../../assets/variations/twins/cut_rgrid.rhai")),
     ("cut_sincos", include_str!("../../assets/variations/twins/cut_sincos.rhai")),
@@ -156,8 +160,10 @@ pub const TWINS: &[(&str, &str)] = &[
     ("cut_spiral", include_str!("../../assets/variations/twins/cut_spiral.rhai")),
     ("cut_sqcir", include_str!("../../assets/variations/twins/cut_sqcir.rhai")),
     ("cut_sqsplits", include_str!("../../assets/variations/twins/cut_sqsplits.rhai")),
+    ("cut_swarp", include_str!("../../assets/variations/twins/cut_swarp.rhai")),
     ("cut_tileillusion", include_str!("../../assets/variations/twins/cut_tileillusion.rhai")),
     ("cut_vasarely", include_str!("../../assets/variations/twins/cut_vasarely.rhai")),
+    ("cut_web", include_str!("../../assets/variations/twins/cut_web.rhai")),
     ("cut_x", include_str!("../../assets/variations/twins/cut_x.rhai")),
     ("cut_yuebing", include_str!("../../assets/variations/twins/cut_yuebing.rhai")),
     ("cut_zigzag", include_str!("../../assets/variations/twins/cut_zigzag.rhai")),
@@ -223,6 +229,18 @@ pub const TWINS: &[(&str, &str)] = &[
     ("funnel", include_str!("../../assets/variations/twins/funnel.rhai")),
     ("gamma", include_str!("../../assets/variations/twins/gamma.rhai")),
     ("gaussian_blur", include_str!("../../assets/variations/twins/gaussian_blur.rhai")),
+    ("glsl_acrilic", include_str!("../../assets/variations/twins/glsl_acrilic.rhai")),
+    ("glsl_circlesblue", include_str!("../../assets/variations/twins/glsl_circlesblue.rhai")),
+    ("glsl_fractaldots", include_str!("../../assets/variations/twins/glsl_fractaldots.rhai")),
+    ("glsl_grid3D", include_str!("../../assets/variations/twins/glsl_grid3D.rhai")),
+    ("glsl_hoshi", include_str!("../../assets/variations/twins/glsl_hoshi.rhai")),
+    ("glsl_hyperbolictile", include_str!("../../assets/variations/twins/glsl_hyperbolictile.rhai")),
+    ("glsl_kaleidoscopic", include_str!("../../assets/variations/twins/glsl_kaleidoscopic.rhai")),
+    ("glsl_kaliset", include_str!("../../assets/variations/twins/glsl_kaliset.rhai")),
+    ("glsl_kaliset2", include_str!("../../assets/variations/twins/glsl_kaliset2.rhai")),
+    ("glsl_mandala", include_str!("../../assets/variations/twins/glsl_mandala.rhai")),
+    ("glsl_squares", include_str!("../../assets/variations/twins/glsl_squares.rhai")),
+    ("glsl_starsfield", include_str!("../../assets/variations/twins/glsl_starsfield.rhai")),
     ("glynnSShape", include_str!("../../assets/variations/twins/glynnSShape.rhai")),
     ("glynnSim1", include_str!("../../assets/variations/twins/glynnSim1.rhai")),
     ("glynnSim2", include_str!("../../assets/variations/twins/glynnSim2.rhai")),
@@ -925,7 +943,7 @@ mod tests {
                 assert_eq!((&t.name, &t.label, &t.hint, &t.kind, t.slow), (&b.name, &b.label, &b.hint, &b.kind, b.slow), "{name}.{}", b.name);
             }
             let has = |f: &str| dl.features.iter().any(|x| x == f);
-            for (f, wire) in [(F::WritesColor, "writes_color"), (F::AlwaysZ, "always_z"), (F::NeverZ, "never_z"), (F::NeedsAccum, "needs_accum"), (F::Replace, "replace"), (F::CanHide, "can_hide")] {
+            for (f, wire) in [(F::WritesColor, "writes_color"), (F::AlwaysZ, "always_z"), (F::NeverZ, "never_z"), (F::NeedsAccum, "needs_accum"), (F::Replace, "replace"), (F::CanHide, "can_hide"), (F::WritesRgb, "writes_rgb")] {
                 assert_eq!(has(wire), builtin.features.contains(&f), "{name}: {f:?}");
             }
             assert_eq!(dl.name, key(name).unwrap(), "{name}: its key");
@@ -1308,9 +1326,11 @@ mod tests {
         // language's range-reduced sin (the portable side, the same on
         // every platform, where the hardware's is not) hashes otherwise.
         // Held to drawing, not to the built-in's layout.
-        // cut_jigsaw's pieces flip by `sin(dot(iv, (27, 57))) * 1e5`: with
-        // the hardware's sin its flame is the built-in's exactly, measured.
-        const OTHER_NOISE: &[&str] = &["r_circleblur", "cut_jigsaw"];
+        // cut_jigsaw's pieces flip by `sin(dot(iv, (27, 57))) * 1e5`, and
+        // cut_fingerprint, cut_hextruchetflow and cut_metaballs hash by
+        // `fract(sin(x) * 43...)`: with the hardware's sin each flame is the
+        // built-in's exactly, measured.
+        const OTHER_NOISE: &[&str] = &["r_circleblur", "cut_jigsaw", "cut_fingerprint", "cut_hextruchetflow", "cut_metaballs"];
         // Twins whose flame sends points past 2^24, where an f32's tan is no
         // formula's on any side (docs/accepted-divergences.txt) and the
         // language's range-reduced one (the portable side) differs from
@@ -1322,7 +1342,9 @@ mod tests {
         // A twin that writes a colour is held to its built-in's colour too:
         // its transform blends it in whole, and each channel's light (colour
         // times density) compares as density does.
-        let writes_colour = |name: &str| super::super::global_registry().get(name).is_some_and(|v| v.has_feature(super::super::Feature::WritesColor));
+        let writes_colour = |name: &str| {
+            super::super::global_registry().get(name).is_some_and(|v| v.has_feature(super::super::Feature::WritesColor) || v.has_feature(super::super::Feature::WritesRgb))
+        };
         let off = |c: &crate::renderer::density_gates::Compared| c.worst_dense > 0.05 || c.worst_middle > 0.15;
         for (name, _) in TWINS {
             let direct = if writes_colour(name) { 1.0 } else { 0.0 };

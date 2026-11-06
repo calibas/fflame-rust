@@ -2096,11 +2096,19 @@ impl<'s> Lowerer<'s> {
     /// A result map's entries besides its point: `color` (the colour it
     /// writes) and `hide` (whether it hides the point), as the places
     /// they set.
-    fn result_extra(&mut self, k: &str, v: &Expr, kp: Position, scope: &mut Scope) -> R<(&'static str, ast::Expr)> {
+    fn result_extra(&mut self, k: &str, v: &Expr, kp: Position, scope: &mut Scope) -> R<Vec<(&'static str, ast::Expr)>> {
         match k {
-            "color" => Ok(("vcolor", self.expr(v, scope)?)),
-            "hide" => Ok(("vhide", self.expr(v, scope)?)),
-            o => self.err(kp, format!("a variation's result has `z`, `color` and `hide`, not `{o}`")),
+            "color" => Ok(vec![("vcolor", self.expr(v, scope)?)]),
+            "hide" => Ok(vec![("vhide", self.expr(v, scope)?)]),
+            // A direct colour, a vector (`WritesRgb`): each part.
+            "rgb" => {
+                let c = self.vexpr(v, scope)?;
+                if c.kind != vec::Kind::Vec3 {
+                    return self.err(v.position(), "`rgb` is a colour, `vec3(r, g, b)`");
+                }
+                Ok(["vrgb_r", "vrgb_g", "vrgb_b"].into_iter().zip(c.parts).collect())
+            }
+            o => self.err(kp, format!("a variation's result has `z`, `color`, `rgb` and `hide`, not `{o}`")),
         }
     }
 
@@ -2111,7 +2119,7 @@ impl<'s> Lowerer<'s> {
         for (k, v) in &m.0 {
             match k.name.as_str() {
                 "z" => point = Some(self.expr(v, scope)?),
-                o => extra.push(self.result_extra(o, v, k.pos, scope)?),
+                o => extra.extend(self.result_extra(o, v, k.pos, scope)?),
             }
         }
         match point {
@@ -2137,7 +2145,7 @@ impl<'s> Lowerer<'s> {
                 for (k, v) in &m.0 {
                     match k.name.as_str() {
                         "z" => point = Some(self.vexpr(v, scope)?),
-                        o => extra.push(self.result_extra(o, v, k.pos, scope)?),
+                        o => extra.extend(self.result_extra(o, v, k.pos, scope)?),
                     }
                 }
                 match point {
@@ -3877,7 +3885,7 @@ impl<'s> Lowerer<'s> {
                         // Whether the point is hidden as it reaches it (an
                         // earlier variation's `hide`).
                         "hide" => Ok(mk(ExprKind::Predef("vhide".into()), span)),
-                        o => self.err(*p, format!("a variation's context has `accum`, `weight`, `color` and `hide`; not `{o}`")),
+                        o => self.err(*p, format!("a variation's context has `accum`, `weight`, `color`, `hide` and `rgb`; not `{o}`")),
                     },
                     Base::Ctx => match name {
                         // `ismand` is 1 on the parameter plane.
@@ -4408,7 +4416,9 @@ impl<'s> Lowerer<'s> {
                 // `step_c` are complex, the default.
                 "bailout" | "degree" | "escape_fraction" | "render_px" | "supersample" | "value" => TypeName::Float,
                 "escaped" | "converged" | "has_derivative" | "vhide" => TypeName::Bool,
-                "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" => TypeName::Float,
+                "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" | "vrgb_r" | "vrgb_g" | "vrgb_b" => {
+                    TypeName::Float
+                }
                 // An effect's (P2).
                 "density_mean" | "pixel_scale" | "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_amount" => TypeName::Float,
                 _ => TypeName::Complex,

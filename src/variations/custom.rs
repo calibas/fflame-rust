@@ -862,8 +862,8 @@ mod tests {
         let refused = |src: &str| compile(src).err().unwrap_or_else(|| panic!("compiled: {src}"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn init(p) { #{ n: rand() } }\nfn variation(z, p) { z * this.n }\n").contains("no random numbers"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { z * this.n }\n").contains("no `init`"));
-        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p, ctx) { z * ctx.julia }\n").contains("`accum`, `weight`, `color` and `hide`"));
-        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { #{ z: z, hue: 0.5 } }\n").contains("`z`, `color` and `hide`"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p, ctx) { z * ctx.julia }\n").contains("`accum`, `weight`, `color`, `hide` and `rgb`"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { #{ z: z, hue: 0.5 } }\n").contains("`z`, `color`, `rgb` and `hide`"));
     }
 
     /// The MacMillan twin runs as the built-in's arithmetic (its WGSL,
@@ -1057,6 +1057,39 @@ mod tests {
                                  fn step(s, p) { s.z = vary(\"rhai_prepare_test\", s.z); s }\nfn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n")
         });
         assert!(e.is_err_and(|d| d[0].message.contains("`prepare`")));
+    }
+
+    /// A direct colour (`WritesRgb`): `#{ z, rgb: vec3(r, g, b) }` writes
+    /// it, a path without `rgb` writes none, and `ctx.rgb` reads it as it
+    /// reached the variation (-1e30 each part until one writes it); the
+    /// 3D body's as the 2D's.
+    #[test]
+    fn rgb_is_the_direct_colour() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_rgb_test\" };\n\
+                   fn variation(z, p, ctx) {\n\
+                   \x20   if z.re < 0.0 { return z; }\n\
+                   \x20   let was = ctx.rgb;\n\
+                   \x20   #{ z: z, rgb: vec3(0.25, 0.5, was.z * 0.0 + 0.75) }\n\
+                   }\n\
+                   fn variation3(v, p) {\n\
+                   \x20   #{ z: v, rgb: vec3(v.x, v.y, v.z) }\n\
+                   }\n";
+        let dl = named(src);
+        assert!(dl.features.contains(&"writes_rgb".to_string()), "{:?}", dl.features);
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("vrc: ptr<function, vec3<f32>>") && s.contains("(*vrc).z")));
+        let p2 = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p2);
+        let mut run = VariationRun::new(&p2, &params, 1);
+        run.call(C64::new(1.0, 2.0), C64::ZERO, 1.0);
+        assert_eq!(run.rgb(), Some([0.25, 0.5, 0.75]));
+        run.call(C64::new(-1.0, 2.0), C64::ZERO, 1.0);
+        assert_eq!(run.rgb(), None, "a path that writes none");
+        let p3 = lang::rhai::transformation3(src).unwrap();
+        let mut run3 = VariationRun::new(&p3, &params, 1);
+        run3.call3([0.1, 0.2, 0.3], [0.0; 3], 1.0);
+        assert_eq!(run3.rgb(), Some([0.1, 0.2, 0.3]));
     }
 
     /// `u32(x)` is WGSL's unsigned int (the user's call, 2026-11-06):

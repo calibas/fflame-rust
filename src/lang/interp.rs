@@ -242,6 +242,9 @@ struct Shared<'e> {
     /// Whether it hides the point, as written, else as it reached it.
     vhide: Option<bool>,
     vhide_in: bool,
+    /// Its direct colour's parts, as written, else as they reached it.
+    vrgb: [Option<f64>; 3],
+    vrgb_in: [f64; 3],
     /// A 3D variation's point's and accumulator's third parts (B2).
     pixel_z: f64,
     accum_z: f64,
@@ -265,6 +268,8 @@ impl<'e> Shared<'e> {
             vcolor_in: 0.0,
             vhide: None,
             vhide_in: false,
+            vrgb: [None; 3],
+            vrgb_in: [-1.0e30; 3],
             pixel_z: 0.0,
             accum_z: 0.0,
             prev: C64::ZERO,
@@ -327,6 +332,8 @@ pub struct VariationRun<'p> {
     color: f64,
     /// Whether the last call hid its point (`#{ z, hide }`).
     hid: bool,
+    /// The direct colour the last call wrote, if it wrote one.
+    rgb: Option<[f64; 3]>,
 }
 
 impl<'p> VariationRun<'p> {
@@ -339,7 +346,7 @@ impl<'p> VariationRun<'p> {
         // `prepare`'s values, at f64, which the body reads as its own.
         m.exec(&p.global_body, &mut sh);
         m.exec(&p.init, &mut sh);
-        VariationRun { m, env, color: 0.0, hid: false }
+        VariationRun { m, env, color: 0.0, hid: false, rgb: None }
     }
 
     /// Each call starting from the colour `c` (`ctx.color`; the probe's
@@ -360,6 +367,7 @@ impl<'p> VariationRun<'p> {
         let prog = self.m.prog;
         self.m.exec(&prog.transform, &mut sh);
         self.hid = sh.vhide.unwrap_or(false);
+        self.rgb = written_rgb(&sh);
         (sh.pixel, sh.vcolor)
     }
 
@@ -376,7 +384,13 @@ impl<'p> VariationRun<'p> {
         let prog = self.m.prog;
         self.m.exec(&prog.transform, &mut sh);
         self.hid = sh.vhide.unwrap_or(false);
+        self.rgb = written_rgb(&sh);
         ([sh.pixel.re, sh.pixel.im, sh.pixel_z], sh.vcolor)
+    }
+
+    /// The direct colour the last call wrote (`#{ z, rgb }`), if any.
+    pub fn rgb(&self) -> Option<[f64; 3]> {
+        self.rgb
     }
 
     /// Whether the last call hid its point (`CanHide`).
@@ -854,6 +868,9 @@ impl<'p> Machine<'p> {
                         Place::Pixel => sh.pixel = v.as_c64(),
                         Place::Color => sh.vcolor = Some(v.as_f64()),
                         Place::Hide => sh.vhide = Some(v.as_bool()),
+                        Place::RgbR => sh.vrgb[0] = Some(v.as_f64()),
+                        Place::RgbG => sh.vrgb[1] = Some(v.as_f64()),
+                        Place::RgbB => sh.vrgb[2] = Some(v.as_f64()),
                         Place::PixelZ => sh.pixel_z = v.as_f64(),
                         // An effect runs on the GPU alone.
                         Place::Effect(_) => {}
@@ -1024,6 +1041,9 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::Weight => Value::Float(sh.weight),
         Predef::VarColor => Value::Float(sh.vcolor.unwrap_or(sh.vcolor_in)),
         Predef::VarHide => Value::Bool(sh.vhide.unwrap_or(sh.vhide_in)),
+        Predef::VarRgbR => Value::Float(sh.vrgb[0].unwrap_or(sh.vrgb_in[0])),
+        Predef::VarRgbG => Value::Float(sh.vrgb[1].unwrap_or(sh.vrgb_in[1])),
+        Predef::VarRgbB => Value::Float(sh.vrgb[2].unwrap_or(sh.vrgb_in[2])),
         Predef::PixelZ => Value::Float(sh.pixel_z),
         Predef::AccumZ => Value::Float(sh.accum_z),
         Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {
@@ -1197,6 +1217,12 @@ pub(crate) fn bits(op: BinOp, a: i32, b: i32) -> i32 {
         BinOp::IDiv => a / b,
         _ => unreachable!("a bit operation"),
     }
+}
+
+/// The direct colour a call wrote: each part as written, the rest as
+/// they reached it; none, if it wrote none.
+fn written_rgb(sh: &Shared) -> Option<[f64; 3]> {
+    sh.vrgb.iter().any(Option::is_some).then(|| [0, 1, 2].map(|k| sh.vrgb[k].unwrap_or(sh.vrgb_in[k])))
 }
 
 /// [`bits`] of two u32s: `/` unsigned, a zero divisor giving the

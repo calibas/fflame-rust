@@ -982,7 +982,7 @@ impl Checker {
             "draw" if self.internal => Predef::Draw,
             // A solid's position's third part (B3).
             "pixelz" if self.internal && self.kind == EntryKind::Solid => Predef::PixelZ,
-            "accum" | "weight" | "vcolor" | "vhide" | "pixelz" | "accumz" if self.internal => {
+            "accum" | "weight" | "vcolor" | "vhide" | "vrgb_r" | "vrgb_g" | "vrgb_b" | "pixelz" | "accumz" if self.internal => {
                 if self.kind != EntryKind::Transform {
                     self.error(span, format!("`{name}` is a flame variation's"));
                     return None;
@@ -993,6 +993,9 @@ impl Checker {
                     "pixelz" => Predef::PixelZ,
                     "accumz" => Predef::AccumZ,
                     "vhide" => Predef::VarHide,
+                    "vrgb_r" => Predef::VarRgbR,
+                    "vrgb_g" => Predef::VarRgbG,
+                    "vrgb_b" => Predef::VarRgbB,
                     _ => Predef::VarColor,
                 }
             }
@@ -1142,7 +1145,7 @@ impl Checker {
             self.error(span, format!("a simulation model reads its cell, the grid's size, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
-        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::VarHide | Predef::PixelZ | Predef::AccumZ) {
+        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::VarHide | Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::PixelZ | Predef::AccumZ) {
             self.error(span, format!("a transformation reads `#pixel`, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
@@ -1531,7 +1534,9 @@ impl Checker {
                     Predef::Index | Predef::Solid => self.section == SectionKind::Final,
                     Predef::DZ => true,
                     Predef::CreaseHeight | Predef::CreaseSlope => true,
-                    Predef::Pixel | Predef::VarColor | Predef::VarHide | Predef::PixelZ => self.section == SectionKind::Transform && self.kind != EntryKind::Effect,
+                    Predef::Pixel | Predef::VarColor | Predef::VarHide | Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::PixelZ => {
+                        self.section == SectionKind::Transform && self.kind != EntryKind::Effect
+                    }
                     Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectBlend | Predef::EffectAmount => self.section == SectionKind::Transform,
                     _ => false,
                 };
@@ -1553,6 +1558,9 @@ impl Checker {
                     Predef::Pixel => (Place::Pixel, Ty::Complex),
                     Predef::VarColor => (Place::Color, Ty::Float),
                     Predef::VarHide => (Place::Hide, Ty::Bool),
+                    Predef::VarRgbR => (Place::RgbR, Ty::Float),
+                    Predef::VarRgbG => (Place::RgbG, Ty::Float),
+                    Predef::VarRgbB => (Place::RgbB, Ty::Float),
                     Predef::PixelZ => (Place::PixelZ, Ty::Float),
                     p @ (Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectBlend | Predef::EffectAmount) => (Place::Effect(p), p.ty()),
                     _ => (Place::Solid, Ty::Bool),
@@ -2329,6 +2337,9 @@ fn place_read(p: Place) -> Option<IExprKind> {
         Place::Pixel => IExprKind::Predef(Predef::Pixel),
         Place::Color => IExprKind::Predef(Predef::VarColor),
         Place::Hide => IExprKind::Predef(Predef::VarHide),
+        Place::RgbR => IExprKind::Predef(Predef::VarRgbR),
+        Place::RgbG => IExprKind::Predef(Predef::VarRgbG),
+        Place::RgbB => IExprKind::Predef(Predef::VarRgbB),
         Place::PixelZ => IExprKind::Predef(Predef::PixelZ),
         Place::Effect(p) => IExprKind::Predef(p),
     })
