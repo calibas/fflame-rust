@@ -554,6 +554,41 @@ function takes the point, and the ids when it has parameters (as
   render as the built-ins in a flame, by density
   (`the_twins_render_as_the_builtins_in_a_flame`), and as lenses, pixel
   for pixel (`the_twins_are_lenses_as_the_builtins`).
+- **Twins of the built-ins** (`variations::twins`,
+  `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
+  P7 step 3): 298 of the 647, each a Rhai variation under its
+  built-in's display name with its parameters exactly (a parameter may
+  be `free: true` with both bounds, a built-in's unlimited number, and
+  `exponential: false` over five decades) and its drawing features
+  (`every_variation_twin_compiles_as_its_builtin`). Seven written by
+  hand, 291 translated from the built-ins' WGSL
+  (`scripts/translate_variation_twins.py`, into the skeletons
+  `twins::skeleton` writes; `scripts/list_variation_twins.py` writes
+  the table).
+  - **Held per point** by the probe's pairs (`probe::pairs`, the
+    built-in and its twin as two transforms, the RNG seeded from the
+    point so the two draw alike, the colour written out): at the probe's
+    adversarial inputs and a grid, 2D and 3D, at the defaults and each
+    parameter's range's ends (`every_variation_twin_runs_as_its_builtin`).
+    91.8% of the outputs are bit for bit. The rest are judged by the
+    twin's own formula in f64 (the interpreter): the built-in off it
+    where the twin is on it (its hardware trig, WGSL's `pow(0, 0)`),
+    the point ill-conditioned (the truth moves by as much when the point
+    moves by a few ulps), or both within f32's reach of it. The
+    language's trig is range-reduced where the built-ins' is the
+    hardware's: the twin is the portable side.
+  - **In a flame, by density** (`every_variation_twin_draws_its_builtins_flame`),
+    which judges the twins that draw (no f64 truth matches the GPU's
+    stream). r_circleblur's cells are placed by a `sin(...) * 43758.5453`
+    hash, which the range-reduced sin hashes otherwise: its twin draws
+    its own noise.
+  - **Edit as Rhai**: a built-in variation with a twin has it in its
+    row's settings menu, putting the twin under a UUID of its own in the
+    built-in's place in that transform (weight, parameters, order,
+    phase), the flame carrying its source, and opening it in the Formula
+    Editor in use (`formula_editor::variation_as_twin`).
+  - `to_float(floor(x))` (`trunc`, `ceil`) is the float operation in
+    every kind and in the interpreter, exact at any size.
 `VariationPhase::Any` has no wire form yet, so a downloaded variation
 cannot honour `fx_priority`. The catalog, caching and curation are in
 [ONLINE.md](ONLINE.md); the design record is
