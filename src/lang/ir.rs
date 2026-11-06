@@ -206,6 +206,11 @@ pub enum Predef {
     /// 5 (JWildfire's `pXForm.getCoeff..`; `NeedsTransform`): what fan,
     /// popcorn, rings and waves read.
     Coef(u8),
+    /// A 3D variation's 4th coordinate (`NeedsW`): `PointW` the one it is
+    /// given (`point_w`), `WOut` the raw one it gives (`point_w_out`), which
+    /// the transform weight-sums as it does x, y and z.
+    PointW,
+    WOut,
     /// A 3D variation's point's third part, read and written beside
     /// `#pixel` (`fn variation3`, the KIFS plan, B2), and its context's
     /// accumulator's.
@@ -262,7 +267,7 @@ impl Predef {
             Predef::Pixel | Predef::Z | Predef::Random | Predef::Center | Predef::ScreenPixel | Predef::Accum => Ty::Complex,
             Predef::Draw | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ => Ty::Float,
             Predef::VarHide => Ty::Bool,
-            Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) => Ty::Float,
+            Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::PointW | Predef::WOut => Ty::Float,
             Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => Ty::Float,
             Predef::EffectBlend => Ty::Int,
             Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height | Predef::Pass | Predef::CreasePattern => Ty::Int,
@@ -442,6 +447,8 @@ pub enum Place {
     RgbR,
     RgbG,
     RgbB,
+    /// The 4th coordinate it gives ([`Predef::WOut`]).
+    WOut,
     /// A 3D variation's point's third part ([`Predef::PixelZ`]).
     PixelZ,
     /// An effect's result ([`Predef::EffectR`] ...).

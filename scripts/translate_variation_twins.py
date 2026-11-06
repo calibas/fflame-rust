@@ -421,6 +421,11 @@ class Fn:
                 return self.point
             if n in ("PI", "M_PI"): return "PI()"
             if n in ("true", "false"): return n
+            if n == "point_w" and not self.helper:
+                self.uses_ctx = True
+                return "ctx.w"
+            if n == "point_w_out" and "point_w_out" in self.outs:
+                return self.outs["point_w_out"][1]
             if n == "accum":
                 self.uses_ctx = True; return "ctx.accum"
             return n
@@ -457,11 +462,9 @@ class Fn:
                 raise Refuse("a vector's remainder")
             if op in ("+", "-") and len(vec) == 1 and (ta in ("f32", "int") or tb in ("f32", "int")):
                 a, b = self.hold(e[2]), self.hold(e[3])
-                parts = ("re", "im") if vec[0] == "vec2" else ("x", "y", "z") if vec[0] == "vec3" else None
-                if parts is None:
-                    raise Refuse("a vec4 and a number")
+                parts = {"vec2": ("re", "im"), "vec3": ("x", "y", "z"), "vec4": ("x", "y", "z", "w")}[vec[0]]
                 each = [f"{a + '.' + c if ta == vec[0] else a} {op} {b + '.' + c if tb == vec[0] else b}" for c in parts]
-                return f"complex({each[0]}, {each[1]})" if vec[0] == "vec2" else f"vec3({', '.join(each)})"
+                return {"vec2": "complex", "vec3": "vec3", "vec4": "vec4"}[vec[0]] + f"({', '.join(each)})"
             return f"{self.ex(e[2])} {op} {self.ex(e[3])}"
         if k == "field" and (e[1] == ("index", ("id", "transforms"), ("id", "xform_id")) or (e[1][0] == "id" and e[1][1] in self.xform_alias)):
             if e[2] not in ("a", "b", "c", "d", "e", "f"):
@@ -516,7 +519,26 @@ class Fn:
                 b = self.hold(args[1]); return f"vec3({self.ex(args[0])}, {b}.re, {b}.im)"
             return f"vec3({', '.join(self.ex(a) for a in args)})"
         if f.startswith("vec4"):
-            raise Refuse("a vec4")
+            # The language's `vec4`, its four-part kind: part by part, as
+            # WGSL's (`*`, `/` and a number's scaling too).
+            kinds = [self.ty(a) for a in args]
+            if len(args) == 1 and kinds[0] == "vec4":
+                return self.ex(args[0])
+            if len(args) == 1:
+                a = self.hold(args[0])
+                return f"vec4({a}, {a}, {a}, {a})"
+            parts = []
+            for a, k in zip(args, kinds):
+                if k in ("vec2", "vec3"):
+                    h = self.hold(a)
+                    parts += [self.part(h, k, c) for c in range(2 if k == "vec2" else 3)]
+                elif k == "vec4":
+                    raise Refuse("a vec4 of a vec4 and more")
+                else:
+                    parts.append(self.ex(a))
+            if len(parts) != 4:
+                raise Refuse("a vec4 of other than four parts")
+            return f"vec4({', '.join(parts)})"
         if f == "get_param":
             slot = args[2]
             if slot[0] != "num":
@@ -556,6 +578,12 @@ class Fn:
         if f in ("bitcast", "bool"):
             raise Refuse(f"`{f}`")
         t0 = self.ty(args[0]) if args else None
+        if f == "length" and t0 == "vec4":
+            h = self.hold(args[0])
+            return f"sqrt({h}.x * {h}.x + {h}.y * {h}.y + {h}.z * {h}.z + {h}.w * {h}.w)"
+        if f == "dot" and t0 == "vec4":
+            x, y = self.hold(args[0]), self.hold(args[1])
+            return f"({x}.x * {y}.x + {x}.y * {y}.y + {x}.z * {y}.z + {x}.w * {y}.w)"
         if f == "length":
             if t0 == "vec2": return f"{self.atom(args[0])}.abs()"
             return f"length({self.ex(args[0])})"
@@ -575,7 +603,7 @@ class Fn:
         # where the language has no such vector form or its complex one is
         # another function (`sin` of a complex is the complex sine).
         kinds = [self.ty(a) for a in args]
-        vk = next((k for k in kinds if k in ("vec2", "vec3")), None)
+        vk = next((k for k in kinds if k in ("vec2", "vec3", "vec4")), None)
         native = (
             f in ("min", "max", "abs")
             or (f == "clamp" and not any(k in ("vec2", "vec3") for k in kinds[1:]))
@@ -586,9 +614,9 @@ class Fn:
             if any(k in ("vec2", "vec3") and k != vk for k in kinds):
                 raise Refuse(f"`{f}` of two kinds of vector")
             held = [a if a[0] in ("id", "num") else ("id", self.hold(a)) for a in args]
-            comps = ("x", "y") if vk == "vec2" else ("x", "y", "z")
+            comps = {"vec2": ("x", "y"), "vec3": ("x", "y", "z"), "vec4": ("x", "y", "z", "w")}[vk]
             parts = [self.ex(("call", f, [("field", h, c) if k == vk else h for h, k in zip(held, kinds)])) for c in comps]
-            return f"complex({parts[0]}, {parts[1]})" if vk == "vec2" else f"vec3({', '.join(parts)})"
+            return {"vec2": "complex", "vec3": "vec3", "vec4": "vec4"}[vk] + f"({', '.join(parts)})"
         if f in ("floor", "ceil", "trunc"):
             if t0 == "vec2": return f"{f}({self.ex(args[0])})"
             if t0 == "vec3": raise Refuse(f"`{f}` of a vec3")
@@ -696,7 +724,7 @@ class Fn:
                 t = "int"
             self.types[name] = "f32" if t == "int" and ty is None and init is not None and self.ty(init) == "f32" else t
             if init is None:
-                zero = {"vec2": "complex(0.0, 0.0)", "vec3": "vec3(0.0, 0.0, 0.0)", "f32": "0.0", "i32": "0", "u32": "u32(0)", "bool": "false"}.get(t)
+                zero = {"vec2": "complex(0.0, 0.0)", "vec3": "vec3(0.0, 0.0, 0.0)", "vec4": "vec4(0.0, 0.0, 0.0, 0.0)", "f32": "0.0", "i32": "0", "u32": "u32(0)", "bool": "false"}.get(t)
                 if zero is None: raise Refuse(f"a `var` of `{ty}`")
                 self.emit(depth, f"let {name} = {zero};")
             else:
@@ -716,13 +744,16 @@ class Fn:
                 value = (lambda: self.ex(rhs)) if op == "=" else (lambda: f"{n}.{part} {op[0]} ({self.ex(rhs)})")
                 self.line(depth, lambda: f"{n} = complex({value()}, {n}.im);" if part == "re" else f"{n} = complex({n}.re, {value()});")
                 return
+            if lhs == ("id", "point_w_out") and "point_w_out" in self.outs:
+                self.line(depth, lambda: f"{self.outs['point_w_out'][1]} {op} {self.ex(rhs)};")
+                return
             if lhs[0] == "un" and lhs[1] == "*" and lhs[2][0] == "id" and lhs[2][1] in self.outs:
                 self.line(depth, lambda: f"{self.outs[lhs[2][1]][1]} {op} {self.ex(rhs)};")
                 return
             if lhs[0] == "un" and lhs[1] == "*":
                 raise Refuse("a write through a pointer")
             if lhs[0] != "id":
-                if lhs[0] == "field" and self.ty(lhs[1]) == "vec3":
+                if lhs[0] == "field" and self.ty(lhs[1]) in ("vec3", "vec4") and len(lhs[2]) == 1:
                     n = self.ex(lhs[1])
                     self.line(depth, lambda: f"{n}.{lhs[2]} {op} {self.ex(rhs)};")
                     return
@@ -799,19 +830,21 @@ class Fn:
             self.types[v] = self.ty(e)
             first = True
             dflt = None
+            # Every arm returning, the switch last: the function's end.
+            tail = last and ends_in_return(s)
             for vals, body in cases:
                 if vals is None:
                     dflt = body; continue
                 cond = " || ".join(f"{v} == {self.ex(x)}" for x in vals)
                 self.emit(depth, ("if " if first else "} else if ") + cond + " {")
-                self.stmts(body, depth + 1)
+                self.stmts(body, depth + 1, tail)
                 first = False
             if dflt is not None:
                 if first:
-                    self.stmts(dflt, depth)
+                    self.stmts(dflt, depth, tail)
                 else:
                     self.emit(depth, "} else {")
-                    self.stmts(dflt, depth + 1)
+                    self.stmts(dflt, depth + 1, tail)
             if not first:
                 self.emit(depth, "}")
             return
@@ -836,9 +869,13 @@ class Fn:
         raise Refuse(f"a statement {k}")
 
 def ends_in_return(s):
-    """Whether every way through `s` ends in a return (an if with an else)."""
+    """Whether every way through `s` ends in a return (an if with an else, a
+    switch with a default, every arm returning)."""
     if s[0] == "return":
         return True
+    if s[0] == "switch":
+        cases = s[2]
+        return any(v is None for v, _ in cases) and all(body and ends_in_return(body[-1]) for _, body in cases)
     if s[0] == "if":
         _, c, then, els = s
         return bool(then) and ends_in_return(then[-1]) and els is not None and bool(els) and ends_in_return(els[-1])
@@ -967,18 +1004,22 @@ class Translation:
         f.taken = set(used)
         names = (["z", "w", "q", "pt"] if dim == 2 else ["v", "q", "pt", "pv"]) + [f"pt{k}" for k in range(2, 10)]
         f.point = next(n for n in names if n not in used)
+        # A 3D body's 4th coordinate given (`point_w_out`): a local, returned
+        # as `w`.
+        if dim == 3 and "point_w_out" in used:
+            f.outs["point_w_out"] = ["w", None]
         for ptr, slot in f.outs.items():
-            slot[1] = next(n for n in ({"vc": ("color", "vcolor", "col"), "hide": ("hidden", "hide_v", "hid"), "vrc": ("rgb", "rgb_v", "direct")}[ptr]) if n not in used)
-            f.types[slot[1]] = {"vc": "f32", "hide": "bool", "vrc": "vec3"}[ptr]
+            slot[1] = next(n for n in ({"vc": ("color", "vcolor", "col"), "hide": ("hidden", "hide_v", "hid"), "vrc": ("rgb", "rgb_v", "direct"), "point_w_out": ("w_out", "w4", "w_given")}[ptr]) if n not in used)
+            f.types[slot[1]] = {"vc": "f32", "hide": "bool", "vrc": "vec3", "point_w_out": "f32"}[ptr]
             f.uses_ctx = True
         p = P(toks)
         ss = block(p)
         if not ss or not ends_in_return(ss[-1]):
             raise Refuse("the body does not end in a return")
-        start = lambda: [f.emit(1, f"let {local} = ctx.{key};") for key, local in f.outs.values()]
+        start = lambda: [f.emit(1, f"let {local} = {'0.0' if key == 'w' else 'ctx.' + key};") for key, local in f.outs.values()]
         start()
         f.stmts(ss, 1, last=True)
-        if (dim == 3 or f.outs) and ss[-1][0] == "if":
+        if (dim == 3 or f.outs) and ss[-1][0] in ("if", "switch"):
             f.result_var = next(n for n in ("result", "out3", "res3") if n not in used)
             f.lines = []
             start()
@@ -1076,7 +1117,7 @@ def passthrough_3d(two, three):
 
 def translate(d):
     f = set(d["features"])
-    for feat in ("needs_w", "needs_mobius_lib", "analytic_blur", "volume_side_emit"):
+    for feat in ("needs_mobius_lib", "analytic_blur", "volume_side_emit"):
         if feat in f: raise Refuse(f"the feature {feat}")
     if d.get("plot_emits"): raise Refuse("plot emits")
     for prm in d["parameters"]:

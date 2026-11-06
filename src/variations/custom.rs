@@ -862,8 +862,8 @@ mod tests {
         let refused = |src: &str| compile(src).err().unwrap_or_else(|| panic!("compiled: {src}"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn init(p) { #{ n: rand() } }\nfn variation(z, p) { z * this.n }\n").contains("no random numbers"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { z * this.n }\n").contains("no `init`"));
-        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p, ctx) { z * ctx.julia }\n").contains("`accum`, `weight`, `color`, `hide`, `rgb` and its transform's `a` .. `f`"));
-        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { #{ z: z, hue: 0.5 } }\n").contains("`z`, `color`, `rgb` and `hide`"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p, ctx) { z * ctx.julia }\n").contains("a variation's context has `accum`"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { #{ z: z, hue: 0.5 } }\n").contains("a variation's result has `z`"));
     }
 
     /// The MacMillan twin runs as the built-in's arithmetic (its WGSL,
@@ -1057,6 +1057,26 @@ mod tests {
                                  fn step(s, p) { s.z = vary(\"rhai_prepare_test\", s.z); s }\nfn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n")
         });
         assert!(e.is_err_and(|d| d[0].message.contains("`prepare`")));
+    }
+
+    /// A 3D body's 4th coordinate (`NeedsW`): `ctx.w` the one it is given,
+    /// `#{ z, w }` the raw one it gives, which the transform weight-sums;
+    /// a 2D body has none.
+    #[test]
+    fn w_is_a_3d_bodys_fourth_coordinate() {
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_w_test\" };\nfn variation(z, p) { z }\nfn variation3(v, p, ctx) {\n    #{ z: v * ctx.w, w: v.x + ctx.w }\n}\n";
+        let dl = named(src);
+        assert!(dl.features.contains(&"needs_w".to_string()), "{:?}", dl.features);
+        assert!(dl.shader_3d.as_deref().is_some_and(|s| s.contains("point_w_out") && s.contains("point_w")));
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| !s.contains("point_w")), "the 2D body has none");
+        let p3 = lang::rhai::transformation3(src).unwrap();
+        let params = ParamValues::defaults(&p3);
+        let mut run = VariationRun::new(&p3, &params, 1).with_w(0.5);
+        let (v, _) = run.call3([2.0, 1.0, 4.0], [0.0; 3], 1.0);
+        assert_eq!((v, run.w_out()), ([1.0, 0.5, 2.0], Some(2.5)));
+        let flat = "const INFO = #{ name: \"rhai_w_flat\" };\nfn variation(z, p, ctx) { z * ctx.w }\n";
+        assert!(compile(flat).is_err_and(|e| e.contains("a 3D body's")), "{:?}", compile(flat).err());
     }
 
     /// `ctx.a` .. `ctx.f` are the transform's affine coefficients, as the

@@ -713,6 +713,15 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
     if union.rgb {
         features.push("writes_rgb");
     }
+    // A 4th coordinate, read or given: the 3D body's alone (the builder's
+    // `point_w` is 3D-gated).
+    if let Some(p) = p2.filter(|p| p.reads(Predef::PointW) || writes(&p.transform, Place::WOut)) {
+        let _ = p;
+        return Err("the 4th coordinate, `ctx.w` and `#{ z, w }`, is a 3D body's (`fn variation3`)".into());
+    }
+    if p3.is_some_and(|p| p.reads(Predef::PointW) || writes(&p.transform, Place::WOut)) {
+        features.push("needs_w");
+    }
     if union.hide {
         features.push("can_hide");
     }
@@ -2441,6 +2450,7 @@ impl<'p> Gen<'p> {
                     Place::RgbR => "(*vrc).x".to_string(),
                     Place::RgbG => "(*vrc).y".to_string(),
                     Place::RgbB => "(*vrc).z".to_string(),
+                    Place::WOut => "point_w_out".to_string(),
                     Place::PixelZ => "pixel_z".to_string(),
                     Place::Effect(p) => self.predef(*p),
                 };
@@ -2772,6 +2782,8 @@ impl<'p> Gen<'p> {
             (Predef::VarRgbG, _) => "(*vrc).y".into(),
             (Predef::VarRgbB, _) => "(*vrc).z".into(),
             (Predef::Coef(k), _) => format!("transforms[xform_id].{}", ["a", "b", "c", "d", "e", "f"][usize::from(k)]),
+            (Predef::PointW, _) => "point_w".into(),
+            (Predef::WOut, _) => "point_w_out".into(),
             // A 3D variation's (B2): the point's and the accumulator's
             // third parts.
             (Predef::PixelZ, _) => "pixel_z".into(),
@@ -4693,6 +4705,8 @@ pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
          fn set_state(xform_id: u32, variation_id: u32, slot: u32, value: f32) {}\n\
          struct RngState {\n    state: u32,\n}\n\
          fn rng_nextf(rng: ptr<function, RngState>) -> f32 {\n    return f32((*rng).state);\n}\n\
+         var<private> point_w: f32;\n\
+         var<private> point_w_out: f32;\n\
          struct StubTransform {\n    a: f32,\n    b: f32,\n    c: f32,\n    d: f32,\n    e: f32,\n    f: f32,\n    variations: array<f32, 4>,\n}\n\
          var<private> transforms: array<StubTransform, 2>;\n";
     if let Some(w2) = &w.wgsl_2d {

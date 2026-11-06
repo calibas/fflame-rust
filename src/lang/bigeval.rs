@@ -278,7 +278,7 @@ impl BigMachine {
                         Place::Var(id) => self.vars[*id] = v,
                         Place::Z => self.z = self.to_c(v),
                         // A formula writes neither; the checker keeps it so.
-                        Place::Index | Place::Solid | Place::DZ | Place::CreaseHeight | Place::CreaseSlope | Place::Pixel | Place::Color | Place::Hide | Place::RgbR | Place::RgbG | Place::RgbB | Place::PixelZ | Place::Effect(_) => {}
+                        Place::Index | Place::Solid | Place::DZ | Place::CreaseHeight | Place::CreaseSlope | Place::Pixel | Place::Color | Place::Hide | Place::RgbR | Place::RgbG | Place::RgbB | Place::WOut | Place::PixelZ | Place::Effect(_) => {}
                     }
                 }
                 IStmt::SetElem { var, index, value } => {
@@ -511,7 +511,7 @@ impl BigMachine {
             // program that draws); a flame variation's, no orbit.
             Predef::Draw | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ => BigValue::Float(BigFloat::zero(self.n)),
             Predef::VarHide => BigValue::Bool(false),
-            Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) => BigValue::Float(BigFloat::zero(self.n)),
+            Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::PointW | Predef::WOut => BigValue::Float(BigFloat::zero(self.n)),
             // An effect's; a reference orbit is a formula's.
             Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {
                 BigValue::Float(BigFloat::zero(self.n))
