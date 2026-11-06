@@ -571,15 +571,19 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 542 of the 647, each a Rhai variation under its
+  P7 step 3): 560 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
   (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
-  `INFO.z`, `INFO.replace`, `CanHide`, `INFO.slow`). Seven written by hand, 535 translated from the built-ins'
+  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `INFO.slow`). Seven written by hand, 553 translated from the built-ins'
   WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
-  reads them; its colour and hide pointers locals from `ctx.color` and
-  `ctx.hide`, returned as `#{ z, color, hide }`; its state slots fields
+  reads them; its colour, direct colour and hide pointers locals from
+  `ctx.color`, `ctx.rgb` and `ctx.hide`, returned as `#{ z, color, rgb,
+  hide }`; a function WGSL takes part by part of a vector written out
+  part by part where the language has no such vector form (`sin` of a
+  complex is the complex sine); its temporaries never a name the WGSL
+  uses; its state slots fields
   named as the body reads them, `get_state` / `set_state` as `this.name`
   and its `wgsl_state_init` as `fn init(p)`; its `u32`s the language's
   (`u32(N)` for a `Nu`, hex as Rhai's, `~x` as `x ^ 0xffffffff`); a
@@ -610,8 +614,8 @@ function takes the point, and the ids when it has parameters (as
     range-reduced where the built-ins' is the hardware's: the twin is
     the portable side.
   - **In a flame, by density** (`every_variation_twin_draws_its_builtins_flame`),
-    and by colour for a twin that writes one -- its transform blending
-    it in whole, each channel's light (colour times density) held as
+    and by colour for a twin that writes one, a palette index or a
+    direct colour -- its transform blending it in whole, each channel's light (colour times density) held as
     density is; dc_linear's colour blended in and not is the control --
     which judges the twins that draw (no f64 truth matches the GPU's
     stream). rays1's flame sends points past 2^24, where an f32's `tan`
@@ -621,9 +625,10 @@ function takes the point, and the ids when it has parameters (as
     rounding on every side past 2^24, so its pairs are not held at points
     that far (`FAR_REMAINDER`). r_circleblur's cells are placed by a `sin(...) * 43758.5453`
     hash, which the range-reduced sin hashes otherwise: its twin draws
-    its own noise, as cut_jigsaw's does (its pieces flip by a
-    `sin(...) * 1e5` hash; with the hardware's sin its flame is the
-    built-in's exactly, measured).
+    its own noise, as cut_jigsaw's (its pieces flip by a `sin(...) *
+    1e5` hash), cut_fingerprint's, cut_hextruchetflow's and
+    cut_metaballs's (`fract(sin(x) * 43...)`) do -- with the hardware's
+    sin each flame is the built-in's exactly, measured.
   - **Edit as Rhai**: a built-in variation with a twin has it in its
     row's settings menu, putting the twin under a UUID of its own in the
     built-in's place in that transform (weight, parameters, order,

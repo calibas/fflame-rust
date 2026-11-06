@@ -257,10 +257,16 @@ impl Lowerer<'_> {
                 Some(Vector::new(kind, parts))
             }
             // A 3D variation's accumulator (B2).
-            Owner::Ctx => (self.three && name == "accum").then(|| {
+            Owner::Ctx if self.three && name == "accum" => {
                 let accum = || mk(ExprKind::Predef("accum".into()), span);
-                Vector::new(Kind::Vec3, vec![call1("real", accum(), span), call1("imag", accum(), span), mk(ExprKind::Predef("accumz".into()), span)])
-            }),
+                Some(Vector::new(Kind::Vec3, vec![call1("real", accum(), span), call1("imag", accum(), span), mk(ExprKind::Predef("accumz".into()), span)]))
+            }
+            // A variation's direct colour as it reaches it (`WritesRgb`):
+            // -1e30 each part until one writes it.
+            Owner::Ctx if self.transform && name == "rgb" => {
+                Some(Vector::new(Kind::Vec3, ["vrgb_r", "vrgb_g", "vrgb_b"].into_iter().map(|n| mk(ExprKind::Predef(n.into()), span)).collect()))
+            }
+            Owner::Ctx => None,
         }
     }
 

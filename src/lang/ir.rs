@@ -196,6 +196,12 @@ pub enum Predef {
     /// Whether a flame variation hides this iteration's point (JWildfire's
     /// `pVarTP.doHide`, `CanHide`): read as it reaches it, and written.
     VarHide,
+    /// The direct colour a flame variation writes, each part (JWildfire's
+    /// `pVarTP.rgbColor`, `WritesRgb`): read as it reaches it (an out-of-
+    /// gamut -1e30 until a variation writes one), and written.
+    VarRgbR,
+    VarRgbG,
+    VarRgbB,
     /// A 3D variation's point's third part, read and written beside
     /// `#pixel` (`fn variation3`, the KIFS plan, B2), and its context's
     /// accumulator's.
@@ -252,6 +258,7 @@ impl Predef {
             Predef::Pixel | Predef::Z | Predef::Random | Predef::Center | Predef::ScreenPixel | Predef::Accum => Ty::Complex,
             Predef::Draw | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ => Ty::Float,
             Predef::VarHide => Ty::Bool,
+            Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB => Ty::Float,
             Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => Ty::Float,
             Predef::EffectBlend => Ty::Int,
             Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height | Predef::Pass | Predef::CreasePattern => Ty::Int,
@@ -427,6 +434,10 @@ pub enum Place {
     Color,
     /// Whether it hides the point ([`Predef::VarHide`]).
     Hide,
+    /// Its direct colour's parts ([`Predef::VarRgbR`] ...).
+    RgbR,
+    RgbG,
+    RgbB,
     /// A 3D variation's point's third part ([`Predef::PixelZ`]).
     PixelZ,
     /// An effect's result ([`Predef::EffectR`] ...).
