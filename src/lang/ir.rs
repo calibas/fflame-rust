@@ -11,16 +11,22 @@ use super::{Dialect, EntryKind, Span};
 pub enum Ty {
     Bool,
     Int,
+    /// Rhai's `u32(x)` (the user's call, 2026-11-06): the int's 32 bits,
+    /// unsigned, as WGSL's `u32` -- wrapping `+ - *`, unsigned `/`, `%`
+    /// and comparisons, `to_float` 0..2^32-1. An int and a u32 convert by
+    /// their bits; one of each joins to u32.
+    UInt,
     Float,
     Complex,
 }
 
 impl Ty {
     /// Rank for UF's widening rule: int to float to complex, never back.
+    /// An int and a u32 are one rank, their bits the same.
     pub fn rank(self) -> u8 {
         match self {
             Ty::Bool => 0,
-            Ty::Int => 1,
+            Ty::Int | Ty::UInt => 1,
             Ty::Float => 2,
             Ty::Complex => 3,
         }
@@ -30,8 +36,16 @@ impl Ty {
         self != Ty::Bool
     }
 
-    /// The wider of two numeric types.
+    /// An int or a u32: 32 bits.
+    pub fn is_integer(self) -> bool {
+        matches!(self, Ty::Int | Ty::UInt)
+    }
+
+    /// The wider of two numeric types; an int and a u32, a u32.
     pub fn join(self, other: Ty) -> Ty {
+        if self.is_integer() && other.is_integer() && self != other {
+            return Ty::UInt;
+        }
         if self.rank() >= other.rank() {
             self
         } else {
@@ -43,6 +57,7 @@ impl Ty {
         match self {
             Ty::Bool => "bool",
             Ty::Int => "int",
+            Ty::UInt => "u32",
             Ty::Float => "float",
             Ty::Complex => "complex",
         }
@@ -336,7 +351,7 @@ impl IExpr {
     pub fn is_lifted_real(&self) -> bool {
         match &self.kind {
             IExprKind::Complex(_, im) => *im == 0.0,
-            IExprKind::Convert(a) => self.ty == Ty::Complex && matches!(a.ty, Ty::Int | Ty::Float),
+            IExprKind::Convert(a) => self.ty == Ty::Complex && matches!(a.ty, Ty::Int | Ty::UInt | Ty::Float),
             _ => false,
         }
     }

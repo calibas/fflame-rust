@@ -785,6 +785,7 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
             let value = match p.vars[v].ty {
                 Ty::Complex => format!("vec2<f32>({}, {})", get(k), get(k + 1)),
                 Ty::Int => format!("i32({})", get(k)),
+                Ty::UInt => format!("u32({})", get(k)),
                 Ty::Bool => format!("{} != 0.0", get(k)),
                 Ty::Float => get(k),
             };
@@ -802,7 +803,7 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
                     set(k, format!("{name}.x"));
                     set(k + 1, format!("{name}.y"));
                 }
-                Ty::Int => set(k, format!("f32({name})")),
+                Ty::Int | Ty::UInt => set(k, format!("f32({name})")),
                 Ty::Bool => set(k, format!("select(0.0, 1.0, {name})")),
                 Ty::Float => set(k, name),
             }
@@ -1029,7 +1030,7 @@ pub fn formula(p: &Program) -> String {
             let el = match v.ty {
                 Ty::Complex => "any(bitcast<vec2<u32>>(a[k]) != bitcast<vec2<u32>>(b[k]))",
                 Ty::Float => "bitcast<u32>(a[k]) != bitcast<u32>(b[k])",
-                Ty::Int | Ty::Bool => "a[k] != b[k]",
+                Ty::Int | Ty::UInt | Ty::Bool => "a[k] != b[k]",
             };
             let t = var_ty(v);
             let _ = write!(
@@ -1043,7 +1044,7 @@ pub fn formula(p: &Program) -> String {
         same.push(match v.ty {
             Ty::Complex => format!("all(bitcast<vec2<u32>>(a.v{i}) == bitcast<vec2<u32>>(b.v{i}))"),
             Ty::Float => format!("bitcast<u32>(a.v{i}) == bitcast<u32>(b.v{i})"),
-            Ty::Int | Ty::Bool => format!("a.v{i} == b.v{i}"),
+            Ty::Int | Ty::UInt | Ty::Bool => format!("a.v{i} == b.v{i}"),
         });
     }
     // ...at the same place in the cycle: two passes that behave alike.
@@ -1669,6 +1670,7 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
                 (Ty::Complex, false) => format!("vec2<f32>({}, {})", slot(o), slot(o + 1)),
                 (Ty::Float, _) => slot(o),
                 (Ty::Int, _) => format!("i32(round({}))", slot(o)),
+                (Ty::UInt, _) => format!("u32(round({}))", slot(o)),
                 (Ty::Bool, _) => format!("({} != 0.0)", slot(o)),
             };
             if var.is_array() {
@@ -1698,7 +1700,7 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
                         parts[o + 1] = format!("{x}.y");
                     }
                     (Ty::Float, _) => parts[o] = x,
-                    (Ty::Int, _) => parts[o] = format!("f32({x})"),
+                    (Ty::Int | Ty::UInt, _) => parts[o] = format!("f32({x})"),
                     (Ty::Bool, _) => parts[o] = format!("select(0.0, 1.0, {x})"),
                 }
             }
@@ -2137,6 +2139,7 @@ impl<'p> Gen<'p> {
             Ty::Complex => format!("vec2<f32>({}, {})", slot(k), slot(k + 1)),
             Ty::Float => slot(k),
             Ty::Int => format!("i32(round({}))", slot(k)),
+            Ty::UInt => format!("u32(round({}))", slot(k)),
             Ty::Bool => format!("({} != 0.0)", slot(k)),
         }
     }
@@ -2157,6 +2160,7 @@ impl<'p> Gen<'p> {
                 Ty::Complex => format!("vec2<f32>({}, {})", at(&format!("2 * {clamped}")), at(&format!("2 * {clamped} + 1"))),
                 Ty::Float => at(&clamped),
                 Ty::Int => format!("i32(round({}))", at(&clamped)),
+                Ty::UInt => format!("u32(round({}))", at(&clamped)),
                 Ty::Bool => format!("({} != 0.0)", at(&clamped)),
             };
         }
@@ -2166,6 +2170,7 @@ impl<'p> Gen<'p> {
             Ty::Complex => format!("vec2<f32>({read}({at} + 2 * {clamped}), {read}({at} + 2 * {clamped} + 1))"),
             Ty::Float => format!("{read}({at} + {clamped})"),
             Ty::Int => format!("i32(round({read}({at} + {clamped})))"),
+            Ty::UInt => format!("u32(round({read}({at} + {clamped})))"),
             Ty::Bool => format!("({read}({at} + {clamped}) != 0.0)"),
         }
     }
@@ -2515,6 +2520,7 @@ impl<'p> Gen<'p> {
         match &e.kind {
             IExprKind::Host(h, args) => self.host(*h, args),
             IExprKind::Bool(b) => b.to_string(),
+            IExprKind::Int(i) if e.ty == Ty::UInt => format!("{}u", *i as u32),
             IExprKind::Int(i) if self.opaque => {
                 self.use_(Helper::Opaque);
                 format!("uf_ki({}i)", *i as i32)
@@ -2538,6 +2544,7 @@ impl<'p> Gen<'p> {
                 match self.p.params[*id].ty() {
                     Ty::Bool => format!("({} != 0.0)", read(k)),
                     Ty::Int => format!("i32(round({}))", read(k)),
+                    Ty::UInt => format!("u32(max(round({}), 0.0))", read(k)),
                     Ty::Float => read(k),
                     Ty::Complex => format!("vec2<f32>({}, {})", read(k), read(k + 1)),
                 }
@@ -2575,8 +2582,15 @@ impl<'p> Gen<'p> {
             IExprKind::Convert(a) => {
                 let v = self.expr(a);
                 match (a.ty, e.ty) {
-                    (Ty::Int, Ty::Float) => format!("f32({v})"),
-                    (Ty::Int, Ty::Complex) => format!("vec2<f32>(f32({v}), 0.0)"),
+                    (Ty::Int | Ty::UInt, Ty::Float) => format!("f32({v})"),
+                    (Ty::Int | Ty::UInt, Ty::Complex) => format!("vec2<f32>(f32({v}), 0.0)"),
+                    // A u32 and an int, by their bits; a float to a u32
+                    // truncated and clamped (`interp::Value::as_uint`).
+                    (Ty::Int, Ty::UInt) => format!("bitcast<u32>({v})"),
+                    (Ty::UInt, Ty::Int) => format!("bitcast<i32>({v})"),
+                    (Ty::Float, Ty::UInt) => format!("u32(clamp({v}, 0.0, 4294967040.0))"),
+                    (Ty::Bool, Ty::UInt) => format!("select(0u, 1u, {v})"),
+                    (Ty::UInt, Ty::Bool) => format!("({v} != 0u)"),
                     (Ty::Float, Ty::Complex) => format!("vec2<f32>({v}, 0.0)"),
                     (Ty::Bool, Ty::Int) => format!("select(0i, 1i, {v})"),
                     (Ty::Bool, Ty::Float) => format!("select(0.0, 1.0, {v})"),
@@ -2593,6 +2607,8 @@ impl<'p> Gen<'p> {
                 let (a, b) = (self.expr(a), self.expr(b));
                 format!("vec2<f32>({a}, {b})")
             }
+            // WGSL has no `-` of a u32: it wraps, as the interpreter's.
+            IExprKind::Unary(UnOp::Neg, a) if a.ty == Ty::UInt => format!("(0u - {})", self.expr(a)),
             IExprKind::Unary(UnOp::Neg, a) => format!("(-{})", self.expr(a)),
             IExprKind::Unary(UnOp::Not, a) => format!("(!{})", self.expr(a)),
             IExprKind::Binary(op, a, b) => self.binary(*op, a, b),
@@ -2848,6 +2864,9 @@ impl<'p> Gen<'p> {
             // zero.
             IDiv => format!("({l} / {r})"),
             Shl => format!("({l} << (u32({r}) & 31u))"),
+            // A u32's `>>` is logical as it is; `/` and `%` unsigned, the
+            // dividend and 0 by zero.
+            Shr if ty == Ty::UInt => format!("({l} >> ({r} & 31u))"),
             Shr => format!("bitcast<i32>(bitcast<u32>({l}) >> (u32({r}) & 31u))"),
         }
     }
@@ -2999,7 +3018,7 @@ impl<'p> Gen<'p> {
                     (format!("({} {o} {})", as_class(ca, ka, Full), as_class(cb, kb, Full)), Full)
                 }
             }
-            IExprKind::Binary(BinOp::Mul, a, b) if e.ty != Ty::Bool && e.ty != Ty::Int => {
+            IExprKind::Binary(BinOp::Mul, a, b) if e.ty != Ty::Bool && !e.ty.is_integer() => {
                 let (ca, ka) = self.sgen(a);
                 let (cb, kb) = self.sgen(b);
                 let prod = self.mul_code(&ca, a, ka, &cb, b, kb, e.ty);
@@ -3009,7 +3028,7 @@ impl<'p> Gen<'p> {
                     _ => (prod, Small),
                 }
             }
-            IExprKind::Binary(BinOp::Div, a, b) if e.ty != Ty::Int => {
+            IExprKind::Binary(BinOp::Div, a, b) if !e.ty.is_integer() => {
                 let (ca, ka) = self.sgen(a);
                 let (cb, kb) = self.sgen(b);
                 match (ka, kb) {
@@ -3033,7 +3052,7 @@ impl<'p> Gen<'p> {
                     (format!("{f}({}, {})", as_class(ca, ka, Full), as_class(cb, kb, Full)), Full)
                 }
             }
-            IExprKind::PowInt(a, n) if *n >= 1 && a.ty != Ty::Int => {
+            IExprKind::PowInt(a, n) if *n >= 1 && !a.ty.is_integer() => {
                 let (ca, ka) = self.sgen(a);
                 if ka == Full {
                     return (self.true_expr(e), Full);
@@ -3053,7 +3072,7 @@ impl<'p> Gen<'p> {
                     (norm, Full)
                 }
             }
-            IExprKind::Call(f, a) if a.ty != Ty::Int => {
+            IExprKind::Call(f, a) if !a.ty.is_integer() => {
                 let (ca, ka) = self.sgen(a);
                 let complex = a.ty == Ty::Complex;
                 match (f, ka) {
@@ -3175,7 +3194,7 @@ impl<'p> Gen<'p> {
             let v = g.expr(e);
             let v = match e.ty {
                 Ty::Complex => v,
-                Ty::Int => format!("vec2<f32>(f32({v}), 0.0)"),
+                Ty::Int | Ty::UInt => format!("vec2<f32>(f32({v}), 0.0)"),
                 Ty::Bool => format!("vec2<f32>(select(0.0, 1.0, {v}), 0.0)"),
                 Ty::Float => format!("vec2<f32>({v}, 0.0)"),
             };
@@ -3637,14 +3656,14 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
                     Full
                 }
             }
-            IExprKind::Binary(BinOp::Mul, a, b) if e.ty != Ty::Bool && e.ty != Ty::Int => {
+            IExprKind::Binary(BinOp::Mul, a, b) if e.ty != Ty::Bool && !e.ty.is_integer() => {
                 if class(a, small) == Full && class(b, small) == Full {
                     Full
                 } else {
                     Small
                 }
             }
-            IExprKind::Binary(BinOp::Div, a, b) if e.ty != Ty::Int => {
+            IExprKind::Binary(BinOp::Div, a, b) if !e.ty.is_integer() => {
                 if class(a, small) == Small && class(b, small) == Full {
                     Small
                 } else {
@@ -3654,7 +3673,7 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
             IExprKind::PowInt(a, n) if *n >= 1 && a.ty != Ty::Int => class(a, small),
             IExprKind::Binary(BinOp::DiffAbs, _, b) => class(b, small),
             IExprKind::Modulus(a) => class(a, small),
-            IExprKind::Call(f, a) if a.ty != Ty::Int => {
+            IExprKind::Call(f, a) if !a.ty.is_integer() => {
                 let complex = a.ty == Ty::Complex;
                 let kept = matches!(f, Builtin::Sqr | Builtin::Ident | Builtin::Zero | Builtin::Expm1 | Builtin::Log1p | Builtin::Sin | Builtin::Sinh)
                     || (complex && matches!(f, Builtin::Conj | Builtin::Flip | Builtin::Real | Builtin::Imag));
@@ -3903,6 +3922,7 @@ fn wgsl_ty(t: Ty) -> &'static str {
     match t {
         Ty::Bool => "bool",
         Ty::Int => "i32",
+        Ty::UInt => "u32",
         Ty::Float => "f32",
         Ty::Complex => "vec2<f32>",
     }
@@ -3912,6 +3932,7 @@ fn zero_of(t: Ty) -> &'static str {
     match t {
         Ty::Bool => "false",
         Ty::Int => "0i",
+        Ty::UInt => "0u",
         Ty::Float => "0.0",
         Ty::Complex => "vec2<f32>(0.0, 0.0)",
     }

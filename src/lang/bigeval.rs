@@ -78,6 +78,10 @@ fn put_value(out: &mut Vec<u8>, v: &BigValue) {
             out.push(1);
             out.extend_from_slice(&i.to_le_bytes());
         }
+        BigValue::UInt(u) => {
+            out.push(4);
+            out.extend_from_slice(&u.to_le_bytes());
+        }
         BigValue::Float(x) => {
             out.push(2);
             put_float(out, x);
@@ -96,6 +100,7 @@ fn take_value(bytes: &mut &[u8]) -> Option<BigValue> {
         1 => BigValue::Int(i32::from_le_bytes(take(bytes, 4)?.try_into().ok()?)),
         2 => BigValue::Float(take_float(bytes)?),
         3 => BigValue::Complex(take_complex(bytes)?),
+        4 => BigValue::UInt(u32::from_le_bytes(take(bytes, 4)?.try_into().ok()?)),
         _ => return None,
     })
 }
@@ -123,6 +128,8 @@ type R<T> = Result<T, Stop>;
 pub enum BigValue {
     Bool(bool),
     Int(i32),
+    /// A u32, exact as an int is (`Ty::UInt`; the interpreter's rules).
+    UInt(u32),
     Float(BigFloat),
     Complex(BigComplex),
 }
@@ -333,6 +340,7 @@ impl BigMachine {
     fn element(&self, v: VarId, index: &IExpr) -> R<usize> {
         let i = match self.eval(index)? {
             BigValue::Int(i) => i,
+            BigValue::UInt(u) => u.min(i32::MAX as u32) as i32,
             other => self.to_f(other).to_f64() as i32,
         };
         Ok((i.max(0) as usize).min(self.arrays[v].len().saturating_sub(1)))
@@ -351,6 +359,7 @@ impl BigMachine {
             BigValue::Complex(c) => c,
             BigValue::Float(f) => BigComplex { re: f, im: BigFloat::zero(self.n) },
             BigValue::Int(i) => self.c(i as f64, 0.0),
+            BigValue::UInt(u) => self.c(f64::from(u), 0.0),
             BigValue::Bool(b) => self.c(if b { 1.0 } else { 0.0 }, 0.0),
         }
     }
@@ -360,6 +369,7 @@ impl BigMachine {
             BigValue::Complex(c) => c.re,
             BigValue::Float(f) => f,
             BigValue::Int(i) => self.f(i as f64),
+            BigValue::UInt(u) => self.f(f64::from(u)),
             BigValue::Bool(b) => self.f(if b { 1.0 } else { 0.0 }),
         }
     }
@@ -375,6 +385,7 @@ impl BigMachine {
             }
             IExprKind::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             IExprKind::Bool(b) => BigValue::Bool(*b),
+            IExprKind::Int(i) if e.ty == Ty::UInt => BigValue::UInt(*i as u32),
             IExprKind::Int(i) => BigValue::Int(*i as i32),
             IExprKind::Float(f) => BigValue::Float(self.f(*f)),
             IExprKind::Complex(re, im) => BigValue::Complex(self.c(*re, *im)),
@@ -385,6 +396,7 @@ impl BigMachine {
                 match self.prog.params[*id].ty() {
                     Ty::Bool => BigValue::Bool(re != 0.0),
                     Ty::Int => BigValue::Int(re.round() as i32),
+                    Ty::UInt => BigValue::UInt(re.round().max(0.0) as u32),
                     Ty::Float => BigValue::Float(self.f(re)),
                     Ty::Complex => BigValue::Complex(self.c(re, im)),
                 }
@@ -396,8 +408,17 @@ impl BigMachine {
                     Ty::Bool => BigValue::Bool(v.truth(self.prog.dialect)),
                     Ty::Int => BigValue::Int(match v {
                         BigValue::Int(i) => i,
+                        BigValue::UInt(u) => u as i32,
                         BigValue::Bool(b) => i32::from(b),
                         other => self.to_f(other).to_f64() as i32,
+                    }),
+                    // An int's bits; a float truncated and clamped, as the
+                    // interpreter's and the GPU's.
+                    Ty::UInt => BigValue::UInt(match v {
+                        BigValue::UInt(u) => u,
+                        BigValue::Int(i) => i as u32,
+                        BigValue::Bool(b) => u32::from(b),
+                        other => self.to_f(other).to_f64().clamp(0.0, 4_294_967_040.0) as u32,
                     }),
                     Ty::Float => BigValue::Float(self.to_f(v)),
                     Ty::Complex => BigValue::Complex(self.to_c(v)),
@@ -410,6 +431,7 @@ impl BigMachine {
             }
             IExprKind::Unary(UnOp::Neg, a) => match self.eval(a)? {
                 BigValue::Int(i) => BigValue::Int(i.wrapping_neg()),
+                BigValue::UInt(u) => BigValue::UInt(u.wrapping_neg()),
                 BigValue::Float(f) => BigValue::Float(f.neg()),
                 BigValue::Complex(c) => BigValue::Complex(cneg(&c)),
                 b => b,
@@ -515,6 +537,7 @@ impl BigMachine {
             Or => BigValue::Bool(l.truth(dialect) || r.truth(dialect)),
             BitAnd | BitOr | BitXor | Shl | Shr | IDiv => match (l, r) {
                 (BigValue::Int(a), BigValue::Int(b)) => BigValue::Int(super::interp::bits(op, a, b)),
+                (BigValue::UInt(a), BigValue::UInt(b)) => BigValue::UInt(super::interp::ubits(op, a, b)),
                 _ => return Err(Stop),
             },
             Eq | Ne => {
@@ -543,6 +566,17 @@ impl BigMachine {
                 BigValue::Float(c.add(&d).abs().sub(&c.abs()))
             }
             Add | Sub | Mul | Div | Mod | Pow => match ty {
+                Ty::UInt => {
+                    let (BigValue::UInt(a), BigValue::UInt(b)) = (&l, &r) else { return Err(Stop) };
+                    let (a, b) = (*a, *b);
+                    BigValue::UInt(match op {
+                        Add => a.wrapping_add(b),
+                        Sub => a.wrapping_sub(b),
+                        Mul => a.wrapping_mul(b),
+                        Mod => a.checked_rem(b).unwrap_or(0),
+                        _ => return Err(Stop),
+                    })
+                }
                 Ty::Int => {
                     let (BigValue::Int(a), BigValue::Int(b)) = (&l, &r) else { return Err(Stop) };
                     let (a, b) = (*a, *b);
@@ -818,6 +852,7 @@ impl BigValue {
         match self {
             BigValue::Bool(b) => *b,
             BigValue::Int(i) => *i != 0,
+            BigValue::UInt(u) => *u != 0,
             BigValue::Float(f) => !f.is_zero(),
             BigValue::Complex(c) if dialect == Dialect::Fractint => !c.re.is_zero(),
             BigValue::Complex(c) => !(c.re.is_zero() && c.im.is_zero()),
@@ -829,6 +864,7 @@ fn zero_of(t: Ty, n: usize) -> BigValue {
     match t {
         Ty::Bool => BigValue::Bool(false),
         Ty::Int => BigValue::Int(0),
+        Ty::UInt => BigValue::UInt(0),
         Ty::Float => BigValue::Float(BigFloat::zero(n)),
         Ty::Complex => BigValue::Complex(BigComplex::zero(n)),
     }

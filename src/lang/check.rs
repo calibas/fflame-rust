@@ -519,6 +519,11 @@ impl Checker {
                     self.error(block.span, "colour parameters are not supported yet");
                     continue;
                 }
+                // A parameter is a slider's number: an int, not its bits.
+                (Some(TypeName::UInt), ..) => {
+                    self.error(block.span, "a u32 parameter: make it an int and `u32(p.name)` it");
+                    continue;
+                }
                 (_, _, false) => ParamKind::Enum,
                 (Some(TypeName::Bool), ..) => ParamKind::Bool,
                 (Some(TypeName::Int), ..) => ParamKind::Int,
@@ -697,6 +702,7 @@ impl Checker {
                     let ty = match ty {
                         TypeName::Bool => Ty::Bool,
                         TypeName::Int => Ty::Int,
+                        TypeName::UInt => Ty::UInt,
                         TypeName::Float => Ty::Float,
                         TypeName::Complex => Ty::Complex,
                         TypeName::Color => {
@@ -873,6 +879,8 @@ impl Checker {
         let mut flat: Option<IExpr> = None;
         for ((x, &d), written) in index.iter().zip(&dims).zip(&size) {
             let i = self.expr(x)?;
+            // A u32 indexes by its value (clamped as any index).
+            let i = if i.ty == Ty::UInt { IExpr { kind: IExprKind::Convert(Box::new(i)), ty: Ty::Int } } else { i };
             if i.ty != Ty::Int {
                 self.error(x.span, format!("an array index is an int, not a {}", i.ty.name()));
                 return None;
@@ -1188,7 +1196,7 @@ impl Checker {
         let saved = self.section;
         self.section = SectionKind::Global;
         let v = self.expr(e).and_then(|v| {
-            if matches!(v.ty, Ty::Int | Ty::Float) {
+            if matches!(v.ty, Ty::Int | Ty::UInt | Ty::Float) {
                 self.convert(v, Ty::Float, e.span)
             } else {
                 self.error(e.span, "`degree` is a real number");
@@ -1443,7 +1451,7 @@ impl Checker {
         // this assignment, so it is set first.
         if let (Some(ls), Some(arg)) = (self.lastsqr, last_sqr_argument(value)) {
             if let Some(a) = self.expr(arg) {
-                let a = if a.ty == Ty::Int { self.convert(a, Ty::Float, arg.span) } else { Some(a) };
+                let a = if a.ty.is_integer() { self.convert(a, Ty::Float, arg.span) } else { Some(a) };
                 if let Some(a) = a.filter(|a| a.ty != Ty::Bool) {
                     let m = IExpr { kind: IExprKind::Modulus(Box::new(a)), ty: Ty::Float };
                     if let Some(m) = self.convert(m, Ty::Complex, arg.span) {
@@ -1684,7 +1692,7 @@ impl Checker {
                     self.error(e.span, "`|...|` takes a number");
                     return None;
                 }
-                let v = if v.ty == Ty::Int { self.convert(v, Ty::Float, inner.span)? } else { v };
+                let v = if v.ty.is_integer() { self.convert(v, Ty::Float, inner.span)? } else { v };
                 lit(IExprKind::Modulus(Box::new(v)), Ty::Float)
             }
             ExprKind::Assign(..) => {
@@ -1695,7 +1703,7 @@ impl Checker {
     }
 
     fn call(&mut self, name: &str, args: &[Expr], user: bool, span: Span) -> Option<IExpr> {
-        if self.rhai && !user && matches!(name, "to_float" | "to_int") {
+        if self.rhai && !user && matches!(name, "to_float" | "to_int" | "u32") {
             return self.rhai_conversion(name, args, span);
         }
         // A grid's cell at a computed row (rhai-plugins P7): its first
@@ -1814,6 +1822,23 @@ impl Checker {
         // An int argument becomes a float unless the result is an int, or
         // it is a stream's number (`rand(k)`).
         let arg = if arg.ty == Ty::Int && ty != Ty::Int && !matches!(b, Builtin::SimRand | Builtin::Tap | Builtin::Disc) { self.convert(arg, Ty::Float, args[0].span)? } else { arg };
+        // A u32's functions are a float's, its value -- but a stream's
+        // number, an index and `pcg`'s 32 bits, which take its bits.
+        let (arg, ty) = if arg.ty == Ty::UInt && matches!(b, Builtin::SimRand | Builtin::Tap | Builtin::Disc | Builtin::Pcg) {
+            (IExpr { kind: IExprKind::Convert(Box::new(arg)), ty: Ty::Int }, ty)
+        } else if arg.ty == Ty::UInt {
+            let arg = self.convert(arg, Ty::Float, args[0].span)?;
+            let ty = match b.result_ty(Ty::Float) {
+                Ok(t) => t,
+                Err(msg) => {
+                    self.error(span, msg);
+                    return None;
+                }
+            };
+            (arg, ty)
+        } else {
+            (arg, ty)
+        };
         Some(IExpr { kind: IExprKind::Call(b, Box::new(arg)), ty })
     }
 
@@ -1872,12 +1897,20 @@ impl Checker {
             return None;
         }
         let arg = self.expr(&args[0])?;
-        let to = if name == "to_float" { Ty::Float } else { Ty::Int };
+        let to = match name {
+            "to_float" => Ty::Float,
+            "u32" => Ty::UInt,
+            _ => Ty::Int,
+        };
         match (arg.ty, to) {
             (t, to) if t == to => Some(arg),
             (Ty::Bool, _) => Some(IExpr { kind: IExprKind::Convert(Box::new(arg)), ty: to }),
-            (Ty::Int, Ty::Float) => self.convert(arg, Ty::Float, span),
+            (Ty::Int | Ty::UInt, Ty::Float) => self.convert(arg, Ty::Float, span),
             (Ty::Float, Ty::Int) => Some(IExpr { kind: IExprKind::Call(Builtin::Trunc, Box::new(arg)), ty: Ty::Int }),
+            // A u32 from an int is its bits, from a float truncated and
+            // clamped to [0, 2^32 - 256]; an int from a u32 its bits.
+            (Ty::Int, Ty::UInt) => self.convert(arg, Ty::UInt, span),
+            (Ty::Float | Ty::UInt, _) => Some(IExpr { kind: IExprKind::Convert(Box::new(arg)), ty: to }),
             (t, _) => {
                 self.error(span, format!("`{name}` takes a bool, an int or a float, not a {}", t.name()));
                 None
@@ -1925,11 +1958,17 @@ impl Checker {
                 Some(IExpr { kind: IExprKind::Binary(op, Box::new(l), Box::new(r)), ty: Ty::Bool })
             }
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr | BinOp::IDiv => {
-                if l.ty != Ty::Int || r.ty != Ty::Int {
+                if !l.ty.is_integer() || !r.ty.is_integer() {
                     self.error(span, format!("`{}` takes two ints (a float's bits are not a formula's)", op.symbol()));
                     return None;
                 }
-                Some(IExpr { kind: IExprKind::Binary(op, Box::new(l), Box::new(r)), ty: Ty::Int })
+                // An int and a u32: a u32, the int's bits -- but a shift is
+                // its left side's, the amount any int (WGSL's, Rust's).
+                let t = if matches!(op, BinOp::Shl | BinOp::Shr) { l.ty } else { l.ty.join(r.ty) };
+                let r = if matches!(op, BinOp::Shl | BinOp::Shr) && r.ty != t { IExpr { kind: IExprKind::Convert(Box::new(r)), ty: t } } else { r };
+                let l = self.convert(l, t, a.span)?;
+                let r = self.convert(r, t, b.span)?;
+                Some(IExpr { kind: IExprKind::Binary(op, Box::new(l), Box::new(r)), ty: t })
             }
             BinOp::And | BinOp::Or => {
                 let l = self.to_bool(l, a.span)?;
@@ -2043,8 +2082,16 @@ impl Checker {
             self.error(span, format!("cannot convert {} to {} (use `real`, `round` and the like)", v.ty.name(), to.name()));
             return None;
         }
-        // Constants convert here, so the back ends see literals.
+        // A u32 is an int again only by `to_int`: a slip would make it
+        // signed and compare, divide and convert otherwise.
+        if self.rhai && (v.ty, to) == (Ty::UInt, Ty::Int) {
+            self.error(span, "a u32 where an int is wanted: `to_int(x)` for its bits, or make the variable a u32 (`let h = u32(0)`)");
+            return None;
+        }
+        // Constants convert here, so the back ends see literals; an int
+        // literal to a u32 is its 32-bit pattern.
         Some(match v.kind {
+            IExprKind::Int(i) if to == Ty::UInt => IExpr { kind: IExprKind::Int(i64::from(i as u32)), ty: to },
             IExprKind::Int(i) if to == Ty::Float => IExpr { kind: IExprKind::Float(i as f64), ty: to },
             IExprKind::Int(i) => IExpr { kind: IExprKind::Complex(i as f64, 0.0), ty: to },
             IExprKind::Float(f) if to == Ty::Complex => IExpr { kind: IExprKind::Complex(f, 0.0), ty: to },

@@ -819,7 +819,7 @@ impl J<'_> {
     /// it does not exist.
     fn d(&self, e: &IExpr) -> Result<Pair, ()> {
         use Builtin::*;
-        if matches!(e.ty, Ty::Bool | Ty::Int) {
+        if matches!(e.ty, Ty::Bool | Ty::Int | Ty::UInt) {
             return Ok(None);
         }
         Ok(match &e.kind {

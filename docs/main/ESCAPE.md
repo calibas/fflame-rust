@@ -541,10 +541,19 @@ fn escaped(s, p) {
   power. Ints are 32-bit, as UF's: `+ - *` wrap, and a literal past
   `i32::MAX` (`0x846ca68b`) is its 32-bit pattern. Rhai's bit
   operations take ints as such patterns -- `^` xor, `&`, `|`, `<<`,
-  `>>` logical (a shift by its amount's low five bits) -- so an
-  unsigned hash runs bit for bit as in Rust (Origami's does: the
-  plan's item 3, step 3c); on bools `&` and `|` are and and or, `^`
-  xor. Rhai's names where they differ from UF's:
+  `>>` logical (a shift by its amount's low five bits, the result its
+  left side's type) -- so an unsigned hash runs bit for bit as in Rust
+  (Origami's does: the plan's item 3, step 3c); on bools `&` and `|`
+  are and and or, `^` xor. **`u32(x)`** is WGSL's unsigned int (the
+  user's call, 2026-11-06; `Ty::UInt`): an int's bits, a float
+  truncated and clamped to [0, 2^32 - 256], a bool 0 or 1. `+ - *`
+  wrap, `/` and `%` are unsigned (a zero divisor giving the dividend
+  and 0, as WGSL's), comparisons unsigned, `to_float` 0..2^32-1; an
+  int joins to it by its bits (`h ^ 0x9e3779b9`), and it is an int
+  again only by `to_int`, an error otherwise, so a slip cannot make it
+  signed. A parameter is never one (`u32(p.n)` it); its functions are a
+  float's, but `pcg`, `rand(k)`, `tap` and `disc` take its bits. The
+  interpreter and deep zoom's reference keep it exactly, as an int. Rhai's names where they differ from UF's:
   `ln` the natural log and `log` base 10, `abs` of a complex its
   modulus and `fold` each part's absolute value (the Burning Ship),
   `norm_sqr` the squared modulus, `.re` / `.im`, `arg`, `atan2(y, x)`,

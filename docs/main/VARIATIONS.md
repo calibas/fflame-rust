@@ -571,17 +571,19 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 519 of the 647, each a Rhai variation under its
+  P7 step 3): 542 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
   (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
-  `INFO.z`, `INFO.replace`, `CanHide`). Seven written by hand, 512 translated from the built-ins'
+  `INFO.z`, `INFO.replace`, `CanHide`, `INFO.slow`). Seven written by hand, 535 translated from the built-ins'
   WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
   reads them; its colour and hide pointers locals from `ctx.color` and
   `ctx.hide`, returned as `#{ z, color, hide }`; its state slots fields
   named as the body reads them, `get_state` / `set_state` as `this.name`
-  and its `wgsl_state_init` as `fn init(p)`; a `for` that is not a
+  and its `wgsl_state_init` as `fn init(p)`; its `u32`s the language's
+  (`u32(N)` for a `Nu`, hex as Rhai's, `~x` as `x ^ 0xffffffff`); a
+  float's bits (`bitcast`) refused, as the language has none; a `for` that is not a
   counted range a `while`, its step last, when nothing `continue`s;
   `smoothstep` written out; a vector and a number added part by part,
   where Rhai's complex + float adds to the real part)

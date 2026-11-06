@@ -1188,15 +1188,23 @@ Steps, in the order that unlocks the most first (the user picks):
      as the body reads it, the def's state init as `init` (2 twins:
      curliecue2, macmillan; the other stateful built-ins wait on `u32`,
      the Möbius library, `w`, or an init that draws). 519 twins, 7870
-     pairs, 0 apart.
+     pairs, 0 apart. **A complex has no order** in Rhai (the user's
+     call). **`u32`** (the user's call: an unsigned type, not bit
+     operations on the int alone): `Ty::UInt` through the checker, the
+     interpreter, deep zoom's reference and the WGSL -- WGSL's
+     semantics, an int joining to it by its bits and back only by
+     `to_int`; a shift its left side's type; `INFO.slow` for a
+     variation's parameters. 23 twins (the hashes and counts), 542 in
+     all, 8504 pairs, 0 apart.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 128, by count: `u32` and bit operations (39:
-     9 a count or an index, 30 a hash), an RGB (20), the Möbius library
-     (9), w (9), arrays (7), the coefficients and other indexing (7),
+     passed through. Left, 105, by count: an RGB (20), the Möbius
+     library (9), w (9), arrays (8), the coefficients and other indexing
+     (7), a helper of the fract family (6), a vec4 (4), a float's bits
+     (3),
      a helper of the fract family (4), crackle's (3), plot emits (3), a
      parameter named `super`, which Rhai reserves (`w`, `z`), vector
      trig (3), the rest one or two.

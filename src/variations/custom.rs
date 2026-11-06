@@ -124,7 +124,7 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
     record_layout(&name, source)?;
     // As every kind takes a script's (`ir::Program::param_defs`), on the
     // wire a downloaded variation's parameters are.
-    let parameters: Vec<serde_json::Value> = p.param_defs(lang::ir::ComplexParams::Split("_"))?.iter().map(crate::params::api_json).collect();
+    let parameters: Vec<serde_json::Value> = param_defs(&p, source)?.iter().map(crate::params::api_json).collect();
     // Its flag for the renderer: orbits started afresh every dispatch.
     let mut features = wgsl.features.clone();
     if lang::rhai::info_bool(source, "resets_orbits") == Some(true) {
@@ -180,6 +180,18 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
         "shader_init": wgsl.init,
     });
     serde_json::from_value(payload).map_err(|e| format!("the variation's payload: {e}"))
+}
+
+/// A transformation's parameters as a variation's (a complex one as two,
+/// `name_re` and `name_im`), those `INFO.slow` names slow: committed when
+/// a drag ends, as a built-in's `slow`.
+pub fn param_defs(p: &lang::ir::Program, source: &str) -> Result<Vec<crate::params::ParamDef>, String> {
+    let mut defs = p.param_defs(lang::ir::ComplexParams::Split("_"))?;
+    for s in lang::rhai::info_strings(source, "slow") {
+        let d = defs.iter_mut().find(|d| d.name == s).ok_or_else(|| format!("`INFO.slow` names `{s}`, which is not in `PARAMS`"))?;
+        d.slow = true;
+    }
+    Ok(defs)
 }
 
 /// The phase `INFO.phase` gives a variation source: normal without one,
@@ -1045,6 +1057,39 @@ mod tests {
                                  fn step(s, p) { s.z = vary(\"rhai_prepare_test\", s.z); s }\nfn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n")
         });
         assert!(e.is_err_and(|d| d[0].message.contains("`prepare`")));
+    }
+
+    /// `u32(x)` is WGSL's unsigned int (the user's call, 2026-11-06):
+    /// `+ - *` wrap, `/ %` and comparisons unsigned, `>>` logical,
+    /// `to_float` 0..2^32-1, a float truncated and clamped at 0; an int
+    /// joins to it by its bits, and it becomes an int only by `to_int`.
+    #[test]
+    fn u32_is_wgsl_unsigned() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_u32_test\" };\n\
+                   fn variation(z, p) {\n\
+                   \x20   let a = u32(7) - u32(8);\n\
+                   \x20   let half = a / 2;\n\
+                   \x20   let bigger = if a > u32(1) { 1.0 } else { 0.0 };\n\
+                   \x20   let top = a >> 31;\n\
+                   \x20   let h = (a ^ 0x9e3779b9) * 2654435761;\n\
+                   \x20   let r = h % 1000;\n\
+                   \x20   let floor_neg = u32(-3.5);\n\
+                   \x20   let signed = to_int(a);\n\
+                   \x20   complex(to_float(a) + bigger + to_float(top) + to_float(floor_neg), to_float(half) + to_float(r) * 1.0e-9 + to_float(signed))\n\
+                   }\n";
+        let dl = named(src);
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("u32")));
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::ZERO, C64::ZERO, 1.0);
+        let h = (u32::MAX ^ 0x9e37_79b9).wrapping_mul(2_654_435_761);
+        assert_eq!(z.re, 4_294_967_295.0 + 1.0 + 1.0 + 0.0, "wrapped, unsigned compare, logical shift, clamped at 0");
+        assert_eq!(z.im, 2_147_483_647.0 + f64::from(h % 1000) * 1.0e-9 - 1.0, "unsigned division and remainder, to_int its bits");
+        // A u32 is an int again only by `to_int`.
+        let slip = "const INFO = #{ name: \"rhai_u32_slip\" };\nfn variation(z, p) {\n    let n = 0;\n    n = u32(3);\n    z * to_float(n)\n}\n";
+        assert!(compile(slip).is_err_and(|e| e.contains("a u32 where an int is wanted")), "{:?}", compile(slip).err());
     }
 
     /// `INFO.z` is JWildfire's z rule, as the built-ins' features: by

@@ -27,7 +27,7 @@ class Refuse(Exception):
 
 TOKEN = re.compile(r"""
     (?P<comment>//[^\n]*)
-  | (?P<num>(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fuih]?)
+  | (?P<num>0[xX][0-9a-fA-F]+[ui]?|(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fuih]?)
   | (?P<id>[A-Za-z_]\w*)
   | (?P<op>->|&&|\|\||==|!=|<=|>=|<<|>>|\+=|-=|\*=|/=|%=|\+\+|--|[-+*/%<>=!&|^~(){}\[\],;.:?])
   | (?P<ws>\s+)
@@ -306,6 +306,10 @@ class Fn:
     def ty(self, e):
         k = e[0]
         if k == "num":
+            if e[1].lower().startswith("0x"):
+                return "u32" if e[1].endswith("u") else "int"
+            if e[1].endswith("u"):
+                return "u32"
             return "f32" if ("." in e[1] or "e" in e[1].lower().rstrip("fhiu")) and not e[1].endswith(("u", "i")) else ("f32" if e[1].endswith("f") else "int")
         if k == "id":
             if e[1] in self.types: return self.types[e[1]]
@@ -320,6 +324,8 @@ class Fn:
             a, b = self.ty(e[2]), self.ty(e[3])
             for v in ("vec3", "vec2", "vec4"):
                 if v in (a, b): return v
+            if "u32" in (a, b) and all(x in ("int", "i32", "u32") for x in (a, b)):
+                return "u32"
             if "f32" in (a, b): return "f32"
             return a
         if k == "field":
@@ -369,6 +375,11 @@ class Fn:
 
     def ex(self, e):
         k = e[0]
+        if k == "num" and e[1].lower().startswith("0x"):
+            v = e[1].rstrip("ui")
+            return f"u32({v})" if e[1].endswith("u") else v
+        if k == "num" and e[1].endswith("u"):
+            return f"u32({e[1][:-1]})"
         if k == "num":
             v = e[1].rstrip("fhiu") if e[1][-1] in "fhiu" and not e[1][-1].isdigit() else e[1]
             if e[1].endswith("u") or e[1].endswith("i"):
@@ -399,14 +410,17 @@ class Fn:
                 return self.outs[e[2][1]][1]
             if e[1] == "*": raise Refuse("a pointer read")
             if e[1] == "&": raise Refuse("a pointer taken")
-            if e[1] == "~": raise Refuse("a bitwise not")
+            if e[1] == "~":
+                if self.ty(e[2]) not in ("int", "i32", "u32"):
+                    raise Refuse("a bitwise not of a float")
+                return f"({self.ex(e[2])} ^ 0xffffffff)"
             inner = self.ex(e[2])
             return f"{e[1]}{inner}"
         if k == "bin":
             op = e[1]
-            if op in ("<<", ">>", "&", "|", "^"):
-                raise Refuse("bit operations")
             ta, tb = self.ty(e[2]), self.ty(e[3])
+            if op in ("<<", ">>", "&", "|", "^") and not (all(x in ("int", "i32", "u32") for x in (ta, tb)) or (ta, tb) == ("bool", "bool")):
+                raise Refuse("bit operations of a float")
             vec = [t for t in (ta, tb) if t in ("vec2", "vec3", "vec4")]
             if op in ("==", "!=", "<", ">", "<=", ">=") and vec:
                 raise Refuse("a vector compared")
@@ -509,7 +523,9 @@ class Fn:
             return f"to_float({self.ex(args[0])})"
         if f in ("i32",):
             return f"to_int({self.ex(args[0])})"
-        if f in ("u32", "bitcast", "bool"):
+        if f == "u32":
+            return self.ex(args[0]) if self.ty(args[0]) == "u32" else f"u32({self.ex(args[0])})"
+        if f in ("bitcast", "bool"):
             raise Refuse(f"`{f}`")
         t0 = self.ty(args[0]) if args else None
         if f == "length":
@@ -631,7 +647,7 @@ class Fn:
                 t = "int"
             self.types[name] = "f32" if t == "int" and ty is None and init is not None and self.ty(init) == "f32" else t
             if init is None:
-                zero = {"vec2": "complex(0.0, 0.0)", "vec3": "vec3(0.0, 0.0, 0.0)", "f32": "0.0", "i32": "0", "u32": "0", "bool": "false"}.get(t)
+                zero = {"vec2": "complex(0.0, 0.0)", "vec3": "vec3(0.0, 0.0, 0.0)", "f32": "0.0", "i32": "0", "u32": "u32(0)", "bool": "false"}.get(t)
                 if zero is None: raise Refuse(f"a `var` of `{ty}`")
                 self.emit(depth, f"let {name} = {zero};")
             else:
