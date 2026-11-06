@@ -66,16 +66,16 @@ fn init(p) {
     #{ creg: 0.0 }
 }
 
-fn cmag2(a) {
-    a.re * a.re + a.im * a.im
-}
-
 fn cmul(a, b) {
     complex(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
 }
 
 fn cconj(a) {
     complex(a.re, -a.im)
+}
+
+fn cmag2(a) {
+    a.re * a.re + a.im * a.im
 }
 
 fn cdiv(a, b) {
