@@ -2100,6 +2100,8 @@ impl<'s> Lowerer<'s> {
         match k {
             "color" => Ok(vec![("vcolor", self.expr(v, scope)?)]),
             "hide" => Ok(vec![("vhide", self.expr(v, scope)?)]),
+            // The 4th coordinate a 3D body gives, raw (`NeedsW`).
+            "w" => Ok(vec![("wout", self.expr(v, scope)?)]),
             // A direct colour, a vector (`WritesRgb`): each part.
             "rgb" => {
                 let c = self.vexpr(v, scope)?;
@@ -2108,7 +2110,7 @@ impl<'s> Lowerer<'s> {
                 }
                 Ok(["vrgb_r", "vrgb_g", "vrgb_b"].into_iter().zip(c.parts).collect())
             }
-            o => self.err(kp, format!("a variation's result has `z`, `color`, `rgb` and `hide`, not `{o}`")),
+            o => self.err(kp, format!("a variation's result has `z`, `color`, `rgb`, `hide` and (in 3D) `w`, not `{o}`")),
         }
     }
 
@@ -3888,7 +3890,9 @@ impl<'s> Lowerer<'s> {
                         // Its transform's affine coefficients, as the flame
                         // stores them (the editor's and a `.flame`'s `coefs`).
                         "a" | "b" | "c" | "d" | "e" | "f" => Ok(mk(ExprKind::Predef(format!("coef_{name}")), span)),
-                        o => self.err(*p, format!("a variation's context has `accum`, `weight`, `color`, `hide`, `rgb` and its transform's `a` .. `f`; not `{o}`")),
+                        // The 4th coordinate a 3D body is given (`NeedsW`).
+                        "w" => Ok(mk(ExprKind::Predef("pointw".into()), span)),
+                        o => self.err(*p, format!("a variation's context has `accum`, `weight`, `color`, `hide`, `rgb`, its transform's `a` .. `f` and (in 3D) `w`; not `{o}`")),
                     },
                     Base::Ctx => match name {
                         // `ismand` is 1 on the parameter plane.
@@ -4423,7 +4427,7 @@ impl<'s> Lowerer<'s> {
                 "bailout" | "degree" | "escape_fraction" | "render_px" | "supersample" | "value" => TypeName::Float,
                 "escaped" | "converged" | "has_derivative" | "vhide" => TypeName::Bool,
                 "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" | "vrgb_r" | "vrgb_g" | "vrgb_b" | "coef_a" | "coef_b" | "coef_c" | "coef_d"
-                | "coef_e" | "coef_f" => TypeName::Float,
+                | "coef_e" | "coef_f" | "pointw" | "wout" => TypeName::Float,
                 // An effect's (P2).
                 "density_mean" | "pixel_scale" | "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_amount" => TypeName::Float,
                 _ => TypeName::Complex,

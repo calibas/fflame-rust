@@ -727,6 +727,11 @@ fn escaped(s, p) {
     (the editor's and a `.flame`'s `coefs`; JWildfire's
     `pXForm.getCoeff..`, read by fan, popcorn, rings and waves; the
     identity inside a formula);
+  - a 4th coordinate, a 3D body's alone (`NeedsW`): `ctx.w` the one it
+    is given, and `#{ z: v, w }` the raw one it gives, which the
+    transform weight-sums with its other 4D variations as it does x, y
+    and z (the builder's `point_w`, seeded at spawn, kept across
+    transforms);
   - a direct colour: the body may end with `#{ z: point, rgb: vec3(r,
     g, b) }`, the colour the transform's `direct_color` blends in where
     the palette's would be (JWildfire's `pVarTP.rgbColor`, `WritesRgb`:

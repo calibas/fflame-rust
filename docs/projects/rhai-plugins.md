@@ -1203,15 +1203,19 @@ Steps, in the order that unlocks the most first (the user picks):
      560 in all, 8980 pairs, 0 apart. **The transform's coefficients**
      (`ctx.a` .. `ctx.f`; the judge's truth given the probe transform's):
      fan, popcorn, rings, waves and the three dc_* that read them, 567 in
-     all, 9098 pairs, 0 apart.
+     all, 9098 pairs, 0 apart. **The 4th coordinate** (`ctx.w`, `#{ z, w
+     }`, a 3D body's; `NeedsW`), the 4D twins' flames rendered in 3D:
+     jubiq4d, minkowski, minkowski_camera, mobiq4d, 571 in all, 9366
+     pairs, 0 apart.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 80, by count: w (12), the Möbius library
-     (9), arrays (8), a vec4 (7), a helper of the fract family (6), a
-     float's bits (3),
+     passed through. Left, 76, by count: the Möbius library (9), a vec4
+     (8, the next batch), arrays (8), a helper of the fract family (6),
+     a palette read in a variation (3, the quaternion family), a float's
+     bits (3),
      a helper of the fract family (4), crackle's (3), plot emits (3), a
      parameter named `super`, which Rhai reserves (`w`, `z`), vector
      trig (3), the rest one or two.

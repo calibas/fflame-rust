@@ -294,6 +294,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("invtree_js", include_str!("../../assets/variations/twins/invtree_js.rhai")),
     ("jac_asn", include_str!("../../assets/variations/twins/jac_asn.rhai")),
     ("jubiQ", include_str!("../../assets/variations/twins/jubiQ.rhai")),
+    ("jubiq4d", include_str!("../../assets/variations/twins/jubiq4d.rhai")),
     ("julia3D", include_str!("../../assets/variations/twins/julia3D.rhai")),
     ("julia3Dz", include_str!("../../assets/variations/twins/julia3Dz.rhai")),
     ("julian", include_str!("../../assets/variations/twins/julian.rhai")),
@@ -329,8 +330,11 @@ pub const TWINS: &[(&str, &str)] = &[
     ("maurer_rose", include_str!("../../assets/variations/twins/maurer_rose.rhai")),
     ("mcarpet", include_str!("../../assets/variations/twins/mcarpet.rhai")),
     ("minkQM", include_str!("../../assets/variations/twins/minkQM.rhai")),
+    ("minkowski", include_str!("../../assets/variations/twins/minkowski.rhai")),
+    ("minkowski_camera", include_str!("../../assets/variations/twins/minkowski_camera.rhai")),
     ("minkowskope", include_str!("../../assets/variations/twins/minkowskope.rhai")),
     ("mobiq", include_str!("../../assets/variations/twins/mobiq.rhai")),
+    ("mobiq4d", include_str!("../../assets/variations/twins/mobiq4d.rhai")),
     ("mobius", include_str!("../../assets/variations/twins/mobius.rhai")),
     ("mobiusN", include_str!("../../assets/variations/twins/mobiusN.rhai")),
     ("mobius_dragon_3D", include_str!("../../assets/variations/twins/mobius_dragon_3D.rhai")),
@@ -950,7 +954,7 @@ mod tests {
                 assert_eq!((&t.name, &t.label, &t.hint, &t.kind, t.slow), (&b.name, &b.label, &b.hint, &b.kind, b.slow), "{name}.{}", b.name);
             }
             let has = |f: &str| dl.features.iter().any(|x| x == f);
-            for (f, wire) in [(F::WritesColor, "writes_color"), (F::AlwaysZ, "always_z"), (F::NeverZ, "never_z"), (F::NeedsAccum, "needs_accum"), (F::Replace, "replace"), (F::CanHide, "can_hide"), (F::WritesRgb, "writes_rgb")] {
+            for (f, wire) in [(F::WritesColor, "writes_color"), (F::AlwaysZ, "always_z"), (F::NeverZ, "never_z"), (F::NeedsAccum, "needs_accum"), (F::Replace, "replace"), (F::CanHide, "can_hide"), (F::WritesRgb, "writes_rgb"), (F::NeedsW, "needs_w")] {
                 assert_eq!(has(wire), builtin.features.contains(&f), "{name}: {f:?}");
             }
             assert_eq!(dl.name, key(name).unwrap(), "{name}: its key");
@@ -1087,7 +1091,7 @@ mod tests {
             // ...and the probe transform's coefficients (`ctx.a` ..).
             fn run<'a>(p: &'a crate::lang::ir::Program, values: &'a crate::lang::interp::ParamValues) -> VariationRun<'a> {
                 let a = crate::probe::flame::AFFINE;
-                VariationRun::new(p, values, 1).with_color(PROBE_COLOR).with_coefs([0, 1, 2, 3, 4, 5].map(|k| f64::from(a[k])))
+                VariationRun::new(p, values, 1).with_color(PROBE_COLOR).with_coefs([0, 1, 2, 3, 4, 5].map(|k| f64::from(a[k]))).with_w(0.0)
             }
             if !self.render_3d {
                 let (w, c) = run(&self.two, values).call(C64::new(x, y), C64::ZERO, 1.0);
@@ -1355,10 +1359,21 @@ mod tests {
             super::super::global_registry().get(name).is_some_and(|v| v.has_feature(super::super::Feature::WritesColor) || v.has_feature(super::super::Feature::WritesRgb))
         };
         let off = |c: &crate::renderer::density_gates::Compared| c.worst_dense > 0.05 || c.worst_middle > 0.15;
+        // A 4D twin's flame in 3D, where its 4th coordinate lives and feeds
+        // back through every iteration (a 2D flame has none).
+        let four_d = |name: &str| super::super::global_registry().get(name).is_some_and(|v| v.has_feature(super::super::Feature::NeedsW));
+        let flame = |name: &str, carries: Option<CustomSource>, direct: f32, three: bool| {
+            let mut cfg = flame_coloured(name, carries, direct);
+            if three {
+                cfg.render_mode = crate::scene::transforms::RenderMode::ThreeD;
+            }
+            cfg
+        };
         for (name, _) in TWINS {
             let direct = if writes_colour(name) { 1.0 } else { 0.0 };
-            let reference = render_blocks(&device, &queue, &flame_coloured(name, None, direct), N, &run);
-            let twin = render_blocks(&device, &queue, &flame_coloured(&key(name).unwrap(), Some(super::carried(name).unwrap()), direct), N, &run);
+            let three = four_d(name);
+            let reference = render_blocks(&device, &queue, &flame(name, None, direct, three), N, &run);
+            let twin = render_blocks(&device, &queue, &flame(&key(name).unwrap(), Some(super::carried(name).unwrap()), direct, three), N, &run);
             if direct > 0.0 {
                 for ch in 0..3 {
                     let c = compare_blocks(&twin.light[ch], &reference.light[ch], &reference.density);

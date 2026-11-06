@@ -247,6 +247,9 @@ struct Shared<'e> {
     vrgb_in: [f64; 3],
     /// Its transform's affine coefficients, `a` to `f`.
     coefs: [f64; 6],
+    /// The 4th coordinate it is given, and the one it gives if it does.
+    point_w: f64,
+    w_out: Option<f64>,
     /// A 3D variation's point's and accumulator's third parts (B2).
     pixel_z: f64,
     accum_z: f64,
@@ -273,6 +276,8 @@ impl<'e> Shared<'e> {
             vrgb: [None; 3],
             vrgb_in: [-1.0e30; 3],
             coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            point_w: 0.0,
+            w_out: None,
             pixel_z: 0.0,
             accum_z: 0.0,
             prev: C64::ZERO,
@@ -339,6 +344,10 @@ pub struct VariationRun<'p> {
     rgb: Option<[f64; 3]>,
     /// Its transform's affine coefficients (`ctx.a` .. `ctx.f`).
     coefs: [f64; 6],
+    /// The 4th coordinate each call is given (`ctx.w`), and the one the
+    /// last call gave (`#{ z, w }`).
+    point_w: f64,
+    w_out: Option<f64>,
 }
 
 impl<'p> VariationRun<'p> {
@@ -351,7 +360,18 @@ impl<'p> VariationRun<'p> {
         // `prepare`'s values, at f64, which the body reads as its own.
         m.exec(&p.global_body, &mut sh);
         m.exec(&p.init, &mut sh);
-        VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }
+        VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], point_w: 0.0, w_out: None }
+    }
+
+    /// Each call given the 4th coordinate `w` (`ctx.w`; the probe's 0).
+    pub fn with_w(mut self, w: f64) -> Self {
+        self.point_w = w;
+        self
+    }
+
+    /// The 4th coordinate the last call gave (`#{ z, w }`), if any.
+    pub fn w_out(&self) -> Option<f64> {
+        self.w_out
     }
 
     /// Its transform's affine coefficients, `a` to `f` (`ctx.a` ..; the
@@ -395,10 +415,12 @@ impl<'p> VariationRun<'p> {
         sh.weight = weight;
         sh.vcolor_in = self.color;
         sh.coefs = self.coefs;
+        sh.point_w = self.point_w;
         let prog = self.m.prog;
         self.m.exec(&prog.transform, &mut sh);
         self.hid = sh.vhide.unwrap_or(false);
         self.rgb = written_rgb(&sh);
+        self.w_out = sh.w_out;
         ([sh.pixel.re, sh.pixel.im, sh.pixel_z], sh.vcolor)
     }
 
@@ -885,6 +907,7 @@ impl<'p> Machine<'p> {
                         Place::RgbR => sh.vrgb[0] = Some(v.as_f64()),
                         Place::RgbG => sh.vrgb[1] = Some(v.as_f64()),
                         Place::RgbB => sh.vrgb[2] = Some(v.as_f64()),
+                        Place::WOut => sh.w_out = Some(v.as_f64()),
                         Place::PixelZ => sh.pixel_z = v.as_f64(),
                         // An effect runs on the GPU alone.
                         Place::Effect(_) => {}
@@ -1059,6 +1082,8 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::VarRgbG => Value::Float(sh.vrgb[1].unwrap_or(sh.vrgb_in[1])),
         Predef::VarRgbB => Value::Float(sh.vrgb[2].unwrap_or(sh.vrgb_in[2])),
         Predef::Coef(k) => Value::Float(sh.coefs[usize::from(k)]),
+        Predef::PointW => Value::Float(sh.point_w),
+        Predef::WOut => Value::Float(sh.w_out.unwrap_or(0.0)),
         Predef::PixelZ => Value::Float(sh.pixel_z),
         Predef::AccumZ => Value::Float(sh.accum_z),
         Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {
