@@ -1183,15 +1183,20 @@ Steps, in the order that unlocks the most first (the user picks):
      two cut twins that draw, and compiling because a complex compares
      with a number by its real part (UF's rule, which the Rhai dialect
      keeps); the judge perturbs by a non-round amount (1e20 ± 1e14 is
-     still a multiple of 5).
+     still a multiple of 5). **State**, the language's already (`fn
+     init(p)`, `this.name`), the translator's now: each slot a field named
+     as the body reads it, the def's state init as `init` (2 twins:
+     curliecue2, macmillan; the other stateful built-ins wait on `u32`,
+     the Möbius library, `w`, or an init that draws). 519 twins, 7870
+     pairs, 0 apart.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 130, by count: an RGB (20), `u32` (15),
-     state (14), the Möbius library (9), bit operations (9), w (9), hex
-     literals (8), arrays (7), the coefficients and other indexing (7),
+     passed through. Left, 128, by count: `u32` and bit operations (39:
+     9 a count or an index, 30 a hash), an RGB (20), the Möbius library
+     (9), w (9), arrays (7), the coefficients and other indexing (7),
      a helper of the fract family (4), crackle's (3), plot emits (3), a
      parameter named `super`, which Rhai reserves (`w`, `z`), vector
      trig (3), the rest one or two.
