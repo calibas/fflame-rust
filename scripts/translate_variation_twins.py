@@ -300,6 +300,10 @@ class Fn:
             ty = ty.strip()
             if name == "p" and not helper:
                 self.types["p"] = "vec2" if dim == 2 else "vec3"
+            elif name == "xform_id" and helper:
+                # A helper reading the parameters takes them, `p`, for
+                # the ids, as the language passes them whole.
+                self.params.append("p")
             elif name in ("xform_id", "variation_id"):
                 pass
             elif ty.startswith("ptr<function,RngState>") or ty.startswith("ptr<function, RngState>"):
@@ -693,9 +697,7 @@ class Fn:
         if f in ("normalize", "cross"):
             return f"{f}({', '.join(self.ex(a) for a in args)})"
         if f in self.tr.helpers:
-            keep = [self.ex(a) for a, (n, ty) in zip(args, self.tr.helper_args[f]) if not ("RngState" in ty or n in ("xform_id", "variation_id"))]
-            if any(n in ("xform_id", "variation_id") for n, _ in self.tr.helper_args[f]):
-                raise Refuse(f"a helper taking the ids `{f}`")
+            keep = ["p" if n == "xform_id" else self.ex(a) for a, (n, ty) in zip(args, self.tr.helper_args[f]) if not ("RngState" in ty or n == "variation_id")]
             return f"{f}({', '.join(keep)})"
         raise Refuse(f"a call to `{f}`")
 
@@ -995,9 +997,9 @@ class Translation:
         the body reads them by. A body ending in its slots' writes returns
         them as a map; any other keeps WGSL's `out`, an array."""
         fns = functions(src)
-        if len(fns) != 1:
-            raise Refuse("a helper in the init")
-        _, args, ret, toks = fns[0]
+        k = next((i for i, fn in enumerate(fns) if fn[0].startswith("init_")), len(fns) - 1)
+        helpers = self.helper_fns(fns[:k] + fns[k + 1:], 2)
+        _, args, ret, toks = fns[k]
         # A local `p` would hide the parameters, `prepare`'s `p`.
         free = next(n for n in ("pv", "p_", "p0") if ("id", n) not in toks)
         toks = [("id", free) if t == ("id", "p") else t for t in toks]
@@ -1024,15 +1026,18 @@ class Translation:
             f.stmts(ss, 1, last=True)
         if f.uses_ctx:
             raise Refuse("an init reading the weight")
-        return "fn prepare(p) {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"
+        return helpers + ["fn prepare(p) {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"]
 
-    def body(self, src, dim, name):
-        fns = functions(src)
-        if not fns: raise Refuse("no function")
-        main = fns[-1]
+    def helper_fns(self, fns, dim):
+        """Each WGSL helper as a Rhai function."""
         out = []
-        for fname, args, ret, toks in fns[:-1]:
+        for fname, args, ret, toks in fns:
             self.helpers[fname] = vec_of(ret.strip()) if ret.strip() else None
+            if any(n == "xform_id" for n, _ in args) and ("id", "p") in toks:
+                # Its own `p` would hide the parameters it takes as `p`.
+                free = next(n for n in ("pv", "p_", "p0") if ("id", n) not in toks)
+                toks = [("id", free) if t == ("id", "p") else t for t in toks]
+                args = [(free if n == "p" else n, ty) for n, ty in args]
             self.helper_args[fname] = args
             f = Fn(self, dim, args, ret, True)
             f.taken = {tk[1] for tk in toks if tk[0] == "id"}
@@ -1042,7 +1047,15 @@ class Translation:
             if f.uses_ctx: raise Refuse(f"a helper reading the weight or the sum `{fname}`")
             params = [a for a in f.params]
             out.append(f"fn {fname}({', '.join(params)}) {{\n" + "\n".join(l[1] for l in f.lines) + "\n}\n")
-        fname, args, ret, toks = main
+        return out
+
+    def body(self, src, dim, name):
+        fns = functions(src)
+        if not fns: raise Refuse("no function")
+        # The variation's own function, its helpers before or after it.
+        k = next((i for i, fn in enumerate(fns) if fn[0] == f"variation_{name}"), len(fns) - 1)
+        out = self.helper_fns(fns[:k] + fns[k + 1:], dim)
+        fname, args, ret, toks = fns[k]
         f = Fn(self, dim, args, ret, False)
         used = {tk[1] for tk in toks if tk[0] == "id"}
         f.taken = set(used)
@@ -1159,34 +1172,39 @@ def passthrough_3d(two, three):
     b2 = re.sub(r",\s*p\.z\s*\)", ")", b2)
     return norm(a) == norm(b2)
 
-# The shared complex helpers (`shaders/core/complex.wgsl`) a body may
-# call: their own WGSL, translated as the twin's helpers, so the formulas
-# (cdiv's guard, csqrt's sign test) are the built-in's exactly.
-COMPLEX_LIB_DEPS = {"cadd": [], "csub": [], "cmul": [], "cmul_real": [], "cconj": [], "cmag2": [], "csquare": [],
-                    "cdiv": ["cmag2", "cmul", "cconj"], "csqrt": ["cmag2"]}
+# The shared helpers a body may call (`shaders/core/`): their own WGSL,
+# translated as the twin's helpers, so the formulas (cdiv's guard,
+# csqrt's sign test, the noise's hashes) are the built-in's exactly. Of
+# complex.wgsl, the functions the language has no form of.
+COMPLEX_LIB = {"cadd", "csub", "cmul", "cmul_real", "cconj", "cmag2", "csquare", "cdiv", "csqrt"}
+SHARED_LIBS = ["complex", "noise", "voronoi", "polyhedra", "polychora"]
 
-def complex_lib():
-    src = open("shaders/core/complex.wgsl", encoding="utf-8").read()
+def shared_lib():
+    """Each shared helper: name -> its WGSL."""
     out = {}
-    for m in re.finditer(r"^fn (\w+)\(.*?^}", src, re.M | re.S):
-        if m.group(1) in COMPLEX_LIB_DEPS:
-            out[m.group(1)] = m.group(0)
+    for lib in SHARED_LIBS:
+        src = open(f"shaders/core/{lib}.wgsl", encoding="utf-8").read()
+        for m in re.finditer(r"^fn (\w+)\(.*?^}", src, re.M | re.S):
+            if lib != "complex" or m.group(1) in COMPLEX_LIB:
+                out[m.group(1)] = m.group(0)
     return out
 
 def with_complex_lib(src):
-    """`src` with the complex helpers it calls, and theirs, before it."""
-    lib = complex_lib()
+    """`src` with the shared helpers it calls, and theirs, before it."""
+    lib = shared_lib()
+    calls = lambda text: [n for n in lib if re.search(r"\b" + n + r"\(", text)]
     defined = set(re.findall(r"^\s*fn (\w+)", src, re.M))
-    need = []
+    need, seen = [], set()
     def want(n):
-        if n in need or n in defined:
+        if n in seen or n in defined:
             return
-        for dep in COMPLEX_LIB_DEPS[n]:
+        seen.add(n)
+        for dep in calls(lib[n][lib[n].index("{"):]):
             want(dep)
+        # A helper before its callers.
         need.append(n)
-    for n in COMPLEX_LIB_DEPS:
-        if re.search(r"\b" + n + r"\(", src):
-            want(n)
+    for n in calls(src):
+        want(n)
     return "".join(lib[n] + "\n" for n in need) + src
 
 def translate(d):
@@ -1204,11 +1222,18 @@ def translate(d):
     # `init`; then the bodies.
     first = []
     if d["init_param_count"]:
-        first.append(t.prepare(d["shader_init"]))
+        first += t.prepare(with_complex_lib(d["shader_init"]))
     if d["state_count"]:
         first.append(t.state_init())
     more, two = t.body(with_complex_lib(d["shader_2d"]), 2, d["name"])
-    helpers = first + more
+    # A helper both the init and the body call, once.
+    helpers = []
+    for h in first + more:
+        same = [g for g in helpers if g.split("(")[0] == h.split("(")[0]]
+        if same and same[0] != h:
+            raise Refuse(f"two helpers named `{h.split('(')[0][3:]}`")
+        if not same:
+            helpers.append(h)
     three = None
     # JWildfire's z rule as `INFO.z` where the twin's default is not the
     # built-in's: a 3D body's z is always kept, a 2D body's only when the
