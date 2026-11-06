@@ -860,7 +860,6 @@ mod tests {
         assert_eq!(c.state_count, 1);
         // What the hooks refuse.
         let refused = |src: &str| compile(src).err().unwrap_or_else(|| panic!("compiled: {src}"));
-        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn init(p) { #{ n: rand() } }\nfn variation(z, p) { z * this.n }\n").contains("no random numbers"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { z * this.n }\n").contains("no `init`"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p, ctx) { z * ctx.julia }\n").contains("a variation's context has `accum`"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { #{ z: z, hue: 0.5 } }\n").contains("a variation's result has `z`"));
@@ -1057,6 +1056,25 @@ mod tests {
                                  fn step(s, p) { s.z = vary(\"rhai_prepare_test\", s.z); s }\nfn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n")
         });
         assert!(e.is_err_and(|d| d[0].message.contains("`prepare`")));
+    }
+
+    /// `init` may draw from the thread's stream, as a built-in's
+    /// `wgsl_state_init` does: its function takes `rng`, and the state's
+    /// start passes the thread's; the interpreter draws it from the stream
+    /// it is seeded with.
+    #[test]
+    fn init_draws_from_the_threads_stream() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_init_draw\" };\nfn init(p) { #{ s: rand() } }\nfn variation(z, p) { z * this.s }\n";
+        let dl = named(src);
+        assert!(dl.shader_state_init.as_deref().is_some_and(|s| s.contains("variation_init(xform_id, variation_id, &rng)")), "{:?}", dl.shader_state_init);
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("variation_init(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>)")));
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (a, _) = VariationRun::new(&p, &params, 1).call(C64::new(1.0, 0.0), C64::ZERO, 1.0);
+        let (b, _) = VariationRun::new(&p, &params, 2).call(C64::new(1.0, 0.0), C64::ZERO, 1.0);
+        assert!((0.0..1.0).contains(&a.re) && a.re != b.re, "a draw, by the seed: {} {}", a.re, b.re);
     }
 
     /// A 3D body's 4th coordinate (`NeedsW`): `ctx.w` the one it is given,

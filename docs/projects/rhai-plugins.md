@@ -1211,19 +1211,29 @@ Steps, in the order that unlocks the most first (the user picks):
      cymatics3d, the hyperbolic and quaternion cameras, the quaternion
      Julia set), 578 in all, 9672 pairs, 0 apart; sphere_packing's
      `vec2<u32>` is refused, the language having no integer vectors.
+     **Arrays** of numbers and complex numbers in the translator (the
+     Jacobi functions, waves2b, cut_kaleido); **a drawing state init**
+     (`rand()` in `init`, the thread's stream, as the built-ins'
+     `wgsl_state_init`); the shared complex helpers translated in;
+     `loop` and `exp2`: 11 twins, 589 in all, 9990 pairs, 0 apart.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 69, by count: the Möbius library (9, its
-     struct and table), arrays (8, 5 the next batch), a helper of the
-     fract family (6, a struct too),
-     a palette read in a variation (3, the quaternion family), a float's
-     bits (3),
-     a helper of the fract family (4), crackle's (3), plot emits (3), a
-     parameter named `super`, which Rhai reserves (`w`, `z`), vector
-     trig (3), the rest one or two.
+     passed through. Left, 58, by count (`translate_variation_twins.py
+     --report`): the Möbius library (9, its struct and table), the
+     fract family's helper (6, a struct too), crackle's helper (3,
+     arrays as arguments), the raw draw (5: the juliaq family's bits of
+     it, cpow2, log_db), a parameter by a computed slot (3, the
+     lsystems), plot emits (3), a palette read in a variation (3, the
+     quaternion family's `.rgb`), the renderer's hooks (6: the analytic
+     blurs, the volume emitters, the subflames), arrays of vectors or as
+     arguments (4), a parameter named `super`, which Rhai reserves (`w`,
+     `z`), and one each: a matrix, a pointer argument, a parameter named
+     `3side`, an integer vector, state by a computed slot, and helpers
+     the translator does not yet carry (ho, klein_group, menger,
+     mondrianomies, polychoron, polyhedron, rhodonea, synth, dc_perlin).
 4. **The twins, in batches**: the variations by family -- a skeleton
    generator from the defs, as P4's `write_twin_skeletons`, and each
    held by a density compare and timed -- the escape colourings, the
