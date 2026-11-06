@@ -272,6 +272,8 @@ class Fn:
         # The init's body (`prepare`): `user[i]` the parameters, `out` its
         # slots, each return the map of them.
         self.init = False
+        # The colour's local, when the body takes `vc` (WritesColor).
+        self.color_var = None
         # A 3D body ending in an `if`: the arms set this, returned after.
         self.result_var = None
         for name, ty in args:
@@ -284,6 +286,11 @@ class Fn:
                 pass
             elif name == "accum":
                 self.types["accum"] = vec_of(ty)
+            elif name == "vc" and ty.replace(" ", "") == "ptr<function,f32>":
+                # The colour: a local from `ctx.color`, returned with the point.
+                if helper:
+                    raise Refuse("a helper writing the colour")
+                self.color_var = "vc"
             elif ty.startswith("ptr"):
                 raise Refuse(f"a pointer argument `{name}: {ty}`")
             else:
@@ -376,6 +383,8 @@ class Fn:
         if k == "paren":
             return f"({self.ex(e[1])})"
         if k == "un":
+            if e[1] == "*" and e[2] == ("id", "vc") and self.color_var:
+                return self.color_var
             if e[1] == "*": raise Refuse("a pointer read")
             if e[1] == "&": raise Refuse("a pointer taken")
             if e[1] == "~": raise Refuse("a bitwise not")
@@ -603,6 +612,9 @@ class Fn:
                 value = self.ex(rhs) if op == "=" else f"{n}.{part} {op[0]} ({self.ex(rhs)})"
                 self.line(depth, lambda: f"{n} = complex({value}, {n}.im);" if part == "re" else f"{n} = complex({n}.re, {value});")
                 return
+            if lhs[0] == "un" and lhs[1] == "*" and lhs[2] == ("id", "vc") and self.color_var:
+                self.line(depth, lambda: f"{self.color_var} {op} {self.ex(rhs)};")
+                return
             if lhs[0] == "un" and lhs[1] == "*":
                 raise Refuse("a write through a pointer")
             if lhs[0] != "id":
@@ -685,12 +697,13 @@ class Fn:
             e = s[1]
             if e is None:
                 raise Refuse("a bare return")
+            value = (lambda: f"#{{ z: {self.ex(e)}, color: {self.color_var} }}") if self.color_var else (lambda: self.ex(e))
             if last and self.result_var:
                 self.line(depth, lambda: f"{self.result_var} = {self.ex(e)};")
             elif last:
-                self.line(depth, lambda: self.ex(e))
+                self.line(depth, value)
             else:
-                self.line(depth, lambda: f"return {self.ex(e)};")
+                self.line(depth, lambda: f"return {value()};")
             return
         if k in ("break", "continue"):
             self.emit(depth, f"{k};")
@@ -795,18 +808,24 @@ class Translation:
         f = Fn(self, dim, args, ret, False)
         used = {tk[1] for tk in toks if tk[0] == "id"}
         f.point = next(n for n in (["z", "w", "q", "pt"] if dim == 2 else ["v", "q", "pt", "pv"]) if n not in used)
+        if f.color_var:
+            f.color_var = next(n for n in ("color", "vcolor", "col") if n not in used)
+            f.uses_ctx = True
         p = P(toks)
         ss = block(p)
         if not ss or not ends_in_return(ss[-1]):
             raise Refuse("the body does not end in a return")
+        start = lambda: f.emit(1, f"let {f.color_var} = ctx.color;") if f.color_var else None
+        start()
         f.stmts(ss, 1, last=True)
-        if dim == 3 and ss[-1][0] == "if":
+        if (dim == 3 or f.color_var) and ss[-1][0] == "if":
             f.result_var = next(n for n in ("result", "out3", "res3") if n not in used)
             f.lines = []
-            f.emit(1, f"let {f.result_var} = vec3(0.0, 0.0, 0.0);")
+            start()
+            f.emit(1, f"let {f.result_var} = {'vec3(0.0, 0.0, 0.0)' if dim == 3 else 'complex(0.0, 0.0)'};")
             f.types = dict(f.types)
             f.stmts(ss, 1, last=True)
-            f.emit(1, f.result_var)
+            f.emit(1, f"#{{ z: {f.result_var}, color: {f.color_var} }}" if f.color_var else f.result_var)
         argz = f.point
         sig = f"fn {'variation' if dim == 2 else 'variation3'}({argz}, p{', ctx' if f.uses_ctx else ''})"
         return out, sig + " {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"
@@ -870,7 +889,7 @@ def passthrough_3d(two, three):
 
 def translate(d):
     f = set(d["features"])
-    for feat in ("replace", "writes_rgb", "can_hide", "needs_w", "needs_mobius_lib", "analytic_blur", "volume_side_emit", "writes_color"):
+    for feat in ("replace", "writes_rgb", "can_hide", "needs_w", "needs_mobius_lib", "analytic_blur", "volume_side_emit"):
         if feat in f: raise Refuse(f"the feature {feat}")
     if d.get("plot_emits"): raise Refuse("plot emits")
     for prm in d["parameters"]:

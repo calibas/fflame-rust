@@ -1168,18 +1168,21 @@ Steps, in the order that unlocks the most first (the user picks):
      `NeverZ`; 45 twins `preserve_z`); **derived parameters** (`fn
      prepare(p)`, compiled to the def's `init_<name>` for the init pass,
      87 twins; a transformation's parameters now take its transform's
-     block, so `quaternion`'s 92 fit). 444 twins, 6208 pairs, 0 apart.
+     block, so `quaternion`'s 92 fit); **a colour read** (`ctx.color`,
+     the colour coordinate as it arrives; the interpreter starts from
+     the probe's 0.5; 23 twins, judged by their colour per point and per
+     channel in a flame). 467 twins, 6958 pairs, 0 apart.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, by count: a colour written (56), replace
-     (47), an RGB (20), hide (10), the Möbius library (9), w (8), bit
-     operations (7), a `for` not over a range (7), state (6), a hex
-     literal (8), the coefficients (4), arrays (4), `u32` (3), a
-     parameter named `super`, which Rhai reserves (`w`, `z`), the rest
-     one or two.
+     passed through. Left, by count: replace (47), an RGB (20), a `for`
+     not over a range (15), state (13), hide (10), `u32` (10), the
+     Möbius library (9), w (8), hex literals (8), bit operations (7),
+     the coefficients and other indexing (7), arrays (5), a helper of
+     the fract family (4), crackle's (3), a parameter named `super`,
+     which Rhai reserves (`w`, `z`), the rest one or two.
 4. **The twins, in batches**: the variations by family -- a skeleton
    generator from the defs, as P4's `write_twin_skeletons`, and each
    held by a density compare and timed -- the escape colourings, the

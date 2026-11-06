@@ -218,6 +218,8 @@ struct Shared<'e> {
     accum: C64,
     weight: f64,
     vcolor: Option<f64>,
+    /// The colour a variation reads (`ctx.color`) until it writes one.
+    vcolor_in: f64,
     /// A 3D variation's point's and accumulator's third parts (B2).
     pixel_z: f64,
     accum_z: f64,
@@ -238,6 +240,7 @@ impl<'e> Shared<'e> {
             accum: C64::ZERO,
             weight: 1.0,
             vcolor: None,
+            vcolor_in: 0.0,
             pixel_z: 0.0,
             accum_z: 0.0,
             prev: C64::ZERO,
@@ -296,6 +299,8 @@ pub fn solid(p: &Program, params: &ParamValues, pos: [f64; 3], levels: u32) -> f
 pub struct VariationRun<'p> {
     m: Machine<'p>,
     env: Env,
+    /// The colour each call starts from (`ctx.color`).
+    color: f64,
 }
 
 impl<'p> VariationRun<'p> {
@@ -308,7 +313,14 @@ impl<'p> VariationRun<'p> {
         // `prepare`'s values, at f64, which the body reads as its own.
         m.exec(&p.global_body, &mut sh);
         m.exec(&p.init, &mut sh);
-        VariationRun { m, env }
+        VariationRun { m, env, color: 0.0 }
+    }
+
+    /// Each call starting from the colour `c` (`ctx.color`; the probe's
+    /// 0.5, a flame's colour coordinate).
+    pub fn with_color(mut self, c: f64) -> Self {
+        self.color = c;
+        self
     }
 
     /// The point for `z`, and the colour it wrote if it writes one, given
@@ -318,6 +330,7 @@ impl<'p> VariationRun<'p> {
         sh.pixel = z;
         sh.accum = accum;
         sh.weight = weight;
+        sh.vcolor_in = self.color;
         let prog = self.m.prog;
         self.m.exec(&prog.transform, &mut sh);
         (sh.pixel, sh.vcolor)
@@ -332,6 +345,7 @@ impl<'p> VariationRun<'p> {
         sh.accum = C64::new(accum[0], accum[1]);
         sh.accum_z = accum[2];
         sh.weight = weight;
+        sh.vcolor_in = self.color;
         let prog = self.m.prog;
         self.m.exec(&prog.transform, &mut sh);
         ([sh.pixel.re, sh.pixel.im, sh.pixel_z], sh.vcolor)
@@ -970,7 +984,7 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::Draw => Value::Float(0.0),
         Predef::Accum => Value::Complex(sh.accum),
         Predef::Weight => Value::Float(sh.weight),
-        Predef::VarColor => Value::Float(sh.vcolor.unwrap_or(0.0)),
+        Predef::VarColor => Value::Float(sh.vcolor.unwrap_or(sh.vcolor_in)),
         Predef::PixelZ => Value::Float(sh.pixel_z),
         Predef::AccumZ => Value::Float(sh.accum_z),
         Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {
