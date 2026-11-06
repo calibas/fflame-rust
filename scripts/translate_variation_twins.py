@@ -245,8 +245,22 @@ def functions(src):
 
 # ---- emitting Rhai ------------------------------------------------------
 
+def array_of(ty):
+    """`array<f32, 8>` as ("f32", "8"): an array of numbers or of complex
+    numbers (`vec2`), the language's; any other refused."""
+    m = re.fullmatch(r"array<\s*(f32|i32|u32|vec2<f32>)\s*,\s*(\w+)\s*>", ty.strip())
+    if not m:
+        raise Refuse(f"an array `{ty.strip()}`")
+    return {"f32": "f32", "i32": "int", "u32": "u32", "vec2<f32>": "vec2"}[m.group(1)], m.group(2)
+
+ZERO_OF = {"f32": "0.0", "int": "0", "u32": "u32(0)", "vec2": "complex(0.0, 0.0)"}
+
 def vec_of(ty):
     if ty is None: return None
+    # The language's vectors are floats: an integer one is refused, not
+    # made a float one.
+    if ty.startswith("vec") and ("u32" in ty or "i32" in ty or "bool" in ty):
+        raise Refuse(f"an integer vector `{ty}`")
     if ty.startswith("vec2"): return "vec2"
     if ty.startswith("vec3"): return "vec3"
     if ty.startswith("vec4"): return "vec4"
@@ -343,9 +357,12 @@ class Fn:
                 return {1: "f32", 2: "vec2", 3: "vec3", 4: "vec4"}[n]
             return "f32"
         if k == "index":
+            if e[1][0] == "id" and self.types.get(e[1][1], "").startswith("array:"):
+                return self.types[e[1][1]][len("array:"):]
             return "f32"
         if k == "call":
             f, args = e[1], e[2]
+            if f.startswith("array<"): return "array:" + array_of(f)[0]
             if f.startswith("vec2"): return "vec2"
             if f.startswith("vec3"): return "vec3"
             if f.startswith("vec4"): return "vec4"
@@ -485,6 +502,8 @@ class Fn:
                 if len(sw) == 3: return f"vec3({', '.join(parts)})"
                 return f"rgba({', '.join(parts)})"
             raise Refuse(f"a field `.{sw}`")
+        if k == "index" and e[1][0] == "id" and self.types.get(e[1][1], "").startswith("array:"):
+            return f"{e[1][1]}[{self.ex(e[2])}]"
         if k == "index" and self.init and e[1] in (("id", "user"), ("id", "out")):
             if e[2][0] != "num":
                 raise Refuse("the init's slots by a computed index")
@@ -504,6 +523,11 @@ class Fn:
 
     def call(self, e):
         f, args = e[1], e[2]
+        if f.startswith("array<"):
+            array_of(f)
+            return "[" + ", ".join(self.ex(a) for a in args) + "]"
+        if f.startswith("vec") and ("u32" in f or "i32" in f or "bool" in f):
+            raise Refuse(f"an integer vector `{f}`")
         if f.startswith("vec2"):
             if len(args) == 1:
                 a = self.hold(args[0]); return f"complex({a}, {a})"
@@ -717,6 +741,14 @@ class Fn:
             # `let xf = transforms[xform_id];`: its reads are `ctx`'s.
             self.xform_alias.add(s[2])
             return
+        if k == "decl" and s[3] and s[3].replace(" ", "").startswith("array<"):
+            elem, n = array_of(s[3])
+            self.types[s[2]] = "array:" + elem
+            if s[4] is None:
+                self.emit(depth, f"let {s[2]} = array({n}, {ZERO_OF[elem]});")
+            else:
+                self.line(depth, lambda: f"let {s[2]} = {self.ex(s[4])};")
+            return
         if k == "decl":
             _, kind, name, ty, init = s
             t = vec_of(ty.strip()) if ty else (self.ty(init) if init else None)
@@ -743,6 +775,9 @@ class Fn:
                 other = {"re": "im", "im": "re"}[part]
                 value = (lambda: self.ex(rhs)) if op == "=" else (lambda: f"{n}.{part} {op[0]} ({self.ex(rhs)})")
                 self.line(depth, lambda: f"{n} = complex({value()}, {n}.im);" if part == "re" else f"{n} = complex({n}.re, {value()});")
+                return
+            if lhs[0] == "index" and lhs[1][0] == "id" and self.types.get(lhs[1][1], "").startswith("array:"):
+                self.line(depth, lambda: f"{lhs[1][1]}[{self.ex(lhs[2])}] {op} {self.ex(rhs)};")
                 return
             if lhs == ("id", "point_w_out") and "point_w_out" in self.outs:
                 self.line(depth, lambda: f"{self.outs['point_w_out'][1]} {op} {self.ex(rhs)};")
