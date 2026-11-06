@@ -271,7 +271,7 @@ impl BigMachine {
                         Place::Var(id) => self.vars[*id] = v,
                         Place::Z => self.z = self.to_c(v),
                         // A formula writes neither; the checker keeps it so.
-                        Place::Index | Place::Solid | Place::DZ | Place::CreaseHeight | Place::CreaseSlope | Place::Pixel | Place::Color | Place::PixelZ | Place::Effect(_) => {}
+                        Place::Index | Place::Solid | Place::DZ | Place::CreaseHeight | Place::CreaseSlope | Place::Pixel | Place::Color | Place::Hide | Place::PixelZ | Place::Effect(_) => {}
                     }
                 }
                 IStmt::SetElem { var, index, value } => {
@@ -488,6 +488,7 @@ impl BigMachine {
             // A draw has no reference value (`lang::perturb` refuses a
             // program that draws); a flame variation's, no orbit.
             Predef::Draw | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ => BigValue::Float(BigFloat::zero(self.n)),
+            Predef::VarHide => BigValue::Bool(false),
             // An effect's; a reference orbit is a formula's.
             Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {
                 BigValue::Float(BigFloat::zero(self.n))

@@ -692,7 +692,10 @@ fn escaped(s, p) {
   it returns is kept), `"preserve_z"` (kept only when the flame
   preserves z, else zero) or `"never"` (`NeverZ`: zero); without it a
   `fn variation3` is `always` and a 2D body alone, whose z passes
-  through, is `preserve_z`. `PARAMS` as a formula's; `fn prepare(p)` its
+  through, is `preserve_z`. `INFO.replace: true` says it replaces the
+  point it is given rather than adding into it (`Feature::Replace`,
+  JWildfire's `pVarTP.x = ...`): moved to pre or post it is assigned,
+  and it runs last of the normal ones. `PARAMS` as a formula's; `fn prepare(p)` its
   derived values, a built-in's `wgsl_init`: from the parameters alone
   (no `ctx`, no draw; at least one parameter), on the GPU in the init
   pass once per transform as they change, the map's values read as
@@ -701,9 +704,15 @@ fn escaped(s, p) {
   - `rand()`, a draw in [0, 1) (`NeedsRng`, the flame's stream);
   - `fn variation(z, p, ctx)`: `ctx.accum`, the weighted sum of the
     transform's earlier variations (JWildfire's `pVarTP`;
-    `NeedsAccum`), `ctx.weight`, its own weight, and `ctx.color`, the
+    `NeedsAccum`), `ctx.weight`, its own weight, `ctx.color`, the
     colour coordinate as it reaches the variation (`pVarTP.color`;
-    `WritesColor`, as the colour pointer it reads; 0 inside a formula);
+    `WritesColor`, as the colour pointer it reads; 0 inside a formula),
+    and `ctx.hide`, whether the point is hidden as it reaches it (an
+    earlier variation's);
+  - hiding the point: the body may end with `#{ z: point, hide: flag }`
+    (with `color` or without), this iteration's splat skipped while the
+    orbit goes on (JWildfire's `pVarTP.doHide`, `CanHide`); written
+    back always, so `false` clears an earlier variation's;
   - state per thread: `fn init(p)` returns the map each thread starts
     with (its parameters may seed it), and the body reads and sets its
     fields as `this.name` -- Rhai's own way for a function called on an

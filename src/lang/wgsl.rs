@@ -523,6 +523,8 @@ pub struct VariationShape {
     pub ids: bool,
     pub rng: bool,
     pub color: bool,
+    /// `hide: ptr<function, bool>`: it hides its point (`CanHide`).
+    pub hide: bool,
     /// The state's variables (the fields `init` returns), each with its
     /// first slot; a complex one takes two.
     pub state: Vec<(VarId, u32)>,
@@ -557,11 +559,11 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
             }
         }
     }
-    fn writes_color(stmts: &[IStmt]) -> bool {
+    fn writes(stmts: &[IStmt], place: Place) -> bool {
         stmts.iter().any(|s| match s {
-            IStmt::Assign(Place::Color, _) => true,
-            IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| writes_color(b)) || writes_color(otherwise),
-            IStmt::While { body, .. } | IStmt::Repeat { body, .. } => writes_color(body),
+            IStmt::Assign(p, _) => *p == place,
+            IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| writes(b, place)) || writes(otherwise, place),
+            IStmt::While { body, .. } | IStmt::Repeat { body, .. } | IStmt::Scope(body) => writes(body, place),
             _ => false,
         })
     }
@@ -597,7 +599,9 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
         ids: !p.params.is_empty() || !state.is_empty() || !p.globals.is_empty() || p.reads(Predef::Weight),
         rng: p.reads(Predef::Draw),
         // Its colour pointer, to write it or to read it (`ctx.color`).
-        color: writes_color(&p.transform) || p.reads(Predef::VarColor),
+        color: writes(&p.transform, Place::Color) || p.reads(Predef::VarColor),
+        // Its hide flag's (`#{ z, hide }`, `ctx.hide`).
+        hide: writes(&p.transform, Place::Hide) || p.reads(Predef::VarHide),
         state,
         state_slots: slots,
     })
@@ -622,6 +626,7 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
         ids: shapes.iter().any(|s| s.ids),
         rng: shapes.iter().any(|s| s.rng),
         color: shapes.iter().any(|s| s.color),
+        hide: shapes.iter().any(|s| s.hide),
         state: own.state.clone(),
         state_slots: shapes.iter().map(|s| s.state_slots).max().unwrap_or(0),
     };
@@ -646,6 +651,12 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
         sig.push_str(", vc: ptr<function, f32>");
         args.push_str(", vc");
         args3.push_str(", vc");
+    }
+    // After the colour's, as `shader_builder_v2::variation_call` passes it.
+    if union.hide {
+        sig.push_str(", hide: ptr<function, bool>");
+        args.push_str(", hide");
+        args3.push_str(", hide");
     }
     let sig3 = sig.replace("accum: vec2<f32>", "accum: vec3<f32>");
     let inner2 = format!("{prefix}variation_2d");
@@ -685,6 +696,9 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
     }
     if union.color {
         features.push("writes_color");
+    }
+    if union.hide {
+        features.push("can_hide");
     }
     if union.needs_transform(main) {
         features.push("needs_transform");
@@ -2402,6 +2416,7 @@ impl<'p> Gen<'p> {
                     Place::CreaseSlope => "crease_g".to_string(),
                     Place::Pixel => "pixel".to_string(),
                     Place::Color => "(*vc)".to_string(),
+                    Place::Hide => "(*hide)".to_string(),
                     Place::PixelZ => "pixel_z".to_string(),
                     Place::Effect(p) => self.predef(*p),
                 };
@@ -2717,6 +2732,7 @@ impl<'p> Gen<'p> {
             (Predef::Accum, _) => "accum".into(),
             (Predef::Weight, _) => "transforms[xform_id].variations[variation_id]".into(),
             (Predef::VarColor, _) => "(*vc)".into(),
+            (Predef::VarHide, _) => "(*hide)".into(),
             // A 3D variation's (B2): the point's and the accumulator's
             // third parts.
             (Predef::PixelZ, _) => "pixel_z".into(),

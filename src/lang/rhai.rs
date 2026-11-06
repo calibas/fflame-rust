@@ -1481,6 +1481,12 @@ impl<'s> Lowerer<'s> {
                     Expr::BoolConstant(..) => {}
                     _ => return self.err(*p, "`resets_orbits` is true or false"),
                 },
+                // It replaces the working point rather than adding into it
+                // (`Feature::Replace`): `variations::custom` reads it apart.
+                "replace" if self.transform => match v {
+                    Expr::BoolConstant(..) => {}
+                    _ => return self.err(*p, "`replace` is true or false: whether it replaces the point it is given, as JWildfire's `pVarTP.x = ...`"),
+                },
                 // When it runs among a transform's variations, and where the
                 // pickers group it: a built-in's own (`variations::custom`
                 // reads them apart; `any` a phase the user may move).
@@ -1509,7 +1515,7 @@ impl<'s> Lowerer<'s> {
                     }
                 },
                 o if self.transform => {
-                    return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name`, `resets_orbits`, `phase`, `category` and `z`, not `{o}`"))
+                    return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name`, `resets_orbits`, `replace`, `phase`, `category` and `z`, not `{o}`"))
                 }
                 // An effect's identity (design rule 7: a UUID, or a
                 // built-in's name) and its place in the pipeline, read
@@ -1791,7 +1797,7 @@ impl<'s> Lowerer<'s> {
         }
         let (value, color) = match final_value(last) {
             Some(Final::Expr(x)) => self.point2(x, &mut scope)?,
-            Some(Final::If(fc, p)) => (self.if_value(fc, p, &mut scope)?, None),
+            Some(Final::If(fc, p)) => (self.if_value(fc, p, &mut scope)?, Vec::new()),
             _ => return self.err(last.position(), RESULT),
         };
         let at = self.pos.span(last.position());
@@ -2078,50 +2084,59 @@ impl<'s> Lowerer<'s> {
         Ok(())
     }
 
-    /// A 2D variation's value: the new point, or `#{ z, color }`.
-    fn point2(&mut self, e: &Expr, scope: &mut Scope) -> R<(ast::Expr, Option<ast::Expr>)> {
-        let Expr::Map(m, mp) = e else { return Ok((self.expr(e, scope)?, None)) };
-        let (mut point, mut color) = (None, None);
+    /// A result map's entries besides its point: `color` (the colour it
+    /// writes) and `hide` (whether it hides the point), as the places
+    /// they set.
+    fn result_extra(&mut self, k: &str, v: &Expr, kp: Position, scope: &mut Scope) -> R<(&'static str, ast::Expr)> {
+        match k {
+            "color" => Ok(("vcolor", self.expr(v, scope)?)),
+            "hide" => Ok(("vhide", self.expr(v, scope)?)),
+            o => self.err(kp, format!("a variation's result has `z`, `color` and `hide`, not `{o}`")),
+        }
+    }
+
+    /// A 2D variation's value: the new point, or `#{ z, color, hide }`.
+    fn point2(&mut self, e: &Expr, scope: &mut Scope) -> R<(ast::Expr, Vec<(&'static str, ast::Expr)>)> {
+        let Expr::Map(m, mp) = e else { return Ok((self.expr(e, scope)?, Vec::new())) };
+        let (mut point, mut extra) = (None, Vec::new());
         for (k, v) in &m.0 {
             match k.name.as_str() {
                 "z" => point = Some(self.expr(v, scope)?),
-                "color" => color = Some(self.expr(v, scope)?),
-                o => return self.err(k.pos, format!("a variation's result has `z` and `color`, not `{o}`")),
+                o => extra.push(self.result_extra(o, v, k.pos, scope)?),
             }
         }
         match point {
-            Some(v) => Ok((v, color)),
+            Some(v) => Ok((v, extra)),
             None => self.err(*mp, "the result needs `z`, the new point"),
         }
     }
 
-    /// A 2D variation's point and colour, set.
-    fn set_point2(&mut self, value: ast::Expr, color: Option<ast::Expr>, at: Span, body: &mut Vec<ast::Stmt>) {
+    /// A 2D variation's point, colour and hide flag, set.
+    fn set_point2(&mut self, value: ast::Expr, extra: Vec<(&'static str, ast::Expr)>, at: Span, body: &mut Vec<ast::Stmt>) {
         self.flush(body);
-        if let Some(c) = color {
-            body.push(assign(mk(ExprKind::Predef("vcolor".into()), at), c, at));
+        for (place, x) in extra {
+            body.push(assign(mk(ExprKind::Predef(place.into()), at), x, at));
         }
         body.push(assign(mk(ExprKind::Predef("pixel".into()), at), value, at));
     }
 
-    /// A 3D variation's value: the new point, a vector, or `#{ z, color }`.
-    fn point3(&mut self, e: &Expr, p: Position, scope: &mut Scope) -> R<(vec::Vector, Option<ast::Expr>)> {
+    /// A 3D variation's value: the new point, a vector, or `#{ z, color, hide }`.
+    fn point3(&mut self, e: &Expr, p: Position, scope: &mut Scope) -> R<(vec::Vector, Vec<(&'static str, ast::Expr)>)> {
         let (value, color) = match e {
             Expr::Map(m, mp) => {
-                let (mut point, mut color) = (None, None);
+                let (mut point, mut extra) = (None, Vec::new());
                 for (k, v) in &m.0 {
                     match k.name.as_str() {
                         "z" => point = Some(self.vexpr(v, scope)?),
-                        "color" => color = Some(self.expr(v, scope)?),
-                        o => return self.err(k.pos, format!("a variation's result has `z` and `color`, not `{o}`")),
+                        o => extra.push(self.result_extra(o, v, k.pos, scope)?),
                     }
                 }
                 match point {
-                    Some(v) => (v, color),
+                    Some(v) => (v, extra),
                     None => return self.err(*mp, "the result needs `z`, the new point"),
                 }
             }
-            x => (self.vexpr(x, scope)?, None),
+            x => (self.vexpr(x, scope)?, Vec::new()),
         };
         if value.kind != vec::Kind::Vec3 {
             return self.err(p, "the new point is a vector: a quaternion's vector part is `q.v`");
@@ -2130,10 +2145,10 @@ impl<'s> Lowerer<'s> {
     }
 
     /// A 3D variation's point and colour, set.
-    fn set_point3(&mut self, value: vec::Vector, color: Option<ast::Expr>, p: Position, at: Span, body: &mut Vec<ast::Stmt>) -> R<()> {
+    fn set_point3(&mut self, value: vec::Vector, extra: Vec<(&'static str, ast::Expr)>, p: Position, at: Span, body: &mut Vec<ast::Stmt>) -> R<()> {
         self.flush(body);
-        if let Some(c) = color {
-            body.push(assign(mk(ExprKind::Predef("vcolor".into()), at), c, at));
+        for (place, x) in extra {
+            body.push(assign(mk(ExprKind::Predef(place.into()), at), x, at));
         }
         let Ok([x, y, z]) = <[ast::Expr; 3]>::try_from(value.parts) else {
             return self.err(p, "`variation3` ends with the new point, a vector, or `#{ z: v, color: index }`");
@@ -3850,7 +3865,10 @@ impl<'s> Lowerer<'s> {
                         // The colour coordinate as it reaches the variation
                         // (JWildfire's `pVarTP.color`), before any it writes.
                         "color" => Ok(mk(ExprKind::Predef("vcolor".into()), span)),
-                        o => self.err(*p, format!("a variation's context has `accum`, `weight` and `color`; not `{o}`")),
+                        // Whether the point is hidden as it reaches it (an
+                        // earlier variation's `hide`).
+                        "hide" => Ok(mk(ExprKind::Predef("vhide".into()), span)),
+                        o => self.err(*p, format!("a variation's context has `accum`, `weight`, `color` and `hide`; not `{o}`")),
                     },
                     Base::Ctx => match name {
                         // `ismand` is 1 on the parameter plane.
@@ -4316,8 +4334,8 @@ impl<'s> Lowerer<'s> {
             let zero = mk(ExprKind::Complex(Box::new(mk(ExprKind::Float(0.0), span)), Box::new(mk(ExprKind::Float(0.0), span))), span);
             // A formula has no colour coordinate: a variation reads 0 there.
             let ctx: HashMap<String, ast::Expr> =
-                [("accum".to_string(), zero), ("weight".to_string(), mk(ExprKind::Float(1.0), span)), ("color".to_string(), mk(ExprKind::Float(0.0), span))].into_iter().collect();
-            inner.bind(cp, Binding::ParamMap(ctx, "in a variation's context (`accum`, `weight`, `color`)"));
+                [("accum".to_string(), zero), ("weight".to_string(), mk(ExprKind::Float(1.0), span)), ("color".to_string(), mk(ExprKind::Float(0.0), span)), ("hide".to_string(), mk(ExprKind::Bool(false), span))].into_iter().collect();
+            inner.bind(cp, Binding::ParamMap(ctx, "in a variation's context (`accum`, `weight`, `color`, `hide`)"));
         }
         let fns = std::mem::replace(&mut self.fns, fns);
         let pos = std::mem::replace(&mut self.pos, Positions::fixed(span));
@@ -4379,7 +4397,7 @@ impl<'s> Lowerer<'s> {
                 // A colouring's view of the loop (P7 step 2); `prev` and
                 // `step_c` are complex, the default.
                 "bailout" | "degree" | "escape_fraction" | "render_px" | "supersample" | "value" => TypeName::Float,
-                "escaped" | "converged" | "has_derivative" => TypeName::Bool,
+                "escaped" | "converged" | "has_derivative" | "vhide" => TypeName::Bool,
                 "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" => TypeName::Float,
                 // An effect's (P2).
                 "density_mean" | "pixel_scale" | "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_amount" => TypeName::Float,

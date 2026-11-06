@@ -220,6 +220,9 @@ struct Shared<'e> {
     vcolor: Option<f64>,
     /// The colour a variation reads (`ctx.color`) until it writes one.
     vcolor_in: f64,
+    /// Whether it hides the point, as written, else as it reached it.
+    vhide: Option<bool>,
+    vhide_in: bool,
     /// A 3D variation's point's and accumulator's third parts (B2).
     pixel_z: f64,
     accum_z: f64,
@@ -241,6 +244,8 @@ impl<'e> Shared<'e> {
             weight: 1.0,
             vcolor: None,
             vcolor_in: 0.0,
+            vhide: None,
+            vhide_in: false,
             pixel_z: 0.0,
             accum_z: 0.0,
             prev: C64::ZERO,
@@ -301,6 +306,8 @@ pub struct VariationRun<'p> {
     env: Env,
     /// The colour each call starts from (`ctx.color`).
     color: f64,
+    /// Whether the last call hid its point (`#{ z, hide }`).
+    hid: bool,
 }
 
 impl<'p> VariationRun<'p> {
@@ -313,7 +320,7 @@ impl<'p> VariationRun<'p> {
         // `prepare`'s values, at f64, which the body reads as its own.
         m.exec(&p.global_body, &mut sh);
         m.exec(&p.init, &mut sh);
-        VariationRun { m, env, color: 0.0 }
+        VariationRun { m, env, color: 0.0, hid: false }
     }
 
     /// Each call starting from the colour `c` (`ctx.color`; the probe's
@@ -333,6 +340,7 @@ impl<'p> VariationRun<'p> {
         sh.vcolor_in = self.color;
         let prog = self.m.prog;
         self.m.exec(&prog.transform, &mut sh);
+        self.hid = sh.vhide.unwrap_or(false);
         (sh.pixel, sh.vcolor)
     }
 
@@ -348,7 +356,13 @@ impl<'p> VariationRun<'p> {
         sh.vcolor_in = self.color;
         let prog = self.m.prog;
         self.m.exec(&prog.transform, &mut sh);
+        self.hid = sh.vhide.unwrap_or(false);
         ([sh.pixel.re, sh.pixel.im, sh.pixel_z], sh.vcolor)
+    }
+
+    /// Whether the last call hid its point (`CanHide`).
+    pub fn hid(&self) -> bool {
+        self.hid
     }
 }
 
@@ -820,6 +834,7 @@ impl<'p> Machine<'p> {
                         Place::CreaseSlope => sh.crease_slope = v.as_c64(),
                         Place::Pixel => sh.pixel = v.as_c64(),
                         Place::Color => sh.vcolor = Some(v.as_f64()),
+                        Place::Hide => sh.vhide = Some(v.as_bool()),
                         Place::PixelZ => sh.pixel_z = v.as_f64(),
                         // An effect runs on the GPU alone.
                         Place::Effect(_) => {}
@@ -985,6 +1000,7 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::Accum => Value::Complex(sh.accum),
         Predef::Weight => Value::Float(sh.weight),
         Predef::VarColor => Value::Float(sh.vcolor.unwrap_or(sh.vcolor_in)),
+        Predef::VarHide => Value::Bool(sh.vhide.unwrap_or(sh.vhide_in)),
         Predef::PixelZ => Value::Float(sh.pixel_z),
         Predef::AccumZ => Value::Float(sh.accum_z),
         Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {
