@@ -1083,6 +1083,64 @@ Steps, in the order that unlocks the most first (the user picks):
    derived parameters, 7: the renderer's own hooks (`PlotEmits` 3,
    `AnalyticBlur` 2, `VolumeSideEmit` 2), each a design of its own,
    open.
+
+   **The census again, 2026-11-05** (branch `rhai-variation-hooks`; the
+   corpus `export_variations_json`, read against the dialect as built),
+   correcting the one above:
+   - **337 need no new hook**: 230 advanced 2D, 60 full 3D, 29 plugin,
+     13 depth 3D, 5 basic.
+   - `NeedsTransform` (123) is mostly the variation's own weight: 117
+     read `transforms[xform_id].variations[variation_id]`, JWildfire's
+     weight inside the formula, which `ctx.weight` already gives. Six
+     read the affine's coefficients (`fan`, `popcorn`, `waves`,
+     `dc_carpet`, `dc_triangle`, `dc_ztransl`): the coefficients hook is
+     theirs alone.
+   - The rest, by how many need each: derived parameters (`prepare`)
+     134; replace 47; the phase 45; hide 39; rgb 20; `never_z` 16; `w`
+     12; the Möbius library 9; the renderer's hooks 7 (out). 61 have a
+     3D body that writes z without `AlwaysZ`, where the dialect's 3D
+     body declares it: they need the z rule as an `INFO` key too. 74 use
+     bit operations, which the dialect has on ints; the 23 hash
+     integers (`pcg` and the host ints) are to check.
+   - **The WGSL is regular**: `let`, `var`, `if`, `for` (68), `switch`
+     (40), `select` (242), helpers (92), vectors and swizzles,
+     `get_param`, `rng_nextf`; 11 arrays, 2 matrices; three helpers take
+     a pointer beyond the rng (`dc_hexes_wf`, `glsl_circuits`,
+     `mondrianomies`).
+   - **Exactness:** a variation's Rhai trig is range-reduced (only an
+     effect's is the hardware's), where the built-ins call the
+     hardware's: a twin differs by ulps wherever trig is, and that is
+     the portable side (the user's rule, 2026-11-05: whatever makes
+     WebGPU, Metal and Vulkan agree). So a twin is held per point within
+     an ulp tolerance -- exact where no trig is -- and, in a flame, by
+     density, as the fixtures are.
+
+   **The order of work** (the user, 2026-11-05: "let's get started on
+   variation hook & twins"):
+   - **V1. The machinery, on a handful written by hand.** A registry of
+     twins beside the escape ones (`variations::twins`, sources in
+     `assets/variations/twins/`), each with its built-in's parameters
+     exactly (a compile test, as the colourings'); **a pair compare on
+     the probe**: the built-in and its twin as two transforms of one
+     probe flame, every probe input through both, 2D and 3D, at the
+     defaults and at swept parameters, held to a tolerance; a density
+     compare in a flame for a sample of each batch (`render_blocks`); a
+     timing; and **Edit as Rhai** for a transform's variation, the twin
+     in the built-in's place with its weight and parameters, the source
+     carried.
+   - **V2. A WGSL-to-Rhai translator** for the regular subset (naga's
+     parse of a def's WGSL to the dialect: a vector `p` a complex in 2D
+     and a `vec3` in 3D, helpers kept, `PARAMS` from the def), so the
+     337 come in batches by family, each translated twin held by V1's
+     compare and read by eye; what it cannot say is listed, and written
+     by hand.
+   - **V3. The hooks, each followed by the twins it unlocks**:
+     derived parameters (`fn prepare(p)` lowered to the def's init
+     setup, 134); the z rule, the phase and replace as `INFO` keys (61,
+     45, 47, 16); outputs beyond the point, `hide`, `rgb`, `w` (39, 20,
+     12); the coefficients (6); the hash ints; the Möbius library as an
+     imported Rhai library (9). The 7 on the renderer's own hooks stay
+     out.
 4. **The twins, in batches**: the variations by family -- a skeleton
    generator from the defs, as P4's `write_twin_skeletons`, and each
    held by a density compare and timed -- the escape colourings, the
