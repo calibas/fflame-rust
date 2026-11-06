@@ -211,6 +211,9 @@ pub enum Predef {
     /// the transform weight-sums as it does x, y and z.
     PointW,
     WOut,
+    /// A flame variation's raw draw (`rand_u32()`): the stream's next 32
+    /// bits, the shader's `rng_next`, of which `rand()` keeps the top 24.
+    DrawU32,
     /// A 3D variation's point's third part, read and written beside
     /// `#pixel` (`fn variation3`, the KIFS plan, B2), and its context's
     /// accumulator's.
@@ -268,6 +271,7 @@ impl Predef {
             Predef::Draw | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ => Ty::Float,
             Predef::VarHide => Ty::Bool,
             Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::PointW | Predef::WOut => Ty::Float,
+            Predef::DrawU32 => Ty::UInt,
             Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => Ty::Float,
             Predef::EffectBlend => Ty::Int,
             Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height | Predef::Pass | Predef::CreasePattern => Ty::Int,

@@ -714,7 +714,10 @@ fn escaped(s, p) {
   pass once per transform as they change, the map's values read as
   `p.name` by both bodies (VARIATIONS.md, *Parameter slots*). The flame's
   hooks (the KIFS plan, C2), each the `Feature` a built-in declares:
-  - `rand()`, a draw in [0, 1) (`NeedsRng`, the flame's stream);
+  - `rand()`, a draw in [0, 1) (`NeedsRng`, the flame's stream), and
+    `rand_u32()`, the stream's raw next 32 bits as a `u32` (the
+    shader's `rng_next`, of which `rand()` keeps the top 24: one
+    stream, so the two interleave as the built-ins' draws do);
   - `fn variation(z, p, ctx)`: `ctx.accum`, the weighted sum of the
     transform's earlier variations (JWildfire's `pVarTP`;
     `NeedsAccum`), `ctx.weight`, its own weight, `ctx.color`, the

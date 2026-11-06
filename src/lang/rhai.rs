@@ -3995,6 +3995,10 @@ impl<'s> Lowerer<'s> {
             }
             return Ok(mk(ExprKind::Predef("draw".into()), span));
         }
+        // A flame variation's raw draw: the stream's next 32 bits, a u32.
+        if name == "rand_u32" && args.is_empty() && f.args.is_empty() && self.transform && !self.fns.contains_key("rand_u32") {
+            return Ok(mk(ExprKind::Predef("draw_u32".into()), span));
+        }
         // A simulation model's kernel table at a tap, and the spectral
         // stage's disc average at the cell (P4 step 9b).
         if matches!(name, "tap" | "disc") && args.is_empty() && self.sim_model && !self.fns.contains_key(name) {
@@ -4426,6 +4430,7 @@ impl<'s> Lowerer<'s> {
                 // `step_c` are complex, the default.
                 "bailout" | "degree" | "escape_fraction" | "render_px" | "supersample" | "value" => TypeName::Float,
                 "escaped" | "converged" | "has_derivative" | "vhide" => TypeName::Bool,
+                "draw_u32" => TypeName::UInt,
                 "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" | "vrgb_r" | "vrgb_g" | "vrgb_b" | "coef_a" | "coef_b" | "coef_c" | "coef_d"
                 | "coef_e" | "coef_f" | "pointw" | "wout" => TypeName::Float,
                 // An effect's (P2).

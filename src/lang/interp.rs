@@ -203,11 +203,10 @@ struct Machine<'p> {
     flame_rng: std::cell::Cell<Option<u32>>,
 }
 
-/// The PCG output of a state (`shaders/core/rng.wgsl` `rng_next`), as a
-/// draw in [0, 1): the top 24 bits.
-fn pcg_draw(old: u32) -> f64 {
+/// The PCG output of a state (`shaders/core/rng.wgsl` `rng_next`).
+fn pcg_out(old: u32) -> u32 {
     let w = ((old >> ((old >> 28) + 4)) ^ old).wrapping_mul(277_803_737);
-    f64::from(((w >> 22) ^ w) >> 8) / 16_777_216.0
+    (w >> 22) ^ w
 }
 
 /// The PCG step.
@@ -854,11 +853,17 @@ impl<'p> Machine<'p> {
         }
     }
 
-    /// The next draw in [0, 1) ([`Predef::Draw`]).
+    /// The next draw in [0, 1) ([`Predef::Draw`]): the top 24 bits of the
+    /// next raw one.
     fn next_draw(&self, sh: &Shared) -> f64 {
+        f64::from(self.next_u32(sh) >> 8) / 16_777_216.0
+    }
+
+    /// The next raw draw, all 32 bits ([`Predef::DrawU32`]).
+    fn next_u32(&self, sh: &Shared) -> u32 {
         if let Some(s) = self.flame_rng.get() {
             self.flame_rng.set(Some(pcg_step(s)));
-            return pcg_draw(s);
+            return pcg_out(s);
         }
         let mut s = self.draw.get();
         if s == 0 {
@@ -866,7 +871,7 @@ impl<'p> Machine<'p> {
             s = x.wrapping_mul(1_664_525).wrapping_add(y.wrapping_mul(22_695_477)).wrapping_add(1_013_904_223) | 1;
         }
         self.draw.set(pcg_step(s));
-        pcg_draw(s)
+        pcg_out(s)
     }
 
     /// An element's place: the flattened index clamped to the array, as
@@ -996,6 +1001,7 @@ impl<'p> Machine<'p> {
                 }
             }
             IExprKind::Predef(Predef::Draw) => Value::Float(self.next_draw(sh)),
+            IExprKind::Predef(Predef::DrawU32) => Value::UInt(self.next_u32(sh)),
             IExprKind::Predef(p) => predef(*p, sh),
             // A real's floor, trunc or ceil back to a float: the float
             // operation, as the GPU computes it -- no int between.
@@ -1074,6 +1080,7 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::Random => Value::Complex(env.random),
         // `Machine::eval` draws; never reached.
         Predef::Draw => Value::Float(0.0),
+        Predef::DrawU32 => Value::UInt(0),
         Predef::Accum => Value::Complex(sh.accum),
         Predef::Weight => Value::Float(sh.weight),
         Predef::VarColor => Value::Float(sh.vcolor.unwrap_or(sh.vcolor_in)),

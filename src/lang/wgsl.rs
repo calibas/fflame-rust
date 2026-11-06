@@ -575,13 +575,14 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
     // `init` runs at a thread's start: no earlier variations, but the
     // thread's stream, as a built-in's `wgsl_state_init` draws from it.
     let init_only = Program { transform: Vec::new(), ..p.clone() };
-    let init_rng = Program { transform: Vec::new(), global_body: Vec::new(), ..p.clone() }.reads(Predef::Draw);
+    let init_only_rng = Program { transform: Vec::new(), global_body: Vec::new(), ..p.clone() };
+    let init_rng = init_only_rng.reads(Predef::Draw) || init_only_rng.reads(Predef::DrawU32);
     if init_only.reads(Predef::Accum) {
         return Err("`init` has no earlier variations: `ctx.accum` is `variation`'s".into());
     }
     // `prepare` runs in the init pass, from the parameters alone.
     let prepare_only = Program { transform: Vec::new(), init: Vec::new(), ..p.clone() };
-    if prepare_only.reads(Predef::Draw) {
+    if prepare_only.reads(Predef::Draw) || prepare_only.reads(Predef::DrawU32) {
         return Err("`prepare` draws no random numbers: it runs once, as the parameters change".into());
     }
     // The state: the fields `init` returns (lowered `s_name`; its own
@@ -601,7 +602,7 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
     Ok(VariationShape {
         accum: p.reads(Predef::Accum) || p.reads(Predef::AccumZ),
         ids: !p.params.is_empty() || !state.is_empty() || !p.globals.is_empty() || p.reads(Predef::Weight) || (0..6).any(|k| p.reads(Predef::Coef(k))),
-        rng: p.reads(Predef::Draw),
+        rng: p.reads(Predef::Draw) || p.reads(Predef::DrawU32),
         // Its colour pointer, to write it or to read it (`ctx.color`).
         init_rng,
         color: writes(&p.transform, Place::Color) || p.reads(Predef::VarColor),
@@ -2769,6 +2770,7 @@ impl<'p> Gen<'p> {
             // Rhai's `rand()` (C2a): the flame's stream in a variation,
             // the pixel's elsewhere.
             (Predef::Draw, Ctx::Variation) => "rng_nextf(rng)".into(),
+            (Predef::DrawU32, _) => "rng_next(rng)".into(),
             // A simulation model's draw (P4): keyed by (seed, cell, step)
             // and a salt of its own, so two draws differ.
             (Predef::Draw, Ctx::Effect) if self.sim_model => {
@@ -4712,6 +4714,7 @@ pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
          fn set_state(xform_id: u32, variation_id: u32, slot: u32, value: f32) {}\n\
          struct RngState {\n    state: u32,\n}\n\
          fn rng_nextf(rng: ptr<function, RngState>) -> f32 {\n    return f32((*rng).state);\n}\n\
+         fn rng_next(rng: ptr<function, RngState>) -> u32 {\n    return (*rng).state;\n}\n\
          var<private> point_w: f32;\n\
          var<private> point_w_out: f32;\n\
          struct StubTransform {\n    a: f32,\n    b: f32,\n    c: f32,\n    d: f32,\n    e: f32,\n    f: f32,\n    variations: array<f32, 4>,\n}\n\

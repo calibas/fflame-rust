@@ -68,7 +68,7 @@ pub fn perturbation(p: &Program) -> Result<Perturbable, String> {
         return Err(format!("its equations carry {} values besides z; deep zoom carries one", p.carried.len()));
     }
     // The reference point and the pixel would draw apart (C2a).
-    if p.reads(Predef::Draw) {
+    if p.reads(Predef::Draw) || p.reads(Predef::DrawU32) {
         return Err("it draws random numbers, which the reference point and the pixel would draw apart".into());
     }
     for place in [Predef::X, Predef::Y, Predef::ScreenPixel, Predef::Random, Predef::WhiteSq] {
