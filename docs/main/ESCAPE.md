@@ -686,7 +686,13 @@ fn escaped(s, p) {
   `"normal"` (without it), `"any"` (the user may move it to pre or post,
   as most built-ins), `"pre"` or `"post"`; `INFO.category` where the
   pickers group it, a `VariationCategory`'s wire name (`plugin` without
-  it). `PARAMS` as a formula's; no `prepare`. The flame's
+  it). A pre or post variation returns the whole point, its weight
+  (`ctx.weight`) applied, as the built-ins do. `INFO.z` is JWildfire's
+  z rule (VARIATIONS.md, *Z semantics*): `"always"` (`AlwaysZ`: the z
+  it returns is kept), `"preserve_z"` (kept only when the flame
+  preserves z, else zero) or `"never"` (`NeverZ`: zero); without it a
+  `fn variation3` is `always` and a 2D body alone, whose z passes
+  through, is `preserve_z`. `PARAMS` as a formula's; no `prepare`. The flame's
   hooks (the KIFS plan, C2), each the `Feature` a built-in declares:
   - `rand()`, a draw in [0, 1) (`NeedsRng`, the flame's stream);
   - `fn variation(z, p, ctx)`: `ctx.accum`, the weighted sum of the

@@ -36,6 +36,6 @@ fn variation3(q, p) {
     let v = q.y;
     let sinv = sin(v);
     let tan_half = tan(v * 0.5);
-    let log_tan = ln(max(abs(tan_half), 1.0e-30));
+    let log_tan = ln(max(1.0e-30, abs(tan_half)));
     vec3(a * cos(u) * sinv, a * sin(u) * sinv, -(a * (cos(v) + log_tan) + b * u))
 }

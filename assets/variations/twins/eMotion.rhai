@@ -27,8 +27,8 @@ fn variation(z, p) {
     let rotate = p.rotate;
     let tmp = z.im * z.im + z.re * z.re + 1.0;
     let tmp2 = 2.0 * z.re;
-    let xmax_raw = (sqrt(max(tmp + tmp2, 0.0)) + sqrt(max(tmp - tmp2, 0.0))) * 0.5;
-    let xmax = max(xmax_raw, 1.0);
+    let xmax_raw = (sqrt(max(0.0, tmp + tmp2)) + sqrt(max(0.0, tmp - tmp2))) * 0.5;
+    let xmax = max(1.0, xmax_raw);
     let mu = acosh(xmax);
     let t = clamp(z.re / xmax, -1.0, 1.0);
     let nu = acos(t);

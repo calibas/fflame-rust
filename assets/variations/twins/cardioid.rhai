@@ -19,6 +19,6 @@ const INFO = #{ title: "Cardioid", name: "rhai_cardioid", category: "advanced_2d
 fn variation(z, p) {
     let a_param = p.a;
     let a = atan2(z.im, z.re);
-    let r = sqrt(max(z.re * z.re + z.im * z.im + sin(a * a_param) + 1.0, 0.0));
+    let r = sqrt(max(0.0, z.re * z.re + z.im * z.im + sin(a * a_param) + 1.0));
     complex(r * cos(a), r * sin(a))
 }

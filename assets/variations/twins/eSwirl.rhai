@@ -26,7 +26,7 @@ fn variation(z, p) {
     let out_p = p.out_p;
     let tmp = z.im * z.im + z.re * z.re + 1.0;
     let tmp2 = 2.0 * z.re;
-    let xmax = max((sqrt(max(tmp + tmp2, 0.0)) + sqrt(max(tmp - tmp2, 0.0))) * 0.5, 1.0);
+    let xmax = max(1.0, (sqrt(max(0.0, tmp + tmp2)) + sqrt(max(0.0, tmp - tmp2))) * 0.5);
     let mu = acosh(xmax);
     let safe_mu = (if abs(mu) < 1.0e-30 { 1.0e-30 } else { mu });
     let t = clamp(z.re / xmax, -1.0, 1.0);

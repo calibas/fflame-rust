@@ -62,7 +62,7 @@ fn variation3(v, p, ctx) {
     tan_c = (if abs(tan_c) <= 1.0e32 { tan_c } else { 0.0 });
     let nx = 0.5 * (v.x + xp * sin(tan_y));
     let ny = 0.5 * (v.y + yp * sin(tan_x));
-    let ratio = min(abs(w), 1.0);
+    let ratio = min(1.0, abs(w));
     let sin_tan_c = sin(tan_c);
     let temp_tz = (if abs(v.z) < 1.0e-30 { sin_tan_c * atan2(v.y, v.x) } else { v.z });
     let temp_pz_over_w = ratio * sin_tan_c * atan2(v.y, v.x);

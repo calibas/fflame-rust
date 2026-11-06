@@ -13,7 +13,7 @@ const INFO = #{ title: "Dust Point", name: "rhai_dustpoint", category: "advanced
 
 fn variation(z, p) {
     let p_sign = (if rand() < 0.5 { 1.0 } else { -1.0 });
-    let r = sqrt(max(z.re * z.re + z.im * z.im, 1.0e-30));
+    let r = sqrt(max(1.0e-30, z.re * z.re + z.im * z.im));
     let w = rand();
     if (w < 0.5) {
         return complex(z.re / r - 1.0, p_sign * z.im / r);

@@ -27,10 +27,10 @@ fn variation(z, p) {
     let power = p.power;
     let dist = p.dist;
     let two_pi = 6.28318530717959;
-    let safe_power_floor = max(to_float(floor(abs(power))), 1.0);
+    let safe_power_floor = max(1.0, to_float(floor(abs(power))));
     let r0 = sqrt(z.re * z.re + z.im * z.im);
-    let R = pow(max(r0, 1.0e-30), dist);
+    let R = pow(max(1.0e-30, r0), dist);
     let n = to_float(floor(power * rand()));
     let alpha = atan2(z.im, z.re) + n * two_pi / safe_power_floor;
-    complex(cos(alpha) / max(R, 1.0e-30), sin(alpha) / max(R, 1.0e-30))
+    complex(cos(alpha) / max(1.0e-30, R), sin(alpha) / max(1.0e-30, R))
 }

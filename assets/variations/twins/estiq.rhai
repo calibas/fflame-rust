@@ -12,7 +12,7 @@ const INFO = #{ title: "Estiq", name: "rhai_estiq", category: "full_3d", phase: 
 
 fn variation(z, p) {
     let e = exp(z.re);
-    let abs_v = max(abs(z.im), 1.0e-30);
+    let abs_v = max(1.0e-30, abs(z.im));
     let s = sin(abs_v);
     let c = cos(abs_v);
     let a = e * s / abs_v;
@@ -21,7 +21,7 @@ fn variation(z, p) {
 
 fn variation3(v, p) {
     let e = exp(v.x);
-    let abs_v = max(sqrt(v.y * v.y + v.z * v.z), 1.0e-30);
+    let abs_v = max(1.0e-30, sqrt(v.y * v.y + v.z * v.z));
     let s = sin(abs_v);
     let c = cos(abs_v);
     let a = e * s / abs_v;

@@ -8,8 +8,8 @@
 const INFO = #{ title: "Sechq", name: "rhai_sechq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
-    let v = max(abs(z.im), 1.0e-20);
-    let norm2 = max(z.re * z.re + z.im * z.im, 1.0e-20);
+    let v = max(1.0e-20, abs(z.im));
+    let norm2 = max(1.0e-20, z.re * z.re + z.im * z.im);
     let ni = 1.0 / norm2;
     let s = sin(v);
     let c = cos(v);
@@ -20,8 +20,8 @@ fn variation(z, p) {
 }
 
 fn variation3(q, p) {
-    let v = max(sqrt(q.y * q.y + q.z * q.z), 1.0e-20);
-    let norm2 = max(q.x * q.x + q.y * q.y + q.z * q.z, 1.0e-20);
+    let v = max(1.0e-20, sqrt(q.y * q.y + q.z * q.z));
+    let norm2 = max(1.0e-20, q.x * q.x + q.y * q.y + q.z * q.z);
     let ni = 1.0 / norm2;
     let s = sin(v);
     let c = cos(v);

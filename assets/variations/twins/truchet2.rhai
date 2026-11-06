@@ -64,13 +64,13 @@ fn variation(z, p) {
     let xs = z.re / safe_scale;
     let xp_in = abs((xs - to_float(floor(xs))) - 0.5) * 2.0;
     let width = w1 * (1.0 - xp_in) + xp_in * w2;
-    width = min(width, 1.0);
+    width = min(1.0, width);
     if (width <= 0.0) {
         return complex(z.re, z.im);
     }
     let xp2 = exp1 * (1.0 - xp_in) + xp_in * exp2;
     let n = xp2;
-    n = min(n, 2.0);
+    n = min(2.0, n);
     if (n <= 0.0) {
         return complex(z.re, z.im);
     }

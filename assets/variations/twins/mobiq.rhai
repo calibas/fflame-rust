@@ -120,7 +120,7 @@ fn variation(z, p) {
     let dx = qct * xx + qcx * tx - qcz * yy + qdx;
     let dy = qct * yy + qcy * tx + qcz * xx + qdy;
     let dz = qcz * tx + qcx * yy - qcy * xx + qdz;
-    let denom = max(dt * dt + dx * dx + dy * dy + dz * dz, 1.0e-30);
+    let denom = max(1.0e-30, dt * dt + dx * dx + dy * dy + dz * dz);
     let ni = 1.0 / denom;
     complex((nt * dt + nx * dx + ny * dy + nz * dz) * ni, (nx * dt - nt * dx - ny * dz + nz * dy) * ni)
 }
@@ -153,7 +153,7 @@ fn variation3(v, p) {
     let dx = qct * xx + qcx * tx - qcz * yy + qdx;
     let dy = qct * yy + qcy * tx + qcz * xx + qdy;
     let dz = qcz * tx + qcx * yy - qcy * xx + qdz;
-    let denom = max(dt * dt + dx * dx + dy * dy + dz * dz, 1.0e-30);
+    let denom = max(1.0e-30, dt * dt + dx * dx + dy * dy + dz * dz);
     let ni = 1.0 / denom;
     vec3((nt * dt + nx * dx + ny * dy + nz * dz) * ni, (nx * dt - nt * dx - ny * dz + nz * dy) * ni, (ny * dt - nt * dy - nz * dx + nx * dz) * ni)
 }

@@ -25,8 +25,8 @@ fn variation(z, p, ctx) {
     let inv_w = 1.0 / (if abs(w) < 1.0e-30 { 1.0e-30 } else { w });
     let xpw = z.re + w;
     let xmw = z.re - w;
-    let denom_arg = max(z.im * z.im + xmw * xmw, 1.0e-30);
-    let num_arg = max(z.im * z.im + xpw * xpw, 1.0e-30);
+    let denom_arg = max(1.0e-30, z.im * z.im + xmw * xmw);
+    let num_arg = max(1.0e-30, z.im * z.im + xpw * xpw);
     let avgr = w * (2.0 + spread) * sqrt(sqrt(num_arg) / sqrt(denom_arg));
     let avga = (atan2(z.im, xmw) - atan2(z.im, xpw)) * 0.5;
     complex(avgr * cos(avga) * inv_w, avgr * sin(avga) * inv_w)

@@ -18,7 +18,7 @@ fn variation(z, p, ctx) {
     let r = rand() * w * (sqrt(z.re * z.re + z.im * z.im) + 1.0e-30);
     let sinr = sin(r);
     let cosr = cos(r);
-    let diff = ln(max(sinr * sinr, 1.0e-30)) * inv_log10 + cosr;
+    let diff = ln(max(1.0e-30, sinr * sinr)) * inv_log10 + cosr;
     if (abs(diff) < 1.0e-30) {
         diff = -30.0;
     }

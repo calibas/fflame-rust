@@ -12,7 +12,7 @@ const INFO = #{ title: "Foci 3D", name: "rhai_foci_3d", category: "full_3d", pha
 
 fn variation(z, p) {
     let expx = exp(z.re) * 0.5;
-    let expnx = 0.25 / max(expx, 1.0e-30);
+    let expnx = 0.25 / max(1.0e-30, expx);
     let boot = atan2(z.im, z.re);
     let cosy = cos(z.im);
     let cosz = cos(boot);
@@ -26,7 +26,7 @@ fn variation(z, p) {
 
 fn variation3(v, p) {
     let expx = exp(v.x) * 0.5;
-    let expnx = 0.25 / max(expx, 1.0e-30);
+    let expnx = 0.25 / max(1.0e-30, expx);
     let boot = v.z;
     if (boot == 0.0) {
         boot = atan2(v.y, v.x);

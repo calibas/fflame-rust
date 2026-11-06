@@ -36,15 +36,15 @@ const INFO = #{ title: "B-Transform", name: "rhai_btransform", category: "advanc
 
 fn variation(z, p) {
     let rotate = p.rotate;
-    let power = max(to_float(p.power), 1.0);
+    let power = max(1.0, to_float(p.power));
     let move_p = p.move;
     let split = p.split;
     let pi = 3.14159265358979;
     let two_pi = 6.28318530717959;
     let xp1 = z.re + 1.0;
     let xm1 = z.re - 1.0;
-    let arg_p = max(xp1 * xp1 + z.im * z.im, 1.0e-30);
-    let arg_m = max(xm1 * xm1 + z.im * z.im, 1.0e-30);
+    let arg_p = max(1.0e-30, xp1 * xp1 + z.im * z.im);
+    let arg_m = max(1.0e-30, xm1 * xm1 + z.im * z.im);
     let tau = 0.5 * (ln(arg_p) - ln(arg_m)) / power + move_p;
     let sigma = pi - atan2(z.im, xp1) - atan2(z.im, 1.0 - z.re) + rotate;
     sigma = sigma / power + two_pi / power * to_float(floor(rand() * power));

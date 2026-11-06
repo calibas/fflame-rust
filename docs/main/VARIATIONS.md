@@ -558,12 +558,13 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 298 of the 647, each a Rhai variation under its
+  P7 step 3): 357 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
-  (`every_variation_twin_compiles_as_its_builtin`). Seven written by
-  hand, 291 translated from the built-ins' WGSL
+  (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
+  `INFO.z`). Seven written by hand, 350 translated from the built-ins'
+  WGSL
   (`scripts/translate_variation_twins.py`, into the skeletons
   `twins::skeleton` writes; `scripts/list_variation_twins.py` writes
   the table).
@@ -591,12 +592,18 @@ function takes the point, and the ids when it has parameters (as
     Editor in use (`formula_editor::variation_as_twin`).
   - `to_float(floor(x))` (`trunc`, `ceil`) is the float operation in
     every kind and in the interpreter, exact at any size.
+  - **A literal first in `min` and `max`**: Rhai's `max(a, b)` keeps a
+    NaN `a` (a test and an assignment, the same in the interpreter),
+    where WGSL's returns the other operand, so a built-in's
+    `sqrt(max(x, 0.0))` is a guard; the translator writes
+    `max(0.0, x)`, WGSL's exactly, a literal never being NaN (`arcsinh`
+    at 1e30, where `x` is inf - inf).
   - **Nothing of the def is lost** (the user, 2026-11-05): each twin
     opens with its def's doc block verbatim -- its description and
     authors, read as text by the API (ESCAPE.md, *The doc block*;
     `every_variation_twin_keeps_its_builtins_doc`) -- and its `INFO`
     gives the def's `category` (where the pickers group it) and its
-    `phase`: `any` for 295 of them, a phase the user may move to pre or
+    `phase`: `any` for 327 of them, a phase the user may move to pre or
     post, which the wire cannot carry, so a variation of the user's takes
     it from its source at registration (`custom::phase_of`,
     `VariationRegistry::set_phase`).

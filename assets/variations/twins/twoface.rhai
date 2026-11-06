@@ -13,7 +13,7 @@ fn variation(z, p, ctx) {
     let r = w;
     if (z.re > 0.0) {
         let denom = z.re * z.re + z.im * z.im;
-        r = r / max(denom, 1.0e-30);
+        r = r / max(1.0e-30, denom);
     }
     complex(r * z.re * inv_w, r * z.im * inv_w)
 }

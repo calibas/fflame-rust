@@ -72,7 +72,7 @@ fn variation(w, p) {
     let xs = w.re * w.re;
     let ys = w.im * w.im;
     let base = xs + ys * y2_mult;
-    let z = pow(max(base, 1.0e-30), power) + x2y2_add;
+    let z = pow(max(1.0e-30, base), power) + x2y2_add;
     let safe_z = (if abs(z) < 1.0e-30 { 1.0e-30 } else { z });
     let safe_center = (if abs(center) < 1.0e-30 { 1.0e-30 } else { center });
     let q = atan2(w.re * a2x_mult, w.im * a2y_mult + a2y_add) * 0.5 + pi * to_float(floor(2.0 * rand()));

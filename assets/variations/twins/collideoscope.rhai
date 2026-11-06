@@ -25,7 +25,7 @@ const INFO = #{ title: "Collideoscope", name: "rhai_collideoscope", category: "a
 
 fn variation(z, p) {
     let a_p = p.a;
-    let num = max(to_float(p.num), 1.0);
+    let num = max(1.0, to_float(p.num));
     let pi = 3.14159265358979;
     let inv_pi = 0.3183098861837907;
     let pi_kn = pi / num;

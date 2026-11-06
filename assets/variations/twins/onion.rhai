@@ -43,7 +43,7 @@ fn variation(z, p, ctx) {
         x1 = x0;
         y1 = y0;
     } else {
-        let radial = (2.0 * r0 - dr) / max(dr, 1.0e-30);
+        let radial = (2.0 * r0 - dr) / max(1.0e-30, dr);
         x1 = radial * x0;
         y1 = radial * y0;
     }
@@ -69,17 +69,17 @@ fn variation3(v, p, ctx) {
     let y1 = 0.0;
     let z1 = 0.0;
     if (d0 <= r0 * r0) {
-        z1 = -sqrt(max(r0 * r0 - d0, 0.0));
+        z1 = -sqrt(max(0.0, r0 * r0 - d0));
         x1 = x0;
         y1 = y0;
     } else if (2.0 * r0 - dr > join) {
-        let radial = (2.0 * r0 - dr) / max(dr, 1.0e-30);
+        let radial = (2.0 * r0 - dr) / max(1.0e-30, dr);
         x1 = radial * x0;
         y1 = radial * y0;
-        z1 = sqrt(max(r0 * r0 - (x1 * x1 + y1 * y1), 0.0));
+        z1 = sqrt(max(0.0, r0 * r0 - (x1 * x1 + y1 * y1)));
     } else {
         z1 = exp(dr - r0 - (r0 - join)) - 1.0 + join;
-        let radial = (2.0 * r0 - dr) / max(dr, 1.0e-30);
+        let radial = (2.0 * r0 - dr) / max(1.0e-30, dr);
         x1 = radial * x0;
         y1 = radial * y0;
     }

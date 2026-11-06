@@ -69,7 +69,7 @@ fn variation(z, p, ctx) {
     let ypower = p.ypower;
     let xypower = p.xypower;
     let logmode = to_float(p.logmode);
-    let log_base = max(p.log_base, 1.0e-6);
+    let log_base = max(1.0e-6, p.log_base);
     let w = ctx.weight;
     let inv_w = 1.0 / (if abs(w) < 1.0e-30 { 1.0e-30 } else { w });
     let xs = z.re * z.re;
@@ -77,13 +77,13 @@ fn variation(z, p, ctx) {
     let ex = 0.0;
     let ey = 0.0;
     if (logmode < 0.5) {
-        ex = pow(max(xs, 1.0e-30), xpower + xypower) * multx;
-        ey = pow(max(ys, 1.0e-30), ypower + xypower) * multy;
+        ex = pow(max(1.0e-30, xs), xpower + xypower) * multx;
+        ey = pow(max(1.0e-30, ys), ypower + xypower) * multy;
     } else {
         let lb = ln(log_base);
         let safe_lb = (if abs(lb) < 1.0e-30 { 1.0e-30 } else { lb });
-        ex = pow(max(ln(xs * multx + 3.0) / safe_lb, 1.0e-30), xpower + 2.25 + xypower) - 1.33;
-        ey = pow(max(ln(ys * multy + 3.0) / safe_lb, 1.0e-30), ypower + 2.25 + xypower) - 1.33;
+        ex = pow(max(1.0e-30, ln(xs * multx + 3.0) / safe_lb), xpower + 2.25 + xypower) - 1.33;
+        ey = pow(max(1.0e-30, ln(ys * multy + 3.0) / safe_lb), ypower + 2.25 + xypower) - 1.33;
     }
     let fx = (if z.re > 0.0 { w * ex + xwidth } else { w * -ex - xwidth });
     let fy = (if z.im > 0.0 { w * ey + ywidth } else { w * -ey - ywidth });

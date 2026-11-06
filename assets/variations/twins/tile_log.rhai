@@ -19,11 +19,11 @@ const INFO = #{ title: "Tile Log", name: "rhai_tile_log", category: "advanced_2d
 fn variation(z, p) {
     let sp = p.spread;
     let x = (if rand() < 0.5 { sp } else { -sp });
-    complex(z.re + round_even(x * ln(max(rand(), 1.0e-30))), z.im)
+    complex(z.re + round_even(x * ln(max(1.0e-30, rand()))), z.im)
 }
 
 fn variation3(v, p) {
     let sp = p.spread;
     let x = (if rand() < 0.5 { sp } else { -sp });
-    vec3(v.x + round_even(x * ln(max(rand(), 1.0e-30))), v.y, v.z)
+    vec3(v.x + round_even(x * ln(max(1.0e-30, rand()))), v.y, v.z)
 }

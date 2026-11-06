@@ -56,32 +56,32 @@ fn variation(z, p) {
     let half_pi = 1.5707963267948966;
     let rhosq = z.re * z.re + z.im * z.im;
     let theta = atan2(z.im, z.re) * d;
-    let delta = pow(max(theta * inv_pi + 1.0, 1.0e-30), a) * c;
+    let delta = pow(max(1.0e-30, theta * inv_pi + 1.0), a) * c;
     let shape_i = to_int(shape);
     let r1 = 1.0;
     if (shape_i == 0) {
-        r1 = sqrt(max(rhosq, 0.0)) + delta;
+        r1 = sqrt(max(0.0, rhosq)) + delta;
     } else if (shape_i == 1) {
-        r1 = sqrt(max(rhosq + delta, 0.0));
+        r1 = sqrt(max(0.0, rhosq + delta));
     } else if (shape_i == 2) {
-        r1 = sqrt(max(rhosq + sin(b * theta) + delta, 0.0));
+        r1 = sqrt(max(0.0, rhosq + sin(b * theta) + delta));
     } else if (shape_i == 3) {
-        r1 = sqrt(max(rhosq + sin(theta) + delta, 0.0));
+        r1 = sqrt(max(0.0, rhosq + sin(theta) + delta));
     } else if (shape_i == 4) {
-        r1 = sqrt(max(rhosq + theta * theta - delta + 1.0, 0.0));
+        r1 = sqrt(max(0.0, rhosq + theta * theta - delta + 1.0));
     } else if (shape_i == 5) {
-        r1 = sqrt(max(rhosq + abs(tan(theta)) + delta, 0.0));
+        r1 = sqrt(max(0.0, rhosq + abs(tan(theta)) + delta));
     } else if (shape_i == 6) {
-        r1 = sqrt(max(rhosq * (1.0 + sin(b * theta)) + delta, 0.0));
+        r1 = sqrt(max(0.0, rhosq * (1.0 + sin(b * theta)) + delta));
     } else if (shape_i == 7) {
-        r1 = sqrt(max(rhosq + abs(sin(0.5 * b * theta)) + delta, 0.0));
+        r1 = sqrt(max(0.0, rhosq + abs(sin(0.5 * b * theta)) + delta));
     } else if (shape_i == 8) {
-        r1 = sqrt(max(rhosq + sin(pi * sin(b * theta)) + delta, 0.0));
+        r1 = sqrt(max(0.0, rhosq + sin(pi * sin(b * theta)) + delta));
     } else {
-        r1 = sqrt(max(rhosq + (sin(b * theta) + sin(2.0 * b * theta + half_pi)) * 0.5 + delta, 0.0));
+        r1 = sqrt(max(0.0, rhosq + (sin(b * theta) + sin(2.0 * b * theta + half_pi)) * 0.5 + delta));
     }
     if (inside != 0.0) {
-        r1 = 1.0 / max(r1, 1.0e-30);
+        r1 = 1.0 / max(1.0e-30, r1);
     }
     complex(r1 * cos(theta), r1 * sin(theta))
 }

@@ -43,7 +43,7 @@ fn variation(z, p) {
     let dist = p.dist;
     let min_v = p.min;
     let max_v = p.max;
-    let rcn = max(abs(n), 1.0e-6);
+    let rcn = max(1.0e-6, abs(n));
     let angle = atan2(z.im, z.re);
     let rad = sqrt(z.re * z.re + z.im * z.im);
     rad = rad - to_float(floor(rad / rcn)) * rcn;

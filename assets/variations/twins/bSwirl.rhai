@@ -26,7 +26,7 @@ fn variation(z, p) {
     let in_p = p.in_p;
     let out_p = p.out_p;
     let pi = 3.14159265358979;
-    let tau = 0.5 * (ln(max((z.re + 1.0) * (z.re + 1.0) + z.im * z.im, 1.0e-30)) - ln(max((z.re - 1.0) * (z.re - 1.0) + z.im * z.im, 1.0e-30)));
+    let tau = 0.5 * (ln(max(1.0e-30, (z.re + 1.0) * (z.re + 1.0) + z.im * z.im)) - ln(max(1.0e-30, (z.re - 1.0) * (z.re - 1.0) + z.im * z.im)));
     let safe_tau = (if abs(tau) < 1.0e-30 { 1.0e-30 } else { tau });
     let sigma = pi - atan2(z.im, z.re + 1.0) - atan2(z.im, 1.0 - z.re);
     sigma = sigma + tau * out_p + in_p / safe_tau;

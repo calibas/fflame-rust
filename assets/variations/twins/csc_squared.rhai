@@ -65,7 +65,7 @@ fn variation(z, p) {
     let safe_cx = (if abs(cx) < 1.0e-30 { 1.0e-30 } else { cx });
     let safe_tx = (if abs(tx) < 1.0e-30 { 1.0e-30 } else { tx });
     let csc = csc_div / safe_cx / safe_tx;
-    let base = max(csc * csc + pi * pi_mult, 1.0e-30);
+    let base = max(1.0e-30, csc * csc + pi * pi_mult);
     let fx_factor = pow(base, csc_pow) + csc_add;
     complex(z.re * fx_factor, z.im * fx_factor * scaley)
 }

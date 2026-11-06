@@ -25,7 +25,7 @@ fn gm_lgamma_iter(x) {
     a = a - 0.13857109526572012 / (xx + 6.0);
     a = a + 9.9843695780195716e-6 / (xx + 7.0);
     a = a + 1.5056327351493116e-7 / (xx + 8.0);
-    log_2pi_half + (xx + 0.5) * ln(t) - t + ln(max(abs(a), 1.0e-30))
+    log_2pi_half + (xx + 0.5) * ln(t) - t + ln(max(1.0e-30, abs(a)))
 }
 
 fn gm_lgamma(x) {

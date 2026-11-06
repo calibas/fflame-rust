@@ -26,14 +26,14 @@ fn xerf_erf(x) {
 }
 
 fn variation(z, p) {
-    let r2 = max(z.re * z.re + z.im * z.im, 1.0e-30);
+    let r2 = max(1.0e-30, z.re * z.re + z.im * z.im);
     let fx = (if abs(z.re) >= 2.0 { z.re / r2 } else { xerf_erf(z.re) });
     let fy = (if abs(z.im) >= 2.0 { z.im / r2 } else { xerf_erf(z.im) });
     complex(fx, fy)
 }
 
 fn variation3(v, p) {
-    let r2 = max(v.x * v.x + v.y * v.y + v.z * v.z, 1.0e-30);
+    let r2 = max(1.0e-30, v.x * v.x + v.y * v.y + v.z * v.z);
     let fx = (if abs(v.x) >= 2.0 { v.x / r2 } else { xerf_erf(v.x) });
     let fy = (if abs(v.y) >= 2.0 { v.y / r2 } else { xerf_erf(v.y) });
     let fz = (if abs(v.z) >= 2.0 { v.z / r2 } else { xerf_erf(v.z) });

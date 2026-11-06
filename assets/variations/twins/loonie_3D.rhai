@@ -15,7 +15,7 @@ fn variation(z, p, ctx) {
     let ef_z = atan2(z.im, z.re);
     let r2 = z.re * z.re + z.im * z.im + ef_z * ef_z;
     if (r2 < sqrvvar) {
-        let scale = sqrt(max(sqrvvar / max(r2, 1.0e-30) - 1.0, 0.0));
+        let scale = sqrt(max(0.0, sqrvvar / max(1.0e-30, r2) - 1.0));
         return complex(scale * z.re, scale * z.im);
     }
     z
@@ -30,7 +30,7 @@ fn variation3(v, p, ctx) {
     }
     let r2 = v.x * v.x + v.y * v.y + ef_z * ef_z;
     if (r2 < sqrvvar) {
-        let scale = sqrt(max(sqrvvar / max(r2, 1.0e-30) - 1.0, 0.0));
+        let scale = sqrt(max(0.0, sqrvvar / max(1.0e-30, r2) - 1.0));
         return vec3(scale * v.x, scale * v.y, scale * ef_z * 0.5);
     }
     vec3(v.x, v.y, ef_z * 0.5)

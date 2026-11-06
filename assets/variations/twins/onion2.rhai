@@ -67,7 +67,7 @@ fn variation(z, p, ctx) {
     let safe_stretch = (if abs(stretch) < 1.0e-30 { 1.0e-30 } else { stretch });
     let inix = z.re - shift_x;
     let iniy = z.im - shift_y;
-    let sqtr = max(sqrt(inix * inix + iniy * iniy), 1.0e-30);
+    let sqtr = max(1.0e-30, sqrt(inix * inix + iniy * iniy));
     let t = sqtr / safe_stretch - pi_2;
     let r = 0.0;
     if (t > meeting_pt) {
@@ -103,7 +103,7 @@ fn variation3(v, p, ctx) {
     let inix = v.x - shift_x;
     let iniy = v.y - shift_y;
     let iniz = v.z;
-    let sqtr = max(sqrt(inix * inix + iniy * iniy + iniz * iniz), 1.0e-30);
+    let sqtr = max(1.0e-30, sqrt(inix * inix + iniy * iniy + iniz * iniz));
     let t = sqtr / safe_stretch - pi_2;
     let r = 0.0;
     let z = 0.0;
@@ -130,7 +130,7 @@ fn variation3(v, p, ctx) {
     let fz = z;
     fx = fx + r * iniz * (inix / sqtr);
     fy = fy + r * iniz * (iniy / sqtr);
-    let denom = max(r * r + z * z, 1.0e-30);
+    let denom = max(1.0e-30, r * r + z * z);
     fz = fz + iniz * z / denom;
     fx = fx + shift_x;
     fy = fy + shift_y;
