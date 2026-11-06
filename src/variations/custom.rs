@@ -185,27 +185,35 @@ pub fn register(source: &str) -> Result<String, String> {
 }
 
 fn register_payload(dl: VariationDownload, source: &str) -> Result<String, String> {
-    let mut registry = crate::variations::global_registry_mut();
+    let name = register_into(&mut crate::variations::global_registry_mut(), &dl, source)?;
+    // So `ensure` does not register this source again.
+    if let Ok(mut known) = registered().lock() {
+        known.insert(name.clone(), source.to_string());
+    }
+    Ok(name)
+}
+
+/// Register `dl`, compiled from `source`, in `registry` -- the global one,
+/// or a test's own -- under its key; refused when a built-in or a
+/// download has it.
+pub(crate) fn register_into(registry: &mut crate::variations::VariationRegistry, dl: &VariationDownload, source: &str) -> Result<String, String> {
     if let Some(existing) = registry.get(&dl.name) {
         if existing.provenance != Provenance::Local {
             return Err(format!("`{}` is taken by a {} variation", dl.name, existing.provenance.label()));
         }
     }
-    registry.register_from_api(&dl, Provenance::Local);
+    registry.register_from_api(dl, Provenance::Local);
     // `any`, which the wire cannot say, from the source.
     if phase_of(source) == crate::variations::VariationPhase::Any {
         registry.set_phase(&dl.name, crate::variations::VariationPhase::Any);
     }
-    if registry.has(&dl.name) {
-        drop(registry);
-        // So `ensure` does not register this source again.
-        if let Ok(mut known) = registered().lock() {
-            known.insert(dl.name.clone(), source.to_string());
-        }
-        Ok(dl.name)
-    } else {
-        Err(format!("`{}` was refused at registration", dl.name))
+    if !registry.has(&dl.name) {
+        return Err(format!("`{}` was refused at registration", dl.name));
     }
+    // Whether it is a built-in's twin, unedited (the planner's data, a
+    // `.flame` export).
+    crate::variations::twins::note(&dl.name, source);
+    Ok(dl.name.clone())
 }
 
 /// The source of the user's variation `name` -- its key, or the

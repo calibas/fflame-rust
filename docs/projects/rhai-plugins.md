@@ -1150,6 +1150,11 @@ Steps, in the order that unlocks the most first (the user picks):
      (5) and hex literals (3), the coefficients (3), arrays (3), a
      helper of its own kind (crackle's, synth's, ho's), state, a
      non-range `for`. Read by eye: a sample, not all 291.
+     **Nothing lost, built 2026-11-05**: each twin opens with its def's
+     doc block verbatim and gives its category and phase in `INFO`; an
+     unedited twin keeps the deep-zoom planner's data and exports in a
+     `.flame` as its built-in (VARIATIONS.md, *Twins*). Still the
+     def's: its aliases.
    - **V3. The hooks, each followed by the twins it unlocks**:
      derived parameters (`fn prepare(p)` lowered to the def's init
      setup, 134); the z rule, the phase and replace as `INFO` keys (61,

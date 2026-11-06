@@ -1357,6 +1357,7 @@ pub fn write_flame_xml(config: &FractalConfig) -> String {
 /// `config.flame.subflames[id]`. Children inherit the parent's
 /// tonemap/palette since our model has no per-subflame FractalConfig.
 fn write_single_flame(out: &mut String, config: &FractalConfig, flame: &Flame) {
+    let flame = &*twins_as_builtins(&config.flame, flame);
     let version = format!(
         "Fractal Flame WGPU {}",
         env!("CARGO_PKG_VERSION")
@@ -1594,6 +1595,41 @@ fn xml_escape_attr(s: &str) -> String {
 /// variation `name` (`Flame::custom_variations`).
 fn carries_custom(flame: &Flame, name: &str) -> bool {
     flame.custom_variations.iter().any(|s| s.entry == name) || flame.subflames.iter().any(|f| carries_custom(f, name))
+}
+
+/// The built-in the variation `name` is an unedited twin of
+/// (`variations::twins::builtin_of`): by the source `root` (or a subflame
+/// of it) carries, else as registered.
+fn twin_builtin(root: &Flame, name: &str) -> Option<&'static str> {
+    fn carried<'a>(f: &'a Flame, name: &str) -> Option<&'a crate::config::escape::CustomSource> {
+        f.custom_variations.iter().find(|s| s.entry == name).or_else(|| f.subflames.iter().find_map(|s| carried(s, name)))
+    }
+    match carried(root, name) {
+        Some(src) => crate::variations::twins::builtin_of(&src.source),
+        None => crate::variations::twins::builtin_of_key(name),
+    }
+}
+
+/// `flame` with each unedited twin under its built-in's name, its weight,
+/// parameters, order and phase with it: the variation JWildfire and
+/// Apophysis know, as it computes. A transform that has the built-in as
+/// well keeps the twin, which `write_xform` drops.
+fn twins_as_builtins<'a>(root: &Flame, flame: &'a Flame) -> std::borrow::Cow<'a, Flame> {
+    let twins = |t: &Transform| -> Vec<(String, &'static str)> {
+        t.variations.keys().filter_map(|n| Some((n.clone(), twin_builtin(root, n)?))).collect()
+    };
+    if flame.transforms.iter().chain(&flame.final_transforms).all(|t| twins(t).is_empty()) {
+        return std::borrow::Cow::Borrowed(flame);
+    }
+    let mut out = flame.clone();
+    for t in out.transforms.iter_mut().chain(out.final_transforms.iter_mut()) {
+        for (twin, builtin) in twins(t) {
+            if !t.variations.contains_key(builtin) {
+                t.rename_variation(&twin, builtin);
+            }
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 fn collect_plugin_names(flame: &Flame) -> String {
@@ -2006,6 +2042,37 @@ mod tests {
         assert_eq!(xform.variation_priorities.get("bubble"), None,
             "priority 0 on a normal-default var is not an override");
         assert_eq!(xform.variation_priorities.len(), 1);
+    }
+
+    /// **An unedited twin exports as its built-in** (`variations::twins`):
+    /// its weight, parameters and phase under the built-in's name, which
+    /// reads back as the flame did before Edit as Rhai; an edited twin is
+    /// a variation of the user's, and dropped.
+    #[test]
+    fn an_unedited_twin_exports_as_its_builtin() {
+        use crate::variations::{custom, twins};
+        let xml = r#"<flames name="t"><flame name="T" size="64 64" center="0 0" scale="20">
+   <xform weight="1" color="0.5" linear="0.2" curl="0.7" curl_c1="0.3" curl_c2="-0.2" curl_fx_priority="-1" coefs="1 0 0 1 0 0" opacity="1" />
+</flame></flames>"#;
+        let base = parse_flame_xml(xml).expect("parse").remove(0);
+        let as_twin = |source: &str| {
+            let mut c = base.clone();
+            let src = custom::carried(source).expect("carried");
+            assert!(c.flame.transforms[0].rename_variation("curl", &src.entry));
+            c.flame.custom_variations.push(src);
+            c
+        };
+        let own = crate::lang::rhai::with_own_id(twins::source("curl").unwrap(), &crate::scripted::mint_id());
+        let was = &base.flame.transforms[0];
+        let back = &parse_flame_xml(&write_flame_xml(&as_twin(&own))).expect("reparse")[0].flame.transforms[0];
+        assert_eq!(back.variations, was.variations);
+        assert_eq!(back.variation_params, was.variation_params);
+        assert_eq!(back.variation_priorities, was.variation_priorities);
+        assert_eq!(back.variation_order, was.variation_order);
+
+        let edited = write_flame_xml(&as_twin(&format!("{own}// mine now\n")));
+        assert!(!edited.contains("curl"), "an edited twin is the user's:\n{edited}");
+        assert!(edited.contains("linear=\"0.2\""));
     }
 
     #[test]

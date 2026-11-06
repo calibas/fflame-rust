@@ -518,7 +518,9 @@ function takes the point, and the ids when it has parameters (as
   older version of an id that is live (`renderer::sticky`), as each
   Live edit would otherwise fill its cap with dead code.
 - **`.flame` export drops it** (JWildfire has no such variation): its
-  weight, its parameters and its `plugins=` entry, with a warning.
+  weight, its parameters and its `plugins=` entry, with a warning --
+  unless it is a built-in's twin, unedited, which is written as the
+  built-in (*Twins*).
 - **As a lens**: the lens menu lists custom variations after the
   measured ones (`lens::lens_menu`).
 - **Inside a formula**: `vary("name", z)` inlines one into an escape
@@ -597,10 +599,24 @@ function takes the point, and the ids when it has parameters (as
     `phase`: `any` for 295 of them, a phase the user may move to pre or
     post, which the wire cannot carry, so a variation of the user's takes
     it from its source at registration (`custom::phase_of`,
-    `VariationRegistry::set_phase`). Still a def's alone: its aliases
-    (a `.flame`'s foreign names), the deep-zoom planner's inverses and
-    bounds (`variations::inverse`, `bound`), and a `.flame` export, which
-    drops a variation of the user's.
+    `VariationRegistry::set_phase`).
+  - **An unedited twin is its built-in** where only a def is known
+    (`twins::builtin_of`: the twin's text, with or without the id Edit
+    as Rhai gives it, line ends aside; noted per key at registration,
+    `twins::note`, `builtin_of_key`). The deep-zoom planner's tables --
+    inverses, bounds, interval bodies -- find the built-in's under its
+    key (`twins::planner_name`, in `inverse::for_name`,
+    `bound::for_name` and `derive`), except a many-valued one's: the
+    replay forces an arm in the built-in's WGSL text
+    (`bound::force_arms`), so a twin of `julian` or `juliascope` would
+    plan as unknown. A `.flame` export writes it under its built-in's
+    name, its weight, parameters, order and `fx_priority` with it
+    (`flame_xml::twins_as_builtins`). One character changed and it is a
+    variation of the user's, with neither
+    (`an_unedited_twin_keeps_its_builtins_planner_data`,
+    `an_unedited_twins_transform_is_analysed_as_its_builtins`,
+    `an_unedited_twin_exports_as_its_builtin`). Still a def's alone: its
+    aliases (a `.flame`'s foreign names).
 `VariationPhase::Any` has no wire form yet, so a downloaded variation
 cannot honour `fx_priority`. The catalog, caching and curation are in
 [ONLINE.md](ONLINE.md); the design record is
