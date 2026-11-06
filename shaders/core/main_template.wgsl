@@ -1480,8 +1480,14 @@ fn probe_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Feature::NeedsRng draws the same sequence on every platform and every
     // run. PCG is integer arithmetic throughout, which fast-math cannot
     // touch — so an RNG-driven variation that diverges has diverged in its
-    // own math, not in its randomness.
+    // own math, not in its randomness. Paired (a built-in beside its Rhai
+    // twin, src/probe/pairs.rs), from the point alone: both of a pair draw
+    // the same sequence.
+{{#if PROBE_PAIRED}}
+    var rng = rng_init(point_idx, 0x9E3779B9u);
+{{else}}
     var rng = rng_init(slot, 0x9E3779B9u);
+{{/if}}
 
     var should_hide = false;
 {{#if HAS_VOLUME_SIDE}}
@@ -1538,6 +1544,15 @@ fn probe_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{else}}
     atomicStore(&histogram[out_base + 2u], 0u);
 {{/if}}
+{{#if PROBE_PAIRED}}
+{{#if HAS_DC}}
+    // The colour a WritesColor variation drives, which a twin must too.
+    atomicStore(&histogram[out_base + 3u], bitcast<u32>(vc));
+{{else}}
     atomicStore(&histogram[out_base + 3u], 0u);
+{{/if}}
+{{else}}
+    atomicStore(&histogram[out_base + 3u], 0u);
+{{/if}}
 }
 {{/if}}

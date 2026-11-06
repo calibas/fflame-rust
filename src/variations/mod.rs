@@ -18,6 +18,8 @@ pub mod docs;
 pub mod analytic_blur;
 /// Variations written in the formula language (the KIFS plan, C1).
 pub mod custom;
+// Rhai twins of the built-ins (rhai-plugins P7 steps 3 and 4).
+pub mod twins;
 
 use definition::VariationDef;
 pub use definition::{Feature, MAX_ORBIT_LENGTH, ORBIT_LENGTH_PARAM};

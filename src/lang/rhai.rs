@@ -2725,6 +2725,12 @@ impl<'s> Lowerer<'s> {
                             Expr::BoolConstant(..) => settings.push(Setting { name: k.name.to_string(), value: SettingValue::Expr(self.literal(x)?), span: kspan }),
                             _ => return self.err(k.pos, "`exponential` is `true` or `false`"),
                         },
+                        // Free beyond the slider's range, both bounds given
+                        // (a built-in variation's unlimited number).
+                        "free" => match x {
+                            Expr::BoolConstant(..) => settings.push(Setting { name: k.name.to_string(), value: SettingValue::Expr(self.literal(x)?), span: kspan }),
+                            _ => return self.err(k.pos, "`free` is `true` or `false`: whether a typed value may leave the range"),
+                        },
                         // What the control is, beyond what the value says:
                         // an angle, in degrees as stored and shown.
                         "type" => match x {
@@ -2736,7 +2742,7 @@ impl<'s> Lowerer<'s> {
                         o => {
                             return self.err(
                                 k.pos,
-                                format!("a parameter has `value`, `min`, `max`, `caption`, `hint`, `choices`, `function`, `exponential`, `type`, `show_if`; not `{o}`"),
+                                format!("a parameter has `value`, `min`, `max`, `caption`, `hint`, `choices`, `function`, `exponential`, `free`, `type`, `show_if`; not `{o}`"),
                             )
                         }
                     }

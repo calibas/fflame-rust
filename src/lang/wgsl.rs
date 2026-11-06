@@ -2460,9 +2460,12 @@ impl<'p> Gen<'p> {
             IExprKind::Convert(a) if self.ctx == Ctx::Effect && (a.ty, e.ty) == (Ty::Int, Ty::Float) && self.int_as_float(a).is_some() => {
                 self.int_as_float(a).unwrap_or_default()
             }
+            // A real's floor, trunc or ceil taken back to a float is the
+            // float operation, in every kind: exact at any size, where the
+            // int between saturates past 2^31 (a variation's floor of a
+            // far point; the interpreter computes it so too).
             IExprKind::Convert(a)
-                if self.ctx == Ctx::Effect
-                    && (a.ty, e.ty) == (Ty::Int, Ty::Float)
+                if (a.ty, e.ty) == (Ty::Int, Ty::Float)
                     && matches!(&a.kind, IExprKind::Call(Builtin::Floor | Builtin::Trunc | Builtin::Ceil, x) if x.ty == Ty::Float) =>
             {
                 let IExprKind::Call(f, x) = &a.kind else { unreachable!() };

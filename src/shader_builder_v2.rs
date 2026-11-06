@@ -483,6 +483,12 @@ pub struct ShaderConstants {
     /// path that binding is the `samples` array instead.
     pub probe: bool,
 
+    /// The probe evaluating pairs, a built-in beside its Rhai twin
+    /// (`probe::pairs`): its random numbers seeded from the input point
+    /// alone, so the two draw alike, and a WritesColor variation's colour
+    /// written out beside the point. Only with `probe`.
+    pub probe_paired: bool,
+
     /// Emit the reachability-census instrumentation inside the generated
     /// dispatcher (see `src/census/`): per-transform input classes,
     /// per-variation output and pre/post-input classes, counted into a
@@ -545,6 +551,7 @@ impl Default for ShaderConstants {
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
+            probe_paired: false,
             census: false,
             attachment_cap: 1,
             inlined_transforms: None,
@@ -878,6 +885,7 @@ impl ShaderConstants {
             // construction.
             solid_enabled: false,
             probe: false,
+            probe_paired: false,
             census: false,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: Some(inlined),
@@ -1877,6 +1885,7 @@ impl ShaderBuilder {
         // call sites above use — which is the point of putting it in
         // the template rather than generating it separately.
         processor.set("PROBE", constants.probe);
+        processor.set("PROBE_PAIRED", constants.probe && constants.probe_paired);
         // IMPORTANCE_SAMPLING gates biased transform selection and the
         // windowed likelihood-ratio correction that makes it unbiased
         // (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). Off strips the
@@ -2162,6 +2171,7 @@ impl ShaderBuilder {
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
+            probe_paired: false,
             census: false,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: None,
@@ -2204,6 +2214,7 @@ impl ShaderBuilder {
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
+            probe_paired: false,
             census: false,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: None,
@@ -2274,6 +2285,7 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
             flatten_z_per_iter: false,
             solid_enabled: false,
             probe: false,
+            probe_paired: false,
             census: false,
             attachment_cap: flame.attachment_cap() as u32,
             inlined_transforms: None,

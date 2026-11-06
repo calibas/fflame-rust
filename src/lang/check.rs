@@ -537,9 +537,12 @@ impl Checker {
             };
             let min = num(self, "min");
             let max = num(self, "max");
-            let exponential = block.get("exponential").is_some_and(|s| {
-                matches!(&s.value, SettingValue::Expr(Expr { kind: ExprKind::Bool(true), .. }))
-            });
+            let flag = |key: &str, v: bool| {
+                block.get(key).is_some_and(|s| matches!(&s.value, SettingValue::Expr(Expr { kind: ExprKind::Bool(b), .. }) if *b == v))
+            };
+            let exponential = flag("exponential", true);
+            let linear = flag("exponential", false);
+            let free = flag("free", true);
             let angle = block.get("angle").is_some_and(|s| {
                 matches!(&s.value, SettingValue::Expr(Expr { kind: ExprKind::Bool(true), .. }))
             });
@@ -553,6 +556,8 @@ impl Checker {
                 hint: string_setting(block.get("hint")).unwrap_or_default(),
                 choices,
                 exponential,
+                linear,
+                free,
                 angle,
                 span: block.span,
             };
@@ -897,6 +902,8 @@ impl Checker {
             hint: String::new(),
             choices: Vec::new(),
             exponential: false,
+            linear: false,
+            free: false,
             angle: false,
             span,
         });

@@ -281,6 +281,13 @@ pub struct Param {
     pub hint: String,
     pub choices: Vec<String>,
     pub exponential: bool,
+    /// Declared not logarithmic (a Rhai `exponential: false`), where a
+    /// range of five decades would otherwise make it so.
+    pub linear: bool,
+    /// Free with both bounds given (a Rhai `free: true`): its range the
+    /// slider's, a typed value may leave it -- a built-in variation's
+    /// `unlimited_float`.
+    pub free: bool,
     /// An angle in degrees (a Rhai `PARAMS` entry's `type: "angle"`): its
     /// control is the angle one, `ParamType::Angle`. The script reads the
     /// degrees as stored and shown.
@@ -649,11 +656,11 @@ fn number_kind(p: &Param, default: f64) -> crate::params::ParamKind {
         (lo, hi)
     };
     let (lo, hi) = (lo as f32, hi as f32);
-    let free = !(p.min.is_some() && p.max.is_some());
+    let free = p.free || !(p.min.is_some() && p.max.is_some());
     match p.kind {
         ParamKind::Int => crate::params::ParamKind::Int { default: default.round() as i64, min: lo.round() as i64, max: hi.round() as i64, free },
         _ => {
-            let log = lo > 0.0 && (p.exponential || hi / lo >= 1e5);
+            let log = lo > 0.0 && !p.linear && (p.exponential || hi / lo >= 1e5);
             crate::params::ParamKind::Float { default: f64::from(default as f32), min: lo.into(), max: hi.into(), free: free && !p.angle, log, angle: p.angle }
         }
     }
