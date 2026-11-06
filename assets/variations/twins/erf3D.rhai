@@ -1,6 +1,13 @@
+/// 3D component-wise erf — same as `erf` but with `erf(z)` applied to the Z
+/// axis too.
+///
+/// # Authors
+/// - zephyrtronium
+/// - DarkBeam
+
 // Erf 3D, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Erf 3D", name: "rhai_erf3d" };
+const INFO = #{ title: "Erf 3D", name: "rhai_erf3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let pp = 0.3275911;

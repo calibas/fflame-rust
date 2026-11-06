@@ -1,3 +1,11 @@
+/// Glynnia with 4 user-tunable knobs — exposes the radius/distance scaling
+/// and the branch threshold as parameters.
+///
+/// # Authors
+/// - Michael Faber
+/// - Maulana Randa
+/// - CozyG
+
 // Glynnia 3, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +31,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Glynnia 3", name: "rhai_glynnia3" };
+const INFO = #{ title: "Glynnia 3", name: "rhai_glynnia3", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let rscale = p.rscale;

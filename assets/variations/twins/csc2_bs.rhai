@@ -1,3 +1,9 @@
+/// Parameterized Csc (1/sin). At defaults (1.0), reduces to Csc.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
+
 // Csc2 BS, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +29,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Csc2 BS", name: "rhai_csc2_bs" };
+const INFO = #{ title: "Csc2 BS", name: "rhai_csc2_bs", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let x1 = p.x1;

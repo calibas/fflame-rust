@@ -1,3 +1,9 @@
+/// 3D version of Julia — splits the output into `power` randomly-chosen
+/// branches in both XY and Z. Generates intricate 3D Julia-set fractals.
+///
+/// # Authors
+/// - Joel Faber
+
 // Julia3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +14,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Julia3D", name: "rhai_julia3d" };
+const INFO = #{ title: "Julia3D", name: "rhai_julia3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let power_f = to_float(p.power);

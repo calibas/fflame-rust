@@ -1,3 +1,10 @@
+/// Parameterized version of Popcorn — adds `param · sin(tan(coord · c))`
+/// to each axis. Unlike the original Popcorn (which reads parameters from
+/// the affine matrix), this one has dedicated `x` / `y` / `c` sliders.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Popcorn2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +25,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Popcorn2", name: "rhai_popcorn2" };
+const INFO = #{ title: "Popcorn2", name: "rhai_popcorn2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let x_p = p.x;

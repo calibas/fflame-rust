@@ -1,6 +1,11 @@
+/// Quaternion tangent — 3D extension of Tan (sin/cos).
+///
+/// # Authors
+/// - zephyrtronium
+
 // Tanq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Tanq", name: "rhai_tanq" };
+const INFO = #{ title: "Tanq", name: "rhai_tanq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let v = max(abs(z.im), 1.0e-20);

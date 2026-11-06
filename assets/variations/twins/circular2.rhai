@@ -1,3 +1,10 @@
+/// Circular with user-tunable hash multipliers — same shape as Circular but
+/// exposes the `(12.9898, 78.233)` magic numbers as `xx` / `yy` parameters.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - Brad Stefanov
+
 // Circular 2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +30,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Circular 2", name: "rhai_circular2" };
+const INFO = #{ title: "Circular 2", name: "rhai_circular2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let angle_deg = p.angle;

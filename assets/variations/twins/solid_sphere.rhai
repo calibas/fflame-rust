@@ -1,3 +1,15 @@
+/// Uniform spherical-shell sampler. IGNORES the incoming point (like
+/// the classic blur family) and emits a volumetrically uniform random
+/// point inside the shell `radius·[1−thickness, 1]` around a
+/// configurable center. Mix at a low weight into a transform (or give
+/// it its own low-weight transform) to guarantee baseline density over
+/// an entire sphere — the textured variations still dominate wherever
+/// they have density; this fills what they leave empty.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
+
 // Solid Sphere, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -28,7 +40,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Solid Sphere", name: "rhai_solid_sphere" };
+const INFO = #{ title: "Solid Sphere", name: "rhai_solid_sphere", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let radius = p.radius;

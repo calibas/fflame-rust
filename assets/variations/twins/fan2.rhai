@@ -1,3 +1,10 @@
+/// Slices the plane into pie wedges and offsets each wedge alternately -
+/// even wedges go one way, odd wedges the other. Configurable wedge width
+/// and rotation.
+///
+/// # Authors
+/// - Scott Draves
+
 // Fan2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Fan2", name: "rhai_fan2" };
+const INFO = #{ title: "Fan2", name: "rhai_fan2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let PI = 3.14159265359;

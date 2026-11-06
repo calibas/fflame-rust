@@ -1,6 +1,12 @@
+/// Spiral wing — uses cos/sin of `x²` with `sin(y²)` modulation. Produces
+/// wing-shaped spiral patterns.
+///
+/// # Authors
+/// - Raykoid666
+
 // Spiral Wing, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Spiral Wing", name: "rhai_spiralwing" };
+const INFO = #{ title: "Spiral Wing", name: "rhai_spiralwing", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let c1 = z.re * z.re;

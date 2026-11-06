@@ -1,3 +1,11 @@
+/// Discrete pie-slice splatter — divides the unit disc into `slices`
+/// wedges and scatters output points uniformly inside one randomly
+/// chosen wedge per iteration. The slice's angular extent is controlled
+/// by `thickness`.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Pie, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +26,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Pie", name: "rhai_pie" };
+const INFO = #{ title: "Pie", name: "rhai_pie", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let two_pi = 6.28318530717959;

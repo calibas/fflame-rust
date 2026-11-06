@@ -1,3 +1,15 @@
+/// Quadrant-based fold-mirror — dispatches to one of four behaviors based
+/// on the input's position relative to per-axis thresholds: swap-or-pass on
+/// the outer boundary (controlled by `type`), additive shift in the third
+/// quadrant, scaled diagonal-mirror in a central region, or identity
+/// elsewhere. The variation weight is used both as a comparison threshold
+/// and an additive offset, so output can change shape qualitatively as
+/// weight changes sign.
+///
+/// # Authors
+/// - chronologicaldot
+/// - Brad Stefanov
+
 // TQ Mirror, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -48,7 +60,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "TQ Mirror", name: "rhai_tqmirror" };
+const INFO = #{ title: "TQ Mirror", name: "rhai_tqmirror", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let a = p.a;

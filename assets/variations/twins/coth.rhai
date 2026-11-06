@@ -1,6 +1,11 @@
+/// Complex hyperbolic cotangent. Singularities at 0.
+///
+/// # Authors
+/// - cothe
+
 // Coth, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Coth", name: "rhai_coth" };
+const INFO = #{ title: "Coth", name: "rhai_coth", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let s2 = sin(2.0 * z.im);

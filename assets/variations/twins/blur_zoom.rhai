@@ -1,3 +1,6 @@
+/// Random zoom blur radiating from a chosen center point. The `length`
+/// slider controls how far points get pushed; `x` and `y` set the center.
+
 // Blur Zoom, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Blur Zoom", name: "rhai_blur_zoom" };
+const INFO = #{ title: "Blur Zoom", name: "rhai_blur_zoom", category: "advanced_2d", phase: "any" };
 
 fn variation(w, p) {
     let length = p.length;

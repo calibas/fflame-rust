@@ -1,6 +1,9 @@
+/// 3D version of Butterfly — same XY butterfly curve plus a Z component
+/// that scales with the radial distance times `|2y|`.
+
 // Butterfly 3D, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Butterfly 3D", name: "rhai_butterfly3d" };
+const INFO = #{ title: "Butterfly 3D", name: "rhai_butterfly3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let k = 1.302940031741119;

@@ -1,3 +1,10 @@
+/// Cellular tiling — divides the plane into cells of the given size and
+/// rearranges them in an interleaved pattern. Produces a checkered,
+/// displaced look.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Cell, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +15,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Cell", name: "rhai_cell" };
+const INFO = #{ title: "Cell", name: "rhai_cell", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let size = max(p.size, 1.0e-6);

@@ -1,3 +1,11 @@
+/// Bipolar warp with σ-axis branch-and-mod — converts the input to bipolar
+/// coordinates `(τ, σ)`, splits σ into `num` equal arcs, and mirrors
+/// alternating arcs around their boundaries with a per-arc offset `a`.
+/// Produces a bipolar tiling with controllable wedge count.
+///
+/// # Authors
+/// - Michael Faber
+
 // BCollide, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "BCollide", name: "rhai_bcollide" };
+const INFO = #{ title: "BCollide", name: "rhai_bcollide", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let num = max(to_float(p.num), 1.0);

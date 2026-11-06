@@ -1,3 +1,9 @@
+/// 3D version of Splits — pushes each coordinate away from zero by a fixed
+/// per-axis offset, creating a gap along each axis.
+///
+/// # Authors
+/// - TyrantWave
+
 // Splits 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +24,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Splits 3D", name: "rhai_splits3d" };
+const INFO = #{ title: "Splits 3D", name: "rhai_splits3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let x_p = p.x;

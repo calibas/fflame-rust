@@ -1,3 +1,9 @@
+/// 3D version of Disc with a tweakable `pi` constant. Wraps the (x, y)
+/// plane onto a disc and adds a `r·cos(z)` Z component.
+///
+/// # Authors
+/// - Larry Berlin
+
 // Disc 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +14,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Disc 3D", name: "rhai_disc3d" };
+const INFO = #{ title: "Disc 3D", name: "rhai_disc3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let pi_p = p.pi;

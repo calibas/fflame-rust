@@ -1,3 +1,9 @@
+/// Pushes positive-X points and negative-X points apart by `x`, and same
+/// for Y. Creates a gap down the middle along each axis.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Splits, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -33,7 +39,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Splits", name: "rhai_splits" };
+const INFO = #{ title: "Splits", name: "rhai_splits", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let splits_x = p.x;

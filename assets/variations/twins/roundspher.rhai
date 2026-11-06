@@ -1,6 +1,14 @@
+/// Rounded spherical inversion — softens the standard spherical inversion
+/// `(x, y)/r²` by adding `(2/π)²` to the reciprocal-of-radius term,
+/// yielding `(w·x, w·y) / (1 + (2/π)²·r²)`. Smooths out the singularity at
+/// the origin.
+///
+/// # Authors
+/// - Raykoid666
+
 // Round Spher, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Round Spher", name: "rhai_roundspher" };
+const INFO = #{ title: "Round Spher", name: "rhai_roundspher", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

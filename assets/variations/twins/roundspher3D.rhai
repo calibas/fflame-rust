@@ -1,6 +1,19 @@
+/// JWildfire 3D-aware companion to [`ROUNDSPHER`] — Larry Berlin's
+/// extension of Raykoid666's rounded spherical inversion. Z participates
+/// in the radius denominator (`d = x² + y² + z²`), and a zero input Z
+/// is replaced with `cos(sqrt(x² + y²))` so the very first iteration
+/// (when the accumulator is still 0) lands on a cylinder rather than
+/// collapsing flat. Output Z accumulates additively when other
+/// variations already contributed, or absorbs the same cos-of-radius
+/// when this is the only Z-writer in the xform.
+///
+/// # Authors
+/// - Raykoid666
+/// - Larry Berlin
+
 // Round Spher 3D, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Round Spher 3D", name: "rhai_roundspher3d" };
+const INFO = #{ title: "Round Spher 3D", name: "rhai_roundspher3d", category: "full_3d" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

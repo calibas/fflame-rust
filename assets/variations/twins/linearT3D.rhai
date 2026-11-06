@@ -1,3 +1,10 @@
+/// Per-axis sign-preserving power — applies `sign(coord) · |coord|^pow` to
+/// each axis independently, with separate exponents per axis. Preserves the
+/// sign while compressing or expanding the magnitude.
+///
+/// # Authors
+/// - FractalDesire
+
 // Linear T 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +25,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Linear T 3D", name: "rhai_lineart3d" };
+const INFO = #{ title: "Linear T 3D", name: "rhai_lineart3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let powx = p.powX;

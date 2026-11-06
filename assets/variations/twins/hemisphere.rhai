@@ -1,6 +1,10 @@
+/// Projects each point onto a hemisphere. The XY position picks a spot on
+/// the dome and Z becomes the height at that spot — points near the
+/// origin sit high, points far away curve down toward the rim.
+
 // Hemisphere, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Hemisphere", name: "rhai_hemisphere" };
+const INFO = #{ title: "Hemisphere", name: "rhai_hemisphere", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let r2 = z.norm_sqr();

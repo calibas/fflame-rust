@@ -89,9 +89,11 @@ impl From<String> for Label {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Labels {
     pub title: Label,
-    /// `INFO.description`: what the library says it does.
+    /// `INFO.description`, else the prose of the doc block the source
+    /// opens with: what the library says it does.
     pub description: Label,
-    /// `INFO.author`: a name, as written (not translated).
+    /// `INFO.author`, else the doc block's `# Authors`, joined: names, as
+    /// written (not translated).
     pub author: String,
     pub params: Vec<ParamLabels>,
 }

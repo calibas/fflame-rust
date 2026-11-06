@@ -1,3 +1,10 @@
+/// Cannabis-curve polar plot — emits a point on the cannabis curve `r = (1
+/// + 0.9·cos 8a) · (1 + 0.1·cos 24a) · (0.9 + 0.1·cos 200a) · (1 + sin a)`.
+/// The curve is documented at
+/// [MathWorld](https://mathworld.wolfram.com/CannabisCurve.html) by Eric W.
+/// Weisstein. When `filled = 1`, randomizes the radius to fill the interior
+/// of the curve.
+
 // Cannabis Curve WF, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +15,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Cannabis Curve WF", name: "rhai_cannabiscurve_wf" };
+const INFO = #{ title: "Cannabis Curve WF", name: "rhai_cannabiscurve_wf", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let filled = to_int(to_float(p.filled));

@@ -1,3 +1,9 @@
+/// 3D ovoid — emits `(x·x_scale, y·y_scale, z·z_scale) / T` where `T = x² +
+/// y² + z² + ε`. Generalizes spherical inversion to per-axis scaling.
+///
+/// # Authors
+/// - Larry Berlin
+
 // Ovoid 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +24,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Ovoid 3D", name: "rhai_ovoid3d" };
+const INFO = #{ title: "Ovoid 3D", name: "rhai_ovoid3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let x_scale = p.x;

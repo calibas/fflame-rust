@@ -1,6 +1,13 @@
+/// Z-axis inflation #5 — adds `cos(π/2 − atan2(y,x)) / 2 = sin(atan2(y,x))
+/// / 2` to the Z output. The simplest of the family — a sinusoidal Z
+/// surface.
+///
+/// # Authors
+/// - Larry Berlin
+
 // Inflate Z 5, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Inflate Z 5", name: "rhai_inflatez_5" };
+const INFO = #{ title: "Inflate Z 5", name: "rhai_inflatez_5", category: "depth_3d", phase: "any" };
 
 fn variation(z, p) {
     complex(0.0, 0.0)

@@ -1,6 +1,10 @@
+/// Exp/sin polar inversion — outputs `(w/(2π) · exp(y) · sin x, w/(2π) ·
+/// exp(y) · cos x)`. The inverse of `polar` — converts log-polar
+/// coordinates back to cartesian.
+
 // Unpolar, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Unpolar", name: "rhai_unpolar" };
+const INFO = #{ title: "Unpolar", name: "rhai_unpolar", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

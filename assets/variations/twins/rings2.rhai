@@ -1,3 +1,7 @@
+/// Carves the plane into concentric ring bands at the chosen spacing. Each
+/// ring inverts the radial position within its band.
+///
+
 // Rings2, the built-in variation's twin: concentric rings, spaced by the value squared.
 
 const PARAMS = #{
@@ -8,7 +12,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Rings2", name: "rhai_rings2" };
+const INFO = #{ title: "Rings2", name: "rhai_rings2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let dx = p.val * p.val + 1e-10;

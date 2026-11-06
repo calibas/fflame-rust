@@ -1,3 +1,9 @@
+/// 3D version of Waves2 — adds `scale · sin(freq · avg(x, y))` to the Z
+/// coordinate alongside the standard 2D Waves2 X/Y displacement.
+/// 
+/// # Authors
+/// - Larry Berlin
+
 // Waves2 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +19,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Waves2 3D", name: "rhai_waves2_3d" };
+const INFO = #{ title: "Waves2 3D", name: "rhai_waves2_3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let freq = p.freq;

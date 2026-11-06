@@ -1,3 +1,6 @@
+/// 3D variant of Julia where the Z coordinate gets folded along with the
+/// XY. Produces 3D fractals stretched along the depth axis.
+
 // Julia3Dz, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +11,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Julia3Dz", name: "rhai_julia3dz" };
+const INFO = #{ title: "Julia3Dz", name: "rhai_julia3dz", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     complex(0.0, 0.0)

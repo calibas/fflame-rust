@@ -1,3 +1,7 @@
+/// Adds random scatter that varies with distance from a chosen center
+/// point. Closer points get less scatter (or more, with `invert`); the
+/// random distribution shape is selectable.
+
 // Falloff2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -58,7 +62,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Falloff2", name: "rhai_falloff2" };
+const INFO = #{ title: "Falloff2", name: "rhai_falloff2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let PI = 3.14159265359;

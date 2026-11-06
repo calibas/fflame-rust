@@ -1,3 +1,11 @@
+/// Quadratic ODE warp — a 12-parameter quadratic polynomial mapping. Emits
+/// `(q01 + q02·x + q03·x² + q04·xy + q05·y + q06·y², q07 + q08·x + q09·x² +
+/// q10·xy + q11·y + q12·y²)`. Implements a general quadratic vector field
+/// in 2D — useful for modeling phase-space portraits of 2D ODEs.
+///
+/// # Authors
+/// - DarkBeam
+
 // Q ODE, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -63,7 +71,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Q ODE", name: "rhai_q_ode" };
+const INFO = #{ title: "Q ODE", name: "rhai_q_ode", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let q01 = p.q_ode01;

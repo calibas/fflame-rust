@@ -1,3 +1,11 @@
+/// Möbius-style shift + stretch — inverts the input through the unit
+/// circle, adds a horizontal shift, then re-inverts. The Y output gets
+/// stretched separately.
+///
+/// # Authors
+/// - Zy0rg
+/// - Brad Stefanov
+
 // Hypershift, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Hypershift", name: "rhai_hypershift" };
+const INFO = #{ title: "Hypershift", name: "rhai_hypershift", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let shift = p.shift;

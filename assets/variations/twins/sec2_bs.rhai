@@ -1,3 +1,9 @@
+/// Parameterized Sec (1/cos). At defaults (1.0), reduces to Sec.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
+
 // Sec2 BS, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +29,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Sec2 BS", name: "rhai_sec2_bs" };
+const INFO = #{ title: "Sec2 BS", name: "rhai_sec2_bs", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let x1 = p.x1;

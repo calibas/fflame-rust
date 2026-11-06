@@ -1,3 +1,9 @@
+/// 3D polar-rose base shape with a per-point Z "waggle/wig" profile 
+/// and an optional transparent mirror reflection.
+///
+/// # Authors
+/// - Larry Berlin
+
 // PRose 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -83,7 +89,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "PRose 3D", name: "rhai_prose3d" };
+const INFO = #{ title: "PRose 3D", name: "rhai_prose3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let l = p.l;

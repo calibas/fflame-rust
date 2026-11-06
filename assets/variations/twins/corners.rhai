@@ -1,3 +1,13 @@
+/// Quadrant-based power warp — squares the input per axis, raises each to a
+/// power (`xpower + xypower` on X, `ypower + xypower` on Y), and multiplies
+/// by `multx`/`multy`. The sign of the input chooses whether the result is
+/// added or subtracted, and a constant `xwidth`/`ywidth` is added to the
+/// output. With `logmode = 1`, the squared input is first run through a
+/// log-base transform before the pow.
+///
+/// # Authors
+/// - Whittaker Courtney
+
 // Corners, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -48,7 +58,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Corners", name: "rhai_corners" };
+const INFO = #{ title: "Corners", name: "rhai_corners", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let xwidth = p.xwidth;

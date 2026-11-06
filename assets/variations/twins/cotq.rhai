@@ -1,6 +1,11 @@
+/// Quaternion cotangent — 3D extension of Cot (cos/sin).
+///
+/// # Authors
+/// - zephyrtronium
+
 // Cotq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Cotq", name: "rhai_cotq" };
+const INFO = #{ title: "Cotq", name: "rhai_cotq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let v = max(abs(z.im), 1.0e-20);

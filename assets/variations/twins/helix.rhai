@@ -1,3 +1,10 @@
+/// 3D helix — winds the (x, y) coordinates around the Z axis with the given
+/// frequency and width. In 2D mode (z = 0) collapses to a simple horizontal
+/// shift by `width`.
+///
+/// # Authors
+/// - Zy0rg
+
 // Helix, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Helix", name: "rhai_helix" };
+const INFO = #{ title: "Helix", name: "rhai_helix", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let width = p.width;

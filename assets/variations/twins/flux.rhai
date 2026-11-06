@@ -1,3 +1,12 @@
+/// VVAR-shift Möbius warp — computes `xpw = x + w` and `xmw = x − w` (where
+/// `w` is the variation weight), then emits a Möbius-style radial × angular
+/// combination: `r = w·(2 + spread)·sqrt(sqrt(y² + xpw²) / sqrt(y² +
+/// xmw²))` and `a = (atan2(y, xmw) − atan2(y, xpw)) / 2`. Produces flux-
+/// like field-line patterns between two virtual poles at `±w`.
+///
+/// # Authors
+/// - meckie
+
 // Flux, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +17,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Flux", name: "rhai_flux" };
+const INFO = #{ title: "Flux", name: "rhai_flux", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let spread = p.spread;

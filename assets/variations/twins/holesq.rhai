@@ -1,6 +1,14 @@
+/// Square hole — outside the square `|x| + |y| > 1` the input passes
+/// through; inside, the dominant-axis coordinate gets folded toward `±0.5`
+/// based on its sign and the magnitude of the perpendicular coordinate.
+/// Produces a square-hole-shaped scatter pattern.
+///
+/// # Authors
+/// - DarkBeam
+
 // Hole Square, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Hole Square", name: "rhai_holesq" };
+const INFO = #{ title: "Hole Square", name: "rhai_holesq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

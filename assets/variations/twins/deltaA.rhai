@@ -1,6 +1,14 @@
+/// Radial ratio + half angle difference — emits `r · (cos a, sin a)` where
+/// `r = sqrt(y² + (x+1)²) / sqrt(y² + (x−1)²)` (ratio of distances to two
+/// foci at `(∓1, 0)`) and `a` is half the angular difference between the
+/// focus-angles. Produces conformal-mapping-style patterns.
+///
+/// # Authors
+/// - Michael Faber
+
 // Delta A, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Delta A", name: "rhai_deltaa" };
+const INFO = #{ title: "Delta A", name: "rhai_deltaa", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

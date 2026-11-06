@@ -1,6 +1,12 @@
+/// Quaternion cosine — 3D extension of Cos. In 2D it collapses to the same
+/// shape as Cos.
+///
+/// # Authors
+/// - zephyrtronium
+
 // Cosq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Cosq", name: "rhai_cosq" };
+const INFO = #{ title: "Cosq", name: "rhai_cosq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let v = max(abs(z.im), 1.0e-20);

@@ -1,3 +1,7 @@
+/// Epispiral curve — emits a point on the epispiral `r = 0.5 / cos(waves ·
+/// a)`. The curve produces `waves` symmetric petals radiating from the
+/// origin. Returns `(0, 0)` at the cos-zero singularities.
+
 // Epispiral WF, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +12,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Epispiral WF", name: "rhai_epispiral_wf" };
+const INFO = #{ title: "Epispiral WF", name: "rhai_epispiral_wf", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let waves = p.waves;

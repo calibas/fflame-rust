@@ -1,3 +1,9 @@
+/// Tiles the plane into rectangles, mirroring the coordinates within each
+/// tile. Produces a checkered, blocky output.
+///
+/// # Authors
+/// - Scott Draves
+
 // Rectangles, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +19,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Rectangles", name: "rhai_rectangles" };
+const INFO = #{ title: "Rectangles", name: "rhai_rectangles", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let rect_x = p.x;

@@ -1,6 +1,9 @@
+/// Real tan-by-cos — X is `sin(x)/cos(y)`, Y is `tan(y)`. Note: not the
+/// same as Tan from trig.rs (which is the complex tangent).
+
 // Tangent, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Tangent", name: "rhai_tangent" };
+const INFO = #{ title: "Tangent", name: "rhai_tangent", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let d = cos(z.im);

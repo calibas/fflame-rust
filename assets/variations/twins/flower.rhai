@@ -1,3 +1,10 @@
+/// Flower — produces petal patterns based on a uniform-random distance
+/// scaled by `cos(petals · angle)`. The `holes` parameter controls how
+/// hollow the center is.
+///
+/// # Authors
+/// - cyberxaos
+
 // Flower, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Flower", name: "rhai_flower" };
+const INFO = #{ title: "Flower", name: "rhai_flower", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let holes = p.holes;

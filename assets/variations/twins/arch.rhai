@@ -1,6 +1,13 @@
+/// RNG-driven angle bend — picks a random angle `ang = rand · w · π`, then
+/// emits `(w · sin(ang), w · sin²(ang) / cos(ang))`. The `sin²/cos = sin ·
+/// tan` term creates a smooth arch shape with a vertical asymptote.
+///
+/// # Authors
+/// - Scott Draves
+
 // Arch, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Arch", name: "rhai_arch" };
+const INFO = #{ title: "Arch", name: "rhai_arch", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

@@ -589,6 +589,18 @@ function takes the point, and the ids when it has parameters (as
     Editor in use (`formula_editor::variation_as_twin`).
   - `to_float(floor(x))` (`trunc`, `ceil`) is the float operation in
     every kind and in the interpreter, exact at any size.
+  - **Nothing of the def is lost** (the user, 2026-11-05): each twin
+    opens with its def's doc block verbatim -- its description and
+    authors, read as text by the API (ESCAPE.md, *The doc block*;
+    `every_variation_twin_keeps_its_builtins_doc`) -- and its `INFO`
+    gives the def's `category` (where the pickers group it) and its
+    `phase`: `any` for 295 of them, a phase the user may move to pre or
+    post, which the wire cannot carry, so a variation of the user's takes
+    it from its source at registration (`custom::phase_of`,
+    `VariationRegistry::set_phase`). Still a def's alone: its aliases
+    (a `.flame`'s foreign names), the deep-zoom planner's inverses and
+    bounds (`variations::inverse`, `bound`), and a `.flame` export, which
+    drops a variation of the user's.
 `VariationPhase::Any` has no wire form yet, so a downloaded variation
 cannot honour `fx_priority`. The catalog, caching and curation are in
 [ONLINE.md](ONLINE.md); the design record is

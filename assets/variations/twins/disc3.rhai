@@ -1,3 +1,12 @@
+/// Disc-style warp with 8 tunable knobs — computes a per-axis-weighted
+/// radial argument `rPI = π · sqrt(x²·d·e + y²·f·g)`, then emits
+/// `(sin(rPI)·a, cos(rPI)·b)` scaled by `atan2(y,x)/π · c · h`. The 8
+/// parameters give independent control over the X/Y radial weights, the
+/// sin/cos amplitudes, and the overall output scale.
+///
+/// # Authors
+/// - Brad Stefanov
+
 // Disc 3, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -43,7 +52,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Disc 3", name: "rhai_disc3" };
+const INFO = #{ title: "Disc 3", name: "rhai_disc3", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let a = p.a;

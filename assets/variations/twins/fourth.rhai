@@ -1,3 +1,12 @@
+/// 4-quadrant compound — applies a different variation in each quadrant of
+/// the input: `(+,+)` uses spherical, `(+,−)` uses loonie (with squared-
+/// weight threshold), `(−,+)` uses lazysusan (shift + spin + twist),
+/// `(−,−)` is linear pass-through. Useful for combining four distinct
+/// behaviors in a single transform.
+///
+/// # Authors
+/// - guagapunyaimel
+
 // Fourth, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -28,7 +37,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Fourth", name: "rhai_fourth" };
+const INFO = #{ title: "Fourth", name: "rhai_fourth", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let spin = p.spin;

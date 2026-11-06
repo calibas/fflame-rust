@@ -1,6 +1,13 @@
+/// Random-branched Glynn-set warp — splits into 4 branches per iteration
+/// based on radius and a random coin flip. Produces the characteristic
+/// organic Glynn fractal shapes.
+///
+/// # Authors
+/// - Michael Faber
+
 // Glynnia, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Glynnia", name: "rhai_glynnia" };
+const INFO = #{ title: "Glynnia", name: "rhai_glynnia", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let half_sqrt2 = 0.7071067811865476;

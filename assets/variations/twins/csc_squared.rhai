@@ -1,3 +1,12 @@
+/// Cosecant-squared power scale — computes a csc-style intermediate `csc =
+/// csc_div / (cos(x/cos_div) · tan(x/tan_div))`, then a per-axis scale
+/// factor `f = (csc² + π·pi_mult)^csc_pow + csc_add`, then emits `(x·f,
+/// y·f·scaley)`. The csc/cos/tan composition produces sharp pole
+/// structures.
+///
+/// # Authors
+/// - Whittaker Courtney
+
 // Csc Squared, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -38,7 +47,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Csc Squared", name: "rhai_csc_squared" };
+const INFO = #{ title: "Csc Squared", name: "rhai_csc_squared", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let csc_div = p.csc_div;

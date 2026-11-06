@@ -1,3 +1,11 @@
+/// Variant of `circlize` — same L∞-square-to-circle mapping, but `hole` is
+/// folded into the variation-weighted radius so the whole formula factors
+/// cleanly through the outer weight. Same visual result as `circlize` for
+/// matching parameters, with subtly different weight semantics.
+///
+/// # Authors
+/// - Michael Faber
+
 // Circlize 2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +16,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Circlize 2", name: "rhai_circlize2" };
+const INFO = #{ title: "Circlize 2", name: "rhai_circlize2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let hole = p.hole;

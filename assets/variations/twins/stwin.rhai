@@ -1,3 +1,11 @@
+/// Sin-weighted twin warp — adds a sin-modulated correction
+/// `(x²−y²)·sin(2π·distort·(x+y+offset_xy·0.1)) / (x²+y²)` to both the X
+/// and Y outputs (the same correction term is applied identically to each
+/// axis).
+///
+/// # Authors
+/// - Xyrus02
+
 // STwin, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +31,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "STwin", name: "rhai_stwin" };
+const INFO = #{ title: "STwin", name: "rhai_stwin", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let distort = p.distort;

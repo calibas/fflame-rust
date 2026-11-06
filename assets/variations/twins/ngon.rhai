@@ -1,3 +1,9 @@
+/// Bends the plane into an N-sided polygon outline. Configurable side
+/// count, corner sharpness, and how circle-vs-polygon the shape feels.
+///
+/// # Authors
+/// - Scott Draves
+
 // Ngon, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +29,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Ngon", name: "rhai_ngon" };
+const INFO = #{ title: "Ngon", name: "rhai_ngon", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let PI = 3.14159265359;

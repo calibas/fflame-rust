@@ -1,6 +1,14 @@
+/// 4-branch Sierpinski-triangle-like IFS — picks one of four branches
+/// uniformly per iteration, each pivoting around the origin or one of the
+/// three vertices of an equilateral triangle. Each branch is a
+/// rotation+half-scale around its pivot. Based on Paul Bourke's `lace.c`.
+///
+/// # Authors
+/// - Jesus Sosa
+
 // Lace (JS), the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Lace (JS)", name: "rhai_lace_js" };
+const INFO = #{ title: "Lace (JS)", name: "rhai_lace_js", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let r = 2.0;

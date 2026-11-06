@@ -1,3 +1,10 @@
+/// Elliptic scale + angular wrap — scales μ by `scale` and applies a scale-
+/// plus-angle modular operation to ν, wrapping the result into `[-π, π]`.
+/// Useful for periodic ellipse-tiled patterns.
+///
+/// # Authors
+/// - Michael Faber
+
 // EScale, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "EScale", name: "rhai_escale" };
+const INFO = #{ title: "EScale", name: "rhai_escale", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let scale = p.scale;

@@ -1,3 +1,12 @@
+/// Radially-falloff variant of `waves2` — applies the `waves2` per-axis
+/// sine offsets (`sin(y·freqx)·scalex` on X, `sin(x·freqy)·scaley` on Y)
+/// with a smooth radial falloff: full effect below the `null` radius, zero
+/// above the `distance` radius, linearly interpolated in between.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - Brad Stefanov
+
 // Waves2 Radial, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -33,7 +42,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Waves2 Radial", name: "rhai_waves2_radial" };
+const INFO = #{ title: "Waves2 Radial", name: "rhai_waves2_radial", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let scalex = p.w2r_scalex;

@@ -1,6 +1,15 @@
+/// 3D piecewise erf / 1/r² — per-axis, if `|coord| ≥ 2` the output is
+/// `coord / r²` (spherical inversion); otherwise it's `erf(coord)`.
+/// Combines sigmoid saturation near the origin with spherical inversion far
+/// away.
+///
+/// # Authors
+/// - zephyrtronium
+/// - DarkBeam
+
 // X Erf, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "X Erf", name: "rhai_xerf" };
+const INFO = #{ title: "X Erf", name: "rhai_xerf", category: "full_3d", phase: "any" };
 
 fn xerf_erf(x) {
     let p = 0.3275911;

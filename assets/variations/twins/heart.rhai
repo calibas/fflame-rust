@@ -1,6 +1,12 @@
+/// Folds the plane along a heart-shaped curve. The output silhouette traces
+/// a cardioid; classic Apophysis effect.
+///
+/// # Authors
+/// - Scott Draves
+
 // Heart, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Heart", name: "rhai_heart" };
+const INFO = #{ title: "Heart", name: "rhai_heart", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let r = z.abs();

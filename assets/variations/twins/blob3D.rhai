@@ -1,3 +1,6 @@
+/// 3D version of Blob — same wavy boundary as Blob, plus a Z component that
+/// modulates with the same waves pattern.
+
 // Blob 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Blob 3D", name: "rhai_blob3d" };
+const INFO = #{ title: "Blob 3D", name: "rhai_blob3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let low = p.low;

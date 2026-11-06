@@ -1,3 +1,10 @@
+/// Elliptic-coordinate motion — converts the input to elliptic coordinates
+/// `(μ, ν)`, adds `move` to μ (with sign determined by ν), folds μ negative
+/// back onto positive (reflecting ν), then adds `rotate` to ν.
+///
+/// # Authors
+/// - Michael Faber
+
 // E-Motion, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "E-Motion", name: "rhai_emotion" };
+const INFO = #{ title: "E-Motion", name: "rhai_emotion", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let move_p = p.move;

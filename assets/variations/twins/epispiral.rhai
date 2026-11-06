@@ -1,3 +1,10 @@
+/// Maps the plane onto an epicycloid spiral pattern. `n` controls how many
+/// lobes, `thickness` adds randomness, `holes` punches gaps in the pattern.
+/// 
+/// # Authors
+/// - Joel Faber
+/// - cyberxaos
+
 // Epispiral, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +25,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Epispiral", name: "rhai_epispiral" };
+const INFO = #{ title: "Epispiral", name: "rhai_epispiral", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let n = p.n;

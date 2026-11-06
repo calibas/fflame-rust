@@ -1,6 +1,14 @@
+/// 2D component-wise erf — applies the error function `erf(coord)` to each
+/// axis independently. Saturates the input smoothly toward ±1, like a soft
+/// clip.
+///
+/// # Authors
+/// - zephyrtronium
+/// - DarkBeam
+
 // Erf, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Erf", name: "rhai_erf" };
+const INFO = #{ title: "Erf", name: "rhai_erf", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let pp = 0.3275911;

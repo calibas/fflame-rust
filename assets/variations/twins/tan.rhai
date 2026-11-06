@@ -1,6 +1,12 @@
+/// Complex tangent (sin/cos). Singularities at ±π/2 produce dramatic poles
+/// in the output.
+///
+/// # Authors
+/// - cothe
+
 // Tan, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Tan", name: "rhai_tan" };
+const INFO = #{ title: "Tan", name: "rhai_tan", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let s2 = sin(2.0 * z.re);

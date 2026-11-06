@@ -1,6 +1,12 @@
+/// Bubble inversion with random Z bump — applies the standard bubble
+/// inversion `(x, y) / (1 + r²/4)` to XY, plus a random `±(2/r − 1)` Z bump
+/// (sign chosen by coin flip). The XY portion matches the classic `bubble`
+/// variation; Z gets per-iteration random spheres above and below the
+/// bubble.
+
 // Bubble WF, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Bubble WF", name: "rhai_bubble_wf" };
+const INFO = #{ title: "Bubble WF", name: "rhai_bubble_wf", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let r = (z.re * z.re + z.im * z.im) * 0.25 + 1.0;

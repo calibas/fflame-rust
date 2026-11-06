@@ -1,6 +1,14 @@
+/// 3-branch inverse-tree IFS — picks one of three branches uniformly per
+/// iteration: half-scale identity, or per-axis `1/(coord + 1)` inverse (one
+/// axis at a time). Produces an inverse-tree fractal. Based on Paul
+/// Bourke's `trifraction2`.
+///
+/// # Authors
+/// - Jesus Sosa
+
 // Inv-Tree (JS), the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Inv-Tree (JS)", name: "rhai_invtree_js" };
+const INFO = #{ title: "Inv-Tree (JS)", name: "rhai_invtree_js", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let r1 = rand();

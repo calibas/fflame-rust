@@ -1,3 +1,10 @@
+/// Elliptic warp with μ-axis clamp-and-mod — wraps μ around within
+/// `±radius` (offset by `distance·radius`). The sign of ν determines the
+/// mod direction. Elliptic analogue of `bmod`.
+///
+/// # Authors
+/// - Michael Faber
+
 // EMod, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "EMod", name: "rhai_emod" };
+const INFO = #{ title: "EMod", name: "rhai_emod", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let radius = p.radius;

@@ -1,6 +1,9 @@
+/// 3D extension of Tangent. Adds `z' = tan(x)` so the variation contributes
+/// depth modulation along the X coordinate.
+
 // Tangent 3D, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Tangent 3D", name: "rhai_tangent3d" };
+const INFO = #{ title: "Tangent 3D", name: "rhai_tangent3d", category: "depth_3d", phase: "any" };
 
 fn variation(z, p) {
     let d = cos(z.im);

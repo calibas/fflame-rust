@@ -1,6 +1,12 @@
+/// Cubes two sinusoidal functions of angle and radius and blends them.
+/// Spreads points into pointed lobes
+///
+/// # Authors
+/// - Scott Draves
+
 // Ex, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Ex", name: "rhai_ex" };
+const INFO = #{ title: "Ex", name: "rhai_ex", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let r = z.abs();

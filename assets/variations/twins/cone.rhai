@@ -1,3 +1,12 @@
+/// Julia + hemisphere mix forming a cone — combines a Julia-style angular
+/// pick `π·floor(weight · rand)·radius2 + atan2(y,x)·radius1` with a
+/// hemisphere-style radial term `r = size2 / sqrt(x²·warp + y² + size1)`,
+/// plus a configurable `height` Z output. The result traces a cone-shaped
+/// surface in 3D.
+///
+/// # Authors
+/// - Brad Stefanov
+
 // Cone, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -48,7 +57,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Cone", name: "rhai_cone" };
+const INFO = #{ title: "Cone", name: "rhai_cone", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let radius1 = p.radius1;

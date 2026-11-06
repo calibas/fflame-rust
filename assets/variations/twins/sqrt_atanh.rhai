@@ -1,6 +1,12 @@
+/// Like ArcTanh but on sqrt(z) — a denser, more compressed variant of the
+/// unit-disc-to-plane mapping. Random ±sign each iteration.
+///  
+/// # Authors
+/// - Whittaker Courtney
+
 // Sqrt ATanh, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Sqrt ATanh", name: "rhai_sqrt_atanh" };
+const INFO = #{ title: "Sqrt ATanh", name: "rhai_sqrt_atanh", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let one_over_pi = 0.3183098861837907;

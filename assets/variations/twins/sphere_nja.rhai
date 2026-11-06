@@ -1,3 +1,11 @@
+/// Parametric sphere — uses `t = sqrt(x²+y²+z²)/stretch − π/2` to
+/// parameterize a sphere with `cos(t)` radius. Per-axis output mixes
+/// cos/sin terms with the input position and configurable shift offsets,
+/// producing a 3D sphere centered at `(shift_x, shift_y, 0)`.
+///
+/// # Authors
+/// - chronologicaldot
+
 // Sphere NJA, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -33,7 +41,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Sphere NJA", name: "rhai_sphere_nja" };
+const INFO = #{ title: "Sphere NJA", name: "rhai_sphere_nja", category: "full_3d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let shift_x = p.shift_x;

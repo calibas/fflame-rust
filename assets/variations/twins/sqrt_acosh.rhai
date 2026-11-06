@@ -1,6 +1,11 @@
+/// Like ACosh but on sqrt(z). Random ±sign each iteration.
+///  
+/// # Authors
+/// - Whittaker Courtney
+
 // Sqrt ACosh, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Sqrt ACosh", name: "rhai_sqrt_acosh" };
+const INFO = #{ title: "Sqrt ACosh", name: "rhai_sqrt_acosh", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let two_over_pi = 0.6366197723675814;

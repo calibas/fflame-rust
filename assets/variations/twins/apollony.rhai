@@ -1,6 +1,13 @@
+/// Apollonian-gasket IFS — randomly picks one of 3 Möbius-style branches
+/// per iteration to spawn points along an Apollonian gasket fractal.
+///
+/// # Authors
+/// - Jesus Sosa
+/// - Paul Bourke
+
 // Apollony, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Apollony", name: "rhai_apollony" };
+const INFO = #{ title: "Apollony", name: "rhai_apollony", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let r = 1.7320508075688772;

@@ -1,6 +1,13 @@
+/// Butterfly-shaped curve produced by a normalized cross-coordinate
+/// stretch. Output sketches the classic butterfly silhouette around the
+/// origin.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Butterfly, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Butterfly", name: "rhai_butterfly" };
+const INFO = #{ title: "Butterfly", name: "rhai_butterfly", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let k = 1.302940031741119;

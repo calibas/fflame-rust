@@ -1,6 +1,14 @@
+/// Spherical-style panoramic projection — maps the plane onto a
+/// hemispherical fisheye then unwraps it into longitude/latitude
+/// coordinates.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - DarkBeam
+
 // Panorama 1, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Panorama 1", name: "rhai_panorama1" };
+const INFO = #{ title: "Panorama 1", name: "rhai_panorama1", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let aux = 1.0 / sqrt(z.re * z.re + z.im * z.im + 1.0);

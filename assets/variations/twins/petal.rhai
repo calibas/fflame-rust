@@ -1,6 +1,13 @@
+/// Petal shape — `(cos(x)·bx, cos(x)·by)` where `bx, by` are cubed
+/// sine/cosine products of `(x, y)`. Produces flower-like radial
+/// structures.
+///
+/// # Authors
+/// - Raykoid666
+
 // Petal, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Petal", name: "rhai_petal" };
+const INFO = #{ title: "Petal", name: "rhai_petal", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let cx = cos(z.re);

@@ -1,3 +1,6 @@
+/// 3D version of Pie — same pie-slice splatter as Pie but adds `z' =
+/// r·sin(r)` for depth modulation.
+
 // Pie 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Pie 3D", name: "rhai_pie3d" };
+const INFO = #{ title: "Pie 3D", name: "rhai_pie3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let two_pi = 6.28318530717959;

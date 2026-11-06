@@ -1,3 +1,11 @@
+/// Parameterized complex exponential — `e^(x·x1)` modulated by `sin(y·y1)`
+/// and `cos(y·y2)`. At defaults (1.0), reduces to the unparameterized
+/// complex exp.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
+
 // Exp2 BS, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +26,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Exp2 BS", name: "rhai_exp2_bs" };
+const INFO = #{ title: "Exp2 BS", name: "rhai_exp2_bs", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let x1 = p.x1;

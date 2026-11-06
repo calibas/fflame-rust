@@ -1,6 +1,11 @@
+/// Quaternion hyperbolic sine — 3D extension of Sinh.
+///
+/// # Authors
+/// - zephyrtronium
+
 // Sinhq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Sinhq", name: "rhai_sinhq" };
+const INFO = #{ title: "Sinhq", name: "rhai_sinhq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let v = max(abs(z.im), 1.0e-20);

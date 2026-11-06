@@ -1,3 +1,11 @@
+/// Clifford strange attractor — iterates `(sin(a·y) + c·cos(a·x), sin(b·x)
+/// + d·cos(b·y))`. Classic 4-parameter chaotic attractor with
+/// characteristic Lissajous-like curves and folds. From Paul Bourke's
+/// collection.
+///
+/// # Authors
+/// - Jesus Sosa
+
 // Clifford (JS), the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +31,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Clifford (JS)", name: "rhai_clifford_js" };
+const INFO = #{ title: "Clifford (JS)", name: "rhai_clifford_js", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let a = p.a;

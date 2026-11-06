@@ -1,3 +1,13 @@
+/// Tile-stripe blur — divides X into stripes of given `width`, and per
+/// iteration either shifts X by ±width to a neighboring stripe (with the
+/// probability driven by stripe position and a uniform random) or leaves it
+/// alone. Y passes through. Produces blurred banding along X.
+///
+/// # Authors
+/// - Zy0rg
+/// - Tatyana Zabanova
+/// - Brad Stefanov
+
 // Tile HLP, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +18,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Tile HLP", name: "rhai_tile_hlp" };
+const INFO = #{ title: "Tile HLP", name: "rhai_tile_hlp", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let width = p.width;

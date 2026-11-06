@@ -1,6 +1,10 @@
+/// Replaces the input with a uniformly random point inside the unit circle.
+/// Like Blur, but with a sharp circular boundary instead of a soft
+/// gradient.
+
 // Blur Circle, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Blur Circle", name: "rhai_blur_circle" };
+const INFO = #{ title: "Blur Circle", name: "rhai_blur_circle", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let PI = 3.14159265359;

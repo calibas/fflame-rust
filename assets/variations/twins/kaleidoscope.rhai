@@ -1,3 +1,10 @@
+/// Half-plane mirror warp — rotates and reflects the input across the X
+/// axis with separate behavior above and below the line. Produces the
+/// classic kaleidoscope mirror pattern.
+///
+/// # Authors
+/// - Will Evans
+
 // Kaleidoscope, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -28,7 +35,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Kaleidoscope", name: "rhai_kaleidoscope" };
+const INFO = #{ title: "Kaleidoscope", name: "rhai_kaleidoscope", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let pull = p.pull;

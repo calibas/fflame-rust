@@ -1,3 +1,12 @@
+/// Parametric sea shell — samples random `(t, s)` over `[0, 2π]²` and emits
+/// a 3D sea-shell surface. The X/Y components trace a spiral of `n` turns
+/// with radius tapering as `1 − t/2π`; the Z component is a linear ramp `b
+/// · t/2π` plus a radial oscillation `a · (1 − t/2π) · sin s`. `c` adds an
+/// inner-spiral offset.
+///
+/// # Authors
+/// - Jesus Sosa
+
 // Seashell 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +32,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Seashell 3D", name: "rhai_seashell3d" };
+const INFO = #{ title: "Seashell 3D", name: "rhai_seashell3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let a = p.final_radius;

@@ -1,6 +1,14 @@
+/// RNG-driven blade fan — picks a random radius `r = rand · w · sqrt(x² +
+/// y²)`, then emits `(w · x · (cos r + sin r), w · x · (cos r − sin r))`.
+/// Both output axes are driven by the input X, so the result spreads along
+/// the X axis like blades of a fan.
+///
+/// # Authors
+/// - Z+
+
 // Blade, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Blade", name: "rhai_blade" };
+const INFO = #{ title: "Blade", name: "rhai_blade", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

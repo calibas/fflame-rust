@@ -1,3 +1,9 @@
+/// Peter de Jong attractor - four sine/cosine coefficients drive the
+/// output. Famous for producing intricate chaotic attractor shapes.
+///
+/// # Authors
+/// - Scott Draves
+
 // PDJ, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +29,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "PDJ", name: "rhai_pdj" };
+const INFO = #{ title: "PDJ", name: "rhai_pdj", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let a = p.a;

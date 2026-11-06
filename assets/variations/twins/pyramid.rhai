@@ -1,6 +1,13 @@
+/// 3D pyramid using cubic-distance norm — each coordinate is cubed and
+/// divided by the sum of absolute cubes. Produces a pyramid-shaped
+/// silhouette.
+///
+/// # Authors
+/// - Zueuk
+
 // Pyramid, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Pyramid", name: "rhai_pyramid" };
+const INFO = #{ title: "Pyramid", name: "rhai_pyramid", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let x3 = z.re * z.re * z.re;

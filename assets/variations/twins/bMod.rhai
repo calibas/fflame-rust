@@ -1,3 +1,11 @@
+/// Bipolar warp with τ-axis clamp-and-mod — converts to bipolar
+/// coordinates, then wraps τ around within `±radius` (offset by
+/// `distance·radius`). Points with τ outside the band pass through
+/// unchanged.
+///
+/// # Authors
+/// - Michael Faber
+
 // BMod, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "BMod", name: "rhai_bmod" };
+const INFO = #{ title: "BMod", name: "rhai_bmod", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let radius = p.radius;

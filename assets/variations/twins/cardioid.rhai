@@ -1,3 +1,9 @@
+/// Parameterized cardioid (heart-shaped curve). The `a` parameter controls
+/// how many lobes/cusps the shape has.
+///
+/// # Authors
+/// - Michael Faber
+
 // Cardioid, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +14,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Cardioid", name: "rhai_cardioid" };
+const INFO = #{ title: "Cardioid", name: "rhai_cardioid", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let a_param = p.a;

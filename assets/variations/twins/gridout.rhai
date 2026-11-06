@@ -1,6 +1,13 @@
+/// Snaps points onto a discrete grid by following the nearest cell-edge
+/// direction. Produces a chunky, tile-like output.
+///
+/// # Authors
+/// - Michael Faber
+/// - DarkBeam
+
 // Gridout, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Gridout", name: "rhai_gridout" };
+const INFO = #{ title: "Gridout", name: "rhai_gridout", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let x = round_even(z.re);

@@ -1,6 +1,11 @@
+/// Quaternion hyperbolic cosecant — 3D extension of Csch.
+///
+/// # Authors
+/// - zephyrtronium
+
 // Cschq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Cschq", name: "rhai_cschq" };
+const INFO = #{ title: "Cschq", name: "rhai_cschq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let v = max(abs(z.im), 1.0e-20);

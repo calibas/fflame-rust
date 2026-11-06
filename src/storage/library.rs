@@ -465,4 +465,17 @@ mod tests {
         let uf = formula_entry("traps.ucl", "x {\n}\n", Origin::Api, Link::default());
         assert_eq!(uf.kind, Kind::UfColorings);
     }
+
+    /// A source that opens with a def's doc block -- a twin of a built-in
+    /// does -- has its prose and authors from it: the description in one
+    /// paragraph as the API keeps it, the authors joined.
+    #[test]
+    fn a_doc_block_reaches_the_entry() {
+        let src = "/// Voronoi cells, picked in a noise-distorted\n/// square lattice.\n///\n/// # Authors\n/// - slobo777\n/// - Andreas Maschke\n\
+                   const INFO = #{ title: \"Crackle\", name: \"rhai_crackle\" };\nfn variation(z, p) { z }\n";
+        let e = formula_entry("crackle.rhai", src, Origin::Local, Link::default());
+        assert_eq!(e.description, "Voronoi cells, picked in a noise-distorted square lattice.");
+        assert_eq!(e.author, "slobo777, Andreas Maschke");
+        assert!(crate::lang::rhai::transformation_any(src).is_ok(), "the block is a comment to Rhai");
+    }
 }

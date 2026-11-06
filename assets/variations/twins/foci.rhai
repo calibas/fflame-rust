@@ -1,6 +1,12 @@
+/// Maps the plane through a hyperbolic curve based on exponentials.
+/// Produces two focal points that warp the surrounding space.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Foci, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Foci", name: "rhai_foci" };
+const INFO = #{ title: "Foci", name: "rhai_foci", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let expx = exp(z.re) * 0.5;

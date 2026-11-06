@@ -1,6 +1,12 @@
+/// Conformal map onto an elliptic-coordinate grid. Useful for mathematical-
+/// looking, symmetric patterns.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Elliptic, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Elliptic", name: "rhai_elliptic" };
+const INFO = #{ title: "Elliptic", name: "rhai_elliptic", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let PI = 3.14159265359;

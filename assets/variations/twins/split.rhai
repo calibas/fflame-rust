@@ -1,3 +1,11 @@
+/// Coin-flip mirror per axis — flips Y based on the sign of
+/// `cos(x · xsize · π)`, and flips X based on the sign of
+/// `cos(y · ysize · π)`. Produces a tiled mirroring pattern whose tile
+/// spacing is controlled by `xsize` and `ysize`.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Split, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Split", name: "rhai_split" };
+const INFO = #{ title: "Split", name: "rhai_split", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let xsize = p.xsize;

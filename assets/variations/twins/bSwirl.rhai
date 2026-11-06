@@ -1,3 +1,10 @@
+/// Bipolar swirl — adds `τ·out + in/τ` to the bipolar σ coordinate. The
+/// combination of an additive (`out`) and reciprocal (`in`) term produces a
+/// hyperbolic-style swirl pattern aligned with the bipolar grid.
+///
+/// # Authors
+/// - Michael Faber
+
 // BSwirl, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "BSwirl", name: "rhai_bswirl" };
+const INFO = #{ title: "BSwirl", name: "rhai_bswirl", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let in_p = p.in_p;

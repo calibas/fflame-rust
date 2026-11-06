@@ -1,6 +1,13 @@
+/// Randomly picks one of the two branches of the complex square root, then
+/// applies it. Each iteration jumps to one half of the Julia-set folding;
+/// over time the attractor fills out.
+///
+/// # Authors
+/// - Scott Draves
+
 // Julia, the built-in variation's twin: the square root of the point, one of its two roots at random.
 
-const INFO = #{ title: "Julia", name: "rhai_julia" };
+const INFO = #{ title: "Julia", name: "rhai_julia", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let r = z.abs();

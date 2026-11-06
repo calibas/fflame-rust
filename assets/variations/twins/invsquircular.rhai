@@ -1,6 +1,10 @@
+/// Inverse `squircular` — undoes the squircular Möbius warp. The body has
+/// the variation weight `w²` appearing nonlinearly inside `r2 = sqrt(r₀ ·
+/// (w²·r₀ − 4u²v²) / w)`, so the shape changes qualitatively with weight.
+
 // Inv Squircular, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Inv Squircular", name: "rhai_invsquircular" };
+const INFO = #{ title: "Inv Squircular", name: "rhai_invsquircular", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

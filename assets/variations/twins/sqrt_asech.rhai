@@ -1,6 +1,13 @@
+/// Variant of ArcSecH applied to sqrt(z). Note: upstream ports a copy-paste
+/// bug that makes this equivalent to sqrt_acosh — preserved so JWildfire
+/// flames render the same.
+///  
+/// # Authors
+/// - Whittaker Courtney
+
 // Sqrt ASech, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Sqrt ASech", name: "rhai_sqrt_asech" };
+const INFO = #{ title: "Sqrt ASech", name: "rhai_sqrt_asech", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let two_over_pi = 0.6366197723675814;

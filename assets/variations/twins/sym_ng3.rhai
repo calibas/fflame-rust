@@ -1,3 +1,8 @@
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
+
 // Sym NG3, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +23,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Sym NG3", name: "rhai_sym_ng3" };
+const INFO = #{ title: "Sym NG3", name: "rhai_sym_ng3", category: "plugin", phase: "any" };
 
 fn variation(z, p) {
     let sepx = p.sepx;
