@@ -580,6 +580,8 @@ class Fn:
             return f"(if {self.ex(args[1])} < {self.ex(args[0])} {{ 0.0 }} else {{ 1.0 }})"
         if f == "fma" and all(self.ty(a) == "f32" for a in args):
             return f"({self.ex(args[0])} * {self.ex(args[1])} + {self.ex(args[2])})"
+        if f == "exp2" and self.ty(args[0]) == "f32":
+            return f"pow(2.0, {self.ex(args[0])})"
         if f == "radians" and self.ty(args[0]) == "f32":
             return f"({self.ex(args[0])} * 0.017453292519943295)"
         if f == "degrees" and self.ty(args[0]) == "f32":
@@ -674,7 +676,7 @@ class Fn:
                 out.append(f"{t} * {t} * (3.0 - 2.0 * {t})")
             return f"({out[0]})" if len(out) == 1 else f"complex({out[0]}, {out[1]})"
         if f in MATH:
-            if f in ("smoothstep", "exp2"):
+            if f in ("smoothstep",):
                 raise Refuse(f"`{f}`")
             # WGSL's log is the natural one; Rhai's `log` is base 10.
             name = "ln" if f == "log" else f
@@ -857,7 +859,12 @@ class Fn:
             self.emit(depth, "}")
             return
         if k == "loop":
-            raise Refuse("a `loop`")
+            # WGSL's `loop`, left by its `break`s: the language's
+            # `while true`, under its loop cap as any.
+            self.emit(depth, "while true {")
+            self.stmts(s[1], depth + 1)
+            self.emit(depth, "}")
+            return
         if k == "switch":
             _, e, cases = s
             v = self.fresh()
@@ -951,8 +958,6 @@ class Translation:
         values = {}
         f = Fn(self, 2, [], "", True)
         if src:
-            if "rng" in src:
-                raise Refuse("a state init that draws")
             fns = functions("fn state_init_() {\n" + src + "\n}")
             f.taken = {tk[1] for tk in fns[0][3] if tk[0] == "id"}
             for s in block(P(fns[0][3])):
@@ -1150,6 +1155,36 @@ def passthrough_3d(two, three):
     b2 = re.sub(r",\s*p\.z\s*\)", ")", b2)
     return norm(a) == norm(b2)
 
+# The shared complex helpers (`shaders/core/complex.wgsl`) a body may
+# call: their own WGSL, translated as the twin's helpers, so the formulas
+# (cdiv's guard, csqrt's sign test) are the built-in's exactly.
+COMPLEX_LIB_DEPS = {"cadd": [], "csub": [], "cmul": [], "cmul_real": [], "cconj": [], "cmag2": [], "csquare": [],
+                    "cdiv": ["cmag2", "cmul", "cconj"], "csqrt": ["cmag2"]}
+
+def complex_lib():
+    src = open("shaders/core/complex.wgsl", encoding="utf-8").read()
+    out = {}
+    for m in re.finditer(r"^fn (\w+)\(.*?^}", src, re.M | re.S):
+        if m.group(1) in COMPLEX_LIB_DEPS:
+            out[m.group(1)] = m.group(0)
+    return out
+
+def with_complex_lib(src):
+    """`src` with the complex helpers it calls, and theirs, before it."""
+    lib = complex_lib()
+    defined = set(re.findall(r"^\s*fn (\w+)", src, re.M))
+    need = []
+    def want(n):
+        if n in need or n in defined:
+            return
+        for dep in COMPLEX_LIB_DEPS[n]:
+            want(dep)
+        need.append(n)
+    for n in COMPLEX_LIB_DEPS:
+        if re.search(r"\b" + n + r"\(", src):
+            want(n)
+    return "".join(lib[n] + "\n" for n in need) + src
+
 def translate(d):
     f = set(d["features"])
     for feat in ("needs_mobius_lib", "analytic_blur", "volume_side_emit"):
@@ -1157,6 +1192,7 @@ def translate(d):
     if d.get("plot_emits"): raise Refuse("plot emits")
     for prm in d["parameters"]:
         if prm["name"] in RHAI_RESERVED: raise Refuse(f"a parameter Rhai reserves the name of, `{prm['name']}`")
+        if not re.fullmatch(r"[A-Za-z_]\w*", prm["name"]): raise Refuse(f"a parameter named `{prm['name']}`, no Rhai name")
     # A pre or post variation returns the whole point, its weight in it
     # (`ctx.weight`), as the built-in does; `INFO.phase` says when it runs.
     t = Translation(d)
@@ -1167,7 +1203,7 @@ def translate(d):
         first.append(t.prepare(d["shader_init"]))
     if d["state_count"]:
         first.append(t.state_init())
-    more, two = t.body(d["shader_2d"], 2, d["name"])
+    more, two = t.body(with_complex_lib(d["shader_2d"]), 2, d["name"])
     helpers = first + more
     three = None
     # JWildfire's z rule as `INFO.z` where the twin's default is not the
@@ -1178,7 +1214,7 @@ def translate(d):
         if "always_z" not in f and z is None:
             z = "preserve_z"
         t3 = Translation(d)
-        h3, three = t3.body(d["shader_3d"], 3, d["name"])
+        h3, three = t3.body(with_complex_lib(d["shader_3d"]), 3, d["name"])
         names2 = {h.split("(")[0] for h in helpers}
         for h in h3:
             if h.split("(")[0] not in names2:

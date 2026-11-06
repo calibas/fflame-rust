@@ -742,7 +742,9 @@ fn escaped(s, p) {
     orbit goes on (JWildfire's `pVarTP.doHide`, `CanHide`); written
     back always, so `false` clears an earlier variation's;
   - state per thread: `fn init(p)` returns the map each thread starts
-    with (its parameters may seed it), and the body reads and sets its
+    with (its parameters may seed it, and `rand()` draws from the
+    thread's stream, as a built-in's `wgsl_state_init` does), and the
+    body reads and sets its
     fields as `this.name` -- Rhai's own way for a function called on an
     object to change it (`state_count` slots, `init` as
     `wgsl_state_init`);

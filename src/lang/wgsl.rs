@@ -522,6 +522,8 @@ pub struct VariationShape {
     /// `xform_id, variation_id`: for parameters, the state or the weight.
     pub ids: bool,
     pub rng: bool,
+    /// `init` draws: its function takes the thread's stream.
+    pub init_rng: bool,
     pub color: bool,
     /// `hide: ptr<function, bool>`: it hides its point (`CanHide`).
     pub hide: bool,
@@ -570,11 +572,10 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
             _ => false,
         })
     }
-    // `init` runs at a thread's start: no stream, no earlier variations.
+    // `init` runs at a thread's start: no earlier variations, but the
+    // thread's stream, as a built-in's `wgsl_state_init` draws from it.
     let init_only = Program { transform: Vec::new(), ..p.clone() };
-    if init_only.reads(Predef::Draw) {
-        return Err("`init` draws no random numbers: it runs once, at a thread's start".into());
-    }
+    let init_rng = Program { transform: Vec::new(), global_body: Vec::new(), ..p.clone() }.reads(Predef::Draw);
     if init_only.reads(Predef::Accum) {
         return Err("`init` has no earlier variations: `ctx.accum` is `variation`'s".into());
     }
@@ -602,6 +603,7 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
         ids: !p.params.is_empty() || !state.is_empty() || !p.globals.is_empty() || p.reads(Predef::Weight) || (0..6).any(|k| p.reads(Predef::Coef(k))),
         rng: p.reads(Predef::Draw),
         // Its colour pointer, to write it or to read it (`ctx.color`).
+        init_rng,
         color: writes(&p.transform, Place::Color) || p.reads(Predef::VarColor),
         // Its hide flag's (`#{ z, hide }`, `ctx.hide`).
         hide: writes(&p.transform, Place::Hide) || p.reads(Predef::VarHide),
@@ -631,6 +633,7 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
         accum: shapes.iter().any(|s| s.accum),
         ids: shapes.iter().any(|s| s.ids),
         rng: shapes.iter().any(|s| s.rng),
+        init_rng: own.init_rng,
         color: shapes.iter().any(|s| s.color),
         hide: shapes.iter().any(|s| s.hide),
         rgb: shapes.iter().any(|s| s.rgb),
@@ -737,7 +740,7 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
         wgsl_3d,
         features,
         state_count: union.state_slots as usize,
-        state_init: (!union.state.is_empty()).then(|| format!("        {prefix}variation_init(xform_id, variation_id);")),
+        state_init: (!union.state.is_empty()).then(|| format!("        {prefix}variation_init(xform_id, variation_id{});", if union.init_rng { ", &rng" } else { "" })),
         init_count: init.as_ref().map_or(0, |(_, m)| *m),
         init: init.map(|(s, _)| s),
     })
@@ -850,7 +853,11 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
     body.push_str(if three { "    return vec3<f32>(pixel, pixel_z);\n}\n" } else { "    return pixel;\n}\n" });
     // `init`: the state a thread starts with.
     if !own.state.is_empty() {
-        body.push_str("\nfn uf_variation_init(xform_id: u32, variation_id: u32) {\n");
+        body.push_str(if own.init_rng {
+            "\nfn uf_variation_init(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) {\n"
+        } else {
+            "\nfn uf_variation_init(xform_id: u32, variation_id: u32) {\n"
+        });
         decls(&mut body);
         g.stmts(&p.init, 1, &mut body);
         store(&g, &mut body);
