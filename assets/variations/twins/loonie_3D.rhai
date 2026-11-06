@@ -1,6 +1,13 @@
+/// 3D version of Loonie — inverts points inside a sphere sized by the
+/// variation's weight; Z gets folded through an atan2 substitution for non-
+/// zero depth handling.
+///
+/// # Authors
+/// - Larry Berlin
+
 // Loonie 3D, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Loonie 3D", name: "rhai_loonie_3d" };
+const INFO = #{ title: "Loonie 3D", name: "rhai_loonie_3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

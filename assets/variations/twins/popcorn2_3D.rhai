@@ -1,3 +1,13 @@
+/// 3D extension of `popcorn2` — modulates XY by `0.5 · (coord + scale ·
+/// sin(tan(c · other_coord)))` (the standard popcorn2 form, halved) and
+/// adds a Z output combining `sin(tan(c)) · atan2(y, x)` with an optional
+/// Z-dependent term scaled by `popcorn2_3D_z`. The accumulator-read path in
+/// the cpp (`otherZ ≠ 0`) is unreachable in our model since `FPz` starts at
+/// 0 each iteration, so we always take the `otherZ == 0` branch.
+///
+/// # Authors
+/// - Larry Berlin
+
 // Popcorn2 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +33,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Popcorn2 3D", name: "rhai_popcorn2_3d" };
+const INFO = #{ title: "Popcorn2 3D", name: "rhai_popcorn2_3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let xp = p.popcorn2_3D_x;

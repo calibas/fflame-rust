@@ -1,3 +1,10 @@
+/// 2D-block warp — maps points through an ellipse-bounded arctan to produce
+/// angular blocky patterns. `mp` controls block size; `x` and `y` set per-
+/// axis aspect.
+///
+/// # Authors
+/// - Brad Stefanov
+
 // Blocky, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +25,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Blocky", name: "rhai_blocky" };
+const INFO = #{ title: "Blocky", name: "rhai_blocky", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let px = p.x;

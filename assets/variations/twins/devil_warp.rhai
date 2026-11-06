@@ -1,3 +1,12 @@
+/// Power-warp with rmin/rmax clamp — computes a complex radial term `r =
+/// (x² + r²·b·y²)^warp − (y² + r²·a·x²)^warp` (with `r² = 1/(x²+y²)`),
+/// clamps it to `[rmin, rmax]`, scales it by `effect`, and emits `(x·(1+r),
+/// y·(1+r))`. The clamp prevents the power expression from blowing up at
+/// large or singular inputs.
+///
+/// # Authors
+/// - DarkBeam
+
 // Devil Warp, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -33,7 +42,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Devil Warp", name: "rhai_devil_warp" };
+const INFO = #{ title: "Devil Warp", name: "rhai_devil_warp", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let a = p.a;

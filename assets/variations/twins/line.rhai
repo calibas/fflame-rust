@@ -1,3 +1,10 @@
+/// Project to a random spot on a 3D line — picks a random distance `r =
+/// rand · w` and emits along a unit vector `(cos(δπ)·cos(φπ),
+/// sin(δπ)·cos(φπ), sin(φπ))`. The 2D output drops the Z component.
+///
+/// # Authors
+/// - chronologicaldot
+
 // Line, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Line", name: "rhai_line" };
+const INFO = #{ title: "Line", name: "rhai_line", category: "full_3d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let delta = p.delta;

@@ -1,6 +1,13 @@
+/// Variant 3 of Loonie — same coin-shape inversion as Loonie but uses
+/// `(r²)²/x²` for the radial threshold check, producing a stretched single-
+/// arm form.
+///
+/// # Authors
+/// - DarkBeam
+
 // Loonie 3, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Loonie 3", name: "rhai_loonie3" };
+const INFO = #{ title: "Loonie 3", name: "rhai_loonie3", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

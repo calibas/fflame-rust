@@ -1,6 +1,13 @@
+/// Z-axis inflation #1 — adds `sin(atan2(y,x)) − 2y` to the Z output. XY
+/// pass through unchanged. The angular sine plus linear-Y term produces a
+/// saddle-shaped Z surface.
+///
+/// # Authors
+/// - Larry Berlin
+
 // Inflate Z 1, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Inflate Z 1", name: "rhai_inflatez_1" };
+const INFO = #{ title: "Inflate Z 1", name: "rhai_inflatez_1", category: "depth_3d", phase: "any" };
 
 fn variation(z, p) {
     complex(0.0, 0.0)

@@ -1,6 +1,11 @@
+/// Quaternion hyperbolic cotangent — 3D extension of Coth.
+///
+/// # Authors
+/// - zephyrtronium
+
 // Cothq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Cothq", name: "rhai_cothq" };
+const INFO = #{ title: "Cothq", name: "rhai_cothq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let v = max(abs(z.im), 1.0e-20);

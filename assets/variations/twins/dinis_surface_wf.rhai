@@ -1,3 +1,9 @@
+/// Dini's Surface parametric mapping — emits `(a·cos(u)·sin(v),
+/// a·sin(u)·sin(v), −(a·(cos(v) + log tan(v/2)) + b·u))` where `(u, v) =
+/// (x, y)`. Dini's surface is a helicoid of constant negative Gaussian
+/// curvature, a generalization of the pseudosphere. See
+/// [MathWorld](https://mathworld.wolfram.com/DinisSurface.html).
+
 // Dini's Surface WF, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +19,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Dini's Surface WF", name: "rhai_dinis_surface_wf" };
+const INFO = #{ title: "Dini's Surface WF", name: "rhai_dinis_surface_wf", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let a = p.a;

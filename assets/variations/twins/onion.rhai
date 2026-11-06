@@ -1,3 +1,11 @@
+/// Onion-warp 3D variation — points inside a sphere (sized by the
+/// variation's weight) stay flat with Z pushed to the bottom; outside, they
+/// curl onto the sphere's top with an exponential tail. Forms onion-layer
+/// structures.
+///
+/// # Authors
+/// - chronologicaldot
+
 // Onion, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Onion", name: "rhai_onion" };
+const INFO = #{ title: "Onion", name: "rhai_onion", category: "full_3d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let cx = p.centre_x;

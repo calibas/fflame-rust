@@ -298,8 +298,9 @@ pub fn label_of(v: &Expr) -> Option<crate::scripted::Label> {
 
 /// A script's labels (`crate::scripted::Labels`), read from its `INFO`
 /// and `PARAMS` as written, for whatever shows them to resolve in the
-/// current language when it shows them. `None` when it does not parse; a
-/// label it does not write is empty.
+/// current language when it shows them -- its description and authors
+/// from the doc block it opens with where `INFO` has none. `None` when it
+/// does not parse; a label it does not write is empty.
 pub fn source_labels(source: &str) -> Option<crate::scripted::Labels> {
     let (ast, _) = parse(source).ok()?;
     let mut out = crate::scripted::Labels::default();
@@ -341,6 +342,18 @@ pub fn source_labels(source: &str) -> Option<crate::scripted::Labels> {
                 }
             }
             _ => {}
+        }
+    }
+    // The doc block the source opens with (a def's shape: the prose, then
+    // `# Authors` and its `- name` lines), where `INFO` gives no
+    // description or author: the text the API reads and writes without
+    // evaluating Rhai (`variations::docs::leading_block`).
+    if let Some(doc) = crate::variations::docs::leading_block(source) {
+        if out.description.resolve().is_empty() {
+            out.description = crate::scripted::Label::text(doc.description);
+        }
+        if out.author.is_empty() {
+            out.author = doc.authors.join(", ");
         }
     }
     Some(out)
@@ -1468,7 +1481,25 @@ impl<'s> Lowerer<'s> {
                     Expr::BoolConstant(..) => {}
                     _ => return self.err(*p, "`resets_orbits` is true or false"),
                 },
-                o if self.transform => return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name` and `resets_orbits`, not `{o}`")),
+                // When it runs among a transform's variations, and where the
+                // pickers group it: a built-in's own (`variations::custom`
+                // reads them apart; `any` a phase the user may move).
+                "phase" if self.transform => match v {
+                    Expr::StringConstant(s, _) if matches!(s.as_str(), "normal" | "any" | "pre" | "post") => {}
+                    _ => return self.err(*p, "`phase` is \"normal\", \"any\" (the user may move it to pre or post), \"pre\" or \"post\""),
+                },
+                "category" if self.transform => match v {
+                    Expr::StringConstant(s, _) if crate::variations::VariationCategory::from_api_str(s).to_api_str() == s.as_str() => {}
+                    _ => {
+                        return self.err(
+                            *p,
+                            "`category` is \"basic_2d\", \"advanced_2d\", \"depth_3d\", \"rotation_3d\", \"full_3d\", \"only_3d\" or \"plugin\": where the pickers group it",
+                        )
+                    }
+                },
+                o if self.transform => {
+                    return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name`, `resets_orbits`, `phase` and `category`, not `{o}`"))
+                }
                 // An effect's identity (design rule 7: a UUID, or a
                 // built-in's name) and its place in the pipeline, read
                 // apart (`info_string`).

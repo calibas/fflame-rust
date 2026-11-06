@@ -1,3 +1,10 @@
+/// Randomly-amplitude parabola. Output X is height-scaled `sin²(r)` times a
+/// uniform random; Y is width-scaled `cos(r)` times another uniform.
+/// Produces blurry parabolic arcs.
+///
+/// # Authors
+/// - cyberxaos
+
 // Parabola, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Parabola", name: "rhai_parabola" };
+const INFO = #{ title: "Parabola", name: "rhai_parabola", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let width = p.width;

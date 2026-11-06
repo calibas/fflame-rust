@@ -1,6 +1,13 @@
+/// Chrysanthemum curve — Sosa's flower-like parametric curve. Plots `r` as
+/// a function of a random angle, producing dense overlapping petal
+/// patterns.
+///
+/// # Authors
+/// - Jesus Sosa
+
 // Chrysanthemum, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Chrysanthemum", name: "rhai_chrysanthemum" };
+const INFO = #{ title: "Chrysanthemum", name: "rhai_chrysanthemum", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let pi = 3.14159265358979;

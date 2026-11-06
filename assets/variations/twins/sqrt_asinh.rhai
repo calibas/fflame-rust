@@ -1,6 +1,11 @@
+/// Like ArcSinh but on sqrt(z). Random ±sign each iteration.
+///  
+/// # Authors
+/// - Whittaker Courtney
+
 // Sqrt ASinh, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Sqrt ASinh", name: "rhai_sqrt_asinh" };
+const INFO = #{ title: "Sqrt ASinh", name: "rhai_sqrt_asinh", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let two_over_pi = 0.6366197723675814;

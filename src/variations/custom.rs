@@ -130,14 +130,27 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
     if lang::rhai::info_bool(source, "resets_orbits") == Some(true) {
         features.push("resets_orbits");
     }
+    // Where the pickers group it, `INFO.category`; a 3D function alone is a
+    // 3D variation only.
+    let category = match lang::rhai::info_string(source, "category") {
+        Some(c) if !two && c != "only_3d" => return Err(format!("a variation with no `fn variation` is `only_3d`, not `{c}`")),
+        Some(c) => c,
+        None if two => "plugin".to_string(),
+        None => "only_3d".to_string(),
+    };
     let payload = serde_json::json!({
         "id": format!("custom:{name}"),
         "name": name,
         "display_name": p.name,
-        // A 3D function alone is a 3D variation only.
-        "category": if two { "plugin" } else { "only_3d" },
+        "category": category,
         "version": 1,
-        "phase": "normal",
+        // The wire's phase has no `any` (VARIATIONS_WIRE_FORMAT.md §4.2):
+        // a variation of the user's takes it at registration ([`phase_of`]).
+        "phase": match phase_of(source) {
+            crate::variations::VariationPhase::Pre => "pre",
+            crate::variations::VariationPhase::Post => "post",
+            _ => "normal",
+        },
         "parameters": parameters,
         "shader_2d": wgsl.wgsl_2d,
         "shader_3d": wgsl.wgsl_3d,
@@ -148,6 +161,19 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
         "shader_state_init": wgsl.state_init,
     });
     serde_json::from_value(payload).map_err(|e| format!("the variation's payload: {e}"))
+}
+
+/// The phase `INFO.phase` gives a variation source: normal without one,
+/// `any` one the user may move to pre or post (a transform's
+/// `variation_priorities`), as 295 of the built-ins with twins are.
+pub fn phase_of(source: &str) -> crate::variations::VariationPhase {
+    use crate::variations::VariationPhase as P;
+    match lang::rhai::info_string(source, "phase").as_deref() {
+        Some("any") => P::Any,
+        Some("pre") => P::Pre,
+        Some("post") => P::Post,
+        _ => P::Normal,
+    }
 }
 
 /// Compile a source and register it under its key, replacing what has that
@@ -166,6 +192,10 @@ fn register_payload(dl: VariationDownload, source: &str) -> Result<String, Strin
         }
     }
     registry.register_from_api(&dl, Provenance::Local);
+    // `any`, which the wire cannot say, from the source.
+    if phase_of(source) == crate::variations::VariationPhase::Any {
+        registry.set_phase(&dl.name, crate::variations::VariationPhase::Any);
+    }
     if registry.has(&dl.name) {
         drop(registry);
         // So `ensure` does not register this source again.

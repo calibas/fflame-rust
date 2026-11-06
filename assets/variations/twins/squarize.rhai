@@ -1,6 +1,14 @@
+/// Angle-pack square map — converts polar coordinates `(s, a)` to a
+/// position on a square of side `s` by treating `q = 4·s·a/π` as a
+/// perimeter parameter and dispatching to one of 5 edge-segment branches.
+/// Effectively wraps the unit circle around a unit square.
+///
+/// # Authors
+/// - Michael Faber
+
 // Squarize, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Squarize", name: "rhai_squarize" };
+const INFO = #{ title: "Squarize", name: "rhai_squarize", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let two_pi = 6.28318530717959;

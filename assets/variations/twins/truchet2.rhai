@@ -1,3 +1,15 @@
+/// Truchet variant with interpolated parameters — same tile algorithm as
+/// `truchet`, but the exponent and width are interpolated linearly based on
+/// the X-position within each cell (`xp ∈ [0, 1]` via fmod-and-fold). Cells
+/// transition smoothly between `(exponent1, width1)` at the left and
+/// `(exponent2, width2)` at the right. `inverse = 1` plots the complement
+/// (cells outside the arcs) instead.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - Brad Stefanov
+/// - Jesus Sosa
+
 // Truchet 2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -38,7 +50,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Truchet 2", name: "rhai_truchet2" };
+const INFO = #{ title: "Truchet 2", name: "rhai_truchet2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let exp1 = p.exponent1;

@@ -1,6 +1,12 @@
+/// Complex secant (1/cos). Singularities at ±π/2 create high-density rings
+/// around the poles.
+///
+/// # Authors
+/// - cothe
+
 // Sec, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Sec", name: "rhai_sec" };
+const INFO = #{ title: "Sec", name: "rhai_sec", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let s = sin(z.re);

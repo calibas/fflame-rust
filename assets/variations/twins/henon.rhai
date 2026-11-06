@@ -1,3 +1,9 @@
+/// Classic Hénon strange attractor — iteration of `(c − a·x² + y, b·x)`.
+/// Maps trajectories onto the famous Hénon curve.
+///
+/// # Authors
+/// - TyrantWave
+
 // Henon, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +24,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Henon", name: "rhai_henon" };
+const INFO = #{ title: "Henon", name: "rhai_henon", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let a = p.a;

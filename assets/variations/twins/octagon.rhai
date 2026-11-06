@@ -1,3 +1,11 @@
+/// Octagonal-tile warp — applies three sequential contributions: a radial
+/// term `r = 1/(x⁴ + y⁴)` (folded for `r < 2`), a Manhattan-distance
+/// reciprocal term, and a sign-based shift by `x`/`y`/`z`. The combined
+/// effect tiles the plane (or volume) with an octagonal pattern.
+///
+/// # Authors
+/// - FracFx
+
 // Octagon, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +26,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Octagon", name: "rhai_octagon" };
+const INFO = #{ title: "Octagon", name: "rhai_octagon", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let xp = p.x;

@@ -1,3 +1,7 @@
+/// Rose curve — emits a point on the classic rose `r = amp · cos(waves ·
+/// a)`. Produces `waves` petals (or `2·waves` if `waves` is even). With
+/// `filled = 1`, randomizes the radius to fill the interior.
+
 // Rose WF, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +22,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Rose WF", name: "rhai_rose_wf" };
+const INFO = #{ title: "Rose WF", name: "rhai_rose_wf", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let amp = p.amp;

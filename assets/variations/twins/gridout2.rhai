@@ -1,3 +1,14 @@
+/// 8-cell quadrant routing — rounds the input to a grid (with separate cell
+/// sizes `c, d` per axis), then chooses one of 8 octant-style cell-boundary
+/// directions to add `±a` to X or `±b` to Y. Produces a grid-tile shifted
+/// pattern.
+///
+/// # Authors
+/// - Michael Faber
+/// - Joel Faber
+/// - Brad Stefanov
+/// - DarkBeam
+
 // Grid Out 2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +34,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Grid Out 2", name: "rhai_gridout2" };
+const INFO = #{ title: "Grid Out 2", name: "rhai_gridout2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let a = p.a;

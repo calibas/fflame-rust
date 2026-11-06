@@ -1,6 +1,13 @@
+/// Treats the input as a complex number and applies the inverse hyperbolic
+/// cotangent, then swaps the real and imaginary parts. Creates two
+/// singularity points at (±1, 0) with the pattern flowing between them.
+/// 
+/// # Authors
+/// - Whittaker Courtney
+
 // ACoth, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "ACoth", name: "rhai_acoth" };
+const INFO = #{ title: "ACoth", name: "rhai_acoth", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let two_over_pi = 0.6366197723675814;

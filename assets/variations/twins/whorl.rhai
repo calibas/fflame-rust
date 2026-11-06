@@ -1,3 +1,12 @@
+/// Radial whorl with inside/outside knobs — adds a `1/(w − r)` angular
+/// term to the polar angle, with separate `inside` and `outside`
+/// multipliers depending on whether the input lies inside (`r < w`) or
+/// outside (`r ≥ w`) the unit-weight radius. Produces a whorl/swirl
+/// pattern that diverges as the radius approaches the variation weight.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Whorl, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +22,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Whorl", name: "rhai_whorl" };
+const INFO = #{ title: "Whorl", name: "rhai_whorl", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let inside = p.inside;

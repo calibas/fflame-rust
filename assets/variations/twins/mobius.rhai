@@ -1,3 +1,10 @@
+/// Möbius transformation in the complex plane — `(Az + B) / (Cz + D)`. The
+/// eight real/imaginary coefficients (A, B, C, D) control the conformal
+/// warping; classic hyperbolic-geometry effect.
+/// 
+/// # Authors
+/// - eralex61
+
 // Mobius, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -43,7 +50,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Mobius", name: "rhai_mobius" };
+const INFO = #{ title: "Mobius", name: "rhai_mobius", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let re_a = p.re_a;

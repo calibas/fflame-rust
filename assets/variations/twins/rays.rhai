@@ -1,6 +1,14 @@
+/// RNG-driven ray spread — picks a random angle `ang = w · rand · π`, then
+/// emits `(tan(ang) · r · cos(x), tan(ang) · r · sin(y))` with `r = w / (x²
+/// + y²)`. The tangent term creates spiky rays radiating in random angular
+/// directions.
+///
+/// # Authors
+/// - Z+
+
 // Rays, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Rays", name: "rhai_rays" };
+const INFO = #{ title: "Rays", name: "rhai_rays", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

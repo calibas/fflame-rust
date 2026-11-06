@@ -1,3 +1,10 @@
+/// Parameterized Sin — independent scaling on each sin/cos/sinh/cosh term.
+/// At defaults (1.0), reduces to Sin.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
+
 // Sin2 BS, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +30,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Sin2 BS", name: "rhai_sin2_bs" };
+const INFO = #{ title: "Sin2 BS", name: "rhai_sin2_bs", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let x1 = p.x1;

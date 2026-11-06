@@ -1,3 +1,9 @@
+/// Elliptic push — additively offsets μ by `push`, multiplicatively scales
+/// μ by `dist`, and rotates ν by `rotate`.
+///
+/// # Authors
+/// - Michael Faber
+
 // EPush, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +24,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "EPush", name: "rhai_epush" };
+const INFO = #{ title: "EPush", name: "rhai_epush", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let push = p.push;

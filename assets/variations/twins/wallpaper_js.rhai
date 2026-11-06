@@ -1,3 +1,11 @@
+/// Random Mira/identity blend — with 50% probability applies a Mira-style
+/// sqrt warp `(y − sign(trunc x) · sqrt|b·x − c|, a − x)`; otherwise passes
+/// through. Produces wallpaper-like tiling patterns based on Paul Bourke's
+/// wallpaper attractor.
+///
+/// # Authors
+/// - Jesus Sosa
+
 // Wallpaper (JS), the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +26,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Wallpaper (JS)", name: "rhai_wallpaper_js" };
+const INFO = #{ title: "Wallpaper (JS)", name: "rhai_wallpaper_js", category: "advanced_2d", phase: "any" };
 
 fn wallpaper_signum(v) {
     if (v < 0.0) {

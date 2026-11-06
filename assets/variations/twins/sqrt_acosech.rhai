@@ -1,6 +1,12 @@
+/// Like ACosecH but on sqrt(z) — denser version of the symmetric two-branch
+/// pattern. Random ±sign each iteration.
+///  
+/// # Authors
+/// - Whittaker Courtney
+
 // Sqrt ACosecH, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Sqrt ACosecH", name: "rhai_sqrt_acosech" };
+const INFO = #{ title: "Sqrt ACosecH", name: "rhai_sqrt_acosech", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let two_over_pi = 0.6366197723675814;

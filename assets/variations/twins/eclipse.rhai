@@ -1,3 +1,10 @@
+/// Eclipse-shaped X-axis clamp — inside an elliptical region sized by the
+/// variation's weight, X gets shifted by `shift · w`; outside the region,
+/// points pass through unchanged. Produces an eclipse silhouette.
+///
+/// # Authors
+/// - Michael Faber
+
 // Eclipse, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +15,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Eclipse", name: "rhai_eclipse" };
+const INFO = #{ title: "Eclipse", name: "rhai_eclipse", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let shift = p.shift;

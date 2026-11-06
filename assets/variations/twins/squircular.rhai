@@ -1,6 +1,11 @@
+/// Squircular Möbius warp — maps the input through a "squircle"-style
+/// transformation (intermediate between a circle and a square). The
+/// variation weight enters non-linearly in the body, so the output shape
+/// changes qualitatively with weight rather than just scaling.
+
 // Squircular, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Squircular", name: "rhai_squircular" };
+const INFO = #{ title: "Squircular", name: "rhai_squircular", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

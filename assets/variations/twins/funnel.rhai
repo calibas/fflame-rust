@@ -1,3 +1,11 @@
+/// Tangent · secant + offset funnel — per axis, emits `tanh(coord) ·
+/// (sec(coord) + effect · π)`. The hyperbolic tangent saturates the input
+/// toward ±1, and the secant term creates poles where the input's cosine
+/// hits zero.
+///
+/// # Authors
+/// - Raykoid666
+
 // Funnel, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +16,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Funnel", name: "rhai_funnel" };
+const INFO = #{ title: "Funnel", name: "rhai_funnel", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let effect = to_float(p.effect);

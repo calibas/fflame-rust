@@ -1,3 +1,9 @@
+/// Torus-section mapping — wraps the input through a torus-shaped surface
+/// modulated by `n`, creating 3D donut-like structures.
+///
+/// # Authors
+/// - gossamer light
+
 // Taurus, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +29,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Taurus", name: "rhai_taurus" };
+const INFO = #{ title: "Taurus", name: "rhai_taurus", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let r_p = p.r;

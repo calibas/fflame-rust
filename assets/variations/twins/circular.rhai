@@ -1,3 +1,10 @@
+/// Randomized rotation by a deterministic-plus-RNG term — each iteration
+/// adds a small random angle to the point's polar angle. The `seed`
+/// parameter changes the noise pattern.
+///
+/// # Authors
+/// - Tatyana Zabanova
+
 // Circular, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Circular", name: "rhai_circular" };
+const INFO = #{ title: "Circular", name: "rhai_circular", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let angle_deg = p.angle;

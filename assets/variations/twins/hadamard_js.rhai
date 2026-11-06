@@ -1,6 +1,14 @@
+/// 3-branch Hadamard IFS — picks one of three affine maps uniformly per
+/// iteration: half-scale identity, or one of two half-scale rotation-plus-
+/// offset maps. Produces a Hadamard fractal pattern. Based on Paul Bourke's
+/// `roger18.c`.
+///
+/// # Authors
+/// - Jesus Sosa
+
 // Hadamard (JS), the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Hadamard (JS)", name: "rhai_hadamard_js" };
+const INFO = #{ title: "Hadamard (JS)", name: "rhai_hadamard_js", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let r1 = rand();

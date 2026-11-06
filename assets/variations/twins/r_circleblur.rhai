@@ -1,3 +1,10 @@
+/// Radial-truncated circle blur — truncates the input radius into bands of
+/// width `n` and places a randomly-positioned small disc within each band
+/// cell. Hash-based per-cell positioning.
+///
+/// # Authors
+/// - Tatyana Zabanova
+
 // R Circle Blur, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -28,7 +35,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "R Circle Blur", name: "rhai_r_circleblur" };
+const INFO = #{ title: "R Circle Blur", name: "rhai_r_circleblur", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let n = p.n;

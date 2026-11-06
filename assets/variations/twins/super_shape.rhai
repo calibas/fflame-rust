@@ -1,3 +1,6 @@
+/// Warps points via the Gielis super-formula — a generalized rose/star
+/// curve controlled by 5 shape parameters. Produces flower-like patterns.
+
 // Super Shape, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -33,7 +36,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Super Shape", name: "rhai_super_shape" };
+const INFO = #{ title: "Super Shape", name: "rhai_super_shape", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let rnd = p.rnd;

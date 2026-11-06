@@ -1,6 +1,13 @@
+/// Quaternion sine — extends the complex Sin to 3D by treating (x, y, z) as
+/// a split quaternion. In 2D mode (z = 0) it collapses to the same shape as
+/// Sin.
+///
+/// # Authors
+/// - zephyrtronium
+
 // Sinq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Sinq", name: "rhai_sinq" };
+const INFO = #{ title: "Sinq", name: "rhai_sinq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let v = max(abs(z.im), 1.0e-20);

@@ -1,3 +1,12 @@
+/// Onion-shaped 3D transform — smoothly transitions a circle into a
+/// (negative) exponential curve at a `meeting_pt`, projecting the result
+/// onto a sphere. Below the meeting point the input lies on a sphere of
+/// radius `cos(t)`; above it, on an exponential decay curve. `top_crop`
+/// optionally truncates the exponential tail.
+///
+/// # Authors
+/// - chronologicaldot
+
 // Onion 2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -43,7 +52,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Onion 2", name: "rhai_onion2" };
+const INFO = #{ title: "Onion 2", name: "rhai_onion2", category: "full_3d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let meeting_pt = p.meeting_pt;

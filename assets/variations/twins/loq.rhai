@@ -1,3 +1,11 @@
+/// 3D quaternion-Apo inverse-log — emits `(log(r²) / (2·log(base)), C·y,
+/// C·z)` where `C = atan2(|v|, x) / |v|` and `|v| = sqrt(y² + z²)`. Inverse
+/// of the `exp`/`q_log` family with a configurable log base. The X output
+/// is logarithmic; the Y and Z components scale by an angular factor.
+///
+/// # Authors
+/// - zephyrtronium
+
 // Loq, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +16,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Loq", name: "rhai_loq" };
+const INFO = #{ title: "Loq", name: "rhai_loq", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let base = max(p.base, 1.000001);

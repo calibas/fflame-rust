@@ -477,6 +477,28 @@ fn escaped(s, p) {
   `INFO` gives `title`, `center`, `magn`, `maxiter`, `angle`; every
   kind's `INFO` may also give `id`, `description` and `author`, what the
   library shows of it (`storage::library`).
+- **The doc block**, every kind's: the `///` lines a source opens with,
+  in a built-in variation's own shape -- the prose (markdown), then
+  `# Authors` and a `- name` line each:
+
+  ```rhai
+  /// Voronoi-cell base shape -- picks a blurred unit-disc point ...
+  ///
+  /// # Authors
+  /// - slobo777
+  /// - Andreas Maschke
+  ```
+
+  It gives the description and the authors where `INFO` has none
+  (`lang::rhai::source_labels`; `INFO.description` stays for a map by
+  locale, which a comment cannot carry). One parser reads it from a Rhai
+  source and from a def (`variations::docs`: `leading_block`,
+  `block_text`), and `write_block` / `with_block` write one, so the API
+  reads and writes a script's description and authors as text, without
+  evaluating Rhai; a block written from any def's doc reads back as it
+  (`a_written_block_reads_back_for_every_def`). The prose is kept as
+  paragraphs, as the API keeps it: a block written back wraps at 76
+  columns, not as the def did.
 - **`prepare(p, ctx)`**, optional, runs once per image (UF's
   `global:`): the map it returns is read as `p.name`.
 - **`fn creases(p0, p, ctx)`**, optional: a folding formula's paper,
@@ -660,8 +682,11 @@ fn escaped(s, p) {
   [VARIATIONS.md](VARIATIONS.md#variations-written-in-rhai)), and
   `INFO.resets_orbits: true` makes a flame using it
   start its orbits afresh every dispatch (`Feature::ResetsOrbits`;
-  [RENDERER.md](RENDERER.md) *Persistent orbits*); `PARAMS` as a
-  formula's; no `prepare`. The flame's
+  [RENDERER.md](RENDERER.md) *Persistent orbits*). `INFO.phase` is
+  `"normal"` (without it), `"any"` (the user may move it to pre or post,
+  as most built-ins), `"pre"` or `"post"`; `INFO.category` where the
+  pickers group it, a `VariationCategory`'s wire name (`plugin` without
+  it). `PARAMS` as a formula's; no `prepare`. The flame's
   hooks (the KIFS plan, C2), each the `Feature` a built-in declares:
   - `rand()`, a draw in [0, 1) (`NeedsRng`, the flame's stream);
   - `fn variation(z, p, ctx)`: `ctx.accum`, the weighted sum of the

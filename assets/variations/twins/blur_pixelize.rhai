@@ -1,3 +1,6 @@
+/// Snaps points to a grid of pixel-sized cells, then adds random offset
+/// within each cell. Produces a mosaic effect.
+
 // Blur Pixelize, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +16,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Blur Pixelize", name: "rhai_blur_pixelize" };
+const INFO = #{ title: "Blur Pixelize", name: "rhai_blur_pixelize", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let size = p.size;

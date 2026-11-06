@@ -1,3 +1,9 @@
+/// Parameterized Cos. At defaults (1.0), reduces to Cos.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
+
 // Cos2 BS, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +29,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Cos2 BS", name: "rhai_cos2_bs" };
+const INFO = #{ title: "Cos2 BS", name: "rhai_cos2_bs", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let x1 = p.x1;

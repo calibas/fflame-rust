@@ -1,3 +1,11 @@
+/// 14-parameter atan2-driven spiral generator — combines two `atan2` calls
+/// (one over per-power radial terms, one over per-divisor xy positions) and
+/// a sine wrap, with separate weights and offsets per component. X output
+/// is mirrored across `±π` based on the sign of x.
+///
+/// # Authors
+/// - Whittaker Courtney
+
 // Atan2 Spirals, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -73,7 +81,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Atan2 Spirals", name: "rhai_atan2_spirals" };
+const INFO = #{ title: "Atan2 Spirals", name: "rhai_atan2_spirals", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let r_mult = p.r_mult;

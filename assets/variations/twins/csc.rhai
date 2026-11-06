@@ -1,6 +1,11 @@
+/// Complex cosecant (1/sin). Singularities at 0 and ±π.
+///
+/// # Authors
+/// - cothe
+
 // Csc, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Csc", name: "rhai_csc" };
+const INFO = #{ title: "Csc", name: "rhai_csc", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let s = sin(z.re);

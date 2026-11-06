@@ -1,3 +1,9 @@
+/// Maps to bipolar coordinates (a pair of orthogonal coordinate systems
+/// centered on two points). Good for two-focus symmetric flames.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Bipolar, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +14,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Bipolar", name: "rhai_bipolar" };
+const INFO = #{ title: "Bipolar", name: "rhai_bipolar", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let PI = 3.14159265359;

@@ -1,3 +1,10 @@
+/// Conic-section sampler — emits `r · (x, y)` where `r = w · (rand − holes)
+/// · eccentricity / (1 + ecc · x/s) / s` and `s = sqrt(x²+y²)`. The `1/(1 +
+/// ecc·cos θ)` term is the standard polar equation of a conic section.
+///
+/// # Authors
+/// - cyberxaos
+
 // Conic, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Conic", name: "rhai_conic" };
+const INFO = #{ title: "Conic", name: "rhai_conic", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let ecc = p.eccentricity;

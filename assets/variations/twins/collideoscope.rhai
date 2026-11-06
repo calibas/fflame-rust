@@ -1,3 +1,11 @@
+/// Radial branch-and-mod (kaleidoscope-style) — converts the input to polar
+/// `(r, a)`, splits the angle into `num` equal sectors, and mirrors/shifts
+/// alternating sectors based on the parity of the sector index, with a per-
+/// sector angular offset `a`. Produces a kaleidoscope-like radial tiling.
+///
+/// # Authors
+/// - Michael Faber
+
 // Collideoscope, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Collideoscope", name: "rhai_collideoscope" };
+const INFO = #{ title: "Collideoscope", name: "rhai_collideoscope", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let a_p = p.a;

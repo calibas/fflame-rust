@@ -1,3 +1,9 @@
+/// 3D helicoid — rotates (x, y) by an angle proportional to Z, preserving
+/// the radius from the origin. In 2D mode collapses to identity.
+///
+/// # Authors
+/// - Zy0rg
+
 // Helicoid, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +14,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Helicoid", name: "rhai_helicoid" };
+const INFO = #{ title: "Helicoid", name: "rhai_helicoid", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let _f = p.frequency;

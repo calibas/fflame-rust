@@ -1,3 +1,9 @@
+/// Parameterized 3D bubble with separate X / Y / Z scaling. Maps the input
+/// onto a sphere and stretches each axis independently.
+///
+/// # Authors
+/// - FracFx
+
 // Bubble2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +24,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Bubble2", name: "rhai_bubble2" };
+const INFO = #{ title: "Bubble2", name: "rhai_bubble2", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let x_p = p.x;

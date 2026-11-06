@@ -1,6 +1,13 @@
+/// Like ACoth but applied to sqrt(z) instead of z. The square-root pre-step
+/// roughly halves the angle, producing a denser, more intricate version of
+/// ACoth's two-singularity pattern. Random ±sign each iteration.
+/// 
+/// # Authors
+/// - Whittaker Courtney
+
 // Sqrt ACoth, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Sqrt ACoth", name: "rhai_sqrt_acoth" };
+const INFO = #{ title: "Sqrt ACoth", name: "rhai_sqrt_acoth", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let two_over_pi = 0.6366197723675814;

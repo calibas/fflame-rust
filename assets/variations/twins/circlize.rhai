@@ -1,3 +1,11 @@
+/// L∞-square perimeter to circle mapping — treats the input as a point
+/// on the L∞ unit square (the Chebyshev-distance "square"), and maps it
+/// onto a circle by treating its perimeter distance as the output angle.
+/// `hole` adds a central radial offset, creating an inner gap.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Circlize, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +16,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Circlize", name: "rhai_circlize" };
+const INFO = #{ title: "Circlize", name: "rhai_circlize", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let hole = p.hole;

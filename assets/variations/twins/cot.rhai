@@ -1,6 +1,11 @@
+/// Complex cotangent (cos/sin). Singularities at 0 and ±π.
+///
+/// # Authors
+/// - cothe
+
 // Cot, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Cot", name: "rhai_cot" };
+const INFO = #{ title: "Cot", name: "rhai_cot", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let s2 = sin(2.0 * z.re);

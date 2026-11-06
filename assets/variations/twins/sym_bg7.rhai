@@ -1,3 +1,8 @@
+/// Band Symmetry Group variations sym_bg1..sym_bg7
+///
+/// # Authors
+/// - Jesus Sosa
+
 // Sym BG7, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +18,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Sym BG7", name: "rhai_sym_bg7" };
+const INFO = #{ title: "Sym BG7", name: "rhai_sym_bg7", category: "plugin", phase: "any" };
 
 fn variation(z, p) {
     let stepx = p.stepx;

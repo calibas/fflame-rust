@@ -1,6 +1,13 @@
+/// Inverse hyperbolic cosine on the complex input. Each iteration randomly
+/// picks one of the two branches, producing a symmetric upper/lower
+/// pattern.
+/// 
+/// # Authors
+/// - Whittaker Courtney
+
 // ACosh, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "ACosh", name: "rhai_acosh" };
+const INFO = #{ title: "ACosh", name: "rhai_acosh", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let two_over_pi = 0.6366197723675814;

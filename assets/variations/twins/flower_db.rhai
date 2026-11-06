@@ -1,3 +1,13 @@
+/// Flower with stem — emits a flower-shaped XY pattern (radius modulated by
+/// `|spread + sin(petals·t)| · cos(petal_split·petals·t)`) plus a stem Z
+/// that grows downward with thickness controlled by `stem_thickness`.
+/// Optionally folds the petal Z upward outside a radius, and caps the stem
+/// at a maximum length.
+///
+/// # Authors
+/// - CozyG
+/// - DarkBeam
+
 // Flower DB, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -38,7 +48,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Flower DB", name: "rhai_flower_db" };
+const INFO = #{ title: "Flower DB", name: "rhai_flower_db", category: "full_3d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let petals = p.petals;

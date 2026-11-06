@@ -1,3 +1,10 @@
+/// Log-polar transform — maps the input to `(ρ·cos(θ), ρ·sin(θ))` where `ρ`
+/// is the input radius (optionally log-transformed) divided by `power` and
+/// then optionally exponentiated. `θ` is the input angle plus `rotate`.
+/// `split` adds an asymmetric ρ offset based on the sign of x. With
+/// `use_log` enabled this becomes a true log-polar transform; disabled,
+/// it's a simple radius rescaling.
+
 // P Transform, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -28,7 +35,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "P Transform", name: "rhai_ptransform" };
+const INFO = #{ title: "P Transform", name: "rhai_ptransform", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let rotate = p.rotate;

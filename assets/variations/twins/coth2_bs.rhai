@@ -1,3 +1,9 @@
+/// Parameterized Coth. At defaults (2.0), reduces to Coth.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
+
 // Coth2 BS, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +29,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Coth2 BS", name: "rhai_coth2_bs" };
+const INFO = #{ title: "Coth2 BS", name: "rhai_coth2_bs", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let x1 = p.x1;

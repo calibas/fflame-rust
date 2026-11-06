@@ -1,3 +1,12 @@
+/// Per-axis floor-and-flip — for each axis with non-zero scale, negates the
+/// coordinate when `floor(coord · scale)` parity matches a sign-dependent
+/// rule (parity ≠ 0 for non-negative; parity = 0 for negative). Produces a
+/// zig-zag mirror pattern whose stripe width is controlled by the per-axis
+/// scale.
+///
+/// # Authors
+/// - bezo97
+
 // Lazy Sensen, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +27,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Lazy Sensen", name: "rhai_lazysensen" };
+const INFO = #{ title: "Lazy Sensen", name: "rhai_lazysensen", category: "full_3d", phase: "any" };
 
 fn lazysensen_flip(c, scale) {
     if (abs(scale) < 1.0e-30) {

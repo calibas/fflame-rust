@@ -1,3 +1,12 @@
+/// 10-shape radial hole — applies one of 10 user-selectable radial shape
+/// formulas to create a hole pattern. `shape` picks which formula; `inside`
+/// toggles whether the hole inverts (`w/r`) or scales (`w·r`).
+///
+/// # Authors
+/// - Michael Faber
+/// - Brad Stefanov
+/// - Rick Sidwell
+
 // Hole 2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -33,7 +42,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Hole 2", name: "rhai_hole2" };
+const INFO = #{ title: "Hole 2", name: "rhai_hole2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let a = p.a;

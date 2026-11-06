@@ -1,3 +1,11 @@
+/// Z-axis random extrusion — with probability `root_face`, sets Z to the
+/// variation weight (clamped at 0 for negative weights); otherwise sets Z
+/// to a random fraction of the weight. The XY output is zero. Useful as a
+/// Z-only depth contribution to give 2D flames a flat Z extrusion.
+///
+/// # Authors
+/// - Xyrus02
+
 // Extrude, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +16,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Extrude", name: "rhai_extrude" };
+const INFO = #{ title: "Extrude", name: "rhai_extrude", category: "depth_3d", phase: "any" };
 
 fn variation(z, p) {
     let unused1 = rand();

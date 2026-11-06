@@ -1,6 +1,11 @@
+/// Complex hyperbolic cosecant. Singularities at 0.
+///
+/// # Authors
+/// - cothe
+
 // Csch, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Csch", name: "rhai_csch" };
+const INFO = #{ title: "Csch", name: "rhai_csch", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let s = sin(z.im);

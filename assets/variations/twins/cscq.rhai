@@ -1,6 +1,11 @@
+/// Quaternion cosecant — 3D extension of Csc (1/sin).
+///
+/// # Authors
+/// - zephyrtronium
+
 // Cscq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Cscq", name: "rhai_cscq" };
+const INFO = #{ title: "Cscq", name: "rhai_cscq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let v = max(abs(z.im), 1.0e-20);

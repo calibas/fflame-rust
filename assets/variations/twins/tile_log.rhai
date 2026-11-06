@@ -1,3 +1,9 @@
+/// 1D version of Log Tile2 — only shifts along X with the same random log-
+/// of-uniform trick. Y (and Z) pass through unchanged.
+///
+/// # Authors
+/// - Zy0rg
+
 // Tile Log, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +14,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Tile Log", name: "rhai_tile_log" };
+const INFO = #{ title: "Tile Log", name: "rhai_tile_log", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let sp = p.spread;

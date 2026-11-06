@@ -1,3 +1,10 @@
+/// Radial sine-density blur — samples points uniformly on the unit disc
+/// with `acos`-based radial distribution. `power` controls how the density
+/// falls off.
+///
+/// # Authors
+/// - Zy0rg
+
 // Sine Blur, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +15,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Sine Blur", name: "rhai_sineblur" };
+const INFO = #{ title: "Sine Blur", name: "rhai_sineblur", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let power_in = p.power;

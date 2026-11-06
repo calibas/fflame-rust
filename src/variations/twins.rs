@@ -403,16 +403,28 @@ pub fn params_rhai(params: &[ParamDef]) -> String {
     out
 }
 
-/// A twin's beginning, from the built-in `name`'s def: its `INFO` (its
-/// display name; `rhai_` and its name lowercased, what `vary` calls it)
-/// and its `PARAMS`, then the built-in's WGSL as a comment to port, and a
-/// body that returns its point.
-pub fn skeleton(name: &str) -> Option<String> {
+/// A twin's beginning, from the built-in `name`'s def: its doc block
+/// (`block`, the `///` lines above the def, verbatim: its description and
+/// authors, which the API reads as text), its `INFO` (its display name;
+/// `rhai_` and its name lowercased, what `vary` calls it) and its
+/// `PARAMS`, then the built-in's WGSL as a comment to port, and a body
+/// that returns its point.
+pub fn skeleton(name: &str, block: Option<&str>) -> Option<String> {
     let reg = super::global_registry();
     let info = reg.get(name)?;
-    let mut out = format!("// {}, the built-in variation's twin.\n\n", info.display_name);
+    let mut out = block.map(|b| format!("{b}\n\n")).unwrap_or_default();
+    out += &format!("// {}, the built-in variation's twin.\n\n", info.display_name);
     out += &params_rhai(&info.parameters);
-    out += &format!("const INFO = #{{ title: {}, name: \"rhai_{}\" }};\n\n", text(&info.display_name), name.to_ascii_lowercase());
+    let phase = match info.phase {
+        super::VariationPhase::Normal => String::new(),
+        ref p => format!(", phase: \"{}\"", p.clone().to_api_str()),
+    };
+    out += &format!(
+        "const INFO = #{{ title: {}, name: \"rhai_{}\", category: \"{}\"{phase} }};\n\n",
+        text(&info.display_name),
+        name.to_ascii_lowercase(),
+        info.category.to_api_str()
+    );
     for (what, wgsl) in [("2D", info.wgsl_source.as_deref()), ("3D", info.wgsl_source_3d.as_deref()), ("init", info.wgsl_source_init.as_deref())] {
         if let Some(w) = wgsl.filter(|w| !w.trim().is_empty()) {
             out += &format!("// The built-in's {what} WGSL:\n");
@@ -430,6 +442,35 @@ pub fn skeleton(name: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// The defs' source files, which hold the built-ins' doc blocks.
+    fn def_sources() -> Vec<String> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/variations/defs");
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "rs"))
+            .map(|e| std::fs::read_to_string(e.path()).unwrap())
+            .collect()
+    }
+
+    /// **Each twin keeps its built-in's description and authors**: it
+    /// opens with its def's doc block verbatim, so what the API reads from
+    /// it -- as text, from either -- is the built-in's, and the library
+    /// shows them.
+    #[test]
+    fn every_variation_twin_keeps_its_builtins_doc() {
+        let sources = def_sources();
+        let docs = super::super::docs::parse_sources(sources.iter().map(String::as_str));
+        for (name, src) in TWINS {
+            let block = sources.iter().find_map(|s| super::super::docs::block_text(s, name)).unwrap_or_else(|| panic!("{name}: no doc block"));
+            assert!(src.replace("\r\n", "\n").starts_with(&format!("{block}\n")), "{name}: its file does not open with its def's block");
+            assert_eq!(super::super::docs::leading_block(src).as_ref(), docs.get(*name), "{name}");
+            let labels = crate::lang::rhai::source_labels(src).unwrap();
+            assert_eq!(labels.author, docs[*name].authors.join(", "), "{name}: its authors reach the library");
+            assert_eq!(labels.description.resolve(), docs[*name].description, "{name}: its description reaches the library");
+        }
+    }
+
     /// WRITER, not a test: `TWIN_SKELETONS=julia,rings2` writes each
     /// one's skeleton to `assets/variations/twins/<name>.rhai`, where none
     /// is yet.
@@ -443,7 +484,8 @@ mod tests {
                 println!("{path}: there already");
                 continue;
             }
-            let text = skeleton(name).unwrap_or_else(|| panic!("no built-in `{name}`"));
+            let block = def_sources().iter().find_map(|s| super::super::docs::block_text(s, name));
+            let text = skeleton(name, block.as_deref()).unwrap_or_else(|| panic!("no built-in `{name}`"));
             std::fs::write(&path, text).unwrap();
             println!("wrote {path}");
         }
@@ -479,6 +521,8 @@ mod tests {
                 assert_eq!(has(wire), builtin.features.contains(&f), "{name}: {f:?}");
             }
             assert_eq!(dl.name, key(name).unwrap(), "{name}: its key");
+            assert_eq!(dl.category, builtin.category.to_api_str(), "{name}: its category");
+            assert_eq!(super::super::custom::phase_of(src), builtin.phase, "{name}: its phase");
         }
         assert!(failed.is_empty(), "{} of {} twins do not compile:
 {}", failed.len(), TWINS.len(), failed.join("

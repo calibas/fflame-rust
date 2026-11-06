@@ -1,3 +1,12 @@
+/// Fractal disc — combines an inverse-radius cosine wave `cos(2π / (r +
+/// ashift) + xshift)`, an angular term `(atan2(y,x)/π + rshift) / 2`, and
+/// four blending weights. Each `term_i` controls a different contribution
+/// to the output (pure-prx, x-scaled-prx, x-scaled-pr, pass-through),
+/// producing rich layered disc patterns.
+///
+/// # Authors
+/// - CozyG
+
 // F-Disc, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -43,7 +52,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "F-Disc", name: "rhai_fdisc" };
+const INFO = #{ title: "F-Disc", name: "rhai_fdisc", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let ashift = p.ashift;

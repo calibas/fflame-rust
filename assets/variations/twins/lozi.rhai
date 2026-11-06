@@ -1,3 +1,9 @@
+/// Lozi strange attractor — `(c − a·|x| + y, b·x)` iteration. Like Hénon
+/// but with `|x|` instead of `x²`.
+///
+/// # Authors
+/// - TyrantWave
+
 // Lozi, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +24,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Lozi", name: "rhai_lozi" };
+const INFO = #{ title: "Lozi", name: "rhai_lozi", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let a = p.a;

@@ -1,3 +1,6 @@
+/// 3D version of Curl — applies a complex polynomial twist along all three
+/// axes. Each axis has its own twist coefficient.
+
 // Curl3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Curl3D", name: "rhai_curl3d" };
+const INFO = #{ title: "Curl3D", name: "rhai_curl3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let cx = p.cx;

@@ -1,3 +1,9 @@
+/// Parameterized Cosh. At defaults (1.0), reduces to Cosh.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
+
 // Cosh2 BS, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +29,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Cosh2 BS", name: "rhai_cosh2_bs" };
+const INFO = #{ title: "Cosh2 BS", name: "rhai_cosh2_bs", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let x1 = p.x1;

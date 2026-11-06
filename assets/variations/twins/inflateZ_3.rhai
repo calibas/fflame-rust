@@ -1,6 +1,13 @@
+/// Z-axis inflation #3 — adds `0.2 · (π − atan2(y,x)) · cos(3·atan2(y,x) +
+/// (y − x))` to the Z output. An angular-cosine modulated radial term
+/// producing a wavy 3D surface.
+///
+/// # Authors
+/// - Larry Berlin
+
 // Inflate Z 3, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Inflate Z 3", name: "rhai_inflatez_3" };
+const INFO = #{ title: "Inflate Z 3", name: "rhai_inflatez_3", category: "depth_3d", phase: "any" };
 
 fn variation(z, p) {
     complex(0.0, 0.0)

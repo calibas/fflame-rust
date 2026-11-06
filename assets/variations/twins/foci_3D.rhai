@@ -1,6 +1,14 @@
+/// 3D extension of the `foci` variation — emits `(expx − expnx, sin(y),
+/// sin(boot)) / (expx + expnx − cos(y)·cos(boot))` where `expx = e^x / 2,
+/// expnx = e^(−x) / 2`, and `boot = z` (or `atan2(y, x)` when `z = 0`, the
+/// 2D fallback). Adds a depth dimension to the classic foci warp.
+///
+/// # Authors
+/// - Larry Berlin
+
 // Foci 3D, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Foci 3D", name: "rhai_foci_3d" };
+const INFO = #{ title: "Foci 3D", name: "rhai_foci_3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let expx = exp(z.re) * 0.5;

@@ -1,3 +1,13 @@
+/// 3D Gaussian blur centered at an offset origin — computes spherical
+/// coordinates around `(x_origin, -y_origin, z_origin)`, jitters by two
+/// random angles plus a Gaussian-approximated scalar (sum of 4 uniforms −
+/// 2), and scales by `pow(distance², dist)`. The blur intensity grows with
+/// distance from the offset origin.
+///
+/// # Authors
+/// - zephyrtronium
+/// - DarkBeam
+
 // Ex Blur, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -28,7 +38,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Ex Blur", name: "rhai_exblur" };
+const INFO = #{ title: "Ex Blur", name: "rhai_exblur", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let dist = p.dist;

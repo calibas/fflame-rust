@@ -1,3 +1,12 @@
+/// 3D spherical with per-axis scales — emits `(x, y, z) / (x_scale²·x² +
+/// y_scale²·y² + zz² + ε)` where `zz = x_scale · z` (upstream typo:
+/// cpp+Java both use `x_scale` instead of `z_scale` in the Z denominator
+/// term, preserved). Per-axis scales tune the asymmetry of the inverse-
+/// distance scaling.
+///
+/// # Authors
+/// - Xyrus02
+
 // Sph 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +27,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Sph 3D", name: "rhai_sph3d" };
+const INFO = #{ title: "Sph 3D", name: "rhai_sph3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let x_scale = p.x;

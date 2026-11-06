@@ -1,3 +1,11 @@
+/// Pass-through inside a `radius − split` disc; outside, points get pushed
+/// outward by `split`. Creates a visible gap ring between the inner and
+/// outer regions.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - Brad Stefanov
+
 // Circle Split, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Circle Split", name: "rhai_circlesplit" };
+const INFO = #{ title: "Circle Split", name: "rhai_circlesplit", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let radius = p.radius;

@@ -1,3 +1,12 @@
+/// Orthogonal Möbius warp — maps points inside the unit disc through an
+/// orthogonal-circle Möbius transformation (branch chosen by the sign of
+/// x). Outside the disc, the input is first inverted through the unit
+/// circle, the same transform is applied, then re-inverted. Produces
+/// hyperbolic-tiling-like patterns.
+///
+/// # Authors
+/// - Michael Faber
+
 // Ortho, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +22,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Ortho", name: "rhai_ortho" };
+const INFO = #{ title: "Ortho", name: "rhai_ortho", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let in_p = p.in_p;

@@ -1,3 +1,10 @@
+/// Quaternion Möbius — same `(Az + B)/(Cz + D)` form as Möbius but with
+/// quaternion-valued A, B, C, D and input. Treats `(x, y, z)` as a
+/// quaternion with no k-component, producing true 3D output.
+///
+/// # Authors
+/// - zephyrtronium
+
 // Mobiq, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -83,7 +90,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Mobiq", name: "rhai_mobiq" };
+const INFO = #{ title: "Mobiq", name: "rhai_mobiq", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let qat = p.qat;

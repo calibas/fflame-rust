@@ -1,3 +1,12 @@
+/// Bipolar transform — extends the bipolar-coords mapping `(τ, σ)` with
+/// adjustable `power`, `move`, `rotate`, and `split` (asymmetric τ offset
+/// based on the sign of x). Picks a random angular branch from `floor(rand
+/// · power)`, producing a generalized bipolar warp with N-fold rotational
+/// structure.
+///
+/// # Authors
+/// - Michael Faber
+
 // B-Transform, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +32,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "B-Transform", name: "rhai_btransform" };
+const INFO = #{ title: "B-Transform", name: "rhai_btransform", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let rotate = p.rotate;

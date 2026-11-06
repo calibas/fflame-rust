@@ -1,3 +1,9 @@
+/// Parameterized Enneper variant — 3-parameter 3D extension of Ennepers
+/// with separate `a`/`b`/`c` controls.
+///
+/// # Authors
+/// - DarkBeam
+
 // Ennepers2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +24,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Ennepers2", name: "rhai_ennepers2" };
+const INFO = #{ title: "Ennepers2", name: "rhai_ennepers2", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let a = p.a;

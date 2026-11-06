@@ -1,3 +1,12 @@
+/// Sin/cos masked warp — emits `(sin³(xf), cos(xf)·sin²(xf)) · (cosh(yf) +
+/// ushift) / (x² + y²)` where `xf = xscale·x + xshift` and `yf = yscale·y +
+/// yshift`. The sin-power factors create lobed masking; `cosh(yf)`
+/// modulates the overall magnitude based on Y.
+///
+/// # Authors
+/// - Raykoid666
+/// - CozyG
+
 // Mask, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -28,7 +37,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Mask", name: "rhai_mask" };
+const INFO = #{ title: "Mask", name: "rhai_mask", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let xshift = p.xshift;

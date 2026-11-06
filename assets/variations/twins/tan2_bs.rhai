@@ -1,3 +1,10 @@
+/// Parameterized Tan. At defaults (2.0, matching the upstream doubling),
+/// reduces to Tan.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
+
 // Tan2 BS, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +30,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Tan2 BS", name: "rhai_tan2_bs" };
+const INFO = #{ title: "Tan2 BS", name: "rhai_tan2_bs", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let x1 = p.x1;

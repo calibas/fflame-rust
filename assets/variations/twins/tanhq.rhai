@@ -1,6 +1,11 @@
+/// Quaternion hyperbolic tangent — 3D extension of Tanh.
+///
+/// # Authors
+/// - zephyrtronium
+
 // Tanhq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Tanhq", name: "rhai_tanhq" };
+const INFO = #{ title: "Tanhq", name: "rhai_tanhq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let v = max(abs(z.im), 1.0e-20);

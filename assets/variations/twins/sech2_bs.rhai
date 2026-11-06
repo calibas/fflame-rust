@@ -1,3 +1,10 @@
+/// Parameterized Sech. At defaults (1.0), reduces to Sech (with the same
+/// JWildfire formula quirk noted in trig.rs).
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
+
 // Sech2 BS, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +30,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Sech2 BS", name: "rhai_sech2_bs" };
+const INFO = #{ title: "Sech2 BS", name: "rhai_sech2_bs", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let x1 = p.x1;

@@ -538,6 +538,14 @@ impl VariationRegistry {
     /// (e.g., when a newer version is fetched). Built-in variations
     /// can't be replaced — the call is rejected with a logged warning.
     /// Register a variation from a download payload.
+    /// Set a registered variation's phase: `any` for one of the user's,
+    /// which the wire cannot carry (`custom::phase_of`).
+    pub fn set_phase(&mut self, name: &str, phase: VariationPhase) {
+        if let Some(v) = self.variations.get_mut(name) {
+            v.phase = phase;
+        }
+    }
+
     pub fn register_from_api(
         &mut self,
         dl: &crate::api::types::VariationDownload,

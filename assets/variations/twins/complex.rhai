@@ -1,3 +1,17 @@
+/// 2D analog of `quaternion` — combines 13 complex-plane
+/// trig/hyperbolic/exp sub-functions (`cos, cosh, cot, coth, csc, csch,
+/// exp, sec, sech, sin, sinh, tan, tanh`), each treating the input `(x, y)`
+/// as a complex number `z = x + iy` and evaluating its complex-function
+/// image. Subfunctions are independently gated by their own `*pow` weight
+/// (zero = disabled) and per-axis-tunable via `x1, x2, y1, y2` mixers. 12
+/// subs have 5 params each; `exp` has 4 (no x2 since `e^(x·x1) · (cos,
+/// sin)` is single-axis). Default has only `cos` active. 2D-only — no 3D
+/// body.
+///
+/// # Authors
+/// - cothe
+/// - Brad Stefanov
+
 // Complex, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -323,7 +337,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Complex", name: "rhai_complex" };
+const INFO = #{ title: "Complex", name: "rhai_complex", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let x_in = z.re;

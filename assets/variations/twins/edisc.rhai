@@ -1,6 +1,15 @@
+/// Elliptic disc — maps the input through an elliptic-coordinate
+/// transformation: `xmax = (sqrt(r² + 2x + 1) + sqrt(r² − 2x + 1)) / 2`,
+/// then emits `(wlocal · cosh(−acos(x/xmax)) · cos(log(xmax + sqrt(xmax² − 1))),
+/// wlocal · sinh(−acos(x/xmax)) · sin(...))`. The `1/11.57 ≈ 1/(4·acosh(2))`
+/// scaling is the empirical Apophysis normalization.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // E-Disc, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "E-Disc", name: "rhai_edisc" };
+const INFO = #{ title: "E-Disc", name: "rhai_edisc", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

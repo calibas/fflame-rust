@@ -1,3 +1,11 @@
+/// 3D single-value function — combines trigonometric terms in a fixed
+/// pattern: `cos(y) · cos(n·y) · (cos(x), sin(x), sin(y))`. The `n`
+/// frequency parameter controls how many oscillations appear along the Y
+/// axis.
+///
+/// # Authors
+/// - gossamer light
+
 // SVF, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +16,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "SVF", name: "rhai_svf" };
+const INFO = #{ title: "SVF", name: "rhai_svf", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let n = p.n;

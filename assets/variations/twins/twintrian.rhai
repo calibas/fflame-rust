@@ -1,6 +1,14 @@
+/// RNG twin trigonal — picks a random `r = rand · w · sqrt(x² + y²)`,
+/// computes `diff = log₁₀(sin² r) + cos r` (forced to −30 when degenerate),
+/// then emits `(w · x · diff, w · x · (diff − sin r · π))`. The log term
+/// creates twin trigonometric interference patterns.
+///
+/// # Authors
+/// - Z+
+
 // Twin Trian, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Twin Trian", name: "rhai_twintrian" };
+const INFO = #{ title: "Twin Trian", name: "rhai_twintrian", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

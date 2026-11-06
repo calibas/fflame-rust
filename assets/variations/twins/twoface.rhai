@@ -1,6 +1,11 @@
+/// Half-spherical / half-pass — points with `x ≤ 0` get scaled output `w ·
+/// (x, y)`; points with `x > 0` get spherical-inverted (`w/(x²+y²) · (x,
+/// y)`). Combines a linear left side with a spherical right side — hence
+/// the name.
+
 // Two Face, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Two Face", name: "rhai_twoface" };
+const INFO = #{ title: "Two Face", name: "rhai_twoface", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

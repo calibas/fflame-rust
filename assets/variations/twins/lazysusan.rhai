@@ -1,3 +1,9 @@
+/// Inside a unit disc the points rotate and twist; outside the disc they're
+/// pushed away from the center. Produces a layered, plate-like swirl.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // LazySusan, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -28,7 +34,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "LazySusan", name: "rhai_lazysusan" };
+const INFO = #{ title: "LazySusan", name: "rhai_lazysusan", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let PI = 3.14159265359;

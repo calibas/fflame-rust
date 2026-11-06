@@ -1,6 +1,12 @@
+/// Maps the plane onto a sphere - far points shrink toward the equator,
+/// near points spread across the surface.
+///
+/// # Authors
+/// - Scott Draves
+
 // Bubble, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Bubble", name: "rhai_bubble" };
+const INFO = #{ title: "Bubble", name: "rhai_bubble", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let r2 = z.norm_sqr();

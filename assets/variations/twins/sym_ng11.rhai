@@ -1,3 +1,8 @@
+/// Network Symmetry Group variations sym_ng1..sym_ng17
+///
+/// # Authors
+/// - Jesus Sosa
+
 // Sym NG11, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -28,7 +33,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Sym NG11", name: "rhai_sym_ng11" };
+const INFO = #{ title: "Sym NG11", name: "rhai_sym_ng11", category: "plugin", phase: "any" };
 
 fn variation(z, p) {
     let space = p.space;

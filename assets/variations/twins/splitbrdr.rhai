@@ -1,3 +1,10 @@
+/// Combines a Bubble warp (radial sphere projection) with a Boarders-style
+/// cell-grid border. The `x`/`y` parameters control the border behavior;
+/// `px`/`py` add an extra linear pass-through component.
+///
+/// # Authors
+/// - FracFx
+
 // Split Brdr, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +30,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Split Brdr", name: "rhai_splitbrdr" };
+const INFO = #{ title: "Split Brdr", name: "rhai_splitbrdr", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let xp = p.x;

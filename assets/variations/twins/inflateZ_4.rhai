@@ -1,6 +1,13 @@
+/// Z-axis inflation #4 — adds `±(π/2 − atan2(y,x)) · 0.25` to the Z output,
+/// with the sign chosen randomly each iteration. Produces a Z surface
+/// that's a stochastic mirror of the input angle.
+///
+/// # Authors
+/// - Larry Berlin
+
 // Inflate Z 4, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Inflate Z 4", name: "rhai_inflatez_4" };
+const INFO = #{ title: "Inflate Z 4", name: "rhai_inflatez_4", category: "depth_3d", phase: "any" };
 
 fn variation(z, p) {
     let unused1 = rand();

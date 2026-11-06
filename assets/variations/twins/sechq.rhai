@@ -1,6 +1,11 @@
+/// Quaternion hyperbolic secant — 3D extension of Sech.
+///
+/// # Authors
+/// - zephyrtronium
+
 // Sechq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Sechq", name: "rhai_sechq" };
+const INFO = #{ title: "Sechq", name: "rhai_sechq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let v = max(abs(z.im), 1.0e-20);

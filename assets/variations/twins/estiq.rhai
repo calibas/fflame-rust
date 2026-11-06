@@ -1,6 +1,14 @@
+/// Quaternion exponential extension — emits `(e^x · cos|v|, e^x ·
+/// sin|v|/|v| · y, e^x · sin|v|/|v| · z)` where `|v| = sqrt(y² + z²)`.
+/// Generalizes the complex exponential `(x + iy → e^x · (cos y, sin y))` to
+/// a 3D quaternion-like form.
+///
+/// # Authors
+/// - zephyrtronium
+
 // Estiq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Estiq", name: "rhai_estiq" };
+const INFO = #{ title: "Estiq", name: "rhai_estiq", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let e = exp(z.re);

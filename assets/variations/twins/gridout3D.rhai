@@ -1,3 +1,32 @@
+/// Eight-region grid offset — partitions the XY plane into 8 wedges based
+/// on `round(p.x)·xx` and `round(p.y)·yy` (the rounding turns the param
+/// space into a coarse grid), then adds or subtracts a per-region offset
+/// triplet to `(x, y, z)`. The 8 regions split each quadrant along its
+/// diagonal; for `y ≤ 0` (regions A-D) the Z offset is added, for `y > 0`
+/// (regions E-H) the Z offset is multiplied into Z instead.
+///
+/// Region table (input X/Y signs after gate-rounding by `xx`/`yy`):
+///
+/// | Region | Condition (`y`, `x` are gate-rounded) | X op | Y op | Z op |
+/// |---|---|---|---|---|
+/// | A | `y ≤ 0`, `x > 0`, `-y ≥ x`  | `+xa` | `+ya` | `+za` |
+/// | B | `y ≤ 0`, `x > 0`, `-y < x`  | `+xb` | `+yb` | `+zb` |
+/// | C | `y ≤ 0`, `x ≤ 0`, `y ≤ x`   | `+xc` | `+yc` | `+zc` |
+/// | D | `y ≤ 0`, `x ≤ 0`, `y > x`   | `+xd` | `-yd` | `+zd` |
+/// | E | `y > 0`, `x > 0`, `y ≥ x`   | `-xe` | `+ye` | `·ze` |
+/// | F | `y > 0`, `x > 0`, `y < x`   | `+xf` | `+yf` | `·zf` |
+/// | G | `y > 0`, `x ≤ 0`, `y ≥ -x`  | `-xg` | `+yg` | `·zg` |
+/// | H | `y > 0`, `x ≤ 0`, `y < -x`  | `+xh` | `-yh` | `·zh` |
+///
+/// Sign flips on `-yd`, `-xe`, `-xg`, `-yh` and the add-vs-multiply Z split
+/// between A-D and E-H are preserved verbatim from upstream.
+///
+/// # Authors
+/// - Michael Faber
+/// - Joel Faber
+/// - DarkBeam
+/// - Brad Stefanov
+
 // Gridout 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -133,7 +162,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Gridout 3D", name: "rhai_gridout3d" };
+const INFO = #{ title: "Gridout 3D", name: "rhai_gridout3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
     let xx = p.xx;

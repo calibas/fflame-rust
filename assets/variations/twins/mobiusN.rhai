@@ -1,3 +1,10 @@
+/// N-power Möbius — transforms into `z^power` space, applies a 2×2 complex
+/// Möbius transformation `(Az + B)/(Cz + D)`, then transforms back via a
+/// random branch of the N-th root.
+///
+/// # Authors
+/// - eralex61
+
 // MobiusN, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -53,7 +60,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "MobiusN", name: "rhai_mobiusn" };
+const INFO = #{ title: "MobiusN", name: "rhai_mobiusn", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let re_a = p.re_a;

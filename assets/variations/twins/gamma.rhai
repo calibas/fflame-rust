@@ -1,6 +1,16 @@
+/// Log-gamma in polar form — outputs `(lgamma(r), θ)` where `r = √(x²+y²)`
+/// and `θ = atan2(y, x)`. The log-gamma function is implemented via the
+/// Lanczos approximation (g = 7, 8 coefficients) with a reflection branch
+/// for negative arguments — though since `r ≥ 0`, the reflection is
+/// unreachable in practice and kept only for safety.
+///
+/// # Authors
+/// - zephyrtronium
+/// - DarkBeam
+
 // Gamma, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Gamma", name: "rhai_gamma" };
+const INFO = #{ title: "Gamma", name: "rhai_gamma", category: "advanced_2d", phase: "any" };
 
 fn gm_lgamma_iter(x) {
     let log_2pi_half = 0.9189385332046727;

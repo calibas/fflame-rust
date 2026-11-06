@@ -1,3 +1,10 @@
+/// Full 3D affine `x' = M·x + t`, all twelve coefficients as
+/// parameters. The container for script-built 3D IFS pieces.
+///
+/// # Authors
+/// - Fractals for All
+/// - Claude Fable 5
+
 // Matrix 3D, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -63,7 +70,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Matrix 3D", name: "rhai_matrix3d" };
+const INFO = #{ title: "Matrix 3D", name: "rhai_matrix3d", category: "full_3d" };
 
 fn variation(z, p) {
     let xx = p.xx;

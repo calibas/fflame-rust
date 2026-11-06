@@ -1,3 +1,10 @@
+/// Per-quadrant scale — positive coordinates pass through unchanged,
+/// while negative coordinates are multiplied by per-axis scale factors.
+/// Bends the quadrants asymmetrically.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Bent 2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Bent 2", name: "rhai_bent2" };
+const INFO = #{ title: "Bent 2", name: "rhai_bent2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let xs = p.x;

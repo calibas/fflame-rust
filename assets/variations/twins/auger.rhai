@@ -1,3 +1,9 @@
+/// Drills a corkscrew distortion into the plane - sine waves on both axes
+/// coupled together. Produces twisting, augur-like patterns.
+///
+/// # Authors
+/// - Xyrus02
+
 // Auger, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +29,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Auger", name: "rhai_auger" };
+const INFO = #{ title: "Auger", name: "rhai_auger", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let freq = p.freq;

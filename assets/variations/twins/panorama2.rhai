@@ -1,6 +1,14 @@
+/// Variant of Panorama 1 using `1/(r+1)` instead of `1/sqrt(r²+1)` as the
+/// radial denominator — same overall shape with subtly different
+/// distortion.
+///
+/// # Authors
+/// - Tatyana Zabanova
+/// - DarkBeam
+
 // Panorama 2, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Panorama 2", name: "rhai_panorama2" };
+const INFO = #{ title: "Panorama 2", name: "rhai_panorama2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let aux = 1.0 / (sqrt(z.re * z.re + z.im * z.im) + 1.0);

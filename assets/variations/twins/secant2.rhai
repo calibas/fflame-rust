@@ -1,6 +1,10 @@
+/// Variant of secant with a sign-dependent constant offset on Y. Passes X
+/// through; Y becomes `1/cos(r) ± 1` depending on the sign of `cos(r)`.
+/// Produces banded patterns with a sharp jump at the cos-sign boundary.
+
 // Secant2, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Secant2", name: "rhai_secant2" };
+const INFO = #{ title: "Secant2", name: "rhai_secant2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let r = sqrt(z.re * z.re + z.im * z.im) + 1.0e-30;

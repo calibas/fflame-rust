@@ -1,3 +1,11 @@
+/// Strip-fit fold — folds the Y axis into `[-1, 1]` strips (via mod-2
+/// wrapping), with each fold adding a horizontal shift on X proportional to
+/// `dx · stripe_count`. The trailing X shift wasn't VVAR-scaled in upstream
+/// — handled via the divide-out pattern.
+///
+/// # Authors
+/// - DarkBeam
+
 // Stripfit, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +16,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Stripfit", name: "rhai_stripfit" };
+const INFO = #{ title: "Stripfit", name: "rhai_stripfit", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let dx = p.dx;

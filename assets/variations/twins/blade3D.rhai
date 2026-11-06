@@ -1,6 +1,13 @@
+/// 3D extension of `blade` — same X/Y outputs as `blade`, plus a Z output
+/// `w · y · (sin r − cos r)` driven by input Y. Completes the 3D blade
+/// structure.
+///
+/// # Authors
+/// - Z+
+
 // Blade 3D, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Blade 3D", name: "rhai_blade3d" };
+const INFO = #{ title: "Blade 3D", name: "rhai_blade3d", category: "full_3d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

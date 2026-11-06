@@ -1,3 +1,9 @@
+/// Pushes points away from the X and Y axes by configurable amounts, with
+/// separate inside/outside offsets. Creates a split, mirrored look.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+
 // Separation, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -23,7 +29,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Separation", name: "rhai_separation" };
+const INFO = #{ title: "Separation", name: "rhai_separation", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let sep_x = p.x;

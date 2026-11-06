@@ -1,3 +1,9 @@
+/// Polar heart-curve mapping — maps the input radius `r` and angle `a` onto
+/// a heart-shaped curve via `nx = ±0.001·(-t² + 40t + 1200)·sin(πt/180)·r`
+/// and `ny = -0.001·(-t² + 40t + 400)·cos(πt/180)·r` where `t = |a|/π · 60
+/// · scale_r − shift_t` (capped at 60). The sign of `a` selects the left vs
+/// right half of the heart, each with its own radial scale.
+
 // Heart WF, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -28,7 +34,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Heart WF", name: "rhai_heart_wf" };
+const INFO = #{ title: "Heart WF", name: "rhai_heart_wf", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let scale_x = p.scale_x;

@@ -1,3 +1,11 @@
+/// Inverted Julia warp — 9-parameter Julia variant with adjustable inward
+/// center. Computes `z = (x² + y²·y2_mult)^power + x2y2_add`, picks a
+/// random hemisphere via `q = atan2(...)/2 + π·floor(2·rand)`, then emits
+/// `cos(z·cos_mult) · (sin q, cos q · y_mult) / z / center`.
+///
+/// # Authors
+/// - Whittaker Courtney
+
 // Inverted Julia, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -48,7 +56,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Inverted Julia", name: "rhai_inverted_julia" };
+const INFO = #{ title: "Inverted Julia", name: "rhai_inverted_julia", category: "advanced_2d", phase: "any" };
 
 fn variation(w, p) {
     let power = p.power;

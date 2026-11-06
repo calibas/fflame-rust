@@ -1,6 +1,11 @@
+/// Quaternion secant — 3D extension of Sec (1/cos).
+///
+/// # Authors
+/// - zephyrtronium
+
 // Secq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Secq", name: "rhai_secq" };
+const INFO = #{ title: "Secq", name: "rhai_secq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let v = max(abs(z.im), 1.0e-20);

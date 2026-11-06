@@ -1,3 +1,11 @@
+/// Sosa's 'S Attractor' — Henon-style IFS variant. Each iteration picks a
+/// random vertex angle `θ = 2π·l/m` (with `l ∈ [1, m]`) and chooses one of
+/// two affine maps with 50/50 probability: either a half-scale plus offset
+/// `(cos θ, sin θ)`, or a rotated quadratic warp.
+///
+/// # Authors
+/// - Jesus Sosa
+
 // S-Attractor (JS), the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +16,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "S-Attractor (JS)", name: "rhai_sattractor_js" };
+const INFO = #{ title: "S-Attractor (JS)", name: "rhai_sattractor_js", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let m = max(to_int(to_float(p.m)), 1);

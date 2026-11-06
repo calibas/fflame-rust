@@ -1,3 +1,10 @@
+/// 3D log-tiled spreader — each axis is independently shifted by a random
+/// integer drawn from `log(uniform)` rounded to the nearest integer.
+/// Produces a stamped tile effect with geometric falloff.
+///
+/// # Authors
+/// - Zy0rg
+
 // Log Tile2, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +25,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Log Tile2", name: "rhai_log_tile2" };
+const INFO = #{ title: "Log Tile2", name: "rhai_log_tile2", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let sx = p.spreadx;

@@ -1,6 +1,11 @@
+/// Quaternion hyperbolic cosine — 3D extension of Cosh.
+///
+/// # Authors
+/// - zephyrtronium
+
 // Coshq, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Coshq", name: "rhai_coshq" };
+const INFO = #{ title: "Coshq", name: "rhai_coshq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let v = max(abs(z.im), 1.0e-20);

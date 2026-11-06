@@ -1,3 +1,10 @@
+/// Radial spiral — emits `(x · radius · cos(r² + ε), x · radius · sin(r² +
+/// ε))` where `r² = x² + y²`. The angular position rotates with squared
+/// radius, producing tightly wound layered spirals.
+///
+/// # Authors
+/// - Will Evans
+
 // Layered Spiral, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -8,7 +15,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Layered Spiral", name: "rhai_layered_spiral" };
+const INFO = #{ title: "Layered Spiral", name: "rhai_layered_spiral", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let radius = p.radius;

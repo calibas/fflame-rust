@@ -1,3 +1,9 @@
+/// Elliptic swirl — adds `μ·out + in/μ` to the elliptic ν coordinate.
+/// Elliptic analogue of `bswirl`.
+///
+/// # Authors
+/// - Michael Faber
+
 // ESwirl, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +19,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "ESwirl", name: "rhai_eswirl" };
+const INFO = #{ title: "ESwirl", name: "rhai_eswirl", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let in_p = p.in_p;

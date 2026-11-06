@@ -1,3 +1,11 @@
+/// N-power spherical with random branch — combines a spherical inversion
+/// `1/r^dist` with a random angular shift `n · 2π / ⌊|power|⌋` where `n =
+/// ⌊power · rand⌋`. Equivalent to spherical-inverting the input and then
+/// rotating by one of `⌊|power|⌋` random angles.
+/// 
+/// # Authors
+/// - eralex61
+
 // Spherical N, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -13,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Spherical N", name: "rhai_sphericaln" };
+const INFO = #{ title: "Spherical N", name: "rhai_sphericaln", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let power = p.power;

@@ -1,6 +1,13 @@
+/// Z-axis inflation #6 — adds `1.5 − acos(sin(atan2(y,x)) · atan2(y,x) ·
+/// sin(y − x) · 0.5)` to the Z output. The most complex of the family — an
+/// arc-cosine of a triple-product term.
+///
+/// # Authors
+/// - Larry Berlin
+
 // Inflate Z 6, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Inflate Z 6", name: "rhai_inflatez_6" };
+const INFO = #{ title: "Inflate Z 6", name: "rhai_inflatez_6", category: "depth_3d", phase: "any" };
 
 fn variation(z, p) {
     complex(0.0, 0.0)

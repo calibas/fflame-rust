@@ -1,6 +1,14 @@
+/// Angle-radius disc inversion — emits `(r·cos a, r·sin a)` where `a = π /
+/// (sqrt(x²+y²) + 1)` and `r = atan2(y, x) · w/π`. Swaps the roles of
+/// radius and angle in the output relative to a standard polar-to-cartesian
+/// mapping.
+///
+/// # Authors
+/// - Michael Faber
+
 // I-Disc, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "I-Disc", name: "rhai_idisc" };
+const INFO = #{ title: "I-Disc", name: "rhai_idisc", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

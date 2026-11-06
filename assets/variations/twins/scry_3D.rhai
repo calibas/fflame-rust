@@ -1,6 +1,22 @@
+/// 3D-aware companion to [`SCRY`] (Larry Berlin, Sep 2009). Distinct
+/// variation, not an alias: the inversion radius is weight-dependent
+/// (`r = 1 / (sqrt(t) × (t + 1/w))`), signed by the variation amount;
+/// a second factor `u` handles the Z component over a different
+/// denominator (`s = sqrt(t) + z²`). Z falls back to
+/// `cos(sqrt(x²+y²))` whenever the input or accumulator Z is zero,
+/// so the variation lands on a cylinder for the first iteration
+/// rather than collapsing flat. For |weight| ≤ 1 the cpp's
+/// `smooth = 1 − w` blend collapses to pure additive on Z; for
+/// |weight| > 1 the prior accumulator is wiped and replaced by
+/// `w × (accumZ + Z·u)` — both branches are handled exactly.
+///
+/// # Authors
+/// - Apophysis Plugin Pack
+/// - Larry Berlin
+
 // Scry 3D, the built-in variation's twin, translated from its WGSL.
 
-const INFO = #{ title: "Scry 3D", name: "rhai_scry_3d" };
+const INFO = #{ title: "Scry 3D", name: "rhai_scry_3d", category: "full_3d" };
 
 fn variation(z, p, ctx) {
     let w = ctx.weight;

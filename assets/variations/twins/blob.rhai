@@ -1,3 +1,10 @@
+/// Wraps the plane around the origin, with the radius pulsing between a
+/// high and low value as the angle rotates. Produces a wavy, bumpy
+/// boundary.
+///
+/// # Authors
+/// - Scott Draves
+
 // Blob, the built-in variation's twin, translated from its WGSL.
 
 const PARAMS = #{
@@ -18,7 +25,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Blob", name: "rhai_blob" };
+const INFO = #{ title: "Blob", name: "rhai_blob", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
     let p1 = p.high;
