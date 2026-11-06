@@ -588,9 +588,12 @@ fn render_enabled_variation(
     // reorder controls (enable Up unless first, Down unless last).
     section_pos: usize,
     section_len: usize,
-) -> (UpdateType, bool, Option<isize>) {
+) -> (UpdateType, bool, Option<isize>, bool) {
     let mut max_update = UpdateType::None;
     let mut delete_requested = false;
+    // Edit as Rhai (P7 step 3): the built-in's twin in its place, applied by
+    // the panel, which holds the Formula Editor.
+    let mut edit_as_rhai = false;
     // Reorder request: -1 = move up, +1 = move down (within the section).
     // Applied by the caller, which knows the section's variation names.
     let mut reorder: Option<isize> = None;
@@ -699,6 +702,16 @@ fn render_enabled_variation(
                 }
             });
 
+            // A built-in with a Rhai twin: the twin in its place, opened in
+            // the Formula Editor as the user's own.
+            if crate::variations::twins::source(variation_name).is_some() {
+                ui.separator();
+                if ui.button(t!("variations.edit_as_rhai")).on_hover_text(t!("variations.edit_as_rhai_tip")).clicked() {
+                    edit_as_rhai = true;
+                    ui.close();
+                }
+            }
+
             // Remove this variation (moved here from the standalone button).
             ui.separator();
             if ui.button(egui::RichText::new(t!("variations.remove")).color(Color32::LIGHT_RED))
@@ -732,7 +745,7 @@ fn render_enabled_variation(
         }
     }
 
-    (max_update, delete_requested, reorder)
+    (max_update, delete_requested, reorder, edit_as_rhai)
 }
 
 /// Render the variations section for a transform.
@@ -744,9 +757,10 @@ fn render_variations_section(
     transform: &crate::scene::transforms::Transform,
     render_mode: RenderMode,
     add_variation_popup_id: egui::Id,
-) -> (UpdateType, Option<String>, Option<String>) {
+) -> (UpdateType, Option<String>, Option<String>, Option<String>) {
     let mut max_update = UpdateType::None;
     let mut variation_to_delete: Option<String> = None;
+    let mut variation_to_edit: Option<String> = None;
     let mut variation_to_add: Option<String> = None;
     // Pending reorder: (variation, partner-to-swap-with). Applied after the
     // render loop so it doesn't alias the `config_manager` borrow.
@@ -795,7 +809,7 @@ fn render_variations_section(
             ui.label(egui::RichText::new(t!(headers[slot])).color(Color32::WHITE));
             let section_len = section.len();
             for (pos, (name, weight, movable, bucket)) in section.iter().enumerate() {
-                let (update, delete, reorder) = render_enabled_variation(
+                let (update, delete, reorder, edit) = render_enabled_variation(
                     ui,
                     config_manager,
                     xref,
@@ -809,6 +823,9 @@ fn render_variations_section(
                 max_update = max_update.max(update);
                 if delete {
                     variation_to_delete = Some(name.clone());
+                }
+                if edit {
+                    variation_to_edit = Some(name.clone());
                 }
                 if let Some(dir) = reorder {
                     // Swap with the adjacent variation in the same section.
@@ -950,7 +967,7 @@ fn render_variations_section(
         });
     });
 
-    (max_update, variation_to_delete, variation_to_add)
+    (max_update, variation_to_delete, variation_to_add, variation_to_edit)
 }
 
 /// Bundled mutable references for the transform pool actions used by the
@@ -978,8 +995,12 @@ pub fn render_transforms_content(
     flame: &mut Flame,
     pool_actions: PoolActions,
     open_triangle_editor: &mut bool,
+    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
+    open_formula_editor: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
+    // Edit as Rhai on a variation, from any pool member's row.
+    let mut edit_as_rhai: Option<(TransformRef, String)> = None;
     let PoolActions {
         add_normal: add_transform,
         delete_normal: delete_transform,
@@ -1093,6 +1114,7 @@ pub fn render_transforms_content(
                 open_triangle_editor,
             );
             max_update = max_update.max(block.update);
+            if let Some(e) = block.edit_as_rhai { edit_as_rhai.get_or_insert(e); }
             if block.delete_requested { normal_delete = Some(i); }
             if block.clone_requested { normal_clone = Some(i); }
         });
@@ -1145,6 +1167,7 @@ pub fn render_transforms_content(
                 open_triangle_editor,
             );
             max_update = max_update.max(block.update);
+            if let Some(e) = block.edit_as_rhai { edit_as_rhai.get_or_insert(e); }
             if block.delete_requested { linked_delete = Some(i); }
             if block.clone_requested { linked_clone = Some(i); }
         });
@@ -1194,11 +1217,16 @@ pub fn render_transforms_content(
                 open_triangle_editor,
             );
             max_update = max_update.max(block.update);
+            if let Some(e) = block.edit_as_rhai { edit_as_rhai.get_or_insert(e); }
             if block.delete_requested { final_delete = Some(i); }
             if block.clone_requested { final_clone = Some(i); }
         });
     }
     if let Some(idx) = final_delete { *delete_final = Some(idx); }
+    if let Some((xref, name)) = edit_as_rhai {
+        formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).edit_variation_as_rhai(config_manager, xref, &name);
+        *open_formula_editor = true;
+    }
     if let Some(idx) = final_clone { *clone_final = Some(idx); }
 
     max_update
@@ -1242,6 +1270,8 @@ struct PoolMemberBlock {
     update: UpdateType,
     delete_requested: bool,
     clone_requested: bool,
+    /// A built-in variation to put its Rhai twin in place of (Edit as Rhai).
+    edit_as_rhai: Option<(TransformRef, String)>,
 }
 
 /// Render a single pool member (Normal / Linked / Final) using the
@@ -1261,6 +1291,7 @@ fn render_pool_member_block(
     let mut update = UpdateType::None;
     let mut delete_requested = false;
     let mut clone_requested = false;
+    let mut edit_as_rhai = None;
 
     let id = ui.make_persistent_id(format!("{}_header_{}", xref.pool_kind(), xref.index()));
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, opts.default_open);
@@ -1421,17 +1452,18 @@ fn render_pool_member_block(
 
                 // Variations section
                 let popup_id = ui.id().with("add_var_popup");
-                let (var_update, var_to_delete, var_to_add) = {
+                let (var_update, var_to_delete, var_to_add, var_to_edit) = {
                     let mut tmp_update = UpdateType::None;
                     let mut tmp_del = None;
                     let mut tmp_add = None;
+                    let mut tmp_edit = None;
                     egui::Frame::new()
                         .fill(ui.visuals().extreme_bg_color)
                         .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
                         .corner_radius(4.0)
                         .inner_margin(6.0)
                         .show(ui, |ui| {
-                            let (u, d, a) = render_variations_section(
+                            let (u, d, a, e) = render_variations_section(
                                 ui,
                                 config_manager,
                                 xref,
@@ -1442,10 +1474,14 @@ fn render_pool_member_block(
                             tmp_update = u;
                             tmp_del = d;
                             tmp_add = a;
+                            tmp_edit = e;
                         });
-                    (tmp_update, tmp_del, tmp_add)
+                    (tmp_update, tmp_del, tmp_add, tmp_edit)
                 };
                 update = update.max(var_update);
+                if let Some(name) = var_to_edit {
+                    edit_as_rhai = Some((xref, name));
+                }
 
                 if let Some(var_name) = var_to_delete {
                     // Whole-transform snapshot so undo restores the removed
@@ -1493,7 +1529,7 @@ fn render_pool_member_block(
         }
     }
 
-    PoolMemberBlock { update, delete_requested, clone_requested }
+    PoolMemberBlock { update, delete_requested, clone_requested, edit_as_rhai }
 }
 
 /// Render the per-normal "Linked XForms" or "Final XForms" subsection: a
