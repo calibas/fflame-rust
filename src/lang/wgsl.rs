@@ -599,7 +599,7 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
     }
     Ok(VariationShape {
         accum: p.reads(Predef::Accum) || p.reads(Predef::AccumZ),
-        ids: !p.params.is_empty() || !state.is_empty() || !p.globals.is_empty() || p.reads(Predef::Weight),
+        ids: !p.params.is_empty() || !state.is_empty() || !p.globals.is_empty() || p.reads(Predef::Weight) || (0..6).any(|k| p.reads(Predef::Coef(k))),
         rng: p.reads(Predef::Draw),
         // Its colour pointer, to write it or to read it (`ctx.color`).
         color: writes(&p.transform, Place::Color) || p.reads(Predef::VarColor),
@@ -2771,6 +2771,7 @@ impl<'p> Gen<'p> {
             (Predef::VarRgbR, _) => "(*vrc).x".into(),
             (Predef::VarRgbG, _) => "(*vrc).y".into(),
             (Predef::VarRgbB, _) => "(*vrc).z".into(),
+            (Predef::Coef(k), _) => format!("transforms[xform_id].{}", ["a", "b", "c", "d", "e", "f"][usize::from(k)]),
             // A 3D variation's (B2): the point's and the accumulator's
             // third parts.
             (Predef::PixelZ, _) => "pixel_z".into(),
@@ -4692,7 +4693,7 @@ pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
          fn set_state(xform_id: u32, variation_id: u32, slot: u32, value: f32) {}\n\
          struct RngState {\n    state: u32,\n}\n\
          fn rng_nextf(rng: ptr<function, RngState>) -> f32 {\n    return f32((*rng).state);\n}\n\
-         struct StubTransform {\n    variations: array<f32, 4>,\n}\n\
+         struct StubTransform {\n    a: f32,\n    b: f32,\n    c: f32,\n    d: f32,\n    e: f32,\n    f: f32,\n    variations: array<f32, 4>,\n}\n\
          var<private> transforms: array<StubTransform, 2>;\n";
     if let Some(w2) = &w.wgsl_2d {
         validate_module(&format!("{GET_PARAM}{w2}"))?;

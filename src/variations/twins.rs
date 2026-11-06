@@ -171,10 +171,13 @@ pub const TWINS: &[(&str, &str)] = &[
     ("cylinder2", include_str!("../../assets/variations/twins/cylinder2.rhai")),
     ("d_spherical", include_str!("../../assets/variations/twins/d_spherical.rhai")),
     ("dc_bubble", include_str!("../../assets/variations/twins/dc_bubble.rhai")),
+    ("dc_carpet", include_str!("../../assets/variations/twins/dc_carpet.rhai")),
+    ("dc_carpet3D", include_str!("../../assets/variations/twins/dc_carpet3D.rhai")),
     ("dc_cube", include_str!("../../assets/variations/twins/dc_cube.rhai")),
     ("dc_cylinder", include_str!("../../assets/variations/twins/dc_cylinder.rhai")),
     ("dc_cylinder2", include_str!("../../assets/variations/twins/dc_cylinder2.rhai")),
     ("dc_linear", include_str!("../../assets/variations/twins/dc_linear.rhai")),
+    ("dc_triangle", include_str!("../../assets/variations/twins/dc_triangle.rhai")),
     ("dc_ztransl", include_str!("../../assets/variations/twins/dc_ztransl.rhai")),
     ("deltaA", include_str!("../../assets/variations/twins/deltaA.rhai")),
     ("devil_warp", include_str!("../../assets/variations/twins/devil_warp.rhai")),
@@ -214,6 +217,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("extrude", include_str!("../../assets/variations/twins/extrude.rhai")),
     ("eyefish", include_str!("../../assets/variations/twins/eyefish.rhai")),
     ("falloff2", include_str!("../../assets/variations/twins/falloff2.rhai")),
+    ("fan", include_str!("../../assets/variations/twins/fan.rhai")),
     ("fan2", include_str!("../../assets/variations/twins/fan2.rhai")),
     ("fdisc", include_str!("../../assets/variations/twins/fdisc.rhai")),
     ("fibonacci2", include_str!("../../assets/variations/twins/fibonacci2.rhai")),
@@ -366,6 +370,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("polar2", include_str!("../../assets/variations/twins/polar2.rhai")),
     ("polarplot2d_wf", include_str!("../../assets/variations/twins/polarplot2d_wf.rhai")),
     ("polarplot3d_wf", include_str!("../../assets/variations/twins/polarplot3d_wf.rhai")),
+    ("popcorn", include_str!("../../assets/variations/twins/popcorn.rhai")),
     ("popcorn2", include_str!("../../assets/variations/twins/popcorn2.rhai")),
     ("popcorn2_3D", include_str!("../../assets/variations/twins/popcorn2_3D.rhai")),
     ("post_axis_symmetry_wf", include_str!("../../assets/variations/twins/post_axis_symmetry_wf.rhai")),
@@ -427,6 +432,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("rays2", include_str!("../../assets/variations/twins/rays2.rhai")),
     ("rays3", include_str!("../../assets/variations/twins/rays3.rhai")),
     ("rectangles", include_str!("../../assets/variations/twins/rectangles.rhai")),
+    ("rings", include_str!("../../assets/variations/twins/rings.rhai")),
     ("ripple", include_str!("../../assets/variations/twins/ripple.rhai")),
     ("rippled", include_str!("../../assets/variations/twins/rippled.rhai")),
     ("rose_wf", include_str!("../../assets/variations/twins/rose_wf.rhai")),
@@ -557,6 +563,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("waffle", include_str!("../../assets/variations/twins/waffle.rhai")),
     ("wallpaper_js", include_str!("../../assets/variations/twins/wallpaper_js.rhai")),
     ("waveblur_wf", include_str!("../../assets/variations/twins/waveblur_wf.rhai")),
+    ("waves", include_str!("../../assets/variations/twins/waves.rhai")),
     ("waves2", include_str!("../../assets/variations/twins/waves2.rhai")),
     ("waves2_3D", include_str!("../../assets/variations/twins/waves2_3D.rhai")),
     ("waves2_radial", include_str!("../../assets/variations/twins/waves2_radial.rhai")),
@@ -1077,8 +1084,10 @@ mod tests {
             // The colour from the probe's 0.5 (`main_template.wgsl`), which a
             // twin that writes none leaves.
             const PROBE_COLOR: f64 = 0.5;
+            // ...and the probe transform's coefficients (`ctx.a` ..).
             fn run<'a>(p: &'a crate::lang::ir::Program, values: &'a crate::lang::interp::ParamValues) -> VariationRun<'a> {
-                VariationRun::new(p, values, 1).with_color(PROBE_COLOR)
+                let a = crate::probe::flame::AFFINE;
+                VariationRun::new(p, values, 1).with_color(PROBE_COLOR).with_coefs([0, 1, 2, 3, 4, 5].map(|k| f64::from(a[k])))
             }
             if !self.render_3d {
                 let (w, c) = run(&self.two, values).call(C64::new(x, y), C64::ZERO, 1.0);

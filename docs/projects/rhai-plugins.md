@@ -1200,15 +1200,18 @@ Steps, in the order that unlocks the most first (the user picks):
      channel; the translator writes a vector's part-by-part functions out
      part by part, and names no temporary as the WGSL names a local (a
      shadowing that compiles). 18 twins, 12 of them the `glsl_*` family:
-     560 in all, 8980 pairs, 0 apart.
+     560 in all, 8980 pairs, 0 apart. **The transform's coefficients**
+     (`ctx.a` .. `ctx.f`; the judge's truth given the probe transform's):
+     fan, popcorn, rings, waves and the three dc_* that read them, 567 in
+     all, 9098 pairs, 0 apart.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 87, by count: w (12), the Möbius library
-     (9), arrays (8), a vec4 (7), the coefficients and other indexing
-     (7), a helper of the fract family (6), a float's bits (3),
+     passed through. Left, 80, by count: w (12), the Möbius library
+     (9), arrays (8), a vec4 (7), a helper of the fract family (6), a
+     float's bits (3),
      a helper of the fract family (4), crackle's (3), plot emits (3), a
      parameter named `super`, which Rhai reserves (`w`, `z`), vector
      trig (3), the rest one or two.

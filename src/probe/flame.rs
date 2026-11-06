@@ -29,7 +29,7 @@ use crate::scene::transforms::{Flame, Transform};
 /// So: non-degenerate (determinant ~0.975), asymmetric, and nothing
 /// zero. Changing these values invalidates every existing report, which
 /// is what the schema number is for.
-const AFFINE: [f32; 7] = [
+pub(crate) const AFFINE: [f32; 7] = [
     1.0,   // a
     0.25,  // b
     0.1,   // c

@@ -3885,7 +3885,10 @@ impl<'s> Lowerer<'s> {
                         // Whether the point is hidden as it reaches it (an
                         // earlier variation's `hide`).
                         "hide" => Ok(mk(ExprKind::Predef("vhide".into()), span)),
-                        o => self.err(*p, format!("a variation's context has `accum`, `weight`, `color`, `hide` and `rgb`; not `{o}`")),
+                        // Its transform's affine coefficients, as the flame
+                        // stores them (the editor's and a `.flame`'s `coefs`).
+                        "a" | "b" | "c" | "d" | "e" | "f" => Ok(mk(ExprKind::Predef(format!("coef_{name}")), span)),
+                        o => self.err(*p, format!("a variation's context has `accum`, `weight`, `color`, `hide`, `rgb` and its transform's `a` .. `f`; not `{o}`")),
                     },
                     Base::Ctx => match name {
                         // `ismand` is 1 on the parameter plane.
@@ -4351,7 +4354,10 @@ impl<'s> Lowerer<'s> {
             let zero = mk(ExprKind::Complex(Box::new(mk(ExprKind::Float(0.0), span)), Box::new(mk(ExprKind::Float(0.0), span))), span);
             // A formula has no colour coordinate: a variation reads 0 there.
             let ctx: HashMap<String, ast::Expr> =
-                [("accum".to_string(), zero), ("weight".to_string(), mk(ExprKind::Float(1.0), span)), ("color".to_string(), mk(ExprKind::Float(0.0), span)), ("hide".to_string(), mk(ExprKind::Bool(false), span))].into_iter().collect();
+                [("accum".to_string(), zero), ("weight".to_string(), mk(ExprKind::Float(1.0), span)), ("color".to_string(), mk(ExprKind::Float(0.0), span)), ("hide".to_string(), mk(ExprKind::Bool(false), span))]
+                    .into_iter()
+                    .chain(["a", "b", "c", "d", "e", "f"].into_iter().zip([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]).map(|(n, v)| (n.to_string(), mk(ExprKind::Float(v), span))))
+                    .collect();
             inner.bind(cp, Binding::ParamMap(ctx, "in a variation's context (`accum`, `weight`, `color`, `hide`)"));
         }
         let fns = std::mem::replace(&mut self.fns, fns);
@@ -4416,9 +4422,8 @@ impl<'s> Lowerer<'s> {
                 // `step_c` are complex, the default.
                 "bailout" | "degree" | "escape_fraction" | "render_px" | "supersample" | "value" => TypeName::Float,
                 "escaped" | "converged" | "has_derivative" | "vhide" => TypeName::Bool,
-                "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" | "vrgb_r" | "vrgb_g" | "vrgb_b" => {
-                    TypeName::Float
-                }
+                "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" | "vrgb_r" | "vrgb_g" | "vrgb_b" | "coef_a" | "coef_b" | "coef_c" | "coef_d"
+                | "coef_e" | "coef_f" => TypeName::Float,
                 // An effect's (P2).
                 "density_mean" | "pixel_scale" | "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_amount" => TypeName::Float,
                 _ => TypeName::Complex,

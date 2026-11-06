@@ -721,8 +721,12 @@ fn escaped(s, p) {
     colour coordinate as it reaches the variation (`pVarTP.color`;
     `WritesColor`, as the colour pointer it reads; 0 inside a formula),
     `ctx.hide`, whether the point is hidden as it reaches it (an
-    earlier variation's), and `ctx.rgb`, the direct colour as it reaches
-    it (-1e30 each part until a variation writes one);
+    earlier variation's), `ctx.rgb`, the direct colour as it reaches it
+    (-1e30 each part until a variation writes one), and `ctx.a` ..
+    `ctx.f`, its transform's affine coefficients as the flame stores them
+    (the editor's and a `.flame`'s `coefs`; JWildfire's
+    `pXForm.getCoeff..`, read by fan, popcorn, rings and waves; the
+    identity inside a formula);
   - a direct colour: the body may end with `#{ z: point, rgb: vec3(r,
     g, b) }`, the colour the transform's `direct_color` blends in where
     the palette's would be (JWildfire's `pVarTP.rgbColor`, `WritesRgb`:

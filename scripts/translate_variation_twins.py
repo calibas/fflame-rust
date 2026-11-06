@@ -278,6 +278,8 @@ class Fn:
         # `ctx` field returned in the map: `vc`'s colour (WritesColor),
         # `hide`'s flag (CanHide). Pointer -> [key, local].
         self.outs = {}
+        # Names bound to `transforms[xform_id]`, read for its coefficients.
+        self.xform_alias = set()
         # A 3D body ending in an `if`: the arms set this, returned after.
         self.result_var = None
         for name, ty in args:
@@ -461,6 +463,11 @@ class Fn:
                 each = [f"{a + '.' + c if ta == vec[0] else a} {op} {b + '.' + c if tb == vec[0] else b}" for c in parts]
                 return f"complex({each[0]}, {each[1]})" if vec[0] == "vec2" else f"vec3({', '.join(each)})"
             return f"{self.ex(e[2])} {op} {self.ex(e[3])}"
+        if k == "field" and (e[1] == ("index", ("id", "transforms"), ("id", "xform_id")) or (e[1][0] == "id" and e[1][1] in self.xform_alias)):
+            if e[2] not in ("a", "b", "c", "d", "e", "f"):
+                raise Refuse(f"the transform's `{e[2]}`")
+            self.uses_ctx = True
+            return f"ctx.{e[2]}"
         if k == "field":
             base_t = self.ty(e[1])
             sw = e[2]
@@ -482,7 +489,9 @@ class Fn:
             return self.tr.param_read(i) if e[1] == ("id", "user") else f"out[{i}]"
         if k == "index":
             # The variation's own weight, JWildfire's inside the formula.
-            if e[1] == ("field", ("index", ("id", "transforms"), ("id", "xform_id")), "variations") and e[2] == ("id", "variation_id"):
+            if e[2] == ("id", "variation_id") and e[1][0] == "field" and e[1][2] == "variations" and (
+                e[1][1] == ("index", ("id", "transforms"), ("id", "xform_id")) or (e[1][1][0] == "id" and e[1][1][1] in self.xform_alias)
+            ):
                 self.uses_ctx = True
                 return "ctx.weight"
             raise Refuse("an index")
@@ -675,6 +684,10 @@ class Fn:
         if self.init and k == "return" and s[1] == ("id", "out"):
             slots = ", ".join(f"{n}: out[{i}]" for i, n in enumerate(self.tr.derived_list()))
             self.emit(depth, f"#{{ {slots} }}" if last else f"return #{{ {slots} }};")
+            return
+        if k == "decl" and s[4] == ("index", ("id", "transforms"), ("id", "xform_id")):
+            # `let xf = transforms[xform_id];`: its reads are `ctx`'s.
+            self.xform_alias.add(s[2])
             return
         if k == "decl":
             _, kind, name, ty, init = s

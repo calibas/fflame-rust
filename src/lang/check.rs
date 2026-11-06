@@ -982,7 +982,10 @@ impl Checker {
             "draw" if self.internal => Predef::Draw,
             // A solid's position's third part (B3).
             "pixelz" if self.internal && self.kind == EntryKind::Solid => Predef::PixelZ,
-            "accum" | "weight" | "vcolor" | "vhide" | "vrgb_r" | "vrgb_g" | "vrgb_b" | "pixelz" | "accumz" if self.internal => {
+            "accum" | "weight" | "vcolor" | "vhide" | "vrgb_r" | "vrgb_g" | "vrgb_b" | "pixelz" | "accumz" | "coef_a" | "coef_b" | "coef_c" | "coef_d"
+            | "coef_e" | "coef_f"
+                if self.internal =>
+            {
                 if self.kind != EntryKind::Transform {
                     self.error(span, format!("`{name}` is a flame variation's"));
                     return None;
@@ -996,6 +999,7 @@ impl Checker {
                     "vrgb_r" => Predef::VarRgbR,
                     "vrgb_g" => Predef::VarRgbG,
                     "vrgb_b" => Predef::VarRgbB,
+                    c if c.starts_with("coef_") => Predef::Coef(c.as_bytes()[5] - b'a'),
                     _ => Predef::VarColor,
                 }
             }
@@ -1145,7 +1149,7 @@ impl Checker {
             self.error(span, format!("a simulation model reads its cell, the grid's size, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
-        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::VarHide | Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::PixelZ | Predef::AccumZ) {
+        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::VarHide | Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::PixelZ | Predef::AccumZ) {
             self.error(span, format!("a transformation reads `#pixel`, `#pi` and `#e`, not `#{name}`"));
             return None;
         }

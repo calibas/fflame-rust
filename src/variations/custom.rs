@@ -862,7 +862,7 @@ mod tests {
         let refused = |src: &str| compile(src).err().unwrap_or_else(|| panic!("compiled: {src}"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn init(p) { #{ n: rand() } }\nfn variation(z, p) { z * this.n }\n").contains("no random numbers"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { z * this.n }\n").contains("no `init`"));
-        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p, ctx) { z * ctx.julia }\n").contains("`accum`, `weight`, `color`, `hide` and `rgb`"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p, ctx) { z * ctx.julia }\n").contains("`accum`, `weight`, `color`, `hide`, `rgb` and its transform's `a` .. `f`"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { #{ z: z, hue: 0.5 } }\n").contains("`z`, `color`, `rgb` and `hide`"));
     }
 
@@ -1057,6 +1057,25 @@ mod tests {
                                  fn step(s, p) { s.z = vary(\"rhai_prepare_test\", s.z); s }\nfn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n")
         });
         assert!(e.is_err_and(|d| d[0].message.contains("`prepare`")));
+    }
+
+    /// `ctx.a` .. `ctx.f` are the transform's affine coefficients, as the
+    /// flame stores them (`NeedsTransform`, read from `transforms`): what
+    /// popcorn and fan read; the identity in the interpreter without any.
+    #[test]
+    fn ctx_coefs_are_the_transforms() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_coef_test\" };\nfn variation(z, p, ctx) {\n    complex(z.re + ctx.e * ctx.a, z.im + ctx.f + ctx.b + ctx.c + ctx.d)\n}\n";
+        let dl = named(src);
+        assert_eq!(dl.features, ["needs_transform"], "the ids, for `transforms[xform_id]`");
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("transforms[xform_id].e") && s.contains("transforms[xform_id].a")));
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::new(1.0, 1.0), C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (1.0, 2.0), "the identity");
+        let (z, _) = VariationRun::new(&p, &params, 1).with_coefs([2.0, 0.5, 0.25, 0.125, 3.0, -1.0]).call(C64::new(1.0, 1.0), C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (7.0, 0.875));
     }
 
     /// A direct colour (`WritesRgb`): `#{ z, rgb: vec3(r, g, b) }` writes
