@@ -63,6 +63,54 @@ pub const TWINS: &[(&str, &str)] = &[
     ("origami", include_str!("../../assets/formulas/twins/origami.rhai")),
 ];
 
+/// The built-in colourings' twins (P7 step 2, docs/projects/rhai-plugins.md):
+/// each a Rhai colouring that renders as its built-in, which the Escape
+/// panel's Edit as Rhai puts in the built-in's place. A twin keeps its
+/// built-in's parameters by name; WGSL's `round` (halves to even) it
+/// spells out, the dialect's rounding halves away from zero. Added in
+/// batches, as the dialect learns what the rest read; the sources are
+/// `assets/formulas/twins/colorings/*.rhai`.
+pub const COLORING_TWINS: &[(&str, &str)] = &[
+    // Batch 1: what a colouring could say already.
+    ("escape_count", include_str!("../../assets/formulas/twins/colorings/escape_count.rhai")),
+    ("orbit_trap", include_str!("../../assets/formulas/twins/colorings/orbit_trap.rhai")),
+    ("sphere_average", include_str!("../../assets/formulas/twins/colorings/sphere_average.rhai")),
+    ("decomposition", include_str!("../../assets/formulas/twins/colorings/decomposition.rhai")),
+    ("basic", include_str!("../../assets/formulas/twins/colorings/basic.rhai")),
+    ("gaussian_integer", include_str!("../../assets/formulas/twins/colorings/gaussian_integer.rhai")),
+    ("itinerary", include_str!("../../assets/formulas/twins/colorings/itinerary.rhai")),
+    // Batch 2: what the loop knows -- the escape fraction, the degree,
+    // the orbit's ending, the step's previous iterate and c.
+    ("smooth", include_str!("../../assets/formulas/twins/colorings/smooth.rhai")),
+    ("orbit_average", include_str!("../../assets/formulas/twins/colorings/orbit_average.rhai")),
+    ("stripe_average", include_str!("../../assets/formulas/twins/colorings/stripe_average.rhai")),
+    ("magnitude_average", include_str!("../../assets/formulas/twins/colorings/magnitude_average.rhai")),
+    ("root_basin", include_str!("../../assets/formulas/twins/colorings/root_basin.rhai")),
+    ("triangle_inequality", include_str!("../../assets/formulas/twins/colorings/triangle_inequality.rhai")),
+    ("period", include_str!("../../assets/formulas/twins/colorings/period.rhai")),
+    ("position_average", include_str!("../../assets/formulas/twins/colorings/position_average.rhai")),
+    ("curvature_average", include_str!("../../assets/formulas/twins/colorings/curvature_average.rhai")),
+    ("velocity", include_str!("../../assets/formulas/twins/colorings/velocity.rhai")),
+    ("threads", include_str!("../../assets/formulas/twins/colorings/threads.rhai")),
+    ("exponential_smoothing", include_str!("../../assets/formulas/twins/colorings/exponential_smoothing.rhai")),
+    // Batch 3: what `INFO` says beside the program -- a level clamped
+    // rather than wrapped, and what picking it sets.
+    ("position_map", include_str!("../../assets/formulas/twins/colorings/position_map.rhai")),
+    ("external_rays", include_str!("../../assets/formulas/twins/colorings/external_rays.rhai")),
+    // Batch 4: the derivative, and the pixel it is measured in.
+    ("distance_estimate", include_str!("../../assets/formulas/twins/colorings/distance_estimate.rhai")),
+    ("normal_map", include_str!("../../assets/formulas/twins/colorings/normal_map.rhai")),
+    // Batch 5: a colour as the result (`fn color`), the palette in the
+    // colouring.
+    ("rainbow_fringe", include_str!("../../assets/formulas/twins/colorings/rainbow_fringe.rhai")),
+    ("infinite_waves", include_str!("../../assets/formulas/twins/colorings/infinite_waves.rhai")),
+    ("voc_traps", include_str!("../../assets/formulas/twins/colorings/voc_traps.rhai")),
+    ("direct_traps", include_str!("../../assets/formulas/twins/colorings/direct_traps.rhai")),
+    // Batch 6: the config's texture, read in the loop, and the colour's
+    // coverage.
+    ("image_trap", include_str!("../../assets/formulas/twins/colorings/image_trap.rhai")),
+];
+
 /// The twin of the built-in formula `name`, when it has one.
 pub fn source(name: &str) -> Option<&'static str> {
     TWINS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
@@ -70,7 +118,20 @@ pub fn source(name: &str) -> Option<&'static str> {
 
 /// The twin as the config carries it.
 pub fn custom_source(name: &str) -> Option<crate::config::escape::CustomSource> {
-    let text = source(name)?;
+    carried(name, source(name)?)
+}
+
+/// The twin of the built-in colouring `name`, when it has one.
+pub fn coloring_source(name: &str) -> Option<&'static str> {
+    COLORING_TWINS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
+}
+
+/// The colouring's twin as the config carries it.
+pub fn coloring_custom_source(name: &str) -> Option<crate::config::escape::CustomSource> {
+    carried(name, coloring_source(name)?)
+}
+
+fn carried(name: &str, text: &str) -> Option<crate::config::escape::CustomSource> {
     Some(crate::config::escape::CustomSource {
         dialect: crate::config::escape::CustomDialect::Rhai,
         entry: super::lang::rhai::title(text).unwrap_or_else(|| name.to_string()),
@@ -85,6 +146,65 @@ mod tests {
     use super::super::lang::interp::{perturb_holds, Env, ParamValues};
     use super::super::lang::{delta, perturb, rhai};
     use super::*;
+
+    /// Each colouring twin compiles as the app compiles it (its WGSL
+    /// validated), with its built-in's name in the panel, its parameters
+    /// exactly -- names, captions, hints, kinds, defaults, ranges,
+    /// choices, a log slider -- its features as the built-in's (an
+    /// orbit accumulator, the interior coloured, period detection, a
+    /// bounded value, the derivative, a colour, the palette or the texture
+    /// in the loop, the coverage, UF's loop order), and what picking it
+    /// sets: the recommended bailout
+    /// and the values a fresh pick takes.
+    #[test]
+    fn every_colouring_twin_compiles_as_its_builtin() {
+        use super::super::ColoringFeature as F;
+        for (name, _) in COLORING_TWINS {
+            let builtin = super::super::get_coloring(name);
+            assert_eq!(builtin.name, *name);
+            let src = coloring_custom_source(name).expect("a twin");
+            let key = super::super::custom::name_of(super::super::lang::EntryKind::Coloring, &src);
+            let twin = super::super::custom::compile_coloring(&src, &key)
+                .unwrap_or_else(|d| panic!("{name}: {:?}", d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>()));
+            assert_eq!(twin.display_name, builtin.display_name, "{name}: its title");
+            assert_eq!(twin.parameters, builtin.parameters, "{name}: its parameters");
+            for f in [
+                F::NeedsOrbitAccum,
+                F::ColorsInterior,
+                F::NeedsPeriod,
+                F::Bounded,
+                F::NeedsDerivative,
+                F::DirectColor,
+                F::PaletteInLoop,
+                F::TextureInLoop,
+                F::DirectAlpha,
+                F::SkipsEscapingIterate,
+            ] {
+                assert_eq!(twin.features.contains(&f), builtin.features.contains(&f), "{name}: {f:?}");
+            }
+            // What picking it sets (`INFO.bailout`, `INFO.pick`).
+            assert_eq!(twin.recommended_bailout, builtin.recommended_bailout, "{name}: its recommended bailout");
+            assert_eq!(twin.pick_params, builtin.pick_params, "{name}: what a fresh pick sets");
+        }
+    }
+
+    /// The built-in Image Trap reads the config's texture as the formula
+    /// language reads one (batch 6): its `image_trap_texture` is the
+    /// language's `uf_texture`, function for function, so its twin and it
+    /// agree -- and both agree across platforms, the filtering done by hand.
+    #[test]
+    fn the_image_trap_reads_the_texture_as_the_language_does() {
+        let body = |src: &str, name: &str| {
+            let at = src.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("no fn {name}"));
+            let end = src[at..].find("
+}
+").expect("its end");
+            src[at + 3 + name.len()..at + end].to_string()
+        };
+        let builtin = super::super::get_coloring("image_trap").wgsl_accum;
+        let lang = super::super::lang::wgsl::texture_wgsl("", "esc_texture");
+        assert_eq!(body(builtin, "image_trap_texture"), body(&lang, "uf_texture"));
+    }
 
     /// Each twin compiles, and keeps its built-in's parameters (names,
     /// defaults, ranges, choices) besides its `bailout`, and its degree.

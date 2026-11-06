@@ -101,7 +101,9 @@
 //! `finish(s, z, p)` returns the palette position -- the index -- or
 //! `#{ index, solid }` (solid: the pixel left to the solid colour). The
 //! context adds `ctx.numiter` (the passes run, in `finish`); `INFO.region`
-//! is `"inside"`, `"outside"` or `"both"`. A state field may be called
+//! is `"inside"`, `"outside"` or `"both"`, `INFO.bounded` clamps the
+//! value rather than wrapping it, and `INFO.bailout` and `INFO.pick` are
+//! what picking it sets. A state field may be called
 //! `z`: in a colouring that name is the colouring's own.
 //!
 //! UF and Fractint formulas and colourings convert to these shapes
@@ -669,6 +671,8 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         solid: kind == EntryKind::Solid,
         effect: kind == EntryKind::Effect,
         sim_coloring: kind == EntryKind::SimColoring,
+        palette_reads: 0,
+        texture_reads: 0,
         sim_model: kind == EntryKind::SimModel,
         sim_fn,
         probe: std::cell::Cell::new(0),
@@ -711,6 +715,26 @@ const CTX_FIELDS: &[(&str, &str)] = &[
     ("pixel", "pixel"),
     // A colouring's, in `finish`.
     ("numiter", "numiter"),
+    // A colouring's view of the loop (P7 step 2): anywhere, in `finish`,
+    // in `step`.
+    ("bailout", "bailout"),
+    ("degree", "degree"),
+    ("escaped", "escaped"),
+    ("converged", "converged"),
+    ("period", "period"),
+    ("escape_fraction", "escape_fraction"),
+    ("prev", "prev"),
+    ("step_c", "step_c"),
+    // The derivative's (batch 4): `#dz` is the perturbation equations'
+    // deviation, so the checker calls the orbit's `orbit_dz`.
+    ("orbit_dz", "dz"),
+    ("has_derivative", "has_derivative"),
+    ("render_px", "render_px"),
+    ("supersample", "supersample"),
+    // A colour colouring's (batch 5): the value after the transfer, in
+    // `color`; the view's rotation, (cos, sin).
+    ("value", "value"),
+    ("rotation", "rotation"),
     // The panel's crease settings, in `creases`.
     ("crease_decay", "crease_decay"),
     ("crease_pattern", "crease_pattern"),
@@ -850,6 +874,8 @@ enum Returns {
     /// A simulation colouring: an `rgba` (its `a` the coverage), a `vec3`,
     /// or `#{ color, coverage }`.
     SimColoring,
+    /// An escape colouring's `color` (batch 5): a `vec3`, linear light.
+    Color,
     /// A simulation model's function: a vector of four (`result` says so).
     SimModel { result: String },
     /// An inlined body that returns early (rhai-plugins P7 step 1): its
@@ -907,6 +933,11 @@ struct Lowerer<'s> {
     /// Lowering a simulation's colouring (P4): `fn cell_color`, its reads
     /// of the sample.
     sim_coloring: bool,
+    /// An escape colouring's palette reads made so far (batch 5): each
+    /// call site's slot, read once.
+    palette_reads: i64,
+    /// Texture reads made so far (batch 6), likewise.
+    texture_reads: i64,
     /// Lowering a simulation's model (P4), and which of its functions.
     sim_model: bool,
     sim_fn: SimFn,
@@ -1556,7 +1587,48 @@ impl<'s> Lowerer<'s> {
                     Expr::StringConstant(r, _) if matches!(r.as_str(), "inside" | "outside" | "both") => region = Some(r.to_string()),
                     _ => return self.err(*p, "`region` is \"inside\", \"outside\" or \"both\""),
                 },
-                o if self.coloring => return self.err(*p, format!("a colouring's `INFO` has `title`, `id`, `description`, `author` and `region`, not `{o}`")),
+                // A level, clamped to 0..1 rather than wrapped
+                // (`ColoringFeature::Bounded`), and what picking the
+                // colouring sets: the squared bailout it is best drawn at
+                // and the values a fresh pick takes (`recommended_bailout`,
+                // `pick_params`). `custom::compile_coloring` reads them
+                // apart.
+                "bounded" if self.coloring => match v {
+                    Expr::BoolConstant(..) => {}
+                    _ => return self.err(*p, "`bounded` is true or false: a value from 0 to 1, clamped rather than wrapped through the palette"),
+                },
+                // `step` sees only the iterates that did not bail out, as
+                // UF runs a colouring's `loop:` (`SkipsEscapingIterate`).
+                "skips_escaping" if self.coloring => match v {
+                    Expr::BoolConstant(..) => {}
+                    _ => return self.err(*p, "`skips_escaping` is true or false: whether `step` skips the iterate that escapes, as Ultra Fractal's loop section does"),
+                },
+                "bailout" if self.coloring => match v {
+                    Expr::FloatConstant(f, _) if **f > 0.0 => {}
+                    Expr::IntegerConstant(i, _) if *i > 0 => {}
+                    _ => return self.err(*p, "`bailout` is a positive number: the squared bailout the colouring is best drawn at, which picking it sets"),
+                },
+                "pick" if self.coloring => {
+                    let Expr::Map(m, _) = v else {
+                        return self.err(*p, "`pick` is a map of parameter to value, `#{ deband: 1 }`: what a fresh pick of the colouring sets");
+                    };
+                    for (k, x) in &m.0 {
+                        if !params.iter().any(|(n, _, _)| n.as_str() == k.name.as_str()) {
+                            return self.err(k.pos, format!("`pick` sets `{}`, which is not a parameter", k.name));
+                        }
+                        let number = |e: &Expr| matches!(e, Expr::FloatConstant(..) | Expr::IntegerConstant(..) | Expr::BoolConstant(..));
+                        let negated = matches!(x, Expr::FnCall(f, _) if f.name == "-" && f.args.len() == 1 && number(&f.args[0]));
+                        if !number(x) && !negated {
+                            return self.err(k.pos, "a value `pick` sets is a number, or true or false");
+                        }
+                    }
+                }
+                o if self.coloring => {
+                    return self.err(
+                        *p,
+                        format!("a colouring's `INFO` has `title`, `id`, `description`, `author`, `region`, `bounded`, `skips_escaping`, `bailout` and `pick`, not `{o}`"),
+                    )
+                }
                 o => return self.err(*p, format!("`INFO` has `title`, `id`, `description`, `author`, `center`, `magn`, `maxiter`, `angle` and `cycle`, not `{o}`")),
             }
         }
@@ -2122,6 +2194,15 @@ impl<'s> Lowerer<'s> {
                 }
                 parts
             }
+            // A `vec3` leaves the coverage alone (opaque); an `rgba` sets
+            // it (`DirectAlpha`).
+            Returns::Color => {
+                let color = self.final_vec(f, scope)?;
+                if color.kind == vec::Kind::Quat {
+                    return self.err(p, "`color` ends with the colour: a `vec3` in linear light, or an `rgba`, its `a` the coverage");
+                }
+                color.parts
+            }
             Returns::SimModel { result } => {
                 let state = self.final_vec(f, scope)?;
                 if state.kind != vec::Kind::Rgba {
@@ -2434,6 +2515,26 @@ impl<'s> Lowerer<'s> {
         let mut body = Vec::new();
         self.result_body(&finish.body, &mut scope, &mut body)?;
         sections.push(Section { kind: SectionKind::Final, span, body, last_is_bailout: false, labelled: true });
+        // A colour, not a palette position (batch 5, `DirectColor`):
+        // `color(s, z, p, ctx)`, beside `finish`, which still gives the
+        // value the relief reads and `ctx.value` is after the transfer.
+        if let Some(color) = get(self, "color") {
+            let mut scope = Scope::new(Fn3::Finish, scope.fields.clone());
+            if color.params.len() < 3 || color.params.len() > 4 {
+                return self.err(color.body.position(), "`color(s, z, p)` or `color(s, z, p, ctx)`");
+            }
+            for (name, role) in color.params.iter().zip([Binding::State, Binding::Z, Binding::Params, Binding::Ctx]) {
+                scope.bind(name, role);
+            }
+            const RESULT: &str = "`color` ends with the colour: a `vec3`, in linear light";
+            let stmts = color.body.statements();
+            let Some((last, rest)) = stmts.split_last() else { return self.err(color.body.position(), RESULT) };
+            let mut body = Vec::new();
+            self.body_returning(rest, &Returns::Color, &mut scope, &mut body)?;
+            let Some(f) = final_value(last) else { return self.err(last.position(), RESULT) };
+            self.put_result(&Returns::Color, f, last.position(), &mut scope, &mut body)?;
+            sections.push(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true });
+        }
         Ok(sections)
     }
 
@@ -3896,7 +3997,7 @@ impl<'s> Lowerer<'s> {
         }
         // Numbers of vectors (`dot`, `length`), and the functions that came
         // with them (`min`, `max`, `clamp` of numbers) (B1).
-        if matches!(name, "vec3" | "vec4" | "quat" | "rgba" | "input" | "input_at" | "palette" | "read" | "read_at" | "drive" | "scratch" | "memory" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
+        if matches!(name, "vec3" | "vec4" | "quat" | "rgba" | "input" | "input_at" | "palette" | "palette_srgb" | "palette_table" | "texture" | "texel" | "read" | "read_at" | "drive" | "scratch" | "memory" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
             || f.args.iter().any(|a| self.is_vec(a, scope))
         {
             let mut vals: Vec<Val> = args.drain(..).map(Val::S).collect();
@@ -4016,6 +4117,27 @@ impl<'s> Lowerer<'s> {
                 self.binary(BinOp::Add, a, m, p)?
             }
             "norm_sqr" => mk(ExprKind::Modulus(Box::new(one(&mut args, self)?)), span),
+            // The texture's size, (width, height) in texels (batch 6).
+            "texture_size" => {
+                if !self.coloring {
+                    return self.err(p, "`texture_size()` is a texture's: an escape colouring's, in `start` and `step`");
+                }
+                match args.as_slice() {
+                    [] => {}
+                    [k] => vec::texture_index(k).map_err(|m| Diag::error(span, m))?,
+                    _ => return self.err(p, "`texture_size()`, or `texture_size(k)` for texture `k`"),
+                }
+                let part = |k: i64| mk(ExprKind::Call { name: "__texture_size".into(), args: vec![mk(ExprKind::Int(k), span)], user: false }, span);
+                mk(ExprKind::Complex(Box::new(part(0)), Box::new(part(1))), span)
+            }
+            // The palette mapping's curve (an escape colouring's, batch 5).
+            "palette_curve" => {
+                if !self.coloring {
+                    return self.err(p, "`palette_curve(t)` is an escape colouring's");
+                }
+                let a = one(&mut args, self)?;
+                mk(ExprKind::Call { name: "__esc_palette_curve".into(), args: vec![a], user: false }, span)
+            }
             "fold" => {
                 let a = one(&mut args, self)?;
                 let part = |n: &str| call("abs", call(n, a.clone()));
@@ -4195,7 +4317,11 @@ impl<'s> Lowerer<'s> {
             ExprKind::Name(n) if n == "ismand" => TypeName::Complex,
             ExprKind::Name(n) => self.types.get(n).copied().unwrap_or(TypeName::Complex),
             ExprKind::Predef(n) => match n.as_str() {
-                "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" | "crease_pattern" | "effect_blend" => TypeName::Int,
+                "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" | "crease_pattern" | "effect_blend" | "period" => TypeName::Int,
+                // A colouring's view of the loop (P7 step 2); `prev` and
+                // `step_c` are complex, the default.
+                "bailout" | "degree" | "escape_fraction" | "render_px" | "supersample" | "value" => TypeName::Float,
+                "escaped" | "converged" | "has_derivative" => TypeName::Bool,
                 "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" => TypeName::Float,
                 // An effect's (P2).
                 "density_mean" | "pixel_scale" | "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_amount" => TypeName::Float,
@@ -5046,14 +5172,59 @@ fn escaped(s, p) { s.z.re > 1e9 }
             ("fn finish(s, z, p, ctx) { to_float(ctx.pass) }", "counts its own passes"),
             ("fn step(s, z, p) { s }", "needs `fn finish`"),
             ("fn finish(s, z, p) { z = complex(1.0, 0.0); 0.0 }", "not a variable to set"),
-            ("const INFO = #{ center: complex(0.0, 0.0) };\nfn finish(s, z, p) { 0.0 }", "`author` and `region`"),
+            ("const INFO = #{ center: complex(0.0, 0.0) };\nfn finish(s, z, p) { 0.0 }", "`bailout` and `pick`"),
             ("const INFO = #{ region: \"left\" };\nfn finish(s, z, p) { 0.0 }", "`region` is"),
+            ("const INFO = #{ bounded: 1 };\nfn finish(s, z, p) { 0.0 }", "`bounded` is true or false"),
+            // A colour (batch 5): `color` ends with a `vec3`, and its
+            // value after the transfer is its alone.
+            ("fn finish(s, z, p) { 0.0 }\nfn color(s, z, p) { 1.0 }", "a number where a vector is wanted"),
+            ("fn finish(s, z, p) { 0.0 }\nfn color(s, z, p) { quat(1.0, 0.0, 0.0, 0.0) }", "a `vec3` in linear light, or an `rgba`"),
+            // A texture (batch 6): read in the loop alone, and by a kind
+            // whose template binds one.
+            ("fn finish(s, z, p) { texture(complex(0.5, 0.5)).r }", "in `start` and `step`"),
+            ("fn finish(s, z, p) { 0.0 }\nfn color(s, z, p) { let t = texel(1, 2); vec3(t.r, t.g, t.b) }", "in `start` and `step`"),
+            ("const INFO = #{ skips_escaping: 1 };\nfn finish(s, z, p) { 0.0 }", "`skips_escaping` is true or false"),
+            ("fn finish(s, z, p, ctx) { ctx.value }", "`ctx.value` belongs to `color`"),
+            ("fn step(s, z, p, ctx) { s }\nfn finish(s, z, p, ctx) { 0.0 }\nfn color(s, z, p, ctx) { vec3(ctx.prev.re, 0.0, 0.0) }", "`ctx.prev` belongs to `step`"),
+            ("const INFO = #{ bailout: -4.0 };\nfn finish(s, z, p) { 0.0 }", "`bailout` is a positive number"),
+            ("const INFO = #{ pick: #{ deband: 1 } };\nfn finish(s, z, p) { 0.0 }", "`deband`, which is not a parameter"),
+            ("const PARAMS = #{ deband: #{ value: 0 } };\nconst INFO = #{ pick: #{ deband: \"on\" } };\nfn finish(s, z, p) { 0.0 }", "a number, or true or false"),
             ("fn finish(s, z, p) { let t = 1.0; }", "ends with the index"),
         ] {
             let err = coloring(src).err().unwrap_or_else(|| panic!("{src}: compiled"));
             let text: Vec<String> = err.iter().map(|d| d.message.clone()).collect();
             assert!(text.iter().any(|m| m.contains(says)), "{src}: {text:?}");
         }
+    }
+
+    /// A texture read names its texture by a last argument, 0 by default
+    /// (batch 6): one exists yet, so 0 alone, written out -- and a script
+    /// written so keeps working when more come.
+    #[test]
+    fn a_texture_is_named_by_its_index() {
+        let with = |k: &str| {
+            coloring(&format!(
+                "fn start(z, p) {{ #{{ r: 0.0 }} }}\nfn step(s, z, p) {{ let t = texture(z{k}); let u = texel(1, 2{k}); let w = texture_size({}); s.r = t.r + u.g + w.re; s }}\nfn finish(s, z, p) {{ s.r }}",
+                k.trim_start_matches(", ")
+            ))
+        };
+        assert!(with("").is_ok(), "{:?}", with("").err().map(|d| d.iter().map(|x| x.message.clone()).collect::<Vec<_>>()));
+        assert!(with(", 0").is_ok(), "texture 0, named");
+        for (k, says) in [(", 1", "one texture exists yet"), (", 1 - 1", "written out")] {
+            let err = with(k).err().unwrap_or_else(|| panic!("texture{k} compiled"));
+            assert!(err.iter().any(|d| d.message.contains(says)), "{k}: {:?}", err.iter().map(|d| &d.message).collect::<Vec<_>>());
+        }
+    }
+
+    /// A texture is read where a kind's template binds one (P7 step 2,
+    /// batch 6): an escape colouring's loop, not yet a formula's.
+    #[test]
+    fn a_formula_reads_no_texture_yet() {
+        let src = "fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                   fn step(s, p) { let t = texture(s.z); s.z = s.z * s.z + s.c + complex(t.r, 0.0); s }\n\
+                   fn escaped(s, p) { s.z.norm_sqr() > 4.0 }";
+        let err = program(src).err().expect("a formula reading a texture compiled");
+        assert!(err.iter().any(|d| d.message.contains("where the template binds one")), "{:?}", err.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
     /// Two ints divided truncate toward zero, as Rhai's do (P4 step 9b),

@@ -83,12 +83,20 @@ pub struct Env {
     pub julia_c: C64,
     /// The view's rotation, radians.
     pub rotation: f64,
+    /// The panel's squared bailout and the formula's degree at infinity,
+    /// as a colouring reads them (`ctx.bailout`, `ctx.degree`).
+    pub bailout: f64,
+    pub degree: f64,
+    /// A render pixel's size in the plane, and the render pixels per
+    /// output pixel (`ctx.render_px`, `ctx.supersample`).
+    pub render_px: f64,
+    pub supersample: f64,
 }
 
 impl Env {
     /// A pixel with nothing else set: tests that only need `#pixel`.
     pub fn at(pixel: C64, maxiter: u32) -> Self {
-        Env { pixel, maxiter, center: C64::ZERO, magn: 1.0, x: 0, y: 0, width: 1, height: 1, random: C64::ZERO, julia: false, julia_c: C64::ZERO, rotation: 0.0 }
+        Env { pixel, maxiter, center: C64::ZERO, magn: 1.0, x: 0, y: 0, width: 1, height: 1, random: C64::ZERO, julia: false, julia_c: C64::ZERO, rotation: 0.0, bailout: 4.0, degree: 2.0, render_px: 1.0, supersample: 1.0 }
     }
 }
 
@@ -213,6 +221,15 @@ struct Shared<'e> {
     /// A 3D variation's point's and accumulator's third parts (B2).
     pixel_z: f64,
     accum_z: f64,
+    /// A colouring's view of the loop: the iterate before the step, and
+    /// whether the orbit escaped (`ctx.prev`, `ctx.escaped`).
+    prev: C64,
+    escaped: bool,
+    /// The orbit's derivative per render pixel, and whether there is one,
+    /// as a colouring's `finish` reads them (`ctx.dz`,
+    /// `ctx.has_derivative`).
+    orbit_dz: C64,
+    has_derivative: bool,
 }
 
 impl<'e> Shared<'e> {
@@ -223,6 +240,10 @@ impl<'e> Shared<'e> {
             vcolor: None,
             pixel_z: 0.0,
             accum_z: 0.0,
+            prev: C64::ZERO,
+            escaped: false,
+            orbit_dz: C64::ZERO,
+            has_derivative: false,
             pixel: env.pixel,
             env,
             z: C64::ZERO,
@@ -681,12 +702,13 @@ pub fn run(
     let mut escaped = false;
     for i in 0..env.maxiter {
         sh.pass = i;
+        sh.prev = sh.z;
         f.exec(&formula.loop_body, &mut sh);
         sh.pass = i + 1;
         sh.numiter = i + 1;
         if let Some(c) = c.as_mut() {
             let prog = c.prog;
-        c.exec(&prog.loop_body, &mut sh);
+            c.exec(&prog.loop_body, &mut sh);
         }
         let go = formula.bailout.as_ref().map_or(true, |t| f.eval(t, &sh).as_bool());
         if !go {
@@ -697,6 +719,17 @@ pub fn run(
     if !escaped {
         sh.numiter = env.maxiter;
     }
+    sh.escaped = escaped;
+    let dz = formula.dz_var.map_or(C64::ZERO, |v| f.vars[v].as_c64());
+    // A Jacobian's, as a colouring reads it (`derive::effective_dz`).
+    let dz = match formula.dzq_var {
+        Some(q) => super::derive::effective_dz(sh.z, dz, f.vars[q].as_c64()),
+        None => dz,
+    };
+    // As the template's: per render pixel, and compiled in for a
+    // colouring that reads it.
+    sh.has_derivative = formula.dz_var.is_some() && coloring.is_some_and(|(p, _)| p.reads(Predef::OrbitDz));
+    sh.orbit_dz = if sh.has_derivative { dz.scale(env.render_px) } else { C64::new(env.render_px, 0.0) };
     if let Some(c) = c.as_mut() {
         let prog = c.prog;
         c.exec(&prog.final_body, &mut sh);
@@ -706,12 +739,6 @@ pub fn run(
             sh.solid = true;
         }
     }
-    let dz = formula.dz_var.map_or(C64::ZERO, |v| f.vars[v].as_c64());
-    // A Jacobian's, as a colouring reads it (`derive::effective_dz`).
-    let dz = match formula.dzq_var {
-        Some(q) => super::derive::effective_dz(sh.z, dz, f.vars[q].as_c64()),
-        None => dz,
-    };
     Run { z: sh.z, n: sh.numiter, escaped, index: sh.index, solid: sh.solid, dz }
 }
 
@@ -757,6 +784,8 @@ impl<'p> Machine<'p> {
                 IStmt::Scope(body) => {
                     let _ = self.exec(body, sh);
                 }
+                // An escape colouring's palette read: none here.
+                IStmt::Host(h, _) if h.gpu_read() => {}
                 IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
                 // The loop or the function around it takes these (P7
                 // step 1), as the GPU's do.
@@ -842,6 +871,9 @@ impl<'p> Machine<'p> {
     fn eval(&self, e: &IExpr, sh: &Shared) -> Value {
         match &e.kind {
             IExprKind::Host(Host::GridParam, args) => Value::Float(self.params.values[grid_cell(args, self.eval(&args[3], sh).as_int())].0),
+            // An escape colouring's palette: the GPU's, with no palette
+            // here.
+            IExprKind::Host(h, _) if h.gpu_read() => Value::Float(0.0),
             IExprKind::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             IExprKind::Bool(b) => Value::Bool(*b),
             IExprKind::Int(i) => Value::Int(*i as i32),
@@ -957,7 +989,36 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::CreaseReach => Value::Float(sh.crease[3]),
         Predef::CreaseHeight => Value::Float(sh.crease_height),
         Predef::CreaseSlope => Value::Complex(sh.crease_slope),
+        // A colouring's view of the loop (P7 step 2). The interpreter
+        // tests no convergence and detects no period; the `c` it steps
+        // by is the pixel, as a program's on the GPU.
+        Predef::Bailout => Value::Float(env.bailout),
+        Predef::Degree => Value::Float(env.degree),
+        Predef::Escaped => Value::Bool(sh.escaped),
+        Predef::Converged => Value::Bool(false),
+        Predef::Period => Value::Int(0),
+        Predef::EscapeFraction => Value::Float(escape_fraction(sh)),
+        Predef::Prev => Value::Complex(sh.prev),
+        Predef::StepC => Value::Complex(sh.pixel),
+        Predef::OrbitDz => Value::Complex(sh.orbit_dz),
+        Predef::HasDerivative => Value::Bool(sh.has_derivative),
+        Predef::RenderPx => Value::Float(env.render_px),
+        Predef::Supersample => Value::Float(env.supersample),
+        Predef::Value => Value::Float(sh.index),
+        Predef::Rotation => Value::Complex(C64::new(env.rotation.cos(), env.rotation.sin())),
     }
+}
+
+/// How far through its last step the orbit had gone when it escaped, as
+/// the template's `esc_escape_fraction`: 1 for an orbit that did not.
+fn escape_fraction(sh: &Shared) -> f64 {
+    if !sh.escaped {
+        return 1.0;
+    }
+    let lr = sh.env.bailout.max(1.0000001).log2();
+    let lz = (sh.z.re * sh.z.re + sh.z.im * sh.z.im).max(1.0000001).log2();
+    let f = 1.0 - (lz / lr).max(1e-6).log2() / sh.env.degree.max(1.0001).log2();
+    f.clamp(0.0, 1.0)
 }
 
 /// `|c + d| - |c|` by sign case, as the GPU's `uf_diffabs`: exact
@@ -1413,5 +1474,34 @@ mod tests {
         let p = program("R {\ninit:\n int k = 0\n while true\n  k = k + 1\n endwhile\n z = k\nloop:\n z = z\nbailout:\n false\n}", EntryKind::Formula);
         let r = run(&p, &ParamValues::defaults(&p), None, &Env::at(C64::ZERO, 1));
         assert_eq!(r.z, C64::real(f64::from(LOOP_CAP)));
+    }
+
+    /// A colouring's `ctx.dz` is the orbit's derivative per render pixel,
+    /// as the template's `sum.dz` (P7 step 2, batch 4): the derivative
+    /// pass's dz/dc times the pixel's size. Without a derivative it is the
+    /// seed, 1, times that size, and `ctx.has_derivative` is false.
+    #[test]
+    fn a_colouring_reads_the_derivative_per_render_pixel() {
+        let m = program("M {
+init:
+ z = 0
+loop:
+ z = sqr(z) + #pixel
+bailout:
+ |z| < 1e4
+}", EntryKind::Formula);
+        let d = super::super::derive::with_derivative(&m).expect("the Mandelbrot has a derivative");
+        let c = super::super::rhai::coloring(
+            "fn finish(s, z, p, ctx) { if ctx.has_derivative { ctx.dz.re * 1000.0 + ctx.dz.im } else { -ctx.dz.re - ctx.supersample } }",
+        )
+        .unwrap();
+        let cp = ParamValues::defaults(&c);
+        let env = Env { render_px: 0.01, supersample: 2.0, ..Env::at(C64::new(0.5, 0.5), 60) };
+        let r = run(&d, &ParamValues::defaults(&d), Some((&c, &cp)), &env);
+        assert!(r.escaped && r.dz.abs() > 1.0, "{r:?}");
+        let want = r.dz.scale(0.01);
+        assert!((r.index - (want.re * 1000.0 + want.im)).abs() < 1e-6 * r.index.abs(), "{} vs {want:?}", r.index);
+        let plain = run(&m, &ParamValues::defaults(&m), Some((&c, &cp)), &env);
+        assert_eq!(plain.index, -0.01 - 2.0, "the seed's, per render pixel, and the supersample factor");
     }
 }

@@ -182,6 +182,31 @@ pub enum Host {
     /// slot, the stride, the last row, the row -- clamped to the grid's in
     /// the read itself.
     GridParam,
+    /// An escape colouring's palette (P7 step 2, batch 5): the palette at
+    /// `t`, how (a literal: 0 a cycle position in linear light, 1 the
+    /// same as stored, display space, 2 a table read clamped at
+    /// `t` in 0..1, its entries at i/(N-1), as stored), part `c`; and the
+    /// palette mapping's curve at `t`.
+    EscPalette,
+    EscPaletteCurve,
+    /// The same read made once (where statements may go): the colour into
+    /// the call site's slot, a literal -- a private `vec3` -- and its parts
+    /// read from there, one texture read rather than one a part.
+    EscPaletteLoad,
+    EscPalettePart,
+    /// A texture read (batch 6), for every kind whose template binds a
+    /// texture -- an escape colouring's loop today -- through one portable
+    /// read (`wgsl::texture_wgsl`): the texture at `(u, v)` in 0..1,
+    /// bilinear between the texel centres and clamped at the edges, and
+    /// the texel at whole `(x, y)`, each into the call site's slot, its
+    /// parts read from there; the same one a part where no statement may
+    /// go; and the texture's size, part 0 its width, 1 its height.
+    TextureLoad,
+    TexelLoad,
+    TexturePart,
+    Texture,
+    Texel,
+    TextureSize,
 }
 
 /// Every host call by its lowered name.
@@ -202,6 +227,16 @@ pub const HOSTS: &[(&str, Host)] = &[
     ("__read_at", Host::ReadAt),
     ("__pyr_prepare", Host::PyrPrepare),
     ("__grid_cell", Host::GridParam),
+    ("__esc_palette", Host::EscPalette),
+    ("__esc_palette_curve", Host::EscPaletteCurve),
+    ("__esc_palette_load", Host::EscPaletteLoad),
+    ("__esc_palette_part", Host::EscPalettePart),
+    ("__texture_load", Host::TextureLoad),
+    ("__texel_load", Host::TexelLoad),
+    ("__texture_part", Host::TexturePart),
+    ("__texture", Host::Texture),
+    ("__texel", Host::Texel),
+    ("__texture_size", Host::TextureSize),
 ];
 
 impl Host {
@@ -222,6 +257,13 @@ impl Host {
             MemRead => &[I, I],
             Outside | AgentClaim | AgentClaimCheck => &[I, I],
             Param => &[I],
+            EscPalette | EscPaletteLoad => &[F, I, I],
+            EscPaletteCurve => &[F],
+            EscPalettePart => &[I, I],
+            TextureLoad | Texture => &[F, F, I],
+            TexelLoad | Texel => &[I, I, I],
+            TexturePart => &[I, I],
+            TextureSize => &[I],
             TakeDeposit | PyrPrepare => &[],
             AgentDeposit => &[I, I, F],
             ReadAt => &[I, I, I],
@@ -232,7 +274,7 @@ impl Host {
     pub fn result(self) -> Option<Ty> {
         use Host::*;
         match self {
-            ScratchWrite | MemWrite | AgentClaim | AgentDeposit | PyrPrepare => None,
+            ScratchWrite | MemWrite | AgentClaim | AgentDeposit | PyrPrepare | EscPaletteLoad | TextureLoad | TexelLoad => None,
             Outside | AgentClaimCheck => Some(Ty::Bool),
             _ => Some(Ty::Float),
         }
@@ -240,7 +282,26 @@ impl Host {
 
     /// Whether its last argument is a vector read's part, a literal 0-3.
     pub fn parts(self) -> bool {
-        matches!(self, Host::ScratchRead | Host::MemRead | Host::ReadAt)
+        matches!(
+            self,
+            Host::ScratchRead | Host::MemRead | Host::ReadAt | Host::EscPalette | Host::EscPalettePart | Host::TexturePart | Host::Texture | Host::Texel | Host::TextureSize
+        )
+    }
+
+    /// Whether an escape colouring's (else a simulation model's).
+    pub fn escape(self) -> bool {
+        matches!(self, Host::EscPalette | Host::EscPaletteCurve | Host::EscPaletteLoad | Host::EscPalettePart)
+    }
+
+    /// Whether a texture read, any kind's whose template binds one.
+    pub fn texture(self) -> bool {
+        matches!(self, Host::TextureLoad | Host::TexelLoad | Host::TexturePart | Host::Texture | Host::Texel | Host::TextureSize)
+    }
+
+    /// A read of what the GPU alone holds -- the palette, a texture --
+    /// which the evaluators read as 0.
+    pub fn gpu_read(self) -> bool {
+        self.escape() || self.texture()
     }
 
     /// Whether an agent function's (else a model step's).
@@ -279,6 +340,14 @@ pub enum Builtin {
     Trunc,
     Ceil,
     Floor,
+    /// Halves to even, as WGSL's `round` and IEEE's default rounding,
+    /// and a float rather than the int `round` gives: a twin of a
+    /// built-in that rounds an iterate (the Gaussian integer colouring)
+    /// rounds as it does, at any size.
+    RoundEven,
+    /// The base-2 log of a real, WGSL's own: what the smooth and
+    /// debanded colourings take, so their twins round as they do.
+    Log2,
     Real,
     Imag,
     Conj,
@@ -409,6 +478,8 @@ pub const BUILTINS: &[(&str, Builtin)] = &[
     ("trunc", Builtin::Trunc),
     ("ceil", Builtin::Ceil),
     ("floor", Builtin::Floor),
+    ("round_even", Builtin::RoundEven),
+    ("log2", Builtin::Log2),
     ("real", Builtin::Real),
     ("imag", Builtin::Imag),
     ("conj", Builtin::Conj),
@@ -501,6 +572,11 @@ impl Builtin {
                     Ty::Int
                 }
             }
+            // A float, whatever it is given: an int rounds to itself.
+            RoundEven if arg == Ty::Complex => Ty::Complex,
+            RoundEven => Ty::Float,
+            Log2 if arg == Ty::Complex => return Err("`log2` takes a real: `ln(z) / ln(2.0)` for a complex".to_string()),
+            Log2 => Ty::Float,
             _ => {
                 if arg == Ty::Complex {
                     Ty::Complex
@@ -552,6 +628,8 @@ impl Builtin {
             Trunc => C64::new(z.re.trunc(), z.im.trunc()),
             Ceil => C64::new(z.re.ceil(), z.im.ceil()),
             Floor => C64::new(z.re.floor(), z.im.floor()),
+            RoundEven => C64::new(z.re.round_ties_even(), z.im.round_ties_even()),
+            Log2 => z.ln().scale(std::f64::consts::LOG2_E),
             Real => C64::real(z.re),
             Imag => C64::real(z.im),
             Conj => z.conj(),
@@ -588,6 +666,7 @@ impl Builtin {
             Sqr => z.scale(2.0),
             Sqrt => C64::real(0.5).div(z.sqrt()),
             Log => one.div(z),
+            Log2 => one.div(z).scale(std::f64::consts::LOG2_E),
             Exp => z.exp(),
             Recip => one.div(z.mul(z)).neg(),
             Ident => one,
@@ -609,7 +688,7 @@ impl Builtin {
             Log1p => one.div(one.add(z)),
             F32 | Fract => one,
             SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Tap | Disc | Hash2 => C64::ZERO,
-            Zero | Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | Cosxx | IsInf
+            Zero | Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | RoundEven | Cosxx | IsInf
             | IsNan => C64::ZERO,
         }
     }
@@ -649,6 +728,8 @@ impl Builtin {
             Trunc => x.trunc(),
             Ceil => x.ceil(),
             Floor => x.floor(),
+            RoundEven => x.round_ties_even(),
+            Log2 => x.log2(),
             Real => x,
             Imag => 0.0,
             IsInf => f64::from(u8::from(x.is_infinite())),
@@ -676,6 +757,23 @@ mod tests {
 
     fn close(a: C64, b: C64) -> bool {
         (a.re - b.re).abs() < 1e-12 && (a.im - b.im).abs() < 1e-12
+    }
+
+    /// `round_even` rounds halves to even, as WGSL's `round` does, where
+    /// `round` (UF's) takes them away from zero; and it is a float, of an
+    /// int too, so an iterate past an int's range rounds to itself.
+    #[test]
+    fn round_even_takes_halves_to_even_and_stays_a_float() {
+        use Builtin::*;
+        for (x, even, away) in [(2.5, 2.0, 3.0), (3.5, 4.0, 4.0), (-2.5, -2.0, -3.0), (0.5, 0.0, 1.0), (2.4, 2.0, 2.0), (1e20, 1e20, 1e20)] {
+            assert_eq!(RoundEven.eval_f(x), even, "round_even({x})");
+            assert_eq!(Round.eval_f(x), away, "round({x})");
+        }
+        assert_eq!(RoundEven.eval_c(C64::new(2.5, -3.5)), C64::new(2.0, -4.0));
+        assert_eq!(RoundEven.result_ty(Ty::Int), Ok(Ty::Float));
+        assert_eq!(RoundEven.result_ty(Ty::Float), Ok(Ty::Float));
+        assert_eq!(RoundEven.result_ty(Ty::Complex), Ok(Ty::Complex));
+        assert_eq!(Round.result_ty(Ty::Float), Ok(Ty::Int), "round stays UF's");
     }
 
     #[test]

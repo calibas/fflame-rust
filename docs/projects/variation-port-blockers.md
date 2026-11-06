@@ -73,7 +73,11 @@ haven't built it yet" and could be added with focused work.
 2. **Texture / image / SVG sampling** — variations that read from a
    user-supplied image (bump map, displacement map, color map, SVG
    path raster). Requires an upload path for image bind groups and
-   per-variation texture handles.
+   per-variation texture handles. The read itself exists since
+   2026-11-05: the formula language's `texture`/`texel`, one portable
+   bilinear for every kind (rhai-plugins.md, step 2, *Textures in other
+   kinds*). Left for flames: a binding, a feature, and where a flame's
+   texture comes from -- the user's decision.
 
 3. **~~Mid-iteration accumulator reads~~** — RESOLVED for the
    intra-iteration case (2026-05-04). Variations declare `needs_accum`;
