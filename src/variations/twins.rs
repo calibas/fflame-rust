@@ -78,6 +78,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("cannabiscurve_wf", include_str!("../../assets/variations/twins/cannabiscurve_wf.rhai")),
     ("cardioid", include_str!("../../assets/variations/twins/cardioid.rhai")),
     ("cell", include_str!("../../assets/variations/twins/cell.rhai")),
+    ("checkerboard_wf", include_str!("../../assets/variations/twins/checkerboard_wf.rhai")),
     ("chrysanthemum", include_str!("../../assets/variations/twins/chrysanthemum.rhai")),
     ("chunk", include_str!("../../assets/variations/twins/chunk.rhai")),
     ("circleblur", include_str!("../../assets/variations/twins/circleblur.rhai")),
@@ -90,6 +91,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("clifford_js", include_str!("../../assets/variations/twins/clifford_js.rhai")),
     ("cloverleaf_wf", include_str!("../../assets/variations/twins/cloverleaf_wf.rhai")),
     ("collideoscope", include_str!("../../assets/variations/twins/collideoscope.rhai")),
+    ("colorscale_wf", include_str!("../../assets/variations/twins/colorscale_wf.rhai")),
     ("complex", include_str!("../../assets/variations/twins/complex.rhai")),
     ("cone", include_str!("../../assets/variations/twins/cone.rhai")),
     ("conic", include_str!("../../assets/variations/twins/conic.rhai")),
@@ -124,6 +126,12 @@ pub const TWINS: &[(&str, &str)] = &[
     ("cylinder", include_str!("../../assets/variations/twins/cylinder.rhai")),
     ("cylinder2", include_str!("../../assets/variations/twins/cylinder2.rhai")),
     ("d_spherical", include_str!("../../assets/variations/twins/d_spherical.rhai")),
+    ("dc_bubble", include_str!("../../assets/variations/twins/dc_bubble.rhai")),
+    ("dc_cube", include_str!("../../assets/variations/twins/dc_cube.rhai")),
+    ("dc_cylinder", include_str!("../../assets/variations/twins/dc_cylinder.rhai")),
+    ("dc_cylinder2", include_str!("../../assets/variations/twins/dc_cylinder2.rhai")),
+    ("dc_linear", include_str!("../../assets/variations/twins/dc_linear.rhai")),
+    ("dc_ztransl", include_str!("../../assets/variations/twins/dc_ztransl.rhai")),
     ("deltaA", include_str!("../../assets/variations/twins/deltaA.rhai")),
     ("devil_warp", include_str!("../../assets/variations/twins/devil_warp.rhai")),
     ("diamond", include_str!("../../assets/variations/twins/diamond.rhai")),
@@ -243,6 +251,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("loonie3", include_str!("../../assets/variations/twins/loonie3.rhai")),
     ("loonie_3D", include_str!("../../assets/variations/twins/loonie_3D.rhai")),
     ("loq", include_str!("../../assets/variations/twins/loq.rhai")),
+    ("lorenz_js", include_str!("../../assets/variations/twins/lorenz_js.rhai")),
     ("lozi", include_str!("../../assets/variations/twins/lozi.rhai")),
     ("mask", include_str!("../../assets/variations/twins/mask.rhai")),
     ("matrix3D", include_str!("../../assets/variations/twins/matrix3D.rhai")),
@@ -270,21 +279,26 @@ pub const TWINS: &[(&str, &str)] = &[
     ("panorama1", include_str!("../../assets/variations/twins/panorama1.rhai")),
     ("panorama2", include_str!("../../assets/variations/twins/panorama2.rhai")),
     ("parabola", include_str!("../../assets/variations/twins/parabola.rhai")),
+    ("parplot2d_wf", include_str!("../../assets/variations/twins/parplot2d_wf.rhai")),
     ("pdj", include_str!("../../assets/variations/twins/pdj.rhai")),
     ("perspective", include_str!("../../assets/variations/twins/perspective.rhai")),
     ("petal", include_str!("../../assets/variations/twins/petal.rhai")),
     ("phoenix_julia", include_str!("../../assets/variations/twins/phoenix_julia.rhai")),
     ("pie", include_str!("../../assets/variations/twins/pie.rhai")),
     ("pie3D", include_str!("../../assets/variations/twins/pie3D.rhai")),
+    ("plane_wf", include_str!("../../assets/variations/twins/plane_wf.rhai")),
     ("plusrecip", include_str!("../../assets/variations/twins/plusrecip.rhai")),
     ("poincare3D", include_str!("../../assets/variations/twins/poincare3D.rhai")),
     ("polar", include_str!("../../assets/variations/twins/polar.rhai")),
     ("polar2", include_str!("../../assets/variations/twins/polar2.rhai")),
+    ("polarplot2d_wf", include_str!("../../assets/variations/twins/polarplot2d_wf.rhai")),
+    ("polarplot3d_wf", include_str!("../../assets/variations/twins/polarplot3d_wf.rhai")),
     ("popcorn2", include_str!("../../assets/variations/twins/popcorn2.rhai")),
     ("popcorn2_3D", include_str!("../../assets/variations/twins/popcorn2_3D.rhai")),
     ("post_axis_symmetry_wf", include_str!("../../assets/variations/twins/post_axis_symmetry_wf.rhai")),
     ("post_bwraps", include_str!("../../assets/variations/twins/post_bwraps.rhai")),
     ("post_bwraps2", include_str!("../../assets/variations/twins/post_bwraps2.rhai")),
+    ("post_colorscale_wf", include_str!("../../assets/variations/twins/post_colorscale_wf.rhai")),
     ("post_crop", include_str!("../../assets/variations/twins/post_crop.rhai")),
     ("post_curl", include_str!("../../assets/variations/twins/post_curl.rhai")),
     ("post_curl3D", include_str!("../../assets/variations/twins/post_curl3D.rhai")),
@@ -292,6 +306,8 @@ pub const TWINS: &[(&str, &str)] = &[
     ("post_heat", include_str!("../../assets/variations/twins/post_heat.rhai")),
     ("post_julia3Dq", include_str!("../../assets/variations/twins/post_julia3Dq.rhai")),
     ("post_juliaq", include_str!("../../assets/variations/twins/post_juliaq.rhai")),
+    ("post_mirror_wf", include_str!("../../assets/variations/twins/post_mirror_wf.rhai")),
+    ("post_point_symmetry_wf", include_str!("../../assets/variations/twins/post_point_symmetry_wf.rhai")),
     ("post_rblur", include_str!("../../assets/variations/twins/post_rblur.rhai")),
     ("post_rotate_x", include_str!("../../assets/variations/twins/post_rotate_x.rhai")),
     ("post_rotate_y", include_str!("../../assets/variations/twins/post_rotate_y.rhai")),
@@ -307,6 +323,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("pre_bwraps2", include_str!("../../assets/variations/twins/pre_bwraps2.rhai")),
     ("pre_crop", include_str!("../../assets/variations/twins/pre_crop.rhai")),
     ("pre_curl", include_str!("../../assets/variations/twins/pre_curl.rhai")),
+    ("pre_dcztransl", include_str!("../../assets/variations/twins/pre_dcztransl.rhai")),
     ("pre_disc", include_str!("../../assets/variations/twins/pre_disc.rhai")),
     ("pre_disc3d", include_str!("../../assets/variations/twins/pre_disc3d.rhai")),
     ("pre_falloff2", include_str!("../../assets/variations/twins/pre_falloff2.rhai")),
@@ -368,6 +385,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("spiral", include_str!("../../assets/variations/twins/spiral.rhai")),
     ("spiralwing", include_str!("../../assets/variations/twins/spiralwing.rhai")),
     ("spirograph", include_str!("../../assets/variations/twins/spirograph.rhai")),
+    ("spirograph3D", include_str!("../../assets/variations/twins/spirograph3D.rhai")),
     ("spligon", include_str!("../../assets/variations/twins/spligon.rhai")),
     ("spliptic_bs", include_str!("../../assets/variations/twins/spliptic_bs.rhai")),
     ("split", include_str!("../../assets/variations/twins/split.rhai")),
@@ -389,11 +407,13 @@ pub const TWINS: &[(&str, &str)] = &[
     ("stripes", include_str!("../../assets/variations/twins/stripes.rhai")),
     ("stripfit", include_str!("../../assets/variations/twins/stripfit.rhai")),
     ("stwin", include_str!("../../assets/variations/twins/stwin.rhai")),
+    ("sunflower", include_str!("../../assets/variations/twins/sunflower.rhai")),
     ("superShape3d", include_str!("../../assets/variations/twins/superShape3d.rhai")),
     ("super_shape", include_str!("../../assets/variations/twins/super_shape.rhai")),
     ("svf", include_str!("../../assets/variations/twins/svf.rhai")),
     ("swirl", include_str!("../../assets/variations/twins/swirl.rhai")),
     ("swirl3", include_str!("../../assets/variations/twins/swirl3.rhai")),
+    ("swirl3D_wf", include_str!("../../assets/variations/twins/swirl3D_wf.rhai")),
     ("sym_bg1", include_str!("../../assets/variations/twins/sym_bg1.rhai")),
     ("sym_bg2", include_str!("../../assets/variations/twins/sym_bg2.rhai")),
     ("sym_bg3", include_str!("../../assets/variations/twins/sym_bg3.rhai")),
@@ -444,6 +464,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("vogel", include_str!("../../assets/variations/twins/vogel.rhai")),
     ("waffle", include_str!("../../assets/variations/twins/waffle.rhai")),
     ("wallpaper_js", include_str!("../../assets/variations/twins/wallpaper_js.rhai")),
+    ("waveblur_wf", include_str!("../../assets/variations/twins/waveblur_wf.rhai")),
     ("waves2", include_str!("../../assets/variations/twins/waves2.rhai")),
     ("waves2_3D", include_str!("../../assets/variations/twins/waves2_3D.rhai")),
     ("waves2_radial", include_str!("../../assets/variations/twins/waves2_radial.rhai")),
@@ -461,6 +482,8 @@ pub const TWINS: &[(&str, &str)] = &[
     ("xheart_blur_wf", include_str!("../../assets/variations/twins/xheart_blur_wf.rhai")),
     ("xtrb", include_str!("../../assets/variations/twins/xtrb.rhai")),
     ("yin_yang", include_str!("../../assets/variations/twins/yin_yang.rhai")),
+    ("yplot2d_wf", include_str!("../../assets/variations/twins/yplot2d_wf.rhai")),
+    ("yplot3d_wf", include_str!("../../assets/variations/twins/yplot3d_wf.rhai")),
     ("zblur", include_str!("../../assets/variations/twins/zblur.rhai")),
     ("zcone", include_str!("../../assets/variations/twins/zcone.rhai")),
     ("zscale", include_str!("../../assets/variations/twins/zscale.rhai")),
@@ -946,18 +969,24 @@ mod tests {
             use crate::lang::builtins::C64;
             use crate::lang::interp::VariationRun;
             let (x, y, z) = (p[0], p[1], p[2]);
+            // The colour from the probe's 0.5 (`main_template.wgsl`), which a
+            // twin that writes none leaves.
+            const PROBE_COLOR: f64 = 0.5;
+            fn run<'a>(p: &'a crate::lang::ir::Program, values: &'a crate::lang::interp::ParamValues) -> VariationRun<'a> {
+                VariationRun::new(p, values, 1).with_color(PROBE_COLOR)
+            }
             if !self.render_3d {
-                let w = VariationRun::new(&self.two, values, 1).call(C64::new(x, y), C64::ZERO, 1.0).0;
-                return [w.re, w.im, 0.0, f64::NAN];
+                let (w, c) = run(&self.two, values).call(C64::new(x, y), C64::ZERO, 1.0);
+                return [w.re, w.im, 0.0, c.unwrap_or(PROBE_COLOR)];
             }
             match &self.three {
                 Some(p3) => {
-                    let v = VariationRun::new(p3, values, 1).call3([x, y, z], [0.0; 3], 1.0).0;
-                    [v[0], v[1], v[2], f64::NAN]
+                    let (v, c) = run(p3, values).call3([x, y, z], [0.0; 3], 1.0);
+                    [v[0], v[1], v[2], c.unwrap_or(PROBE_COLOR)]
                 }
                 None => {
-                    let w = VariationRun::new(&self.two, values, 1).call(C64::new(x, y), C64::ZERO, 1.0).0;
-                    [w.re, w.im, z, f64::NAN]
+                    let (w, c) = run(&self.two, values).call(C64::new(x, y), C64::ZERO, 1.0);
+                    [w.re, w.im, z, c.unwrap_or(PROBE_COLOR)]
                 }
             }
         }
@@ -1145,6 +1174,12 @@ mod tests {
     /// two linear shrinks keeping it bounded; a twin's flame carries its
     /// source, which nothing registers but the renderer.
     fn flame_with(variation: &str, carries: Option<CustomSource>) -> crate::config::FractalConfig {
+        flame_coloured(variation, carries, 0.0)
+    }
+
+    /// [`flame_with`], the variation's transform blending in the colour it
+    /// writes by `direct` (`Transform::direct_color`).
+    fn flame_coloured(variation: &str, carries: Option<CustomSource>, direct: f32) -> crate::config::FractalConfig {
         use crate::scene::transforms::{RenderMode, Transform};
         let mut cfg = crate::config::FractalConfig::default();
         cfg.render_mode = RenderMode::TwoD;
@@ -1160,6 +1195,9 @@ mod tests {
             t.variations.clear();
             t.variation_order.clear();
             t.set_variation(v, 1.0);
+            if i == 0 {
+                t.direct_color = direct;
+            }
             cfg.flame.transforms.push(t);
         }
         cfg.flame.custom_variations = carries.into_iter().collect();
@@ -1187,9 +1225,24 @@ mod tests {
         const OTHER_NOISE: &[&str] = &["r_circleblur"];
         let mut failures = Vec::new();
         let mut renders = Vec::new();
+        // A twin that writes a colour is held to its built-in's colour too:
+        // its transform blends it in whole, and each channel's light (colour
+        // times density) compares as density does.
+        let writes_colour = |name: &str| super::super::global_registry().get(name).is_some_and(|v| v.has_feature(super::super::Feature::WritesColor));
+        let off = |c: &crate::renderer::density_gates::Compared| c.worst_dense > 0.05 || c.worst_middle > 0.15;
         for (name, _) in TWINS {
-            let reference = render_blocks(&device, &queue, &flame_with(name, None), N, &run);
-            let twin = render_blocks(&device, &queue, &flame_with(&key(name).unwrap(), Some(super::carried(name).unwrap())), N, &run);
+            let direct = if writes_colour(name) { 1.0 } else { 0.0 };
+            let reference = render_blocks(&device, &queue, &flame_coloured(name, None, direct), N, &run);
+            let twin = render_blocks(&device, &queue, &flame_coloured(&key(name).unwrap(), Some(super::carried(name).unwrap()), direct), N, &run);
+            if direct > 0.0 {
+                for ch in 0..3 {
+                    let c = compare_blocks(&twin.light[ch], &reference.light[ch], &reference.density);
+                    if off(&c) {
+                        print_compared(&format!("{name}'s twin against {name}, channel {ch}'s light"), &c);
+                        failures.push(format!("{name}'s twin: its colour, channel {ch}: a block is {:.3} off (dense), {:.3} (middle)", c.worst_dense, c.worst_middle));
+                    }
+                }
+            }
             let c = compare_blocks(&twin.density, &reference.density, &reference.density);
             let (_, _, mx, _, my, _, z) = c.pooled[0];
             if mx <= 0.0 {
@@ -1203,7 +1256,7 @@ mod tests {
             if z.abs() > 4.0 && (mx / my - 1.0).abs() > 0.005 {
                 failures.push(format!("{name}'s twin: the whole view's density is {:.4} of the built-in's", mx / my));
             }
-            if c.worst_dense > 0.05 || c.worst_middle > 0.15 {
+            if off(&c) {
                 failures.push(format!("{name}'s twin: a block is {:.3} off (dense), {:.3} (middle)", c.worst_dense, c.worst_middle));
             }
             if ["julia", "exp"].contains(name) {
@@ -1216,6 +1269,13 @@ mod tests {
             if c.worst_dense < 0.2 {
                 failures.push(format!("{} and {} look alike to this measure: {:.3}", a.0, b.0, c.worst_dense));
             }
+        }
+        // And the light tells a colour written from none: dc_linear's,
+        // blended in and not.
+        let (on, none) = (render_blocks(&device, &queue, &flame_coloured("dc_linear", None, 1.0), N, &run), render_blocks(&device, &queue, &flame_coloured("dc_linear", None, 0.0), N, &run));
+        let c = compare_blocks(&on.light[0], &none.light[0], &none.density);
+        if !off(&c) {
+            failures.push(format!("dc_linear's colour, blended in and not, looks alike to this measure: {:.3}", c.worst_dense));
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }

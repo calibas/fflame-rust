@@ -3847,7 +3847,10 @@ impl<'s> Lowerer<'s> {
                     Base::Ctx if self.transform => match name {
                         "accum" => Ok(mk(ExprKind::Predef("accum".into()), span)),
                         "weight" => Ok(mk(ExprKind::Predef("weight".into()), span)),
-                        o => self.err(*p, format!("a variation's context has `accum` and `weight`; not `{o}`")),
+                        // The colour coordinate as it reaches the variation
+                        // (JWildfire's `pVarTP.color`), before any it writes.
+                        "color" => Ok(mk(ExprKind::Predef("vcolor".into()), span)),
+                        o => self.err(*p, format!("a variation's context has `accum`, `weight` and `color`; not `{o}`")),
                     },
                     Base::Ctx => match name {
                         // `ismand` is 1 on the parameter plane.
@@ -4311,8 +4314,10 @@ impl<'s> Lowerer<'s> {
         // Its context inside a formula: no earlier variations, weight 1.
         if let Some(cp) = def.params.get(2) {
             let zero = mk(ExprKind::Complex(Box::new(mk(ExprKind::Float(0.0), span)), Box::new(mk(ExprKind::Float(0.0), span))), span);
-            let ctx: HashMap<String, ast::Expr> = [("accum".to_string(), zero), ("weight".to_string(), mk(ExprKind::Float(1.0), span))].into_iter().collect();
-            inner.bind(cp, Binding::ParamMap(ctx, "in a variation's context (`accum`, `weight`)"));
+            // A formula has no colour coordinate: a variation reads 0 there.
+            let ctx: HashMap<String, ast::Expr> =
+                [("accum".to_string(), zero), ("weight".to_string(), mk(ExprKind::Float(1.0), span)), ("color".to_string(), mk(ExprKind::Float(0.0), span))].into_iter().collect();
+            inner.bind(cp, Binding::ParamMap(ctx, "in a variation's context (`accum`, `weight`, `color`)"));
         }
         let fns = std::mem::replace(&mut self.fns, fns);
         let pos = std::mem::replace(&mut self.pos, Positions::fixed(span));

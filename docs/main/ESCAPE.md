@@ -701,7 +701,9 @@ fn escaped(s, p) {
   - `rand()`, a draw in [0, 1) (`NeedsRng`, the flame's stream);
   - `fn variation(z, p, ctx)`: `ctx.accum`, the weighted sum of the
     transform's earlier variations (JWildfire's `pVarTP`;
-    `NeedsAccum`), and `ctx.weight`, its own weight;
+    `NeedsAccum`), `ctx.weight`, its own weight, and `ctx.color`, the
+    colour coordinate as it reaches the variation (`pVarTP.color`;
+    `WritesColor`, as the colour pointer it reads; 0 inside a formula);
   - state per thread: `fn init(p)` returns the map each thread starts
     with (its parameters may seed it), and the body reads and sets its
     fields as `this.name` -- Rhai's own way for a function called on an

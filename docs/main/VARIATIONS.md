@@ -571,14 +571,15 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 444 of the 647, each a Rhai variation under its
+  P7 step 3): 467 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
   (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
-  `INFO.z`). Seven written by hand, 437 translated from the built-ins'
+  `INFO.z`). Seven written by hand, 460 translated from the built-ins'
   WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
-  reads them)
+  reads them; its colour pointer a local from `ctx.color`, returned as
+  `#{ z, color }`)
   (`scripts/translate_variation_twins.py`, into the skeletons
   `twins::skeleton` writes; `scripts/list_variation_twins.py` writes
   the table).
@@ -602,6 +603,9 @@ function takes the point, and the ids when it has parameters (as
     range-reduced where the built-ins' is the hardware's: the twin is
     the portable side.
   - **In a flame, by density** (`every_variation_twin_draws_its_builtins_flame`),
+    and by colour for a twin that writes one -- its transform blending
+    it in whole, each channel's light (colour times density) held as
+    density is; dc_linear's colour blended in and not is the control --
     which judges the twins that draw (no f64 truth matches the GPU's
     stream). r_circleblur's cells are placed by a `sin(...) * 43758.5453`
     hash, which the range-reduced sin hashes otherwise: its twin draws

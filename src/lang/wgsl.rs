@@ -596,7 +596,8 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
         accum: p.reads(Predef::Accum) || p.reads(Predef::AccumZ),
         ids: !p.params.is_empty() || !state.is_empty() || !p.globals.is_empty() || p.reads(Predef::Weight),
         rng: p.reads(Predef::Draw),
-        color: writes_color(&p.transform),
+        // Its colour pointer, to write it or to read it (`ctx.color`).
+        color: writes_color(&p.transform) || p.reads(Predef::VarColor),
         state,
         state_slots: slots,
     })
