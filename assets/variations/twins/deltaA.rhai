@@ -13,8 +13,8 @@ const INFO = #{ title: "Delta A", name: "rhai_deltaa", category: "advanced_2d", 
 fn variation(z, p, ctx) {
     let w = ctx.weight;
     let inv_w = 1.0 / (if abs(w) < 1.0e-30 { 1.0e-30 } else { w });
-    let denom = sqrt(max(z.im * z.im + (z.re - 1.0) * (z.re - 1.0), 1.0e-30));
-    let num = sqrt(max(z.im * z.im + (z.re + 1.0) * (z.re + 1.0), 1.0e-30));
+    let denom = sqrt(max(1.0e-30, z.im * z.im + (z.re - 1.0) * (z.re - 1.0)));
+    let num = sqrt(max(1.0e-30, z.im * z.im + (z.re + 1.0) * (z.re + 1.0)));
     let avgr = w * (num / denom);
     let avga = (atan2(z.im, z.re - 1.0) - atan2(z.im, z.re + 1.0)) * 0.5;
     complex(avgr * cos(avga) * inv_w, avgr * sin(avga) * inv_w)

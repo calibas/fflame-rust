@@ -47,10 +47,10 @@ fn variation(z, p) {
     let holes = p.holes;
     let pi_4 = 0.7853981633974483;
     let theta = m * 0.25 * atan2(z.re, z.im) + pi_4;
-    let t1 = pow(max(abs(cos(theta)), 1.0e-30), n2);
-    let t2 = pow(max(abs(sin(theta)), 1.0e-30), n3);
+    let t1 = pow(max(1.0e-30, abs(cos(theta))), n2);
+    let t2 = pow(max(1.0e-30, abs(sin(theta))), n3);
     let len = sqrt(z.re * z.re + z.im * z.im) + 1.0e-6;
     let safe_n1 = (if n1 == 0.0 { 1.0e-30 } else { n1 });
-    let r = ((rnd * rand() + (1.0 - rnd) * len) - holes) * pow(max(t1 + t2, 1.0e-30), -1.0 / safe_n1) / len;
+    let r = ((rnd * rand() + (1.0 - rnd) * len) - holes) * pow(max(1.0e-30, t1 + t2), -1.0 / safe_n1) / len;
     complex(r * z.re, r * z.im)
 }

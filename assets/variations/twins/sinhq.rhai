@@ -8,7 +8,7 @@
 const INFO = #{ title: "Sinhq", name: "rhai_sinhq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
-    let v = max(abs(z.im), 1.0e-20);
+    let v = max(1.0e-20, abs(z.im));
     let s = sin(v);
     let c = cos(v);
     let sh = sinh(z.re);
@@ -18,7 +18,7 @@ fn variation(z, p) {
 }
 
 fn variation3(q, p) {
-    let v = max(sqrt(q.y * q.y + q.z * q.z), 1.0e-20);
+    let v = max(1.0e-20, sqrt(q.y * q.y + q.z * q.z));
     let s = sin(v);
     let c = cos(v);
     let sh = sinh(q.x);

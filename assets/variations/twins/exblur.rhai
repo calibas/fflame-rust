@@ -48,7 +48,7 @@ fn variation(z, p) {
     let two_pi = 6.28318530717959;
     let ox = z.re - x_origin;
     let oy = z.im + y_origin;
-    let n = max(ox * ox + oy * oy, 1.0e-30);
+    let n = max(1.0e-30, ox * ox + oy * oy);
     let gauss = rand() + rand() + rand() + rand() - 2.0;
     let rr = pow(n, dist) * gauss;
     let theta = atan2(oy, ox);
@@ -75,7 +75,7 @@ fn variation3(v, p) {
     let ox = v.x - x_origin;
     let oy = v.y + y_origin;
     let oz = v.z - z_origin;
-    let n = max(ox * ox + oy * oy + oz * oz, 1.0e-30);
+    let n = max(1.0e-30, ox * ox + oy * oy + oz * oz);
     let gauss = rand() + rand() + rand() + rand() - 2.0;
     let rr = pow(n, dist) * gauss;
     let theta = atan2(oy, ox);

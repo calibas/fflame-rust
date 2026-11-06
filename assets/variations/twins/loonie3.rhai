@@ -18,7 +18,7 @@ fn variation(z, p, ctx) {
         r2 = s * s;
     }
     if (r2 < sqrvvar) {
-        let scale = sqrt(max(sqrvvar / max(r2, 1.0e-30) - 1.0, 0.0));
+        let scale = sqrt(max(0.0, sqrvvar / max(1.0e-30, r2) - 1.0));
         return complex(scale * z.re, scale * z.im);
     }
     z

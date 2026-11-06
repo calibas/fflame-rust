@@ -24,14 +24,14 @@ const PARAMS = #{
 const INFO = #{ title: "BCollide", name: "rhai_bcollide", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
-    let num = max(to_float(p.num), 1.0);
+    let num = max(1.0, to_float(p.num));
     let a = p.a;
     let pi = 3.14159265358979;
     let inv_pi = 0.3183098861837907;
     let pi_n = pi / num;
     let a_n = pi * a / num;
     let n_invpi = num * inv_pi;
-    let tau = 0.5 * (ln(max((z.re + 1.0) * (z.re + 1.0) + z.im * z.im, 1.0e-30)) - ln(max((z.re - 1.0) * (z.re - 1.0) + z.im * z.im, 1.0e-30)));
+    let tau = 0.5 * (ln(max(1.0e-30, (z.re + 1.0) * (z.re + 1.0) + z.im * z.im)) - ln(max(1.0e-30, (z.re - 1.0) * (z.re - 1.0) + z.im * z.im)));
     let sigma = pi - atan2(z.im, z.re + 1.0) - atan2(z.im, 1.0 - z.re);
     let alt = to_float(floor(sigma * n_invpi));
     if (to_int(alt) % 2 == 0) {

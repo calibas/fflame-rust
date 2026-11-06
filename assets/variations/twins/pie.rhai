@@ -30,7 +30,7 @@ const INFO = #{ title: "Pie", name: "rhai_pie", category: "advanced_2d", phase: 
 
 fn variation(z, p) {
     let two_pi = 6.28318530717959;
-    let slices = max(p.slices, 1.0);
+    let slices = max(1.0, p.slices);
     let rotation = p.rotation;
     let thickness = p.thickness;
     let sl = to_float(floor(rand() * slices + 0.5));

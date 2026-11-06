@@ -39,7 +39,7 @@ fn variation(z, p, ctx) {
     let py = p.py;
     let w = ctx.weight;
     let inv_w = 1.0 / (if abs(w) < 1.0e-30 { 1.0e-30 } else { w });
-    let b = w / max(0.25 * (z.re * z.re + z.im * z.im) + 1.0, 1.0e-30);
+    let b = w / max(1.0e-30, 0.25 * (z.re * z.re + z.im * z.im) + 1.0);
     let fpx = z.re * b;
     let fpy = z.im * b;
     let round_x = round_even(z.re);

@@ -29,10 +29,10 @@ fn variation(z, p, ctx) {
     let w = ctx.weight;
     let inv_w = 1.0 / (if abs(w) < 1.0e-30 { 1.0e-30 } else { w });
     let scale = 1.0 - shift * shift;
-    let rad1 = 1.0 / max(z.re * z.re + z.im * z.im, 1.0e-30);
+    let rad1 = 1.0 / max(1.0e-30, z.re * z.re + z.im * z.im);
     let x1 = rad1 * z.re + shift;
     let y1 = rad1 * z.im;
-    let rad2 = w * scale / max(x1 * x1 + y1 * y1, 1.0e-30);
+    let rad2 = w * scale / max(1.0e-30, x1 * x1 + y1 * y1);
     let fx = rad2 * x1 + shift;
     let fy = rad2 * y1 * stretch;
     complex(fx * inv_w, fy * inv_w)

@@ -18,7 +18,7 @@ const PARAMS = #{
 const INFO = #{ title: "Cell", name: "rhai_cell", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
-    let size = max(p.size, 1.0e-6);
+    let size = max(1.0e-6, p.size);
     let inv_cell_size = 1.0 / size;
     let x_i = to_float(floor(z.re * inv_cell_size));
     let y_i = to_float(floor(z.im * inv_cell_size));

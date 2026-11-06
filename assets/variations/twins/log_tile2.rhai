@@ -32,8 +32,8 @@ fn variation(z, p) {
     let sy = p.spready;
     let spreadx = (if rand() < 0.5 { sx } else { -sx });
     let spready = (if rand() < 0.5 { sy } else { -sy });
-    let lx = round_even(ln(max(rand(), 1.0e-30)));
-    let ly = round_even(ln(max(rand(), 1.0e-30)));
+    let lx = round_even(ln(max(1.0e-30, rand())));
+    let ly = round_even(ln(max(1.0e-30, rand())));
     complex(z.re + spreadx * lx, z.im + spready * ly)
 }
 
@@ -44,8 +44,8 @@ fn variation3(v, p) {
     let spreadx = (if rand() < 0.5 { sx } else { -sx });
     let spready = (if rand() < 0.5 { sy } else { -sy });
     let spreadz = (if rand() < 0.5 { sz } else { -sz });
-    let lx = round_even(ln(max(rand(), 1.0e-30)));
-    let ly = round_even(ln(max(rand(), 1.0e-30)));
-    let lz = round_even(ln(max(rand(), 1.0e-30)));
+    let lx = round_even(ln(max(1.0e-30, rand())));
+    let ly = round_even(ln(max(1.0e-30, rand())));
+    let lz = round_even(ln(max(1.0e-30, rand())));
     vec3(v.x + spreadx * lx, v.y + spready * ly, v.z + spreadz * lz)
 }

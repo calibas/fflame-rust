@@ -42,13 +42,13 @@ fn variation(z, p, ctx) {
     let tmp = z.re * z.re + z.im * z.im + 1.0;
     let x2 = 2.0 * z.re;
     let y2 = 2.0 * z.im;
-    let xmax = 0.5 * (sqrt(max(tmp + x2, 0.0)) + sqrt(max(tmp - x2, 0.0)));
-    let ymax = 0.5 * (sqrt(max(tmp + y2, 0.0)) + sqrt(max(tmp - y2, 0.0)));
-    let ax_n = z.re / max(xmax, 1.0e-30);
-    let bx = sqrt(max(1.0 - ax_n * ax_n, 0.0));
+    let xmax = 0.5 * (sqrt(max(0.0, tmp + x2)) + sqrt(max(0.0, tmp - x2)));
+    let ymax = 0.5 * (sqrt(max(0.0, tmp + y2)) + sqrt(max(0.0, tmp - y2)));
+    let ax_n = z.re / max(1.0e-30, xmax);
+    let bx = sqrt(max(0.0, 1.0 - ax_n * ax_n));
     let out_x = v_in * atan2(ax_n, bx) * r * px;
-    let ay_n = z.im / max(ymax, 1.0e-30);
-    let by = sqrt(max(1.0 - ay_n * ay_n, 0.0));
+    let ay_n = z.im / max(1.0e-30, ymax);
+    let by = sqrt(max(0.0, 1.0 - ay_n * ay_n));
     let out_y = v_in * atan2(ay_n, by) * r * py;
     complex(out_x * inv_w, out_y * inv_w)
 }

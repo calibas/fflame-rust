@@ -1497,8 +1497,19 @@ impl<'s> Lowerer<'s> {
                         )
                     }
                 },
+                // JWildfire's z rule (`Feature::AlwaysZ`, `NeverZ`):
+                // `variations::custom` reads it apart.
+                "z" if self.transform => match v {
+                    Expr::StringConstant(s, _) if matches!(s.as_str(), "always" | "preserve_z" | "never") => {}
+                    _ => {
+                        return self.err(
+                            *p,
+                            "`z` is \"always\" (the z it returns is kept), \"preserve_z\" (kept when the flame preserves z, else zero) or \"never\" (zero)",
+                        )
+                    }
+                },
                 o if self.transform => {
-                    return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name`, `resets_orbits`, `phase` and `category`, not `{o}`"))
+                    return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name`, `resets_orbits`, `phase`, `category` and `z`, not `{o}`"))
                 }
                 // An effect's identity (design rule 7: a UUID, or a
                 // built-in's name) and its place in the pipeline, read

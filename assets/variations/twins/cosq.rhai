@@ -9,7 +9,7 @@
 const INFO = #{ title: "Cosq", name: "rhai_cosq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
-    let v = max(abs(z.im), 1.0e-20);
+    let v = max(1.0e-20, abs(z.im));
     let s = sin(z.re);
     let c = cos(z.re);
     let sh = sinh(v);
@@ -19,7 +19,7 @@ fn variation(z, p) {
 }
 
 fn variation3(q, p) {
-    let v = max(sqrt(q.y * q.y + q.z * q.z), 1.0e-20);
+    let v = max(1.0e-20, sqrt(q.y * q.y + q.z * q.z));
     let s = sin(q.x);
     let c = cos(q.x);
     let sh = sinh(v);

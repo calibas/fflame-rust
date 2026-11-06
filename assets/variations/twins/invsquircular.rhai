@@ -14,8 +14,8 @@ fn variation(z, p, ctx) {
     let v = z.im;
     let r0 = u * u + v * v;
     let inner = r0 * (safe_w * safe_w * r0 - 4.0 * u * u * v * v) / safe_w;
-    let r2 = sqrt(max(inner, 0.0));
-    let r = sqrt(max(r0 - r2, 0.0)) * 0.7071067811865476;
+    let r2 = sqrt(max(0.0, inner));
+    let r = sqrt(max(0.0, r0 - r2)) * 0.7071067811865476;
     let safe_u = (if abs(u) < 1.0e-30 { 1.0e-30 } else { u });
     let safe_v = (if abs(v) < 1.0e-30 { 1.0e-30 } else { v });
     complex(r / safe_u * inv_w, r / safe_v * inv_w)

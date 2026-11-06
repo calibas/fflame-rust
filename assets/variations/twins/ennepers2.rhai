@@ -30,7 +30,7 @@ fn variation(z, p) {
     let a = p.a;
     let b = p.b;
     let c = p.c;
-    let r2 = 1.0 / max(z.re * z.re + z.im * z.im, 1.0e-30);
+    let r2 = 1.0 / max(1.0e-30, z.re * z.re + z.im * z.im);
     let ax = a * z.re;
     let by = b * z.im;
     let dxy = ax * ax - by * by;
@@ -41,7 +41,7 @@ fn variation3(v, p) {
     let a = p.a;
     let b = p.b;
     let c = p.c;
-    let r2 = 1.0 / max(v.x * v.x + v.y * v.y, 1.0e-30);
+    let r2 = 1.0 / max(1.0e-30, v.x * v.x + v.y * v.y);
     let ax = a * v.x;
     let by = b * v.y;
     let dxy = ax * ax - by * by;

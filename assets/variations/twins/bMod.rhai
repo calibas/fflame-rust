@@ -27,7 +27,7 @@ fn variation(z, p) {
     let radius = p.radius;
     let distance = p.distance;
     let pi = 3.14159265358979;
-    let tau = 0.5 * (ln(max((z.re + 1.0) * (z.re + 1.0) + z.im * z.im, 1.0e-30)) - ln(max((z.re - 1.0) * (z.re - 1.0) + z.im * z.im, 1.0e-30)));
+    let tau = 0.5 * (ln(max(1.0e-30, (z.re + 1.0) * (z.re + 1.0) + z.im * z.im)) - ln(max(1.0e-30, (z.re - 1.0) * (z.re - 1.0) + z.im * z.im)));
     let sigma = pi - atan2(z.im, z.re + 1.0) - atan2(z.im, 1.0 - z.re);
     if (tau < radius && -tau < radius) {
         let two_r = 2.0 * radius;

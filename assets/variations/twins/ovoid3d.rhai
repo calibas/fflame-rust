@@ -29,7 +29,7 @@ const INFO = #{ title: "Ovoid 3D", name: "rhai_ovoid3d", category: "full_3d", ph
 fn variation(z, p) {
     let x_scale = p.x;
     let y_scale = p.y;
-    let t = max(z.re * z.re + z.im * z.im, 1.0e-30);
+    let t = max(1.0e-30, z.re * z.re + z.im * z.im);
     let r = 1.0 / t;
     complex(z.re * r * x_scale, z.im * r * y_scale)
 }
@@ -38,7 +38,7 @@ fn variation3(v, p) {
     let x_scale = p.x;
     let y_scale = p.y;
     let z_scale = p.z;
-    let t = max(v.x * v.x + v.y * v.y + v.z * v.z, 1.0e-30);
+    let t = max(1.0e-30, v.x * v.x + v.y * v.y + v.z * v.z);
     let r = 1.0 / t;
     vec3(v.x * r * x_scale, v.y * r * y_scale, v.z * r * z_scale)
 }

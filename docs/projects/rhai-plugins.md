@@ -839,7 +839,7 @@ needs the census did not, the int step and `ctx.layer`):
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
 | Simulation colourings | 13 | all 13 | yes, the simulation panel (2026-11-03) |
-| Flame variations | 647 | 298 (`variations::twins`, branch `rhai-variation-hooks`; plan in step 3), besides the 10 test fixtures | yes, a transform's variation (2026-11-05) |
+| Flame variations | 647 | 357 (`variations::twins`, branch `rhai-variation-hooks`; plan in step 3), besides the 10 test fixtures | yes, a transform's variation (2026-11-05) |
 
 Steps, in the order that unlocks the most first (the user picks):
 
@@ -1155,6 +1155,18 @@ Steps, in the order that unlocks the most first (the user picks):
      unedited twin keeps the deep-zoom planner's data and exports in a
      `.flame` as its built-in (VARIATIONS.md, *Twins*). Still the
      def's: its aliases.
+   - **V3. The hooks, each followed by the twins it unlocks**, as built:
+     **the phase** (`INFO.phase` pre or post: the translator's refusal
+     lifted, 27 twins) and **the z rule** (`INFO.z`: `always`,
+     `preserve_z`, `never`, as `AlwaysZ` and `NeverZ`; 45 twins are
+     `preserve_z`), 2026-11-05: 59 more, 357 in all, 4102 pairs, 0
+     apart. On the way: the translator writes a literal first in `min`
+     and `max`, where Rhai's keeps a NaN first operand and WGSL's does
+     not (`arcsinh` at 1e30). Left, by count: derived parameters (103),
+     a colour written (56), replace (47), an RGB (20), hide (10), the
+     Möbius library (9), w (8), bit operations (6), state (5), the
+     coefficients (4), hex literals, `u32`, arrays (3 each), the rest
+     one or two.
    - **V3. The hooks, each followed by the twins it unlocks**:
      derived parameters (`fn prepare(p)` lowered to the def's init
      setup, 134); the z rule, the phase and replace as `INFO` keys (61,

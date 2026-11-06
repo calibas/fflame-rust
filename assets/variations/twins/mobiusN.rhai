@@ -87,7 +87,7 @@ fn variation(z, p) {
     let imag_u = re_a * y1 + im_a * x1 + im_b;
     let real_v = re_c * x1 - im_c * y1 + re_d;
     let imag_v = re_c * y1 + im_c * x1 + im_d;
-    let rad_v = max(real_v * real_v + imag_v * imag_v, 1.0e-30);
+    let rad_v = max(1.0e-30, real_v * real_v + imag_v * imag_v);
     let x2 = (real_u * real_v + imag_u * imag_v) / rad_v;
     let y2 = (imag_u * real_v - real_u * imag_v) / rad_v;
     let z_inv = 1.0 / z_exp;

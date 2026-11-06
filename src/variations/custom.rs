@@ -130,6 +130,17 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
     if lang::rhai::info_bool(source, "resets_orbits") == Some(true) {
         features.push("resets_orbits");
     }
+    // JWildfire's z rule, `INFO.z`: by default a 3D body's z is always kept
+    // and a 2D body's passed-through z only when the flame preserves z
+    // (`shader_builder_v2::zeroes_z`).
+    if let Some(z) = lang::rhai::info_string(source, "z") {
+        features.retain(|f| *f != "always_z" && *f != "never_z");
+        match z.as_str() {
+            "always" => features.push("always_z"),
+            "never" => features.push("never_z"),
+            _ => {}
+        }
+    }
     // Where the pickers group it, `INFO.category`; a 3D function alone is a
     // 3D variation only.
     let category = match lang::rhai::info_string(source, "category") {
@@ -984,6 +995,26 @@ mod tests {
                                  fn step(s, p) { s.z = vary(\"rhai_spherical3d\", s.z); s }\nfn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n")
         });
         assert!(e.is_err_and(|d| d[0].message.contains("3D variation only")));
+    }
+
+    /// `INFO.z` is JWildfire's z rule, as the built-ins' features: by
+    /// default a 3D body's z is always kept and a 2D body's only when the
+    /// flame preserves z; `always`, `preserve_z` and `never` say so of
+    /// either, and anything else is refused.
+    #[test]
+    fn info_z_is_the_z_rule() {
+        let src = |z: &str, three: bool| {
+            let info = if z.is_empty() { String::new() } else { format!(", z: \"{z}\"") };
+            let body = if three { "fn variation3(v, p) { v * 0.5 }" } else { "fn variation(z, p) { z * 0.5 }" };
+            format!("const INFO = #{{ name: \"rhai_z_rule_test\"{info} }};\n{body}\n")
+        };
+        let z_of = |z: &str, three: bool| named(&src(z, three)).features.into_iter().filter(|f| f.ends_with("_z")).collect::<Vec<_>>();
+        assert_eq!(z_of("", true), ["always_z"]);
+        assert!(z_of("", false).is_empty());
+        assert!(z_of("preserve_z", true).is_empty());
+        assert_eq!(z_of("always", false), ["always_z"]);
+        assert_eq!(z_of("never", true), ["never_z"]);
+        assert!(compile(&src("sometimes", true)).is_err_and(|e| e.contains("`z` is")), "refused");
     }
 
     /// The 3D twins run as the built-ins' formulas, and a hooked 3D

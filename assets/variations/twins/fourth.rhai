@@ -52,7 +52,7 @@ fn variation(z, p, ctx) {
     let fy = 0.0;
     if (z.re > 0.0 && z.im > 0.0) {
         let r2 = z.re * z.re + z.im * z.im;
-        let safe_r2 = max(r2, 1.0e-30);
+        let safe_r2 = max(1.0e-30, r2);
         let a = atan2(z.im, z.re);
         let inv_r = 1.0 / sqrt(safe_r2);
         fx = w * inv_r * cos(a);
@@ -60,7 +60,7 @@ fn variation(z, p, ctx) {
     } else if (z.re > 0.0 && z.im < 0.0) {
         let r2 = z.re * z.re + z.im * z.im;
         if (r2 < sqrvvar) {
-            let r = w * sqrt(max(sqrvvar / max(r2, 1.0e-30) - 1.0, 0.0));
+            let r = w * sqrt(max(0.0, sqrvvar / max(1.0e-30, r2) - 1.0));
             fx = r * z.re;
             fy = r * z.im;
         } else {
@@ -77,7 +77,7 @@ fn variation(z, p, ctx) {
             fx = r2 * cos(a) + x_p;
             fy = r2 * sin(a) - y_p;
         } else {
-            let r2 = w * (1.0 + space / max(r, 1.0e-30));
+            let r2 = w * (1.0 + space / max(1.0e-30, r));
             fx = r2 * xs + x_p;
             fy = r2 * ys - y_p;
         }

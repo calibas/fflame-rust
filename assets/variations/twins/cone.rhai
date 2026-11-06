@@ -69,7 +69,7 @@ fn variation(z, p) {
     let warp = p.warp;
     let weight = p.weight;
     let pi = 3.14159265358979;
-    let denom = sqrt(max(z.re * z.re * warp + z.im * z.im + size1, 1.0e-30));
+    let denom = sqrt(max(1.0e-30, z.re * z.re * warp + z.im * z.im + size1));
     let r = size2 / denom;
     let xx = atan2(z.im, z.re) * radius1 + pi * to_float(floor(weight * rand())) * radius2;
     complex(r * cos(xx * xwave), r * sin(xx * ywave))
@@ -86,7 +86,7 @@ fn variation3(v, p) {
     let warp = p.warp;
     let weight = p.weight;
     let pi = 3.14159265358979;
-    let denom = sqrt(max(v.x * v.x * warp + v.y * v.y + size1, 1.0e-30));
+    let denom = sqrt(max(1.0e-30, v.x * v.x * warp + v.y * v.y + size1));
     let r = size2 / denom;
     let xx = atan2(v.y, v.x) * radius1 + pi * to_float(floor(weight * rand())) * radius2;
     vec3(r * cos(xx * xwave), r * sin(xx * ywave), r * height)

@@ -34,7 +34,7 @@ fn variation(z, p) {
     let y_scale = p.y;
     let xx = x_scale * z.re;
     let yy = y_scale * z.im;
-    let denom = max(xx * xx + yy * yy, 1.0e-30);
+    let denom = max(1.0e-30, xx * xx + yy * yy);
     let r = 1.0 / denom;
     complex(z.re * r, z.im * r)
 }
@@ -45,7 +45,7 @@ fn variation3(v, p) {
     let xx = x_scale * v.x;
     let yy = y_scale * v.y;
     let zz = x_scale * v.z;
-    let denom = max(xx * xx + yy * yy + zz * zz, 1.0e-30);
+    let denom = max(1.0e-30, xx * xx + yy * yy + zz * zz);
     let r = 1.0 / denom;
     vec3(v.x * r, v.y * r, v.z * r)
 }

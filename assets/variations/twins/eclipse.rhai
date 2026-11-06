@@ -22,7 +22,7 @@ fn variation(z, p, ctx) {
     let w = ctx.weight;
     let ox = z.re;
     if (abs(z.im) <= w) {
-        let c2 = sqrt(max(w * w - z.im * z.im, 0.0));
+        let c2 = sqrt(max(0.0, w * w - z.im * z.im));
         if (abs(z.re) <= c2) {
             let x_shifted = z.re + shift * w;
             if (abs(x_shifted) >= c2) {

@@ -34,7 +34,7 @@ fn variation(z, p) {
     let sx = (if z.re == 0.0 { 1.0 } else { (if t1 > 0.0 { 1.0 } else if t1 < 0.0 { -1.0 } else { 0.0 }) });
     let t2 = z.im;
     let sy = (if z.im == 0.0 { 1.0 } else { (if t2 > 0.0 { 1.0 } else if t2 < 0.0 { -1.0 } else { 0.0 }) });
-    complex(sx * pow(max(abs(z.re), 1.0e-30), powx), sy * pow(max(abs(z.im), 1.0e-30), powy))
+    complex(sx * pow(max(1.0e-30, abs(z.re)), powx), sy * pow(max(1.0e-30, abs(z.im)), powy))
 }
 
 fn variation3(v, p) {
@@ -47,5 +47,5 @@ fn variation3(v, p) {
     let sy = (if v.y == 0.0 { 1.0 } else { (if t2 > 0.0 { 1.0 } else if t2 < 0.0 { -1.0 } else { 0.0 }) });
     let t3 = v.z;
     let sz = (if v.z == 0.0 { 1.0 } else { (if t3 > 0.0 { 1.0 } else if t3 < 0.0 { -1.0 } else { 0.0 }) });
-    vec3(sx * pow(max(abs(v.x), 1.0e-30), powx), sy * pow(max(abs(v.y), 1.0e-30), powy), sz * pow(max(abs(v.z), 1.0e-30), powz))
+    vec3(sx * pow(max(1.0e-30, abs(v.x)), powx), sy * pow(max(1.0e-30, abs(v.y)), powy), sz * pow(max(1.0e-30, abs(v.z)), powz))
 }

@@ -25,7 +25,7 @@ const INFO = #{ title: "Pie 3D", name: "rhai_pie3d", category: "full_3d", phase:
 
 fn variation(z, p) {
     let two_pi = 6.28318530717959;
-    let slices = max(p.slices, 1.0);
+    let slices = max(1.0, p.slices);
     let rotation = p.rotation;
     let thickness = p.thickness;
     let sl = to_float(floor(rand() * slices + 0.5));
@@ -36,7 +36,7 @@ fn variation(z, p) {
 
 fn variation3(v, p) {
     let two_pi = 6.28318530717959;
-    let slices = max(p.slices, 1.0);
+    let slices = max(1.0, p.slices);
     let rotation = p.rotation;
     let thickness = p.thickness;
     let sl = to_float(floor(rand() * slices + 0.5));

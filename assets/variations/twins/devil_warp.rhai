@@ -56,9 +56,9 @@ fn variation(z, p, ctx) {
     let xx = z.re;
     let yy = z.im;
     let denom = xx * xx + yy * yy;
-    let safe_denom = max(denom, 1.0e-30);
+    let safe_denom = max(1.0e-30, denom);
     let r2 = 1.0 / safe_denom;
-    let r = pow(max(xx * xx + r2 * b * yy * yy, 1.0e-30), warp) - pow(max(yy * yy + r2 * a * xx * xx, 1.0e-30), warp);
+    let r = pow(max(1.0e-30, xx * xx + r2 * b * yy * yy), warp) - pow(max(1.0e-30, yy * yy + r2 * a * xx * xx), warp);
     r = clamp(r, rmin, rmax);
     r = effect * r;
     complex(xx * (1.0 + r) * inv_w, yy * (1.0 + r) * inv_w)

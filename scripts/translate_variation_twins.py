@@ -518,6 +518,11 @@ class Fn:
                 raise Refuse(f"`{f}`")
             # WGSL's log is the natural one; Rhai's `log` is base 10.
             name = "ln" if f == "log" else f
+            # Rhai's `max(a, b)` is `t = a; if b > t { t = b }`, keeping a
+            # NaN `a`; WGSL's gives the other operand, so `max(x, 0.0)` is
+            # a guard. A literal is never NaN: first, it is WGSL's exactly.
+            if f in ("min", "max") and len(args) == 2 and t0 == "f32" and literal(args[1]) and not literal(args[0]):
+                args = [args[1], args[0]]
             return f"{name}({', '.join(self.ex(a) for a in args)})"
         if f in ("normalize", "cross"):
             return f"{f}({', '.join(self.ex(a) for a in args)})"
@@ -742,6 +747,12 @@ class Translation:
         sig = f"fn {'variation' if dim == 2 else 'variation3'}({argz}, p{', ctx' if f.uses_ctx else ''})"
         return out, sig + " {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"
 
+def literal(e):
+    """A number written out, or its negation: never NaN."""
+    while e[0] in ("paren", "un") and (e[0] == "paren" or e[1] == "-"):
+        e = e[1] if e[0] == "paren" else e[2]
+    return e[0] == "num"
+
 def passthrough_3d(two, three):
     """Whether the 3D WGSL is the 2D one with z passed through."""
     a = re.sub(r"\s+", " ", two)
@@ -756,25 +767,30 @@ def passthrough_3d(two, three):
 
 def translate(d):
     f = set(d["features"])
-    for feat in ("replace", "never_z", "writes_rgb", "can_hide", "needs_w", "needs_mobius_lib", "analytic_blur", "volume_side_emit", "writes_color"):
+    for feat in ("replace", "writes_rgb", "can_hide", "needs_w", "needs_mobius_lib", "analytic_blur", "volume_side_emit", "writes_color"):
         if feat in f: raise Refuse(f"the feature {feat}")
     if d.get("plot_emits"): raise Refuse("plot emits")
     if d["init_param_count"]: raise Refuse("derived parameters (prepare)")
     if d["state_count"]: raise Refuse("state")
-    if d["phase"] in ("pre", "post"): raise Refuse(f"the phase {d['phase']}")
+    # A pre or post variation returns the whole point, its weight in it
+    # (`ctx.weight`), as the built-in does; `INFO.phase` says when it runs.
     t = Translation(d)
     helpers, two = t.body(d["shader_2d"], 2, d["name"])
     three = None
+    # JWildfire's z rule as `INFO.z` where the twin's default is not the
+    # built-in's: a 3D body's z is always kept, a 2D body's only when the
+    # flame preserves z.
+    z = "never" if "never_z" in f else None
     if d["shader_3d"] and ("always_z" in f or not passthrough_3d(d["shader_2d"], d["shader_3d"])):
-        if "always_z" not in f:
-            raise Refuse("a 3D body that writes z without AlwaysZ")
+        if "always_z" not in f and z is None:
+            z = "preserve_z"
         t3 = Translation(d)
         h3, three = t3.body(d["shader_3d"], 3, d["name"])
         names2 = {h.split("(")[0] for h in helpers}
         for h in h3:
             if h.split("(")[0] not in names2:
                 helpers.append(h)
-    return helpers, two, three
+    return helpers, two, three, z
 
 def write(name, d):
     path = f"assets/variations/twins/{name}.rhai"
@@ -782,12 +798,14 @@ def write(name, d):
         text = open(path, encoding="utf-8").read()
     except FileNotFoundError:
         raise Refuse("no skeleton (write_variation_twin_skeletons)")
-    helpers, two, three = translate(d)
+    helpers, two, three, z = translate(d)
     head = text.split("// The built-in's ")[0].rstrip("\n") + "\n\n"
     if "fn variation" in head:
         raise Refuse("already written")
     body = "".join(h + "\n" for h in helpers) + two + ("\n" + three if three else "")
     head = head.replace("the built-in variation's twin.", "the built-in variation's twin, translated from its WGSL.", 1)
+    if z:
+        head = re.sub(r'(const INFO = #\{ .*?) \};', lambda m: m.group(1) + f', z: "{z}" }};', head, count=1)
     open(path, "w", encoding="utf-8", newline="\n").write(head + body)
 
 if __name__ == "__main__":

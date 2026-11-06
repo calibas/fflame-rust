@@ -21,7 +21,7 @@ const INFO = #{ title: "D-Spherical", name: "rhai_d_spherical", category: "advan
 fn variation(z, p) {
     let d_spher_weight = p.d_spher_weight;
     if (rand() < d_spher_weight) {
-        let r2 = max(z.re * z.re + z.im * z.im, 1.0e-30);
+        let r2 = max(1.0e-30, z.re * z.re + z.im * z.im);
         return complex(z.re / r2, z.im / r2);
     }
     z

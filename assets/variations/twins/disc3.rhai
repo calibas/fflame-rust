@@ -65,7 +65,7 @@ fn variation(z, p) {
     let h = p.h;
     let pi = 3.14159265358979;
     let inv_pi = 0.3183098861837907;
-    let r_pi = pi * sqrt(max(z.re * d * z.re * e + z.im * f * z.im * g, 0.0));
+    let r_pi = pi * sqrt(max(0.0, z.re * d * z.re * e + z.im * f * z.im * g));
     let sinr = sin(r_pi) * a;
     let cosr = cos(r_pi) * b;
     let r = atan2(z.im, z.re) * inv_pi * c;

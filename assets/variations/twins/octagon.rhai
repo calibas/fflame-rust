@@ -31,7 +31,7 @@ const INFO = #{ title: "Octagon", name: "rhai_octagon", category: "full_3d", pha
 fn variation(z, p) {
     let xp = p.x;
     let yp = p.y;
-    let denom_r = max(z.re * z.re * z.re * z.re + z.im * z.im * z.im * z.im, 1.0e-30);
+    let denom_r = max(1.0e-30, z.re * z.re * z.re * z.re + z.im * z.im * z.im * z.im);
     let r = 1.0 / denom_r;
     let fpx = 0.0;
     let fpy = 0.0;
@@ -42,7 +42,7 @@ fn variation(z, p) {
         fpx = z.re;
         fpy = z.im;
     }
-    let denom_t = max(sqrt(abs(z.re * z.re)) + sqrt(abs(z.im * z.im)), 1.0e-30);
+    let denom_t = max(1.0e-30, sqrt(abs(z.re * z.re)) + sqrt(abs(z.im * z.im)));
     let t = 1.0 / denom_t;
     if (r >= 0.0) {
         fpx = fpx + z.re * t;
@@ -68,7 +68,7 @@ fn variation3(v, p) {
     let xp = p.x;
     let yp = p.y;
     let zp = p.z;
-    let denom_r = max(v.x * v.x * v.x * v.x + v.z * v.z + v.y * v.y * v.y * v.y + v.z * v.z, 1.0e-30);
+    let denom_r = max(1.0e-30, v.x * v.x * v.x * v.x + v.z * v.z + v.y * v.y * v.y * v.y + v.z * v.z);
     let r = 1.0 / denom_r;
     let fpx = 0.0;
     let fpy = 0.0;
@@ -82,7 +82,7 @@ fn variation3(v, p) {
         fpy = v.y;
         fpz = v.z;
     }
-    let denom_t = max(sqrt(abs(v.x * v.x)) + sqrt(abs(v.z)) + sqrt(abs(v.y * v.y)) + sqrt(abs(v.z)), 1.0e-30);
+    let denom_t = max(1.0e-30, sqrt(abs(v.x * v.x)) + sqrt(abs(v.z)) + sqrt(abs(v.y * v.y)) + sqrt(abs(v.z)));
     let t = 1.0 / denom_t;
     if (r >= 0.0) {
         fpx = fpx + v.x * t;

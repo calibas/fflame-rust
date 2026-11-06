@@ -61,7 +61,7 @@ fn variation3(v, p) {
     let cz = p.cz;
     let z = rand() * 2.0 - 1.0;
     let phi = rand() * 6.28318530718;
-    let rxy = sqrt(max(1.0 - z * z, 0.0));
+    let rxy = sqrt(max(0.0, 1.0 - z * z));
     let dir = vec3(rxy * cos(phi), rxy * sin(phi), z);
     let ri = 1.0 - thickness;
     let ri3 = ri * ri * ri;

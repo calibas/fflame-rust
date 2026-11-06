@@ -19,22 +19,22 @@ const PARAMS = #{
 const INFO = #{ title: "Loq", name: "rhai_loq", category: "full_3d", phase: "any" };
 
 fn variation(z, p) {
-    let base = max(p.base, 1.000001);
-    let abs_v = max(abs(z.im), 1.0e-30);
+    let base = max(1.000001, p.base);
+    let abs_v = max(1.0e-30, abs(z.im));
     let denom = 0.5 / ln(base);
     let c_val = atan2(abs_v, z.re) / abs_v;
-    let log_arg = max(z.re * z.re + abs_v * abs_v, 1.0e-30);
+    let log_arg = max(1.0e-30, z.re * z.re + abs_v * abs_v);
     let fx = ln(log_arg) * denom;
     let fy = c_val * z.im;
     complex(fx, fy)
 }
 
 fn variation3(v, p) {
-    let base = max(p.base, 1.000001);
-    let abs_v = max(sqrt(v.y * v.y + v.z * v.z), 1.0e-30);
+    let base = max(1.000001, p.base);
+    let abs_v = max(1.0e-30, sqrt(v.y * v.y + v.z * v.z));
     let denom = 0.5 / ln(base);
     let c_val = atan2(abs_v, v.x) / abs_v;
-    let log_arg = max(v.x * v.x + abs_v * abs_v, 1.0e-30);
+    let log_arg = max(1.0e-30, v.x * v.x + abs_v * abs_v);
     let fx = ln(log_arg) * denom;
     let fy = c_val * v.y;
     let fz = c_val * v.z;

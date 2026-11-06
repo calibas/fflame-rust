@@ -24,7 +24,7 @@ fn variation(z, p, ctx) {
     let abs_inv = abs(vvar_inv);
     let sign_factor = (if vvar_inv < 0.0 { -1.0 } else { 1.0 });
     let t = z.re * z.re + z.im * z.im;
-    let safe_f = max(sqrt(t), 1.0e-30);
+    let safe_f = max(1.0e-30, sqrt(t));
     let r = sign_factor / (safe_f * (t + abs_inv));
     complex(z.re * r, z.im * r)
 }
@@ -41,8 +41,8 @@ fn variation3(v, p, ctx) {
     let s = f + footzee * footzee;
     let abs_inv = abs(vvar_inv);
     let sign_factor = (if vvar_inv < 0.0 { -1.0 } else { 1.0 });
-    let safe_f = max(f, 1.0e-30);
-    let safe_s = max(s, 1.0e-30);
+    let safe_f = max(1.0e-30, f);
+    let safe_s = max(1.0e-30, s);
     let r = sign_factor / (safe_f * (t + abs_inv));
     let u = sign_factor / (sqrt(safe_s) * (s + abs_inv));
     let smoothed = (if abs(w) <= 1.0 { 1.0 - w } else { 0.0 });

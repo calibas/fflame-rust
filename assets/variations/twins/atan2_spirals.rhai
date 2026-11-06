@@ -99,7 +99,7 @@ fn variation(z, p) {
     let r_power = p.r_power;
     let x2y2_pow = p.x2y2_pow;
     let pi = 3.14159265358979;
-    let r2 = max(z.re * z.re + z.im * z.im, 1.0e-30);
+    let r2 = max(1.0e-30, z.re * z.re + z.im * z.im);
     let xy2 = pow(r2, x2y2_pow);
     let r = pow(r2, r_power);
     let fx = x_mult * atan2(r * r_mult + r_add, xy2 * xy2_mult + xy2_add) + x_add;

@@ -8,9 +8,9 @@
 const INFO = #{ title: "Cothq", name: "rhai_cothq", category: "advanced_2d", phase: "any" };
 
 fn variation(z, p) {
-    let v = max(abs(z.im), 1.0e-20);
+    let v = max(1.0e-20, abs(z.im));
     let sysz = z.im * z.im;
-    let ni = 1.0 / max(z.re * z.re + sysz, 1.0e-20);
+    let ni = 1.0 / max(1.0e-20, z.re * z.re + sysz);
     let s = sin(v);
     let c = cos(v);
     let sh = sinh(z.re);
@@ -25,9 +25,9 @@ fn variation(z, p) {
 }
 
 fn variation3(q, p) {
-    let v = max(sqrt(q.y * q.y + q.z * q.z), 1.0e-20);
+    let v = max(1.0e-20, sqrt(q.y * q.y + q.z * q.z));
     let sysz = q.y * q.y + q.z * q.z;
-    let ni = 1.0 / max(q.x * q.x + sysz, 1.0e-20);
+    let ni = 1.0 / max(1.0e-20, q.x * q.x + sysz);
     let s = sin(v);
     let c = cos(v);
     let sh = sinh(q.x);

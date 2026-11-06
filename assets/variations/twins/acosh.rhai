@@ -15,7 +15,7 @@ fn variation(z, p) {
     let z2_im = 2.0 * z.re * z.im;
     let r = sqrt(z2_re * z2_re + z2_im * z2_im);
     let s_re = sqrt(0.5 * (r + z2_re));
-    let s_im_mag = sqrt(0.5 * max(r - z2_re, 0.0));
+    let s_im_mag = sqrt(0.5 * max(0.0, r - z2_re));
     let s_im = (if z2_im < 0.0 { -s_im_mag } else { s_im_mag });
     let arg_re = z.re + s_re;
     let arg_im = z.im + s_im;
