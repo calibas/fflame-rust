@@ -1171,18 +1171,30 @@ Steps, in the order that unlocks the most first (the user picks):
      block, so `quaternion`'s 92 fit); **a colour read** (`ctx.color`,
      the colour coordinate as it arrives; the interpreter starts from
      the probe's 0.5; 23 twins, judged by their colour per point and per
-     channel in a flame). 467 twins, 6958 pairs, 0 apart.
+     channel in a flame); **replace** (`INFO.replace`, the feature the
+     shader combines by; 16 twins, the cut family waiting for `hide`).
+     **hide** (`#{ z, hide }` and `ctx.hide`, `CanHide`), with the
+     translator's `while` for a `for` not over a range and `smoothstep`
+     written out (34 twins, 23 of them the cut family). 517 twins, 7842
+     pairs, 0 apart. On the way: a held temporary inside a vector part's
+     assignment came out a bare name (now refused if it ever recurs); a
+     vector and a number are added part by part; `length(u - d)` came out
+     `u - d.abs()`, the receiver unparenthesised -- found by density in
+     two cut twins that draw, and compiling because a complex compares
+     with a number by its real part (UF's rule, which the Rhai dialect
+     keeps); the judge perturbs by a non-round amount (1e20 ± 1e14 is
+     still a multiple of 5).
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, by count: replace (47), an RGB (20), a `for`
-     not over a range (15), state (13), hide (10), `u32` (10), the
-     Möbius library (9), w (8), hex literals (8), bit operations (7),
-     the coefficients and other indexing (7), arrays (5), a helper of
-     the fract family (4), crackle's (3), a parameter named `super`,
-     which Rhai reserves (`w`, `z`), the rest one or two.
+     passed through. Left, 130, by count: an RGB (20), `u32` (15),
+     state (14), the Möbius library (9), bit operations (9), w (9), hex
+     literals (8), arrays (7), the coefficients and other indexing (7),
+     a helper of the fract family (4), crackle's (3), plot emits (3), a
+     parameter named `super`, which Rhai reserves (`w`, `z`), vector
+     trig (3), the rest one or two.
 4. **The twins, in batches**: the variations by family -- a skeleton
    generator from the defs, as P4's `write_twin_skeletons`, and each
    held by a density compare and timed -- the escape colourings, the

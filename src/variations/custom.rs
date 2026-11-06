@@ -130,6 +130,11 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
     if lang::rhai::info_bool(source, "resets_orbits") == Some(true) {
         features.push("resets_orbits");
     }
+    // It replaces the working point (JWildfire's `=` against `+=`): moved
+    // to pre or post it is assigned, and it runs last of the normal ones.
+    if lang::rhai::info_bool(source, "replace") == Some(true) {
+        features.push("replace");
+    }
     // JWildfire's z rule, `INFO.z`: by default a 3D body's z is always kept
     // and a 2D body's passed-through z only when the flame preserves z
     // (`shader_builder_v2::zeroes_z`).
@@ -845,8 +850,8 @@ mod tests {
         let refused = |src: &str| compile(src).err().unwrap_or_else(|| panic!("compiled: {src}"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn init(p) { #{ n: rand() } }\nfn variation(z, p) { z * this.n }\n").contains("no random numbers"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { z * this.n }\n").contains("no `init`"));
-        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p, ctx) { z * ctx.julia }\n").contains("`accum`, `weight` and `color`"));
-        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { #{ z: z, hue: 0.5 } }\n").contains("`z` and `color`"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p, ctx) { z * ctx.julia }\n").contains("`accum`, `weight`, `color` and `hide`"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { #{ z: z, hue: 0.5 } }\n").contains("`z`, `color` and `hide`"));
     }
 
     /// The MacMillan twin runs as the built-in's arithmetic (its WGSL,

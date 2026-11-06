@@ -571,15 +571,18 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 467 of the 647, each a Rhai variation under its
+  P7 step 3): 517 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
   (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
-  `INFO.z`). Seven written by hand, 460 translated from the built-ins'
+  `INFO.z`, `INFO.replace`, `CanHide`). Seven written by hand, 510 translated from the built-ins'
   WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
-  reads them; its colour pointer a local from `ctx.color`, returned as
-  `#{ z, color }`)
+  reads them; its colour and hide pointers locals from `ctx.color` and
+  `ctx.hide`, returned as `#{ z, color, hide }`; a `for` that is not a
+  counted range a `while`, its step last, when nothing `continue`s;
+  `smoothstep` written out; a vector and a number added part by part,
+  where Rhai's complex + float adds to the real part)
   (`scripts/translate_variation_twins.py`, into the skeletons
   `twins::skeleton` writes; `scripts/list_variation_twins.py` writes
   the table).
@@ -607,9 +610,16 @@ function takes the point, and the ids when it has parameters (as
     it in whole, each channel's light (colour times density) held as
     density is; dc_linear's colour blended in and not is the control --
     which judges the twins that draw (no f64 truth matches the GPU's
-    stream). r_circleblur's cells are placed by a `sin(...) * 43758.5453`
+    stream). rays1's flame sends points past 2^24, where an f32's `tan`
+    is no formula's on any side (`docs/accepted-divergences.txt`): reduced
+    below 1e5 it is the built-in's exactly, measured, and it is held to
+    drawing (`HUGE_TRIG`). mobius_strip takes a coordinate's remainder,
+    rounding on every side past 2^24, so its pairs are not held at points
+    that far (`FAR_REMAINDER`). r_circleblur's cells are placed by a `sin(...) * 43758.5453`
     hash, which the range-reduced sin hashes otherwise: its twin draws
-    its own noise.
+    its own noise, as cut_jigsaw's does (its pieces flip by a
+    `sin(...) * 1e5` hash; with the hardware's sin its flame is the
+    built-in's exactly, measured).
   - **Edit as Rhai**: a built-in variation with a twin has it in its
     row's settings menu, putting the twin under a UUID of its own in the
     built-in's place in that transform (weight, parameters, order,

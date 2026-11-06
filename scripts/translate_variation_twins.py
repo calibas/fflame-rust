@@ -272,8 +272,10 @@ class Fn:
         # The init's body (`prepare`): `user[i]` the parameters, `out` its
         # slots, each return the map of them.
         self.init = False
-        # The colour's local, when the body takes `vc` (WritesColor).
-        self.color_var = None
+        # The pointers it writes besides the point, each a local from its
+        # `ctx` field returned in the map: `vc`'s colour (WritesColor),
+        # `hide`'s flag (CanHide). Pointer -> [key, local].
+        self.outs = {}
         # A 3D body ending in an `if`: the arms set this, returned after.
         self.result_var = None
         for name, ty in args:
@@ -290,7 +292,11 @@ class Fn:
                 # The colour: a local from `ctx.color`, returned with the point.
                 if helper:
                     raise Refuse("a helper writing the colour")
-                self.color_var = "vc"
+                self.outs["vc"] = ["color", None]
+            elif name == "hide" and ty.replace(" ", "") == "ptr<function,bool>":
+                if helper:
+                    raise Refuse("a helper hiding the point")
+                self.outs["hide"] = ["hide", None]
             elif ty.startswith("ptr"):
                 raise Refuse(f"a pointer argument `{name}: {ty}`")
             else:
@@ -339,6 +345,12 @@ class Fn:
             return "f32"
         return "f32"
 
+    def atom(self, e):
+        """`e` as a method's receiver: in parentheses unless one already
+        (`u - d * 0.2` is not `(u - d * 0.2).abs()`)."""
+        text = self.ex(e)
+        return text if e[0] in ("id", "paren", "call", "field") else f"({text})"
+
     def hold(self, e):
         """An operand used more than once, made a name."""
         if e[0] in ("id", "num"):
@@ -383,8 +395,8 @@ class Fn:
         if k == "paren":
             return f"({self.ex(e[1])})"
         if k == "un":
-            if e[1] == "*" and e[2] == ("id", "vc") and self.color_var:
-                return self.color_var
+            if e[1] == "*" and e[2][0] == "id" and e[2][1] in self.outs:
+                return self.outs[e[2][1]][1]
             if e[1] == "*": raise Refuse("a pointer read")
             if e[1] == "&": raise Refuse("a pointer taken")
             if e[1] == "~": raise Refuse("a bitwise not")
@@ -408,6 +420,13 @@ class Fn:
                     return f"complex({a} / {b}.re, {a} / {b}.im)"
             if op == "%" and vec:
                 raise Refuse("a vector's remainder")
+            if op in ("+", "-") and len(vec) == 1 and (ta in ("f32", "int") or tb in ("f32", "int")):
+                a, b = self.hold(e[2]), self.hold(e[3])
+                parts = ("re", "im") if vec[0] == "vec2" else ("x", "y", "z") if vec[0] == "vec3" else None
+                if parts is None:
+                    raise Refuse("a vec4 and a number")
+                each = [f"{a + '.' + c if ta == vec[0] else a} {op} {b + '.' + c if tb == vec[0] else b}" for c in parts]
+                return f"complex({each[0]}, {each[1]})" if vec[0] == "vec2" else f"vec3({', '.join(each)})"
             return f"{self.ex(e[2])} {op} {self.ex(e[3])}"
         if k == "field":
             base_t = self.ty(e[1])
@@ -492,13 +511,13 @@ class Fn:
             raise Refuse(f"`{f}`")
         t0 = self.ty(args[0]) if args else None
         if f == "length":
-            if t0 == "vec2": return f"{self.ex(args[0])}.abs()"
+            if t0 == "vec2": return f"{self.atom(args[0])}.abs()"
             return f"length({self.ex(args[0])})"
         if f == "dot":
             if t0 == "vec2":
                 a, b = args
                 if a == b:
-                    return f"{self.ex(a)}.norm_sqr()"
+                    return f"{self.atom(a)}.norm_sqr()"
                 x, y = self.hold(a), self.hold(b)
                 return f"({x}.re * {y}.re + {x}.im * {y}.im)"
             return f"dot({self.ex(args[0])}, {self.ex(args[1])})"
@@ -525,6 +544,20 @@ class Fn:
             return f"complex({parts[0]}, {parts[1]})"
         if f in ("sin", "cos", "tan", "exp", "log", "sqrt", "pow", "atan", "sinh", "cosh", "tanh") and t0 in ("vec2", "vec3"):
             raise Refuse(f"`{f}` of a vector")
+        if f == "smoothstep" and all(self.ty(a) in ("f32", "vec2") for a in args):
+            # WGSL's: t = clamp((x - e0) / (e1 - e0), 0, 1), then t·t·(3 - 2t);
+            # a complex one part by part.
+            held = [self.hold(a) for a in args]
+            parts = [""] if self.ty(args[2]) == "f32" else [".re", ".im"]
+            out = []
+            for c in parts:
+                e0, e1, x = (h + c if self.ty(a) == "vec2" else h for h, a in zip(held, args))
+                self.temps += 1
+                t = f"t{self.temps}"
+                self.lines.append(("let", t, f"clamp(({x} - {e0}) / ({e1} - {e0}), 0.0, 1.0)"))
+                self.types[t] = "f32"
+                out.append(f"{t} * {t} * (3.0 - 2.0 * {t})")
+            return f"({out[0]})" if len(out) == 1 else f"complex({out[0]}, {out[1]})"
         if f in MATH:
             if f in ("smoothstep", "exp2"):
                 raise Refuse(f"`{f}`")
@@ -544,6 +577,10 @@ class Fn:
                 raise Refuse(f"a helper taking the ids `{f}`")
             return f"{f}({', '.join(keep)})"
         raise Refuse(f"a call to `{f}`")
+
+    def result_map(self, point):
+        """`#{ z: point, color: .., hide: .. }`, the pointers' locals."""
+        return "#{ z: " + point + "".join(f", {k}: {v}" for k, v in self.outs.values()) + " }"
 
     def stmts(self, ss, depth, last=False):
         for i, s in enumerate(ss):
@@ -609,11 +646,11 @@ class Fn:
                 n = lhs[1][1]
                 part = {"x": "re", "y": "im"}[lhs[2]]
                 other = {"re": "im", "im": "re"}[part]
-                value = self.ex(rhs) if op == "=" else f"{n}.{part} {op[0]} ({self.ex(rhs)})"
-                self.line(depth, lambda: f"{n} = complex({value}, {n}.im);" if part == "re" else f"{n} = complex({n}.re, {value});")
+                value = (lambda: self.ex(rhs)) if op == "=" else (lambda: f"{n}.{part} {op[0]} ({self.ex(rhs)})")
+                self.line(depth, lambda: f"{n} = complex({value()}, {n}.im);" if part == "re" else f"{n} = complex({n}.re, {value()});")
                 return
-            if lhs[0] == "un" and lhs[1] == "*" and lhs[2] == ("id", "vc") and self.color_var:
-                self.line(depth, lambda: f"{self.color_var} {op} {self.ex(rhs)};")
+            if lhs[0] == "un" and lhs[1] == "*" and lhs[2][0] == "id" and lhs[2][1] in self.outs:
+                self.line(depth, lambda: f"{self.outs[lhs[2][1]][1]} {op} {self.ex(rhs)};")
                 return
             if lhs[0] == "un" and lhs[1] == "*":
                 raise Refuse("a write through a pointer")
@@ -651,13 +688,28 @@ class Fn:
         if k == "for":
             _, init, cond, upd, body = s
             # for (var i = a; i < b; i++) -> for i in a..b
-            if init and init[0] == "decl" and cond and cond[0] == "bin" and cond[1] in ("<", "<=") and cond[2] == ("id", init[2]) \
-                    and upd == ("assign", ("id", init[2]), "+=", ("num", "1")) and not assigns(body, init[2]):
+            step_one = init and init[0] == "decl" and upd in (
+                ("assign", ("id", init[2]), "+=", ("num", "1")),
+                ("assign", ("id", init[2]), "=", ("bin", "+", ("id", init[2]), ("num", "1"))),
+            )
+            # Rhai's range is taken once; WGSL tests its bound every pass.
+            bound_fixed = cond and cond[0] == "bin" and not any(assigns(body, n) for n in re.findall(r"'id', '(\w+)'", repr(cond[3])))
+            if step_one and init[4] is not None and self.ty(init[4]) != "f32" and cond and cond[0] == "bin" and cond[1] in ("<", "<=") and cond[2] == ("id", init[2]) \
+                    and not assigns(body, init[2]) and bound_fixed:
                 name = init[2]
                 self.types[name] = "int"
                 rng = ".." if cond[1] == "<" else "..="
                 self.line(depth, lambda: f"for {name} in {self.ex(init[4])}{rng}{self.ex(cond[3])} {{")
                 self.stmts(body, depth + 1)
+                self.emit(depth, "}")
+                return
+            # Any other: a `while`, its step last -- which a `continue`
+            # would skip.
+            if init and cond and upd and upd[0] == "assign" and "'continue'" not in repr(body):
+                self.stmt(init, depth, False)
+                self.line(depth, lambda: f"while {self.ex(cond)} {{")
+                self.stmts(body, depth + 1)
+                self.stmt(upd, depth + 1, False)
                 self.emit(depth, "}")
                 return
             raise Refuse("a `for` that is not a counted range")
@@ -697,7 +749,7 @@ class Fn:
             e = s[1]
             if e is None:
                 raise Refuse("a bare return")
-            value = (lambda: f"#{{ z: {self.ex(e)}, color: {self.color_var} }}") if self.color_var else (lambda: self.ex(e))
+            value = (lambda: self.result_map(self.ex(e))) if self.outs else (lambda: self.ex(e))
             if last and self.result_var:
                 self.line(depth, lambda: f"{self.result_var} = {self.ex(e)};")
             elif last:
@@ -808,25 +860,27 @@ class Translation:
         f = Fn(self, dim, args, ret, False)
         used = {tk[1] for tk in toks if tk[0] == "id"}
         f.point = next(n for n in (["z", "w", "q", "pt"] if dim == 2 else ["v", "q", "pt", "pv"]) if n not in used)
-        if f.color_var:
-            f.color_var = next(n for n in ("color", "vcolor", "col") if n not in used)
+        for ptr, slot in f.outs.items():
+            slot[1] = next(n for n in ({"vc": ("color", "vcolor", "col"), "hide": ("hidden", "hide_v", "hid")}[ptr]) if n not in used)
             f.uses_ctx = True
         p = P(toks)
         ss = block(p)
         if not ss or not ends_in_return(ss[-1]):
             raise Refuse("the body does not end in a return")
-        start = lambda: f.emit(1, f"let {f.color_var} = ctx.color;") if f.color_var else None
+        start = lambda: [f.emit(1, f"let {local} = ctx.{key};") for key, local in f.outs.values()]
         start()
         f.stmts(ss, 1, last=True)
-        if (dim == 3 or f.color_var) and ss[-1][0] == "if":
+        if (dim == 3 or f.outs) and ss[-1][0] == "if":
             f.result_var = next(n for n in ("result", "out3", "res3") if n not in used)
             f.lines = []
             start()
             f.emit(1, f"let {f.result_var} = {'vec3(0.0, 0.0, 0.0)' if dim == 3 else 'complex(0.0, 0.0)'};")
             f.types = dict(f.types)
             f.stmts(ss, 1, last=True)
-            f.emit(1, f"#{{ z: {f.result_var}, color: {f.color_var} }}" if f.color_var else f.result_var)
+            f.emit(1, f.result_map(f.result_var) if f.outs else f.result_var)
         argz = f.point
+        if any(l[0] == "let" for l in f.lines):
+            raise Refuse("(translator error) a held temporary outside its statement")
         sig = f"fn {'variation' if dim == 2 else 'variation3'}({argz}, p{', ctx' if f.uses_ctx else ''})"
         return out, sig + " {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"
 
@@ -889,7 +943,7 @@ def passthrough_3d(two, three):
 
 def translate(d):
     f = set(d["features"])
-    for feat in ("replace", "writes_rgb", "can_hide", "needs_w", "needs_mobius_lib", "analytic_blur", "volume_side_emit"):
+    for feat in ("writes_rgb", "needs_w", "needs_mobius_lib", "analytic_blur", "volume_side_emit"):
         if feat in f: raise Refuse(f"the feature {feat}")
     if d.get("plot_emits"): raise Refuse("plot emits")
     for prm in d["parameters"]:
@@ -919,7 +973,13 @@ def translate(d):
         for h in h3:
             if h.split("(")[0] not in names2:
                 helpers.append(h)
-    return helpers, two, three, z
+    info = {}
+    if z:
+        info["z"] = f'"{z}"'
+    # It replaces the point it is given (`Feature::Replace`).
+    if "replace" in f:
+        info["replace"] = "true"
+    return helpers, two, three, info
 
 def write(name, d):
     path = f"assets/variations/twins/{name}.rhai"
@@ -927,14 +987,15 @@ def write(name, d):
         text = open(path, encoding="utf-8").read()
     except FileNotFoundError:
         raise Refuse("no skeleton (write_variation_twin_skeletons)")
-    helpers, two, three, z = translate(d)
+    helpers, two, three, info = translate(d)
     head = text.split("// The built-in's ")[0].rstrip("\n") + "\n\n"
     if "fn variation" in head:
         raise Refuse("already written")
     body = "".join(h + "\n" for h in helpers) + two + ("\n" + three if three else "")
     head = head.replace("the built-in variation's twin.", "the built-in variation's twin, translated from its WGSL.", 1)
-    if z:
-        head = re.sub(r'(const INFO = #\{ .*?) \};', lambda m: m.group(1) + f', z: "{z}" }};', head, count=1)
+    if info:
+        extra = "".join(f", {k}: {v}" for k, v in info.items())
+        head = re.sub(r'(const INFO = #\{ .*?) \};', lambda m: m.group(1) + extra + " };", head, count=1)
     open(path, "w", encoding="utf-8", newline="\n").write(head + body)
 
 if __name__ == "__main__":
