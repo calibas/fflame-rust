@@ -185,7 +185,13 @@ impl FormulaEditorPanel {
     pub fn open_in_use(&mut self, kind: EntryKind, file: String, src: &CustomSource) {
         self.adopt(None, file, src.source.clone());
         self.in_use.retain(|(k, _, _)| *k != kind);
-        self.in_use.push((kind, None, src.entry.clone()));
+        // A variation by its id, as its Use holds it: Live follows it from
+        // version to version.
+        let held = match kind {
+            EntryKind::Transform => crate::scripted::key_id(&src.entry).unwrap_or_else(|| src.entry.clone()),
+            _ => src.entry.clone(),
+        };
+        self.in_use.push((kind, None, held));
         let status = if kind == EntryKind::Coloring {
             t!("formula_editor.editing_builtin_coloring", entry = src.entry)
         } else {
@@ -654,6 +660,32 @@ impl FormulaEditorPanel {
     /// is the same; one undo step, entering Simulation if another mode is
     /// on. It opens here unsaved and in use, so Live re-applies an edit.
     /// Save keeps it in the library; the built-in is untouched.
+    /// A variation's Edit as Rhai (P7 step 3, V1): the built-in
+    /// `builtin`'s twin in its place in the transform `xref` of the flame
+    /// being edited, under a UUID of its own ([`variation_as_twin`]), one
+    /// undo step, and the copy open here in use, so with Live an edit
+    /// re-renders every transform it is in.
+    pub fn edit_variation_as_rhai(&mut self, cm: &mut ConfigManager, xref: crate::config::TransformRef, builtin: &str) {
+        use crate::variations::{custom, twins};
+        let Some(text) = twins::source(builtin) else { return };
+        let text = lang::rhai::with_own_id(text, &crate::scripted::mint_id());
+        let key = match custom::register(&text) {
+            Ok(key) => key,
+            Err(e) => {
+                self.status = Some(t!("formula_editor.did_not_compile", entry = builtin, error = e).to_string());
+                return;
+            }
+        };
+        let Some(mut src) = custom::carried(&text) else { return };
+        src.entry = key.clone();
+        let Some(after) = variation_as_twin(cm.config(), cm.editing_target(), xref, builtin, &src) else { return };
+        if cm.apply_config_edit(after, "history.action.edit_variation_as_rhai".to_string()).is_err() {
+            return;
+        }
+        let file = crate::storage::formula_store::file_name_for(&format!("{builtin}-variation.rhai")).unwrap_or_else(|| "variation.rhai".into());
+        self.open_in_use(EntryKind::Transform, file, &src);
+    }
+
     pub fn edit_sim_as_rhai(&mut self, cm: &mut ConfigManager, model: bool, layer: Option<usize>, builtin: &str) {
         use crate::scene::transforms::RenderMode;
         let shipped = if model { crate::sim::custom::SHIPPED_MODELS } else { crate::sim::custom::SHIPPED };
@@ -1361,6 +1393,32 @@ fn escaped(s, p) {
 }
 ";
 
+/// The config with the built-in variation `builtin` in the transform
+/// `xref` of the flame `target` names replaced by the variation `src`
+/// carries (its entry the key it registers under): the weight, parameters,
+/// order and phase moved to it (`Transform::rename_variation`), the source
+/// carried by that flame. `None` when the transform does not use it.
+pub fn variation_as_twin(
+    config: &crate::config::FractalConfig,
+    target: crate::config::EditingTarget,
+    xref: crate::config::TransformRef,
+    builtin: &str,
+    src: &CustomSource,
+) -> Option<crate::config::FractalConfig> {
+    let mut after = config.clone();
+    let flame = match target {
+        crate::config::EditingTarget::Subflame { index } if index < after.flame.subflames.len() => &mut after.flame.subflames[index],
+        _ => &mut after.flame,
+    };
+    if !xref.get_mut(flame)?.rename_variation(builtin, &src.entry) {
+        return None;
+    }
+    if !flame.custom_variations.iter().any(|s| s.entry == src.entry) {
+        flame.custom_variations.push(src.clone());
+    }
+    Some(after)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1500,6 +1558,43 @@ mod tests {
         cm.undo().unwrap();
         assert_eq!(cm.config().color_effects[0].effect_type, "vignette");
         crate::effects::global_effect_registry_mut().remove_by_name(&key);
+    }
+
+    /// A variation's Edit as Rhai (P7 step 3): in the one transform, the
+    /// built-in's weight, parameters, order and phase move to the twin,
+    /// the flame carrying its source; the other transforms and a subflame
+    /// untouched, and nothing done where the transform has no such
+    /// variation.
+    #[test]
+    fn edit_as_rhai_puts_a_variations_twin_in_its_place() {
+        use crate::config::{EditingTarget, TransformRef};
+        use crate::scene::transforms::Transform;
+        let mut config = crate::config::FractalConfig::default();
+        config.flame.transforms.clear();
+        for _ in 0..2 {
+            let mut t = Transform::default();
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 0.5);
+            t.set_variation("rings2", 0.7);
+            t.set_variation_param("rings2", "val", 0.3);
+            config.flame.transforms.push(t);
+        }
+        config.flame.subflames.push(config.flame.clone());
+        let mut src = crate::variations::custom::carried(crate::variations::twins::source("rings2").unwrap()).unwrap();
+        src.entry = "u0123_twin".into();
+        let after = variation_as_twin(&config, EditingTarget::Main, TransformRef::Normal(1), "rings2", &src).expect("it uses rings2");
+        let t = &after.flame.transforms[1];
+        assert_eq!((t.variations.get("u0123_twin"), t.variations.get("rings2")), (Some(&0.7), None), "the weight moved");
+        assert_eq!(t.variation_params.get("u0123_twin.val"), Some(&0.3), "the parameter moved");
+        assert_eq!(t.variation_order, ["linear", "u0123_twin"], "its place kept");
+        assert!(after.flame.transforms[0].variations.contains_key("rings2"), "the other transform untouched");
+        assert_eq!(after.flame.custom_variations, vec![src.clone()], "the source carried");
+        assert!(after.flame.subflames[0].custom_variations.is_empty(), "the subflame untouched");
+        let sub = variation_as_twin(&config, EditingTarget::Subflame { index: 0 }, TransformRef::Normal(0), "rings2", &src).unwrap();
+        assert!(sub.flame.subflames[0].transforms[0].variations.contains_key("u0123_twin") && sub.flame.subflames[0].custom_variations.len() == 1);
+        assert!(sub.flame.transforms[0].variations.contains_key("rings2"), "the main flame untouched");
+        assert!(variation_as_twin(&config, EditingTarget::Main, TransformRef::Normal(0), "julia", &src).is_none(), "no julia there");
     }
 
     /// Edit as Rhai in the simulation panel (P7 step 5): a built-in model
