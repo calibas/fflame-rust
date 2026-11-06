@@ -1470,20 +1470,24 @@ mod tests {
         assert_eq!(back.len(), defs.len());
     }
 
-    /// A tool for the twins' speed: each twin's flame dispatched beside its
+    /// A tool for the twins' speed: each twin's flame dispatched against its
     /// built-in's -- the density compare's flame at 1024x1024, its
     /// variation's transform weighted 8 to the linears' 1 so most
-    /// iterations run it -- interleaved, seven rounds of eight dispatches,
-    /// the median of the rounds' ratios; the slowest printed last.
-    /// `VARIATION_TWINS=a,b` times those alone. Measured, not held: a twin
-    /// is what an edit starts from, and the built-in still draws an
-    /// unedited one. Ignored: it times the GPU (the app closed).
+    /// iterations run it -- on one renderer, the two loaded in turn, seven
+    /// rounds of eight dispatches, the median of the rounds' ratios; the
+    /// slowest printed last.
+    /// `VARIATION_TWINS=a,b` times those alone; `VARIATION_TWINS_SELF=1`
+    /// times each built-in against itself, the measure's noise. Measured,
+    /// not held: a twin is what an edit starts from, and the built-in
+    /// still draws an unedited one. Ignored: it times the GPU (the app
+    /// closed).
     #[test]
     #[ignore = "times the GPU"]
     fn time_variation_twins() {
         const N: u32 = 1024;
         let (device, queue) = pollster::block_on(crate::probe::run::open_device("variation twin timing")).expect("a GPU");
         let only: Option<Vec<String>> = std::env::var("VARIATION_TWINS").ok().map(|v| v.split(',').map(str::to_string).collect());
+        let itself = std::env::var("VARIATION_TWINS_SELF").is_ok_and(|v| v == "1");
         let wait = || {
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
         };
@@ -1501,7 +1505,8 @@ mod tests {
                 continue;
             }
             let three = super::super::global_registry().get(name).is_some_and(|v| v.has_feature(super::super::Feature::NeedsW));
-            let cfgs = [flame_coloured(name, None, 0.0), flame_coloured(&key(name).unwrap(), Some(super::carried(name).unwrap()), 0.0)].map(|mut cfg| {
+            let twin = if itself { flame_coloured(name, None, 0.0) } else { flame_coloured(&key(name).unwrap(), Some(super::carried(name).unwrap()), 0.0) };
+            let cfgs = [flame_coloured(name, None, 0.0), twin].map(|mut cfg| {
                 cfg.deterministic_rng = false;
                 cfg.flame.transforms[0].weight = 8.0;
                 if three {
@@ -1509,27 +1514,26 @@ mod tests {
                 }
                 cfg
             });
-            let mut rs: Vec<_> = cfgs
-                .iter()
-                .map(|cfg| {
-                    let mut r = crate::renderer::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
-                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
-                    r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 1, 0);
-                    queue.submit(Some(enc.finish()));
-                    for _ in 0..4 {
-                        dispatch(&mut r, cfg);
-                    }
-                    r
-                })
-                .collect();
-            wait();
+            // One renderer for both, each batch loading its flame: two
+            // renderers' buffers land apart in memory, and an atomic-bound
+            // flame's speed is its buffers' (the same built-in ran 82 to
+            // 194 ms by instance, in creation order, run after run).
+            let mut r = crate::renderer::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfgs[0].flame, cfgs[0].palette_size);
             let mut ratios = Vec::new();
             let mut ms = [0.0f64; 2];
-            for _ in 0..7 {
-                for (i, r) in rs.iter_mut().enumerate() {
+            for round in 0..7 {
+                for i in if round % 2 == 0 { [0, 1] } else { [1, 0] } {
+                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+                    r.load_config(&device, &mut enc, &queue, &cfgs[i], &cfgs[i].palette, 1, 0);
+                    queue.submit(Some(enc.finish()));
+                    r.restart_orbits();
+                    for _ in 0..4 {
+                        dispatch(&mut r, &cfgs[i]);
+                    }
+                    wait();
                     let start = web_time::Instant::now();
                     for _ in 0..8 {
-                        dispatch(r, &cfgs[i]);
+                        dispatch(&mut r, &cfgs[i]);
                     }
                     wait();
                     ms[i] = start.elapsed().as_secs_f64() * 1e3;

@@ -646,6 +646,19 @@ function takes the point, and the ids when it has parameters (as
     1e5` hash), cut_fingerprint's, cut_hextruchetflow's and
     cut_metaballs's (`fract(sin(x) * 43...)`) do -- with the hardware's
     sin each flame is the built-in's exactly, measured.
+  - **Timed** (`time_variation_twins`, a tool, ignored): each twin's
+    flame against its built-in's on one renderer, the two loaded in
+    turn. Two renderers of the same flame ran up to 2.3x apart, by
+    where their buffers landed (a cheap variation's dispatch is bound by
+    the histogram's atomics), so an A/A (`VARIATION_TWINS_SELF=1`, the
+    built-in against itself) checks the measure first: 0.997 to 1.002.
+    Of the 597 (2026-11-06, GTX 1660 SUPER): median ratio 1.002,
+    quartiles 1.000 to 1.008, 24 more than 5% slower, 3 more than 25%
+    -- glsl_circlesblue 1.61, glsl_acrilic 1.48, electron_orbital 1.32,
+    each calling trig inside a loop, where the language's is
+    range-reduced (the likely cause, not yet measured as it). Measured,
+    not held: a twin is what an edit starts from, and the built-in still
+    draws an unedited flame.
   - **Edit as Rhai**: a built-in variation with a twin has it in its
     row's settings menu, putting the twin under a UUID of its own in the
     built-in's place in that transform (weight, parameters, order,
