@@ -61,6 +61,13 @@ var<private> esc_env_solid: bool;
 /// flat there, as an interior pixel's.
 pub const SOLID_FLAG: &str = "esc_env_solid";
 
+/// The token a custom colouring's `accum_init` holds where the formula's
+/// starting z goes (`ufc_init(ESC_Z0)`): each template puts its own
+/// expression in its place, the direct path's `z` and the perturbed
+/// rungs' reference start plus the pixel's offset. A built-in's
+/// `accum_init` is a constant and holds none.
+pub const COLORING_Z0: &str = "ESC_Z0";
+
 /// A custom colouring's three pieces, as `ColoringDef` holds them.
 #[derive(Clone, Debug)]
 pub struct ColoringWgsl {
@@ -69,7 +76,7 @@ pub struct ColoringWgsl {
     /// Empty: `coloring_accum` is in `wgsl`, which the templates splice
     /// before the accumulator marker.
     pub wgsl_accum: String,
-    /// `ufc_init()`.
+    /// `ufc_init(ESC_Z0)`, [`COLORING_Z0`] the formula's starting z.
     pub accum_init: String,
     /// The colouring keeps state or has a loop: it needs the
     /// accumulator compiled in.
@@ -116,6 +123,81 @@ const FX_RETURN: &str = "return FxOut(vec4<f32>(effect_r, effect_g, effect_b, ef
 /// The line that ends a simulation's colouring or model function, and an
 /// early `return` in it.
 const SIM_RETURN: &str = "return vec4<f32>(effect_r, effect_g, effect_b, effect_a);";
+/// How many reads made once each (`Host::EscPaletteLoad`, a texture's
+/// load) the program makes of the kind `which` picks, by their slots --
+/// each a load's third argument.
+fn load_slots(p: &Program, which: fn(Host) -> bool) -> usize {
+    fn s(st: &[IStmt], w: fn(Host) -> bool) -> usize {
+        st.iter()
+            .map(|x| match x {
+                IStmt::Host(h, args) if w(*h) => args.get(2).and_then(cell_index).map_or(0, |k| k + 1),
+                IStmt::Scope(b) => s(b, w),
+                IStmt::If { arms, otherwise } => arms.iter().map(|(_, b)| s(b, w)).max().unwrap_or(0).max(s(otherwise, w)),
+                IStmt::While { body, .. } | IStmt::Repeat { body, .. } => s(body, w),
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+    [&p.init, &p.loop_body, &p.final_body, &p.transform].into_iter().map(|b| s(b, which)).max().unwrap_or(0)
+}
+
+/// Whether the program reads a texture (batch 6).
+pub fn reads_texture(p: &Program) -> bool {
+    [&p.global_body, &p.init, &p.loop_body, &p.final_body, &p.transform, &p.creases].into_iter().any(|b| Program::calls_host(b, Host::texture))
+}
+
+/// Whether a colouring's `color` sets the coverage (an `rgba`:
+/// `DirectAlpha`).
+pub fn writes_alpha(p: &Program) -> bool {
+    writes(&p.transform, Place::Effect(Predef::EffectA))
+}
+
+/// A texture's reads as one kind's template gives them (batch 6): `decl`
+/// the binding the kind's passes bind, `var` its name. The same portable
+/// read for every kind: `uf_texture(uv)`, bilinear between the texel
+/// centres at `(i + 0.5) / size` and clamped at the edges, by hand in f32
+/// from `textureLoad` -- not the sampler, whose filtering weights each
+/// vendor rounds its own way, so WebGPU, Metal and Vulkan read the same
+/// -- and the interpolation as JWildfire's texture variations do theirs;
+/// `uf_texel(xy)` the texel, clamped to the texture; `uf_texture_size()`.
+/// A position that is not finite or far outside reads the edge: no such
+/// float converts to an int the same way everywhere.
+pub fn texture_wgsl(decl: &str, var: &str) -> String {
+    format!(
+        "{decl}
+fn uf_texture_size() -> vec2<f32> {{
+    return vec2<f32>(textureDimensions({var}));
+}}
+fn uf_texel(xy: vec2<i32>) -> vec4<f32> {{
+    let dims = vec2<i32>(textureDimensions({var}));
+    return textureLoad({var}, clamp(xy, vec2<i32>(0), dims - 1), 0);
+}}
+fn uf_texture(uv: vec2<f32>) -> vec4<f32> {{
+    let dims = vec2<i32>(textureDimensions({var}));
+    let size = vec2<f32>(dims);
+    var p = uv * size - 0.5;
+    p = select(vec2<f32>(-1.0), clamp(p, vec2<f32>(-1.0), size), abs(p) <= vec2<f32>(1e30));
+    let f = floor(p);
+    let t = p - f;
+    let i0 = clamp(vec2<i32>(f), vec2<i32>(0), dims - 1);
+    let i1 = clamp(vec2<i32>(f) + 1, vec2<i32>(0), dims - 1);
+    let a = textureLoad({var}, i0, 0);
+    let b = textureLoad({var}, vec2<i32>(i1.x, i0.y), 0);
+    let c = textureLoad({var}, vec2<i32>(i0.x, i1.y), 0);
+    let d = textureLoad({var}, i1, 0);
+    let top = a + (b - a) * t.x;
+    let bottom = c + (d - c) * t.x;
+    return top + (bottom - top) * t.y;
+}}
+"
+    )
+}
+
+/// What ends an escape colouring's `coloring_color` (batch 5), and its
+/// colour with the coverage (batch 6).
+const COLOR_RETURN: &str = "return vec3<f32>(effect_r, effect_g, effect_b);";
+const COLOR4_RETURN: &str = "return vec4<f32>(effect_r, effect_g, effect_b, effect_a);";
 
 /// The line that ends an agent's function (P4 step 9d): its record from
 /// the vector of four, position, heading and state.
@@ -1557,8 +1639,22 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
              var<private> uf_ext: array<vec4<f32>, {ext_vec4s}>;\n\n"
         );
     }
+    // Each palette read's colour, read once (batch 5), and each texture
+    // read's (batch 6).
+    for k in 0..load_slots(p, |h| h == Host::EscPaletteLoad) {
+        let _ = writeln!(body, "var<private> ufc_pal{k}: vec3<f32>;");
+    }
+    for k in 0..load_slots(p, |h| matches!(h, Host::TextureLoad | Host::TexelLoad)) {
+        let _ = writeln!(body, "var<private> ufc_tex{k}: vec4<f32>;");
+    }
+    // The texture the loop reads: the config's, slot 14, which the iterate
+    // passes bind (`TextureInLoop`). The recolour pass declares it unread.
+    if reads_texture(p) {
+        body.push_str(&texture_wgsl("@group(0) @binding(14) var esc_texture: texture_2d<f32>;", "esc_texture"));
+        body.push('\n');
+    }
     let mut g = Gen::new(p, Ctx::ColoringInit, "ufc_");
-    body.push_str("fn ufc_init() -> vec4<f32> {\n");
+    body.push_str("fn ufc_init(z_init: vec2<f32>) -> vec4<f32> {\n");
     for &(v, _) in &offsets {
         let _ = writeln!(body, "    {};", var_decl(v, &p.vars[v]));
     }
@@ -1592,9 +1688,34 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
         let _ = write!(body, "    {SOLID_FLAG} = solid;\n    if (solid) {{\n        return 0.0;\n    }}\n");
     }
     body.push_str("    return index;\n}\n");
+    // A colour, not a palette position (batch 5, `DirectColor`): `color`
+    // as `coloring_color`, its result in the effect places.
+    // An `rgba` sets the coverage too (`DirectAlpha`): one function for
+    // both, which the colour and the alpha read.
+    if !p.transform.is_empty() {
+        let alpha = writes_alpha(p);
+        g.ctx = Ctx::ColoringColor;
+        g.ret = if alpha { COLOR4_RETURN } else { COLOR_RETURN };
+        if alpha {
+            body.push_str("\nfn ufc_rgba(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec4<f32> {\n");
+        } else {
+            body.push_str("\nfn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {\n");
+        }
+        unpack(&mut body);
+        locals(&mut body);
+        body.push_str("    var effect_r = 0.0;\n    var effect_g = 0.0;\n    var effect_b = 0.0;\n    var effect_a = 1.0;\n");
+        g.stmts(&p.transform, 1, &mut body);
+        let _ = writeln!(body, "    {}\n}}", g.ret);
+        if alpha {
+            body.push_str(
+                "\nfn coloring_color(sum: OrbitSummary, state: vec4<f32>, v: f32) -> vec3<f32> {\n    return ufc_rgba(sum, state, v).xyz;\n}\n\
+                 \nfn coloring_alpha(sum: OrbitSummary, state: vec4<f32>, v: f32) -> f32 {\n    return ufc_rgba(sum, state, v).w;\n}\n",
+            );
+        }
+    }
 
     let wgsl = g.finish(&format!("// custom colouring: {}\n", sanitize(&p.name)), body);
-    ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init: "ufc_init()".to_string(), needs_accum, ext_vec4s }
+    ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init: format!("ufc_init({COLORING_Z0})"), needs_accum, ext_vec4s }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1603,6 +1724,9 @@ enum Ctx {
     ColoringInit,
     ColoringLoop,
     ColoringFinal,
+    /// A colouring's `color` (batch 5), `coloring_color(sum, state, v)`:
+    /// the summary as `finish` has it, and the value after the transfer.
+    ColoringColor,
     /// The perturbation equations: `#z` is the reference's `z_ref`,
     /// variables are the functions' locals.
     Perturb,
@@ -2056,6 +2180,33 @@ impl<'p> Gen<'p> {
             Host::AgentDeposit => format!("agent_deposit(vec2<i32>({}, {}), {})", a[0], a[1], a[2]),
             Host::ReadAt => format!("sim_read(vec2<i32>({}, {})).{}", a[0], a[1], part(2)),
             Host::PyrPrepare => "pyr_prepare()".to_string(),
+            // An escape colouring's palette, the template's (batch 5).
+            Host::EscPalette => {
+                let f = match args.get(1).and_then(cell_index) {
+                    Some(1) => "esc_palette_srgb",
+                    Some(2) => self.use_(Helper::PaletteTable),
+                    _ => "esc_palette",
+                };
+                format!("{f}({}).{}", a[0], part(2))
+            }
+            Host::EscPaletteCurve => format!("esc_palette_curve({})", a[0]),
+            Host::EscPaletteLoad => {
+                let f = match args.get(1).and_then(cell_index) {
+                    Some(1) => "esc_palette_srgb",
+                    Some(2) => self.use_(Helper::PaletteTable),
+                    _ => "esc_palette",
+                };
+                format!("ufc_pal{} = {f}({})", args.get(2).and_then(cell_index).unwrap_or(0), a[0])
+            }
+            Host::EscPalettePart => format!("ufc_pal{}.{}", args.first().and_then(cell_index).unwrap_or(0), part(1)),
+            // A texture, through the kind's own `uf_texture` and `uf_texel`
+            // ([`texture_wgsl`]).
+            Host::TextureLoad => format!("{}tex{} = uf_texture(vec2<f32>({}, {}))", self.prefix, args.get(2).and_then(cell_index).unwrap_or(0), a[0], a[1]),
+            Host::TexelLoad => format!("{}tex{} = uf_texel(vec2<i32>({}, {}))", self.prefix, args.get(2).and_then(cell_index).unwrap_or(0), a[0], a[1]),
+            Host::TexturePart => format!("{}tex{}.{}", self.prefix, args.first().and_then(cell_index).unwrap_or(0), part(1)),
+            Host::Texture => format!("uf_texture(vec2<f32>({}, {})).{}", a[0], a[1], part(2)),
+            Host::Texel => format!("uf_texel(vec2<i32>({}, {})).{}", a[0], a[1], part(2)),
+            Host::TextureSize => format!("uf_texture_size().{}", part(0)),
             Host::GridParam => {
                 let (Some(first), Some(next)) = (args.first().and_then(cell_index), args.get(1).and_then(cell_index)) else {
                     unreachable!("a grid's cells, as the checker gives them")
@@ -2432,10 +2583,31 @@ impl<'p> Gen<'p> {
             // and a variation its point.
             (Predef::Z, Ctx::Creases | Ctx::Variation | Ctx::Effect) => "pixel".into(),
             (Predef::Z, Ctx::ColoringLoop) => "z".into(),
-            (Predef::Z, Ctx::ColoringFinal) => "sum.z".into(),
-            // A colouring's init runs before the first iterate.
-            (Predef::Z, Ctx::ColoringInit) => "vec2<f32>(0.0, 0.0)".into(),
+            (Predef::Z, Ctx::ColoringFinal | Ctx::ColoringColor) => "sum.z".into(),
+            // A colouring's init runs before the first iterate, on the
+            // formula's starting z: the template passes it
+            // ([`COLORING_Z0`]), as the interpreter's init sees it.
+            (Predef::Z, Ctx::ColoringInit) => "z_init".into(),
             (Predef::NumIter, _) => "i32(sum.n)".into(),
+            // What the loop knows (P7 step 2): the panel's, anywhere; the
+            // orbit's ending in `finish`, from its summary; the step's own
+            // in `step`, the accumulator's arguments.
+            (Predef::Bailout, _) => "params.bailout".into(),
+            (Predef::Degree, _) => "params.degree".into(),
+            (Predef::Escaped, _) => "sum.escaped".into(),
+            (Predef::Converged, _) => "sum.converged".into(),
+            (Predef::Period, _) => "i32(sum.period)".into(),
+            (Predef::EscapeFraction, _) => "esc_escape_fraction(sum)".into(),
+            (Predef::Prev, _) => "z_prev".into(),
+            (Predef::StepC, _) => "c".into(),
+            // The derivative's (batch 4): the summary's, per render pixel,
+            // and the template's own flag and pixel helpers.
+            (Predef::OrbitDz, _) => "sum.dz".into(),
+            (Predef::HasDerivative, _) => "HAS_DERIVATIVE".into(),
+            (Predef::RenderPx, _) => "esc_render_px()".into(),
+            (Predef::Supersample, _) => "esc_supersample()".into(),
+            (Predef::Value, _) => "v".into(),
+            (Predef::Rotation, _) => "params.rot_cs".into(),
             (Predef::Pass, Ctx::Formula) => "s.npass".into(),
             // The perturbation equations read the reference's pass.
             (Predef::Pass, _) => "pass_index".into(),
@@ -3167,6 +3339,8 @@ impl<'p> Gen<'p> {
                 Abs => format!("abs({v})"),
                 Atan2 => format!("{}({v})", self.use_(Helper::CArg)),
                 Fract => format!("fract({v})"),
+                // Component by component, halves to even.
+                RoundEven => format!("round({v})"),
                 Hash2 => format!("{}({v})", self.use_(Helper::Hash2)),
                 IsNan => format!("{}({v})", self.use_(Helper::CIsNan)),
                 IsInf => format!("{}({v})", self.use_(Helper::CIsInf)),
@@ -3199,6 +3373,7 @@ impl<'p> Gen<'p> {
             Sqr => format!("{}({v})", self.use_(Helper::FSq)),
             Sqrt => format!("sqrt({v})"),
             Log => format!("log({v})"),
+            Log2 => format!("log2({v})"),
             Exp => format!("exp({v})"),
             Abs | Cabs => format!("abs({v})"),
             Recip => format!("(1.0 / {v})"),
@@ -3227,6 +3402,8 @@ impl<'p> Gen<'p> {
             Trunc => format!("trunc({v})"),
             Ceil => format!("ceil({v})"),
             Floor => format!("floor({v})"),
+            // WGSL's own: halves to even.
+            RoundEven => format!("round({v})"),
             IsNan => return format!("{}({v})", self.use_(Helper::IsNan)),
             IsInf => return format!("{}({v})", self.use_(Helper::IsInf)),
             Expm1 => format!("{}({v})", self.use_(Helper::FExpm1)),
@@ -3248,7 +3425,8 @@ fn complex_helper(f: Builtin) -> Helper {
     match f {
         SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Tap | Disc => unreachable!("an image read, emitted by `Gen::call`"),
         Hash2 => Helper::Hash2,
-        Fract => unreachable!("emitted by `Gen::call`, real or complex"),
+        Fract | RoundEven => unreachable!("emitted by `Gen::call`, real or complex"),
+        Log2 => unreachable!("a real's alone (`Builtin::result_ty`)"),
         // `Gen::call` passes the value through.
         F32 => Helper::CIdent,
         Sqr => Helper::CSqr,
@@ -3677,6 +3855,8 @@ enum Helper {
     Reduce,
     /// The effects' noise hash (`Builtin::Hash2`).
     Hash2,
+    /// An escape colouring's clamped palette table read (`palette_table`).
+    PaletteTable,
     Atan2,
     Round,
     IsNan,
@@ -3754,6 +3934,7 @@ impl Helper {
         match self {
             Reduce => "uf_reduce",
             Hash2 => "uf_hash2",
+            PaletteTable => "uf_palette_table",
             FSin => "uf_sin",
             FSinh => "uf_sinh",
             FExpm1 => "uf_expm1",
@@ -3861,6 +4042,14 @@ impl Helper {
             // Cody-Waite reduction of a trig argument: the template's
             // `esc_reduce`, which the measured M2 cos error needed.
             // As the built-in noise shaders write it, to the operation.
+            // The palette as a table, CLAMPED rather than wrapped: position
+            // k (N - 1) over the N entries, which sit at i/(N-1), at their
+            // texel centres, as stored (the Direct Orbit Traps' lookup).
+            PaletteTable => "fn uf_palette_table(k: f32) -> vec3<f32> {
+    let n = f32(textureDimensions(palette_texture).x);
+    let u = (clamp(k, 0.0, 1.0) * (n - 1.0) + 0.5) / n;
+    return textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(u, 0.5), 0.0).rgb;
+}",
             Hash2 => "fn uf_hash2(p: vec2<f32>) -> vec2<f32> {
     var n = vec2<f32>(dot(p, vec2<f32>(127.1, 311.7)), dot(p, vec2<f32>(269.5, 183.3)));
     return fract(sin(n) * 43758.5453);
@@ -4282,9 +4471,32 @@ struct HarnessParams {
     flags: u32,
     rot_cs: vec2<f32>,
     julia_c: vec2<f32>,
+    bailout: f32,
+    degree: f32,
     crease: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> params: HarnessParams;
+fn esc_escape_fraction(sum: OrbitSummary) -> f32 {
+    return 1.0;
+}
+const HAS_DERIVATIVE: bool = true;
+@group(0) @binding(1) var palette_texture: texture_2d<f32>;
+@group(0) @binding(2) var palette_sampler: sampler;
+fn esc_palette_curve(t: f32) -> f32 {
+    return t;
+}
+fn esc_palette_srgb(t: f32) -> vec3<f32> {
+    return vec3<f32>(t);
+}
+fn esc_palette(t: f32) -> vec3<f32> {
+    return vec3<f32>(t);
+}
+fn esc_render_px() -> f32 {
+    return 1.0;
+}
+fn esc_supersample() -> f32 {
+    return 1.0;
+}
 fn fparam(i: u32) -> f32 {
     return f32(i);
 }
@@ -4352,7 +4564,7 @@ pub fn validate_coloring(c: &ColoringWgsl) -> Result<(), String> {
         "{HARNESS}{ENV_DECLS}{}\n@compute @workgroup_size(1)\nfn main() {{\n    var st = {};\n    \
          st = coloring_accum(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), st);\n    \
          let v = coloring_map(OrbitSummary(vec2<f32>(1.0, 1.0), 3u, true, false, 0u, vec2<f32>(1.0, 1.0)), st);\n}}\n",
-        c.wgsl, c.accum_init
+        c.wgsl, c.accum_init.replace(COLORING_Z0, "vec2<f32>(0.0, 0.0)")
     ))
 }
 
@@ -4402,7 +4614,7 @@ pub(crate) mod tests {
             "{HARNESS}{ENV_DECLS}{}\n@compute @workgroup_size(1)\nfn main() {{\n    var st = {};\n    \
              st = coloring_accum(vec2<f32>(0.1, 0.2), vec2<f32>(0.0), vec2<f32>(0.1, 0.2), st);\n    \
              let v = coloring_map(OrbitSummary(vec2<f32>(1.0), 3u, true, false, 0u, vec2<f32>(1.0)), st);\n}}\n",
-            c.wgsl, c.accum_init
+            c.wgsl, c.accum_init.replace(COLORING_Z0, "vec2<f32>(0.1, 0.2)")
         )
     }
 
@@ -4414,7 +4626,10 @@ pub(crate) mod tests {
         // An effect's reads of its image are an effect's alone
         // (`an_effect_compiles_to_a_module_naga_accepts`).
         for (name, _) in super::super::builtins::BUILTINS.iter().filter(|(n, _)| !n.starts_with("__")) {
-            let _ = writeln!(calls, "  c = c + {name}(z)");
+            // A real's alone: `log2`.
+            if *name != "log2" {
+                let _ = writeln!(calls, "  c = c + {name}(z)");
+            }
             if !matches!(*name, "conj" | "flip" | "cosxx" | "isnan" | "isinf") {
                 let _ = writeln!(calls, "  f = f + real({name}(f))");
             }
@@ -4930,6 +5145,9 @@ fn step(s, p) {
             // The tests are bools: used as one.
             let body = if matches!(b, Builtin::IsInf | Builtin::IsNan) {
                 format!("if {name}(z)\n  z = 0\n endif")
+            } else if *b == Builtin::Log2 {
+                // A real's alone.
+                format!("z = {name}(real(z)) + #pixel")
             } else {
                 format!("z = {name}(z) + #pixel")
             };
@@ -5281,7 +5499,7 @@ fn step(s, p) {
             cblock.resize(64, 0.0);
             blocks.extend(cblock);
             let cw = coloring(c);
-            let body = "    var s = formula_init(px);\n    var z = s.z;\n    var st = ufc_init();\n    var n = 0u;\n    var escaped = false;\n\
+            let body = "    var s = formula_init(px);\n    var z = s.z;\n    var st = ufc_init(z);\n    var n = 0u;\n    var escaped = false;\n\
                         \x20   for (var i = 0u; i < params.max_iter; i = i + 1u) {\n        let zp = z;\n        s = formula_loop(s, px);\n        z = s.z;\n\
                         \x20       st = coloring_accum(z, zp, px, st);\n        if (!formula_bailout(s, px)) {\n            escaped = true;\n            n = i + 1u;\n            break;\n        }\n    }\n\
                         \x20   if (!escaped) {\n        n = params.max_iter;\n    }\n\

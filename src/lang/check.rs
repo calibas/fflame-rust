@@ -393,7 +393,9 @@ impl Checker {
                 (EntryKind::Formula, SectionKind::Init | SectionKind::Loop | SectionKind::Bailout) => true,
                 (EntryKind::Formula, SectionKind::PerturbInit | SectionKind::PerturbLoop) => true,
                 (EntryKind::Formula, SectionKind::Creases) => true,
-                (EntryKind::Coloring, SectionKind::Init | SectionKind::Loop | SectionKind::Final) => true,
+                // A colouring's `start`, `step` and `finish`, and its
+                // `color` (batch 5) as the transform section.
+                (EntryKind::Coloring, SectionKind::Init | SectionKind::Loop | SectionKind::Final | SectionKind::Transform) => true,
                 // A solid: its start, step, bail and distance (B3), and
                 // what `prepare` computes once (B's leftovers).
                 (EntryKind::Solid, SectionKind::Global | SectionKind::Init | SectionKind::Loop | SectionKind::Bailout | SectionKind::Final) => true,
@@ -961,7 +963,7 @@ impl Checker {
             "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_blend" | "effect_amount" | "density_mean" | "pixel_scale" if self.internal => {
                 // A simulation colouring writes its colour to the same
                 // places (P4), and has nothing else of an effect's.
-                let sim = matches!(self.kind, EntryKind::SimColoring | EntryKind::SimModel) && matches!(name, "effect_r" | "effect_g" | "effect_b" | "effect_a");
+                let sim = matches!(self.kind, EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Coloring) && matches!(name, "effect_r" | "effect_g" | "effect_b" | "effect_a");
                 if self.kind != EntryKind::Effect && !sim {
                     self.error(span, format!("`{name}` is an effect's"));
                     return None;
@@ -978,6 +980,52 @@ impl Checker {
                 }
             }
             "juliac" if self.internal => Predef::JuliaC,
+            // What the loop knows, a colouring's (P7 step 2): the bailout
+            // and degree anywhere, the orbit's ending in `finish`, the
+            // step's own values in `step`.
+            "bailout" | "degree" | "escaped" | "converged" | "period" | "escape_fraction" | "prev" | "step_c" | "orbit_dz" | "has_derivative"
+            | "render_px" | "supersample" | "value" | "rotation"
+                if self.internal =>
+            {
+                if self.kind != EntryKind::Coloring {
+                    self.error(span, format!("`{name}` is a colouring's"));
+                    return None;
+                }
+                let (p, section) = match name {
+                    "bailout" => (Predef::Bailout, None),
+                    "degree" => (Predef::Degree, None),
+                    "escaped" => (Predef::Escaped, Some(SectionKind::Final)),
+                    "converged" => (Predef::Converged, Some(SectionKind::Final)),
+                    "period" => (Predef::Period, Some(SectionKind::Final)),
+                    "escape_fraction" => (Predef::EscapeFraction, Some(SectionKind::Final)),
+                    "prev" => (Predef::Prev, Some(SectionKind::Loop)),
+                    // The derivative's (batch 4).
+                    "orbit_dz" => (Predef::OrbitDz, Some(SectionKind::Final)),
+                    "has_derivative" => (Predef::HasDerivative, None),
+                    "render_px" => (Predef::RenderPx, None),
+                    "supersample" => (Predef::Supersample, None),
+                    // A colour colouring's (batch 5).
+                    "value" => (Predef::Value, Some(SectionKind::Transform)),
+                    "rotation" => (Predef::Rotation, None),
+                    _ => (Predef::StepC, Some(SectionKind::Loop)),
+                };
+                if let Some(s) = section {
+                    // `color` sees the orbit's ending as `finish` does.
+                    if self.section != s && !(s == SectionKind::Final && self.section == SectionKind::Transform) {
+                        let f = match s {
+                            SectionKind::Final => "finish` or `color",
+                            SectionKind::Transform => "color",
+                            _ => "step",
+                        };
+                        // `#dz` is the perturbation equations' deviation:
+                        // the colouring's is `ctx.dz` by another name.
+                        let shown = if name == "orbit_dz" { "dz" } else { name };
+                        self.error(span, format!("`ctx.{shown}` belongs to `{f}`"));
+                        return None;
+                    }
+                }
+                p
+            }
             "crease_decay" | "crease_pattern" | "crease_sign" | "crease_reach" | "crease_height" | "crease_slope"
                 if self.internal =>
             {
@@ -1068,8 +1116,10 @@ impl Checker {
                 return None;
             }
             // UF reads `#numiter` in `final:`, and there alone does the
-            // engine have the orbit's summary.
-            if self.section != SectionKind::Final {
+            // engine have the orbit's summary -- and in a Rhai colouring's
+            // `color`, which has it too.
+            let color = p == Predef::NumIter && self.kind == EntryKind::Coloring && self.section == SectionKind::Transform;
+            if self.section != SectionKind::Final && !color {
                 self.error(span, format!("`#{name}` belongs to `final:`"));
                 return None;
             }
@@ -1741,7 +1791,24 @@ impl Checker {
     /// to a float where a float is taken; a float where an int is, refused),
     /// a vector read's part a literal 0-3; a simulation model's alone.
     fn host_args(&mut self, h: Host, args: &[Expr], span: Span) -> Option<Vec<IExpr>> {
-        if self.kind != EntryKind::SimModel {
+        if h.texture() {
+            // A kind reads a texture where its template binds one: an
+            // escape colouring's iterate passes (slot 14). The recolour
+            // pass runs `finish` and `color` again, and binds none.
+            if self.kind != EntryKind::Coloring {
+                self.error(span, "a texture is read where the template binds one: an escape colouring's `start` and `step`");
+                return None;
+            }
+            if !matches!(self.section, SectionKind::Init | SectionKind::Loop) {
+                self.error(span, "a colouring reads the texture in `start` and `step`: the recolour pass, which runs `finish` and `color` again, has none");
+                return None;
+            }
+        } else if h.escape() {
+            if self.kind != EntryKind::Coloring {
+                self.error(span, "the escape palette is an escape colouring's");
+                return None;
+            }
+        } else if self.kind != EntryKind::SimModel {
             self.error(span, "a simulation's framework call is a simulation model's");
             return None;
         }
@@ -2412,8 +2479,8 @@ fn real_valued(e: &IExpr, real: &HashSet<VarId>) -> bool {
         IExprKind::Call(f, a) => {
             use Builtin::*;
             match f {
-                Zero | Real | Imag | Cabs | Atan2 => true,
-                Sqr | Exp | Expm1 | Sin | Cos | Tan | Cotan | Sinh | Cosh | Tanh | Cotanh | Atan | Asinh | Abs | Ident | Recip | Conj | Round | Trunc | Ceil | Floor | Cosxx => {
+                Zero | Real | Imag | Cabs | Atan2 | Log2 => true,
+                Sqr | Exp | Expm1 | Sin | Cos | Tan | Cotan | Sinh | Cosh | Tanh | Cotanh | Atan | Asinh | Abs | Ident | Recip | Conj | Round | Trunc | Ceil | Floor | RoundEven | Cosxx => {
                     real_valued(a, real)
                 }
                 _ => false,

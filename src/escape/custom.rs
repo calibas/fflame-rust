@@ -640,6 +640,11 @@ fn reference_inputs(escape: &EscapeConfig, prog: &Arc<ir::Program>) -> Option<Re
         julia: escape.julia,
         julia_c: lang::builtins::C64::new(f64::from(escape.julia_re), f64::from(escape.julia_im)),
         rotation: f64::from(escape.rotation),
+        // A colouring's; a formula reads none of them.
+        bailout: f64::from(escape.bailout),
+        degree: 2.0,
+        render_px: 1.0,
+        supersample: 1.0,
     };
     Some(ReferenceInputs { prog: prog.clone(), params, env })
 }
@@ -1212,6 +1217,53 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
     if p.region != ir::Region::Outside {
         features.push(ColoringFeature::ColorsInterior);
     }
+    // `ctx.period` reads the period the loop detects, which the template
+    // compiles in only for a colouring that asks.
+    if p.reads(ir::Predef::Period) {
+        features.push(ColoringFeature::NeedsPeriod);
+    }
+    // `ctx.dz` reads the derivative orbit, which the template compiles in
+    // for a colouring that asks and a formula that has one
+    // (`ctx.has_derivative` says which).
+    if p.reads(ir::Predef::OrbitDz) {
+        features.push(ColoringFeature::NeedsDerivative);
+    }
+    // `fn color` draws a colour (batch 5); a palette read in `start` or
+    // `step` makes the palette part of the iteration, so a palette edit
+    // re-iterates.
+    if !p.transform.is_empty() {
+        features.push(ColoringFeature::DirectColor);
+    }
+    if ir::Program::calls_host(&p.init, lang::builtins::Host::escape) || ir::Program::calls_host(&p.loop_body, lang::builtins::Host::escape) {
+        features.push(ColoringFeature::PaletteInLoop);
+    }
+    // A texture read (in `start` and `step` alone, the checker says) makes
+    // the config's texture part of the iteration, bound in its passes; an
+    // `rgba` colour sets the coverage (batch 6).
+    if lang::wgsl::reads_texture(&p) {
+        features.push(ColoringFeature::TextureInLoop);
+    }
+    if lang::wgsl::writes_alpha(&p) {
+        features.push(ColoringFeature::DirectAlpha);
+    }
+    // What a Rhai colouring's `INFO` says of it beside the program (the
+    // lowering checked them): a level clamped rather than wrapped, and
+    // what picking it sets.
+    let rhai = src.dialect == CustomDialect::Rhai;
+    if rhai && lang::rhai::info_bool(&src.source, "bounded") == Some(true) {
+        features.push(ColoringFeature::Bounded);
+    }
+    if rhai && lang::rhai::info_bool(&src.source, "skips_escaping") == Some(true) {
+        features.push(ColoringFeature::SkipsEscapingIterate);
+    }
+    let recommended_bailout = if rhai { lang::rhai::info_number(&src.source, "bailout").map(|b| b as f32) } else { None };
+    let pick: Vec<(&'static str, f32)> = match rhai.then(|| lang::rhai::info_json(&src.source, "pick")).flatten() {
+        Some(serde_json::Value::Object(m)) => m
+            .into_iter()
+            .filter_map(|(k, v)| Some((leak(k), v.as_f64().or_else(|| v.as_bool().map(f64::from))? as f32)))
+            .collect(),
+        _ => Vec::new(),
+    };
     let def: &'static ColoringDef = Box::leak(Box::new(ColoringDef {
         name: leak(name.to_string()),
         display_name: display_name(&p),
@@ -1220,8 +1272,8 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
         wgsl: leak(c.wgsl),
         accum_init: leak(c.accum_init),
         wgsl_accum: leak(c.wgsl_accum),
-        recommended_bailout: None,
-        pick_params: &[],
+        recommended_bailout,
+        pick_params: Box::leak(pick.into_boxed_slice()),
     }));
     if let Ok(mut r) = registry().write() {
         r.colorings.insert(name.to_string(), def);

@@ -154,6 +154,18 @@ fn bin(op: BinOp, a: ast::Expr, b: ast::Expr, span: Span) -> ast::Expr {
     mk(ExprKind::Binary(op, Box::new(a), Box::new(b)), span)
 }
 
+/// Which texture a read names (batch 6): one exists yet, the config's, so
+/// its index is 0 written out. More are planned; a script naming its
+/// texture now keeps working when they come, and the index may become any
+/// expression (a variation's parameter, say) then.
+pub(super) fn texture_index(k: &ast::Expr) -> Result<(), String> {
+    match k.kind {
+        ExprKind::Int(0) => Ok(()),
+        ExprKind::Int(_) => Err("one texture exists yet: its index is 0".into()),
+        _ => Err("a texture's index is a whole number written out, `0`, for now".into()),
+    }
+}
+
 fn call1(name: &str, a: ast::Expr, span: Span) -> ast::Expr {
     mk(ExprKind::Call { name: name.to_string(), args: vec![a], user: false }, span)
 }
@@ -316,7 +328,8 @@ impl Lowerer<'_> {
             "vec3" | "cross" => Some(Kind::Vec3),
             "quat" => Some(Kind::Quat),
             "rgba" | "vec4" | "input" | "input_at" | "read" | "read_at" | "drive" | "scratch" | "memory" => Some(Kind::Rgba),
-            "palette" => Some(Kind::Vec3),
+            "palette" | "palette_srgb" | "palette_table" => Some(Kind::Vec3),
+            "texture" | "texel" => Some(Kind::Rgba),
             "normalize" | "abs" | "floor" | "min" | "max" | "clamp" | "mix" => first(),
             "conj" | "inv" | "pow" => first().filter(|k| *k == Kind::Quat),
             _ if PLANE_FUNCTIONS.contains(&n) => first().filter(|k| *k == Kind::Quat),
@@ -875,9 +888,75 @@ impl Lowerer<'_> {
                     .collect();
                 V(Vector::new(Kind::Rgba, parts))
             }
+            // An escape colouring's palette (batch 5), through the
+            // template's: at a cycle position in linear light, the same as
+            // stored (display space), or a table read clamped at 0..1.
+            ("palette" | "palette_srgb" | "palette_table", 1) if self.coloring => match args.remove(0) {
+                S(t) => {
+                    let t = self.hold(t, "t");
+                    let how = mk(ExprKind::Int(match name {
+                        "palette" => 0,
+                        "palette_srgb" => 1,
+                        _ => 2,
+                    }), span);
+                    let call = |name: &str, args: Vec<ast::Expr>| mk(ExprKind::Call { name: name.into(), args, user: false }, span);
+                    if self.pure {
+                        // No statement here: a texture read a part.
+                        let part = |c: i64| call("__esc_palette", vec![t.clone(), how.clone(), mk(ExprKind::Int(c), span)]);
+                        V(Vector::new(Kind::Vec3, (0..3).map(part).collect()))
+                    } else {
+                        // Read once into the call site's slot, its parts
+                        // from there.
+                        let slot = self.palette_reads;
+                        self.palette_reads += 1;
+                        self.pending.push(ast::Stmt::Expr(call("__esc_palette_load", vec![t, how, mk(ExprKind::Int(slot), span)])));
+                        let part = |c: i64| call("__esc_palette_part", vec![mk(ExprKind::Int(slot), span), mk(ExprKind::Int(c), span)]);
+                        V(Vector::new(Kind::Vec3, (0..3).map(part).collect()))
+                    }
+                }
+                V(_) => return self.err(p, format!("`{name}(t)` takes a number")),
+            },
+            ("palette_srgb" | "palette_table", 1) => {
+                return self.err(p, format!("`{name}(t)` is an escape colouring's"));
+            }
+            // A texture (batch 6): at a point in 0..1, bilinear, or the
+            // texel at whole coordinates, read once into the call site's
+            // slot where statements may go. A last argument picks which
+            // texture, 0 by default ([`texture_index`]).
+            ("texture", 1 | 2) | ("texel", 2 | 3) if !self.coloring => {
+                return self.err(p, format!("`{name}` reads a texture where the template binds one: an escape colouring's `start` and `step`"));
+            }
+            ("texture", 1 | 2) | ("texel", 2 | 3) => {
+                if args.len() == if name == "texture" { 2 } else { 3 } {
+                    let Some(S(k)) = args.pop() else { return self.err(p, "a texture's index is a whole number") };
+                    texture_index(&k).map_err(|m| Diag::error(span, m))?;
+                }
+                let call = |name: &str, args: Vec<ast::Expr>| mk(ExprKind::Call { name: name.into(), args, user: false }, span);
+                let (a, b) = if name == "texture" {
+                    let S(uv) = args.remove(0) else { return self.err(p, "`texture(uv)` takes a point, `complex(u, v)`, from 0 to 1") };
+                    let uv = self.hold(uv, "uv");
+                    (call1("real", uv.clone(), span), call1("imag", uv, span))
+                } else {
+                    let (S(x), S(y)) = (args.remove(0), args.remove(0)) else { return self.err(p, "`texel(x, y)` takes two whole numbers") };
+                    (self.hold(x, "x"), self.hold(y, "y"))
+                };
+                if self.pure {
+                    // No statement here: a read a part.
+                    let host = if name == "texture" { "__texture" } else { "__texel" };
+                    let part = |c: i64| call(host, vec![a.clone(), b.clone(), mk(ExprKind::Int(c), span)]);
+                    V(Vector::new(Kind::Rgba, (0..4).map(part).collect()))
+                } else {
+                    let slot = self.texture_reads;
+                    self.texture_reads += 1;
+                    let host = if name == "texture" { "__texture_load" } else { "__texel_load" };
+                    self.pending.push(ast::Stmt::Expr(call(host, vec![a, b, mk(ExprKind::Int(slot), span)])));
+                    let part = |c: i64| call("__texture_part", vec![mk(ExprKind::Int(slot), span), mk(ExprKind::Int(c), span)]);
+                    V(Vector::new(Kind::Rgba, (0..4).map(part).collect()))
+                }
+            }
             // A simulation colouring's palette (P4): the shared one at `t`.
             ("palette", 1) if !self.sim_coloring => {
-                return self.err(p, "`palette(t)` is a simulation colouring's: in `fn cell_color` alone");
+                return self.err(p, "`palette(t)` is a simulation colouring's: in `fn cell_color` alone, or an escape colouring's");
             }
             ("palette", 1) => match args.remove(0) {
                 S(t) => {
@@ -1110,7 +1189,7 @@ impl Lowerer<'_> {
                 }
             }
             (n, k) => {
-                if matches!(n, "vec3" | "quat" | "rgba" | "mix" | "input" | "input_at" | "palette" | "read" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp" | "abs" | "floor" | "conj" | "inv" | "pow" | "complex") {
+                if matches!(n, "vec3" | "quat" | "rgba" | "mix" | "input" | "input_at" | "palette" | "palette_srgb" | "palette_table" | "texture" | "texel" | "read" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp" | "abs" | "floor" | "conj" | "inv" | "pow" | "complex") {
                     return self.err(p, format!("`{n}` does not take {k} argument{}", if k == 1 { "" } else { "s" }));
                 }
                 if first_kind == Some(Kind::Quat) {

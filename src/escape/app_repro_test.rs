@@ -3415,6 +3415,411 @@ mod tests {
         assert!(d == 0.0, "the custom colouring at depth differs on {:.3}% of pixels", d * 100.0);
     }
 
+    /// The built-in colourings' twins (`escape::twins::COLORING_TWINS`,
+    /// P7 step 2) render as their built-ins: every setting that takes
+    /// another path through the code, on the Mandelbrot inside and out, a
+    /// Julia set, and deep on the perturbed path.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn builtin_colouring_twins_render_as_their_builtins() {
+        use crate::lang::EntryKind;
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let twin_of = |mut esc: crate::config::escape::EscapeConfig| {
+            let src = crate::escape::twins::coloring_custom_source(&esc.coloring).expect("a twin");
+            esc.coloring = crate::escape::custom::name_of(EntryKind::Coloring, &src);
+            esc.custom_coloring = Some(src);
+            esc
+        };
+        // (colouring, its settings)
+        let mut cases: Vec<(&str, Vec<(&str, f32)>)> = vec![
+            ("escape_count", vec![]),
+            ("basic", vec![]),
+            ("basic", vec![("part", 1.0)]),
+            ("basic", vec![("part", 2.0), ("scale", 3.0)]),
+            ("decomposition", vec![]),
+            ("decomposition", vec![("sectors", 2.0)]),
+            // A half: WGSL's round goes to even, 2 sectors.
+            ("decomposition", vec![("sectors", 2.5)]),
+            ("decomposition", vec![("sectors", 5.0), ("scale", 2.0)]),
+            ("sphere_average", vec![]),
+            ("sphere_average", vec![("at_infinity", 1.0)]),
+            ("sphere_average", vec![("target_re", 0.5), ("target_im", -0.25), ("stride", 3.0)]),
+            ("gaussian_integer", vec![]),
+            ("itinerary", vec![]),
+            ("itinerary", vec![("window", 1.0)]),
+            ("itinerary", vec![("sectors", 3.0), ("depth", 5.0), ("scale", 4.0)]),
+        ];
+        for shape in 0..8 {
+            cases.push(("orbit_trap", vec![("shape", shape as f32), ("radius", 0.6), ("scale", 3.0)]));
+        }
+        for mode in 1..4 {
+            cases.push(("orbit_trap", vec![("mode", mode as f32), ("threshold", 0.05)]));
+        }
+        cases.push(("orbit_trap", vec![("shape", 4.0), ("rotation", 30.0), ("center_re", 0.3), ("center_im", -0.2)]));
+        cases.push(("orbit_trap", vec![("shape", 3.0), ("growth", 2.0), ("rotation", -45.0)]));
+        for reduction in 1..4 {
+            cases.push(("gaussian_integer", vec![("reduction", reduction as f32)]));
+        }
+        // Batch 2: what the loop knows. Each debanded average with and
+        // without Deband (the escape fraction).
+        cases.push(("smooth", vec![]));
+        cases.push(("smooth", vec![("scale", 0.2)]));
+        for name in ["orbit_average", "stripe_average", "magnitude_average", "triangle_inequality", "position_average", "curvature_average", "velocity", "threads"] {
+            cases.push((name, vec![]));
+            cases.push((name, vec![("deband", 1.0)]));
+        }
+        cases.push(("stripe_average", vec![("density", 9.5), ("deband", 1.0)]));
+        cases.push(("magnitude_average", vec![("offset", 0.8), ("scale", 3.0), ("deband", 1.0)]));
+        cases.push(("position_average", vec![("mode", 1.0), ("deband", 1.0)]));
+        cases.push(("threads", vec![("width", 0.4), ("deband", 1.0)]));
+        cases.push(("period", vec![]));
+        cases.push(("period", vec![("scale", 0.05), ("escape_scale", 0.1)]));
+        for mode in 0..3 {
+            cases.push(("exponential_smoothing", vec![("mode", mode as f32)]));
+        }
+        cases.push(("root_basin", vec![]));
+        cases.push(("root_basin", vec![("key", 1.0)]));
+        // Batch 3: bounded, so clamped; External Rays' count rounding
+        // half to even.
+        cases.push(("position_map", vec![]));
+        cases.push(("position_map", vec![("address_mix", 1.5), ("freq_x", 7.0)]));
+        cases.push(("external_rays", vec![]));
+        cases.push(("external_rays", vec![("count", 3.0), ("width", 0.2)]));
+        cases.push(("external_rays", vec![("count", 2.5), ("width", 0.1)]));
+        // Batch 4: the derivative, in the plane and in pixels, and a
+        // light past a half turn (its angle range-reduced).
+        for mapping in 0..3 {
+            cases.push(("distance_estimate", vec![("mapping", mapping as f32)]));
+            cases.push(("distance_estimate", vec![("mapping", mapping as f32), ("units", 1.0), ("scale", 0.3)]));
+        }
+        cases.push(("normal_map", vec![]));
+        cases.push(("normal_map", vec![("angle", 0.7), ("height", 0.5), ("scale", 2.0)]));
+        // Batch 5: a colour as the result, and the palette in it.
+        cases.push(("rainbow_fringe", vec![]));
+        cases.push(("rainbow_fringe", vec![("gamma", 1.0)]));
+        cases.push(("infinite_waves", vec![]));
+        cases.push(("infinite_waves", vec![("smooth", 0.0), ("scale", 0.3), ("offset", 20.0)]));
+        cases.push(("infinite_waves", vec![("blend", 1.0), ("wave4", -50.0), ("wave4_channel", 1.0)]));
+        for shape in 0..5 {
+            cases.push(("voc_traps", vec![("shape", shape as f32)]));
+        }
+        cases.push(("voc_traps", vec![("shape", 0.0), ("trap_x", -0.3), ("trap_y", 0.2), ("circle_size", 0.3)]));
+        cases.push(("voc_traps", vec![("shape", 2.0), ("ring_min", 0.1), ("ring_max", 0.9)]));
+        // Every shape at its own threshold, every blend, the order, the
+        // start, the curves, and the held Screen cross.
+        for shape in 0..8 {
+            cases.push(("direct_traps", vec![("shape", shape as f32), ("threshold", 0.0)]));
+        }
+        for blend in 0..6 {
+            cases.push(("direct_traps", vec![("blend", blend as f32), ("start", if blend == 1 { 1.0 } else { 0.0 })]));
+        }
+        cases.push(("direct_traps", vec![("order", 1.0), ("blend", 3.0)]));
+        for transform in 1..4 {
+            cases.push(("direct_traps", vec![("transform", transform as f32), ("threshold", 0.3)]));
+        }
+        cases.push(("direct_traps", vec![("shape", 2.0), ("blend", 2.0), ("opacity", 0.9), ("threshold", 0.3)]));
+
+        let mut whole = crate::config::escape::EscapeConfig::default();
+        whole.formula = "mandelbrot".into();
+        whole.max_iter = 200;
+        whole.bailout = 4.0;
+        whole.center_re = "-0.6".into();
+        whole.center_im = "0".into();
+        whole.zoom_log2 = 0.4;
+        let mut julia = whole.clone();
+        julia.julia = true;
+        julia.julia_re = -0.8;
+        julia.julia_im = 0.156;
+        julia.center_re = "0".into();
+        julia.zoom_log2 = 0.0;
+        let mut deep = whole.clone();
+        deep.center_re = "-0.743643887037158704752191506114774".into();
+        deep.center_im = "0.131825904205311970493132056385139".into();
+        deep.zoom_log2 = 20.0;
+        deep.max_iter = 1500;
+        // Iterates far past an int's range: a rounding of z is a float's.
+        let mut far = whole.clone();
+        far.bailout = 1e8;
+        // Escaping to infinity: past any meaning, as Basic's guard says.
+        let mut exponential = whole.clone();
+        exponential.formula = "exponential".into();
+        exponential.center_re = "0".into();
+        exponential.zoom_log2 = -1.0;
+        let views = [
+            ("the whole set", whole, false),
+            ("a Julia set", julia, false),
+            ("deep, perturbed", deep, true),
+            ("bailout 1e8", far, false),
+            ("the exponential", exponential, false),
+        ];
+
+        // The share of pixels a twin may differ on: none, but where the
+        // language cannot say the built-in's arithmetic. The language's
+        // sin is range-reduced (for Metal's error) where the built-in's is
+        // the hardware's, whose error grows with the argument: Stripe
+        // Average's takes density times the angle, up to 32 pi, Position
+        // Map's 2 pi times a frequency times the final z, Normal Map's a
+        // light angle past a half turn. An ulp, which the palette carries
+        // across the compare's 1e-4 on a few pixels.
+        let allowed = |name: &str| match name {
+            "stripe_average" => 0.01,
+            "position_map" => 0.02,
+            "normal_map" => 0.002,
+            _ => 0.0,
+        };
+        let mut worst = 0.0f64;
+        for (name, settings) in &cases {
+            for (view, base, perturbed) in &views {
+                // Position Map's sines of an escaped z of 1e4 and more,
+                // arguments past 1e5, are noise on every platform, a
+                // different noise each way: it is for folds, whose z
+                // stays near the paper (Origami, below).
+                if *name == "position_map" && matches!(*view, "bailout 1e8" | "the exponential") {
+                    continue;
+                }
+                let mut esc = base.clone();
+                esc.coloring = name.to_string();
+                for (k, v) in settings {
+                    esc.coloring_params.insert(k.to_string(), *v);
+                }
+                let want = output_on(&device, &queue, &renderer, &esc, w, h, *perturbed);
+                let twin = twin_of(esc);
+                let got = output_on(&device, &queue, &renderer, &twin, w, h, *perturbed);
+                assert_eq!(crate::escape::get_coloring(&twin.coloring).name, twin.coloring, "{name} did not compile");
+                let covered = want.chunks(4).filter(|p| p[3] > 0.5).count();
+                assert!(covered > 100, "{name} {settings:?} on {view}: too little shows ({covered})");
+                let d = differing(&want, &got);
+                println!("{name} {settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
+                if d > 0.0 && std::env::var("TWIN_DIFFS").is_ok() {
+                    for i in (0..want.len() / 4).filter(|&i| (0..4).any(|k| (want[i * 4 + k] - got[i * 4 + k]).abs() > 1e-4)).take(6) {
+                        println!("  pixel {} ({}, {}): {:?} vs {:?}", i, i as u32 % w, i as u32 / w, &want[i * 4..i * 4 + 4], &got[i * 4..i * 4 + 4]);
+                    }
+                }
+                if allowed(name) == 0.0 {
+                    worst = worst.max(d);
+                } else {
+                    let far = want.iter().zip(&got).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                    println!("  (allowed {:.1}%; the largest difference {far:.5})", allowed(name) * 100.0);
+                }
+                assert!(d <= allowed(name), "{name} {settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
+            }
+        }
+        // The colourings of a formula made for them: Newton's basins,
+        // its orbits settling (`ctx.converged`, `ctx.prev`), and
+        // Origami's folds, which steps moved the point (Position Map's
+        // branch address).
+        let mut newton = crate::config::escape::EscapeConfig::default();
+        newton.formula = "newton".into();
+        newton.max_iter = 100;
+        newton.center_re = "0".into();
+        newton.center_im = "0".into();
+        newton.zoom_log2 = -0.5;
+        newton.julia = true;
+        let mut origami = crate::config::escape::EscapeConfig::default();
+        origami.formula = "origami".into();
+        origami.max_iter = 32;
+        origami.center_re = "0".into();
+        origami.center_im = "0".into();
+        origami.zoom_log2 = -1.0;
+        // A formula's derivative derived from its program, not written
+        // (`ctx.dz` through `derive`): the Mandelbrot's own twin.
+        let mut program = crate::config::escape::EscapeConfig { max_iter: 200, center_re: "-0.6".into(), zoom_log2: 0.4, ..Default::default() };
+        let msrc = crate::escape::twins::custom_source("mandelbrot").unwrap();
+        program.formula = crate::escape::custom::name_of(EntryKind::Formula, &msrc);
+        program.custom_formula = Some(msrc);
+        let made_for: [(&str, &crate::config::escape::EscapeConfig, &str, Vec<(&str, f32)>); 11] = [
+            ("Newton", &newton, "root_basin", vec![]),
+            ("Newton", &newton, "root_basin", vec![("key", 1.0), ("key_scale", 0.6)]),
+            ("Newton", &newton, "exponential_smoothing", vec![("mode", 1.0)]),
+            ("Newton", &newton, "exponential_smoothing", vec![]),
+            ("Newton", &newton, "velocity", vec![("deband", 1.0)]),
+            ("Origami", &origami, "position_map", vec![]),
+            ("Origami", &origami, "position_map", vec![("address_mix", 2.0)]),
+            ("Origami", &origami, "position_map", vec![("address_mix", 0.5), ("freq_x", 12.0), ("freq_y", 9.0)]),
+            ("the Mandelbrot's twin", &program, "distance_estimate", vec![]),
+            ("the Mandelbrot's twin", &program, "distance_estimate", vec![("units", 1.0), ("mapping", 2.0)]),
+            ("the Mandelbrot's twin", &program, "normal_map", vec![]),
+        ];
+        for (view, base, name, settings) in &made_for {
+            let mut esc = (*base).clone();
+            esc.coloring = name.to_string();
+            for (k, v) in settings {
+                esc.coloring_params.insert(k.to_string(), *v);
+            }
+            let want = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let got = output_on(&device, &queue, &renderer, &twin_of(esc), w, h, false);
+            let covered = want.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100, "{name} {settings:?} on {view}: too little shows ({covered})");
+            // Shaded by a derivative, not the flat light of none.
+            if matches!(*name, "distance_estimate" | "normal_map") {
+                let mut values: Vec<u32> = want.chunks(4).map(|p| p[0].to_bits()).collect();
+                values.sort_unstable();
+                values.dedup();
+                assert!(values.len() > 50, "{name} on {view}: flat ({} values), no derivative", values.len());
+            }
+            let d = differing(&want, &got);
+            println!("{name} {settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
+            if allowed(name) == 0.0 {
+                worst = worst.max(d);
+            } else {
+                let far = want.iter().zip(&got).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                println!("  (allowed {:.1}%; the largest difference {far:.5})", allowed(name) * 100.0);
+            }
+            assert!(d <= allowed(name), "{name} {settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
+        }
+        println!("worst: {:.3}%", worst * 100.0);
+    }
+
+    /// Image Trap's twin (P7 step 2, batch 6) renders as the built-in:
+    /// the config's texture read in its `step` (`texture`,
+    /// `texture_size`), the colour's coverage (an `rgba`), UF's loop order
+    /// (`INFO.skips_escaping`), on every merge mode, both orders, both
+    /// proportions and a moved trap, on the Mandelbrot direct and
+    /// perturbed and a Julia set. The texture, wider than tall and
+    /// transparent in a disc, is the Ultra Fractal test's.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_image_trap_twin_renders_as_its_builtin() {
+        use crate::config::escape::EscapeTexture;
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let (tw, th) = (48u32, 32u32);
+        let tex = image::RgbaImage::from_fn(tw, th, |x, y| {
+            let (u, v) = (x as f32 / (tw - 1) as f32, y as f32 / (th - 1) as f32);
+            let (dx, dy) = (u - 0.35, v - 0.5);
+            let a = if dx * dx + dy * dy < 0.04 { 0 } else { ((1.0 - 0.6 * u * v) * 255.0) as u8 };
+            image::Rgba([(u * 230.0 + 20.0) as u8, (v * 200.0 + 40.0) as u8, ((1.0 - u) * 120.0 + v * 100.0) as u8, a])
+        });
+        let recipe = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        let key = crate::textures::cache::key(&recipe);
+        let mut whole = crate::config::escape::EscapeConfig::default();
+        whole.formula = "mandelbrot".into();
+        whole.coloring = "image_trap".into();
+        whole.center_re = "-0.6".into();
+        whole.center_im = "0.1".into();
+        whole.zoom_log2 = 0.6;
+        whole.max_iter = 48;
+        whole.bailout = 4.0;
+        whole.texture = Some(EscapeTexture { name: "synthetic".into(), config: Box::new(recipe) });
+        let mut julia = whole.clone();
+        julia.julia = true;
+        julia.julia_re = -0.8;
+        julia.julia_im = 0.156;
+        julia.center_re = "0".into();
+        julia.center_im = "0".into();
+        julia.zoom_log2 = 0.0;
+        let mut deep = whole.clone();
+        deep.center_re = "-0.743643887037158704752191506114774".into();
+        deep.center_im = "0.131825904205311970493132056385139".into();
+        deep.zoom_log2 = 20.0;
+        deep.max_iter = 400;
+        let views = [("the whole set", whole, false), ("a Julia set", julia, false), ("deep, perturbed", deep, true)];
+        // On a grey base, so the darkening modes show.
+        let mut cases: Vec<Vec<(&str, f32)>> =
+            (0..11).map(|m| vec![("merge", m as f32), ("opacity", 0.6), ("base_r", 0.5), ("base_g", 0.5), ("base_b", 0.5)]).collect();
+        for m in [0.0, 1.0, 5.0] {
+            cases.push(vec![("order", 1.0), ("merge", m), ("opacity", 0.5), ("base_r", 0.2), ("base_g", 0.4), ("base_b", 0.6)]);
+        }
+        cases.push(vec![("proportions", 0.0)]);
+        cases.push(vec![("trap_re", 0.2), ("trap_im", -0.1), ("trap_scale", 0.7), ("trap_rotation", 30.0), ("trap_aspect", 1.5), ("trap_skew", 20.0), ("opacity", 0.8)]);
+        let src = crate::escape::twins::coloring_custom_source("image_trap").unwrap();
+        for settings in &cases {
+            for (view, base, perturbed) in &views {
+                let mut esc = base.clone();
+                for (k, v) in settings {
+                    esc.coloring_params.insert(k.to_string(), *v);
+                }
+                assert!(esc.uses_texture());
+                let mut twin = esc.clone();
+                twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
+                twin.custom_coloring = Some(src.clone());
+                let set = |r: &mut crate::escape::EscapeRenderer| assert!(r.set_texture(&device, &queue, &key, &tex));
+                let want = output_with(&device, &queue, &renderer, &esc, w, h, *perturbed, set);
+                let got = output_with(&device, &queue, &renderer, &twin, w, h, *perturbed, set);
+                assert_eq!(crate::escape::get_coloring(&twin.coloring).name, twin.coloring, "the twin did not compile");
+                // Deep, the long orbits multiply and darken to black: there
+                // the coverage shows, and the colour on the shallow views.
+                let painted = want.chunks(4).filter(|p| p[3] > 0.0 && (*perturbed || (p[0] + p[1] + p[2]) > 0.01)).count();
+                assert!(painted > 100, "{settings:?} on {view}: too little shows ({painted})");
+                let d = differing(&want, &got);
+                println!("image_trap {settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
+                if d > 0.0 {
+                    for i in (0..want.len() / 4).filter(|&i| (0..4).any(|k| (want[i * 4 + k] - got[i * 4 + k]).abs() > 1e-4)).take(4) {
+                        println!("  pixel {} ({}, {}): {:?} vs {:?}", i, i as u32 % w, i as u32 / w, &want[i * 4..i * 4 + 4], &got[i * 4..i * 4 + 4]);
+                    }
+                }
+                assert!(d == 0.0, "{settings:?} on {view}: the twin differs on {:.3}% of pixels", d * 100.0);
+            }
+        }
+    }
+
+    /// A colouring that reads the texture in its loop recolours: its WGSL
+    /// declares the texture's slot in every pass, and the recolour pass,
+    /// which binds none, never reads it (batch 6). A palette edit recolours
+    /// Image Trap's twin, as the built-in's, to the picture a fresh render
+    /// gives.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_texture_reading_twin_recolours() {
+        use crate::config::escape::EscapeTexture;
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let tex = image::RgbaImage::from_fn(32, 32, |x, y| image::Rgba([(x * 8) as u8, (y * 8) as u8, 128, 255]));
+        let recipe = crate::textures::as_recipe(&crate::config::FractalConfig::default(), (64, 64));
+        let key = crate::textures::cache::key(&recipe);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.6".into();
+        esc.zoom_log2 = 0.4;
+        esc.max_iter = 64;
+        esc.texture = Some(EscapeTexture { name: "synthetic".into(), config: Box::new(recipe) });
+        let src = crate::escape::twins::coloring_custom_source("image_trap").unwrap();
+        esc.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
+        esc.custom_coloring = Some(src);
+        let settle = |escape: &mut crate::escape::EscapeRenderer, renderer: &mut crate::renderer::compute_kernel::FlameRenderer| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("recolour") });
+                let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.escape_palette_view(false), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let px: Vec<f32> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_texture(&device, &queue, escape.output_texture_for_test(), 0, w, h, 16)).to_vec();
+            px
+        };
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        assert!(escape.set_texture(&device, &queue, &key, &tex));
+        let _ = settle(&mut escape, &mut renderer);
+        config.palette_reverse = true;
+        renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
+            config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse);
+        let after = settle(&mut escape, &mut renderer);
+        assert_eq!(escape.last_path, "recolor", "a palette edit should recolour a colouring that does not read the palette in its loop");
+        let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+        assert!(fresh.set_texture(&device, &queue, &key, &tex));
+        assert_eq!(after, settle(&mut fresh, &mut renderer), "the recoloured picture differs from a fresh one");
+        fresh.destroy();
+        escape.destroy();
+    }
+
     /// Arrays through the renderer (plan, item 3, step 3a): a formula
     /// whose step reads global tables and keeps a per-pixel history
     /// renders as the built-in Mandelbrot it equals -- a table picks the
@@ -13101,7 +13506,9 @@ fn main() {
 
     /// Direct orbit traps sample the palette inside the loop, so a palette
     /// edit must re-iterate: recolouring the records would keep the old
-    /// palette's colours. Changed, the render matches a fresh one.
+    /// palette's colours. Changed, the render matches a fresh one -- the
+    /// built-in's, and its Rhai twin's, whose `palette_table` in `step`
+    /// makes it `PaletteInLoop` (P7 step 2, batch 5).
     #[test]
     #[ignore = "needs a GPU"]
     fn a_palette_edit_re_iterates_direct_traps() {
@@ -13114,44 +13521,54 @@ fn main() {
             &config.flame, config.palette_size,
         );
         renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
-        let mut esc = crate::config::escape::EscapeConfig::default();
-        esc.center_re = "-0.6".to_string();
-        esc.center_im = "0.1".to_string();
-        esc.zoom_log2 = 0.4;
-        esc.max_iter = 100;
-        esc.coloring = "direct_traps".to_string();
-        let settle = |escape: &mut crate::escape::EscapeRenderer, renderer: &mut crate::renderer::compute_kernel::FlameRenderer| {
-            let mut guard = 0u32;
-            loop {
-                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("palette edit") });
-                let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.escape_palette_view(false), renderer.palette_generation());
-                queue.submit(std::iter::once(enc.finish()));
-                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-                if settled {
-                    break;
+        let mut builtin = crate::config::escape::EscapeConfig::default();
+        builtin.center_re = "-0.6".to_string();
+        builtin.center_im = "0.1".to_string();
+        builtin.zoom_log2 = 0.4;
+        builtin.max_iter = 100;
+        builtin.coloring = "direct_traps".to_string();
+        let mut twin = builtin.clone();
+        let src = crate::escape::twins::coloring_custom_source("direct_traps").unwrap();
+        twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
+        twin.custom_coloring = Some(src);
+        for esc in [builtin, twin] {
+            config.palette_reverse = false;
+            renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
+                config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
+                config.palette_log_strength, config.palette_reverse);
+            let settle = |escape: &mut crate::escape::EscapeRenderer, renderer: &mut crate::renderer::compute_kernel::FlameRenderer| {
+                let mut guard = 0u32;
+                loop {
+                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("palette edit") });
+                    let settled = escape.render(&device, &queue, &mut enc, &esc, renderer.escape_palette_view(false), renderer.palette_generation());
+                    queue.submit(std::iter::once(enc.finish()));
+                    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                    if settled {
+                        break;
+                    }
+                    guard += 1;
+                    assert!(guard < 100_000, "render did not settle");
                 }
-                guard += 1;
-                assert!(guard < 100_000, "render did not settle");
-            }
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("palette edit tonemap") });
-            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
-            queue.submit(std::iter::once(enc.finish()));
-            pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0])).expect("readback").2
-        };
-        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
-        let before = settle(&mut escape, &mut renderer);
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("palette edit tonemap") });
+                renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+                queue.submit(std::iter::once(enc.finish()));
+                pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0])).expect("readback").2
+            };
+            let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+            let before = settle(&mut escape, &mut renderer);
 
-        config.palette_reverse = true;
-        renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
-            config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
-            config.palette_log_strength, config.palette_reverse);
-        let after = settle(&mut escape, &mut renderer);
-        assert_ne!(escape.last_path, "recolor", "a palette edit recoloured the baked colours");
-        assert_ne!(before, after, "the palette edit changed nothing");
-        let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
-        assert_eq!(after, settle(&mut fresh, &mut renderer), "the re-iterated picture differs from a fresh one");
-        fresh.destroy();
-        escape.destroy();
+            config.palette_reverse = true;
+            renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
+                config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
+                config.palette_log_strength, config.palette_reverse);
+            let after = settle(&mut escape, &mut renderer);
+            assert_ne!(escape.last_path, "recolor", "a palette edit recoloured the baked colours");
+            assert_ne!(before, after, "the palette edit changed nothing");
+            let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+            assert_eq!(after, settle(&mut fresh, &mut renderer), "the re-iterated picture differs from a fresh one");
+            fresh.destroy();
+            escape.destroy();
+        }
     }
 
     /// The texture overlay is Kalles Fraktaler's: each pixel shows the
@@ -17163,6 +17580,70 @@ fn main() {
                 );
             }
         }
+    }
+
+    /// MEASUREMENT (P7 step 2): each colouring twin against its built-in,
+    /// at its defaults, on the direct path: the Mandelbrot's whole set at
+    /// 4000 iterations, where most pixels run long and the colouring's
+    /// step is a large share of the work. The best of nine, alternating.
+    /// One renderer for every run, so its pipelines are warm: a renderer
+    /// made for each run timed its pipelines' building, about 2 ms here
+    /// and more for a twin's longer WGSL, which read as a colouring's cost.
+    /// The bailout moves by a part in a million between runs, so each
+    /// iterates afresh.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn measure_colouring_twins_against_their_builtins() {
+        let (device, queue) = repro_device();
+        let (w, h) = (1024u32, 768u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
+        let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+        r.force_direct = true;
+        let mut fresh = false;
+        let mut run = |esc: &crate::config::escape::EscapeConfig| -> f64 {
+            let mut esc = esc.clone();
+            fresh = !fresh;
+            if fresh {
+                esc.bailout *= 1.000001;
+            }
+            let start = std::time::Instant::now();
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
+                let settled = r.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+            }
+            start.elapsed().as_secs_f64() * 1000.0
+        };
+        println!("{w}x{h}, the Mandelbrot at 4000 iterations, direct; ms, the best of nine, pipelines warm");
+        for (name, _) in crate::escape::twins::COLORING_TWINS {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "mandelbrot".into();
+            esc.max_iter = 4000;
+            esc.center_re = "-0.6".into();
+            esc.center_im = "0".into();
+            esc.zoom_log2 = 0.4;
+            esc.coloring = name.to_string();
+            let src = crate::escape::twins::coloring_custom_source(name).unwrap();
+            let mut twin = esc.clone();
+            twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
+            twin.custom_coloring = Some(src);
+            for _ in 0..2 {
+                run(&esc);
+                run(&twin);
+            }
+            let (mut b, mut t) = (f64::MAX, f64::MAX);
+            for _ in 0..9 {
+                b = b.min(run(&esc));
+                t = t.min(run(&twin));
+            }
+            println!("{name:21} built-in {b:6.2}  twin {t:6.2}  ({:+.1}%)", (t / b - 1.0) * 100.0);
+        }
+        r.destroy();
     }
 
     /// MEASUREMENT (the speed work after phase 4, step 9e): each twin

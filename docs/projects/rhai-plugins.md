@@ -834,7 +834,7 @@ needs the census did not, the int step and `ctx.layer`):
 |---|---|---|---|
 | Effects | 15 | all 15, the definitions (D1) | yes, the Effects panel |
 | Escape formulas | 26 | all 26 (`escape::twins`) | yes, Edit as Formula |
-| Escape colourings | 28 | none (two examples, `smooth`, `orbit-trap`) | no |
+| Escape colourings | 28 | 28 (six batches, branch `rhai-escape-colourings`; plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
 | Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
@@ -868,22 +868,199 @@ Steps, in the order that unlocks the most first (the user picks):
    loop moves a multiply-add's fusion). Deep zoom declines a formula with
    a scope. Open: a colouring's own `finish` and the escape colourings'
    sections returning early (P7 step 2 will want them).
-2. **Escape colourings** (28). About 20 accumulate over the orbit, which
-   `start` / `step` / `finish` already do. The rest need:
-   - a colour as the result, not a palette position (Rainbow Fringe,
-     Infinite Waves, VOC Traps, Direct Traps, Image Trap): `finish`
-     ending with an `rgba` or a `vec3`, through the result handling the
-     effects and simulation colourings share (`put_result`);
-   - the palette inside the loop (Direct Traps): P4's `palette(t)`;
-   - the formula's derivative (Distance Estimate, Normal Map, Rainbow
-     Fringe): a read of `dz` outside the perturbation sections -- the
-     compiler derives a custom formula's, a built-in has its
-     `wgsl_derivative`;
-   - `INFO` flags for `Bounded`, `ColorsInterior`, `DirectAlpha` and
-     `SkipsEscapingIterate`.
-   Image Trap reads an image, which stays out with user image files
-   (decided 2026-10-02). Then the twins, and Edit as Rhai for the
-   colouring in the Escape panel.
+2. **Escape colourings** (28), branch `rhai-escape-colourings` (begun
+   2026-11-05; **all six batches built 2026-11-05**: every colouring
+   twinned, to merge). A census of the 28 against the
+   dialect (2026-11-05) corrected the estimate: 7 could be twins then,
+   not about 20. The rest needed values the loop has and a Rhai
+   colouring could not read.
+
+   **What a Rhai colouring had then.** `start(z, p)`, `step(s, z, p)`
+   and `finish(s, z, p)`, each with an optional `ctx`. `finish` returns
+   a palette position or `#{ index, solid }`. `ctx` has `c`, `julia`,
+   `angle`, `maxiter`, `center`, `magn`, the pixel's place, `random`,
+   and `numiter` (in `finish` only). `INFO` takes `region`.
+   `compile_coloring` sets only `NeedsOrbitAccum` and `ColorsInterior`.
+
+   **A bug found.** On the GPU, `start`'s `z` is the literal 0, while
+   the interpreter gives it the formula's starting z. No test catches
+   it, because the test's formula starts at 0. Fixed in batch 2: each
+   template hands `start` its starting z (the perturbed path the
+   reference's first point plus the pixel's offset). It changes the Point
+   Trap example on a formula that does not start at 0.
+
+   **The order of work**, each batch ending with the twins it unlocks:
+   - **Batch 1: the seven writable today**, with the machinery every
+     batch uses. **Built 2026-11-05**: every twin matches its built-in on
+     every pixel, at every setting that takes another path, on five views
+     (`builtin_colouring_twins_render_as_their_builtins`). They are
+     within a few percent of their built-ins' speed, but for Itinerary,
+     25% slower through the language's zero-pair-exact `atan2`
+     (ESCAPE.md). `round_even` came forward from batch 2's numerics: the
+     dialect's `floor` and `round` give an int, which overflowed on
+     Gaussian Integer's iterates at a large bailout, and a helper
+     branching to even cost it 45%.
+     - The twins: Escape Count, Orbit Trap, Sphere Average,
+       Decomposition, Basic, Gaussian Integer, Itinerary.
+     - A registry beside the formulas' (`escape::twins`,
+       `COLORING_TWINS`), with sources in
+       `assets/formulas/twins/colorings/`.
+     - A CPU test that each twin compiles with its built-in's
+       parameters.
+     - A GPU picture compare against the built-in, on more than one
+       formula.
+     - A printed timing, as the formula twins have.
+     - The Escape panel's **Edit as Rhai** for the colouring; the
+       Formula Editor's `open_in_use` takes the entry's kind.
+   - **Batch 2: what the loop knows.** **Built 2026-11-05**: all twelve
+     match their built-ins on every pixel on the five views and Newton's
+     basins, but Stripe Average, under 0.25% of pixels by an ulp (its
+     range-reduced `sin` at up to 32 pi; allowed 1%). Speed within a few
+     percent, but Curvature Average 14% slower (`atan2`, as Itinerary)
+     and Stripe Average 9% (`sin`). Two rules found for matching to the
+     bit, both the GPU's fused multiply-add: a blend as `prev + (mean -
+     prev) * f` (WGSL's `mix`), and a term the built-in adds in one
+     expression added in one (Root Basin's shading by time).
+     - `ctx.escaped`, `ctx.converged`, and `ctx.period`, which brings
+       `NeedsPeriod`.
+     - `ctx.degree` and `ctx.bailout` in every function.
+     - The escape fraction the debanding uses, as the template computes
+       it (`esc_escape_fraction`, its never-escaping case included).
+     - `c` and the previous `z` in `step`, and the formula's starting z
+       in `start` (the bug above).
+     - `log2`, so twins round as their built-ins. (`inverseSqrt` is not
+       needed: Sphere Average's `1 / sqrt` matched to the pixel.)
+     - The twins it unlocks: Smooth, the five deband averages (Orbit,
+       Stripe, Magnitude, Position, Threads), Triangle Inequality,
+       Curvature Average, Velocity, Exponential Smoothing, Root Basin,
+       Period.
+   - **Batch 3: `INFO` keys.** **Built 2026-11-05**: External Rays
+     matches its built-in on every pixel; Position Map differs by an ulp
+     on under 1.7% of pixels on Origami, its `sin` range-reduced as
+     Stripe Average's (allowed 2%). The batch 1 and 2 twins gained their
+     built-ins' `bailout` and `pick`, which the compile test now checks.
+     A Rhai colouring picked from the panel's plug-ins, or first Used in
+     the Formula Editor, applies them as a built-in's pick does.
+     - `bounded`: clamp rather than wrap, the `Bounded` flag.
+     - The recommended bailout, and the pick parameters a fresh pick
+       takes (the averages' deband).
+     - The twins it unlocks: Position Map, External Rays. With it, a
+       twin also picks as its built-in does.
+   - **Batch 4: the derivative.** **Built 2026-11-05**: `ctx.dz`,
+     `ctx.has_derivative`, `ctx.render_px`, `ctx.supersample`. Distance
+     Estimate matches its built-in on every pixel at every mapping and
+     unit, on the five views and over the Mandelbrot's Rhai twin (its
+     derivative derived); Normal Map too, but by an ulp on under 0.06%
+     with its light past a half turn (the range-reduced `cos`/`sin`;
+     allowed 0.2%). Speed within 6%.
+     - `dz` in `finish`, which brings `NeedsDerivative`, with the
+       template's has-a-derivative flag.
+     - The supersample factor and the render pixel's size.
+     - The twins it unlocks: Distance Estimate, Normal Map.
+   - **Batch 5: a colour as the result.** **Built 2026-11-05**: all
+     four match their built-ins on every pixel at every setting tried, on
+     the five views; Direct Orbit Traps' twin re-iterates on a palette
+     edit. Speed within 2% (Rainbow Fringe, Infinite Waves) or faster
+     (Visions of Chaos Traps 7%, Direct Orbit Traps 20%). As built, it
+     differs from the plan below in two places:
+     - The colour is a function of its own, `fn color(s, z, p[, ctx])`
+       ending with a `vec3`, not a value `finish` returns beside the
+       index: the colour reads the value after the transfer
+       (`ctx.value`), which exists only once `finish` has given the
+       index. It is the program's transform section, through the same
+       result handling as effects and simulation colourings
+       (`put_result`).
+     - The palette is four reads -- `palette`, `palette_srgb`,
+       `palette_table`, `palette_curve` -- host calls, each read once
+       into a slot for its parts. Three reads a part cost Visions of
+       Chaos Traps' twin 40%. A read in `start` or `step` brings
+       `PaletteInLoop`.
+     The measure was fixed on the way: it made a renderer for each run,
+     so it timed the pipelines' building too, which read as up to 60% on
+     the short renders; with one renderer the earlier batches' figures
+     hold (Itinerary 28%, Curvature Average 12%, Stripe Average 8-12%).
+     - `finish` returning an `rgb` beside the index, through the result
+       handling effects and simulation colourings share (`put_result`).
+     - The palette in `finish`, and in `step` with `PaletteInLoop`, so a
+       palette edit re-iterates.
+     - The value after the transfer.
+     - The view's rotation as cosine and sine.
+     - The twins it unlocks: Rainbow Fringe, Infinite Waves, Visions of
+       Chaos Traps, Direct Orbit Traps.
+   - **Batch 6: Image Trap** (corrected 2026-11-05: the census had it
+     reading a user image, but it reads the config's simulation texture,
+     `EscapeConfig::texture`). **Built 2026-11-05**, all 28 colourings now
+     twinned: the twin matches the built-in on every pixel, on every
+     merge mode, both orders, both proportions and a moved trap, direct,
+     perturbed and on a Julia set (`the_image_trap_twin_renders_as_its_builtin`),
+     and recolours on a palette edit (`a_texture_reading_twin_recolours`).
+     18% slower, its trap's rotation and skew through the reduced trig
+     each iteration as the built-in's are. The texture read is the
+     language's, for every kind (below). The built-in now reads the
+     texture as the language does -- bilinear by hand in f32 from
+     `textureLoad`, not through the sampler, whose filtering weights each
+     vendor rounds its own way -- so the two agree and both agree across
+     platforms (`the_image_trap_reads_the_texture_as_the_language_does`;
+     the visual config moved by one 8-bit level on 535 of 307,200
+     pixels, the Ultra Fractal trace's agreement unchanged). What it
+     needed:
+     - `texture(uv)`, an `rgba`, and `texture_size()`, in `start` and
+       `step` alone (the colouring's iterate passes bind slot 14; the
+       recolour pass does not), each read once per call site as the
+       palette's are; reading it brings `TextureInLoop`.
+     - `color` ending with an `rgba`, its `a` the pixel's coverage
+       (`DirectAlpha`), as a simulation colouring's does. The template's
+       `coloring_alpha(sum, state)` gains `v`, so it can be written from
+       the same body; Image Trap's own changes to match.
+     - An `INFO` key for `SkipsEscapingIterate` (UF's loop section: the
+       step sees only the iterates that did not bail out).
+     - The compare with a texture on the renderer, as
+       `the_image_trap_draws_what_ultra_fractals_source_says` sets one:
+       every merge mode, both orders, both proportions, the trap's
+       transform.
+
+   **Textures in other kinds** (the user's ask, 2026-11-05: one way to
+   read a texture, usable by variations too). The language side is
+   kind-free: `texture(uv)`, `texel(x, y)` and `texture_size()` lower to
+   host calls (`Host::texture`), each read once per call site into a
+   slot, and every kind's WGSL reads through the one portable
+   `lang::wgsl::texture_wgsl(decl, var)` -- the bilinear JWildfire's
+   texture variations do on the CPU, so a port can match them, and
+   `texel` for one that interpolates its own way. A kind opts in with
+   four things:
+   1. the checker allows its kind and sections (`check::host_args`);
+   2. its generator emits `texture_wgsl` with its own binding and the
+      slots' declarations (as `wgsl::coloring` does for slot 14);
+   3. a feature, from `wgsl::reads_texture`, that makes its passes bind
+      the texture and makes the texture part of what it renders;
+   4. a texture to read.
+   For **flame variations** (`colormap_wf`, `displacemap_wf`,
+   `post_bumpmap_wf` ... in variation-port-blockers.md, blocker 2) the
+   first three are small: the Variation context in the generator, a
+   `Feature` (append-only; the API repository is told), and a binding
+   the compute layout holds only for a flame that uses it
+   (`used_bindings`). The fourth is where a flame's texture comes from:
+   the user plans several (2026-11-05), so the reads already name theirs
+   -- `texture(uv, k)`, `texel(x, y, k)`, `texture_size(k)`, k 0 by
+   default and 0 alone yet, a literal. When more come, the index may
+   become any expression (a variation's parameter picking its texture per
+   instance, as JWildfire's each have one), the config holds a list
+   (escape's one texture its first), and the shader binds the list --
+   separate bindings under a switch, or a `texture_2d_array` if the
+   textures share a size (WebGPU's default limit is 16 sampled textures a
+   stage). Every path that renders (export, video, thumbnails, the
+   gallery modules, pyfflame) bakes the list first, and the UI picks into
+   it.
+
+   **Numerics to write by hand in a twin.** WGSL's `round` rounds half
+   to even, the dialect's half away from zero. A real `sin`/`cos` is
+   range-reduced past pi. A number `min`/`max` is an `if`, so NaN
+   differs. Where a twin cannot match bit for bit, its compare names
+   the share it allows, as the formula twins' table does.
+
+   **Stays beside the built-ins.** Whether the twins then replace them
+   is D7's, decided later, as for the formulas.
+
 3. **Flame variations' hooks.** 339 of the 647 use nothing a Rhai
    variation cannot say today; the other 308 need at least one of:
    - **derived parameters** (134 built-ins, `wgsl_init`): a variation's

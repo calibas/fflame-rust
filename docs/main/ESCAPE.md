@@ -558,13 +558,94 @@ fn escaped(s, p) {
   fn finish(s, z, p) { s.closest.sqrt() * p.scale }
   ```
 
-  - `start` (the state the pixel keeps) and `step` (after each of the
-    formula's passes) are optional, as UF's `init:` and `loop:` are.
+  - `start` (the state the pixel keeps; its `z` the formula's starting
+    z -- on the GPU it was 0 until 2026-11-05, where the interpreter
+    already gave the starting z) and `step` (after each of the formula's
+    passes) are optional, as UF's `init:` and `loop:` are.
   - `finish` returns the palette position (the index; it wraps), or
     `#{ index, solid }`, `solid` leaving the pixel to the solid colour.
     It may end in an `if` whose arms give either.
-  - The context adds `ctx.numiter` (the passes run, in `finish`); a
-    colouring counts its own passes in its state.
+  - The context adds what the built-in colourings read (batch 2 of the
+    colouring twins):
+    - in `finish`: `ctx.numiter` (the passes run), `ctx.dz` (the
+      orbit's derivative per render pixel; reading it compiles the
+      derivative in, `NeedsDerivative`, on a formula that has one --
+      a built-in's, or one derived from a custom formula's program),
+      `ctx.escaped`,
+      `ctx.converged` (a convergent formula's orbit settled),
+      `ctx.period` (the period the orbit was found to repeat at, an
+      int, 0 if none; reading it turns the period check on,
+      `NeedsPeriod`) and `ctx.escape_fraction` (the smooth count's
+      fraction, `1 - log_degree(log|z|^2 / log bailout)` clamped to 0
+      to 1, 0 inside: the debanded averages' weight,
+      `esc_escape_fraction`);
+    - in `step`: `ctx.prev` (z before this pass) and `ctx.step_c` (the c
+      the renderer hands the colouring's step: a built-in formula's c,
+      the pixel or the Julia constant; a custom formula's, the pixel);
+    - anywhere: `ctx.bailout` (the panel's), `ctx.degree` (the
+      formula's degree at infinity, as the smooth colourings divide by),
+      `ctx.has_derivative` (whether `ctx.dz` is a derivative or its seed,
+      1, per render pixel: a colouring built on it draws flat without),
+      `ctx.render_px` (a render pixel's size in the plane) and
+      `ctx.supersample` (render pixels per output pixel: the supersample
+      factor times the render scale, so a distance in output pixels holds
+      still as antialiasing changes).
+
+    A colouring counts its own passes in its state.
+  - `INFO` takes, beside the title: `region` (`"inside"`, `"outside"`
+    or `"both"`, the default), `bounded: true` (the value is a level,
+    0 to 1, clamped rather than wrapped through the palette:
+    `ColoringFeature::Bounded`), and what picking the colouring sets --
+    `bailout` (the squared bailout it is best drawn at, as a built-in's
+    `recommended_bailout`) and `pick` (`#{ deband: 1 }`, the values a
+    fresh pick takes, `pick_params`). The panel's colouring picker, its
+    plug-ins and the Formula Editor's first Use of a colouring apply
+    them as they do a built-in's (`escape_panel::pick_changes`); Edit as
+    Rhai does not, keeping the settings in use.
+  - **A colour, not a palette position** (batch 5): beside `finish`,
+    `fn color(s, z, p[, ctx])` ends with a `vec3` in linear light, the
+    pixel's colour (`ColoringFeature::DirectColor`; it lowers to the
+    template's `coloring_color`, the program's transform section).
+    `finish` still gives the value the relief and auto contrast read;
+    `ctx.value` in `color` is that value after the Palette mapping's
+    transfer. `color` reads the state and the orbit's ending as `finish`
+    does (`ctx.dz`, `ctx.escaped`, `ctx.numiter` ...). A separate function
+    rather than a colour `finish` returns, because the colour reads the
+    transferred value, which only exists once `finish` has given it.
+  - **The palette**, through the template's own reads: `palette(t)` (a
+    cycle position, linear light), `palette_srgb(t)` (the same as stored,
+    display space), `palette_table(k)` (the table read CLAMPED at k in
+    0..1, its N entries at i/(N-1), as stored: a colormap lookup) and
+    `palette_curve(t)` (the Palette mapping's curve). Each read is one
+    texture read, held in a slot of its own for its parts
+    (`Host::EscPaletteLoad`; three reads a part cost Visions of Chaos
+    Traps' twin 40%). Read in `start` or `step`, the palette is part of
+    the iteration (`PaletteInLoop`): a palette edit re-iterates. The
+    interpreter has no palette, and reads 0.
+  - `ctx.rotation`, anywhere: the view's rotation as (cos, sin), the
+    uniform's own -- not `cos(ctx.angle)`, which rounds again.
+  - **The config's texture** (batch 6), in `start` and `step` alone --
+    the iterate passes bind it (slot 14), the recolour pass, which runs
+    `finish` and `color` again, does not: `texture(uv)`, an `rgba` at uv
+    in 0..1, bilinear between the texel centres and clamped at the
+    edges; `texel(x, y)`, the texel at whole coordinates, clamped;
+    `texture_size()`, (width, height). A last argument names the
+    texture -- `texture(uv, 0)`, `texel(x, y, 0)`, `texture_size(0)` --
+    and 0 is the default: one texture exists yet, so its index is 0
+    written out, and more are planned (rhai-plugins.md, step 2). Reading
+    it brings
+    `TextureInLoop`: the texture is part of the iteration. The read is
+    the language's for every kind (`lang::wgsl::texture_wgsl`):
+    bilinear by hand in f32 from `textureLoad`, not through the sampler,
+    whose filtering weights each vendor rounds its own way, so WebGPU,
+    Metal and Vulkan read the same. Each read is one, held in a slot for
+    its parts. The interpreter has no texture, and reads 0.
+  - `color` may end with an `rgba` instead, its `a` the pixel's coverage
+    (`DirectAlpha`: transparent, the background shows); the template's
+    `coloring_alpha` takes the transferred value as `coloring_color`
+    does. `INFO.skips_escaping: true` makes `step` see only the iterates
+    that did not bail out, as Ultra Fractal runs a colouring's `loop:`
+    (`SkipsEscapingIterate`).
   - The state is packed under the same 32-float cap as UF's.
   - Examples: `assets/formulas/smooth.rhai`, `orbit-trap.rhai`; the
     test file `tests/formulas/rhai/coloring.rhai` runs on the GPU as the
@@ -914,6 +995,15 @@ fn escaped(s, p) {
   noise to the bit -- where the language's own `sin`, range-reduced
   (`uf_reduce`, for Metal's error), would make it a different noise.
   Fast, not good: hash a lattice point, as noise does.
+- **`round_even(x)`** (WGSL's `round`, each part of a complex): halves to
+  even, and a float -- where `round` (UF's) takes halves away from zero
+  and gives an int. So a twin of a built-in that rounds rounds as it
+  does, and an iterate past an int's range rounds to itself (the
+  Gaussian Integer colouring's twin). Deep zoom declines a formula that
+  uses it, as it declines `round`.
+- **`log2(x)`** (WGSL's, a real): the base-2 logarithm in one
+  instruction, as the smooth colouring takes it; a complex is refused
+  (`ln(z) / ln(2.0)`). Deep zoom declines a formula that uses it.
 - **Labels by locale** (design rule 8): `INFO.title`, `INFO.description`
   and a parameter's `caption`, `hint` and each choice may be a map of
   locale to string,
@@ -1083,6 +1173,67 @@ fn escaped(s, p) {
     CPU in f32, and each line folds through every earlier one, so `prepare`
     computes in f32 an operation at a time (`to_f32`) -- in f64 the tables
     parted by whole units after the first few lines.
+- **The built-in colourings' twins** (`escape::twins::COLORING_TWINS`,
+  `assets/formulas/twins/colorings/*.rhai`; P7 step 2 in
+  [rhai-plugins.md](../projects/rhai-plugins.md), six batches): every
+  built-in colouring -- Escape
+  Count, Orbit Trap, Sphere Average, Decomposition, Basic, Gaussian
+  Integer, Itinerary, (reading the loop's values, `ctx` above) Smooth,
+  Orbit, Stripe, Magnitude and Position Average, Root Basin, Triangle
+  Inequality, Period, Curvature Average, Velocity, Threads and
+  Exponential Smoothing, (bounded, `INFO` above) Position Map and
+  External Rays, (the derivative, `ctx.dz`) Distance Estimate and Normal
+  Map, (a colour, `fn color`, and the palette) Rainbow Fringe, Infinite
+  Waves, Visions of Chaos Traps and Direct Orbit Traps, and (the
+  texture, the coverage) Image Trap -- each a Rhai colouring that renders
+  as its built-in. The built-in Image Trap reads its texture as the
+  language does, bilinear by hand
+  (`the_image_trap_reads_the_texture_as_the_language_does`).
+  - Each has its built-in's parameters exactly -- names, captions,
+    hints, ranges, choices, a log slider -- its interior, accumulator,
+    period, bounded, derivative, colour and palette-in-the-loop flags,
+    and its recommended bailout and pick values
+    (`every_colouring_twin_compiles_as_its_builtin`). Direct Orbit
+    Traps' twin re-iterates on a palette edit as the built-in does
+    (`a_palette_edit_re_iterates_direct_traps`).
+  - The colouring section's **Edit as Rhai** puts the twin in the
+    built-in's place, one undo step: the settings carry over by name,
+    and the formula and the view stay. It opens the twin in the Formula
+    Editor in use as a colouring, so with Live on an edit re-renders.
+  - Through the renderer each matches its built-in on every pixel, at
+    every setting that takes another path through the code, on the
+    Mandelbrot inside and out, a Julia set, deep on the perturbed path,
+    at a bailout of 1e8, and on the exponential; those of a formula made
+    for them on it (Newton's basins, Origami's folds); and the
+    derivative's on the Mandelbrot's Rhai twin, whose derivative is
+    derived (`builtin_colouring_twins_render_as_their_builtins`). Stripe
+    Average, Position Map and Normal Map are the exceptions, by an ulp
+    the palette carries to 1e-3: the language's `sin` and `cos` are
+    range-reduced (for Metal's error) where the built-ins' are the
+    hardware's, whose error grows with the argument -- Stripe's up to
+    32 pi (under 0.25% of pixels), Position Map's 2 pi times a
+    frequency times the final z (under 1.7% on Origami at frequency
+    12), Normal Map's a light angle past a half turn (under 0.06%;
+    exact at its default). Position Map is not compared where z escapes
+    to 1e4 and more: sines of 1e5 are noise on every platform.
+  - Two more rules for a twin to match to the bit, each the GPU fusing a
+    multiply and an add: a blend is written `prev + (mean - prev) * f`,
+    as WGSL's `mix` (`prev * (1 - f) + mean * f` parted on 0.016% of
+    pixels), and a term the built-in adds in one expression is added in
+    one (Root Basin's `t + n * speed`: kept apart in a `let`, it rounded
+    once more and a whole-number position wrapped).
+  - Their speed, the best of nine at 1024x768 and 4000 iterations, the
+    Mandelbrot's whole set, direct, pipelines warm
+    (`measure_colouring_twins_against_their_builtins`, 2026-11-05, GTX
+    1660 SUPER): most within 5% of their built-ins; Orbit Trap,
+    Gaussian Integer, Visions of Chaos Traps and Direct Orbit Traps 8 to
+    20% faster. Slower: Itinerary 28% and Curvature Average 12%, their
+    angles through the language's zero-pair-exact `atan2` (Metal's fails
+    at a zero pair), which the built-ins avoid by their own guards;
+    Stripe Average 8-12% by its range-reduced `sin`; Sphere Average 7%.
+    The measure made a renderer for each run until batch 5, so it timed
+    the pipelines' building too (about 2 ms, more for a twin's longer
+    WGSL), which read as the colourings' cost on the short renders.
 - **UF and Fractint formulas and colourings convert** (`lang/to_rhai.rs`;
   the Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
   checked program is printed in these shapes, the file opened left as
