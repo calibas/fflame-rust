@@ -305,6 +305,8 @@ impl<'p> VariationRun<'p> {
         let mut m = Machine::new(p, params);
         m.flame_rng.set(Some(seed));
         let mut sh = Shared::new(&env);
+        // `prepare`'s values, at f64, which the body reads as its own.
+        m.exec(&p.global_body, &mut sh);
         m.exec(&p.init, &mut sh);
         VariationRun { m, env }
     }

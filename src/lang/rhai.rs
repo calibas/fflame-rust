@@ -1676,9 +1676,11 @@ impl<'s> Lowerer<'s> {
         }
         let span = Span { start: 0, end: self.source.len() };
         let mut sections = Vec::new();
-        if self.transform && self.fns.contains_key("prepare") {
+        // A variation's derived values (a built-in's `wgsl_init`): from its
+        // parameters alone, on the GPU once per transform as they change.
+        if self.transform && self.fns.get("prepare").is_some_and(|f| f.params.len() != 1) {
             let f = &self.fns["prepare"];
-            return self.err(f.body.position(), "a transformation has no `prepare` yet: its values are computed in `variation`");
+            return self.err(f.body.position(), "`prepare(p)`: a variation's values from its parameters, computed once as they change");
         }
         if self.effect && self.fns.contains_key("prepare") {
             let f = &self.fns["prepare"];
@@ -4240,6 +4242,9 @@ impl<'s> Lowerer<'s> {
         let Some(def) = fns.get("variation").cloned() else { return self.err(p, format!("`{vname}` is not a variation")) };
         if fns.contains_key("init") {
             return self.err(p, format!("`{vname}` keeps state (`init`): a flame's; inside a formula, a later step"));
+        }
+        if fns.contains_key("prepare") {
+            return self.err(p, format!("`{vname}` computes values from its parameters (`prepare`): a flame's; inside a formula, a later step"));
         }
         // A body ending `#{ z, color }` gives its point here: the colour
         // is a flame's.

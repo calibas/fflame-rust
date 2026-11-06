@@ -357,8 +357,6 @@ static MODULES: std::sync::OnceLock<
 > = std::sync::OnceLock::new();
 
 fn body_for(name: &str) -> Option<&'static Body> {
-    // An unedited twin's is its built-in's body (`twins::planner_name`).
-    let name = super::twins::planner_name(name);
     let cache = MODULES.get_or_init(Default::default);
     if let Some(hit) = cache.lock().ok()?.get(name) {
         return *hit;
@@ -546,6 +544,9 @@ fn derive_box_branched(
     input: [Interval; 2],
     branch: Option<Branch>,
 ) -> Result<[Interval; 2], Refusal> {
+    // An unedited twin is its built-in: its body, its parameters and its
+    // derived slots (`twins::planner_name`).
+    let name = super::twins::planner_name(name);
     let body = body_for(name).ok_or(Refusal::NoBody)?;
     let module = &body.module;
     let func = &module.functions[body.handle];

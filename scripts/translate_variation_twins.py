@@ -269,6 +269,9 @@ class Fn:
         self.ret = vec_of(ret.strip()) if ret.strip() else None
         self.params = []
         self.point = None
+        # The init's body (`prepare`): `user[i]` the parameters, `out` its
+        # slots, each return the map of them.
+        self.init = False
         # A 3D body ending in an `if`: the arms set this, returned after.
         self.result_var = None
         for name, ty in args:
@@ -411,6 +414,11 @@ class Fn:
                 if len(sw) == 3: return f"vec3({', '.join(parts)})"
                 return f"rgba({', '.join(parts)})"
             raise Refuse(f"a field `.{sw}`")
+        if k == "index" and self.init and e[1] in (("id", "user"), ("id", "out")):
+            if e[2][0] != "num":
+                raise Refuse("the init's slots by a computed index")
+            i = int(e[2][1].rstrip("ui"))
+            return self.tr.param_read(i) if e[1] == ("id", "user") else f"out[{i}]"
         if k == "index":
             # The variation's own weight, JWildfire's inside the formula.
             if e[1] == ("field", ("index", ("id", "transforms"), ("id", "xform_id")), "variations") and e[2] == ("id", "variation_id"):
@@ -443,12 +451,7 @@ class Fn:
             slot = args[2]
             if slot[0] != "num":
                 raise Refuse("a parameter by a computed slot")
-            i = int(slot[1].rstrip("u"))
-            if i >= len(self.tr.param_names):
-                raise Refuse("a derived parameter (prepare)")
-            if not self.tr.param_floats[i]:
-                return f"to_float(p.{self.tr.param_names[i]})"
-            return f"p.{self.tr.param_names[i]}"
+            return self.tr.param_read(int(slot[1].rstrip("u")))
         if f == "rng_nextf":
             return "rand()"
         # The project's IEEE-exact atan2 is the language's.
@@ -563,6 +566,16 @@ class Fn:
 
     def stmt(self, s, depth, last):
         k = s[0]
+        if self.init and k == "decl" and s[2] == "out":
+            self.emit(depth, f"let out = array({self.tr.d['init_param_count']}, 0.0);")
+            return
+        if self.init and k == "assign" and s[1][0] == "index" and s[1][1] == ("id", "out"):
+            self.line(depth, lambda: f"{self.ex(s[1])} {s[2]} {self.ex(s[3])};")
+            return
+        if self.init and k == "return" and s[1] == ("id", "out"):
+            slots = ", ".join(f"{n}: out[{i}]" for i, n in enumerate(self.tr.derived_list()))
+            self.emit(depth, f"#{{ {slots} }}" if last else f"return #{{ {slots} }};")
+            return
         if k == "decl":
             _, kind, name, ty, init = s
             t = vec_of(ty.strip()) if ty else (self.ty(init) if init else None)
@@ -711,6 +724,57 @@ class Translation:
         self.param_floats = [p["param_type"] in ("float", "unlimited_float", "angle") for p in d["parameters"]]
         self.helpers = {}
         self.helper_args = {}
+        self.derived = derived_names(d)
+
+    def derived_list(self):
+        return [self.derived[k] for k in range(self.d["init_param_count"])]
+
+    def param_read(self, i):
+        """Slot `i` of the variation's: a parameter, or past them a value
+        `prepare` returns."""
+        n = len(self.param_names)
+        if i >= n:
+            if i - n not in self.derived:
+                raise Refuse("a slot past the derived ones")
+            return f"p.{self.derived[i - n]}"
+        if not self.param_floats[i]:
+            return f"to_float(p.{self.param_names[i]})"
+        return f"p.{self.param_names[i]}"
+
+    def prepare(self, src):
+        """The def's `wgsl_init` as `fn prepare(p)`: its values by the names
+        the body reads them by. A body ending in its slots' writes returns
+        them as a map; any other keeps WGSL's `out`, an array."""
+        fns = functions(src)
+        if len(fns) != 1:
+            raise Refuse("a helper in the init")
+        _, args, ret, toks = fns[0]
+        # A local `p` would hide the parameters, `prepare`'s `p`.
+        free = next(n for n in ("pv", "p_", "p0") if ("id", n) not in toks)
+        toks = [("id", free) if t == ("id", "p") else t for t in toks]
+        f = Fn(self, 2, [], "", True)
+        f.init = True
+        ss = fold_returns(block(P(toks)))
+        if not ss or ss[-1] != ("return", ("id", "out")):
+            raise Refuse("an init that does not end returning `out`")
+        mentions = lambda s: "('id', 'out')" in repr(s)
+        tail = len(ss) - 1
+        while tail > 0 and ss[tail - 1][0] == "assign" and ss[tail - 1][1][0] == "index" and ss[tail - 1][1][1] == ("id", "out") and ss[tail - 1][2] == "=":
+            tail -= 1
+        head = [s for s in ss[:tail] if not (s[0] == "decl" and s[2] == "out")]
+        if not any(mentions(s) for s in head):
+            # Straight to the map.
+            f.stmts(head, 1)
+            values = {}
+            for s in ss[tail:-1]:
+                values[int(s[1][2][1].rstrip("ui"))] = s[3]
+            parts = [f"{n}: {f.ex(values[i]) if i in values else '0.0'}" for i, n in enumerate(self.derived_list())]
+            f.emit(1, f"#{{ {', '.join(parts)} }}")
+        else:
+            f.stmts(ss, 1, last=True)
+        if f.uses_ctx:
+            raise Refuse("an init reading the weight")
+        return "fn prepare(p) {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"
 
     def body(self, src, dim, name):
         fns = functions(src)
@@ -747,6 +811,45 @@ class Translation:
         sig = f"fn {'variation' if dim == 2 else 'variation3'}({argz}, p{', ctx' if f.uses_ctx else ''})"
         return out, sig + " {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"
 
+def fold_returns(ss):
+    """An init's early `return out` (an `if` without an `else`) folded:
+    what follows becomes its `else`, so `prepare` returns once, at its
+    end, as the language has it."""
+    ret = ("return", ("id", "out"))
+    for i, s in enumerate(ss):
+        if s[0] == "if" and s[3] is None and s[2] and fold_returns(s[2])[-1] == ret and ss[-1] == ret:
+            return ss[:i] + [("if", s[1], fold_returns(s[2])[:-1], fold_returns(ss[i + 1:])[:-1]), ret]
+    return ss
+
+# Rhai's reserved words: not a `PARAMS` key, nor `p.` a name.
+RHAI_RESERVED = {"super", "this", "fn", "let", "const", "if", "else", "while", "loop", "for", "in", "do", "until", "break", "continue",
+                 "return", "throw", "try", "catch", "import", "export", "as", "private", "global", "true", "false", "switch", "is", "Fn",
+                 "call", "curry", "type_of", "print", "debug", "eval", "var", "static", "shared", "with", "goto", "exit", "match", "case",
+                 "public", "protected", "new", "use", "module", "package", "spawn", "thread", "go", "sync", "async", "await", "yield",
+                 "default", "void", "null", "nil"}
+
+def derived_names(d):
+    """Each derived slot's name: the one the body binds it to (`let va =
+    get_param(xform_id, variation_id, 3u)`), else `d<k>`; never a
+    parameter's, never twice."""
+    n, m = len(d["parameters"]), d["init_param_count"]
+    taken = {p["name"] for p in d["parameters"]} | RHAI_RESERVED
+    names = {}
+    for src in (d["shader_2d"] or "", d["shader_3d"] or ""):
+        for g in re.finditer(r"let (\w+)\s*=\s*get_param\(xform_id,\s*variation_id,\s*(\d+)u\)", src):
+            k = int(g.group(2)) - n
+            if 0 <= k < m and k not in names and g.group(1) not in taken:
+                names[k] = g.group(1)
+                taken.add(g.group(1))
+    for k in range(m):
+        if k not in names:
+            name = f"d{k}"
+            while name in taken:
+                name += "_"
+            names[k] = name
+            taken.add(name)
+    return names
+
 def literal(e):
     """A number written out, or its negation: never NaN."""
     while e[0] in ("paren", "un") and (e[0] == "paren" or e[1] == "-"):
@@ -770,12 +873,19 @@ def translate(d):
     for feat in ("replace", "writes_rgb", "can_hide", "needs_w", "needs_mobius_lib", "analytic_blur", "volume_side_emit", "writes_color"):
         if feat in f: raise Refuse(f"the feature {feat}")
     if d.get("plot_emits"): raise Refuse("plot emits")
-    if d["init_param_count"]: raise Refuse("derived parameters (prepare)")
+    for prm in d["parameters"]:
+        if prm["name"] in RHAI_RESERVED: raise Refuse(f"a parameter Rhai reserves the name of, `{prm['name']}`")
     if d["state_count"]: raise Refuse("state")
     # A pre or post variation returns the whole point, its weight in it
     # (`ctx.weight`), as the built-in does; `INFO.phase` says when it runs.
     t = Translation(d)
-    helpers, two = t.body(d["shader_2d"], 2, d["name"])
+    # Derived parameters: the init as `prepare`, before the bodies.
+    if d["init_param_count"]:
+        helpers = [t.prepare(d["shader_init"])]
+        more, two = t.body(d["shader_2d"], 2, d["name"])
+        helpers += more
+    else:
+        helpers, two = t.body(d["shader_2d"], 2, d["name"])
     three = None
     # JWildfire's z rule as `INFO.z` where the twin's default is not the
     # built-in's: a 3D body's z is always kept, a 2D body's only when the

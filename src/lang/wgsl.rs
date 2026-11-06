@@ -103,6 +103,11 @@ pub struct VariationWgsl {
     /// them at a thread's start (`wgsl_state_init`).
     pub state_count: usize,
     pub state_init: Option<String>,
+    /// `prepare` as the init pass's `fn init_<name>(user) -> array<f32, M>`
+    /// (a built-in's `wgsl_init`), and `M`, the derived slots after the
+    /// parameters.
+    pub init: Option<String>,
+    pub init_count: usize,
 }
 
 /// An effect's WGSL (P2): its program as `fx_effect(uv)`, which gives the
@@ -568,6 +573,11 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
     if init_only.reads(Predef::Accum) {
         return Err("`init` has no earlier variations: `ctx.accum` is `variation`'s".into());
     }
+    // `prepare` runs in the init pass, from the parameters alone.
+    let prepare_only = Program { transform: Vec::new(), init: Vec::new(), ..p.clone() };
+    if prepare_only.reads(Predef::Draw) {
+        return Err("`prepare` draws no random numbers: it runs once, as the parameters change".into());
+    }
     // The state: the fields `init` returns (lowered `s_name`; its own
     // locals are not kept).
     let mut fields = BTreeSet::new();
@@ -584,7 +594,7 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
     }
     Ok(VariationShape {
         accum: p.reads(Predef::Accum) || p.reads(Predef::AccumZ),
-        ids: !p.params.is_empty() || !state.is_empty() || p.reads(Predef::Weight),
+        ids: !p.params.is_empty() || !state.is_empty() || !p.globals.is_empty() || p.reads(Predef::Weight),
         rng: p.reads(Predef::Draw),
         color: writes_color(&p.transform),
         state,
@@ -656,6 +666,15 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
             format!("{m}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return vec3<f32>({inner2}(p.xy{args3}), p.z);\n}}\n")
         }
     };
+    // `prepare`, one for both bodies: both programs lower it alike, its
+    // values in the same slots.
+    if let (Some(a), Some(b)) = (p2, p3) {
+        let layout = |p: &Program| p.globals.iter().map(|&v| (p.vars[v].name.clone(), p.vars[v].floats())).collect::<Vec<_>>();
+        if layout(a) != layout(b) {
+            return Err("`prepare`'s values are laid out differently for `variation` and `variation3` (a bug)".into());
+        }
+    }
+    let init = variation_init(main, name, prefix)?;
     let mut features = Vec::new();
     if union.rng {
         features.push("needs_rng");
@@ -679,7 +698,59 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
         features,
         state_count: union.state_slots as usize,
         state_init: (!union.state.is_empty()).then(|| format!("        {prefix}variation_init(xform_id, variation_id);")),
+        init_count: init.as_ref().map_or(0, |(_, m)| *m),
+        init: init.map(|(s, _)| s),
     })
+}
+
+/// A variation's `prepare` as the init pass runs it (a built-in's
+/// `wgsl_init`): `fn init_<name>(user: array<f32, N>) -> array<f32, M>`,
+/// its parameters read from `user`, the values the body reads written to
+/// the `M` slots after them (`Program::globals`, in order). With `M`; none
+/// when the body reads no value of `prepare`'s.
+fn variation_init(p: &Program, name: &str, prefix: &'static str) -> Result<Option<(String, usize)>, String> {
+    if p.globals.is_empty() {
+        return Ok(None);
+    }
+    if let Some(&v) = p.globals.iter().find(|&&v| p.vars[v].is_array()) {
+        return Err(format!("`prepare`'s `{}` is an array: for a variation, a later step", p.vars[v].name.trim_start_matches("g_")));
+    }
+    let n = p.param_slots();
+    if n == 0 {
+        return Err("`prepare` computes from the parameters: a variation without any computes its values in `variation`".into());
+    }
+    let m = p.global_floats();
+    let mut g = Gen::new(p, Ctx::Variation, prefix);
+    g.init_user = true;
+    g.global_slots = vec![None; p.vars.len()];
+    let mut body = format!("fn uf_variation_prepare(user: array<f32, {n}>) -> array<f32, {m}> {{\n");
+    for (i, v) in p.vars.iter().enumerate() {
+        let _ = writeln!(body, "    {};", var_decl(i, v));
+    }
+    g.stmts(&p.global_body, 1, &mut body);
+    let _ = writeln!(body, "    var out: array<f32, {m}>;");
+    let mut k = 0;
+    for &v in &p.globals {
+        let x = g.var(v);
+        match p.vars[v].ty {
+            Ty::Complex => {
+                let _ = writeln!(body, "    out[{k}] = {x}.x;\n    out[{}] = {x}.y;", k + 1);
+                k += 2;
+            }
+            ty => {
+                let value = match ty {
+                    Ty::Int => format!("f32({x})"),
+                    Ty::Bool => format!("select(0.0, 1.0, {x})"),
+                    _ => x,
+                };
+                let _ = writeln!(body, "    out[{k}] = {value};");
+                k += 1;
+            }
+        }
+    }
+    body.push_str("    return out;\n}\n");
+    let module = g.finish("", body);
+    Ok(Some((format!("{module}\nfn init_{name}(user: array<f32, {n}>) -> array<f32, {m}> {{\n    return {prefix}variation_prepare(user);\n}}\n"), m)))
 }
 
 /// One body of a flame variation, as a module: the inner function (2D, or
@@ -1787,6 +1858,9 @@ struct Gen<'p> {
     /// A solid's globals (`prepare`): in its parameter block from this
     /// slot, after its parameters, where mode D's `fdata` is the walk's.
     global_base: Option<usize>,
+    /// A variation's `prepare` in the init pass: its parameters are
+    /// `user`'s, its globals its own variables.
+    init_user: bool,
     /// The effect context hosted by the simulation's colour template
     /// (P4): parameters are `cparam`, the size the grid's, the sample
     /// `x` and the palette the template's.
@@ -1852,6 +1926,7 @@ impl<'p> Gen<'p> {
             user_jac: false,
             exact_near_zero: false,
             global_base: None,
+            init_user: false,
             sim: false,
             sim_model: false,
             draw_salt: 0,
@@ -1982,7 +2057,9 @@ impl<'p> Gen<'p> {
     /// an effect's `get_param`, a formula side's `fparam`, a colouring
     /// side's `cparam`.
     fn slot_read(&self, slot: &str) -> String {
-        if self.ctx == Ctx::Variation {
+        if self.init_user {
+            format!("user[{slot}]")
+        } else if self.ctx == Ctx::Variation {
             format!("get_param(xform_id, variation_id, {slot})")
         } else if self.ctx == Ctx::Effect && self.sim_model {
             format!("mparam({slot})")
@@ -2032,6 +2109,9 @@ impl<'p> Gen<'p> {
         let slot = |k: usize| {
             if let Some(b) = self.global_base {
                 format!("fparam({}u)", b + k)
+            } else if self.ctx == Ctx::Variation {
+                // A variation's derived slots, after its parameters.
+                self.slot_read(&format!("{}u", self.p.param_slots() + k))
             } else if self.formula_side() {
                 format!("fdata4({}u).{}", k / 4, ["x", "y", "z", "w"][k % 4])
             } else {
@@ -4556,6 +4636,10 @@ pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
          var<private> transforms: array<StubTransform, 2>;\n";
     if let Some(w2) = &w.wgsl_2d {
         validate_module(&format!("{GET_PARAM}{w2}"))?;
+    }
+    // The init pass's module holds it alone (`build_init_shader`).
+    if let Some(init) = &w.init {
+        validate_module(init)?;
     }
     validate_module(&format!("{GET_PARAM}{}", w.wgsl_3d))
 }

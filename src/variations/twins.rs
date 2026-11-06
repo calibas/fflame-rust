@@ -31,6 +31,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("acosech", include_str!("../../assets/variations/twins/acosech.rhai")),
     ("acosh", include_str!("../../assets/variations/twins/acosh.rhai")),
     ("acoth", include_str!("../../assets/variations/twins/acoth.rhai")),
+    ("affine3D", include_str!("../../assets/variations/twins/affine3D.rhai")),
     ("apocarpet_js", include_str!("../../assets/variations/twins/apocarpet_js.rhai")),
     ("apollony", include_str!("../../assets/variations/twins/apollony.rhai")),
     ("arch", include_str!("../../assets/variations/twins/arch.rhai")),
@@ -38,6 +39,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("arcsech2", include_str!("../../assets/variations/twins/arcsech2.rhai")),
     ("arcsinh", include_str!("../../assets/variations/twins/arcsinh.rhai")),
     ("arctanh", include_str!("../../assets/variations/twins/arctanh.rhai")),
+    ("asteria", include_str!("../../assets/variations/twins/asteria.rhai")),
     ("atan", include_str!("../../assets/variations/twins/atan.rhai")),
     ("atan2_spirals", include_str!("../../assets/variations/twins/atan2_spirals.rhai")),
     ("auger", include_str!("../../assets/variations/twins/auger.rhai")),
@@ -59,14 +61,20 @@ pub const TWINS: &[(&str, &str)] = &[
     ("blur", include_str!("../../assets/variations/twins/blur.rhai")),
     ("blur3D", include_str!("../../assets/variations/twins/blur3D.rhai")),
     ("blur_circle", include_str!("../../assets/variations/twins/blur_circle.rhai")),
+    ("blur_linear", include_str!("../../assets/variations/twins/blur_linear.rhai")),
     ("blur_pixelize", include_str!("../../assets/variations/twins/blur_pixelize.rhai")),
     ("blur_zoom", include_str!("../../assets/variations/twins/blur_zoom.rhai")),
     ("boarders", include_str!("../../assets/variations/twins/boarders.rhai")),
+    ("boarders2", include_str!("../../assets/variations/twins/boarders2.rhai")),
     ("bubble", include_str!("../../assets/variations/twins/bubble.rhai")),
     ("bubble2", include_str!("../../assets/variations/twins/bubble2.rhai")),
+    ("bubbleT3D", include_str!("../../assets/variations/twins/bubbleT3D.rhai")),
     ("bubble_wf", include_str!("../../assets/variations/twins/bubble_wf.rhai")),
     ("butterfly", include_str!("../../assets/variations/twins/butterfly.rhai")),
     ("butterfly3D", include_str!("../../assets/variations/twins/butterfly3D.rhai")),
+    ("butterfly_fay", include_str!("../../assets/variations/twins/butterfly_fay.rhai")),
+    ("bwraps", include_str!("../../assets/variations/twins/bwraps.rhai")),
+    ("bwraps7", include_str!("../../assets/variations/twins/bwraps7.rhai")),
     ("cannabiscurve_wf", include_str!("../../assets/variations/twins/cannabiscurve_wf.rhai")),
     ("cardioid", include_str!("../../assets/variations/twins/cardioid.rhai")),
     ("cell", include_str!("../../assets/variations/twins/cell.rhai")),
@@ -78,6 +86,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("circlize2", include_str!("../../assets/variations/twins/circlize2.rhai")),
     ("circular", include_str!("../../assets/variations/twins/circular.rhai")),
     ("circular2", include_str!("../../assets/variations/twins/circular2.rhai")),
+    ("circus", include_str!("../../assets/variations/twins/circus.rhai")),
     ("clifford_js", include_str!("../../assets/variations/twins/clifford_js.rhai")),
     ("cloverleaf_wf", include_str!("../../assets/variations/twins/cloverleaf_wf.rhai")),
     ("collideoscope", include_str!("../../assets/variations/twins/collideoscope.rhai")),
@@ -98,6 +107,9 @@ pub const TWINS: &[(&str, &str)] = &[
     ("coth2_bs", include_str!("../../assets/variations/twins/coth2_bs.rhai")),
     ("cothq", include_str!("../../assets/variations/twins/cothq.rhai")),
     ("cotq", include_str!("../../assets/variations/twins/cotq.rhai")),
+    ("cpow", include_str!("../../assets/variations/twins/cpow.rhai")),
+    ("cpow3", include_str!("../../assets/variations/twins/cpow3.rhai")),
+    ("cpow3_wf", include_str!("../../assets/variations/twins/cpow3_wf.rhai")),
     ("cross", include_str!("../../assets/variations/twins/cross.rhai")),
     ("csc", include_str!("../../assets/variations/twins/csc.rhai")),
     ("csc2_bs", include_str!("../../assets/variations/twins/csc2_bs.rhai")),
@@ -107,6 +119,8 @@ pub const TWINS: &[(&str, &str)] = &[
     ("cschq", include_str!("../../assets/variations/twins/cschq.rhai")),
     ("cscq", include_str!("../../assets/variations/twins/cscq.rhai")),
     ("curl3D", include_str!("../../assets/variations/twins/curl3D.rhai")),
+    ("curl_sp", include_str!("../../assets/variations/twins/curl_sp.rhai")),
+    ("curve", include_str!("../../assets/variations/twins/curve.rhai")),
     ("cylinder", include_str!("../../assets/variations/twins/cylinder.rhai")),
     ("cylinder2", include_str!("../../assets/variations/twins/cylinder2.rhai")),
     ("d_spherical", include_str!("../../assets/variations/twins/d_spherical.rhai")),
@@ -115,10 +129,12 @@ pub const TWINS: &[(&str, &str)] = &[
     ("diamond", include_str!("../../assets/variations/twins/diamond.rhai")),
     ("dinis_surface_wf", include_str!("../../assets/variations/twins/dinis_surface_wf.rhai")),
     ("disc", include_str!("../../assets/variations/twins/disc.rhai")),
+    ("disc2", include_str!("../../assets/variations/twins/disc2.rhai")),
     ("disc3", include_str!("../../assets/variations/twins/disc3.rhai")),
     ("disc3d", include_str!("../../assets/variations/twins/disc3d.rhai")),
     ("dustpoint", include_str!("../../assets/variations/twins/dustpoint.rhai")),
     ("eCollide", include_str!("../../assets/variations/twins/eCollide.rhai")),
+    ("eJulia", include_str!("../../assets/variations/twins/eJulia.rhai")),
     ("eMod", include_str!("../../assets/variations/twins/eMod.rhai")),
     ("eMotion", include_str!("../../assets/variations/twins/eMotion.rhai")),
     ("ePush", include_str!("../../assets/variations/twins/ePush.rhai")),
@@ -128,11 +144,13 @@ pub const TWINS: &[(&str, &str)] = &[
     ("eclipse", include_str!("../../assets/variations/twins/eclipse.rhai")),
     ("edisc", include_str!("../../assets/variations/twins/edisc.rhai")),
     ("elliptic", include_str!("../../assets/variations/twins/elliptic.rhai")),
+    ("elliptic2", include_str!("../../assets/variations/twins/elliptic2.rhai")),
     ("ennepers2", include_str!("../../assets/variations/twins/ennepers2.rhai")),
     ("epispiral", include_str!("../../assets/variations/twins/epispiral.rhai")),
     ("epispiral_wf", include_str!("../../assets/variations/twins/epispiral_wf.rhai")),
     ("erf", include_str!("../../assets/variations/twins/erf.rhai")),
     ("erf3D", include_str!("../../assets/variations/twins/erf3D.rhai")),
+    ("escher", include_str!("../../assets/variations/twins/escher.rhai")),
     ("estiq", include_str!("../../assets/variations/twins/estiq.rhai")),
     ("ex", include_str!("../../assets/variations/twins/ex.rhai")),
     ("exblur", include_str!("../../assets/variations/twins/exblur.rhai")),
@@ -157,8 +175,14 @@ pub const TWINS: &[(&str, &str)] = &[
     ("funnel", include_str!("../../assets/variations/twins/funnel.rhai")),
     ("gamma", include_str!("../../assets/variations/twins/gamma.rhai")),
     ("gaussian_blur", include_str!("../../assets/variations/twins/gaussian_blur.rhai")),
+    ("glynnSShape", include_str!("../../assets/variations/twins/glynnSShape.rhai")),
+    ("glynnSim1", include_str!("../../assets/variations/twins/glynnSim1.rhai")),
+    ("glynnSim2", include_str!("../../assets/variations/twins/glynnSim2.rhai")),
+    ("glynnSim3", include_str!("../../assets/variations/twins/glynnSim3.rhai")),
     ("glynnia", include_str!("../../assets/variations/twins/glynnia.rhai")),
     ("glynnia3", include_str!("../../assets/variations/twins/glynnia3.rhai")),
+    ("glynnlissa", include_str!("../../assets/variations/twins/glynnlissa.rhai")),
+    ("glynnspiro", include_str!("../../assets/variations/twins/glynnspiro.rhai")),
     ("gridout", include_str!("../../assets/variations/twins/gridout.rhai")),
     ("gridout2", include_str!("../../assets/variations/twins/gridout2.rhai")),
     ("gridout3D", include_str!("../../assets/variations/twins/gridout3D.rhai")),
@@ -174,7 +198,14 @@ pub const TWINS: &[(&str, &str)] = &[
     ("hole2", include_str!("../../assets/variations/twins/hole2.rhai")),
     ("holesq", include_str!("../../assets/variations/twins/holesq.rhai")),
     ("horseshoe", include_str!("../../assets/variations/twins/horseshoe.rhai")),
+    ("hypercrop", include_str!("../../assets/variations/twins/hypercrop.rhai")),
     ("hypershift", include_str!("../../assets/variations/twins/hypershift.rhai")),
+    ("hypertile", include_str!("../../assets/variations/twins/hypertile.rhai")),
+    ("hypertile1", include_str!("../../assets/variations/twins/hypertile1.rhai")),
+    ("hypertile2", include_str!("../../assets/variations/twins/hypertile2.rhai")),
+    ("hypertile3D", include_str!("../../assets/variations/twins/hypertile3D.rhai")),
+    ("hypertile3D1", include_str!("../../assets/variations/twins/hypertile3D1.rhai")),
+    ("hypertile3D2", include_str!("../../assets/variations/twins/hypertile3D2.rhai")),
     ("idisc", include_str!("../../assets/variations/twins/idisc.rhai")),
     ("inflateZ_1", include_str!("../../assets/variations/twins/inflateZ_1.rhai")),
     ("inflateZ_2", include_str!("../../assets/variations/twins/inflateZ_2.rhai")),
@@ -182,15 +213,22 @@ pub const TWINS: &[(&str, &str)] = &[
     ("inflateZ_4", include_str!("../../assets/variations/twins/inflateZ_4.rhai")),
     ("inflateZ_5", include_str!("../../assets/variations/twins/inflateZ_5.rhai")),
     ("inflateZ_6", include_str!("../../assets/variations/twins/inflateZ_6.rhai")),
+    ("intersection", include_str!("../../assets/variations/twins/intersection.rhai")),
     ("inverted_julia", include_str!("../../assets/variations/twins/inverted_julia.rhai")),
     ("invpolar", include_str!("../../assets/variations/twins/invpolar.rhai")),
     ("invsquircular", include_str!("../../assets/variations/twins/invsquircular.rhai")),
     ("invtree_js", include_str!("../../assets/variations/twins/invtree_js.rhai")),
+    ("jubiQ", include_str!("../../assets/variations/twins/jubiQ.rhai")),
     ("julia3D", include_str!("../../assets/variations/twins/julia3D.rhai")),
     ("julia3Dz", include_str!("../../assets/variations/twins/julia3Dz.rhai")),
+    ("julian", include_str!("../../assets/variations/twins/julian.rhai")),
+    ("julian2", include_str!("../../assets/variations/twins/julian2.rhai")),
+    ("julian3Dx", include_str!("../../assets/variations/twins/julian3Dx.rhai")),
     ("kaleidoscope", include_str!("../../assets/variations/twins/kaleidoscope.rhai")),
     ("lace_js", include_str!("../../assets/variations/twins/lace_js.rhai")),
     ("layered_spiral", include_str!("../../assets/variations/twins/layered_spiral.rhai")),
+    ("lazyTravis", include_str!("../../assets/variations/twins/lazyTravis.rhai")),
+    ("lazyjess", include_str!("../../assets/variations/twins/lazyjess.rhai")),
     ("lazysensen", include_str!("../../assets/variations/twins/lazysensen.rhai")),
     ("lazysusan", include_str!("../../assets/variations/twins/lazysusan.rhai")),
     ("line", include_str!("../../assets/variations/twins/line.rhai")),
@@ -199,6 +237,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("linearT", include_str!("../../assets/variations/twins/linearT.rhai")),
     ("linearT3D", include_str!("../../assets/variations/twins/linearT3D.rhai")),
     ("lissajous", include_str!("../../assets/variations/twins/lissajous.rhai")),
+    ("log", include_str!("../../assets/variations/twins/log.rhai")),
     ("log_tile2", include_str!("../../assets/variations/twins/log_tile2.rhai")),
     ("loonie", include_str!("../../assets/variations/twins/loonie.rhai")),
     ("loonie3", include_str!("../../assets/variations/twins/loonie3.rhai")),
@@ -207,17 +246,24 @@ pub const TWINS: &[(&str, &str)] = &[
     ("lozi", include_str!("../../assets/variations/twins/lozi.rhai")),
     ("mask", include_str!("../../assets/variations/twins/mask.rhai")),
     ("matrix3D", include_str!("../../assets/variations/twins/matrix3D.rhai")),
+    ("maurer_rose", include_str!("../../assets/variations/twins/maurer_rose.rhai")),
     ("mcarpet", include_str!("../../assets/variations/twins/mcarpet.rhai")),
     ("mobiq", include_str!("../../assets/variations/twins/mobiq.rhai")),
     ("mobius", include_str!("../../assets/variations/twins/mobius.rhai")),
     ("mobiusN", include_str!("../../assets/variations/twins/mobiusN.rhai")),
+    ("modulus", include_str!("../../assets/variations/twins/modulus.rhai")),
+    ("murl", include_str!("../../assets/variations/twins/murl.rhai")),
     ("murl2", include_str!("../../assets/variations/twins/murl2.rhai")),
     ("ngon", include_str!("../../assets/variations/twins/ngon.rhai")),
     ("noise", include_str!("../../assets/variations/twins/noise.rhai")),
+    ("npolar", include_str!("../../assets/variations/twins/npolar.rhai")),
     ("octagon", include_str!("../../assets/variations/twins/octagon.rhai")),
+    ("octapol", include_str!("../../assets/variations/twins/octapol.rhai")),
     ("onion", include_str!("../../assets/variations/twins/onion.rhai")),
     ("onion2", include_str!("../../assets/variations/twins/onion2.rhai")),
     ("ortho", include_str!("../../assets/variations/twins/ortho.rhai")),
+    ("oscilloscope", include_str!("../../assets/variations/twins/oscilloscope.rhai")),
+    ("oscilloscope2", include_str!("../../assets/variations/twins/oscilloscope2.rhai")),
     ("ovoid3d", include_str!("../../assets/variations/twins/ovoid3d.rhai")),
     ("pRose3D", include_str!("../../assets/variations/twins/pRose3D.rhai")),
     ("pTransform", include_str!("../../assets/variations/twins/pTransform.rhai")),
@@ -225,32 +271,46 @@ pub const TWINS: &[(&str, &str)] = &[
     ("panorama2", include_str!("../../assets/variations/twins/panorama2.rhai")),
     ("parabola", include_str!("../../assets/variations/twins/parabola.rhai")),
     ("pdj", include_str!("../../assets/variations/twins/pdj.rhai")),
+    ("perspective", include_str!("../../assets/variations/twins/perspective.rhai")),
     ("petal", include_str!("../../assets/variations/twins/petal.rhai")),
+    ("phoenix_julia", include_str!("../../assets/variations/twins/phoenix_julia.rhai")),
     ("pie", include_str!("../../assets/variations/twins/pie.rhai")),
     ("pie3D", include_str!("../../assets/variations/twins/pie3D.rhai")),
     ("plusrecip", include_str!("../../assets/variations/twins/plusrecip.rhai")),
+    ("poincare3D", include_str!("../../assets/variations/twins/poincare3D.rhai")),
     ("polar", include_str!("../../assets/variations/twins/polar.rhai")),
     ("polar2", include_str!("../../assets/variations/twins/polar2.rhai")),
     ("popcorn2", include_str!("../../assets/variations/twins/popcorn2.rhai")),
     ("popcorn2_3D", include_str!("../../assets/variations/twins/popcorn2_3D.rhai")),
+    ("post_axis_symmetry_wf", include_str!("../../assets/variations/twins/post_axis_symmetry_wf.rhai")),
+    ("post_bwraps", include_str!("../../assets/variations/twins/post_bwraps.rhai")),
+    ("post_bwraps2", include_str!("../../assets/variations/twins/post_bwraps2.rhai")),
     ("post_crop", include_str!("../../assets/variations/twins/post_crop.rhai")),
     ("post_curl", include_str!("../../assets/variations/twins/post_curl.rhai")),
     ("post_curl3D", include_str!("../../assets/variations/twins/post_curl3D.rhai")),
     ("post_falloff2", include_str!("../../assets/variations/twins/post_falloff2.rhai")),
     ("post_heat", include_str!("../../assets/variations/twins/post_heat.rhai")),
+    ("post_julia3Dq", include_str!("../../assets/variations/twins/post_julia3Dq.rhai")),
+    ("post_juliaq", include_str!("../../assets/variations/twins/post_juliaq.rhai")),
+    ("post_rblur", include_str!("../../assets/variations/twins/post_rblur.rhai")),
     ("post_rotate_x", include_str!("../../assets/variations/twins/post_rotate_x.rhai")),
     ("post_rotate_y", include_str!("../../assets/variations/twins/post_rotate_y.rhai")),
     ("post_spherical", include_str!("../../assets/variations/twins/post_spherical.rhai")),
     ("post_spin_z", include_str!("../../assets/variations/twins/post_spin_z.rhai")),
     ("post_ztranslate_wf", include_str!("../../assets/variations/twins/post_ztranslate_wf.rhai")),
+    ("pow_block", include_str!("../../assets/variations/twins/pow_block.rhai")),
     ("power", include_str!("../../assets/variations/twins/power.rhai")),
     ("pre_blur", include_str!("../../assets/variations/twins/pre_blur.rhai")),
     ("pre_blur3D", include_str!("../../assets/variations/twins/pre_blur3D.rhai")),
+    ("pre_boarders2", include_str!("../../assets/variations/twins/pre_boarders2.rhai")),
+    ("pre_bwraps", include_str!("../../assets/variations/twins/pre_bwraps.rhai")),
+    ("pre_bwraps2", include_str!("../../assets/variations/twins/pre_bwraps2.rhai")),
     ("pre_crop", include_str!("../../assets/variations/twins/pre_crop.rhai")),
     ("pre_curl", include_str!("../../assets/variations/twins/pre_curl.rhai")),
     ("pre_disc", include_str!("../../assets/variations/twins/pre_disc.rhai")),
     ("pre_disc3d", include_str!("../../assets/variations/twins/pre_disc3d.rhai")),
     ("pre_falloff2", include_str!("../../assets/variations/twins/pre_falloff2.rhai")),
+    ("pre_rect_wf", include_str!("../../assets/variations/twins/pre_rect_wf.rhai")),
     ("pre_rotate_x", include_str!("../../assets/variations/twins/pre_rotate_x.rhai")),
     ("pre_rotate_y", include_str!("../../assets/variations/twins/pre_rotate_y.rhai")),
     ("pre_sinusoidal", include_str!("../../assets/variations/twins/pre_sinusoidal.rhai")),
@@ -260,11 +320,14 @@ pub const TWINS: &[(&str, &str)] = &[
     ("pre_wave3D_wf", include_str!("../../assets/variations/twins/pre_wave3D_wf.rhai")),
     ("pre_zscale", include_str!("../../assets/variations/twins/pre_zscale.rhai")),
     ("pre_ztranslate", include_str!("../../assets/variations/twins/pre_ztranslate.rhai")),
+    ("pressure_wave", include_str!("../../assets/variations/twins/pressure_wave.rhai")),
     ("projective", include_str!("../../assets/variations/twins/projective.rhai")),
     ("pulse", include_str!("../../assets/variations/twins/pulse.rhai")),
     ("pyramid", include_str!("../../assets/variations/twins/pyramid.rhai")),
     ("q_ode", include_str!("../../assets/variations/twins/q_ode.rhai")),
+    ("quaternion", include_str!("../../assets/variations/twins/quaternion.rhai")),
     ("r_circleblur", include_str!("../../assets/variations/twins/r_circleblur.rhai")),
+    ("radial_blur", include_str!("../../assets/variations/twins/radial_blur.rhai")),
     ("rational3", include_str!("../../assets/variations/twins/rational3.rhai")),
     ("rays", include_str!("../../assets/variations/twins/rays.rhai")),
     ("rectangles", include_str!("../../assets/variations/twins/rectangles.rhai")),
@@ -284,6 +347,8 @@ pub const TWINS: &[(&str, &str)] = &[
     ("sechq", include_str!("../../assets/variations/twins/sechq.rhai")),
     ("secq", include_str!("../../assets/variations/twins/secq.rhai")),
     ("separation", include_str!("../../assets/variations/twins/separation.rhai")),
+    ("shift", include_str!("../../assets/variations/twins/shift.rhai")),
+    ("shredrad", include_str!("../../assets/variations/twins/shredrad.rhai")),
     ("sigmoid", include_str!("../../assets/variations/twins/sigmoid.rhai")),
     ("sin", include_str!("../../assets/variations/twins/sin.rhai")),
     ("sin2_bs", include_str!("../../assets/variations/twins/sin2_bs.rhai")),
@@ -298,10 +363,13 @@ pub const TWINS: &[(&str, &str)] = &[
     ("sphere_nja", include_str!("../../assets/variations/twins/sphere_nja.rhai")),
     ("spherical", include_str!("../../assets/variations/twins/spherical.rhai")),
     ("spherical3D", include_str!("../../assets/variations/twins/spherical3D.rhai")),
+    ("spherical3D_wf", include_str!("../../assets/variations/twins/spherical3D_wf.rhai")),
     ("sphericalN", include_str!("../../assets/variations/twins/sphericalN.rhai")),
     ("spiral", include_str!("../../assets/variations/twins/spiral.rhai")),
     ("spiralwing", include_str!("../../assets/variations/twins/spiralwing.rhai")),
     ("spirograph", include_str!("../../assets/variations/twins/spirograph.rhai")),
+    ("spligon", include_str!("../../assets/variations/twins/spligon.rhai")),
+    ("spliptic_bs", include_str!("../../assets/variations/twins/spliptic_bs.rhai")),
     ("split", include_str!("../../assets/variations/twins/split.rhai")),
     ("splitbrdr", include_str!("../../assets/variations/twins/splitbrdr.rhai")),
     ("splits", include_str!("../../assets/variations/twins/splits.rhai")),
@@ -316,9 +384,12 @@ pub const TWINS: &[(&str, &str)] = &[
     ("square3D", include_str!("../../assets/variations/twins/square3D.rhai")),
     ("squarize", include_str!("../../assets/variations/twins/squarize.rhai")),
     ("squircular", include_str!("../../assets/variations/twins/squircular.rhai")),
+    ("squish", include_str!("../../assets/variations/twins/squish.rhai")),
+    ("starblur", include_str!("../../assets/variations/twins/starblur.rhai")),
     ("stripes", include_str!("../../assets/variations/twins/stripes.rhai")),
     ("stripfit", include_str!("../../assets/variations/twins/stripfit.rhai")),
     ("stwin", include_str!("../../assets/variations/twins/stwin.rhai")),
+    ("superShape3d", include_str!("../../assets/variations/twins/superShape3d.rhai")),
     ("super_shape", include_str!("../../assets/variations/twins/super_shape.rhai")),
     ("svf", include_str!("../../assets/variations/twins/svf.rhai")),
     ("swirl", include_str!("../../assets/variations/twins/swirl.rhai")),
@@ -356,24 +427,40 @@ pub const TWINS: &[(&str, &str)] = &[
     ("tanh2_bs", include_str!("../../assets/variations/twins/tanh2_bs.rhai")),
     ("tanhq", include_str!("../../assets/variations/twins/tanhq.rhai")),
     ("tanq", include_str!("../../assets/variations/twins/tanq.rhai")),
+    ("target", include_str!("../../assets/variations/twins/target.rhai")),
+    ("target_sp", include_str!("../../assets/variations/twins/target_sp.rhai")),
     ("taurus", include_str!("../../assets/variations/twins/taurus.rhai")),
     ("threepoint_js", include_str!("../../assets/variations/twins/threepoint_js.rhai")),
     ("tile_hlp", include_str!("../../assets/variations/twins/tile_hlp.rhai")),
     ("tile_log", include_str!("../../assets/variations/twins/tile_log.rhai")),
     ("tqmirror", include_str!("../../assets/variations/twins/tqmirror.rhai")),
+    ("trade", include_str!("../../assets/variations/twins/trade.rhai")),
     ("truchet2", include_str!("../../assets/variations/twins/truchet2.rhai")),
+    ("truchet_fill", include_str!("../../assets/variations/twins/truchet_fill.rhai")),
     ("twintrian", include_str!("../../assets/variations/twins/twintrian.rhai")),
     ("twoface", include_str!("../../assets/variations/twins/twoface.rhai")),
     ("unpolar", include_str!("../../assets/variations/twins/unpolar.rhai")),
     ("vibration2", include_str!("../../assets/variations/twins/vibration2.rhai")),
+    ("vogel", include_str!("../../assets/variations/twins/vogel.rhai")),
+    ("waffle", include_str!("../../assets/variations/twins/waffle.rhai")),
     ("wallpaper_js", include_str!("../../assets/variations/twins/wallpaper_js.rhai")),
     ("waves2", include_str!("../../assets/variations/twins/waves2.rhai")),
     ("waves2_3D", include_str!("../../assets/variations/twins/waves2_3D.rhai")),
     ("waves2_radial", include_str!("../../assets/variations/twins/waves2_radial.rhai")),
+    ("waves2_wf", include_str!("../../assets/variations/twins/waves2_wf.rhai")),
+    ("waves3_wf", include_str!("../../assets/variations/twins/waves3_wf.rhai")),
+    ("waves4_wf", include_str!("../../assets/variations/twins/waves4_wf.rhai")),
     ("wdisc", include_str!("../../assets/variations/twins/wdisc.rhai")),
+    ("wedge", include_str!("../../assets/variations/twins/wedge.rhai")),
+    ("wedge_julia", include_str!("../../assets/variations/twins/wedge_julia.rhai")),
+    ("wedge_sph", include_str!("../../assets/variations/twins/wedge_sph.rhai")),
     ("whitney_umbrella", include_str!("../../assets/variations/twins/whitney_umbrella.rhai")),
     ("whorl", include_str!("../../assets/variations/twins/whorl.rhai")),
     ("xerf", include_str!("../../assets/variations/twins/xerf.rhai")),
+    ("xheart", include_str!("../../assets/variations/twins/xheart.rhai")),
+    ("xheart_blur_wf", include_str!("../../assets/variations/twins/xheart_blur_wf.rhai")),
+    ("xtrb", include_str!("../../assets/variations/twins/xtrb.rhai")),
+    ("yin_yang", include_str!("../../assets/variations/twins/yin_yang.rhai")),
     ("zblur", include_str!("../../assets/variations/twins/zblur.rhai")),
     ("zcone", include_str!("../../assets/variations/twins/zcone.rhai")),
     ("zscale", include_str!("../../assets/variations/twins/zscale.rhai")),
@@ -787,10 +874,16 @@ mod tests {
     /// The twin of `builtin` in f64 (the interpreter), at the pair's
     /// parameters and weight 1 -- for a twin that draws no random numbers,
     /// whose draws the interpreter's stream would not match.
+    /// The parts of a pair the built-in may be off its formula at where the
+    /// twin is on it, before the twin is doubted (`every_variation_twin_runs_as_its_builtin`).
+    const OFF_CAP: usize = 16;
+
     struct Judge {
         two: crate::lang::ir::Program,
         three: Option<crate::lang::ir::Program>,
         values: crate::lang::interp::ParamValues,
+        /// The parameters' slots, which [`Self::spread`] moves.
+        slots: Vec<f32>,
         render_3d: bool,
     }
 
@@ -806,25 +899,36 @@ mod tests {
             let defs = &reg.get(builtin)?.parameters;
             let slots: Vec<f32> = defs.iter().map(|d| params.iter().find(|(n, _)| *n == d.name).map_or(d.slot_default(), |(_, v)| *v)).collect();
             let values = crate::lang::interp::ParamValues::from_slots(&two, &slots);
-            Some(Judge { two, three, values, render_3d })
+            Some(Judge { two, three, values, slots, render_3d })
         }
 
-        /// How far part `c` of the truth moves when the point moves by
-        /// about one part in a million, any way: a few f32 ulps.
+        /// How far part `c` of the truth moves when the point, or one
+        /// parameter, moves by about one part in a million, any way: a few
+        /// f32 ulps. A parameter's move is a derived value's (`prepare`'s
+        /// angle at an exact turn, 360 degrees, where its sine is zero).
         fn spread(&self, p: [f32; 3], c: usize) -> f64 {
-            let at = |q: [f64; 3]| self.at_f64(q)[c];
-            let base = at(p.map(f64::from));
+            let base = self.at_f64(p.map(f64::from))[c];
             let mut far = 0.0f64;
+            let mut take = |v: f64| {
+                if v.is_finite() && base.is_finite() {
+                    far = far.max((v - base).abs());
+                } else if v.is_finite() != base.is_finite() {
+                    far = f64::INFINITY;
+                }
+            };
             for axis in 0..3 {
                 for s in [-1.0, 1.0] {
                     let mut q = p.map(f64::from);
                     q[axis] += s * 1e-6 * q[axis].abs().max(1e-6);
-                    let v = at(q);
-                    if v.is_finite() && base.is_finite() {
-                        far = far.max((v - base).abs());
-                    } else if v.is_finite() != base.is_finite() {
-                        far = f64::INFINITY;
-                    }
+                    take(self.at_f64(q)[c]);
+                }
+            }
+            for i in 0..self.slots.len() {
+                for s in [-1.0f32, 1.0] {
+                    let mut slots = self.slots.clone();
+                    slots[i] += s * 1e-6 * slots[i].abs().max(1e-6);
+                    let values = crate::lang::interp::ParamValues::from_slots(&self.two, &slots);
+                    take(self.with(&values, p.map(f64::from))[c]);
                 }
             }
             far
@@ -835,20 +939,24 @@ mod tests {
         }
 
         fn at_f64(&self, p: [f64; 3]) -> [f64; 4] {
+            self.with(&self.values, p)
+        }
+
+        fn with(&self, values: &crate::lang::interp::ParamValues, p: [f64; 3]) -> [f64; 4] {
             use crate::lang::builtins::C64;
             use crate::lang::interp::VariationRun;
             let (x, y, z) = (p[0], p[1], p[2]);
             if !self.render_3d {
-                let w = VariationRun::new(&self.two, &self.values, 1).call(C64::new(x, y), C64::ZERO, 1.0).0;
+                let w = VariationRun::new(&self.two, values, 1).call(C64::new(x, y), C64::ZERO, 1.0).0;
                 return [w.re, w.im, 0.0, f64::NAN];
             }
             match &self.three {
                 Some(p3) => {
-                    let v = VariationRun::new(p3, &self.values, 1).call3([x, y, z], [0.0; 3], 1.0).0;
+                    let v = VariationRun::new(p3, values, 1).call3([x, y, z], [0.0; 3], 1.0).0;
                     [v[0], v[1], v[2], f64::NAN]
                 }
                 None => {
-                    let w = VariationRun::new(&self.two, &self.values, 1).call(C64::new(x, y), C64::ZERO, 1.0).0;
+                    let w = VariationRun::new(&self.two, values, 1).call(C64::new(x, y), C64::ZERO, 1.0).0;
                     [w.re, w.im, z, f64::NAN]
                 }
             }
@@ -886,10 +994,14 @@ mod tests {
         }
         drop(reg);
         // The compare tells a different variation apart: exp's twin set
-        // beside julia.
+        // beside julia, judged by exp's formula, as a twin of julia that
+        // computed exp would be.
         pairs.push(("(control) julia beside exp's twin".into(), Pair { builtin: "julia".into(), twin: key("exp").unwrap(), params: Vec::new() }));
+        // Each twin's built-in, by its key: the formula a pair is judged by is
+        // the twin's that runs (the control's, exp's).
+        let of_key: std::collections::HashMap<String, &str> = TWINS.iter().filter_map(|(n, _)| Some((key(n)?, *n))).collect();
         let mut failures = Vec::new();
-        let mut counts = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+        let mut counts = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
         // In flames of at most 96 variations and 120 transforms (two a pair,
         // MAX_TRANSFORMS 128).
         let mut batches: Vec<Vec<usize>> = vec![Vec::new()];
@@ -914,8 +1026,11 @@ mod tests {
                     let mut bad = Vec::new();
                     let mut exact = 0;
                     let mut builtin_off = 0;
+                    let mut off_parts = Vec::new();
+                    let mut builtin_nan = 0;
                     let mut ill = 0;
-                    let judge = Judge::new(builtin, &pairs[i].1.params, render_3d);
+                    let _ = builtin;
+                    let judge = Judge::new(of_key[&pairs[i].1.twin], &pairs[i].1.params, render_3d);
                     for (k, (w, g)) in o.builtin.iter().zip(&o.twin).enumerate() {
                         let far = pts[k].iter().any(|c| c.abs() > 16_777_216.0);
                         let truth = judge.as_ref().map(|j| j.at(pts[k]));
@@ -928,9 +1043,19 @@ mod tests {
                             // twin is it and the built-in is not, the built-in
                             // is the imprecise side (its hardware trig, its
                             // pow at zero).
+                            let part = format!("    at {:?} part {c}: built-in {} twin {}{}", pts[k], w[c], g[c], truth.and_then(|t| t.get(c).map(|x| format!(" (f64 {x})"))).unwrap_or_default());
                             if let Some(t) = truth.and_then(|t| t.get(c).copied()) {
                                 if near(g[c], t) && !near(w[c], t) {
-                                    builtin_off += 1;
+                                    // No number where its formula has one
+                                    // (WGSL's pow of a negative base, which
+                                    // JWildfire's Math.pow takes): never the
+                                    // sign of a twin that is another formula.
+                                    if !w[c].is_finite() {
+                                        builtin_nan += 1;
+                                    } else {
+                                        builtin_off += 1;
+                                        off_parts.push(part);
+                                    }
                                     continue;
                                 }
                                 // Both within f32's reach of the truth: the
@@ -939,20 +1064,39 @@ mod tests {
                                     continue;
                                 }
                                 // Ill-conditioned: the truth itself moves by as
-                                // much when the point moves by a few f32 ulps --
-                                // trig of a large value, a near cancellation --
-                                // so the two f32 roundings may part by that.
+                                // much when the point or a parameter moves by a
+                                // few f32 ulps -- trig of a large value, a near
+                                // cancellation, a sine at an exact turn -- so
+                                // the two f32 roundings may part by that.
                                 let spread = judge.as_ref().map_or(0.0, |j| j.spread(pts[k], c));
                                 if w[c].is_finite() && g[c].is_finite() && f64::from((w[c] - g[c]).abs()) <= 4.0 * spread {
                                     ill += 1;
                                     continue;
                                 }
+                                // Both off it, the twin the nearer: the
+                                // built-in's rounding the larger, past what
+                                // the perturbations reach (a derived sine at
+                                // an exact turn, divided into 1e20).
+                                if g[c].is_finite() && (f64::from(g[c]) - t).abs() < (f64::from(w[c]) - t).abs() {
+                                    builtin_off += 1;
+                                    off_parts.push(part);
+                                    continue;
+                                }
                             }
-                            bad.push(format!("    at {:?} part {c}: built-in {} twin {}{}", pts[k], w[c], g[c], truth.and_then(|t| t.get(c).map(|x| format!(" (f64 {x})"))).unwrap_or_default()));
+                            bad.push(part);
                         }
                     }
-                    if builtin_off > 0 {
+                    // Off its own formula at a handful of points, the built-in
+                    // is imprecise there (at most 9 of 432 parts, measured);
+                    // at more, the twin may not be its formula -- judged by
+                    // itself, a wrong twin would be "on" it everywhere.
+                    if builtin_off > OFF_CAP {
+                        bad.append(&mut off_parts);
+                    } else if builtin_off > 0 {
                         counts.3 += 1;
+                    }
+                    if builtin_nan > 0 {
+                        counts.6 += 1;
                     }
                     if ill > 0 {
                         counts.4 += 1;
@@ -979,24 +1123,22 @@ mod tests {
                     if !bad.is_empty() {
                         counts.1 += 1;
                         println!("{what} ({dim}): {} of {} parts apart, {exact} bit for bit", bad.len(), pts.len() * 4);
-                        failures.push(format!("{what} ({dim}):
-{}", bad.iter().take(4).cloned().collect::<Vec<_>>().join("
-")));
+                        failures.push(format!("{what} ({dim}):\n{}", bad.iter().take(4).cloned().collect::<Vec<_>>().join("\n")));
                     }
                 }
             }
         }
         println!(
-            "{} pairs, {} apart, {} with the built-in off its own formula where the twin is on it, {} ill-conditioned somewhere, {} drawing and apart (judged by density); {:.1}% of their parts bit for bit",
+            "{} pairs, {} apart, {} with the built-in off its own formula where the twin is on it, {} with the built-in giving no number where its formula has one, {} ill-conditioned somewhere, {} drawing and apart (judged by density); {:.1}% of their parts bit for bit",
             counts.0,
             counts.1,
             counts.3,
+            counts.6,
             counts.4,
             counts.5,
             100.0 * counts.2 as f64 / (counts.0 * pts.len() * 4).max(1) as f64
         );
-        assert!(failures.is_empty(), "{}", failures.join("
-"));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// A 2D flame of three transforms: `variation` on a turning shrink,
@@ -1075,8 +1217,7 @@ mod tests {
                 failures.push(format!("{} and {} look alike to this measure: {:.3}", a.0, b.0, c.worst_dense));
             }
         }
-        assert!(failures.is_empty(), "{}", failures.join("
-"));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// A parameter of every kind written as a twin's `PARAMS` reads back
