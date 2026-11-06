@@ -496,8 +496,10 @@ class Fn:
             return f"({self.ex(args[0])} * 0.017453292519943295)"
         if f == "degrees" and self.ty(args[0]) == "f32":
             return f"({self.ex(args[0])} * 57.29577951308232)"
-        if f in ("get_state", "set_state"):
-            raise Refuse("state")
+        if f == "get_state":
+            return f"this.{self.tr.state_field(args[2])}"
+        if f == "set_state":
+            raise Refuse("a `set_state` inside an expression")
         if f == "select":
             a, b, c = args
             return f"(if {self.ex(c)} {{ {self.ex(b)} }} else {{ {self.ex(a)} }})"
@@ -664,6 +666,10 @@ class Fn:
                 raise Refuse("a componentwise compound assignment")
             self.line(depth, lambda: f"{self.ex(lhs)} {op} {self.ex(rhs)};")
             return
+        if k == "expr" and s[1][0] == "call" and s[1][1] == "set_state":
+            field = self.tr.state_field(s[1][2][2])
+            self.line(depth, lambda: f"this.{field} = {self.ex(s[1][2][3])};")
+            return
         if k == "expr":
             raise Refuse("a statement of an expression")
         if k == "if":
@@ -790,6 +796,38 @@ class Translation:
         self.helpers = {}
         self.helper_args = {}
         self.derived = derived_names(d)
+        self.state = state_names(d, set(self.derived.values()))
+
+    def state_field(self, slot):
+        """The state field a `get_state` / `set_state` slot names."""
+        if slot[0] != "num":
+            raise Refuse("state by a computed slot")
+        k = int(slot[1].rstrip("ui"))
+        if k not in self.state:
+            raise Refuse("a state slot past `state_count`")
+        return self.state[k]
+
+    def state_init(self):
+        """`fn init(p)`: the map each thread starts with -- the def's
+        `wgsl_state_init` (its `set_state`s, straight through), every
+        other field zero, as the built-in's slots start."""
+        src = self.d["shader_state_init"]
+        values = {}
+        f = Fn(self, 2, [], "", True)
+        if src:
+            if "rng" in src:
+                raise Refuse("a state init that draws")
+            fns = functions("fn state_init_() {\n" + src + "\n}")
+            for s in block(P(fns[0][3])):
+                if s[0] == "expr" and s[1][0] == "call" and s[1][1] == "set_state":
+                    values[self.state_field(s[1][2][2])] = s[1][2][3]
+                elif s[0] == "decl" and not values:
+                    f.stmt(s, 1, False)
+                else:
+                    raise Refuse("a state init that is not straight `set_state`s")
+        fields = ", ".join(f"{n}: {f.ex(values[n]) if n in values else '0.0'}" for n in (self.state[k] for k in sorted(self.state)))
+        f.emit(1, f"#{{ {fields} }}")
+        return "fn init(p) {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"
 
     def derived_list(self):
         return [self.derived[k] for k in range(self.d["init_param_count"])]
@@ -901,6 +939,27 @@ RHAI_RESERVED = {"super", "this", "fn", "let", "const", "if", "else", "while", "
                  "public", "protected", "new", "use", "module", "package", "spawn", "thread", "go", "sync", "async", "await", "yield",
                  "default", "void", "null", "nil"}
 
+def state_names(d, taken):
+    """Each state slot's field: the name the body reads it into (`let x0 =
+    get_state(xform_id, variation_id, 0u)`), else `st<k>`; never a
+    parameter's or a derived value's, never twice."""
+    taken = set(taken) | {p["name"] for p in d["parameters"]} | RHAI_RESERVED
+    names = {}
+    for src in (d["shader_2d"] or "", d["shader_3d"] or ""):
+        for g in re.finditer(r"(?:let|var) (\w+)\s*=\s*get_state\(xform_id,\s*variation_id,\s*(\d+)u\)", src):
+            k = int(g.group(2))
+            if k < d["state_count"] and k not in names and g.group(1) not in taken:
+                names[k] = g.group(1)
+                taken.add(g.group(1))
+    for k in range(d["state_count"]):
+        if k not in names:
+            name = f"st{k}"
+            while name in taken:
+                name += "_"
+            names[k] = name
+            taken.add(name)
+    return names
+
 def derived_names(d):
     """Each derived slot's name: the one the body binds it to (`let va =
     get_param(xform_id, variation_id, 3u)`), else `d<k>`; never a
@@ -948,17 +1007,18 @@ def translate(d):
     if d.get("plot_emits"): raise Refuse("plot emits")
     for prm in d["parameters"]:
         if prm["name"] in RHAI_RESERVED: raise Refuse(f"a parameter Rhai reserves the name of, `{prm['name']}`")
-    if d["state_count"]: raise Refuse("state")
     # A pre or post variation returns the whole point, its weight in it
     # (`ctx.weight`), as the built-in does; `INFO.phase` says when it runs.
     t = Translation(d)
-    # Derived parameters: the init as `prepare`, before the bodies.
+    # Derived parameters: the init as `prepare`; the state's start as
+    # `init`; then the bodies.
+    first = []
     if d["init_param_count"]:
-        helpers = [t.prepare(d["shader_init"])]
-        more, two = t.body(d["shader_2d"], 2, d["name"])
-        helpers += more
-    else:
-        helpers, two = t.body(d["shader_2d"], 2, d["name"])
+        first.append(t.prepare(d["shader_init"]))
+    if d["state_count"]:
+        first.append(t.state_init())
+    more, two = t.body(d["shader_2d"], 2, d["name"])
+    helpers = first + more
     three = None
     # JWildfire's z rule as `INFO.z` where the twin's default is not the
     # built-in's: a 3D body's z is always kept, a 2D body's only when the
