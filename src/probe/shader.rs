@@ -44,17 +44,22 @@ pub fn buffer_words(point_count: usize, xform_count: usize) -> usize {
 
 /// Build the WGSL for one batch.
 pub fn build(batch: &Batch, render_3d: bool) -> String {
-    let flame = super::flame::build_probe_flame(batch);
+    build_flame(&super::flame::build_probe_flame(batch), render_3d, false)
+}
 
+/// Build the probe's WGSL for a flame of its own (`paired`: a built-in
+/// beside its twin, [`super::pairs`]).
+pub fn build_flame(flame: &crate::scene::transforms::Flame, render_3d: bool, paired: bool) -> String {
     let constants = ShaderConstants {
         num_transforms: flame.transforms.len() as u32,
         probe: true,
+        probe_paired: paired,
         ..ShaderConstants::default()
     };
 
     let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
     builder.build_from_template(
-        &flame,
+        flame,
         // Unused by the builder — the local index map comes from the
         // flame's own variation order.
         &HashMap::new(),

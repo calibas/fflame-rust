@@ -43,6 +43,22 @@ const AFFINE: [f32; 7] = [
 /// [`super::batch::Target::needs_carrier`].
 pub const CARRIER: &str = "linear";
 
+/// A probe transform: the probe's affine, weight 1, no variation yet.
+pub fn probe_transform() -> Transform {
+    let mut xf = Transform::new();
+    xf.a = AFFINE[0];
+    xf.b = AFFINE[1];
+    xf.c = AFFINE[2];
+    xf.d = AFFINE[3];
+    xf.e = AFFINE[4];
+    xf.f = AFFINE[5];
+    xf.g = AFFINE[6];
+    xf.weight = 1.0;
+    xf.variations.clear();
+    xf.variation_order.clear();
+    xf
+}
+
 /// Build the flame for one batch: one transform per target.
 pub fn build_probe_flame(batch: &Batch) -> Flame {
     let mut flame = Flame::new();
@@ -50,15 +66,7 @@ pub fn build_probe_flame(batch: &Batch) -> Flame {
     flame.transforms.clear();
 
     for target in &batch.targets {
-        let mut xf = Transform::new();
-        xf.a = AFFINE[0];
-        xf.b = AFFINE[1];
-        xf.c = AFFINE[2];
-        xf.d = AFFINE[3];
-        xf.e = AFFINE[4];
-        xf.f = AFFINE[5];
-        xf.g = AFFINE[6];
-        xf.weight = 1.0;
+        let mut xf = probe_transform();
 
         // The carrier goes in first so the target's own dispatch order
         // is unaffected by whether it needed one — `variation_order` is

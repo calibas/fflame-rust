@@ -891,6 +891,15 @@ impl<'p> Machine<'p> {
             }
             IExprKind::Predef(Predef::Draw) => Value::Float(self.next_draw(sh)),
             IExprKind::Predef(p) => predef(*p, sh),
+            // A real's floor, trunc or ceil back to a float: the float
+            // operation, as the GPU computes it -- no int between.
+            IExprKind::Convert(a)
+                if (a.ty, e.ty) == (Ty::Int, Ty::Float)
+                    && matches!(&a.kind, IExprKind::Call(Builtin::Floor | Builtin::Trunc | Builtin::Ceil, x) if x.ty == Ty::Float) =>
+            {
+                let IExprKind::Call(f, x) = &a.kind else { unreachable!() };
+                Value::Float(f.eval_f(self.eval(x, sh).as_f64()))
+            }
             IExprKind::Convert(a) => {
                 let v = self.eval(a, sh);
                 match e.ty {
