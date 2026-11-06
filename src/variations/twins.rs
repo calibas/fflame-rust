@@ -336,6 +336,76 @@ pub fn key(name: &str) -> Option<String> {
     super::custom::key_of(source(name)?)
 }
 
+/// The built-in whose twin `source` is, UNEDITED: the twin's text, with
+/// or without the id Edit as Rhai gives it (`lang::rhai::with_info_id`),
+/// line ends aside. While it is, it computes its built-in, so it keeps
+/// what is still a def's alone: the deep-zoom planner's data
+/// ([`planner_name`]) and its name in a `.flame` export.
+pub fn builtin_of(source: &str) -> Option<&'static str> {
+    use std::hash::{Hash, Hasher};
+    fn hash(text: &str) -> u64 {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut h);
+        h.finish()
+    }
+    static BY_TEXT: std::sync::OnceLock<std::collections::HashMap<u64, &'static str>> = std::sync::OnceLock::new();
+    let by_text = BY_TEXT.get_or_init(|| TWINS.iter().map(|(n, s)| (hash(&s.replace("\r\n", "\n")), *n)).collect());
+    let text = source.replace("\r\n", "\n");
+    let id = crate::lang::rhai::info_string(&text, "id");
+    let bare = match &id {
+        Some(id) => text.replacen(&format!(" id: \"{id}\","), "", 1),
+        None => text.clone(),
+    };
+    let name = *by_text.get(&hash(&bare))?;
+    // The id where Edit as Rhai puts it, and nothing else moved.
+    let twin = self::source(name)?.replace("\r\n", "\n");
+    let same = match &id {
+        Some(id) => crate::lang::rhai::with_info_id(&twin, id) == text,
+        None => twin == text,
+    };
+    same.then_some(name)
+}
+
+/// The registered keys that are unedited twins, and of which built-in:
+/// noted at registration ([`note`]).
+fn unedited() -> &'static std::sync::RwLock<std::collections::HashMap<String, &'static str>> {
+    static U: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, &'static str>>> = std::sync::OnceLock::new();
+    U.get_or_init(Default::default)
+}
+
+/// Note what registered under `key`: an unedited twin's built-in, or
+/// nothing (`custom::register_payload`).
+pub(crate) fn note(key: &str, source: &str) {
+    let builtin = builtin_of(source);
+    if let Ok(mut u) = unedited().write() {
+        match builtin {
+            Some(b) => u.insert(key.to_string(), b),
+            None => u.remove(key),
+        };
+    }
+}
+
+/// The built-in the variation registered under `key` is an unedited twin
+/// of. A built-in's name is never a key, so it is not looked up.
+pub fn builtin_of_key(key: &str) -> Option<&'static str> {
+    if !crate::scripted::is_key(key) {
+        return None;
+    }
+    unedited().read().ok()?.get(key).copied()
+}
+
+/// The name the deep-zoom planner's tables know the variation `name` by
+/// (`inverse`, `bound`, `derive`): an unedited twin's built-in's, as its
+/// own; anything else its own. Not a many-valued built-in's: the replay
+/// forces its arm in the built-in's WGSL text (`bound::force_arms`),
+/// which a twin's is not, so a twin of one has no planner data.
+pub fn planner_name(name: &str) -> &str {
+    match builtin_of_key(name) {
+        Some(b) if super::bound::arms_for(b).is_none() => b,
+        _ => name,
+    }
+}
+
 /// A float as a Rhai literal that parses back to the same f32: the
 /// shortest form, with the point Rhai wants.
 fn float(v: f64) -> String {
@@ -441,6 +511,97 @@ pub fn skeleton(name: &str, block: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A twin as Edit as Rhai makes it: with an id of its own.
+    fn own(name: &str) -> String {
+        crate::lang::rhai::with_own_id(source(name).unwrap(), &crate::scripted::mint_id())
+    }
+
+    /// **An unedited twin is known as its built-in**: as shipped, with the
+    /// id Edit as Rhai gives it, with Windows line ends -- and not once a
+    /// character of it is changed.
+    #[test]
+    fn an_unedited_twin_is_known_as_its_builtin() {
+        for (name, src) in TWINS {
+            assert_eq!(builtin_of(src), Some(*name), "{name}: as shipped");
+            assert_eq!(builtin_of(&own(name)), Some(*name), "{name}: with an id of its own");
+        }
+        let julia = own("julia");
+        assert_eq!(builtin_of(&julia.replace('\n', "\r\n")), Some("julia"), "line ends aside");
+        assert_eq!(builtin_of(&format!("{julia}// mine now\n")), None, "a comment added is an edit");
+        assert_eq!(builtin_of(&julia.replacen("0.5", "0.25", 1)), None, "so is a number changed");
+        assert_eq!(builtin_of(&julia.replacen("const INFO = #{ id:", "const INFO = #{ id :", 1)), None, "or the id moved");
+    }
+
+    /// **An unedited twin keeps its built-in's deep-zoom planner data**:
+    /// its key finds the built-in's inverse, bound and interval body
+    /// (`twins::planner_name`); an edited twin's finds none.
+    #[test]
+    fn an_unedited_twin_keeps_its_builtins_planner_data() {
+        use crate::variations::{bound, derive, inverse};
+        let registered = |src: &str| {
+            let key = super::super::custom::key_of(src).unwrap();
+            note(&key, src);
+            key
+        };
+        let (julia, bubble, blur) = (registered(&own("julia")), registered(&own("bubble")), registered(&own("blur")));
+        assert_eq!(builtin_of_key(&julia), Some("julia"));
+        assert_eq!(inverse::for_name(&julia).map(|d| d.name), Some("julia"));
+        assert_eq!(inverse::for_name(&bubble).map(|d| d.name), Some("bubble"));
+        assert_eq!(bound::for_name(&bubble).map(|d| d.name), Some("bubble"));
+        assert_eq!(bound::for_name(&blur).map(|d| d.name), Some("blur"));
+        let none = |_: &str| 0.0;
+        let ball = bound::Ball::new([0.4, -0.3], 0.1);
+        assert_eq!(derive::derive(&bubble, &none, 0.8, ball), derive::derive("bubble", &none, 0.8, ball), "its interval body");
+        assert!(derive::derive("bubble", &none, 0.8, ball).is_ok());
+
+        let edited = registered(&format!("{}// mine now\n", own("bubble")));
+        assert_eq!(builtin_of_key(&edited), None);
+        assert!(inverse::for_name(&edited).is_none() && bound::for_name(&edited).is_none());
+        assert!(derive::derive(&edited, &none, 0.8, ball).is_err());
+    }
+
+    /// **A transform with unedited twins is analysed as with their
+    /// built-ins**: the forward bounds' disc (`bubble` + `blur`) and the
+    /// inverse walk's map (`julia`, a kernel the user may move to pre or
+    /// post) come out the same. In a registry of the test's own, as
+    /// registering in the global one would stall the suite.
+    #[test]
+    fn an_unedited_twins_transform_is_analysed_as_its_builtins() {
+        use crate::scene::transforms::Transform;
+        let mut reg = crate::variations::VariationRegistry::new();
+        let mut as_twins = |t: &Transform, names: &[&str]| {
+            let mut t = t.clone();
+            for name in names {
+                let src = own(name);
+                let dl = super::super::custom::compile(&src).unwrap();
+                let key = super::super::custom::register_into(&mut reg, &dl, &src).unwrap();
+                assert!(t.rename_variation(name, &key));
+            }
+            t
+        };
+        let mut t = Transform::default();
+        (t.a, t.d, t.e) = (0.5, 0.5, 0.25);
+        t.variations.clear();
+        t.variation_order.clear();
+        t.set_variation("bubble", 0.8);
+        t.set_variation("blur", 0.3);
+        let twins = as_twins(&t, &["bubble", "blur"]);
+        let mut julia = t.clone();
+        julia.variations.clear();
+        julia.variation_order.clear();
+        julia.set_variation("julia", 1.0);
+        let julia_twin = as_twins(&julia, &["julia"]);
+
+        use crate::scene::{ifs_analysis, ifs_ball};
+        let input = crate::variations::bound::Ball::new([0.3, -0.2], 0.6);
+        let ball = ifs_ball::transform_ball_2d(&t, &reg, input);
+        assert!(ball.is_ok(), "{ball:?}");
+        assert_eq!(ifs_ball::transform_ball_2d(&twins, &reg, input), ball, "the forward bounds");
+        let map = ifs_analysis::transform_map_2d_ordered(&julia, &reg, &[]);
+        assert!(map.is_ok());
+        assert_eq!(ifs_analysis::transform_map_2d_ordered(&julia_twin, &reg, &[]), map, "the inverse walk's map");
+    }
 
     /// The defs' source files, which hold the built-ins' doc blocks.
     fn def_sources() -> Vec<String> {
