@@ -245,6 +245,8 @@ struct Shared<'e> {
     /// Its direct colour's parts, as written, else as they reached it.
     vrgb: [Option<f64>; 3],
     vrgb_in: [f64; 3],
+    /// Its transform's affine coefficients, `a` to `f`.
+    coefs: [f64; 6],
     /// A 3D variation's point's and accumulator's third parts (B2).
     pixel_z: f64,
     accum_z: f64,
@@ -270,6 +272,7 @@ impl<'e> Shared<'e> {
             vhide_in: false,
             vrgb: [None; 3],
             vrgb_in: [-1.0e30; 3],
+            coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             pixel_z: 0.0,
             accum_z: 0.0,
             prev: C64::ZERO,
@@ -334,6 +337,8 @@ pub struct VariationRun<'p> {
     hid: bool,
     /// The direct colour the last call wrote, if it wrote one.
     rgb: Option<[f64; 3]>,
+    /// Its transform's affine coefficients (`ctx.a` .. `ctx.f`).
+    coefs: [f64; 6],
 }
 
 impl<'p> VariationRun<'p> {
@@ -346,7 +351,14 @@ impl<'p> VariationRun<'p> {
         // `prepare`'s values, at f64, which the body reads as its own.
         m.exec(&p.global_body, &mut sh);
         m.exec(&p.init, &mut sh);
-        VariationRun { m, env, color: 0.0, hid: false, rgb: None }
+        VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }
+    }
+
+    /// Its transform's affine coefficients, `a` to `f` (`ctx.a` ..; the
+    /// identity without).
+    pub fn with_coefs(mut self, c: [f64; 6]) -> Self {
+        self.coefs = c;
+        self
     }
 
     /// Each call starting from the colour `c` (`ctx.color`; the probe's
@@ -364,6 +376,7 @@ impl<'p> VariationRun<'p> {
         sh.accum = accum;
         sh.weight = weight;
         sh.vcolor_in = self.color;
+        sh.coefs = self.coefs;
         let prog = self.m.prog;
         self.m.exec(&prog.transform, &mut sh);
         self.hid = sh.vhide.unwrap_or(false);
@@ -381,6 +394,7 @@ impl<'p> VariationRun<'p> {
         sh.accum_z = accum[2];
         sh.weight = weight;
         sh.vcolor_in = self.color;
+        sh.coefs = self.coefs;
         let prog = self.m.prog;
         self.m.exec(&prog.transform, &mut sh);
         self.hid = sh.vhide.unwrap_or(false);
@@ -1044,6 +1058,7 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::VarRgbR => Value::Float(sh.vrgb[0].unwrap_or(sh.vrgb_in[0])),
         Predef::VarRgbG => Value::Float(sh.vrgb[1].unwrap_or(sh.vrgb_in[1])),
         Predef::VarRgbB => Value::Float(sh.vrgb[2].unwrap_or(sh.vrgb_in[2])),
+        Predef::Coef(k) => Value::Float(sh.coefs[usize::from(k)]),
         Predef::PixelZ => Value::Float(sh.pixel_z),
         Predef::AccumZ => Value::Float(sh.accum_z),
         Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {

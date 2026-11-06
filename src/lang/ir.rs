@@ -202,6 +202,10 @@ pub enum Predef {
     VarRgbR,
     VarRgbG,
     VarRgbB,
+    /// The variation's transform's affine coefficients, `a` to `f` as 0 to
+    /// 5 (JWildfire's `pXForm.getCoeff..`; `NeedsTransform`): what fan,
+    /// popcorn, rings and waves read.
+    Coef(u8),
     /// A 3D variation's point's third part, read and written beside
     /// `#pixel` (`fn variation3`, the KIFS plan, B2), and its context's
     /// accumulator's.
@@ -258,7 +262,7 @@ impl Predef {
             Predef::Pixel | Predef::Z | Predef::Random | Predef::Center | Predef::ScreenPixel | Predef::Accum => Ty::Complex,
             Predef::Draw | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ => Ty::Float,
             Predef::VarHide => Ty::Bool,
-            Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB => Ty::Float,
+            Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) => Ty::Float,
             Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => Ty::Float,
             Predef::EffectBlend => Ty::Int,
             Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height | Predef::Pass | Predef::CreasePattern => Ty::Int,
