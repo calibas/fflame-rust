@@ -311,10 +311,17 @@ impl Checker {
         flow(&program.loop_body, &mut f);
         flow(&program.final_body, &mut f);
         flow(&program.creases, &mut f);
+        // A variation's body, which reads its derived slots.
+        flow(&program.transform, &mut f);
         if let Some(b) = &program.bailout {
             reads(b, &mut f);
         }
         let mut globals: Vec<VarId> = f.exposed.into_iter().filter(|&v| program.vars[v].global).collect();
+        // A variation's: every value `prepare` returns (`g_`), so its 2D
+        // and 3D programs, each reading its own, lay its slots out alike.
+        if self.kind == EntryKind::Transform {
+            globals = (0..program.vars.len()).filter(|&v| program.vars[v].global && program.vars[v].name.starts_with("g_")).collect();
+        }
         // A solid's ball (`prepare`'s `ball`), which the engine reads to
         // frame the camera and start the march (`custom::solid_ball`).
         if self.kind == EntryKind::Solid {
@@ -326,8 +333,22 @@ impl Checker {
         }
         globals.sort_unstable();
         program.globals = globals;
-        let cap = if self.kind == EntryKind::SimModel { SIM_MODEL_PARAM_SLOTS } else { PARAM_SLOTS };
-        if program.param_slots() > cap {
+        // A variation's parameters and derived values are in its
+        // transform's block, which a built-in's share.
+        let cap = match self.kind {
+            EntryKind::SimModel => SIM_MODEL_PARAM_SLOTS,
+            EntryKind::Transform => crate::gpu::buffers::MAX_VARIATION_PARAM_SLOTS,
+            _ => PARAM_SLOTS,
+        };
+        if self.kind == EntryKind::Transform && program.param_slots() + program.global_floats() > cap {
+            self.error(
+                entry.span,
+                format!(
+                    "the parameters and `prepare`'s values take {} floats; a transform's block has {cap} (a complex takes two)",
+                    program.param_slots() + program.global_floats()
+                ),
+            );
+        } else if program.param_slots() > cap {
             self.error(
                 entry.span,
                 format!(
@@ -381,9 +402,9 @@ impl Checker {
                 }
             }
             let allowed = match (self.kind, kind) {
-                // A transformation's derived values would be its
-                // variation's `wgsl_init`: a later step.
-                (EntryKind::Formula | EntryKind::Coloring, SectionKind::Global) => true,
+                // A transformation's are its variation's derived values
+                // (`wgsl_init`).
+                (EntryKind::Formula | EntryKind::Coloring | EntryKind::Transform, SectionKind::Global) => true,
                 // A variation's `init(p)`: the state a thread starts with
                 // (C2c).
                 (EntryKind::Transform, SectionKind::Transform | SectionKind::Init) => true,

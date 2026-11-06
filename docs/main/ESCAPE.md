@@ -692,7 +692,11 @@ fn escaped(s, p) {
   it returns is kept), `"preserve_z"` (kept only when the flame
   preserves z, else zero) or `"never"` (`NeverZ`: zero); without it a
   `fn variation3` is `always` and a 2D body alone, whose z passes
-  through, is `preserve_z`. `PARAMS` as a formula's; no `prepare`. The flame's
+  through, is `preserve_z`. `PARAMS` as a formula's; `fn prepare(p)` its
+  derived values, a built-in's `wgsl_init`: from the parameters alone
+  (no `ctx`, no draw; at least one parameter), on the GPU in the init
+  pass once per transform as they change, the map's values read as
+  `p.name` by both bodies (VARIATIONS.md, *Parameter slots*). The flame's
   hooks (the KIFS plan, C2), each the `Feature` a built-in declares:
   - `rand()`, a draw in [0, 1) (`NeedsRng`, the flame's stream);
   - `fn variation(z, p, ctx)`: `ctx.accum`, the weighted sum of the

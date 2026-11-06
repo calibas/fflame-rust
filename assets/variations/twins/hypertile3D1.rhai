@@ -1,0 +1,81 @@
+/// 3D version of Hypertile1 — random 3D tile per iteration.
+///
+/// # Authors
+/// - Zueuk
+
+// Hypertile 3D 1, the built-in variation's twin, translated from its WGSL.
+
+const PARAMS = #{
+    p: #{
+        value: 3, min: 3, max: 50,
+        caption: "P",
+        hint: "First Schläfli symbol — number of sides per tile (3 = triangle, 4 = square, 5 = pentagon, etc.).",
+    },
+    q: #{
+        value: 7, min: 3, max: 50,
+        caption: "Q",
+        hint: "Second Schläfli symbol — number of tiles meeting at each vertex. For a valid hyperbolic tiling, `(p − 2)(q − 2) > 4`.",
+    },
+};
+
+const INFO = #{ title: "Hypertile 3D 1", name: "rhai_hypertile3d1", category: "full_3d", phase: "any" };
+
+fn prepare(p) {
+    let pi = 3.14159265358979;
+    let pv = to_float(p.p);
+    let q = to_float(p.q);
+    let pa = 2.0 * pi / pv;
+    let qa = 2.0 * pi / q;
+    let r_alt = -(cos(pa) - 1.0) / (cos(pa) + cos(qa));
+    let r = 0.0;
+    if (r_alt > 0.0) {
+        r = 1.0 / sqrt(1.0 + r_alt);
+    } else {
+        r = 1.0;
+    }
+    let c2 = r * r;
+    #{ pa: pa, r: r, c2: c2, s2z: 1.0 - c2 }
+}
+
+fn variation(z, p) {
+    let pa = p.pa;
+    let r = p.r;
+    let c2 = p.c2;
+    let ang = to_float(floor(rand() * to_float(p.p))) * pa;
+    let cosa = cos(ang);
+    let sina = sin(ang);
+    let cx = r * cosa;
+    let cy = r * sina;
+    let cx2 = cx * cx;
+    let cy2 = cy * cy;
+    let s2x = 1.0 + cx2 - cy2;
+    let s2y = 1.0 + cy2 - cx2;
+    let r2 = z.re * z.re + z.im * z.im;
+    let x2cx = 2.0 * cx * z.re;
+    let y2cy = 2.0 * cy * z.im;
+    let denom = c2 * r2 + x2cx - y2cy + 1.0;
+    let d = 1.0 / max(1.0e-30, denom);
+    complex(d * (z.re * s2x - cx * (y2cy - r2 - 1.0)), d * (z.im * s2y + cy * (-x2cx - r2 - 1.0)))
+}
+
+fn variation3(v, p) {
+    let pa = p.pa;
+    let r = p.r;
+    let c2 = p.c2;
+    let s2z = p.s2z;
+    let ang = to_float(floor(rand() * to_float(p.p))) * pa;
+    let cosa = cos(ang);
+    let sina = sin(ang);
+    let cx = r * cosa;
+    let cy = r * sina;
+    let cx2 = cx * cx;
+    let cy2 = cy * cy;
+    let s2x = 1.0 + cx2 - cy2;
+    let s2y = 1.0 + cy2 - cx2;
+    let r2 = v.x * v.x + v.y * v.y + v.z * v.z;
+    let x2cx = 2.0 * cx * v.x;
+    let y2cy = 2.0 * cy * v.y;
+    let denom = c2 * r2 + x2cx - y2cy + 1.0;
+    let d = 1.0 / max(1.0e-30, denom);
+    vec3(d * (v.x * s2x - cx * (y2cy - r2 - 1.0)), d * (v.y * s2y + cy * (-x2cx - r2 - 1.0)), d * (v.z * s2z))
+}

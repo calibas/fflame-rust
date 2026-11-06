@@ -486,6 +486,19 @@ function takes the point, and the ids when it has parameters (as
 `shader_builder_v2::variation_call` passes them); the 3D one runs the
 2D body on `p.xy` and passes `p.z` through. Helpers are prefixed
 `cv_<name>_`.
+- **`fn prepare(p)`** is its derived parameters: compiled to
+  `fn init_<key>(user: array<f32, N>) -> array<f32, M>`
+  (`lang::wgsl::variation_init`, `shader_init` and `init_param_count` on
+  the wire), every value its map returns in the `M` slots after the
+  parameters, in declaration order, so the 2D and 3D bodies read them
+  alike (`get_param(xform_id, variation_id, N + k)`). The init pass runs
+  it wherever a built-in's runs -- the render, the exporter, the GPU
+  planner, the probe -- and the interpreter runs it at f64 before the
+  body (`VariationRun::new`). Not in the escape lens, which runs no init
+  pass (`lens_menu` leaves such a variation out), nor inside a formula
+  (`vary` refuses it). A transformation's parameters and derived values
+  share its transform's block (`MAX_VARIATION_PARAM_SLOTS`), not the
+  formulas' 64 floats.
 - **The flame carries the source** (`Flame::custom_variations`, skip if
   empty; `ConfigPath::FlameCustomVariations`, one undo step), so a saved
   flame renders anywhere. `custom::ensure` registers a flame's sources
@@ -558,13 +571,14 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 357 of the 647, each a Rhai variation under its
+  P7 step 3): 444 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
   (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
-  `INFO.z`). Seven written by hand, 350 translated from the built-ins'
-  WGSL
+  `INFO.z`). Seven written by hand, 437 translated from the built-ins'
+  WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
+  reads them)
   (`scripts/translate_variation_twins.py`, into the skeletons
   `twins::skeleton` writes; `scripts/list_variation_twins.py` writes
   the table).
@@ -573,13 +587,20 @@ function takes the point, and the ids when it has parameters (as
     point so the two draw alike, the colour written out): at the probe's
     adversarial inputs and a grid, 2D and 3D, at the defaults and each
     parameter's range's ends (`every_variation_twin_runs_as_its_builtin`).
-    91.8% of the outputs are bit for bit. The rest are judged by the
+    91.3% of the outputs are bit for bit. The rest are judged by the
     twin's own formula in f64 (the interpreter): the built-in off it
-    where the twin is on it (its hardware trig, WGSL's `pow(0, 0)`),
-    the point ill-conditioned (the truth moves by as much when the point
-    moves by a few ulps), or both within f32's reach of it. The
-    language's trig is range-reduced where the built-ins' is the
-    hardware's: the twin is the portable side.
+    where the twin is on it (its hardware trig, WGSL's `pow(0, 0)`), or
+    giving no number where it has one (WGSL's `pow` of a negative base,
+    which JWildfire's `Math.pow` takes: `ngon` at sides -10); the
+    truth ill-conditioned (it moves by as much when the point or a
+    parameter moves by a few ulps: a derived sine at an exact turn); or
+    both within f32's reach of it. A built-in off its formula at more
+    than 16 of a pair's 432 parts doubts the twin instead (`OFF_CAP`;
+    at most 9, measured): judged by itself, a twin of another formula
+    would be on it everywhere, as the control -- julia beside exp's
+    twin, judged by exp's formula -- shows. The language's trig is
+    range-reduced where the built-ins' is the hardware's: the twin is
+    the portable side.
   - **In a flame, by density** (`every_variation_twin_draws_its_builtins_flame`),
     which judges the twins that draw (no f64 truth matches the GPU's
     stream). r_circleblur's cells are placed by a `sin(...) * 43758.5453`

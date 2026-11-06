@@ -170,6 +170,9 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
         "features": features,
         "state_count": wgsl.state_count,
         "shader_state_init": wgsl.state_init,
+        // `prepare`, its derived slots computed by the init pass.
+        "init_param_count": wgsl.init_count,
+        "shader_init": wgsl.init,
     });
     serde_json::from_value(payload).map_err(|e| format!("the variation's payload: {e}"))
 }
@@ -995,6 +998,48 @@ mod tests {
                                  fn step(s, p) { s.z = vary(\"rhai_spherical3d\", s.z); s }\nfn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n")
         });
         assert!(e.is_err_and(|d| d[0].message.contains("3D variation only")));
+    }
+
+    /// `prepare(p)` is a variation's derived values, as a built-in's
+    /// `wgsl_init`: the init pass's `init_<key>` from the parameters, the
+    /// values the body reads (`p.name`) in the slots after them; the
+    /// interpreter computes them too. Not from `ctx`, a draw, or no
+    /// parameters, and not inside a formula.
+    #[test]
+    fn prepare_is_the_init_pass() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let head = "const PARAMS = #{ power: 2.0 };\nconst INFO = #{ name: \"rhai_prepare_test\" };\n";
+        let src = format!(
+            "{head}fn prepare(p) {{\n    let k = 1.0 / p.power;\n    #{{ inv: k, shift: complex(p.power, 2.0 * p.power), unused: 3.0 }}\n}}\n\
+             fn variation(z, p) {{ z * p.inv + p.shift }}\n"
+        );
+        let dl = named(&src);
+        assert_eq!(dl.init_param_count, 4, "the three it returns, a complex in two");
+        let init = dl.shader_init.as_deref().unwrap();
+        assert!(init.contains("fn init_rhai_prepare_test(user: array<f32, 1>) -> array<f32, 4>"), "{init}");
+        assert!(init.contains("user[0u]") && !init.contains("get_param"), "{init}");
+        let body = dl.shader_2d.as_deref().unwrap();
+        assert!(body.contains("get_param(xform_id, variation_id, 1u)") && body.contains("get_param(xform_id, variation_id, 3u)"), "{body}");
+        let p = lang::rhai::transformation(&src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::new(1.0, -1.0), C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (2.5, 3.5));
+
+        for (bad, why) in [
+            ("fn prepare(p, ctx) { #{ inv: 1.0 } }", "`prepare(p)`"),
+            ("fn prepare(p) { #{ inv: rand() } }", "draws no random"),
+        ] {
+            let s = format!("{head}{bad}\nfn variation(z, p) {{ z * p.inv }}\n");
+            assert!(compile(&s).is_err_and(|e| e.contains(why)), "{bad}: {:?}", compile(&s).err());
+        }
+        let none = "const INFO = #{ name: \"rhai_prepare_none\" };\nfn prepare(p) { #{ k: 2.0 } }\nfn variation(z, p) { z * p.k }\n";
+        assert!(compile(none).is_err_and(|e| e.contains("without any")));
+        let e = lang::rhai::with_variations(&[("rhai_prepare_test".into(), src.clone())], || {
+            lang::rhai::program("const PARAMS = #{ bailout: 4.0 };\nfn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                                 fn step(s, p) { s.z = vary(\"rhai_prepare_test\", s.z); s }\nfn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n")
+        });
+        assert!(e.is_err_and(|d| d[0].message.contains("`prepare`")));
     }
 
     /// `INFO.z` is JWildfire's z rule, as the built-ins' features: by
