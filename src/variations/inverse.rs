@@ -129,8 +129,10 @@ pub static INVERSES: &[&InverseDef] = &[
 
 /// The inverse registered for `name`, without going through a
 /// registry. [`VariationRegistry::inverse`](super::VariationRegistry::inverse)
-/// is the call the analysis makes; this is what it looks up in.
+/// is the call the analysis makes; this is what it looks up in. An
+/// unedited twin's key finds its built-in's (`twins::planner_name`).
 pub fn for_name(name: &str) -> Option<&'static InverseDef> {
+    let name = super::twins::planner_name(name);
     INVERSES.iter().copied().find(|d| d.name == name)
 }
 

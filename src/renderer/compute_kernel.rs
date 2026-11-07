@@ -1164,6 +1164,7 @@ impl FlameRenderer {
             solid_enabled: (self.solid_strength > 0.0 || self.solid_shading.active())
                 && matches!(render_mode, crate::scene::transforms::RenderMode::ThreeD),
             probe: false,
+            probe_paired: false,
             census: self.census,
             attachment_cap: flame.attachment_cap() as u32,
             // No inlining for incremental updates (would trigger too many shader rebuilds)

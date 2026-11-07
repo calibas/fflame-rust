@@ -99,6 +99,8 @@ pub struct Section {
 pub enum TypeName {
     Bool,
     Int,
+    /// Rhai's `u32(x)` (`Ty::UInt`).
+    UInt,
     Float,
     Complex,
     Color,
@@ -109,6 +111,7 @@ impl TypeName {
         Some(match s {
             "bool" => TypeName::Bool,
             "int" => TypeName::Int,
+            "u32" => TypeName::UInt,
             "float" => TypeName::Float,
             "complex" => TypeName::Complex,
             "color" => TypeName::Color,

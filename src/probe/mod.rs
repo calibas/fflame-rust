@@ -46,6 +46,9 @@ pub mod inputs;
 // Desktop only, as `run` is: the survey drives a real device.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lens;
+// A built-in beside its Rhai twin (rhai-plugins P7 step 3), on a device.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod pairs;
 pub mod report;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod run;

@@ -39,6 +39,11 @@ pub const LOOP_CAP: u32 = 4096;
 /// anyway, and a per-pixel one lives in each GPU thread's registers and
 /// private memory (the uniform's `fdata` is as large).
 pub const ARRAY_CAP_FLOATS: usize = 256;
+/// The most a flame variation's table may take: an array of literals only
+/// read, which its WGSL holds as a module constant, not in each thread's
+/// private memory (`wgsl::constant_arrays`; polychora.wgsl's faces take
+/// 4372).
+pub const TABLE_CAP_FLOATS: usize = 8192;
 
 /// The settings an entry is checked at: an array's size that reads a
 /// parameter or `#maxiter` folds with these values (plan, item 3, step
@@ -311,10 +316,17 @@ impl Checker {
         flow(&program.loop_body, &mut f);
         flow(&program.final_body, &mut f);
         flow(&program.creases, &mut f);
+        // A variation's body, which reads its derived slots.
+        flow(&program.transform, &mut f);
         if let Some(b) = &program.bailout {
             reads(b, &mut f);
         }
         let mut globals: Vec<VarId> = f.exposed.into_iter().filter(|&v| program.vars[v].global).collect();
+        // A variation's: every value `prepare` returns (`g_`), so its 2D
+        // and 3D programs, each reading its own, lay its slots out alike.
+        if self.kind == EntryKind::Transform {
+            globals = (0..program.vars.len()).filter(|&v| program.vars[v].global && program.vars[v].name.starts_with("g_")).collect();
+        }
         // A solid's ball (`prepare`'s `ball`), which the engine reads to
         // frame the camera and start the march (`custom::solid_ball`).
         if self.kind == EntryKind::Solid {
@@ -326,8 +338,43 @@ impl Checker {
         }
         globals.sort_unstable();
         program.globals = globals;
-        let cap = if self.kind == EntryKind::SimModel { SIM_MODEL_PARAM_SLOTS } else { PARAM_SLOTS };
-        if program.param_slots() > cap {
+        // A variation's array past an array's cap is a table, or one
+        // `prepare` alone holds: it runs in the init pass, once per
+        // transform, its values in the transform's block (capped above).
+        // One a thread holds is refused.
+        if self.kind == EntryKind::Transform {
+            let tables = super::wgsl::constant_arrays(&program, &[&program.transform, &program.init]);
+            let (body, init) = (program.vars_used(&program.transform), program.vars_used(&program.init));
+            for (v, var) in program.vars.iter().enumerate() {
+                let per_thread = (body[v] || init[v]) && !var.global;
+                if var.is_array() && var.floats() > ARRAY_CAP_FLOATS && per_thread && tables[v].is_none() {
+                    self.error(
+                        entry.span,
+                        format!(
+                            "`{}` takes {} floats; an array has at most {ARRAY_CAP_FLOATS}, a table (literals only read) {TABLE_CAP_FLOATS}",
+                            var.name,
+                            var.floats()
+                        ),
+                    );
+                }
+            }
+        }
+        // A variation's parameters and derived values are in its
+        // transform's block, which a built-in's share.
+        let cap = match self.kind {
+            EntryKind::SimModel => SIM_MODEL_PARAM_SLOTS,
+            EntryKind::Transform => crate::gpu::buffers::MAX_VARIATION_PARAM_SLOTS,
+            _ => PARAM_SLOTS,
+        };
+        if self.kind == EntryKind::Transform && program.param_slots() + program.global_floats() > cap {
+            self.error(
+                entry.span,
+                format!(
+                    "the parameters and `prepare`'s values take {} floats; a transform's block has {cap} (a complex takes two)",
+                    program.param_slots() + program.global_floats()
+                ),
+            );
+        } else if program.param_slots() > cap {
             self.error(
                 entry.span,
                 format!(
@@ -381,9 +428,9 @@ impl Checker {
                 }
             }
             let allowed = match (self.kind, kind) {
-                // A transformation's derived values would be its
-                // variation's `wgsl_init`: a later step.
-                (EntryKind::Formula | EntryKind::Coloring, SectionKind::Global) => true,
+                // A transformation's are its variation's derived values
+                // (`wgsl_init`).
+                (EntryKind::Formula | EntryKind::Coloring | EntryKind::Transform, SectionKind::Global) => true,
                 // A variation's `init(p)`: the state a thread starts with
                 // (C2c).
                 (EntryKind::Transform, SectionKind::Transform | SectionKind::Init) => true,
@@ -498,6 +545,11 @@ impl Checker {
                     self.error(block.span, "colour parameters are not supported yet");
                     continue;
                 }
+                // A parameter is a slider's number: an int, not its bits.
+                (Some(TypeName::UInt), ..) => {
+                    self.error(block.span, "a u32 parameter: make it an int and `u32(p.name)` it");
+                    continue;
+                }
                 (_, _, false) => ParamKind::Enum,
                 (Some(TypeName::Bool), ..) => ParamKind::Bool,
                 (Some(TypeName::Int), ..) => ParamKind::Int,
@@ -537,9 +589,12 @@ impl Checker {
             };
             let min = num(self, "min");
             let max = num(self, "max");
-            let exponential = block.get("exponential").is_some_and(|s| {
-                matches!(&s.value, SettingValue::Expr(Expr { kind: ExprKind::Bool(true), .. }))
-            });
+            let flag = |key: &str, v: bool| {
+                block.get(key).is_some_and(|s| matches!(&s.value, SettingValue::Expr(Expr { kind: ExprKind::Bool(b), .. }) if *b == v))
+            };
+            let exponential = flag("exponential", true);
+            let linear = flag("exponential", false);
+            let free = flag("free", true);
             let angle = block.get("angle").is_some_and(|s| {
                 matches!(&s.value, SettingValue::Expr(Expr { kind: ExprKind::Bool(true), .. }))
             });
@@ -553,6 +608,8 @@ impl Checker {
                 hint: string_setting(block.get("hint")).unwrap_or_default(),
                 choices,
                 exponential,
+                linear,
+                free,
                 angle,
                 span: block.span,
             };
@@ -671,6 +728,7 @@ impl Checker {
                     let ty = match ty {
                         TypeName::Bool => Ty::Bool,
                         TypeName::Int => Ty::Int,
+                        TypeName::UInt => Ty::UInt,
                         TypeName::Float => Ty::Float,
                         TypeName::Complex => Ty::Complex,
                         TypeName::Color => {
@@ -818,8 +876,10 @@ impl Checker {
             out.push(n.min(i64::from(u32::MAX)) as u32);
         }
         let floats = out.iter().map(|&d| d as usize).fold(1usize, |a, d| a.saturating_mul(d)).saturating_mul(ty.floats());
-        if floats > ARRAY_CAP_FLOATS {
-            self.error(span, format!("this array takes {floats} floats; at most {ARRAY_CAP_FLOATS} fit (a complex takes two)"));
+        // A variation's may be a table, held to it when the body is known.
+        let cap = if self.kind == EntryKind::Transform { TABLE_CAP_FLOATS } else { ARRAY_CAP_FLOATS };
+        if floats > cap {
+            self.error(span, format!("this array takes {floats} floats; at most {cap} fit (a complex takes two)"));
             return None;
         }
         Some((out, size))
@@ -847,6 +907,8 @@ impl Checker {
         let mut flat: Option<IExpr> = None;
         for ((x, &d), written) in index.iter().zip(&dims).zip(&size) {
             let i = self.expr(x)?;
+            // A u32 indexes by its value (clamped as any index).
+            let i = if i.ty == Ty::UInt { IExpr { kind: IExprKind::Convert(Box::new(i)), ty: Ty::Int } } else { i };
             if i.ty != Ty::Int {
                 self.error(x.span, format!("an array index is an int, not a {}", i.ty.name()));
                 return None;
@@ -897,6 +959,8 @@ impl Checker {
             hint: String::new(),
             choices: Vec::new(),
             exponential: false,
+            linear: false,
+            free: false,
             angle: false,
             span,
         });
@@ -944,11 +1008,21 @@ impl Checker {
             // Rhai's `rand()` (C2a), and a variation's context and colour
             // (C2b, C2d).
             "draw" if self.internal => Predef::Draw,
+            "draw_u32" if self.internal && self.kind == EntryKind::Transform => Predef::DrawU32,
             // A solid's position's third part (B3).
             "pixelz" if self.internal && self.kind == EntryKind::Solid => Predef::PixelZ,
-            "accum" | "weight" | "vcolor" | "pixelz" | "accumz" if self.internal => {
+            "accum" | "weight" | "vcolor" | "vhide" | "vrgb_r" | "vrgb_g" | "vrgb_b" | "pixelz" | "accumz" | "coef_a" | "coef_b" | "coef_c" | "coef_d"
+            | "coef_e" | "coef_f" | "pointw" | "wout" | "cam_x" | "cam_y" | "cam_z" | "cam_pitch" | "cam_yaw" | "cam_bank" | "cam_persp"
+                if self.internal =>
+            {
                 if self.kind != EntryKind::Transform {
                     self.error(span, format!("`{name}` is a flame variation's"));
+                    return None;
+                }
+                // The camera is the flame shader's `params`, which the
+                // body's shader binds and `prepare`'s init pass does not.
+                if name.starts_with("cam_") && self.section != SectionKind::Transform {
+                    self.error(span, "a variation reads the camera in its body (`variation`)");
                     return None;
                 }
                 match name {
@@ -956,6 +1030,16 @@ impl Checker {
                     "weight" => Predef::Weight,
                     "pixelz" => Predef::PixelZ,
                     "accumz" => Predef::AccumZ,
+                    "vhide" => Predef::VarHide,
+                    "vrgb_r" => Predef::VarRgbR,
+                    "vrgb_g" => Predef::VarRgbG,
+                    "vrgb_b" => Predef::VarRgbB,
+                    c if c.starts_with("coef_") => Predef::Coef(c.as_bytes()[5] - b'a'),
+                    c if c.starts_with("cam_") => {
+                        Predef::Camera(["cam_x", "cam_y", "cam_z", "cam_pitch", "cam_yaw", "cam_bank", "cam_persp"].iter().position(|n| *n == c).unwrap_or(0) as u8)
+                    }
+                    "pointw" => Predef::PointW,
+                    "wout" => Predef::WOut,
                     _ => Predef::VarColor,
                 }
             }
@@ -1105,7 +1189,7 @@ impl Checker {
             self.error(span, format!("a simulation model reads its cell, the grid's size, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
-        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ) {
+        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::VarHide | Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::Camera(_) | Predef::PointW | Predef::WOut | Predef::DrawU32 | Predef::PixelZ | Predef::AccumZ) {
             self.error(span, format!("a transformation reads `#pixel`, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
@@ -1159,7 +1243,7 @@ impl Checker {
         let saved = self.section;
         self.section = SectionKind::Global;
         let v = self.expr(e).and_then(|v| {
-            if matches!(v.ty, Ty::Int | Ty::Float) {
+            if matches!(v.ty, Ty::Int | Ty::UInt | Ty::Float) {
                 self.convert(v, Ty::Float, e.span)
             } else {
                 self.error(e.span, "`degree` is a real number");
@@ -1414,7 +1498,7 @@ impl Checker {
         // this assignment, so it is set first.
         if let (Some(ls), Some(arg)) = (self.lastsqr, last_sqr_argument(value)) {
             if let Some(a) = self.expr(arg) {
-                let a = if a.ty == Ty::Int { self.convert(a, Ty::Float, arg.span) } else { Some(a) };
+                let a = if a.ty.is_integer() { self.convert(a, Ty::Float, arg.span) } else { Some(a) };
                 if let Some(a) = a.filter(|a| a.ty != Ty::Bool) {
                     let m = IExpr { kind: IExprKind::Modulus(Box::new(a)), ty: Ty::Float };
                     if let Some(m) = self.convert(m, Ty::Complex, arg.span) {
@@ -1494,7 +1578,9 @@ impl Checker {
                     Predef::Index | Predef::Solid => self.section == SectionKind::Final,
                     Predef::DZ => true,
                     Predef::CreaseHeight | Predef::CreaseSlope => true,
-                    Predef::Pixel | Predef::VarColor | Predef::PixelZ => self.section == SectionKind::Transform && self.kind != EntryKind::Effect,
+                    Predef::Pixel | Predef::VarColor | Predef::VarHide | Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::WOut | Predef::PixelZ => {
+                        self.section == SectionKind::Transform && self.kind != EntryKind::Effect
+                    }
                     Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectBlend | Predef::EffectAmount => self.section == SectionKind::Transform,
                     _ => false,
                 };
@@ -1515,6 +1601,11 @@ impl Checker {
                     Predef::CreaseSlope => (Place::CreaseSlope, Ty::Complex),
                     Predef::Pixel => (Place::Pixel, Ty::Complex),
                     Predef::VarColor => (Place::Color, Ty::Float),
+                    Predef::VarHide => (Place::Hide, Ty::Bool),
+                    Predef::VarRgbR => (Place::RgbR, Ty::Float),
+                    Predef::VarRgbG => (Place::RgbG, Ty::Float),
+                    Predef::VarRgbB => (Place::RgbB, Ty::Float),
+                    Predef::WOut => (Place::WOut, Ty::Float),
                     Predef::PixelZ => (Place::PixelZ, Ty::Float),
                     p @ (Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectBlend | Predef::EffectAmount) => (Place::Effect(p), p.ty()),
                     _ => (Place::Solid, Ty::Bool),
@@ -1654,7 +1745,7 @@ impl Checker {
                     self.error(e.span, "`|...|` takes a number");
                     return None;
                 }
-                let v = if v.ty == Ty::Int { self.convert(v, Ty::Float, inner.span)? } else { v };
+                let v = if v.ty.is_integer() { self.convert(v, Ty::Float, inner.span)? } else { v };
                 lit(IExprKind::Modulus(Box::new(v)), Ty::Float)
             }
             ExprKind::Assign(..) => {
@@ -1665,7 +1756,7 @@ impl Checker {
     }
 
     fn call(&mut self, name: &str, args: &[Expr], user: bool, span: Span) -> Option<IExpr> {
-        if self.rhai && !user && matches!(name, "to_float" | "to_int") {
+        if self.rhai && !user && matches!(name, "to_float" | "to_int" | "u32") {
             return self.rhai_conversion(name, args, span);
         }
         // A grid's cell at a computed row (rhai-plugins P7): its first
@@ -1784,6 +1875,23 @@ impl Checker {
         // An int argument becomes a float unless the result is an int, or
         // it is a stream's number (`rand(k)`).
         let arg = if arg.ty == Ty::Int && ty != Ty::Int && !matches!(b, Builtin::SimRand | Builtin::Tap | Builtin::Disc) { self.convert(arg, Ty::Float, args[0].span)? } else { arg };
+        // A u32's functions are a float's, its value -- but a stream's
+        // number, an index and `pcg`'s 32 bits, which take its bits.
+        let (arg, ty) = if arg.ty == Ty::UInt && matches!(b, Builtin::SimRand | Builtin::Tap | Builtin::Disc | Builtin::Pcg) {
+            (IExpr { kind: IExprKind::Convert(Box::new(arg)), ty: Ty::Int }, ty)
+        } else if arg.ty == Ty::UInt {
+            let arg = self.convert(arg, Ty::Float, args[0].span)?;
+            let ty = match b.result_ty(Ty::Float) {
+                Ok(t) => t,
+                Err(msg) => {
+                    self.error(span, msg);
+                    return None;
+                }
+            };
+            (arg, ty)
+        } else {
+            (arg, ty)
+        };
         Some(IExpr { kind: IExprKind::Call(b, Box::new(arg)), ty })
     }
 
@@ -1801,6 +1909,21 @@ impl Checker {
             }
             if !matches!(self.section, SectionKind::Init | SectionKind::Loop) {
                 self.error(span, "a colouring reads the texture in `start` and `step`: the recolour pass, which runs `finish` and `color` again, has none");
+                return None;
+            }
+        } else if h.emit() {
+            // A variation's emissions: its body's, where the flame shader
+            // collects them (`Feature::PlotEmits`).
+            if self.kind != EntryKind::Transform || self.section != SectionKind::Transform {
+                self.error(span, "a variation emits points in its body (`variation`)");
+                return None;
+            }
+        } else if h.escape() && self.kind == EntryKind::Transform {
+            // A flame variation's palette, the flame's: read where the
+            // flame shader binds it, the body (`prepare` runs in the init
+            // pass, which has none), and without the escape mapping's curve.
+            if h == Host::EscPaletteCurve || self.section != SectionKind::Transform {
+                self.error(span, "a variation reads the flame's palette in its body (`variation`), as `palette(t)` or `palette_srgb(t)`");
                 return None;
             }
         } else if h.escape() {
@@ -1842,12 +1965,20 @@ impl Checker {
             return None;
         }
         let arg = self.expr(&args[0])?;
-        let to = if name == "to_float" { Ty::Float } else { Ty::Int };
+        let to = match name {
+            "to_float" => Ty::Float,
+            "u32" => Ty::UInt,
+            _ => Ty::Int,
+        };
         match (arg.ty, to) {
             (t, to) if t == to => Some(arg),
             (Ty::Bool, _) => Some(IExpr { kind: IExprKind::Convert(Box::new(arg)), ty: to }),
-            (Ty::Int, Ty::Float) => self.convert(arg, Ty::Float, span),
+            (Ty::Int | Ty::UInt, Ty::Float) => self.convert(arg, Ty::Float, span),
             (Ty::Float, Ty::Int) => Some(IExpr { kind: IExprKind::Call(Builtin::Trunc, Box::new(arg)), ty: Ty::Int }),
+            // A u32 from an int is its bits, from a float truncated and
+            // clamped to [0, 2^32 - 256]; an int from a u32 its bits.
+            (Ty::Int, Ty::UInt) => self.convert(arg, Ty::UInt, span),
+            (Ty::Float | Ty::UInt, _) => Some(IExpr { kind: IExprKind::Convert(Box::new(arg)), ty: to }),
             (t, _) => {
                 self.error(span, format!("`{name}` takes a bool, an int or a float, not a {}", t.name()));
                 None
@@ -1895,11 +2026,17 @@ impl Checker {
                 Some(IExpr { kind: IExprKind::Binary(op, Box::new(l), Box::new(r)), ty: Ty::Bool })
             }
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr | BinOp::IDiv => {
-                if l.ty != Ty::Int || r.ty != Ty::Int {
+                if !l.ty.is_integer() || !r.ty.is_integer() {
                     self.error(span, format!("`{}` takes two ints (a float's bits are not a formula's)", op.symbol()));
                     return None;
                 }
-                Some(IExpr { kind: IExprKind::Binary(op, Box::new(l), Box::new(r)), ty: Ty::Int })
+                // An int and a u32: a u32, the int's bits -- but a shift is
+                // its left side's, the amount any int (WGSL's, Rust's).
+                let t = if matches!(op, BinOp::Shl | BinOp::Shr) { l.ty } else { l.ty.join(r.ty) };
+                let r = if matches!(op, BinOp::Shl | BinOp::Shr) && r.ty != t { IExpr { kind: IExprKind::Convert(Box::new(r)), ty: t } } else { r };
+                let l = self.convert(l, t, a.span)?;
+                let r = self.convert(r, t, b.span)?;
+                Some(IExpr { kind: IExprKind::Binary(op, Box::new(l), Box::new(r)), ty: t })
             }
             BinOp::And | BinOp::Or => {
                 let l = self.to_bool(l, a.span)?;
@@ -1912,6 +2049,13 @@ impl Checker {
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 let l = self.numeric(l, a.span)?;
                 let r = self.numeric(r, b.span)?;
+                // UF and Fractint order a complex by its real part; in Rhai
+                // it is an error, where a slip (`u - d.abs()` for `(u -
+                // d).abs()`) would compile and compare the wrong thing.
+                if self.rhai && !matches!(op, BinOp::Eq | BinOp::Ne) && (l.ty == Ty::Complex || r.ty == Ty::Complex) {
+                    self.error(span, "a complex number has no order: compare `z.re`, or its size, `z.abs()`");
+                    return None;
+                }
                 let t = l.ty.join(r.ty);
                 let l = self.convert(l, t, a.span)?;
                 let r = self.convert(r, t, b.span)?;
@@ -2006,8 +2150,16 @@ impl Checker {
             self.error(span, format!("cannot convert {} to {} (use `real`, `round` and the like)", v.ty.name(), to.name()));
             return None;
         }
-        // Constants convert here, so the back ends see literals.
+        // A u32 is an int again only by `to_int`: a slip would make it
+        // signed and compare, divide and convert otherwise.
+        if self.rhai && (v.ty, to) == (Ty::UInt, Ty::Int) {
+            self.error(span, "a u32 where an int is wanted: `to_int(x)` for its bits, or make the variable a u32 (`let h = u32(0)`)");
+            return None;
+        }
+        // Constants convert here, so the back ends see literals; an int
+        // literal to a u32 is its 32-bit pattern.
         Some(match v.kind {
+            IExprKind::Int(i) if to == Ty::UInt => IExpr { kind: IExprKind::Int(i64::from(i as u32)), ty: to },
             IExprKind::Int(i) if to == Ty::Float => IExpr { kind: IExprKind::Float(i as f64), ty: to },
             IExprKind::Int(i) => IExpr { kind: IExprKind::Complex(i as f64, 0.0), ty: to },
             IExprKind::Float(f) if to == Ty::Complex => IExpr { kind: IExprKind::Complex(f, 0.0), ty: to },
@@ -2244,6 +2396,11 @@ fn place_read(p: Place) -> Option<IExprKind> {
         Place::CreaseSlope => IExprKind::Predef(Predef::CreaseSlope),
         Place::Pixel => IExprKind::Predef(Predef::Pixel),
         Place::Color => IExprKind::Predef(Predef::VarColor),
+        Place::Hide => IExprKind::Predef(Predef::VarHide),
+        Place::RgbR => IExprKind::Predef(Predef::VarRgbR),
+        Place::RgbG => IExprKind::Predef(Predef::VarRgbG),
+        Place::RgbB => IExprKind::Predef(Predef::VarRgbB),
+        Place::WOut => IExprKind::Predef(Predef::WOut),
         Place::PixelZ => IExprKind::Predef(Predef::PixelZ),
         Place::Effect(p) => IExprKind::Predef(p),
     })

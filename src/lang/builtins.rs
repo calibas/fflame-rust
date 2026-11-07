@@ -207,6 +207,15 @@ pub enum Host {
     Texture,
     Texel,
     TextureSize,
+    /// A flame variation's extra plot points (`Feature::PlotEmits`;
+    /// rhai-plugins P7 step 3): a point's parts and its weight, in 2D or
+    /// 3D, absolute or an offset from where the iteration finally plots;
+    /// and its own plot suppressed, the emissions kept. Statements.
+    EmitPlot2,
+    EmitPlot3,
+    EmitOffset2,
+    EmitOffset3,
+    EmitSuppress,
 }
 
 /// Every host call by its lowered name.
@@ -237,6 +246,11 @@ pub const HOSTS: &[(&str, Host)] = &[
     ("__texture", Host::Texture),
     ("__texel", Host::Texel),
     ("__texture_size", Host::TextureSize),
+    ("__emit_plot2", Host::EmitPlot2),
+    ("__emit_plot3", Host::EmitPlot3),
+    ("__emit_offset2", Host::EmitOffset2),
+    ("__emit_offset3", Host::EmitOffset3),
+    ("__emit_suppress", Host::EmitSuppress),
 ];
 
 impl Host {
@@ -264,7 +278,9 @@ impl Host {
             TexelLoad | Texel => &[I, I, I],
             TexturePart => &[I, I],
             TextureSize => &[I],
-            TakeDeposit | PyrPrepare => &[],
+            TakeDeposit | PyrPrepare | EmitSuppress => &[],
+            EmitPlot2 | EmitOffset2 => &[F, F, F],
+            EmitPlot3 | EmitOffset3 => &[F, F, F, F],
             AgentDeposit => &[I, I, F],
             ReadAt => &[I, I, I],
         }
@@ -275,6 +291,7 @@ impl Host {
         use Host::*;
         match self {
             ScratchWrite | MemWrite | AgentClaim | AgentDeposit | PyrPrepare | EscPaletteLoad | TextureLoad | TexelLoad => None,
+            EmitPlot2 | EmitPlot3 | EmitOffset2 | EmitOffset3 | EmitSuppress => None,
             Outside | AgentClaimCheck => Some(Ty::Bool),
             _ => Some(Ty::Float),
         }
@@ -291,6 +308,11 @@ impl Host {
     /// Whether an escape colouring's (else a simulation model's).
     pub fn escape(self) -> bool {
         matches!(self, Host::EscPalette | Host::EscPaletteCurve | Host::EscPaletteLoad | Host::EscPalettePart)
+    }
+
+    /// Whether a flame variation's emission (`Feature::PlotEmits`).
+    pub fn emit(self) -> bool {
+        matches!(self, Host::EmitPlot2 | Host::EmitPlot3 | Host::EmitOffset2 | Host::EmitOffset3 | Host::EmitSuppress)
     }
 
     /// Whether a texture read, any kind's whose template binds one.
@@ -551,10 +573,10 @@ impl Builtin {
             Cabs | Real | Imag | Atan2 => Ty::Float,
             // A simulation's (P4): a stream and a hash take an int, the
             // seed's words are ints.
-            SimRand if arg != Ty::Int => return Err("`rand(k)` takes an int: the stream's number".to_string()),
-            Tap | Disc if arg != Ty::Int => return Err(format!("`{}` takes an int: the index", if self == Tap { "tap(i)" } else { "disc(i)" })),
+            SimRand if !arg.is_integer() => return Err("`rand(k)` takes an int: the stream's number".to_string()),
+            Tap | Disc if !arg.is_integer() => return Err(format!("`{}` takes an int: the index", if self == Tap { "tap(i)" } else { "disc(i)" })),
             Tap | Disc => Ty::Float,
-            Pcg if arg != Ty::Int => return Err("`pcg(n)` takes an int: it hashes its 32 bits".to_string()),
+            Pcg if !arg.is_integer() => return Err("`pcg(n)` takes an int: it hashes its 32 bits".to_string()),
             SimRand => Ty::Float,
             Pcg | HostInt => Ty::Int,
             SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | InitAt => Ty::Float,

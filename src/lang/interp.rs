@@ -17,6 +17,8 @@ use super::Dialect;
 pub enum Value {
     Bool(bool),
     Int(i32),
+    /// Rhai's `u32` (`Ty::UInt`), wrapping as WGSL's.
+    UInt(u32),
     Float(f64),
     Complex(C64),
 }
@@ -26,6 +28,7 @@ impl Value {
         match ty {
             Ty::Bool => Value::Bool(false),
             Ty::Int => Value::Int(0),
+            Ty::UInt => Value::UInt(0),
             Ty::Float => Value::Float(0.0),
             Ty::Complex => Value::Complex(C64::ZERO),
         }
@@ -35,6 +38,7 @@ impl Value {
         match self {
             Value::Bool(b) => b,
             Value::Int(i) => i != 0,
+            Value::UInt(u) => u != 0,
             Value::Float(f) => f != 0.0,
             Value::Complex(c) => c.re != 0.0 || c.im != 0.0,
         }
@@ -44,6 +48,7 @@ impl Value {
         match self {
             Value::Bool(b) => f64::from(u8::from(b)),
             Value::Int(i) => f64::from(i),
+            Value::UInt(u) => f64::from(u),
             Value::Float(f) => f,
             Value::Complex(c) => c.re,
         }
@@ -59,8 +64,22 @@ impl Value {
     fn as_int(self) -> i32 {
         match self {
             Value::Int(i) => i,
+            // Its bits.
+            Value::UInt(u) => u as i32,
             Value::Bool(b) => i32::from(b),
             other => other.as_f64() as i32,
+        }
+    }
+
+    /// As a u32: an int's bits, a float truncated and clamped to [0,
+    /// 2^32 - 256] (the largest f32 below 2^32), as the GPU's
+    /// `u32(clamp(x, 0.0, 4294967040.0))`.
+    fn as_uint(self) -> u32 {
+        match self {
+            Value::UInt(u) => u,
+            Value::Int(i) => i as u32,
+            Value::Bool(b) => u32::from(b),
+            other => other.as_f64().clamp(0.0, 4_294_967_040.0) as u32,
         }
     }
 }
@@ -184,11 +203,10 @@ struct Machine<'p> {
     flame_rng: std::cell::Cell<Option<u32>>,
 }
 
-/// The PCG output of a state (`shaders/core/rng.wgsl` `rng_next`), as a
-/// draw in [0, 1): the top 24 bits.
-fn pcg_draw(old: u32) -> f64 {
+/// The PCG output of a state (`shaders/core/rng.wgsl` `rng_next`).
+fn pcg_out(old: u32) -> u32 {
     let w = ((old >> ((old >> 28) + 4)) ^ old).wrapping_mul(277_803_737);
-    f64::from(((w >> 22) ^ w) >> 8) / 16_777_216.0
+    (w >> 22) ^ w
 }
 
 /// The PCG step.
@@ -218,6 +236,19 @@ struct Shared<'e> {
     accum: C64,
     weight: f64,
     vcolor: Option<f64>,
+    /// The colour a variation reads (`ctx.color`) until it writes one.
+    vcolor_in: f64,
+    /// Whether it hides the point, as written, else as it reached it.
+    vhide: Option<bool>,
+    vhide_in: bool,
+    /// Its direct colour's parts, as written, else as they reached it.
+    vrgb: [Option<f64>; 3],
+    vrgb_in: [f64; 3],
+    /// Its transform's affine coefficients, `a` to `f`.
+    coefs: [f64; 6],
+    /// The 4th coordinate it is given, and the one it gives if it does.
+    point_w: f64,
+    w_out: Option<f64>,
     /// A 3D variation's point's and accumulator's third parts (B2).
     pixel_z: f64,
     accum_z: f64,
@@ -238,6 +269,14 @@ impl<'e> Shared<'e> {
             accum: C64::ZERO,
             weight: 1.0,
             vcolor: None,
+            vcolor_in: 0.0,
+            vhide: None,
+            vhide_in: false,
+            vrgb: [None; 3],
+            vrgb_in: [-1.0e30; 3],
+            coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            point_w: 0.0,
+            w_out: None,
             pixel_z: 0.0,
             accum_z: 0.0,
             prev: C64::ZERO,
@@ -296,6 +335,18 @@ pub fn solid(p: &Program, params: &ParamValues, pos: [f64; 3], levels: u32) -> f
 pub struct VariationRun<'p> {
     m: Machine<'p>,
     env: Env,
+    /// The colour each call starts from (`ctx.color`).
+    color: f64,
+    /// Whether the last call hid its point (`#{ z, hide }`).
+    hid: bool,
+    /// The direct colour the last call wrote, if it wrote one.
+    rgb: Option<[f64; 3]>,
+    /// Its transform's affine coefficients (`ctx.a` .. `ctx.f`).
+    coefs: [f64; 6],
+    /// The 4th coordinate each call is given (`ctx.w`), and the one the
+    /// last call gave (`#{ z, w }`).
+    point_w: f64,
+    w_out: Option<f64>,
 }
 
 impl<'p> VariationRun<'p> {
@@ -305,8 +356,35 @@ impl<'p> VariationRun<'p> {
         let mut m = Machine::new(p, params);
         m.flame_rng.set(Some(seed));
         let mut sh = Shared::new(&env);
+        // `prepare`'s values, at f64, which the body reads as its own.
+        m.exec(&p.global_body, &mut sh);
         m.exec(&p.init, &mut sh);
-        VariationRun { m, env }
+        VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], point_w: 0.0, w_out: None }
+    }
+
+    /// Each call given the 4th coordinate `w` (`ctx.w`; the probe's 0).
+    pub fn with_w(mut self, w: f64) -> Self {
+        self.point_w = w;
+        self
+    }
+
+    /// The 4th coordinate the last call gave (`#{ z, w }`), if any.
+    pub fn w_out(&self) -> Option<f64> {
+        self.w_out
+    }
+
+    /// Its transform's affine coefficients, `a` to `f` (`ctx.a` ..; the
+    /// identity without).
+    pub fn with_coefs(mut self, c: [f64; 6]) -> Self {
+        self.coefs = c;
+        self
+    }
+
+    /// Each call starting from the colour `c` (`ctx.color`; the probe's
+    /// 0.5, a flame's colour coordinate).
+    pub fn with_color(mut self, c: f64) -> Self {
+        self.color = c;
+        self
     }
 
     /// The point for `z`, and the colour it wrote if it writes one, given
@@ -316,8 +394,12 @@ impl<'p> VariationRun<'p> {
         sh.pixel = z;
         sh.accum = accum;
         sh.weight = weight;
+        sh.vcolor_in = self.color;
+        sh.coefs = self.coefs;
         let prog = self.m.prog;
         self.m.exec(&prog.transform, &mut sh);
+        self.hid = sh.vhide.unwrap_or(false);
+        self.rgb = written_rgb(&sh);
         (sh.pixel, sh.vcolor)
     }
 
@@ -330,9 +412,25 @@ impl<'p> VariationRun<'p> {
         sh.accum = C64::new(accum[0], accum[1]);
         sh.accum_z = accum[2];
         sh.weight = weight;
+        sh.vcolor_in = self.color;
+        sh.coefs = self.coefs;
+        sh.point_w = self.point_w;
         let prog = self.m.prog;
         self.m.exec(&prog.transform, &mut sh);
+        self.hid = sh.vhide.unwrap_or(false);
+        self.rgb = written_rgb(&sh);
+        self.w_out = sh.w_out;
         ([sh.pixel.re, sh.pixel.im, sh.pixel_z], sh.vcolor)
+    }
+
+    /// The direct colour the last call wrote (`#{ z, rgb }`), if any.
+    pub fn rgb(&self) -> Option<[f64; 3]> {
+        self.rgb
+    }
+
+    /// Whether the last call hid its point (`CanHide`).
+    pub fn hid(&self) -> bool {
+        self.hid
     }
 }
 
@@ -755,11 +853,17 @@ impl<'p> Machine<'p> {
         }
     }
 
-    /// The next draw in [0, 1) ([`Predef::Draw`]).
+    /// The next draw in [0, 1) ([`Predef::Draw`]): the top 24 bits of the
+    /// next raw one.
     fn next_draw(&self, sh: &Shared) -> f64 {
+        f64::from(self.next_u32(sh) >> 8) / 16_777_216.0
+    }
+
+    /// The next raw draw, all 32 bits ([`Predef::DrawU32`]).
+    fn next_u32(&self, sh: &Shared) -> u32 {
         if let Some(s) = self.flame_rng.get() {
             self.flame_rng.set(Some(pcg_step(s)));
-            return pcg_draw(s);
+            return pcg_out(s);
         }
         let mut s = self.draw.get();
         if s == 0 {
@@ -767,7 +871,7 @@ impl<'p> Machine<'p> {
             s = x.wrapping_mul(1_664_525).wrapping_add(y.wrapping_mul(22_695_477)).wrapping_add(1_013_904_223) | 1;
         }
         self.draw.set(pcg_step(s));
-        pcg_draw(s)
+        pcg_out(s)
     }
 
     /// An element's place: the flattened index clamped to the array, as
@@ -785,7 +889,9 @@ impl<'p> Machine<'p> {
                     let _ = self.exec(body, sh);
                 }
                 // An escape colouring's palette read: none here.
-                IStmt::Host(h, _) if h.gpu_read() => {}
+                // A variation's emissions are plot-only: nothing the point
+                // or its colour depends on.
+                IStmt::Host(h, _) if h.gpu_read() || h.emit() => {}
                 IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
                 // The loop or the function around it takes these (P7
                 // step 1), as the GPU's do.
@@ -804,6 +910,11 @@ impl<'p> Machine<'p> {
                         Place::CreaseSlope => sh.crease_slope = v.as_c64(),
                         Place::Pixel => sh.pixel = v.as_c64(),
                         Place::Color => sh.vcolor = Some(v.as_f64()),
+                        Place::Hide => sh.vhide = Some(v.as_bool()),
+                        Place::RgbR => sh.vrgb[0] = Some(v.as_f64()),
+                        Place::RgbG => sh.vrgb[1] = Some(v.as_f64()),
+                        Place::RgbB => sh.vrgb[2] = Some(v.as_f64()),
+                        Place::WOut => sh.w_out = Some(v.as_f64()),
                         Place::PixelZ => sh.pixel_z = v.as_f64(),
                         // An effect runs on the GPU alone.
                         Place::Effect(_) => {}
@@ -876,6 +987,7 @@ impl<'p> Machine<'p> {
             IExprKind::Host(h, _) if h.gpu_read() => Value::Float(0.0),
             IExprKind::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
             IExprKind::Bool(b) => Value::Bool(*b),
+            IExprKind::Int(i) if e.ty == Ty::UInt => Value::UInt(*i as u32),
             IExprKind::Int(i) => Value::Int(*i as i32),
             IExprKind::Float(f) => Value::Float(*f),
             IExprKind::Complex(re, im) => Value::Complex(C64::new(*re, *im)),
@@ -885,12 +997,23 @@ impl<'p> Machine<'p> {
                 match self.prog.params[*id].ty() {
                     Ty::Bool => Value::Bool(re != 0.0),
                     Ty::Int => Value::Int(re.round() as i32),
+                    Ty::UInt => Value::UInt(re.round().max(0.0) as u32),
                     Ty::Float => Value::Float(re),
                     Ty::Complex => Value::Complex(C64::new(re, im)),
                 }
             }
             IExprKind::Predef(Predef::Draw) => Value::Float(self.next_draw(sh)),
+            IExprKind::Predef(Predef::DrawU32) => Value::UInt(self.next_u32(sh)),
             IExprKind::Predef(p) => predef(*p, sh),
+            // A real's floor, trunc or ceil back to a float: the float
+            // operation, as the GPU computes it -- no int between.
+            IExprKind::Convert(a)
+                if (a.ty, e.ty) == (Ty::Int, Ty::Float)
+                    && matches!(&a.kind, IExprKind::Call(Builtin::Floor | Builtin::Trunc | Builtin::Ceil, x) if x.ty == Ty::Float) =>
+            {
+                let IExprKind::Call(f, x) = &a.kind else { unreachable!() };
+                Value::Float(f.eval_f(self.eval(x, sh).as_f64()))
+            }
             IExprKind::Convert(a) => {
                 let v = self.eval(a, sh);
                 match e.ty {
@@ -898,6 +1021,7 @@ impl<'p> Machine<'p> {
                     Ty::Bool if self.prog.dialect == Dialect::Fractint => Value::Bool(v.as_f64() != 0.0),
                     Ty::Bool => Value::Bool(v.as_bool()),
                     Ty::Int => Value::Int(v.as_int()),
+                    Ty::UInt => Value::UInt(v.as_uint()),
                     Ty::Float => Value::Float(v.as_f64()),
                     Ty::Complex => Value::Complex(v.as_c64()),
                 }
@@ -905,6 +1029,7 @@ impl<'p> Machine<'p> {
             IExprKind::MakeComplex(a, b) => Value::Complex(C64::new(self.eval(a, sh).as_f64(), self.eval(b, sh).as_f64())),
             IExprKind::Unary(UnOp::Neg, a) => match self.eval(a, sh) {
                 Value::Int(i) => Value::Int(i.wrapping_neg()),
+                Value::UInt(u) => Value::UInt(u.wrapping_neg()),
                 Value::Float(f) => Value::Float(-f),
                 Value::Complex(c) => Value::Complex(c.neg()),
                 Value::Bool(b) => Value::Bool(b),
@@ -957,9 +1082,19 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::Random => Value::Complex(env.random),
         // `Machine::eval` draws; never reached.
         Predef::Draw => Value::Float(0.0),
+        Predef::DrawU32 => Value::UInt(0),
         Predef::Accum => Value::Complex(sh.accum),
         Predef::Weight => Value::Float(sh.weight),
-        Predef::VarColor => Value::Float(sh.vcolor.unwrap_or(0.0)),
+        Predef::VarColor => Value::Float(sh.vcolor.unwrap_or(sh.vcolor_in)),
+        Predef::VarHide => Value::Bool(sh.vhide.unwrap_or(sh.vhide_in)),
+        Predef::VarRgbR => Value::Float(sh.vrgb[0].unwrap_or(sh.vrgb_in[0])),
+        Predef::VarRgbG => Value::Float(sh.vrgb[1].unwrap_or(sh.vrgb_in[1])),
+        Predef::VarRgbB => Value::Float(sh.vrgb[2].unwrap_or(sh.vrgb_in[2])),
+        Predef::Coef(k) => Value::Float(sh.coefs[usize::from(k)]),
+        // The default camera: at the origin, unturned, orthographic.
+        Predef::Camera(_) => Value::Float(0.0),
+        Predef::PointW => Value::Float(sh.point_w),
+        Predef::WOut => Value::Float(sh.w_out.unwrap_or(0.0)),
         Predef::PixelZ => Value::Float(sh.pixel_z),
         Predef::AccumZ => Value::Float(sh.accum_z),
         Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {
@@ -1060,8 +1195,20 @@ fn binary(op: BinOp, l: Value, r: Value, ty: Ty, dialect: Dialect) -> Value {
         Gt => Value::Bool(l.as_f64() > r.as_f64()),
         Ge => Value::Bool(l.as_f64() >= r.as_f64()),
         DiffAbs => Value::Float(diffabs(l.as_f64(), r.as_f64())),
+        BitAnd | BitOr | BitXor | Shl | Shr | IDiv if ty == Ty::UInt => Value::UInt(ubits(op, l.as_uint(), r.as_uint())),
         BitAnd | BitOr | BitXor | Shl | Shr | IDiv => Value::Int(bits(op, l.as_int(), r.as_int())),
         Add | Sub | Mul | Div | Mod | Pow => match ty {
+            Ty::UInt => {
+                let (a, b) = (l.as_uint(), r.as_uint());
+                Value::UInt(match op {
+                    Add => a.wrapping_add(b),
+                    Sub => a.wrapping_sub(b),
+                    Mul => a.wrapping_mul(b),
+                    // A zero divisor gives 0, in WGSL too.
+                    Mod => a.checked_rem(b).unwrap_or(0),
+                    _ => unreachable!("a u32's `/` is `IDiv`; powers are float"),
+                })
+            }
             Ty::Int => {
                 let (a, b) = (l.as_int(), r.as_int());
                 Value::Int(match op {
@@ -1120,6 +1267,21 @@ pub(crate) fn bits(op: BinOp, a: i32, b: i32) -> i32 {
         BinOp::IDiv if b == 0 || (a == i32::MIN && b == -1) => a,
         BinOp::IDiv => a / b,
         _ => unreachable!("a bit operation"),
+    }
+}
+
+/// The direct colour a call wrote: each part as written, the rest as
+/// they reached it; none, if it wrote none.
+fn written_rgb(sh: &Shared) -> Option<[f64; 3]> {
+    sh.vrgb.iter().any(Option::is_some).then(|| [0, 1, 2].map(|k| sh.vrgb[k].unwrap_or(sh.vrgb_in[k])))
+}
+
+/// [`bits`] of two u32s: `/` unsigned, a zero divisor giving the
+/// dividend, as WGSL's.
+pub(crate) fn ubits(op: BinOp, a: u32, b: u32) -> u32 {
+    match op {
+        BinOp::IDiv => a.checked_div(b).unwrap_or(a),
+        _ => bits(op, a as i32, b as i32) as u32,
     }
 }
 

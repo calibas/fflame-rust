@@ -196,6 +196,7 @@ fn zero(ty: Ty) -> &'static str {
     match ty {
         Ty::Bool => "false",
         Ty::Int => "0",
+        Ty::UInt => "u32(0)",
         Ty::Float => "0.0",
         Ty::Complex => "complex(0.0, 0.0)",
     }
@@ -275,7 +276,7 @@ fn place_slot(p: Place) -> Option<Slot> {
         Place::Index => Some(Slot::Index),
         Place::Solid => Some(Slot::Solid),
         // A Rhai formula's `creases`, which the converter does not write.
-        Place::CreaseHeight | Place::CreaseSlope | Place::Pixel | Place::Color | Place::PixelZ | Place::Effect(_) => None,
+        Place::CreaseHeight | Place::CreaseSlope | Place::Pixel | Place::Color | Place::Hide | Place::RgbR | Place::RgbG | Place::RgbB | Place::WOut | Place::PixelZ | Place::Effect(_) => None,
     }
 }
 
@@ -1019,9 +1020,15 @@ impl<'p> Printer<'p> {
             Predef::Height => self.ctx_field("height"),
             Predef::Random => self.ctx_field("random"),
             Predef::Draw => P::atom("rand()"),
+            Predef::DrawU32 => P::atom("rand_u32()"),
             Predef::Accum => self.ctx_field("accum"),
             Predef::Weight => self.ctx_field("weight"),
             Predef::VarColor => return Err("a flame variation's colour is written in its result, `#{ z, color }`".into()),
+            Predef::VarHide => return Err("a flame variation hides its point in its result, `#{ z, hide }`".into()),
+            Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB => return Err("a flame variation's direct colour is written in its result, `#{ z, rgb }`".into()),
+            Predef::Coef(_) => return Err("a flame variation's transform's coefficients are `ctx.a` .. `ctx.f`".into()),
+            Predef::Camera(_) => return Err("a flame variation's camera is `ctx.camera_x` .. `ctx.perspective`".into()),
+            Predef::PointW | Predef::WOut => return Err("a 3D variation's 4th coordinate is `ctx.w` and `#{ z, w }`".into()),
             Predef::PixelZ | Predef::AccumZ => return Err("a 3D variation's point is a vector, `fn variation3(v, p)`".into()),
             Predef::EffectR
             | Predef::EffectG
@@ -1127,7 +1134,10 @@ impl<'p> Printer<'p> {
         };
         // Fractint compares complex values by their real parts, equality
         // too.
-        if matches!(op, BinOp::Eq | BinOp::Ne) && a.ty == Ty::Complex && self.p.dialect == Dialect::Fractint {
+        // Both order them by their real parts, which Rhai leaves unsaid
+        // no more: a complex there has no order.
+        let ordered = matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge);
+        if a.ty == Ty::Complex && (ordered || (matches!(op, BinOp::Eq | BinOp::Ne) && self.p.dialect == Dialect::Fractint)) {
             let (l, r) = (self.real_part(a)?, self.real_part(b)?);
             return Ok(P(format!("{} {sym} {}", l.at(prec), r.at(prec + 1)), prec));
         }

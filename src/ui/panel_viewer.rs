@@ -884,6 +884,8 @@ impl<'a> PanelViewer<'a> {
                 attachment_edit: self.context.attachment_edit,
             },
             self.context.open_triangle_editor,
+            self.context.formula_editor,
+            self.context.open_formula_editor,
         );
     }
 

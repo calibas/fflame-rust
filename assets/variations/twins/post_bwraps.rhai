@@ -1,0 +1,94 @@
+/// Same as Pre Bwraps but runs after all other variations — the bubble grid
+/// is applied to the final output coordinates.
+
+// Post Bwraps, the built-in variation's twin, translated from its WGSL.
+
+const PARAMS = #{
+    cellsize: #{
+        value: 1.0, min: -10.0, max: 10.0, free: true,
+        caption: "Cell Size",
+        hint: "Width of each grid cell — the plane is divided into cells of this size, each becoming a bubble.",
+    },
+    space: #{
+        value: 0.0, min: -1.0, max: 1.0, free: true,
+        caption: "Space",
+        hint: "Gap between cells. 0 = no gap; positive values push the bubbles apart.",
+    },
+    gain: #{
+        value: 1.0, min: -5.0, max: 5.0, free: true,
+        caption: "Gain",
+        hint: "How strongly each bubble wraps its contents inward.",
+    },
+    inner_twist: #{
+        value: 0.0, min: -10.0, max: 10.0, free: true,
+        caption: "Inner Twist",
+        hint: "Rotation (in degrees) applied at the center of each bubble.",
+    },
+    outer_twist: #{
+        value: 0.0, min: -10.0, max: 10.0, free: true,
+        caption: "Outer Twist",
+        hint: "Rotation (in degrees) applied at the edge of each bubble.",
+    },
+};
+
+const INFO = #{ title: "Post Bwraps", name: "rhai_post_bwraps", category: "advanced_2d", phase: "post" };
+
+fn prepare(p) {
+    let cellsize = p.cellsize;
+    let space = p.space;
+    let gain = p.gain;
+    let inner_twist = p.inner_twist;
+    let outer_twist = p.outer_twist;
+    let out = array(5, 0.0);
+    if (cellsize == 0.0) {
+        out[0] = 0.0;
+        out[1] = 0.0;
+        out[2] = 0.0;
+        out[3] = inner_twist * 3.14159265358979 / 180.0;
+        out[4] = outer_twist * 3.14159265358979 / 180.0;
+    } else {
+        let radius = 0.5 * (cellsize / (1.0 + space * space));
+        let g2 = (gain * gain) / (radius + 1.0e-6) + 1.0e-6;
+        let max_bubble = g2 * radius;
+        if (max_bubble > 2.0) {
+            max_bubble = 1.0;
+        } else {
+            max_bubble = max_bubble * (1.0 / ((max_bubble * max_bubble) / 4.0 + 1.0));
+        }
+        out[0] = g2;
+        out[1] = radius * radius;
+        out[2] = radius / max_bubble;
+        out[3] = inner_twist * 3.14159265358979 / 180.0;
+        out[4] = outer_twist * 3.14159265358979 / 180.0;
+    }
+    #{ g2: out[0], r2: out[1], rfactor: out[2], d3: out[3], d4: out[4] }
+}
+
+fn variation(z, p) {
+    let cellsize = p.cellsize;
+    let g2 = p.g2;
+    let r2 = p.r2;
+    let rfactor = p.rfactor;
+    let inner_twist = p.d3;
+    let outer_twist = p.d4;
+    if cellsize == 0.0 {
+        return z;
+    }
+    let cx = (to_float(floor(z.re / cellsize)) + 0.5) * cellsize;
+    let cy = (to_float(floor(z.im / cellsize)) + 0.5) * cellsize;
+    let lx = z.re - cx;
+    let ly = z.im - cy;
+    if (lx * lx + ly * ly) <= r2 {
+        lx = lx * g2;
+        ly = ly * g2;
+        let r = rfactor / ((lx * lx + ly * ly) / 4.0 + 1.0);
+        lx = lx * r;
+        ly = ly * r;
+        r = (lx * lx + ly * ly) / r2;
+        let theta = inner_twist * (1.0 - r) + outer_twist * r;
+        let s = sin(theta);
+        let c = cos(theta);
+        return complex(cx + c * lx + s * ly, cy - s * lx + c * ly);
+    }
+    z
+}

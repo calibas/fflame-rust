@@ -251,13 +251,16 @@ fn arm_count_from_power(power: f64) -> u32 {
 /// finely is better than an antichain nobody can afford.
 pub const MAX_ARMS: u32 = 64;
 
-/// The arm table entry for `name`.
+/// The arm table entry for `name`: a built-in's alone, since
+/// [`force_arms`] rewrites its WGSL text (`twins::planner_name`).
 pub fn arms_for(name: &str) -> Option<&'static ArmedDef> {
     ARMED.iter().copied().find(|d| d.name == name)
 }
 
-/// The bound registered for `name`.
+/// The bound registered for `name`; an unedited twin's key finds its
+/// built-in's (`twins::planner_name`).
 pub fn for_name(name: &str) -> Option<&'static BoundDef> {
+    let name = super::twins::planner_name(name);
     BOUNDS.iter().copied().find(|d| d.name == name)
 }
 

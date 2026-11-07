@@ -18,6 +18,8 @@ pub mod docs;
 pub mod analytic_blur;
 /// Variations written in the formula language (the KIFS plan, C1).
 pub mod custom;
+// Rhai twins of the built-ins (rhai-plugins P7 steps 3 and 4).
+pub mod twins;
 
 use definition::VariationDef;
 pub use definition::{Feature, MAX_ORBIT_LENGTH, ORBIT_LENGTH_PARAM};
@@ -536,6 +538,14 @@ impl VariationRegistry {
     /// (e.g., when a newer version is fetched). Built-in variations
     /// can't be replaced — the call is rejected with a logged warning.
     /// Register a variation from a download payload.
+    /// Set a registered variation's phase: `any` for one of the user's,
+    /// which the wire cannot carry (`custom::phase_of`).
+    pub fn set_phase(&mut self, name: &str, phase: VariationPhase) {
+        if let Some(v) = self.variations.get_mut(name) {
+            v.phase = phase;
+        }
+    }
+
     pub fn register_from_api(
         &mut self,
         dl: &crate::api::types::VariationDownload,
@@ -797,6 +807,31 @@ impl Default for VariationRegistry {
 }
 
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+/// Parameters renamed from a reserved word or a name that is none (the
+/// user, 2026-11-06: no Rhai or WGSL reserved word as a name): the
+/// variation, the old name -- JWildfire's, still written in `.flame` and
+/// read from older files -- and the new.
+pub const RENAMED_PARAMS: &[(&str, &str, &str)] = &[("w", "super", "super_shape"), ("z", "super", "super_shape"), ("hexnix3D", "3side", "triangle_scale")];
+
+/// A parameter's name now, for one saved under its old name.
+pub fn current_param_name<'a>(variation: &str, param: &'a str) -> &'a str {
+    RENAMED_PARAMS.iter().find(|(v, old, _)| *v == variation && *old == param).map_or(param, |(_, _, new)| new)
+}
+
+/// A parameter's name as JWildfire writes it in a `.flame`.
+pub fn jwf_param_name<'a>(variation: &str, param: &'a str) -> &'a str {
+    RENAMED_PARAMS.iter().find(|(v, _, new)| *v == variation && *new == param).map_or(param, |(_, old, _)| old)
+}
+
+/// A transform's `"variation.param"` key now, for one saved under its old
+/// name.
+pub fn current_param_key(key: &str) -> std::borrow::Cow<'_, str> {
+    match key.split_once('.') {
+        Some((v, p)) if current_param_name(v, p) != p => std::borrow::Cow::Owned(format!("{v}.{}", current_param_name(v, p))),
+        _ => std::borrow::Cow::Borrowed(key),
+    }
+}
 
 fn registry_lock() -> &'static RwLock<VariationRegistry> {
     use once_cell::sync::Lazy;

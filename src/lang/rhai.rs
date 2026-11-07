@@ -81,8 +81,11 @@
 //! `+ - * / %`, `**` the power, comparisons, `&& || !`; on ints, 32-bit
 //! as UF's (a literal past `i32::MAX` its pattern), the bit operations
 //! `^ & | << >>`, `>>` logical (on bools `& |` are and and or, `^` xor).
-//! Two ints divided is refused -- Rhai would truncate where a formula
-//! wants the quotient. Functions (and as methods, `z.sqr()`):
+//! Two ints divided truncate, as Rhai's do. `u32(x)` is an unsigned
+//! 32-bit int, as WGSL's (an int's bits, a float truncated and clamped):
+//! `+ - *` wrap, `/ %` and comparisons unsigned, `to_float` 0..2^32-1;
+//! one joins an int to a u32, and a u32 is an int again only by
+//! `to_int`. Functions (and as methods, `z.sqr()`):
 //! `sqr sqrt exp ln sin cos tan cot sinh cosh tanh coth asin acos atan
 //! asinh acosh atanh conj flip recip round floor ceiling trunc ident
 //! zero cosxx isinf isnan`; `abs` (of a complex, its modulus), `fold`
@@ -298,8 +301,9 @@ pub fn label_of(v: &Expr) -> Option<crate::scripted::Label> {
 
 /// A script's labels (`crate::scripted::Labels`), read from its `INFO`
 /// and `PARAMS` as written, for whatever shows them to resolve in the
-/// current language when it shows them. `None` when it does not parse; a
-/// label it does not write is empty.
+/// current language when it shows them -- its description and authors
+/// from the doc block it opens with where `INFO` has none. `None` when it
+/// does not parse; a label it does not write is empty.
 pub fn source_labels(source: &str) -> Option<crate::scripted::Labels> {
     let (ast, _) = parse(source).ok()?;
     let mut out = crate::scripted::Labels::default();
@@ -341,6 +345,18 @@ pub fn source_labels(source: &str) -> Option<crate::scripted::Labels> {
                 }
             }
             _ => {}
+        }
+    }
+    // The doc block the source opens with (a def's shape: the prose, then
+    // `# Authors` and its `- name` lines), where `INFO` gives no
+    // description or author: the text the API reads and writes without
+    // evaluating Rhai (`variations::docs::leading_block`).
+    if let Some(doc) = crate::variations::docs::leading_block(source) {
+        if out.description.resolve().is_empty() {
+            out.description = crate::scripted::Label::text(doc.description);
+        }
+        if out.author.is_empty() {
+            out.author = doc.authors.join(", ");
         }
     }
     Some(out)
@@ -672,6 +688,8 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         effect: kind == EntryKind::Effect,
         sim_coloring: kind == EntryKind::SimColoring,
         palette_reads: 0,
+        state_this: false,
+        stmt_call: false,
         texture_reads: 0,
         sim_model: kind == EntryKind::SimModel,
         sim_fn,
@@ -787,6 +805,11 @@ impl Positions {
 }
 
 // ---- lowering ---------------------------------------------------------
+
+/// A flame variation's emission, a statement (rhai-plugins P7 step 3).
+fn is_emit(f: &FnCallExpr) -> bool {
+    matches!(f.name.as_str(), "emit" | "emit_offset" | "suppress_main")
+}
 
 /// A simulation model's write, a statement (P4 step 9c).
 fn is_sim_write(f: &FnCallExpr) -> bool {
@@ -936,6 +959,12 @@ struct Lowerer<'s> {
     /// An escape colouring's palette reads made so far (batch 5): each
     /// call site's slot, read once.
     palette_reads: i64,
+    /// A helper called on a variation's state (`this.f(..)`), until
+    /// [`Lowerer::call`] or `vcall` takes it.
+    state_this: bool,
+    /// A statement calling a helper alone (for what it writes), until
+    /// [`Lowerer::call`] takes it.
+    stmt_call: bool,
     /// Texture reads made so far (batch 6), likewise.
     texture_reads: i64,
     /// Lowering a simulation's model (P4), and which of its functions.
@@ -1468,7 +1497,53 @@ impl<'s> Lowerer<'s> {
                     Expr::BoolConstant(..) => {}
                     _ => return self.err(*p, "`resets_orbits` is true or false"),
                 },
-                o if self.transform => return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name` and `resets_orbits`, not `{o}`")),
+                // It replaces the working point rather than adding into it
+                // (`Feature::Replace`): `variations::custom` reads it apart.
+                // The most points one call emits (`Feature::PlotEmits`).
+                "emits" if self.transform => match v {
+                    Expr::IntegerConstant(n, _) if (1..=16).contains(n) => {}
+                    _ => return self.err(*p, "`emits` is the most points one call emits, 1 to 16"),
+                },
+                "replace" if self.transform => match v {
+                    Expr::BoolConstant(..) => {}
+                    _ => return self.err(*p, "`replace` is true or false: whether it replaces the point it is given, as JWildfire's `pVarTP.x = ...`"),
+                },
+                // When it runs among a transform's variations, and where the
+                // pickers group it: a built-in's own (`variations::custom`
+                // reads them apart; `any` a phase the user may move).
+                "phase" if self.transform => match v {
+                    Expr::StringConstant(s, _) if matches!(s.as_str(), "normal" | "any" | "pre" | "post") => {}
+                    _ => return self.err(*p, "`phase` is \"normal\", \"any\" (the user may move it to pre or post), \"pre\" or \"post\""),
+                },
+                // The parameters a slider commits when its drag ends (a
+                // built-in's `slow`): `variations::custom::param_defs`.
+                "slow" if self.transform => match v {
+                    Expr::Array(items, _) if items.iter().all(|i| matches!(i, Expr::StringConstant(..))) => {}
+                    _ => return self.err(*p, "`slow` is a list of the parameters committed when a drag ends: `[\"depth\"]`"),
+                },
+                "category" if self.transform => match v {
+                    Expr::StringConstant(s, _) if crate::variations::VariationCategory::from_api_str(s).to_api_str() == s.as_str() => {}
+                    _ => {
+                        return self.err(
+                            *p,
+                            "`category` is \"basic_2d\", \"advanced_2d\", \"depth_3d\", \"rotation_3d\", \"full_3d\", \"only_3d\" or \"plugin\": where the pickers group it",
+                        )
+                    }
+                },
+                // JWildfire's z rule (`Feature::AlwaysZ`, `NeverZ`):
+                // `variations::custom` reads it apart.
+                "z" if self.transform => match v {
+                    Expr::StringConstant(s, _) if matches!(s.as_str(), "always" | "preserve_z" | "never") => {}
+                    _ => {
+                        return self.err(
+                            *p,
+                            "`z` is \"always\" (the z it returns is kept), \"preserve_z\" (kept when the flame preserves z, else zero) or \"never\" (zero)",
+                        )
+                    }
+                },
+                o if self.transform => {
+                    return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name`, `resets_orbits`, `replace`, `slow`, `phase`, `category` and `z`, not `{o}`"))
+                }
                 // An effect's identity (design rule 7: a UUID, or a
                 // built-in's name) and its place in the pipeline, read
                 // apart (`info_string`).
@@ -1634,9 +1709,11 @@ impl<'s> Lowerer<'s> {
         }
         let span = Span { start: 0, end: self.source.len() };
         let mut sections = Vec::new();
-        if self.transform && self.fns.contains_key("prepare") {
+        // A variation's derived values (a built-in's `wgsl_init`): from its
+        // parameters alone, on the GPU once per transform as they change.
+        if self.transform && self.fns.get("prepare").is_some_and(|f| f.params.len() != 1) {
             let f = &self.fns["prepare"];
-            return self.err(f.body.position(), "a transformation has no `prepare` yet: its values are computed in `variation`");
+            return self.err(f.body.position(), "`prepare(p)`: a variation's values from its parameters, computed once as they change");
         }
         if self.effect && self.fns.contains_key("prepare") {
             let f = &self.fns["prepare"];
@@ -1747,7 +1824,7 @@ impl<'s> Lowerer<'s> {
         }
         let (value, color) = match final_value(last) {
             Some(Final::Expr(x)) => self.point2(x, &mut scope)?,
-            Some(Final::If(fc, p)) => (self.if_value(fc, p, &mut scope)?, None),
+            Some(Final::If(fc, p)) => (self.if_value(fc, p, &mut scope)?, Vec::new()),
             _ => return self.err(last.position(), RESULT),
         };
         let at = self.pos.span(last.position());
@@ -2034,50 +2111,69 @@ impl<'s> Lowerer<'s> {
         Ok(())
     }
 
-    /// A 2D variation's value: the new point, or `#{ z, color }`.
-    fn point2(&mut self, e: &Expr, scope: &mut Scope) -> R<(ast::Expr, Option<ast::Expr>)> {
-        let Expr::Map(m, mp) = e else { return Ok((self.expr(e, scope)?, None)) };
-        let (mut point, mut color) = (None, None);
+    /// A result map's entries besides its point: `color` (the colour it
+    /// writes) and `hide` (whether it hides the point), as the places
+    /// they set.
+    fn result_extra(&mut self, k: &str, v: &Expr, kp: Position, scope: &mut Scope) -> R<Vec<(&'static str, ast::Expr)>> {
+        match k {
+            "color" => Ok(vec![("vcolor", self.expr(v, scope)?)]),
+            "hide" => Ok(vec![("vhide", self.expr(v, scope)?)]),
+            // The 4th coordinate a 3D body gives, raw (`NeedsW`).
+            "w" => Ok(vec![("wout", self.expr(v, scope)?)]),
+            // A direct colour, a vector (`WritesRgb`): each part.
+            "rgb" => {
+                let c = self.vexpr(v, scope)?;
+                if c.kind != vec::Kind::Vec3 {
+                    return self.err(v.position(), "`rgb` is a colour, `vec3(r, g, b)`");
+                }
+                Ok(["vrgb_r", "vrgb_g", "vrgb_b"].into_iter().zip(c.parts).collect())
+            }
+            o => self.err(kp, format!("a variation's result has `z`, `color`, `rgb`, `hide` and (in 3D) `w`, not `{o}`")),
+        }
+    }
+
+    /// A 2D variation's value: the new point, or `#{ z, color, hide }`.
+    fn point2(&mut self, e: &Expr, scope: &mut Scope) -> R<(ast::Expr, Vec<(&'static str, ast::Expr)>)> {
+        let Expr::Map(m, mp) = e else { return Ok((self.expr(e, scope)?, Vec::new())) };
+        let (mut point, mut extra) = (None, Vec::new());
         for (k, v) in &m.0 {
             match k.name.as_str() {
                 "z" => point = Some(self.expr(v, scope)?),
-                "color" => color = Some(self.expr(v, scope)?),
-                o => return self.err(k.pos, format!("a variation's result has `z` and `color`, not `{o}`")),
+                o => extra.extend(self.result_extra(o, v, k.pos, scope)?),
             }
         }
         match point {
-            Some(v) => Ok((v, color)),
+            Some(v) => Ok((v, extra)),
             None => self.err(*mp, "the result needs `z`, the new point"),
         }
     }
 
-    /// A 2D variation's point and colour, set.
-    fn set_point2(&mut self, value: ast::Expr, color: Option<ast::Expr>, at: Span, body: &mut Vec<ast::Stmt>) {
+    /// A 2D variation's point, colour and hide flag, set.
+    fn set_point2(&mut self, value: ast::Expr, extra: Vec<(&'static str, ast::Expr)>, at: Span, body: &mut Vec<ast::Stmt>) {
         self.flush(body);
-        if let Some(c) = color {
-            body.push(assign(mk(ExprKind::Predef("vcolor".into()), at), c, at));
+        for (place, x) in extra {
+            body.push(assign(mk(ExprKind::Predef(place.into()), at), x, at));
         }
         body.push(assign(mk(ExprKind::Predef("pixel".into()), at), value, at));
     }
 
-    /// A 3D variation's value: the new point, a vector, or `#{ z, color }`.
-    fn point3(&mut self, e: &Expr, p: Position, scope: &mut Scope) -> R<(vec::Vector, Option<ast::Expr>)> {
+    /// A 3D variation's value: the new point, a vector, or `#{ z, color, hide }`.
+    fn point3(&mut self, e: &Expr, p: Position, scope: &mut Scope) -> R<(vec::Vector, Vec<(&'static str, ast::Expr)>)> {
         let (value, color) = match e {
             Expr::Map(m, mp) => {
-                let (mut point, mut color) = (None, None);
+                let (mut point, mut extra) = (None, Vec::new());
                 for (k, v) in &m.0 {
                     match k.name.as_str() {
                         "z" => point = Some(self.vexpr(v, scope)?),
-                        "color" => color = Some(self.expr(v, scope)?),
-                        o => return self.err(k.pos, format!("a variation's result has `z` and `color`, not `{o}`")),
+                        o => extra.extend(self.result_extra(o, v, k.pos, scope)?),
                     }
                 }
                 match point {
-                    Some(v) => (v, color),
+                    Some(v) => (v, extra),
                     None => return self.err(*mp, "the result needs `z`, the new point"),
                 }
             }
-            x => (self.vexpr(x, scope)?, None),
+            x => (self.vexpr(x, scope)?, Vec::new()),
         };
         if value.kind != vec::Kind::Vec3 {
             return self.err(p, "the new point is a vector: a quaternion's vector part is `q.v`");
@@ -2086,10 +2182,10 @@ impl<'s> Lowerer<'s> {
     }
 
     /// A 3D variation's point and colour, set.
-    fn set_point3(&mut self, value: vec::Vector, color: Option<ast::Expr>, p: Position, at: Span, body: &mut Vec<ast::Stmt>) -> R<()> {
+    fn set_point3(&mut self, value: vec::Vector, extra: Vec<(&'static str, ast::Expr)>, p: Position, at: Span, body: &mut Vec<ast::Stmt>) -> R<()> {
         self.flush(body);
-        if let Some(c) = color {
-            body.push(assign(mk(ExprKind::Predef("vcolor".into()), at), c, at));
+        for (place, x) in extra {
+            body.push(assign(mk(ExprKind::Predef(place.into()), at), x, at));
         }
         let Ok([x, y, z]) = <[ast::Expr; 3]>::try_from(value.parts) else {
             return self.err(p, "`variation3` ends with the new point, a vector, or `#{ z: v, color: index }`");
@@ -2725,6 +2821,12 @@ impl<'s> Lowerer<'s> {
                             Expr::BoolConstant(..) => settings.push(Setting { name: k.name.to_string(), value: SettingValue::Expr(self.literal(x)?), span: kspan }),
                             _ => return self.err(k.pos, "`exponential` is `true` or `false`"),
                         },
+                        // Free beyond the slider's range, both bounds given
+                        // (a built-in variation's unlimited number).
+                        "free" => match x {
+                            Expr::BoolConstant(..) => settings.push(Setting { name: k.name.to_string(), value: SettingValue::Expr(self.literal(x)?), span: kspan }),
+                            _ => return self.err(k.pos, "`free` is `true` or `false`: whether a typed value may leave the range"),
+                        },
                         // What the control is, beyond what the value says:
                         // an angle, in degrees as stored and shown.
                         "type" => match x {
@@ -2736,7 +2838,7 @@ impl<'s> Lowerer<'s> {
                         o => {
                             return self.err(
                                 k.pos,
-                                format!("a parameter has `value`, `min`, `max`, `caption`, `hint`, `choices`, `function`, `exponential`, `type`, `show_if`; not `{o}`"),
+                                format!("a parameter has `value`, `min`, `max`, `caption`, `hint`, `choices`, `function`, `exponential`, `free`, `type`, `show_if`; not `{o}`"),
                             )
                         }
                     }
@@ -3176,6 +3278,12 @@ impl<'s> Lowerer<'s> {
                 out.extend(body);
                 Ok(())
             }
+            // A variation's emissions (`Feature::PlotEmits`): statements.
+            Stmt::FnCall(f, p) if self.transform && is_emit(f) && !self.fns.contains_key(f.name.as_str()) => self.emit_call(f, *p, scope, out),
+            Stmt::Expr(e) if self.transform && matches!(&**e, Expr::FnCall(f, _) if is_emit(f) && !self.fns.contains_key(f.name.as_str())) => {
+                let Expr::FnCall(f, p) = &**e else { unreachable!("matched above") };
+                self.emit_call(f, *p, scope, out)
+            }
             // A simulation model's writes (P4 step 9c): the measure pass's
             // scratch, the memory -- statements, a vector of four each.
             Stmt::FnCall(f, p) if self.sim_model && is_sim_write(f) => self.sim_write(f, *p, scope, out),
@@ -3220,6 +3328,33 @@ impl<'s> Lowerer<'s> {
                 let Some(value) = value else { return self.err(*p, "`return` gives the function's result: `return x;`") };
                 self.put_result(&how, Final::Expr(value), *p, scope, out)?;
                 out.push(ast::Stmt::Return { span: self.pos.span(*p) });
+                Ok(())
+            }
+            // A helper called for what it does: what it writes through
+            // `this` (a method call), its value, if any, unused.
+            Stmt::Expr(e) if self.helper_method(e) => {
+                self.stmt_call = true;
+                let r = self.expr(e, scope);
+                self.stmt_call = false;
+                r?;
+                self.flush(out);
+                Ok(())
+            }
+            Stmt::FnCall(f, p) if self.fns.contains_key(f.name.as_str()) => {
+                self.stmt_call = true;
+                let r = self.call(f, None, *p, scope);
+                self.stmt_call = false;
+                r?;
+                self.flush(out);
+                Ok(())
+            }
+            Stmt::Expr(e) if matches!(&**e, Expr::FnCall(f, _) if self.fns.contains_key(f.name.as_str())) => {
+                let Expr::FnCall(f, p) = &**e else { unreachable!("matched above") };
+                self.stmt_call = true;
+                let r = self.call(f, None, *p, scope);
+                self.stmt_call = false;
+                r?;
+                self.flush(out);
                 Ok(())
             }
             Stmt::Expr(e) => self.err(e.position(), "a value alone does nothing here"),
@@ -3276,6 +3411,55 @@ impl<'s> Lowerer<'s> {
 
     /// `write_scratch(k, v)`, `write_memory(k, v)`: the slice and a vector
     /// of four, the host's write.
+    /// A variation's emission (`Feature::PlotEmits`, its cap `INFO.emits`):
+    /// `emit(z)` or `emit(z, w)` an extra plot point of weight `w` (1
+    /// without), `emit_offset(d, w)` one offset from where the iteration
+    /// finally plots, `suppress_main()` its own plot left out, the
+    /// emissions kept. A point is a complex number or a `vec3`.
+    fn emit_call(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
+        let span = self.pos.span(p);
+        let call = |name: &str, args: Vec<ast::Expr>| ast::Stmt::Expr(mk(ExprKind::Call { name: name.into(), args, user: false }, span));
+        if f.name == "suppress_main" {
+            if !f.args.is_empty() {
+                return self.err(p, "`suppress_main()` takes nothing");
+            }
+            self.flush(out);
+            out.push(call("__emit_suppress", Vec::new()));
+            return Ok(());
+        }
+        let (z, w) = match &f.args[..] {
+            [z] => (z, None),
+            [z, w] => (z, Some(w)),
+            _ => return self.err(p, format!("`{0}(z)` or `{0}(z, w)`: a point and its weight", f.name)),
+        };
+        let mut args = if self.is_vec(z, scope) {
+            let v = self.vexpr(z, scope)?;
+            if v.kind != vec::Kind::Vec3 {
+                return self.err(p, "a point emitted is a complex number or a `vec3`");
+            }
+            v.parts
+        } else {
+            let z = self.expr(z, scope)?;
+            let z = self.hold(z, "emit");
+            let part = |n: &str| mk(ExprKind::Call { name: n.into(), args: vec![z.clone()], user: false }, span);
+            vec![part("real"), part("imag")]
+        };
+        let three = args.len() == 3;
+        args.push(match w {
+            Some(w) => self.expr(w, scope)?,
+            None => mk(ExprKind::Float(1.0), span),
+        });
+        self.flush(out);
+        let name = match (f.name.as_str() == "emit_offset", three) {
+            (false, false) => "__emit_plot2",
+            (false, true) => "__emit_plot3",
+            (true, false) => "__emit_offset2",
+            (true, true) => "__emit_offset3",
+        };
+        out.push(call(name, args));
+        Ok(())
+    }
+
     fn sim_write(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
         let span = self.pos.span(p);
         if !self.sim_fn.cell_step() {
@@ -3390,7 +3574,13 @@ impl<'s> Lowerer<'s> {
         let ty = arms.iter().map(|(_, _, v)| self.ty_of(v)).reduce(join).unwrap_or(TypeName::Float);
         let name = self.local("if", ty);
         self.pending.extend(conds_pending);
-        self.pending.push(ast::Stmt::Decl { ty, name: name.clone(), init: None, dims: None, span });
+        // Arms giving arrays: an array of their length, each arm setting it
+        // whole.
+        let len = arms.first().and_then(|(_, _, v)| self.array_of(v)).map(|(_, len)| len);
+        if let Some(len) = &len {
+            self.arrays.insert(name.clone(), len.clone());
+        }
+        self.pending.push(ast::Stmt::Decl { ty, name: name.clone(), init: None, dims: len.map(|l| vec![l]), span });
         let mut lowered = Vec::new();
         let mut otherwise = None;
         for (cond, mut body, value) in arms {
@@ -3451,6 +3641,11 @@ impl<'s> Lowerer<'s> {
                 Some(_) => self.err(*p, format!("`{}` is not a variable to set", v.1)),
                 None => self.err(*p, format!("`{}` is not declared: `let {} = ...`", v.1, v.1)),
             },
+            // The value a helper is called on: the caller's variable.
+            Expr::ThisPtr(p) if scope.get("this").is_some() => match scope.get("this") {
+                Some(Binding::Local(n)) => Ok(mk(ExprKind::Name(n.clone()), span)),
+                _ => self.err(*p, "`this` is a value here, not a variable to set"),
+            },
             Expr::Index(be, flags, p) => {
                 let array = self.target(&be.lhs, scope)?;
                 self.index(array, &be.rhs, *flags, scope, *p, false)
@@ -3495,7 +3690,7 @@ impl<'s> Lowerer<'s> {
 
     /// `this` at `p`: the variation's state, which `init` must give.
     fn this_state(&self, p: Position, scope: &Scope) -> R<()> {
-        if scope.which != Fn3::Variation {
+        if scope.which != Fn3::Variation && !matches!(scope.get("this"), Some(Binding::State)) {
             return self.err(p, "`this` is a variation's state, read in `variation`");
         }
         if scope.fields.is_empty() {
@@ -3567,6 +3762,12 @@ impl<'s> Lowerer<'s> {
             Expr::IntegerConstant(v, _) => mk(ExprKind::Int(*v), span),
             Expr::FloatConstant(v, _) => mk(ExprKind::Float(**v), span),
             Expr::BoolConstant(v, _) => mk(ExprKind::Bool(*v), span),
+            // A helper called as a method: the value it was called on.
+            Expr::ThisPtr(p) => match scope.get("this").cloned() {
+                Some(Binding::Local(n)) => mk(ExprKind::Name(n), span),
+                Some(Binding::Value(x)) => x,
+                _ => return self.err(*p, "`this` is a variation's state, read by its fields (`this.n`), or the value a helper is called on"),
+            },
             Expr::Variable(v, _, p) => match scope.get(v.1.as_str()).cloned() {
                 Some(Binding::Local(n)) => mk(ExprKind::Name(n), span),
                 Some(Binding::Value(x)) => x,
@@ -3648,6 +3849,11 @@ impl<'s> Lowerer<'s> {
         // `this`: a variation's state (C2c), as Rhai binds the object a
         // function is called on.
         if let Expr::ThisPtr(p) = e {
+            match scope.get("this") {
+                Some(Binding::State) => return self.this_state(*p, scope).map(|_| Base::State),
+                Some(_) => return Ok(Base::Value(self.expr(e, scope)?)),
+                None => {}
+            }
             return self.this_state(*p, scope).map(|_| Base::State);
         }
         if let Expr::Variable(v, _, _) = e {
@@ -3797,7 +4003,29 @@ impl<'s> Lowerer<'s> {
                     Base::Ctx if self.transform => match name {
                         "accum" => Ok(mk(ExprKind::Predef("accum".into()), span)),
                         "weight" => Ok(mk(ExprKind::Predef("weight".into()), span)),
-                        o => self.err(*p, format!("a variation's context has `accum` and `weight`; not `{o}`")),
+                        // The colour coordinate as it reaches the variation
+                        // (JWildfire's `pVarTP.color`), before any it writes.
+                        "color" => Ok(mk(ExprKind::Predef("vcolor".into()), span)),
+                        // Whether the point is hidden as it reaches it (an
+                        // earlier variation's `hide`).
+                        "hide" => Ok(mk(ExprKind::Predef("vhide".into()), span)),
+                        // Its transform's affine coefficients, as the flame
+                        // stores them (the editor's and a `.flame`'s `coefs`).
+                        "a" | "b" | "c" | "d" | "e" | "f" => Ok(mk(ExprKind::Predef(format!("coef_{name}")), span)),
+                        // The 4th coordinate a 3D body is given (`NeedsW`).
+                        "w" => Ok(mk(ExprKind::Predef("pointw".into()), span)),
+                        // The flame's 3D camera, as the shader holds it:
+                        // radians, and the perspective strength.
+                        "camera_x" | "camera_y" | "camera_z" | "camera_pitch" | "camera_yaw" | "camera_bank" => {
+                            Ok(mk(ExprKind::Predef(format!("cam_{}", &name["camera_".len()..])), span))
+                        }
+                        "perspective" => Ok(mk(ExprKind::Predef("cam_persp".into()), span)),
+                        o => self.err(
+                            *p,
+                            format!(
+                                "a variation's context has `accum`, `weight`, `color`, `hide`, `rgb`, its transform's `a` .. `f`, (in 3D) `w`, and the camera's `camera_x` .. `camera_z`, `camera_pitch`, `camera_yaw`, `camera_bank` and `perspective`; not `{o}`"
+                            ),
+                        ),
                     },
                     Base::Ctx => match name {
                         // `ismand` is 1 on the parameter plane.
@@ -3842,6 +4070,12 @@ impl<'s> Lowerer<'s> {
                     Ok(mk(ExprKind::Call { name, args: vec![arg], user: true }, self.pos.span(*p)))
                 }
                 Base::Value(v) => self.call(f, Some(v), *p, scope),
+                // A helper called on a variation's state: its `this` the
+                // state, by reference, as Rhai binds the object.
+                Base::State if self.fns.contains_key(f.name.as_str()) => {
+                    self.state_this = true;
+                    self.call(f, None, *p, scope)
+                }
                 Base::Map(..) => self.err(*p, "a variation's parameters hold no functions"),
                 _ => self.err(*p, "call a function of a value, `s.z.sqr()`"),
             },
@@ -3852,6 +4086,10 @@ impl<'s> Lowerer<'s> {
     /// A function call, or an operator; `this` is a method call's value.
     fn call(&mut self, f: &FnCallExpr, this: Option<ast::Expr>, p: Position, scope: &mut Scope) -> R<ast::Expr> {
         let span = self.pos.span(p);
+        // A statement's call of a helper: its body as statements. Taken
+        // here, so a call among its arguments is a value as ever.
+        let alone = std::mem::take(&mut self.stmt_call);
+        let on_state = std::mem::take(&mut self.state_this);
         let mut args = Vec::new();
         if let Some(t) = this {
             args.push(t);
@@ -3899,6 +4137,10 @@ impl<'s> Lowerer<'s> {
                 return self.err(p, "an effect has no `rand()`: a picture is the same every frame -- hash the pixel's position and a seed parameter");
             }
             return Ok(mk(ExprKind::Predef("draw".into()), span));
+        }
+        // A flame variation's raw draw: the stream's next 32 bits, a u32.
+        if name == "rand_u32" && args.is_empty() && f.args.is_empty() && self.transform && !self.fns.contains_key("rand_u32") {
+            return Ok(mk(ExprKind::Predef("draw_u32".into()), span));
         }
         // A simulation model's kernel table at a tap, and the spectral
         // stage's disc average at the cell (P4 step 9b).
@@ -3963,11 +4205,11 @@ impl<'s> Lowerer<'s> {
         // A helper of the script's own, inlined; it reads only its
         // arguments.
         if let Some(def) = self.fns.get(name).cloned() {
-            if !args.is_empty() {
-                // Rhai binds a method call's value to `this`, not to the
-                // first parameter.
-                return self.err(p, format!("call a helper as a function, `{name}(x)`"));
-            }
+            // A method call binds its value to `this`, as Rhai does: a
+            // variable by reference, so the helper's writes to `this` are
+            // its caller's (a WGSL pointer's way); any other value a
+            // temporary, its changes lost.
+            let this = args.pop().map(|v| self.this_binding(v, span));
             if matches!(name, "start" | "step" | "escaped" | "finish" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when" | "degree" | "creases" | "variation" | "vary") {
                 return self.err(p, format!("`{name}` is the formula's own, not a helper to call"));
             }
@@ -3982,16 +4224,27 @@ impl<'s> Lowerer<'s> {
             if self.depth > 32 {
                 return self.err(p, "helpers call each other too deep (recursion?)");
             }
-            let mut inner = Scope::new(Fn3::Helper, Vec::new());
+            let mut inner = Scope::new(Fn3::Helper, if on_state { scope.fields.clone() } else { Vec::new() });
             for (param, a) in def.params.iter().zip(vals) {
                 inner.bind(param, a);
+            }
+            if on_state {
+                inner.bind("this", Binding::State);
+            } else if let Some(this) = this {
+                inner.bind("this", this);
             }
             // A helper giving a vector, where a number is wanted.
             if self.block_gives_vec(&def.body, &inner).is_some() {
                 return self.err(p, format!("`{name}` gives a vector where a number is wanted: take a part (`.x`), `length` or `dot`"));
             }
             self.depth += 1;
-            let r = if self.pure { self.pure_body(&def.body, &mut inner) } else { self.helper_body(&def.body, &mut inner) };
+            let r = if alone {
+                self.helper_stmts(&def.body, &mut inner).map(|_| mk(ExprKind::Int(0), span))
+            } else if self.pure {
+                self.pure_body(&def.body, &mut inner)
+            } else {
+                self.helper_body(&def.body, &mut inner)
+            };
             self.depth -= 1;
             return r;
         }
@@ -4193,6 +4446,9 @@ impl<'s> Lowerer<'s> {
         if fns.contains_key("init") {
             return self.err(p, format!("`{vname}` keeps state (`init`): a flame's; inside a formula, a later step"));
         }
+        if fns.contains_key("prepare") {
+            return self.err(p, format!("`{vname}` computes values from its parameters (`prepare`): a flame's; inside a formula, a later step"));
+        }
         // A body ending `#{ z, color }` gives its point here: the colour
         // is a flame's.
         let def = match def.body.statements().last() {
@@ -4258,8 +4514,13 @@ impl<'s> Lowerer<'s> {
         // Its context inside a formula: no earlier variations, weight 1.
         if let Some(cp) = def.params.get(2) {
             let zero = mk(ExprKind::Complex(Box::new(mk(ExprKind::Float(0.0), span)), Box::new(mk(ExprKind::Float(0.0), span))), span);
-            let ctx: HashMap<String, ast::Expr> = [("accum".to_string(), zero), ("weight".to_string(), mk(ExprKind::Float(1.0), span))].into_iter().collect();
-            inner.bind(cp, Binding::ParamMap(ctx, "in a variation's context (`accum`, `weight`)"));
+            // A formula has no colour coordinate: a variation reads 0 there.
+            let ctx: HashMap<String, ast::Expr> =
+                [("accum".to_string(), zero), ("weight".to_string(), mk(ExprKind::Float(1.0), span)), ("color".to_string(), mk(ExprKind::Float(0.0), span)), ("hide".to_string(), mk(ExprKind::Bool(false), span))]
+                    .into_iter()
+                    .chain(["a", "b", "c", "d", "e", "f"].into_iter().zip([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]).map(|(n, v)| (n.to_string(), mk(ExprKind::Float(v), span))))
+                    .collect();
+            inner.bind(cp, Binding::ParamMap(ctx, "in a variation's context (`accum`, `weight`, `color`, `hide`)"));
         }
         let fns = std::mem::replace(&mut self.fns, fns);
         let pos = std::mem::replace(&mut self.pos, Positions::fixed(span));
@@ -4283,6 +4544,59 @@ impl<'s> Lowerer<'s> {
 
     /// A helper's body inlined into `start` or `step`: its statements
     /// pending, its value returned.
+    /// A method call's value as the helper's `this`, as Rhai binds it: a
+    /// variable by reference, so the helper's writes to `this` are its
+    /// caller's (a WGSL pointer's way); any other value a temporary, its
+    /// changes lost.
+    fn this_binding(&mut self, v: ast::Expr, span: Span) -> Binding {
+        match &v.kind {
+            ExprKind::Name(n) => Binding::Local(n.clone()),
+            _ if self.pure => Binding::Value(v),
+            _ => {
+                let ty = self.ty_of(&v);
+                let t = self.local("this", ty);
+                self.pending.push(ast::Stmt::Decl { ty, name: t.clone(), init: Some(v), dims: None, span });
+                Binding::Local(t)
+            }
+        }
+    }
+
+    /// Whether `e` calls a helper of the script's as a method of a
+    /// variable or of `this`: a statement for what it writes.
+    fn helper_method(&self, e: &Expr) -> bool {
+        let Expr::Dot(be, _, _) = e else { return false };
+        matches!(&be.lhs, Expr::Variable(..) | Expr::ThisPtr(_)) && matches!(&be.rhs, Expr::MethodCall(f, _) if self.fns.contains_key(f.name.as_str()))
+    }
+
+    /// A helper called alone: its statements, a value it ends in unused.
+    fn helper_stmts(&mut self, b: &StmtBlock, scope: &mut Scope) -> R<()> {
+        if returns_early(b) {
+            return self.err(b.position(), "a helper called alone, for what it does, returns at its end");
+        }
+        let outer = std::mem::take(&mut self.pending);
+        let sealed = self.seal();
+        scope.blocks.push(HashMap::new());
+        let r = (|| {
+            let mut out = Vec::new();
+            let stmts = b.statements();
+            for (i, st) in stmts.iter().enumerate() {
+                match final_value(st).filter(|_| i + 1 == stmts.len()) {
+                    Some(f) => {
+                        let _ = self.final_expr(f, scope)?;
+                        self.flush(&mut out);
+                    }
+                    None => self.stmt(st, scope, &mut out)?,
+                }
+            }
+            Ok(out)
+        })();
+        scope.blocks.pop();
+        self.unseal(sealed);
+        self.pending = outer;
+        self.pending.extend(r?);
+        Ok(())
+    }
+
     fn helper_body(&mut self, b: &StmtBlock, scope: &mut Scope) -> R<ast::Expr> {
         // One that returns early: a scope (P7 step 1).
         if returns_early(b) {
@@ -4300,7 +4614,8 @@ impl<'s> Lowerer<'s> {
         let span = self.pos.span(p);
         // Two ints divided truncate, as Rhai's do (P4 step 9b): its own
         // operator, not UF's quotient.
-        if op == BinOp::Div && self.ty_of(&a) == TypeName::Int && self.ty_of(&b) == TypeName::Int {
+        let integer = |t: TypeName| matches!(t, TypeName::Int | TypeName::UInt);
+        if op == BinOp::Div && integer(self.ty_of(&a)) && integer(self.ty_of(&b)) {
             return Ok(mk(ExprKind::Binary(BinOp::IDiv, Box::new(a), Box::new(b)), span));
         }
         Ok(mk(ExprKind::Binary(op, Box::new(a), Box::new(b)), span))
@@ -4321,8 +4636,10 @@ impl<'s> Lowerer<'s> {
                 // A colouring's view of the loop (P7 step 2); `prev` and
                 // `step_c` are complex, the default.
                 "bailout" | "degree" | "escape_fraction" | "render_px" | "supersample" | "value" => TypeName::Float,
-                "escaped" | "converged" | "has_derivative" => TypeName::Bool,
-                "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" => TypeName::Float,
+                "escaped" | "converged" | "has_derivative" | "vhide" => TypeName::Bool,
+                "draw_u32" => TypeName::UInt,
+                "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" | "vrgb_r" | "vrgb_g" | "vrgb_b" | "coef_a" | "coef_b" | "coef_c" | "coef_d"
+                | "coef_e" | "coef_f" | "pointw" | "wout" | "cam_x" | "cam_y" | "cam_z" | "cam_pitch" | "cam_yaw" | "cam_bank" | "cam_persp" => TypeName::Float,
                 // An effect's (P2).
                 "density_mean" | "pixel_scale" | "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_amount" => TypeName::Float,
                 _ => TypeName::Complex,
@@ -4335,6 +4652,7 @@ impl<'s> Lowerer<'s> {
                 match name.as_str() {
                     "to_float" | "__grid_param" => return TypeName::Float,
                     "to_int" => return TypeName::Int,
+                    "u32" => return TypeName::UInt,
                     _ => {}
                 }
                 // A simulation's framework call (P4 steps 9c, 9d).
@@ -4363,10 +4681,8 @@ impl<'s> Lowerer<'s> {
                     (TypeName::Complex, _) | (_, TypeName::Complex) => TypeName::Complex,
                     _ => TypeName::Float,
                 },
-                BinOp::Div => match join(self.ty_of(a), self.ty_of(b)) {
-                    TypeName::Int => TypeName::Float,
-                    t => t,
-                },
+                // Two ints divided truncate (`binary`); two u32s, as WGSL's.
+                BinOp::Div => join(self.ty_of(a), self.ty_of(b)),
                 _ => join(self.ty_of(a), self.ty_of(b)),
             },
         }
@@ -4437,6 +4753,8 @@ fn rename_function(name: &str) -> Option<&'static str> {
         // number among them).
         "to_float" => "to_float",
         "to_int" => "to_int",
+        // An unsigned 32-bit int (`Ty::UInt`).
+        "u32" => "u32",
         "abs" => "abs",
         // A value at the GPU's precision (UF-side `f32`).
         "to_f32" => "f32",
@@ -4452,6 +4770,7 @@ fn join(a: TypeName, b: TypeName) -> TypeName {
         (Complex, _) | (_, Complex) => Complex,
         (Float, _) | (_, Float) => Float,
         (Int, Int) => Int,
+        (UInt, Int | UInt) | (Int, UInt) => UInt,
         (Bool, Bool) => Bool,
         _ => Float,
     }
@@ -4461,6 +4780,7 @@ fn to_ty(t: TypeName) -> Ty {
     match t {
         TypeName::Bool => Ty::Bool,
         TypeName::Int => Ty::Int,
+        TypeName::UInt => Ty::UInt,
         TypeName::Float => Ty::Float,
         _ => Ty::Complex,
     }
@@ -4470,6 +4790,7 @@ fn from_ty(t: Ty) -> TypeName {
     match t {
         Ty::Bool => TypeName::Bool,
         Ty::Int => TypeName::Int,
+        Ty::UInt => TypeName::UInt,
         Ty::Float => TypeName::Float,
         Ty::Complex => TypeName::Complex,
     }

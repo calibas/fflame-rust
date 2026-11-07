@@ -103,6 +103,11 @@ pub struct VariationWgsl {
     /// them at a thread's start (`wgsl_state_init`).
     pub state_count: usize,
     pub state_init: Option<String>,
+    /// `prepare` as the init pass's `fn init_<name>(user) -> array<f32, M>`
+    /// (a built-in's `wgsl_init`), and `M`, the derived slots after the
+    /// parameters.
+    pub init: Option<String>,
+    pub init_count: usize,
 }
 
 /// An effect's WGSL (P2): its program as `fx_effect(uv)`, which gives the
@@ -517,7 +522,14 @@ pub struct VariationShape {
     /// `xform_id, variation_id`: for parameters, the state or the weight.
     pub ids: bool,
     pub rng: bool,
+    /// `init` draws: its function takes the thread's stream.
+    pub init_rng: bool,
     pub color: bool,
+    /// `hide: ptr<function, bool>`: it hides its point (`CanHide`).
+    pub hide: bool,
+    /// `vrc: ptr<function, vec3<f32>>`: it writes a direct colour
+    /// (`WritesRgb`).
+    pub rgb: bool,
     /// The state's variables (the fields `init` returns), each with its
     /// first slot; a complex one takes two.
     pub state: Vec<(VarId, u32)>,
@@ -538,7 +550,7 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
     fn assigned(stmts: &[IStmt], out: &mut BTreeSet<VarId>) {
         for s in stmts {
             match s {
-                IStmt::Assign(Place::Var(v), _) => {
+                IStmt::Assign(Place::Var(v), _) | IStmt::SetElem { var: v, .. } => {
                     out.insert(*v);
                 }
                 IStmt::If { arms, otherwise } => {
@@ -552,21 +564,26 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
             }
         }
     }
-    fn writes_color(stmts: &[IStmt]) -> bool {
+    fn writes(stmts: &[IStmt], place: Place) -> bool {
         stmts.iter().any(|s| match s {
-            IStmt::Assign(Place::Color, _) => true,
-            IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| writes_color(b)) || writes_color(otherwise),
-            IStmt::While { body, .. } | IStmt::Repeat { body, .. } => writes_color(body),
+            IStmt::Assign(p, _) => *p == place,
+            IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| writes(b, place)) || writes(otherwise, place),
+            IStmt::While { body, .. } | IStmt::Repeat { body, .. } | IStmt::Scope(body) => writes(body, place),
             _ => false,
         })
     }
-    // `init` runs at a thread's start: no stream, no earlier variations.
+    // `init` runs at a thread's start: no earlier variations, but the
+    // thread's stream, as a built-in's `wgsl_state_init` draws from it.
     let init_only = Program { transform: Vec::new(), ..p.clone() };
-    if init_only.reads(Predef::Draw) {
-        return Err("`init` draws no random numbers: it runs once, at a thread's start".into());
-    }
+    let init_only_rng = Program { transform: Vec::new(), global_body: Vec::new(), ..p.clone() };
+    let init_rng = init_only_rng.reads(Predef::Draw) || init_only_rng.reads(Predef::DrawU32);
     if init_only.reads(Predef::Accum) {
         return Err("`init` has no earlier variations: `ctx.accum` is `variation`'s".into());
+    }
+    // `prepare` runs in the init pass, from the parameters alone.
+    let prepare_only = Program { transform: Vec::new(), init: Vec::new(), ..p.clone() };
+    if prepare_only.reads(Predef::Draw) || prepare_only.reads(Predef::DrawU32) {
+        return Err("`prepare` draws no random numbers: it runs once, as the parameters change".into());
     }
     // The state: the fields `init` returns (lowered `s_name`; its own
     // locals are not kept).
@@ -575,18 +592,22 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
     let mut state = Vec::new();
     let mut slots = 0u32;
     for v in fields.into_iter().filter(|v| p.vars[*v].name.starts_with("s_")) {
-        let var = &p.vars[v];
-        if var.is_array() {
-            return Err(format!("the state's `{}` is an array: a later step", &var.name[2..]));
-        }
+        // An array's floats each a slot (rhai-plugins P7 step 3).
         state.push((v, slots));
-        slots += if var.ty == Ty::Complex { 2 } else { 1 };
+        slots += p.vars[v].floats() as u32;
     }
     Ok(VariationShape {
         accum: p.reads(Predef::Accum) || p.reads(Predef::AccumZ),
-        ids: !p.params.is_empty() || !state.is_empty() || p.reads(Predef::Weight),
-        rng: p.reads(Predef::Draw),
-        color: writes_color(&p.transform),
+        ids: !p.params.is_empty() || !state.is_empty() || !p.globals.is_empty() || p.reads(Predef::Weight) || (0..6).any(|k| p.reads(Predef::Coef(k))),
+        rng: p.reads(Predef::Draw) || p.reads(Predef::DrawU32),
+        // Its colour pointer, to write it or to read it (`ctx.color`).
+        init_rng,
+        color: writes(&p.transform, Place::Color) || p.reads(Predef::VarColor),
+        // Its hide flag's (`#{ z, hide }`, `ctx.hide`).
+        hide: writes(&p.transform, Place::Hide) || p.reads(Predef::VarHide),
+        // Its direct colour's (`#{ z, rgb }`, `ctx.rgb`).
+        rgb: [Place::RgbR, Place::RgbG, Place::RgbB].into_iter().any(|x| writes(&p.transform, x))
+            || [Predef::VarRgbR, Predef::VarRgbG, Predef::VarRgbB].into_iter().any(|x| p.reads(x)),
         state,
         state_slots: slots,
     })
@@ -610,7 +631,10 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
         accum: shapes.iter().any(|s| s.accum),
         ids: shapes.iter().any(|s| s.ids),
         rng: shapes.iter().any(|s| s.rng),
+        init_rng: own.init_rng,
         color: shapes.iter().any(|s| s.color),
+        hide: shapes.iter().any(|s| s.hide),
+        rgb: shapes.iter().any(|s| s.rgb),
         state: own.state.clone(),
         state_slots: shapes.iter().map(|s| s.state_slots).max().unwrap_or(0),
     };
@@ -636,11 +660,23 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
         args.push_str(", vc");
         args3.push_str(", vc");
     }
+    // After the colour's, as `shader_builder_v2::variation_call` passes
+    // them: the direct colour, then the hide flag.
+    if union.rgb {
+        sig.push_str(", vrc: ptr<function, vec3<f32>>");
+        args.push_str(", vrc");
+        args3.push_str(", vrc");
+    }
+    if union.hide {
+        sig.push_str(", hide: ptr<function, bool>");
+        args.push_str(", hide");
+        args3.push_str(", hide");
+    }
     let sig3 = sig.replace("accum: vec2<f32>", "accum: vec3<f32>");
     let inner2 = format!("{prefix}variation_2d");
     let inner3 = format!("{prefix}variation_3d");
     let module2 = match (p2, &s2) {
-        (Some(p), Some(s)) => Some(variation_module(p, s, &sig, false, prefix)),
+        (Some(p), Some(s)) => Some(variation_module(p, s, &sig, false, false, prefix)),
         _ => None,
     };
     let wgsl_2d = module2
@@ -648,14 +684,31 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
         .map(|m| format!("{m}\nfn variation_{name}(p: vec2<f32>{sig}) -> vec2<f32> {{\n    return {inner2}(p{args});\n}}\n"));
     let wgsl_3d = match (p3, &s3) {
         (Some(p), Some(s)) => {
-            let m = variation_module(p, s, &sig.replace("accum: vec2<f32>", "accum3: vec3<f32>"), true, prefix);
+            let m = variation_module(p, s, &sig.replace("accum: vec2<f32>", "accum3: vec3<f32>"), true, false, prefix);
             format!("{m}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return {inner3}(p{args});\n}}\n")
         }
-        _ => {
-            let m = module2.clone().unwrap_or_default();
-            format!("{m}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return vec3<f32>({inner2}(p.xy{args3}), p.z);\n}}\n")
-        }
+        // A 2D body in a 3D flame. One emitting points emits them at the
+        // point's z, as its point keeps it: its own copy here, taking z.
+        _ => match (p2, &s2) {
+            (Some(p), Some(s)) if Program::calls_host(&p.transform, Host::emit) => {
+                let m = variation_module(p, s, &sig, false, true, prefix);
+                format!("{m}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return vec3<f32>({inner2}(p.xy{args3}, p.z), p.z);\n}}\n")
+            }
+            _ => {
+                let m = module2.clone().unwrap_or_default();
+                format!("{m}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return vec3<f32>({inner2}(p.xy{args3}), p.z);\n}}\n")
+            }
+        },
     };
+    // `prepare`, one for both bodies: both programs lower it alike, its
+    // values in the same slots.
+    if let (Some(a), Some(b)) = (p2, p3) {
+        let layout = |p: &Program| p.globals.iter().map(|&v| (p.vars[v].name.clone(), p.vars[v].floats())).collect::<Vec<_>>();
+        if layout(a) != layout(b) {
+            return Err("`prepare`'s values are laid out differently for `variation` and `variation3` (a bug)".into());
+        }
+    }
+    let init = variation_init(main, name, prefix)?;
     let mut features = Vec::new();
     if union.rng {
         features.push("needs_rng");
@@ -665,6 +718,21 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
     }
     if union.color {
         features.push("writes_color");
+    }
+    if union.rgb {
+        features.push("writes_rgb");
+    }
+    // A 4th coordinate, read or given: the 3D body's alone (the builder's
+    // `point_w` is 3D-gated).
+    if let Some(p) = p2.filter(|p| p.reads(Predef::PointW) || writes(&p.transform, Place::WOut)) {
+        let _ = p;
+        return Err("the 4th coordinate, `ctx.w` and `#{ z, w }`, is a 3D body's (`fn variation3`)".into());
+    }
+    if p3.is_some_and(|p| p.reads(Predef::PointW) || writes(&p.transform, Place::WOut)) {
+        features.push("needs_w");
+    }
+    if union.hide {
+        features.push("can_hide");
     }
     if union.needs_transform(main) {
         features.push("needs_transform");
@@ -678,27 +746,135 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
         wgsl_3d,
         features,
         state_count: union.state_slots as usize,
-        state_init: (!union.state.is_empty()).then(|| format!("        {prefix}variation_init(xform_id, variation_id);")),
+        state_init: (!union.state.is_empty()).then(|| format!("        {prefix}variation_init(xform_id, variation_id{});", if union.init_rng { ", &rng" } else { "" })),
+        init_count: init.as_ref().map_or(0, |(_, m)| *m),
+        init: init.map(|(s, _)| s),
     })
+}
+
+/// A variation's `prepare` as the init pass runs it (a built-in's
+/// `wgsl_init`): `fn init_<name>(user: array<f32, N>) -> array<f32, M>`,
+/// its parameters read from `user`, the values the body reads written to
+/// the `M` slots after them (`Program::globals`, in order). With `M`; none
+/// when the body reads no value of `prepare`'s.
+fn variation_init(p: &Program, name: &str, prefix: &'static str) -> Result<Option<(String, usize)>, String> {
+    if p.globals.is_empty() {
+        return Ok(None);
+    }
+    let n = p.param_slots();
+    if n == 0 {
+        return Err("`prepare` computes from the parameters: a variation without any computes its values in `variation`".into());
+    }
+    let m = p.global_floats();
+    let mut g = Gen::new(p, Ctx::Variation, prefix);
+    g.init_user = true;
+    g.global_slots = vec![None; p.vars.len()];
+    let mut body = format!("fn uf_variation_prepare(user: array<f32, {n}>) -> array<f32, {m}> {{\n");
+    for (i, v) in p.vars.iter().enumerate() {
+        let _ = writeln!(body, "    {};", var_decl(i, v));
+    }
+    g.stmts(&p.global_body, 1, &mut body);
+    let _ = writeln!(body, "    var out: array<f32, {m}>;");
+    let mut k = 0;
+    for &v in &p.globals {
+        let x = g.var(v);
+        // An array (rhai-plugins P7 step 3): each element's floats in turn,
+        // which the body reads at a computed index.
+        if p.vars[v].is_array() {
+            let n = p.vars[v].len();
+            let line = match p.vars[v].ty {
+                Ty::Complex => format!("out[{k}u + 2u * i] = {x}[i].x;\n        out[{k}u + 2u * i + 1u] = {x}[i].y;"),
+                Ty::Int | Ty::UInt => format!("out[{k}u + i] = f32({x}[i]);"),
+                Ty::Bool => format!("out[{k}u + i] = select(0.0, 1.0, {x}[i]);"),
+                Ty::Float => format!("out[{k}u + i] = {x}[i];"),
+            };
+            let _ = writeln!(body, "    for (var i = 0u; i < {n}u; i++) {{\n        {line}\n    }}");
+            k += p.vars[v].floats();
+            continue;
+        }
+        match p.vars[v].ty {
+            Ty::Complex => {
+                let _ = writeln!(body, "    out[{k}] = {x}.x;\n    out[{}] = {x}.y;", k + 1);
+                k += 2;
+            }
+            ty => {
+                let value = match ty {
+                    Ty::Int => format!("f32({x})"),
+                    Ty::Bool => format!("select(0.0, 1.0, {x})"),
+                    _ => x,
+                };
+                let _ = writeln!(body, "    out[{k}] = {value};");
+                k += 1;
+            }
+        }
+    }
+    body.push_str("    return out;\n}\n");
+    let module = g.finish("", body);
+    Ok(Some((format!("{module}\nfn init_{name}(user: array<f32, {n}>) -> array<f32, {m}> {{\n    return {prefix}variation_prepare(user);\n}}\n"), m)))
 }
 
 /// One body of a flame variation, as a module: the inner function (2D, or
 /// 3D with the point's third part beside `#pixel`), the state's load and
 /// store, `init`'s function, and the helpers, all prefixed.
-fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, prefix: &'static str) -> String {
+fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, emit_z: bool, prefix: &'static str) -> String {
     let mut g = Gen::new(p, Ctx::Variation, prefix);
+    // A 2D body's copy in a 3D flame: its emissions at the z it is given.
+    g.emit_z = emit_z;
+    // Its tables, module constants: one for each set of literals.
+    let mut tables = String::new();
+    let mut named: Vec<(String, String)> = Vec::new();
+    let mut by_var = vec![None; p.vars.len()];
+    for (v, elements) in constant_arrays(p, &[&p.transform, &p.init]).into_iter().enumerate() {
+        let Some(elements) = elements else { continue };
+        if own.state.iter().any(|&(s, _)| s == v) || p.vars[v].global {
+            continue;
+        }
+        let value = format!("{}({})", var_ty(&p.vars[v]), elements.iter().map(|e| g.expr(e)).collect::<Vec<_>>().join(", "));
+        let name = match named.iter().find(|(text, _)| *text == value) {
+            Some((_, n)) => n.clone(),
+            None => {
+                let n = format!("uf_table{}", named.len());
+                let _ = writeln!(tables, "const {n}: {} = {value};", var_ty(&p.vars[v]));
+                named.push((value, n.clone()));
+                n
+            }
+        };
+        by_var[v] = Some(name);
+    }
+    let hoisted: Vec<bool> = by_var.iter().map(Option::is_some).collect();
+    g.tables = by_var;
     let decls = |out: &mut String| {
         for (i, v) in p.vars.iter().enumerate() {
-            let _ = writeln!(out, "    {};", var_decl(i, v));
+            if !hoisted[i] {
+                let _ = writeln!(out, "    {};", var_decl(i, v));
+            }
+        }
+        // Each palette read's colour, read once.
+        for k in 0..load_slots(p, |h| h == Host::EscPaletteLoad) {
+            let _ = writeln!(out, "    var uf_pal{k}: vec3<f32>;");
         }
     };
     // The state: loaded at the start, stored at the end.
     let load = |g: &Gen, out: &mut String| {
         for &(v, k) in &own.state {
+            if p.vars[v].is_array() {
+                let (n, a) = (p.vars[v].len(), g.var(v));
+                let get = |o: &str| format!("get_state(xform_id, variation_id, {k}u + {o})");
+                let value = match p.vars[v].ty {
+                    Ty::Complex => format!("vec2<f32>({}, {})", get("2u * i"), get("2u * i + 1u")),
+                    Ty::Int => format!("i32({})", get("i")),
+                    Ty::UInt => format!("u32({})", get("i")),
+                    Ty::Bool => format!("{} != 0.0", get("i")),
+                    Ty::Float => get("i"),
+                };
+                let _ = writeln!(out, "    for (var i = 0u; i < {n}u; i++) {{\n        {a}[i] = {value};\n    }}");
+                continue;
+            }
             let get = |k: u32| format!("get_state(xform_id, variation_id, {k}u)");
             let value = match p.vars[v].ty {
                 Ty::Complex => format!("vec2<f32>({}, {})", get(k), get(k + 1)),
                 Ty::Int => format!("i32({})", get(k)),
+                Ty::UInt => format!("u32({})", get(k)),
                 Ty::Bool => format!("{} != 0.0", get(k)),
                 Ty::Float => get(k),
             };
@@ -708,6 +884,18 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
     let store = |g: &Gen, out: &mut String| {
         for &(v, k) in &own.state {
             let name = g.var(v);
+            if p.vars[v].is_array() {
+                let n = p.vars[v].len();
+                let set = |o: &str, x: String| format!("        set_state(xform_id, variation_id, {k}u + {o}, {x});\n");
+                let body = match p.vars[v].ty {
+                    Ty::Complex => format!("{}{}", set("2u * i", format!("{name}[i].x")), set("2u * i + 1u", format!("{name}[i].y"))),
+                    Ty::Int | Ty::UInt => set("i", format!("f32({name}[i])")),
+                    Ty::Bool => set("i", format!("select(0.0, 1.0, {name}[i])")),
+                    Ty::Float => set("i", format!("{name}[i]")),
+                };
+                let _ = write!(out, "    for (var i = 0u; i < {n}u; i++) {{\n{body}    }}\n");
+                continue;
+            }
             let mut set = |k: u32, x: String| {
                 let _ = writeln!(out, "    set_state(xform_id, variation_id, {k}u, {x});");
             };
@@ -716,7 +904,7 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
                     set(k, format!("{name}.x"));
                     set(k + 1, format!("{name}.y"));
                 }
-                Ty::Int => set(k, format!("f32({name})")),
+                Ty::Int | Ty::UInt => set(k, format!("f32({name})")),
                 Ty::Bool => set(k, format!("select(0.0, 1.0, {name})")),
                 Ty::Float => set(k, name),
             }
@@ -729,7 +917,8 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
         }
         b
     } else {
-        format!("fn uf_variation_2d(p: vec2<f32>{sig}) -> vec2<f32> {{\n    var pixel = p;\n")
+        let z = if emit_z { ", uf_emit_z: f32" } else { "" };
+        format!("fn uf_variation_2d(p: vec2<f32>{sig}{z}) -> vec2<f32> {{\n    var pixel = p;\n")
     };
     decls(&mut body);
     load(&g, &mut body);
@@ -738,13 +927,80 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
     body.push_str(if three { "    return vec3<f32>(pixel, pixel_z);\n}\n" } else { "    return pixel;\n}\n" });
     // `init`: the state a thread starts with.
     if !own.state.is_empty() {
-        body.push_str("\nfn uf_variation_init(xform_id: u32, variation_id: u32) {\n");
+        body.push_str(if own.init_rng {
+            "\nfn uf_variation_init(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) {\n"
+        } else {
+            "\nfn uf_variation_init(xform_id: u32, variation_id: u32) {\n"
+        });
         decls(&mut body);
         g.stmts(&p.init, 1, &mut body);
         store(&g, &mut body);
         body.push_str("}\n");
     }
-    g.finish("", body)
+    g.finish("", format!("{tables}{body}"))
+}
+
+/// A whole-array copy as the checker writes it (`Checker::copy_array`): its
+/// counter set to zero, then the loop setting each element of `dst` from
+/// `src`'s. As `(dst, src)`.
+fn array_copy(p: &Program, zero: &IStmt, the_loop: &IStmt) -> Option<(VarId, VarId)> {
+    let IStmt::Assign(Place::Var(k), IExpr { kind: IExprKind::Int(0), .. }) = zero else { return None };
+    if !p.vars[*k].name.starts_with("copy ") {
+        return None;
+    }
+    let IStmt::While { body, .. } = the_loop else { return None };
+    let [IStmt::SetElem { var: dst, index, value }, _] = &body[..] else { return None };
+    let (IExprKind::Var(i), IExprKind::Elem(src, j)) = (&index.kind, &value.kind) else { return None };
+    (i == k && matches!(j.kind, IExprKind::Var(x) if x == *k)).then_some((*dst, *src))
+}
+
+/// The arrays a body only builds from literals and reads -- a table: each
+/// element set once, a literal at a literal place, the whole array never
+/// set -- with their elements in order. A variation writes each as a
+/// module constant its reads share, where a local would be filled at each
+/// call, the table's every store again (rhai-plugins P7 step 3). A fresh
+/// array's name is bound after its literal, so nothing reads it before.
+pub(crate) fn constant_arrays(p: &Program, bodies: &[&[IStmt]]) -> Vec<Option<Vec<IExpr>>> {
+    type Sets = Vec<Option<Vec<Option<IExpr>>>>;
+    fn literal(e: &IExpr) -> bool {
+        match &e.kind {
+            IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) | IExprKind::Complex(..) => true,
+            IExprKind::Convert(a) | IExprKind::Unary(UnOp::Neg, a) => literal(a),
+            IExprKind::MakeComplex(a, b) => literal(a) && literal(b),
+            _ => false,
+        }
+    }
+    fn walk(st: &[IStmt], sets: &mut Sets) {
+        for s in st {
+            match s {
+                IStmt::SetElem { var, index, value } => {
+                    let set = match (&index.kind, sets[*var].as_mut()) {
+                        (IExprKind::Int(k), Some(slots)) if literal(value) && usize::try_from(*k).is_ok_and(|k| k < slots.len() && slots[k].is_none()) => {
+                            slots[*k as usize] = Some(value.clone());
+                            true
+                        }
+                        _ => false,
+                    };
+                    if !set {
+                        sets[*var] = None;
+                    }
+                }
+                IStmt::Assign(Place::Var(v), _) => sets[*v] = None,
+                IStmt::Map { out, .. } => out.iter().for_each(|v| sets[*v] = None),
+                IStmt::If { arms, otherwise } => {
+                    arms.iter().for_each(|(_, b)| walk(b, sets));
+                    walk(otherwise, sets);
+                }
+                IStmt::While { body, .. } | IStmt::Repeat { body, .. } | IStmt::Scope(body) => walk(body, sets),
+                _ => {}
+            }
+        }
+    }
+    let mut sets: Sets = p.vars.iter().map(|v| v.is_array().then(|| vec![None; v.len()])).collect();
+    for b in bodies {
+        walk(b, &mut sets);
+    }
+    sets.into_iter().map(|s| s.and_then(|slots| slots.into_iter().collect())).collect()
 }
 
 /// A solid's WGSL (the KIFS plan, B3): its program as `solid_init(pixel,
@@ -943,7 +1199,7 @@ pub fn formula(p: &Program) -> String {
             let el = match v.ty {
                 Ty::Complex => "any(bitcast<vec2<u32>>(a[k]) != bitcast<vec2<u32>>(b[k]))",
                 Ty::Float => "bitcast<u32>(a[k]) != bitcast<u32>(b[k])",
-                Ty::Int | Ty::Bool => "a[k] != b[k]",
+                Ty::Int | Ty::UInt | Ty::Bool => "a[k] != b[k]",
             };
             let t = var_ty(v);
             let _ = write!(
@@ -957,7 +1213,7 @@ pub fn formula(p: &Program) -> String {
         same.push(match v.ty {
             Ty::Complex => format!("all(bitcast<vec2<u32>>(a.v{i}) == bitcast<vec2<u32>>(b.v{i}))"),
             Ty::Float => format!("bitcast<u32>(a.v{i}) == bitcast<u32>(b.v{i})"),
-            Ty::Int | Ty::Bool => format!("a.v{i} == b.v{i}"),
+            Ty::Int | Ty::UInt | Ty::Bool => format!("a.v{i} == b.v{i}"),
         });
     }
     // ...at the same place in the cycle: two passes that behave alike.
@@ -1583,6 +1839,7 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
                 (Ty::Complex, false) => format!("vec2<f32>({}, {})", slot(o), slot(o + 1)),
                 (Ty::Float, _) => slot(o),
                 (Ty::Int, _) => format!("i32(round({}))", slot(o)),
+                (Ty::UInt, _) => format!("u32(round({}))", slot(o)),
                 (Ty::Bool, _) => format!("({} != 0.0)", slot(o)),
             };
             if var.is_array() {
@@ -1612,7 +1869,7 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
                         parts[o + 1] = format!("{x}.y");
                     }
                     (Ty::Float, _) => parts[o] = x,
-                    (Ty::Int, _) => parts[o] = format!("f32({x})"),
+                    (Ty::Int | Ty::UInt, _) => parts[o] = format!("f32({x})"),
                     (Ty::Bool, _) => parts[o] = format!("select(0.0, 1.0, {x})"),
                 }
             }
@@ -1787,6 +2044,9 @@ struct Gen<'p> {
     /// A solid's globals (`prepare`): in its parameter block from this
     /// slot, after its parameters, where mode D's `fdata` is the walk's.
     global_base: Option<usize>,
+    /// A variation's `prepare` in the init pass: its parameters are
+    /// `user`'s, its globals its own variables.
+    init_user: bool,
     /// The effect context hosted by the simulation's colour template
     /// (P4): parameters are `cparam`, the size the grid's, the sample
     /// `x` and the palette the template's.
@@ -1808,6 +2068,12 @@ struct Gen<'p> {
     /// the innermost scope.
     scopes: Vec<ScopeExit>,
     nest: usize,
+    /// Each variable written as a module constant, a table
+    /// ([`constant_arrays`]), by the constant's name.
+    tables: Vec<Option<String>>,
+    /// A 2D body's emissions as 3D points at `uf_emit_z`, the z its copy in
+    /// a 3D flame is given.
+    emit_z: bool,
 }
 
 /// A scope being written (`IStmt::Scope`): the `loop` it is, how many
@@ -1852,6 +2118,7 @@ impl<'p> Gen<'p> {
             user_jac: false,
             exact_near_zero: false,
             global_base: None,
+            init_user: false,
             sim: false,
             sim_model: false,
             draw_salt: 0,
@@ -1859,6 +2126,8 @@ impl<'p> Gen<'p> {
             ret: "",
             scopes: Vec::new(),
             nest: 0,
+            tables: Vec::new(),
+            emit_z: false,
         }
     }
 
@@ -1982,7 +2251,9 @@ impl<'p> Gen<'p> {
     /// an effect's `get_param`, a formula side's `fparam`, a colouring
     /// side's `cparam`.
     fn slot_read(&self, slot: &str) -> String {
-        if self.ctx == Ctx::Variation {
+        if self.init_user {
+            format!("user[{slot}]")
+        } else if self.ctx == Ctx::Variation {
             format!("get_param(xform_id, variation_id, {slot})")
         } else if self.ctx == Ctx::Effect && self.sim_model {
             format!("mparam({slot})")
@@ -2004,6 +2275,9 @@ impl<'p> Gen<'p> {
     }
 
     fn var(&self, v: VarId) -> String {
+        if let Some(Some(t)) = self.tables.get(v) {
+            return t.clone();
+        }
         if let Some(k) = self.global_slots[v] {
             return self.global(v, k);
         }
@@ -2032,6 +2306,9 @@ impl<'p> Gen<'p> {
         let slot = |k: usize| {
             if let Some(b) = self.global_base {
                 format!("fparam({}u)", b + k)
+            } else if self.ctx == Ctx::Variation {
+                // A variation's derived slots, after its parameters.
+                self.slot_read(&format!("{}u", self.p.param_slots() + k))
             } else if self.formula_side() {
                 format!("fdata4({}u).{}", k / 4, ["x", "y", "z", "w"][k % 4])
             } else {
@@ -2042,6 +2319,7 @@ impl<'p> Gen<'p> {
             Ty::Complex => format!("vec2<f32>({}, {})", slot(k), slot(k + 1)),
             Ty::Float => slot(k),
             Ty::Int => format!("i32(round({}))", slot(k)),
+            Ty::UInt => format!("u32(round({}))", slot(k)),
             Ty::Bool => format!("({} != 0.0)", slot(k)),
         }
     }
@@ -2062,7 +2340,20 @@ impl<'p> Gen<'p> {
                 Ty::Complex => format!("vec2<f32>({}, {})", at(&format!("2 * {clamped}")), at(&format!("2 * {clamped} + 1"))),
                 Ty::Float => at(&clamped),
                 Ty::Int => format!("i32(round({}))", at(&clamped)),
+                Ty::UInt => format!("u32(round({}))", at(&clamped)),
                 Ty::Bool => format!("({} != 0.0)", at(&clamped)),
+            };
+        }
+        // A variation's, from its derived slots after its parameters.
+        if self.ctx == Ctx::Variation {
+            let at = self.p.param_slots() + k;
+            let s = |o: String| self.slot_read(&format!("u32({at} + {o})"));
+            return match var.ty {
+                Ty::Complex => format!("vec2<f32>({}, {})", s(format!("2 * {clamped}")), s(format!("2 * {clamped} + 1"))),
+                Ty::Float => s(clamped),
+                Ty::Int => format!("i32(round({}))", s(clamped)),
+                Ty::UInt => format!("u32(round({}))", s(clamped)),
+                Ty::Bool => format!("({} != 0.0)", s(clamped)),
             };
         }
         let read = self.use_(if self.formula_side() { Helper::GArrF } else { Helper::GArrC });
@@ -2071,6 +2362,7 @@ impl<'p> Gen<'p> {
             Ty::Complex => format!("vec2<f32>({read}({at} + 2 * {clamped}), {read}({at} + 2 * {clamped} + 1))"),
             Ty::Float => format!("{read}({at} + {clamped})"),
             Ty::Int => format!("i32(round({read}({at} + {clamped})))"),
+            Ty::UInt => format!("u32(round({read}({at} + {clamped})))"),
             Ty::Bool => format!("({read}({at} + {clamped}) != 0.0)"),
         }
     }
@@ -2085,6 +2377,21 @@ impl<'p> Gen<'p> {
     fn stmts(&mut self, stmts: &[IStmt], depth: usize, out: &mut String) {
         let mut i = 0;
         while i < stmts.len() {
+            // A whole array copied (the checker's loop over its elements,
+            // UF's `x = y`): WGSL's own assignment. The loop indexes both
+            // arrays by a variable, which keeps them out of registers:
+            // von_dyck's twin ran 68% slower for its matrices' copies,
+            // dc_hexes_wf's 59% (rhai-plugins P7 step 3).
+            if self.ctx == Ctx::Variation {
+                if let Some((dst, src)) = stmts.get(i + 1).and_then(|next| array_copy(self.p, &stmts[i], next)) {
+                    if self.global_slots[dst].is_none() && self.global_slots[src].is_none() {
+                        let pad = "    ".repeat(depth);
+                        let _ = writeln!(out, "{pad}{} = {};", self.var(dst), self.var(src));
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
             // In an effect, Rhai's `min` and `max` (and so `clamp`), which
             // the language lowers to a test and an assignment for UF's sake,
             // are WGSL's own: what a hand-written effect calls, 2% of the
@@ -2180,6 +2487,18 @@ impl<'p> Gen<'p> {
             Host::AgentDeposit => format!("agent_deposit(vec2<i32>({}, {}), {})", a[0], a[1], a[2]),
             Host::ReadAt => format!("sim_read(vec2<i32>({}, {})).{}", a[0], a[1], part(2)),
             Host::PyrPrepare => "pyr_prepare()".to_string(),
+            // A flame variation's palette, the flame shader's texture at `t`
+            // (P7 step 3): as stored, or decoded as the flame decodes it.
+            Host::EscPalette | Host::EscPaletteLoad if matches!(self.ctx, Ctx::Variation) => {
+                let read = format!("textureSampleLevel(palette_texture, palette_sampler, vec2<f32>({}, 0.5), 0.0).rgb", a[0]);
+                let colour = if args.get(1).and_then(cell_index) == Some(1) { read } else { format!("srgb_to_linear({read})") };
+                if h == Host::EscPaletteLoad {
+                    format!("uf_pal{} = {colour}", args.get(2).and_then(cell_index).unwrap_or(0))
+                } else {
+                    format!("{colour}.{}", part(2))
+                }
+            }
+            Host::EscPalettePart if matches!(self.ctx, Ctx::Variation) => format!("uf_pal{}.{}", args.first().and_then(cell_index).unwrap_or(0), part(1)),
             // An escape colouring's palette, the template's (batch 5).
             Host::EscPalette => {
                 let f = match args.get(1).and_then(cell_index) {
@@ -2207,6 +2526,14 @@ impl<'p> Gen<'p> {
             Host::Texture => format!("uf_texture(vec2<f32>({}, {})).{}", a[0], a[1], part(2)),
             Host::Texel => format!("uf_texel(vec2<i32>({}, {})).{}", a[0], a[1], part(2)),
             Host::TextureSize => format!("uf_texture_size().{}", part(0)),
+            // A variation's emissions, the flame shader's collector.
+            Host::EmitPlot2 if self.emit_z => format!("emit_plot_weighted(vec3<f32>({}, {}, uf_emit_z), {})", a[0], a[1], a[2]),
+            Host::EmitOffset2 if self.emit_z => format!("emit_plot_offset(vec3<f32>({}, {}, 0.0), {})", a[0], a[1], a[2]),
+            Host::EmitPlot2 => format!("emit_plot_weighted(vec2<f32>({}, {}), {})", a[0], a[1], a[2]),
+            Host::EmitPlot3 => format!("emit_plot_weighted(vec3<f32>({}, {}, {}), {})", a[0], a[1], a[2], a[3]),
+            Host::EmitOffset2 => format!("emit_plot_offset(vec2<f32>({}, {}), {})", a[0], a[1], a[2]),
+            Host::EmitOffset3 => format!("emit_plot_offset(vec3<f32>({}, {}, {}), {})", a[0], a[1], a[2], a[3]),
+            Host::EmitSuppress => "emit_suppress_main()".to_string(),
             Host::GridParam => {
                 let (Some(first), Some(next)) = (args.first().and_then(cell_index), args.get(1).and_then(cell_index)) else {
                     unreachable!("a grid's cells, as the checker gives them")
@@ -2321,11 +2648,17 @@ impl<'p> Gen<'p> {
                     Place::CreaseSlope => "crease_g".to_string(),
                     Place::Pixel => "pixel".to_string(),
                     Place::Color => "(*vc)".to_string(),
+                    Place::Hide => "(*hide)".to_string(),
+                    Place::RgbR => "(*vrc).x".to_string(),
+                    Place::RgbG => "(*vrc).y".to_string(),
+                    Place::RgbB => "(*vrc).z".to_string(),
+                    Place::WOut => "point_w_out".to_string(),
                     Place::PixelZ => "pixel_z".to_string(),
                     Place::Effect(p) => self.predef(*p),
                 };
                 let _ = writeln!(out, "{pad}{target} = {v};");
             }
+            IStmt::SetElem { var, .. } if self.tables.get(*var).is_some_and(Option::is_some) => {}
             IStmt::SetElem { var, index, value } => {
                 let v = self.expr(value);
                 let i = self.expr(index);
@@ -2419,6 +2752,7 @@ impl<'p> Gen<'p> {
         match &e.kind {
             IExprKind::Host(h, args) => self.host(*h, args),
             IExprKind::Bool(b) => b.to_string(),
+            IExprKind::Int(i) if e.ty == Ty::UInt => format!("{}u", *i as u32),
             IExprKind::Int(i) if self.opaque => {
                 self.use_(Helper::Opaque);
                 format!("uf_ki({}i)", *i as i32)
@@ -2442,6 +2776,7 @@ impl<'p> Gen<'p> {
                 match self.p.params[*id].ty() {
                     Ty::Bool => format!("({} != 0.0)", read(k)),
                     Ty::Int => format!("i32(round({}))", read(k)),
+                    Ty::UInt => format!("u32(max(round({}), 0.0))", read(k)),
                     Ty::Float => read(k),
                     Ty::Complex => format!("vec2<f32>({}, {})", read(k), read(k + 1)),
                 }
@@ -2460,9 +2795,12 @@ impl<'p> Gen<'p> {
             IExprKind::Convert(a) if self.ctx == Ctx::Effect && (a.ty, e.ty) == (Ty::Int, Ty::Float) && self.int_as_float(a).is_some() => {
                 self.int_as_float(a).unwrap_or_default()
             }
+            // A real's floor, trunc or ceil taken back to a float is the
+            // float operation, in every kind: exact at any size, where the
+            // int between saturates past 2^31 (a variation's floor of a
+            // far point; the interpreter computes it so too).
             IExprKind::Convert(a)
-                if self.ctx == Ctx::Effect
-                    && (a.ty, e.ty) == (Ty::Int, Ty::Float)
+                if (a.ty, e.ty) == (Ty::Int, Ty::Float)
                     && matches!(&a.kind, IExprKind::Call(Builtin::Floor | Builtin::Trunc | Builtin::Ceil, x) if x.ty == Ty::Float) =>
             {
                 let IExprKind::Call(f, x) = &a.kind else { unreachable!() };
@@ -2476,8 +2814,15 @@ impl<'p> Gen<'p> {
             IExprKind::Convert(a) => {
                 let v = self.expr(a);
                 match (a.ty, e.ty) {
-                    (Ty::Int, Ty::Float) => format!("f32({v})"),
-                    (Ty::Int, Ty::Complex) => format!("vec2<f32>(f32({v}), 0.0)"),
+                    (Ty::Int | Ty::UInt, Ty::Float) => format!("f32({v})"),
+                    (Ty::Int | Ty::UInt, Ty::Complex) => format!("vec2<f32>(f32({v}), 0.0)"),
+                    // A u32 and an int, by their bits; a float to a u32
+                    // truncated and clamped (`interp::Value::as_uint`).
+                    (Ty::Int, Ty::UInt) => format!("bitcast<u32>({v})"),
+                    (Ty::UInt, Ty::Int) => format!("bitcast<i32>({v})"),
+                    (Ty::Float, Ty::UInt) => format!("u32(clamp({v}, 0.0, 4294967040.0))"),
+                    (Ty::Bool, Ty::UInt) => format!("select(0u, 1u, {v})"),
+                    (Ty::UInt, Ty::Bool) => format!("({v} != 0u)"),
                     (Ty::Float, Ty::Complex) => format!("vec2<f32>({v}, 0.0)"),
                     (Ty::Bool, Ty::Int) => format!("select(0i, 1i, {v})"),
                     (Ty::Bool, Ty::Float) => format!("select(0.0, 1.0, {v})"),
@@ -2494,6 +2839,8 @@ impl<'p> Gen<'p> {
                 let (a, b) = (self.expr(a), self.expr(b));
                 format!("vec2<f32>({a}, {b})")
             }
+            // WGSL has no `-` of a u32: it wraps, as the interpreter's.
+            IExprKind::Unary(UnOp::Neg, a) if a.ty == Ty::UInt => format!("(0u - {})", self.expr(a)),
             IExprKind::Unary(UnOp::Neg, a) => format!("(-{})", self.expr(a)),
             IExprKind::Unary(UnOp::Not, a) => format!("(!{})", self.expr(a)),
             IExprKind::Binary(op, a, b) => self.binary(*op, a, b),
@@ -2618,6 +2965,7 @@ impl<'p> Gen<'p> {
             // Rhai's `rand()` (C2a): the flame's stream in a variation,
             // the pixel's elsewhere.
             (Predef::Draw, Ctx::Variation) => "rng_nextf(rng)".into(),
+            (Predef::DrawU32, _) => "rng_next(rng)".into(),
             // A simulation model's draw (P4): keyed by (seed, cell, step)
             // and a salt of its own, so two draws differ.
             (Predef::Draw, Ctx::Effect) if self.sim_model => {
@@ -2633,6 +2981,17 @@ impl<'p> Gen<'p> {
             (Predef::Accum, _) => "accum".into(),
             (Predef::Weight, _) => "transforms[xform_id].variations[variation_id]".into(),
             (Predef::VarColor, _) => "(*vc)".into(),
+            (Predef::VarHide, _) => "(*hide)".into(),
+            (Predef::VarRgbR, _) => "(*vrc).x".into(),
+            (Predef::VarRgbG, _) => "(*vrc).y".into(),
+            (Predef::VarRgbB, _) => "(*vrc).z".into(),
+            (Predef::Coef(k), _) => format!("transforms[xform_id].{}", ["a", "b", "c", "d", "e", "f"][usize::from(k)]),
+            (Predef::Camera(k), _) => format!(
+                "params.{}",
+                ["camera_x", "camera_y", "camera_z", "camera_rotation_x", "camera_rotation_y", "camera_bank", "perspective_strength"][usize::from(k)]
+            ),
+            (Predef::PointW, _) => "point_w".into(),
+            (Predef::WOut, _) => "point_w_out".into(),
             // A 3D variation's (B2): the point's and the accumulator's
             // third parts.
             (Predef::PixelZ, _) => "pixel_z".into(),
@@ -2748,6 +3107,9 @@ impl<'p> Gen<'p> {
             // zero.
             IDiv => format!("({l} / {r})"),
             Shl => format!("({l} << (u32({r}) & 31u))"),
+            // A u32's `>>` is logical as it is; `/` and `%` unsigned, the
+            // dividend and 0 by zero.
+            Shr if ty == Ty::UInt => format!("({l} >> ({r} & 31u))"),
             Shr => format!("bitcast<i32>(bitcast<u32>({l}) >> (u32({r}) & 31u))"),
         }
     }
@@ -2899,7 +3261,7 @@ impl<'p> Gen<'p> {
                     (format!("({} {o} {})", as_class(ca, ka, Full), as_class(cb, kb, Full)), Full)
                 }
             }
-            IExprKind::Binary(BinOp::Mul, a, b) if e.ty != Ty::Bool && e.ty != Ty::Int => {
+            IExprKind::Binary(BinOp::Mul, a, b) if e.ty != Ty::Bool && !e.ty.is_integer() => {
                 let (ca, ka) = self.sgen(a);
                 let (cb, kb) = self.sgen(b);
                 let prod = self.mul_code(&ca, a, ka, &cb, b, kb, e.ty);
@@ -2909,7 +3271,7 @@ impl<'p> Gen<'p> {
                     _ => (prod, Small),
                 }
             }
-            IExprKind::Binary(BinOp::Div, a, b) if e.ty != Ty::Int => {
+            IExprKind::Binary(BinOp::Div, a, b) if !e.ty.is_integer() => {
                 let (ca, ka) = self.sgen(a);
                 let (cb, kb) = self.sgen(b);
                 match (ka, kb) {
@@ -2933,7 +3295,7 @@ impl<'p> Gen<'p> {
                     (format!("{f}({}, {})", as_class(ca, ka, Full), as_class(cb, kb, Full)), Full)
                 }
             }
-            IExprKind::PowInt(a, n) if *n >= 1 && a.ty != Ty::Int => {
+            IExprKind::PowInt(a, n) if *n >= 1 && !a.ty.is_integer() => {
                 let (ca, ka) = self.sgen(a);
                 if ka == Full {
                     return (self.true_expr(e), Full);
@@ -2953,7 +3315,7 @@ impl<'p> Gen<'p> {
                     (norm, Full)
                 }
             }
-            IExprKind::Call(f, a) if a.ty != Ty::Int => {
+            IExprKind::Call(f, a) if !a.ty.is_integer() => {
                 let (ca, ka) = self.sgen(a);
                 let complex = a.ty == Ty::Complex;
                 match (f, ka) {
@@ -3075,7 +3437,7 @@ impl<'p> Gen<'p> {
             let v = g.expr(e);
             let v = match e.ty {
                 Ty::Complex => v,
-                Ty::Int => format!("vec2<f32>(f32({v}), 0.0)"),
+                Ty::Int | Ty::UInt => format!("vec2<f32>(f32({v}), 0.0)"),
                 Ty::Bool => format!("vec2<f32>(select(0.0, 1.0, {v}), 0.0)"),
                 Ty::Float => format!("vec2<f32>({v}, 0.0)"),
             };
@@ -3537,14 +3899,14 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
                     Full
                 }
             }
-            IExprKind::Binary(BinOp::Mul, a, b) if e.ty != Ty::Bool && e.ty != Ty::Int => {
+            IExprKind::Binary(BinOp::Mul, a, b) if e.ty != Ty::Bool && !e.ty.is_integer() => {
                 if class(a, small) == Full && class(b, small) == Full {
                     Full
                 } else {
                     Small
                 }
             }
-            IExprKind::Binary(BinOp::Div, a, b) if e.ty != Ty::Int => {
+            IExprKind::Binary(BinOp::Div, a, b) if !e.ty.is_integer() => {
                 if class(a, small) == Small && class(b, small) == Full {
                     Small
                 } else {
@@ -3554,7 +3916,7 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
             IExprKind::PowInt(a, n) if *n >= 1 && a.ty != Ty::Int => class(a, small),
             IExprKind::Binary(BinOp::DiffAbs, _, b) => class(b, small),
             IExprKind::Modulus(a) => class(a, small),
-            IExprKind::Call(f, a) if a.ty != Ty::Int => {
+            IExprKind::Call(f, a) if !a.ty.is_integer() => {
                 let complex = a.ty == Ty::Complex;
                 let kept = matches!(f, Builtin::Sqr | Builtin::Ident | Builtin::Zero | Builtin::Expm1 | Builtin::Log1p | Builtin::Sin | Builtin::Sinh)
                     || (complex && matches!(f, Builtin::Conj | Builtin::Flip | Builtin::Real | Builtin::Imag));
@@ -3803,6 +4165,7 @@ fn wgsl_ty(t: Ty) -> &'static str {
     match t {
         Ty::Bool => "bool",
         Ty::Int => "i32",
+        Ty::UInt => "u32",
         Ty::Float => "f32",
         Ty::Complex => "vec2<f32>",
     }
@@ -3812,6 +4175,7 @@ fn zero_of(t: Ty) -> &'static str {
     match t {
         Ty::Bool => "false",
         Ty::Int => "0i",
+        Ty::UInt => "0u",
         Ty::Float => "0.0",
         Ty::Complex => "vec2<f32>(0.0, 0.0)",
     }
@@ -4549,12 +4913,28 @@ pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
          fn set_state(xform_id: u32, variation_id: u32, slot: u32, value: f32) {}\n\
          struct RngState {\n    state: u32,\n}\n\
          fn rng_nextf(rng: ptr<function, RngState>) -> f32 {\n    return f32((*rng).state);\n}\n\
-         struct StubTransform {\n    variations: array<f32, 4>,\n}\n\
-         var<private> transforms: array<StubTransform, 2>;\n";
+         fn rng_next(rng: ptr<function, RngState>) -> u32 {\n    return (*rng).state;\n}\n\
+         var<private> point_w: f32;\n\
+         var<private> point_w_out: f32;\n\
+         struct StubTransform {\n    a: f32,\n    b: f32,\n    c: f32,\n    d: f32,\n    e: f32,\n    f: f32,\n    variations: array<f32, 4>,\n}\n\
+         var<private> transforms: array<StubTransform, 2>;\n\
+         struct StubParams {\n    perspective_strength: f32,\n    camera_rotation_x: f32,\n    camera_rotation_y: f32,\n    camera_bank: f32,\n    camera_x: f32,\n    camera_y: f32,\n    camera_z: f32,\n}\n\
+         var<private> params: StubParams;\n\
+         @group(0) @binding(0) var palette_texture: texture_2d<f32>;\n\
+         @group(0) @binding(1) var palette_sampler: sampler;\n\
+         fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {\n    return c;\n}\n";
+    // The flame shader's emission collector (`Feature::PlotEmits`), a body's
+    // own dimension.
+    const EMIT2: &str = "fn emit_plot_weighted(p: vec2<f32>, w: f32) {}\nfn emit_plot_offset(p: vec2<f32>, w: f32) {}\nfn emit_suppress_main() {}\n";
+    const EMIT3: &str = "fn emit_plot_weighted(p: vec3<f32>, w: f32) {}\nfn emit_plot_offset(p: vec3<f32>, w: f32) {}\nfn emit_suppress_main() {}\n";
     if let Some(w2) = &w.wgsl_2d {
-        validate_module(&format!("{GET_PARAM}{w2}"))?;
+        validate_module(&format!("{GET_PARAM}{EMIT2}{w2}"))?;
     }
-    validate_module(&format!("{GET_PARAM}{}", w.wgsl_3d))
+    // The init pass's module holds it alone (`build_init_shader`).
+    if let Some(init) = &w.init {
+        validate_module(init)?;
+    }
+    validate_module(&format!("{GET_PARAM}{EMIT3}{}", w.wgsl_3d))
 }
 
 /// [`validate_formula`] for a colouring.

@@ -477,6 +477,28 @@ fn escaped(s, p) {
   `INFO` gives `title`, `center`, `magn`, `maxiter`, `angle`; every
   kind's `INFO` may also give `id`, `description` and `author`, what the
   library shows of it (`storage::library`).
+- **The doc block**, every kind's: the `///` lines a source opens with,
+  in a built-in variation's own shape -- the prose (markdown), then
+  `# Authors` and a `- name` line each:
+
+  ```rhai
+  /// Voronoi-cell base shape -- picks a blurred unit-disc point ...
+  ///
+  /// # Authors
+  /// - slobo777
+  /// - Andreas Maschke
+  ```
+
+  It gives the description and the authors where `INFO` has none
+  (`lang::rhai::source_labels`; `INFO.description` stays for a map by
+  locale, which a comment cannot carry). One parser reads it from a Rhai
+  source and from a def (`variations::docs`: `leading_block`,
+  `block_text`), and `write_block` / `with_block` write one, so the API
+  reads and writes a script's description and authors as text, without
+  evaluating Rhai; a block written from any def's doc reads back as it
+  (`a_written_block_reads_back_for_every_def`). The prose is kept as
+  paragraphs, as the API keeps it: a block written back wraps at 76
+  columns, not as the def did.
 - **`prepare(p, ctx)`**, optional, runs once per image (UF's
   `global:`): the map it returns is read as `p.name`.
 - **`fn creases(p0, p, ctx)`**, optional: a folding formula's paper,
@@ -511,14 +533,27 @@ fn escaped(s, p) {
   helpers; `escaped` is one test, its `let`s substituted.
 - Values are int, float, bool and complex (`complex(re, im)`); a bool
   and a number do not mix but by `to_float` / `to_int` (1 for true),
-  and two ints divided is refused (Rhai would truncate). `**` is the
+  and two ints divided is refused (Rhai would truncate). A complex has
+  no order: `<`, `<=`, `>`, `>=` on one is refused -- compare `z.re`, or
+  its size, `z.abs()` -- where UF and Fractint order it by its real part
+  and a slip (`u - d.abs()` for `(u - d).abs()`) would compile and
+  compare the wrong thing; the UF converter writes the `.re`. `**` is the
   power. Ints are 32-bit, as UF's: `+ - *` wrap, and a literal past
   `i32::MAX` (`0x846ca68b`) is its 32-bit pattern. Rhai's bit
   operations take ints as such patterns -- `^` xor, `&`, `|`, `<<`,
-  `>>` logical (a shift by its amount's low five bits) -- so an
-  unsigned hash runs bit for bit as in Rust (Origami's does: the
-  plan's item 3, step 3c); on bools `&` and `|` are and and or, `^`
-  xor. Rhai's names where they differ from UF's:
+  `>>` logical (a shift by its amount's low five bits, the result its
+  left side's type) -- so an unsigned hash runs bit for bit as in Rust
+  (Origami's does: the plan's item 3, step 3c); on bools `&` and `|`
+  are and and or, `^` xor. **`u32(x)`** is WGSL's unsigned int (the
+  user's call, 2026-11-06; `Ty::UInt`): an int's bits, a float
+  truncated and clamped to [0, 2^32 - 256], a bool 0 or 1. `+ - *`
+  wrap, `/` and `%` are unsigned (a zero divisor giving the dividend
+  and 0, as WGSL's), comparisons unsigned, `to_float` 0..2^32-1; an
+  int joins to it by its bits (`h ^ 0x9e3779b9`), and it is an int
+  again only by `to_int`, an error otherwise, so a slip cannot make it
+  signed. A parameter is never one (`u32(p.n)` it); its functions are a
+  float's, but `pcg`, `rand(k)`, `tap` and `disc` take its bits. The
+  interpreter and deep zoom's reference keep it exactly, as an int. Rhai's names where they differ from UF's:
   `ln` the natural log and `log` base 10, `abs` of a complex its
   modulus and `fold` each part's absolute value (the Burning Ship),
   `norm_sqr` the squared modulus, `.re` / `.im`, `arg`, `atan2(y, x)`,
@@ -660,21 +695,90 @@ fn escaped(s, p) {
   [VARIATIONS.md](VARIATIONS.md#variations-written-in-rhai)), and
   `INFO.resets_orbits: true` makes a flame using it
   start its orbits afresh every dispatch (`Feature::ResetsOrbits`;
-  [RENDERER.md](RENDERER.md) *Persistent orbits*); `PARAMS` as a
-  formula's; no `prepare`. The flame's
+  [RENDERER.md](RENDERER.md) *Persistent orbits*). `INFO.phase` is
+  `"normal"` (without it), `"any"` (the user may move it to pre or post,
+  as most built-ins), `"pre"` or `"post"`; `INFO.category` where the
+  pickers group it, a `VariationCategory`'s wire name (`plugin` without
+  it). A pre or post variation returns the whole point, its weight
+  (`ctx.weight`) applied, as the built-ins do. `INFO.z` is JWildfire's
+  z rule (VARIATIONS.md, *Z semantics*): `"always"` (`AlwaysZ`: the z
+  it returns is kept), `"preserve_z"` (kept only when the flame
+  preserves z, else zero) or `"never"` (`NeverZ`: zero); without it a
+  `fn variation3` is `always` and a 2D body alone, whose z passes
+  through, is `preserve_z`. `INFO.replace: true` says it replaces the
+  point it is given rather than adding into it (`Feature::Replace`,
+  JWildfire's `pVarTP.x = ...`): moved to pre or post it is assigned,
+  and it runs last of the normal ones. `PARAMS` as a formula's; `fn prepare(p)` its
+  derived values, a built-in's `wgsl_init`: from the parameters alone
+  (no `ctx`, no draw; at least one parameter), on the GPU in the init
+  pass once per transform as they change, the map's values read as
+  `p.name` by both bodies (VARIATIONS.md, *Parameter slots*). A value
+  may be an array, `#{ m: [..] }`, read at a computed index, `p.m[i]`,
+  from the transform's slots; `prepare`'s arrays run in the init pass, so
+  the per-thread cap of 256 floats is not theirs (the transform's block
+  is). The flame's
   hooks (the KIFS plan, C2), each the `Feature` a built-in declares:
-  - `rand()`, a draw in [0, 1) (`NeedsRng`, the flame's stream);
+  - `palette(t)` and `palette_srgb(t)`, the flame's palette at `t`
+    (the shader's texture, as the built-ins read it): decoded as the
+    flame decodes it (`srgb_to_linear`, gamma 2.2, as escape's
+    `palette` is) or as stored; in the body alone (`prepare` runs in the
+    init pass, which binds none), read once a call site; such a
+    variation is no camera lens (the lens's shader has not the palette);
+  - `rand()`, a draw in [0, 1) (`NeedsRng`, the flame's stream), and
+    `rand_u32()`, the stream's raw next 32 bits as a `u32` (the
+    shader's `rng_next`, of which `rand()` keeps the top 24: one
+    stream, so the two interleave as the built-ins' draws do);
   - `fn variation(z, p, ctx)`: `ctx.accum`, the weighted sum of the
     transform's earlier variations (JWildfire's `pVarTP`;
-    `NeedsAccum`), and `ctx.weight`, its own weight;
+    `NeedsAccum`), `ctx.weight`, its own weight, `ctx.color`, the
+    colour coordinate as it reaches the variation (`pVarTP.color`;
+    `WritesColor`, as the colour pointer it reads; 0 inside a formula),
+    `ctx.hide`, whether the point is hidden as it reaches it (an
+    earlier variation's), `ctx.rgb`, the direct colour as it reaches it
+    (-1e30 each part until a variation writes one), and `ctx.a` ..
+    `ctx.f`, its transform's affine coefficients as the flame stores them
+    (the editor's and a `.flame`'s `coefs`; JWildfire's
+    `pXForm.getCoeff..`, read by fan, popcorn, rings and waves; the
+    identity inside a formula), and `ctx.camera_x` .. `ctx.camera_z`,
+    `ctx.camera_pitch`, `ctx.camera_yaw`, `ctx.camera_bank` (radians)
+    and `ctx.perspective`, the flame's 3D camera as the shader's
+    `params` holds it ([CAMERA.md](CAMERA.md); stereogram forks its eyes
+    in camera space), in the body alone (`prepare`'s init pass binds no
+    `params`), the default camera, all zeros, on the CPU;
+  - a 4th coordinate, a 3D body's alone (`NeedsW`): `ctx.w` the one it
+    is given, and `#{ z: v, w }` the raw one it gives, which the
+    transform weight-sums with its other 4D variations as it does x, y
+    and z (the builder's `point_w`, seeded at spawn, kept across
+    transforms);
+  - a direct colour: the body may end with `#{ z: point, rgb: vec3(r,
+    g, b) }`, the colour the transform's `direct_color` blends in where
+    the palette's would be (JWildfire's `pVarTP.rgbColor`, `WritesRgb`:
+    the `glsl_*` family); a return without `rgb` writes none, so a
+    transform without one keeps its palette colour;
+  - hiding the point: the body may end with `#{ z: point, hide: flag }`
+    (with `color` or without), this iteration's splat skipped while the
+    orbit goes on (JWildfire's `pVarTP.doHide`, `CanHide`); written
+    back always, so `false` clears an earlier variation's;
   - state per thread: `fn init(p)` returns the map each thread starts
-    with (its parameters may seed it), and the body reads and sets its
+    with (its parameters may seed it, and `rand()` draws from the
+    thread's stream, as a built-in's `wgsl_state_init` does), and the
+    body reads and sets its
     fields as `this.name` -- Rhai's own way for a function called on an
     object to change it (`state_count` slots, `init` as
-    `wgsl_state_init`);
+    `wgsl_state_init`); a field may be an array, `this.hist[i]`, a slot
+    a float, loaded and stored element by element;
   - a colour: the body may end with `#{ z: point, color: index }`, the
     palette index the transform's `direct_color` blends in
-    (`WritesColor`).
+    (`WritesColor`);
+  - extra plot points (`PlotEmits`; [VARIATIONS.md](VARIATIONS.md),
+    *Multi-emit plotting*): `emit(z)` and `emit(z, w)` plot a point (a
+    vector in a 3D body) at weight `w`, `emit_offset(d, w)` one at `d`
+    from where the iteration finally plots, and `suppress_main()` drops
+    the iteration's own plot -- statements of the body alone, the most
+    one call emits declared as `INFO.emits` (1-16; a body emitting
+    without it is refused). The returned point walks on as ever; a
+    2D-only body's copy in a 3D flame emits at the point's z. The CPU
+    evaluator plots nothing.
 
   A **3D variation** (B2) has `fn variation3(v, p[, ctx])`, its point a
   vector, ending with a vector or `#{ z: v, color }`; `ctx.accum` is a
@@ -953,6 +1057,27 @@ fn escaped(s, p) {
   the helper's parameter as it is bound at the call
   (`passed_whole`), so `fn level(p, ctx)` reads `p.radius` and
   `ctx.width` as its caller would.
+- **An array passes to a helper by value**, as Rhai and WGSL pass one:
+  the helper's own copy, its writes its own (`helper_arg`; where no
+  statement may go, and so no write, the caller's read in place). A
+  helper's value may be an array, an `if` value too (each arm's array
+  set whole).
+- **A helper called as a method changes what it is called on**
+  (rhai-plugins P7 step 3): `x.bump(k)` binds `x` to the helper's
+  `this`, as Rhai binds a method call's object -- a variable by
+  reference, so `this += k` sets the caller's `x` (a WGSL pointer
+  argument's way), any other value a temporary, its changes lost. The
+  helper may give a number or a vector, or nothing: called alone, a
+  statement, for what it writes (`helper_stmts`). Outside such a call
+  `this` is a variation's state, and a helper called on it,
+  `this.f(..)`, has the state's fields as its own `this.name`, to read
+  and set (klein_group's helpers keep its matrices there).
+- **A table is a module constant** in a flame variation's WGSL: an
+  array whose every element is set once, a literal at a literal place,
+  and which is never set whole (`wgsl::constant_arrays`) is written as
+  a `const` its reads share, one for each set of literals, where a local
+  would be filled at every call. Such a table may take up to 8192 floats
+  (`TABLE_CAP_FLOATS`); any other array 256, as ever.
 - **A fresh array is its local**: `let a = [x, y]` and `let a =
   array(n, v)` bind `a` to the array the literal made, where they copied
   it into another, element by element -- a loop the driver kept, which
