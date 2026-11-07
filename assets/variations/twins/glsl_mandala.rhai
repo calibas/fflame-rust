@@ -126,7 +126,8 @@ fn variation(w, p, ctx) {
         u = complex(t5.im, t5.re);
     }
     let pp = vec3(u.re, u.im, mx * v);
-    for l in 0..to_int(loops) {
+    for l_n in 0..to_int(loops) {
+        let l = u32(l_n);
         let d = max(1.0e-32, dot(pp, pp));
         let t1 = vec3(1.3, 0.999, 0.678);
         let t2 = abs(pp) / d - vec3(1.0, 1.02, my * rcpi);
@@ -191,7 +192,8 @@ fn variation3(q, p, ctx) {
         u = complex(t5.im, t5.re);
     }
     let pp = vec3(u.re, u.im, mx * v);
-    for l in 0..to_int(loops) {
+    for l_n in 0..to_int(loops) {
+        let l = u32(l_n);
         let d = max(1.0e-32, dot(pp, pp));
         let t1 = vec3(1.3, 0.999, 0.678);
         let t2 = abs(pp) / d - vec3(1.0, 1.02, my * rcpi);

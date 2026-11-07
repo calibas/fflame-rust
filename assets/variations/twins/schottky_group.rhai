@@ -163,7 +163,8 @@ fn prepare(p) {
     out[17] = to_float(p.symmetry);
     out[18] = p.twist_a;
     out[19] = p.twist_b;
-    for pair in 0..2 {
+    for pair_n in 0..2 {
+        let pair = u32(pair_n);
         let o = pair * u32(6);
         let c1 = complex(out[to_int(o)], out[to_int(o + u32(1))]);
         let r1 = max(0.05, out[to_int(o + u32(2))]);

@@ -96,7 +96,8 @@ fn prepare(p) {
     gb[2] = complex(0.0, sin(ar));
     gc[2] = complex(0.0, sin(ar));
     gd[2] = complex(cos(ar), 0.0);
-    for i in 0..3 {
+    for i_n in 0..3 {
+        let i = u32(i_n);
         let na = ga[i];
         let nb = gb[i];
         let nc = gc[i];

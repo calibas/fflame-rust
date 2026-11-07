@@ -889,7 +889,9 @@ impl<'p> Machine<'p> {
                     let _ = self.exec(body, sh);
                 }
                 // An escape colouring's palette read: none here.
-                IStmt::Host(h, _) if h.gpu_read() => {}
+                // A variation's emissions are plot-only: nothing the point
+                // or its colour depends on.
+                IStmt::Host(h, _) if h.gpu_read() || h.emit() => {}
                 IStmt::Host(..) => unreachable!("a simulation's framework call, which runs on the GPU alone"),
                 // The loop or the function around it takes these (P7
                 // step 1), as the GPU's do.

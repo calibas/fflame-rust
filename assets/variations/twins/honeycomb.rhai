@@ -156,7 +156,8 @@ fn variation(pt2, p, ctx) {
             let nring = to_float(count_one_bits(mask));
             let pick = to_int(min(rand() * nring, nring - 0.5));
             let mi = u32(0);
-            for i in 0..3 {
+            for i_n in 0..3 {
+                let i = u32(i_n);
                 if ((mask & (u32(1) << i)) != u32(0)) {
                     if (pick == 0) {
                         mi = i;
@@ -171,7 +172,8 @@ fn variation(pt2, p, ctx) {
                 m = mix(wp, f1, rand());
             } else {
                 let mj = (mi + u32(1) + min(u32(rand() * 2.0), u32(1))) % u32(3);
-                for ttry in 0..2 {
+                for ttry_n in 0..2 {
+                    let ttry = u32(ttry_n);
                     if (mj != mi && abs(honeycomb_mdot2(f1, vec3(mirrors[3 * mj + 0], mirrors[3 * mj + 1], mirrors[3 * mj + 2]))) > 1.0e-4) {
                         break;
                     }
@@ -359,7 +361,8 @@ fn variation3(pt, p, ctx) {
             let nring = to_float(count_one_bits(mask));
             let pick = to_int(min(rand() * nring, nring - 0.5));
             let mi = u32(0);
-            for i in 0..4 {
+            for i_n in 0..4 {
+                let i = u32(i_n);
                 if ((mask & (u32(1) << i)) != u32(0)) {
                     if (pick == 0) {
                         mi = i;
@@ -374,7 +377,8 @@ fn variation3(pt, p, ctx) {
                 m = mix(wp, f1, rand());
             } else {
                 let mj = (mi + u32(1) + min(u32(rand() * 3.0), u32(2))) % u32(4);
-                for ttry in 0..3 {
+                for ttry_n in 0..3 {
+                    let ttry = u32(ttry_n);
                     if (mj != mi && abs(honeycomb_mdot(f1, vec4(mirrors[4 * mj + 0], mirrors[4 * mj + 1], mirrors[4 * mj + 2], mirrors[4 * mj + 3]))) > 1.0e-4) {
                         break;
                     }

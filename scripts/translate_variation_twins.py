@@ -343,7 +343,10 @@ def vec_of(ty):
     if ty.startswith("vec4"): return "vec4"
     if ty in ("f32", "i32", "u32", "bool"): return ty
     if ty.startswith("array"): raise Refuse("an array")
-    if ty.startswith("mat"): raise Refuse("a matrix")
+    # A 3x3 matrix: its nine floats, column by column, an array (as the
+    # structs are helpers over arrays; the user, 2026-11-06).
+    if ty.replace(" ", "") == "mat3x3<f32>": return "mat3"
+    if ty.startswith("mat"): raise Refuse("a matrix of other than 3x3")
     if ty.startswith("ptr"): return "ptr"
     return ty
 
@@ -378,6 +381,7 @@ class Fn:
         # The constant tables it reads, each a literal at its top
         # (`tbl_<name>`), which the language writes as a module constant.
         self.tables = set()
+        self.reads_state = False
         for name, ty in args:
             ty = ty.strip()
             if name == "p" and not helper:
@@ -398,6 +402,8 @@ class Fn:
                 self.this_ptr = name
                 pointee = ty.replace(" ", "")[len("ptr<function,"):-1]
                 self.types[name] = ("array:" + array_of(pointee)[0]) if pointee.startswith("array<") else vec_of(pointee)
+                if pointee.startswith("array<"):
+                    self.types["this"] = self.types[name]
                 self.outs[name] = ["this", "this"]
             elif name == "accum":
                 self.types["accum"] = vec_of(ty)
@@ -446,6 +452,8 @@ class Fn:
             if e[1] in ("==", "!=", "<", ">", "<=", ">=", "&&", "||"):
                 return "bool"
             a, b = self.ty(e[2]), self.ty(e[3])
+            if e[1] == "*" and (a, b) == ("mat3", "vec3"):
+                return "vec3"
             for v in ("vec3", "vec2", "vec4"):
                 if v in (a, b): return v
             if "u32" in (a, b) and all(x in ("int", "i32", "u32") for x in (a, b)):
@@ -475,6 +483,7 @@ class Fn:
             if f.startswith("array<"): return "array:" + array_of(f)[0]
             if f in STRUCTS: return "array:" + struct_array(f)[0]
             if f.startswith("vec") and ("u32" in f or "i32" in f): return "array:" + ("u32" if "u32" in f else "int")
+            if f.replace(" ", "") == "mat3x3<f32>": return "mat3"
             if f.startswith("vec2"): return "vec2"
             if f.startswith("vec3"): return "vec3"
             if f.startswith("vec4"): return "vec4"
@@ -580,6 +589,11 @@ class Fn:
                 return f"({self.ex(e[2])} ^ 0xffffffff)"
             inner = self.ex(e[2])
             return f"{e[1]}{inner}"
+        if k == "bin" and e[1] == "*" and (self.ty(e[2]), self.ty(e[3])) == ("mat3", "vec3"):
+            m = e[2][1] if e[2][0] == "id" else self.hold(e[2])
+            v = self.hold(e[3])
+            rows = [" + ".join(f"{m}[{3 * c + r}] * {v}.{'xyz'[c]}" for c in range(3)) for r in range(3)]
+            return f"vec3({', '.join(f'({x})' for x in rows)})"
         if k == "bin":
             op = e[1]
             ta, tb = self.ty(e[2]), self.ty(e[3])
@@ -682,6 +696,19 @@ class Fn:
         if f in STRUCTS:
             struct_array(f)
             return "[" + ", ".join(self.ex(a) for a in args) + "]"
+        if f.replace(" ", "") == "mat3x3<f32>":
+            if len(args) == 3 and all(self.ty(a) == "vec3" for a in args):
+                parts = []
+                for a in args:
+                    if a[0] == "call" and a[1].startswith("vec3") and len(a[2]) == 3:
+                        parts += [self.ex(x) for x in a[2]]
+                    else:
+                        c = self.hold(a)
+                        parts += [f"{c}.{x}" for x in "xyz"]
+                return "[" + ", ".join(parts) + "]"
+            if len(args) == 9:
+                return "[" + ", ".join(self.ex(a) for a in args) + "]"
+            raise Refuse("a matrix built otherwise")
         if f.startswith("array<"):
             elem, _ = array_of(f)
             if elem in FLAT:
@@ -774,9 +801,8 @@ class Fn:
             return f"({self.ex(args[0])} * 0.017453292519943295)"
         if f == "degrees" and self.ty(args[0]) == "f32":
             return f"({self.ex(args[0])} * 57.29577951308232)"
-        if f == "get_state" and self.helper:
-            raise Refuse("a helper reading the variation's state")
         if f == "get_state":
+            self.reads_state = True
             return f"this.{self.tr.state_field(args[2], self)}"
         if f == "set_state":
             raise Refuse("a `set_state` inside an expression")
@@ -885,11 +911,31 @@ class Fn:
         if f in self.tr.helpers:
             hargs = self.tr.helper_args[f]
             pointer = lambda ty: ty.strip().startswith("ptr") and "RngState" not in ty
-            keep = ["p" if n == "xform_id" else self.ex(a) for a, (n, ty) in zip(args, hargs) if not ("RngState" in ty or n == "variation_id" or pointer(ty))]
+            valptr = self.tr.helper_valptr.get(f, set())
+            def arg(a, n):
+                if n == "xform_id":
+                    return "p"
+                if n in valptr:
+                    # An array by value: what the pointer points at.
+                    if a[0] == "un" and a[1] == "&" and a[2][0] == "id":
+                        return self.ex(a[2])
+                    if a[0] == "id" and a[1] in self.outs:
+                        return self.outs[a[1]][1]
+                    if a[0] == "id" and a[1] == self.this_ptr:
+                        return "this"
+                    if a[0] == "id" and self.types.get(a[1], "").startswith("array:"):
+                        return a[1]
+                    raise Refuse(f"a pointer of another kind to `{f}`")
+                return self.ex(a)
+            keep = [arg(a, n) for a, (n, ty) in zip(args, hargs) if not ("RngState" in ty or n == "variation_id" or pointer(ty))]
             if f in self.tr.helper_ctx:
                 keep.append("ctx")
                 self.uses_ctx = True
             ptrs = [a for a, (n, ty) in zip(args, hargs) if pointer(ty)]
+            if f in self.tr.helper_state:
+                # Called on the state.
+                self.reads_state = True
+                return f"this.{f}({', '.join(keep)})"
             if ptrs:
                 # Called on what its pointer points at.
                 a = ptrs[0]
@@ -1043,7 +1089,21 @@ class Fn:
                 self.line(depth, lambda: f"out[{self.tr.n_slots()} + {self.slot_index(lhs[2])}] {op} {self.ex(rhs)};")
                 return
             if lhs[0] == "index" and lhs[1][0] == "id" and self.types.get(lhs[1][1], "")[len("array:"):] in FLAT:
-                raise Refuse("a vector array's element set")
+                elem = self.types[lhs[1][1]][len("array:"):]
+                if op != "=":
+                    raise Refuse("a vector array's element set by an operator")
+                k = FLAT[elem]
+                # The index and the vector held once (inside `line`, which
+                # writes the temporaries before the statement).
+                held = {}
+                def first():
+                    held["i"] = self.ex(lhs[2]) if lhs[2][0] in ("id", "num") else self.hold(lhs[2])
+                    held["v"] = self.hold(rhs)
+                    return f"{lhs[1][1]}[{k} * {held['i']} + 0] = {held['v']}.x;"
+                self.line(depth, first)
+                for c in range(1, k):
+                    self.emit(depth, f"{lhs[1][1]}[{k} * {held['i']} + {c}] = {held['v']}.{'xyzw'[c]};")
+                return
             if lhs[0] == "index" and lhs[1][0] == "id" and self.types.get(lhs[1][1], "").startswith("array:"):
                 self.line(depth, lambda: f"{lhs[1][1]}[{self.ex(lhs[2])}] {op} {self.ex(rhs)};")
                 return
@@ -1068,11 +1128,15 @@ class Fn:
                 raise Refuse("a componentwise compound assignment")
             self.line(depth, lambda: f"{self.ex(lhs)} {op} {self.ex(rhs)};")
             return
-        if k == "expr" and s[1][0] == "call" and s[1][1] == "set_state" and self.helper:
-            raise Refuse("a helper writing the variation's state")
         if k == "expr" and s[1][0] == "call" and s[1][1] == "set_state":
+            self.reads_state = True
             field = self.tr.state_field(s[1][2][2], self)
             self.line(depth, lambda: f"this.{field} = {self.ex(s[1][2][3])};")
+            return
+        # An emission: the language's statement (`INFO.emits` its cap).
+        if k == "expr" and s[1][0] == "call" and s[1][1] in EMITS:
+            name, args = EMITS[s[1][1]], s[1][2]
+            self.line(depth, lambda: f"{name}({', '.join(self.ex(a) for a in args)});")
             return
         # A helper called for what it writes through its pointer.
         if k == "expr" and s[1][0] == "call" and s[1][1] in self.tr.helpers:
@@ -1111,16 +1175,21 @@ class Fn:
             if step_one and init[4] is not None and self.ty(init[4]) != "f32" and cond and cond[0] == "bin" and cond[1] in ("<", "<=") and cond[2] == ("id", init[2]) \
                     and not assigns(body, init[2]) and bound_fixed:
                 name = init[2]
-                self.types[name] = "int"
                 rng = ".." if cond[1] == "<" else "..="
                 # A range counts in ints: a u32 bound by `to_int` (its
-                # bits; a counter's are small), the counter joining a u32
-                # by its bits where it meets one.
+                # bits; a counter's are small), and a u32 counter a u32 in
+                # the body again, as WGSL's is.
+                unsigned = (init[3] or "").strip() == "u32" or self.ty(init[4]) == "u32"
                 def bound(e):
                     if e[0] == "num":
                         return e[1].rstrip("ui")
                     return f"to_int({self.ex(e)})" if self.ty(e) == "u32" else self.ex(e)
-                self.line(depth, lambda: f"for {name} in {bound(init[4])}{rng}{bound(cond[3])} {{")
+                counter = next(n for n in (f"{name}_n", f"{name}_k", f"{name}_i") if n not in self.taken) if unsigned else name
+                self.line(depth, lambda: f"for {counter} in {bound(init[4])}{rng}{bound(cond[3])} {{")
+                if unsigned:
+                    # Each range's counter its own: sibling loops share it.
+                    self.emit(depth + 1, f"let {name} = u32({counter});")
+                self.types[name] = "u32" if unsigned else "int"
                 self.stmts(body, depth + 1)
                 self.emit(depth, "}")
                 return
@@ -1223,6 +1292,12 @@ class Translation:
         # The helpers reading the context (the weight, the sum), which
         # take it, `ctx`, passed whole as the language allows.
         self.helper_ctx = set()
+        # A helper's pointers to arrays it never writes through, by name:
+        # passed by value as arrays (`&x` at the call is `x`).
+        self.helper_valptr = {}
+        # The helpers reading or setting the variation's state: called on
+        # it, `this.f(..)`, their `this` the state as Rhai binds it.
+        self.helper_state = set()
         # WGSL built-ins the language has not, written as helpers of the
         # twin's own (`WRITTEN`), by name.
         self.written = set()
@@ -1359,16 +1434,29 @@ class Translation:
                 free = next(n for n in ("pv", "p_", "p0") if ("id", n) not in toks)
                 toks = [("id", free) if t == ("id", "p") else t for t in toks]
                 args = [(free if n == "p" else n, ty) for n, ty in args]
+            # Its pointers to arrays: one never written through is an array
+            # passed by value, the one written `this` (as a scalar's is).
+            ss = block(P(toks))
+            array_ptrs = [n for n, ty in args if ty.replace(" ", "").startswith("ptr<function,array<")]
+            valptr = {n for n in array_ptrs if not writes_through(ss, n)}
+            written = [n for n in array_ptrs if n not in valptr]
+            if len(written) > 1 or (written and any(ty.strip().startswith("ptr") and "RngState" not in ty and n not in array_ptrs for n, ty in args)):
+                raise Refuse("a helper writing through two pointers")
+            ss = deref(ss, {n: n for n in valptr} | {n: "this" for n in written})
+            args = [(n, ty.replace(" ", "")[len("ptr<function,"):-1]) if n in valptr else (n, ty) for n, ty in args]
+            self.helper_valptr[fname] = valptr
             self.helper_args[fname] = args
             f = Fn(self, dim, args, ret, True)
             f.taken = {tk[1] for tk in toks if tk[0] == "id"}
-            p = P(toks)
-            ss = block(p)
             if (self.helpers[fname] or "").startswith("array:"):
                 ss = fold_early(ss)
             f.stmts(ss, 1, last=True)
             f.lines[0:0] = f.table_lines()
             params = [a for a in f.params]
+            if f.reads_state:
+                if f.this_ptr:
+                    raise Refuse(f"a helper with a pointer and the variation's state `{fname}`")
+                self.helper_state.add(fname)
             if f.uses_ctx:
                 params.append("ctx")
                 self.helper_ctx.add(fname)
@@ -1417,6 +1505,30 @@ class Translation:
         sig = f"fn {'variation' if dim == 2 else 'variation3'}({argz}, p{', ctx' if f.uses_ctx else ''})"
         return out, sig + " {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"
 
+def writes_through(ss, name):
+    """Whether any statement of `ss` assigns through the pointer `name`."""
+    target = repr(("un", "*", ("id", name)))
+    def walk(node):
+        if isinstance(node, tuple) and node and node[0] == "assign" and target in repr(node[1]):
+            return True
+        if isinstance(node, (tuple, list)):
+            return any(walk(x) for x in node)
+        return False
+    return walk(ss)
+
+def deref(node, names):
+    """`node` with each `*name` (and `(*name)`) the name `names` gives."""
+    if isinstance(node, tuple) and len(node) == 3 and node[0] == "un" and node[1] == "*" and node[2][0] == "id" and node[2][1] in names:
+        return ("id", names[node[2][1]])
+    if isinstance(node, tuple) and len(node) == 2 and node[0] == "paren":
+        inner = deref(node[1], names)
+        return inner if inner[0] == "id" and inner != node[1] else ("paren", inner)
+    if isinstance(node, tuple):
+        return tuple(deref(x, names) for x in node)
+    if isinstance(node, list):
+        return [deref(x, names) for x in node]
+    return node
+
 def fold_early(ss):
     """Early returns (an `if` without an `else` that returns) folded: what
     follows becomes its `else`, so the body ends in one `if` value -- for
@@ -1436,6 +1548,18 @@ def fold_returns(ss):
         if s[0] == "if" and s[3] is None and s[2] and fold_returns(s[2])[-1] == ret and ss[-1] == ret:
             return ss[:i] + [("if", s[1], fold_returns(s[2])[:-1], fold_returns(ss[i + 1:])[:-1]), ret]
     return ss
+
+# Built-ins whose shader the builder rewrites for each flame with data
+# the host computes (`variation_specialized_source`): their WGSL alone is
+# not the variation. (synth's rewrite only drops the modes a flame does
+# not use, so its twin is whole.)
+HOST_BAKED = {
+    "mondrianomies": "a table the host computes for each flame (the Exact fill's rectangles) baked into its shader",
+}
+
+# The flame shader's emission collector (`Feature::PlotEmits`) as the
+# language's statements.
+EMITS = {"emit_plot": "emit", "emit_plot_weighted": "emit", "emit_plot_offset": "emit_offset", "emit_suppress_main": "suppress_main"}
 
 # WGSL built-ins the language has not, as Rhai helpers: exact, if slower
 # than the hardware's.
@@ -1583,7 +1707,8 @@ def translate(d):
     f = set(d["features"])
     for feat in ("analytic_blur", "volume_side_emit"):
         if feat in f: raise Refuse(f"the feature {feat}")
-    if d.get("plot_emits"): raise Refuse("plot emits")
+    if d["name"] in HOST_BAKED: raise Refuse(HOST_BAKED[d["name"]])
+
     for prm in d["parameters"]:
         if prm["name"] in RHAI_RESERVED: raise Refuse(f"a parameter Rhai reserves the name of, `{prm['name']}`")
         if not re.fullmatch(r"[A-Za-z_]\w*", prm["name"]): raise Refuse(f"a parameter named `{prm['name']}`, no Rhai name")
@@ -1632,6 +1757,9 @@ def translate(d):
     # It replaces the point it is given (`Feature::Replace`).
     if "replace" in f:
         info["replace"] = "true"
+    # The most points one call emits.
+    if d.get("plot_emits"):
+        info["emits"] = str(d["plot_emits"])
     return helpers, two, three, info
 
 def write(name, d):

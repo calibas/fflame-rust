@@ -52,7 +52,8 @@ fn voronoi_closest(points, n, u) {
     let best = u32(0);
     let best_d2 = 1.0e30;
     let cap = min(n, u32(9));
-    for i in 0..to_int(cap) {
+    for i_n in 0..to_int(cap) {
+        let i = u32(i_n);
         let d = points[i] - u;
         let d2 = d.norm_sqr();
         if (d2 < best_d2) {
@@ -76,7 +77,8 @@ fn voronoi_inside(points, n, q, u) {
     let ratio_max = -1.0e30;
     let cap = min(n, u32(9));
     let pq = points[q];
-    for i in 0..to_int(cap) {
+    for i_n in 0..to_int(cap) {
+        let i = u32(i_n);
         if (i == q) {
             continue;
         }

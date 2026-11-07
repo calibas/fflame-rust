@@ -1281,12 +1281,32 @@ Steps, in the order that unlocks the most first (the user picks):
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 12, by count (`translate_variation_twins.py
-     --report`): the renderer's hooks (6: the analytic blurs, the volume
-     emitters, the subflames) and plot emits (3), out of the plan; and
-     one each: a helper taking several pointers (mondrianomies, whose
-     `this` is one), a matrix (glsl_apollonian), a helper reading the
-     variation's state (klein_group).
+     passed through. **Of the last twelve** (the user, 2026-11-07:
+     the analytic blurs and the subflames would not translate well,
+     skipped; the volume emitters noted for possible later work; the
+     other six to do): the language's **emissions** -- `emit(z[, w])`,
+     `emit_offset(d, w)`, `suppress_main()`, statements of the body,
+     `INFO.emits` the cap, a 2D-only body's 3D copy emitting at the
+     point's z -- for multi_kaleidoscope and spray_blur; a helper
+     called on the state, `this.f(..)`, the state's fields its own
+     (klein_group); a 3x3 matrix as its nine floats (glsl_apollonian);
+     a `u32` loop counter a `u32` in the body again (34 twins' loops
+     rewritten, every one still drawn alike): 639, compile, 13518 pairs,
+     0 apart, every flame drawn alike in 2D and 3D. mondrianomies
+     translated (of a helper's several pointers, one to an array it
+     never writes through passed by value) but drew another picture:
+     its default fill, Exact (R), samples a rectangle table the CPU
+     computes from the whole drawing for each flame (`exact_combos`,
+     `cpu_rects`) and the shader builder bakes in over a stub, so the
+     def's WGSL is not the whole variation -- refused by name
+     (`HOST_BAKED`). A twin would need that table from `prepare`: the
+     parameter storage to hold it (docs/projects/variation-param-storage.md)
+     and a relational pass over thousands of segments, at present Rust
+     on the CPU. Left, 8: stereogram, which reads the camera; mondrianomies;
+     out of the plan, the analytic blurs (analytic_blur,
+     analytic_gaussian_blur) and the subflames (subflame_wf,
+     pre_subflame_wf); possible later work, the volume emitters
+     (polyhedron_volume, sphere_volume).
 4. **The twins, in batches**: the variations by family -- a skeleton
    generator from the defs, as P4's `write_twin_skeletons`, and each
    held by a density compare and timed -- the escape colourings, the

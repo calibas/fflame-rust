@@ -676,7 +676,7 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
     let inner2 = format!("{prefix}variation_2d");
     let inner3 = format!("{prefix}variation_3d");
     let module2 = match (p2, &s2) {
-        (Some(p), Some(s)) => Some(variation_module(p, s, &sig, false, prefix)),
+        (Some(p), Some(s)) => Some(variation_module(p, s, &sig, false, false, prefix)),
         _ => None,
     };
     let wgsl_2d = module2
@@ -684,13 +684,21 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
         .map(|m| format!("{m}\nfn variation_{name}(p: vec2<f32>{sig}) -> vec2<f32> {{\n    return {inner2}(p{args});\n}}\n"));
     let wgsl_3d = match (p3, &s3) {
         (Some(p), Some(s)) => {
-            let m = variation_module(p, s, &sig.replace("accum: vec2<f32>", "accum3: vec3<f32>"), true, prefix);
+            let m = variation_module(p, s, &sig.replace("accum: vec2<f32>", "accum3: vec3<f32>"), true, false, prefix);
             format!("{m}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return {inner3}(p{args});\n}}\n")
         }
-        _ => {
-            let m = module2.clone().unwrap_or_default();
-            format!("{m}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return vec3<f32>({inner2}(p.xy{args3}), p.z);\n}}\n")
-        }
+        // A 2D body in a 3D flame. One emitting points emits them at the
+        // point's z, as its point keeps it: its own copy here, taking z.
+        _ => match (p2, &s2) {
+            (Some(p), Some(s)) if Program::calls_host(&p.transform, Host::emit) => {
+                let m = variation_module(p, s, &sig, false, true, prefix);
+                format!("{m}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return vec3<f32>({inner2}(p.xy{args3}, p.z), p.z);\n}}\n")
+            }
+            _ => {
+                let m = module2.clone().unwrap_or_default();
+                format!("{m}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return vec3<f32>({inner2}(p.xy{args3}), p.z);\n}}\n")
+            }
+        },
     };
     // `prepare`, one for both bodies: both programs lower it alike, its
     // values in the same slots.
@@ -808,8 +816,10 @@ fn variation_init(p: &Program, name: &str, prefix: &'static str) -> Result<Optio
 /// One body of a flame variation, as a module: the inner function (2D, or
 /// 3D with the point's third part beside `#pixel`), the state's load and
 /// store, `init`'s function, and the helpers, all prefixed.
-fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, prefix: &'static str) -> String {
+fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, emit_z: bool, prefix: &'static str) -> String {
     let mut g = Gen::new(p, Ctx::Variation, prefix);
+    // A 2D body's copy in a 3D flame: its emissions at the z it is given.
+    g.emit_z = emit_z;
     // Its tables, module constants: one for each set of literals.
     let mut tables = String::new();
     let mut named: Vec<(String, String)> = Vec::new();
@@ -907,7 +917,8 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
         }
         b
     } else {
-        format!("fn uf_variation_2d(p: vec2<f32>{sig}) -> vec2<f32> {{\n    var pixel = p;\n")
+        let z = if emit_z { ", uf_emit_z: f32" } else { "" };
+        format!("fn uf_variation_2d(p: vec2<f32>{sig}{z}) -> vec2<f32> {{\n    var pixel = p;\n")
     };
     decls(&mut body);
     load(&g, &mut body);
@@ -2060,6 +2071,9 @@ struct Gen<'p> {
     /// Each variable written as a module constant, a table
     /// ([`constant_arrays`]), by the constant's name.
     tables: Vec<Option<String>>,
+    /// A 2D body's emissions as 3D points at `uf_emit_z`, the z its copy in
+    /// a 3D flame is given.
+    emit_z: bool,
 }
 
 /// A scope being written (`IStmt::Scope`): the `loop` it is, how many
@@ -2113,6 +2127,7 @@ impl<'p> Gen<'p> {
             scopes: Vec::new(),
             nest: 0,
             tables: Vec::new(),
+            emit_z: false,
         }
     }
 
@@ -2511,6 +2526,14 @@ impl<'p> Gen<'p> {
             Host::Texture => format!("uf_texture(vec2<f32>({}, {})).{}", a[0], a[1], part(2)),
             Host::Texel => format!("uf_texel(vec2<i32>({}, {})).{}", a[0], a[1], part(2)),
             Host::TextureSize => format!("uf_texture_size().{}", part(0)),
+            // A variation's emissions, the flame shader's collector.
+            Host::EmitPlot2 if self.emit_z => format!("emit_plot_weighted(vec3<f32>({}, {}, uf_emit_z), {})", a[0], a[1], a[2]),
+            Host::EmitOffset2 if self.emit_z => format!("emit_plot_offset(vec3<f32>({}, {}, 0.0), {})", a[0], a[1], a[2]),
+            Host::EmitPlot2 => format!("emit_plot_weighted(vec2<f32>({}, {}), {})", a[0], a[1], a[2]),
+            Host::EmitPlot3 => format!("emit_plot_weighted(vec3<f32>({}, {}, {}), {})", a[0], a[1], a[2], a[3]),
+            Host::EmitOffset2 => format!("emit_plot_offset(vec2<f32>({}, {}), {})", a[0], a[1], a[2]),
+            Host::EmitOffset3 => format!("emit_plot_offset(vec3<f32>({}, {}, {}), {})", a[0], a[1], a[2], a[3]),
+            Host::EmitSuppress => "emit_suppress_main()".to_string(),
             Host::GridParam => {
                 let (Some(first), Some(next)) = (args.first().and_then(cell_index), args.get(1).and_then(cell_index)) else {
                     unreachable!("a grid's cells, as the checker gives them")
@@ -4894,14 +4917,18 @@ pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
          @group(0) @binding(0) var palette_texture: texture_2d<f32>;\n\
          @group(0) @binding(1) var palette_sampler: sampler;\n\
          fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {\n    return c;\n}\n";
+    // The flame shader's emission collector (`Feature::PlotEmits`), a body's
+    // own dimension.
+    const EMIT2: &str = "fn emit_plot_weighted(p: vec2<f32>, w: f32) {}\nfn emit_plot_offset(p: vec2<f32>, w: f32) {}\nfn emit_suppress_main() {}\n";
+    const EMIT3: &str = "fn emit_plot_weighted(p: vec3<f32>, w: f32) {}\nfn emit_plot_offset(p: vec3<f32>, w: f32) {}\nfn emit_suppress_main() {}\n";
     if let Some(w2) = &w.wgsl_2d {
-        validate_module(&format!("{GET_PARAM}{w2}"))?;
+        validate_module(&format!("{GET_PARAM}{EMIT2}{w2}"))?;
     }
     // The init pass's module holds it alone (`build_init_shader`).
     if let Some(init) = &w.init {
         validate_module(init)?;
     }
-    validate_module(&format!("{GET_PARAM}{}", w.wgsl_3d))
+    validate_module(&format!("{GET_PARAM}{EMIT3}{}", w.wgsl_3d))
 }
 
 /// [`validate_formula`] for a colouring.

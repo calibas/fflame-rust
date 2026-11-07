@@ -126,7 +126,8 @@ fn prepare(p) {
     } else if (kn_is_integer && kd_is_integer) {
         let a = abs(to_float(floor(kn + 0.5)));
         let b = abs(to_float(floor(kd + 0.5)));
-        for i in 0..64 {
+        for i_n in 0..64 {
+            let i = u32(i_n);
             if (b < 0.5) {
                 break;
             }

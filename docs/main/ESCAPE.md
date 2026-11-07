@@ -764,7 +764,16 @@ fn escaped(s, p) {
     a float, loaded and stored element by element;
   - a colour: the body may end with `#{ z: point, color: index }`, the
     palette index the transform's `direct_color` blends in
-    (`WritesColor`).
+    (`WritesColor`);
+  - extra plot points (`PlotEmits`; [VARIATIONS.md](VARIATIONS.md),
+    *Multi-emit plotting*): `emit(z)` and `emit(z, w)` plot a point (a
+    vector in a 3D body) at weight `w`, `emit_offset(d, w)` one at `d`
+    from where the iteration finally plots, and `suppress_main()` drops
+    the iteration's own plot -- statements of the body alone, the most
+    one call emits declared as `INFO.emits` (1-16; a body emitting
+    without it is refused). The returned point walks on as ever; a
+    2D-only body's copy in a 3D flame emits at the point's z. The CPU
+    evaluator plots nothing.
 
   A **3D variation** (B2) has `fn variation3(v, p[, ctx])`, its point a
   vector, ending with a vector or `#{ z: v, color }`; `ctx.accum` is a
@@ -1055,7 +1064,9 @@ fn escaped(s, p) {
   argument's way), any other value a temporary, its changes lost. The
   helper may give a number or a vector, or nothing: called alone, a
   statement, for what it writes (`helper_stmts`). Outside such a call
-  `this` is a variation's state.
+  `this` is a variation's state, and a helper called on it,
+  `this.f(..)`, has the state's fields as its own `this.name`, to read
+  and set (klein_group's helpers keep its matrices there).
 - **A table is a module constant** in a flame variation's WGSL: an
   array whose every element is set once, a literal at a literal place,
   and which is never set whole (`wgsl::constant_arrays`) is written as

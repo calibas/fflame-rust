@@ -688,6 +688,7 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         effect: kind == EntryKind::Effect,
         sim_coloring: kind == EntryKind::SimColoring,
         palette_reads: 0,
+        state_this: false,
         stmt_call: false,
         texture_reads: 0,
         sim_model: kind == EntryKind::SimModel,
@@ -804,6 +805,11 @@ impl Positions {
 }
 
 // ---- lowering ---------------------------------------------------------
+
+/// A flame variation's emission, a statement (rhai-plugins P7 step 3).
+fn is_emit(f: &FnCallExpr) -> bool {
+    matches!(f.name.as_str(), "emit" | "emit_offset" | "suppress_main")
+}
 
 /// A simulation model's write, a statement (P4 step 9c).
 fn is_sim_write(f: &FnCallExpr) -> bool {
@@ -953,6 +959,9 @@ struct Lowerer<'s> {
     /// An escape colouring's palette reads made so far (batch 5): each
     /// call site's slot, read once.
     palette_reads: i64,
+    /// A helper called on a variation's state (`this.f(..)`), until
+    /// [`Lowerer::call`] or `vcall` takes it.
+    state_this: bool,
     /// A statement calling a helper alone (for what it writes), until
     /// [`Lowerer::call`] takes it.
     stmt_call: bool,
@@ -1490,6 +1499,11 @@ impl<'s> Lowerer<'s> {
                 },
                 // It replaces the working point rather than adding into it
                 // (`Feature::Replace`): `variations::custom` reads it apart.
+                // The most points one call emits (`Feature::PlotEmits`).
+                "emits" if self.transform => match v {
+                    Expr::IntegerConstant(n, _) if (1..=16).contains(n) => {}
+                    _ => return self.err(*p, "`emits` is the most points one call emits, 1 to 16"),
+                },
                 "replace" if self.transform => match v {
                     Expr::BoolConstant(..) => {}
                     _ => return self.err(*p, "`replace` is true or false: whether it replaces the point it is given, as JWildfire's `pVarTP.x = ...`"),
@@ -3264,6 +3278,12 @@ impl<'s> Lowerer<'s> {
                 out.extend(body);
                 Ok(())
             }
+            // A variation's emissions (`Feature::PlotEmits`): statements.
+            Stmt::FnCall(f, p) if self.transform && is_emit(f) && !self.fns.contains_key(f.name.as_str()) => self.emit_call(f, *p, scope, out),
+            Stmt::Expr(e) if self.transform && matches!(&**e, Expr::FnCall(f, _) if is_emit(f) && !self.fns.contains_key(f.name.as_str())) => {
+                let Expr::FnCall(f, p) = &**e else { unreachable!("matched above") };
+                self.emit_call(f, *p, scope, out)
+            }
             // A simulation model's writes (P4 step 9c): the measure pass's
             // scratch, the memory -- statements, a vector of four each.
             Stmt::FnCall(f, p) if self.sim_model && is_sim_write(f) => self.sim_write(f, *p, scope, out),
@@ -3328,6 +3348,15 @@ impl<'s> Lowerer<'s> {
                 self.flush(out);
                 Ok(())
             }
+            Stmt::Expr(e) if matches!(&**e, Expr::FnCall(f, _) if self.fns.contains_key(f.name.as_str())) => {
+                let Expr::FnCall(f, p) = &**e else { unreachable!("matched above") };
+                self.stmt_call = true;
+                let r = self.call(f, None, *p, scope);
+                self.stmt_call = false;
+                r?;
+                self.flush(out);
+                Ok(())
+            }
             Stmt::Expr(e) => self.err(e.position(), "a value alone does nothing here"),
             Stmt::FnCall(_, p) => self.err(*p, "a call alone does nothing here"),
             other => self.err(other.position(), "not in a formula"),
@@ -3382,6 +3411,55 @@ impl<'s> Lowerer<'s> {
 
     /// `write_scratch(k, v)`, `write_memory(k, v)`: the slice and a vector
     /// of four, the host's write.
+    /// A variation's emission (`Feature::PlotEmits`, its cap `INFO.emits`):
+    /// `emit(z)` or `emit(z, w)` an extra plot point of weight `w` (1
+    /// without), `emit_offset(d, w)` one offset from where the iteration
+    /// finally plots, `suppress_main()` its own plot left out, the
+    /// emissions kept. A point is a complex number or a `vec3`.
+    fn emit_call(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
+        let span = self.pos.span(p);
+        let call = |name: &str, args: Vec<ast::Expr>| ast::Stmt::Expr(mk(ExprKind::Call { name: name.into(), args, user: false }, span));
+        if f.name == "suppress_main" {
+            if !f.args.is_empty() {
+                return self.err(p, "`suppress_main()` takes nothing");
+            }
+            self.flush(out);
+            out.push(call("__emit_suppress", Vec::new()));
+            return Ok(());
+        }
+        let (z, w) = match &f.args[..] {
+            [z] => (z, None),
+            [z, w] => (z, Some(w)),
+            _ => return self.err(p, format!("`{0}(z)` or `{0}(z, w)`: a point and its weight", f.name)),
+        };
+        let mut args = if self.is_vec(z, scope) {
+            let v = self.vexpr(z, scope)?;
+            if v.kind != vec::Kind::Vec3 {
+                return self.err(p, "a point emitted is a complex number or a `vec3`");
+            }
+            v.parts
+        } else {
+            let z = self.expr(z, scope)?;
+            let z = self.hold(z, "emit");
+            let part = |n: &str| mk(ExprKind::Call { name: n.into(), args: vec![z.clone()], user: false }, span);
+            vec![part("real"), part("imag")]
+        };
+        let three = args.len() == 3;
+        args.push(match w {
+            Some(w) => self.expr(w, scope)?,
+            None => mk(ExprKind::Float(1.0), span),
+        });
+        self.flush(out);
+        let name = match (f.name.as_str() == "emit_offset", three) {
+            (false, false) => "__emit_plot2",
+            (false, true) => "__emit_plot3",
+            (true, false) => "__emit_offset2",
+            (true, true) => "__emit_offset3",
+        };
+        out.push(call(name, args));
+        Ok(())
+    }
+
     fn sim_write(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
         let span = self.pos.span(p);
         if !self.sim_fn.cell_step() {
@@ -3612,7 +3690,7 @@ impl<'s> Lowerer<'s> {
 
     /// `this` at `p`: the variation's state, which `init` must give.
     fn this_state(&self, p: Position, scope: &Scope) -> R<()> {
-        if scope.which != Fn3::Variation {
+        if scope.which != Fn3::Variation && !matches!(scope.get("this"), Some(Binding::State)) {
             return self.err(p, "`this` is a variation's state, read in `variation`");
         }
         if scope.fields.is_empty() {
@@ -3771,8 +3849,10 @@ impl<'s> Lowerer<'s> {
         // `this`: a variation's state (C2c), as Rhai binds the object a
         // function is called on.
         if let Expr::ThisPtr(p) = e {
-            if scope.get("this").is_some() {
-                return Ok(Base::Value(self.expr(e, scope)?));
+            match scope.get("this") {
+                Some(Binding::State) => return self.this_state(*p, scope).map(|_| Base::State),
+                Some(_) => return Ok(Base::Value(self.expr(e, scope)?)),
+                None => {}
             }
             return self.this_state(*p, scope).map(|_| Base::State);
         }
@@ -3979,6 +4059,12 @@ impl<'s> Lowerer<'s> {
                     Ok(mk(ExprKind::Call { name, args: vec![arg], user: true }, self.pos.span(*p)))
                 }
                 Base::Value(v) => self.call(f, Some(v), *p, scope),
+                // A helper called on a variation's state: its `this` the
+                // state, by reference, as Rhai binds the object.
+                Base::State if self.fns.contains_key(f.name.as_str()) => {
+                    self.state_this = true;
+                    self.call(f, None, *p, scope)
+                }
                 Base::Map(..) => self.err(*p, "a variation's parameters hold no functions"),
                 _ => self.err(*p, "call a function of a value, `s.z.sqr()`"),
             },
@@ -3992,6 +4078,7 @@ impl<'s> Lowerer<'s> {
         // A statement's call of a helper: its body as statements. Taken
         // here, so a call among its arguments is a value as ever.
         let alone = std::mem::take(&mut self.stmt_call);
+        let on_state = std::mem::take(&mut self.state_this);
         let mut args = Vec::new();
         if let Some(t) = this {
             args.push(t);
@@ -4126,11 +4213,13 @@ impl<'s> Lowerer<'s> {
             if self.depth > 32 {
                 return self.err(p, "helpers call each other too deep (recursion?)");
             }
-            let mut inner = Scope::new(Fn3::Helper, Vec::new());
+            let mut inner = Scope::new(Fn3::Helper, if on_state { scope.fields.clone() } else { Vec::new() });
             for (param, a) in def.params.iter().zip(vals) {
                 inner.bind(param, a);
             }
-            if let Some(this) = this {
+            if on_state {
+                inner.bind("this", Binding::State);
+            } else if let Some(this) = this {
                 inner.bind("this", this);
             }
             // A helper giving a vector, where a number is wanted.

@@ -39,7 +39,8 @@ const INFO = #{ title: "GLSL Grid 3D", name: "rhai_glsl_grid3d", category: "plug
 fn grid3d_field(p_in) {
     let pp = p_in * 0.1;
     let f = 0.1;
-    for i in 0..3 {
+    for i_n in 0..3 {
+        let i = u32(i_n);
         pp = vec3(pp.y, pp.z, pp.x);
         let t1 = vec3(fract(pp.x), fract(pp.y), fract(pp.z));
         pp = abs(vec3(t1.x - 0.5, t1.y - 0.5, t1.z - 0.5));
@@ -71,7 +72,8 @@ fn variation(w, p, ctx) {
     dir = vec3(dir.x, dir.y * ca - dir.z * sa, dir.y * sa + dir.z * ca);
     dir = vec3(dir.x * ca - dir.z * sa, dir.y, dir.x * sa + dir.z * ca);
     let color = vec3(0.0, 0.0, 0.0);
-    for i in 0..to_int(max_iter) {
+    for i_n in 0..to_int(max_iter) {
+        let i = u32(i_n);
         let f2 = grid3d_field(pos);
         let f = min(min(f2.x, f2.y), f2.z);
         pos = pos + dir * f;
@@ -106,7 +108,8 @@ fn variation3(v, p, ctx) {
     dir = vec3(dir.x, dir.y * ca - dir.z * sa, dir.y * sa + dir.z * ca);
     dir = vec3(dir.x * ca - dir.z * sa, dir.y, dir.x * sa + dir.z * ca);
     let color = vec3(0.0, 0.0, 0.0);
-    for i in 0..to_int(max_iter) {
+    for i_n in 0..to_int(max_iter) {
+        let i = u32(i_n);
         let f2 = grid3d_field(pos);
         let f = min(min(f2.x, f2.y), f2.z);
         pos = pos + dir * f;

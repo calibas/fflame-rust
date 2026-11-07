@@ -89,7 +89,8 @@ fn variation(z, p, ctx) {
     let t3 = -0.5;
     let fold = complex(t3, t3);
     let trans = complex(translate, translate);
-    for k in 0..to_int(steps) {
+    for k_n in 0..to_int(steps) {
+        let k = u32(k_n);
         let orig_i = to_float(steps) - to_float(k);
         let t4 = pp - fold;
         pp = complex(abs(t4.re), abs(t4.im)) + fold;
@@ -130,7 +131,8 @@ fn variation3(q, p, ctx) {
     let t3 = -0.5;
     let fold = complex(t3, t3);
     let trans = complex(translate, translate);
-    for k in 0..to_int(steps) {
+    for k_n in 0..to_int(steps) {
+        let k = u32(k_n);
         let orig_i = to_float(steps) - to_float(k);
         let t4 = pp - fold;
         pp = complex(abs(t4.re), abs(t4.im)) + fold;

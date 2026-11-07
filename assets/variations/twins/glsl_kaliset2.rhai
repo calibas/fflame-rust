@@ -96,7 +96,8 @@ fn variation(z, p, ctx) {
     let zoom = 2.0 + 5.0 * shift_y;
     let rad2_safe = max(1.0e-32, abs(rad2));
     let rsum = 0.0;
-    for k in 0..to_int(n_iters) {
+    for k_n in 0..to_int(n_iters) {
+        let k = u32(k_n);
         let rr = v.re * v.re + v.im * v.im;
         if (rr > rad2) {
             rr = rad2_safe / rr;
@@ -132,7 +133,8 @@ fn variation3(q, p, ctx) {
     let zoom = 2.0 + 5.0 * shift_y;
     let rad2_safe = max(1.0e-32, abs(rad2));
     let rsum = 0.0;
-    for k in 0..to_int(n_iters) {
+    for k_n in 0..to_int(n_iters) {
+        let k = u32(k_n);
         let rr = v.re * v.re + v.im * v.im;
         if (rr > rad2) {
             rr = rad2_safe / rr;

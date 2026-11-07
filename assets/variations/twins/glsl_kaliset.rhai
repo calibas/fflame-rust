@@ -70,7 +70,8 @@ fn variation(z, p, ctx) {
     let shift = complex(shift_x, shift_y);
     let zoom = time / 184.0 + 1.0;
     let rsum = 0.0;
-    for k in 0..to_int(n_iters) {
+    for k_n in 0..to_int(n_iters) {
+        let k = u32(k_n);
         let rr = v.re * v.re + v.im * v.im;
         if (rr > 1.0) {
             rr = 1.0 / rr;
@@ -100,7 +101,8 @@ fn variation3(q, p, ctx) {
     let shift = complex(shift_x, shift_y);
     let zoom = time / 184.0 + 1.0;
     let rsum = 0.0;
-    for k in 0..to_int(n_iters) {
+    for k_n in 0..to_int(n_iters) {
+        let k = u32(k_n);
         let rr = v.re * v.re + v.im * v.im;
         if (rr > 1.0) {
             rr = 1.0 / rr;

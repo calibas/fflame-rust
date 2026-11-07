@@ -33,7 +33,8 @@ fn variation(z, p) {
     let denom = p.denom;
     let fixpe = p.fixpe;
     let fix_atan_period = 0.0;
-    for i in 0..7 {
+    for i_n in 0..7 {
+        let i = u32(i_n);
         let adp = to_int(rand_u32() % u32(10)) - 5;
         if (adp >= 3 || adp <= -3) {
             adp = 0;
