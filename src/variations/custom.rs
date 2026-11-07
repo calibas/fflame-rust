@@ -124,20 +124,57 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
     record_layout(&name, source)?;
     // As every kind takes a script's (`ir::Program::param_defs`), on the
     // wire a downloaded variation's parameters are.
-    let parameters: Vec<serde_json::Value> = p.param_defs(lang::ir::ComplexParams::Split("_"))?.iter().map(crate::params::api_json).collect();
+    let parameters: Vec<serde_json::Value> = param_defs(&p, source)?.iter().map(crate::params::api_json).collect();
     // Its flag for the renderer: orbits started afresh every dispatch.
     let mut features = wgsl.features.clone();
     if lang::rhai::info_bool(source, "resets_orbits") == Some(true) {
         features.push("resets_orbits");
     }
+    // It replaces the working point (JWildfire's `=` against `+=`): moved
+    // to pre or post it is assigned, and it runs last of the normal ones.
+    if lang::rhai::info_bool(source, "replace") == Some(true) {
+        features.push("replace");
+    }
+    // The most points one call emits, `INFO.emits` (`Feature::PlotEmits`),
+    // which a body emitting must say.
+    let emits = lang::rhai::info_number(source, "emits").map_or(0, |n| n as u8);
+    let emits_in = |w: &str| w.contains("emit_plot") || w.contains("emit_suppress_main");
+    let emitting = wgsl.wgsl_2d.as_deref().is_some_and(emits_in) || emits_in(&wgsl.wgsl_3d);
+    if emitting && emits == 0 {
+        return Err("a variation emitting points says how many one call emits at most, `INFO.emits` (1 to 16)".into());
+    }
+    // JWildfire's z rule, `INFO.z`: by default a 3D body's z is always kept
+    // and a 2D body's passed-through z only when the flame preserves z
+    // (`shader_builder_v2::zeroes_z`).
+    if let Some(z) = lang::rhai::info_string(source, "z") {
+        features.retain(|f| *f != "always_z" && *f != "never_z");
+        match z.as_str() {
+            "always" => features.push("always_z"),
+            "never" => features.push("never_z"),
+            _ => {}
+        }
+    }
+    // Where the pickers group it, `INFO.category`; a 3D function alone is a
+    // 3D variation only.
+    let category = match lang::rhai::info_string(source, "category") {
+        Some(c) if !two && c != "only_3d" => return Err(format!("a variation with no `fn variation` is `only_3d`, not `{c}`")),
+        Some(c) => c,
+        None if two => "plugin".to_string(),
+        None => "only_3d".to_string(),
+    };
     let payload = serde_json::json!({
         "id": format!("custom:{name}"),
         "name": name,
         "display_name": p.name,
-        // A 3D function alone is a 3D variation only.
-        "category": if two { "plugin" } else { "only_3d" },
+        "category": category,
         "version": 1,
-        "phase": "normal",
+        // The wire's phase has no `any` (VARIATIONS_WIRE_FORMAT.md §4.2):
+        // a variation of the user's takes it at registration ([`phase_of`]).
+        "phase": match phase_of(source) {
+            crate::variations::VariationPhase::Pre => "pre",
+            crate::variations::VariationPhase::Post => "post",
+            _ => "normal",
+        },
         "parameters": parameters,
         "shader_2d": wgsl.wgsl_2d,
         "shader_3d": wgsl.wgsl_3d,
@@ -146,8 +183,37 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
         "features": features,
         "state_count": wgsl.state_count,
         "shader_state_init": wgsl.state_init,
+        // `prepare`, its derived slots computed by the init pass.
+        "init_param_count": wgsl.init_count,
+        "shader_init": wgsl.init,
+        "plot_emits": emits,
     });
     serde_json::from_value(payload).map_err(|e| format!("the variation's payload: {e}"))
+}
+
+/// A transformation's parameters as a variation's (a complex one as two,
+/// `name_re` and `name_im`), those `INFO.slow` names slow: committed when
+/// a drag ends, as a built-in's `slow`.
+pub fn param_defs(p: &lang::ir::Program, source: &str) -> Result<Vec<crate::params::ParamDef>, String> {
+    let mut defs = p.param_defs(lang::ir::ComplexParams::Split("_"))?;
+    for s in lang::rhai::info_strings(source, "slow") {
+        let d = defs.iter_mut().find(|d| d.name == s).ok_or_else(|| format!("`INFO.slow` names `{s}`, which is not in `PARAMS`"))?;
+        d.slow = true;
+    }
+    Ok(defs)
+}
+
+/// The phase `INFO.phase` gives a variation source: normal without one,
+/// `any` one the user may move to pre or post (a transform's
+/// `variation_priorities`), as 295 of the built-ins with twins are.
+pub fn phase_of(source: &str) -> crate::variations::VariationPhase {
+    use crate::variations::VariationPhase as P;
+    match lang::rhai::info_string(source, "phase").as_deref() {
+        Some("any") => P::Any,
+        Some("pre") => P::Pre,
+        Some("post") => P::Post,
+        _ => P::Normal,
+    }
 }
 
 /// Compile a source and register it under its key, replacing what has that
@@ -159,23 +225,35 @@ pub fn register(source: &str) -> Result<String, String> {
 }
 
 fn register_payload(dl: VariationDownload, source: &str) -> Result<String, String> {
-    let mut registry = crate::variations::global_registry_mut();
+    let name = register_into(&mut crate::variations::global_registry_mut(), &dl, source)?;
+    // So `ensure` does not register this source again.
+    if let Ok(mut known) = registered().lock() {
+        known.insert(name.clone(), source.to_string());
+    }
+    Ok(name)
+}
+
+/// Register `dl`, compiled from `source`, in `registry` -- the global one,
+/// or a test's own -- under its key; refused when a built-in or a
+/// download has it.
+pub(crate) fn register_into(registry: &mut crate::variations::VariationRegistry, dl: &VariationDownload, source: &str) -> Result<String, String> {
     if let Some(existing) = registry.get(&dl.name) {
         if existing.provenance != Provenance::Local {
             return Err(format!("`{}` is taken by a {} variation", dl.name, existing.provenance.label()));
         }
     }
-    registry.register_from_api(&dl, Provenance::Local);
-    if registry.has(&dl.name) {
-        drop(registry);
-        // So `ensure` does not register this source again.
-        if let Ok(mut known) = registered().lock() {
-            known.insert(dl.name.clone(), source.to_string());
-        }
-        Ok(dl.name)
-    } else {
-        Err(format!("`{}` was refused at registration", dl.name))
+    registry.register_from_api(dl, Provenance::Local);
+    // `any`, which the wire cannot say, from the source.
+    if phase_of(source) == crate::variations::VariationPhase::Any {
+        registry.set_phase(&dl.name, crate::variations::VariationPhase::Any);
     }
+    if !registry.has(&dl.name) {
+        return Err(format!("`{}` was refused at registration", dl.name));
+    }
+    // Whether it is a built-in's twin, unedited (the planner's data, a
+    // `.flame` export).
+    crate::variations::twins::note(&dl.name, source);
+    Ok(dl.name.clone())
 }
 
 /// The source of the user's variation `name` -- its key, or the
@@ -791,10 +869,9 @@ mod tests {
         assert_eq!(c.state_count, 1);
         // What the hooks refuse.
         let refused = |src: &str| compile(src).err().unwrap_or_else(|| panic!("compiled: {src}"));
-        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn init(p) { #{ n: rand() } }\nfn variation(z, p) { z * this.n }\n").contains("no random numbers"));
         assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { z * this.n }\n").contains("no `init`"));
-        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p, ctx) { z * ctx.julia }\n").contains("`accum` and `weight`"));
-        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { #{ z: z, hue: 0.5 } }\n").contains("`z` and `color`"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p, ctx) { z * ctx.julia }\n").contains("a variation's context has `accum`"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { #{ z: z, hue: 0.5 } }\n").contains("a variation's result has `z`"));
     }
 
     /// The MacMillan twin runs as the built-in's arithmetic (its WGSL,
@@ -946,6 +1023,502 @@ mod tests {
                                  fn step(s, p) { s.z = vary(\"rhai_spherical3d\", s.z); s }\nfn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n")
         });
         assert!(e.is_err_and(|d| d[0].message.contains("3D variation only")));
+    }
+
+    /// `prepare(p)` is a variation's derived values, as a built-in's
+    /// `wgsl_init`: the init pass's `init_<key>` from the parameters, the
+    /// values the body reads (`p.name`) in the slots after them; the
+    /// interpreter computes them too. Not from `ctx`, a draw, or no
+    /// parameters, and not inside a formula.
+    #[test]
+    fn prepare_is_the_init_pass() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let head = "const PARAMS = #{ power: 2.0 };\nconst INFO = #{ name: \"rhai_prepare_test\" };\n";
+        let src = format!(
+            "{head}fn prepare(p) {{\n    let k = 1.0 / p.power;\n    #{{ inv: k, shift: complex(p.power, 2.0 * p.power), unused: 3.0 }}\n}}\n\
+             fn variation(z, p) {{ z * p.inv + p.shift }}\n"
+        );
+        let dl = named(&src);
+        assert_eq!(dl.init_param_count, 4, "the three it returns, a complex in two");
+        let init = dl.shader_init.as_deref().unwrap();
+        assert!(init.contains("fn init_rhai_prepare_test(user: array<f32, 1>) -> array<f32, 4>"), "{init}");
+        assert!(init.contains("user[0u]") && !init.contains("get_param"), "{init}");
+        let body = dl.shader_2d.as_deref().unwrap();
+        assert!(body.contains("get_param(xform_id, variation_id, 1u)") && body.contains("get_param(xform_id, variation_id, 3u)"), "{body}");
+        let p = lang::rhai::transformation(&src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::new(1.0, -1.0), C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (2.5, 3.5));
+
+        for (bad, why) in [
+            ("fn prepare(p, ctx) { #{ inv: 1.0 } }", "`prepare(p)`"),
+            ("fn prepare(p) { #{ inv: rand() } }", "draws no random"),
+        ] {
+            let s = format!("{head}{bad}\nfn variation(z, p) {{ z * p.inv }}\n");
+            assert!(compile(&s).is_err_and(|e| e.contains(why)), "{bad}: {:?}", compile(&s).err());
+        }
+        let none = "const INFO = #{ name: \"rhai_prepare_none\" };\nfn prepare(p) { #{ k: 2.0 } }\nfn variation(z, p) { z * p.k }\n";
+        assert!(compile(none).is_err_and(|e| e.contains("without any")));
+        let e = lang::rhai::with_variations(&[("rhai_prepare_test".into(), src.clone())], || {
+            lang::rhai::program("const PARAMS = #{ bailout: 4.0 };\nfn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                                 fn step(s, p) { s.z = vary(\"rhai_prepare_test\", s.z); s }\nfn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n")
+        });
+        assert!(e.is_err_and(|d| d[0].message.contains("`prepare`")));
+    }
+
+    /// `init` may draw from the thread's stream, as a built-in's
+    /// `wgsl_state_init` does: its function takes `rng`, and the state's
+    /// start passes the thread's; the interpreter draws it from the stream
+    /// it is seeded with.
+    #[test]
+    fn init_draws_from_the_threads_stream() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_init_draw\" };\nfn init(p) { #{ s: rand() } }\nfn variation(z, p) { z * this.s }\n";
+        let dl = named(src);
+        assert!(dl.shader_state_init.as_deref().is_some_and(|s| s.contains("variation_init(xform_id, variation_id, &rng)")), "{:?}", dl.shader_state_init);
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("variation_init(xform_id: u32, variation_id: u32, rng: ptr<function, RngState>)")));
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (a, _) = VariationRun::new(&p, &params, 1).call(C64::new(1.0, 0.0), C64::ZERO, 1.0);
+        let (b, _) = VariationRun::new(&p, &params, 2).call(C64::new(1.0, 0.0), C64::ZERO, 1.0);
+        assert!((0.0..1.0).contains(&a.re) && a.re != b.re, "a draw, by the seed: {} {}", a.re, b.re);
+    }
+
+    /// A 3D body's 4th coordinate (`NeedsW`): `ctx.w` the one it is given,
+    /// `#{ z, w }` the raw one it gives, which the transform weight-sums;
+    /// a 2D body has none.
+    #[test]
+    fn w_is_a_3d_bodys_fourth_coordinate() {
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_w_test\" };\nfn variation(z, p) { z }\nfn variation3(v, p, ctx) {\n    #{ z: v * ctx.w, w: v.x + ctx.w }\n}\n";
+        let dl = named(src);
+        assert!(dl.features.contains(&"needs_w".to_string()), "{:?}", dl.features);
+        assert!(dl.shader_3d.as_deref().is_some_and(|s| s.contains("point_w_out") && s.contains("point_w")));
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| !s.contains("point_w")), "the 2D body has none");
+        let p3 = lang::rhai::transformation3(src).unwrap();
+        let params = ParamValues::defaults(&p3);
+        let mut run = VariationRun::new(&p3, &params, 1).with_w(0.5);
+        let (v, _) = run.call3([2.0, 1.0, 4.0], [0.0; 3], 1.0);
+        assert_eq!((v, run.w_out()), ([1.0, 0.5, 2.0], Some(2.5)));
+        let flat = "const INFO = #{ name: \"rhai_w_flat\" };\nfn variation(z, p, ctx) { z * ctx.w }\n";
+        assert!(compile(flat).is_err_and(|e| e.contains("a 3D body's")), "{:?}", compile(flat).err());
+    }
+
+    /// `ctx.a` .. `ctx.f` are the transform's affine coefficients, as the
+    /// flame stores them (`NeedsTransform`, read from `transforms`): what
+    /// popcorn and fan read; the identity in the interpreter without any.
+    #[test]
+    fn ctx_coefs_are_the_transforms() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_coef_test\" };\nfn variation(z, p, ctx) {\n    complex(z.re + ctx.e * ctx.a, z.im + ctx.f + ctx.b + ctx.c + ctx.d)\n}\n";
+        let dl = named(src);
+        assert_eq!(dl.features, ["needs_transform"], "the ids, for `transforms[xform_id]`");
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("transforms[xform_id].e") && s.contains("transforms[xform_id].a")));
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::new(1.0, 1.0), C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (1.0, 2.0), "the identity");
+        let (z, _) = VariationRun::new(&p, &params, 1).with_coefs([2.0, 0.5, 0.25, 0.125, 3.0, -1.0]).call(C64::new(1.0, 1.0), C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (7.0, 0.875));
+    }
+
+    /// `ctx.camera_x` .. `ctx.perspective` are the flame's 3D camera, the
+    /// shader's `params` (what stereogram reads), in the body alone: the
+    /// init pass that runs `prepare` binds no `params`. The interpreter's
+    /// camera is the default one, all zeros.
+    #[test]
+    fn ctx_camera_is_the_flames() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_camera_test\" };\nfn variation3(v, p, ctx) {\n    \
+                   v + vec3(ctx.camera_x + ctx.camera_pitch, ctx.camera_y + ctx.camera_yaw, ctx.camera_z + ctx.camera_bank * ctx.perspective)\n}\n\
+                   fn variation(z, p, ctx) {\n    complex(z.re + ctx.camera_x, z.im)\n}\n";
+        let dl = named(src);
+        assert_eq!(dl.features, ["always_z"], "a 3D body's; the camera takes no ids");
+        let three = dl.shader_3d.as_deref().unwrap_or_default();
+        for f in ["camera_x", "camera_y", "camera_z", "camera_rotation_x", "camera_rotation_y", "camera_bank", "perspective_strength"] {
+            assert!(three.contains(&format!("params.{f}")), "{f}: {three}");
+        }
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("params.camera_x")));
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::new(1.0, 2.0), C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (1.0, 2.0));
+        let early = "const INFO = #{ name: \"rhai_camera_early\" };\nfn prepare(p) {\n    #{ k: ctx.camera_x }\n}\nfn variation(z, p) {\n    z * p.k\n}\n";
+        assert!(compile(early).is_err(), "the camera read in `prepare`");
+        let unknown = "const INFO = #{ name: \"rhai_camera_unknown\" };\nfn variation(z, p, ctx) {\n    z * ctx.camera_roll\n}\n";
+        assert!(compile(unknown).is_err_and(|e| e.contains("camera_pitch")), "{:?}", compile(unknown).err());
+    }
+
+    /// A direct colour (`WritesRgb`): `#{ z, rgb: vec3(r, g, b) }` writes
+    /// it, a path without `rgb` writes none, and `ctx.rgb` reads it as it
+    /// reached the variation (-1e30 each part until one writes it); the
+    /// 3D body's as the 2D's.
+    #[test]
+    fn rgb_is_the_direct_colour() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_rgb_test\" };\n\
+                   fn variation(z, p, ctx) {\n\
+                   \x20   if z.re < 0.0 { return z; }\n\
+                   \x20   let was = ctx.rgb;\n\
+                   \x20   #{ z: z, rgb: vec3(0.25, 0.5, was.z * 0.0 + 0.75) }\n\
+                   }\n\
+                   fn variation3(v, p) {\n\
+                   \x20   #{ z: v, rgb: vec3(v.x, v.y, v.z) }\n\
+                   }\n";
+        let dl = named(src);
+        assert!(dl.features.contains(&"writes_rgb".to_string()), "{:?}", dl.features);
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("vrc: ptr<function, vec3<f32>>") && s.contains("(*vrc).z")));
+        let p2 = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p2);
+        let mut run = VariationRun::new(&p2, &params, 1);
+        run.call(C64::new(1.0, 2.0), C64::ZERO, 1.0);
+        assert_eq!(run.rgb(), Some([0.25, 0.5, 0.75]));
+        run.call(C64::new(-1.0, 2.0), C64::ZERO, 1.0);
+        assert_eq!(run.rgb(), None, "a path that writes none");
+        let p3 = lang::rhai::transformation3(src).unwrap();
+        let mut run3 = VariationRun::new(&p3, &params, 1);
+        run3.call3([0.1, 0.2, 0.3], [0.0; 3], 1.0);
+        assert_eq!(run3.rgb(), Some([0.1, 0.2, 0.3]));
+    }
+
+    /// `u32(x)` is WGSL's unsigned int (the user's call, 2026-11-06):
+    /// `+ - *` wrap, `/ %` and comparisons unsigned, `>>` logical,
+    /// `to_float` 0..2^32-1, a float truncated and clamped at 0; an int
+    /// joins to it by its bits, and it becomes an int only by `to_int`.
+    #[test]
+    fn u32_is_wgsl_unsigned() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_u32_test\" };\n\
+                   fn variation(z, p) {\n\
+                   \x20   let a = u32(7) - u32(8);\n\
+                   \x20   let half = a / 2;\n\
+                   \x20   let bigger = if a > u32(1) { 1.0 } else { 0.0 };\n\
+                   \x20   let top = a >> 31;\n\
+                   \x20   let h = (a ^ 0x9e3779b9) * 2654435761;\n\
+                   \x20   let r = h % 1000;\n\
+                   \x20   let floor_neg = u32(-3.5);\n\
+                   \x20   let signed = to_int(a);\n\
+                   \x20   complex(to_float(a) + bigger + to_float(top) + to_float(floor_neg), to_float(half) + to_float(r) * 1.0e-9 + to_float(signed))\n\
+                   }\n";
+        let dl = named(src);
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("u32")));
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::ZERO, C64::ZERO, 1.0);
+        let h = (u32::MAX ^ 0x9e37_79b9).wrapping_mul(2_654_435_761);
+        assert_eq!(z.re, 4_294_967_295.0 + 1.0 + 1.0 + 0.0, "wrapped, unsigned compare, logical shift, clamped at 0");
+        assert_eq!(z.im, 2_147_483_647.0 + f64::from(h % 1000) * 1.0e-9 - 1.0, "unsigned division and remainder, to_int its bits");
+        // A u32 is an int again only by `to_int`.
+        let slip = "const INFO = #{ name: \"rhai_u32_slip\" };\nfn variation(z, p) {\n    let n = 0;\n    n = u32(3);\n    z * to_float(n)\n}\n";
+        assert!(compile(slip).is_err_and(|e| e.contains("a u32 where an int is wanted")), "{:?}", compile(slip).err());
+    }
+
+    /// `rand_u32()` is the raw draw, the shader's `rng_next`: the stream's
+    /// next 32 bits, of which `rand()` keeps the top 24, so the two read
+    /// one stream; `prepare` draws neither.
+    #[test]
+    fn rand_u32_is_the_raw_draw() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let raw = "const INFO = #{ name: \"rhai_draw_u32\" };\nfn variation(z, p) {\n    let n = rand_u32();\n    complex(to_float(n >> 8) / 16777216.0, to_float(n % 10))\n}\n";
+        let dl = named(raw);
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("rng_next(rng)") && s.contains("rng: ptr<function, RngState>")), "{:?}", dl.shader_2d);
+        let flat = "const INFO = #{ name: \"rhai_draw_f\" };\nfn variation(z, p) { complex(rand(), 0.0) }\n";
+        let (pr, pf) = (lang::rhai::transformation(raw).unwrap(), lang::rhai::transformation(flat).unwrap());
+        for seed in [1, 2, 77] {
+            let (a, _) = VariationRun::new(&pr, &ParamValues::defaults(&pr), seed).call(C64::ZERO, C64::ZERO, 1.0);
+            let (b, _) = VariationRun::new(&pf, &ParamValues::defaults(&pf), seed).call(C64::ZERO, C64::ZERO, 1.0);
+            assert_eq!(a.re, b.re, "one stream, seed {seed}");
+            assert!(a.im.fract() == 0.0 && (0.0..10.0).contains(&a.im), "{}", a.im);
+        }
+        let prep = "const INFO = #{ name: \"rhai_draw_prep\" };\nfn prepare(p) { #{ k: to_float(rand_u32()) } }\nfn variation(z, p) { z * p.k }\n";
+        assert!(compile(prep).is_err_and(|e| e.contains("draws no random")), "{:?}", compile(prep).err());
+    }
+
+    /// `palette(t)` and `palette_srgb(t)` in a variation read the flame's
+    /// palette, the shader's texture, decoded as the flame decodes it or
+    /// as stored, once a call site; in the body alone (`prepare` runs in
+    /// the init pass, which binds none), and not the escape mapping's
+    /// table. Such a variation is no lens: the lens has not the palette.
+    #[test]
+    fn palette_reads_the_flames_palette() {
+        let src = "const INFO = #{ name: \"rhai_palette_test\" };\nfn variation(z, p, ctx) {\n    let lin = palette(ctx.color);\n    let raw = palette_srgb(0.25);\n    #{ z: z, rgb: lin * 0.5 + raw * 0.5 }\n}\n";
+        let dl = named(src);
+        let w = dl.shader_2d.as_deref().unwrap();
+        assert!(w.contains("srgb_to_linear(textureSampleLevel(palette_texture, palette_sampler, vec2<f32>("), "{w}");
+        assert_eq!(w.matches("textureSampleLevel").count(), 2, "one read a call site: {w}");
+        for (bad, why) in [
+            ("const PARAMS = #{ a: 0.5 };\nconst INFO = #{ name: \"rhai_palette_prep\" };\nfn prepare(p) { #{ k: palette(p.a).x } }\nfn variation(z, p) { z * p.k }\n", "in its body"),
+            ("const INFO = #{ name: \"rhai_palette_table\" };\nfn variation(z, p) { z * palette_table(0.5).x }\n", "escape colouring's"),
+        ] {
+            assert!(compile(bad).is_err_and(|e| e.contains(why)), "{bad}: {:?}", compile(bad).err());
+        }
+        let plain = compile("const INFO = #{ name: \"rhai_palette_plain\" };\nfn variation(z, p) { z * 0.5 }\n").unwrap();
+        let mut registry = crate::variations::VariationRegistry::new();
+        registry.register_from_api(&dl, Provenance::Local);
+        registry.register_from_api(&plain, Provenance::Local);
+        let menu = crate::escape::lens::lens_menu(&registry);
+        assert!(menu.contains(&plain.name) && !menu.contains(&dl.name), "{menu:?}");
+    }
+
+    /// An array passes to a helper by value, as Rhai and WGSL pass one:
+    /// the helper reads its elements, and its writes are its own copy's.
+    #[test]
+    fn an_array_passes_to_a_helper_by_value() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_array_arg\" };\n\
+                   fn total(a) {\n\
+                   \x20   a[0] = 100.0;\n\
+                   \x20   let s = 0.0;\n\
+                   \x20   for i in 0..3 { s += a[i]; }\n\
+                   \x20   s\n\
+                   }\n\
+                   fn variation(z, p) {\n\
+                   \x20   let xs = [1.0, 2.0, 3.0];\n\
+                   \x20   let t = total(xs);\n\
+                   \x20   complex(t, xs[0])\n\
+                   }\n";
+        let dl = named(src);
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("array<f32, 3>")), "{:?}", dl.shader_2d);
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::ZERO, C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (105.0, 1.0), "its copy written, the caller's not");
+    }
+
+    /// A helper called as a method changes the variable it is called on
+    /// through `this`, as Rhai binds it (a WGSL pointer argument's way);
+    /// called on any other value, a temporary's changes are lost.
+    #[test]
+    fn a_method_helper_writes_its_receiver() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_this_test\" };\n\
+                   fn bump(k) {\n\
+                   \x20   this += k;\n\
+                   \x20   this * 10.0\n\
+                   }\n\
+                   fn variation(z, p) {\n\
+                   \x20   let a = 1.0;\n\
+                   \x20   let r = a.bump(2.0);\n\
+                   \x20   let b = (a + 0.0).bump(5.0);\n\
+                   \x20   complex(a, r + b)\n\
+                   }\n";
+        let _ = named(src);
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::ZERO, C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (3.0, 30.0 + 80.0), "the variable changed, the temporary's change lost");
+        let stray = "const INFO = #{ name: \"rhai_this_stray\" };\nfn half() { this * 0.5 }\nfn variation(z, p) { z * half() }\n";
+        assert!(compile(stray).is_err_and(|e| e.contains("the value a helper is called on")), "{:?}", compile(stray).err());
+    }
+
+    /// A helper called alone, a statement, for what it writes through
+    /// `this`; and an `if` whose arms give arrays, a helper's value.
+    #[test]
+    fn a_helper_alone_and_an_if_of_arrays() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_alone_test\" };\n\
+                   fn add_to(k) {\n\
+                   \x20   this += k;\n\
+                   }\n\
+                   fn pick(i) {\n\
+                   \x20   if i == 0 { [1.0, 2.0] } else { [3.0, 4.0] }\n\
+                   }\n\
+                   fn variation(z, p) {\n\
+                   \x20   let a = 1.0;\n\
+                   \x20   a.add_to(2.0);\n\
+                   \x20   let m = pick(1);\n\
+                   \x20   complex(a, m[0] + m[1])\n\
+                   }\n";
+        let _ = named(src);
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::ZERO, C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (3.0, 7.0));
+    }
+
+    /// A helper called as a method may give a vector, its writes to `this`
+    /// its caller's as a number-giving one's.
+    #[test]
+    fn a_method_helper_gives_a_vector() {
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_this_vec\" };\n\
+                   fn variation(z, p) { z }\n\
+                   fn grow(k) {\n\
+                   \x20   this += k;\n\
+                   \x20   vec3(this, 2.0 * this, k)\n\
+                   }\n\
+                   fn variation3(v, p) {\n\
+                   \x20   let a = 1.0;\n\
+                   \x20   let g = a.grow(2.0);\n\
+                   \x20   vec3(a, g.y, g.z)\n\
+                   }\n";
+        let _ = named(src);
+        let p3 = lang::rhai::transformation3(src).unwrap();
+        let params = ParamValues::defaults(&p3);
+        let (v, _) = VariationRun::new(&p3, &params, 1).call3([0.0; 3], [0.0; 3], 1.0);
+        assert_eq!(v, [3.0, 6.0, 2.0]);
+    }
+
+    /// A table -- an array built from literals and only read -- is a
+    /// module constant in a variation's WGSL, where a local would be
+    /// filled at each call; an array written after is a local still.
+    #[test]
+    fn a_table_is_a_module_constant() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_table_test\" };\n\
+                   fn variation(z, p) {\n\
+                   \x20   let t = [0.5, 1.5, 2.5];\n\
+                   \x20   let w = [1.0, 2.0];\n\
+                   \x20   w[0] = z.re;\n\
+                   \x20   let i = to_int(floor(z.im)) % 3;\n\
+                   \x20   complex(t[i] + w[0], w[1])\n\
+                   }\n";
+        let dl = named(src);
+        let w = dl.shader_2d.unwrap();
+        assert_eq!(w.matches("const ").count(), 1, "the table alone: {w}");
+        assert!(w.contains(": array<f32, 3> = array<f32, 3>("), "{w}");
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::new(0.25, 1.0), C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (1.75, 2.0));
+        // Past an array's cap, a table alone: one written is refused.
+        let big = "const INFO = #{ name: \"rhai_table_big\" };\nfn variation(z, p) {\n    let t = array(300, 0.0);\n    t[0] = z.re;\n    complex(t[0], 0.0)\n}\n";
+        assert!(compile(big).is_err_and(|e| e.contains("a table (literals only read)")), "{:?}", compile(big).err());
+    }
+
+    /// `prepare` may return an array, which the body reads at a computed
+    /// index from the transform's derived slots, and the state may hold
+    /// one, kept call to call: where a built-in reads a slot it computes,
+    /// in Rhai's own terms (rhai-plugins P7 step 3).
+    #[test]
+    fn prepare_and_the_state_hold_arrays() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const PARAMS = #{ a: 1.0 };\n\
+                   const INFO = #{ name: \"rhai_arrays_test\" };\n\
+                   fn prepare(p) { #{ m: [p.a, 2.0 * p.a, 3.0 * p.a] } }\n\
+                   fn init(p) { #{ hist: [0.0, 0.0], n: 0 } }\n\
+                   fn variation(z, p) {\n\
+                   \x20   let i = this.n % 2;\n\
+                   \x20   this.hist[i] = z.re;\n\
+                   \x20   this.n = this.n + 1;\n\
+                   \x20   complex(p.m[to_int(z.im)], this.hist[0] + this.hist[1])\n\
+                   }\n";
+        let dl = named(src);
+        assert_eq!(dl.init_param_count, 3, "the array's three floats");
+        assert!(dl.shader_init.as_deref().is_some_and(|s| s.contains("i < 3u")), "{:?}", dl.shader_init);
+        let w = dl.shader_2d.as_deref().unwrap();
+        assert!(w.contains("get_param(xform_id, variation_id, u32(") && w.contains("get_state(xform_id, variation_id, 0u + i)"), "{w}");
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let mut run = VariationRun::new(&p, &params, 1);
+        let (a, _) = run.call(C64::new(1.0, 1.0), C64::ZERO, 1.0);
+        let (b, _) = run.call(C64::new(2.0, 2.0), C64::ZERO, 1.0);
+        assert_eq!(((a.re, a.im), (b.re, b.im)), ((2.0, 1.0), (3.0, 3.0)));
+    }
+
+    /// A helper called on the state, `this.f(..)`, reads and sets its
+    /// fields through `this`, as Rhai binds the object a function is called
+    /// on; a helper giving a vector likewise.
+    #[test]
+    fn a_helper_called_on_the_state_has_its_fields() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_state_helper\" };\n\
+                   fn init(p) { #{ n: 0.0 } }\n\
+                   fn tick(k) {\n\
+                   \x20   this.n = this.n + k;\n\
+                   \x20   this.n * 2.0\n\
+                   }\n\
+                   fn lift(k) {\n\
+                   \x20   this.n = this.n + k;\n\
+                   \x20   vec3(this.n, 0.0, 1.0)\n\
+                   }\n\
+                   fn variation(z, p) {\n\
+                   \x20   let r = this.tick(1.0);\n\
+                   \x20   complex(r, this.n)\n\
+                   }\n\
+                   fn variation3(v, p) { this.lift(0.5) }\n";
+        let _ = named(src);
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let mut run = VariationRun::new(&p, &params, 1);
+        let (a, _) = run.call(C64::ZERO, C64::ZERO, 1.0);
+        let (b, _) = run.call(C64::ZERO, C64::ZERO, 1.0);
+        assert_eq!(((a.re, a.im), (b.re, b.im)), ((2.0, 1.0), (4.0, 2.0)));
+        let p3 = lang::rhai::transformation3(src).unwrap();
+        let mut run3 = VariationRun::new(&p3, &params, 1);
+        assert_eq!(run3.call3([0.0; 3], [0.0; 3], 1.0).0, [0.5, 0.0, 1.0]);
+        assert_eq!(run3.call3([0.0; 3], [0.0; 3], 1.0).0, [1.0, 0.0, 1.0]);
+    }
+
+    /// `emit(z)`, `emit(z, w)`, `emit_offset(d, w)` and `suppress_main()`
+    /// are a variation's extra plot points (`Feature::PlotEmits`, its cap
+    /// `INFO.emits`), each the flame shader's collector call in the body's
+    /// own dimension; the point the body gives is unchanged by them, and a
+    /// body emitting without `INFO.emits` is refused.
+    #[test]
+    fn emits_are_extra_plot_points() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_emit_test\", emits: 3 };\n\
+                   fn variation(z, p) {\n\
+                   \x20   emit(z * 2.0);\n\
+                   \x20   emit(z, 0.5);\n\
+                   \x20   emit_offset(complex(0.1, 0.0), 0.25);\n\
+                   \x20   suppress_main();\n\
+                   \x20   z\n\
+                   }\n\
+                   fn variation3(v, p) {\n\
+                   \x20   emit(v * 2.0);\n\
+                   \x20   v\n\
+                   }\n";
+        let dl = named(src);
+        assert_eq!(dl.plot_emits, 3);
+        let w2 = dl.shader_2d.as_deref().unwrap();
+        assert!(w2.contains("emit_plot_weighted(vec2<f32>(") && w2.contains("emit_plot_offset(vec2<f32>(") && w2.contains("emit_suppress_main()"), "{w2}");
+        assert!(dl.shader_3d.as_deref().is_some_and(|w| w.contains("emit_plot_weighted(vec3<f32>(")), "{:?}", dl.shader_3d);
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::new(0.5, -0.25), C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (0.5, -0.25));
+        // A 2D body alone: in a 3D flame its copy emits 3D points at the
+        // point's z.
+        let flat = named("const INFO = #{ name: \"rhai_emit_flat\", emits: 1 };\nfn variation(z, p) {\n    emit(z);\n    z\n}\n");
+        assert!(flat.shader_3d.as_deref().is_some_and(|w| w.contains("emit_z: f32") && w.contains("p.xy, p.z)")), "{:?}", flat.shader_3d);
+        let unsaid = "const INFO = #{ name: \"rhai_emit_unsaid\" };\nfn variation(z, p) {\n    emit(z);\n    z\n}\n";
+        assert!(compile(unsaid).is_err_and(|e| e.contains("INFO.emits")), "{:?}", compile(unsaid).err());
+    }
+
+    /// `INFO.z` is JWildfire's z rule, as the built-ins' features: by
+    /// default a 3D body's z is always kept and a 2D body's only when the
+    /// flame preserves z; `always`, `preserve_z` and `never` say so of
+    /// either, and anything else is refused.
+    #[test]
+    fn info_z_is_the_z_rule() {
+        let src = |z: &str, three: bool| {
+            let info = if z.is_empty() { String::new() } else { format!(", z: \"{z}\"") };
+            let body = if three { "fn variation3(v, p) { v * 0.5 }" } else { "fn variation(z, p) { z * 0.5 }" };
+            format!("const INFO = #{{ name: \"rhai_z_rule_test\"{info} }};\n{body}\n")
+        };
+        let z_of = |z: &str, three: bool| named(&src(z, three)).features.into_iter().filter(|f| f.ends_with("_z")).collect::<Vec<_>>();
+        assert_eq!(z_of("", true), ["always_z"]);
+        assert!(z_of("", false).is_empty());
+        assert!(z_of("preserve_z", true).is_empty());
+        assert_eq!(z_of("always", false), ["always_z"]);
+        assert_eq!(z_of("never", true), ["never_z"]);
+        assert!(compile(&src("sometimes", true)).is_err_and(|e| e.contains("`z` is")), "refused");
     }
 
     /// The 3D twins run as the built-ins' formulas, and a hooked 3D

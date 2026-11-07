@@ -257,7 +257,9 @@ The contract:
   16; calls past it are dropped.
 
 Three variations use it: `stereogram`, `multi_kaleidoscope`,
-`spray_blur`. See
+`spray_blur`. A Rhai variation emits with `emit(z[, w])`,
+`emit_offset(d, w)` and `suppress_main()`, its `n` declared as
+`INFO.emits` ([ESCAPE.md](ESCAPE.md), *A Rhai transformation*). See
 [multi-emit-stereograms.md](../archive/projects/multi-emit-stereograms.md).
 
 ---
@@ -378,10 +380,14 @@ dispatcher's `w · f(p)` gives back the intended value. `idisc` in
 pattern. Native pre- and post-phase variations always apply their own
 weight.
 
-**Per-flame specialisation.** A body can be re-emitted per flame:
-`synth` and `mondrianomies` cut their unused modes before compilation
-(`variation_specialized_source` in `generate_variation_code`). A new
-specialiser is a new arm there.
+**Per-flame specialisation.** A body can be re-emitted per flame
+(`variation_specialized_source` in `generate_variation_code`): `synth`
+cuts the modes the flame does not use before compilation, and
+`mondrianomies` bakes in its Exact fill's rectangles, a table the CPU
+computes from the drawing for each seed, depth and drift in the flame
+(`exact_combos`), in place of a stub. A new specialiser is a new arm
+there. One that bakes in data makes the def's WGSL less than the
+variation, so mondrianomies has no Rhai twin (below).
 
 **GPU arithmetic.** The shader lints reject self-compares (`x != x`),
 self-divisions (`x / x`) and f32-subnormal literals (`1e-40`) in every
@@ -486,6 +492,19 @@ function takes the point, and the ids when it has parameters (as
 `shader_builder_v2::variation_call` passes them); the 3D one runs the
 2D body on `p.xy` and passes `p.z` through. Helpers are prefixed
 `cv_<name>_`.
+- **`fn prepare(p)`** is its derived parameters: compiled to
+  `fn init_<key>(user: array<f32, N>) -> array<f32, M>`
+  (`lang::wgsl::variation_init`, `shader_init` and `init_param_count` on
+  the wire), every value its map returns in the `M` slots after the
+  parameters, in declaration order, so the 2D and 3D bodies read them
+  alike (`get_param(xform_id, variation_id, N + k)`). The init pass runs
+  it wherever a built-in's runs -- the render, the exporter, the GPU
+  planner, the probe -- and the interpreter runs it at f64 before the
+  body (`VariationRun::new`). Not in the escape lens, which runs no init
+  pass (`lens_menu` leaves such a variation out), nor inside a formula
+  (`vary` refuses it). A transformation's parameters and derived values
+  share its transform's block (`MAX_VARIATION_PARAM_SLOTS`), not the
+  formulas' 64 floats.
 - **The flame carries the source** (`Flame::custom_variations`, skip if
   empty; `ConfigPath::FlameCustomVariations`, one undo step), so a saved
   flame renders anywhere. `custom::ensure` registers a flame's sources
@@ -518,7 +537,9 @@ function takes the point, and the ids when it has parameters (as
   older version of an id that is live (`renderer::sticky`), as each
   Live edit would otherwise fill its cap with dead code.
 - **`.flame` export drops it** (JWildfire has no such variation): its
-  weight, its parameters and its `plugins=` entry, with a warning.
+  weight, its parameters and its `plugins=` entry, with a warning --
+  unless it is a built-in's twin, unedited, which is written as the
+  built-in (*Twins*).
 - **As a lens**: the lens menu lists custom variations after the
   measured ones (`lens::lens_menu`).
 - **Inside a formula**: `vary("name", z)` inlines one into an escape
@@ -526,8 +547,8 @@ function takes the point, and the ids when it has parameters (as
   ([ESCAPE.md](ESCAPE.md#the-formula-language)). A Rhai solid calls a
   BUILT-IN variation's 3D body on a vector the same way, through the
   maps flame built in 3D (`flame_map3`).
-- **Hooks** (`lang::wgsl::variation_shape`): `rand()` declares
-  `NeedsRng`, `ctx.accum` `NeedsAccum`, a `#{ z, color }` result
+- **Hooks** (`lang::wgsl::variation_shape`): `rand()` and
+  `rand_u32()` (`rng_nextf`, `rng_next`) declare `NeedsRng`, `ctx.accum` `NeedsAccum`, a `#{ z, color }` result
   `WritesColor`; `init(p)` and `this.name` are per-thread state
   (`state_count`, the seeding call as `wgsl_state_init`); state or
   `ctx.weight` without parameters declares `NeedsTransform` for the
@@ -554,6 +575,201 @@ function takes the point, and the ids when it has parameters (as
   render as the built-ins in a flame, by density
   (`the_twins_render_as_the_builtins_in_a_flame`), and as lenses, pixel
   for pixel (`the_twins_are_lenses_as_the_builtins`).
+- **Twins of the built-ins** (`variations::twins`,
+  `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
+  P7 step 3): 640 of the 647, each a Rhai variation under its
+  built-in's display name with its parameters exactly (a parameter may
+  be `free: true` with both bounds, a built-in's unlimited number, and
+  `exponential: false` over five decades) and its drawing features
+  (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
+  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`, and `INFO.emits` as its `PlotEmits`). Seven written by hand, 633 translated from the built-ins'
+  WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
+  reads them; its colour, direct colour and hide pointers locals from
+  `ctx.color`, `ctx.rgb` and `ctx.hide`, returned as `#{ z, color, rgb,
+  hide }`; its transform's coefficients (`transforms[xform_id].e`, or
+  through a `let xf = transforms[xform_id]`) as `ctx.e`; a 3D body's
+  `point_w` as `ctx.w` and its `point_w_out` a local returned as `w`; a
+  `vec4` the language's four-part kind (part by part, as WGSL's), a
+  part of one assigned; a `switch` whose every arm returns the body's
+  end; an integer vector (`vec2<u32>`) refused, as the language's
+  vectors are floats; an array of numbers or of complex numbers the
+  language's (`array(n, zero)`, a `[...]` literal); the shared
+  helpers it calls (`shaders/core/`: complex.wgsl's `cmul`, `cdiv`,
+  `csqrt` ..., noise.wgsl's, voronoi.wgsl's, polyhedra.wgsl's,
+  polychora.wgsl's) translated from their own WGSL as its helpers, so
+  their guards are the built-in's; its helpers wherever they stand, and
+  the init's (`prepare` calls them, the language inlining helpers); a
+  helper reading the parameters (taking the ids) takes `p` in their
+  place, passed whole; `loop` as `while true`; a parameter whose
+  name is no Rhai name (`3side`) refused; `rng_next(rng)` as
+  `rand_u32()`; the flame palette's read (`textureSampleLevel(palette_texture,
+  ...)`) as `palette_srgb(t)`; structs as helpers (the user,
+  2026-11-06: no struct types), one whose fields share a type an array
+  of them, its fields by place (su_mobius.wgsl's `SuMat`, complex.wgsl's
+  `CMat2`, fractwf.wgsl's result); an integer vector an array of its
+  integers (`.x`, `.y` by place: the range helpers' pairs); an array of
+  `vec3` or `vec4` an array of their floats, flat; a module constant
+  written out where it is read, a constant table a literal at the top
+  of each function that reads it (a vector's floats flat), which the
+  language writes as a module constant (polychora.wgsl's faces,
+  su_mobius.wgsl's base matrices); a
+  helper's pointer argument its `this` (`x.f(...)`, called on what the
+  pointer points at; of several, a pointer to an array it never writes
+  through the array passed by value), a helper reading
+  the context taking `ctx`, one reading or setting the variation's
+  state called on it (`this.f(..)`, klein_group); a 3x3 matrix its nine
+  floats, column by column, `m * v`, `m[c][r]` and `transpose(m)`
+  written out (glsl_apollonian, stereogram); the flame's camera in the
+  shader's `params` (`params.camera_rotation_x` ..) the context's
+  (`ctx.camera_pitch` ..), utilities.wgsl's `build_camera_matrix` and
+  `camera_transform` carried in (stereogram); the emission collector's calls (`emit_plot`,
+  `emit_plot_offset`, `emit_suppress_main`) the language's emissions
+  (multi_kaleidoscope, spray_blur); a `u32` loop counter a `u32` again
+  in the body, as WGSL's is; a
+  helper giving an array with its early returns folded into an `if`
+  value; `bitcast` of an integer the language's conversion (a float's
+  refused); `countOneBits` a helper of the twin's own, Kernighan's;
+  a variation reading its slots by a computed index (`get_param` of a
+  slot it computes, or its init's `out[e]`) has a `prepare` returning one
+  array, `slots`: its parameters, then the built-in's derived values,
+  so `p.slots[e]` is the built-in's slot `e` (the lsystems, the
+  matrices fuchsian_triangle, schottky_group and su_custom compute);
+  one setting its state by a computed slot keeps it as one array,
+  `this.st[k]` (farblur) -- Rhai's own terms, no syntax of ours (the
+  user asked for that, 2026-11-06); a 2D `normalize` as `v / v.abs()`; a function WGSL takes part by part of a vector written out
+  part by part where the language has no such vector form (`sin` of a
+  complex is the complex sine); its temporaries never a name the WGSL
+  uses; its state slots fields
+  named as the body reads them, `get_state` / `set_state` as `this.name`
+  and its `wgsl_state_init` as `fn init(p)`; its `u32`s the language's
+  (`u32(N)` for a `Nu`, hex as Rhai's, `~x` as `x ^ 0xffffffff`); a
+  float's bits (`bitcast`) refused, as the language has none; a `for` that is not a
+  counted range a `while`, its step last, when nothing `continue`s;
+  `smoothstep` written out; a vector and a number added part by part,
+  where Rhai's complex + float adds to the real part)
+  (`scripts/translate_variation_twins.py`, into the skeletons
+  `twins::skeleton` writes; `scripts/list_variation_twins.py` writes
+  the table).
+  - **Held per point** by the probe's pairs (`probe::pairs`, the
+    built-in and its twin as two transforms, the RNG seeded from the
+    point so the two draw alike, the colour written out): at the probe's
+    adversarial inputs and a grid, 2D and 3D, at the defaults and each
+    parameter's range's ends (`every_variation_twin_runs_as_its_builtin`).
+    93.3% of the outputs are bit for bit. The rest are judged by the
+    twin's own formula in f64 (the interpreter): the built-in off it
+    where the twin is on it (its hardware trig, WGSL's `pow(0, 0)`), or
+    giving no number where it has one (WGSL's `pow` of a negative base,
+    which JWildfire's `Math.pow` takes: `ngon` at sides -10); the
+    truth ill-conditioned (it moves by as much when the point or a
+    parameter moves by a few ulps: a derived sine at an exact turn); or
+    both within f32's reach of it. A built-in off its formula at more
+    than 16 of a pair's 432 parts doubts the twin instead (`OFF_CAP`;
+    at most 9, measured): judged by itself, a twin of another formula
+    would be on it everywhere, as the control -- julia beside exp's
+    twin, judged by exp's formula -- shows. The language's trig is
+    range-reduced where the built-ins' is the hardware's: the twin is
+    the portable side.
+  - **In a flame, by density** (`every_variation_twin_draws_its_builtins_flame`),
+    and by colour for a twin that writes one, a palette index or a
+    direct colour -- its transform blending it in whole -- each twin's
+    flame drawn in 2D and in 3D, its two bodies (a 4D twin's in 3D alone,
+    where its 4th coordinate feeds back through every iteration;
+    `VARIATION_TWINS_DIMS=2` or `3` draws one), each channel's light
+    (colour times density) held as density is; a twin reading the
+    camera drawn in 3D with it turned, moved and in perspective (pitch
+    and yaw swapped in the generated WGSL is the control: 75 of its 101
+    blocks off); dc_linear's colour blended in and not is the control --
+    which judges the twins that draw (no f64 truth matches the GPU's
+    stream). rays1's flame sends points past 2^24, where an f32's `tan`
+    is no formula's on any side (`docs/accepted-divergences.txt`): reduced
+    below 1e5 it is the built-in's exactly, measured, and it is held to
+    drawing (`HUGE_TRIG`). mobius_strip takes a coordinate's remainder,
+    rounding on every side past 2^24, so its pairs are not held at points
+    that far (`FAR_REMAINDER`). r_circleblur's cells are placed by a `sin(...) * 43758.5453`
+    hash, which the range-reduced sin hashes otherwise: its twin draws
+    its own noise, as cut_jigsaw's (its pieces flip by a `sin(...) *
+    1e5` hash), cut_fingerprint's, cut_hextruchetflow's and
+    cut_metaballs's (`fract(sin(x) * 43...)`) do -- with the hardware's
+    sin each flame is the built-in's exactly, measured.
+  - **Timed** (`time_variation_twins`, a tool, ignored): each twin's
+    flame against its built-in's on one renderer, the two loaded in
+    turn. Two renderers of the same flame ran up to 2.3x apart, by
+    where their buffers landed (a cheap variation's dispatch is bound by
+    the histogram's atomics), so an A/A (`VARIATION_TWINS_SELF=1`, the
+    built-in against itself) checks the measure first: 0.997 to 1.002.
+    Of the 597 (2026-11-06, GTX 1660 SUPER): median ratio 1.002,
+    quartiles 1.000 to 1.008, 24 more than 5% slower, 3 more than 25%
+    -- glsl_circlesblue 1.61, glsl_acrilic 1.48, electron_orbital 1.32,
+    each calling trig inside a loop, where the language's is
+    range-reduced (the likely cause, not yet measured as it). Measured,
+    not held: a twin is what an edit starts from, and the built-in still
+    draws an unedited flame. Its dispatches are small (64 workgroups x
+    256 iterations) and one is probed first, a twin over 250 ms a
+    dispatch skipped: a slower variant of a 370 ms dispatch once reset
+    the driver, and with it every program on the GPU. `TWIN_WGSL=dir`
+    runs a twin's WGSL from `dir/<name>-2d.wgsl` / `-3d.wgsl` in place of
+    its compiled code (`TWIN_WGSL_WRITE=1` writes it there first), to time
+    a change of the compiler's before making it. Found so: a whole-array
+    copy written as a loop over its elements kept small arrays out of
+    registers (von_dyck 1.68, su_mobius 3.06, dc_hexes_wf 1.59), now
+    WGSL's own `dst = src` (1.01, 1.08, 1.09); and polychoron's 5.65 is
+    its table, which naga copies to a local at every read of it indexed
+    at run time (`spill_to_internal_variable`), the twin reading a
+    vertex's four floats where the built-in reads one `vec4` -- the
+    built-in pays the copy once a read too, so the fix is the tables'
+    storage, the user's call.
+  - **Renamed parameters** (the user, 2026-11-06: no Rhai or WGSL
+    reserved word as a name): w's and z's `super` is `super_shape`,
+    hexnix3D's `3side` `triangle_scale` (`variations::RENAMED_PARAMS`).
+    A `.flame` keeps JWildfire's names both ways (`w_super`), and a
+    flame or an animation track saved under an old name reads under the
+    new (`Transform`'s loading, `set_variation_param`).
+  - **Edit as Rhai**: a built-in variation with a twin has it in its
+    row's settings menu, putting the twin under a UUID of its own in the
+    built-in's place in that transform (weight, parameters, order,
+    phase), the flame carrying its source, and opening it in the Formula
+    Editor in use (`formula_editor::variation_as_twin`).
+  - **Without a twin** (7; `translate_variation_twins.py --report`
+    names each one's reason): the analytic blurs (`analytic_blur`,
+    `analytic_gaussian_blur`) and the subflames (`subflame_wf`,
+    `pre_subflame_wf`), renderer hooks that would not translate well
+    (the user, 2026-11-07); the volume emitters (`polyhedron_volume`,
+    `sphere_volume`), possible later work; mondrianomies, its Exact fill
+    a table baked in per flame (*Per-flame specialisation*).
+  - `to_float(floor(x))` (`trunc`, `ceil`) is the float operation in
+    every kind and in the interpreter, exact at any size.
+  - **A literal first in `min` and `max`**: Rhai's `max(a, b)` keeps a
+    NaN `a` (a test and an assignment, the same in the interpreter),
+    where WGSL's returns the other operand, so a built-in's
+    `sqrt(max(x, 0.0))` is a guard; the translator writes
+    `max(0.0, x)`, WGSL's exactly, a literal never being NaN (`arcsinh`
+    at 1e30, where `x` is inf - inf).
+  - **Nothing of the def is lost** (the user, 2026-11-05): each twin
+    opens with its def's doc block verbatim -- its description and
+    authors, read as text by the API (ESCAPE.md, *The doc block*;
+    `every_variation_twin_keeps_its_builtins_doc`) -- and its `INFO`
+    gives the def's `category` (where the pickers group it) and its
+    `phase`: `any` for 327 of them, a phase the user may move to pre or
+    post, which the wire cannot carry, so a variation of the user's takes
+    it from its source at registration (`custom::phase_of`,
+    `VariationRegistry::set_phase`).
+  - **An unedited twin is its built-in** where only a def is known
+    (`twins::builtin_of`: the twin's text, with or without the id Edit
+    as Rhai gives it, line ends aside; noted per key at registration,
+    `twins::note`, `builtin_of_key`). The deep-zoom planner's tables --
+    inverses, bounds, interval bodies -- find the built-in's under its
+    key (`twins::planner_name`, in `inverse::for_name`,
+    `bound::for_name` and `derive`), except a many-valued one's: the
+    replay forces an arm in the built-in's WGSL text
+    (`bound::force_arms`), so a twin of `julian` or `juliascope` would
+    plan as unknown. A `.flame` export writes it under its built-in's
+    name, its weight, parameters, order and `fx_priority` with it
+    (`flame_xml::twins_as_builtins`). One character changed and it is a
+    variation of the user's, with neither
+    (`an_unedited_twin_keeps_its_builtins_planner_data`,
+    `an_unedited_twins_transform_is_analysed_as_its_builtins`,
+    `an_unedited_twin_exports_as_its_builtin`). Still a def's alone: its
+    aliases (a `.flame`'s foreign names).
 `VariationPhase::Any` has no wire form yet, so a downloaded variation
 cannot honour `fx_priority`. The catalog, caching and curation are in
 [ONLINE.md](ONLINE.md); the design record is

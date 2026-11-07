@@ -122,6 +122,99 @@ fn field_str(line: &str, field: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+/// The doc block a Rhai source begins with (rhai-plugins P7 step 3): the
+/// same shape as a def's -- prose, then `# Authors` and its `- name`
+/// lines -- in the `///` lines that open the file, after any blank ones.
+/// A twin of a built-in carries its def's block verbatim, and a script of
+/// the user's may write one; it is text, so the API reads and writes it
+/// without evaluating Rhai. `None` when the source opens with none.
+pub fn leading_block(src: &str) -> Option<VariationDoc> {
+    let lines: Vec<&str> = src.lines().skip_while(|l| l.trim().is_empty()).take_while(|l| l.trim_start().starts_with("///")).collect();
+    (!lines.is_empty()).then(|| parse_doc_block(&lines))
+}
+
+/// `doc` as a `///` block, its prose wrapped at 76 columns -- what
+/// [`with_block`] writes. Never broken where the next word would begin a
+/// list item or a heading, so the block parses back to `doc`
+/// (`a_written_block_reads_back_for_every_def`).
+pub fn write_block(doc: &VariationDoc) -> String {
+    const WIDTH: usize = 76;
+    let mut out = Vec::new();
+    for para in doc.description.lines() {
+        if para.trim().is_empty() {
+            out.push("///".to_string());
+            continue;
+        }
+        let mut line = String::new();
+        for word in para.split(' ') {
+            let marks = word.starts_with('#') || is_list_item(&format!("{word} x")) || word == "-" || word == "*";
+            if !line.is_empty() && line.len() + 1 + word.len() > WIDTH && !marks {
+                out.push(format!("/// {line}"));
+                line.clear();
+            }
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+        out.push(format!("/// {line}"));
+    }
+    if !doc.authors.is_empty() {
+        if !out.is_empty() {
+            out.push("///".to_string());
+        }
+        out.push("/// # Authors".to_string());
+        for a in &doc.authors {
+            out.push(format!("/// - {a}"));
+        }
+    }
+    out.join("
+")
+}
+
+/// `source` with the doc block it begins with replaced by `doc`'s, or
+/// `doc`'s put first where it has none: what a download from the API
+/// writes into a script it brings down. The rest of the source as it was.
+pub fn with_block(source: &str, doc: &VariationDoc) -> String {
+    let mut rest: Vec<&str> = source.lines().skip_while(|l| l.trim().is_empty()).skip_while(|l| l.trim_start().starts_with("///")).collect();
+    while rest.first().is_some_and(|l| l.trim().is_empty()) {
+        rest.remove(0);
+    }
+    let block = write_block(doc);
+    if block.is_empty() {
+        return rest.join("
+") + "
+";
+    }
+    format!("{block}
+
+{}
+", rest.join("
+"))
+}
+
+/// The `///` block above the def named `name` in a defs file, verbatim:
+/// what a twin copies.
+pub fn block_text(src: &str, name: &str) -> Option<String> {
+    let lines: Vec<&str> = src.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        if !(line.starts_with("pub static ") && line.contains(": VariationDef")) {
+            continue;
+        }
+        let named = lines.iter().skip(i + 1).take_while(|b| !b.starts_with("};")).find_map(|b| field_str(b, "name"));
+        if named.as_deref() != Some(name) {
+            continue;
+        }
+        let mut start = i;
+        while start > 0 && lines[start - 1].trim_start().starts_with("///") {
+            start -= 1;
+        }
+        return (start < i).then(|| lines[start..i].iter().map(|l| l.trim_start()).collect::<Vec<_>>().join("
+"));
+    }
+    None
+}
+
 /// Split a `///` block into prose and attribution.
 fn parse_doc_block(doc_lines: &[&str]) -> VariationDoc {
     let mut description: Vec<&str> = Vec::new();
@@ -227,6 +320,62 @@ fn is_list_item(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every def's doc block, as the export reads them.
+    fn every_def() -> BTreeMap<String, VariationDoc> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/variations/defs");
+        let texts: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "rs"))
+            .map(|e| std::fs::read_to_string(e.path()).unwrap())
+            .collect();
+        parse_sources(texts.iter().map(String::as_str))
+    }
+
+    /// A block written from any def's doc reads back as that doc: the way
+    /// down from the API loses nothing the way up took.
+    #[test]
+    fn a_written_block_reads_back_for_every_def() {
+        let docs = every_def();
+        assert!(docs.len() > 600, "{} defs", docs.len());
+        for (name, doc) in &docs {
+            let block = write_block(doc);
+            assert_eq!(leading_block(&block).as_ref(), Some(doc), "{name}:
+{block}");
+            assert!(block.lines().all(|l| l.starts_with("///")), "{name}");
+        }
+    }
+
+    /// A Rhai source's opening block is its doc, the rest of the file
+    /// untouched; a block put in place of another, or first.
+    #[test]
+    fn a_rhai_sources_opening_block_is_its_doc() {
+        let src = "
+/// Voronoi cells.
+///
+/// # Authors
+/// - slobo777
+/// - Andreas Maschke
+// The twin.
+const INFO = #{ title: \"Crackle\" };
+";
+        let doc = leading_block(src).expect("a block");
+        assert_eq!(doc.description, "Voronoi cells.");
+        assert_eq!(doc.authors, ["slobo777", "Andreas Maschke"]);
+        assert!(leading_block("const INFO = #{};
+/// Not leading.
+").is_none());
+        let other = VariationDoc { description: "Another.".into(), description_plain: "Another.".into(), authors: vec!["Ada".into()] };
+        let swapped = with_block(src, &other);
+        assert_eq!(leading_block(&swapped), Some(other.clone()));
+        assert!(swapped.contains("// The twin.
+const INFO"), "{swapped}");
+        let first = with_block("const INFO = #{};
+", &other);
+        assert!(first.starts_with("/// Another.") && first.ends_with("const INFO = #{};
+"), "{first}");
+    }
 
     const SAMPLE: &str = r####"
 // ---------------------------------------------------------------------------

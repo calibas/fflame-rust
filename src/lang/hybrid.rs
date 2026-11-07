@@ -493,6 +493,8 @@ pub fn compose(members: &[(Program, Option<Program>)], rename: &dyn Fn(usize, bo
                 hint: "0 runs the group's first formula, 1 its second, between them a mix of the two steps".into(),
                 choices: Vec::new(),
                 exponential: false,
+                linear: false,
+                free: false,
                 angle: false,
                 span: Span::default(),
             });

@@ -2614,8 +2614,8 @@ hexaplay3D.scale 2d 0.zpmHh...0..p......0.zpmHh... 2d2174ee8db01d0c
 hexaplay3D.scale 3d 0.zpmHh...0..pmH....0.zpmHh... d84e50ab30d191dd
 hexaplay3D.zlift 2d 0.zpmHh...0.zpmHh...0.zpmHh... 38a25572d89de8d8
 hexaplay3D.zlift 3d 0.zpmHh...0.zpmHh...0.zpmHh... 7e67588e7e97751c
-hexnix3D.3side 2d 0..pmH....0..pmH....0..pmH.... f6e0e75338530f72
-hexnix3D.3side 3d 0.zpmH....0.zpmH....0.zpmH.... bda41a53d75d47ad
+hexnix3D.triangle_scale 2d 0..pmH....0..pmH....0..pmH.... f6e0e75338530f72
+hexnix3D.triangle_scale 3d 0.zpmH....0.zpmH....0.zpmH.... bda41a53d75d47ad
 hexnix3D.majp 2d 0..pmH....0..pmH....0..pmH.... f6e0e75338530f72
 hexnix3D.majp 3d 0.zpmH....0.zpmH....0.zpmH.... 3561b888f2fc7785
 hexnix3D.scale 2d 0.zpm.h...0..pm.....0.zpmH.... 5afa49ff6bc30cca
@@ -6450,8 +6450,8 @@ w.star_n 2d 0..pmHh...0..pmHh... 64923ece3c784afd
 w.star_n 3d 0.zpmHh...0.zpmHh... 0521423de1873489
 w.star_slope 2d 0..pmHh...0..pmHh...0..pmHh... 6ecaccc02e8dbff9
 w.star_slope 3d 0.zpmHh...0.zpmHh...0.zpmHh... 996f47f21523e44c
-w.super 2d 0.zpmHh...0..pmHh...0..pmHh... bbbe0796e534ca4b
-w.super 3d 0.zpmHh...0.zpmHh...0.zpmHh... c32887ac1949ceee
+w.super_shape 2d 0.zpmHh...0..pmHh...0..pmHh... bbbe0796e534ca4b
+w.super_shape 3d 0.zpmHh...0.zpmHh...0.zpmHh... c32887ac1949ceee
 w.super_m 2d 0..pmHh...0..pmHh...0..pmHh... 6ecaccc02e8dbff9
 w.super_m 3d 0.zpmHh...0.zpmHh...0.zpmHh... 996f47f21523e44c
 w.super_n1 2d 0..pmHh...0..pmHh...0..pmHh... 6ecaccc02e8dbff9
@@ -6732,8 +6732,8 @@ z.star_n 2d 0..pm..Iin0..pm..Iin dc75be901ad826fd
 z.star_n 3d 0.zpmH.Iin0.zpmH.Iin f5b231da697c31e5
 z.star_slope 2d 0..pm..Iin0..pm..Iin0..pm..Iin c38d5c82413a2a88
 z.star_slope 3d 0.zpmH.Iin0.zpmH.Iin0.zpmH.Iin bc8633320e2aeec5
-z.super 2d 0..pm..Iin0..pm..Iin0..pm..Iin e5385134c4879bf7
-z.super 3d 0.zpmH.Iin0.zpmH.Iin0.zpmH.Iin 850e8c8bda6f0002
+z.super_shape 2d 0..pm..Iin0..pm..Iin0..pm..Iin e5385134c4879bf7
+z.super_shape 3d 0.zpmH.Iin0.zpmH.Iin0.zpmH.Iin 850e8c8bda6f0002
 z.super_m 2d 0..pm..Iin0..pm..Iin0..pm..Iin c38d5c82413a2a88
 z.super_m 3d 0.zpmH.Iin0.zpmH.Iin0.zpmH.Iin bc8633320e2aeec5
 z.super_n1 2d 0..pm..Iin0..pm..Iin0..pm..Iin c38d5c82413a2a88

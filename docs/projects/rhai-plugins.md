@@ -839,7 +839,7 @@ needs the census did not, the int step and `ctx.layer`):
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
 | Simulation colourings | 13 | all 13 | yes, the simulation panel (2026-11-03) |
-| Flame variations | 647 | 10, as test fixtures (linear, spherical, swirl, polar, horseshoe, blur, macmillan, spherical3D, hemisphere, zcone) | no |
+| Flame variations | 647 | 444 (`variations::twins`, branch `rhai-variation-hooks`; plan in step 3), besides the 10 test fixtures | yes, a transform's variation (2026-11-05) |
 
 Steps, in the order that unlocks the most first (the user picks):
 
@@ -1083,6 +1083,239 @@ Steps, in the order that unlocks the most first (the user picks):
    derived parameters, 7: the renderer's own hooks (`PlotEmits` 3,
    `AnalyticBlur` 2, `VolumeSideEmit` 2), each a design of its own,
    open.
+
+   **The census again, 2026-11-05** (branch `rhai-variation-hooks`; the
+   corpus `export_variations_json`, read against the dialect as built),
+   correcting the one above:
+   - **337 need no new hook**: 230 advanced 2D, 60 full 3D, 29 plugin,
+     13 depth 3D, 5 basic.
+   - `NeedsTransform` (123) is mostly the variation's own weight: 117
+     read `transforms[xform_id].variations[variation_id]`, JWildfire's
+     weight inside the formula, which `ctx.weight` already gives. Six
+     read the affine's coefficients (`fan`, `popcorn`, `waves`,
+     `dc_carpet`, `dc_triangle`, `dc_ztransl`): the coefficients hook is
+     theirs alone.
+   - The rest, by how many need each: derived parameters (`prepare`)
+     134; replace 47; the phase 45; hide 39; rgb 20; `never_z` 16; `w`
+     12; the Möbius library 9; the renderer's hooks 7 (out). 61 have a
+     3D body that writes z without `AlwaysZ`, where the dialect's 3D
+     body declares it: they need the z rule as an `INFO` key too. 74 use
+     bit operations, which the dialect has on ints; the 23 hash
+     integers (`pcg` and the host ints) are to check.
+   - **The WGSL is regular**: `let`, `var`, `if`, `for` (68), `switch`
+     (40), `select` (242), helpers (92), vectors and swizzles,
+     `get_param`, `rng_nextf`; 11 arrays, 2 matrices; three helpers take
+     a pointer beyond the rng (`dc_hexes_wf`, `glsl_circuits`,
+     `mondrianomies`).
+   - **Exactness:** a variation's Rhai trig is range-reduced (only an
+     effect's is the hardware's), where the built-ins call the
+     hardware's: a twin differs by ulps wherever trig is, and that is
+     the portable side (the user's rule, 2026-11-05: whatever makes
+     WebGPU, Metal and Vulkan agree). So a twin is held per point within
+     an ulp tolerance -- exact where no trig is -- and, in a flame, by
+     density, as the fixtures are.
+
+   **The order of work** (the user, 2026-11-05: "let's get started on
+   variation hook & twins"):
+   - **V1. The machinery, on a handful written by hand.** A registry of
+     twins beside the escape ones (`variations::twins`, sources in
+     `assets/variations/twins/`), each with its built-in's parameters
+     exactly (a compile test, as the colourings'); **a pair compare on
+     the probe**: the built-in and its twin as two transforms of one
+     probe flame, every probe input through both, 2D and 3D, at the
+     defaults and at swept parameters, held to a tolerance; a density
+     compare in a flame for a sample of each batch (`render_blocks`); a
+     timing; and **Edit as Rhai** for a transform's variation, the twin
+     in the built-in's place with its weight and parameters, the source
+     carried.
+     **V1 built 2026-11-05**: the registry, `probe::pairs` (the probe
+     paired: the RNG seeded from the point, the colour written out),
+     the compile, pair and density tests, Edit as Rhai in a variation's
+     settings menu, and seven twins by hand. The timing came later
+     (2026-11-06, `time_variation_twins`, VARIATIONS.md *Timed*): of
+     597, median ratio 1.002, 3 more than 25% slower (trig in a loop).
+   - **V2. A WGSL-to-Rhai translator** for the regular subset (naga's
+     parse of a def's WGSL to the dialect: a vector `p` a complex in 2D
+     and a `vec3` in 3D, helpers kept, `PARAMS` from the def), so the
+     337 come in batches by family, each translated twin held by V1's
+     compare and read by eye; what it cannot say is listed, and written
+     by hand.
+     **Built 2026-11-05**, as a text-level translator in Python
+     (`scripts/translate_variation_twins.py`: the author's names,
+     structure and comments kept, where naga's IR loses them): 291
+     twins, 298 with the seven. It found what the dialect and the compare
+     needed: `free` and `exponential: false` on a parameter; the float
+     `floor` everywhere; WGSL's `log` is Rhai's `ln`; a parameter WGSL
+     reads as an f32 is `to_float`; the compare's f64 judge, and density
+     for the twins that draw. Refused, 39 of the 337: a colour written
+     (11), a 3D body writing z without `AlwaysZ` (8), bit operations
+     (5) and hex literals (3), the coefficients (3), arrays (3), a
+     helper of its own kind (crackle's, synth's, ho's), state, a
+     non-range `for`. Read by eye: a sample, not all 291.
+     **Nothing lost, built 2026-11-05**: each twin opens with its def's
+     doc block verbatim and gives its category and phase in `INFO`; an
+     unedited twin keeps the deep-zoom planner's data and exports in a
+     `.flame` as its built-in (VARIATIONS.md, *Twins*). Still the
+     def's: its aliases.
+   - **V3. The hooks, each followed by the twins it unlocks**:
+     derived parameters (`fn prepare(p)` lowered to the def's init
+     setup, 134); the z rule, the phase and replace as `INFO` keys (61,
+     45, 47, 16); outputs beyond the point, `hide`, `rgb`, `w` (39, 20,
+     12); the coefficients (6); the hash ints; the Möbius library as an
+     imported Rhai library (9). The 7 on the renderer's own hooks stay
+     out.
+     **Built 2026-11-05**, in order: **the phase** (`INFO.phase` pre or
+     post: the translator's refusal lifted, 27 twins); **the z rule**
+     (`INFO.z`: `always`, `preserve_z`, `never`, as `AlwaysZ` and
+     `NeverZ`; 45 twins `preserve_z`); **derived parameters** (`fn
+     prepare(p)`, compiled to the def's `init_<name>` for the init pass,
+     87 twins; a transformation's parameters now take its transform's
+     block, so `quaternion`'s 92 fit); **a colour read** (`ctx.color`,
+     the colour coordinate as it arrives; the interpreter starts from
+     the probe's 0.5; 23 twins, judged by their colour per point and per
+     channel in a flame); **replace** (`INFO.replace`, the feature the
+     shader combines by; 16 twins, the cut family waiting for `hide`).
+     **hide** (`#{ z, hide }` and `ctx.hide`, `CanHide`), with the
+     translator's `while` for a `for` not over a range and `smoothstep`
+     written out (34 twins, 23 of them the cut family). 517 twins, 7842
+     pairs, 0 apart. On the way: a held temporary inside a vector part's
+     assignment came out a bare name (now refused if it ever recurs); a
+     vector and a number are added part by part; `length(u - d)` came out
+     `u - d.abs()`, the receiver unparenthesised -- found by density in
+     two cut twins that draw, and compiling because a complex compares
+     with a number by its real part (UF's rule, which the Rhai dialect
+     keeps); the judge perturbs by a non-round amount (1e20 ± 1e14 is
+     still a multiple of 5). **State**, the language's already (`fn
+     init(p)`, `this.name`), the translator's now: each slot a field named
+     as the body reads it, the def's state init as `init` (2 twins:
+     curliecue2, macmillan; the other stateful built-ins wait on `u32`,
+     the Möbius library, `w`, or an init that draws). 519 twins, 7870
+     pairs, 0 apart. **A complex has no order** in Rhai (the user's
+     call). **`u32`** (the user's call: an unsigned type, not bit
+     operations on the int alone): `Ty::UInt` through the checker, the
+     interpreter, deep zoom's reference and the WGSL -- WGSL's
+     semantics, an int joining to it by its bits and back only by
+     `to_int`; a shift its left side's type; `INFO.slow` for a
+     variation's parameters. 23 twins (the hashes and counts), 542 in
+     all, 8504 pairs, 0 apart. **A direct colour** (`#{ z, rgb }`,
+     `ctx.rgb`; `WritesRgb`), judged by its flame's light, channel by
+     channel; the translator writes a vector's part-by-part functions out
+     part by part, and names no temporary as the WGSL names a local (a
+     shadowing that compiles). 18 twins, 12 of them the `glsl_*` family:
+     560 in all, 8980 pairs, 0 apart. **The transform's coefficients**
+     (`ctx.a` .. `ctx.f`; the judge's truth given the probe transform's):
+     fan, popcorn, rings, waves and the three dc_* that read them, 567 in
+     all, 9098 pairs, 0 apart. **The 4th coordinate** (`ctx.w`, `#{ z, w
+     }`, a 3D body's; `NeedsW`), the 4D twins' flames rendered in 3D:
+     jubiq4d, minkowski, minkowski_camera, mobiq4d, 571 in all, 9366
+     pairs, 0 apart. **A vec4** as the language's four-part kind, in the
+     translator: 7 twins (the mandelbox and kaleidocomplex glsl,
+     cymatics3d, the hyperbolic and quaternion cameras, the quaternion
+     Julia set), 578 in all, 9672 pairs, 0 apart; sphere_packing's
+     `vec2<u32>` is refused, the language having no integer vectors.
+     **Arrays** of numbers and complex numbers in the translator (the
+     Jacobi functions, waves2b, cut_kaleido); **a drawing state init**
+     (`rand()` in `init`, the thread's stream, as the built-ins'
+     `wgsl_state_init`); the shared complex helpers translated in;
+     `loop` and `exp2`: 11 twins, 589 in all, 9990 pairs, 0 apart.
+     **The raw draw**, `rand_u32()` (the shader's `rng_next`, a `u32`
+     from the same stream as `rand()`): the juliaq family, cpow2,
+     log_db, 594 in all, 10052 pairs, 0 apart. **Helpers**: a helper
+     reading the parameters takes `p` (synth), a helper after the
+     variation's own function (ho), the init's helpers, and the shared
+     helpers of noise.wgsl and its neighbours as complex.wgsl's
+     (dc_perlin): 597 in all, 10266 pairs, 0 apart. **The user's
+     answers (2026-11-06)**: structs as helpers, no struct types unless
+     one is pressing; palette reads in a variation; no Rhai or WGSL
+     reserved word as a name; arrays to helpers, integer vectors and
+     pointer arguments as language work. Built: `palette(t)` and
+     `palette_srgb(t)` (the quaternion family); an array passed to a
+     helper by value, and a helper's value an array (`if` values too);
+     a helper called as a method changing what it is called on through
+     `this` (Rhai's binding, a WGSL pointer's way), giving a number, a
+     vector or nothing (a statement); in the translator, a struct of one
+     field type an array, module constants written out, the Möbius and
+     fract libraries carried in, a helper's pointer its `this`, a helper
+     reading the context taking `ctx`, a u32 `for` a counted range:
+     crackle's three, iconattractor_js, glsl_circuits, eight of the
+     Möbius family, the six fract, rhodonea, 617 in all, 11354 pairs, 0
+     apart. An integer vector as an array of its integers, an array of
+     vectors flat, `countOneBits` a helper of the twin's: sphere_packing,
+     dc_hexes_wf, the honeycombs, 621 in all, 11542 pairs, 0 apart. One
+     run's light compare flagged one faint block of fract_salamander_wf's
+     blue (z 5.6 of 152 blocks, 8 replicates' heavy tails); three runs of
+     it alone passed (`VARIATION_TWINS` picks a gate's twins). **A table
+     as a module constant**: an array of literals only read is a WGSL
+     `const` in a variation (up to 8192 floats), and the translator
+     writes a constant table as a literal at the top of each function
+     reading it: polyhedron, polychoron, menger, su_mobius, 625 in
+     all, 11710 pairs, 0 apart. **Renamed parameters** (the user's
+     names): w's and z's `super` as `super_shape`, hexnix3D's `3side`
+     as `triangle_scale`, `.flame` keeping JWildfire's and an old saved
+     name read as the new: 628 in all. **Computed slots in Rhai's own
+     terms** (the user: no new syntax): `prepare` may return an array,
+     read `p.m[i]`, and the state may hold one, `this.hist[i]` -- the two
+     restrictions lifted; the translator gives a variation reading its
+     slots by a computed index one `prepare` array of its parameters and
+     derived values, so a slot keeps the built-in's number, and one
+     keeping its state by a computed slot one state array: the three
+     lsystems, fuchsian_triangle, schottky_group, su_custom, farblur, 635
+     in all. **The slow twins**: a whole-array copy as WGSL's own
+     assignment, not the checker's loop over its elements (which kept
+     small arrays out of registers): von_dyck 1.68 to 1.01, su_mobius
+     3.06 to 1.08, dc_hexes_wf 1.59 to 1.09; polychoron stays 5.65, its
+     4372-float table copied to a local at each run-time read (naga's
+     spill), four reads a vertex where the built-in's one -- a fix to the
+     tables' storage reaches the built-ins too, the user's call. The
+     timing tool's dispatches made small after one experiment reset the
+     driver (VSCode went with it). 635: compile, 13430 pairs, 0 apart,
+     every flame drawn alike. The density gate now draws every twin's flame in 3D as
+     well as 2D (the user asked: the 3D bodies were held per point, never
+     as a flame but the 4D twins'): all 635 alike in 3D. The timing
+     tool's 3D mode, and an experiment: a twin's table in `prepare`, read
+     from the parameter slots, took polychoron from 5.69x its built-in
+     to 0.06x -- naga's per-read copy is nearly all the built-in's time --
+     so the slots are to grow, general purpose (the user, 2026-11-06).
+     On the way: the translator writes a literal first in `min` and
+     `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
+     at 1e30); the judge moves the parameters as it moves the point, and
+     caps how often the built-in may be "off its formula" before the
+     twin is doubted -- a hole a twin of another formula would have
+     passed through. **Of the last twelve** (the user, 2026-11-07:
+     the analytic blurs and the subflames would not translate well,
+     skipped; the volume emitters noted for possible later work; the
+     other six to do): the language's **emissions** -- `emit(z[, w])`,
+     `emit_offset(d, w)`, `suppress_main()`, statements of the body,
+     `INFO.emits` the cap, a 2D-only body's 3D copy emitting at the
+     point's z -- for multi_kaleidoscope and spray_blur; a helper
+     called on the state, `this.f(..)`, the state's fields its own
+     (klein_group); a 3x3 matrix as its nine floats (glsl_apollonian);
+     a `u32` loop counter a `u32` in the body again (34 twins' loops
+     rewritten, every one still drawn alike): 639, compile, 13526 pairs,
+     0 apart, every flame drawn alike in 2D and 3D. mondrianomies
+     translated (of a helper's several pointers, one to an array it
+     never writes through passed by value) but drew another picture:
+     its default fill, Exact (R), samples a rectangle table the CPU
+     computes from the whole drawing for each flame (`exact_combos`,
+     `cpu_rects`) and the shader builder bakes in over a stub, so the
+     def's WGSL is not the whole variation -- refused by name
+     (`HOST_BAKED`). A twin would need that table from `prepare`: the
+     parameter storage to hold it (docs/projects/variation-param-storage.md)
+     and a relational pass over thousands of segments, at present Rust
+     on the CPU. **The camera** for stereogram, which forks its eyes in
+     camera space: `ctx.camera_x` .. `ctx.camera_z`, `ctx.camera_pitch`,
+     `ctx.camera_yaw`, `ctx.camera_bank` and `ctx.perspective`, the
+     shader's `params` (`Predef::Camera`), in the body alone; the
+     translator's `transpose` and utilities.wgsl's camera helpers; the
+     density gate draws a camera-reading twin with the camera turned,
+     moved and in perspective (pitch and yaw swapped is the control, 75
+     of 101 blocks off): 640, its 26 pairs 0 apart, drawn alike in 2D
+     and 3D; all 640 together, 13552 pairs, 0 apart, every flame drawn
+     alike (su_custom's green light flagged one block of 255 by chance,
+     z 5.5; three runs of it alone clean). Left, 7: mondrianomies; out of the plan, the analytic blurs (analytic_blur,
+     analytic_gaussian_blur) and the subflames (subflame_wf,
+     pre_subflame_wf); possible later work, the volume emitters
+     (polyhedron_volume, sphere_volume).
 4. **The twins, in batches**: the variations by family -- a skeleton
    generator from the defs, as P4's `write_twin_skeletons`, and each
    held by a density compare and timed -- the escape colourings, the
