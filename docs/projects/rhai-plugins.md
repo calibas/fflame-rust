@@ -1291,7 +1291,7 @@ Steps, in the order that unlocks the most first (the user picks):
      called on the state, `this.f(..)`, the state's fields its own
      (klein_group); a 3x3 matrix as its nine floats (glsl_apollonian);
      a `u32` loop counter a `u32` in the body again (34 twins' loops
-     rewritten, every one still drawn alike): 639, compile, 13518 pairs,
+     rewritten, every one still drawn alike): 639, compile, 13526 pairs,
      0 apart, every flame drawn alike in 2D and 3D. mondrianomies
      translated (of a helper's several pointers, one to an array it
      never writes through passed by value) but drew another picture:
@@ -1310,7 +1310,9 @@ Steps, in the order that unlocks the most first (the user picks):
      density gate draws a camera-reading twin with the camera turned,
      moved and in perspective (pitch and yaw swapped is the control, 75
      of 101 blocks off): 640, its 26 pairs 0 apart, drawn alike in 2D
-     and 3D. Left, 7: mondrianomies; out of the plan, the analytic blurs (analytic_blur,
+     and 3D; all 640 together, 13552 pairs, 0 apart, every flame drawn
+     alike (su_custom's green light flagged one block of 255 by chance,
+     z 5.5; three runs of it alone clean). Left, 7: mondrianomies; out of the plan, the analytic blurs (analytic_blur,
      analytic_gaussian_blur) and the subflames (subflame_wf,
      pre_subflame_wf); possible later work, the volume emitters
      (polyhedron_volume, sphere_volume).
