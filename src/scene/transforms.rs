@@ -724,14 +724,14 @@ impl Transform {
     /// Set a parameter for a specific variation
     /// Key format: "variation_name.param_name" (e.g., "julian.power")
     pub fn set_variation_param(&mut self, variation: &str, param: &str, value: f32) {
-        let key = format!("{}.{}", variation, param);
+        let key = format!("{}.{}", variation, crate::variations::current_param_name(variation, param));
         self.variation_params.insert(key, value);
     }
 
     /// Get a parameter value for a specific variation
     /// Returns None if not set
     pub fn get_variation_param(&self, variation: &str, param: &str) -> Option<f32> {
-        let key = format!("{}.{}", variation, param);
+        let key = format!("{}.{}", variation, crate::variations::current_param_name(variation, param));
         self.variation_params.get(&key).copied()
     }
 
@@ -745,7 +745,7 @@ impl Transform {
         self.get_variation_param(variation, param)
             .or_else(|| {
                 registry.get(variation)
-                    .and_then(|info| info.get_param_default(param))
+                    .and_then(|info| info.get_param_default(crate::variations::current_param_name(variation, param)))
             })
             .unwrap_or(0.0)
     }
@@ -1275,6 +1275,26 @@ impl Serialize for Transform {
     }
 }
 
+#[cfg(test)]
+mod renamed_param_tests {
+    use super::*;
+
+    /// A flame saved before a parameter's rename reads under its new name
+    /// (`variations::RENAMED_PARAMS`), and a value set or read by the old
+    /// name (an animation track's) is the new one's.
+    #[test]
+    fn a_renamed_parameter_reads_from_its_old_name() {
+        let mut saved = serde_json::to_value(Transform::default()).unwrap();
+        saved["variation_params"] = serde_json::json!({ "w.super": 0.5, "w.super_m": 3.0 });
+        let mut t: Transform = serde_json::from_value(saved).unwrap();
+        assert_eq!(t.variation_params.get("w.super_shape"), Some(&0.5));
+        assert_eq!(t.variation_params.get("w.super_m"), Some(&3.0), "its neighbours as they were");
+        assert!(!t.variation_params.contains_key("w.super"));
+        t.set_variation_param("w", "super", 0.25);
+        assert_eq!((t.get_variation_param("w", "super_shape"), t.get_variation_param("w", "super")), (Some(0.25), Some(0.25)));
+    }
+}
+
 /// Custom deserialization - supports both HashMap and array formats
 impl<'de> Deserialize<'de> for Transform {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -1394,7 +1414,14 @@ impl<'de> Deserialize<'de> for Transform {
                             variations = Some(var_map);
                         }
                         Field::VariationParams => {
-                            variation_params = Some(map.next_value()?);
+                            // A renamed parameter under its new name.
+                            let saved: HashMap<String, f32> = map.next_value()?;
+                            variation_params = Some(
+                                saved
+                                    .into_iter()
+                                    .map(|(k, v)| (crate::variations::current_param_key(&k).into_owned(), v))
+                                    .collect(),
+                            );
                         }
                         Field::VariationPriorities => {
                             variation_priorities = Some(map.next_value()?);

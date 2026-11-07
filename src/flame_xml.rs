@@ -991,7 +991,9 @@ fn find_variation_and_param(key: &str, registry: &crate::variations::VariationRe
 
         if let Some(var_info) = registry.get(&potential_var) {
             // Found matching variation, remaining part is parameter name
-            let param_name = parts[i..].join("_");
+            // (JWildfire's, ours where we renamed it).
+            let joined = parts[i..].join("_");
+            let param_name = crate::variations::current_param_name(&var_info.name, &joined).to_string();
 
             // Validate that this parameter exists for this variation
             if var_info.parameters.iter().any(|p| p.name == param_name) {
@@ -1805,7 +1807,7 @@ fn write_xform(
             continue;
         }
         let xml_value = variation_param_to_xml(var_name, param_name, value);
-        out.push_str(&format!(" {}_{}=\"{}\"", var_name, param_name, fmt_f32(xml_value)));
+        out.push_str(&format!(" {}_{}=\"{}\"", var_name, crate::variations::jwf_param_name(var_name, param_name), fmt_f32(xml_value)));
     }
 
     if let Some(row) = chaos_row {
@@ -2096,6 +2098,25 @@ mod tests {
             reimported.flame.transforms[0].variation_priorities.get("combimirror"),
             Some(&-1)
         );
+    }
+
+    /// A parameter renamed from a reserved word (`RENAMED_PARAMS`) reads
+    /// from a `.flame` under JWildfire's name and is written under it.
+    #[test]
+    fn a_renamed_parameter_keeps_jwildfires_name() {
+        let xml = r#"
+<flames name="test">
+<flame name="Renamed" size="800 600" center="0 0" scale="200">
+   <xform weight="1" color="0.5" w="1" w_super="0.75" hexnix3D="1" hexnix3D_3side="0.25" coefs="1 0 0 1 0 0" opacity="1" />
+</flame>
+</flames>
+        "#;
+        let config = parse_flame_xml(xml).expect("parse").remove(0);
+        let t = &config.flame.transforms[0];
+        assert_eq!(t.variation_params.get("w.super_shape"), Some(&0.75));
+        assert_eq!(t.variation_params.get("hexnix3D.triangle_scale"), Some(&0.25));
+        let exported = write_flame_xml(&config);
+        assert!(exported.contains("w_super=\"0.75\"") && exported.contains("hexnix3D_3side=\"0.25\""), "{exported}");
     }
 
     #[test]

@@ -1249,20 +1249,21 @@ Steps, in the order that unlocks the most first (the user picks):
      `const` in a variation (up to 8192 floats), and the translator
      writes a constant table as a literal at the top of each function
      reading it: polyhedron, polychoron, menger, su_mobius, 625 in
-     all, 11710 pairs, 0 apart.
+     all, 11710 pairs, 0 apart. **Renamed parameters** (the user's
+     names): w's and z's `super` as `super_shape`, hexnix3D's `3side`
+     as `triangle_scale`, `.flame` keeping JWildfire's and an old saved
+     name read as the new: 628 in all.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 22, by count (`translate_variation_twins.py
+     passed through. Left, 19, by count (`translate_variation_twins.py
      --report`): the renderer's hooks (6: the analytic blurs, the volume
      emitters, the subflames) and plot emits (3), out of the plan; a
      computed slot (8: `prepare`'s for fuchsian_triangle, schottky_group
      and mondrianomies, a parameter's for su_custom and the three
-     lsystems, the state's for farblur); a reserved or non-identifier parameter name
-     (3: `super` in w and z, `3side` in hexnix3D -- a rename, its names
-     the user's); and one each: a matrix (glsl_apollonian), a helper
+     lsystems, the state's for farblur); and one each: a matrix (glsl_apollonian), a helper
      reading the variation's state (klein_group).
 4. **The twins, in batches**: the variations by family -- a skeleton
    generator from the defs, as P4's `write_twin_skeletons`, and each

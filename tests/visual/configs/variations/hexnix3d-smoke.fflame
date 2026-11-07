@@ -10,7 +10,7 @@
           "hexnix3D.majp": 1.0,
           "hexnix3D.scale": 0.5,
           "hexnix3D.zlift": 0.0,
-          "hexnix3D.3side": 0.667
+          "hexnix3D.triangle_scale": 0.667
         },
         "color": 0.0, "color_speed": 0.0, "opacity": 1.0
       },

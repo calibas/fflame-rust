@@ -808,6 +808,31 @@ impl Default for VariationRegistry {
 
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+/// Parameters renamed from a reserved word or a name that is none (the
+/// user, 2026-11-06: no Rhai or WGSL reserved word as a name): the
+/// variation, the old name -- JWildfire's, still written in `.flame` and
+/// read from older files -- and the new.
+pub const RENAMED_PARAMS: &[(&str, &str, &str)] = &[("w", "super", "super_shape"), ("z", "super", "super_shape"), ("hexnix3D", "3side", "triangle_scale")];
+
+/// A parameter's name now, for one saved under its old name.
+pub fn current_param_name<'a>(variation: &str, param: &'a str) -> &'a str {
+    RENAMED_PARAMS.iter().find(|(v, old, _)| *v == variation && *old == param).map_or(param, |(_, _, new)| new)
+}
+
+/// A parameter's name as JWildfire writes it in a `.flame`.
+pub fn jwf_param_name<'a>(variation: &str, param: &'a str) -> &'a str {
+    RENAMED_PARAMS.iter().find(|(v, _, new)| *v == variation && *new == param).map_or(param, |(_, old, _)| old)
+}
+
+/// A transform's `"variation.param"` key now, for one saved under its old
+/// name.
+pub fn current_param_key(key: &str) -> std::borrow::Cow<'_, str> {
+    match key.split_once('.') {
+        Some((v, p)) if current_param_name(v, p) != p => std::borrow::Cow::Owned(format!("{v}.{}", current_param_name(v, p))),
+        _ => std::borrow::Cow::Borrowed(key),
+    }
+}
+
 fn registry_lock() -> &'static RwLock<VariationRegistry> {
     use once_cell::sync::Lazy;
     static REGISTRY: Lazy<RwLock<VariationRegistry>> = Lazy::new(|| RwLock::new(VariationRegistry::new()));

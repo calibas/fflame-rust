@@ -571,12 +571,12 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 625 of the 647, each a Rhai variation under its
+  P7 step 3): 628 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
   (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
-  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`). Seven written by hand, 618 translated from the built-ins'
+  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`). Seven written by hand, 621 translated from the built-ins'
   WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
   reads them; its colour, direct colour and hide pointers locals from
   `ctx.color`, `ctx.rgb` and `ctx.hide`, returned as `#{ z, color, rgb,
@@ -674,6 +674,12 @@ function takes the point, and the ids when it has parameters (as
     range-reduced (the likely cause, not yet measured as it). Measured,
     not held: a twin is what an edit starts from, and the built-in still
     draws an unedited flame.
+  - **Renamed parameters** (the user, 2026-11-06: no Rhai or WGSL
+    reserved word as a name): w's and z's `super` is `super_shape`,
+    hexnix3D's `3side` `triangle_scale` (`variations::RENAMED_PARAMS`).
+    A `.flame` keeps JWildfire's names both ways (`w_super`), and a
+    flame or an animation track saved under an old name reads under the
+    new (`Transform`'s loading, `set_variation_param`).
   - **Edit as Rhai**: a built-in variation with a twin has it in its
     row's settings menu, putting the twin under a UUID of its own in the
     built-in's place in that transform (weight, parameters, order,
