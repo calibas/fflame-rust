@@ -1252,19 +1252,26 @@ Steps, in the order that unlocks the most first (the user picks):
      all, 11710 pairs, 0 apart. **Renamed parameters** (the user's
      names): w's and z's `super` as `super_shape`, hexnix3D's `3side`
      as `triangle_scale`, `.flame` keeping JWildfire's and an old saved
-     name read as the new: 628 in all.
+     name read as the new: 628 in all. **Computed slots in Rhai's own
+     terms** (the user: no new syntax): `prepare` may return an array,
+     read `p.m[i]`, and the state may hold one, `this.hist[i]` -- the two
+     restrictions lifted; the translator gives a variation reading its
+     slots by a computed index one `prepare` array of its parameters and
+     derived values, so a slot keeps the built-in's number, and one
+     keeping its state by a computed slot one state array: the three
+     lsystems, fuchsian_triangle, schottky_group, su_custom, farblur, 635
+     in all.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 19, by count (`translate_variation_twins.py
+     passed through. Left, 12, by count (`translate_variation_twins.py
      --report`): the renderer's hooks (6: the analytic blurs, the volume
-     emitters, the subflames) and plot emits (3), out of the plan; a
-     computed slot (8: `prepare`'s for fuchsian_triangle, schottky_group
-     and mondrianomies, a parameter's for su_custom and the three
-     lsystems, the state's for farblur); and one each: a matrix (glsl_apollonian), a helper
-     reading the variation's state (klein_group).
+     emitters, the subflames) and plot emits (3), out of the plan; and
+     one each: a helper taking several pointers (mondrianomies, whose
+     `this` is one), a matrix (glsl_apollonian), a helper reading the
+     variation's state (klein_group).
 4. **The twins, in batches**: the variations by family -- a skeleton
    generator from the defs, as P4's `write_twin_skeletons`, and each
    held by a density compare and timed -- the escape colourings, the

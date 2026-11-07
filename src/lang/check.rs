@@ -338,11 +338,16 @@ impl Checker {
         }
         globals.sort_unstable();
         program.globals = globals;
-        // A variation's array past an array's cap is a table, or refused.
+        // A variation's array past an array's cap is a table, or one
+        // `prepare` alone holds: it runs in the init pass, once per
+        // transform, its values in the transform's block (capped above).
+        // One a thread holds is refused.
         if self.kind == EntryKind::Transform {
             let tables = super::wgsl::constant_arrays(&program, &[&program.transform, &program.init]);
+            let (body, init) = (program.vars_used(&program.transform), program.vars_used(&program.init));
             for (v, var) in program.vars.iter().enumerate() {
-                if var.is_array() && var.floats() > ARRAY_CAP_FLOATS && (tables[v].is_none() || var.global) {
+                let per_thread = (body[v] || init[v]) && !var.global;
+                if var.is_array() && var.floats() > ARRAY_CAP_FLOATS && per_thread && tables[v].is_none() {
                     self.error(
                         entry.span,
                         format!(

@@ -712,7 +712,11 @@ fn escaped(s, p) {
   derived values, a built-in's `wgsl_init`: from the parameters alone
   (no `ctx`, no draw; at least one parameter), on the GPU in the init
   pass once per transform as they change, the map's values read as
-  `p.name` by both bodies (VARIATIONS.md, *Parameter slots*). The flame's
+  `p.name` by both bodies (VARIATIONS.md, *Parameter slots*). A value
+  may be an array, `#{ m: [..] }`, read at a computed index, `p.m[i]`,
+  from the transform's slots; `prepare`'s arrays run in the init pass, so
+  the per-thread cap of 256 floats is not theirs (the transform's block
+  is). The flame's
   hooks (the KIFS plan, C2), each the `Feature` a built-in declares:
   - `palette(t)` and `palette_srgb(t)`, the flame's palette at `t`
     (the shader's texture, as the built-ins read it): decoded as the
@@ -756,7 +760,8 @@ fn escaped(s, p) {
     body reads and sets its
     fields as `this.name` -- Rhai's own way for a function called on an
     object to change it (`state_count` slots, `init` as
-    `wgsl_state_init`);
+    `wgsl_state_init`); a field may be an array, `this.hist[i]`, a slot
+    a float, loaded and stored element by element;
   - a colour: the body may end with `#{ z: point, color: index }`, the
     palette index the transform's `direct_color` blends in
     (`WritesColor`).

@@ -571,12 +571,12 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 628 of the 647, each a Rhai variation under its
+  P7 step 3): 635 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
   (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
-  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`). Seven written by hand, 621 translated from the built-ins'
+  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`). Seven written by hand, 628 translated from the built-ins'
   WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
   reads them; its colour, direct colour and hide pointers locals from
   `ctx.color`, `ctx.rgb` and `ctx.hide`, returned as `#{ z, color, rgb,
@@ -611,7 +611,15 @@ function takes the point, and the ids when it has parameters (as
   pointer points at), a helper reading the context taking `ctx`; a
   helper giving an array with its early returns folded into an `if`
   value; `bitcast` of an integer the language's conversion (a float's
-  refused); `countOneBits` a helper of the twin's own, Kernighan's; a function WGSL takes part by part of a vector written out
+  refused); `countOneBits` a helper of the twin's own, Kernighan's;
+  a variation reading its slots by a computed index (`get_param` of a
+  slot it computes, or its init's `out[e]`) has a `prepare` returning one
+  array, `slots`: its parameters, then the built-in's derived values,
+  so `p.slots[e]` is the built-in's slot `e` (the lsystems, the
+  matrices fuchsian_triangle, schottky_group and su_custom compute);
+  one setting its state by a computed slot keeps it as one array,
+  `this.st[k]` (farblur) -- Rhai's own terms, no syntax of ours (the
+  user asked for that, 2026-11-06); a 2D `normalize` as `v / v.abs()`; a function WGSL takes part by part of a vector written out
   part by part where the language has no such vector form (`sin` of a
   complex is the complex sine); its temporaries never a name the WGSL
   uses; its state slots fields

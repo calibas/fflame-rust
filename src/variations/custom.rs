@@ -1360,6 +1360,37 @@ mod tests {
         assert!(compile(big).is_err_and(|e| e.contains("a table (literals only read)")), "{:?}", compile(big).err());
     }
 
+    /// `prepare` may return an array, which the body reads at a computed
+    /// index from the transform's derived slots, and the state may hold
+    /// one, kept call to call: where a built-in reads a slot it computes,
+    /// in Rhai's own terms (rhai-plugins P7 step 3).
+    #[test]
+    fn prepare_and_the_state_hold_arrays() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const PARAMS = #{ a: 1.0 };\n\
+                   const INFO = #{ name: \"rhai_arrays_test\" };\n\
+                   fn prepare(p) { #{ m: [p.a, 2.0 * p.a, 3.0 * p.a] } }\n\
+                   fn init(p) { #{ hist: [0.0, 0.0], n: 0 } }\n\
+                   fn variation(z, p) {\n\
+                   \x20   let i = this.n % 2;\n\
+                   \x20   this.hist[i] = z.re;\n\
+                   \x20   this.n = this.n + 1;\n\
+                   \x20   complex(p.m[to_int(z.im)], this.hist[0] + this.hist[1])\n\
+                   }\n";
+        let dl = named(src);
+        assert_eq!(dl.init_param_count, 3, "the array's three floats");
+        assert!(dl.shader_init.as_deref().is_some_and(|s| s.contains("i < 3u")), "{:?}", dl.shader_init);
+        let w = dl.shader_2d.as_deref().unwrap();
+        assert!(w.contains("get_param(xform_id, variation_id, u32(") && w.contains("get_state(xform_id, variation_id, 0u + i)"), "{w}");
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let mut run = VariationRun::new(&p, &params, 1);
+        let (a, _) = run.call(C64::new(1.0, 1.0), C64::ZERO, 1.0);
+        let (b, _) = run.call(C64::new(2.0, 2.0), C64::ZERO, 1.0);
+        assert_eq!(((a.re, a.im), (b.re, b.im)), ((2.0, 1.0), (3.0, 3.0)));
+    }
+
     /// `INFO.z` is JWildfire's z rule, as the built-ins' features: by
     /// default a 3D body's z is always kept and a 2D body's only when the
     /// flame preserves z; `always`, `preserve_z` and `never` say so of
