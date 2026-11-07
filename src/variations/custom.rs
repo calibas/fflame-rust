@@ -1332,6 +1332,34 @@ mod tests {
         assert_eq!(v, [3.0, 6.0, 2.0]);
     }
 
+    /// A table -- an array built from literals and only read -- is a
+    /// module constant in a variation's WGSL, where a local would be
+    /// filled at each call; an array written after is a local still.
+    #[test]
+    fn a_table_is_a_module_constant() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_table_test\" };\n\
+                   fn variation(z, p) {\n\
+                   \x20   let t = [0.5, 1.5, 2.5];\n\
+                   \x20   let w = [1.0, 2.0];\n\
+                   \x20   w[0] = z.re;\n\
+                   \x20   let i = to_int(floor(z.im)) % 3;\n\
+                   \x20   complex(t[i] + w[0], w[1])\n\
+                   }\n";
+        let dl = named(src);
+        let w = dl.shader_2d.unwrap();
+        assert_eq!(w.matches("const ").count(), 1, "the table alone: {w}");
+        assert!(w.contains(": array<f32, 3> = array<f32, 3>("), "{w}");
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::new(0.25, 1.0), C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (1.75, 2.0));
+        // Past an array's cap, a table alone: one written is refused.
+        let big = "const INFO = #{ name: \"rhai_table_big\" };\nfn variation(z, p) {\n    let t = array(300, 0.0);\n    t[0] = z.re;\n    complex(t[0], 0.0)\n}\n";
+        assert!(compile(big).is_err_and(|e| e.contains("a table (literals only read)")), "{:?}", compile(big).err());
+    }
+
     /// `INFO.z` is JWildfire's z rule, as the built-ins' features: by
     /// default a 3D body's z is always kept and a 2D body's only when the
     /// flame preserves z; `always`, `preserve_z` and `never` say so of

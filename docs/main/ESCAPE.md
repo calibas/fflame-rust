@@ -1051,6 +1051,12 @@ fn escaped(s, p) {
   helper may give a number or a vector, or nothing: called alone, a
   statement, for what it writes (`helper_stmts`). Outside such a call
   `this` is a variation's state.
+- **A table is a module constant** in a flame variation's WGSL: an
+  array whose every element is set once, a literal at a literal place,
+  and which is never set whole (`wgsl::constant_arrays`) is written as
+  a `const` its reads share, one for each set of literals, where a local
+  would be filled at every call. Such a table may take up to 8192 floats
+  (`TABLE_CAP_FLOATS`); any other array 256, as ever.
 - **A fresh array is its local**: `let a = [x, y]` and `let a =
   array(n, v)` bind `a` to the array the literal made, where they copied
   it into another, element by element -- a loop the driver kept, which

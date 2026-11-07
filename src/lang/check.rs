@@ -39,6 +39,11 @@ pub const LOOP_CAP: u32 = 4096;
 /// anyway, and a per-pixel one lives in each GPU thread's registers and
 /// private memory (the uniform's `fdata` is as large).
 pub const ARRAY_CAP_FLOATS: usize = 256;
+/// The most a flame variation's table may take: an array of literals only
+/// read, which its WGSL holds as a module constant, not in each thread's
+/// private memory (`wgsl::constant_arrays`; polychora.wgsl's faces take
+/// 4372).
+pub const TABLE_CAP_FLOATS: usize = 8192;
 
 /// The settings an entry is checked at: an array's size that reads a
 /// parameter or `#maxiter` folds with these values (plan, item 3, step
@@ -333,6 +338,22 @@ impl Checker {
         }
         globals.sort_unstable();
         program.globals = globals;
+        // A variation's array past an array's cap is a table, or refused.
+        if self.kind == EntryKind::Transform {
+            let tables = super::wgsl::constant_arrays(&program, &[&program.transform, &program.init]);
+            for (v, var) in program.vars.iter().enumerate() {
+                if var.is_array() && var.floats() > ARRAY_CAP_FLOATS && (tables[v].is_none() || var.global) {
+                    self.error(
+                        entry.span,
+                        format!(
+                            "`{}` takes {} floats; an array has at most {ARRAY_CAP_FLOATS}, a table (literals only read) {TABLE_CAP_FLOATS}",
+                            var.name,
+                            var.floats()
+                        ),
+                    );
+                }
+            }
+        }
         // A variation's parameters and derived values are in its
         // transform's block, which a built-in's share.
         let cap = match self.kind {
@@ -850,8 +871,10 @@ impl Checker {
             out.push(n.min(i64::from(u32::MAX)) as u32);
         }
         let floats = out.iter().map(|&d| d as usize).fold(1usize, |a, d| a.saturating_mul(d)).saturating_mul(ty.floats());
-        if floats > ARRAY_CAP_FLOATS {
-            self.error(span, format!("this array takes {floats} floats; at most {ARRAY_CAP_FLOATS} fit (a complex takes two)"));
+        // A variation's may be a table, held to it when the body is known.
+        let cap = if self.kind == EntryKind::Transform { TABLE_CAP_FLOATS } else { ARRAY_CAP_FLOATS };
+        if floats > cap {
+            self.error(span, format!("this array takes {floats} floats; at most {cap} fit (a complex takes two)"));
             return None;
         }
         Some((out, size))

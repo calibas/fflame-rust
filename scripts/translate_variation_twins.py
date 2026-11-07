@@ -374,6 +374,9 @@ class Fn:
         self.result_var = None
         # A helper's pointer argument, written as `this`.
         self.this_ptr = None
+        # The constant tables it reads, each a literal at its top
+        # (`tbl_<name>`), which the language writes as a module constant.
+        self.tables = set()
         for name, ty in args:
             ty = ty.strip()
             if name == "p" and not helper:
@@ -459,6 +462,8 @@ class Fn:
                 n = len(e[2])
                 return {1: "f32", 2: "vec2", 3: "vec3", 4: "vec4"}[n]
             return "f32"
+        if k == "index" and e[1][0] == "id" and e[1][1] in CONSTS and e[1][1] not in self.types:
+            return array_of(CONSTS[e[1][1]][0])[0]
         if k == "index":
             if e[1][0] == "id" and self.types.get(e[1][1], "").startswith("array:"):
                 return self.types[e[1][1]][len("array:"):]
@@ -627,6 +632,8 @@ class Fn:
                 if len(sw) == 3: return f"vec3({', '.join(parts)})"
                 return f"rgba({', '.join(parts)})"
             raise Refuse(f"a field `.{sw}`")
+        if k == "index" and e[1][0] == "id" and e[1][1] in CONSTS and e[1][1] not in self.types:
+            return self.table_read(e[1][1], e[2])
         if k == "index" and e[1][0] == "id" and self.types.get(e[1][1], "")[len("array:"):] in FLAT:
             elem = self.types[e[1][1]][len("array:"):]
             i = self.ex(e[2]) if e[2][0] in ("id", "num") else self.hold(e[2])
@@ -882,6 +889,40 @@ class Fn:
                 return f"{recv}.{f}({', '.join(keep)})"
             return f"{f}({', '.join(keep)})"
         raise Refuse(f"a call to `{f}`")
+
+    def table_read(self, name, idx):
+        """An element of the constant table `name`: of its local, a
+        vector's floats flat."""
+        ty, init = CONSTS[name]
+        if not ty or init is None:
+            raise Refuse(f"a constant table `{name}` without its type")
+        elem, _ = array_of(ty)
+        self.tables.add(name)
+        local = "tbl_" + name.lower()
+        if elem in FLAT:
+            i = self.ex(idx) if idx[0] in ("id", "num") else self.hold(idx)
+            k = FLAT[elem]
+            return f"{elem}(" + ", ".join(f"{local}[{k} * {i} + {c}]" for c in range(k)) + ")"
+        return f"{local}[{self.ex(idx)}]"
+
+    def table_lines(self):
+        """Each table it reads, its literal bound at the top."""
+        out = []
+        for name in sorted(self.tables):
+            ty, init = CONSTS[name]
+            elem, _ = array_of(ty)
+            if init[0] != "call" or not init[1].startswith("array<"):
+                raise Refuse(f"a constant table `{name}` not of literals")
+            parts = []
+            for a in init[2]:
+                if elem in FLAT:
+                    if a[0] != "call" or len(a[2]) != FLAT[elem]:
+                        raise Refuse(f"a constant table `{name}` not of literals")
+                    parts += [self.ex(x) for x in a[2]]
+                else:
+                    parts.append(self.ex(a))
+            out.append(("raw", f"    let tbl_{name.lower()} = [{', '.join(parts)}];"))
+        return out
 
     def result_map(self, point):
         """`#{ z: point, color: .., hide: .. }`, the pointers' locals."""
@@ -1260,6 +1301,7 @@ class Translation:
             if (self.helpers[fname] or "").startswith("array:"):
                 ss = fold_early(ss)
             f.stmts(ss, 1, last=True)
+            f.lines[0:0] = f.table_lines()
             params = [a for a in f.params]
             if f.uses_ctx:
                 params.append("ctx")
@@ -1303,6 +1345,7 @@ class Translation:
             f.stmts(ss, 1, last=True)
             f.emit(1, f.result_map(f.result_var) if f.outs else f.result_var)
         argz = f.point
+        f.lines[0:0] = f.table_lines()
         if any(l[0] == "let" for l in f.lines):
             raise Refuse("(translator error) a held temporary outside its statement")
         sig = f"fn {'variation' if dim == 2 else 'variation3'}({argz}, p{', ctx' if f.uses_ctx else ''})"
