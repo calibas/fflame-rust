@@ -1,0 +1,236 @@
+/// Animation-friendly sister of `hexaplay3D`. Adds: a `smooth` factor that
+/// fades between pass-through and full hex effect when `|weight| ≤ 0.5`;
+/// three majplane modes (`|majp| ≤ 1` single plate / `1 < |majp| < 2`
+/// transition / `|majp| ≥ 2` split planes with boost `(|majp| - 2) · 0.5`)
+/// with extra negative-`majp` branches that flip Z for animation
+/// transitions; a `3side` parameter that scales the inscribed triangle
+/// vertices independently; randomized (rather than sequential) vertex
+/// selection to reduce stepping artifacts; and a rotation-and-blend X/Y
+/// formula (rather than hexaplay's translate-to-vertex). Vertex layouts
+/// also differ — `seg60` y-signs mirrored and `seg120` rotated 30°.
+///
+/// # Authors
+/// - Larry Berlin
+
+// Hexnix 3D, the built-in variation's twin, translated from its WGSL.
+
+const PARAMS = #{
+    majp: #{
+        value: 1.0, min: -10.0, max: 10.0, free: true,
+        caption: "Major Plane",
+        hint: "Major-plane threshold for Z behavior (3 modes based on `|majp|`): ≤ 1 = single plate (Z from `zlift` only); 1 < |majp| < 2 = transition mode (with extra negative-`majp` Z-flip branches for animation); ≥ 2 = split planes with boost = `(|majp| - 2) · 0.5`. Negative `majp` adds Z-flip branches in modes 1 and 2 that mirror the accumulator across Z=0 for animation transitions. Unused in 2D mode.",
+    },
+    scale: #{
+        value: 0.25, min: -10.0, max: 10.0, free: true,
+        caption: "Scale",
+        hint: "Input-blend scale for the rotation-and-blend X/Y formula. The body mixes `(accum + p)` rotated by the chosen vertex angle with the vertex itself, scaled by `scale`.",
+    },
+    zlift: #{
+        value: 0.0, min: -10.0, max: 10.0, free: true,
+        caption: "Z Lift",
+        hint: "Z input scale. Combined with `scale` and `p.z` to set the baseline Z output. Unused in 2D mode.",
+    },
+    triangle_scale: #{
+        value: 0.667, min: -10.0, max: 10.0, free: true,
+        caption: "Triangle Scale",
+        hint: "Inscribed-triangle vertex scale. Multiplies the 3-vertex (triangle) branch's `weight · vertex` term, letting the triangle and hexagon contributions be scaled independently. Hexagon branch ignores this param.",
+    },
+};
+
+const INFO = #{ title: "Hexnix 3D", name: "rhai_hexnix3d", category: "full_3d" };
+
+fn init(p) {
+    let r = rand();
+    #{ rswtch: to_float(floor(r * 3.0)), fcycle: 0.0, bcycle: 0.0 }
+}
+
+fn hexnix_seg60(loc) {
+    let hlift = 0.86602540378443864;
+    let t1 = (loc);
+    if t1 == u32(0) {
+        complex(1.0, 0.0)
+    } else if t1 == u32(1) {
+        complex(0.5, -hlift)
+    } else if t1 == u32(2) {
+        complex(-0.5, -hlift)
+    } else if t1 == u32(3) {
+        complex(-1.0, 0.0)
+    } else if t1 == u32(4) {
+        complex(-0.5, hlift)
+    } else {
+        complex(0.5, hlift)
+    }
+}
+
+fn hexnix_seg120(loc) {
+    let c76 = -0.86602540378443864;
+    let c116 = 0.86602540378443864;
+    let t1 = (loc);
+    if t1 == u32(0) {
+        complex(0.0, -1.0)
+    } else if t1 == u32(1) {
+        complex(c76, 0.5)
+    } else {
+        complex(c116, 0.5)
+    }
+}
+
+fn hexnix_seg60_3d(loc) {
+    let hlift = 0.86602540378443864;
+    let t1 = (loc);
+    if t1 == u32(0) {
+        complex(1.0, 0.0)
+    } else if t1 == u32(1) {
+        complex(0.5, -hlift)
+    } else if t1 == u32(2) {
+        complex(-0.5, -hlift)
+    } else if t1 == u32(3) {
+        complex(-1.0, 0.0)
+    } else if t1 == u32(4) {
+        complex(-0.5, hlift)
+    } else {
+        complex(0.5, hlift)
+    }
+}
+
+fn hexnix_seg120_3d(loc) {
+    let c76 = -0.86602540378443864;
+    let c116 = 0.86602540378443864;
+    let t1 = (loc);
+    if t1 == u32(0) {
+        complex(0.0, -1.0)
+    } else if t1 == u32(1) {
+        complex(c76, 0.5)
+    } else {
+        complex(c116, 0.5)
+    }
+}
+
+fn variation(z, p, ctx) {
+    let scale = p.scale;
+    let scale3 = p.triangle_scale;
+    let rswtch = this.rswtch;
+    let fcycle = this.fcycle;
+    let bcycle = this.bcycle;
+    if (fcycle > 5.0) {
+        fcycle = 0.0;
+        rswtch = to_float(floor(rand() * 3.0));
+    }
+    if (bcycle > 2.0) {
+        bcycle = 0.0;
+        rswtch = to_float(floor(rand() * 3.0));
+    }
+    let weight = ctx.weight;
+    let safe_w = (if abs(weight) < 1.0e-30 { 1.0e-30 } else { weight });
+    let sm = 1.0;
+    if (abs(weight) <= 0.5) {
+        sm = weight * 2.0;
+    }
+    let ox = 0.0;
+    let oy = 0.0;
+    if (rswtch <= 1.0) {
+        let loc = u32(to_float(floor(rand() * 6.0)));
+        let v = hexnix_seg60(min(loc, u32(5)));
+        let dx = ctx.accum.re * (1.0 - sm) + sm * (scale * ((ctx.accum.re + z.re) * v.re - (ctx.accum.im + z.im) * v.im) + weight * v.re);
+        let dy = ctx.accum.im * (1.0 - sm) + sm * (scale * ((ctx.accum.re + z.re) * v.im + (ctx.accum.im + z.im) * v.re) + weight * v.im);
+        ox = (dx - ctx.accum.re) / safe_w;
+        oy = (dy - ctx.accum.im) / safe_w;
+        fcycle = fcycle + 1.0;
+    } else {
+        let loc = u32(to_float(floor(rand() * 3.0)));
+        let v = hexnix_seg120(min(loc, u32(2)));
+        let dx = ctx.accum.re * (1.0 - sm) + sm * (scale * ((ctx.accum.re + z.re) * v.re - (ctx.accum.im + z.im) * v.im) + weight * scale3 * v.re);
+        let dy = ctx.accum.im * (1.0 - sm) + sm * (scale * ((ctx.accum.re + z.re) * v.im + (ctx.accum.im + z.im) * v.re) + weight * scale3 * v.im);
+        ox = (dx - ctx.accum.re) / safe_w;
+        oy = (dy - ctx.accum.im) / safe_w;
+        bcycle = bcycle + 1.0;
+    }
+    this.rswtch = rswtch;
+    this.fcycle = fcycle;
+    this.bcycle = bcycle;
+    complex(ox, oy)
+}
+
+fn variation3(q, p, ctx) {
+    let majp = p.majp;
+    let scale = p.scale;
+    let zlift = p.zlift;
+    let scale3 = p.triangle_scale;
+    let rswtch = this.rswtch;
+    let fcycle = this.fcycle;
+    let bcycle = this.bcycle;
+    if (fcycle > 5.0) {
+        fcycle = 0.0;
+        rswtch = to_float(floor(rand() * 3.0));
+    }
+    if (bcycle > 2.0) {
+        bcycle = 0.0;
+        rswtch = to_float(floor(rand() * 3.0));
+    }
+    let weight = ctx.weight;
+    let safe_w = (if abs(weight) < 1.0e-30 { 1.0e-30 } else { weight });
+    let sm = 1.0;
+    if (abs(weight) <= 0.5) {
+        sm = weight * 2.0;
+    }
+    let pos_neg = 1.0;
+    if (rand() < 0.5) {
+        pos_neg = -1.0;
+    }
+    let abmajp = abs(majp);
+    let majplane = 0;
+    let boost = 0.0;
+    if (abmajp <= 1.0) {
+        majplane = 0;
+    } else if (abmajp < 2.0) {
+        majplane = 1;
+    } else {
+        majplane = 2;
+        boost = (abmajp - 2.0) * 0.5;
+    }
+    let oz = 0.0;
+    if (majplane == 0) {
+        oz = sm * q.z * scale * zlift / safe_w;
+    } else if (majplane == 1 && majp < 0.0) {
+        let gentle_z = 1.0;
+        if (majp < -1.0 && majp >= -2.0) {
+            gentle_z = abmajp - 1.0;
+        }
+        if (pos_neg < 0.0) {
+            let desired = ctx.accum.z * (1.0 - 2.0 * gentle_z);
+            oz = (desired - ctx.accum.z) / safe_w;
+        }
+    } else if (majplane == 2 && majp < 0.0) {
+        if (pos_neg > 0.0) {
+            oz = sm * (q.z * scale * zlift + boost) / safe_w;
+        } else {
+            let desired = ctx.accum.z * (1.0 - 2.0 * sm) + sm * pos_neg * (q.z * scale * zlift + boost);
+            oz = (desired - ctx.accum.z) / safe_w;
+        }
+    } else {
+        oz = sm * (q.z * scale * zlift + pos_neg * boost) / safe_w;
+    }
+    let ox = 0.0;
+    let oy = 0.0;
+    if (rswtch <= 1.0) {
+        let loc = u32(to_float(floor(rand() * 6.0)));
+        let v = hexnix_seg60_3d(min(loc, u32(5)));
+        let dx = ctx.accum.x * (1.0 - sm) + sm * (scale * ((ctx.accum.x + q.x) * v.re - (ctx.accum.y + q.y) * v.im) + weight * v.re);
+        let dy = ctx.accum.y * (1.0 - sm) + sm * (scale * ((ctx.accum.x + q.x) * v.im + (ctx.accum.y + q.y) * v.re) + weight * v.im);
+        ox = (dx - ctx.accum.x) / safe_w;
+        oy = (dy - ctx.accum.y) / safe_w;
+        fcycle = fcycle + 1.0;
+    } else {
+        let loc = u32(to_float(floor(rand() * 3.0)));
+        let v = hexnix_seg120_3d(min(loc, u32(2)));
+        let dx = ctx.accum.x * (1.0 - sm) + sm * (scale * ((ctx.accum.x + q.x) * v.re - (ctx.accum.y + q.y) * v.im) + weight * scale3 * v.re);
+        let dy = ctx.accum.y * (1.0 - sm) + sm * (scale * ((ctx.accum.x + q.x) * v.im + (ctx.accum.y + q.y) * v.re) + weight * scale3 * v.im);
+        ox = (dx - ctx.accum.x) / safe_w;
+        oy = (dy - ctx.accum.y) / safe_w;
+        bcycle = bcycle + 1.0;
+    }
+    this.rswtch = rswtch;
+    this.fcycle = fcycle;
+    this.bcycle = bcycle;
+    vec3(ox, oy, oz)
+}

@@ -2005,8 +2005,8 @@ fn apply_variation_param(
     value: ConfigValue,
 ) -> Result<(), ConfigError> {
     let new_value: f32 = value.try_into()?;
-    let key = format!("{}.{}", variation, param);
-    xform.variation_params.insert(key, new_value);
+    // By the parameter's name now (a track saved under an old one).
+    xform.set_variation_param(variation, param, new_value);
     Ok(())
 }
 
