@@ -654,9 +654,11 @@ function takes the point, and the ids when it has parameters (as
     the portable side.
   - **In a flame, by density** (`every_variation_twin_draws_its_builtins_flame`),
     and by colour for a twin that writes one, a palette index or a
-    direct colour -- its transform blending it in whole -- a 4D twin's in
-    3D, where its 4th coordinate feeds back through every iteration, each channel's light (colour times density) held as
-    density is; dc_linear's colour blended in and not is the control --
+    direct colour -- its transform blending it in whole -- each twin's
+    flame drawn in 2D and in 3D, its two bodies (a 4D twin's in 3D alone,
+    where its 4th coordinate feeds back through every iteration;
+    `VARIATION_TWINS_DIMS=2` or `3` draws one), each channel's light
+    (colour times density) held as density is; dc_linear's colour blended in and not is the control --
     which judges the twins that draw (no f64 truth matches the GPU's
     stream). rays1's flame sends points past 2^24, where an f32's `tan`
     is no formula's on any side (`docs/accepted-divergences.txt`): reduced
