@@ -929,6 +929,20 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
     g.finish("", format!("{tables}{body}"))
 }
 
+/// A whole-array copy as the checker writes it (`Checker::copy_array`): its
+/// counter set to zero, then the loop setting each element of `dst` from
+/// `src`'s. As `(dst, src)`.
+fn array_copy(p: &Program, zero: &IStmt, the_loop: &IStmt) -> Option<(VarId, VarId)> {
+    let IStmt::Assign(Place::Var(k), IExpr { kind: IExprKind::Int(0), .. }) = zero else { return None };
+    if !p.vars[*k].name.starts_with("copy ") {
+        return None;
+    }
+    let IStmt::While { body, .. } = the_loop else { return None };
+    let [IStmt::SetElem { var: dst, index, value }, _] = &body[..] else { return None };
+    let (IExprKind::Var(i), IExprKind::Elem(src, j)) = (&index.kind, &value.kind) else { return None };
+    (i == k && matches!(j.kind, IExprKind::Var(x) if x == *k)).then_some((*dst, *src))
+}
+
 /// The arrays a body only builds from literals and reads -- a table: each
 /// element set once, a literal at a literal place, the whole array never
 /// set -- with their elements in order. A variation writes each as a
@@ -2348,6 +2362,21 @@ impl<'p> Gen<'p> {
     fn stmts(&mut self, stmts: &[IStmt], depth: usize, out: &mut String) {
         let mut i = 0;
         while i < stmts.len() {
+            // A whole array copied (the checker's loop over its elements,
+            // UF's `x = y`): WGSL's own assignment. The loop indexes both
+            // arrays by a variable, which keeps them out of registers:
+            // von_dyck's twin ran 68% slower for its matrices' copies,
+            // dc_hexes_wf's 59% (rhai-plugins P7 step 3).
+            if self.ctx == Ctx::Variation {
+                if let Some((dst, src)) = stmts.get(i + 1).and_then(|next| array_copy(self.p, &stmts[i], next)) {
+                    if self.global_slots[dst].is_none() && self.global_slots[src].is_none() {
+                        let pad = "    ".repeat(depth);
+                        let _ = writeln!(out, "{pad}{} = {};", self.var(dst), self.var(src));
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
             // In an effect, Rhai's `min` and `max` (and so `clamp`), which
             // the language lowers to a test and an assignment for UF's sake,
             // are WGSL's own: what a hand-written effect calls, 2% of the
