@@ -206,6 +206,10 @@ pub enum Predef {
     /// 5 (JWildfire's `pXForm.getCoeff..`; `NeedsTransform`): what fan,
     /// popcorn, rings and waves read.
     Coef(u8),
+    /// The flame's 3D camera, 0 to 6: its position x, y, z, pitch, yaw and
+    /// bank (radians) and the perspective strength, as the flame shader's
+    /// `params` holds them (what stereogram reads).
+    Camera(u8),
     /// A 3D variation's 4th coordinate (`NeedsW`): `PointW` the one it is
     /// given (`point_w`), `WOut` the raw one it gives (`point_w_out`), which
     /// the transform weight-sums as it does x, y and z.
@@ -270,7 +274,7 @@ impl Predef {
             Predef::Pixel | Predef::Z | Predef::Random | Predef::Center | Predef::ScreenPixel | Predef::Accum => Ty::Complex,
             Predef::Draw | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ => Ty::Float,
             Predef::VarHide => Ty::Bool,
-            Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::PointW | Predef::WOut => Ty::Float,
+            Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::Camera(_) | Predef::PointW | Predef::WOut => Ty::Float,
             Predef::DrawU32 => Ty::UInt,
             Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => Ty::Float,
             Predef::EffectBlend => Ty::Int,

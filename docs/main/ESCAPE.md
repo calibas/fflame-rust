@@ -739,7 +739,12 @@ fn escaped(s, p) {
     `ctx.f`, its transform's affine coefficients as the flame stores them
     (the editor's and a `.flame`'s `coefs`; JWildfire's
     `pXForm.getCoeff..`, read by fan, popcorn, rings and waves; the
-    identity inside a formula);
+    identity inside a formula), and `ctx.camera_x` .. `ctx.camera_z`,
+    `ctx.camera_pitch`, `ctx.camera_yaw`, `ctx.camera_bank` (radians)
+    and `ctx.perspective`, the flame's 3D camera as the shader's
+    `params` holds it ([CAMERA.md](CAMERA.md); stereogram forks its eyes
+    in camera space), in the body alone (`prepare`'s init pass binds no
+    `params`), the default camera, all zeros, on the CPU;
   - a 4th coordinate, a 3D body's alone (`NeedsW`): `ctx.w` the one it
     is given, and `#{ z: v, w }` the raw one it gives, which the
     transform weight-sums with its other 4D variations as it does x, y

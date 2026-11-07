@@ -1012,11 +1012,17 @@ impl Checker {
             // A solid's position's third part (B3).
             "pixelz" if self.internal && self.kind == EntryKind::Solid => Predef::PixelZ,
             "accum" | "weight" | "vcolor" | "vhide" | "vrgb_r" | "vrgb_g" | "vrgb_b" | "pixelz" | "accumz" | "coef_a" | "coef_b" | "coef_c" | "coef_d"
-            | "coef_e" | "coef_f" | "pointw" | "wout"
+            | "coef_e" | "coef_f" | "pointw" | "wout" | "cam_x" | "cam_y" | "cam_z" | "cam_pitch" | "cam_yaw" | "cam_bank" | "cam_persp"
                 if self.internal =>
             {
                 if self.kind != EntryKind::Transform {
                     self.error(span, format!("`{name}` is a flame variation's"));
+                    return None;
+                }
+                // The camera is the flame shader's `params`, which the
+                // body's shader binds and `prepare`'s init pass does not.
+                if name.starts_with("cam_") && self.section != SectionKind::Transform {
+                    self.error(span, "a variation reads the camera in its body (`variation`)");
                     return None;
                 }
                 match name {
@@ -1029,6 +1035,9 @@ impl Checker {
                     "vrgb_g" => Predef::VarRgbG,
                     "vrgb_b" => Predef::VarRgbB,
                     c if c.starts_with("coef_") => Predef::Coef(c.as_bytes()[5] - b'a'),
+                    c if c.starts_with("cam_") => {
+                        Predef::Camera(["cam_x", "cam_y", "cam_z", "cam_pitch", "cam_yaw", "cam_bank", "cam_persp"].iter().position(|n| *n == c).unwrap_or(0) as u8)
+                    }
                     "pointw" => Predef::PointW,
                     "wout" => Predef::WOut,
                     _ => Predef::VarColor,
@@ -1180,7 +1189,7 @@ impl Checker {
             self.error(span, format!("a simulation model reads its cell, the grid's size, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
-        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::VarHide | Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::PointW | Predef::WOut | Predef::DrawU32 | Predef::PixelZ | Predef::AccumZ) {
+        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::VarHide | Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::Camera(_) | Predef::PointW | Predef::WOut | Predef::DrawU32 | Predef::PixelZ | Predef::AccumZ) {
             self.error(span, format!("a transformation reads `#pixel`, `#pi` and `#e`, not `#{name}`"));
             return None;
         }

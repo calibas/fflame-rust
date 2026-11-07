@@ -577,12 +577,12 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 639 of the 647, each a Rhai variation under its
+  P7 step 3): 640 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
   (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
-  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`, and `INFO.emits` as its `PlotEmits`). Seven written by hand, 632 translated from the built-ins'
+  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`, and `INFO.emits` as its `PlotEmits`). Seven written by hand, 633 translated from the built-ins'
   WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
   reads them; its colour, direct colour and hide pointers locals from
   `ctx.color`, `ctx.rgb` and `ctx.hide`, returned as `#{ z, color, rgb,
@@ -618,8 +618,11 @@ function takes the point, and the ids when it has parameters (as
   through the array passed by value), a helper reading
   the context taking `ctx`, one reading or setting the variation's
   state called on it (`this.f(..)`, klein_group); a 3x3 matrix its nine
-  floats, column by column, `m * v` and `m[c][r]` written out
-  (glsl_apollonian); the emission collector's calls (`emit_plot`,
+  floats, column by column, `m * v`, `m[c][r]` and `transpose(m)`
+  written out (glsl_apollonian, stereogram); the flame's camera in the
+  shader's `params` (`params.camera_rotation_x` ..) the context's
+  (`ctx.camera_pitch` ..), utilities.wgsl's `build_camera_matrix` and
+  `camera_transform` carried in (stereogram); the emission collector's calls (`emit_plot`,
   `emit_plot_offset`, `emit_suppress_main`) the language's emissions
   (multi_kaleidoscope, spray_blur); a `u32` loop counter a `u32` again
   in the body, as WGSL's is; a
@@ -672,7 +675,10 @@ function takes the point, and the ids when it has parameters (as
     flame drawn in 2D and in 3D, its two bodies (a 4D twin's in 3D alone,
     where its 4th coordinate feeds back through every iteration;
     `VARIATION_TWINS_DIMS=2` or `3` draws one), each channel's light
-    (colour times density) held as density is; dc_linear's colour blended in and not is the control --
+    (colour times density) held as density is; a twin reading the
+    camera drawn in 3D with it turned, moved and in perspective (pitch
+    and yaw swapped in the generated WGSL is the control: 75 of its 101
+    blocks off); dc_linear's colour blended in and not is the control --
     which judges the twins that draw (no f64 truth matches the GPU's
     stream). rays1's flame sends points past 2^24, where an f32's `tan`
     is no formula's on any side (`docs/accepted-divergences.txt`): reduced
@@ -723,14 +729,13 @@ function takes the point, and the ids when it has parameters (as
     built-in's place in that transform (weight, parameters, order,
     phase), the flame carrying its source, and opening it in the Formula
     Editor in use (`formula_editor::variation_as_twin`).
-  - **Without a twin** (8; `translate_variation_twins.py --report`
+  - **Without a twin** (7; `translate_variation_twins.py --report`
     names each one's reason): the analytic blurs (`analytic_blur`,
     `analytic_gaussian_blur`) and the subflames (`subflame_wf`,
     `pre_subflame_wf`), renderer hooks that would not translate well
     (the user, 2026-11-07); the volume emitters (`polyhedron_volume`,
     `sphere_volume`), possible later work; mondrianomies, its Exact fill
-    a table baked in per flame (*Per-flame specialisation*); and
-    stereogram, which reads the camera.
+    a table baked in per flame (*Per-flame specialisation*).
   - `to_float(floor(x))` (`trunc`, `ceil`) is the float operation in
     every kind and in the interpreter, exact at any size.
   - **A literal first in `min` and `max`**: Rhai's `max(a, b)` keeps a

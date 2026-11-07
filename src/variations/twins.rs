@@ -561,6 +561,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("squirrel", include_str!("../../assets/variations/twins/squirrel.rhai")),
     ("squish", include_str!("../../assets/variations/twins/squish.rhai")),
     ("starblur", include_str!("../../assets/variations/twins/starblur.rhai")),
+    ("stereogram", include_str!("../../assets/variations/twins/stereogram.rhai")),
     ("stripes", include_str!("../../assets/variations/twins/stripes.rhai")),
     ("stripfit", include_str!("../../assets/variations/twins/stripfit.rhai")),
     ("stwin", include_str!("../../assets/variations/twins/stwin.rhai")),
@@ -1434,10 +1435,19 @@ mod tests {
         // A 4D twin's flame in 3D, where its 4th coordinate lives and feeds
         // back through every iteration (a 2D flame has none).
         let four_d = |name: &str| super::super::global_registry().get(name).is_some_and(|v| v.has_feature(super::super::Feature::NeedsW));
-        let flame = |name: &str, carries: Option<CustomSource>, direct: f32, three: bool| {
+        // A twin reading the camera (`ctx.camera_x` .. `ctx.perspective`)
+        // is drawn with it turned, moved and in perspective, every field
+        // apart from the default's zero.
+        let reads_camera = |name: &str| source(name).is_some_and(|s| s.contains("ctx.camera_") || s.contains("ctx.perspective"));
+        let flame = |name: &str, twin_of: &str, carries: Option<CustomSource>, direct: f32, three: bool| {
             let mut cfg = flame_coloured(name, carries, direct);
             if three {
                 cfg.render_mode = crate::scene::transforms::RenderMode::ThreeD;
+                if reads_camera(twin_of) {
+                    (cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank) = (0.35, 0.6, 0.15);
+                    (cfg.camera_x, cfg.camera_y, cfg.camera_z) = (0.1, -0.05, 0.2);
+                    cfg.perspective_strength = 0.25;
+                }
             }
             cfg
         };
@@ -1449,8 +1459,8 @@ mod tests {
             let both: &[bool] = if four_d(name) { &[true] } else { &[false, true] };
             for &three in both.iter().filter(|&&t| dims.is_empty() || dims == if t { "3" } else { "2" }) {
                 let (what, d) = if three { (format!("{name} (3D)"), " (3D)") } else { (name.to_string(), "") };
-                let reference = render_blocks(&device, &queue, &flame(name, None, direct, three), N, &run);
-                let twin = render_blocks(&device, &queue, &flame(&key(name).unwrap(), Some(super::carried(name).unwrap()), direct, three), N, &run);
+                let reference = render_blocks(&device, &queue, &flame(name, name, None, direct, three), N, &run);
+                let twin = render_blocks(&device, &queue, &flame(&key(name).unwrap(), name, Some(super::carried(name).unwrap()), direct, three), N, &run);
                 if direct > 0.0 {
                     for ch in 0..3 {
                         let c = compare_blocks(&twin.light[ch], &reference.light[ch], &reference.density);

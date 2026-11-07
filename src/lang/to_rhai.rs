@@ -1027,6 +1027,7 @@ impl<'p> Printer<'p> {
             Predef::VarHide => return Err("a flame variation hides its point in its result, `#{ z, hide }`".into()),
             Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB => return Err("a flame variation's direct colour is written in its result, `#{ z, rgb }`".into()),
             Predef::Coef(_) => return Err("a flame variation's transform's coefficients are `ctx.a` .. `ctx.f`".into()),
+            Predef::Camera(_) => return Err("a flame variation's camera is `ctx.camera_x` .. `ctx.perspective`".into()),
             Predef::PointW | Predef::WOut => return Err("a 3D variation's 4th coordinate is `ctx.w` and `#{ z, w }`".into()),
             Predef::PixelZ | Predef::AccumZ => return Err("a 3D variation's point is a vector, `fn variation3(v, p)`".into()),
             Predef::EffectR

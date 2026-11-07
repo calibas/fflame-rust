@@ -2986,6 +2986,10 @@ impl<'p> Gen<'p> {
             (Predef::VarRgbG, _) => "(*vrc).y".into(),
             (Predef::VarRgbB, _) => "(*vrc).z".into(),
             (Predef::Coef(k), _) => format!("transforms[xform_id].{}", ["a", "b", "c", "d", "e", "f"][usize::from(k)]),
+            (Predef::Camera(k), _) => format!(
+                "params.{}",
+                ["camera_x", "camera_y", "camera_z", "camera_rotation_x", "camera_rotation_y", "camera_bank", "perspective_strength"][usize::from(k)]
+            ),
             (Predef::PointW, _) => "point_w".into(),
             (Predef::WOut, _) => "point_w_out".into(),
             // A 3D variation's (B2): the point's and the accumulator's
@@ -4914,6 +4918,8 @@ pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
          var<private> point_w_out: f32;\n\
          struct StubTransform {\n    a: f32,\n    b: f32,\n    c: f32,\n    d: f32,\n    e: f32,\n    f: f32,\n    variations: array<f32, 4>,\n}\n\
          var<private> transforms: array<StubTransform, 2>;\n\
+         struct StubParams {\n    perspective_strength: f32,\n    camera_rotation_x: f32,\n    camera_rotation_y: f32,\n    camera_bank: f32,\n    camera_x: f32,\n    camera_y: f32,\n    camera_z: f32,\n}\n\
+         var<private> params: StubParams;\n\
          @group(0) @binding(0) var palette_texture: texture_2d<f32>;\n\
          @group(0) @binding(1) var palette_sampler: sampler;\n\
          fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {\n    return c;\n}\n";
