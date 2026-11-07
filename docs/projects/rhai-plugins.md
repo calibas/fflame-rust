@@ -1260,7 +1260,16 @@ Steps, in the order that unlocks the most first (the user picks):
      derived values, so a slot keeps the built-in's number, and one
      keeping its state by a computed slot one state array: the three
      lsystems, fuchsian_triangle, schottky_group, su_custom, farblur, 635
-     in all.
+     in all. **The slow twins**: a whole-array copy as WGSL's own
+     assignment, not the checker's loop over its elements (which kept
+     small arrays out of registers): von_dyck 1.68 to 1.01, su_mobius
+     3.06 to 1.08, dc_hexes_wf 1.59 to 1.09; polychoron stays 5.65, its
+     4372-float table copied to a local at each run-time read (naga's
+     spill), four reads a vertex where the built-in's one -- a fix to the
+     tables' storage reaches the built-ins too, the user's call. The
+     timing tool's dispatches made small after one experiment reset the
+     driver (VSCode went with it). 635: compile, 13430 pairs, 0 apart,
+     every flame drawn alike.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and

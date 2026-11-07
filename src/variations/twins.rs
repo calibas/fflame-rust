@@ -1519,10 +1519,15 @@ mod tests {
     /// built-in's -- the density compare's flame at 1024x1024, its
     /// variation's transform weighted 8 to the linears' 1 so most
     /// iterations run it -- on one renderer, the two loaded in turn, seven
-    /// rounds of eight dispatches, the median of the rounds' ratios; the
-    /// slowest printed last.
+    /// rounds of sixteen small dispatches, the median of the rounds'
+    /// ratios; the slowest printed last. A twin whose one dispatch takes
+    /// over 250 ms is skipped, short of the driver's watchdog.
     /// `VARIATION_TWINS=a,b` times those alone; `VARIATION_TWINS_SELF=1`
-    /// times each built-in against itself, the measure's noise. Measured,
+    /// times each built-in against itself, the measure's noise.
+    /// `TWIN_WGSL=dir` runs a twin's WGSL from `dir/<name>-2d.wgsl` and
+    /// `-3d.wgsl` in place of its compiled code, to try a change of the
+    /// compiler's by its timing before making it (`TWIN_WGSL_WRITE=1`
+    /// writes the compiled code there first, to start from). Measured,
     /// not held: a twin is what an edit starts from, and the built-in
     /// still draws an unedited one. Ignored: it times the GPU (the app
     /// closed).
@@ -1530,15 +1535,22 @@ mod tests {
     #[ignore = "times the GPU"]
     fn time_variation_twins() {
         const N: u32 = 1024;
+        // Small dispatches, far under the driver's 2 s watchdog: a slow
+        // variant must not reset the GPU (one did, taking the editor down,
+        // 2026-11-06 -- a 370 ms dispatch made slower).
+        const GROUPS: u32 = 64;
+        const IPT: u32 = 256;
         let (device, queue) = pollster::block_on(crate::probe::run::open_device("variation twin timing")).expect("a GPU");
         let itself = std::env::var("VARIATION_TWINS_SELF").is_ok_and(|v| v == "1");
+        let wgsl_dir = std::env::var("TWIN_WGSL").ok().map(std::path::PathBuf::from);
+        let write_wgsl = std::env::var("TWIN_WGSL_WRITE").is_ok_and(|v| v == "1");
         let wait = || {
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
         };
         let dispatch = |r: &mut crate::renderer::FlameRenderer, cfg: &crate::config::FractalConfig| {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("timed") });
             r.compute_pass(
-                &mut enc, &queue, &device, 256, 1024, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation, cfg.camera_rotation_x,
+                &mut enc, &queue, &device, GROUPS, IPT, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation, cfg.camera_rotation_x,
                 cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z, cfg.speed_factor, true, false,
             );
             queue.submit(Some(enc.finish()));
@@ -1559,7 +1571,42 @@ mod tests {
             // renderers' buffers land apart in memory, and an atomic-bound
             // flame's speed is its buffers' (the same built-in ran 82 to
             // 194 ms by instance, in creation order, run after run).
+            // The twin's code from the files, registered over its own.
+            if let (Some(dir), false) = (&wgsl_dir, itself) {
+                let carried = super::carried(name).unwrap();
+                let mut dl = super::super::custom::compile_as(&carried.source, &carried.entry).unwrap();
+                let files = [(format!("{name}-2d.wgsl"), &mut dl.shader_2d), (format!("{name}-3d.wgsl"), &mut dl.shader_3d)];
+                for (file, shader) in files {
+                    let path = dir.join(file);
+                    if write_wgsl {
+                        std::fs::create_dir_all(dir).unwrap();
+                        std::fs::write(&path, shader.as_deref().unwrap_or_default()).unwrap();
+                    } else if let Ok(text) = std::fs::read_to_string(&path) {
+                        *shader = Some(text);
+                        println!("{name}: its {} from {}", if path.to_string_lossy().ends_with("2d.wgsl") { "2D body" } else { "3D body" }, path.display());
+                    }
+                }
+                super::super::custom::ensure(&cfgs[1].flame);
+                super::super::custom::register_into(&mut super::super::global_registry_mut(), &dl, &carried.source).unwrap();
+            }
             let mut r = crate::renderer::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfgs[0].flame, cfgs[0].palette_size);
+            // One dispatch of each first: past 250 ms, too near the
+            // watchdog to time.
+            let slow = (0..2).find_map(|i| {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("probe") });
+                r.load_config(&device, &mut enc, &queue, &cfgs[i], &cfgs[i].palette, 1, 0);
+                queue.submit(Some(enc.finish()));
+                wait();
+                let start = web_time::Instant::now();
+                dispatch(&mut r, &cfgs[i]);
+                wait();
+                let ms = start.elapsed().as_secs_f64() * 1e3;
+                (ms > 250.0).then_some((i, ms))
+            });
+            if let Some((i, ms)) = slow {
+                println!("{name:28} skipped: one {} dispatch took {ms:.0} ms", if i == 0 { "built-in" } else { "twin" });
+                continue;
+            }
             let mut ratios = Vec::new();
             let mut ms = [0.0f64; 2];
             for round in 0..7 {
@@ -1573,7 +1620,7 @@ mod tests {
                     }
                     wait();
                     let start = web_time::Instant::now();
-                    for _ in 0..8 {
+                    for _ in 0..16 {
                         dispatch(&mut r, &cfgs[i]);
                     }
                     wait();

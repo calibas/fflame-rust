@@ -638,7 +638,7 @@ function takes the point, and the ids when it has parameters (as
     point so the two draw alike, the colour written out): at the probe's
     adversarial inputs and a grid, 2D and 3D, at the defaults and each
     parameter's range's ends (`every_variation_twin_runs_as_its_builtin`).
-    92.4% of the outputs are bit for bit. The rest are judged by the
+    93.3% of the outputs are bit for bit. The rest are judged by the
     twin's own formula in f64 (the interpreter): the built-in off it
     where the twin is on it (its hardware trig, WGSL's `pow(0, 0)`), or
     giving no number where it has one (WGSL's `pow` of a negative base,
@@ -681,7 +681,21 @@ function takes the point, and the ids when it has parameters (as
     each calling trig inside a loop, where the language's is
     range-reduced (the likely cause, not yet measured as it). Measured,
     not held: a twin is what an edit starts from, and the built-in still
-    draws an unedited flame.
+    draws an unedited flame. Its dispatches are small (64 workgroups x
+    256 iterations) and one is probed first, a twin over 250 ms a
+    dispatch skipped: a slower variant of a 370 ms dispatch once reset
+    the driver, and with it every program on the GPU. `TWIN_WGSL=dir`
+    runs a twin's WGSL from `dir/<name>-2d.wgsl` / `-3d.wgsl` in place of
+    its compiled code (`TWIN_WGSL_WRITE=1` writes it there first), to time
+    a change of the compiler's before making it. Found so: a whole-array
+    copy written as a loop over its elements kept small arrays out of
+    registers (von_dyck 1.68, su_mobius 3.06, dc_hexes_wf 1.59), now
+    WGSL's own `dst = src` (1.01, 1.08, 1.09); and polychoron's 5.65 is
+    its table, which naga copies to a local at every read of it indexed
+    at run time (`spill_to_internal_variable`), the twin reading a
+    vertex's four floats where the built-in reads one `vec4` -- the
+    built-in pays the copy once a read too, so the fix is the tables'
+    storage, the user's call.
   - **Renamed parameters** (the user, 2026-11-06: no Rhai or WGSL
     reserved word as a name): w's and z's `super` is `super_shape`,
     hexnix3D's `3side` `triangle_scale` (`variations::RENAMED_PARAMS`).
