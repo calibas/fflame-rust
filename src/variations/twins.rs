@@ -1523,8 +1523,9 @@ mod tests {
     /// ratios; the slowest printed last. A twin whose one dispatch takes
     /// over 250 ms is skipped, short of the driver's watchdog.
     /// `VARIATION_TWINS=a,b` times those alone; `VARIATION_TWINS_SELF=1`
-    /// times each built-in against itself, the measure's noise.
-    /// `TWIN_WGSL=dir` runs a twin's WGSL from `dir/<name>-2d.wgsl` and
+    /// times each built-in against itself, the measure's noise;
+    /// `VARIATION_TWINS_3D=1` times every twin in a 3D flame, its 3D body
+    /// (else a 4D twin's alone). `TWIN_WGSL=dir` runs a twin's WGSL from `dir/<name>-2d.wgsl` and
     /// `-3d.wgsl` in place of its compiled code, to try a change of the
     /// compiler's by its timing before making it (`TWIN_WGSL_WRITE=1`
     /// writes the compiled code there first, to start from). Measured,
@@ -1542,6 +1543,7 @@ mod tests {
         const IPT: u32 = 256;
         let (device, queue) = pollster::block_on(crate::probe::run::open_device("variation twin timing")).expect("a GPU");
         let itself = std::env::var("VARIATION_TWINS_SELF").is_ok_and(|v| v == "1");
+        let all_3d = std::env::var("VARIATION_TWINS_3D").is_ok_and(|v| v == "1");
         let wgsl_dir = std::env::var("TWIN_WGSL").ok().map(std::path::PathBuf::from);
         let write_wgsl = std::env::var("TWIN_WGSL_WRITE").is_ok_and(|v| v == "1");
         let wait = || {
@@ -1562,7 +1564,7 @@ mod tests {
             let cfgs = [flame_coloured(name, None, 0.0), twin].map(|mut cfg| {
                 cfg.deterministic_rng = false;
                 cfg.flame.transforms[0].weight = 8.0;
-                if three {
+                if three || all_3d {
                     cfg.render_mode = crate::scene::transforms::RenderMode::ThreeD;
                 }
                 cfg
@@ -1596,6 +1598,9 @@ mod tests {
                 let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("probe") });
                 r.load_config(&device, &mut enc, &queue, &cfgs[i], &cfgs[i].palette, 1, 0);
                 queue.submit(Some(enc.finish()));
+                // The first dispatch also builds the pipeline: the second
+                // is the one timed.
+                dispatch(&mut r, &cfgs[i]);
                 wait();
                 let start = web_time::Instant::now();
                 dispatch(&mut r, &cfgs[i]);
