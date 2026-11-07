@@ -105,8 +105,7 @@ fn variation(z, p, ctx) {
     let col = vec3(0.0, 0.0, 0.0);
     uv = starsfield_rotate(uv, time);
     uv = uv + complex(cos(time), sin(time)) * 2.0;
-    let ix = u32(0);
-    while ix < u32(10) {
+    for ix in 0..10 {
         let i = to_float(ix) * 0.1;
         uv = starsfield_rotate(uv, starsfield_hash11(i) * 6.28);
         let t_arg = i - time;
@@ -123,7 +122,6 @@ fn variation(z, p, ctx) {
         let t5 = vec3(1.0, 1.0, 1.0);
         let t6 = vec3(l, l, l);
         col = col + vec3(mix(t4.x, t5.x, t6.x), mix(t4.y, t5.y, t6.y), mix(t4.z, t5.z, t6.z)) * f;
-        ix = ix + u32(1);
     }
     let glow_v = glow * starsfield_hash21(complex(uv.re + time, uv.im + time));
     col = col + vec3(glow_v, glow_v, glow_v);
@@ -143,8 +141,7 @@ fn variation3(v, p, ctx) {
     let col = vec3(0.0, 0.0, 0.0);
     uv = starsfield_rotate(uv, time);
     uv = uv + complex(cos(time), sin(time)) * 2.0;
-    let ix = u32(0);
-    while ix < u32(10) {
+    for ix in 0..10 {
         let i = to_float(ix) * 0.1;
         uv = starsfield_rotate(uv, starsfield_hash11(i) * 6.28);
         let t_arg = i - time;
@@ -161,7 +158,6 @@ fn variation3(v, p, ctx) {
         let t5 = vec3(1.0, 1.0, 1.0);
         let t6 = vec3(l, l, l);
         col = col + vec3(mix(t4.x, t5.x, t6.x), mix(t4.y, t5.y, t6.y), mix(t4.z, t5.z, t6.z)) * f;
-        ix = ix + u32(1);
     }
     let glow_v = glow * starsfield_hash21(complex(uv.re + time, uv.im + time));
     col = col + vec3(glow_v, glow_v, glow_v);

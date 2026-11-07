@@ -58,8 +58,7 @@ fn dc_mbox2d_rgb(i_in, time) {
     let I = i_in;
     let O = vec4(I.re, I.im, -5.0 * cos(time * 0.1), 1.0);
     let d = 1.0;
-    let k = u32(0);
-    while k < u32(20) {
+    for k in 0..20 {
         let t2 = -1.0;
         let t1 = complex(t2, t2);
         let t3 = complex(1.0, 1.0);
@@ -75,7 +74,6 @@ fn dc_mbox2d_rgb(i_in, time) {
         }
         I = I * (O.z * b) + complex(O.x, O.y);
         d = b * d * abs(O.z) + 1.0;
-        k = k + u32(1);
     }
     let df = pow(I.abs() / d, 0.1) * 5.0;
     let t4 = vec3(cos(df), sin(10.0 * df + 1.0), cos(3.0 * df + 1.0)) * 0.5;

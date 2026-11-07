@@ -33,14 +33,12 @@ fn variation(z, p) {
     let denom = p.denom;
     let fixpe = p.fixpe;
     let fix_atan_period = 0.0;
-    let i = u32(0);
-    while i < u32(7) {
+    for i in 0..7 {
         let adp = to_int(rand_u32() % u32(10)) - 5;
         if (adp >= 3 || adp <= -3) {
             adp = 0;
         }
         fix_atan_period = fix_atan_period + to_float(adp);
-        i = i + u32(1);
     }
     fix_atan_period = fix_atan_period * fixpe;
     let r2 = max(1.1754944e-38, z.re * z.re + z.im * z.im);

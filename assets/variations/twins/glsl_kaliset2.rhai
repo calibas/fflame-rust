@@ -96,8 +96,7 @@ fn variation(z, p, ctx) {
     let zoom = 2.0 + 5.0 * shift_y;
     let rad2_safe = max(1.0e-32, abs(rad2));
     let rsum = 0.0;
-    let k = u32(0);
-    while k < n_iters {
+    for k in 0..to_int(n_iters) {
         let rr = v.re * v.re + v.im * v.im;
         if (rr > rad2) {
             rr = rad2_safe / rr;
@@ -105,7 +104,6 @@ fn variation(z, p, ctx) {
         }
         rsum = max(rsum, rr);
         v = complex(c_cos * v.re - s_sin * v.im, s_sin * v.re + c_cos * v.im) * zoom + shift;
-        k = k + u32(1);
     }
     let col = rsum * rsum * (500.0 / to_float(n_iters) / rad2_safe);
     rgb = vec3(cos(col * fr), cos(col * fg), cos(col * fb));
@@ -134,8 +132,7 @@ fn variation3(q, p, ctx) {
     let zoom = 2.0 + 5.0 * shift_y;
     let rad2_safe = max(1.0e-32, abs(rad2));
     let rsum = 0.0;
-    let k = u32(0);
-    while k < n_iters {
+    for k in 0..to_int(n_iters) {
         let rr = v.re * v.re + v.im * v.im;
         if (rr > rad2) {
             rr = rad2_safe / rr;
@@ -143,7 +140,6 @@ fn variation3(q, p, ctx) {
         }
         rsum = max(rsum, rr);
         v = complex(c_cos * v.re - s_sin * v.im, s_sin * v.re + c_cos * v.im) * zoom + shift;
-        k = k + u32(1);
     }
     let col = rsum * rsum * (500.0 / to_float(n_iters) / rad2_safe);
     rgb = vec3(cos(col * fr), cos(col * fg), cos(col * fb));

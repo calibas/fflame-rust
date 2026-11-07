@@ -126,15 +126,13 @@ fn variation(w, p, ctx) {
         u = complex(t5.im, t5.re);
     }
     let pp = vec3(u.re, u.im, mx * v);
-    let l = u32(0);
-    while l < loops {
+    for l in 0..to_int(loops) {
         let d = max(1.0e-32, dot(pp, pp));
         let t1 = vec3(1.3, 0.999, 0.678);
         let t2 = abs(pp) / d - vec3(1.0, 1.02, my * rcpi);
         let t3 = abs(t2);
         let t4 = t1 * t3;
         pp = vec3(t4.x, t4.z, t4.y);
-        l = l + u32(1);
     }
     if (inv_r == u32(1)) {
         pp.x = 1.0 - pp.x;
@@ -193,15 +191,13 @@ fn variation3(q, p, ctx) {
         u = complex(t5.im, t5.re);
     }
     let pp = vec3(u.re, u.im, mx * v);
-    let l = u32(0);
-    while l < loops {
+    for l in 0..to_int(loops) {
         let d = max(1.0e-32, dot(pp, pp));
         let t1 = vec3(1.3, 0.999, 0.678);
         let t2 = abs(pp) / d - vec3(1.0, 1.02, my * rcpi);
         let t3 = abs(t2);
         let t4 = t1 * t3;
         pp = vec3(t4.x, t4.z, t4.y);
-        l = l + u32(1);
     }
     if (inv_r == u32(1)) {
         pp.x = 1.0 - pp.x;

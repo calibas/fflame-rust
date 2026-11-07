@@ -287,6 +287,12 @@ impl Lowerer<'_> {
                 if let Some(kind) = self.vec_kind(&be.lhs, scope) {
                     return member_kind(kind, &be.rhs);
                 }
+                // A helper of the script's called as a method: what it gives.
+                if let Expr::MethodCall(f, _) = &be.rhs {
+                    if self.fns.contains_key(f.name.as_str()) {
+                        return self.helper_gives_vec(f.name.as_str(), &f.args, scope);
+                    }
+                }
                 let owner = self.owner(&be.lhs, scope)?;
                 let (first, rest) = match &be.rhs {
                     Expr::Dot(b2, _, _) => (&b2.lhs, Some(&b2.rhs)),
@@ -346,14 +352,26 @@ impl Lowerer<'_> {
     }
 
     /// A value, a vector or a number as it is.
-    /// A helper's argument as its parameter binds: a value, a vector, or
-    /// the entry's parameters or context passed whole.
+    /// A helper's argument as its parameter binds: a value, a vector, the
+    /// entry's parameters or context passed whole, or an array -- the
+    /// helper's own copy, as Rhai and WGSL pass one, by value; where no
+    /// statement may go (and so no write), the caller's read in place.
     pub(super) fn helper_arg(&mut self, e: &Expr, scope: &mut Scope) -> R<Binding> {
         if let Some(b) = super::passed_whole(e, scope) {
             return Ok(b);
         }
         Ok(match self.arg(e, scope)? {
-            Val::S(a) => Binding::Value(a),
+            Val::S(a) => match self.array_of(&a) {
+                Some((from, _)) if self.pure => Binding::Local(from),
+                Some((from, len)) => {
+                    let span = self.pos.span(e.position());
+                    let ty = self.types.get(&from).copied().unwrap_or(TypeName::Float);
+                    let copy = self.new_array(ty, len, span);
+                    self.pending.push(super::assign(super::mk(ExprKind::Name(copy.clone()), span), a, span));
+                    Binding::Local(copy)
+                }
+                None => Binding::Value(a),
+            },
             Val::V(v) => Binding::VecValue(Box::new(v)),
         })
     }
@@ -375,6 +393,13 @@ impl Lowerer<'_> {
                 Some(Binding::VecValue(x)) => Ok(*x),
                 _ => self.err(*p, VECTOR_WANTED),
             },
+            Expr::Dot(be, _, _) if matches!(&be.rhs, Expr::MethodCall(f, _) if self.fns.contains_key(f.name.as_str())) && !self.is_vec(&be.lhs, scope) => {
+                // A helper of the script's called as a method, giving a
+                // vector: its value its `this`.
+                let Expr::MethodCall(f, fp) = &be.rhs else { unreachable!() };
+                let this = self.expr(&be.lhs, scope)?;
+                self.vcall(f, *fp, Some(this), scope)
+            }
             Expr::Dot(be, _, _) => {
                 let got = if self.is_vec(&be.lhs, scope) {
                     let v = self.vexpr(&be.lhs, scope)?;
@@ -410,7 +435,7 @@ impl Lowerer<'_> {
                     Val::S(_) => self.err(e.position(), VECTOR_WANTED),
                 }
             }
-            Expr::FnCall(f, p) => self.vcall(f, *p, scope),
+            Expr::FnCall(f, p) => self.vcall(f, *p, None, scope),
             Expr::Stmt(b) => match b.statements() {
                 [Stmt::If(fc, p)] => self.vec_if_value(fc, *p, scope),
                 _ => self.err(e.position(), VECTOR_WANTED),
@@ -420,8 +445,8 @@ impl Lowerer<'_> {
     }
 
     /// A call giving a vector: a helper of the script's, inlined, or a
-    /// function of vectors.
-    fn vcall(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope) -> R<Vector> {
+    /// function of vectors; `this` a method call's value.
+    fn vcall(&mut self, f: &FnCallExpr, p: Position, this: Option<ast::Expr>, scope: &mut Scope) -> R<Vector> {
         let n = f.name.as_str();
         if n == "vary" && self.solid {
             return self.vary_map(f, p, scope);
@@ -443,6 +468,10 @@ impl Lowerer<'_> {
             let mut inner = Scope::new(Fn3::Helper, Vec::new());
             for (param, a) in def.params.iter().zip(vals) {
                 inner.bind(param, a);
+            }
+            if let Some(v) = this {
+                let b = self.this_binding(v, self.pos.span(p));
+                inner.bind("this", b);
             }
             self.depth += 1;
             let r = if self.pure {
@@ -584,7 +613,7 @@ impl Lowerer<'_> {
     pub(super) fn final_vec(&mut self, f: Final, scope: &mut Scope) -> R<Vector> {
         match f {
             Final::Expr(e) => self.vexpr(e, scope),
-            Final::Call(c, p) => self.vcall(c, p, scope),
+            Final::Call(c, p) => self.vcall(c, p, None, scope),
             Final::If(fc, p) => self.vec_if_value(fc, p, scope),
         }
     }
@@ -896,8 +925,10 @@ impl Lowerer<'_> {
             }
             // An escape colouring's palette (batch 5), through the
             // template's: at a cycle position in linear light, the same as
-            // stored (display space), or a table read clamped at 0..1.
-            ("palette" | "palette_srgb" | "palette_table", 1) if self.coloring => match args.remove(0) {
+            // stored (display space), or a table read clamped at 0..1. A
+            // flame variation's (P7 step 3): the flame's palette at `t`,
+            // linear or as stored.
+            ("palette" | "palette_srgb" | "palette_table", 1) if self.coloring || (self.transform && name != "palette_table") => match args.remove(0) {
                 S(t) => {
                     let t = self.hold(t, "t");
                     let how = mk(ExprKind::Int(match name {

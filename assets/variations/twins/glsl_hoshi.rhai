@@ -89,15 +89,13 @@ fn variation(z, p, ctx) {
     let t3 = -0.5;
     let fold = complex(t3, t3);
     let trans = complex(translate, translate);
-    let k = u32(0);
-    while k < steps {
+    for k in 0..to_int(steps) {
         let orig_i = to_float(steps) - to_float(k);
         let t4 = pp - fold;
         pp = complex(abs(t4.re), abs(t4.im)) + fold;
         pp = pp * scale - trans;
         let denom = 0.10 + sin(time * 0.0005 + orig_i * 0.5000001) * 0.4999 + 0.5 + (10.0 / time) + sin(time) / 100.0;
         pp = hoshi_rotate(pp, 3.14159 / max(1.0e-32, denom));
-        k = k + u32(1);
     }
     let ii = x_init * x_init + atan2(pp.im, pp.re) + time * 0.02;
     let h = to_float(floor(ii * 4.0)) / 8.0 + 1.107;
@@ -132,15 +130,13 @@ fn variation3(q, p, ctx) {
     let t3 = -0.5;
     let fold = complex(t3, t3);
     let trans = complex(translate, translate);
-    let k = u32(0);
-    while k < steps {
+    for k in 0..to_int(steps) {
         let orig_i = to_float(steps) - to_float(k);
         let t4 = pp - fold;
         pp = complex(abs(t4.re), abs(t4.im)) + fold;
         pp = pp * scale - trans;
         let denom = 0.10 + sin(time * 0.0005 + orig_i * 0.5000001) * 0.4999 + 0.5 + (10.0 / time) + sin(time) / 100.0;
         pp = hoshi_rotate(pp, 3.14159 / max(1.0e-32, denom));
-        k = k + u32(1);
     }
     let ii = x_init * x_init + atan2(pp.im, pp.re) + time * 0.02;
     let h = to_float(floor(ii * 4.0)) / 8.0 + 1.107;

@@ -1224,26 +1224,41 @@ Steps, in the order that unlocks the most first (the user picks):
      reading the parameters takes `p` (synth), a helper after the
      variation's own function (ho), the init's helpers, and the shared
      helpers of noise.wgsl and its neighbours as complex.wgsl's
-     (dc_perlin): 597 in all, 10266 pairs, 0 apart.
+     (dc_perlin): 597 in all, 10266 pairs, 0 apart. **The user's
+     answers (2026-11-06)**: structs as helpers, no struct types unless
+     one is pressing; palette reads in a variation; no Rhai or WGSL
+     reserved word as a name; arrays to helpers, integer vectors and
+     pointer arguments as language work. Built: `palette(t)` and
+     `palette_srgb(t)` (the quaternion family); an array passed to a
+     helper by value, and a helper's value an array (`if` values too);
+     a helper called as a method changing what it is called on through
+     `this` (Rhai's binding, a WGSL pointer's way), giving a number, a
+     vector or nothing (a statement); in the translator, a struct of one
+     field type an array, module constants written out, the Möbius and
+     fract libraries carried in, a helper's pointer its `this`, a helper
+     reading the context taking `ctx`, a u32 `for` a counted range:
+     crackle's three, iconattractor_js, glsl_circuits, eight of the
+     Möbius family, the six fract, rhodonea, 617 in all, 11354 pairs, 0
+     apart.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 50, by count (`translate_variation_twins.py
-     --report`): a struct (16: the Möbius library's, with its table, 9;
-     the fract family's, 6; complex.wgsl's `CMat2`, klein_group), the
-     renderer's hooks (6: the analytic blurs, the volume emitters, the
-     subflames), arrays as arguments or of vectors (7: crackle's three,
-     dc_hexes_wf, iconattractor_js, the honeycombs), an integer vector
-     (4: sphere_packing, and polyhedra.wgsl's and polychora.wgsl's face
-     ranges for polyhedron, polychoron, menger), a parameter by a
-     computed slot (3, the lsystems), plot emits (3), a palette read in a
-     variation (3, the quaternion family's `.rgb`), a pointer argument
-     (2: glsl_circuits, mondrianomies's hash state), a parameter named
-     `super`, which Rhai reserves (`w`, `z`), and one each: a matrix
-     (glsl_apollonian), a parameter named `3side` (hexnix3D), state by a
-     computed slot (farblur), a helper hiding the point (rhodonea).
+     passed through. Left, 30, by count (`translate_variation_twins.py
+     --report`): the renderer's hooks (6: the analytic blurs, the volume
+     emitters, the subflames) and plot emits (3), out of the plan; a
+     computed slot (8: `prepare`'s for fuchsian_triangle, schottky_group
+     and mondrianomies, a parameter's for su_custom and the three
+     lsystems, the state's for farblur); a constant table (4:
+     polyhedron, polychoron, menger, su_mobius -- next, the language
+     hoisting a read-only literal array to a WGSL constant, as a table
+     built at each read is thousands of stores); integer vectors and
+     vector arrays (4: sphere_packing, dc_hexes_wf, the honeycombs,
+     translated, to gate); a reserved or non-identifier parameter name
+     (3: `super` in w and z, `3side` in hexnix3D -- a rename, its names
+     the user's); and one each: a matrix (glsl_apollonian), a helper
+     reading the variation's state (klein_group).
 4. **The twins, in batches**: the variations by family -- a skeleton
    generator from the defs, as P4's `write_twin_skeletons`, and each
    held by a density compare and timed -- the escape colourings, the

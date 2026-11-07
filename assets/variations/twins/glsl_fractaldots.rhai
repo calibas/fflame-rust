@@ -95,8 +95,7 @@ fn variation(z, p, ctx) {
     uv = fractaldots_rot(uv, rotate1);
     uv = uv * zoom;
     let s = spacing;
-    let i = u32(0);
-    while i < max_iter {
+    for i in 0..to_int(max_iter) {
         let t1 = complex(abs(uv.re), abs(uv.im));
         uv = complex(t1.re - s, t1.im - s);
         uv = uv - complex(complexity, complexity);
@@ -105,7 +104,6 @@ fn variation(z, p, ctx) {
         if (iterations < i) {
             break;
         }
-        i = i + u32(1);
     }
     let c = (if uv.abs() <= circle_size { 1.0 } else { 0.0 });
     rgb = vec3(c, c, c);
@@ -132,8 +130,7 @@ fn variation3(v, p, ctx) {
     uv = fractaldots_rot(uv, rotate1);
     uv = uv * zoom;
     let s = spacing;
-    let i = u32(0);
-    while i < max_iter {
+    for i in 0..to_int(max_iter) {
         let t1 = complex(abs(uv.re), abs(uv.im));
         uv = complex(t1.re - s, t1.im - s);
         uv = uv - complex(complexity, complexity);
@@ -142,7 +139,6 @@ fn variation3(v, p, ctx) {
         if (iterations < i) {
             break;
         }
-        i = i + u32(1);
     }
     let c = (if uv.abs() <= circle_size { 1.0 } else { 0.0 });
     rgb = vec3(c, c, c);

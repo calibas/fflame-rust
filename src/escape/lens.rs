@@ -213,10 +213,14 @@ pub fn lens_menu(registry: &VariationRegistry) -> Vec<String> {
         }
     }
     for name in registry.names() {
-        // A 3D variation only has no 2D body for the lens (B2), and the
-        // lens runs no init pass for derived slots (`prepare`).
+        // A 3D variation only has no 2D body for the lens (B2), the lens
+        // runs no init pass for derived slots (`prepare`), and its shader
+        // has not the flame's palette (`palette(t)`).
         if registry.get(name).is_some_and(|v| {
-            v.provenance == crate::provenance::Provenance::Local && v.category != crate::variations::VariationCategory::Only3D && v.init_param_count == 0
+            v.provenance == crate::provenance::Provenance::Local
+                && v.category != crate::variations::VariationCategory::Only3D
+                && v.init_param_count == 0
+                && !v.wgsl_source.as_deref().is_some_and(|s| s.contains("palette_texture"))
         }) {
             out.push(name.clone());
         }
