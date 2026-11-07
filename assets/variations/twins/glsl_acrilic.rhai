@@ -105,17 +105,14 @@ fn variation(w, p, ctx) {
     let i_f = to_float(floor(rand() * resolution));
     let j_f = to_float(floor(rand() * resolution));
     let col = vec3(0.0, 0.0, 0.0);
-    let j = u32(0);
-    while j < u32(3) {
+    for j in 0..3 {
         let pp = complex(0.7 * (i_f + 0.5) / resolution, 0.7 * (j_f + 0.5) / resolution);
         let jf = to_float(j);
-        let i = u32(1);
-        while i < steps {
+        for i in 1..to_int(steps) {
             let ife = to_float(i);
             let denom = ife + jf;
             pp = complex(pp.re + 0.1 / denom * sin(ife * p1 * pp.im + time + cos((time / (p2 * ife)) * ife + jf)), pp.im);
             pp = complex(pp.re, pp.im + 0.1 / denom * cos(ife * p3 * pp.re + time + sin((time / (p4 * ife)) * ife + jf)));
-            i = i + u32(1);
         }
         let v = sin(p5 * pp.re * pp.re) + sin(p6 * pp.im * pp.im);
         if (j == u32(0)) {
@@ -125,7 +122,6 @@ fn variation(w, p, ctx) {
         } else {
             col.z = v;
         }
-        j = j + u32(1);
     }
     rgb = vec3(cos(col.x * fr), cos(col.y * fg), cos(col.z * fb));
     #{ z: complex(i_f / resolution - 0.5, j_f / resolution - 0.5), rgb: rgb }
@@ -150,17 +146,14 @@ fn variation3(q, p, ctx) {
     let i_f = to_float(floor(rand() * resolution));
     let j_f = to_float(floor(rand() * resolution));
     let col = vec3(0.0, 0.0, 0.0);
-    let j = u32(0);
-    while j < u32(3) {
+    for j in 0..3 {
         let pp = complex(0.7 * (i_f + 0.5) / resolution, 0.7 * (j_f + 0.5) / resolution);
         let jf = to_float(j);
-        let i = u32(1);
-        while i < steps {
+        for i in 1..to_int(steps) {
             let ife = to_float(i);
             let denom = ife + jf;
             pp = complex(pp.re + 0.1 / denom * sin(ife * p1 * pp.im + time + cos((time / (p2 * ife)) * ife + jf)), pp.im);
             pp = complex(pp.re, pp.im + 0.1 / denom * cos(ife * p3 * pp.re + time + sin((time / (p4 * ife)) * ife + jf)));
-            i = i + u32(1);
         }
         let v = sin(p5 * pp.re * pp.re) + sin(p6 * pp.im * pp.im);
         if (j == u32(0)) {
@@ -170,7 +163,6 @@ fn variation3(q, p, ctx) {
         } else {
             col.z = v;
         }
-        j = j + u32(1);
     }
     rgb = vec3(cos(col.x * fr), cos(col.y * fg), cos(col.z * fb));
     #{ z: vec3(i_f / resolution - 0.5, j_f / resolution - 0.5, q.z), rgb: rgb }

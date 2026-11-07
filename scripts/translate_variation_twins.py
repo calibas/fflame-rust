@@ -85,7 +85,7 @@ class P:
         if k == "id":
             self.next()
             # A type's constructor: vec2<f32>(...), array<...>(...).
-            if self.peek() == "<" and v in ("vec2", "vec3", "vec4", "array", "mat2x2", "mat3x3", "ptr"):
+            if self.peek() == "<" and v in ("vec2", "vec3", "vec4", "array", "mat2x2", "mat3x3", "ptr", "bitcast"):
                 depth = 0; ty = v
                 while True:
                     w = self.next(); ty += w
@@ -196,11 +196,66 @@ def stmt_simple(p):
         p.next(); return ("assign", lhs, "+=" if op == "++" else "-=", ("num", "1"))
     return ("expr", lhs)
 
+# The structs and module constants of the WGSL being translated (its own
+# and the shared helpers'): a struct whose fields share one type, a number
+# or a complex number, is an array of it, its fields by their places (the
+# user, 2026-11-06: structs as helpers, no struct types); a constant is
+# written out where it is read.
+STRUCTS = {}
+CONSTS = {}
+
+def struct_array(name):
+    """A struct as ("f32" | "vec2", {field: place}), or refused."""
+    fields = STRUCTS[name]
+    tys = {ty.replace(" ", "") for _, ty in fields}
+    if len(tys) != 1 or not tys <= {"f32", "vec2<f32>"}:
+        raise Refuse(f"a struct of other fields `{name}`")
+    return ("vec2" if tys == {"vec2<f32>"} else "f32"), {f: i for i, (f, _) in enumerate(fields)}
+
+def struct_field(field):
+    """The place of `field` in whichever array-struct has it, or None."""
+    at = {struct_array(s)[1][field] for s in STRUCTS if field in dict(STRUCTS[s]) and len({t.replace(" ", "") for _, t in STRUCTS[s]}) == 1}
+    if len(at) > 1:
+        raise Refuse(f"a field `.{field}` at two places")
+    return at.pop() if at else None
+
 def functions(src):
-    """Each `fn name(args) -> ret { body }` in the WGSL: (name, args, ret, body tokens)."""
+    """Each `fn name(args) -> ret { body }` in the WGSL: (name, args, ret, body tokens).
+    Its structs and constants go to STRUCTS and CONSTS."""
     toks = tokens(src)
     out, i = [], 0
     while i < len(toks):
+        if toks[i][1] == "struct":
+            name = toks[i + 1][1]
+            j = i + 2
+            assert toks[j][1] == "{"
+            k = j
+            while toks[k][1] != "}":
+                k += 1
+            fields, cur = [], []
+            for t in toks[j + 1:k]:
+                if t[0] == "comment":
+                    continue
+                if t[1] == "," and cur.count("<") == cur.count(">"):
+                    fields.append("".join(cur)); cur = []
+                else:
+                    cur.append(t[1])
+            if cur: fields.append("".join(cur))
+            STRUCTS[name] = [tuple(f.split(":", 1)) for f in fields if ":" in f]
+            i = k + 1
+            if i < len(toks) and toks[i][1] == ";":
+                i += 1
+            continue
+        if toks[i][1] == "const":
+            k, depth = i, 0
+            while not (depth == 0 and toks[k][1] == ";"):
+                if toks[k][1] in ("(", "{", "["): depth += 1
+                elif toks[k][1] in (")", "}", "]"): depth -= 1
+                k += 1
+            d = stmt(P([t for t in toks[i:k + 1] if t[0] != "comment"]))
+            CONSTS[d[2]] = (d[3], d[4])
+            i = k + 1
+            continue
         if toks[i][1] == "fn":
             name = toks[i + 1][1]
             j = toks.index((toks[i + 2][0], "("), i) if False else i + 2
@@ -247,20 +302,41 @@ def functions(src):
 
 def array_of(ty):
     """`array<f32, 8>` as ("f32", "8"): an array of numbers or of complex
-    numbers (`vec2`), the language's; any other refused."""
-    m = re.fullmatch(r"array<\s*(f32|i32|u32|vec2<f32>)\s*,\s*(\w+)\s*>", ty.strip())
+    numbers (`vec2`), the language's; of `vec3` or `vec4`, an array of
+    their floats, flat (`FLAT`); any other refused."""
+    m = re.fullmatch(r"array<\s*(f32|i32|u32|vec2<f32>|vec3<f32>|vec4<f32>)\s*,\s*(\w+)\s*>", ty.strip())
     if not m:
         raise Refuse(f"an array `{ty.strip()}`")
-    return {"f32": "f32", "i32": "int", "u32": "u32", "vec2<f32>": "vec2"}[m.group(1)], m.group(2)
+    return {"f32": "f32", "i32": "int", "u32": "u32", "vec2<f32>": "vec2", "vec3<f32>": "vec3", "vec4<f32>": "vec4"}[m.group(1)], m.group(2)
+
+# A vector array's floats a vector, flat in the language's array.
+FLAT = {"vec3": 3, "vec4": 4}
 
 ZERO_OF = {"f32": "0.0", "int": "0", "u32": "u32(0)", "vec2": "complex(0.0, 0.0)"}
 
+def palette_read(e):
+    """`t` of the flame palette's read at `t` as stored --
+    `textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(t,
+    0.5), 0.0).rgb`, a variation's `palette_srgb(t)` -- else None."""
+    if e[0] != "field" or e[2] != "rgb" or e[1][0] != "call" or e[1][1] != "textureSampleLevel" or len(e[1][2]) != 4:
+        return None
+    tex, smp, uv, lod = e[1][2]
+    if tex != ("id", "palette_texture") or smp != ("id", "palette_sampler") or lod[0] != "num":
+        return None
+    if uv[0] != "call" or not uv[1].startswith("vec2") or len(uv[2]) != 2 or uv[2][1][0] != "num" or float(uv[2][1][1].rstrip("f")) != 0.5:
+        return None
+    return uv[2][0]
+
 def vec_of(ty):
     if ty is None: return None
-    # The language's vectors are floats: an integer one is refused, not
-    # made a float one.
-    if ty.startswith("vec") and ("u32" in ty or "i32" in ty or "bool" in ty):
-        raise Refuse(f"an integer vector `{ty}`")
+    if ty.strip() in STRUCTS:
+        return "array:" + struct_array(ty.strip())[0]
+    # The language's vectors are floats: an integer one is an array of its
+    # integers (a helper's pair, read by `.x` and `.y`), never a float one.
+    if ty.startswith("vec") and ("u32" in ty or "i32" in ty):
+        return "array:" + ("u32" if "u32" in ty else "int")
+    if ty.startswith("vec") and "bool" in ty:
+        raise Refuse(f"a vector of bools `{ty}`")
     if ty.startswith("vec2"): return "vec2"
     if ty.startswith("vec3"): return "vec3"
     if ty.startswith("vec4"): return "vec4"
@@ -282,7 +358,7 @@ class Fn:
         # The function's own names, which a temporary must not take.
         self.taken = set()
         self.uses_ctx = False
-        self.ret = vec_of(ret.strip()) if ret.strip() else None
+        self.ret = ("array:" + array_of(ret)[0]) if ret.replace(" ", "").startswith("array<") else (vec_of(ret.strip()) if ret.strip() else None)
         self.params = []
         self.point = None
         # The init's body (`prepare`): `user[i]` the parameters, `out` its
@@ -296,6 +372,8 @@ class Fn:
         self.xform_alias = set()
         # A 3D body ending in an `if`: the arms set this, returned after.
         self.result_var = None
+        # A helper's pointer argument, written as `this`.
+        self.this_ptr = None
         for name, ty in args:
             ty = ty.strip()
             if name == "p" and not helper:
@@ -308,6 +386,14 @@ class Fn:
                 pass
             elif ty.startswith("ptr<function,RngState>") or ty.startswith("ptr<function, RngState>"):
                 pass
+            elif helper and ty.startswith("ptr"):
+                # A helper's pointer: the value it is called on, `this`, as
+                # Rhai binds a method call's (by reference).
+                if self.this_ptr:
+                    raise Refuse("a helper taking two pointers")
+                self.this_ptr = name
+                self.types[name] = vec_of(ty.replace(" ", "")[len("ptr<function,"):-1])
+                self.outs[name] = ["this", "this"]
             elif name == "accum":
                 self.types["accum"] = vec_of(ty)
             elif name == "vc" and ty.replace(" ", "") == "ptr<function,f32>":
@@ -325,6 +411,10 @@ class Fn:
                 self.outs["vrc"] = ["rgb", None]
             elif ty.startswith("ptr"):
                 raise Refuse(f"a pointer argument `{name}: {ty}`")
+            elif ty.replace(" ", "").startswith("array<"):
+                # An array, by value as the language passes one.
+                self.types[name] = "array:" + array_of(ty)[0]
+                self.params.append(name)
             else:
                 self.types[name] = vec_of(ty)
                 self.params.append(name)
@@ -340,6 +430,9 @@ class Fn:
         if k == "id":
             if e[1] in self.types: return self.types[e[1]]
             if e[1] in ("true", "false"): return "bool"
+            if e[1] in CONSTS:
+                ty, init = CONSTS[e[1]]
+                return vec_of(ty.strip()) if ty else self.ty(init)
             return "f32"
         if k == "paren": return self.ty(e[1])
         if k == "un":
@@ -354,6 +447,12 @@ class Fn:
                 return "u32"
             if "f32" in (a, b): return "f32"
             return a
+        if palette_read(e) is not None:
+            return "vec3"
+        if k == "field" and self.ty(e[1]).startswith("array:") and struct_field(e[2]) is not None:
+            return self.ty(e[1])[len("array:"):]
+        if k == "field" and self.ty(e[1]) in ("array:u32", "array:int") and len(e[2]) == 1 and e[2] in "xyzw":
+            return self.ty(e[1])[len("array:"):]
         if k == "field":
             base = self.ty(e[1])
             if base in ("vec2", "vec3", "vec4"):
@@ -367,11 +466,15 @@ class Fn:
         if k == "call":
             f, args = e[1], e[2]
             if f.startswith("array<"): return "array:" + array_of(f)[0]
+            if f in STRUCTS: return "array:" + struct_array(f)[0]
+            if f.startswith("vec") and ("u32" in f or "i32" in f): return "array:" + ("u32" if "u32" in f else "int")
             if f.startswith("vec2"): return "vec2"
             if f.startswith("vec3"): return "vec3"
             if f.startswith("vec4"): return "vec4"
             if f in ("length", "dot", "distance", "get_param", "rng_nextf", "f32", "atan2"): return "f32"
             if f in ("i32", "u32"): return f
+            if f == "countOneBits": return "u32"
+            if f in ("bitcast<u32>", "bitcast<i32>"): return "u32" if f == "bitcast<u32>" else "int"
             if f == "rng_next": return "u32"
             if f in ("select",): return self.ty(args[1])
             # A function WGSL takes part by part gives the vector it is of.
@@ -450,6 +553,12 @@ class Fn:
                 return self.outs["point_w_out"][1]
             if n == "accum":
                 self.uses_ctx = True; return "ctx.accum"
+            # A module constant, written out.
+            if n in CONSTS and n not in self.types:
+                ty, init = CONSTS[n]
+                if init is None or (ty and ty.replace(" ", "").startswith("array<")):
+                    raise Refuse(f"a constant table `{n}`")
+                return self.ex(init)
             return n
         if k == "paren":
             return f"({self.ex(e[1])})"
@@ -493,6 +602,17 @@ class Fn:
                 raise Refuse(f"the transform's `{e[2]}`")
             self.uses_ctx = True
             return f"ctx.{e[2]}"
+        # An integer vector's part: its place in the array.
+        if k == "field" and self.ty(e[1]) in ("array:u32", "array:int") and len(e[2]) == 1 and e[2] in "xyzw":
+            b = e[1][1] if e[1][0] == "id" and e[1][1] not in CONSTS else self.hold(e[1])
+            return f"{b}[{'xyzw'.index(e[2])}]"
+        # A struct's field: its place in the array.
+        if k == "field" and self.ty(e[1]).startswith("array:") and struct_field(e[2]) is not None:
+            b = e[1][1] if e[1][0] == "id" and e[1][1] not in CONSTS else self.hold(e[1])
+            return f"{b}[{struct_field(e[2])}]"
+        # The flame's palette at `t`, as stored.
+        if palette_read(e) is not None:
+            return f"palette_srgb({self.ex(palette_read(e))})"
         if k == "field":
             base_t = self.ty(e[1])
             sw = e[2]
@@ -507,6 +627,11 @@ class Fn:
                 if len(sw) == 3: return f"vec3({', '.join(parts)})"
                 return f"rgba({', '.join(parts)})"
             raise Refuse(f"a field `.{sw}`")
+        if k == "index" and e[1][0] == "id" and self.types.get(e[1][1], "")[len("array:"):] in FLAT:
+            elem = self.types[e[1][1]][len("array:"):]
+            i = self.ex(e[2]) if e[2][0] in ("id", "num") else self.hold(e[2])
+            n = FLAT[elem]
+            return f"{elem}(" + ", ".join(f"{e[1][1]}[{n} * {i} + {c}]" for c in range(n)) + ")"
         if k == "index" and e[1][0] == "id" and self.types.get(e[1][1], "").startswith("array:"):
             return f"{e[1][1]}[{self.ex(e[2])}]"
         if k == "index" and self.init and e[1] in (("id", "user"), ("id", "out")):
@@ -528,11 +653,50 @@ class Fn:
 
     def call(self, e):
         f, args = e[1], e[2]
-        if f.startswith("array<"):
-            array_of(f)
+        if f == "countOneBits":
+            if self.ty(args[0]) != "u32":
+                raise Refuse("`countOneBits` of other than a u32")
+            self.tr.written.add("count_one_bits")
+            return f"count_one_bits({self.ex(args[0])})"
+        if f.startswith("bitcast<"):
+            src = self.ty(args[0])
+            if f == "bitcast<u32>" and src in ("int", "i32", "u32"):
+                return f"u32({self.ex(args[0])})"
+            if f == "bitcast<i32>" and src in ("int", "i32", "u32"):
+                return f"to_int({self.ex(args[0])})" if src == "u32" else self.ex(args[0])
+            raise Refuse("a float's bits (`bitcast`), which the language has not")
+        # A struct built: the array of its fields.
+        if f in STRUCTS:
+            struct_array(f)
             return "[" + ", ".join(self.ex(a) for a in args) + "]"
-        if f.startswith("vec") and ("u32" in f or "i32" in f or "bool" in f):
-            raise Refuse(f"an integer vector `{f}`")
+        if f.startswith("array<"):
+            elem, _ = array_of(f)
+            if elem in FLAT:
+                parts = []
+                for a in args:
+                    if a[0] == "call" and a[1].startswith(elem) and len(a[2]) == FLAT[elem] and all(not self.ty(x).startswith(("vec", "array")) for x in a[2]):
+                        parts += [self.ex(x) for x in a[2]]
+                    else:
+                        v = self.hold(a)
+                        parts += [f"{v}.{c}" for c in "xyzw"[:FLAT[elem]]]
+                return "[" + ", ".join(parts) + "]"
+            return "[" + ", ".join(self.ex(a) for a in args) + "]"
+        if f.startswith("vec") and ("u32" in f or "i32" in f):
+            # An integer vector: the array of its parts, each its type.
+            n = int(f[3])
+            conv = (lambda x: f"u32({x})") if "u32" in f else (lambda x: f"to_int({x})")
+            def part(a):
+                t = self.ty(a)
+                want = "u32" if "u32" in f else "int"
+                return self.ex(a) if t == want or (want == "int" and t == "i32") else conv(self.ex(a))
+            if len(args) == 1:
+                a = self.hold(args[0])
+                return "[" + ", ".join([part(("id", a))] * n) + "]"
+            if len(args) != n or any(self.ty(a).startswith(("vec", "array")) for a in args):
+                raise Refuse(f"an integer vector `{f}` of other parts")
+            return "[" + ", ".join(part(a) for a in args) + "]"
+        if f.startswith("vec") and "bool" in f:
+            raise Refuse(f"a vector of bools `{f}`")
         if f.startswith("vec2"):
             if len(args) == 1:
                 a = self.hold(args[0]); return f"complex({a}, {a})"
@@ -594,6 +758,8 @@ class Fn:
             return f"({self.ex(args[0])} * 0.017453292519943295)"
         if f == "degrees" and self.ty(args[0]) == "f32":
             return f"({self.ex(args[0])} * 57.29577951308232)"
+        if f == "get_state" and self.helper:
+            raise Refuse("a helper reading the variation's state")
         if f == "get_state":
             return f"this.{self.tr.state_field(args[2])}"
         if f == "set_state":
@@ -697,7 +863,23 @@ class Fn:
         if f in ("normalize", "cross"):
             return f"{f}({', '.join(self.ex(a) for a in args)})"
         if f in self.tr.helpers:
-            keep = ["p" if n == "xform_id" else self.ex(a) for a, (n, ty) in zip(args, self.tr.helper_args[f]) if not ("RngState" in ty or n == "variation_id")]
+            hargs = self.tr.helper_args[f]
+            pointer = lambda ty: ty.strip().startswith("ptr") and "RngState" not in ty
+            keep = ["p" if n == "xform_id" else self.ex(a) for a, (n, ty) in zip(args, hargs) if not ("RngState" in ty or n == "variation_id" or pointer(ty))]
+            if f in self.tr.helper_ctx:
+                keep.append("ctx")
+                self.uses_ctx = True
+            ptrs = [a for a, (n, ty) in zip(args, hargs) if pointer(ty)]
+            if ptrs:
+                # Called on what its pointer points at.
+                a = ptrs[0]
+                if a[0] == "id" and a[1] in self.outs:
+                    recv = self.outs[a[1]][1]
+                elif a[0] == "un" and a[1] == "&" and a[2][0] == "id":
+                    recv = self.ex(a[2])
+                else:
+                    raise Refuse(f"a pointer of another kind to `{f}`")
+                return f"{recv}.{f}({', '.join(keep)})"
             return f"{f}({', '.join(keep)})"
         raise Refuse(f"a call to `{f}`")
 
@@ -752,7 +934,9 @@ class Fn:
         if k == "decl" and s[3] and s[3].replace(" ", "").startswith("array<"):
             elem, n = array_of(s[3])
             self.types[s[2]] = "array:" + elem
-            if s[4] is None:
+            if s[4] is None and elem in FLAT:
+                self.emit(depth, f"let {s[2]} = array({n} * {FLAT[elem]}, 0.0);")
+            elif s[4] is None:
                 self.emit(depth, f"let {s[2]} = array({n}, {ZERO_OF[elem]});")
             else:
                 self.line(depth, lambda: f"let {s[2]} = {self.ex(s[4])};")
@@ -763,6 +947,9 @@ class Fn:
             if t in ("i32",) and init is not None and self.ty(init) == "int":
                 t = "int"
             self.types[name] = "f32" if t == "int" and ty is None and init is not None and self.ty(init) == "f32" else t
+            if init is None and t and t.startswith("array:") and ty and ty.strip() in STRUCTS:
+                self.emit(depth, f"let {name} = array({len(STRUCTS[ty.strip()])}, {ZERO_OF[t[len('array:'):]]});")
+                return
             if init is None:
                 zero = {"vec2": "complex(0.0, 0.0)", "vec3": "vec3(0.0, 0.0, 0.0)", "vec4": "vec4(0.0, 0.0, 0.0, 0.0)", "f32": "0.0", "i32": "0", "u32": "u32(0)", "bool": "false"}.get(t)
                 if zero is None: raise Refuse(f"a `var` of `{ty}`")
@@ -784,8 +971,13 @@ class Fn:
                 value = (lambda: self.ex(rhs)) if op == "=" else (lambda: f"{n}.{part} {op[0]} ({self.ex(rhs)})")
                 self.line(depth, lambda: f"{n} = complex({value()}, {n}.im);" if part == "re" else f"{n} = complex({n}.re, {value()});")
                 return
+            if lhs[0] == "index" and lhs[1][0] == "id" and self.types.get(lhs[1][1], "")[len("array:"):] in FLAT:
+                raise Refuse("a vector array's element set")
             if lhs[0] == "index" and lhs[1][0] == "id" and self.types.get(lhs[1][1], "").startswith("array:"):
                 self.line(depth, lambda: f"{lhs[1][1]}[{self.ex(lhs[2])}] {op} {self.ex(rhs)};")
+                return
+            if lhs[0] == "field" and lhs[1][0] == "id" and self.ty(lhs[1]).startswith("array:") and struct_field(lhs[2]) is not None:
+                self.line(depth, lambda: f"{lhs[1][1]}[{struct_field(lhs[2])}] {op} {self.ex(rhs)};")
                 return
             if lhs == ("id", "point_w_out") and "point_w_out" in self.outs:
                 self.line(depth, lambda: f"{self.outs['point_w_out'][1]} {op} {self.ex(rhs)};")
@@ -805,9 +997,15 @@ class Fn:
                 raise Refuse("a componentwise compound assignment")
             self.line(depth, lambda: f"{self.ex(lhs)} {op} {self.ex(rhs)};")
             return
+        if k == "expr" and s[1][0] == "call" and s[1][1] == "set_state" and self.helper:
+            raise Refuse("a helper writing the variation's state")
         if k == "expr" and s[1][0] == "call" and s[1][1] == "set_state":
             field = self.tr.state_field(s[1][2][2])
             self.line(depth, lambda: f"this.{field} = {self.ex(s[1][2][3])};")
+            return
+        # A helper called for what it writes through its pointer.
+        if k == "expr" and s[1][0] == "call" and s[1][1] in self.tr.helpers:
+            self.line(depth, lambda: f"{self.ex(s[1])};")
             return
         if k == "expr":
             raise Refuse("a statement of an expression")
@@ -833,10 +1031,10 @@ class Fn:
         if k == "for":
             _, init, cond, upd, body = s
             # for (var i = a; i < b; i++) -> for i in a..b
-            step_one = init and init[0] == "decl" and upd in (
-                ("assign", ("id", init[2]), "+=", ("num", "1")),
-                ("assign", ("id", init[2]), "=", ("bin", "+", ("id", init[2]), ("num", "1"))),
-            )
+            step_one = init and init[0] == "decl" and any(upd in (
+                ("assign", ("id", init[2]), "+=", ("num", one)),
+                ("assign", ("id", init[2]), "=", ("bin", "+", ("id", init[2]), ("num", one))),
+            ) for one in ("1", "1u", "1i"))
             # Rhai's range is taken once; WGSL tests its bound every pass.
             bound_fixed = cond and cond[0] == "bin" and not any(assigns(body, n) for n in re.findall(r"'id', '(\w+)'", repr(cond[3])))
             if step_one and init[4] is not None and self.ty(init[4]) != "f32" and cond and cond[0] == "bin" and cond[1] in ("<", "<=") and cond[2] == ("id", init[2]) \
@@ -844,7 +1042,14 @@ class Fn:
                 name = init[2]
                 self.types[name] = "int"
                 rng = ".." if cond[1] == "<" else "..="
-                self.line(depth, lambda: f"for {name} in {self.ex(init[4])}{rng}{self.ex(cond[3])} {{")
+                # A range counts in ints: a u32 bound by `to_int` (its
+                # bits; a counter's are small), the counter joining a u32
+                # by its bits where it meets one.
+                def bound(e):
+                    if e[0] == "num":
+                        return e[1].rstrip("ui")
+                    return f"to_int({self.ex(e)})" if self.ty(e) == "u32" else self.ex(e)
+                self.line(depth, lambda: f"for {name} in {bound(init[4])}{rng}{bound(cond[3])} {{")
                 self.stmts(body, depth + 1)
                 self.emit(depth, "}")
                 return
@@ -900,7 +1105,7 @@ class Fn:
             e = s[1]
             if e is None:
                 raise Refuse("a bare return")
-            value = (lambda: self.result_map(self.ex(e))) if self.outs else (lambda: self.ex(e))
+            value = (lambda: self.result_map(self.ex(e))) if self.outs and not self.helper else (lambda: self.ex(e))
             if last and self.result_var:
                 self.line(depth, lambda: f"{self.result_var} = {self.ex(e)};")
             elif last:
@@ -944,6 +1149,12 @@ class Translation:
         self.param_floats = [p["param_type"] in ("float", "unlimited_float", "angle") for p in d["parameters"]]
         self.helpers = {}
         self.helper_args = {}
+        # The helpers reading the context (the weight, the sum), which
+        # take it, `ctx`, passed whole as the language allows.
+        self.helper_ctx = set()
+        # WGSL built-ins the language has not, written as helpers of the
+        # twin's own (`WRITTEN`), by name.
+        self.written = set()
         self.derived = derived_names(d)
         self.state = state_names(d, set(self.derived.values()))
 
@@ -1032,7 +1243,10 @@ class Translation:
         """Each WGSL helper as a Rhai function."""
         out = []
         for fname, args, ret, toks in fns:
-            self.helpers[fname] = vec_of(ret.strip()) if ret.strip() else None
+            if ret.replace(" ", "").startswith("array<"):
+                self.helpers[fname] = "array:" + array_of(ret)[0]
+            else:
+                self.helpers[fname] = vec_of(ret.strip()) if ret.strip() else None
             if any(n == "xform_id" for n, _ in args) and ("id", "p") in toks:
                 # Its own `p` would hide the parameters it takes as `p`.
                 free = next(n for n in ("pv", "p_", "p0") if ("id", n) not in toks)
@@ -1043,9 +1257,13 @@ class Translation:
             f.taken = {tk[1] for tk in toks if tk[0] == "id"}
             p = P(toks)
             ss = block(p)
+            if (self.helpers[fname] or "").startswith("array:"):
+                ss = fold_early(ss)
             f.stmts(ss, 1, last=True)
-            if f.uses_ctx: raise Refuse(f"a helper reading the weight or the sum `{fname}`")
             params = [a for a in f.params]
+            if f.uses_ctx:
+                params.append("ctx")
+                self.helper_ctx.add(fname)
             out.append(f"fn {fname}({', '.join(params)}) {{\n" + "\n".join(l[1] for l in f.lines) + "\n}\n")
         return out
 
@@ -1090,6 +1308,16 @@ class Translation:
         sig = f"fn {'variation' if dim == 2 else 'variation3'}({argz}, p{', ctx' if f.uses_ctx else ''})"
         return out, sig + " {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"
 
+def fold_early(ss):
+    """Early returns (an `if` without an `else` that returns) folded: what
+    follows becomes its `else`, so the body ends in one `if` value -- for
+    a helper giving an array, which the language's `if` value can give
+    and its early return cannot."""
+    for i, s in enumerate(ss):
+        if s[0] == "if" and s[3] is None and s[2] and i + 1 < len(ss) and ends_in_return(fold_early(s[2])[-1]):
+            return ss[:i] + [("if", s[1], fold_early(s[2]), fold_early(ss[i + 1:]))]
+    return ss
+
 def fold_returns(ss):
     """An init's early `return out` (an `if` without an `else`) folded:
     what follows becomes its `else`, so `prepare` returns once, at its
@@ -1099,6 +1327,13 @@ def fold_returns(ss):
         if s[0] == "if" and s[3] is None and s[2] and fold_returns(s[2])[-1] == ret and ss[-1] == ret:
             return ss[:i] + [("if", s[1], fold_returns(s[2])[:-1], fold_returns(ss[i + 1:])[:-1]), ret]
     return ss
+
+# WGSL built-ins the language has not, as Rhai helpers: exact, if slower
+# than the hardware's.
+WRITTEN = {
+    # `countOneBits` of a u32: Kernighan's, a bit cleared a pass.
+    "count_one_bits": "fn count_one_bits(x) {\n    let v = x;\n    let n = u32(0);\n    while v != u32(0) {\n        v = v & (v - u32(1));\n        n = n + u32(1);\n    }\n    n\n}\n",
+}
 
 # Rhai's reserved words: not a `PARAMS` key, nor `p.` a name.
 RHAI_RESERVED = {"super", "this", "fn", "let", "const", "if", "else", "while", "loop", "for", "in", "do", "until", "break", "continue",
@@ -1176,18 +1411,43 @@ def passthrough_3d(two, three):
 # translated as the twin's helpers, so the formulas (cdiv's guard,
 # csqrt's sign test, the noise's hashes) are the built-in's exactly. Of
 # complex.wgsl, the functions the language has no form of.
-COMPLEX_LIB = {"cadd", "csub", "cmul", "cmul_real", "cconj", "cmag2", "csquare", "cdiv", "csqrt"}
-SHARED_LIBS = ["complex", "noise", "voronoi", "polyhedra", "polychora"]
+COMPLEX_LIB = {"cadd", "csub", "cmul", "cmul_real", "cconj", "cmag2", "csquare", "cdiv", "csqrt", "cmat2_make", "cmat2_apply", "cmat2_inverse_sl2"}
+SHARED_LIBS = ["complex", "utilities", "noise", "voronoi", "polyhedra", "polychora", "su_mobius", "fractwf"]
+# Of these, the functions carried in: the others the translator writes
+# as the language's own (`ff_atan2` as `atan2`) or refuses.
+SHARED_ONLY = {"complex": COMPLEX_LIB, "utilities": {"srgb_to_linear"}}
 
 def shared_lib():
     """Each shared helper: name -> its WGSL."""
     out = {}
     for lib in SHARED_LIBS:
         src = open(f"shaders/core/{lib}.wgsl", encoding="utf-8").read()
-        for m in re.finditer(r"^fn (\w+)\(.*?^}", src, re.M | re.S):
-            if lib != "complex" or m.group(1) in COMPLEX_LIB:
-                out[m.group(1)] = m.group(0)
+        for m in re.finditer(r"^fn (\w+)\(", src, re.M):
+            if lib in SHARED_ONLY and m.group(1) not in SHARED_ONLY[lib]:
+                continue
+            # To its closing brace, which may share its line.
+            i, depth = src.index("{", m.end()), 0
+            for j in range(i, len(src)):
+                depth += {"{": 1, "}": -1}.get(src[j], 0)
+                if depth == 0:
+                    break
+            out[m.group(1)] = src[m.start():j + 1]
     return out
+
+LIB_DECLS = None
+
+def lib_decls():
+    """The shared libraries' structs and constants."""
+    global LIB_DECLS
+    if LIB_DECLS is None:
+        STRUCTS.clear(); CONSTS.clear()
+        for lib in SHARED_LIBS:
+            # Its template's lines (`{{#if}}`) dropped: only the
+            # declarations are wanted here.
+            src = open(f"shaders/core/{lib}.wgsl", encoding="utf-8").read()
+            functions("".join(l for l in src.splitlines(True) if not l.lstrip().startswith(("#", "{{"))))
+        LIB_DECLS = (dict(STRUCTS), dict(CONSTS))
+    return LIB_DECLS
 
 def with_complex_lib(src):
     """`src` with the shared helpers it calls, and theirs, before it."""
@@ -1208,8 +1468,11 @@ def with_complex_lib(src):
     return "".join(lib[n] + "\n" for n in need) + src
 
 def translate(d):
+    structs, consts = lib_decls()
+    STRUCTS.clear(); STRUCTS.update(structs)
+    CONSTS.clear(); CONSTS.update(consts)
     f = set(d["features"])
-    for feat in ("needs_mobius_lib", "analytic_blur", "volume_side_emit"):
+    for feat in ("analytic_blur", "volume_side_emit"):
         if feat in f: raise Refuse(f"the feature {feat}")
     if d.get("plot_emits"): raise Refuse("plot emits")
     for prm in d["parameters"]:
@@ -1248,6 +1511,10 @@ def translate(d):
         for h in h3:
             if h.split("(")[0] not in names2:
                 helpers.append(h)
+    for t_ in (t, t3) if three else (t,):
+        for w in sorted(t_.written):
+            if not any(h.startswith(f"fn {w}(") for h in helpers):
+                helpers.append(WRITTEN[w])
     info = {}
     if z:
         info["z"] = f'"{z}"'

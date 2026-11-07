@@ -1874,6 +1874,14 @@ impl Checker {
                 self.error(span, "a colouring reads the texture in `start` and `step`: the recolour pass, which runs `finish` and `color` again, has none");
                 return None;
             }
+        } else if h.escape() && self.kind == EntryKind::Transform {
+            // A flame variation's palette, the flame's: read where the
+            // flame shader binds it, the body (`prepare` runs in the init
+            // pass, which has none), and without the escape mapping's curve.
+            if h == Host::EscPaletteCurve || self.section != SectionKind::Transform {
+                self.error(span, "a variation reads the flame's palette in its body (`variation`), as `palette(t)` or `palette_srgb(t)`");
+                return None;
+            }
         } else if h.escape() {
             if self.kind != EntryKind::Coloring {
                 self.error(span, "the escape palette is an escape colouring's");

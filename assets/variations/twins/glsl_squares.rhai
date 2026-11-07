@@ -73,14 +73,12 @@ fn squares_hit(p_in, n, time, dir) {
     let arg_mod = arg - to_float(floor(arg));
     let scale = pow(0.5, arg_mod);
     let coord_iter = p_in / scale;
-    let i = u32(0);
-    while i < n {
+    for i in 0..to_int(n) {
         let sectors = floor(coord_iter * 3.0);
         if (sectors.re == 1.0 && sectors.im == 1.0) {
             return false;
         }
         coord_iter = coord_iter * 3.0 - sectors;
-        i = i + u32(1);
     }
     true
 }
@@ -101,14 +99,12 @@ fn variation(w, p, ctx) {
     let coord_orig = complex(abs(x / resolution - 0.5), abs(y / resolution - 0.5));
     coord_orig = coord_orig - floor(coord_orig);
     let color = vec3(cos(time), tan(time), sin(time));
-    let i = u32(0);
-    while i < u32(4) {
+    for i in 0..4 {
         let t1 = to_float(i) * 0.1;
         let offset = complex(t1, t1);
         if (squares_hit(offset + coord_orig, n, time, dir)) {
             color = vec3(1.0, 1.0, 1.0) - color;
         }
-        i = i + u32(1);
     }
     rgb = vec3(cos(color.x * fr), cos(color.y * fg), cos(color.z * fb));
     #{ z: complex(i_f / resolution - 0.5, j_f / resolution - 0.5), rgb: rgb }
@@ -128,14 +124,12 @@ fn variation3(v, p, ctx) {
     let coord_orig = complex(abs((i_f + 0.5) / resolution - 0.5), abs((j_f + 0.5) / resolution - 0.5));
     coord_orig = coord_orig - floor(coord_orig);
     let color = vec3(cos(time), tan(time), sin(time));
-    let i = u32(0);
-    while i < u32(4) {
+    for i in 0..4 {
         let t1 = to_float(i) * 0.1;
         let offset = complex(t1, t1);
         if (squares_hit(offset + coord_orig, n, time, dir)) {
             color = vec3(1.0, 1.0, 1.0) - color;
         }
-        i = i + u32(1);
     }
     rgb = vec3(cos(color.x * fr), cos(color.y * fg), cos(color.z * fb));
     #{ z: vec3(i_f / resolution - 0.5, j_f / resolution - 0.5, v.z), rgb: rgb }

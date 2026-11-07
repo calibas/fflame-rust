@@ -571,12 +571,12 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 597 of the 647, each a Rhai variation under its
+  P7 step 3): 617 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
   (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
-  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`). Seven written by hand, 590 translated from the built-ins'
+  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`). Seven written by hand, 610 translated from the built-ins'
   WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
   reads them; its colour, direct colour and hide pointers locals from
   `ctx.color`, `ctx.rgb` and `ctx.hide`, returned as `#{ z, color, rgb,
@@ -596,7 +596,20 @@ function takes the point, and the ids when it has parameters (as
   helper reading the parameters (taking the ids) takes `p` in their
   place, passed whole; `loop` as `while true`; a parameter whose
   name is no Rhai name (`3side`) refused; `rng_next(rng)` as
-  `rand_u32()`; a function WGSL takes part by part of a vector written out
+  `rand_u32()`; the flame palette's read (`textureSampleLevel(palette_texture,
+  ...)`) as `palette_srgb(t)`; structs as helpers (the user,
+  2026-11-06: no struct types), one whose fields share a type an array
+  of them, its fields by place (su_mobius.wgsl's `SuMat`, complex.wgsl's
+  `CMat2`, fractwf.wgsl's result); an integer vector an array of its
+  integers (`.x`, `.y` by place: the range helpers' pairs); an array of
+  `vec3` or `vec4` an array of their floats, flat; a module constant
+  written out where it is read (a constant table is refused: next, the
+  language hoisting a read-only literal array to a WGSL constant); a
+  helper's pointer argument its `this` (`x.f(...)`, called on what the
+  pointer points at), a helper reading the context taking `ctx`; a
+  helper giving an array with its early returns folded into an `if`
+  value; `bitcast` of an integer the language's conversion (a float's
+  refused); `countOneBits` a helper of the twin's own, Kernighan's; a function WGSL takes part by part of a vector written out
   part by part where the language has no such vector form (`sin` of a
   complex is the complex sine); its temporaries never a name the WGSL
   uses; its state slots fields
@@ -615,7 +628,7 @@ function takes the point, and the ids when it has parameters (as
     point so the two draw alike, the colour written out): at the probe's
     adversarial inputs and a grid, 2D and 3D, at the defaults and each
     parameter's range's ends (`every_variation_twin_runs_as_its_builtin`).
-    91.8% of the outputs are bit for bit. The rest are judged by the
+    92.2% of the outputs are bit for bit. The rest are judged by the
     twin's own formula in f64 (the interpreter): the built-in off it
     where the twin is on it (its hardware trig, WGSL's `pow(0, 0)`), or
     giving no number where it has one (WGSL's `pow` of a negative base,

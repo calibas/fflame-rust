@@ -48,8 +48,7 @@ fn variation(q, p, ctx) {
     let i_vec = complex(7.0 * (x + x - resolution) / resolution, 7.0 * (y + y - resolution) / resolution);
     let o = vec4(i_vec.re, i_vec.im, -5.0 * cos(time * 0.1), 1.0);
     let d = 1.0;
-    let k = u32(0);
-    while k < u32(20) {
+    for k in 0..20 {
         let t2 = -1.0;
         let t1 = complex(t2, t2);
         let t3 = complex(1.0, 1.0);
@@ -65,7 +64,6 @@ fn variation(q, p, ctx) {
         }
         i_vec = i_vec * (o.z * b) + complex(o.x, o.y);
         d = b * d * abs(o.z) + 1.0;
-        k = k + u32(1);
     }
     let d_final = pow(i_vec.abs() / d, 0.1) * 5.0;
     let t4 = vec3(cos(d_final), sin(10.0 * d_final + 1.0), cos(3.0 * d_final + 1.0)) * 0.5;
@@ -83,8 +81,7 @@ fn variation3(v, p, ctx) {
     let i_vec = complex(7.0 * ((i_f + 0.5) + (i_f + 0.5) - resolution) / resolution, 7.0 * ((j_f + 0.5) + (j_f + 0.5) - resolution) / resolution);
     let o = vec4(i_vec.re, i_vec.im, -5.0 * cos(time * 0.1), 1.0);
     let d = 1.0;
-    let k = u32(0);
-    while k < u32(20) {
+    for k in 0..20 {
         let t2 = -1.0;
         let t1 = complex(t2, t2);
         let t3 = complex(1.0, 1.0);
@@ -100,7 +97,6 @@ fn variation3(v, p, ctx) {
         }
         i_vec = i_vec * (o.z * b) + complex(o.x, o.y);
         d = b * d * abs(o.z) + 1.0;
-        k = k + u32(1);
     }
     let d_final = pow(i_vec.abs() / d, 0.1) * 5.0;
     let t4 = vec3(cos(d_final), sin(10.0 * d_final + 1.0), cos(3.0 * d_final + 1.0)) * 0.5;

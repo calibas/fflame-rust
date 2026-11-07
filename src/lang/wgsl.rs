@@ -806,6 +806,10 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
         for (i, v) in p.vars.iter().enumerate() {
             let _ = writeln!(out, "    {};", var_decl(i, v));
         }
+        // Each palette read's colour, read once.
+        for k in 0..load_slots(p, |h| h == Host::EscPaletteLoad) {
+            let _ = writeln!(out, "    var uf_pal{k}: vec3<f32>;");
+        }
     };
     // The state: loaded at the start, stored at the end.
     let load = |g: &Gen, out: &mut String| {
@@ -2313,6 +2317,18 @@ impl<'p> Gen<'p> {
             Host::AgentDeposit => format!("agent_deposit(vec2<i32>({}, {}), {})", a[0], a[1], a[2]),
             Host::ReadAt => format!("sim_read(vec2<i32>({}, {})).{}", a[0], a[1], part(2)),
             Host::PyrPrepare => "pyr_prepare()".to_string(),
+            // A flame variation's palette, the flame shader's texture at `t`
+            // (P7 step 3): as stored, or decoded as the flame decodes it.
+            Host::EscPalette | Host::EscPaletteLoad if matches!(self.ctx, Ctx::Variation) => {
+                let read = format!("textureSampleLevel(palette_texture, palette_sampler, vec2<f32>({}, 0.5), 0.0).rgb", a[0]);
+                let colour = if args.get(1).and_then(cell_index) == Some(1) { read } else { format!("srgb_to_linear({read})") };
+                if h == Host::EscPaletteLoad {
+                    format!("uf_pal{} = {colour}", args.get(2).and_then(cell_index).unwrap_or(0))
+                } else {
+                    format!("{colour}.{}", part(2))
+                }
+            }
+            Host::EscPalettePart if matches!(self.ctx, Ctx::Variation) => format!("uf_pal{}.{}", args.first().and_then(cell_index).unwrap_or(0), part(1)),
             // An escape colouring's palette, the template's (batch 5).
             Host::EscPalette => {
                 let f = match args.get(1).and_then(cell_index) {
@@ -4718,7 +4734,10 @@ pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
          var<private> point_w: f32;\n\
          var<private> point_w_out: f32;\n\
          struct StubTransform {\n    a: f32,\n    b: f32,\n    c: f32,\n    d: f32,\n    e: f32,\n    f: f32,\n    variations: array<f32, 4>,\n}\n\
-         var<private> transforms: array<StubTransform, 2>;\n";
+         var<private> transforms: array<StubTransform, 2>;\n\
+         @group(0) @binding(0) var palette_texture: texture_2d<f32>;\n\
+         @group(0) @binding(1) var palette_sampler: sampler;\n\
+         fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {\n    return c;\n}\n";
     if let Some(w2) = &w.wgsl_2d {
         validate_module(&format!("{GET_PARAM}{w2}"))?;
     }

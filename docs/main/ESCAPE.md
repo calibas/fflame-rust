@@ -714,6 +714,12 @@ fn escaped(s, p) {
   pass once per transform as they change, the map's values read as
   `p.name` by both bodies (VARIATIONS.md, *Parameter slots*). The flame's
   hooks (the KIFS plan, C2), each the `Feature` a built-in declares:
+  - `palette(t)` and `palette_srgb(t)`, the flame's palette at `t`
+    (the shader's texture, as the built-ins read it): decoded as the
+    flame decodes it (`srgb_to_linear`, gamma 2.2, as escape's
+    `palette` is) or as stored; in the body alone (`prepare` runs in the
+    init pass, which binds none), read once a call site; such a
+    variation is no camera lens (the lens's shader has not the palette);
   - `rand()`, a draw in [0, 1) (`NeedsRng`, the flame's stream), and
     `rand_u32()`, the stream's raw next 32 bits as a `u32` (the
     shader's `rng_next`, of which `rand()` keeps the top 24: one
@@ -1032,6 +1038,19 @@ fn escaped(s, p) {
   the helper's parameter as it is bound at the call
   (`passed_whole`), so `fn level(p, ctx)` reads `p.radius` and
   `ctx.width` as its caller would.
+- **An array passes to a helper by value**, as Rhai and WGSL pass one:
+  the helper's own copy, its writes its own (`helper_arg`; where no
+  statement may go, and so no write, the caller's read in place). A
+  helper's value may be an array, an `if` value too (each arm's array
+  set whole).
+- **A helper called as a method changes what it is called on**
+  (rhai-plugins P7 step 3): `x.bump(k)` binds `x` to the helper's
+  `this`, as Rhai binds a method call's object -- a variable by
+  reference, so `this += k` sets the caller's `x` (a WGSL pointer
+  argument's way), any other value a temporary, its changes lost. The
+  helper may give a number or a vector, or nothing: called alone, a
+  statement, for what it writes (`helper_stmts`). Outside such a call
+  `this` is a variation's state.
 - **A fresh array is its local**: `let a = [x, y]` and `let a =
   array(n, v)` bind `a` to the array the literal made, where they copied
   it into another, element by element -- a loop the driver kept, which

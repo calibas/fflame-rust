@@ -58,8 +58,7 @@ fn variation(z, p, ctx) {
     let color = vec3(0.0, 0.0, 0.0);
     let col_a = vec3(0.1, 0.2, 0.8);
     let col_b = vec3(0.2, 0.8, 0.6);
-    let i = u32(0);
-    while i < bubles {
+    for i in 0..to_int(bubles) {
         let i_fl = to_float(i);
         let pha = tan(i_fl * 6.0 + 1.0) * 0.5 + 0.5;
         let siz = pow(cos(i_fl * 2.4 + 5.0) * 0.5 + 0.5, 4.0);
@@ -75,7 +74,6 @@ fn variation(z, p, ctx) {
         let t3 = rad * (0.65 + 0.20 * sin(pox * time));
         let t4 = clamp((dis - t3) / (rad - t3), 0.0, 1.0);
         color = color + col * (1.0 - (t4 * t4 * (3.0 - 2.0 * t4))) * (1.0 - cos(pox * time));
-        i = i + u32(1);
     }
     rgb = color * 0.3;
     #{ z: complex(i_f / resolution - 0.5, j_f / resolution - 0.5), rgb: rgb }
@@ -93,8 +91,7 @@ fn variation3(v, p, ctx) {
     let color = vec3(0.0, 0.0, 0.0);
     let col_a = vec3(0.1, 0.2, 0.8);
     let col_b = vec3(0.2, 0.8, 0.6);
-    let i = u32(0);
-    while i < bubles {
+    for i in 0..to_int(bubles) {
         let i_fl = to_float(i);
         let pha = tan(i_fl * 6.0 + 1.0) * 0.5 + 0.5;
         let siz = pow(cos(i_fl * 2.4 + 5.0) * 0.5 + 0.5, 4.0);
@@ -110,7 +107,6 @@ fn variation3(v, p, ctx) {
         let t3 = rad * (0.65 + 0.20 * sin(pox * time));
         let t4 = clamp((dis - t3) / (rad - t3), 0.0, 1.0);
         color = color + col * (1.0 - (t4 * t4 * (3.0 - 2.0 * t4))) * (1.0 - cos(pox * time));
-        i = i + u32(1);
     }
     rgb = color * 0.3;
     #{ z: vec3(i_f / resolution - 0.5, j_f / resolution - 0.5, v.z), rgb: rgb }

@@ -1204,6 +1204,134 @@ mod tests {
         assert!(compile(prep).is_err_and(|e| e.contains("draws no random")), "{:?}", compile(prep).err());
     }
 
+    /// `palette(t)` and `palette_srgb(t)` in a variation read the flame's
+    /// palette, the shader's texture, decoded as the flame decodes it or
+    /// as stored, once a call site; in the body alone (`prepare` runs in
+    /// the init pass, which binds none), and not the escape mapping's
+    /// table. Such a variation is no lens: the lens has not the palette.
+    #[test]
+    fn palette_reads_the_flames_palette() {
+        let src = "const INFO = #{ name: \"rhai_palette_test\" };\nfn variation(z, p, ctx) {\n    let lin = palette(ctx.color);\n    let raw = palette_srgb(0.25);\n    #{ z: z, rgb: lin * 0.5 + raw * 0.5 }\n}\n";
+        let dl = named(src);
+        let w = dl.shader_2d.as_deref().unwrap();
+        assert!(w.contains("srgb_to_linear(textureSampleLevel(palette_texture, palette_sampler, vec2<f32>("), "{w}");
+        assert_eq!(w.matches("textureSampleLevel").count(), 2, "one read a call site: {w}");
+        for (bad, why) in [
+            ("const PARAMS = #{ a: 0.5 };\nconst INFO = #{ name: \"rhai_palette_prep\" };\nfn prepare(p) { #{ k: palette(p.a).x } }\nfn variation(z, p) { z * p.k }\n", "in its body"),
+            ("const INFO = #{ name: \"rhai_palette_table\" };\nfn variation(z, p) { z * palette_table(0.5).x }\n", "escape colouring's"),
+        ] {
+            assert!(compile(bad).is_err_and(|e| e.contains(why)), "{bad}: {:?}", compile(bad).err());
+        }
+        let plain = compile("const INFO = #{ name: \"rhai_palette_plain\" };\nfn variation(z, p) { z * 0.5 }\n").unwrap();
+        let mut registry = crate::variations::VariationRegistry::new();
+        registry.register_from_api(&dl, Provenance::Local);
+        registry.register_from_api(&plain, Provenance::Local);
+        let menu = crate::escape::lens::lens_menu(&registry);
+        assert!(menu.contains(&plain.name) && !menu.contains(&dl.name), "{menu:?}");
+    }
+
+    /// An array passes to a helper by value, as Rhai and WGSL pass one:
+    /// the helper reads its elements, and its writes are its own copy's.
+    #[test]
+    fn an_array_passes_to_a_helper_by_value() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_array_arg\" };\n\
+                   fn total(a) {\n\
+                   \x20   a[0] = 100.0;\n\
+                   \x20   let s = 0.0;\n\
+                   \x20   for i in 0..3 { s += a[i]; }\n\
+                   \x20   s\n\
+                   }\n\
+                   fn variation(z, p) {\n\
+                   \x20   let xs = [1.0, 2.0, 3.0];\n\
+                   \x20   let t = total(xs);\n\
+                   \x20   complex(t, xs[0])\n\
+                   }\n";
+        let dl = named(src);
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("array<f32, 3>")), "{:?}", dl.shader_2d);
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::ZERO, C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (105.0, 1.0), "its copy written, the caller's not");
+    }
+
+    /// A helper called as a method changes the variable it is called on
+    /// through `this`, as Rhai binds it (a WGSL pointer argument's way);
+    /// called on any other value, a temporary's changes are lost.
+    #[test]
+    fn a_method_helper_writes_its_receiver() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_this_test\" };\n\
+                   fn bump(k) {\n\
+                   \x20   this += k;\n\
+                   \x20   this * 10.0\n\
+                   }\n\
+                   fn variation(z, p) {\n\
+                   \x20   let a = 1.0;\n\
+                   \x20   let r = a.bump(2.0);\n\
+                   \x20   let b = (a + 0.0).bump(5.0);\n\
+                   \x20   complex(a, r + b)\n\
+                   }\n";
+        let _ = named(src);
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::ZERO, C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (3.0, 30.0 + 80.0), "the variable changed, the temporary's change lost");
+        let stray = "const INFO = #{ name: \"rhai_this_stray\" };\nfn half() { this * 0.5 }\nfn variation(z, p) { z * half() }\n";
+        assert!(compile(stray).is_err_and(|e| e.contains("the value a helper is called on")), "{:?}", compile(stray).err());
+    }
+
+    /// A helper called alone, a statement, for what it writes through
+    /// `this`; and an `if` whose arms give arrays, a helper's value.
+    #[test]
+    fn a_helper_alone_and_an_if_of_arrays() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_alone_test\" };\n\
+                   fn add_to(k) {\n\
+                   \x20   this += k;\n\
+                   }\n\
+                   fn pick(i) {\n\
+                   \x20   if i == 0 { [1.0, 2.0] } else { [3.0, 4.0] }\n\
+                   }\n\
+                   fn variation(z, p) {\n\
+                   \x20   let a = 1.0;\n\
+                   \x20   a.add_to(2.0);\n\
+                   \x20   let m = pick(1);\n\
+                   \x20   complex(a, m[0] + m[1])\n\
+                   }\n";
+        let _ = named(src);
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::ZERO, C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (3.0, 7.0));
+    }
+
+    /// A helper called as a method may give a vector, its writes to `this`
+    /// its caller's as a number-giving one's.
+    #[test]
+    fn a_method_helper_gives_a_vector() {
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_this_vec\" };\n\
+                   fn variation(z, p) { z }\n\
+                   fn grow(k) {\n\
+                   \x20   this += k;\n\
+                   \x20   vec3(this, 2.0 * this, k)\n\
+                   }\n\
+                   fn variation3(v, p) {\n\
+                   \x20   let a = 1.0;\n\
+                   \x20   let g = a.grow(2.0);\n\
+                   \x20   vec3(a, g.y, g.z)\n\
+                   }\n";
+        let _ = named(src);
+        let p3 = lang::rhai::transformation3(src).unwrap();
+        let params = ParamValues::defaults(&p3);
+        let (v, _) = VariationRun::new(&p3, &params, 1).call3([0.0; 3], [0.0; 3], 1.0);
+        assert_eq!(v, [3.0, 6.0, 2.0]);
+    }
+
     /// `INFO.z` is JWildfire's z rule, as the built-ins' features: by
     /// default a 3D body's z is always kept and a 2D body's only when the
     /// flame preserves z; `always`, `preserve_z` and `never` say so of

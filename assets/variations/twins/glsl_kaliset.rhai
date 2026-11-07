@@ -70,8 +70,7 @@ fn variation(z, p, ctx) {
     let shift = complex(shift_x, shift_y);
     let zoom = time / 184.0 + 1.0;
     let rsum = 0.0;
-    let k = u32(0);
-    while k < n_iters {
+    for k in 0..to_int(n_iters) {
         let rr = v.re * v.re + v.im * v.im;
         if (rr > 1.0) {
             rr = 1.0 / rr;
@@ -79,7 +78,6 @@ fn variation(z, p, ctx) {
         }
         rsum = rsum * 0.99 + rr;
         v = complex(c_cos * v.re - s_sin * v.im, s_sin * v.re + c_cos * v.im) * zoom + shift;
-        k = k + u32(1);
     }
     let col = rsum * 0.5;
     rgb = vec3(cos(col * 1.0), cos(col * 2.0), cos(col * 4.0));
@@ -102,8 +100,7 @@ fn variation3(q, p, ctx) {
     let shift = complex(shift_x, shift_y);
     let zoom = time / 184.0 + 1.0;
     let rsum = 0.0;
-    let k = u32(0);
-    while k < n_iters {
+    for k in 0..to_int(n_iters) {
         let rr = v.re * v.re + v.im * v.im;
         if (rr > 1.0) {
             rr = 1.0 / rr;
@@ -111,7 +108,6 @@ fn variation3(q, p, ctx) {
         }
         rsum = rsum * 0.99 + rr;
         v = complex(c_cos * v.re - s_sin * v.im, s_sin * v.re + c_cos * v.im) * zoom + shift;
-        k = k + u32(1);
     }
     let col = rsum * 0.5;
     rgb = vec3(cos(col * 1.0), cos(col * 2.0), cos(col * 4.0));

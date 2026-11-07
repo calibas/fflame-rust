@@ -688,6 +688,7 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         effect: kind == EntryKind::Effect,
         sim_coloring: kind == EntryKind::SimColoring,
         palette_reads: 0,
+        stmt_call: false,
         texture_reads: 0,
         sim_model: kind == EntryKind::SimModel,
         sim_fn,
@@ -952,6 +953,9 @@ struct Lowerer<'s> {
     /// An escape colouring's palette reads made so far (batch 5): each
     /// call site's slot, read once.
     palette_reads: i64,
+    /// A statement calling a helper alone (for what it writes), until
+    /// [`Lowerer::call`] takes it.
+    stmt_call: bool,
     /// Texture reads made so far (batch 6), likewise.
     texture_reads: i64,
     /// Lowering a simulation's model (P4), and which of its functions.
@@ -3306,6 +3310,24 @@ impl<'s> Lowerer<'s> {
                 out.push(ast::Stmt::Return { span: self.pos.span(*p) });
                 Ok(())
             }
+            // A helper called for what it does: what it writes through
+            // `this` (a method call), its value, if any, unused.
+            Stmt::Expr(e) if self.helper_method(e) => {
+                self.stmt_call = true;
+                let r = self.expr(e, scope);
+                self.stmt_call = false;
+                r?;
+                self.flush(out);
+                Ok(())
+            }
+            Stmt::FnCall(f, p) if self.fns.contains_key(f.name.as_str()) => {
+                self.stmt_call = true;
+                let r = self.call(f, None, *p, scope);
+                self.stmt_call = false;
+                r?;
+                self.flush(out);
+                Ok(())
+            }
             Stmt::Expr(e) => self.err(e.position(), "a value alone does nothing here"),
             Stmt::FnCall(_, p) => self.err(*p, "a call alone does nothing here"),
             other => self.err(other.position(), "not in a formula"),
@@ -3474,7 +3496,13 @@ impl<'s> Lowerer<'s> {
         let ty = arms.iter().map(|(_, _, v)| self.ty_of(v)).reduce(join).unwrap_or(TypeName::Float);
         let name = self.local("if", ty);
         self.pending.extend(conds_pending);
-        self.pending.push(ast::Stmt::Decl { ty, name: name.clone(), init: None, dims: None, span });
+        // Arms giving arrays: an array of their length, each arm setting it
+        // whole.
+        let len = arms.first().and_then(|(_, _, v)| self.array_of(v)).map(|(_, len)| len);
+        if let Some(len) = &len {
+            self.arrays.insert(name.clone(), len.clone());
+        }
+        self.pending.push(ast::Stmt::Decl { ty, name: name.clone(), init: None, dims: len.map(|l| vec![l]), span });
         let mut lowered = Vec::new();
         let mut otherwise = None;
         for (cond, mut body, value) in arms {
@@ -3534,6 +3562,11 @@ impl<'s> Lowerer<'s> {
                 Some(Binding::Local(n)) => Ok(mk(ExprKind::Name(n.clone()), span)),
                 Some(_) => self.err(*p, format!("`{}` is not a variable to set", v.1)),
                 None => self.err(*p, format!("`{}` is not declared: `let {} = ...`", v.1, v.1)),
+            },
+            // The value a helper is called on: the caller's variable.
+            Expr::ThisPtr(p) if scope.get("this").is_some() => match scope.get("this") {
+                Some(Binding::Local(n)) => Ok(mk(ExprKind::Name(n.clone()), span)),
+                _ => self.err(*p, "`this` is a value here, not a variable to set"),
             },
             Expr::Index(be, flags, p) => {
                 let array = self.target(&be.lhs, scope)?;
@@ -3651,6 +3684,12 @@ impl<'s> Lowerer<'s> {
             Expr::IntegerConstant(v, _) => mk(ExprKind::Int(*v), span),
             Expr::FloatConstant(v, _) => mk(ExprKind::Float(**v), span),
             Expr::BoolConstant(v, _) => mk(ExprKind::Bool(*v), span),
+            // A helper called as a method: the value it was called on.
+            Expr::ThisPtr(p) => match scope.get("this").cloned() {
+                Some(Binding::Local(n)) => mk(ExprKind::Name(n), span),
+                Some(Binding::Value(x)) => x,
+                _ => return self.err(*p, "`this` is a variation's state, read by its fields (`this.n`), or the value a helper is called on"),
+            },
             Expr::Variable(v, _, p) => match scope.get(v.1.as_str()).cloned() {
                 Some(Binding::Local(n)) => mk(ExprKind::Name(n), span),
                 Some(Binding::Value(x)) => x,
@@ -3732,6 +3771,9 @@ impl<'s> Lowerer<'s> {
         // `this`: a variation's state (C2c), as Rhai binds the object a
         // function is called on.
         if let Expr::ThisPtr(p) = e {
+            if scope.get("this").is_some() {
+                return Ok(Base::Value(self.expr(e, scope)?));
+            }
             return self.this_state(*p, scope).map(|_| Base::State);
         }
         if let Expr::Variable(v, _, _) = e {
@@ -3947,6 +3989,9 @@ impl<'s> Lowerer<'s> {
     /// A function call, or an operator; `this` is a method call's value.
     fn call(&mut self, f: &FnCallExpr, this: Option<ast::Expr>, p: Position, scope: &mut Scope) -> R<ast::Expr> {
         let span = self.pos.span(p);
+        // A statement's call of a helper: its body as statements. Taken
+        // here, so a call among its arguments is a value as ever.
+        let alone = std::mem::take(&mut self.stmt_call);
         let mut args = Vec::new();
         if let Some(t) = this {
             args.push(t);
@@ -4062,11 +4107,11 @@ impl<'s> Lowerer<'s> {
         // A helper of the script's own, inlined; it reads only its
         // arguments.
         if let Some(def) = self.fns.get(name).cloned() {
-            if !args.is_empty() {
-                // Rhai binds a method call's value to `this`, not to the
-                // first parameter.
-                return self.err(p, format!("call a helper as a function, `{name}(x)`"));
-            }
+            // A method call binds its value to `this`, as Rhai does: a
+            // variable by reference, so the helper's writes to `this` are
+            // its caller's (a WGSL pointer's way); any other value a
+            // temporary, its changes lost.
+            let this = args.pop().map(|v| self.this_binding(v, span));
             if matches!(name, "start" | "step" | "escaped" | "finish" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when" | "degree" | "creases" | "variation" | "vary") {
                 return self.err(p, format!("`{name}` is the formula's own, not a helper to call"));
             }
@@ -4085,12 +4130,21 @@ impl<'s> Lowerer<'s> {
             for (param, a) in def.params.iter().zip(vals) {
                 inner.bind(param, a);
             }
+            if let Some(this) = this {
+                inner.bind("this", this);
+            }
             // A helper giving a vector, where a number is wanted.
             if self.block_gives_vec(&def.body, &inner).is_some() {
                 return self.err(p, format!("`{name}` gives a vector where a number is wanted: take a part (`.x`), `length` or `dot`"));
             }
             self.depth += 1;
-            let r = if self.pure { self.pure_body(&def.body, &mut inner) } else { self.helper_body(&def.body, &mut inner) };
+            let r = if alone {
+                self.helper_stmts(&def.body, &mut inner).map(|_| mk(ExprKind::Int(0), span))
+            } else if self.pure {
+                self.pure_body(&def.body, &mut inner)
+            } else {
+                self.helper_body(&def.body, &mut inner)
+            };
             self.depth -= 1;
             return r;
         }
@@ -4390,6 +4444,59 @@ impl<'s> Lowerer<'s> {
 
     /// A helper's body inlined into `start` or `step`: its statements
     /// pending, its value returned.
+    /// A method call's value as the helper's `this`, as Rhai binds it: a
+    /// variable by reference, so the helper's writes to `this` are its
+    /// caller's (a WGSL pointer's way); any other value a temporary, its
+    /// changes lost.
+    fn this_binding(&mut self, v: ast::Expr, span: Span) -> Binding {
+        match &v.kind {
+            ExprKind::Name(n) => Binding::Local(n.clone()),
+            _ if self.pure => Binding::Value(v),
+            _ => {
+                let ty = self.ty_of(&v);
+                let t = self.local("this", ty);
+                self.pending.push(ast::Stmt::Decl { ty, name: t.clone(), init: Some(v), dims: None, span });
+                Binding::Local(t)
+            }
+        }
+    }
+
+    /// Whether `e` calls a helper of the script's as a method of a
+    /// variable or of `this`: a statement for what it writes.
+    fn helper_method(&self, e: &Expr) -> bool {
+        let Expr::Dot(be, _, _) = e else { return false };
+        matches!(&be.lhs, Expr::Variable(..) | Expr::ThisPtr(_)) && matches!(&be.rhs, Expr::MethodCall(f, _) if self.fns.contains_key(f.name.as_str()))
+    }
+
+    /// A helper called alone: its statements, a value it ends in unused.
+    fn helper_stmts(&mut self, b: &StmtBlock, scope: &mut Scope) -> R<()> {
+        if returns_early(b) {
+            return self.err(b.position(), "a helper called alone, for what it does, returns at its end");
+        }
+        let outer = std::mem::take(&mut self.pending);
+        let sealed = self.seal();
+        scope.blocks.push(HashMap::new());
+        let r = (|| {
+            let mut out = Vec::new();
+            let stmts = b.statements();
+            for (i, st) in stmts.iter().enumerate() {
+                match final_value(st).filter(|_| i + 1 == stmts.len()) {
+                    Some(f) => {
+                        let _ = self.final_expr(f, scope)?;
+                        self.flush(&mut out);
+                    }
+                    None => self.stmt(st, scope, &mut out)?,
+                }
+            }
+            Ok(out)
+        })();
+        scope.blocks.pop();
+        self.unseal(sealed);
+        self.pending = outer;
+        self.pending.extend(r?);
+        Ok(())
+    }
+
     fn helper_body(&mut self, b: &StmtBlock, scope: &mut Scope) -> R<ast::Expr> {
         // One that returns early: a scope (P7 step 1).
         if returns_early(b) {
