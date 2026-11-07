@@ -12,6 +12,7 @@ which rewrites the references in code comments too).
 
 | Doc | Status |
 |---|---|
+| [variation-param-storage.md](variation-param-storage.md) | Planned 2026-11-06, not started: the variation parameter buffer as general-purpose per-transform storage (a flat array, its stride baked, sized to use, up to 262,144 floats a transform), then the built-ins' and twins' constant tables moved into it: naga copies a constant table at every run-time read, and polychoron's twin ran 17x faster than its built-in from the buffer. |
 | [terrain-speed.md](terrain-speed.md) | A rough outline (2026-10-31), not started: a deep escape terrain's section renders (single steps of 100-360 ms), which the quality governor's render scale cannot reach; the lit tier's antialiasing redrawn and thrown away while sections arrive (suspected); candidates from one lit picture a ground to a section budget the governor sets. |
 | [preview-slicing.md](preview-slicing.md) | Planned 2026-11-04, not started: the Fractal Browser's previews as a job advanced a few milliseconds a frame (a cooperative `render` with yield points at its GPU waits, driven as `scene::slice` drives the planner), so no frame waits for a whole render -- the simulations' full step counts above all. The order of work starts with measuring. |
 | [camera-lens-everywhere.md](camera-lens-everywhere.md) | Planned 2026-10-10, not started: the camera lens in every mode. Three decisions first. |
