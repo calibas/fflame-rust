@@ -185,6 +185,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("dc_cube", include_str!("../../assets/variations/twins/dc_cube.rhai")),
     ("dc_cylinder", include_str!("../../assets/variations/twins/dc_cylinder.rhai")),
     ("dc_cylinder2", include_str!("../../assets/variations/twins/dc_cylinder2.rhai")),
+    ("dc_hexes_wf", include_str!("../../assets/variations/twins/dc_hexes_wf.rhai")),
     ("dc_linear", include_str!("../../assets/variations/twins/dc_linear.rhai")),
     ("dc_mandelbox2D", include_str!("../../assets/variations/twins/dc_mandelbox2D.rhai")),
     ("dc_perlin", include_str!("../../assets/variations/twins/dc_perlin.rhai")),
@@ -292,6 +293,8 @@ pub const TWINS: &[(&str, &str)] = &[
     ("hofstadter3d", include_str!("../../assets/variations/twins/hofstadter3d.rhai")),
     ("hole2", include_str!("../../assets/variations/twins/hole2.rhai")),
     ("holesq", include_str!("../../assets/variations/twins/holesq.rhai")),
+    ("honeycomb", include_str!("../../assets/variations/twins/honeycomb.rhai")),
+    ("honeycomb4d", include_str!("../../assets/variations/twins/honeycomb4d.rhai")),
     ("horseshoe", include_str!("../../assets/variations/twins/horseshoe.rhai")),
     ("hyperbolic_camera", include_str!("../../assets/variations/twins/hyperbolic_camera.rhai")),
     ("hyperbolicellipse", include_str!("../../assets/variations/twins/hyperbolicellipse.rhai")),
@@ -515,6 +518,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("solid_sphere", include_str!("../../assets/variations/twins/solid_sphere.rhai")),
     ("sph3D", include_str!("../../assets/variations/twins/sph3D.rhai")),
     ("sphere_nja", include_str!("../../assets/variations/twins/sphere_nja.rhai")),
+    ("sphere_packing", include_str!("../../assets/variations/twins/sphere_packing.rhai")),
     ("spherecrop", include_str!("../../assets/variations/twins/spherecrop.rhai")),
     ("spherical", include_str!("../../assets/variations/twins/spherical.rhai")),
     ("spherical3D", include_str!("../../assets/variations/twins/spherical3D.rhai")),
@@ -1172,7 +1176,7 @@ mod tests {
         let reg = super::super::global_registry().clone();
         let mut pairs = Vec::new();
         let mut carried = Vec::new();
-        for (name, _) in TWINS {
+        for (name, _) in chosen_twins() {
             let builtin = reg.get(name).unwrap();
             let twin = key(name).unwrap();
             carried.push(super::carried(name).unwrap());
@@ -1333,6 +1337,13 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// The twins a GPU gate or tool runs: those `VARIATION_TWINS=a,b`
+    /// names, else every one.
+    fn chosen_twins() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
+        let only: Option<Vec<String>> = std::env::var("VARIATION_TWINS").ok().map(|v| v.split(',').map(str::to_string).collect());
+        TWINS.iter().filter(move |(n, _)| only.as_ref().is_none_or(|o| o.iter().any(|x| x == n)))
+    }
+
     /// A 2D flame of three transforms: `variation` on a turning shrink,
     /// two linear shrinks keeping it bounded; a twin's flame carries its
     /// source, which nothing registers but the renderer. The variation's
@@ -1411,7 +1422,7 @@ mod tests {
             }
             cfg
         };
-        for (name, _) in TWINS {
+        for (name, _) in chosen_twins() {
             let direct = if writes_colour(name) { 1.0 } else { 0.0 };
             let three = four_d(name);
             let reference = render_blocks(&device, &queue, &flame(name, None, direct, three), N, &run);
@@ -1506,7 +1517,6 @@ mod tests {
     fn time_variation_twins() {
         const N: u32 = 1024;
         let (device, queue) = pollster::block_on(crate::probe::run::open_device("variation twin timing")).expect("a GPU");
-        let only: Option<Vec<String>> = std::env::var("VARIATION_TWINS").ok().map(|v| v.split(',').map(str::to_string).collect());
         let itself = std::env::var("VARIATION_TWINS_SELF").is_ok_and(|v| v == "1");
         let wait = || {
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
@@ -1520,10 +1530,7 @@ mod tests {
             queue.submit(Some(enc.finish()));
         };
         let mut timed = Vec::new();
-        for (name, _) in TWINS {
-            if only.as_ref().is_some_and(|o| !o.iter().any(|n| n == name)) {
-                continue;
-            }
+        for (name, _) in chosen_twins() {
             let three = super::super::global_registry().get(name).is_some_and(|v| v.has_feature(super::super::Feature::NeedsW));
             let twin = if itself { flame_coloured(name, None, 0.0) } else { flame_coloured(&key(name).unwrap(), Some(super::carried(name).unwrap()), 0.0) };
             let cfgs = [flame_coloured(name, None, 0.0), twin].map(|mut cfg| {
