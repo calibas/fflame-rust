@@ -1902,6 +1902,13 @@ impl Checker {
                 self.error(span, "a colouring reads the texture in `start` and `step`: the recolour pass, which runs `finish` and `color` again, has none");
                 return None;
             }
+        } else if h.emit() {
+            // A variation's emissions: its body's, where the flame shader
+            // collects them (`Feature::PlotEmits`).
+            if self.kind != EntryKind::Transform || self.section != SectionKind::Transform {
+                self.error(span, "a variation emits points in its body (`variation`)");
+                return None;
+            }
         } else if h.escape() && self.kind == EntryKind::Transform {
             // A flame variation's palette, the flame's: read where the
             // flame shader binds it, the body (`prepare` runs in the init

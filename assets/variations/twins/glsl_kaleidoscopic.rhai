@@ -83,7 +83,8 @@ fn variation(w, p, ctx) {
         uv = kaleidoscopic_kscope(uv, ka, time);
     }
     let pp = vec3(uv.re, uv.im, zoom);
-    for i in 0..44 {
+    for i_n in 0..44 {
+        let i = u32(i_n);
         let d = max(1.0e-32, dot(pp, pp));
         let t1 = abs(pp) / d;
         let t0 = t1 - vec3(1.0, 1.02, p1 * 0.4);
@@ -111,7 +112,8 @@ fn variation3(v, p, ctx) {
         uv = kaleidoscopic_kscope(uv, ka, time);
     }
     let pp = vec3(uv.re, uv.im, zoom);
-    for i in 0..44 {
+    for i_n in 0..44 {
+        let i = u32(i_n);
         let d = max(1.0e-32, dot(pp, pp));
         let t1 = abs(pp) / d;
         let t0 = t1 - vec3(1.0, 1.02, p1 * 0.4);

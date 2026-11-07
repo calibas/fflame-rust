@@ -95,7 +95,8 @@ fn polyhedra_denom(dir, off, cnt, bevel) {
     let m1 = 0.0;
     let m2 = 0.0;
     let imax = u32(0);
-    for i in 0..to_int(cnt) {
+    for i_n in 0..to_int(cnt) {
+        let i = u32(i_n);
         let t1 = off + i;
         let f = vec4(tbl_polyhedra_faces[4 * t1 + 0], tbl_polyhedra_faces[4 * t1 + 1], tbl_polyhedra_faces[4 * t1 + 2], tbl_polyhedra_faces[4 * t1 + 3]);
         let s = max(0.0, dot(vec3(f.x, f.y, f.z), dir)) / f.w;
@@ -118,7 +119,8 @@ fn polyhedra_denom(dir, off, cnt, bevel) {
         let t2 = vec4(tbl_polyhedra_faces[4 * off + 0], tbl_polyhedra_faces[4 * off + 1], tbl_polyhedra_faces[4 * off + 2], tbl_polyhedra_faces[4 * off + 3]);
         let n0 = vec3(t2.x, t2.y, t2.z);
         let d0 = vec4(tbl_polyhedra_faces[4 * off + 0], tbl_polyhedra_faces[4 * off + 1], tbl_polyhedra_faces[4 * off + 2], tbl_polyhedra_faces[4 * off + 3]).w;
-        for i in 0..to_int(cnt) {
+        for i_n in 0..to_int(cnt) {
+            let i = u32(i_n);
             let t3 = off + i;
             let f = vec4(tbl_polyhedra_faces[4 * t3 + 0], tbl_polyhedra_faces[4 * t3 + 1], tbl_polyhedra_faces[4 * t3 + 2], tbl_polyhedra_faces[4 * t3 + 3]);
             let s = max(0.0, dot(vec3(f.x, f.y, f.z), dir)) / f.w;

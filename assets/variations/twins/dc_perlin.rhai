@@ -187,7 +187,8 @@ fn perlin_noise_3d(v, a_scale, f_scale, octaves_raw) {
     let n = 0.0;
     let u = v;
     let a = 1.0;
-    for i in 0..to_int(octaves) {
+    for i_n in 0..to_int(octaves) {
+        let i = u32(i_n);
         n = n + simplex_noise_3d(u) / a;
         a = a * a_scale;
         u = u * f_scale;

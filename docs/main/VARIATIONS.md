@@ -257,7 +257,9 @@ The contract:
   16; calls past it are dropped.
 
 Three variations use it: `stereogram`, `multi_kaleidoscope`,
-`spray_blur`. See
+`spray_blur`. A Rhai variation emits with `emit(z[, w])`,
+`emit_offset(d, w)` and `suppress_main()`, its `n` declared as
+`INFO.emits` ([ESCAPE.md](ESCAPE.md), *A Rhai transformation*). See
 [multi-emit-stereograms.md](../archive/projects/multi-emit-stereograms.md).
 
 ---
@@ -378,10 +380,14 @@ dispatcher's `w · f(p)` gives back the intended value. `idisc` in
 pattern. Native pre- and post-phase variations always apply their own
 weight.
 
-**Per-flame specialisation.** A body can be re-emitted per flame:
-`synth` and `mondrianomies` cut their unused modes before compilation
-(`variation_specialized_source` in `generate_variation_code`). A new
-specialiser is a new arm there.
+**Per-flame specialisation.** A body can be re-emitted per flame
+(`variation_specialized_source` in `generate_variation_code`): `synth`
+cuts the modes the flame does not use before compilation, and
+`mondrianomies` bakes in its Exact fill's rectangles, a table the CPU
+computes from the drawing for each seed, depth and drift in the flame
+(`exact_combos`), in place of a stub. A new specialiser is a new arm
+there. One that bakes in data makes the def's WGSL less than the
+variation, so mondrianomies has no Rhai twin (below).
 
 **GPU arithmetic.** The shader lints reject self-compares (`x != x`),
 self-divisions (`x / x`) and f32-subnormal literals (`1e-40`) in every
@@ -571,12 +577,12 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 635 of the 647, each a Rhai variation under its
+  P7 step 3): 639 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
   (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
-  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`). Seven written by hand, 628 translated from the built-ins'
+  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`, and `INFO.emits` as its `PlotEmits`). Seven written by hand, 632 translated from the built-ins'
   WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
   reads them; its colour, direct colour and hide pointers locals from
   `ctx.color`, `ctx.rgb` and `ctx.hide`, returned as `#{ z, color, rgb,
@@ -608,7 +614,15 @@ function takes the point, and the ids when it has parameters (as
   language writes as a module constant (polychora.wgsl's faces,
   su_mobius.wgsl's base matrices); a
   helper's pointer argument its `this` (`x.f(...)`, called on what the
-  pointer points at), a helper reading the context taking `ctx`; a
+  pointer points at; of several, a pointer to an array it never writes
+  through the array passed by value), a helper reading
+  the context taking `ctx`, one reading or setting the variation's
+  state called on it (`this.f(..)`, klein_group); a 3x3 matrix its nine
+  floats, column by column, `m * v` and `m[c][r]` written out
+  (glsl_apollonian); the emission collector's calls (`emit_plot`,
+  `emit_plot_offset`, `emit_suppress_main`) the language's emissions
+  (multi_kaleidoscope, spray_blur); a `u32` loop counter a `u32` again
+  in the body, as WGSL's is; a
   helper giving an array with its early returns folded into an `if`
   value; `bitcast` of an integer the language's conversion (a float's
   refused); `countOneBits` a helper of the twin's own, Kernighan's;
@@ -709,6 +723,14 @@ function takes the point, and the ids when it has parameters (as
     built-in's place in that transform (weight, parameters, order,
     phase), the flame carrying its source, and opening it in the Formula
     Editor in use (`formula_editor::variation_as_twin`).
+  - **Without a twin** (8; `translate_variation_twins.py --report`
+    names each one's reason): the analytic blurs (`analytic_blur`,
+    `analytic_gaussian_blur`) and the subflames (`subflame_wf`,
+    `pre_subflame_wf`), renderer hooks that would not translate well
+    (the user, 2026-11-07); the volume emitters (`polyhedron_volume`,
+    `sphere_volume`), possible later work; mondrianomies, its Exact fill
+    a table baked in per flame (*Per-flame specialisation*); and
+    stereogram, which reads the camera.
   - `to_float(floor(x))` (`trunc`, `ceil`) is the float operation in
     every kind and in the interpreter, exact at any size.
   - **A literal first in `min` and `max`**: Rhai's `max(a, b)` keeps a

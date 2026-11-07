@@ -105,10 +105,12 @@ fn variation(w, p, ctx) {
     let i_f = to_float(floor(rand() * resolution));
     let j_f = to_float(floor(rand() * resolution));
     let col = vec3(0.0, 0.0, 0.0);
-    for j in 0..3 {
+    for j_n in 0..3 {
+        let j = u32(j_n);
         let pp = complex(0.7 * (i_f + 0.5) / resolution, 0.7 * (j_f + 0.5) / resolution);
         let jf = to_float(j);
-        for i in 1..to_int(steps) {
+        for i_n in 1..to_int(steps) {
+            let i = u32(i_n);
             let ife = to_float(i);
             let denom = ife + jf;
             pp = complex(pp.re + 0.1 / denom * sin(ife * p1 * pp.im + time + cos((time / (p2 * ife)) * ife + jf)), pp.im);
@@ -146,10 +148,12 @@ fn variation3(q, p, ctx) {
     let i_f = to_float(floor(rand() * resolution));
     let j_f = to_float(floor(rand() * resolution));
     let col = vec3(0.0, 0.0, 0.0);
-    for j in 0..3 {
+    for j_n in 0..3 {
+        let j = u32(j_n);
         let pp = complex(0.7 * (i_f + 0.5) / resolution, 0.7 * (j_f + 0.5) / resolution);
         let jf = to_float(j);
-        for i in 1..to_int(steps) {
+        for i_n in 1..to_int(steps) {
+            let i = u32(i_n);
             let ife = to_float(i);
             let denom = ife + jf;
             pp = complex(pp.re + 0.1 / denom * sin(ife * p1 * pp.im + time + cos((time / (p2 * ife)) * ife + jf)), pp.im);

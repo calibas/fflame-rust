@@ -135,6 +135,14 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
     if lang::rhai::info_bool(source, "replace") == Some(true) {
         features.push("replace");
     }
+    // The most points one call emits, `INFO.emits` (`Feature::PlotEmits`),
+    // which a body emitting must say.
+    let emits = lang::rhai::info_number(source, "emits").map_or(0, |n| n as u8);
+    let emits_in = |w: &str| w.contains("emit_plot") || w.contains("emit_suppress_main");
+    let emitting = wgsl.wgsl_2d.as_deref().is_some_and(emits_in) || emits_in(&wgsl.wgsl_3d);
+    if emitting && emits == 0 {
+        return Err("a variation emitting points says how many one call emits at most, `INFO.emits` (1 to 16)".into());
+    }
     // JWildfire's z rule, `INFO.z`: by default a 3D body's z is always kept
     // and a 2D body's passed-through z only when the flame preserves z
     // (`shader_builder_v2::zeroes_z`).
@@ -178,6 +186,7 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
         // `prepare`, its derived slots computed by the init pass.
         "init_param_count": wgsl.init_count,
         "shader_init": wgsl.init,
+        "plot_emits": emits,
     });
     serde_json::from_value(payload).map_err(|e| format!("the variation's payload: {e}"))
 }
@@ -1389,6 +1398,79 @@ mod tests {
         let (a, _) = run.call(C64::new(1.0, 1.0), C64::ZERO, 1.0);
         let (b, _) = run.call(C64::new(2.0, 2.0), C64::ZERO, 1.0);
         assert_eq!(((a.re, a.im), (b.re, b.im)), ((2.0, 1.0), (3.0, 3.0)));
+    }
+
+    /// A helper called on the state, `this.f(..)`, reads and sets its
+    /// fields through `this`, as Rhai binds the object a function is called
+    /// on; a helper giving a vector likewise.
+    #[test]
+    fn a_helper_called_on_the_state_has_its_fields() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_state_helper\" };\n\
+                   fn init(p) { #{ n: 0.0 } }\n\
+                   fn tick(k) {\n\
+                   \x20   this.n = this.n + k;\n\
+                   \x20   this.n * 2.0\n\
+                   }\n\
+                   fn lift(k) {\n\
+                   \x20   this.n = this.n + k;\n\
+                   \x20   vec3(this.n, 0.0, 1.0)\n\
+                   }\n\
+                   fn variation(z, p) {\n\
+                   \x20   let r = this.tick(1.0);\n\
+                   \x20   complex(r, this.n)\n\
+                   }\n\
+                   fn variation3(v, p) { this.lift(0.5) }\n";
+        let _ = named(src);
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let mut run = VariationRun::new(&p, &params, 1);
+        let (a, _) = run.call(C64::ZERO, C64::ZERO, 1.0);
+        let (b, _) = run.call(C64::ZERO, C64::ZERO, 1.0);
+        assert_eq!(((a.re, a.im), (b.re, b.im)), ((2.0, 1.0), (4.0, 2.0)));
+        let p3 = lang::rhai::transformation3(src).unwrap();
+        let mut run3 = VariationRun::new(&p3, &params, 1);
+        assert_eq!(run3.call3([0.0; 3], [0.0; 3], 1.0).0, [0.5, 0.0, 1.0]);
+        assert_eq!(run3.call3([0.0; 3], [0.0; 3], 1.0).0, [1.0, 0.0, 1.0]);
+    }
+
+    /// `emit(z)`, `emit(z, w)`, `emit_offset(d, w)` and `suppress_main()`
+    /// are a variation's extra plot points (`Feature::PlotEmits`, its cap
+    /// `INFO.emits`), each the flame shader's collector call in the body's
+    /// own dimension; the point the body gives is unchanged by them, and a
+    /// body emitting without `INFO.emits` is refused.
+    #[test]
+    fn emits_are_extra_plot_points() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_emit_test\", emits: 3 };\n\
+                   fn variation(z, p) {\n\
+                   \x20   emit(z * 2.0);\n\
+                   \x20   emit(z, 0.5);\n\
+                   \x20   emit_offset(complex(0.1, 0.0), 0.25);\n\
+                   \x20   suppress_main();\n\
+                   \x20   z\n\
+                   }\n\
+                   fn variation3(v, p) {\n\
+                   \x20   emit(v * 2.0);\n\
+                   \x20   v\n\
+                   }\n";
+        let dl = named(src);
+        assert_eq!(dl.plot_emits, 3);
+        let w2 = dl.shader_2d.as_deref().unwrap();
+        assert!(w2.contains("emit_plot_weighted(vec2<f32>(") && w2.contains("emit_plot_offset(vec2<f32>(") && w2.contains("emit_suppress_main()"), "{w2}");
+        assert!(dl.shader_3d.as_deref().is_some_and(|w| w.contains("emit_plot_weighted(vec3<f32>(")), "{:?}", dl.shader_3d);
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::new(0.5, -0.25), C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (0.5, -0.25));
+        // A 2D body alone: in a 3D flame its copy emits 3D points at the
+        // point's z.
+        let flat = named("const INFO = #{ name: \"rhai_emit_flat\", emits: 1 };\nfn variation(z, p) {\n    emit(z);\n    z\n}\n");
+        assert!(flat.shader_3d.as_deref().is_some_and(|w| w.contains("emit_z: f32") && w.contains("p.xy, p.z)")), "{:?}", flat.shader_3d);
+        let unsaid = "const INFO = #{ name: \"rhai_emit_unsaid\" };\nfn variation(z, p) {\n    emit(z);\n    z\n}\n";
+        assert!(compile(unsaid).is_err_and(|e| e.contains("INFO.emits")), "{:?}", compile(unsaid).err());
     }
 
     /// `INFO.z` is JWildfire's z rule, as the built-ins' features: by

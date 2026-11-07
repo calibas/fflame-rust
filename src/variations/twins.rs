@@ -254,6 +254,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("gamma", include_str!("../../assets/variations/twins/gamma.rhai")),
     ("gaussian_blur", include_str!("../../assets/variations/twins/gaussian_blur.rhai")),
     ("glsl_acrilic", include_str!("../../assets/variations/twins/glsl_acrilic.rhai")),
+    ("glsl_apollonian", include_str!("../../assets/variations/twins/glsl_apollonian.rhai")),
     ("glsl_circlesblue", include_str!("../../assets/variations/twins/glsl_circlesblue.rhai")),
     ("glsl_circuits", include_str!("../../assets/variations/twins/glsl_circuits.rhai")),
     ("glsl_fractaldots", include_str!("../../assets/variations/twins/glsl_fractaldots.rhai")),
@@ -341,6 +342,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("juliascope", include_str!("../../assets/variations/twins/juliascope.rhai")),
     ("juliascope3Db", include_str!("../../assets/variations/twins/juliascope3Db.rhai")),
     ("kaleidoscope", include_str!("../../assets/variations/twins/kaleidoscope.rhai")),
+    ("klein_group", include_str!("../../assets/variations/twins/klein_group.rhai")),
     ("lace_js", include_str!("../../assets/variations/twins/lace_js.rhai")),
     ("layered_spiral", include_str!("../../assets/variations/twins/layered_spiral.rhai")),
     ("lazyTravis", include_str!("../../assets/variations/twins/lazyTravis.rhai")),
@@ -386,6 +388,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("mobius_dragon_3D", include_str!("../../assets/variations/twins/mobius_dragon_3D.rhai")),
     ("mobius_strip", include_str!("../../assets/variations/twins/mobius_strip.rhai")),
     ("modulus", include_str!("../../assets/variations/twins/modulus.rhai")),
+    ("multi_kaleidoscope", include_str!("../../assets/variations/twins/multi_kaleidoscope.rhai")),
     ("murl", include_str!("../../assets/variations/twins/murl.rhai")),
     ("murl2", include_str!("../../assets/variations/twins/murl2.rhai")),
     ("ngon", include_str!("../../assets/variations/twins/ngon.rhai")),
@@ -544,6 +547,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("splitbrdr", include_str!("../../assets/variations/twins/splitbrdr.rhai")),
     ("splits", include_str!("../../assets/variations/twins/splits.rhai")),
     ("splits3D", include_str!("../../assets/variations/twins/splits3D.rhai")),
+    ("spray_blur", include_str!("../../assets/variations/twins/spray_blur.rhai")),
     ("sqrt_acosech", include_str!("../../assets/variations/twins/sqrt_acosech.rhai")),
     ("sqrt_acosh", include_str!("../../assets/variations/twins/sqrt_acosh.rhai")),
     ("sqrt_acoth", include_str!("../../assets/variations/twins/sqrt_acoth.rhai")),
@@ -1021,6 +1025,7 @@ mod tests {
             for (f, wire) in [(F::WritesColor, "writes_color"), (F::AlwaysZ, "always_z"), (F::NeverZ, "never_z"), (F::NeedsAccum, "needs_accum"), (F::Replace, "replace"), (F::CanHide, "can_hide"), (F::WritesRgb, "writes_rgb"), (F::NeedsW, "needs_w")] {
                 assert_eq!(has(wire), builtin.features.contains(&f), "{name}: {f:?}");
             }
+            assert_eq!(u32::from(dl.plot_emits), builtin.plot_emit_cap(), "{name}: the most points one call emits");
             assert_eq!(dl.name, key(name).unwrap(), "{name}: its key");
             assert_eq!(dl.category, builtin.category.to_api_str(), "{name}: its category");
             assert_eq!(super::super::custom::phase_of(src), builtin.phase, "{name}: its phase");

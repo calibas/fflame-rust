@@ -58,7 +58,8 @@ fn variation(z, p, ctx) {
     let color = vec3(0.0, 0.0, 0.0);
     let col_a = vec3(0.1, 0.2, 0.8);
     let col_b = vec3(0.2, 0.8, 0.6);
-    for i in 0..to_int(bubles) {
+    for i_n in 0..to_int(bubles) {
+        let i = u32(i_n);
         let i_fl = to_float(i);
         let pha = tan(i_fl * 6.0 + 1.0) * 0.5 + 0.5;
         let siz = pow(cos(i_fl * 2.4 + 5.0) * 0.5 + 0.5, 4.0);
@@ -91,7 +92,8 @@ fn variation3(v, p, ctx) {
     let color = vec3(0.0, 0.0, 0.0);
     let col_a = vec3(0.1, 0.2, 0.8);
     let col_b = vec3(0.2, 0.8, 0.6);
-    for i in 0..to_int(bubles) {
+    for i_n in 0..to_int(bubles) {
+        let i = u32(i_n);
         let i_fl = to_float(i);
         let pha = tan(i_fl * 6.0 + 1.0) * 0.5 + 0.5;
         let siz = pow(cos(i_fl * 2.4 + 5.0) * 0.5 + 0.5, 4.0);

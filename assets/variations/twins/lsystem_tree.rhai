@@ -701,7 +701,8 @@ fn variation(z, p, ctx) {
     let soft = to_float(p.soft) > 0.5;
     let sig = array(12, 0.0);
     let rho = 0.0;
-    for i in 0..to_int(k) {
+    for i_n in 0..to_int(k) {
+        let i = u32(i_n);
         let base = u32(4) + i * u32(6);
         let ma = p.slots[to_int(base)];
         let mc = p.slots[to_int(base + u32(2))];
@@ -712,14 +713,16 @@ fn variation(z, p, ctx) {
     if (s > u32(0)) {
         let total = 0.0;
         let w = 1.0;
-        for l in 0..to_int(iters) {
+        for l_n in 0..to_int(iters) {
+            let l = u32(l_n);
             total = total + w;
             w = w * rho;
         }
         let u = rand() * total;
         level = iters - u32(1);
         w = 1.0;
-        for l in 0..to_int(iters) {
+        for l_n in 0..to_int(iters) {
+            let l = u32(l_n);
             if (u < w) {
                 level = l;
                 break;
@@ -732,7 +735,8 @@ fn variation(z, p, ctx) {
     let pb = complex(1.0, 0.0);
     if (s > u32(0)) {
         let slen = 0.0;
-        for j in 0..to_int(s) {
+        for j_n in 0..to_int(s) {
+            let j = u32(j_n);
             let sb = u32(76) + j * u32(4);
             let dxj = p.slots[to_int(sb + u32(2))] - p.slots[to_int(sb)];
             let dyj = p.slots[to_int(sb + u32(3))] - p.slots[to_int(sb + u32(1))];
@@ -740,7 +744,8 @@ fn variation(z, p, ctx) {
         }
         let us = rand() * max(1.0e-9, slen);
         let pick = s - u32(1);
-        for j in 0..to_int(s) {
+        for j_n in 0..to_int(s) {
+            let j = u32(j_n);
             let sb = u32(76) + j * u32(4);
             let dxj = p.slots[to_int(sb + u32(2))] - p.slots[to_int(sb)];
             let dyj = p.slots[to_int(sb + u32(3))] - p.slots[to_int(sb + u32(1))];
@@ -769,10 +774,12 @@ fn variation(z, p, ctx) {
         }
     }
     let tcol = 0.0;
-    for j2 in 0..to_int(level) {
+    for j2_n in 0..to_int(level) {
+        let j2 = u32(j2_n);
         let u2 = rand() * rho;
         let i2 = k - u32(1);
-        for q in 0..to_int(k) {
+        for q_n in 0..to_int(k) {
+            let q = u32(q_n);
             if (u2 < sig[q]) {
                 i2 = q;
                 break;
@@ -810,7 +817,8 @@ fn variation3(v, p, ctx) {
     let soft = to_float(p.soft) > 0.5;
     let sig = array(12, 0.0);
     let rho = 0.0;
-    for i in 0..to_int(k) {
+    for i_n in 0..to_int(k) {
+        let i = u32(i_n);
         let base = u32(4) + i * u32(6);
         let ma = p.slots[to_int(base)];
         let mc = p.slots[to_int(base + u32(2))];
@@ -821,14 +829,16 @@ fn variation3(v, p, ctx) {
     if (s > u32(0)) {
         let total = 0.0;
         let w = 1.0;
-        for l in 0..to_int(iters) {
+        for l_n in 0..to_int(iters) {
+            let l = u32(l_n);
             total = total + w;
             w = w * rho;
         }
         let u = rand() * total;
         level = iters - u32(1);
         w = 1.0;
-        for l in 0..to_int(iters) {
+        for l_n in 0..to_int(iters) {
+            let l = u32(l_n);
             if (u < w) {
                 level = l;
                 break;
@@ -841,7 +851,8 @@ fn variation3(v, p, ctx) {
     let pb = complex(1.0, 0.0);
     if (s > u32(0)) {
         let slen = 0.0;
-        for j in 0..to_int(s) {
+        for j_n in 0..to_int(s) {
+            let j = u32(j_n);
             let sb = u32(76) + j * u32(4);
             let dxj = p.slots[to_int(sb + u32(2))] - p.slots[to_int(sb)];
             let dyj = p.slots[to_int(sb + u32(3))] - p.slots[to_int(sb + u32(1))];
@@ -849,7 +860,8 @@ fn variation3(v, p, ctx) {
         }
         let us = rand() * max(1.0e-9, slen);
         let pick = s - u32(1);
-        for j in 0..to_int(s) {
+        for j_n in 0..to_int(s) {
+            let j = u32(j_n);
             let sb = u32(76) + j * u32(4);
             let dxj = p.slots[to_int(sb + u32(2))] - p.slots[to_int(sb)];
             let dyj = p.slots[to_int(sb + u32(3))] - p.slots[to_int(sb + u32(1))];
@@ -878,10 +890,12 @@ fn variation3(v, p, ctx) {
         }
     }
     let tcol = 0.0;
-    for j2 in 0..to_int(level) {
+    for j2_n in 0..to_int(level) {
+        let j2 = u32(j2_n);
         let u2 = rand() * rho;
         let i2 = k - u32(1);
-        for q in 0..to_int(k) {
+        for q_n in 0..to_int(k) {
+            let q = u32(q_n);
             if (u2 < sig[q]) {
                 i2 = q;
                 break;

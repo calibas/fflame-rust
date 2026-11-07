@@ -962,7 +962,8 @@ fn prepare(p) {
 fn lsp3_point(p, idx, iters, n, anchor) {
     let v = anchor;
     let rem = idx;
-    for j in 0..to_int(iters) {
+    for j_n in 0..to_int(iters) {
+        let j = u32(j_n);
         let d = rem % n;
         rem = rem / n;
         let base = u32(4) + d * u32(12);
@@ -991,7 +992,8 @@ fn variation(q, p, ctx) {
     let dc = to_float(p.dc) > 0.5;
     let anchored = to_float(p.anchored) > 0.5;
     let total = u32(1);
-    for j in 0..to_int(iters) {
+    for j_n in 0..to_int(iters) {
+        let j = u32(j_n);
         total = min(total * n, u32(16000000));
     }
     let t = rand();
@@ -1099,7 +1101,8 @@ fn variation(q, p, ctx) {
             } else {
                 let s = 0.0;
                 let off = vec3(0.0, 0.0, 0.0);
-                for k in 0..8 {
+                for k_n in 0..8 {
+                    let k = u32(k_n);
                     s = rand() * dlen;
                     let a2 = rand() * 6.28318530718;
                     off = (ub * cos(a2) + vb * sin(a2)) * (r * rad);
@@ -1129,7 +1132,8 @@ fn variation3(q, p, ctx) {
     let dc = to_float(p.dc) > 0.5;
     let anchored = to_float(p.anchored) > 0.5;
     let total = u32(1);
-    for j in 0..to_int(iters) {
+    for j_n in 0..to_int(iters) {
+        let j = u32(j_n);
         total = min(total * n, u32(16000000));
     }
     let t = rand();
@@ -1237,7 +1241,8 @@ fn variation3(q, p, ctx) {
             } else {
                 let s = 0.0;
                 let off = vec3(0.0, 0.0, 0.0);
-                for k in 0..8 {
+                for k_n in 0..8 {
+                    let k = u32(k_n);
                     s = rand() * dlen;
                     let a2 = rand() * 6.28318530718;
                     off = (ub * cos(a2) + vb * sin(a2)) * (r * rad);

@@ -73,7 +73,8 @@ fn squares_hit(p_in, n, time, dir) {
     let arg_mod = arg - to_float(floor(arg));
     let scale = pow(0.5, arg_mod);
     let coord_iter = p_in / scale;
-    for i in 0..to_int(n) {
+    for i_n in 0..to_int(n) {
+        let i = u32(i_n);
         let sectors = floor(coord_iter * 3.0);
         if (sectors.re == 1.0 && sectors.im == 1.0) {
             return false;
@@ -99,7 +100,8 @@ fn variation(w, p, ctx) {
     let coord_orig = complex(abs(x / resolution - 0.5), abs(y / resolution - 0.5));
     coord_orig = coord_orig - floor(coord_orig);
     let color = vec3(cos(time), tan(time), sin(time));
-    for i in 0..4 {
+    for i_n in 0..4 {
+        let i = u32(i_n);
         let t1 = to_float(i) * 0.1;
         let offset = complex(t1, t1);
         if (squares_hit(offset + coord_orig, n, time, dir)) {
@@ -124,7 +126,8 @@ fn variation3(v, p, ctx) {
     let coord_orig = complex(abs((i_f + 0.5) / resolution - 0.5), abs((j_f + 0.5) / resolution - 0.5));
     coord_orig = coord_orig - floor(coord_orig);
     let color = vec3(cos(time), tan(time), sin(time));
-    for i in 0..4 {
+    for i_n in 0..4 {
+        let i = u32(i_n);
         let t1 = to_float(i) * 0.1;
         let offset = complex(t1, t1);
         if (squares_hit(offset + coord_orig, n, time, dir)) {

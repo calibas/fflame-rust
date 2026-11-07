@@ -105,7 +105,8 @@ fn variation(z, p, ctx) {
     let col = vec3(0.0, 0.0, 0.0);
     uv = starsfield_rotate(uv, time);
     uv = uv + complex(cos(time), sin(time)) * 2.0;
-    for ix in 0..10 {
+    for ix_n in 0..10 {
+        let ix = u32(ix_n);
         let i = to_float(ix) * 0.1;
         uv = starsfield_rotate(uv, starsfield_hash11(i) * 6.28);
         let t_arg = i - time;
@@ -141,7 +142,8 @@ fn variation3(v, p, ctx) {
     let col = vec3(0.0, 0.0, 0.0);
     uv = starsfield_rotate(uv, time);
     uv = uv + complex(cos(time), sin(time)) * 2.0;
-    for ix in 0..10 {
+    for ix_n in 0..10 {
+        let ix = u32(ix_n);
         let i = to_float(ix) * 0.1;
         uv = starsfield_rotate(uv, starsfield_hash11(i) * 6.28);
         let t_arg = i - time;

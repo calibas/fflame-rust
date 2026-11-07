@@ -129,7 +129,8 @@ fn fractwf_next_iter(x, y, xs, ys, start_x, start_y, cust_a, cust_b, power, kind
     } else if t1 == u32(4) {
         let nx = x * (xs * xs - 10.0 * xs * ys + 5.0 * ys * ys);
         let ny = y * (ys * ys - 10.0 * xs * ys + 5.0 * xs * xs);
-        for k in 5..to_int(power) {
+        for k_n in 5..to_int(power) {
+            let k = u32(k_n);
             let xa = x * nx - y * ny;
             let ya = x * ny + nx * y;
             nx = xa;
@@ -145,7 +146,8 @@ fn fractwf_next_iter(x, y, xs, ys, start_x, start_y, cust_a, cust_b, power, kind
     } else if t1 == u32(8) {
         let nx = x * (xs * xs - 10.0 * xs * ys + 5.0 * ys * ys);
         let ny = y * (ys * ys - 10.0 * xs * ys + 5.0 * xs * xs);
-        for k in 5..to_int(power) {
+        for k_n in 5..to_int(power) {
+            let k = u32(k_n);
             let xa = x * nx - y * ny;
             let ya = x * ny + nx * y;
             nx = xa;
@@ -199,7 +201,8 @@ fn fractwf_iterate_body(affine_p, xmin, xmax, ymin, ymax, cust_a, cust_b, max_it
     let max_iter_safe = min(max_iter, u32(500));
     let clip_max_user = min(max(max_clip_iter, u32(1)), u32(4));
     let clip_max = (if color_only > u32(0) { u32(1) } else { clip_max_user });
-    for i in 0..to_int(clip_max) {
+    for i_n in 0..to_int(clip_max) {
+        let i = u32(i_n);
         if (color_only > u32(0)) {
             x0 = affine_p.re;
             y0 = affine_p.im;

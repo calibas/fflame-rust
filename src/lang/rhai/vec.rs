@@ -206,7 +206,7 @@ impl Lowerer<'_> {
     /// `this`), the parameters, the context.
     pub(super) fn owner(&self, e: &Expr, scope: &Scope) -> Option<Owner> {
         match e {
-            Expr::ThisPtr(_) if scope.which == Fn3::Variation => Some(Owner::State),
+            Expr::ThisPtr(_) if scope.which == Fn3::Variation || matches!(scope.get("this"), Some(Binding::State)) => Some(Owner::State),
             Expr::Variable(v, _, _) => match scope.get(v.1.as_str()) {
                 Some(Binding::State) => Some(Owner::State),
                 Some(Binding::Params) => Some(Owner::Params),
@@ -397,6 +397,13 @@ impl Lowerer<'_> {
                 // A helper of the script's called as a method, giving a
                 // vector: its value its `this`.
                 let Expr::MethodCall(f, fp) = &be.rhs else { unreachable!() };
+                // On the state: its `this` the state.
+                let on_state = matches!(&be.lhs, Expr::ThisPtr(_))
+                    && (matches!(scope.get("this"), Some(Binding::State)) || (scope.which == Fn3::Variation && scope.get("this").is_none()));
+                if on_state {
+                    self.state_this = true;
+                    return self.vcall(f, *fp, None, scope);
+                }
                 let this = self.expr(&be.lhs, scope)?;
                 self.vcall(f, *fp, Some(this), scope)
             }
@@ -447,6 +454,7 @@ impl Lowerer<'_> {
     /// A call giving a vector: a helper of the script's, inlined, or a
     /// function of vectors; `this` a method call's value.
     fn vcall(&mut self, f: &FnCallExpr, p: Position, this: Option<ast::Expr>, scope: &mut Scope) -> R<Vector> {
+        let on_state = std::mem::take(&mut self.state_this);
         let n = f.name.as_str();
         if n == "vary" && self.solid {
             return self.vary_map(f, p, scope);
@@ -465,11 +473,13 @@ impl Lowerer<'_> {
             if self.depth > 32 {
                 return self.err(p, "helpers call each other too deep (recursion?)");
             }
-            let mut inner = Scope::new(Fn3::Helper, Vec::new());
+            let mut inner = Scope::new(Fn3::Helper, if on_state { scope.fields.clone() } else { Vec::new() });
             for (param, a) in def.params.iter().zip(vals) {
                 inner.bind(param, a);
             }
-            if let Some(v) = this {
+            if on_state {
+                inner.bind("this", Binding::State);
+            } else if let Some(v) = this {
                 let b = self.this_binding(v, self.pos.span(p));
                 inner.bind("this", b);
             }

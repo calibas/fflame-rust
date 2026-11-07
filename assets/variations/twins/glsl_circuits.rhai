@@ -81,7 +81,8 @@ fn circuits_formula(z_in, t, intensity, zoom, pulse, loops) {
     let ot2 = 1000.0;
     let k = to_float(floor(loops / 4.0 + to_float(floor(5.0 * zoom))));
     let color = vec3(0.0, 0.0, 0.0);
-    for i in 0..11 {
+    for i_n in 0..11 {
+        let i = u32(i_n);
         let d = z.norm_sqr();
         let c_d = clamp(d, 0.1, 0.5);
         let t3 = complex(abs(z.re), abs(z.im)) / c_d;
@@ -160,7 +161,8 @@ fn variation(z, p, ctx) {
     let dof = (zoom * focus) + (t * 0.25);
     let color = vec3(0.0, 0.0, 0.0);
     let s_accum = (101.0 + glow) * intensity;
-    for aa in 0..to_int(loops) {
+    for aa_n in 0..to_int(loops) {
+        let aa = u32(aa_n);
         let aa_uv = complex(to_float(floor(to_float(aa) / 6.0)), to_float(aa) - 6.0 * to_float(floor(to_float(aa) / 6.0)));
         color = s_accum.circuits_formula(uv + aa_uv * pix * dof, t, intensity, zoom, pulse, loops_f);
     }
@@ -221,7 +223,8 @@ fn variation3(v, p, ctx) {
     let dof = (zoom * focus) + (t * 0.25);
     let color = vec3(0.0, 0.0, 0.0);
     let s_accum = (101.0 + glow) * intensity;
-    for aa in 0..to_int(loops) {
+    for aa_n in 0..to_int(loops) {
+        let aa = u32(aa_n);
         let aa_uv = complex(to_float(floor(to_float(aa) / 6.0)), to_float(aa) - 6.0 * to_float(floor(to_float(aa) / 6.0)));
         color = s_accum.circuits_formula(uv + aa_uv * pix * dof, t, intensity, zoom, pulse, loops_f);
     }

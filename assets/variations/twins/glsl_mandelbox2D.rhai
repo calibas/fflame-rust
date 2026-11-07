@@ -48,7 +48,8 @@ fn variation(q, p, ctx) {
     let i_vec = complex(7.0 * (x + x - resolution) / resolution, 7.0 * (y + y - resolution) / resolution);
     let o = vec4(i_vec.re, i_vec.im, -5.0 * cos(time * 0.1), 1.0);
     let d = 1.0;
-    for k in 0..20 {
+    for k_n in 0..20 {
+        let k = u32(k_n);
         let t2 = -1.0;
         let t1 = complex(t2, t2);
         let t3 = complex(1.0, 1.0);
@@ -81,7 +82,8 @@ fn variation3(v, p, ctx) {
     let i_vec = complex(7.0 * ((i_f + 0.5) + (i_f + 0.5) - resolution) / resolution, 7.0 * ((j_f + 0.5) + (j_f + 0.5) - resolution) / resolution);
     let o = vec4(i_vec.re, i_vec.im, -5.0 * cos(time * 0.1), 1.0);
     let d = 1.0;
-    for k in 0..20 {
+    for k_n in 0..20 {
+        let k = u32(k_n);
         let t2 = -1.0;
         let t1 = complex(t2, t2);
         let t3 = complex(1.0, 1.0);
