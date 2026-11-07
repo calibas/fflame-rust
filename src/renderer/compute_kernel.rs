@@ -5762,6 +5762,13 @@ impl FlameRenderer {
         Ok((self.width, self.height, rgba_data))
     }
 
+    /// The variation parameter buffer's size, in bytes (the flame timing's
+    /// memory column).
+    #[cfg(test)]
+    pub(crate) fn variation_params_bytes(&self) -> u64 {
+        self.buffers.variation_params_buffer.size()
+    }
+
     /// Rewrite the packed variation parameters from `flame`, without
     /// touching anything else.
     ///

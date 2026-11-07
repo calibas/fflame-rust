@@ -17,6 +17,8 @@ pub(crate) mod density_gates;
 mod orbit_gates;
 #[cfg(test)]
 mod param_cost;
+#[cfg(test)]
+mod flame_timing;
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "web-app"))]
 mod calibration;
 
