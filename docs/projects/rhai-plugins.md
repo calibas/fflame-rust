@@ -1269,7 +1269,13 @@ Steps, in the order that unlocks the most first (the user picks):
      tables' storage reaches the built-ins too, the user's call. The
      timing tool's dispatches made small after one experiment reset the
      driver (VSCode went with it). 635: compile, 13430 pairs, 0 apart,
-     every flame drawn alike.
+     every flame drawn alike. The density gate now draws every twin's flame in 3D as
+     well as 2D (the user asked: the 3D bodies were held per point, never
+     as a flame but the 4D twins'): all 635 alike in 3D. The timing
+     tool's 3D mode, and an experiment: a twin's table in `prepare`, read
+     from the parameter slots, took polychoron from 5.69x its built-in
+     to 0.06x -- naga's per-read copy is nearly all the built-in's time --
+     so the slots are to grow, general purpose (the user, 2026-11-06).
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and

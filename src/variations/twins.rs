@@ -1436,42 +1436,48 @@ mod tests {
             }
             cfg
         };
+        // Each twin's flame in 2D and in 3D, its two bodies (a 4D twin's in
+        // 3D alone); `VARIATION_TWINS_DIMS=2` or `3` draws one of them.
+        let dims = std::env::var("VARIATION_TWINS_DIMS").unwrap_or_default();
         for (name, _) in chosen_twins() {
             let direct = if writes_colour(name) { 1.0 } else { 0.0 };
-            let three = four_d(name);
-            let reference = render_blocks(&device, &queue, &flame(name, None, direct, three), N, &run);
-            let twin = render_blocks(&device, &queue, &flame(&key(name).unwrap(), Some(super::carried(name).unwrap()), direct, three), N, &run);
-            if direct > 0.0 {
-                for ch in 0..3 {
-                    let c = compare_blocks(&twin.light[ch], &reference.light[ch], &reference.density);
-                    if off(&c) {
-                        print_compared(&format!("{name}'s twin against {name}, channel {ch}'s light"), &c);
-                        failures.push(format!("{name}'s twin: its colour, channel {ch}: a block is {:.3} off (dense), {:.3} (middle)", c.worst_dense, c.worst_middle));
+            let both: &[bool] = if four_d(name) { &[true] } else { &[false, true] };
+            for &three in both.iter().filter(|&&t| dims.is_empty() || dims == if t { "3" } else { "2" }) {
+                let (what, d) = if three { (format!("{name} (3D)"), " (3D)") } else { (name.to_string(), "") };
+                let reference = render_blocks(&device, &queue, &flame(name, None, direct, three), N, &run);
+                let twin = render_blocks(&device, &queue, &flame(&key(name).unwrap(), Some(super::carried(name).unwrap()), direct, three), N, &run);
+                if direct > 0.0 {
+                    for ch in 0..3 {
+                        let c = compare_blocks(&twin.light[ch], &reference.light[ch], &reference.density);
+                        if off(&c) {
+                            print_compared(&format!("{what}'s twin against {name}, channel {ch}'s light"), &c);
+                            failures.push(format!("{what}'s twin: its colour, channel {ch}: a block is {:.3} off (dense), {:.3} (middle)", c.worst_dense, c.worst_middle));
+                        }
                     }
                 }
-            }
-            let c = compare_blocks(&twin.density, &reference.density, &reference.density);
-            let (_, _, mx, _, my, _, z) = c.pooled[0];
-            if mx <= 0.0 {
-                failures.push(format!("{name}'s twin drew nothing"));
-            }
-            if OTHER_NOISE.contains(name) {
-                println!("  {name}'s twin: its own noise, drawn");
-                continue;
-            }
-            if HUGE_TRIG.contains(name) {
-                println!("  {name}'s twin: its trig past 2^24 the portable side's, drawn");
-                continue;
-            }
-            print_compared(&format!("{name}'s twin against {name}"), &c);
-            if z.abs() > 4.0 && (mx / my - 1.0).abs() > 0.005 {
-                failures.push(format!("{name}'s twin: the whole view's density is {:.4} of the built-in's", mx / my));
-            }
-            if off(&c) {
-                failures.push(format!("{name}'s twin: a block is {:.3} off (dense), {:.3} (middle)", c.worst_dense, c.worst_middle));
-            }
-            if ["julia", "exp"].contains(name) {
-                renders.push((name, reference));
+                let c = compare_blocks(&twin.density, &reference.density, &reference.density);
+                let (_, _, mx, _, my, _, z) = c.pooled[0];
+                if mx <= 0.0 {
+                    failures.push(format!("{what}'s twin drew nothing"));
+                }
+                if OTHER_NOISE.contains(name) {
+                    println!("  {what}'s twin: its own noise, drawn");
+                    continue;
+                }
+                if HUGE_TRIG.contains(name) {
+                    println!("  {what}'s twin: its trig past 2^24 the portable side's, drawn");
+                    continue;
+                }
+                print_compared(&format!("{what}'s twin against {name}{d}"), &c);
+                if z.abs() > 4.0 && (mx / my - 1.0).abs() > 0.005 {
+                    failures.push(format!("{what}'s twin: the whole view's density is {:.4} of the built-in's", mx / my));
+                }
+                if off(&c) {
+                    failures.push(format!("{what}'s twin: a block is {:.3} off (dense), {:.3} (middle)", c.worst_dense, c.worst_middle));
+                }
+                if !three && ["julia", "exp"].contains(name) {
+                    renders.push((name, reference));
+                }
             }
         }
         // The measure tells two built-ins apart, or agreeing means nothing.
