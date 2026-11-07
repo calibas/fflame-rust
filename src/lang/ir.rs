@@ -823,6 +823,64 @@ impl Program {
             || s(&self.transform, p)
     }
 
+    /// Each variable `body` reads or writes, by its id.
+    pub fn vars_used(&self, body: &[IStmt]) -> Vec<bool> {
+        fn e(x: &IExpr, out: &mut Vec<bool>) {
+            match &x.kind {
+                IExprKind::Var(v) => out[*v] = true,
+                IExprKind::Elem(v, a) => {
+                    out[*v] = true;
+                    e(a, out);
+                }
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => e(a, out),
+                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => {
+                    e(a, out);
+                    e(b, out);
+                }
+                IExprKind::Host(_, args) => args.iter().for_each(|a| e(a, out)),
+                _ => {}
+            }
+        }
+        fn s(st: &[IStmt], out: &mut Vec<bool>) {
+            for x in st {
+                match x {
+                    IStmt::Scope(b) => s(b, out),
+                    IStmt::Host(_, args) => args.iter().for_each(|a| e(a, out)),
+                    IStmt::Break | IStmt::Continue | IStmt::Return => {}
+                    IStmt::Assign(place, v) => {
+                        if let Place::Var(w) = place {
+                            out[*w] = true;
+                        }
+                        e(v, out);
+                    }
+                    IStmt::SetElem { var, index, value } => {
+                        out[*var] = true;
+                        e(index, out);
+                        e(value, out);
+                    }
+                    IStmt::If { arms, otherwise } => {
+                        for (c, b) in arms {
+                            e(c, out);
+                            s(b, out);
+                        }
+                        s(otherwise, out);
+                    }
+                    IStmt::While { cond, body } | IStmt::Repeat { body, cond } => {
+                        e(cond, out);
+                        s(body, out);
+                    }
+                    IStmt::Map { input, out: o, .. } => {
+                        input.iter().for_each(|x| e(x, out));
+                        o.iter().for_each(|w| out[*w] = true);
+                    }
+                }
+            }
+        }
+        let mut out = vec![false; self.vars.len()];
+        s(body, &mut out);
+        out
+    }
+
     /// Whether `body` calls a host function `which` picks (an escape
     /// colouring's palette read in its `step`: `PaletteInLoop`).
     pub fn calls_host(body: &[IStmt], which: fn(super::builtins::Host) -> bool) -> bool {

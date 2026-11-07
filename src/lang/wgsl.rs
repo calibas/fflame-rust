@@ -550,7 +550,7 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
     fn assigned(stmts: &[IStmt], out: &mut BTreeSet<VarId>) {
         for s in stmts {
             match s {
-                IStmt::Assign(Place::Var(v), _) => {
+                IStmt::Assign(Place::Var(v), _) | IStmt::SetElem { var: v, .. } => {
                     out.insert(*v);
                 }
                 IStmt::If { arms, otherwise } => {
@@ -592,12 +592,9 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
     let mut state = Vec::new();
     let mut slots = 0u32;
     for v in fields.into_iter().filter(|v| p.vars[*v].name.starts_with("s_")) {
-        let var = &p.vars[v];
-        if var.is_array() {
-            return Err(format!("the state's `{}` is an array: a later step", &var.name[2..]));
-        }
+        // An array's floats each a slot (rhai-plugins P7 step 3).
         state.push((v, slots));
-        slots += if var.ty == Ty::Complex { 2 } else { 1 };
+        slots += p.vars[v].floats() as u32;
     }
     Ok(VariationShape {
         accum: p.reads(Predef::Accum) || p.reads(Predef::AccumZ),
@@ -756,9 +753,6 @@ fn variation_init(p: &Program, name: &str, prefix: &'static str) -> Result<Optio
     if p.globals.is_empty() {
         return Ok(None);
     }
-    if let Some(&v) = p.globals.iter().find(|&&v| p.vars[v].is_array()) {
-        return Err(format!("`prepare`'s `{}` is an array: for a variation, a later step", p.vars[v].name.trim_start_matches("g_")));
-    }
     let n = p.param_slots();
     if n == 0 {
         return Err("`prepare` computes from the parameters: a variation without any computes its values in `variation`".into());
@@ -776,6 +770,20 @@ fn variation_init(p: &Program, name: &str, prefix: &'static str) -> Result<Optio
     let mut k = 0;
     for &v in &p.globals {
         let x = g.var(v);
+        // An array (rhai-plugins P7 step 3): each element's floats in turn,
+        // which the body reads at a computed index.
+        if p.vars[v].is_array() {
+            let n = p.vars[v].len();
+            let line = match p.vars[v].ty {
+                Ty::Complex => format!("out[{k}u + 2u * i] = {x}[i].x;\n        out[{k}u + 2u * i + 1u] = {x}[i].y;"),
+                Ty::Int | Ty::UInt => format!("out[{k}u + i] = f32({x}[i]);"),
+                Ty::Bool => format!("out[{k}u + i] = select(0.0, 1.0, {x}[i]);"),
+                Ty::Float => format!("out[{k}u + i] = {x}[i];"),
+            };
+            let _ = writeln!(body, "    for (var i = 0u; i < {n}u; i++) {{\n        {line}\n    }}");
+            k += p.vars[v].floats();
+            continue;
+        }
         match p.vars[v].ty {
             Ty::Complex => {
                 let _ = writeln!(body, "    out[{k}] = {x}.x;\n    out[{}] = {x}.y;", k + 1);
@@ -839,6 +847,19 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
     // The state: loaded at the start, stored at the end.
     let load = |g: &Gen, out: &mut String| {
         for &(v, k) in &own.state {
+            if p.vars[v].is_array() {
+                let (n, a) = (p.vars[v].len(), g.var(v));
+                let get = |o: &str| format!("get_state(xform_id, variation_id, {k}u + {o})");
+                let value = match p.vars[v].ty {
+                    Ty::Complex => format!("vec2<f32>({}, {})", get("2u * i"), get("2u * i + 1u")),
+                    Ty::Int => format!("i32({})", get("i")),
+                    Ty::UInt => format!("u32({})", get("i")),
+                    Ty::Bool => format!("{} != 0.0", get("i")),
+                    Ty::Float => get("i"),
+                };
+                let _ = writeln!(out, "    for (var i = 0u; i < {n}u; i++) {{\n        {a}[i] = {value};\n    }}");
+                continue;
+            }
             let get = |k: u32| format!("get_state(xform_id, variation_id, {k}u)");
             let value = match p.vars[v].ty {
                 Ty::Complex => format!("vec2<f32>({}, {})", get(k), get(k + 1)),
@@ -853,6 +874,18 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
     let store = |g: &Gen, out: &mut String| {
         for &(v, k) in &own.state {
             let name = g.var(v);
+            if p.vars[v].is_array() {
+                let n = p.vars[v].len();
+                let set = |o: &str, x: String| format!("        set_state(xform_id, variation_id, {k}u + {o}, {x});\n");
+                let body = match p.vars[v].ty {
+                    Ty::Complex => format!("{}{}", set("2u * i", format!("{name}[i].x")), set("2u * i + 1u", format!("{name}[i].y"))),
+                    Ty::Int | Ty::UInt => set("i", format!("f32({name}[i])")),
+                    Ty::Bool => set("i", format!("select(0.0, 1.0, {name}[i])")),
+                    Ty::Float => set("i", format!("{name}[i]")),
+                };
+                let _ = write!(out, "    for (var i = 0u; i < {n}u; i++) {{\n{body}    }}\n");
+                continue;
+            }
             let mut set = |k: u32, x: String| {
                 let _ = writeln!(out, "    set_state(xform_id, variation_id, {k}u, {x});");
             };
@@ -2280,6 +2313,18 @@ impl<'p> Gen<'p> {
                 Ty::Int => format!("i32(round({}))", at(&clamped)),
                 Ty::UInt => format!("u32(round({}))", at(&clamped)),
                 Ty::Bool => format!("({} != 0.0)", at(&clamped)),
+            };
+        }
+        // A variation's, from its derived slots after its parameters.
+        if self.ctx == Ctx::Variation {
+            let at = self.p.param_slots() + k;
+            let s = |o: String| self.slot_read(&format!("u32({at} + {o})"));
+            return match var.ty {
+                Ty::Complex => format!("vec2<f32>({}, {})", s(format!("2 * {clamped}")), s(format!("2 * {clamped} + 1"))),
+                Ty::Float => s(clamped),
+                Ty::Int => format!("i32(round({}))", s(clamped)),
+                Ty::UInt => format!("u32(round({}))", s(clamped)),
+                Ty::Bool => format!("({} != 0.0)", s(clamped)),
             };
         }
         let read = self.use_(if self.formula_side() { Helper::GArrF } else { Helper::GArrC });

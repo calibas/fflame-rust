@@ -284,7 +284,8 @@ def functions(src):
             args = []
             cur = []
             for t in args_toks:
-                if t[1] == "," and cur.count("<") == cur.count(">"):
+                # By characters: a nested type closes with one `>>` token.
+                if t[1] == "," and "".join(cur).count("<") == "".join(cur).count(">"):
                     args.append("".join(cur)); cur = []
                 else:
                     cur.append(t[1])
@@ -395,7 +396,8 @@ class Fn:
                 if self.this_ptr:
                     raise Refuse("a helper taking two pointers")
                 self.this_ptr = name
-                self.types[name] = vec_of(ty.replace(" ", "")[len("ptr<function,"):-1])
+                pointee = ty.replace(" ", "")[len("ptr<function,"):-1]
+                self.types[name] = ("array:" + array_of(pointee)[0]) if pointee.startswith("array<") else vec_of(pointee)
                 self.outs[name] = ["this", "this"]
             elif name == "accum":
                 self.types["accum"] = vec_of(ty)
@@ -641,6 +643,10 @@ class Fn:
             return f"{elem}(" + ", ".join(f"{e[1][1]}[{n} * {i} + {c}]" for c in range(n)) + ")"
         if k == "index" and e[1][0] == "id" and self.types.get(e[1][1], "").startswith("array:"):
             return f"{e[1][1]}[{self.ex(e[2])}]"
+        if k == "index" and self.init and self.tr.slotted and e[1] == ("id", "out"):
+            return f"out[{self.tr.n_slots()} + {self.slot_index(e[2])}]"
+        if k == "index" and self.init and self.tr.slotted and e[1] == ("id", "user"):
+            return f"out[{self.slot_index(e[2])}]" if e[2][0] != "num" else self.tr.param_read(int(e[2][1].rstrip("ui")))
         if k == "index" and self.init and e[1] in (("id", "user"), ("id", "out")):
             if e[2][0] != "num":
                 raise Refuse("the init's slots by a computed index")
@@ -741,6 +747,9 @@ class Fn:
             return f"vec4({', '.join(parts)})"
         if f == "get_param":
             slot = args[2]
+            if slot[0] != "num" and self.tr.slotted:
+                i = self.ex(slot)
+                return f"p.slots[{f'to_int({i})' if self.ty(slot) == 'u32' else i}]"
             if slot[0] != "num":
                 raise Refuse("a parameter by a computed slot")
             return self.tr.param_read(int(slot[1].rstrip("u")))
@@ -768,7 +777,7 @@ class Fn:
         if f == "get_state" and self.helper:
             raise Refuse("a helper reading the variation's state")
         if f == "get_state":
-            return f"this.{self.tr.state_field(args[2])}"
+            return f"this.{self.tr.state_field(args[2], self)}"
         if f == "set_state":
             raise Refuse("a `set_state` inside an expression")
         if f == "select":
@@ -867,6 +876,10 @@ class Fn:
             if f in ("min", "max") and len(args) == 2 and t0 == "f32" and literal(args[1]) and not literal(args[0]):
                 args = [args[1], args[0]]
             return f"{name}({', '.join(self.ex(a) for a in args)})"
+        # A 2D vector normalized: WGSL's `v / length(v)`, as a complex.
+        if f == "normalize" and self.ty(args[0]) == "vec2":
+            x = self.hold(args[0])
+            return f"({x} / {x}.abs())"
         if f in ("normalize", "cross"):
             return f"{f}({', '.join(self.ex(a) for a in args)})"
         if f in self.tr.helpers:
@@ -889,6 +902,11 @@ class Fn:
                 return f"{recv}.{f}({', '.join(keep)})"
             return f"{f}({', '.join(keep)})"
         raise Refuse(f"a call to `{f}`")
+
+    def slot_index(self, e):
+        """An index into an array of the language's, an int."""
+        i = self.ex(e)
+        return f"to_int({i})" if self.ty(e) == "u32" else i
 
     def table_read(self, name, idx):
         """An element of the constant table `name`: of its local, a
@@ -958,11 +976,20 @@ class Fn:
 
     def stmt(self, s, depth, last):
         k = s[0]
+        if self.init and self.tr.slotted and k == "decl" and s[2] == "out":
+            # The parameters first, then the built-in's derived values.
+            self.emit(depth, f"let out = array({self.tr.n_slots() + self.tr.d['init_param_count']}, 0.0);")
+            for i in range(self.tr.n_slots()):
+                self.emit(depth, f"out[{i}] = {self.tr.param_read(i)};")
+            return
         if self.init and k == "decl" and s[2] == "out":
             self.emit(depth, f"let out = array({self.tr.d['init_param_count']}, 0.0);")
             return
         if self.init and k == "assign" and s[1][0] == "index" and s[1][1] == ("id", "out"):
             self.line(depth, lambda: f"{self.ex(s[1])} {s[2]} {self.ex(s[3])};")
+            return
+        if self.init and self.tr.slotted and k == "return" and s[1] == ("id", "out"):
+            self.emit(depth, "#{ slots: out }" if last else "return #{ slots: out };")
             return
         if self.init and k == "return" and s[1] == ("id", "out"):
             slots = ", ".join(f"{n}: out[{i}]" for i, n in enumerate(self.tr.derived_list()))
@@ -1012,6 +1039,9 @@ class Fn:
                 value = (lambda: self.ex(rhs)) if op == "=" else (lambda: f"{n}.{part} {op[0]} ({self.ex(rhs)})")
                 self.line(depth, lambda: f"{n} = complex({value()}, {n}.im);" if part == "re" else f"{n} = complex({n}.re, {value()});")
                 return
+            if self.init and self.tr.slotted and lhs[0] == "index" and lhs[1] == ("id", "out"):
+                self.line(depth, lambda: f"out[{self.tr.n_slots()} + {self.slot_index(lhs[2])}] {op} {self.ex(rhs)};")
+                return
             if lhs[0] == "index" and lhs[1][0] == "id" and self.types.get(lhs[1][1], "")[len("array:"):] in FLAT:
                 raise Refuse("a vector array's element set")
             if lhs[0] == "index" and lhs[1][0] == "id" and self.types.get(lhs[1][1], "").startswith("array:"):
@@ -1041,7 +1071,7 @@ class Fn:
         if k == "expr" and s[1][0] == "call" and s[1][1] == "set_state" and self.helper:
             raise Refuse("a helper writing the variation's state")
         if k == "expr" and s[1][0] == "call" and s[1][1] == "set_state":
-            field = self.tr.state_field(s[1][2][2])
+            field = self.tr.state_field(s[1][2][2], self)
             self.line(depth, lambda: f"this.{field} = {self.ex(s[1][2][3])};")
             return
         # A helper called for what it writes through its pointer.
@@ -1198,9 +1228,24 @@ class Translation:
         self.written = set()
         self.derived = derived_names(d)
         self.state = state_names(d, set(self.derived.values()))
+        # A variation reading its slots by a computed index: `prepare`'s one
+        # array, `slots` -- its parameters, then the built-in's derived
+        # values -- so a slot is the built-in's number (Rhai's own terms,
+        # no syntax of ours; rhai-plugins P7 step 3).
+        every = (d["shader_2d"] or "") + (d["shader_3d"] or "")
+        self.slotted = bool(re.search(r"get_param\(\s*xform_id\s*,\s*variation_id\s*,\s*(?!\s)(?!\d+u\s*\))", every)) \
+            or bool(re.search(r"\b(?:out|user)\[(?!\d+u?\])", d.get("shader_init") or ""))
+        # One keeping its state by a computed slot: the state one array, `st`.
+        self.state_array = bool(re.search(r"[gs]et_state\(\s*xform_id\s*,\s*variation_id\s*,\s*(?!\s)(?!\d+u\s*[,)])", every + (d.get("shader_state_init") or "")))
 
-    def state_field(self, slot):
-        """The state field a `get_state` / `set_state` slot names."""
+    def state_field(self, slot, f=None):
+        """The state field a `get_state` / `set_state` slot names: the
+        state array's element where the state is one."""
+        if self.state_array:
+            if slot[0] == "num":
+                return f"st[{slot[1].rstrip('ui')}]"
+            i = f.ex(slot)
+            return f"st[{f'to_int({i})' if f.ty(slot) == 'u32' else i}]"
         if slot[0] != "num":
             raise Refuse("state by a computed slot")
         k = int(slot[1].rstrip("ui"))
@@ -1225,9 +1270,28 @@ class Translation:
                     f.stmt(s, 1, False)
                 else:
                     raise Refuse("a state init that is not straight `set_state`s")
-        fields = ", ".join(f"{n}: {f.ex(values[n]) if n in values else '0.0'}" for n in (self.state[k] for k in sorted(self.state)))
-        f.emit(1, f"#{{ {fields} }}")
+        if self.state_array:
+            parts = ", ".join(f.ex(values[f"st[{k}]"]) if f"st[{k}]" in values else "0.0" for k in range(self.d["state_count"]))
+            f.emit(1, f"#{{ st: [{parts}] }}")
+        else:
+            fields = ", ".join(f"{n}: {f.ex(values[n]) if n in values else '0.0'}" for n in (self.state[k] for k in sorted(self.state)))
+            f.emit(1, f"#{{ {fields} }}")
         return "fn init(p) {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"
+
+    def n_slots(self):
+        """The parameters' slots."""
+        return len(self.param_names)
+
+    def slots_prepare(self):
+        """`prepare` for a variation reading its parameters by a computed
+        slot and computing nothing of its own: the parameters as `slots`."""
+        f = Fn(self, 2, [], "", True)
+        f.init = True
+        f.emit(1, f"let out = array({self.n_slots()}, 0.0);")
+        for i in range(self.n_slots()):
+            f.emit(1, f"out[{i}] = {self.param_read(i)};")
+        f.emit(1, "#{ slots: out }")
+        return "fn prepare(p) {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"
 
     def derived_list(self):
         return [self.derived[k] for k in range(self.d["init_param_count"])]
@@ -1236,6 +1300,8 @@ class Translation:
         """Slot `i` of the variation's: a parameter, or past them a value
         `prepare` returns."""
         n = len(self.param_names)
+        if i >= n and self.slotted:
+            return f"p.slots[{i}]"
         if i >= n:
             if i - n not in self.derived:
                 raise Refuse("a slot past the derived ones")
@@ -1266,7 +1332,7 @@ class Translation:
         while tail > 0 and ss[tail - 1][0] == "assign" and ss[tail - 1][1][0] == "index" and ss[tail - 1][1][1] == ("id", "out") and ss[tail - 1][2] == "=":
             tail -= 1
         head = [s for s in ss[:tail] if not (s[0] == "decl" and s[2] == "out")]
-        if not any(mentions(s) for s in head):
+        if not any(mentions(s) for s in head) and not self.slotted:
             # Straight to the map.
             f.stmts(head, 1)
             values = {}
@@ -1529,6 +1595,8 @@ def translate(d):
     first = []
     if d["init_param_count"]:
         first += t.prepare(with_complex_lib(d["shader_init"]))
+    elif t.slotted:
+        first.append(t.slots_prepare())
     if d["state_count"]:
         first.append(t.state_init())
     more, two = t.body(with_complex_lib(d["shader_2d"]), 2, d["name"])
