@@ -4014,7 +4014,18 @@ impl<'s> Lowerer<'s> {
                         "a" | "b" | "c" | "d" | "e" | "f" => Ok(mk(ExprKind::Predef(format!("coef_{name}")), span)),
                         // The 4th coordinate a 3D body is given (`NeedsW`).
                         "w" => Ok(mk(ExprKind::Predef("pointw".into()), span)),
-                        o => self.err(*p, format!("a variation's context has `accum`, `weight`, `color`, `hide`, `rgb`, its transform's `a` .. `f` and (in 3D) `w`; not `{o}`")),
+                        // The flame's 3D camera, as the shader holds it:
+                        // radians, and the perspective strength.
+                        "camera_x" | "camera_y" | "camera_z" | "camera_pitch" | "camera_yaw" | "camera_bank" => {
+                            Ok(mk(ExprKind::Predef(format!("cam_{}", &name["camera_".len()..])), span))
+                        }
+                        "perspective" => Ok(mk(ExprKind::Predef("cam_persp".into()), span)),
+                        o => self.err(
+                            *p,
+                            format!(
+                                "a variation's context has `accum`, `weight`, `color`, `hide`, `rgb`, its transform's `a` .. `f`, (in 3D) `w`, and the camera's `camera_x` .. `camera_z`, `camera_pitch`, `camera_yaw`, `camera_bank` and `perspective`; not `{o}`"
+                            ),
+                        ),
                     },
                     Base::Ctx => match name {
                         // `ismand` is 1 on the parameter plane.
@@ -4628,7 +4639,7 @@ impl<'s> Lowerer<'s> {
                 "escaped" | "converged" | "has_derivative" | "vhide" => TypeName::Bool,
                 "draw_u32" => TypeName::UInt,
                 "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" | "vrgb_r" | "vrgb_g" | "vrgb_b" | "coef_a" | "coef_b" | "coef_c" | "coef_d"
-                | "coef_e" | "coef_f" | "pointw" | "wout" => TypeName::Float,
+                | "coef_e" | "coef_f" | "pointw" | "wout" | "cam_x" | "cam_y" | "cam_z" | "cam_pitch" | "cam_yaw" | "cam_bank" | "cam_persp" => TypeName::Float,
                 // An effect's (P2).
                 "density_mean" | "pixel_scale" | "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_amount" => TypeName::Float,
                 _ => TypeName::Complex,

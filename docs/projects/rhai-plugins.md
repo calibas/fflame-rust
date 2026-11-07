@@ -1302,8 +1302,15 @@ Steps, in the order that unlocks the most first (the user picks):
      (`HOST_BAKED`). A twin would need that table from `prepare`: the
      parameter storage to hold it (docs/projects/variation-param-storage.md)
      and a relational pass over thousands of segments, at present Rust
-     on the CPU. Left, 8: stereogram, which reads the camera; mondrianomies;
-     out of the plan, the analytic blurs (analytic_blur,
+     on the CPU. **The camera** for stereogram, which forks its eyes in
+     camera space: `ctx.camera_x` .. `ctx.camera_z`, `ctx.camera_pitch`,
+     `ctx.camera_yaw`, `ctx.camera_bank` and `ctx.perspective`, the
+     shader's `params` (`Predef::Camera`), in the body alone; the
+     translator's `transpose` and utilities.wgsl's camera helpers; the
+     density gate draws a camera-reading twin with the camera turned,
+     moved and in perspective (pitch and yaw swapped is the control, 75
+     of 101 blocks off): 640, its 26 pairs 0 apart, drawn alike in 2D
+     and 3D. Left, 7: mondrianomies; out of the plan, the analytic blurs (analytic_blur,
      analytic_gaussian_blur) and the subflames (subflame_wf,
      pre_subflame_wf); possible later work, the volume emitters
      (polyhedron_volume, sphere_volume).

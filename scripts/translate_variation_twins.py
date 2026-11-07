@@ -493,6 +493,7 @@ class Fn:
             if f in ("bitcast<u32>", "bitcast<i32>"): return "u32" if f == "bitcast<u32>" else "int"
             if f == "rng_next": return "u32"
             if f in ("select",): return self.ty(args[1])
+            if f == "transpose": return "mat3"
             # A function WGSL takes part by part gives the vector it is of.
             if f in PARTWISE:
                 vk = next((k for k in (self.ty(a) for a in args) if k in ("vec2", "vec3", "vec4")), None)
@@ -623,6 +624,12 @@ class Fn:
                 raise Refuse(f"the transform's `{e[2]}`")
             self.uses_ctx = True
             return f"ctx.{e[2]}"
+        # The flame's camera, as the shader holds it: the context's.
+        if k == "field" and e[1] == ("id", "params"):
+            if e[2] not in CAMERA:
+                raise Refuse(f"the flame's `params.{e[2]}`")
+            self.uses_ctx = True
+            return f"ctx.{CAMERA[e[2]]}"
         # An integer vector's part: its place in the array.
         if k == "field" and self.ty(e[1]) in ("array:u32", "array:int") and len(e[2]) == 1 and e[2] in "xyzw":
             b = e[1][1] if e[1][0] == "id" and e[1][1] not in CONSTS else self.hold(e[1])
@@ -650,6 +657,8 @@ class Fn:
             raise Refuse(f"a field `.{sw}`")
         if k == "index" and e[1][0] == "id" and e[1][1] in CONSTS and e[1][1] not in self.types:
             return self.table_read(e[1][1], e[2])
+        if k == "index" and e[1][0] == "index" and e[1][1][0] == "id" and self.types.get(e[1][1][1]) == "mat3":
+            return f"{e[1][1][1]}[3 * {self.ex(e[1][2])} + {self.ex(e[2])}]"
         if k == "index" and e[1][0] == "id" and self.types.get(e[1][1], "")[len("array:"):] in FLAT:
             elem = self.types[e[1][1]][len("array:"):]
             i = self.ex(e[2]) if e[2][0] in ("id", "num") else self.hold(e[2])
@@ -696,6 +705,11 @@ class Fn:
         if f in STRUCTS:
             struct_array(f)
             return "[" + ", ".join(self.ex(a) for a in args) + "]"
+        if f == "transpose":
+            if self.ty(args[0]) != "mat3":
+                raise Refuse("a transpose of other than a 3x3 matrix")
+            m = args[0][1] if args[0][0] == "id" else self.hold(args[0])
+            return "[" + ", ".join(f"{m}[{3 * r + c}]" for c in range(3) for r in range(3)) + "]"
         if f.replace(" ", "") == "mat3x3<f32>":
             if len(args) == 3 and all(self.ty(a) == "vec3" for a in args):
                 parts = []
@@ -1557,6 +1571,10 @@ HOST_BAKED = {
     "mondrianomies": "a table the host computes for each flame (the Exact fill's rectangles) baked into its shader",
 }
 
+# The flame's camera in the shader's `params`: the context's names.
+CAMERA = {"camera_x": "camera_x", "camera_y": "camera_y", "camera_z": "camera_z", "camera_rotation_x": "camera_pitch",
+          "camera_rotation_y": "camera_yaw", "camera_bank": "camera_bank", "perspective_strength": "perspective"}
+
 # The flame shader's emission collector (`Feature::PlotEmits`) as the
 # language's statements.
 EMITS = {"emit_plot": "emit", "emit_plot_weighted": "emit", "emit_plot_offset": "emit_offset", "emit_suppress_main": "suppress_main"}
@@ -1648,7 +1666,7 @@ COMPLEX_LIB = {"cadd", "csub", "cmul", "cmul_real", "cconj", "cmag2", "csquare",
 SHARED_LIBS = ["complex", "utilities", "noise", "voronoi", "polyhedra", "polychora", "su_mobius", "fractwf"]
 # Of these, the functions carried in: the others the translator writes
 # as the language's own (`ff_atan2` as `atan2`) or refuses.
-SHARED_ONLY = {"complex": COMPLEX_LIB, "utilities": {"srgb_to_linear"}}
+SHARED_ONLY = {"complex": COMPLEX_LIB, "utilities": {"srgb_to_linear", "build_camera_matrix", "camera_transform"}}
 
 def shared_lib():
     """Each shared helper: name -> its WGSL."""

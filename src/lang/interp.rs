@@ -1091,6 +1091,8 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::VarRgbG => Value::Float(sh.vrgb[1].unwrap_or(sh.vrgb_in[1])),
         Predef::VarRgbB => Value::Float(sh.vrgb[2].unwrap_or(sh.vrgb_in[2])),
         Predef::Coef(k) => Value::Float(sh.coefs[usize::from(k)]),
+        // The default camera: at the origin, unturned, orthographic.
+        Predef::Camera(_) => Value::Float(0.0),
         Predef::PointW => Value::Float(sh.point_w),
         Predef::WOut => Value::Float(sh.w_out.unwrap_or(0.0)),
         Predef::PixelZ => Value::Float(sh.pixel_z),

@@ -1125,6 +1125,34 @@ mod tests {
         assert_eq!((z.re, z.im), (7.0, 0.875));
     }
 
+    /// `ctx.camera_x` .. `ctx.perspective` are the flame's 3D camera, the
+    /// shader's `params` (what stereogram reads), in the body alone: the
+    /// init pass that runs `prepare` binds no `params`. The interpreter's
+    /// camera is the default one, all zeros.
+    #[test]
+    fn ctx_camera_is_the_flames() {
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
+        let src = "const INFO = #{ name: \"rhai_camera_test\" };\nfn variation3(v, p, ctx) {\n    \
+                   v + vec3(ctx.camera_x + ctx.camera_pitch, ctx.camera_y + ctx.camera_yaw, ctx.camera_z + ctx.camera_bank * ctx.perspective)\n}\n\
+                   fn variation(z, p, ctx) {\n    complex(z.re + ctx.camera_x, z.im)\n}\n";
+        let dl = named(src);
+        assert_eq!(dl.features, ["always_z"], "a 3D body's; the camera takes no ids");
+        let three = dl.shader_3d.as_deref().unwrap_or_default();
+        for f in ["camera_x", "camera_y", "camera_z", "camera_rotation_x", "camera_rotation_y", "camera_bank", "perspective_strength"] {
+            assert!(three.contains(&format!("params.{f}")), "{f}: {three}");
+        }
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("params.camera_x")));
+        let p = lang::rhai::transformation(src).unwrap();
+        let params = ParamValues::defaults(&p);
+        let (z, _) = VariationRun::new(&p, &params, 1).call(C64::new(1.0, 2.0), C64::ZERO, 1.0);
+        assert_eq!((z.re, z.im), (1.0, 2.0));
+        let early = "const INFO = #{ name: \"rhai_camera_early\" };\nfn prepare(p) {\n    #{ k: ctx.camera_x }\n}\nfn variation(z, p) {\n    z * p.k\n}\n";
+        assert!(compile(early).is_err(), "the camera read in `prepare`");
+        let unknown = "const INFO = #{ name: \"rhai_camera_unknown\" };\nfn variation(z, p, ctx) {\n    z * ctx.camera_roll\n}\n";
+        assert!(compile(unknown).is_err_and(|e| e.contains("camera_pitch")), "{:?}", compile(unknown).err());
+    }
+
     /// A direct colour (`WritesRgb`): `#{ z, rgb: vec3(r, g, b) }` writes
     /// it, a path without `rgb` writes none, and `ctx.rgb` reads it as it
     /// reached the variation (-1e30 each part until one writes it); the
