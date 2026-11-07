@@ -871,7 +871,8 @@ mod tests {
             assert_eq!(builtin_of(src), Some(*name), "{name}: as shipped");
             assert_eq!(builtin_of(&own(name)), Some(*name), "{name}: with an id of its own");
         }
-        let julia = own("julia");
+        // From LF line ends, as a checkout with `core.autocrlf` gives CRLF.
+        let julia = own("julia").replace("\r\n", "\n");
         assert_eq!(builtin_of(&julia.replace('\n', "\r\n")), Some("julia"), "line ends aside");
         assert_eq!(builtin_of(&format!("{julia}// mine now\n")), None, "a comment added is an edit");
         assert_eq!(builtin_of(&julia.replacen("0.5", "0.25", 1)), None, "so is a number changed");
