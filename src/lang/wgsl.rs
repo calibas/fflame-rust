@@ -802,9 +802,34 @@ fn variation_init(p: &Program, name: &str, prefix: &'static str) -> Result<Optio
 /// store, `init`'s function, and the helpers, all prefixed.
 fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, prefix: &'static str) -> String {
     let mut g = Gen::new(p, Ctx::Variation, prefix);
+    // Its tables, module constants: one for each set of literals.
+    let mut tables = String::new();
+    let mut named: Vec<(String, String)> = Vec::new();
+    let mut by_var = vec![None; p.vars.len()];
+    for (v, elements) in constant_arrays(p, &[&p.transform, &p.init]).into_iter().enumerate() {
+        let Some(elements) = elements else { continue };
+        if own.state.iter().any(|&(s, _)| s == v) || p.vars[v].global {
+            continue;
+        }
+        let value = format!("{}({})", var_ty(&p.vars[v]), elements.iter().map(|e| g.expr(e)).collect::<Vec<_>>().join(", "));
+        let name = match named.iter().find(|(text, _)| *text == value) {
+            Some((_, n)) => n.clone(),
+            None => {
+                let n = format!("uf_table{}", named.len());
+                let _ = writeln!(tables, "const {n}: {} = {value};", var_ty(&p.vars[v]));
+                named.push((value, n.clone()));
+                n
+            }
+        };
+        by_var[v] = Some(name);
+    }
+    let hoisted: Vec<bool> = by_var.iter().map(Option::is_some).collect();
+    g.tables = by_var;
     let decls = |out: &mut String| {
         for (i, v) in p.vars.iter().enumerate() {
-            let _ = writeln!(out, "    {};", var_decl(i, v));
+            if !hoisted[i] {
+                let _ = writeln!(out, "    {};", var_decl(i, v));
+            }
         }
         // Each palette read's colour, read once.
         for k in 0..load_slots(p, |h| h == Host::EscPaletteLoad) {
@@ -868,7 +893,56 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
         store(&g, &mut body);
         body.push_str("}\n");
     }
-    g.finish("", body)
+    g.finish("", format!("{tables}{body}"))
+}
+
+/// The arrays a body only builds from literals and reads -- a table: each
+/// element set once, a literal at a literal place, the whole array never
+/// set -- with their elements in order. A variation writes each as a
+/// module constant its reads share, where a local would be filled at each
+/// call, the table's every store again (rhai-plugins P7 step 3). A fresh
+/// array's name is bound after its literal, so nothing reads it before.
+pub(crate) fn constant_arrays(p: &Program, bodies: &[&[IStmt]]) -> Vec<Option<Vec<IExpr>>> {
+    type Sets = Vec<Option<Vec<Option<IExpr>>>>;
+    fn literal(e: &IExpr) -> bool {
+        match &e.kind {
+            IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) | IExprKind::Complex(..) => true,
+            IExprKind::Convert(a) | IExprKind::Unary(UnOp::Neg, a) => literal(a),
+            IExprKind::MakeComplex(a, b) => literal(a) && literal(b),
+            _ => false,
+        }
+    }
+    fn walk(st: &[IStmt], sets: &mut Sets) {
+        for s in st {
+            match s {
+                IStmt::SetElem { var, index, value } => {
+                    let set = match (&index.kind, sets[*var].as_mut()) {
+                        (IExprKind::Int(k), Some(slots)) if literal(value) && usize::try_from(*k).is_ok_and(|k| k < slots.len() && slots[k].is_none()) => {
+                            slots[*k as usize] = Some(value.clone());
+                            true
+                        }
+                        _ => false,
+                    };
+                    if !set {
+                        sets[*var] = None;
+                    }
+                }
+                IStmt::Assign(Place::Var(v), _) => sets[*v] = None,
+                IStmt::Map { out, .. } => out.iter().for_each(|v| sets[*v] = None),
+                IStmt::If { arms, otherwise } => {
+                    arms.iter().for_each(|(_, b)| walk(b, sets));
+                    walk(otherwise, sets);
+                }
+                IStmt::While { body, .. } | IStmt::Repeat { body, .. } | IStmt::Scope(body) => walk(body, sets),
+                _ => {}
+            }
+        }
+    }
+    let mut sets: Sets = p.vars.iter().map(|v| v.is_array().then(|| vec![None; v.len()])).collect();
+    for b in bodies {
+        walk(b, &mut sets);
+    }
+    sets.into_iter().map(|s| s.and_then(|slots| slots.into_iter().collect())).collect()
 }
 
 /// A solid's WGSL (the KIFS plan, B3): its program as `solid_init(pixel,
@@ -1936,6 +2010,9 @@ struct Gen<'p> {
     /// the innermost scope.
     scopes: Vec<ScopeExit>,
     nest: usize,
+    /// Each variable written as a module constant, a table
+    /// ([`constant_arrays`]), by the constant's name.
+    tables: Vec<Option<String>>,
 }
 
 /// A scope being written (`IStmt::Scope`): the `loop` it is, how many
@@ -1988,6 +2065,7 @@ impl<'p> Gen<'p> {
             ret: "",
             scopes: Vec::new(),
             nest: 0,
+            tables: Vec::new(),
         }
     }
 
@@ -2135,6 +2213,9 @@ impl<'p> Gen<'p> {
     }
 
     fn var(&self, v: VarId) -> String {
+        if let Some(Some(t)) = self.tables.get(v) {
+            return t.clone();
+        }
         if let Some(k) = self.global_slots[v] {
             return self.global(v, k);
         }
@@ -2480,6 +2561,7 @@ impl<'p> Gen<'p> {
                 };
                 let _ = writeln!(out, "{pad}{target} = {v};");
             }
+            IStmt::SetElem { var, .. } if self.tables.get(*var).is_some_and(Option::is_some) => {}
             IStmt::SetElem { var, index, value } => {
                 let v = self.expr(value);
                 let i = self.expr(index);

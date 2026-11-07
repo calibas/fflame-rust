@@ -1244,21 +1244,23 @@ Steps, in the order that unlocks the most first (the user picks):
      dc_hexes_wf, the honeycombs, 621 in all, 11542 pairs, 0 apart. One
      run's light compare flagged one faint block of fract_salamander_wf's
      blue (z 5.6 of 152 blocks, 8 replicates' heavy tails); three runs of
-     it alone passed (`VARIATION_TWINS` picks a gate's twins).
+     it alone passed (`VARIATION_TWINS` picks a gate's twins). **A table
+     as a module constant**: an array of literals only read is a WGSL
+     `const` in a variation (up to 8192 floats), and the translator
+     writes a constant table as a literal at the top of each function
+     reading it: polyhedron, polychoron, menger, su_mobius, 625 in
+     all, 11710 pairs, 0 apart.
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 26, by count (`translate_variation_twins.py
+     passed through. Left, 22, by count (`translate_variation_twins.py
      --report`): the renderer's hooks (6: the analytic blurs, the volume
      emitters, the subflames) and plot emits (3), out of the plan; a
      computed slot (8: `prepare`'s for fuchsian_triangle, schottky_group
      and mondrianomies, a parameter's for su_custom and the three
-     lsystems, the state's for farblur); a constant table (4:
-     polyhedron, polychoron, menger, su_mobius -- next, the language
-     hoisting a read-only literal array to a WGSL constant, as a table
-     built at each read is thousands of stores); a reserved or non-identifier parameter name
+     lsystems, the state's for farblur); a reserved or non-identifier parameter name
      (3: `super` in w and z, `3side` in hexnix3D -- a rename, its names
      the user's); and one each: a matrix (glsl_apollonian), a helper
      reading the variation's state (klein_group).

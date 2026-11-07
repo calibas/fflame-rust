@@ -571,12 +571,12 @@ function takes the point, and the ids when it has parameters (as
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
   `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
-  P7 step 3): 621 of the 647, each a Rhai variation under its
+  P7 step 3): 625 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
   `exponential: false` over five decades) and its drawing features
   (`every_variation_twin_compiles_as_its_builtin`; with its z rule,
-  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`). Seven written by hand, 614 translated from the built-ins'
+  `INFO.z`, `INFO.replace`, `CanHide`, `WritesRgb`, `NeedsW`, `INFO.slow`). Seven written by hand, 618 translated from the built-ins'
   WGSL (the def's `wgsl_init` as `prepare`, its slots named as the body
   reads them; its colour, direct colour and hide pointers locals from
   `ctx.color`, `ctx.rgb` and `ctx.hide`, returned as `#{ z, color, rgb,
@@ -603,8 +603,10 @@ function takes the point, and the ids when it has parameters (as
   `CMat2`, fractwf.wgsl's result); an integer vector an array of its
   integers (`.x`, `.y` by place: the range helpers' pairs); an array of
   `vec3` or `vec4` an array of their floats, flat; a module constant
-  written out where it is read (a constant table is refused: next, the
-  language hoisting a read-only literal array to a WGSL constant); a
+  written out where it is read, a constant table a literal at the top
+  of each function that reads it (a vector's floats flat), which the
+  language writes as a module constant (polychora.wgsl's faces,
+  su_mobius.wgsl's base matrices); a
   helper's pointer argument its `this` (`x.f(...)`, called on what the
   pointer points at), a helper reading the context taking `ctx`; a
   helper giving an array with its early returns folded into an `if`
@@ -628,7 +630,7 @@ function takes the point, and the ids when it has parameters (as
     point so the two draw alike, the colour written out): at the probe's
     adversarial inputs and a grid, 2D and 3D, at the defaults and each
     parameter's range's ends (`every_variation_twin_runs_as_its_builtin`).
-    92.3% of the outputs are bit for bit. The rest are judged by the
+    92.4% of the outputs are bit for bit. The rest are judged by the
     twin's own formula in f64 (the interpreter): the built-in off it
     where the twin is on it (its hardware trig, WGSL's `pow(0, 0)`), or
     giving no number where it has one (WGSL's `pow` of a negative base,
