@@ -11,9 +11,13 @@
 //! FLAME_TIMING_LABEL=before cargo test --release --lib -- --ignored --nocapture time_ordinary_flames
 //! ```
 //!
-//! Written to `output/flame-timing/<label>.txt`. Two runs of one build
-//! differ by where each renderer's buffers land, so compare builds by
-//! several runs of each (docs/projects/variation-param-storage.md).
+//! Written to `output/flame-timing/<label>.txt`; `FLAME_TIMING_ONLY=a,b`
+//! times the flames whose names contain one of them. Each renderer is
+//! destroyed after its timing, but a flame's speed still depends on where
+//! its buffers land, which what ran before it moves (two renderers of
+//! one flame differ by up to 2.3x): compare builds by several runs of
+//! each, and a flame that moves alone in a fresh process too
+//! (docs/projects/variation-param-storage.md).
 #![cfg(test)]
 
 use crate::config::FractalConfig;
@@ -57,8 +61,9 @@ fn time_ordinary_flames() {
         );
         queue.submit(Some(enc.finish()));
     };
+    let only: Option<Vec<String>> = std::env::var("FLAME_TIMING_ONLY").ok().map(|s| s.split(',').map(str::to_string).collect());
     let mut lines = Vec::new();
-    for (name, mut cfg) in flames() {
+    for (name, mut cfg) in flames().into_iter().filter(|(n, _)| only.as_ref().is_none_or(|o| o.iter().any(|x| n.contains(x.as_str())))) {
         cfg.deterministic_rng = false;
         let mut r = FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
@@ -74,6 +79,7 @@ fn time_ordinary_flames() {
         if probe > 250.0 {
             lines.push(format!("{name:40} skipped: one dispatch took {probe:.0} ms"));
             println!("{}", lines.last().unwrap());
+            r.destroy();
             continue;
         }
         let mut rounds = Vec::new();
@@ -98,6 +104,7 @@ fn time_ordinary_flames() {
             r.variation_params_bytes()
         ));
         println!("{}", lines.last().unwrap());
+        r.destroy();
     }
     let dir = std::path::Path::new("output/flame-timing");
     std::fs::create_dir_all(dir).unwrap();
