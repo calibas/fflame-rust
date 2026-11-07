@@ -1239,13 +1239,18 @@ Steps, in the order that unlocks the most first (the user picks):
      reading the context taking `ctx`, a u32 `for` a counted range:
      crackle's three, iconattractor_js, glsl_circuits, eight of the
      Möbius family, the six fract, rhodonea, 617 in all, 11354 pairs, 0
-     apart.
+     apart. An integer vector as an array of its integers, an array of
+     vectors flat, `countOneBits` a helper of the twin's: sphere_packing,
+     dc_hexes_wf, the honeycombs, 621 in all, 11542 pairs, 0 apart. One
+     run's light compare flagged one faint block of fract_salamander_wf's
+     blue (z 5.6 of 152 blocks, 8 replicates' heavy tails); three runs of
+     it alone passed (`VARIATION_TWINS` picks a gate's twins).
      On the way: the translator writes a literal first in `min` and
      `max` (Rhai's keeps a NaN first operand, WGSL's does not: `arcsinh`
      at 1e30); the judge moves the parameters as it moves the point, and
      caps how often the built-in may be "off its formula" before the
      twin is doubted -- a hole a twin of another formula would have
-     passed through. Left, 30, by count (`translate_variation_twins.py
+     passed through. Left, 26, by count (`translate_variation_twins.py
      --report`): the renderer's hooks (6: the analytic blurs, the volume
      emitters, the subflames) and plot emits (3), out of the plan; a
      computed slot (8: `prepare`'s for fuchsian_triangle, schottky_group
@@ -1253,9 +1258,7 @@ Steps, in the order that unlocks the most first (the user picks):
      lsystems, the state's for farblur); a constant table (4:
      polyhedron, polychoron, menger, su_mobius -- next, the language
      hoisting a read-only literal array to a WGSL constant, as a table
-     built at each read is thousands of stores); integer vectors and
-     vector arrays (4: sphere_packing, dc_hexes_wf, the honeycombs,
-     translated, to gate); a reserved or non-identifier parameter name
+     built at each read is thousands of stores); a reserved or non-identifier parameter name
      (3: `super` in w and z, `3side` in hexnix3D -- a rename, its names
      the user's); and one each: a matrix (glsl_apollonian), a helper
      reading the variation's state (klein_group).
