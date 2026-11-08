@@ -533,11 +533,20 @@ impl FractalConfigGallery {
     }
 
     fn format_variations(config: &FractalConfig) -> String {
+        let registry = crate::variations::global_registry();
+        // What the user calls each: a carried Rhai source's title where
+        // this session has not registered it.
+        let label = |name: &String| match config.flame.custom_variations.iter().find(|s| &s.entry == name) {
+            Some(s) if registry.get(name).is_none() => {
+                crate::lang::rhai::source_labels(&s.source).map(|l| l.title.resolve()).unwrap_or_else(|| name.clone())
+            }
+            _ => registry.label(name),
+        };
         let mut variations: Vec<String> = config
             .flame
             .transforms
             .iter()
-            .flat_map(|t| t.variations.keys().cloned())
+            .flat_map(|t| t.variations.keys().map(label))
             .collect();
         variations.sort();
         variations.dedup();

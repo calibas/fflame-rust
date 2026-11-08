@@ -122,14 +122,22 @@ fn online_row_label(flame: &crate::api::types::FlameListItem) -> String {
     match flame.render_mode {
         M::Escape | M::Simulation => format!("{} — {}", flame.name, render_mode),
         M::TwoD | M::ThreeD => {
-            let variations_summary = if flame.variation_names.len() <= 3 {
-                flame.variation_names.join(", ")
+            let names: Vec<String> = {
+                let registry = crate::variations::global_registry();
+                flame
+                    .variation_names
+                    .iter()
+                    .map(|n| match registry.get(n) {
+                        Some(v) => v.display_name.clone(),
+                        None if crate::scripted::is_key(n) => t!("browser.rhai_variation").to_string(),
+                        None => n.clone(),
+                    })
+                    .collect()
+            };
+            let variations_summary = if names.len() <= 3 {
+                names.join(", ")
             } else {
-                format!(
-                    "{}, +{}",
-                    flame.variation_names[..2].join(", "),
-                    flame.variation_names.len() - 2
-                )
+                format!("{}, +{}", names[..2].join(", "), names.len() - 2)
             };
             format!(
                 "{} — {} | {}T | {}",
@@ -1127,7 +1135,8 @@ mod tests {
     #[test]
     fn a_flame_row_keeps_its_transform_count_and_variations() {
         let label = online_row_label(&item(ApiRenderMode::TwoD, 3, &["linear", "swirl"]));
-        assert!(label.contains("| 3T | linear, swirl"), "{label}");
+        // By their display names, as the app shows them.
+        assert!(label.contains("| 3T | Linear, Swirl"), "{label}");
         let label = online_row_label(&item(ApiRenderMode::ThreeD, 2, &["a", "b", "c", "d"]));
         assert!(label.contains("| 2T | a, b, +2"), "{label}");
     }

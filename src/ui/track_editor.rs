@@ -94,9 +94,12 @@ fn path_to_display(path: &str) -> String {
     // light, a layer, a coupling, a xaos cell), stored from 0 and shown
     // from 1 (the user, 2026-10-31: user-facing numbers start at 1;
     // scripts and files keep 0).
+    // A Rhai variation's key, by what the user calls it.
+    let registry = crate::variations::global_registry();
     path.split('.')
         .map(|seg| match seg.parse::<usize>() {
             Ok(index) => (index + 1).to_string(),
+            Err(_) if crate::scripted::is_key(seg) => registry.label(seg),
             Err(_) => seg.to_string(),
         })
         .collect::<Vec<_>>()

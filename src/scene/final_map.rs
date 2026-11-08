@@ -152,7 +152,7 @@ impl Step {
                 })
             }
             _ => {
-                let names: Vec<&str> = live.iter().map(|(n, _)| n.as_str()).collect();
+                let names: Vec<String> = live.iter().map(|(n, _)| registry.label(n)).collect();
                 Err(format!("a final transform of {} is not pulled back yet (affine and bipolar are)", names.join(" + ")))
             }
         }

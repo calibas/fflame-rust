@@ -220,7 +220,10 @@ impl RandomGeneratorPanel {
 
         // Variation checkboxes in a grid
         let registry = global_registry();
-        let all_variations: Vec<_> = registry.names().to_vec();
+        // The user's Rhai variations once each (their latest version), by
+        // title, as the transforms' picker offers them.
+        let superseded = registry.superseded(&[]);
+        let all_variations: Vec<_> = registry.names().iter().filter(|n| !superseded.contains(*n)).cloned().collect();
 
         egui::Grid::new("variation_grid")
             .num_columns(3)
@@ -228,7 +231,7 @@ impl RandomGeneratorPanel {
             .show(ui, |ui| {
                 for (i, name) in all_variations.iter().enumerate() {
                     let mut enabled = self.settings.enabled_variations.contains(name);
-                    if ui.checkbox(&mut enabled, name.as_str()).changed() {
+                    if ui.checkbox(&mut enabled, registry.label(name)).changed() {
                         if enabled {
                             self.settings.enabled_variations.insert(name.clone());
                         } else {

@@ -24,6 +24,15 @@ fn translate_description(description: &str) -> String {
                 if let Some(eq_pos) = param_pair.find('=') {
                     let param_name = &param_pair[..eq_pos];
                     let param_value = &param_pair[eq_pos + 1..];
+                    // A variation by what the user calls it, not its key
+                    // (a Rhai variation's is a UUID).
+                    let label;
+                    let param_value = if param_name == "variation" {
+                        label = crate::variations::global_registry().label(param_value);
+                        label.as_str()
+                    } else {
+                        param_value
+                    };
                     // Replace %{param_name} with param_value
                     let placeholder = format!("%{{{}}}", param_name);
                     result = result.replace(&placeholder, param_value);

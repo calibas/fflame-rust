@@ -893,7 +893,7 @@ impl ConfigManager {
             xref.index(),
             before,
             after,
-            format!("Remove {}", variation),
+            format!("Remove {}", crate::variations::global_registry().label(variation)),
         );
         self.push_undo(change);
         let update_type = UpdateType::IterationReset;

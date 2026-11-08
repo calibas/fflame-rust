@@ -256,7 +256,11 @@ pub fn render_variations_panel(
                     for v in in_cat {
                         ui.horizontal(|ui| {
                             ui.label(&v.display_name);
-                            ui.weak(format!("({})", v.name));
+                            // A built-in's name beside its title; a Rhai
+                            // variation's is a key, nothing to read.
+                            if !crate::scripted::is_key(&v.name) {
+                                ui.weak(format!("({})", v.name));
+                            }
                             // A variation with no 3D body is DROPPED from a
                             // 3D flame — it keeps its weight and contributes
                             // nothing, which is invisible in the render.

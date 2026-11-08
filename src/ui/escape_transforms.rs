@@ -149,7 +149,8 @@ pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut Co
                             }
                             Some(_) => {}
                             None => {
-                                ui.colored_label(egui::Color32::from_rgb(240, 120, 120), t!("escape_transforms.unknown", name = t.variation));
+                                let name = crate::variations::global_registry().label(&t.variation);
+                                ui.colored_label(egui::Color32::from_rgb(240, 120, 120), t!("escape_transforms.unknown", name = name));
                             }
                         }
                     });
@@ -182,7 +183,7 @@ pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut Co
 /// (`VariationRegistry::superseded`).
 fn variation_picker(ui: &mut egui::Ui, i: usize, current: &str, solid: bool, superseded: &std::collections::HashSet<String>) -> Option<String> {
     let registry = crate::variations::global_registry();
-    let label = registry.get(current).map(|v| v.display_name.clone()).unwrap_or_else(|| current.to_string());
+    let label = registry.label(current);
     let popup_id = egui::Id::new(("escape_transform_popup", i));
     let filter_id = popup_id.with("filter");
     let btn = ui.add(egui::Button::new(format!("{label}  \u{25be}")).min_size(egui::vec2(160.0, 0.0)));

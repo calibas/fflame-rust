@@ -3453,33 +3453,50 @@ pub enum Disqualification {
     NoBall,
 }
 
+impl Disqualification {
+    /// What the user reads (the escape panel, Focused Rendering's walk):
+    /// transforms numbered from 1, as the app numbers them, and each
+    /// variation by its label -- a Rhai variation's title, never its key.
+    pub fn describe(&self, registry: &VariationRegistry) -> String {
+        self.text(1, &|v| registry.label(v), "has no inverse")
+    }
+
+    /// The reason as words: transforms from `base`, each variation by
+    /// `name`, a variation the analysis cannot invert as `no_inverse`.
+    fn text(&self, base: usize, name: &dyn Fn(&str) -> String, no_inverse: &str) -> String {
+        // What a transform (or the final one) does that disqualifies it:
+        // the words after its name.
+        let clause = |why: &NotAffine| match why {
+            NotAffine::Variation(v) => format!(" uses {}, which {no_inverse}", name(v)),
+            NotAffine::Priority(v) => format!(" moves {} out of the weighted sum", name(v)),
+            NotAffine::NoVariations => " has no variations".to_string(),
+            NotAffine::MixedSum(v) => format!(" sums {} with another variation; a root must be alone in its sum", name(v)),
+            NotAffine::Degenerate(v) => format!(
+                "'s {} has a parameter that leaves it no single inverse (a zero power or distance, a scale that reaches zero)",
+                name(v)
+            ),
+            NotAffine::Mode(v) => format!("'s {} must be in inverse mode with the vector projection", name(v)),
+        };
+        match self {
+            Self::Empty => "the flame has no transforms".to_string(),
+            Self::NotAffine { index, why } => format!("transform {}{}", index + base, clause(why)),
+            Self::Singular { index } => format!("transform {} is singular (no inverse)", index + base),
+            Self::NotContractive { index, sigma_max } => {
+                format!("transform {} is not contractive (σ_max = {sigma_max:.3})", index + base)
+            }
+            Self::FinalNotAffine { why: Some(w) } => format!("the final transform{}", clause(w)),
+            Self::FinalNotAffine { why: None } => "the final transform is singular".to_string(),
+            Self::MultipleFinals { count } => format!("{count} final transforms; at most one is supported"),
+            Self::NoBall => "no bounding ball: the nonlinear maps do not keep the set bounded".to_string(),
+        }
+    }
+}
+
+/// For logs and tests: transforms from 0, each variation by its
+/// registry name. The user reads [`Disqualification::describe`].
 impl std::fmt::Display for Disqualification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Empty => write!(f, "the flame has no transforms"),
-            Self::NotAffine { index, why } => match why {
-                NotAffine::Variation(v) => write!(f, "transform {index} uses `{v}`, which is not affine"),
-                NotAffine::Priority(v) => write!(f, "transform {index} moves `{v}` out of the weighted sum"),
-                NotAffine::NoVariations => write!(f, "transform {index} has no variations"),
-                NotAffine::MixedSum(v) => write!(
-                    f,
-                    "transform {index} sums `{v}` with another variation; a root must be alone in its sum"
-                ),
-                NotAffine::Degenerate(v) => write!(f, "transform {index}'s `{v}` has a parameter that leaves it no single inverse (a zero power or distance, a scale that reaches zero)"),
-                NotAffine::Mode(v) => write!(f, "transform {index}'s `{v}` must be in inverse mode with the vector projection"),
-            },
-            Self::Singular { index } => write!(f, "transform {index} is singular (no inverse)"),
-            Self::NotContractive { index, sigma_max } => {
-                write!(f, "transform {index} is not contractive (σ_max = {sigma_max:.3})")
-            }
-            Self::FinalNotAffine { why: Some(NotAffine::Variation(v)) } => {
-                write!(f, "the final transform uses `{v}`, which is not affine")
-            }
-            Self::FinalNotAffine { why: Some(w) } => write!(f, "the final transform is not affine ({w:?})"),
-            Self::FinalNotAffine { why: None } => write!(f, "the final transform is singular"),
-            Self::MultipleFinals { count } => write!(f, "{count} final transforms; at most one is supported"),
-            Self::NoBall => write!(f, "no bounding ball: the nonlinear maps do not keep the set bounded"),
-        }
+        f.write_str(&self.text(0, &|v| format!("`{v}`"), "is not affine"))
     }
 }
 

@@ -43,8 +43,9 @@ use crate::variations::{VariationPhase, VariationRegistry};
 #[derive(Debug, Clone, PartialEq)]
 pub enum NoBall {
     /// The variation is neither affine nor bounded: nothing in the
-    /// registry knows what it does to a disc.
-    Unbounded(String),
+    /// registry knows what it does to a disc. Its name, and why its
+    /// bound could not be derived, where one was tried.
+    Unbounded(String, Option<String>),
     /// The variation HAS a bound, but it declines at these parameters
     /// over this disc — `julian` with a negative exponent over the
     /// origin, where the image really is unbounded.
@@ -54,10 +55,25 @@ pub enum NoBall {
     Priority(String),
 }
 
+impl NoBall {
+    /// What the user reads (Focused Rendering's refusal): the variation
+    /// by its label -- a Rhai variation's title, never its key.
+    pub fn describe(&self, registry: &VariationRegistry) -> String {
+        match self {
+            Self::Unbounded(n, Some(why)) => format!("{} has no forward bound ({why})", registry.label(n)),
+            Self::Unbounded(n, None) => format!("{} has no forward bound", registry.label(n)),
+            Self::Declines(n) => format!("{} has no bound at these parameters", registry.label(n)),
+            Self::Priority(n) => format!("{} is moved out of its phase by a priority", registry.label(n)),
+        }
+    }
+}
+
+/// For logs and tests: each variation by its registry name.
 impl std::fmt::Display for NoBall {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unbounded(n) => write!(f, "`{n}` has no forward bound"),
+            Self::Unbounded(n, Some(why)) => write!(f, "`{n}` has no forward bound ({why})"),
+            Self::Unbounded(n, None) => write!(f, "`{n}` has no forward bound"),
             Self::Declines(n) => write!(f, "`{n}` has no bound at these parameters"),
             Self::Priority(n) => write!(f, "`{n}` is moved out of its phase by a priority"),
         }
@@ -377,7 +393,12 @@ fn one(
                 ),
                 Chain::Replace => out,
             }),
-            Err(why) => Err(NoBall::Unbounded(format!("{name} ({why})"))),
+            // A variation of the user's has no shipped body to derive
+            // from (`derive::body_for`): say so, not "no 2D body".
+            Err(crate::variations::derive::Refusal::NoBody) if crate::scripted::is_key(name) => {
+                Err(NoBall::Unbounded(name.to_string(), Some("bounds are worked out for built-in variations only, so far".to_string())))
+            }
+            Err(why) => Err(NoBall::Unbounded(name.to_string(), Some(why.to_string()))),
         };
     }
     // The web build has no WGSL front end to parse with, so the hand
@@ -387,7 +408,7 @@ fn one(
     Err(if bound::for_name(name).is_some() {
         NoBall::Declines(name.to_string())
     } else {
-        NoBall::Unbounded(name.to_string())
+        NoBall::Unbounded(name.to_string(), None)
     })
 }
 
@@ -517,9 +538,9 @@ mod tests {
         t.variation_order.clear();
         t.set_variation("waves", 1.0);
         match transform_ball_2d(&t, &r, Ball::new([0.0, 0.0], 1.0)) {
-            Err(NoBall::Unbounded(n)) => {
-                assert!(n.starts_with("waves"), "{n}");
-                assert!(n.contains("weights"), "{n}");
+            Err(NoBall::Unbounded(n, why)) => {
+                assert_eq!(n, "waves");
+                assert!(why.as_deref().is_some_and(|w| w.contains("weights")), "{why:?}");
             }
             other => panic!("expected an unbounded refusal, got {other:?}"),
         }

@@ -703,6 +703,17 @@ impl VariationRegistry {
         inverse::for_name(&self.get(name)?.name)
     }
 
+    /// What the user calls the variation `name`, where it is shown: its
+    /// display name (a Rhai variation's `INFO.title`), never its key; a
+    /// key this registry does not hold (its carried source did not
+    /// compile) by its source's title; else the name itself.
+    pub fn label(&self, name: &str) -> String {
+        match self.get(name) {
+            Some(v) => v.display_name.clone(),
+            None => custom::title_of(name).unwrap_or_else(|| name.to_string()),
+        }
+    }
+
     pub fn get(&self, name: &str) -> Option<&VariationInfo> {
         if let Some(info) = self.variations.get(name) {
             return Some(info);

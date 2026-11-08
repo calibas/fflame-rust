@@ -1048,7 +1048,7 @@ impl Cylinders {
                         Ball::new([0.0, 0.0], 1.0),
                     ) {
                         probe_failure =
-                            Some(NoCylinders::Unbounded { index: i, why: why.to_string() });
+                            Some(NoCylinders::Unbounded { index: i, why: why.describe(registry) });
                     }
                 }
             }
@@ -1083,7 +1083,7 @@ impl Cylinders {
             match crate::scene::ifs_ball::Bounder::new(t, registry) {
                 Ok(b) => bounders.push(b),
                 Err(why) => {
-                    return Err(NoCylinders::Unbounded { index: i, why: why.to_string() })
+                    return Err(NoCylinders::Unbounded { index: i, why: why.describe(registry) })
                 }
             }
         }
@@ -1162,7 +1162,7 @@ impl Cylinders {
             let _ = t;
             let img = bounders[i]
                 .apply(Ball::new(root_c, root_r))
-                .map_err(|why| NoCylinders::Unbounded { index: i, why: why.to_string() })?;
+                .map_err(|why| NoCylinders::Unbounded { index: i, why: why.describe(registry) })?;
             if !(img.r < root_r) {
                 return Err(NoCylinders::NotContractive(i));
             }
@@ -10269,7 +10269,7 @@ mod tests {
         match Cylinders::plan(&wild, &reg, view) {
             Err(NoCylinders::Unbounded { index, why }) => {
                 assert_eq!(index, 1);
-                assert!(why.contains("waves"), "the reason must name it: {why}");
+                assert!(why.contains("Waves"), "the reason must name it, by its label: {why}");
             }
             other => panic!("expected an unbounded refusal, got {other:?}"),
         }
