@@ -1162,6 +1162,22 @@ mod tests {
     /// WRITER, not a test: `TWIN_SKELETONS=julia,rings2` writes each
     /// one's skeleton to `assets/variations/twins/<name>.rhai`, where none
     /// is yet.
+    /// `TWIN_WGSL_DUMP=a,b`: each twin's compiled 2D and 3D bodies, to
+    /// `output/twin-wgsl/<name>-2d.wgsl` and `-3d.wgsl` -- what the
+    /// renderer and the bounds' evaluator read.
+    #[test]
+    #[ignore = "writes files"]
+    fn dump_twin_wgsl() {
+        let Ok(names) = std::env::var("TWIN_WGSL_DUMP") else { return };
+        let dir = std::path::Path::new("output/twin-wgsl");
+        std::fs::create_dir_all(dir).unwrap();
+        for name in names.split(',') {
+            let dl = super::super::custom::compile(&own(name)).unwrap();
+            std::fs::write(dir.join(format!("{name}-2d.wgsl")), dl.shader_2d.unwrap_or_default()).unwrap();
+            std::fs::write(dir.join(format!("{name}-3d.wgsl")), dl.shader_3d.unwrap_or_default()).unwrap();
+        }
+    }
+
     #[test]
     #[ignore = "writes files"]
     fn write_variation_twin_skeletons() {

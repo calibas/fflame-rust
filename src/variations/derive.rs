@@ -103,6 +103,24 @@ impl Interval {
         Self { lo: self.lo - m, hi: self.hi + m }
     }
 
+    /// [`widen`](Self::widen) for the result of one CORRECTLY ROUNDED
+    /// operation (`+ - *`, and `/` within WGSL's 2.5 ulp): each end by
+    /// its own magnitude. The rounded result of a value is within half
+    /// an ulp of it, and rounding is monotone, so the least of the
+    /// rounded results is within an ulp of the least exact one -- the
+    /// slop at an end scales with that end, not with the other. Scaled
+    /// by the larger end, `sqrt(r2) + 1e-6` over `[0, 1]` reached below
+    /// zero, and a `pow` the formula language guards by `a < 0.0` took
+    /// its negative-base arm (mobiusN, synth). Plus f32's least normal,
+    /// for a result flushed to zero.
+    fn round_out(self) -> Self {
+        if !self.lo.is_finite() || !self.hi.is_finite() {
+            return self;
+        }
+        let ftz = f32::MIN_POSITIVE as f64;
+        Self { lo: self.lo - self.lo.abs() * WIDEN - ftz, hi: self.hi + self.hi.abs() * WIDEN + ftz }
+    }
+
     pub fn contains(&self, v: f64) -> bool {
         v >= self.lo && v <= self.hi
     }
@@ -112,11 +130,11 @@ impl Interval {
     }
 
     fn add(self, o: Self) -> Self {
-        Self::new(self.lo + o.lo, self.hi + o.hi).widen()
+        Self::new(self.lo + o.lo, self.hi + o.hi).round_out()
     }
 
     fn sub(self, o: Self) -> Self {
-        Self::new(self.lo - o.hi, self.hi - o.lo).widen()
+        Self::new(self.lo - o.hi, self.hi - o.lo).round_out()
     }
 
     fn mul(self, o: Self) -> Self {
@@ -135,7 +153,7 @@ impl Interval {
             lo = lo.min(v);
             hi = hi.max(v);
         }
-        Self::new(lo, hi).widen()
+        Self::new(lo, hi).round_out()
     }
 
     /// `self / o`, and the place a pole announces itself.
@@ -160,7 +178,7 @@ impl Interval {
             lo = lo.min(v);
             hi = hi.max(v);
         }
-        Self::new(lo, hi).widen()
+        Self::new(lo, hi).round_out()
     }
 
     fn neg(self) -> Self {
@@ -185,11 +203,17 @@ impl Interval {
 
     /// A monotone function applied to both ends.
     fn monotone(self, f: impl Fn(f64) -> f64) -> Self {
+        self.monotone_exact(f).widen()
+    }
+
+    /// [`monotone`](Self::monotone) for an `f` the shader computes
+    /// exactly (`floor`, `round`): no rounding slop to allow for.
+    fn monotone_exact(self, f: impl Fn(f64) -> f64) -> Self {
         let (a, b) = (f(self.lo), f(self.hi));
         if a.is_nan() || b.is_nan() {
             return Self::UNBOUNDED;
         }
-        Self::new(a, b).widen()
+        Self::new(a, b)
     }
 
     /// `sin` or `cos` over the interval: `[-1, 1]` unless the span is
@@ -300,6 +324,9 @@ pub enum Refusal {
     /// The body did arithmetic on something the evaluator carries
     /// without a value. Names which.
     Opaque(&'static str),
+    /// The returned point depends on something the evaluator carries
+    /// without a value (a direct colour, a raw RNG word). Names which.
+    Reaches(&'static str),
     /// The body reads an init-derived parameter slot, whose value is
     /// computed by a `wgsl_init` function that the probe module does
     /// not carry.
@@ -324,6 +351,7 @@ impl std::fmt::Display for Refusal {
             Self::Domain(d) => write!(f, "leaves the domain of {d}"),
             Self::State => write!(f, "reads per-thread state"),
             Self::Opaque(w) => write!(f, "does arithmetic on {w}"),
+            Self::Reaches(w) => write!(f, "its answer depends on {w}"),
             Self::InitSlot => write!(f, "reads an init-derived parameter slot"),
             Self::LoopUnsettled => write!(f, "a loop that did not settle within the cap"),
             Self::Shape(s) => write!(f, "unexpected value shape: {s}"),
@@ -628,8 +656,11 @@ fn evaluate(
         }));
     }
 
-    let mut ev = Eval { module, params, weight, name, rng: rng_for(branch) };
+    let mut ev = Eval { module, params, weight, name, rng: rng_for(branch), types: Default::default() };
     let out = ev.call(func, &args)?;
+    if let IVal::Opaque(w) = out {
+        return Err(found(w));
+    }
     let lanes = out.lanes()?;
     if lanes.len() < 2 {
         return Err(Refusal::Shape("body did not return a vector"));
@@ -686,6 +717,105 @@ fn as_extremum(
     Some((pointer, load, other, greater))
 }
 
+/// **A cast, by what it casts to.** It used to pass its value through,
+/// which left an `i32(x)` a float to the evaluator: integer division then
+/// came out as float division, and `f32(k)` of an exact integer stayed an
+/// exact integer, divided as one. Now:
+///
+/// - to `i32`/`u32` by conversion: an exact value becomes an exact
+///   integer, truncated and saturated as WGSL's conversion is; a range,
+///   the range of its ends' conversions (monotone); between the two
+///   integer kinds, the same bits read the other way;
+/// - to `i32`/`u32` by `bitcast` (`from_integer`, the source's type):
+///   of the other integer kind, the same bits read the other way, which
+///   keeps a value in `[0, 2^31)` (the formula language's loop bounds);
+///   of a float, any 32-bit pattern;
+/// - to `f32` by conversion: the integer's value, rounded to f32 past
+///   2^24; by `bitcast`, a value this cannot name (an opaque);
+/// - to `bool`: whether it is non-zero, where that is decided.
+fn cast(v: IVal, kind: naga::ScalarKind, convert: bool, from_integer: bool) -> Result<IVal, Refusal> {
+    use naga::ScalarKind as K;
+    const TWO32: i64 = 1 << 32;
+    // An integer's bits read as the other integer kind.
+    let reinterpret = |k: i64, kind: K| match kind {
+        K::Uint => k.rem_euclid(TWO32),
+        _ => {
+            let u = k.rem_euclid(TWO32);
+            if u >= 1 << 31 { u - TWO32 } else { u }
+        }
+    };
+    // WGSL's float-to-integer conversion: toward zero, then saturated.
+    let (lo_sat, hi_sat) = if kind == K::Uint { (0.0, 4294967295.0) } else { (-2147483648.0, 2147483647.0) };
+    let to_int = |x: f64| x.trunc().clamp(lo_sat, hi_sat);
+    // An integer range read as the other integer kind: unchanged inside
+    // `[0, 2^31)`, where both read the bits alike; else that kind's span.
+    let reread = |i: Interval| -> Interval {
+        if i.lo >= 0.0 && i.hi < 2147483648.0 {
+            i
+        } else if kind == K::Uint {
+            Interval::new(0.0, 4294967295.0)
+        } else {
+            Interval::new(-2147483648.0, 2147483647.0)
+        }
+    };
+    Ok(match (kind, v) {
+        (_, IVal::Opaque(w)) => IVal::Opaque(w),
+        (K::Sint | K::Uint, IVal::Int(k)) => IVal::Int(reinterpret(k, kind)),
+        (K::Sint | K::Uint, IVal::Scalar(i)) if !convert && from_integer => {
+            if i.lo == i.hi && i.lo.is_finite() && i.lo.fract() == 0.0 {
+                IVal::Int(reinterpret(i.lo as i64, kind))
+            } else {
+                IVal::Scalar(reread(i))
+            }
+        }
+        (K::Sint | K::Uint, IVal::Vec(l)) if !convert && from_integer => IVal::Vec(l.into_iter().map(reread).collect()),
+        (K::Sint | K::Uint, IVal::Scalar(_)) if !convert => IVal::Scalar(INT32_RANGE),
+        (K::Sint | K::Uint, IVal::Scalar(i)) if i.lo == i.hi && i.lo.is_finite() => IVal::Int(to_int(i.lo) as i64),
+        (K::Sint | K::Uint, IVal::Scalar(i)) => {
+            if !i.finite() {
+                IVal::Scalar(Interval::new(lo_sat, hi_sat))
+            } else {
+                IVal::Scalar(Interval::new(to_int(i.lo), to_int(i.hi)))
+            }
+        }
+        (K::Sint | K::Uint, IVal::Vec(l)) if !convert => IVal::Vec(vec![INT32_RANGE; l.len()]),
+        (K::Sint | K::Uint, IVal::Vec(l)) => IVal::Vec(
+            l.into_iter()
+                .map(|i| if i.finite() { Interval::new(to_int(i.lo), to_int(i.hi)) } else { Interval::new(lo_sat, hi_sat) })
+                .collect(),
+        ),
+        (K::Sint | K::Uint, IVal::Bool(b)) => match b {
+            Some(b) => IVal::Int(b as i64),
+            None => IVal::Scalar(Interval::new(0.0, 1.0)),
+        },
+        (K::Float, IVal::Int(_)) if !convert => IVal::Opaque("a reinterpreted bit pattern"),
+        (K::Float, IVal::Scalar(_) | IVal::Vec(_)) if !convert => IVal::Opaque("a reinterpreted bit pattern"),
+        (K::Float, IVal::Int(k)) => {
+            if k.abs() <= 1 << 24 {
+                IVal::Scalar(Interval::point(k as f64))
+            } else {
+                IVal::Scalar(Interval::point(k as f64).widen())
+            }
+        }
+        (K::Float, IVal::Bool(b)) => match b {
+            Some(b) => IVal::Scalar(Interval::point(if b { 1.0 } else { 0.0 })),
+            None => IVal::Scalar(Interval::new(0.0, 1.0)),
+        },
+        (K::Float, v) => v,
+        (K::Bool, IVal::Bool(b)) => IVal::Bool(b),
+        (K::Bool, IVal::Int(k)) => IVal::Bool(Some(k != 0)),
+        (K::Bool, IVal::Scalar(i)) => IVal::Bool(if i.lo == 0.0 && i.hi == 0.0 {
+            Some(false)
+        } else if i.lo > 0.0 || i.hi < 0.0 {
+            Some(true)
+        } else {
+            None
+        }),
+        (_, IVal::Vec(_)) => return Err(Refusal::Shape("a vector cast to bool")),
+        _ => return Err(Refusal::Shape("an unmodelled cast")),
+    })
+}
+
 /// A condition's value, where the evaluator can tell.
 fn as_bool(v: &IVal) -> Option<bool> {
     match v {
@@ -722,6 +852,56 @@ fn cmp_le(x: Interval, y: Interval) -> Option<bool> {
 /// is the ONLY field of `transforms` any of them reads (107 do), so
 /// a chain that indexes twice from that global is the weight and
 /// nothing else. `the_weight_chain_is_the_only_one` pins it.
+/// **A pole or a domain exit is a value, not yet a refusal.** The shader
+/// computes an infinity or a NaN there, which matters only if it reaches
+/// the returned point: one feeding a colour, or a condition (both arms
+/// taken, as for any undecided one), leaves the bound sound. So a
+/// division by a range through zero gives an opaque, refused at the
+/// return as the pole it was (`found`). Ten twins divided by a range
+/// through zero in a computation the point never read (`glsl_squares`'
+/// carpet test, which only picks a colour).
+const PAST_A_POLE: &str = "a value past a pole";
+
+/// The opaque a read of per-thread state gives.
+const STATE: &str = "per-thread state";
+
+/// The opaque a domain exit leaves, by the function's name.
+const OUTSIDE: &[(&str, &str)] = &[
+    ("log", "a value outside the domain of log"),
+    ("log2", "a value outside the domain of log2"),
+    ("acosh", "a value outside the domain of acosh"),
+    ("atanh", "a value outside the domain of atanh"),
+    ("asin", "a value outside the domain of asin"),
+    ("acos", "a value outside the domain of acos"),
+    ("sqrt", "a value outside the domain of sqrt"),
+    ("pow with a negative base", "a value outside the domain of pow with a negative base"),
+    ("pow", "a value outside the domain of pow"),
+];
+
+/// A pole or a domain exit as an opaque value; anything else as it was.
+fn lost(r: Result<IVal, Refusal>) -> Result<IVal, Refusal> {
+    match r {
+        Err(Refusal::Pole) => Ok(IVal::Opaque(PAST_A_POLE)),
+        Err(Refusal::Domain(d)) => Ok(IVal::Opaque(OUTSIDE.iter().find(|(n, _)| *n == d).map_or("a value outside a function's domain", |(_, t)| t))),
+        r => r,
+    }
+}
+
+/// The refusal for an answer that depends on the opaque `w`: a pole or a
+/// domain exit by its own name, as when they refused where they happened.
+fn found(w: &'static str) -> Refusal {
+    if w == PAST_A_POLE {
+        return Refusal::Pole;
+    }
+    if w == STATE {
+        return Refusal::State;
+    }
+    match OUTSIDE.iter().find(|(_, t)| *t == w) {
+        Some((d, _)) => Refusal::Domain(d),
+        None => Refusal::Reaches(w),
+    }
+}
+
 const TRANSFORMS: &str = "the transform table";
 const ONE_TRANSFORM: &str = "one transform's record";
 const WEIGHTS: &str = "the variation weights";
@@ -756,6 +936,9 @@ struct Eval<'a> {
     /// however small the input. Narrowing this to one arm's slice is
     /// what lets a word through such a variation shrink at all.
     rng: Interval,
+    /// Each function's expression types, by the function's address,
+    /// grown as asked (`is_integer`).
+    types: std::collections::HashMap<usize, naga::front::Typifier>,
 }
 
 /// Locals and evaluated expressions for one function activation.
@@ -784,6 +967,10 @@ struct Frame {
     /// evaluator could not decide puts several, and the answer is
     /// their union.
     returns: Vec<IVal>,
+    /// The argument of each call to the formula language's trig range
+    /// reduction (`uf_reduce`), by its result's handle: a `sin`, `cos`
+    /// or `tan` of the result is taken of the argument.
+    reduced: std::collections::HashMap<usize, IVal>,
 }
 
 type Locals = std::collections::HashMap<usize, IVal>;
@@ -800,24 +987,30 @@ fn join(a: &IVal, b: &IVal) -> Result<IVal, Refusal> {
         (IVal::Scalar(x), IVal::Int(y)) | (IVal::Int(y), IVal::Scalar(x)) => {
             IVal::Scalar(x.union(Interval::point(*y as f64)))
         }
+        // A lane one side never wrote is WGSL-zeroed, as `AccessIndex`
+        // reads it, so it joins as zero -- not as the other side's lane,
+        // which was a bound too tight wherever only one arm wrote it.
         (IVal::Vec(x), IVal::Vec(y)) => {
             let n = x.len().max(y.len());
-            let mut out = Vec::with_capacity(n);
-            for i in 0..n {
-                match (x.get(i), y.get(i)) {
-                    (Some(p), Some(q)) => out.push(p.union(*q)),
-                    (Some(p), None) | (None, Some(p)) => out.push(*p),
-                    (None, None) => {}
-                }
-            }
-            IVal::Vec(out)
+            let zero = Interval::point(0.0);
+            IVal::Vec((0..n).map(|i| x.get(i).unwrap_or(&zero).union(*y.get(i).unwrap_or(&zero))).collect())
+        }
+        // A vector against a scalar: the scalar is a whole-vector value
+        // the evaluator holds as one lane (an unwritten local's zero, a
+        // splat), so it joins every lane.
+        (IVal::Vec(x), s) | (s, IVal::Vec(x)) if matches!(s, IVal::Scalar(_) | IVal::Int(_)) => {
+            let s = s.scalar()?;
+            IVal::Vec(x.iter().map(|l| l.union(s)).collect())
         }
         (IVal::Bool(x), IVal::Bool(y)) => {
             IVal::Bool(if x == y { *x } else { None })
         }
-        (IVal::Opaque(x), IVal::Opaque(y)) if x == y => IVal::Opaque(x),
-        // Two different opaques, or a shape mismatch: nothing useful
-        // can be said, and saying something would be the unsound move.
+        // An opaque on either side: the joined value is one this cannot
+        // name either, and it stays opaque -- refused where it reaches
+        // the answer, as before the join.
+        (IVal::Opaque(x), _) | (_, IVal::Opaque(x)) => IVal::Opaque(x),
+        // A bool against a number: a shape slip, and saying anything
+        // would be the unsound move.
         _ => return Err(Refusal::Shape("joined two incompatible values")),
     })
 }
@@ -825,18 +1018,38 @@ fn join(a: &IVal, b: &IVal) -> Result<IVal, Refusal> {
 /// Join two post-branch local tables against the state they both
 /// started from. A local only one arm wrote still has the incoming
 /// value on the other path, which is what `before` supplies.
+///
+/// One no path had written before is WGSL-zeroed on the path that did
+/// not write it -- the zero of the type the other path's value shows: a
+/// `bool` declared inside the branch's scope is `false` there, not the
+/// number zero, which no join can meet (the crop family's flags).
 fn join_locals(before: &Locals, a: &Locals, b: &Locals) -> Result<Locals, Refusal> {
     let mut out = Locals::new();
     for k in a.keys().chain(b.keys()) {
         if out.contains_key(k) {
             continue;
         }
-        let zero = IVal::Scalar(Interval::point(0.0));
-        let va = a.get(k).or_else(|| before.get(k)).unwrap_or(&zero);
-        let vb = b.get(k).or_else(|| before.get(k)).unwrap_or(&zero);
-        out.insert(*k, join(va, vb)?);
+        let va = a.get(k).or_else(|| before.get(k));
+        let vb = b.get(k).or_else(|| before.get(k));
+        let joined = match (va, vb) {
+            (Some(x), Some(y)) => join(x, y)?,
+            (Some(x), None) | (None, Some(x)) => join(x, &zero_like(x))?,
+            (None, None) => continue,
+        };
+        out.insert(*k, joined);
     }
     Ok(out)
+}
+
+/// The WGSL zero of the type `v` has.
+fn zero_like(v: &IVal) -> IVal {
+    match v {
+        IVal::Bool(_) => IVal::Bool(Some(false)),
+        IVal::Vec(l) => IVal::Vec(vec![Interval::point(0.0); l.len()]),
+        IVal::Int(_) => IVal::Int(0),
+        IVal::Scalar(_) => IVal::Scalar(Interval::point(0.0)),
+        IVal::Opaque(w) => IVal::Opaque(w),
+    }
 }
 
 impl<'a> Eval<'a> {
@@ -847,6 +1060,7 @@ impl<'a> Eval<'a> {
             locals: Locals::new(),
             maybe_exits: Vec::new(),
             returns: Vec::new(),
+            reduced: std::collections::HashMap::new(),
         };
         // **Declaration initialisers, before anything runs.**
         // `var inv = 1.0;` is a `LocalVariable` carrying an `init`
@@ -901,7 +1115,7 @@ impl<'a> Eval<'a> {
                         // bound and makes it too tight -- the same
                         // fault `r_circleblur` caught for locals.
                         let e = &func.expressions[h];
-                        let v = self.expr_inner(func, e, frame)?;
+                        let v = self.expr_inner(func, h, e, frame)?;
                         frame.exprs.insert(h.index(), v);
                     }
                 }
@@ -929,6 +1143,19 @@ impl<'a> Eval<'a> {
                     let (pointer, load, other, max) = as_extremum(func, *condition, accept, reject).expect("matched");
                     let held = self.expr(func, load, frame)?;
                     let o = self.expr(func, other, frame)?;
+                    if let IVal::Opaque(w) = held.clone() {
+                        self.store(func, pointer, IVal::Opaque(w), frame)?;
+                        continue;
+                    }
+                    if let IVal::Opaque(w) = o {
+                        self.store(func, pointer, IVal::Opaque(w), frame)?;
+                        continue;
+                    }
+                    if let (IVal::Int(x), IVal::Int(y)) = (&held, &o) {
+                        let v = IVal::Int(if max { *x.max(y) } else { *x.min(y) });
+                        self.store(func, pointer, v, frame)?;
+                        continue;
+                    }
                     let (h, o) = (held.lanes()?, o.lanes()?);
                     let pick = |x: Interval, y: Interval| {
                         if max { Interval::new(x.lo.max(y.lo), x.hi.max(y.hi)) } else { Interval::new(x.lo.min(y.lo), x.hi.min(y.hi)) }
@@ -1071,6 +1298,10 @@ impl<'a> Eval<'a> {
                     for a in arguments {
                         vals.push(self.expr(func, *a, frame)?);
                     }
+                    let callee = self.module.functions[*function].name.as_deref().unwrap_or("");
+                    if let (Some(r), true, [t]) = (result, callee.ends_with("_reduce"), &vals[..]) {
+                        frame.reduced.insert(r.index(), t.clone());
+                    }
                     let v = self.dispatch(*function, &vals)?;
                     if let Some(r) = result {
                         frame.exprs.insert(r.index(), v);
@@ -1186,6 +1417,14 @@ impl<'a> Eval<'a> {
         v: IVal,
         frame: &mut Frame,
     ) -> Result<(), Refusal> {
+        // A lane of an out-parameter held opaquely (`(*vrc).x = v1`, how
+        // the formula language writes a direct colour back): thrown away,
+        // as a whole store through one is (`store`).
+        if let naga::Expression::FunctionArgument(i) = &func.expressions[base] {
+            if let Some(IVal::Opaque(_)) = frame.args.get(*i as usize) {
+                return Ok(());
+            }
+        }
         let naga::Expression::LocalVariable(lh) = &func.expressions[base] else {
             return Err(Refusal::Intrinsic(format!(
                 "a lane store whose base is {}",
@@ -1194,6 +1433,11 @@ impl<'a> Eval<'a> {
         };
         let key = lh.index();
         let cur = frame.locals.get(&key).cloned();
+        // One lane of a vector nothing is known about: the others are
+        // still unknown, so the whole stays opaque.
+        if let Some(IVal::Opaque(_)) = cur {
+            return Ok(());
+        }
         let mut lanes = match cur {
             Some(IVal::Vec(l)) => l,
             Some(IVal::Scalar(s)) => vec![s],
@@ -1256,16 +1500,30 @@ impl<'a> Eval<'a> {
                 return Ok(v.clone());
             }
         }
-        let v = self.expr_inner(func, e, frame)?;
+        let v = self.expr_inner(func, h, e, frame)?;
         if cacheable {
             frame.exprs.insert(h.index(), v.clone());
         }
         Ok(v)
     }
 
+    /// Whether the expression `h` of `func` has an integer type (a
+    /// scalar or a vector of `i32` or `u32`), by naga's own resolution.
+    fn is_integer(&mut self, func: &naga::Function, h: naga::Handle<naga::Expression>) -> Result<bool, Refusal> {
+        let ctx = naga::proc::ResolveContext::with_locals(self.module, &func.local_variables, &func.arguments);
+        let types = self.types.entry(func as *const naga::Function as usize).or_default();
+        types.grow(h, &func.expressions, &ctx).map_err(|_| Refusal::Shape("an expression naga could not type"))?;
+        let scalar = match types.get(h, &self.module.types) {
+            naga::TypeInner::Scalar(s) | naga::TypeInner::Vector { scalar: s, .. } => *s,
+            _ => return Ok(false),
+        };
+        Ok(matches!(scalar.kind, naga::ScalarKind::Sint | naga::ScalarKind::Uint))
+    }
+
     fn expr_inner(
         &mut self,
         func: &naga::Function,
+        h: naga::Handle<naga::Expression>,
         e: &naga::Expression,
         frame: &mut Frame,
     ) -> Result<IVal, Refusal> {
@@ -1299,18 +1557,31 @@ impl<'a> Eval<'a> {
                 let mut lanes = Vec::new();
                 for c in components {
                     let v = self.expr(func, *c, frame)?;
+                    if let IVal::Opaque(w) = v {
+                        return Ok(IVal::Opaque(w));
+                    }
                     lanes.extend(v.lanes()?);
                 }
                 IVal::Vec(lanes)
             }
             E::Splat { size, value } => {
-                let v = self.expr(func, *value, frame)?.scalar()?;
-                IVal::Vec(vec![v; *size as usize])
+                let v = self.expr(func, *value, frame)?;
+                if let IVal::Opaque(w) = v {
+                    return Ok(IVal::Opaque(w));
+                }
+                IVal::Vec(vec![v.scalar()?; *size as usize])
             }
             E::AccessIndex { base, index } => {
                 let b = self.expr(func, *base, frame)?;
                 if let Some(v) = step_transform_chain(&b) {
                     return Ok(v);
+                }
+                // A part of an opaque (`(*vrc).x`, a direct colour's
+                // channel, which the formula language reads into a local
+                // at the top of every body that can write one) is as
+                // opaque as the whole.
+                if let IVal::Opaque(w) = b {
+                    return Ok(IVal::Opaque(w));
                 }
                 let lanes = b.lanes()?;
                 // A lane past what the evaluator has tracked is a
@@ -1333,6 +1604,9 @@ impl<'a> Eval<'a> {
                 if let Some(v) = step_transform_chain(&b) {
                     return Ok(v);
                 }
+                if let IVal::Opaque(w) = b {
+                    return Ok(IVal::Opaque(w));
+                }
                 let i = self.expr(func, *index, frame)?;
                 let lanes = b.lanes()?;
                 match i {
@@ -1351,7 +1625,11 @@ impl<'a> Eval<'a> {
                 }
             }
             E::Swizzle { pattern, vector, size } => {
-                let v = self.expr(func, *vector, frame)?.lanes()?;
+                let v = self.expr(func, *vector, frame)?;
+                if let IVal::Opaque(w) = v {
+                    return Ok(IVal::Opaque(w));
+                }
+                let v = v.lanes()?;
                 let mut out = Vec::new();
                 for c in &pattern[..*size as usize] {
                     out.push(
@@ -1369,7 +1647,7 @@ impl<'a> Eval<'a> {
                         IVal::Int(k) => IVal::Int(-k),
                         IVal::Vec(l) => IVal::Vec(l.into_iter().map(|i| i.neg()).collect()),
                         IVal::Bool(_) => return Err(Refusal::Shape("negated a bool")),
-                        IVal::Opaque(w) => return Err(Refusal::Opaque(w)),
+                        IVal::Opaque(w) => IVal::Opaque(w),
                     },
                     naga::UnaryOperator::LogicalNot => match v {
                         IVal::Bool(b) => IVal::Bool(b.map(|x| !x)),
@@ -1396,7 +1674,24 @@ impl<'a> Eval<'a> {
                     self.map_lanes(&a, |x| square(x))?
                 } else {
                     let b = self.expr(func, *right, frame)?;
-                    self.binary(*op, a, b)?
+                    let v = lost(self.binary(*op, a, b))?;
+                    // **An integer division truncates**, and the float
+                    // quotient's range does not hold what it truncates to:
+                    // `[1, 3] / 2` is `[0.5, 1.5]` and the shader's `1 / 2`
+                    // is 0 (lazysensen's parity, `n - (n / 2) * 2`). So an
+                    // integer-typed quotient's ends are truncated, a
+                    // monotone map. Two exact integers divide exactly
+                    // already (`binary`).
+                    if matches!(op, naga::BinaryOperator::Divide) && self.is_integer(func, h)? {
+                        let t = |i: Interval| Interval::new(i.lo.trunc(), i.hi.trunc());
+                        match v {
+                            IVal::Scalar(i) => IVal::Scalar(t(i)),
+                            IVal::Vec(l) => IVal::Vec(l.into_iter().map(t).collect()),
+                            other => other,
+                        }
+                    } else {
+                        v
+                    }
                 }
             }
             E::Math { fun, arg, arg1, arg2, arg3 } => {
@@ -1407,23 +1702,44 @@ impl<'a> Eval<'a> {
                 // pole at the first division.
                 if matches!(fun, naga::MathFunction::Dot) && arg1.as_ref() == Some(arg) {
                     let v = self.expr(func, *arg, frame)?;
+                    if let IVal::Opaque(w) = v {
+                        return Ok(IVal::Opaque(w));
+                    }
                     let mut acc = Interval::point(0.0);
                     for l in v.lanes()? {
                         acc = acc.add(square(l));
                     }
                     return Ok(IVal::Scalar(acc));
                 }
-                let mut args = vec![self.expr(func, *arg, frame)?];
+                // **A trig function of the formula language's range
+                // reduction is of what it reduced.** `uf_reduce(t)` is `t`
+                // less a whole number of turns, by Cody-Waite, which the
+                // trig functions cannot tell from `t`; but its interval is
+                // `t`'s less a RANGE of turns wherever `round(t / 2pi)` is
+                // not one integer, and the trig of that lost what `t`
+                // knew -- bMod's `cosh(tau) - cos(sigma)` reached zero, a
+                // pole the built-in's plain `cos` never shows. Only as a
+                // trig argument: the reduced value elsewhere is itself.
+                let reduced = match fun {
+                    naga::MathFunction::Sin | naga::MathFunction::Cos | naga::MathFunction::Tan => frame.reduced.get(&arg.index()).cloned(),
+                    _ => None,
+                };
+                let first = match reduced {
+                    Some(t) => t,
+                    None => self.expr(func, *arg, frame)?,
+                };
+                let mut args = vec![first];
                 for a in [arg1, arg2, arg3].into_iter().flatten() {
                     args.push(self.expr(func, *a, frame)?);
                 }
-                self.math(*fun, &args)?
+                lost(self.math(*fun, &args))?
             }
-            E::As { expr, .. } => {
-                // A numeric cast. `i32(x)` truncates, which for a
-                // bound is safely widened to the whole span it could
-                // land on, so the interval passes through.
-                self.expr(func, *expr, frame)?
+            E::As { expr, kind, convert } => {
+                let v = self.expr(func, *expr, frame)?;
+                // A `bitcast` reads the bits: an integer's as the other
+                // integer kind, a float's as a pattern.
+                let from_integer = convert.is_none() && self.is_integer(func, *expr)?;
+                cast(v, *kind, convert.is_some(), from_integer)?
             }
             E::Select { condition, accept, reject } => {
                 let c = self.expr(func, *condition, frame)?;
@@ -1477,8 +1793,25 @@ impl<'a> Eval<'a> {
                 self.param_slot(*slot as usize)
             }
             "rng_nextf" => Ok(IVal::Scalar(self.rng)),
+            // The formula language's `pow` (`uf_powf`), by its own rule:
+            // through its IR, a base the evaluator could not place on one
+            // side of zero took the negative-base arm, `pow(-a, b)`, with
+            // `-a` mostly negative, as no path through the real helper
+            // does (synth).
+            n if n.ends_with("_powf") && args.len() == 2 => match (&args[0], &args[1]) {
+                (IVal::Opaque(w), _) | (_, IVal::Opaque(w)) => Ok(IVal::Opaque(w)),
+                (a, b) => lost(powf_iv(a.scalar()?, b.scalar()?).map(IVal::Scalar)),
+            },
             "rng_next" => Ok(IVal::Opaque("a raw RNG word")),
-            "get_state" | "set_state" => Err(Refusal::State),
+            // **Per-thread state is opaque, not a refusal.** What a
+            // previous iteration stored can be anything, so a read is a
+            // value this cannot name, refused where it reaches the point
+            // (`found`, as the state it was); a write changes only what
+            // a later read gives, opaque already. A body whose state
+            // feeds only its colour (littlewood's colour register, read
+            // at the top of its twin) bounds as one without.
+            "get_state" => Ok(IVal::Opaque(STATE)),
+            "set_state" => Ok(IVal::Opaque(STATE)),
             _ => self.call(callee, args),
         }
     }
@@ -1515,6 +1848,7 @@ impl<'a> Eval<'a> {
             weight: self.weight,
             name: self.name,
             rng: self.rng,
+            types: Default::default(),
         };
         let out = ev.call(&module.functions[handle], &[IVal::Vec(user)])?;
         let lanes = out.lanes()?;
@@ -1534,7 +1868,7 @@ impl<'a> Eval<'a> {
             IVal::Scalar(x) => IVal::Scalar(f(*x)),
             IVal::Int(k) => IVal::Scalar(f(Interval::point(*k as f64))),
             IVal::Vec(l) => IVal::Vec(l.iter().map(|x| f(*x)).collect()),
-            IVal::Opaque(w) => return Err(Refusal::Opaque(w)),
+            IVal::Opaque(w) => IVal::Opaque(w),
             IVal::Bool(_) => return Err(Refusal::Shape("arithmetic on a bool")),
         })
     }
@@ -1600,6 +1934,21 @@ impl<'a> Eval<'a> {
                     }
                 }
             }));
+        }
+        // **Arithmetic with an opaque is opaque, not a refusal.** A value
+        // the evaluator carries without a number (a direct colour, the
+        // RNG's raw word, an index) may feed a colour, a condition or an
+        // index without ever touching the point, and refusing at the
+        // first `+` lost every `glsl_*` twin, whose bodies load their
+        // colour into locals at the top. Where it can matter, it still
+        // refuses: at the returned point, in a parameter slot, in a
+        // `pow` or a division that needs a number (`lanes`, `scalar`);
+        // a condition on one is undecided, both arms taken.
+        if let IVal::Opaque(w) = a {
+            return Ok(IVal::Opaque(w));
+        }
+        if let IVal::Opaque(w) = b {
+            return Ok(IVal::Opaque(w));
         }
         if let (IVal::Int(x), IVal::Int(y)) = (&a, &b) {
             // Exact integer arithmetic, so a slot index stays a slot
@@ -1678,6 +2027,9 @@ impl<'a> Eval<'a> {
 
     fn math(&self, fun: naga::MathFunction, args: &[IVal]) -> Result<IVal, Refusal> {
         use naga::MathFunction as M;
+        if let Some(IVal::Opaque(w)) = args.iter().find(|a| matches!(a, IVal::Opaque(_))) {
+            return Ok(IVal::Opaque(w));
+        }
         let lanes0 = args[0].lanes()?;
         let n = lanes0.len();
 
@@ -1744,10 +2096,17 @@ impl<'a> Eval<'a> {
                     }
                     x.monotone(f64::log2)
                 }
-                M::Floor => x.monotone(f64::floor),
-                M::Ceil => x.monotone(f64::ceil),
-                M::Round => x.monotone(f64::round),
-                M::Trunc => x.monotone(f64::trunc),
+                // Exact, so not widened: each is monotone and lands on an
+                // integer f32 holds exactly, so the ends of the range
+                // bound it. Widened, `round(1.0)` straddled 1 and every
+                // `power != 1.0` the formula language's `to_float` feeds
+                // was undecided (murl's prepare divided by `power - 1`).
+                // WGSL's `round` is half-to-even, Rust's half-away from
+                // zero: the hull of both is sound.
+                M::Floor => x.monotone_exact(f64::floor),
+                M::Ceil => x.monotone_exact(f64::ceil),
+                M::Round => x.monotone_exact(f64::round).union(x.monotone_exact(f64::round_ties_even)),
+                M::Trunc => x.monotone_exact(f64::trunc),
                 M::Fract => {
                     // `x - floor(x)` is in [0, 1) always, and tracking
                     // it more tightly needs the same period reasoning
@@ -1898,6 +2257,36 @@ fn atan2_iv(y: Interval, x: Interval) -> Interval {
     Interval::new(lo, hi).widen()
 }
 
+/// The formula language's `pow` (`uf_powf`): 1 at a zero exponent; a
+/// negative base to a whole exponent as `pow(-a, b)`, negated at an odd
+/// one; else WGSL's `pow`. The hull of its non-negative base's `pow` and,
+/// for a base reaching below zero, the negative part to each whole
+/// exponent in range (a fractional one there is NaN, which no bound need
+/// hold).
+fn powf_iv(a: Interval, b: Interval) -> Result<Interval, Refusal> {
+    let mut acc: Option<Interval> = None;
+    let mut add = |r: Interval| acc = Some(acc.map_or(r, |x: Interval| x.union(r)));
+    if a.hi >= 0.0 {
+        add(pow_iv(Interval::new(a.lo.max(0.0), a.hi), b)?);
+    }
+    if a.lo < 0.0 {
+        let (n0, n1) = (b.lo.ceil(), b.hi.floor());
+        if n1 - n0 > 64.0 {
+            return Err(Refusal::Domain("pow with a negative base"));
+        }
+        let neg = Interval::new(a.lo, a.hi.min(0.0));
+        let mut n = n0;
+        while n <= n1 {
+            add(pow_iv(neg, Interval::point(n))?);
+            n += 1.0;
+        }
+    }
+    if b.contains(0.0) {
+        add(Interval::point(1.0));
+    }
+    acc.ok_or(Refusal::Domain("pow with a negative base"))
+}
+
 fn sqrt_iv(x: Interval) -> Result<Interval, Refusal> {
     if x.hi < 0.0 {
         return Err(Refusal::Domain("sqrt"));
@@ -1906,7 +2295,9 @@ fn sqrt_iv(x: Interval) -> Result<Interval, Refusal> {
     // almost always a rounding artefact of an expression that is
     // mathematically non-negative (`dot(p, p)`), and clamping is
     // sound because the true value cannot be negative there.
-    Ok(Interval::new(x.lo.max(0.0).sqrt(), x.hi.max(0.0).sqrt()).widen())
+    // Never below zero, however widened: no square root is.
+    let r = Interval::new(x.lo.max(0.0).sqrt(), x.hi.max(0.0).sqrt()).widen();
+    Ok(Interval::new(r.lo.max(0.0), r.hi))
 }
 
 fn pow_iv(mut b: Interval, e: Interval) -> Result<Interval, Refusal> {
@@ -2190,6 +2581,55 @@ mod tests {
         // ...and away from zero it is ordinary.
         let q = a.div(Interval::new(2.0, 4.0));
         assert!(q.lo <= 0.25 && q.hi >= 1.0, "{q:?}");
+    }
+
+    /// **An integer division truncates, as the shader's does.**
+    /// `lazysensen` flips a coordinate by the parity of `floor(c * s)`,
+    /// `n - (n / 2) * 2`: read as float division the parity of 1 was 0
+    /// and its bound kept the point where the shader flipped it, which
+    /// the soundness gate caught once `floor` stopped widening.
+    #[test]
+    fn an_integer_division_truncates() {
+        let reg = crate::variations::global_registry();
+        let info = reg.get("lazysensen").expect("lazysensen");
+        let defaults: std::collections::HashMap<String, f64> =
+            info.parameters.iter().map(|p| (p.name.to_string(), f64::from(p.slot_default()))).collect();
+        drop(reg);
+        let pf = |q: &str| defaults.get(q).copied().unwrap_or(0.0);
+        let ball = Ball::new([1.5, 0.0], 0.05);
+        let disc = derive("lazysensen", &pf, 1.0, ball).expect("lazysensen derives");
+        let flipped = [-1.5, 0.0];
+        let d = ((flipped[0] - disc.c[0]).powi(2) + (flipped[1] - disc.c[1]).powi(2)).sqrt();
+        assert!(d <= disc.r, "the flipped point {flipped:?} is outside {disc:?}");
+    }
+
+    /// The integer casts: an exact value to an exact integer, truncated
+    /// and saturated; a `bitcast` between the integer kinds keeps a
+    /// value in `[0, 2^31)` and rereads the rest; of a float, any bits.
+    #[test]
+    fn casts_follow_wgsl() {
+        use naga::ScalarKind as K;
+        let int = |v: IVal| match v { IVal::Int(k) => k, other => panic!("{other:?}") };
+        assert_eq!(int(cast(IVal::Scalar(Interval::point(-2.7)), K::Sint, true, false).unwrap()), -2);
+        assert_eq!(int(cast(IVal::Scalar(Interval::point(-2.7)), K::Uint, true, false).unwrap()), 0);
+        assert_eq!(int(cast(IVal::Scalar(Interval::point(3.0)), K::Sint, false, true).unwrap()), 3);
+        assert_eq!(int(cast(IVal::Int(-1), K::Uint, false, true).unwrap()), 4294967295);
+        assert_eq!(int(cast(IVal::Int(4294967295), K::Sint, false, true).unwrap()), -1);
+        let IVal::Scalar(bits) = cast(IVal::Scalar(Interval::point(1.0)), K::Uint, false, false).unwrap() else { panic!() };
+        assert_eq!(bits, INT32_RANGE);
+        let IVal::Scalar(f) = cast(IVal::Int(7), K::Float, true, false).unwrap() else { panic!() };
+        assert_eq!(f, Interval::point(7.0));
+    }
+
+    /// The formula language's `pow` over a base reaching below zero: the
+    /// negative part to each whole exponent in range, signed.
+    #[test]
+    fn the_language_pow_holds_its_negative_arm() {
+        let r = powf_iv(Interval::new(-0.5, 1.0), Interval::new(0.999, 1.001)).unwrap();
+        assert!(r.lo <= -0.5 && r.hi >= 1.0, "{r:?}");
+        let r = powf_iv(Interval::new(-2.0, -1.0), Interval::point(2.0)).unwrap();
+        assert!(r.lo <= 1.0 && r.hi >= 4.0, "{r:?}");
+        assert!(powf_iv(Interval::new(-2.0, -1.0), Interval::point(0.5)).is_err(), "a fractional power of a negative base is NaN");
     }
 }
 
