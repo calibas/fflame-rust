@@ -17,3 +17,7 @@ fn variation(z, p) {
     let half_theta = theta / 2.0 + omega;
     complex(sqrt_r * cos(half_theta), sqrt_r * sin(half_theta))
 }
+
+fn inverse(z, p, branch) {
+    z * z
+}

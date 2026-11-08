@@ -8686,20 +8686,72 @@ pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> Strin
 /// `ifs_map_jacobian` rather than wrapping them: every caller of those
 /// three would otherwise have to learn about sums, and there are
 /// dozens across the walk, the beam and three colourings.
-fn push_ifs_sum_markers(out: &mut Vec<String>, text: &str, sums: bool) {
+fn push_ifs_sum_markers(out: &mut Vec<String>, text: &str, sums: bool, user: bool) {
     for l in text.lines() {
         let call = match l.trim() {
-            "//__IFS_SUM_POINT__" => Some("return ifs_sum_inv_point(i, p);"),
-            "//__IFS_SUM_SIGMA__" => Some("return ifs_sum_inv_sigma(i, p);"),
-            "//__IFS_SUM_JACOBIAN__" => Some("return ifs_sum_inv_jacobian(i, q);"),
+            "//__IFS_SUM_POINT__" => Some((7.0, "return ifs_sum_inv_point(i, p);")),
+            "//__IFS_SUM_SIGMA__" => Some((7.0, "return ifs_sum_inv_sigma(i, p);")),
+            "//__IFS_SUM_JACOBIAN__" => Some((7.0, "return ifs_sum_inv_jacobian(i, q);")),
+            // A row of a Rhai variation's own inverse (kind 8,
+            // [`ifs_user_block`]), dispatched inside the kernel's three
+            // functions as a sum's is inside the map's.
+            "//__IFS_USER_INVERSE__" => Some((8.0, "return ifs_user_inverse(i, v);")),
+            "//__IFS_USER_SIGMA__" => Some((8.0, "return ifs_user_sigma(i, v);")),
+            "//__IFS_USER_JACOBIAN__" => Some((8.0, "return ifs_user_jacobian(i, v);")),
+            "//__IFS_USER_GAP__" => Some((8.0, "return ifs_user_gap(i, p);")),
             _ => None,
         };
         match call {
-            Some(c) if sums => out.push(format!("    if (ifs_maps[i].kind == 7.0) {{ {c} }}")),
+            Some((k, c)) if (k == 7.0 && sums) || (k == 8.0 && user) => {
+                out.push(format!("    if (ifs_maps[i].kind == {k:.1}) {{ {c} }}"))
+            }
             Some(_) => {}
             None => out.push(l.to_string()),
         }
     }
+}
+
+/// The flame's own Rhai inverses (kind-8 rows; docs/projects/rhai-planners.md,
+/// B1), each the function its variation's `fn inverse` compiles to
+/// (`lang::wgsl::inverse_kernel`), renamed by its index; the `get_param`
+/// they read their values through, which ride behind the xaos graph
+/// (`ifs::pack_flame`); and the three the kernel's switches call: the
+/// inverse along the row's branch, its Jacobian by central differences
+/// -- a step of 2e-4 of the point's size, where the f32 cube root of
+/// epsilon's 5e-3 lost a few percent within that of hemisphere's edge,
+/// whose inverse is singular there, and the outer arc of its set with it
+/// -- one-sided where a side leaves the image, and the local σ that
+/// Jacobian gives, `1/σ_max` (1 where there is no preimage, as the
+/// CPU's). A difference across a cut or
+/// the image's edge comes out huge, and its σ small: the sound way.
+fn ifs_user_block(user: &super::ifs::UserKernels) -> String {
+    use crate::variations::user_inverse::{GAP_WGSL_NAME, WGSL_NAME};
+    let mut out = String::from(
+        "fn get_param(xform_id: u32, variation_id: u32, slot: u32) -> f32 {\n    return ifs_xaos[xform_id + variation_id + slot];\n}\n",
+    );
+    let (mut cases, mut gaps) = (String::new(), String::new());
+    for (f, (_, wgsl, gap)) in user.functions.iter().enumerate() {
+        out.push_str(&wgsl.replace(WGSL_NAME, &format!("{WGSL_NAME}{f}")).replace(GAP_WGSL_NAME, &format!("{GAP_WGSL_NAME}{f}")));
+        cases.push_str(&format!("        case {f}u: {{ return {WGSL_NAME}{f}(v, base, branch); }}\n"));
+        if *gap {
+            gaps.push_str(&format!("        case {f}u: {{ g = {GAP_WGSL_NAME}{f}(v, base, 0.0).x; }}\n"));
+        }
+    }
+    // Its image gap where it declares one (`fn image_gap`), in the
+    // kernel's frame, scaled as the unit disc's (`params.z`).
+    out.push_str(&format!(
+        "fn ifs_user_gap(i: u32, p: vec2<f32>) -> f32 {{\n    let m = ifs_maps[i].inv_m;\n    let t = ifs_maps[i].inv_t;\n    let v = vec2<f32>(m.x * p.x + m.y * p.y + t.x, m.z * p.x + m.w * p.y + t.y);\n    let base = u32(ifs_maps[i].params.y);\n    var g = -1.0;\n    switch u32(ifs_maps[i].params.x) {{\n{gaps}        default: {{}}\n    }}\n    if (g > 0.0) {{\n        return g * ifs_maps[i].params.z;\n    }}\n    return -1.0;\n}}\n"
+    ));
+    out.push_str(&format!(
+        "fn ifs_user_inverse(i: u32, v: vec2<f32>) -> vec2<f32> {{\n    let f = u32(ifs_maps[i].params.x);\n    let base = u32(ifs_maps[i].params.y);\n    let branch = ifs_maps[i].branch;\n    switch f {{\n{cases}        default: {{}}\n    }}\n    return v * 1e30;\n}}\n"
+    ));
+    out.push_str(
+        "fn ifs_user_side(u: vec2<f32>) -> bool {\n    return abs(u.x) < 1e29 && abs(u.y) < 1e29;\n}\n\
+         fn ifs_user_diff(i: u32, v: vec2<f32>, d: vec2<f32>, u0: vec2<f32>) -> vec2<f32> {\n    let a = ifs_user_inverse(i, v + d);\n    let b = ifs_user_inverse(i, v - d);\n    let h = length(d);\n    if (ifs_user_side(a) && !ifs_user_side(b)) {\n        return (a - u0) / h;\n    }\n    if (ifs_user_side(b) && !ifs_user_side(a)) {\n        return (u0 - b) / h;\n    }\n    return (a - b) / (2.0 * h);\n}\n\
+         fn ifs_user_jacobian(i: u32, v: vec2<f32>) -> mat2x2<f32> {\n    let h = 2e-4 * max(length(v), 1e-2);\n    let u0 = ifs_user_inverse(i, v);\n    return mat2x2<f32>(ifs_user_diff(i, v, vec2<f32>(h, 0.0), u0), ifs_user_diff(i, v, vec2<f32>(0.0, h), u0));\n}\n\
+         fn ifs_user_sigma(i: u32, v: vec2<f32>) -> f32 {\n    if (!ifs_user_side(ifs_user_inverse(i, v))) {\n        return 1.0;\n    }\n    let j = ifs_user_jacobian(i, v);\n    let fro2 = dot(j[0], j[0]) + dot(j[1], j[1]);\n    let det = j[0].x * j[1].y - j[1].x * j[0].y;\n    let s_max = sqrt(max((fro2 + sqrt(max(fro2 * fro2 - 4.0 * det * det, 0.0))) * 0.5, 0.0));\n    if (!(s_max > 0.0) || !(s_max <= 1e32)) {\n        return 0.0;\n    }\n    return 1.0 / s_max;\n}\n",
+    );
+    out
 }
 
 /// The same, with a camera lens.
@@ -8731,6 +8783,24 @@ pub fn assemble_ifs_rig(
     sums: bool,
     placed: bool,
 ) -> String {
+    assemble_ifs_user(def, coloring, beam, lens, delta, sums, placed, &super::ifs::UserKernels::default())
+}
+
+/// The same, with the flame's own Rhai inverses (`user`; kind-8 rows,
+/// docs/projects/rhai-planners.md, B1) spliced in -- or, without any,
+/// the text it has always been.
+#[allow(clippy::too_many_arguments)]
+pub fn assemble_ifs_user(
+    def: &IfsDef,
+    coloring: &IfsColoringDef,
+    beam: u32,
+    lens: Option<&str>,
+    delta: bool,
+    sums: bool,
+    placed: bool,
+    user: &super::ifs::UserKernels,
+) -> String {
+    let users = !user.functions.is_empty() && !def.solid;
     // A SUM row's inverse is a Newton solve over the kernel's forward
     // body (`ifs-general.md` D3), which only a flame that HAS one
     // pays for. Spliced or not, exactly as the delta walk is, so a
@@ -8790,12 +8860,15 @@ pub fn assemble_ifs_rig(
                 // `ifs_inv_point` and `ifs_inv_sigma` rather than
                 // wrapping them. Dropped when there is no sum, so the
                 // text is what it was.
-                push_ifs_sum_markers(&mut out, def.wgsl.trim(), sums);
+                push_ifs_sum_markers(&mut out, def.wgsl.trim(), sums, users);
+                if users {
+                    out.push(ifs_user_block(user));
+                }
                 if def.solid {
                     out.push(ifs_trap_point_wgsl(orbit).trim().to_string());
                 }
                 if measure {
-                    push_ifs_sum_markers(&mut out, super::ifs::IFS_JACOBIAN.trim(), sums);
+                    push_ifs_sum_markers(&mut out, super::ifs::IFS_JACOBIAN.trim(), sums, users);
                     out.push(super::ifs::IFS_MEASURE.trim().to_string());
                 }
                 if delta {
@@ -8804,7 +8877,7 @@ pub fn assemble_ifs_rig(
                     // too -- and only once, when the measure
                     // colouring has not already spliced them.
                     if !measure {
-                        push_ifs_sum_markers(&mut out, super::ifs::IFS_JACOBIAN.trim(), sums);
+                        push_ifs_sum_markers(&mut out, super::ifs::IFS_JACOBIAN.trim(), sums, users);
                     }
                     out.push(super::ifs::IFS_DIFFERENCE.trim().to_string());
                     out.push(super::ifs::IFS_DELTA_WALK.trim().to_string());

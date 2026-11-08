@@ -7872,10 +7872,15 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             // Points and headlamps compiled in, or not (`assembler::ifs_rig`).
             let placed = self.solid_lighting.0.placed_lights();
             let ptag = if placed { "|placed" } else { "" };
+            // The flame's own Rhai inverses, each a function spliced in
+            // (rhai-planners B1): their keys are the shader's, and a key
+            // is its source's, so an edit is another pipeline.
+            let user = self.ifs.as_ref().map(|p| p.user.clone()).unwrap_or_default();
+            let utag = if user.functions.is_empty() { String::new() } else { format!("|user:{}", user.key()) };
             let key =
-                format!("ifs|{}|{}|b{beam}|{lens_id}{dtag}{stag}{ptag}", def.name, coloring.name);
+                format!("ifs|{}|{}|b{beam}|{lens_id}{dtag}{stag}{ptag}{utag}", def.name, coloring.name);
             if !self.pipelines.contains_key(&key) {
-                let source = assembler::assemble_ifs_rig(
+                let source = assembler::assemble_ifs_user(
                     def,
                     coloring,
                     beam,
@@ -7883,6 +7888,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     delta,
                     sums,
                     placed,
+                    &user,
                 );
                 let module = device.create_shader_module(ShaderModuleDescriptor {
                     label: Some(&format!("Escape Shader {key}")),

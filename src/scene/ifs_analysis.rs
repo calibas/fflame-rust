@@ -242,6 +242,14 @@ pub enum Kernel {
     /// (`cylinder_turns`), as disc's rings are counted (tracker C6).
     /// **The walk's alone** (`walk_only`).
     Cylinder { k0: i32 },
+    /// A Rhai variation's own inverse (`fn inverse(z, p, branch)`;
+    /// docs/projects/rhai-planners.md, B1): the slot of it and one
+    /// transform's parameter values in `variations::user_inverse`'s
+    /// table, where it was checked against its forward map. Both maps
+    /// run in the interpreter at f64; derivatives are central
+    /// differences of them (`user_jacobian`); nothing else is known of
+    /// it -- no difference form, no hole, no smooth radius.
+    User { slot: u32 },
 }
 
 impl Kernel {
@@ -394,10 +402,17 @@ impl Kernel {
                 let c = (1.0 - v[0] * v[0]).max(0.0).sqrt();
                 c.min(1.0)
             }
+            // Where a user kernel's inverse gives no preimage its point
+            // is at 1e30, which the walk reads as that piece escaped, as
+            // a built-in's past its image: one, as bubble's is there, so
+            // the bound is that far and not held at zero.
+            Kernel::User { slot } if !crate::variations::user_inverse::is_preimage(crate::variations::user_inverse::kernel(slot).inverse(v, branch)) => 1.0,
             // The inverse's derivative is the dual numbers' own, so the
             // forward's σ_min is its largest singular value reciprocated
-            // -- exact by construction, and zero where it has none.
-            Kernel::Elliptic => match self.inverse_jacobian(v, branch) {
+            // -- exact by construction, and zero where it has none. A
+            // user kernel's the same, its Jacobian by central
+            // differences of the interpreter's inverse.
+            Kernel::Elliptic | Kernel::User { .. } => match self.inverse_jacobian(v, branch) {
                 Some(j) => {
                     let (_, hi) = singular_values_of(j);
                     if hi > 0.0 {
@@ -607,6 +622,10 @@ impl Kernel {
             }
             // The strip's edge, the image of the folds.
             Kernel::Cylinder { .. } => (1.0 - v[0].abs()).max(0.0),
+            // Nothing is known of where it stops being smooth, so no
+            // radius is claimed: the delta walk's remainder is then
+            // never measured (`set_holes`) and a lineage rebases.
+            Kernel::User { .. } => 0.0,
         }
     }
 
@@ -636,6 +655,9 @@ impl Kernel {
             Kernel::Root { d, .. } => d < 0.0,
             Kernel::Bubble | Kernel::Hemisphere | Kernel::Disc | Kernel::Blob { .. } => false,
             Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } => false,
+            // Probed (`UserInverse::unbounded_at_origin`); and a reach
+            // that goes to infinity takes the bulk, or no ball, anyway.
+            Kernel::User { slot } => crate::variations::user_inverse::kernel(slot).unbounded_at_origin(),
         }
     }
 
@@ -671,8 +693,11 @@ impl Kernel {
         matches!(self, Kernel::Bubble | Kernel::Hemisphere | Kernel::Disc)
     }
 
-    pub fn variation(&self) -> &'static str {
-        match self {
+    /// The variation the kernel is: a built-in's name, or a user
+    /// kernel's variation's key.
+    pub fn variation(&self) -> String {
+        let name = match self {
+            Kernel::User { slot } => return crate::variations::user_inverse::kernel(*slot).inverse.key.clone(),
             Kernel::Root { mirror: true, .. } => "juliascope",
             Kernel::Root { n: 2, d, .. } if *d == 1.0 => "julia",
             Kernel::Root { .. } => "julian",
@@ -684,8 +709,47 @@ impl Kernel {
             Kernel::Elliptic => "elliptic",
             Kernel::Splits { .. } => "splits",
             Kernel::Cylinder { .. } => "cylinder",
-        }
+        };
+        name.to_string()
     }
+}
+
+/// A user kernel's map at `p` over any [`Real`] (`Kernel::User`): the
+/// interpreter's value at f64, and for a number carrying derivatives its
+/// Jacobian by central differences ([`user_jacobian`]).
+fn user_gen<T: Real>(p: &[T; 2], f: impl Fn([f64; 2]) -> [f64; 2]) -> [T; 2] {
+    let x = [p[0].to_f64(), p[1].to_f64()];
+    T::outside2(p, f(x), &|| user_jacobian(x, &f))
+}
+
+/// The Jacobian of `f` at `x` by central differences, row-major
+/// (`J[i][j] = ∂f_i/∂x_j`). The step is f64's cube-root epsilon times
+/// the point's size, at least 1e-3 of a unit near the origin: rounding
+/// and truncation then balance near 1e-10 of the derivative wherever `f`
+/// is smooth across the step. Across a cut or a jump it is not, and the
+/// derivative comes out huge -- a σ_min too small, which is the sound
+/// direction. Where one side of the step has no preimage (the edge of the
+/// image), the difference is one-sided.
+pub fn user_jacobian(x: [f64; 2], f: &impl Fn([f64; 2]) -> [f64; 2]) -> [[f64; 2]; 2] {
+    let h = 6.0e-6 * x[0].hypot(x[1]).max(1e-3);
+    let ok = |u: [f64; 2]| crate::variations::user_inverse::is_preimage(u);
+    let f0 = f(x);
+    // Central; one-sided where one side leaves where the map is defined
+    // (its image's edge, for an inverse), so a point near the edge keeps
+    // its derivative.
+    let along = |i: usize| {
+        let (mut a, mut b) = (x, x);
+        a[i] += h;
+        b[i] -= h;
+        let (fa, fb) = (f(a), f(b));
+        match (ok(fa), ok(fb)) {
+            (true, true) | (false, false) => [(fa[0] - fb[0]) / (2.0 * h), (fa[1] - fb[1]) / (2.0 * h)],
+            (true, false) => [(fa[0] - f0[0]) / h, (fa[1] - f0[1]) / h],
+            (false, true) => [(f0[0] - fb[0]) / h, (f0[1] - fb[1]) / h],
+        }
+    };
+    let (dx, dy) = (along(0), along(1));
+    [[dx[0], dy[0]], [dx[1], dy[1]]]
 }
 
 
@@ -783,6 +847,10 @@ pub(crate) fn elliptic_parts<T: Real>(z: &[T; 2]) -> EllipticParts<T> {
 /// takes the same branch the point does.
 pub fn kernel_forward_gen<T: Transcendental>(k: &Kernel, z: &[T; 2], branch: u32) -> [T; 2] {
     use std::f64::consts::{PI, TAU};
+    if let Kernel::User { slot } = *k {
+        let kernel = crate::variations::user_inverse::kernel(slot);
+        return user_gen(z, |p| kernel.forward(p, branch));
+    }
     let r2 = z[0].hypot2(&z[1]);
     match *k {
         Kernel::Hemisphere => {
@@ -845,6 +913,7 @@ pub fn kernel_forward_gen<T: Transcendental>(k: &Kernel, z: &[T; 2], branch: u32
             [z[0].add(&z[0].lit(s[0])), z[1].add(&z[1].lit(s[1]))]
         }
         Kernel::Cylinder { .. } => [z[0].sin(), z[1].clone()],
+        Kernel::User { .. } => unreachable!("taken above"),
     }
 }
 
@@ -857,10 +926,15 @@ pub fn kernel_forward_gen<T: Transcendental>(k: &Kernel, z: &[T; 2], branch: u32
 /// being taken of a sentinel.
 pub fn kernel_inverse_gen<T: Transcendental>(k: &Kernel, v: &[T; 2], branch: u32) -> [T; 2] {
     use std::f64::consts::PI;
+    if let Kernel::User { slot } = *k {
+        let kernel = crate::variations::user_inverse::kernel(slot);
+        return user_gen(v, |q| kernel.inverse(q, branch));
+    }
     let r2 = v[0].hypot2(&v[1]);
     let r2v = r2.to_f64();
     let far = |v: &[T; 2]| [v[0].mul(&v[0].lit(1e30)), v[1].mul(&v[1].lit(1e30))];
     match *k {
+        Kernel::User { .. } => unreachable!("taken above"),
         Kernel::Hemisphere => {
             if r2v >= 1.0 {
                 return far(v);
@@ -1051,7 +1125,8 @@ pub fn kernel_inverse_real<T: Real>(k: &Kernel, v: &[T; 2], branch: u32) -> Opti
             let u = [v[0].sub(&v[0].lit(s[0])), v[1].sub(&v[1].lit(s[1]))];
             (branch <= 3 && Kernel::splits_quadrant([u[0].to_f64(), u[1].to_f64()]) == branch).then_some(u)
         }
-        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } => None,
+        // A user kernel runs in the interpreter, at f64 alone.
+        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } | Kernel::User { .. } => None,
     }
 }
 
@@ -1077,7 +1152,7 @@ pub fn kernel_has_difference(k: &Kernel) -> bool {
         // A mirrored root's is not needed: the difference forms are the
         // escape engine's, and it is the walk's alone.
         Kernel::Root { n, d, mirror } => !mirror && root_powers(n, d).is_some(),
-        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } => false,
+        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } | Kernel::User { .. } => false,
     }
 }
 
@@ -1134,6 +1209,7 @@ pub fn kernel_difference_gen<T: Real>(
     let x = cnorm2(z);
 
     match *k {
+        Kernel::User { .. } => None,
         Kernel::Root { mirror: true, .. } => None,
         Kernel::Root { n, d: dist, .. } => {
             let (a, b) = root_powers(n, dist)?;
@@ -1234,6 +1310,10 @@ pub fn kernel_inverse_domain(k: &Kernel, v: [f64; 2], branch: u32) -> bool {
         }
         // Inside the strip: on its edge the preimage is on a fold.
         Kernel::Cylinder { .. } => v[0].abs() < 1.0 && v[1].is_finite(),
+        // Where its inverse gives a preimage, as it says.
+        Kernel::User { slot } => {
+            r2.is_finite() && crate::variations::user_inverse::is_preimage(crate::variations::user_inverse::kernel(slot).inverse(v, branch))
+        }
     }
 }
 
@@ -1534,6 +1614,14 @@ impl NonlinearMap2 {
             }
             return None;
         }
+        // A user kernel's own image gap (`fn image_gap`), in the
+        // kernel's frame, scaled as the unit disc's.
+        if let Kernel::User { slot } = self.kernel {
+            let v = self.before_kernel(q);
+            let g = crate::variations::user_inverse::kernel(slot).gap(v)?;
+            let (post_lo, _) = self.post.singular_values();
+            return (g > 0.0).then(|| g * self.w.abs() * post_lo);
+        }
         if !self.kernel.image_is_unit_disc() {
             return None;
         }
@@ -1568,6 +1656,8 @@ impl NonlinearMap2 {
                 let (lo, hi) = self.cylinder_turns(ball);
                 2 * (hi - lo + 1) as u32
             }
+            // As many as its inverse declares (`INFO.inverse_branches`).
+            Kernel::User { slot } => crate::variations::user_inverse::kernel(slot).inverse.branches,
             _ => 1,
         }
     }
@@ -1805,6 +1895,33 @@ impl Map2 {
             // a solve would differentiate the ITERATION, not the map.
             Map2::SumInverse(r) => {
                 let step = 1e-5 * f64::hypot(q[0], q[1]).max(1.0);
+                let mut out = [[[0.0f64; 2]; 2]; 2];
+                for k in 0..2 {
+                    let (mut a, mut b) = (q, q);
+                    a[k] += step;
+                    b[k] -= step;
+                    let (ja, jb) = (r.inverse_jacobian(a)?, r.inverse_jacobian(b)?);
+                    for i in 0..2 {
+                        for j in 0..2 {
+                            out[i][j][k] = (ja[i][j] - jb[i][j]) / (2.0 * step);
+                        }
+                    }
+                }
+                for i in 0..2 {
+                    let mid = (out[i][0][1] + out[i][1][0]) * 0.5;
+                    out[i][0][1] = mid;
+                    out[i][1][0] = mid;
+                }
+                out.iter().flatten().flatten().all(|x| x.is_finite()).then_some(out)
+            }
+            // A user kernel's dual numbers carry a first derivative alone
+            // (`Real::outside2`), so its Hessian is differenced from its
+            // Jacobian, as a sum's is.
+            Map2::NonlinearInverse(r) if matches!(r.kernel, Kernel::User { .. }) => {
+                if !r.inverse_domain(q) {
+                    return None;
+                }
+                let step = 1e-4 * f64::hypot(q[0], q[1]).max(1e-2);
                 let mut out = [[[0.0f64; 2]; 2]; 2];
                 for k in 0..2 {
                     let (mut a, mut b) = (q, q);
@@ -2672,6 +2789,10 @@ pub enum NotAffine {
     /// `quaternion_julia` in forward mode or with a projection other
     /// than the vector one (plan §8.11 step 3).
     Mode(String),
+    /// A Rhai variation whose own inverse (`fn inverse`) is refused --
+    /// it does not compile, or does not undo its forward map at these
+    /// parameters (`variations::user_inverse::check`) -- and why.
+    Inverse(String, String),
 }
 
 /// A transform's variations as three affine maps: the pre-phase
@@ -2684,8 +2805,10 @@ struct VariationStage {
     post: Affine3,
     /// Whether anything was summed.
     any: bool,
-    /// The nonlinear variations met, with their weights (planar only).
-    roots: Vec<(&'static str, f64)>,
+    /// The nonlinear variations met, with their weights (planar only):
+    /// a built-in kernel's name, or the key of a Rhai variation with an
+    /// inverse of its own.
+    roots: Vec<(std::borrow::Cow<'static, str>, f64)>,
 }
 
 /// The variation stage, or why it is not affine in `space`.
@@ -2723,8 +2846,13 @@ fn variation_stage(
             // REGISTRY's answer now, not a list here
             // (`ifs-general.md` D1). The transform's kind is decided
             // once the whole stage is known.
-            let root = registry.inverse(name).filter(|d| d.is_kernel_in(space));
-            let Some(root) = root.map(|d| d.name) else {
+            let root = registry.inverse(name).filter(|d| d.is_kernel_in(space)).map(|d| std::borrow::Cow::Borrowed(d.name));
+            // A Rhai variation's own inverse (docs/projects/rhai-planners.md,
+            // B1), in the plane; the solid's is B3.
+            let root = root.or_else(|| {
+                (space == Space::Planar && crate::variations::user_inverse::of(name).is_some()).then(|| std::borrow::Cow::Owned(name.clone()))
+            });
+            let Some(root) = root else {
                 return Err(NotAffine::Variation(name.clone()));
             };
             let summed = match registry.get(name).map(|i| i.phase.clone()) {
@@ -2792,6 +2920,11 @@ fn kernel_from_registry(
     space: Space,
 ) -> Result<Kernel, NotAffine> {
     let p = |name: &str| t.get_variation_param_or_default(kind, name, registry) as f64;
+    if registry.inverse(kind).is_none() && space == Space::Planar {
+        if let Some(inverse) = crate::variations::user_inverse::of(kind) {
+            return user_kernel(t, registry, kind, inverse);
+        }
+    }
     let def = registry
         .inverse(kind)
         .filter(|d| d.is_kernel_in(space))
@@ -2800,6 +2933,23 @@ fn kernel_from_registry(
         return Err(NotAffine::Variation(kind.to_string()));
     };
     build(&p).map_err(|r| refusal(r, kind))
+}
+
+/// The kernel of the Rhai variation `key`'s own inverse at this
+/// transform's parameters (`Kernel::User`): its slot, made and checked
+/// against the forward map at these values; a refusal names why.
+fn user_kernel(
+    t: &Transform,
+    registry: &VariationRegistry,
+    key: &str,
+    inverse: Result<std::sync::Arc<crate::variations::user_inverse::UserInverse>, String>,
+) -> Result<Kernel, NotAffine> {
+    let refused = |why: String| NotAffine::Inverse(key.to_string(), why);
+    let inverse = inverse.map_err(refused)?;
+    let info = registry.get(key).ok_or_else(|| NotAffine::Variation(key.to_string()))?;
+    let slots: Vec<f32> = info.parameters.iter().map(|p| t.get_variation_param_or_default(key, &p.name, registry)).collect();
+    let slot = crate::variations::user_inverse::kernel_slot(&inverse, &slots).map_err(refused)?;
+    Ok(Kernel::User { slot })
 }
 
 /// The solid kernel `kind` is. [`kernel_from_registry`]'s twin.
@@ -3171,7 +3321,7 @@ pub fn transform_map_2d_ordered(
     if stage.roots.is_empty() {
         return transform_affine_2d_ordered(t, registry, order).map(Map2::Affine);
     }
-    let (kind, w) = stage.roots[0];
+    let (kind, w) = stage.roots[0].clone();
     // TWO kernels summed have no dominant term to seed Newton from
     // and no branch rule, so they are still refused. One kernel and
     // an affine is the case D3 is about, and the commonest transform
@@ -3179,7 +3329,7 @@ pub fn transform_map_2d_ordered(
     if stage.roots.len() > 1 {
         return Err(NotAffine::MixedSum(kind.to_string()));
     }
-    let kernel = kernel_from_registry(t, registry, kind, Space::Planar)?;
+    let kernel = kernel_from_registry(t, registry, &kind, Space::Planar)?;
     if !(w != 0.0) || !w.is_finite() {
         return Err(NotAffine::Degenerate(kind.to_string()));
     }
@@ -3239,6 +3389,14 @@ pub fn transform_map_2d_ordered(
     if stage.any && matches!(kernel, Kernel::Cylinder { .. }) {
         return Err(NotAffine::MixedSum(kind.to_string()));
     }
+    // A user kernel summed with an affine needs its forward map in the
+    // shader's Newton solve (docs/projects/rhai-planners.md, B2).
+    let std::borrow::Cow::Borrowed(kind) = kind else {
+        if stage.any {
+            return Err(NotAffine::MixedSum(kind.to_string()));
+        }
+        return Ok(Map2::Nonlinear(NonlinearMap2 { kernel, branch: 0, pre, post, pre_inv, post_inv, hole: 0.0, third: 0.0, w }));
+    };
     if stage.any {
         // A kernel SUMMED with an affine (D3). The affine part is
         // `stage.sum`'s xy block, already weighted, applied to the
@@ -3476,6 +3634,7 @@ impl Disqualification {
                 name(v)
             ),
             NotAffine::Mode(v) => format!("'s {} must be in inverse mode with the vector projection", name(v)),
+            NotAffine::Inverse(v, why) => format!("'s {} has an inverse that is refused: {why}", name(v)),
         };
         match self {
             Self::Empty => "the flame has no transforms".to_string(),
@@ -4147,7 +4306,12 @@ fn set_holes(maps: &mut [IfsMap<Map2>], ball: &Ball<[f64; 2]>) {
             // until now -- the same reason the hole above is set here
             // and not where the map is built. A kernel with an exact
             // form never reads it and does not pay for it.
-            if !kernel_has_difference(&r.kernel) {
+            // A user kernel claims no smooth radius, so nothing is
+            // measured, and its remainder is unbounded: a lineage
+            // through one always rebases.
+            if matches!(r.kernel, Kernel::User { .. }) {
+                r.third = f64::INFINITY;
+            } else if !kernel_has_difference(&r.kernel) {
                 let (bc, br) = (ball.centre, ball.radius);
                 r.measure_third(bc, br);
             }
@@ -4223,14 +4387,14 @@ pub fn transform_map_3d_ordered(
     if stage.roots.is_empty() {
         return transform_affine_3d_ordered(t, registry, order).map(Map3::Affine);
     }
-    let (kind, w) = stage.roots[0];
+    let (kind, w) = stage.roots[0].clone();
     if stage.roots.len() > 1 || stage.any {
         return Err(NotAffine::MixedSum(kind.to_string()));
     }
     if !(w != 0.0) || !w.is_finite() {
         return Err(NotAffine::Degenerate(kind.to_string()));
     }
-    let kernel = kernel3_from_registry(t, registry, kind)?;
+    let kernel = kernel3_from_registry(t, registry, &kind)?;
     let affine = plane_affine(
         [[t.a as f64, t.b as f64], [t.c as f64, t.d as f64]],
         [t.e as f64, t.f as f64],
@@ -4403,6 +4567,8 @@ async fn ball_2d_numeric(maps: &[IfsMap<Map2>], bulk: bool, slicer: &super::slic
         match m {
             Map2::Nonlinear(r) => match r.kernel {
                 Kernel::Root { n, .. } => r.apply_branch(p, (u * (n.unsigned_abs() as f64)).floor() as u32),
+                // Its arm is its draws' value (`UserInverse::forward_at`).
+                Kernel::User { .. } => r.apply_branch(p, (u * crate::variations::user_inverse::FORWARD_ARMS as f64) as u32),
                 _ => r.apply_branch(p, 0),
             },
             other => other.apply(p),
@@ -4486,6 +4652,9 @@ async fn ball_2d_numeric(maps: &[IfsMap<Map2>], bulk: bool, slicer: &super::slic
                 for m in maps {
                     let branches = match m.forward.nonlinear().map(|r| r.kernel) {
                         Some(Kernel::Root { n, .. }) => n.unsigned_abs(),
+                        // A forward map that draws (julian's twin picking
+                        // its root): each of its arms.
+                        Some(Kernel::User { slot }) if crate::variations::user_inverse::kernel(slot).inverse.forward_draws => crate::variations::user_inverse::FORWARD_ARMS,
                         _ => 1,
                     };
                     for k in 0..branches {
@@ -4530,6 +4699,8 @@ async fn bulk_ball_2d(maps: &[IfsMap<Map2>], slicer: &super::slice::Slicer) -> O
         match m {
             Map2::Nonlinear(r) => match r.kernel {
                 Kernel::Root { n, .. } => r.apply_branch(p, (u * (n.unsigned_abs() as f64)).floor() as u32),
+                // Its arm is its draws' value (`UserInverse::forward_at`).
+                Kernel::User { .. } => r.apply_branch(p, (u * crate::variations::user_inverse::FORWARD_ARMS as f64) as u32),
                 _ => r.apply_branch(p, 0),
             },
             other => other.apply(p),

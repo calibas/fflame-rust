@@ -17,3 +17,15 @@ fn variation3(v, p) {
     let t = 1.0 / sqrt(r2_xy + 1.0);
     vec3(v.x * t, v.y * t, t)
 }
+
+fn inverse(z, p, branch) {
+    let x = z.norm_sqr();
+    if x >= 1.0 {
+        return no_preimage();
+    }
+    z / sqrt(1.0 - x)
+}
+
+fn image_gap(z, p) {
+    z.abs() - 1.0
+}

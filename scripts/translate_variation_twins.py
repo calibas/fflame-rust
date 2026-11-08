@@ -1817,7 +1817,9 @@ def write(name, d):
     if info:
         extra = "".join(f", {k}: {v}" for k, v in info.items())
         head = re.sub(r'(const INFO = #\{ .*?) \};', lambda m: m.group(1) + extra + " };", head, count=1)
-    open(path, "w", encoding="utf-8", newline="\n").write(head + body)
+    # Its hand-written inverse, if it has one (`twin_inverses.py`).
+    from twin_inverses import with_inverse
+    open(path, "w", encoding="utf-8", newline="\n").write(with_inverse(name, head + body))
 
 if __name__ == "__main__":
     args = sys.argv[1:]

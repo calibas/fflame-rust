@@ -19,3 +19,12 @@ fn variation3(v, p) {
     let t1 = complex(v.x, v.y) / r2;
     vec3(t1.re, t1.im, v.z)
 }
+
+fn inverse(z, p, branch) {
+    let x = z.norm_sqr();
+    let d = 1.0 - 4.0e-6 * x;
+    if d < 0.0 || x <= 0.0 {
+        return no_preimage();
+    }
+    z * ((1.0 + sqrt(d)) / (2.0 * x))
+}

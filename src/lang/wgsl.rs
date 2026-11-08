@@ -752,6 +752,61 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
     })
 }
 
+/// A transformation's inverse (`fn inverse(z, p, branch)`,
+/// `rhai::inverse_transformation`) as the Flame Attractor's shader calls
+/// it (docs/projects/rhai-planners.md, B1): `fn {name}(v: vec2<f32>, base:
+/// u32, branch: f32) -> vec2<f32>`, its parameters -- the user's, then
+/// `prepare`'s -- read as `get_param(base, 0u, slot)`, which the mode D
+/// shader defines over a buffer of its own, and its branch handed in as the
+/// colour coordinate it is lowered to read. Refused where it reaches for
+/// anything only a flame has: a random number, state, the running sum, the
+/// weight or the transform, a texture, a 4th coordinate, an emitted point,
+/// or a colour, direct colour or hide flag written.
+pub fn inverse_kernel(p: &Program, name: &str) -> Result<String, String> {
+    let s = variation_shape(p)?;
+    let refuse = |what: &str| Err(format!("an inverse {what}: the Flame Attractor runs it outside a flame"));
+    if s.rng || s.init_rng {
+        return refuse("draws no random numbers");
+    }
+    if s.accum {
+        return refuse("reads no running sum (`ctx.accum`)");
+    }
+    if s.rgb || s.hide || writes(&p.transform, Place::Color) {
+        return refuse("writes no colour and hides nothing");
+    }
+    if !s.state.is_empty() {
+        return refuse("keeps no state");
+    }
+    let prefix: &'static str = Box::leak(format!("{name}_").into_boxed_str());
+    let shape = VariationShape { ids: true, color: true, ..s };
+    let m = variation_module(p, &shape, ", xform_id: u32, variation_id: u32, vc: ptr<function, f32>", false, false, prefix);
+    // What a flame's prelude alone defines, by name: the weight and the
+    // affine (`transforms[...]`), the RNG, state, the 4th coordinate, the
+    // palette, emissions, the camera.
+    for (needle, what) in [
+        ("transforms[", "reads no weight or affine (`ctx.weight`, `ctx.a` ...)"),
+        ("rng_next", "draws no random numbers"),
+        ("_state(", "keeps no state"),
+        ("point_w", "reads no 4th coordinate"),
+        ("palette_", "reads no palette or texture"),
+        ("texture", "reads no palette or texture"),
+        ("emit_", "emits no points"),
+        ("params.", "reads no camera"),
+    ] {
+        if m.contains(needle) {
+            return refuse(what);
+        }
+    }
+    Ok(format!("{m}\nfn {name}(v: vec2<f32>, base: u32, branch: f32) -> vec2<f32> {{\n    var vc = branch;\n    return {prefix}variation_2d(v, base, 0u, &vc);\n}}\n"))
+}
+
+/// [`inverse_kernel`]'s WGSL is a valid module beside the one function the
+/// mode D shader gives it, `get_param`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn validate_inverse_kernel(wgsl: &str) -> Result<(), String> {
+    validate_module(&format!("fn get_param(xform_id: u32, variation_id: u32, slot: u32) -> f32 {{\n    return f32(xform_id + variation_id + slot);\n}}\n{wgsl}"))
+}
+
 /// A variation's `prepare` as the init pass runs it (a built-in's
 /// `wgsl_init`): `fn init_<name>(user: array<f32, N>) -> array<f32, M>`,
 /// its parameters read from `user`, the values the body reads written to

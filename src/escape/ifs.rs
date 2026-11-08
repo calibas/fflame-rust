@@ -192,6 +192,7 @@ fn ifs_bubble_scale(r2: f32, branch: f32) -> f32 {
 
 fn ifs_kernel_inverse(i: u32, v: vec2<f32>) -> vec2<f32> {
     let kind = ifs_maps[i].kind;
+//__IFS_USER_INVERSE__
     let r2 = dot(v, v);
     if (kind == 1.0) {
         let n = ifs_maps[i].params.x;
@@ -251,6 +252,7 @@ fn ifs_kernel_inverse(i: u32, v: vec2<f32>) -> vec2<f32> {
 // derivative passes through zero there (see Kernel::local_sigma_factor).
 fn ifs_kernel_sigma(i: u32, v: vec2<f32>) -> f32 {
     let kind = ifs_maps[i].kind;
+//__IFS_USER_SIGMA__
     let r2 = max(dot(v, v), 1e-30);
     if (kind == 1.0) {
         return pow(sqrt(r2), 1.0 - abs(ifs_maps[i].params.x) / ifs_maps[i].params.y);
@@ -293,6 +295,7 @@ fn ifs_kernel_sigma(i: u32, v: vec2<f32>) -> f32 {
 // hemisphere and disc (kinds 3, 4, 5).
 fn ifs_image_gap(i: u32, p: vec2<f32>) -> f32 {
     let kind = ifs_maps[i].kind;
+//__IFS_USER_GAP__
     let hole = ifs_maps[i].params.w;
     // An inversion's image has a hole about the pole; a point inside
     // it is a known distance from the piece, and is exactly the point
@@ -2885,6 +2888,7 @@ pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfi
             colour: Vec::new(),
         },
         xaos: vec![0.0; 4],
+        user: UserKernels::default(),
         solid: Some((ifs3, Vec::new())),
     }
 }
@@ -3414,6 +3418,9 @@ pub struct PackedIfs {
     /// branches -- the packed address is a base-N fraction and loses
     /// the tail.
     pub measure: crate::scene::ifs_estimate::MeasureMaps,
+    /// The flame's user kernels: their inverses' WGSL, which the shader
+    /// splices, and their values, which ride at the end of `xaos`.
+    pub user: UserKernels,
     /// The SOLID analysis and its rows, when the flame also qualifies
     /// in three dimensions.
     ///
@@ -3443,6 +3450,9 @@ pub fn packed_bytes_eq(a: Option<&PackedIfs>, b: Option<&PackedIfs>) -> bool {
             bytemuck::bytes_of(&x.globals) == bytemuck::bytes_of(&y.globals)
                 && bytemuck::cast_slice::<IfsMapGpu, u8>(&x.rows)
                     == bytemuck::cast_slice::<IfsMapGpu, u8>(&y.rows)
+                // A user kernel's values change in `xaos` alone: its rows
+                // name a function and an offset, not the numbers.
+                && bytemuck::cast_slice::<f32, u8>(&x.xaos) == bytemuck::cast_slice::<f32, u8>(&y.xaos)
         }
         _ => false,
     }
@@ -3505,9 +3515,75 @@ pub fn pack_flame(
     let mut globals = [[0.0f32; 4]; 4];
     pack_globals(&ifs, &mut globals);
     let measure = crate::scene::ifs_estimate::MeasureMaps::of(&ifs, flame);
-    let rows = pack_maps(&ifs, &colors, Some(&measure));
-    let xaos = pack_xaos(&ifs, &measure);
-    Ok(PackedIfs { globals, rows, ifs, colors, measure, xaos, solid })
+    let mut rows = pack_maps(&ifs, &colors, Some(&measure));
+    let mut xaos = pack_xaos(&ifs, &measure);
+    // The user kernels' values behind the graph, so no binding is added
+    // for them (a browser counts every storage buffer): their rows'
+    // offsets move past it.
+    let user = user_kernels(&ifs);
+    if !user.params.is_empty() {
+        let base = xaos.len().max(4) as f32;
+        xaos.resize(xaos.len().max(4), 0.0);
+        for r in rows.iter_mut().filter(|r| r.kind == 8.0) {
+            r.params[1] += base;
+        }
+        xaos.extend_from_slice(&user.params);
+    }
+    Ok(PackedIfs { globals, rows, ifs, colors, measure, xaos, user, solid })
+}
+
+/// The flame's user kernels as mode D's shader takes them
+/// (docs/projects/rhai-planners.md, B1): each distinct inverse a
+/// function of its own, `ifs_user_inv{f}`, and each kernel's packed
+/// values (`UserKernel::packed`) in one block, at an offset its rows
+/// carry.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UserKernels {
+    /// `(key, wgsl, gap)` of each inverse, in first use: function `f` is
+    /// the `f`th; its WGSL holds its image gap's function too when `gap`.
+    pub functions: Vec<(String, String, bool)>,
+    /// Every kernel's values, one after another.
+    pub params: Vec<f32>,
+    /// Each kernel's slot, function and offset into `params`.
+    slots: Vec<(u32, u32, u32)>,
+}
+
+impl UserKernels {
+    /// The function and the offset of the kernel in `slot`.
+    pub fn at(&self, slot: u32) -> (u32, u32) {
+        self.slots.iter().find(|s| s.0 == slot).map_or((0, 0), |s| (s.1, s.2))
+    }
+
+    /// The pipeline's identity for these functions: their keys.
+    pub fn key(&self) -> String {
+        self.functions.iter().map(|(k, _, _)| k.as_str()).collect::<Vec<_>>().join(",")
+    }
+}
+
+/// [`UserKernels`] for `ifs`, in map order.
+pub fn user_kernels(ifs: &Ifs2) -> UserKernels {
+    use crate::scene::ifs_analysis::Kernel;
+    let mut u = UserKernels::default();
+    for m in &ifs.maps {
+        let Some(Kernel::User { slot }) = m.inverse.nonlinear().map(|n| n.kernel) else { continue };
+        if u.slots.iter().any(|s| s.0 == slot) {
+            continue;
+        }
+        let kernel = crate::variations::user_inverse::kernel(slot);
+        let key = &kernel.inverse.key;
+        let f = match u.functions.iter().position(|(k, _, _)| k == key) {
+            Some(f) => f,
+            None => {
+                let gap = kernel.inverse.gap.as_ref().map(|(_, w)| w.as_str());
+                let wgsl = format!("{}{}", kernel.inverse.wgsl, gap.unwrap_or(""));
+                u.functions.push((key.clone(), wgsl, gap.is_some()));
+                u.functions.len() - 1
+            }
+        };
+        u.slots.push((slot, f as u32, u.params.len() as u32));
+        u.params.extend_from_slice(&kernel.packed);
+    }
+    u
 }
 
 /// The six kernels' inverse Jacobians, and the map-level composition,
@@ -3559,6 +3635,7 @@ fn ifs_bubble_dscale(r2: f32, branch: f32) -> f32 {
 // The kernel's inverse Jacobian at v, along the row's branch.
 fn ifs_kernel_jacobian(i: u32, v: vec2<f32>) -> mat2x2<f32> {
     let kind = ifs_maps[i].kind;
+//__IFS_USER_JACOBIAN__
     let r2 = dot(v, v);
     if (kind == 1.0) {
         // root: u = |v|^m e^{i n arg v}, m = |n|/d. In the radial and
@@ -6337,6 +6414,7 @@ pub fn pack_maps(
 ) -> Vec<IfsMapGpu> {
     let m4 = |a: &Affine2| [a.m[0][0] as f32, a.m[0][1] as f32, a.m[1][0] as f32, a.m[1][1] as f32];
     let t2 = |a: &Affine2| [a.t[0] as f32, a.t[1] as f32];
+    let user = user_kernels(ifs);
     ifs.maps
         .iter()
         .enumerate()
@@ -6416,6 +6494,14 @@ pub fn pack_maps(
                         Kernel::Hemisphere => (4.0, [0.0, 0.0, gap, 0.0]),
                         Kernel::Disc => (5.0, [0.0, 0.0, gap, 0.0]),
                         Kernel::Blob { high, low, waves } => (6.0, [high as f32, low as f32, waves as f32, 0.0]),
+                        // A Rhai variation's own inverse: x its function,
+                        // y where its values start in the user block
+                        // (`user_kernels`; `pack_flame` moves it past the
+                        // xaos graph the block rides behind).
+                        Kernel::User { slot } => {
+                            let (f, at) = user.at(slot);
+                            (8.0, [f as f32, at as f32, gap, 0.0])
+                        }
                         Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } | Kernel::Root { mirror: true, .. } => {
                             unreachable!("analyse_2d refuses the walk's own kernels (Kernel::walk_only)")
                         }
@@ -6458,6 +6544,10 @@ pub fn pack_maps(
                         Kernel::Blob { high, low, waves } => {
                             (6.0, [high as f32, low as f32, waves as f32, 0.0])
                         }
+                        // A user kernel summed with an affine is B2's
+                        // (docs/projects/rhai-planners.md): the analysis
+                        // refuses it until then.
+                        Kernel::User { .. } => unreachable!("analyse_2d refuses a user kernel in a sum"),
                         Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } | Kernel::Root { mirror: true, .. } => {
                             unreachable!("analyse_2d refuses the walk's own kernels (Kernel::walk_only)")
                         }
@@ -7378,6 +7468,7 @@ mod tests {
             rows: pack_maps(&ifs, &colors, None),
             ifs: ifs.clone(),
             colors,
+            user: UserKernels::default(),
             solid: None,
         };
         pack_globals(&ifs, &mut packed.globals);
@@ -9645,6 +9736,195 @@ mod gpu_tests {
         fl.transforms[0].set_variation_param("blob", "low", 0.5);
         fl.transforms[0].set_variation_param("blob", "waves", 5.0);
         fl
+    }
+
+    /// The flame with the built-in `name` replaced by its Rhai twin,
+    /// which it carries: the twin's key in every transform's weights,
+    /// order and parameters.
+    fn twin_flame(flame: &Flame, name: &str) -> Flame {
+        let key = crate::variations::twins::key(name).expect("a twin");
+        let mut f = flame.clone();
+        for t in &mut f.transforms {
+            if let Some(w) = t.variations.remove(name) {
+                t.variations.insert(key.clone(), w);
+            }
+            for v in &mut t.variation_order {
+                if v == name {
+                    *v = key.clone();
+                }
+            }
+            let params: Vec<(String, f32)> = t.variation_params.drain().collect();
+            for (k, v) in params {
+                let k = match k.strip_prefix(&format!("{name}.")) {
+                    Some(rest) => format!("{key}.{rest}"),
+                    None => k,
+                };
+                t.variation_params.insert(k, v);
+            }
+        }
+        f.custom_variations = vec![crate::variations::twins::carried(name).expect("a twin")];
+        f
+    }
+
+    /// **A twin's own Rhai inverse renders the Flame Attractor**
+    /// (docs/projects/rhai-planners.md, B1). With no twin borrowing its
+    /// built-in's kernel on this thread, each twin with an inverse
+    /// analyses to user kernels (`Kernel::User`) -- compiled, checked
+    /// against its forward map at the flame's parameters -- and the
+    /// shader draws them through the spliced inverse:
+    ///
+    /// - where the built-in renders in mode D, the twin's picture is the
+    ///   built-in's, pixel for pixel within f32's reach;
+    /// - where the built-in is the walk's alone (`Kernel::walk_only`:
+    ///   juliascope, elliptic, splits, cylinder), the twin renders, and
+    ///   agrees with its own CPU reference walk.
+    ///
+    /// `INVERSE_TWINS=a,b` runs those alone.
+    #[test]
+    #[ignore = "needs a GPU; registers the twins"]
+    fn a_twins_own_inverse_renders_the_flame_attractor() {
+        use crate::scene::ifs_analysis::{analyse_2d, Kernel};
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        let only: Option<Vec<String>> = std::env::var("INVERSE_TWINS").ok().map(|v| v.split(',').map(str::to_string).collect());
+        let mut julian = kernel_flame(vec![("julian", [1.0, 0.0, 0.0, 1.0, -0.3, 0.1], 1.0, 0.3)]);
+        julian.transforms[0].set_variation_param("julian", "power", 3.0);
+        let mut scope = kernel_flame(vec![("juliascope", [1.0, 0.0, 0.0, 1.0, -0.25, -0.2], 1.0, 0.3)]);
+        scope.transforms[0].set_variation_param("juliascope", "power", 2.0);
+        let cases: Vec<(&str, Flame)> = vec![
+            ("bubble", bubble_ifs_flame()),
+            ("spherical", spherical_ifs_flame()),
+            ("hemisphere", hemisphere_ifs_flame()),
+            ("disc", disc_ifs_flame()),
+            ("blob", blob_ifs_flame()),
+            ("julia", julia_ifs_flame([-0.4, 0.3])),
+            ("julian", julian),
+            ("juliascope", scope),
+            ("elliptic", kernel_flame(vec![("elliptic", [0.6, 0.2, -0.2, 0.6, 0.0, 0.0], 0.8, 0.3), ("linear", [0.5, 0.0, 0.0, 0.5, 0.4, 0.3], 1.0, 0.8)])),
+            ("splits", kernel_flame(vec![("splits", [0.45, 0.1, -0.1, 0.45, 0.0, 0.0], 1.0, 0.3), ("linear", [0.5, 0.0, 0.0, 0.5, 0.5, -0.4], 1.0, 0.8)])),
+            ("cylinder", kernel_flame(vec![("cylinder", [0.5, 0.2, -0.2, 0.5, 0.0, 0.0], 0.9, 0.3), ("linear", [0.5, 0.0, 0.0, 0.5, 0.3, 0.4], 1.0, 0.8)])),
+        ];
+        let mut failures = Vec::new();
+        for (name, builtin) in cases {
+            if only.as_ref().is_some_and(|o| !o.iter().any(|x| x == name)) {
+                continue;
+            }
+            let twin = twin_flame(&builtin, name);
+            crate::variations::custom::ensure(&twin);
+            let guard = global_registry();
+            let ifs_t = match analyse_2d(&twin, &guard) {
+                Ok(ifs) => ifs,
+                Err(e) => {
+                    failures.push(format!("{name}: the twin does not qualify: {}", e.iter().map(|d| d.describe(&guard)).collect::<Vec<_>>().join("; ")));
+                    continue;
+                }
+            };
+            let ifs_b = analyse_2d(&builtin, &guard).ok();
+            drop(guard);
+            assert!(
+                ifs_t.maps.iter().any(|m| matches!(m.inverse.nonlinear().map(|n| n.kernel), Some(Kernel::User { .. }))),
+                "{name}: the twin's maps are not its own inverse's"
+            );
+            // Framed on the twin's ball (the built-in's, where it has one,
+            // is the same ball by the same sampling).
+            let frame = |flame: Flame| {
+                let mut c = config_for(flame);
+                c.escape.center_re = format!("{}", ifs_t.ball.centre[0]);
+                c.escape.center_im = format!("{}", plane_im(ifs_t.ball.centre[1]));
+                c.escape.zoom_log2 = (4.0 / (ifs_t.ball.radius * 2.4)).log2();
+                c
+            };
+            // How well a picture agrees with a CPU reference walk: of the
+            // pixels the reference puts on the set (within a quarter
+            // pixel) or well off it (past three), the share the picture
+            // lights or leaves dark accordingly, cut halfway between the
+            // two means.
+            let agreement = |ifs: &crate::scene::ifs_analysis::Ifs2, rgba: &[u8]| -> (usize, usize, f64, f64, f64) {
+                let span = ifs_t.ball.radius * 2.4;
+                let px = span / H as f64;
+                let plane = |x: u32, y: u32| -> [f64; 2] {
+                    let u = (x as f64 + 0.5) / W as f64 - 0.5;
+                    let v = (y as f64 + 0.5) / H as f64 - 0.5;
+                    [ifs_t.ball.centre[0] + u * span * W as f64 / H as f64, ifs_t.ball.centre[1] + v * span]
+                };
+                let (mut inside, mut outside) = (Vec::new(), Vec::new());
+                for y in 0..H {
+                    for x in 0..W {
+                        let d = estimate(ifs, plane(x, y), LEVELS, BEAM).distance;
+                        if d < 0.25 * px {
+                            inside.push(brightness(rgba, x, y));
+                        } else if d > 3.0 * px {
+                            outside.push(brightness(rgba, x, y));
+                        }
+                    }
+                }
+                let mean = |v: &Vec<f64>| v.iter().sum::<f64>() / v.len().max(1) as f64;
+                let (mi, mo) = (mean(&inside), mean(&outside));
+                let cut = (mi + mo) * 0.5;
+                let lit_in = inside.iter().filter(|&&b| b > cut).count();
+                let lit_out = outside.iter().filter(|&&b| b > cut).count();
+                let agree = (lit_in + (outside.len() - lit_out)) as f64 / (inside.len() + outside.len()).max(1) as f64;
+                (inside.len(), outside.len(), agree, mi, mo)
+            };
+            let got = render(&frame(twin.clone()));
+            let (ni, no, agree, mi, mo) = agreement(&ifs_t, &got);
+            if ni < 50 || no < 500 || mi <= mo {
+                failures.push(format!("{name}: interior {ni} exterior {no} (means {mi:.3} / {mo:.3})"));
+            }
+            match ifs_b {
+                Some(ifs_b) => {
+                    let want = render(&frame(builtin.clone()));
+                    if let Ok(dir) = std::env::var("INVERSE_TWINS_PNG") {
+                        let _ = std::fs::create_dir_all(&dir);
+                        let _ = image::save_buffer(format!("{dir}/{name}-builtin.png"), &want, W, H, image::ColorType::Rgba8);
+                        let _ = image::save_buffer(format!("{dir}/{name}-twin.png"), &got, W, H, image::ColorType::Rgba8);
+                    }
+                    // The built-in's own picture against the same
+                    // reference: the twin must do as well, to a point.
+                    let (_, _, agree_b, _, _) = agreement(&ifs_t, &want);
+                    let differ = (0..W * H).filter(|&i| (brightness(&got, i % W, i / W) - brightness(&want, i % W, i / W)).abs() > 0.1).count();
+                    // The CPU walks, where the two balls are one ball
+                    // (a many-valued forward map's is sampled along arms
+                    // numbered otherwise, and comes out a little apart).
+                    let same_ball = (ifs_b.ball.radius - ifs_t.ball.radius).abs() <= 1e-9 * ifs_b.ball.radius;
+                    let mut worst_cpu = 0.0f64;
+                    if same_ball {
+                        for k in 0..64 {
+                            let (a, r) = (k as f64 * 2.399963, ifs_b.ball.radius * ((k as f64 + 0.5) / 64.0).sqrt());
+                            let q = [ifs_b.ball.centre[0] + r * a.cos(), ifs_b.ball.centre[1] + r * a.sin()];
+                            let (db, dt) = (estimate(&ifs_b, q, LEVELS, BEAM).distance, estimate(&ifs_t, q, LEVELS, BEAM).distance);
+                            worst_cpu = worst_cpu.max((db - dt).abs() / ifs_b.ball.radius);
+                        }
+                    }
+                    println!(
+                        "  {name}: {} maps, ball {:.4} (built-in {:.4}); agrees with the reference {:.1}% (built-in {:.1}%); CPU walks {worst_cpu:.1e}; {differ} pixels differ",
+                        ifs_t.maps.len(),
+                        ifs_t.ball.radius,
+                        ifs_b.ball.radius,
+                        agree * 100.0,
+                        agree_b * 100.0
+                    );
+                    if agree < (agree_b - 0.01).min(0.97) {
+                        failures.push(format!("{name}: agrees {agree:.3} with the reference, the built-in {agree_b:.3}"));
+                    }
+                    // Spherical's twin keeps its 1e-6 and has no hole to
+                    // score (`hole_radius`), so its walk is its own.
+                    if same_ball && worst_cpu > 1e-4 && name != "spherical" {
+                        failures.push(format!("{name}: the CPU walks differ by {worst_cpu:.2e} of the ball"));
+                    }
+                    if !same_ball && (ifs_b.ball.radius - ifs_t.ball.radius).abs() > 0.05 * ifs_b.ball.radius {
+                        failures.push(format!("{name}: balls {:.5} / {:.5}", ifs_t.ball.radius, ifs_b.ball.radius));
+                    }
+                }
+                None => {
+                    println!("  {name} (walk-only built-in): {} maps, ball {:.4}; agrees with the reference {:.1}% (interior {ni} / exterior {no})", ifs_t.maps.len(), ifs_t.ball.radius, agree * 100.0);
+                    if agree < 0.97 {
+                        failures.push(format!("{name}: agrees {agree:.3} with the reference"));
+                    }
+                }
+            }
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// A bounded julia set, as a flame: `julia` after a translation by
