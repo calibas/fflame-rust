@@ -363,8 +363,14 @@ fn body_for(name: &str) -> Option<&'static Body> {
     }
 
     let built = (|| {
-        use crate::probe::batch::{builtin_targets, Batch};
-        let target = builtin_targets().into_iter().find(|t| t.name == name)?;
+        use crate::probe::batch::{builtin_targets, Batch, Target};
+        // A shipped variation, or one of the user's registered (a Rhai
+        // variation): its compiled body, in a probe module as a built-in's.
+        let target = builtin_targets().into_iter().find(|t| t.name == name).or_else(|| {
+            let reg = crate::variations::global_registry();
+            let info = reg.get(name).filter(|i| !i.provenance.is_builtin())?;
+            Some(Target { name: info.name.clone(), slots: info.slot_count(), needs_init: info.init_param_count > 0, phase: info.phase.clone() })
+        })?;
         let slots = target.slots;
         let batch = Batch { targets: vec![target], slots };
         let src = crate::probe::shader::build(&batch, false);
@@ -399,6 +405,38 @@ static INITS: std::sync::OnceLock<
 > = std::sync::OnceLock::new();
 
 fn init_module(name: &str) -> Option<(&'static naga::Module, naga::Handle<naga::Function>)> {
+    if let Some(hit) = builtin_init_module(name) {
+        return Some(hit);
+    }
+    custom_init_module(name)
+}
+
+/// A user's variation's init (a Rhai variation's `prepare`), parsed once
+/// per key -- a key is its source's, so an edit is another.
+fn custom_init_module(name: &str) -> Option<(&'static naga::Module, naga::Handle<naga::Function>)> {
+    static CUSTOM: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Option<&'static (naga::Module, naga::Handle<naga::Function>)>>>> =
+        std::sync::OnceLock::new();
+    let cache = CUSTOM.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().ok()?.get(name) {
+        return hit.map(|(m, h)| (m, *h));
+    }
+    let built = (|| {
+        let src = crate::variations::global_registry().get(name).filter(|i| !i.provenance.is_builtin())?.wgsl_source_init.clone()?;
+        // The init pass splices complex.wgsl in beside it (`build_init_shader`).
+        let module = naga::front::wgsl::parse_str(&format!("{}\n{src}", include_str!("../../shaders/core/complex.wgsl")))
+            .or_else(|_| naga::front::wgsl::parse_str(&src))
+            .ok()?;
+        let want = format!("init_{name}");
+        let handle = module.functions.iter().find(|(_, f)| f.name.as_deref() == Some(want.as_str())).map(|(h, _)| h)?;
+        Some(&*Box::leak(Box::new((module, handle))))
+    })();
+    if let Ok(mut c) = cache.lock() {
+        c.insert(name.to_string(), built);
+    }
+    built.map(|(m, h)| (m, *h))
+}
+
+fn builtin_init_module(name: &str) -> Option<(&'static naga::Module, naga::Handle<naga::Function>)> {
     let map = INITS.get_or_init(|| {
         let mut out = std::collections::HashMap::new();
         for def in crate::variations::defs::ALL_VARIATIONS {
@@ -546,7 +584,26 @@ fn derive_box_branched(
 ) -> Result<[Interval; 2], Refusal> {
     // An unedited twin is its built-in: its body, its parameters and its
     // derived slots (`twins::planner_name`).
-    let name = super::twins::planner_name(name);
+    evaluate(super::twins::planner_name(name), params, weight, input, branch)
+}
+
+/// [`derive`] of the variation `name`'s own body, not an unedited twin's
+/// built-in's: what a twin's compiled code derives (the corpus measure).
+#[cfg(test)]
+pub(crate) fn derive_own(name: &str, params: ParamFn, weight: f64, ball: Ball) -> Result<Ball, Refusal> {
+    let cell = [Interval::new(ball.c[0] - ball.r, ball.c[0] + ball.r), Interval::new(ball.c[1] - ball.r, ball.c[1] + ball.r)];
+    box_to_disc(evaluate(name, params, weight, cell, None)?)
+}
+
+/// The body of the variation registered as `name`, through the interval
+/// evaluator.
+fn evaluate(
+    name: &str,
+    params: ParamFn,
+    weight: f64,
+    input: [Interval; 2],
+    branch: Option<Branch>,
+) -> Result<[Interval; 2], Refusal> {
     let body = body_for(name).ok_or(Refusal::NoBody)?;
     let module = &body.module;
     let func = &module.functions[body.handle];
@@ -578,6 +635,55 @@ fn derive_box_branched(
         return Err(Refusal::Shape("body did not return a vector"));
     }
     Ok([lanes[0], lanes[1]])
+}
+
+/// Whether two expressions are the same value: one handle, or the same
+/// argument, constant or variable read through the same parts (`z.x *
+/// z.x`, the formula language's squared norm). Two loads of one variable
+/// in one expression see one value: an expression stores nothing.
+fn same_value(func: &naga::Function, a: naga::Handle<naga::Expression>, b: naga::Handle<naga::Expression>) -> bool {
+    use naga::Expression as E;
+    if a == b {
+        return true;
+    }
+    match (&func.expressions[a], &func.expressions[b]) {
+        (E::FunctionArgument(x), E::FunctionArgument(y)) => x == y,
+        (E::LocalVariable(x), E::LocalVariable(y)) => x == y,
+        (E::GlobalVariable(x), E::GlobalVariable(y)) => x == y,
+        (E::Constant(x), E::Constant(y)) => x == y,
+        (E::Load { pointer: x }, E::Load { pointer: y }) => same_value(func, *x, *y),
+        (E::AccessIndex { base: x, index: i }, E::AccessIndex { base: y, index: j }) => i == j && same_value(func, *x, *y),
+        _ => false,
+    }
+}
+
+/// The formula language's `max` and `min`: `if (a > b) { b = a; }` with no
+/// `else` (and its mirrors `b < a`, and `<` for `min`) -- the variable
+/// `b` is, the condition's load of it, the other operand, and whether it
+/// is the max.
+fn as_extremum(
+    func: &naga::Function,
+    condition: naga::Handle<naga::Expression>,
+    accept: &naga::Block,
+    reject: &naga::Block,
+) -> Option<(naga::Handle<naga::Expression>, naga::Handle<naga::Expression>, naga::Handle<naga::Expression>, bool)> {
+    use naga::{BinaryOperator as B, Expression as E, Statement as S};
+    let real = |b: &naga::Block| b.iter().filter(|s| !matches!(s, S::Emit(_))).cloned().collect::<Vec<_>>();
+    if !real(reject).is_empty() {
+        return None;
+    }
+    let [S::Store { pointer, value }] = real(accept)[..] else { return None };
+    let E::Binary { op, left, right } = func.expressions[condition] else { return None };
+    // The variable's own load on one side, the stored value on the other.
+    let held = |h: naga::Handle<naga::Expression>| matches!(func.expressions[h], E::Load { pointer: p } if same_value(func, p, pointer));
+    let (load, other, greater) = match op {
+        B::Greater | B::GreaterEqual if held(right) && same_value(func, left, value) => (right, left, true),
+        B::Less | B::LessEqual if held(right) && same_value(func, left, value) => (right, left, false),
+        B::Less | B::LessEqual if held(left) && same_value(func, right, value) => (left, right, true),
+        B::Greater | B::GreaterEqual if held(left) && same_value(func, right, value) => (left, right, false),
+        _ => return None,
+    };
+    Some((pointer, load, other, greater))
 }
 
 /// A condition's value, where the evaluator can tell.
@@ -814,6 +920,23 @@ impl<'a> Eval<'a> {
                     Flow::Fell => {}
                     other => return Ok(other),
                 },
+                naga::Statement::If { condition, accept, reject } if as_extremum(func, *condition, accept, reject).is_some() => {
+                    // `if (a > b) { b = a; }`: `b = max(b, a)`, as the
+                    // formula language writes Rhai's `max` (a test and an
+                    // assignment, for its NaN rule) -- exactly the max on
+                    // ranges, where joining the two arms loses the guard
+                    // (`max(|y|, 1e-20)` reached zero, a pole).
+                    let (pointer, load, other, max) = as_extremum(func, *condition, accept, reject).expect("matched");
+                    let held = self.expr(func, load, frame)?;
+                    let o = self.expr(func, other, frame)?;
+                    let (h, o) = (held.lanes()?, o.lanes()?);
+                    let pick = |x: Interval, y: Interval| {
+                        if max { Interval::new(x.lo.max(y.lo), x.hi.max(y.hi)) } else { Interval::new(x.lo.min(y.lo), x.hi.min(y.hi)) }
+                    };
+                    let lanes: Vec<Interval> = (0..h.len().max(o.len())).map(|i| pick(*h.get(i).unwrap_or(&h[0]), *o.get(i).unwrap_or(&o[0]))).collect();
+                    let v = if lanes.len() == 1 { IVal::Scalar(lanes[0]) } else { IVal::Vec(lanes) };
+                    self.store(func, pointer, v, frame)?;
+                }
                 naga::Statement::If { condition, accept, reject } => {
                     let c = self.expr(func, *condition, frame)?;
                     match as_bool(&c) {
@@ -1269,7 +1392,7 @@ impl<'a> Eval<'a> {
                 // a pole that does not exist. Recognising the
                 // identical operand costs one handle comparison and
                 // removes that whole class of false refusal.
-                if matches!(op, naga::BinaryOperator::Multiply) && left == right {
+                if matches!(op, naga::BinaryOperator::Multiply) && same_value(func, *left, *right) {
                     self.map_lanes(&a, |x| square(x))?
                 } else {
                     let b = self.expr(func, *right, frame)?;
