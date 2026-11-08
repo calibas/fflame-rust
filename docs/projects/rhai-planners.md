@@ -1,8 +1,9 @@
 # Rhai variations in Focused Rendering and the Flame Attractor
 
-Status: **Part A step 1 built** (2026-11-08, branch `rhai-planners`);
-the rest planned. The user (2026-11-08): both features compatible with
-Rhai scripts.
+Status: **Part A steps 1-2 built** (2026-11-08, branch `rhai-planners`):
+every twin whose built-in derives a bound derives one from its own code;
+Part B in progress. The user (2026-11-08): both features compatible with
+Rhai scripts; decisions 1-3 below taken as proposed, all phases.
 
 ## Why a Rhai variation does not work in them
 
@@ -50,24 +51,51 @@ own script, has neither.
   (`derived_bounds_contain_the_real_wgsl`: 542 derived bounds, each
   containing what the shipped WGSL computes at sampled points).
 
+### Built (step 2: soundness, and the 32)
+
+- **Soundness for Rhai bodies.** `BOUNDS_TWINS=1` runs the gate over
+  every twin's own compiled body as well (`derive_own`).
+- **What refused, and what the evaluator does now** (each a rule that
+  holds for built-ins too):
+  - **An opaque value is carried, not refused** (the `glsl_*` family,
+    which loads its direct colour `(*vrc).xyz` into locals at the top):
+    arithmetic, parts, casts and joins of an opaque give an opaque;
+    a condition on one is undecided (both arms); it refuses where it
+    reaches the returned point, a parameter slot, or a rule that needs a
+    number. Writes through an opaque pointer, lane by lane, are dropped.
+  - **A pole or a domain exit is an opaque too**, refused by its own
+    name where it reaches the point (`lost`, `found`): ten twins divided
+    by a range through zero in a computation the point never read.
+  - **Per-thread state is opaque** (`get_state`): littlewood's colour
+    register, read at the top of its twin.
+  - **A local unwritten on one path joins as its type's zero** (a
+    `bool` as `false`, a vector lane-wise), not the number 0 (the crop
+    family's flags); a vector against a scalar joins lane-wise.
+  - **`floor`, `ceil`, `round`, `trunc` are exact**, not widened, so a
+    `to_float` of a whole number stays one and `power != 1.0` decides
+    (murl's prepare).
+  - **`+ - * /` widen each end by its own magnitude** (`round_out`;
+    correctly rounded, so the least rounded result is within an ulp of
+    the least exact one), and no `sqrt` is below zero: by the larger end,
+    `sqrt(r2) + 1e-6` reached below zero (mobiusN).
+  - **Casts by their target type** (`cast`), and **an integer division
+    truncates** (by naga's own expression types, `is_integer`). The gate
+    caught this one: lazysensen's parity `n - (n / 2) * 2` read `1 / 2`
+    as 0.5 once `floor` stopped widening; it had passed by the widening's
+    luck.
+  - **The language's helpers by their own rules**: a trig of
+    `uf_reduce(t)` is a trig of `t` (bMod's `cos` lost what `sigma`
+    knew), and `uf_powf` (Rhai's `pow`, signed at a whole exponent) as
+    its arms are, not through its IR (synth).
+- **Measured** (`measure_derived_bounds_of_twins`): of the 472 twins
+  whose built-in derives, **472 derive**, and 2 more whose built-in does
+  not; 470 built-ins derive at that disc (433 before step 2).
+- **The gates pass:** built-ins, 566 bodies, 484,053 shader evaluations;
+  with the twins (`BOUNDS_TWINS=1`), 1,130 bodies, 961,383 evaluations,
+  all inside their discs.
+
 ### To do
 
-1. **Soundness for Rhai bodies.** The gate checks built-ins. Run it over
-   the twins' compiled bodies too (ignored, as it registers them): a
-   wrong interval rule for a pattern only the language emits would
-   otherwise go unseen, and a bound too small drops part of the picture
-   silently.
-2. **The 32 twins that refuse where their built-ins derive**, by reason:
-   - 11 do arithmetic on an opaque argument (the `glsl_*` family):
-     find what is opaque (likely a direct-colour pointer or the weight)
-     and model it;
-   - 9 divide by a range containing zero (bMod, the cut family, jubiQ,
-     murl): check whether each guard is one the evaluator could read;
-   - 9 join values of different shapes (the crop family, polarplot2d_wf,
-     truchet, w): an `if` whose arms give a vector and a scalar, or two
-     vector kinds;
-   - 2 a `pow` of a negative base (mobiusN, synth), 1 reads per-thread
-     state (littlewood, refused for built-ins too).
 3. **Many-valued Rhai variations.** julian's and juliascope's bounds
    pin their random arm by rewriting the built-in's WGSL text
    (`bound::force_arms`), which a Rhai body is not, so an edited twin of
@@ -142,8 +170,8 @@ fn inverse(z, p, branch) { ... }   // the preimage on branch 0 .. n-1
 
 ## Order of work
 
-A1 (soundness for Rhai bodies), A2 (the 32), then B1, B1's twins, B2,
-B3; A3 if wanted.
+A1 (soundness for Rhai bodies) and A2 (the 32) done; then B1, B1's
+twins, B2, B3; A3.
 
 ## Decisions for the user
 
