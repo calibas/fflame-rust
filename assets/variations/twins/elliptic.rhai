@@ -23,3 +23,19 @@ fn variation(z, p) {
     }
     complex(new_x, new_y)
 }
+
+fn inverse(z, p, branch) {
+    if abs(z.re) > 1.0 {
+        return no_preimage();
+    }
+    let h = 1.5707963267949;
+    let e = exp(abs(z.im) * h) - 1.0;
+    let s = 2.0 * e / (sqrt(1.0 + 4.0 * e) + 1.0);
+    let m = s * s;
+    let y = s * sqrt(m + 2.0) * cos(z.re * h);
+    complex(sin(z.re * h) * (1.0 + m), if z.im < 0.0 { -y } else { y })
+}
+
+fn image_gap(z, p) {
+    abs(z.re) - 1.0
+}

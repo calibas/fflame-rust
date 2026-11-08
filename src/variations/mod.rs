@@ -20,6 +20,8 @@ pub mod analytic_blur;
 pub mod custom;
 // Rhai twins of the built-ins (rhai-plugins P7 steps 3 and 4).
 pub mod twins;
+// A Rhai variation's own inverse, for the Flame Attractor (rhai-planners B1).
+pub mod user_inverse;
 
 use definition::VariationDef;
 pub use definition::{Feature, MAX_ORBIT_LENGTH, ORBIT_LENGTH_PARAM};

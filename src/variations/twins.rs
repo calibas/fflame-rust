@@ -828,12 +828,24 @@ pub fn builtin_of_key(key: &str) -> Option<&'static str> {
     unedited().read().ok()?.get(key).copied()
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Off: no twin borrows its built-in's planner data, so a test on
+    /// this thread reaches a twin's own -- its Rhai inverse
+    /// (`user_inverse`), its own derived bounds.
+    pub(crate) static BORROW: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
 /// The name the deep-zoom planner's tables know the variation `name` by
 /// (`inverse`, `bound`, `derive`): an unedited twin's built-in's, as its
 /// own; anything else its own. Not a many-valued built-in's: the replay
 /// forces its arm in the built-in's WGSL text (`bound::force_arms`),
 /// which a twin's is not, so a twin of one has no planner data.
 pub fn planner_name(name: &str) -> &str {
+    #[cfg(test)]
+    if !BORROW.with(|b| b.get()) {
+        return name;
+    }
     match builtin_of_key(name) {
         Some(b) if super::bound::arms_for(b).is_none() => b,
         _ => name,
@@ -1162,6 +1174,21 @@ mod tests {
     /// WRITER, not a test: `TWIN_SKELETONS=julia,rings2` writes each
     /// one's skeleton to `assets/variations/twins/<name>.rhai`, where none
     /// is yet.
+    /// **The twins' inverses undo their forward maps**
+    /// (docs/projects/rhai-planners.md, B1): the eleven planar kernels'
+    /// own, written by hand (`scripts/twin_inverses.py`), each compiled
+    /// and checked at its defaults (`user_inverse::check`).
+    #[test]
+    fn the_twins_inverses_undo_their_maps() {
+        for name in ["julia", "julian", "juliascope", "spherical", "bubble", "hemisphere", "disc", "blob", "elliptic", "splits", "cylinder"] {
+            match crate::variations::user_inverse::compile(&own(name), name) {
+                Some(Ok(inv)) => assert!(inv.branches >= 1, "{name}"),
+                Some(Err(e)) => panic!("{name}: {e}"),
+                None => panic!("{name} has no inverse"),
+            }
+        }
+    }
+
     /// `TWIN_WGSL_DUMP=a,b`: each twin's compiled 2D and 3D bodies, to
     /// `output/twin-wgsl/<name>-2d.wgsl` and `-3d.wgsl` -- what the
     /// renderer and the bounds' evaluator read.
@@ -1175,6 +1202,9 @@ mod tests {
             let dl = super::super::custom::compile(&own(name)).unwrap();
             std::fs::write(dir.join(format!("{name}-2d.wgsl")), dl.shader_2d.unwrap_or_default()).unwrap();
             std::fs::write(dir.join(format!("{name}-3d.wgsl")), dl.shader_3d.unwrap_or_default()).unwrap();
+            if let Some(Ok(inv)) = crate::variations::user_inverse::compile(&own(name), name) {
+                std::fs::write(dir.join(format!("{name}-inverse.wgsl")), &inv.wgsl).unwrap();
+            }
         }
     }
 

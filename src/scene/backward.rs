@@ -1618,6 +1618,12 @@ impl Backward {
         if ifs.maps.is_empty() {
             return Err("no maps".into());
         }
+        // A Rhai variation's own inverse (`Kernel::User`) serves the
+        // Flame Attractor; the replay this walk's plans run in has no
+        // body for it (docs/projects/rhai-planners.md, B1).
+        if let Some(n) = ifs.maps.iter().find_map(|m| m.forward.nonlinear().filter(|n| matches!(n.kernel, Kernel::User { .. }))) {
+            return Err(format!("{} has its own inverse, which this walk does not take yet", registry.label(&n.kernel.variation())));
+        }
         let mut transforms: Vec<TransformInfo> = Vec::new();
         for (mi, m) in ifs.maps.iter().enumerate() {
             if let Some(t) = transforms.iter_mut().find(|t| t.index == m.transform_index) {

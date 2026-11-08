@@ -38,3 +38,10 @@ fn variation(z, p) {
     let t = (theta + 6.28318530718 * trunc_val) / power;
     complex(r * cos(t), r * sin(t))
 }
+
+fn inverse(z, p, branch) {
+    let power = to_float(p.power);
+    let rr = pow(z.abs(), abs(power) / p.dist);
+    let a = power * atan2(z.im, z.re);
+    complex(rr * cos(a), rr * sin(a))
+}

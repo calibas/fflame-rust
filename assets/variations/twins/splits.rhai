@@ -39,7 +39,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Splits", name: "rhai_splits", category: "advanced_2d", phase: "any" };
+const INFO = #{ title: "Splits", name: "rhai_splits", category: "advanced_2d", phase: "any", inverse_branches: 4 };
 
 fn variation(z, p) {
     let splits_x = p.x;
@@ -51,4 +51,17 @@ fn variation(z, p) {
     let px = (if z.re >= 0.0 { z.re + splits_x } else { z.re - splits_x }) + (if z.im >= 0.0 { ushear } else { -dshear });
     let py = (if z.im >= 0.0 { z.im + splits_y } else { z.im - splits_y }) + (if z.re >= 0.0 { rshear } else { -lshear });
     complex(px, py)
+}
+
+fn inverse(z, p, branch) {
+    let east = (branch & 1) == 1;
+    let north = (branch & 2) == 2;
+    let dx = (if east { p.x } else { -p.x }) + (if north { p.ushear } else { -p.dshear });
+    let dy = (if north { p.y } else { -p.y }) + (if east { p.rshear } else { -p.lshear });
+    let u = complex(z.re - dx, z.im - dy);
+    if (u.re >= 0.0) == east && (u.im >= 0.0) == north {
+        u
+    } else {
+        no_preimage()
+    }
 }

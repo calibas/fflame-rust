@@ -201,6 +201,9 @@ struct Machine<'p> {
     /// from its place on the first draw, as the GPU's `uf_draw`.
     draw: std::cell::Cell<u32>,
     flame_rng: std::cell::Cell<Option<u32>>,
+    /// Every draw this one raw value (`VariationRun::with_draw`): an arm
+    /// of a many-valued map picked rather than drawn.
+    fixed_draw: std::cell::Cell<Option<u32>>,
 }
 
 /// The PCG output of a state (`shaders/core/rng.wgsl` `rng_next`).
@@ -362,6 +365,14 @@ impl<'p> VariationRun<'p> {
         VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], point_w: 0.0, w_out: None }
     }
 
+    /// Every `rand()` of every call `u`, in [0, 1): the arm of a
+    /// many-valued map (julian's root) picked, not drawn
+    /// (`variations::user_inverse::UserInverse::forward_at`).
+    pub fn with_draw(self, u: f64) -> Self {
+        self.m.fixed_draw.set(Some((u.clamp(0.0, 1.0 - 1e-9) * 4294967296.0) as u32));
+        self
+    }
+
     /// Each call given the 4th coordinate `w` (`ctx.w`; the probe's 0).
     pub fn with_w(mut self, w: f64) -> Self {
         self.point_w = w;
@@ -496,7 +507,7 @@ impl<'p> PerturbStepper<'p> {
 
     pub(crate) fn step(&self, z: C64, dz: C64, dpixel: C64) -> C64 {
         let env = Env { pixel: self.reference.add(dpixel), ..self.env };
-        let mut m = Machine { prog: self.formula, params: self.params, vars: self.vars.clone(), arrays: self.arrays.clone(), draw: Default::default(), flame_rng: Default::default() };
+        let mut m = Machine { prog: self.formula, params: self.params, vars: self.vars.clone(), arrays: self.arrays.clone(), draw: Default::default(), flame_rng: Default::default(), fixed_draw: Default::default() };
         let mut sh = Shared::new(&env);
         sh.z = z;
         sh.dz = dz;
@@ -544,7 +555,7 @@ impl DerivStepper {
 
     /// One pass from the iterate `z`.
     pub(crate) fn step(&mut self, z: C64) {
-        let mut m = Machine { prog: &self.prog, params: &self.params, vars: std::mem::take(&mut self.vars), arrays: std::mem::take(&mut self.arrays), draw: Default::default(), flame_rng: Default::default() };
+        let mut m = Machine { prog: &self.prog, params: &self.params, vars: std::mem::take(&mut self.vars), arrays: std::mem::take(&mut self.arrays), draw: Default::default(), flame_rng: Default::default(), fixed_draw: Default::default() };
         let mut sh = Shared::new(&self.env);
         sh.z = z;
         m.exec(&self.prog.loop_body, &mut sh);
@@ -850,6 +861,7 @@ impl<'p> Machine<'p> {
             arrays,
             draw: std::cell::Cell::new(0),
             flame_rng: std::cell::Cell::new(None),
+            fixed_draw: std::cell::Cell::new(None),
         }
     }
 
@@ -861,6 +873,9 @@ impl<'p> Machine<'p> {
 
     /// The next raw draw, all 32 bits ([`Predef::DrawU32`]).
     fn next_u32(&self, sh: &Shared) -> u32 {
+        if let Some(v) = self.fixed_draw.get() {
+            return v;
+        }
         if let Some(s) = self.flame_rng.get() {
             self.flame_rng.set(Some(pcg_step(s)));
             return pcg_out(s);
