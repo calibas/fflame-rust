@@ -842,6 +842,16 @@ mod derived_gate {
             v
         };
 
+        // `BOUNDS_TWINS=1`: every twin registered too, each derived from
+        // its OWN compiled body (`derive_own`) -- a pattern only the formula
+        // language emits checked against what its shader computes
+        // (docs/projects/rhai-planners.md, A1).
+        let twins = std::env::var("BOUNDS_TWINS").is_ok_and(|v| v == "1");
+        if twins {
+            for (_, src) in crate::variations::twins::TWINS {
+                let _ = crate::variations::custom::register(src);
+            }
+        }
         let names: Vec<String> = {
             let reg = crate::variations::global_registry();
             reg.ordered_names.clone()
@@ -858,7 +868,12 @@ mod derived_gate {
             let mut claims: Vec<Ball> = Vec::new();
             for name in &names {
                 let pf = default_params(name);
-                let Ok(claim) = crate::variations::derive::derive(name, &pf, 1.0, *disc) else {
+                let claim = if twins && crate::scripted::is_key(name) {
+                    crate::variations::derive::derive_own(name, &pf, 1.0, *disc)
+                } else {
+                    crate::variations::derive::derive(name, &pf, 1.0, *disc)
+                };
+                let Ok(claim) = claim else {
                     continue;
                 };
                 if !claim.r.is_finite() || claim.r > 1.0e12 {
