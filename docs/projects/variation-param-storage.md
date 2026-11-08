@@ -1,8 +1,8 @@
 # Variation parameter storage: a general-purpose per-transform block
 
 Status: **steps 1-4 built** (2026-11-07, branch
-`variation-param-storage`; *Progress* below); one question for the
-user (below, *Found for step 4*). Follows the variation twins (`rhai-variation-hooks`,
+`variation-param-storage`; *Progress* below). The API notice is in
+[v0.6.0-release.md](v0.6.0-release.md). Follows the variation twins (`rhai-variation-hooks`,
 [rhai-plugins.md](rhai-plugins.md) P7 step 3).
 
 ## Why
@@ -266,9 +266,8 @@ twin retranslates byte-identical.
 **Found for step 4** (the twins): a Rhai array holds at most 8192
 floats and a loop runs at most 4096 times, `prepare`'s included, and
 `prepare` builds its result in the init as locals (three copies of each
-array). A table past 8192 floats takes several arrays; whether
-`prepare`'s arrays get a cap of their own (they run once, in the init
-pass) or are written into the buffer in place is the user's call.
+array). A table past 8192 floats takes several arrays. The user,
+2026-11-07: the cap is fine; expand it later if something needs it.
 
 ## Open questions
 
