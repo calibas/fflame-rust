@@ -49,8 +49,8 @@ buffers. In WGSL terms:
 - **Every Rust struct the GPU reads** is `#[repr(C)]` and
   `bytemuck::Pod + Zeroable`. Small ones derive both; those with arrays
   longer than bytemuck derives for (`GpuTransform`,
-  `GpuVariationParams`, `GpuAttachmentList`, `SubflameMeta`) implement
-  them with `unsafe impl`.
+  `GpuAttachmentList`, `SubflameMeta`) implement them with `unsafe
+  impl`.
 - **Sizes are pinned where a drift would be silent.** A const assertion
   holds `TonemapParams` at 144 bytes, and
   `gpu_transform_std430_size_invariant` holds `GpuTransform` at 592. A
@@ -75,7 +75,7 @@ historical gap in the direct-histogram shader.
 | 2 | `histogram` | `storage, read_write` `array<atomic<u32>>` | `histogram_buffer` | always (`samples` in the sample-emit shader) |
 | 3 | `palette_texture` | `texture_2d<f32>` | `palette_view` | always |
 | 4 | `palette_sampler` | `sampler` (filtering binding) | `FlameBuffers::sampler` (nearest) | always |
-| 5 | `variation_params` | `storage, read` `array<VariationParams>` | `variation_params_buffer` | always |
+| 5 | `variation_params` | `storage, read` `array<f32>` | `variation_params_buffer` | always |
 | 6 | — | — | — | `sample_counter` in the sample-emit shader only |
 | 7 | `path_ids` | `storage, read_write` `array<u32>` | `path_buffer` | PathMap colour mode; else a 4-byte dummy |
 | 8 | `orbits` | `storage, read_write` `array<u32>` | `orbit_buffer` | `PERSISTENT_ORBITS`; else a 64-byte dummy |
@@ -224,10 +224,11 @@ converted from the config's degrees), two pads. Built from
 
 ### Variation parameters
 
-`GpuVariationParams { params: [f32; 1600] }` — 6,400 bytes per
-`xform_id`, `MAX_TRANSFORMS_UNIFIED` of them (2,457,600 bytes), at
-binding 5, laid out in the same slot order as the transform buffer
-(`pack_gpu_variation_params`).
+One flat `array<f32>` at binding 5: a row of `stride` floats an
+`xform_id`, in the same slot order as the transform buffer (the
+parent's transforms from row 0, the subflames' from row
+`MAX_TRANSFORMS`; `pack_gpu_variation_params`, which gives a
+`PackedVariationParams`).
 
 - **Packed per flame.** Each active variation gets
   `parameters.len() + init_param_count` consecutive slots
@@ -235,12 +236,27 @@ binding 5, laid out in the same slot order as the transform buffer
   `scene::transforms::compute_packed_layout`, walking the flame's
   local index map in order. The offsets are the same for every
   transform; a transform without a variation leaves its run at zero.
-  `MAX_VARIATION_PARAM_SLOTS = 1600` caps the sum over the flame's
-  active variations, and `update_variation_params` logs an error past it.
+  The stride is their sum, at least one (`packed_param_stride_of`),
+  which the host packs by and the shader bakes in.
+- **A row holds up to `MAX_VARIATION_PARAM_SLOTS` = 262,144 floats**
+  (1 MiB; `update_variation_params` logs past it), so a variation may
+  keep a table of thousands of floats in its derived slots
+  (docs/projects/variation-param-storage.md).
+- **The buffer** is never smaller than it was when a row was 1600
+  floats, `MIN_VARIATION_PARAMS_BYTES` = 2,457,600 bytes, and grows to a
+  power of two for a flame whose rows need more
+  (`variation_params_capacity`; `ensure_variation_params_capacity`
+  replaces it, the old one retired, and the renderer remakes the bind
+  groups holding it), up to the device's binding limit. The minimum is
+  for the buffers made after it, not this one's memory: where they land
+  follows its size, and a flame's speed follows where they land -- a
+  buffer sized to its rows moved one flame 24% slower and another 26%
+  faster with the shader's work unchanged. Only the rows in use are
+  uploaded.
 - **The shader reads** through a generated `get_param(xform_id,
   variation_id, slot)`: a `switch` over the local index baked with each
-  offset, returning `variation_params[xform_id].params[offset + slot]`
-  (`build_packed_get_param` in `src/shader_builder_v2.rs`).
+  offset, returning `variation_params[xform_id * PARAM_STRIDE + offset +
+  slot]` (`build_packed_get_param` in `src/shader_builder_v2.rs`).
 - **Init-derived slots** follow a variation's user parameters. The
   host writes them as zero; the variation init pass (its own pipeline
   and bind group, `read_write` on this buffer) computes them whenever

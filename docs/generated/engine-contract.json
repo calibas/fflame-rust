@@ -151,10 +151,10 @@
     "effect_params": 48,
     "effect_slots": 32,
     "largest_shipped_state_count": 9,
-    "largest_shipped_variation_slots": 259,
+    "largest_shipped_variation_slots": 2410,
     "script_source_bytes": 262144,
     "transforms_per_flame": 128,
-    "variation_slots_per_flame": 1600,
+    "variation_slots_per_flame": 262144,
     "variation_slots_per_variation_policy_cap": 512,
     "variations_per_flame": 100
   },

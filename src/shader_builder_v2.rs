@@ -1432,11 +1432,13 @@ impl ShaderBuilder {
     /// Generate a per-flame `get_param` function with packed offsets baked
     /// from the active variation set.
     ///
-    /// Each variation occupies exactly `slot_count()` slots in the
-    /// `variation_params` buffer (no fixed 16-slot stride). The generated
-    /// switch maps `variation_id` (the per-flame local index) to its byte
-    /// offset, so `get_param(xform, var, slot)` returns
-    /// `variation_params[xform].params[offset + slot]`.
+    /// Each variation occupies exactly `slot_count()` slots of a
+    /// transform's row in the flat `variation_params` buffer. The
+    /// generated switch maps `variation_id` (the per-flame local index) to
+    /// its offset in the row, and the row's length is baked beside it
+    /// (`PARAM_STRIDE`, [`crate::scene::transforms::packed_param_stride_of`],
+    /// as the host packs it), so `get_param(xform, var, slot)` returns
+    /// `variation_params[xform * PARAM_STRIDE + offset + slot]`.
     ///
     /// Variations not in the active set never have their `get_param` called
     /// (the shader builder only emits calls for active ones), but the switch
@@ -1447,12 +1449,16 @@ impl ShaderBuilder {
     ) -> String {
         let layout = self.packed_layout(active_variations);
         let mut out = String::new();
-        out.push_str(
+        out.push_str(&format!(
             "// Per-flame packed get_param: each active variation has its own\n\
-             // contiguous slot range in variation_params, with offsets baked\n\
-             // at flame compile time. See build_packed_get_param in\n\
-             // shader_builder_v2.rs.\n\
-             fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {\n\
+             // contiguous slot range in a transform's row of variation_params,\n\
+             // with offsets and the row's length baked at flame compile time.\n\
+             // See build_packed_get_param in shader_builder_v2.rs.\n\
+             const PARAM_STRIDE: u32 = {}u;\n\n",
+            crate::scene::transforms::packed_param_stride_of(&layout)
+        ));
+        out.push_str(
+            "fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {\n\
              \x20   var offset: u32 = 0u;\n\
              \x20   switch (variation_id) {\n",
         );
@@ -1468,7 +1474,7 @@ impl ShaderBuilder {
         out.push_str(
             "        default: { offset = 0u; }\n\
              \x20   }\n\
-             \x20   return variation_params[xform_id].params[offset + param_slot];\n\
+             \x20   return variation_params[xform_id * PARAM_STRIDE + offset + param_slot];\n\
              }\n",
         );
         out
@@ -1482,6 +1488,7 @@ impl ShaderBuilder {
     ///
     /// The returned shader has a single bind group layout:
     ///   `@group(0) @binding(0) var<storage, read_write> variation_params`
+    ///   (the main shader's flat array, its rows the same stride)
     ///
     /// Dispatch with `ceil(pair_count / 64)` workgroups of size 64. Each
     /// thread handles one (xform_idx, init-bearing-variation) pair —
@@ -1581,21 +1588,25 @@ impl ShaderBuilder {
         let pair_count = pairs.len();
         let mut shader = String::new();
 
-        // 1. VariationParams struct + buffer binding (read_write).
-        //    Mirror the layout used by the main shader's `variation_params`,
-        //    but with read_write access mode.
-        shader.push_str(
-            "struct VariationParams {\n\
-             \x20   params: array<f32, 1600>,\n\
-             }\n\n\
-             @group(0) @binding(0) var<storage, read_write> variation_params: array<VariationParams>;\n\n",
-        );
+        // 1. The buffer binding (read_write): the main shader's flat
+        //    `variation_params`, a transform's row `stride` floats.
+        let stride = crate::scene::transforms::packed_param_stride_of(&layout) as usize;
+        shader.push_str("@group(0) @binding(0) var<storage, read_write> variation_params: array<f32>;\n\n");
 
         // 1a. Complex math helpers — init functions for variations like
         //     klein_group use cmul/cdiv/csqrt to compute their generator
         //     matrices. Always injected (~90 LoC, dead-code-eliminated).
         shader.push_str(include_str!("../shaders/core/complex.wgsl"));
         shader.push('\n');
+        // 1b. The name-gated libraries an init reads, as the main shader
+        //     takes them (polychoron's and menger's vertex tables from
+        //     polychora.wgsl).
+        for lib in NAME_GATED_LIBRARIES {
+            if pairs.iter().any(|(_, name, _)| lib.is_used_by(name)) {
+                shader.push_str(lib.source);
+                shader.push('\n');
+            }
+        }
 
         // 2. Emit each unique variation's init function (dedup by name).
         let mut emitted: HashSet<String> = HashSet::new();
@@ -1611,59 +1622,56 @@ impl ShaderBuilder {
             }
         }
 
-        // 3. Main entry point — switch on pair_idx, decode to (xform, var)
-        //    and call the right init.
+        // 3. Main entry point: each thread one (xform, variation) pair, its
+        //    run's start in the flat array and its init read from a table,
+        //    and one case a variation -- not a pair -- so the shader is as
+        //    long however many transforms carry a variation (its init's
+        //    arrays, a table of thousands of floats, are not copied for
+        //    each: a hundred such cases took the driver past ten minutes).
+        let mut kinds: Vec<&str> = Vec::new();
+        let mut rows = Vec::new();
+        for (xform_idx, var_name, offset) in &pairs {
+            let kind = match kinds.iter().position(|k| *k == var_name.as_str()) {
+                Some(k) => k,
+                None => {
+                    kinds.push(var_name);
+                    kinds.len() - 1
+                }
+            };
+            rows.push(format!("vec2<u32>({}u, {kind}u)", *xform_idx as usize * stride + *offset as usize));
+        }
         shader.push_str(&format!(
-            "const TOTAL_INIT_PAIRS: u32 = {}u;\n\n",
-            pair_count
+            "const TOTAL_INIT_PAIRS: u32 = {pair_count}u;\n\
+             // Each pair: its run's start in variation_params, its init.\n\
+             const INIT_PAIRS: array<vec2<u32>, {pair_count}> = array<vec2<u32>, {pair_count}>({});\n\n",
+            rows.join(", ")
         ));
         shader.push_str(
             "@compute @workgroup_size(64)\n\
              fn init_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n\
              \x20   let pair_idx = gid.x;\n\
              \x20   if (pair_idx >= TOTAL_INIT_PAIRS) { return; }\n\
-             \x20   switch (pair_idx) {\n",
+             \x20   let pair = INIT_PAIRS[pair_idx];\n\
+             \x20   let base = pair.x;\n\
+             \x20   switch (pair.y) {\n",
         );
-
-        for (case_idx, (xform_idx, var_name, offset)) in pairs.iter().enumerate() {
-            let info = match self.registry.get(var_name) {
-                Some(i) => i,
-                None => continue,
-            };
-            let n_user = info.parameters.len();
-            let n_init = info.init_param_count;
-            // Packed layout: this variation owns `n_user + n_init` slots
-            // starting at `offset` in variation_params[xform_idx].params.
-            let base_slot = *offset as usize;
-            shader.push_str(&format!("        case {}u: {{\n", case_idx));
-            // Read user params
-            shader.push_str(&format!("            var user: array<f32, {}>;\n", n_user));
-            for i in 0..n_user {
-                shader.push_str(&format!(
-                    "            user[{i}] = variation_params[{x}u].params[{slot}u];\n",
-                    i = i,
-                    x = xform_idx,
-                    slot = base_slot + i,
-                ));
-            }
-            // Call init
+        for (kind, var_name) in kinds.iter().enumerate() {
+            let Some(info) = self.registry.get(var_name) else { continue };
+            let (n_user, n_init) = (info.parameters.len(), info.init_param_count);
+            // Packed layout: the variation owns `n_user + n_init` slots of
+            // the pair's row from `base`. Each run copied by a loop, the
+            // derived values from a `var` (a run-time index into a `let`
+            // array copies it at every read).
             shader.push_str(&format!(
-                "            let derived = init_{name}(user);\n",
-                name = var_name,
+                "        case {kind}u: {{\n\
+                 \x20           var user: array<f32, {n_user}>;\n\
+                 \x20           for (var i = 0u; i < {n_user}u; i = i + 1u) {{ user[i] = variation_params[base + i]; }}\n\
+                 \x20           var derived = init_{var_name}(user);\n\
+                 \x20           for (var i = 0u; i < {n_init}u; i = i + 1u) {{ variation_params[base + {n_user}u + i] = derived[i]; }}\n\
+                 \x20       }}\n"
             ));
-            // Write init params
-            for i in 0..n_init {
-                shader.push_str(&format!(
-                    "            variation_params[{x}u].params[{slot}u] = derived[{i}];\n",
-                    i = i,
-                    x = xform_idx,
-                    slot = base_slot + n_user + i,
-                ));
-            }
-            shader.push_str("        }\n");
         }
-
-        shader.push_str("        default: { /* unreachable */ }\n    }\n}\n");
+        shader.push_str("        default: { /* unreachable */ }\n    }\n}\n\n");
 
         Some(shader)
     }
@@ -3413,6 +3421,50 @@ mod tests {
         .validate(&module)
         .unwrap_or_else(|e| panic!("validation (3d={render_3d}):\n{}", e.emit_to_string(&shader)));
         shader
+    }
+
+    /// The shaders read a transform's row where the host packs it: the
+    /// stride `get_param` multiplies by is `PackedVariationParams`', and
+    /// the init pass reads and writes each pair's run in its transform's
+    /// row (klein_group's 16 derived slots), both modules valid.
+    #[test]
+    fn the_shaders_read_the_rows_the_host_packs() {
+        use crate::scene::transforms::{Flame, Transform};
+        let xform = |names: &[&str]| {
+            let mut t = Transform::new();
+            t.variations.clear();
+            t.variation_order.clear();
+            for n in names {
+                t.set_variation(n, 1.0);
+            }
+            t
+        };
+        let mut flame = Flame::new();
+        flame.transforms = vec![xform(&["linear", "julian"]), xform(&["blob", "klein_group"]), xform(&["klein_group"])];
+        let packed = crate::gpu::buffers::pack_gpu_variation_params(&flame);
+        let shader = validated_flame_shader(&flame, false);
+        assert!(shader.contains(&format!("const PARAM_STRIDE: u32 = {}u;", packed.stride)), "the host's stride, {}", packed.stride);
+        assert!(shader.contains("return variation_params[xform_id * PARAM_STRIDE + offset + param_slot];"));
+
+        let registry = crate::variations::global_registry().clone();
+        let local_map = crate::scene::transforms::compute_local_index_map(flame.active_variation_names_ordered(&registry));
+        let layout = crate::scene::transforms::compute_packed_layout(&local_map, &registry);
+        let klein = layout.iter().find(|e| e.name == "klein_group").unwrap().offset as usize;
+        let info = registry.get("klein_group").unwrap();
+        let (n_user, n_init) = (info.parameters.len(), info.init_param_count);
+        assert!(n_init > 0);
+        let init = test_builder().build_init_shader(&flame, &HashMap::new()).expect("klein_group has an init");
+        for x in [1usize, 2] {
+            let base = x * packed.stride + klein;
+            // klein_group's case after julian's (it has an init too).
+            assert!(init.contains(&format!("vec2<u32>({base}u, 1u)")), "transform {x}'s run, klein_group's case:\n{init}");
+        }
+        assert_eq!(init.matches("init_klein_group(user)").count(), 1, "one case for the two transforms");
+        assert!(init.contains(&format!("i < {n_init}u; i = i + 1u) {{ variation_params[base + {n_user}u + i] = derived[i];")), "its derived run");
+        let module = wgpu::naga::front::wgsl::parse_str(&init).unwrap_or_else(|e| panic!("parse:\n{}", e.emit_to_string(&init)));
+        wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("validation:\n{}", e.emit_to_string(&init)));
     }
 
     /// Two normals -- `name` at weight 0.5 and fx_priority `prio` on the
