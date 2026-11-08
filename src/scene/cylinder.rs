@@ -2076,8 +2076,10 @@ pub fn pack(cyl: &Cylinders, flame: &Flame, registry: &crate::variations::Variat
         let mut g_acc = 0.0f64;
         for &sym in &c.word {
             let i = sym_transform(sym) as usize;
-            m = maps[i].then_after(&m);
-            let t = &flame.transforms[i];
+            // A plan made for another flame (`stale_symbol`): its missing
+            // transforms as the identity, colour kept.
+            let (Some(map), Some(t)) = (maps.get(i), flame.transforms.get(i)) else { continue };
+            m = map.then_after(&m);
             let s = t.color_speed as f64;
             let h = (1.0 + s) * 0.5;
             let g = t.color as f64 * (1.0 - s) * 0.5;
@@ -2169,6 +2171,17 @@ pub const COUNT_AT: usize = 9;
 /// few floats on the shallow ones and buys the kernel a multiply
 /// instead of an indirection; at the caps (4096 words, depth 96) the
 /// whole table is under 1.6 MB.
+/// Whether a word of `cyl` names a transform `flame` does not have: a
+/// plan made for another flame. A renderer keeps its plan until the next
+/// arrives, and one not planning (the escape engine showing the flame's
+/// attractor) keeps it while the flame changes under it; a resize then
+/// packed it against the new flame and indexed past its transforms (the
+/// user's crash, 2026-11-08). The packers take such a word's missing
+/// transforms as the identity; the next plan replaces it.
+pub fn stale_symbol(cyl: &Cylinders, flame: &Flame) -> bool {
+    cyl.words.iter().any(|c| c.word.iter().any(|&s| sym_transform(s) as usize >= flame.transforms.len()))
+}
+
 pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
     let longest = cyl.words.iter().map(|c| c.word.len()).max().unwrap_or(0);
     // Round the stride to a vec4 multiple, as `pack` does, so a word
@@ -2188,7 +2201,9 @@ pub fn pack_words(cyl: &Cylinders, flame: &Flame) -> Vec<f32> {
         let mut h_prod = 1.0f64;
         let mut g_acc = 0.0f64;
         for &sym in &c.word {
-            let t = &flame.transforms[sym_transform(sym) as usize];
+            // A plan made for another flame (`stale_symbol`): a missing
+            // transform leaves the colour as it is.
+            let Some(t) = flame.transforms.get(sym_transform(sym) as usize) else { continue };
             let s = t.color_speed as f64;
             let h = (1.0 + s) * 0.5;
             let g = t.color as f64 * (1.0 - s) * 0.5;
@@ -10226,6 +10241,28 @@ mod tests {
         for (s, n) in best.iter().take(8) {
             println!("    {s:>12.3e}  {n}");
         }
+    }
+
+    /// **A plan made for another flame packs without a panic** (the
+    /// user's crash, 2026-11-08: a resize packed a four-transform flame's
+    /// plan against a three-transform one): its missing transforms are
+    /// the identity, the table is the size it was, and a plan that fits
+    /// packs exactly as before.
+    #[test]
+    fn a_stale_plan_packs_without_a_panic() {
+        let reg = crate::variations::global_registry();
+        let mut four = gasket();
+        four.transforms.push(affine(0.5, 0.0, 0.0, 0.5, 0.5, 0.5, 1.0));
+        let view = View::of(1.0, [0.25, 0.25], 256, 256);
+        let plan = Cylinders::plan(&four, &reg, view).expect("the four-map gasket plans");
+        assert!(plan.words.iter().any(|c| c.word.iter().any(|&s| sym_transform(s) == 3)), "the plan uses the fourth map");
+        let three = gasket();
+        assert!(stale_symbol(&plan, &three) && !stale_symbol(&plan, &four));
+        let fits_words = pack_words(&plan, &four);
+        let fits = pack(&plan, &four, &reg);
+        assert_eq!(pack_words(&plan, &three).len(), fits_words.len(), "the replay's table, its size kept");
+        assert_eq!(pack(&plan, &three, &reg).len(), fits.len(), "the composed table, its size kept");
+        assert_eq!(pack_words(&plan, &four), fits_words, "a plan that fits packs as before");
     }
 
     /// The refusals are refusals, not silent wrong answers.
