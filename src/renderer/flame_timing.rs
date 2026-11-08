@@ -13,7 +13,9 @@
 //! ```
 //!
 //! Written to `output/flame-timing/<label>.txt`; `FLAME_TIMING_ONLY=a,b`
-//! times the flames whose names contain one of them. A flame's speed
+//! times the flames whose names contain one of them, and
+//! `FLAME_TIMING_VARIATIONS=a,b` a flame of each of those variations
+//! instead (2D and 3D), a built-in's before and after. A flame's speed
 //! depends on where its buffers land -- which every buffer made before
 //! them moves, a size changed anywhere (the parameter buffer's moved one
 //! flame 24% and another -26%, the same shader's work) -- so each is
@@ -29,8 +31,13 @@ const N: u32 = 1024;
 const GROUPS: u32 = 256;
 const IPT: u32 = 256;
 
-/// The flames: the eight classic presets, then the visual configs.
+/// The flames: the eight classic presets, then the visual configs; or,
+/// with `FLAME_TIMING_VARIATIONS=a,b`, a flame of each of those
+/// variations, in 2D and 3D.
 fn flames() -> Vec<(String, FractalConfig)> {
+    if let Ok(names) = std::env::var("FLAME_TIMING_VARIATIONS") {
+        return names.split(',').flat_map(|n| [false, true].map(|three| variation_flame(n, three))).collect();
+    }
     let presets = FractalConfig::from_json_multi(&std::fs::read_to_string("assets/presets.fflame").expect("the presets")).expect("they parse");
     let mut out: Vec<(String, FractalConfig)> = presets.into_iter().take(8).map(|c| (c.flame.name.clone(), c)).collect();
     for path in [
@@ -45,6 +52,33 @@ fn flames() -> Vec<(String, FractalConfig)> {
         out.push((path.rsplit('/').next().unwrap_or(path).trim_end_matches(".fflame").to_string(), cfg));
     }
     out
+}
+
+/// A flame of `variation`: on a turning shrink, weighted 8 to the two
+/// linear shrinks' 1 that keep it bounded, so most iterations run it.
+fn variation_flame(variation: &str, three: bool) -> (String, FractalConfig) {
+    use crate::scene::transforms::{RenderMode, Transform};
+    let mut cfg = FractalConfig::default();
+    cfg.render_mode = if three { RenderMode::ThreeD } else { RenderMode::TwoD };
+    cfg.flame.transforms = [
+        ((0.6f32, -0.3f32, 0.3f32, 0.6f32, 0.1f32, -0.2f32), variation, 8.0f32),
+        ((0.5, 0.0, 0.0, 0.5, 0.5, 0.3), "linear", 1.0),
+        ((0.5, 0.0, 0.0, 0.5, -0.4, 0.4), "linear", 1.0),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (m, v, w))| {
+        let mut t = Transform::default();
+        (t.a, t.b, t.c, t.d, t.e, t.f) = m;
+        t.weight = w;
+        t.color = i as f32 / 2.0;
+        t.variations.clear();
+        t.variation_order.clear();
+        t.set_variation(v, 1.0);
+        t
+    })
+    .collect();
+    (format!("{variation}{}", if three { " (3D)" } else { "" }), cfg)
 }
 
 #[test]
