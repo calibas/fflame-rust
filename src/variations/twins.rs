@@ -1025,6 +1025,45 @@ mod tests {
         assert_eq!(found(&own("julia")), Some("julia"));
     }
 
+    /// **How far Focused Rendering's derived bounds reach a Rhai
+    /// variation's own code** (a measure, not a gate): each twin's compiled
+    /// body through the interval evaluator (`derive::derive_own`), against
+    /// its built-in's, at the parameters' defaults, over one disc. Prints
+    /// the counts and why a twin refuses where its built-in derives.
+    /// Ignored: it registers every twin.
+    #[test]
+    #[ignore = "a measure; registers every twin"]
+    fn measure_derived_bounds_of_twins() {
+        use crate::variations::{bound::Ball, derive};
+        let ball = Ball::new([0.3, -0.2], 0.5);
+        let (mut both, mut builtin_only, mut twin_only, mut neither) = (0, 0, 0, 0);
+        let mut why: std::collections::BTreeMap<String, Vec<&str>> = Default::default();
+        for (name, src) in chosen_twins() {
+            let Ok(key) = super::super::custom::register(src) else { continue };
+            let reg = super::super::global_registry().clone();
+            let info = reg.get(name).unwrap();
+            let defaults: std::collections::HashMap<String, f64> = info.parameters.iter().map(|p| (p.name.to_string(), f64::from(p.slot_default()))).collect();
+            let params = |p: &str| defaults.get(p).copied().unwrap_or(0.0);
+            let builtin = derive::derive(name, &params, 1.0, ball);
+            let twin = derive::derive_own(&key, &params, 1.0, ball);
+            match (&builtin, &twin) {
+                (Ok(_), Ok(_)) => both += 1,
+                (Ok(_), Err(e)) => {
+                    builtin_only += 1;
+                    why.entry(e.to_string()).or_default().push(name);
+                }
+                (Err(_), Ok(_)) => twin_only += 1,
+                (Err(_), Err(_)) => neither += 1,
+            }
+        }
+        println!("derived: both {both}, the built-in alone {builtin_only}, the twin alone {twin_only}, neither {neither}");
+        let mut reasons: Vec<_> = why.into_iter().collect();
+        reasons.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
+        for (reason, names) in reasons {
+            println!("  {:3} {reason}: {}", names.len(), names.iter().take(8).cloned().collect::<Vec<_>>().join(" "));
+        }
+    }
+
     /// **A variation is named by its label where the user reads it**: a
     /// Rhai variation by its title, never its key, in the Flame
     /// Attractor's and Focused Rendering's refusals as in the panels, and
