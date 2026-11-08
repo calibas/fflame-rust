@@ -98,9 +98,9 @@ impl Batch {
 /// project's stable ID order (`defs/mod.rs` is append-only), so a new
 /// variation lands at the end and disturbs nothing before it.
 ///
-/// The count cap is not the only binding one: the widest single
-/// variation takes 259 slots, so a batch of expensive variations fills
-/// the slot budget after six.
+/// The count cap is not the only binding one: su_custom takes 259
+/// slots, so a batch of expensive variations fills the slot budget after
+/// six (polychoron's vertex table, 2410, is probed alone).
 pub fn plan_batches(targets: &[Target]) -> Vec<Batch> {
     let mut batches = Vec::new();
     let mut group: Vec<Target> = Vec::new();

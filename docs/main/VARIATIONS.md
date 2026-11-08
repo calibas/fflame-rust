@@ -305,7 +305,11 @@ consecutive floats in its transform's parameter block:
   init compute pass runs it for every (transform, variation) pair that
   uses it — subflame transforms included — and writes the results after
   the user parameters. Use it for anything a body would otherwise
-  recompute from its parameters every iteration.
+  recompute from its parameters every iteration -- or read from a
+  constant table at a run-time index, which naga copies whole at every
+  read: polychoron and menger copy their vertices from polychora.wgsl's
+  table here (their name-gated library is the init's too), and ran
+  2-10x faster where they read it, 2D and 3D.
 
 The layout is packed per flame: each active variation gets the same
 offset in every transform's block, in local-index order, and the

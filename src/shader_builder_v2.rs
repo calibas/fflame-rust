@@ -1598,6 +1598,15 @@ impl ShaderBuilder {
         //     matrices. Always injected (~90 LoC, dead-code-eliminated).
         shader.push_str(include_str!("../shaders/core/complex.wgsl"));
         shader.push('\n');
+        // 1b. The name-gated libraries an init reads, as the main shader
+        //     takes them (polychoron's and menger's vertex tables from
+        //     polychora.wgsl).
+        for lib in NAME_GATED_LIBRARIES {
+            if pairs.iter().any(|(_, name, _)| lib.is_used_by(name)) {
+                shader.push_str(lib.source);
+                shader.push('\n');
+            }
+        }
 
         // 2. Emit each unique variation's init function (dedup by name).
         let mut emitted: HashSet<String> = HashSet::new();
