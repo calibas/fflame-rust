@@ -1612,7 +1612,7 @@ impl Backward {
         // The maps alone: the escape engine's bounds are never read here.
         // A `pre_blur` comes back beside them (tracker item C2).
         let (ifs, blurs) = analyse_2d_maps_blurred_sliced(&body, registry, slicer).await.map_err(|errs| {
-            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")
+            errs.iter().map(|e| e.describe(registry)).collect::<Vec<_>>().join("; ")
         })?;
         slicer.tick().await;
         if ifs.maps.is_empty() {

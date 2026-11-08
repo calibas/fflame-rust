@@ -82,6 +82,17 @@ impl App {
 
         let mut fetchable = Vec::new();
         let mut unresolvable = Vec::new();
+        // A Rhai variation is carried, never fetched: one missing is a
+        // carried source that did not compile (or a flame without it).
+        let (keys, missing): (Vec<String>, Vec<String>) = missing.into_iter().partition(|n| crate::scripted::is_key(n));
+        for key in keys {
+            let name = crate::variations::global_registry().label(&key);
+            let message = match crate::variations::custom::error_of(&key) {
+                Some(error) => rust_i18n::t!("api.variation_did_not_compile", name = name, error = error),
+                None => rust_i18n::t!("api.variation_not_carried", name = name),
+            };
+            self.egui_layer.show_api_notification(&message, true);
+        }
         for name in missing {
             match crate::variations::classify_missing(&name, self.variation_catalog.as_ref()) {
                 // Unknown means no catalog has been fetched. Being

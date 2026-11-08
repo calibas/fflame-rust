@@ -192,10 +192,14 @@ impl FormulaEditorPanel {
             _ => src.entry.clone(),
         };
         self.in_use.push((kind, None, held));
-        let status = if kind == EntryKind::Coloring {
-            t!("formula_editor.editing_builtin_coloring", entry = src.entry)
-        } else {
-            t!("formula_editor.editing_builtin", entry = src.entry)
+        let status = match kind {
+            EntryKind::Coloring => t!("formula_editor.editing_builtin_coloring", entry = src.entry),
+            // A variation's entry is its key: by its title.
+            EntryKind::Transform => {
+                let name = lang::rhai::source_labels(&src.source).map(|l| l.title.resolve()).unwrap_or_else(|| src.entry.clone());
+                t!("formula_editor.editing_builtin_variation", name = name)
+            }
+            _ => t!("formula_editor.editing_builtin", entry = src.entry),
         };
         self.status = Some(status.to_string());
     }

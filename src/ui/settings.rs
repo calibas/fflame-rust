@@ -99,7 +99,10 @@ pub fn render_settings_content(
         // Thread long. A variation that needs it holds it on.
         let (forced_by, length) = {
             let registry = crate::variations::global_registry();
-            (config.flame.fresh_orbits_variation(&registry), config.flame.orbit_length_source(&registry))
+            (
+                config.flame.fresh_orbits_variation(&registry).map(|n| registry.label(&n)),
+                config.flame.orbit_length_source(&registry).map(|(n, l)| (registry.label(&n), l)),
+            )
         };
         let mut reset = config.reset_orbits || forced_by.is_some();
         let tip = reset_orbits_tip(forced_by.as_deref(), length.as_ref());

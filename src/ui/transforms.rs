@@ -600,9 +600,7 @@ fn render_enabled_variation(
 
     let registry = global_registry();
     let var_info = registry.get(variation_name);
-    let display_name = var_info
-        .map(|v| v.display_name.as_str())
-        .unwrap_or(variation_name);
+    let display_name = registry.label(variation_name);
 
     ui.horizontal(|ui| {
         // Reserve the gear button's width BEFORE laying out the name, so a
@@ -632,7 +630,7 @@ fn render_enabled_variation(
                     );
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(display_name).color(Color32::LIGHT_GRAY),
+                            egui::RichText::new(&display_name).color(Color32::LIGHT_GRAY),
                         )
                         .truncate()
                         // egui shows its own tooltip when a label elides,
@@ -643,7 +641,7 @@ fn render_enabled_variation(
                         // is the single, always-present, default-coloured one.
                         .show_tooltip_when_elided(false),
                     )
-                    .on_hover_text(display_name);
+                    .on_hover_text(&display_name);
                     response
                 },
             )
@@ -729,7 +727,7 @@ fn render_enabled_variation(
     // Show parameters if variation has them
     if let Some(var_info) = var_info {
         if !var_info.parameters.is_empty() {
-            egui::CollapsingHeader::new(t!("variations.parameters", name = display_name))
+            egui::CollapsingHeader::new(t!("variations.parameters", name = &display_name))
                 .id_salt(format!("params_{}_{}_{}", xref.pool_kind(), xref.index(), variation_name))
                 .default_open(false)
                 .show(ui, |ui| {
@@ -1330,7 +1328,7 @@ fn render_pool_member_block(
     // the summary expands the section too, matching a click on the name.
     if !state.is_open() {
         let registry = crate::variations::global_registry();
-        let names = transform.ordered_variation_names(&registry);
+        let names: Vec<String> = transform.ordered_variation_names(&registry).iter().map(|n| registry.label(n)).collect();
         if !names.is_empty() {
             ui.horizontal(|ui| {
                 ui.add_space(35.0);

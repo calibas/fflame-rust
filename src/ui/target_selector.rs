@@ -536,7 +536,7 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
         let registry = crate::variations::global_registry();
         for (i, t) in esc.transforms.iter().enumerate() {
             let info = registry.get(&t.variation);
-            let name = info.map_or(t.variation.clone(), |v| v.display_name.clone());
+            let name = registry.label(&t.variation);
             let label = format!("Transformation {} ({name})", i + 1);
             items.push(TargetItem::new(ConfigPath::EscapeTransformAmount { index: i }, &format!("{label}: Amount")));
             for p in info.map(|v| v.parameters.as_slice()).unwrap_or_default() {
@@ -1163,7 +1163,7 @@ fn get_transform_items(index: usize, transform: &crate::scene::transforms::Trans
                 index,
                 variation: var_name.clone(),
             },
-            &format!("{}", capitalize_first(var_name)),
+            &format!("{}", registry.label(var_name)),
         ));
 
         // Variation parameters (if any)
@@ -1175,7 +1175,7 @@ fn get_transform_items(index: usize, transform: &crate::scene::transforms::Trans
                         variation: var_name.clone(),
                         param: param.name.to_string(),
                     },
-                    &format!("{} → {}", capitalize_first(var_name), &param.label),
+                    &format!("{} → {}", registry.label(var_name), &param.label),
                 ));
             }
         }
@@ -1236,7 +1236,7 @@ fn get_linked_transform_items(index: usize, transform: &crate::scene::transforms
     for (var_name, _weight) in &transform.variations {
         items.push(TargetItem::new(
             ConfigPath::LinkedTransformVariation { index, variation: var_name.clone() },
-            &capitalize_first(var_name),
+            &registry.label(var_name),
         ));
         if let Some(info) = registry.get(var_name) {
             for param in &info.parameters {
@@ -1244,7 +1244,7 @@ fn get_linked_transform_items(index: usize, transform: &crate::scene::transforms
                     ConfigPath::LinkedTransformVariationParam {
                         index, variation: var_name.clone(), param: param.name.to_string(),
                     },
-                    &format!("{} → {}", capitalize_first(var_name), &param.label),
+                    &format!("{} → {}", registry.label(var_name), &param.label),
                 ));
             }
         }
@@ -1305,7 +1305,7 @@ fn get_pool_final_transform_items(index: usize, transform: &crate::scene::transf
     for (var_name, _weight) in &transform.variations {
         items.push(TargetItem::new(
             ConfigPath::FinalTransformVariation { index, variation: var_name.clone() },
-            &capitalize_first(var_name),
+            &registry.label(var_name),
         ));
         if let Some(info) = registry.get(var_name) {
             for param in &info.parameters {
@@ -1313,7 +1313,7 @@ fn get_pool_final_transform_items(index: usize, transform: &crate::scene::transf
                     ConfigPath::FinalTransformVariationParam {
                         index, variation: var_name.clone(), param: param.name.to_string(),
                     },
-                    &format!("{} → {}", capitalize_first(var_name), &param.label),
+                    &format!("{} → {}", registry.label(var_name), &param.label),
                 ));
             }
         }

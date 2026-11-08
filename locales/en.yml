@@ -1597,6 +1597,7 @@ file_browser:
 # Fractal Browser Panel (unified presets/batch/files browser)
 browser:
   title: "Fractal Browser"
+  rhai_variation: "a Rhai variation"
   tab_presets: "Presets"
   presets_flame_2d: "2D Flame"
   presets_flame_3d: "3D Flame"
@@ -1659,6 +1660,8 @@ api:
   loading_animation: "Loading animation..."
   loading_variations: "Loading variations: %{names}..."
   variations_need_a_plugin: "This flame uses %{names}, which this build does not have and the online library does not list, so it will not render as its author saw it."
+  variation_did_not_compile: "This flame's Rhai variation %{name} did not compile, so it is left out: %{error}"
+  variation_not_carried: "This flame uses a Rhai variation (%{name}) without carrying its source, so it is left out."
   online_account_off: "This needs the online account, which is off. Turn it on in the File menu."
   variation_fetch_timeout: "Timed out loading variations: %{names}. Fractal may render incorrectly."
   variation_fetch_failed: "Couldn't load variations: %{names}. Fractal may render incorrectly."
@@ -3090,6 +3093,7 @@ formula_editor:
   edit_as_rhai: "Edit as Rhai"
   editing_builtin: "`%{entry}` is in use as your own formula; Save keeps it in your library"
   editing_builtin_coloring: "`%{entry}` is in use as your own colouring; Save keeps it in your library"
+  editing_builtin_variation: "%{name} is in use as your own variation; Save keeps it in your library"
   editing_builtin_effect: "%{name} is your own effect now, in use; Save keeps it in your library"
   editing_builtin_sim: "%{name} is your own now, in use; Save keeps it in your library"
   plugin: "Load at start"

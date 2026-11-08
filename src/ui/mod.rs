@@ -1645,8 +1645,14 @@ impl EguiLayer {
             frame_governor: config_manager.system_settings().frame_governor,
             manual_workgroups: config_manager.system_settings().manual_workgroups,
             reset_orbits: config_manager.active_config().reset_orbits,
-            reset_orbits_forced_by: config_manager.active_config().flame.fresh_orbits_variation(&crate::variations::global_registry()),
-            orbit_length_source: config_manager.active_config().flame.orbit_length_source(&crate::variations::global_registry()),
+            reset_orbits_forced_by: {
+                let registry = crate::variations::global_registry();
+                config_manager.active_config().flame.fresh_orbits_variation(&registry).map(|n| registry.label(&n))
+            },
+            orbit_length_source: {
+                let registry = crate::variations::global_registry();
+                config_manager.active_config().flame.orbit_length_source(&registry).map(|(n, l)| (registry.label(&n), l))
+            },
             render_scale: config_manager.system_settings().render_scale,
             upscaler: config_manager.system_settings().upscaler,
             render_physical_pixels: config_manager.system_settings().render_physical_pixels,

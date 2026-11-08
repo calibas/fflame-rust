@@ -2001,10 +2001,7 @@ pub(super) fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigMa
     let label = if current.is_empty() {
         t!("escape_panel.lens_none").to_string()
     } else {
-        registry
-            .get(&current)
-            .map(|i| i.display_name.clone())
-            .unwrap_or_else(|| current.clone())
+        registry.label(&current)
     };
 
     egui::CollapsingHeader::new(t!("escape_panel.lens"))
@@ -2224,7 +2221,7 @@ pub(crate) fn ifs_verdict(flame: &crate::scene::transforms::Flame, solid: bool) 
                     centre: $centre(&ifs.ball.centre),
                     radius: ifs.ball.radius,
                 },
-                Err(why) => Verdict::No(why.iter().map(|d| d.to_string()).collect()),
+                Err(why) => Verdict::No(why.iter().map(|d| d.describe(&registry)).collect()),
             }
         }};
     }

@@ -226,6 +226,9 @@ pub fn register(source: &str) -> Result<String, String> {
 
 fn register_payload(dl: VariationDownload, source: &str) -> Result<String, String> {
     let name = register_into(&mut crate::variations::global_registry_mut(), &dl, source)?;
+    // A twin by what it computes, not only its text (its title changed,
+    // say): after the registry's lock, as compiling the twin may read it.
+    crate::variations::twins::note_maths(&name, source, &dl);
     // So `ensure` does not register this source again.
     if let Ok(mut known) = registered().lock() {
         known.insert(name.clone(), source.to_string());
@@ -351,6 +354,24 @@ fn registered() -> &'static Mutex<HashMap<String, String>> {
     R.get_or_init(Default::default)
 }
 
+/// Why a carried source did not register, by its key (`ensure`).
+fn failures() -> &'static Mutex<HashMap<String, String>> {
+    static F: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    F.get_or_init(Default::default)
+}
+
+/// The title of the carried source registered, or tried, under `key`:
+/// what to call a variation whose source did not compile.
+pub fn title_of(key: &str) -> Option<String> {
+    let source = registered().lock().ok()?.get(key).cloned()?;
+    Some(lang::rhai::source_labels(&source)?.title.resolve())
+}
+
+/// Why the carried source under `key` did not register, if it did not.
+pub fn error_of(key: &str) -> Option<String> {
+    failures().lock().ok()?.get(key).cloned()
+}
+
 /// Register a flame's custom variations (and its subflames'), before
 /// anything builds its shader. Cheap when each is registered with this
 /// source already; a source that does not compile is logged once and its
@@ -368,6 +389,12 @@ pub fn ensure(flame: &Flame) {
         // flame names, which its transforms run.
         let carried = crate::lang::rhai::carried_variations(src);
         let result = lang::rhai::with_variations(&carried, || compile_as(&src.source, &src.entry).and_then(|dl| register_payload(dl, &src.source)));
+        if let Ok(mut failed) = failures().lock() {
+            match &result {
+                Err(e) => failed.insert(src.entry.clone(), e.clone()),
+                Ok(_) => failed.remove(&src.entry),
+            };
+        }
         if let Err(e) = result {
             log::warn!("Custom variation `{}` did not register: {e}", src.entry);
         }

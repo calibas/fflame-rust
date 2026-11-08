@@ -708,8 +708,100 @@ pub fn builtin_of(source: &str) -> Option<&'static str> {
     same.then_some(name)
 }
 
+/// What a compiled variation computes, as text to compare: its shaders
+/// with its own names (`own`: its key, its `INFO.name`) blanked, its
+/// phase, features, state, derived slots, emissions, and its parameters'
+/// names and kinds. Not its title, description, category, authors, nor
+/// its parameters' defaults, ranges or captions: they change no maths.
+fn maths_of(dl: &crate::api::types::VariationDownload, own: &[&str]) -> String {
+    let blank = |s: &Option<String>| {
+        let mut s = s.clone().unwrap_or_default();
+        for n in own.iter().filter(|n| !n.is_empty()) {
+            s = s.replace(n, "@");
+        }
+        s
+    };
+    let mut features = dl.features.clone();
+    features.sort();
+    let params: Vec<String> = dl.parameters.iter().map(|p| format!("{}:{:?}", p.name, p.param_type)).collect();
+    format!(
+        "{:?}|{features:?}|{}|{}|{}|{params:?}|{}|{}|{}|{}",
+        dl.phase,
+        dl.state_count,
+        dl.init_param_count,
+        dl.plot_emits,
+        blank(&dl.shader_2d),
+        blank(&dl.shader_3d),
+        blank(&dl.shader_init),
+        blank(&dl.shader_state_init)
+    )
+}
+
+/// A source's functions, its text from the first `fn` with its spacing
+/// collapsed: what a change of its `INFO` or `PARAMS` alone leaves as it
+/// was.
+fn functions_of(source: &str) -> String {
+    let text = source.replace("\r\n", "\n");
+    let start = if text.starts_with("fn ") { Some(0) } else { text.find("\nfn ").map(|i| i + 1) };
+    start.map(|i| text[i..].split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default()
+}
+
+/// The built-in whose twin computes what `dl` computes, compiled from
+/// `source`: the same maths ([`maths_of`]) however its title, `INFO.name`,
+/// description or parameters' captions and defaults were changed. The twin
+/// it is compared with is the one its `INFO.name` names (`rhai_<built-in>`)
+/// or the one whose functions it has; each twin compiled once, when first
+/// asked. Run outside the registry's lock: compiling may read it.
+pub(crate) fn builtin_computed_by(source: &str, dl: &crate::api::types::VariationDownload) -> Option<&'static str> {
+    use std::collections::HashMap;
+    static BY_FUNCTIONS: std::sync::OnceLock<HashMap<String, &'static str>> = std::sync::OnceLock::new();
+    static MATHS: std::sync::OnceLock<std::sync::Mutex<HashMap<&'static str, Option<String>>>> = std::sync::OnceLock::new();
+    let by_functions = BY_FUNCTIONS.get_or_init(|| TWINS.iter().map(|(n, s)| (functions_of(s), *n)).collect());
+    let own_name = crate::lang::rhai::variation_name(source).unwrap_or_default();
+    let mut candidates: Vec<&'static str> = Vec::new();
+    if let Some(&(n, _)) = own_name.strip_prefix("rhai_").and_then(|b| TWINS.iter().find(|(n, _)| *n == b)) {
+        candidates.push(n);
+    }
+    if let Some(&n) = by_functions.get(&functions_of(source)) {
+        if !candidates.contains(&n) {
+            candidates.push(n);
+        }
+    }
+    let mine = maths_of(dl, &[&dl.name, &own_name]);
+    let maths = MATHS.get_or_init(Default::default);
+    candidates.into_iter().find(|&b| {
+        let cached = maths.lock().ok().and_then(|m| m.get(b).cloned());
+        let theirs = cached.unwrap_or_else(|| {
+            let twin = self::source(b)?;
+            let entry = "uf_twin_maths";
+            let name = crate::lang::rhai::variation_name(twin).unwrap_or_default();
+            let computed = super::custom::compile_as(twin, entry).ok().map(|t| maths_of(&t, &[entry, &name]));
+            if let Ok(mut m) = maths.lock() {
+                m.insert(b, computed.clone());
+            }
+            computed
+        });
+        theirs.as_deref() == Some(mine.as_str())
+    })
+}
+
+/// Note what registered under `key` by what it computes: an unedited
+/// twin's built-in where [`note`]'s text did not find one but the maths is
+/// the same (a title or a caption changed). After registration, outside
+/// the registry's lock.
+pub(crate) fn note_maths(key: &str, source: &str, dl: &crate::api::types::VariationDownload) {
+    if builtin_of_key(key).is_some() {
+        return;
+    }
+    if let Some(b) = builtin_computed_by(source, dl) {
+        if let Ok(mut u) = unedited().write() {
+            u.insert(key.to_string(), b);
+        }
+    }
+}
+
 /// The registered keys that are unedited twins, and of which built-in:
-/// noted at registration ([`note`]).
+/// noted at registration ([`note`], [`note_maths`]).
 fn unedited() -> &'static std::sync::RwLock<std::collections::HashMap<String, &'static str>> {
     static U: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, &'static str>>> = std::sync::OnceLock::new();
     U.get_or_init(Default::default)
@@ -905,6 +997,56 @@ mod tests {
         assert_eq!(builtin_of_key(&edited), None);
         assert!(inverse::for_name(&edited).is_none() && bound::for_name(&edited).is_none());
         assert!(derive::derive(&edited, &none, 0.8, ball).is_err());
+    }
+
+    /// **A twin is unedited by its maths, not its text** (the user,
+    /// 2026-11-08: bubble's twin retitled "Bubble2" lost the Flame
+    /// Attractor and Focused Rendering): its title or `INFO.name` changed,
+    /// or a comment added, it computes its built-in still and keeps its
+    /// planner data; a constant of its body changed, it does not.
+    #[test]
+    fn a_twin_is_unedited_by_its_maths_not_its_text() {
+        let compiled = |src: &str| super::super::custom::compile(src).unwrap();
+        let found = |src: &str| builtin_computed_by(src, &compiled(src));
+        // From LF line ends, as a checkout with `core.autocrlf` gives CRLF.
+        let base = own("bubble").replace("\r\n", "\n");
+        let retitled = base.replacen("title: \"Bubble\"", "title: \"Bubble2\"", 1);
+        assert_ne!(retitled, base, "the twin has the title");
+        assert_eq!(builtin_of(&retitled), None, "its text is not the twin's");
+        assert_eq!(found(&retitled), Some("bubble"), "its maths is");
+        let renamed = retitled.replacen("name: \"rhai_bubble\"", "name: \"my_bubble\"", 1);
+        assert_eq!(found(&renamed), Some("bubble"), "found by its functions");
+        let commented = retitled.replacen("    let scale = 1.0 / r;\n", "    // mine now\n    let scale = 1.0 / r;\n", 1);
+        assert_ne!(commented, retitled);
+        assert_eq!(found(&commented), Some("bubble"), "found by its name");
+        let edited = retitled.replacen("r2 / 4.0", "r2 / 3.0", 1);
+        assert_ne!(edited, retitled);
+        assert_eq!(found(&edited), None, "another map");
+        assert_eq!(found(&own("julia")), Some("julia"));
+    }
+
+    /// **A variation is named by its label where the user reads it**: a
+    /// Rhai variation by its title, never its key, in the Flame
+    /// Attractor's and Focused Rendering's refusals as in the panels, and
+    /// transforms numbered from 1. In a registry of the test's own.
+    #[test]
+    fn refusals_name_a_rhai_variation_by_its_title() {
+        use crate::scene::{ifs_analysis::{Disqualification, NotAffine}, ifs_ball::NoBall};
+        let mut reg = crate::variations::VariationRegistry::new();
+        let src = own("bubble").replacen("title: \"Bubble\"", "title: \"Bubble2\"", 1).replacen("r2 / 4.0", "r2 / 3.0", 1);
+        let dl = super::super::custom::compile(&src).unwrap();
+        let key = super::super::custom::register_into(&mut reg, &dl, &src).unwrap();
+        assert!(crate::scripted::is_key(&key), "{key}");
+        assert_eq!(reg.label(&key), "Bubble2");
+        assert_eq!(reg.label("bubble"), "Bubble");
+        assert_eq!(reg.label("no_such_variation"), "no_such_variation");
+        let d = Disqualification::NotAffine { index: 0, why: NotAffine::Variation(key.clone()) };
+        assert_eq!(d.describe(&reg), "transform 1 uses Bubble2, which has no inverse");
+        assert_eq!(d.to_string(), format!("transform 0 uses `{key}`, which is not affine"), "logs keep the key");
+        let f = Disqualification::FinalNotAffine { why: Some(NotAffine::Priority(key.clone())) };
+        assert_eq!(f.describe(&reg), "the final transform moves Bubble2 out of the weighted sum");
+        let b = NoBall::Unbounded(key.clone(), Some("bounds are worked out for built-in variations only, so far".into()));
+        assert_eq!(b.describe(&reg), "Bubble2 has no forward bound (bounds are worked out for built-in variations only, so far)");
     }
 
     /// **A transform with unedited twins is analysed as with their

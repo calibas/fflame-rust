@@ -765,10 +765,18 @@ function takes the point, and the ids when it has parameters (as
     post, which the wire cannot carry, so a variation of the user's takes
     it from its source at registration (`custom::phase_of`,
     `VariationRegistry::set_phase`).
-  - **An unedited twin is its built-in** where only a def is known
-    (`twins::builtin_of`: the twin's text, with or without the id Edit
-    as Rhai gives it, line ends aside; noted per key at registration,
-    `twins::note`, `builtin_of_key`). The deep-zoom planner's tables --
+  - **An unedited twin is its built-in** where only a def is known:
+    one that computes what the twin does, noted per key at registration
+    (`twins::note`, `note_maths`, `builtin_of_key`). The twin's text
+    (with or without the id Edit as Rhai gives it, line ends aside;
+    `twins::builtin_of`), or its maths (`twins::builtin_computed_by`:
+    its compiled shaders with its own names blanked, its phase,
+    features, state, derived slots, emissions and parameters' names and
+    kinds, against the twin its `INFO.name` or its functions name): a
+    changed title, `INFO.name`, description, comment, or a parameter's
+    caption, default or range keeps it (the user, 2026-11-08: a twin
+    retitled "Bubble2" lost the Flame Attractor and Focused Rendering).
+    Compared after the registry's lock, as compiling may read it. The deep-zoom planner's tables --
     inverses, bounds, interval bodies -- find the built-in's under its
     key (`twins::planner_name`, in `inverse::for_name`,
     `bound::for_name` and `derive`), except a many-valued one's: the
@@ -776,12 +784,28 @@ function takes the point, and the ids when it has parameters (as
     (`bound::force_arms`), so a twin of `julian` or `juliascope` would
     plan as unknown. A `.flame` export writes it under its built-in's
     name, its weight, parameters, order and `fx_priority` with it
-    (`flame_xml::twins_as_builtins`). One character changed and it is a
+    (`flame_xml::twins_as_builtins`). Its maths changed and it is a
     variation of the user's, with neither
-    (`an_unedited_twin_keeps_its_builtins_planner_data`,
+    (`a_twin_is_unedited_by_its_maths_not_its_text`,
+    `an_unedited_twin_keeps_its_builtins_planner_data`,
     `an_unedited_twins_transform_is_analysed_as_its_builtins`,
     `an_unedited_twin_exports_as_its_builtin`). Still a def's alone: its
     aliases (a `.flame`'s foreign names).
+  - **Named by its label** where the user reads it
+    (`VariationRegistry::label`: a Rhai variation's title, never its
+    key; one whose carried source did not compile by that source's
+    title, `custom::title_of`): the Transforms panel and its collapsed
+    summary, Undo History, animation targets and the track editor, the
+    Reset Orbits tooltip, the Variations panel, the Random Generator (one
+    version of each), the gallery, the browser (a key it does not know
+    as "a Rhai variation"), the Formula Editor's status, and the Flame
+    Attractor's and Focused Rendering's refusals
+    (`Disqualification::describe`, `NoBall::describe`: transforms from
+    1, "has no inverse", and for a Rhai variation "bounds are worked out
+    for built-in variations only, so far"; their `Display` keeps the
+    key, for logs). A carried source that did not compile is reported by
+    its title and its error, not fetched from the library
+    (`custom::error_of`).
 `VariationPhase::Any` has no wire form yet, so a downloaded variation
 cannot honour `fx_priority`. The catalog, caching and curation are in
 [ONLINE.md](ONLINE.md); the design record is
