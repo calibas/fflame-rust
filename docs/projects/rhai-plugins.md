@@ -1263,7 +1263,8 @@ Steps, in the order that unlocks the most first (the user picks):
      in all. **The slow twins**: a whole-array copy as WGSL's own
      assignment, not the checker's loop over its elements (which kept
      small arrays out of registers): von_dyck 1.68 to 1.01, su_mobius
-     3.06 to 1.08, dc_hexes_wf 1.59 to 1.09; polychoron stays 5.65, its
+     3.06 to 1.08, dc_hexes_wf 1.59 to 1.09; polychoron stayed 5.65 (fixed
+     since, its table in derived slots: variation-param-storage.md), its
      4372-float table copied to a local at each run-time read (naga's
      spill), four reads a vertex where the built-in's one -- a fix to the
      tables' storage reaches the built-ins too, the user's call. The

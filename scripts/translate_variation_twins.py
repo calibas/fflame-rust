@@ -374,6 +374,9 @@ class Fn:
         self.outs = {}
         # Names bound to `transforms[xform_id]`, read for its coefficients.
         self.xform_alias = set()
+        # Variables a constant table is copied into whole and never
+        # written (`var verts = POLYCHORA_VERTS;`): read as the table.
+        self.table_alias = {}
         # A 3D body ending in an `if`: the arms set this, returned after.
         self.result_var = None
         # A helper's pointer argument, written as `this`.
@@ -472,6 +475,8 @@ class Fn:
                 n = len(e[2])
                 return {1: "f32", 2: "vec2", 3: "vec3", 4: "vec4"}[n]
             return "f32"
+        if k == "index" and e[1][0] == "id" and e[1][1] in self.table_alias:
+            return array_of(CONSTS[self.table_alias[e[1][1]]][0])[0]
         if k == "index" and e[1][0] == "id" and e[1][1] in CONSTS and e[1][1] not in self.types:
             return array_of(CONSTS[e[1][1]][0])[0]
         if k == "index":
@@ -655,6 +660,8 @@ class Fn:
                 if len(sw) == 3: return f"vec3({', '.join(parts)})"
                 return f"rgba({', '.join(parts)})"
             raise Refuse(f"a field `.{sw}`")
+        if k == "index" and e[1][0] == "id" and e[1][1] in self.table_alias:
+            return self.table_read(self.table_alias[e[1][1]], e[2])
         if k == "index" and e[1][0] == "id" and e[1][1] in CONSTS and e[1][1] not in self.types:
             return self.table_read(e[1][1], e[2])
         if k == "index" and e[1][0] == "index" and e[1][1][0] == "id" and self.types.get(e[1][1][1]) == "mat3":
@@ -1069,6 +1076,13 @@ class Fn:
             else:
                 self.line(depth, lambda: f"let {s[2]} = {self.ex(s[4])};")
             return
+        if k == "decl" and s[4] is not None and s[4][0] == "id" and s[4][1] in CONSTS and s[4][1] not in self.types \
+                and (CONSTS[s[4][1]][0] or "").replace(" ", "").startswith("array<"):
+            # A whole table copied into a variable (one copy where a read of
+            # the constant at a run-time index copies it each time): its
+            # reads are the table's.
+            self.table_alias[s[2]] = s[4][1]
+            return
         if k == "decl":
             _, kind, name, ty, init = s
             t = vec_of(ty.strip()) if ty else (self.ty(init) if init else None)
@@ -1087,6 +1101,11 @@ class Fn:
             return
         if k == "assign":
             _, lhs, op, rhs = s
+            base = lhs
+            while base[0] in ("index", "field"):
+                base = base[1]
+            if base[0] == "id" and base[1] in self.table_alias:
+                raise Refuse("a table's copy written")
             # WGSL's `_ = e;`: e evaluated (a draw kept in the stream).
             if lhs == ("id", "_"):
                 self.temps += 1
@@ -1433,6 +1452,9 @@ class Translation:
             f.stmts(ss, 1, last=True)
         if f.uses_ctx:
             raise Refuse("an init reading the weight")
+        # Its tables' literals at its top, as a body's (the vertices
+        # polychoron's init copies).
+        f.lines[0:0] = f.table_lines()
         return helpers + ["fn prepare(p) {\n" + "\n".join(l[1] for l in f.lines) + "\n}\n"]
 
     def helper_fns(self, fns, dim):

@@ -1,7 +1,8 @@
 # Variation parameter storage: a general-purpose per-transform block
 
-Status: **steps 1-3 built** (2026-11-07, branch
-`variation-param-storage`; *Progress* below); the twins next. Follows the variation twins (`rhai-variation-hooks`,
+Status: **steps 1-4 built** (2026-11-07, branch
+`variation-param-storage`; *Progress* below); one question for the
+user (below, *Found for step 4*). Follows the variation twins (`rhai-variation-hooks`,
 [rhai-plugins.md](rhai-plugins.md) P7 step 3).
 
 ## Why
@@ -237,6 +238,30 @@ to before in every mode, 2D and 3D:
 - The contract's `largest_shipped_variation_slots` moved 259 to 2410
   (polychoron), and polychoron's and menger's `init_param_count` with
   it: the variation corpus changes, tell the API repository.
+
+**Step 4** (2026-11-07): the twins follow their built-ins. The
+translator already makes a def's `wgsl_init` the twin's `prepare` and a
+computed slot read `p.slots[e]`, so polychoron's and menger's twins,
+retranslated from the new built-ins, keep their vertices in `prepare`'s
+slots too. Two translator additions: a table copied whole into a
+variable never written (`var verts = POLYCHORA_VERTS;`) is read as the
+table, and `prepare`'s tables are written at its top (in `prepare` the
+language fills a local once a call, no module constant). Every other
+twin retranslates byte-identical.
+
+- Held: compile; pairs; density in 3D (both are 4D) at the defaults and
+  in each table mode -- polychoron's 5-cell, 120-cell and 600-cell,
+  menger's two 4-gap modes -- with the density gate's new
+  `VARIATION_TWINS_PARAMS=k=v`, which the defaults do not reach.
+- Timed against the new built-ins (`time_variation_twins`, which takes
+  the same knob): 1.00-1.04 in every mode (polychoron's was 5.65).
+- Not needed: the CPU pair judge's `prepare` reuse. Both variations
+  draw, so their pairs are judged by density and the judge never runs
+  them; no twin with a large `prepare` is judged by formula today.
+- The translator's general move of a table into `prepare` (for twins
+  whose built-ins keep a constant table) stays unbuilt: of the measured
+  ones, su_mobius's built-in gained nothing from it and polyhedron's twin
+  nothing, so the twins mirror their built-ins instead.
 
 **Found for step 4** (the twins): a Rhai array holds at most 8192
 floats and a loop runs at most 4096 times, `prepare`'s included, and

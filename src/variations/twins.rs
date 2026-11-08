@@ -1440,8 +1440,21 @@ mod tests {
         // is drawn with it turned, moved and in perspective, every field
         // apart from the default's zero.
         let reads_camera = |name: &str| source(name).is_some_and(|s| s.contains("ctx.camera_") || s.contains("ctx.perspective"));
+        // `VARIATION_TWINS_PARAMS=k=v,k=v`: the variation's parameters in
+        // both flames, a mode its defaults do not reach (menger's 4-gap,
+        // which reads its table).
+        let params: Vec<(String, f32)> = std::env::var("VARIATION_TWINS_PARAMS")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|kv| kv.split_once('=').and_then(|(k, v)| Some((k.to_string(), v.parse().ok()?))))
+            .collect();
         let flame = |name: &str, twin_of: &str, carries: Option<CustomSource>, direct: f32, three: bool| {
             let mut cfg = flame_coloured(name, carries, direct);
+            for t in cfg.flame.transforms.iter_mut().filter(|t| t.variations.contains_key(name)) {
+                for (k, v) in &params {
+                    t.variation_params.insert(format!("{name}.{k}"), *v);
+                }
+            }
             if three {
                 cfg.render_mode = crate::scene::transforms::RenderMode::ThreeD;
                 if reads_camera(twin_of) {
@@ -1586,6 +1599,13 @@ mod tests {
             let cfgs = [flame_coloured(name, None, 0.0), twin].map(|mut cfg| {
                 cfg.deterministic_rng = false;
                 cfg.flame.transforms[0].weight = 8.0;
+                // `VARIATION_TWINS_PARAMS`, as the density gate takes it.
+                let var = cfg.flame.transforms[0].variations.keys().next().cloned().unwrap_or_default();
+                for kv in std::env::var("VARIATION_TWINS_PARAMS").unwrap_or_default().split(',') {
+                    if let Some((k, v)) = kv.split_once('=').and_then(|(k, v)| Some((k, v.parse::<f32>().ok()?))) {
+                        cfg.flame.transforms[0].variation_params.insert(format!("{var}.{k}"), v);
+                    }
+                }
                 if three || all_3d {
                     cfg.render_mode = crate::scene::transforms::RenderMode::ThreeD;
                 }
