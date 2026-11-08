@@ -13,7 +13,7 @@ definitions, mostly ported from flam3, Apophysis and JWildfire.
   variations run inside
 - [SHADERS.md](SHADERS.md) — how `apply_variations` is generated, the
   WGSL lints, the Metal fast-math rules, the math probe and the census
-- [BUFFERS.md](BUFFERS.md) — `GpuVariationParams` and the state buffers
+- [BUFFERS.md](BUFFERS.md) — the variation parameter rows and the state buffers
 - [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md) — the planners that
   consume inverse definitions and forward bounds
 - [ESCAPE.md](ESCAPE.md) — the escape engine's IFS modes, which use the
@@ -310,10 +310,12 @@ consecutive floats in its transform's parameter block:
 The layout is packed per flame: each active variation gets the same
 offset in every transform's block, in local-index order, and the
 generated `get_param(xform_id, variation_id, slot)` maps the local
-index to that offset. A transform's block holds
-`MAX_VARIATION_PARAM_SLOTS = 1600` floats; a flame that needs more logs
-an error and loses parameters. See [BUFFERS.md](BUFFERS.md) and
-[SHADERS.md](SHADERS.md).
+index to that offset. A transform's row holds up to
+`MAX_VARIATION_PARAM_SLOTS` = 262,144 floats (1 MiB), and the buffer
+grows to fit the flame's rows, so an init may compute a table of
+thousands of floats once rather than a body reading a constant at a
+run-time index (which naga copies whole at every read). See
+[BUFFERS.md](BUFFERS.md) and [SHADERS.md](SHADERS.md).
 
 ### Per-thread state
 

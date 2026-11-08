@@ -685,7 +685,6 @@ impl LensGpu {
     ) -> Self {
         use crate::gpu::buffers::{pack_gpu_transforms, pack_gpu_variation_params};
         let transforms = pack_gpu_transforms(flame, crate::scene::transforms::RenderMode::TwoD);
-        let vparams = pack_gpu_variation_params(flame);
         let make = |label: &str, bytes: &[u8]| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
@@ -695,9 +694,9 @@ impl LensGpu {
         };
         // Every map's row (the lens and the transformations, C4).
         let rows = flame.transforms.len().clamp(1, transforms.len());
+        let vparams = pack_gpu_variation_params(flame).rows(rows);
         let transforms = make("Escape Lens Transforms", bytemuck::cast_slice(&transforms[..rows]));
-        let variation_params =
-            make("Escape Lens Variation Params", bytemuck::cast_slice(&vparams[..rows]));
+        let variation_params = make("Escape Lens Variation Params", bytemuck::cast_slice(&vparams));
         let flame_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Escape Lens Flame Params"),
             contents: bytemuck::bytes_of(
@@ -745,10 +744,10 @@ impl LensGpu {
     pub fn write(&self, queue: &wgpu::Queue, flame: &Flame) {
         use crate::gpu::buffers::{pack_gpu_transforms, pack_gpu_variation_params};
         let transforms = pack_gpu_transforms(flame, crate::scene::transforms::RenderMode::TwoD);
-        let vparams = pack_gpu_variation_params(flame);
         let rows = flame.transforms.len().clamp(1, transforms.len());
+        let vparams = pack_gpu_variation_params(flame).rows(rows);
         queue.write_buffer(&self.transforms, 0, bytemuck::cast_slice(&transforms[..rows]));
-        queue.write_buffer(&self.variation_params, 0, bytemuck::cast_slice(&vparams[..rows]));
+        queue.write_buffer(&self.variation_params, 0, bytemuck::cast_slice(&vparams));
         // Referenced so the buffers outlive the bind group; nothing
         // else writes them.
         let _ = (&self.flame_params, &self.attachments, &self.subflame_meta);

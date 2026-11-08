@@ -15,7 +15,7 @@ of where the points land.
 - [RENDERER.md](RENDERER.md) — dispatch sizing, persistent orbits,
   accumulation and tone mapping
 - [SHADERS.md](SHADERS.md) — how the per-flame shader is assembled
-- [BUFFERS.md](BUFFERS.md) — `GpuTransform`, `GpuVariationParams`, the
+- [BUFFERS.md](BUFFERS.md) — `GpuTransform`, the variation parameter rows, the
   attachment buffer
 - [CAMERA.md](CAMERA.md) — the 3D camera and the view mapping
 - [COLOR.md](COLOR.md) — colour modes and the palette

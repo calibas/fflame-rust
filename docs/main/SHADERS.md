@@ -47,7 +47,7 @@ cached and bound with a layout of exactly the bindings it names.
 
 | file | what it holds | spliced in |
 | --- | --- | --- |
-| `header.wgsl` | `Transform`, `Params`, `PostSymmetry`, `VariationParams`, `AttachmentList`, `Sample`/`SampleCounter`, `SubflameMeta`, `BlurConvolveParams`, every group-0 binding, and the flag-gated helpers that live beside their bindings (`bias_*`, `ct_*`, `pathmap_origin`, `shadow_map_splat`) | always |
+| `header.wgsl` | `Transform`, `Params`, `PostSymmetry`, `AttachmentList`, `Sample`/`SampleCounter`, `SubflameMeta`, `BlurConvolveParams`, every group-0 binding, and the flag-gated helpers that live beside their bindings (`bias_*`, `ct_*`, `pathmap_origin`, `shadow_map_splat`) | always |
 | `rng.wgsl` | `RngState`, `pcg_hash`, `rng_init`, `rng_next`, `rng_nextf` | always |
 | `affine.wgsl` / `affine_3d.wgsl` | `apply_affine`, `apply_post_affine` (3D also `rotate_x`, `rotate_y` and the JWF plane affines) | one, by `RENDER_3D` |
 | `complex.wgsl` | complex arithmetic and the 2×2 complex matrix `CMat2` | always (main and init shader) |
@@ -290,14 +290,17 @@ Further rules in the generated code:
 
 ### `get_param` and the packed parameter buffer
 
-`VariationParams` is one flat `array<f32, 1600>` per transform
-(`MAX_VARIATION_PARAM_SLOTS`). `compute_packed_layout` gives each active
-variation a contiguous run of `slot_count()` slots (its user parameters,
-then its `init_param_count` derived slots), in local-index order, at the
-same offset in every transform's block. `build_packed_get_param` bakes
-those offsets into the shader:
+`variation_params` is one flat `array<f32>`, a row of `PARAM_STRIDE`
+floats a transform (up to `MAX_VARIATION_PARAM_SLOTS`, 262,144).
+`compute_packed_layout` gives each active variation a contiguous run of
+`slot_count()` slots (its user parameters, then its `init_param_count`
+derived slots), in local-index order, at the same offset in every
+transform's row; the stride is their sum. `build_packed_get_param` bakes
+the offsets and the stride into the shader:
 
 ```wgsl
+const PARAM_STRIDE: u32 = 3u;
+
 fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {
     var offset: u32 = 0u;
     switch (variation_id) {
@@ -305,7 +308,7 @@ fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {
         case 1u: { offset = 0u; }  // julian: 3 slots
         ...
     }
-    return variation_params[xform_id].params[offset + param_slot];
+    return variation_params[xform_id * PARAM_STRIDE + offset + param_slot];
 }
 ```
 
@@ -418,8 +421,9 @@ not use it. Tests hold this per feature: `solid_off_is_byte_identical`,
 
 The structs mirror Rust structs in
 [src/gpu/buffers.rs](../../src/gpu/buffers.rs) (`GpuTransform`,
-`GpuParams`, `GpuPostSymmetry`, `GpuVariationParams`,
-`GpuAttachmentList`, `SubflameMeta`, `BlurConvolveParams`). A field
+`GpuParams`, `GpuPostSymmetry`, `GpuAttachmentList`, `SubflameMeta`,
+`BlurConvolveParams`); the variation parameters are a flat `f32` array
+(`PackedVariationParams`). A field
 added to one must be added to the other, padding included: `Params`
 keeps `post_symmetry` on a 16-byte boundary with explicit pad fields.
 [BUFFERS.md](BUFFERS.md) has the layouts.
@@ -547,12 +551,18 @@ A variation can declare derived parameters, values computed once from
 its user parameters (`wgsl_init`, `init_param_count`).
 `build_init_shader` emits a separate kernel:
 
-- binding 0, `variation_params` as `read_write`, and `complex.wgsl`;
+- binding 0, `variation_params` as `read_write` (the same flat rows),
+  and `complex.wgsl`;
 - each init-bearing variation's `init_<name>(user: array<f32, N>)`,
   once;
-- `@compute @workgroup_size(64) fn init_main`, a `switch` with one
-  `case` per (transform, variation) pair: read the user slots, call the
-  init, write the result into the slots after them.
+- `@compute @workgroup_size(64) fn init_main`, a thread a (transform,
+  variation) pair: its run's start and its init read from a table
+  (`INIT_PAIRS`), then a `switch` with one `case` per variation -- not
+  per pair -- that reads the user slots, calls the init and writes the
+  result into the slots after them, each run by a loop. So the kernel
+  is as long however many transforms carry a variation: a case a pair
+  copied an init's arrays (a table of 8192 floats) for each, and a
+  hundred of them took the driver past ten minutes and 5 GB.
 
 Pairs cover every transform the main shader reads, in global id order:
 normals, linked, finals, then subflame transforms from
@@ -636,7 +646,10 @@ state, never serialised:
 - It remembers which variations recent flames used and compiles each
   flame against a **canonical map**: the sorted union of the flame's
   variations and the retained extras, up to `STICKY_CAP` (32) and
-  within the hard caps of 100 variations and 1600 parameter slots.
+  within the cap of 100 variations, and while the row stays within
+  1600 parameter slots (`EXTRAS_SLOT_BUDGET`: each extra lengthens
+  every transform's row, and so every upload, for a variation the flame
+  does not draw).
 - The extras ride at weight 0, so they are branch-skipped; the map
   depends only on the set, so flames drawing from one pool converge on
   one pipeline.

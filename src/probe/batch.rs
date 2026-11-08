@@ -58,7 +58,10 @@ impl Target {
 /// sufficient and simpler than making the budget depend on the mix.
 pub const MAX_PER_FLAME: usize = 99;
 
-/// Ceiling on packed parameter slots in one flame
+/// The packed parameter slots a batch of several variations may take: a
+/// budget of the probe's, as each of a batch's (up to 99) transforms
+/// holds a row of all of them. A variation wider alone is probed in a
+/// batch of its own, up to the buffer's ceiling
 /// (`MAX_VARIATION_PARAM_SLOTS`).
 pub const MAX_SLOTS: usize = 1600;
 
@@ -104,16 +107,16 @@ pub fn plan_batches(targets: &[Target]) -> Vec<Batch> {
     let mut slots = 0usize;
 
     for target in targets {
-        // A single variation wider than the whole budget cannot be
-        // probed at all. None exists today (worst is 259 of 1600) and
-        // the shader builder would reject it too, but say so rather
-        // than emitting a batch that fails to compile later.
-        if target.slots > MAX_SLOTS {
+        // A single variation wider than a transform's row cannot be
+        // probed at all; say so rather than emitting a batch that fails
+        // later. One wider than the budget alone gets a batch of its own
+        // (the test below starts one for it, and for whatever follows).
+        if target.slots > crate::gpu::buffers::MAX_VARIATION_PARAM_SLOTS {
             log::error!(
-                "variation `{}` needs {} slots, over the {MAX_SLOTS} budget \
-                 for a whole flame — it cannot be probed",
+                "variation `{}` needs {} slots, over the {} a transform's row holds — it cannot be probed",
                 target.name,
-                target.slots
+                target.slots,
+                crate::gpu::buffers::MAX_VARIATION_PARAM_SLOTS
             );
             continue;
         }
@@ -198,7 +201,7 @@ mod tests {
                 batch.targets.len()
             );
             assert!(
-                batch.slots <= MAX_SLOTS,
+                batch.slots <= MAX_SLOTS || batch.targets.len() == 1,
                 "batch of {} slots exceeds the {MAX_SLOTS} budget",
                 batch.slots
             );
@@ -217,10 +220,11 @@ mod tests {
     }
 
     #[test]
-    fn a_variation_wider_than_the_whole_budget_is_dropped_not_batched() {
-        let batches = plan_batches(&[t("ok", 10), t("impossible", MAX_SLOTS + 1), t("fine", 10)]);
-        let packed: Vec<&str> = batches.iter().flat_map(|b| b.names()).collect();
-        assert_eq!(packed, vec!["ok", "fine"]);
+    fn a_variation_wider_than_the_budget_is_batched_alone() {
+        let row = crate::gpu::buffers::MAX_VARIATION_PARAM_SLOTS;
+        let batches = plan_batches(&[t("ok", 10), t("wide", MAX_SLOTS + 1), t("impossible", row + 1), t("fine", 10)]);
+        let packed: Vec<Vec<&str>> = batches.iter().map(|b| b.names().collect()).collect();
+        assert_eq!(packed, vec![vec!["ok"], vec!["wide"], vec!["fine"]], "wider than a row, dropped");
     }
 
     /// Not an assertion about a number so much as a record of the cost:

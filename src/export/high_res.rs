@@ -13,7 +13,7 @@ use wgpu::*;
 use rayon::prelude::*;
 
 use crate::config::FractalConfig;
-use crate::gpu::buffers::{GpuParams, GpuVariationParams, TonemapParams};
+use crate::gpu::buffers::{GpuParams, TonemapParams};
 use crate::renderer::effect_chain::EffectChainRunner;
 use crate::scene::tonemap::ToneCurve;
 use crate::scene::transforms::RenderMode;
@@ -557,14 +557,10 @@ impl HighResExporter {
             queue.write_buffer(&blur_convolve_params_buffer, 0, bytemuck::bytes_of(&params));
         }
 
-        // Variation params buffer — sized for the worst-case
-        // MAX_TRANSFORMS slots so flames whose pool count exceeds the
-        // old 32-slot cap don't overflow the write.
-        // Parent + subflame variation params, sized for the unified slot space
-        // (MAX_TRANSFORMS_UNIFIED) so subflame slots [MAX_TRANSFORMS..) exist.
-        let variation_params = crate::gpu::buffers::pack_gpu_variation_params(&config.flame);
-        let variation_params_size = (crate::gpu::buffers::MAX_TRANSFORMS_UNIFIED
-            * std::mem::size_of::<GpuVariationParams>()) as u64;
+        // Variation params buffer: the parent's rows and the subflames'
+        // (from row MAX_TRANSFORMS), sized to them.
+        let variation_params = crate::gpu::buffers::pack_gpu_variation_params(&config.flame).flat();
+        let variation_params_size = (variation_params.len() * 4) as u64;
         let variation_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Variation Params Buffer"),
             size: variation_params_size,
