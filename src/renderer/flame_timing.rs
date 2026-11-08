@@ -54,10 +54,12 @@ fn flames() -> Vec<(String, FractalConfig)> {
     out
 }
 
-/// A flame of `variation`: on a turning shrink, weighted 8 to the two
-/// linear shrinks' 1 that keep it bounded, so most iterations run it.
-fn variation_flame(variation: &str, three: bool) -> (String, FractalConfig) {
+/// A flame of a variation (`name:k=v:k=v` with its parameters): on a
+/// turning shrink, weighted 8 to the two linear shrinks' 1 that keep it
+/// bounded, so most iterations run it.
+fn variation_flame(name: &str, three: bool) -> (String, FractalConfig) {
     use crate::scene::transforms::{RenderMode, Transform};
+    let (variation, params) = name.split_once(':').unwrap_or((name, ""));
     let mut cfg = FractalConfig::default();
     cfg.render_mode = if three { RenderMode::ThreeD } else { RenderMode::TwoD };
     cfg.flame.transforms = [
@@ -78,7 +80,13 @@ fn variation_flame(variation: &str, three: bool) -> (String, FractalConfig) {
         t
     })
     .collect();
-    (format!("{variation}{}", if three { " (3D)" } else { "" }), cfg)
+    // `name:k=v:k=v`, the variation's parameters.
+    for kv in params.split(':').filter(|s| !s.is_empty()) {
+        if let Some((k, v)) = kv.split_once('=') {
+            cfg.flame.transforms[0].variation_params.insert(format!("{variation}.{k}"), v.parse().unwrap_or(0.0));
+        }
+    }
+    (format!("{name}{}", if three { " (3D)" } else { "" }), cfg)
 }
 
 #[test]
