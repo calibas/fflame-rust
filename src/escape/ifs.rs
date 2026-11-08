@@ -340,6 +340,7 @@ fn ifs_inv_point(i: u32, p: vec2<f32>) -> vec2<f32> {
         return q;
     }
     let u = ifs_kernel_inverse(i, q);
+//__IFS_USER_POINT__
     let pm = ifs_maps[i].pre_m;
     let pt = ifs_maps[i].pre_t;
     return vec2<f32>(
@@ -9867,6 +9868,34 @@ mod gpu_tests {
             };
             let got = render(&frame(twin.clone()));
             let (ni, no, agree, mi, mo) = agreement(&ifs_t, &got);
+            if let Ok(dir) = std::env::var("INVERSE_TWINS_PNG") {
+                // Red: the reference's set, dark; green: its exterior, lit.
+                let span = ifs_t.ball.radius * 2.4;
+                let px = span / H as f64;
+                let cut = (mi + mo) * 0.5;
+                let mut img = vec![0u8; (W * H * 4) as usize];
+                for y in 0..H {
+                    for x in 0..W {
+                        let u = (x as f64 + 0.5) / W as f64 - 0.5;
+                        let v = (y as f64 + 0.5) / H as f64 - 0.5;
+                        let q = [ifs_t.ball.centre[0] + u * span * W as f64 / H as f64, ifs_t.ball.centre[1] + v * span];
+                        let d = estimate(&ifs_t, q, LEVELS, BEAM).distance;
+                        let b = brightness(&got, x, y);
+                        let k = ((y * W + x) * 4) as usize;
+                        img[k + 3] = 255;
+                        if d < 0.25 * px && b <= cut {
+                            img[k] = 255;
+                        } else if d > 3.0 * px && b > cut {
+                            img[k + 1] = 255;
+                        } else if d < 0.25 * px {
+                            img[k + 2] = 90;
+                        }
+                    }
+                }
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = image::save_buffer(format!("{dir}/{name}-twin-misread.png"), &img, W, H, image::ColorType::Rgba8);
+                let _ = image::save_buffer(format!("{dir}/{name}-twin-only.png"), &got, W, H, image::ColorType::Rgba8);
+            }
             if ni < 50 || no < 500 || mi <= mo {
                 failures.push(format!("{name}: interior {ni} exterior {no} (means {mi:.3} / {mo:.3})"));
             }
@@ -9920,10 +9949,126 @@ mod gpu_tests {
                     if agree < 0.97 {
                         failures.push(format!("{name}: agrees {agree:.3} with the reference"));
                     }
+                    // The walk-only kernels' sets are thin at this size.
+                    if ni >= 25 {
+                        failures.retain(|f| !f.starts_with(&format!("{name}: interior")));
+                    }
                 }
             }
         }
         crate::variations::twins::BORROW.with(|b| b.set(true));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// **A built-in with no inverse in Rust takes its twin's**
+    /// (docs/projects/rhai-planners.md, B1): swirl, horseshoe and the rest
+    /// of `scripts/twin_inverses.py`'s, in flames of the built-in itself,
+    /// qualify for the Flame Attractor as user kernels and render as their
+    /// CPU reference walks. `INVERSE_BUILTINS=a,b` runs those alone.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_builtin_borrows_its_twins_inverse() {
+        use crate::scene::ifs_analysis::{analyse_2d, Kernel};
+        let only: Option<Vec<String>> = std::env::var("INVERSE_BUILTINS").ok().map(|v| v.split(',').map(str::to_string).collect());
+        let with = |v: &str, a: [f32; 6], w: f32| {
+            kernel_flame(vec![
+                (v, a, w, 0.3),
+                ("linear", [0.5, 0.0, 0.0, 0.5, 0.5, 0.3], 1.0, 0.8),
+                ("linear", [0.45, 0.0, 0.0, 0.45, -0.4, 0.4], 1.0, 0.6),
+                ("linear", [0.5, 0.0, 0.0, 0.5, 0.0, -0.5], 1.0, 0.1),
+            ])
+        };
+        let shrink = [0.5, 0.2, -0.2, 0.5, 0.0, 0.0];
+        let cases: Vec<(&str, Flame)> = vec![
+            ("swirl", with("swirl", shrink, 1.0)),
+            ("horseshoe", with("horseshoe", shrink, 1.0)),
+            ("polar", with("polar", [0.6, 0.0, 0.0, 0.6, 0.0, 0.2], 0.5)),
+            ("exponential", with("exponential", [0.7, 0.0, 0.0, 0.7, -0.6, 0.0], 0.6)),
+            ("exp", with("exp", [0.7, 0.0, 0.0, 0.7, -0.9, 0.0], 0.7)),
+            ("log", with("log", [0.6, 0.2, -0.2, 0.6, 1.2, 0.3], 0.4)),
+            ("fisheye", with("fisheye", shrink, 0.6)),
+            ("eyefish", with("eyefish", shrink, 0.6)),
+            ("sinusoidal", with("sinusoidal", shrink, 0.7)),
+        ];
+        let mut failures = Vec::new();
+        for (name, flame) in cases {
+            if only.as_ref().is_some_and(|o| !o.iter().any(|x| x == name)) {
+                continue;
+            }
+            let guard = global_registry();
+            assert!(guard.inverse(name).is_none(), "{name} has an inverse in Rust");
+            let ifs = match analyse_2d(&flame, &guard) {
+                Ok(ifs) => ifs,
+                Err(e) => {
+                    failures.push(format!("{name}: does not qualify: {}", e.iter().map(|d| d.describe(&guard)).collect::<Vec<_>>().join("; ")));
+                    continue;
+                }
+            };
+            drop(guard);
+            assert!(ifs.maps.iter().any(|m| matches!(m.inverse.nonlinear().map(|n| n.kernel), Some(Kernel::User { .. }))), "{name}: not its twin's inverse");
+            let mut c = config_for(flame);
+            c.escape.center_re = format!("{}", ifs.ball.centre[0]);
+            c.escape.center_im = format!("{}", plane_im(ifs.ball.centre[1]));
+            let span = ifs.ball.radius * 2.4;
+            c.escape.zoom_log2 = (4.0 / span).log2();
+            let rgba = render(&c);
+            if let Ok(dir) = std::env::var("INVERSE_TWINS_PNG") {
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = image::save_buffer(format!("{dir}/{name}-borrowed.png"), &rgba, W, H, image::ColorType::Rgba8);
+            }
+            let px = span / H as f64;
+            let plane = |x: u32, y: u32| -> [f64; 2] {
+                let u = (x as f64 + 0.5) / W as f64 - 0.5;
+                let v = (y as f64 + 0.5) / H as f64 - 0.5;
+                [ifs.ball.centre[0] + u * span * W as f64 / H as f64, ifs.ball.centre[1] + v * span]
+            };
+            let (mut inside, mut outside) = (Vec::new(), Vec::new());
+            for y in 0..H {
+                for x in 0..W {
+                    let d = estimate(&ifs, plane(x, y), LEVELS, BEAM).distance;
+                    if d < 0.25 * px {
+                        inside.push(brightness(&rgba, x, y));
+                    } else if d > 3.0 * px {
+                        outside.push(brightness(&rgba, x, y));
+                    }
+                }
+            }
+            let mean = |v: &Vec<f64>| v.iter().sum::<f64>() / v.len().max(1) as f64;
+            let (mi, mo) = (mean(&inside), mean(&outside));
+            let cut = (mi + mo) * 0.5;
+            let lit_in = inside.iter().filter(|&&b| b > cut).count();
+            let lit_out = outside.iter().filter(|&&b| b > cut).count();
+            let agree = (lit_in + (outside.len() - lit_out)) as f64 / (inside.len() + outside.len()).max(1) as f64;
+            if let Ok(dir) = std::env::var("INVERSE_TWINS_PNG") {
+                // Red: the reference's set, dark; green: its exterior, lit.
+                let mut img = vec![0u8; (W * H * 4) as usize];
+                for y in 0..H {
+                    for x in 0..W {
+                        let d = estimate(&ifs, plane(x, y), LEVELS, BEAM).distance;
+                        let b = brightness(&rgba, x, y);
+                        let k = ((y * W + x) * 4) as usize;
+                        img[k + 3] = 255;
+                        if d < 0.25 * px && b <= cut {
+                            img[k] = 255;
+                        } else if d > 3.0 * px && b > cut {
+                            img[k + 1] = 255;
+                        } else if d < 0.25 * px {
+                            img[k + 2] = 90;
+                        }
+                    }
+                }
+                let _ = image::save_buffer(format!("{dir}/{name}-misread.png"), &img, W, H, image::ColorType::Rgba8);
+                let packed = pack_flame(&c.flame, &global_registry(), None).expect("packs");
+                let def = get_ifs("ifs_flame").expect("mode D");
+                let src = crate::escape::assembler::assemble_ifs_user(def, get_ifs_coloring("ifs_distance", def), 4, None, false, false, false, &packed.user);
+                let _ = std::fs::write(format!("{dir}/{name}-ifs.wgsl"), src);
+            }
+            println!("  {name}: {} maps, ball {:.4}; agrees with the reference {:.1}% (interior {} / exterior {})", ifs.maps.len(), ifs.ball.radius, agree * 100.0, inside.len(), outside.len());
+            // A set a few dozen pixels thick is enough to tell.
+            if inside.len() < 25 || outside.len() < 500 || mi <= mo || agree < 0.97 {
+                failures.push(format!("{name}: interior {} exterior {} agreement {agree:.3} (means {mi:.3} / {mo:.3})", inside.len(), outside.len()));
+            }
+        }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 

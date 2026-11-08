@@ -402,10 +402,12 @@ impl Kernel {
                 let c = (1.0 - v[0] * v[0]).max(0.0).sqrt();
                 c.min(1.0)
             }
-            // Where a user kernel's inverse gives no preimage its point
-            // is at 1e30, which the walk reads as that piece escaped, as
-            // a built-in's past its image: one, as bubble's is there, so
-            // the bound is that far and not held at zero.
+            // Where a user kernel's inverse gives no preimage -- past the
+            // image, or on a ring its branch does not reach -- its point
+            // is at infinity (`apply_inverse`), the walk folds no term for
+            // it and a path frozen there keeps only a positive bound it
+            // had (`fold_level`, the frozen rule); one, as bubble's. The
+            // GPU's row leaves the same way (`ifs_user_block`).
             Kernel::User { slot } if !crate::variations::user_inverse::is_preimage(crate::variations::user_inverse::kernel(slot).inverse(v, branch)) => 1.0,
             // The inverse's derivative is the dual numbers' own, so the
             // forward's σ_min is its largest singular value reciprocated
@@ -7856,14 +7858,16 @@ mod tests {
         let guard = global_registry();
         let r = &*guard;
         let mut bad = affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0);
-        bad.variations.insert("sinusoidal".to_string(), 0.5);
-        bad.variation_order.push("sinusoidal".to_string());
+        // A variation with no inverse anywhere: sinusoidal, the example
+        // this used to name, takes its twin's (`user_inverse::of`).
+        bad.variations.insert("waves".to_string(), 0.5);
+        bad.variation_order.push("waves".to_string());
         let big = affine_xform(1.5, 0.0, 0.0, 0.5, 0.0, 0.0);
         let mut fl = flame_of(vec![affine_xform(0.5, 0.0, 0.0, 0.5, 0.0, 0.0), bad, big]);
         fl.xaos = Some(vec![vec![1.0; 3]; 3]);
         let errs = analyse_2d(&fl, r).unwrap_err();
         let text: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
-        assert!(text.iter().any(|s| s == "transform 1 uses `sinusoidal`, which is not affine"), "{text:?}");
+        assert!(text.iter().any(|s| s == "transform 1 uses `waves`, which is not affine"), "{text:?}");
         assert!(text.iter().any(|s| s.starts_with("transform 2 is not contractive")), "{text:?}");
         assert_eq!(errs.len(), 2, "{text:?}");
     }

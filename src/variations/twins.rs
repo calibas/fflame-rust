@@ -1175,12 +1175,15 @@ mod tests {
     /// one's skeleton to `assets/variations/twins/<name>.rhai`, where none
     /// is yet.
     /// **The twins' inverses undo their forward maps**
-    /// (docs/projects/rhai-planners.md, B1): the eleven planar kernels'
-    /// own, written by hand (`scripts/twin_inverses.py`), each compiled
-    /// and checked at its defaults (`user_inverse::check`).
+    /// (docs/projects/rhai-planners.md, B1): every twin's that has one,
+    /// written by hand (`scripts/twin_inverses.py`) -- the eleven planar
+    /// kernels' and the built-ins' that have none in Rust -- each
+    /// compiled and checked at its defaults (`user_inverse::check`).
     #[test]
     fn the_twins_inverses_undo_their_maps() {
-        for name in ["julia", "julian", "juliascope", "spherical", "bubble", "hemisphere", "disc", "blob", "elliptic", "splits", "cylinder"] {
+        let with: Vec<&str> = TWINS.iter().filter(|(_, s)| s.contains("fn inverse(")).map(|(n, _)| *n).collect();
+        assert!(with.len() >= 20, "{with:?}");
+        for name in with {
             match crate::variations::user_inverse::compile(&own(name), name) {
                 Some(Ok(inv)) => assert!(inv.branches >= 1, "{name}"),
                 Some(Err(e)) => panic!("{name}: {e}"),
