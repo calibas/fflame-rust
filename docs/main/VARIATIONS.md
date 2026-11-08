@@ -727,7 +727,7 @@ function takes the point, and the ids when it has parameters (as
     its table, which naga copies to a local at every read of it indexed
     at run time (`spill_to_internal_variable`), the built-in paying the
     copy once a read too. Both now keep their vertices in derived slots
-    (docs/projects/variation-param-storage.md): the built-in 2-10x
+    (docs/archive/projects/variation-param-storage.md): the built-in 2-10x
     faster, and the twin, translated from it, 1.00-1.04 of it -- menger's
     the same, in its 4-gap modes.
   - **Renamed parameters** (the user, 2026-11-06: no Rhai or WGSL

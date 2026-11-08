@@ -88,7 +88,7 @@ const HARD_VARIATION_CAP: usize = 100;
 /// buffer's ceiling (`MAX_VARIATION_PARAM_SLOTS`, far above): each extra's
 /// slots lengthen every transform's row, and so every parameter upload,
 /// for a variation the flame does not draw. The 1600 the buffer held
-/// before it grew to fit (docs/projects/variation-param-storage.md), so
+/// before it grew to fit (docs/archive/projects/variation-param-storage.md), so
 /// what is retained is as it was; a flame whose own row is longer takes
 /// no extras.
 const EXTRAS_SLOT_BUDGET: usize = 1600;

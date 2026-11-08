@@ -1,9 +1,11 @@
 # Variation parameter storage: a general-purpose per-transform block
 
+> **Archived 2026-11-08** -- finished: steps 1-4 built and merged 2026-11-07 (branch `variation-param-storage`, PR #155) -- the parameter block a flat array of rows up to 262,144 floats a transform, the buffer kept at its old size (a smaller one moved where the renderer's other buffers land), the init kernel one case a variation, polychoron's and menger's vertex tables in their inits and their twins'. The API notice is in [v0.6.0-release.md](../../projects/v0.6.0-release.md). Read [BUFFERS.md](../../main/BUFFERS.md) (*Variation parameters*) and [VARIATIONS.md](../../main/VARIATIONS.md) for how it works now; this is the record of the plan, the measurements and the placement bisection.
+
 Status: **steps 1-4 built** (2026-11-07, branch
 `variation-param-storage`; *Progress* below). The API notice is in
-[v0.6.0-release.md](v0.6.0-release.md). Follows the variation twins (`rhai-variation-hooks`,
-[rhai-plugins.md](rhai-plugins.md) P7 step 3).
+[v0.6.0-release.md](../../projects/v0.6.0-release.md). Follows the variation twins (`rhai-variation-hooks`,
+[rhai-plugins.md](../../projects/rhai-plugins.md) P7 step 3).
 
 ## Why
 
