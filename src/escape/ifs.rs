@@ -3525,7 +3525,7 @@ pub fn pack_flame(
     if !user.params.is_empty() {
         let base = xaos.len().max(4) as f32;
         xaos.resize(xaos.len().max(4), 0.0);
-        for r in rows.iter_mut().filter(|r| r.kind == 8.0) {
+        for r in rows.iter_mut().filter(|r| r.kind == 8.0 || (r.kind == 7.0 && r.lin_t[3] == 8.0)) {
             r.params[1] += base;
         }
         xaos.extend_from_slice(&user.params);
@@ -3540,9 +3540,10 @@ pub fn pack_flame(
 /// carry.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct UserKernels {
-    /// `(key, wgsl, gap)` of each inverse, in first use: function `f` is
-    /// the `f`th; its WGSL holds its image gap's function too when `gap`.
-    pub functions: Vec<(String, String, bool)>,
+    /// `(key, wgsl, gap, forward)` of each inverse, in first use:
+    /// function `f` is the `f`th; its WGSL holds its image gap's function
+    /// too when `gap`, and its forward map's when `forward` (B2).
+    pub functions: Vec<(String, String, bool, bool)>,
     /// Every kernel's values, one after another.
     pub params: Vec<f32>,
     /// Each kernel's slot, function and offset into `params`.
@@ -3557,7 +3558,7 @@ impl UserKernels {
 
     /// The pipeline's identity for these functions: their keys.
     pub fn key(&self) -> String {
-        self.functions.iter().map(|(k, _, _)| k.as_str()).collect::<Vec<_>>().join(",")
+        self.functions.iter().map(|(k, _, _, _)| k.as_str()).collect::<Vec<_>>().join(",")
     }
 }
 
@@ -3566,18 +3567,20 @@ pub fn user_kernels(ifs: &Ifs2) -> UserKernels {
     use crate::scene::ifs_analysis::Kernel;
     let mut u = UserKernels::default();
     for m in &ifs.maps {
-        let Some(Kernel::User { slot }) = m.inverse.nonlinear().map(|n| n.kernel) else { continue };
+        let kernel = m.inverse.nonlinear().map(|n| n.kernel).or_else(|| m.inverse.sum().map(|s| s.kernel));
+        let Some(Kernel::User { slot }) = kernel else { continue };
         if u.slots.iter().any(|s| s.0 == slot) {
             continue;
         }
         let kernel = crate::variations::user_inverse::kernel(slot);
         let key = &kernel.inverse.key;
-        let f = match u.functions.iter().position(|(k, _, _)| k == key) {
+        let f = match u.functions.iter().position(|(k, _, _, _)| k == key) {
             Some(f) => f,
             None => {
                 let gap = kernel.inverse.gap.as_ref().map(|(_, w)| w.as_str());
-                let wgsl = format!("{}{}", kernel.inverse.wgsl, gap.unwrap_or(""));
-                u.functions.push((key.clone(), wgsl, gap.is_some()));
+                let fwd = kernel.inverse.forward_wgsl.as_deref();
+                let wgsl = format!("{}{}{}", kernel.inverse.wgsl, gap.unwrap_or(""), fwd.unwrap_or(""));
+                u.functions.push((key.clone(), wgsl, gap.is_some(), fwd.is_some()));
                 u.functions.len() - 1
             }
         };
@@ -4111,6 +4114,7 @@ pub(crate) const IFS_NEWTON: &str = r#"
 // says 7.
 fn ifs_kernel_forward(i: u32, z: vec2<f32>) -> vec2<f32> {
     let k = ifs_maps[i].lin_t.w;
+//__IFS_USER_FORWARD__
     let r2 = dot(z, z);
     if (k == 1.0) {
         let n = ifs_maps[i].params.x;
@@ -4176,6 +4180,7 @@ fn ifs_sum_phase_jacobian(i: u32, z: vec2<f32>) -> mat2x2<f32> {
 // can hold.
 fn ifs_sum_kernel_inverse(i: u32, v: vec2<f32>) -> vec2<f32> {
     let k = ifs_maps[i].lin_t.w;
+//__IFS_USER_SUM_INVERSE__
     let r2 = dot(v, v);
     if (k == 1.0) {
         let n = ifs_maps[i].params.x;
@@ -6545,10 +6550,13 @@ pub fn pack_maps(
                         Kernel::Blob { high, low, waves } => {
                             (6.0, [high as f32, low as f32, waves as f32, 0.0])
                         }
-                        // A user kernel summed with an affine is B2's
-                        // (docs/projects/rhai-planners.md): the analysis
-                        // refuses it until then.
-                        Kernel::User { .. } => unreachable!("analyse_2d refuses a user kernel in a sum"),
+                        // A Rhai variation's own (B2): its forward map and
+                        // inverse are its functions', x and y as its own
+                        // rows have them.
+                        Kernel::User { slot } => {
+                            let (f, at) = user.at(slot);
+                            (8.0, [f as f32, at as f32, 0.0, 0.0])
+                        }
                         Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } | Kernel::Root { mirror: true, .. } => {
                             unreachable!("analyse_2d refuses the walk's own kernels (Kernel::walk_only)")
                         }
@@ -9804,12 +9812,30 @@ mod gpu_tests {
             ("splits", kernel_flame(vec![("splits", [0.45, 0.1, -0.1, 0.45, 0.0, 0.0], 1.0, 0.3), ("linear", [0.5, 0.0, 0.0, 0.5, 0.5, -0.4], 1.0, 0.8)])),
             ("cylinder", kernel_flame(vec![("cylinder", [0.5, 0.2, -0.2, 0.5, 0.0, 0.0], 0.9, 0.3), ("linear", [0.5, 0.0, 0.0, 0.5, 0.3, 0.4], 1.0, 0.8)])),
         ];
+        // Summed with `linear` in its transform (B2): Newton over its
+        // forward map, as the built-in's sum is solved. Not disc's: its
+        // twelve rings' solves, each step in the interpreter, take the
+        // CPU reference hours at this size.
+        let summed = |flame: Flame, v: &str, lw: f32| {
+            let mut f = flame;
+            f.transforms[0].variations.insert("linear".to_string(), lw);
+            f.transforms[0].variation_order.push("linear".to_string());
+            let _ = v;
+            f
+        };
+        let sums: Vec<(&str, Flame)> = vec![
+            ("bubble+linear", summed(bubble_ifs_flame(), "bubble", 0.3)),
+            ("spherical+linear", summed(spherical_ifs_flame(), "spherical", 0.3)),
+            ("hemisphere+linear", summed(hemisphere_ifs_flame(), "hemisphere", 0.3)),
+        ];
         let mut failures = Vec::new();
-        for (name, builtin) in cases {
-            if only.as_ref().is_some_and(|o| !o.iter().any(|x| x == name)) {
+        for (label, builtin) in cases.into_iter().chain(sums) {
+            let name = label.split('+').next().expect("a name");
+            if only.as_ref().is_some_and(|o| !o.iter().any(|x| x == label)) {
                 continue;
             }
             let twin = twin_flame(&builtin, name);
+            let name = label;
             crate::variations::custom::ensure(&twin);
             let guard = global_registry();
             let ifs_t = match analyse_2d(&twin, &guard) {
@@ -9822,9 +9848,12 @@ mod gpu_tests {
             let ifs_b = analyse_2d(&builtin, &guard).ok();
             drop(guard);
             assert!(
-                ifs_t.maps.iter().any(|m| matches!(m.inverse.nonlinear().map(|n| n.kernel), Some(Kernel::User { .. }))),
+                ifs_t.maps.iter().any(|m| matches!(m.inverse.nonlinear().map(|n| n.kernel).or_else(|| m.inverse.sum().map(|s| s.kernel)), Some(Kernel::User { .. }))),
                 "{name}: the twin's maps are not its own inverse's"
             );
+            if name.contains('+') {
+                assert!(ifs_t.maps.iter().any(|m| m.inverse.sum().is_some()), "{name}: not a sum");
+            }
             // Framed on the twin's ball (the built-in's, where it has one,
             // is the same ball by the same sampling).
             let frame = |flame: Flame| {
@@ -9937,7 +9966,7 @@ mod gpu_tests {
                     }
                     // Spherical's twin keeps its 1e-6 and has no hole to
                     // score (`hole_radius`), so its walk is its own.
-                    if same_ball && worst_cpu > 1e-4 && name != "spherical" {
+                    if same_ball && worst_cpu > 1e-4 && !name.starts_with("spherical") {
                         failures.push(format!("{name}: the CPU walks differ by {worst_cpu:.2e} of the ball"));
                     }
                     if !same_ball && (ifs_b.ball.radius - ifs_t.ball.radius).abs() > 0.05 * ifs_b.ball.radius {

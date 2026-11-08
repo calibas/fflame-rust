@@ -534,6 +534,8 @@ impl Kernel {
             Kernel::Splits { .. } => z[0].abs().min(z[1].abs()),
             // `sin` is smooth everywhere; its folds are the INVERSE's edge.
             Kernel::Cylinder { .. } => f64::INFINITY,
+            // Nothing is known of where it stops being smooth.
+            Kernel::User { .. } => 0.0,
             _ => rho,
         }
     }
@@ -3273,6 +3275,8 @@ impl SumMap2 {
         match self.kernel {
             Kernel::Root { n, .. } => n.unsigned_abs().max(1),
             Kernel::Bubble => 2,
+            // Each of its inverse's branches seeds a solve.
+            Kernel::User { slot } => crate::variations::user_inverse::kernel(slot).inverse.branches,
             _ => 1,
         }
     }
@@ -3391,13 +3395,24 @@ pub fn transform_map_2d_ordered(
     if stage.any && matches!(kernel, Kernel::Cylinder { .. }) {
         return Err(NotAffine::MixedSum(kind.to_string()));
     }
-    // A user kernel summed with an affine needs its forward map in the
-    // shader's Newton solve (docs/projects/rhai-planners.md, B2).
-    let std::borrow::Cow::Borrowed(kind) = kind else {
-        if stage.any {
-            return Err(NotAffine::MixedSum(kind.to_string()));
+    // A user kernel summed with an affine (docs/projects/rhai-planners.md,
+    // B2): the shader's Newton solve steps on its forward map, which one
+    // that draws -- a root picked by `rand()` -- cannot give it.
+    let kind: &'static str = match kind {
+        std::borrow::Cow::Borrowed(k) => k,
+        std::borrow::Cow::Owned(k) => {
+            let summable = match kernel {
+                Kernel::User { slot } => {
+                    let inv = &crate::variations::user_inverse::kernel(slot).inverse;
+                    !inv.forward_draws && inv.forward_wgsl.is_some()
+                }
+                _ => true,
+            };
+            if stage.any && !summable {
+                return Err(NotAffine::MixedSum(k));
+            }
+            crate::variations::user_inverse::static_name(&k)
         }
-        return Ok(Map2::Nonlinear(NonlinearMap2 { kernel, branch: 0, pre, post, pre_inv, post_inv, hole: 0.0, third: 0.0, w }));
     };
     if stage.any {
         // A kernel SUMMED with an affine (D3). The affine part is
@@ -4322,7 +4337,13 @@ fn set_holes(maps: &mut [IfsMap<Map2>], ball: &Ball<[f64; 2]>) {
         // the affine term moves it -- but it always rides the Taylor
         // rung, so it always needs the remainder.
         if let Map2::Sum(r) | Map2::SumInverse(r) = &mut m.inverse {
-            r.measure_third(ball.centre, ball.radius);
+            // A user kernel's sum claims no smooth radius: unbounded,
+            // as its plain row's.
+            if matches!(r.kernel, Kernel::User { .. }) {
+                r.third = f64::INFINITY;
+            } else {
+                r.measure_third(ball.centre, ball.radius);
+            }
         }
     }
 }
