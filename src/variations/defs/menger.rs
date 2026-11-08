@@ -63,8 +63,12 @@ pub static MENGER: VariationDef = VariationDef {
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
     features: &[Feature::NeedsRng, Feature::NeedsW, Feature::WritesColor, Feature::AlwaysZ],
-    init_param_count: 0,
-    wgsl_init: None,
+    // The 4-gap modes' point set (224 vertices the most), copied from
+    // polychora.wgsl's table once a parameter change: read from the
+    // table at a run-time index, naga copies all 1093 vertices at every
+    // read.
+    init_param_count: 896,
+    wgsl_init: Some(WGSL_INIT),
     // State slot 0: the internal color register for the Flame color
     // mode (zero-init; converges within a few picks).
     state_count: 1,
@@ -84,6 +88,25 @@ pub static MENGER: VariationDef = VariationDef {
     wgsl_2d: WGSL_2D,
     wgsl_3d: WGSL_3D,
 };
+
+const WGSL_INIT: &str = r#"
+fn init_menger(user: array<f32, 10>) -> array<f32, 896> {
+    let dim = u32(user[0]);
+    var rc = vec2<u32>(0u, 0u);
+    if (dim == 2u) { rc = polychora_menger4gap_range(); }
+    if (dim == 3u) { rc = polychora_menger4gap4d_range(); }
+    var verts = POLYCHORA_VERTS;
+    var out: array<f32, 896>;
+    for (var k = 0u; k < rc.y; k = k + 1u) {
+        let v = verts[rc.x + k];
+        out[4u * k] = v.x;
+        out[4u * k + 1u] = v.y;
+        out[4u * k + 2u] = v.z;
+        out[4u * k + 3u] = v.w;
+    }
+    return out;
+}
+"#;
 
 const WGSL_2D: &str = r#"
 // Random carpet cell in {-1,0,1}^2 with at most `rule` zeros
@@ -205,7 +228,7 @@ fn variation_menger(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     var code = 0.0;
         for (var st = 0; st < steps; st = st + 1) {
             let idx = min(u32(rng_nextf(rng) * f32(rc.y)), rc.y - 1u);
-            let v = POLYCHORA_VERTS[rc.x + idx];
+            let v = vec4<f32>(get_param(xform_id, variation_id, 10u + 4u * idx), get_param(xform_id, variation_id, 11u + 4u * idx), get_param(xform_id, variation_id, 12u + 4u * idx), get_param(xform_id, variation_id, 13u + 4u * idx));
             q = k * q + (1.0 - k) * size * v.xyz;
             code = (f32(idx) + 0.5) / f32(rc.y);
             if (dc_mode == 1u) { creg = mix(creg, fract(code * dc_scale), color_speed); }
@@ -240,7 +263,7 @@ fn variation_menger(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     var code = 0.0;
         for (var st = 0; st < steps; st = st + 1) {
             let idx = min(u32(rng_nextf(rng) * f32(rc.y)), rc.y - 1u);
-            var v = POLYCHORA_VERTS[rc.x + idx] * size;
+            var v = vec4<f32>(get_param(xform_id, variation_id, 10u + 4u * idx), get_param(xform_id, variation_id, 11u + 4u * idx), get_param(xform_id, variation_id, 12u + 4u * idx), get_param(xform_id, variation_id, 13u + 4u * idx)) * size;
             v = vec4<f32>(cxw * v.x - sxw * v.w, v.y, v.z, sxw * v.x + cxw * v.w);
             v = vec4<f32>(v.x, cyw * v.y - syw * v.w, v.z, syw * v.y + cyw * v.w);
             v = vec4<f32>(v.x, v.y, czw * v.z - szw * v.w, szw * v.z + czw * v.w);

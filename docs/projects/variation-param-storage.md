@@ -1,8 +1,7 @@
 # Variation parameter storage: a general-purpose per-transform block
 
-Status: **steps 1 and 2 built** (2026-11-07, branch
-`variation-param-storage`; *Progress* below); the built-ins and the
-twins next. Follows the variation twins (`rhai-variation-hooks`,
+Status: **steps 1-3 built** (2026-11-07, branch
+`variation-param-storage`; *Progress* below); the twins next. Follows the variation twins (`rhai-variation-hooks`,
 [rhai-plugins.md](rhai-plugins.md) P7 step 3).
 
 ## Why
@@ -212,6 +211,32 @@ library's `const`:
   table's entry reaching the shader.
 - **The contract moved** (`variation_slots_per_flame` 1600 to 262,144):
   tell the API repository (RELEASE.md §3).
+
+**Step 3** (2026-11-07), measured flame by flame (`time_ordinary_flames`
+with `FLAME_TIMING_VARIATIONS`, eight placements; the variation on a
+turning shrink weighted 8 to two linears'), each picture byte-identical
+to before in every mode, 2D and 3D:
+
+| built-in | flame (ms per 16 dispatches) | before | after |
+| --- | --- | --- | --- |
+| polychoron | 16-cell, 2D / 3D | 139.5 / 228.5 | 21.9 / 23.4 |
+| polychoron | 120-cell, 2D / 3D | 155.3 / 332.3 | 87.1 / 85.9 |
+| menger | 4-gap, 3D | 311.0 | 81.2 |
+| menger | 4-gap 4D, 3D | 321.8 | 69.2 |
+| menger | 2D, any mode (the body reads no table) | 72.5-72.7 | 69.9-70.4 |
+
+- polychoron's init copies its shape's vertices (2400 floats the most),
+  menger's its 4-gap point set (896); the body reads four `get_param`s a
+  vertex. The init kernel takes the name-gated libraries its variations
+  use, as the main shader does. su_mobius moved likewise drew no gain
+  (its 992 floats read twice a call: group 3 at 34.3 before, 34.1 / 35.7
+  after), so it stays; polyhedron's 360 gained nothing in the twin
+  experiment, so it stays too. Runs minutes apart drifted a few percent
+  on the noisier flames (polyhedron, unchanged, 35.2 to 38.0), which is
+  why each comparison was made against the old build timed then.
+- The contract's `largest_shipped_variation_slots` moved 259 to 2410
+  (polychoron), and polychoron's and menger's `init_param_count` with
+  it: the variation corpus changes, tell the API repository.
 
 **Found for step 4** (the twins): a Rhai array holds at most 8192
 floats and a loop runs at most 4096 times, `prepare`'s included, and
