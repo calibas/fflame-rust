@@ -241,7 +241,7 @@ parent's transforms from row 0, the subflames' from row
 - **A row holds up to `MAX_VARIATION_PARAM_SLOTS` = 262,144 floats**
   (1 MiB; `update_variation_params` logs past it), so a variation may
   keep a table of thousands of floats in its derived slots
-  (docs/projects/variation-param-storage.md).
+  (docs/archive/projects/variation-param-storage.md).
 - **The buffer** is never smaller than it was when a row was 1600
   floats, `MIN_VARIATION_PARAMS_BYTES` = 2,457,600 bytes, and grows to a
   power of two for a flame whose rows need more

@@ -21,7 +21,7 @@
 //! flame 24% and another -26%, the same shader's work) -- so each is
 //! timed at several placements, a buffer made first shifting the
 //! renderer's, and builds compare by the median over them
-//! (docs/projects/variation-param-storage.md).
+//! (docs/archive/projects/variation-param-storage.md).
 #![cfg(test)]
 
 use crate::config::FractalConfig;
