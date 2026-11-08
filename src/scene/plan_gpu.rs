@@ -505,13 +505,13 @@ fn dz_endpoints(@builtin(global_invocation_id) gid: vec3<u32>) {
         // the finals (`ct_apply_finals`, tracker C7).
         let n = (flame.transforms.len() + flame.linked_transforms.len() + flame.final_transforms.len()).max(1);
         let transforms = gb::pack_gpu_transforms(flame, crate::scene::transforms::RenderMode::TwoD);
-        let vparams = gb::pack_gpu_variation_params(flame);
+        let vparams = gb::pack_gpu_variation_params(flame).rows(n);
         let init = |label: &str, bytes: &[u8], usage: wgpu::BufferUsages| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: bytes, usage })
         };
         let st = wgpu::BufferUsages::STORAGE;
         let t_buf = init("Plan Eval Transforms", bytemuck::cast_slice(&transforms[..n.min(transforms.len())]), st);
-        let v_buf = init("Plan Eval Variation Params", bytemuck::cast_slice(&vparams[..n.min(vparams.len())]), st);
+        let v_buf = init("Plan Eval Variation Params", bytemuck::cast_slice(&vparams), st);
         let p_buf = init(
             "Plan Eval Params",
             bytemuck::bytes_of(&<gb::GpuParams as bytemuck::Zeroable>::zeroed()),

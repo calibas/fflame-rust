@@ -168,20 +168,6 @@ struct PostSymmetry {
     _pad_b: f32,
 }
 
-// Variation parameters for one transform — single flat array
-// shared by every active variation on the transform. Each variation
-// gets a contiguous run starting at the offset assigned by
-// `compute_packed_layout` (Rust side). The shader builder reads /
-// writes through `get_param(xform_id, variation_id, slot)` which
-// resolves the offset from a per-transform header — no
-// `variation_id * N + slot` constant stride anymore. Individual
-// variations can declare as many params as they need (the `complex`
-// variation already uses 64); the 1600-slot ceiling is on the
-// transform-wide total across all its active variations.
-struct VariationParams {
-    params: array<f32, 1600>,
-}
-
 // Path storage for PathMap color mode
 // Stores up to 32 iterations losslessly (4 bits per transform, up to 16 transforms)
 // Also stores initial random X/Y coordinates for complete path reconstruction
@@ -212,7 +198,14 @@ struct AttachmentList {
 
 @group(0) @binding(3) var palette_texture: texture_2d<f32>;
 @group(0) @binding(4) var palette_sampler: sampler;
-@group(0) @binding(5) var<storage, read> variation_params: array<VariationParams>;
+// Variation parameters: one flat array, a row of PARAM_STRIDE floats a
+// transform (`PackedVariationParams`, Rust side). Each active variation
+// gets a contiguous run of the row at the offset `compute_packed_layout`
+// assigns; the shader builder bakes the offsets and the stride into
+// `get_param(xform_id, variation_id, slot)`. A row holds up to
+// MAX_VARIATION_PARAM_SLOTS (262,144) floats across the transform's
+// variations.
+@group(0) @binding(5) var<storage, read> variation_params: array<f32>;
 
 // Binding 6 intentionally unused in histogram-direct mode. Was
 // `iteration_counts: array<atomic<u32>>` for the per-pixel convergence
@@ -423,9 +416,11 @@ fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<func
 }
 
 // Per-flame packed get_param: each active variation has its own
-// contiguous slot range in variation_params, with offsets baked
-// at flame compile time. See build_packed_get_param in
-// shader_builder_v2.rs.
+// contiguous slot range in a transform's row of variation_params,
+// with offsets and the row's length baked at flame compile time.
+// See build_packed_get_param in shader_builder_v2.rs.
+const PARAM_STRIDE: u32 = 1u;
+
 fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {
     var offset: u32 = 0u;
     switch (variation_id) {
@@ -433,7 +428,7 @@ fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {
         case 1u: { offset = 0u; }  // spherical: 0 slots
         default: { offset = 0u; }
     }
-    return variation_params[xform_id].params[offset + param_slot];
+    return variation_params[xform_id * PARAM_STRIDE + offset + param_slot];
 }
 
 const ORBIT_SLOTS: u32 = 0u;

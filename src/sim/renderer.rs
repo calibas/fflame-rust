@@ -2428,9 +2428,9 @@ impl SimRenderer {
         let key = LayerMapKey::of(flame);
         let n = flame.transforms.len().max(1);
         let transforms = pack_gpu_transforms(flame, crate::scene::transforms::RenderMode::TwoD);
-        let vparams = pack_gpu_variation_params(flame);
+        let vparams = pack_gpu_variation_params(flame).rows(n);
         let t_bytes: &[u8] = bytemuck::cast_slice(&transforms[..n.min(transforms.len())]);
-        let v_bytes: &[u8] = bytemuck::cast_slice(&vparams[..n.min(vparams.len())]);
+        let v_bytes: &[u8] = bytemuck::cast_slice(&vparams);
         let rates: Vec<f32> = flame.transforms.iter().map(|t| t.weight.clamp(0.0, 1.0)).collect();
         let rebuild = match &self.layer_map {
             Some(m) => m.key != key,

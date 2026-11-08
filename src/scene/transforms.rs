@@ -23,10 +23,9 @@ pub fn next_id() -> u64 {
 }
 
 /// Maximum number of variations that can be active in a single flame.
-/// This is the cap on the GPU-side `xform.variations` array and the
-/// `variation_params` array layout (100 variations × 12 params = 1200 floats).
-/// The variation registry itself is unbounded — this only limits the
-/// per-flame active set.
+/// This is the cap on the GPU-side `xform.variations` array (a
+/// transform's weights). The variation registry itself is unbounded —
+/// this only limits the per-flame active set.
 pub const MAX_VARIATIONS_PER_FLAME: usize = 100;
 
 /// Compute a per-flame local index map for the given active variation set.
@@ -104,7 +103,7 @@ pub struct PackedParamEntry {
 /// ```
 ///
 /// Both the shader builder (for its generated `get_param` switch) and
-/// the host packer ([`crate::gpu::buffers::GpuVariationParams`]) must
+/// the host packer ([`crate::gpu::buffers::PackedVariationParams`]) must
 /// use this layout consistently — they're keyed by local_idx through
 /// the same registry-order assignment.
 ///
@@ -149,6 +148,15 @@ pub fn total_packed_slots(
         .last()
         .map(|e| e.offset + e.slot_count)
         .unwrap_or(0)
+}
+
+/// The floats each transform's row of the parameter buffer holds: the
+/// layout's slots, at least one (a binding is never empty). The host
+/// packer and the shader's baked `PARAM_STRIDE` both take it from here,
+/// so `get_param`'s `xform_id * PARAM_STRIDE` finds the row the host
+/// wrote.
+pub fn packed_param_stride_of(layout: &[PackedParamEntry]) -> u32 {
+    layout.last().map_or(0, |e| e.offset + e.slot_count).max(1)
 }
 
 /// One entry in a flame's per-thread state layout. Records which (xform,

@@ -2780,7 +2780,11 @@ impl FlameRenderer {
         // PathMap's per-pixel path ids (the right-click): a loaded
         // PathMap config needs them as surely as a switch to PathMap.
         let path_buffers_changed = path_features_enabled && self.buffers.create_path_buffers(device);
-        if shaders_changed || path_buffers_changed {
+        // The parameter buffer holds the flame's rows; a larger flame grows
+        // it (the derived slots are computed again after the write below,
+        // as after every one).
+        let params_grew = self.buffers.ensure_variation_params_capacity(device, &config.flame);
+        if shaders_changed || path_buffers_changed || params_grew {
             log::info!("Shaders recompiled during preset load - recreating bind group");
             // Recreate compute bind group with new pipeline
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
@@ -3129,7 +3133,11 @@ impl FlameRenderer {
             constants,
             render_mode,
         );
-        if shaders_changed {
+        // The parameter buffer holds the flame's rows; a larger flame grows
+        // it (the derived slots are computed again after the write below,
+        // as after every one).
+        let params_grew = self.buffers.ensure_variation_params_capacity(device, flame);
+        if shaders_changed || params_grew {
             log::info!("Shaders recompiled due to variation/constant changes - recreating bind group");
             // Recreate compute bind group with new pipeline
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
@@ -6082,6 +6090,91 @@ mod memory_tests {
                 .await
                 .ok()
         })
+    }
+
+    /// **Tables past the buffer's size**, the block's general purpose: a
+    /// Rhai variation whose `prepare` returns a table of 8192 floats (an
+    /// array's most), in each of 100 transforms -- 3.3 MB of rows, past
+    /// the buffer's 2.4 MB -- grows a renderer made for one linear
+    /// transform. Its bind groups made again and the table computed
+    /// again by the init pass (the variation scales its point by an entry
+    /// of it, so a table unread draws another picture), it draws byte for
+    /// byte as a renderer made for the flame. Ignored: it registers a
+    /// variation, which the parallel suite must not (run it alone).
+    #[test]
+    #[ignore = "needs a GPU; registers a variation"]
+    fn a_wide_table_grows_the_parameter_buffer() {
+        use crate::config::FractalConfig;
+        use crate::renderer::{render_with, NoProgress, RenderJob};
+        use crate::scene::transforms::{Flame, Transform};
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let source = crate::lang::rhai::with_own_id(
+            "const INFO = #{ name: \"rhai_wide_table\" };\n\
+             const PARAMS = #{ base: #{ value: 0.25, min: 0.0, max: 1.0, caption: \"Base\" } };\n\
+             fn prepare(p) {\n    let t = array(8192, 0.0);\n    for i in 0..2048 {\n        for j in 0..4 {\n            t[i * 4 + j] = p.base + to_float(j) * 0.25;\n        }\n    }\n    #{ t: t }\n}\n\
+             fn variation(z, p) {\n    z * p.t[8189]\n}\n",
+            &crate::scripted::mint_id(),
+        );
+        let carried = crate::variations::custom::carried(&source).expect("it has a key");
+        if let Err(e) = crate::variations::custom::compile_as(&carried.source, &carried.entry) {
+            panic!("it compiles: {e}");
+        }
+        let config = |wide: bool, n: usize| {
+            let mut c = FractalConfig::default();
+            c.deterministic_rng = true;
+            c.flame = Flame::new();
+            c.flame.transforms = (0..n)
+                .map(|i| {
+                    let mut t = Transform::new();
+                    t.variations.clear();
+                    t.variation_order.clear();
+                    t.set_variation("linear", 0.5);
+                    if wide {
+                        t.set_variation(&carried.entry, 0.5);
+                    }
+                    (t.a, t.e, t.c) = (0.5, 0.5, (i % 4) as f32 * 0.25 - 0.4);
+                    t.weight = 1.0;
+                    t
+                })
+                .collect();
+            if wide {
+                c.flame.custom_variations.push(carried.clone());
+            }
+            c
+        };
+        let small = config(false, 1);
+        let big = config(true, 100);
+        let render = |r: &mut FlameRenderer, c: &FractalConfig| {
+            r.set_sticky_enabled(false);
+            let job = RenderJob::new(c, 64, 64).with_iterations(500_000);
+            pollster::block_on(render_with(r, &device, &queue, job, &mut NoProgress)).expect("render").rgba_data
+        };
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut grown = FlameRenderer::with_palette_size(&device, &queue, format, 64, 64, &small.flame, 256);
+        assert_eq!(grown.variation_params_bytes(), crate::gpu::buffers::MIN_VARIATION_PARAMS_BYTES);
+        let px = render(&mut grown, &big);
+        assert!(grown.variation_params_bytes() >= 100 * 8192 * 4, "it grew: {} bytes", grown.variation_params_bytes());
+        let mut fresh = FlameRenderer::with_palette_size(&device, &queue, format, 64, 64, &big.flame, 256);
+        let reference = render(&mut fresh, &big);
+        assert!(px.chunks(4).filter(|p| p[..3].iter().any(|&c| c > 0)).count() > 10, "a picture");
+        assert_eq!(px, reference, "the grown buffer's picture");
+        // The table read: entry 8189 is 0.5; at 0 (a table unread, or read
+        // from the wrong row) the variation collapses its part.
+        let mut zero = big.clone();
+        zero.flame.custom_variations[0].source = source.replace("p.t[8189]", "0.0");
+        zero.flame.custom_variations[0].entry = crate::variations::custom::key_of(&zero.flame.custom_variations[0].source).unwrap();
+        let entry = zero.flame.custom_variations[0].entry.clone();
+        for t in &mut zero.flame.transforms {
+            t.rename_variation(&carried.entry, &entry);
+        }
+        let mut other = FlameRenderer::with_palette_size(&device, &queue, format, 64, 64, &zero.flame, 256);
+        assert_ne!(render(&mut other, &zero), reference, "the table's entry reaches the shader");
+        grown.destroy();
+        fresh.destroy();
+        other.destroy();
     }
 
     /// A renderer holds only what it draws with. The solid shade pass's

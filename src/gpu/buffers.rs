@@ -253,46 +253,65 @@ fn gpu_transform_regions(flame: &Flame, render_mode: crate::scene::transforms::R
     (gpu_transforms, subflames)
 }
 
-/// Pack a flame's per-transform variation parameters into the unified GPU
-/// layout, in lockstep with `pack_gpu_transforms` (same parent → pad → subflame
-/// → pad ordering, same shared local index map). Shared by
-/// `Buffers::update_variation_params` and `HighResExporter`.
-pub fn pack_gpu_variation_params(flame: &Flame) -> Vec<GpuVariationParams> {
-    let (mut gpu_params, subflames) = gpu_variation_param_regions(flame);
-    gpu_params.resize(MAX_TRANSFORMS, bytemuck::Zeroable::zeroed());
-    gpu_params.extend(subflames);
-    gpu_params.resize(MAX_TRANSFORMS_UNIFIED, bytemuck::Zeroable::zeroed());
-    gpu_params
-}
-
-/// [`pack_gpu_variation_params`]' two regions, unpadded: the parent's
-/// transforms (normals, linkeds, finals; from slot 0) and the subflames'
-/// (from `MAX_TRANSFORMS`).
-fn gpu_variation_param_regions(flame: &Flame) -> (Vec<GpuVariationParams>, Vec<GpuVariationParams>) {
+/// Pack a flame's per-transform variation parameters, in lockstep with
+/// `pack_gpu_transforms` (the same parent and subflame rows, the same
+/// shared local index map). Shared by `Buffers::update_variation_params`,
+/// the `HighResExporter` and the renderers of a flame's parent transforms
+/// alone (the escape lens, a simulation's layers, the GPU planner).
+pub fn pack_gpu_variation_params(flame: &Flame) -> PackedVariationParams {
     let registry = crate::variations::global_registry();
     let local_map = crate::scene::transforms::compute_local_index_map(
         flame.active_variation_names_ordered(&registry),
     );
-    let parent: Vec<GpuVariationParams> = flame
-        .transforms
-        .iter()
-        .chain(&flame.linked_transforms)
-        .chain(&flame.final_transforms)
-        .map(|xform| GpuVariationParams::from_transform(xform, &local_map, &registry))
-        .collect();
-    let mut subflames = Vec::new();
-    for sf in &flame.subflames {
-        for xform in sf.transforms.iter().chain(&sf.final_transforms) {
-            subflames.push(GpuVariationParams::from_transform(xform, &local_map, &registry));
-        }
-    }
-    if subflames.len() > MAX_SUBFLAME_TRANSFORMS_TOTAL {
-        panic!(
-            "Subflames have {} total transforms but MAX_SUBFLAME_TRANSFORMS_TOTAL is {}",
-            subflames.len(), MAX_SUBFLAME_TRANSFORMS_TOTAL,
+    let layout = crate::scene::transforms::compute_packed_layout(&local_map, &registry);
+    let stride = crate::scene::transforms::packed_param_stride_of(&layout) as usize;
+    if stride > MAX_VARIATION_PARAM_SLOTS {
+        log::error!(
+            "Flame has {stride} packed variation slots a transform, over the {MAX_VARIATION_PARAM_SLOTS} a transform's row holds. \
+             Active variations: {:?}",
+            local_map.keys().collect::<Vec<_>>(),
         );
     }
-    (parent, subflames)
+    let offsets: std::collections::HashMap<&str, usize> = layout.iter().map(|e| (e.name.as_str(), e.offset as usize)).collect();
+    let rows = |xforms: &mut dyn Iterator<Item = &Transform>| -> Vec<f32> {
+        let mut out = Vec::new();
+        for xform in xforms {
+            let at = out.len();
+            out.resize(at + stride, 0.0);
+            write_param_row(&mut out[at..], xform, &offsets, &registry);
+        }
+        out
+    };
+    let parent = rows(&mut flame.transforms.iter().chain(&flame.linked_transforms).chain(&flame.final_transforms));
+    let subflames = rows(&mut flame.subflames.iter().flat_map(|sf| sf.transforms.iter().chain(&sf.final_transforms)));
+    if subflames.len() / stride > MAX_SUBFLAME_TRANSFORMS_TOTAL {
+        panic!(
+            "Subflames have {} total transforms but MAX_SUBFLAME_TRANSFORMS_TOTAL is {}",
+            subflames.len() / stride, MAX_SUBFLAME_TRANSFORMS_TOTAL,
+        );
+    }
+    PackedVariationParams { stride, parent, subflames }
+}
+
+/// One transform's row: each of its variations' parameters at the
+/// variation's packed offset, the derived slots (`init_param_count`) left
+/// at 0.0 for the GPU init dispatch to fill.
+fn write_param_row(
+    row: &mut [f32],
+    xform: &Transform,
+    offsets: &std::collections::HashMap<&str, usize>,
+    registry: &crate::variations::VariationRegistry,
+) {
+    for var_name in xform.variations.keys() {
+        let (Some(&offset), Some(info)) = (offsets.get(var_name.as_str()), registry.get(var_name)) else {
+            continue; // not active, or not registered
+        };
+        for (param_idx, param_def) in info.parameters.iter().enumerate() {
+            if let Some(slot) = row.get_mut(offset + param_idx) {
+                *slot = xform.get_variation_param_or_default(var_name, &param_def.name, registry);
+            }
+        }
+    }
 }
 
 /// Write a table's two regions -- the parent's from slot 0, the
@@ -309,6 +328,53 @@ fn write_regions<T: bytemuck::Pod>(queue: &Queue, buffer: &Buffer, parent: &[T],
     if !subflames.is_empty() {
         queue.write_buffer(buffer, MAX_TRANSFORMS as u64 * size, bytemuck::cast_slice(subflames));
     }
+}
+
+/// The size the variation parameter buffer had when a row was 1600
+/// floats, `MAX_TRANSFORMS_UNIFIED` of them: a renderer's buffer is never
+/// smaller. Not for the memory (a flame's rows are mostly a few KiB) but
+/// for its other buffers: where they land follows this one's size, made
+/// before them, and a flame's speed follows where they land -- sized to
+/// its rows, one flame ran 24% slower and another 26% faster with the
+/// shader's work unchanged, and timed at eight placements (made after
+/// the others, or at 4 MiB) some still moved 3%. At this size every flame
+/// that fits it lands as before (docs/projects/variation-param-storage.md).
+pub const MIN_VARIATION_PARAMS_BYTES: u64 = (MAX_TRANSFORMS_UNIFIED * 1600 * 4) as u64;
+
+/// The variation parameter buffer's size for `flame`, in bytes: its rows
+/// (`PackedVariationParams::len`), at least `MIN_VARIATION_PARAMS_BYTES`,
+/// and past that a power of two, so a growing flame reallocates rarely;
+/// held to the device's binding limit (past it, `update_variation_params`
+/// logs and writes what fits).
+pub fn variation_params_capacity(device: &Device, flame: &Flame) -> u64 {
+    let registry = crate::variations::global_registry();
+    let local_map = crate::scene::transforms::compute_local_index_map(flame.active_variation_names_ordered(&registry));
+    let stride = crate::scene::transforms::packed_param_stride_of(&crate::scene::transforms::compute_packed_layout(&local_map, &registry)) as usize;
+    drop(registry);
+    // `PackedVariationParams::len`, without packing.
+    let parent = flame.transforms.len() + flame.linked_transforms.len() + flame.final_transforms.len();
+    let subflames: usize = flame.subflames.iter().map(|sf| sf.transforms.len() + sf.final_transforms.len()).sum();
+    let rows = if subflames == 0 { parent.max(1) } else { MAX_TRANSFORMS + subflames };
+    capacity_for((rows * stride * 4) as u64, device.limits().max_storage_buffer_binding_size as u64)
+}
+
+/// [`variation_params_capacity`]'s rule for `need` bytes under a binding
+/// limit of `max`.
+fn capacity_for(need: u64, max: u64) -> u64 {
+    if need <= MIN_VARIATION_PARAMS_BYTES {
+        MIN_VARIATION_PARAMS_BYTES
+    } else {
+        need.next_power_of_two().min(max & !3)
+    }
+}
+
+fn create_variation_params_buffer(device: &Device, size: u64) -> Buffer {
+    device.create_buffer(&BufferDescriptor {
+        label: Some("Variation Params Buffer"),
+        size,
+        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
 }
 
 /// Build the per-subflame metadata array (offsets/counts into the unified
@@ -501,14 +567,17 @@ impl GpuTransform {
     }
 }
 
-/// Maximum total variation-parameter slots per transform.
+/// Maximum total variation-parameter slots per transform: a transform's
+/// row of the parameter buffer, 1 MiB.
 ///
-/// This is the packed buffer's capacity. With the packed layout, each
-/// variation occupies exactly `parameters.len() + init_param_count`
+/// Each variation occupies exactly `parameters.len() + init_param_count`
 /// slots, so the cap applies to `sum(active_variation_slot_counts)`,
-/// not to any single variation. Even pathological flames stay well
-/// below this — typical flames use 30-150 slots.
-pub const MAX_VARIATION_PARAM_SLOTS: usize = 1600;
+/// not to any single variation. Typical flames use 30-150 slots; a
+/// variation's table computed in its init (polychoron's vertices) takes
+/// thousands. The buffer holds the flame's rows alone, so a flame pays
+/// for what it uses (`PackedVariationParams`); the whole buffer is held
+/// to the device's binding limit (`FlameBuffers::ensure_variation_params_capacity`).
+pub const MAX_VARIATION_PARAM_SLOTS: usize = 262_144;
 
 /// GPU-side per-normal-transform list of attached Linked and Final
 /// indexes. Buffer is `array<GpuAttachmentList, MAX_NORMAL_TRANSFORMS>`
@@ -689,117 +758,54 @@ pub fn pack_attachment_entry(
     dst[final_count_off..final_count_off + 4].copy_from_slice(&final_count.to_le_bytes());
 }
 
-/// GPU representation of variation parameters for ONE transform.
+/// A flame's variation parameters as the GPU reads them: one flat array
+/// (binding 5, `array<f32>`), a row of `stride` floats a transform.
 ///
-/// Layout is **packed**: each active variation gets exactly
-/// `parameters.len() + init_param_count` consecutive slots starting
-/// at its packed offset (computed by
-/// [`crate::scene::transforms::compute_packed_layout`]). The shader
-/// builder generates a per-flame `get_param` that maps `variation_id`
-/// (per-flame local index) to its packed offset, so host and shader
-/// stay in sync.
+/// Each active variation gets exactly `parameters.len() +
+/// init_param_count` consecutive slots of the row at its packed offset
+/// (computed by [`crate::scene::transforms::compute_packed_layout`]), and
+/// the stride is their sum ([`crate::scene::transforms::packed_param_stride_of`]).
+/// The shader builder bakes the offsets and the stride into the per-flame
+/// `get_param`, which reads `variation_params[xform_id * PARAM_STRIDE +
+/// offset + slot]`, so host and shader stay in sync.
 ///
-/// The buffer is sized to a worst-case ceiling
-/// (`MAX_VARIATION_PARAM_SLOTS = 1600` floats = 6400 bytes); flames
-/// only fill the prefix they need, leaving the tail zeroed.
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct GpuVariationParams {
-    pub params: [f32; MAX_VARIATION_PARAM_SLOTS],
+/// Rows follow the unified xform_id space: the parent's transforms
+/// (normals, linkeds, finals) from row 0, the subflames' from row
+/// `MAX_TRANSFORMS`.
+pub struct PackedVariationParams {
+    /// Floats a row holds.
+    pub stride: usize,
+    /// The parent's rows.
+    pub parent: Vec<f32>,
+    /// The subflames' rows (empty without subflames).
+    pub subflames: Vec<f32>,
 }
 
-// Manual implementation for bytemuck (arrays > 128 not auto-derived)
-unsafe impl bytemuck::Pod for GpuVariationParams {}
-unsafe impl bytemuck::Zeroable for GpuVariationParams {}
-
-impl GpuVariationParams {
-    /// Create the packed param-array for a single transform.
-    ///
-    /// `local_map` and `registry` together yield each active variation's
-    /// packed offset (via `compute_packed_layout`), and we write each
-    /// variation's user-visible parameter values starting at that
-    /// offset. Init-derived slots are left at 0.0; the GPU init compute
-    /// dispatch fills them in before the main render pass reads them.
-    pub fn from_transform(
-        xform: &Transform,
-        local_map: &std::collections::HashMap<String, u32>,
-        registry: &crate::variations::VariationRegistry,
-    ) -> Self {
-        let mut params = [0.0f32; MAX_VARIATION_PARAM_SLOTS];
-
-        // Build name → offset lookup once per transform. Cheap; could be
-        // hoisted to caller for very large flames.
-        let layout = crate::scene::transforms::compute_packed_layout(local_map, registry);
-        let offset_for: std::collections::HashMap<&str, u32> = layout
-            .iter()
-            .map(|e| (e.name.as_str(), e.offset))
-            .collect();
-
-        for (var_name, _weight) in &xform.variations {
-            let offset = match offset_for.get(var_name.as_str()) {
-                Some(&o) => o as usize,
-                None => continue, // not active or dropped past the cap
-            };
-            let info = match registry.get(var_name) {
-                Some(i) => i,
-                None => continue,
-            };
-
-            for (param_idx, param_def) in info.parameters.iter().enumerate() {
-                let value = xform.get_variation_param_or_default(
-                    var_name,
-                    &param_def.name,
-                    registry,
-                );
-                let buffer_idx = offset + param_idx;
-                if buffer_idx < params.len() {
-                    params[buffer_idx] = value;
-                }
-            }
+impl PackedVariationParams {
+    /// Floats from row 0 through the last row in use, at least a row.
+    pub fn len(&self) -> usize {
+        if self.subflames.is_empty() {
+            self.parent.len().max(self.stride)
+        } else {
+            MAX_TRANSFORMS * self.stride + self.subflames.len()
         }
-
-        Self { params }
     }
 
-    /// Create the full per-flame param-array vector, computing the local index
-    /// map once and applying it consistently to all transforms.
-    pub fn from_flame(
-        flame: &Flame,
-        registry: &crate::variations::VariationRegistry,
-    ) -> Vec<Self> {
-        let local_map = crate::scene::transforms::compute_local_index_map(
-            flame.active_variation_names_ordered(registry),
-        );
-        // Soft cap check: warn if total slot footprint approaches the buffer.
-        let total_slots = crate::scene::transforms::total_packed_slots(&local_map, registry);
-        if total_slots as usize > MAX_VARIATION_PARAM_SLOTS {
-            log::error!(
-                "Flame has {} packed variation slots, exceeds buffer capacity {}. \
-                 Some parameters will be lost. Active variations: {:?}",
-                total_slots,
-                MAX_VARIATION_PARAM_SLOTS,
-                local_map.keys().collect::<Vec<_>>(),
-            );
-        }
-        // Concatenated layout: normals, then linkeds, then finals.
-        // Mirror of `GpuTransform::from_flame`. xform_id in the shader
-        // indexes into both the transforms array and this params array
-        // simultaneously, so the orderings must match.
-        let mut result: Vec<Self> = Vec::with_capacity(
-            flame.transforms.len()
-                + flame.linked_transforms.len()
-                + flame.final_transforms.len(),
-        );
-        for xform in &flame.transforms {
-            result.push(Self::from_transform(xform, &local_map, registry));
-        }
-        for xform in &flame.linked_transforms {
-            result.push(Self::from_transform(xform, &local_map, registry));
-        }
-        for xform in &flame.final_transforms {
-            result.push(Self::from_transform(xform, &local_map, registry));
-        }
-        result
+    /// The whole layout, `len()` floats: the parent's rows, and with
+    /// subflames zeros to row `MAX_TRANSFORMS` then theirs.
+    pub fn flat(&self) -> Vec<f32> {
+        let mut out = self.parent.clone();
+        out.resize(self.len() - self.subflames.len(), 0.0);
+        out.extend_from_slice(&self.subflames);
+        out
+    }
+
+    /// The first `rows` rows (at least one; zeros past the parent's): what
+    /// a renderer of the parent's transforms alone binds.
+    pub fn rows(&self, rows: usize) -> Vec<f32> {
+        let mut out: Vec<f32> = self.parent.iter().copied().take(rows.max(1) * self.stride).collect();
+        out.resize(rows.max(1) * self.stride, 0.0);
+        out
     }
 }
 
@@ -1508,20 +1514,12 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Create variation parameters storage buffer sized for
-        // `MAX_TRANSFORMS_UNIFIED` — the unified xform_id space
-        // covering parent xforms in [0, MAX_TRANSFORMS) plus subflame
-        // xforms in [MAX_TRANSFORMS, MAX_TRANSFORMS_UNIFIED). The
-        // buffer is populated below via update_variation_params, which
-        // walks parent xforms then subflame xforms in the same
-        // contiguous order.
-        let params_buffer_size = (MAX_TRANSFORMS_UNIFIED * std::mem::size_of::<GpuVariationParams>()) as u64;
-        let variation_params_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Variation Params Buffer"),
-            size: params_buffer_size,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+
+        // The variation parameters (`variation_params_capacity`: the size
+        // the buffer always had, grown for a flame whose rows need more;
+        // `ensure_variation_params_capacity`). Populated below via
+        // update_variation_params.
+        let variation_params_buffer = create_variation_params_buffer(device, variation_params_capacity(device, flame));
 
         // Per-normal-transform attachment list buffer (binding 10).
         // One GpuAttachmentList entry per normal transform slot;
@@ -2403,6 +2401,11 @@ impl FlameBuffers {
     /// reads from the subflame portion of this buffer. v1 had all
     /// subflame xforms reading OOB and getting zeros — that's what
     /// broke julian / blob / klein_group inside subflames.
+    ///
+    /// The buffer must hold the flame's rows: a caller whose flame may
+    /// have changed its variations calls
+    /// [`Self::ensure_variation_params_capacity`] first. Rows past the
+    /// buffer are not written (and logged).
     pub fn update_variation_params(&self, queue: &Queue, flame: &Flame) {
         let total_transforms = flame.total_gpu_transform_slots();
         if total_transforms > MAX_TRANSFORMS {
@@ -2416,28 +2419,46 @@ impl FlameBuffers {
             );
         }
 
-        // Soft cap: warn if the per-xform packed footprint exceeds the fixed
-        // slot count (some parameters would be lost).
-        let registry = crate::variations::global_registry();
-        let local_map = crate::scene::transforms::compute_local_index_map(
-            flame.active_variation_names_ordered(&registry),
-        );
-        let total_slots = crate::scene::transforms::total_packed_slots(&local_map, &registry);
-        if total_slots as usize > MAX_VARIATION_PARAM_SLOTS {
-            log::error!(
-                "Flame has {} packed variation slots, exceeds buffer capacity {}. \
-                 Some parameters will be lost. Active variations: {:?}",
-                total_slots,
-                MAX_VARIATION_PARAM_SLOTS,
-                local_map.keys().collect::<Vec<_>>(),
-            );
-        }
-
         // Pack parent + subflame variation params into the unified layout
         // (shared with HighResExporter for cross-engine parity), writing
-        // the slots used (`write_regions`).
-        let (parent, subflames) = gpu_variation_param_regions(flame);
-        write_regions(queue, &self.variation_params_buffer, &parent, &subflames);
+        // the rows used: the parent's from row 0, the subflames' from row
+        // MAX_TRANSFORMS.
+        let packed = pack_gpu_variation_params(flame);
+        let capacity = self.variation_params_buffer.size();
+        if (packed.len() * 4) as u64 > capacity {
+            log::error!(
+                "Flame's variation parameters take {} bytes; the buffer holds {capacity} (the device's binding limit, or a missed \
+                 ensure_variation_params_capacity). Rows past it are not written.",
+                packed.len() * 4
+            );
+        }
+        let fits = |data: &[f32], at: u64| -> usize { (capacity.saturating_sub(at) / 4).min(data.len() as u64) as usize };
+        let n = fits(&packed.parent, 0);
+        if n > 0 {
+            queue.write_buffer(&self.variation_params_buffer, 0, bytemuck::cast_slice(&packed.parent[..n]));
+        }
+        let at = (MAX_TRANSFORMS * packed.stride * 4) as u64;
+        let n = fits(&packed.subflames, at);
+        if n > 0 {
+            queue.write_buffer(&self.variation_params_buffer, at, bytemuck::cast_slice(&packed.subflames[..n]));
+        }
+    }
+
+    /// Grow the variation parameter buffer to hold `flame`'s rows if it
+    /// does not ([`variation_params_capacity`]: a power of two, so a
+    /// slider dragged never grows it twice). True when it was replaced:
+    /// the bind groups holding it (the compute pass's, the init pass's)
+    /// must be made again, and the derived slots computed again (the new
+    /// buffer has none). The old one is retired, not destroyed, as work
+    /// in flight may still read it.
+    pub fn ensure_variation_params_capacity(&mut self, device: &Device, flame: &Flame) -> bool {
+        let need = variation_params_capacity(device, flame);
+        if need <= self.variation_params_buffer.size() {
+            return false;
+        }
+        let old = std::mem::replace(&mut self.variation_params_buffer, create_variation_params_buffer(device, need));
+        self.retire_buffer(old);
+        true
     }
 
     /// Update palette texture.
@@ -2862,6 +2883,76 @@ mod tests {
     #[test]
     fn a_per_pixel_size_does_not_wrap() {
         assert_eq!(pixel_bytes(16384, 16384, 16), 1u64 << 32);
+    }
+
+    /// The parameter block is one flat array of rows a stride apart: the
+    /// stride the layout's slots, each transform's parameters at its
+    /// variations' offsets in its own row, the subflames' rows from row
+    /// `MAX_TRANSFORMS`, and a renderer of the parent's transforms alone
+    /// given the rows it asks for.
+    #[test]
+    fn the_rows_are_a_stride_apart() {
+        let registry = crate::variations::global_registry().clone();
+        let xform = |names: &[(&str, &[(&str, f32)])]| {
+            let mut t = Transform::new();
+            t.variations.clear();
+            t.variation_order.clear();
+            for (n, params) in names {
+                t.set_variation(n, 1.0);
+                for (k, v) in *params {
+                    t.variation_params.insert(format!("{n}.{k}"), *v);
+                }
+            }
+            t
+        };
+        let mut flame = Flame::new();
+        flame.transforms = vec![xform(&[("linear", &[]), ("julian", &[("power", 5.0)])]), xform(&[("blob", &[("waves", 7.0)])])];
+        let mut sub = Flame::new();
+        sub.transforms = vec![xform(&[("julian", &[("dist", 3.0)])])];
+        flame.subflames = vec![sub];
+
+        let local_map = crate::scene::transforms::compute_local_index_map(flame.active_variation_names_ordered(&registry));
+        let layout = crate::scene::transforms::compute_packed_layout(&local_map, &registry);
+        let offset = |n: &str| layout.iter().find(|e| e.name == n).unwrap().offset as usize;
+        let slot = |v: &str, p: &str| offset(v) + registry.get(v).unwrap().parameters.iter().position(|d| d.name == p).unwrap();
+        let packed = pack_gpu_variation_params(&flame);
+        let slots: usize = ["linear", "julian", "blob"].iter().map(|n| registry.get(n).unwrap().slot_count()).sum();
+        assert_eq!(packed.stride, slots);
+        assert_eq!(packed.parent.len(), 2 * slots);
+        assert_eq!(packed.parent[slot("julian", "power")], 5.0);
+        assert_eq!(packed.parent[slots + slot("blob", "waves")], 7.0);
+        assert_eq!(packed.parent[slot("blob", "waves")], 0.0, "a variation the transform lacks reads zero");
+        let flat = packed.flat();
+        assert_eq!(flat.len(), packed.len());
+        assert_eq!(flat.len(), (MAX_TRANSFORMS + 1) * slots);
+        assert_eq!(flat[MAX_TRANSFORMS * slots + slot("julian", "dist")], 3.0, "the subflame's row");
+        assert!(flat[2 * slots..MAX_TRANSFORMS * slots].iter().all(|&v| v == 0.0));
+
+        let rows = packed.rows(3);
+        assert_eq!(rows.len(), 3 * slots);
+        assert_eq!(rows[..2 * slots], packed.parent[..]);
+        assert!(rows[2 * slots..].iter().all(|&v| v == 0.0));
+
+        // A flame without parameters still has a row, the binding's least.
+        let mut bare = Flame::new();
+        bare.transforms = vec![xform(&[("linear", &[])])];
+        let packed = pack_gpu_variation_params(&bare);
+        assert_eq!((packed.stride, packed.len(), packed.rows(0).len()), (1, 1, 1));
+    }
+
+    /// The buffer is the size it always was until a flame's rows need
+    /// more, then a power of two (a slider dragged grows it once), never
+    /// past the device's binding limit.
+    #[test]
+    fn the_buffer_keeps_its_size_until_a_flame_needs_more() {
+        let min = MIN_VARIATION_PARAMS_BYTES;
+        assert_eq!(min, 2_457_600, "the size it had at 1600 floats a row");
+        let max = 128 << 20;
+        assert_eq!(capacity_for(4, max), min);
+        assert_eq!(capacity_for(min, max), min);
+        assert_eq!(capacity_for(min + 4, max), 4 << 20);
+        assert_eq!(capacity_for(5 << 20, max), 8 << 20);
+        assert_eq!(capacity_for(200 << 20, max), max, "held to the limit");
     }
 
     /// `scene` mirrors these caps rather than depending on `gpu`; the
