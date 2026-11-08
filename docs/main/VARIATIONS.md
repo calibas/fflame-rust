@@ -13,7 +13,7 @@ definitions, mostly ported from flam3, Apophysis and JWildfire.
   variations run inside
 - [SHADERS.md](SHADERS.md) — how `apply_variations` is generated, the
   WGSL lints, the Metal fast-math rules, the math probe and the census
-- [BUFFERS.md](BUFFERS.md) — `GpuVariationParams` and the state buffers
+- [BUFFERS.md](BUFFERS.md) — the variation parameter rows and the state buffers
 - [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md) — the planners that
   consume inverse definitions and forward bounds
 - [ESCAPE.md](ESCAPE.md) — the escape engine's IFS modes, which use the
@@ -305,15 +305,21 @@ consecutive floats in its transform's parameter block:
   init compute pass runs it for every (transform, variation) pair that
   uses it — subflame transforms included — and writes the results after
   the user parameters. Use it for anything a body would otherwise
-  recompute from its parameters every iteration.
+  recompute from its parameters every iteration -- or read from a
+  constant table at a run-time index, which naga copies whole at every
+  read: polychoron and menger copy their vertices from polychora.wgsl's
+  table here (their name-gated library is the init's too), and ran
+  2-10x faster where they read it, 2D and 3D.
 
 The layout is packed per flame: each active variation gets the same
 offset in every transform's block, in local-index order, and the
 generated `get_param(xform_id, variation_id, slot)` maps the local
-index to that offset. A transform's block holds
-`MAX_VARIATION_PARAM_SLOTS = 1600` floats; a flame that needs more logs
-an error and loses parameters. See [BUFFERS.md](BUFFERS.md) and
-[SHADERS.md](SHADERS.md).
+index to that offset. A transform's row holds up to
+`MAX_VARIATION_PARAM_SLOTS` = 262,144 floats (1 MiB), and the buffer
+grows to fit the flame's rows, so an init may compute a table of
+thousands of floats once rather than a body reading a constant at a
+run-time index (which naga copies whole at every read). See
+[BUFFERS.md](BUFFERS.md) and [SHADERS.md](SHADERS.md).
 
 ### Per-thread state
 
@@ -612,7 +618,10 @@ function takes the point, and the ids when it has parameters (as
   written out where it is read, a constant table a literal at the top
   of each function that reads it (a vector's floats flat), which the
   language writes as a module constant (polychora.wgsl's faces,
-  su_mobius.wgsl's base matrices); a
+  su_mobius.wgsl's base matrices) -- in `prepare` a local, filled once
+  a call; a table copied whole into a variable never written (`var
+  verts = POLYCHORA_VERTS;`, a built-in init's one copy) read as the
+  table; a
   helper's pointer argument its `this` (`x.f(...)`, called on what the
   pointer points at; of several, a pointer to an array it never writes
   through the array passed by value), a helper reading
@@ -674,7 +683,9 @@ function takes the point, and the ids when it has parameters (as
     direct colour -- its transform blending it in whole -- each twin's
     flame drawn in 2D and in 3D, its two bodies (a 4D twin's in 3D alone,
     where its 4th coordinate feeds back through every iteration;
-    `VARIATION_TWINS_DIMS=2` or `3` draws one), each channel's light
+    `VARIATION_TWINS_DIMS=2` or `3` draws one; `VARIATION_TWINS_PARAMS=k=v`
+    sets the variation's parameters in both flames, a mode the defaults
+    do not reach, as the timing tool takes it too), each channel's light
     (colour times density) held as density is; a twin reading the
     camera drawn in 3D with it turned, moved and in perspective (pitch
     and yaw swapped in the generated WGSL is the control: 75 of its 101
@@ -712,12 +723,13 @@ function takes the point, and the ids when it has parameters (as
     a change of the compiler's before making it. Found so: a whole-array
     copy written as a loop over its elements kept small arrays out of
     registers (von_dyck 1.68, su_mobius 3.06, dc_hexes_wf 1.59), now
-    WGSL's own `dst = src` (1.01, 1.08, 1.09); and polychoron's 5.65 is
+    WGSL's own `dst = src` (1.01, 1.08, 1.09); and polychoron's 5.65 was
     its table, which naga copies to a local at every read of it indexed
-    at run time (`spill_to_internal_variable`), the twin reading a
-    vertex's four floats where the built-in reads one `vec4` -- the
-    built-in pays the copy once a read too, so the fix is the tables'
-    storage, the user's call.
+    at run time (`spill_to_internal_variable`), the built-in paying the
+    copy once a read too. Both now keep their vertices in derived slots
+    (docs/projects/variation-param-storage.md): the built-in 2-10x
+    faster, and the twin, translated from it, 1.00-1.04 of it -- menger's
+    the same, in its 4-gap modes.
   - **Renamed parameters** (the user, 2026-11-06: no Rhai or WGSL
     reserved word as a name): w's and z's `super` is `super_shape`,
     hexnix3D's `3side` `triangle_scale` (`variations::RENAMED_PARAMS`).

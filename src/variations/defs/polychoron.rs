@@ -50,8 +50,12 @@ pub static POLYCHORON: VariationDef = VariationDef {
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
     features: &[Feature::NeedsRng, Feature::NeedsW, Feature::WritesColor, Feature::AlwaysZ],
-    init_param_count: 0,
-    wgsl_init: None,
+    // The shape's vertices (the 120-cell's 600 the most), copied from
+    // polychora.wgsl's table once a parameter change: read from the
+    // table at a run-time index, naga copies all 1093 of them at every
+    // read -- nearly all the variation's time, 2D and 3D.
+    init_param_count: 2400,
+    wgsl_init: Some(WGSL_INIT),
     // State slot 0: the internal color register for the Flame color
     // mode (zero-init; converges within a few picks).
     state_count: 1,
@@ -72,6 +76,22 @@ pub static POLYCHORON: VariationDef = VariationDef {
     wgsl_3d: WGSL_3D,
 };
 
+const WGSL_INIT: &str = r#"
+fn init_polychoron(user: array<f32, 10>) -> array<f32, 2400> {
+    let rc = polychora_range(u32(user[0]));
+    var verts = POLYCHORA_VERTS;
+    var out: array<f32, 2400>;
+    for (var k = 0u; k < rc.y; k = k + 1u) {
+        let v = verts[rc.x + k];
+        out[4u * k] = v.x;
+        out[4u * k + 1u] = v.y;
+        out[4u * k + 2u] = v.z;
+        out[4u * k + 3u] = v.w;
+    }
+    return out;
+}
+"#;
+
 const WGSL_2D: &str = r#"
 fn variation_polychoron(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let shape = u32(get_param(xform_id, variation_id, 0u));
@@ -89,7 +109,7 @@ fn variation_polychoron(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
     var code = 0.0;
     for (var i = 0; i < steps; i = i + 1) {
         let idx = min(u32(rng_nextf(rng) * f32(rc.y)), rc.y - 1u);
-        let v = POLYCHORA_VERTS[rc.x + idx];
+        let v = vec4<f32>(get_param(xform_id, variation_id, 10u + 4u * idx), get_param(xform_id, variation_id, 11u + 4u * idx), get_param(xform_id, variation_id, 12u + 4u * idx), get_param(xform_id, variation_id, 13u + 4u * idx));
         q = s * q + (1.0 - s) * size * v.xy;
         code = (f32(idx) + 0.5) / f32(rc.y);
         if (dc_mode == 1u) { creg = mix(creg, fract(code * dc_scale), color_speed); }
@@ -128,7 +148,7 @@ fn variation_polychoron(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
     var code = 0.0;
     for (var i = 0; i < steps; i = i + 1) {
         let idx = min(u32(rng_nextf(rng) * f32(rc.y)), rc.y - 1u);
-        var v = POLYCHORA_VERTS[rc.x + idx] * size;
+        var v = vec4<f32>(get_param(xform_id, variation_id, 10u + 4u * idx), get_param(xform_id, variation_id, 11u + 4u * idx), get_param(xform_id, variation_id, 12u + 4u * idx), get_param(xform_id, variation_id, 13u + 4u * idx)) * size;
         // Rotate the vertex into the attractor's 4D orientation (the
         // uniform contraction commutes with rotations, so this rotates
         // the whole gasket exactly).

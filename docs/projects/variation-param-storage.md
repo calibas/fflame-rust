@@ -1,8 +1,9 @@
 # Variation parameter storage: a general-purpose per-transform block
 
-Status: **planned** (2026-11-06). Follows the variation twins
-(`rhai-variation-hooks`, [rhai-plugins.md](rhai-plugins.md) P7 step 3);
-its own branch.
+Status: **steps 1-4 built** (2026-11-07, branch
+`variation-param-storage`; *Progress* below). The API notice is in
+[v0.6.0-release.md](v0.6.0-release.md). Follows the variation twins (`rhai-variation-hooks`,
+[rhai-plugins.md](rhai-plugins.md) P7 step 3).
 
 ## Why
 
@@ -158,6 +159,115 @@ library's `const`:
    reuse, and a retranslation, gated in 2D and 3D.
 5. Docs (BUFFERS.md, VARIATIONS.md, CLAUDE.md's 1600), the regenerated
    contract and shader dumps, and the API notice.
+
+## Progress
+
+**Steps 1 and 2** (2026-11-07):
+
+- **Built as designed**, but for the buffer's size: one flat
+  `array<f32>` at binding 5, the stride baked as `PARAM_STRIDE`
+  (`packed_param_stride_of`, which the host packs by), a row of up to
+  262,144 floats, only the rows in use uploaded, and every sharer (the
+  high-res exporter, the escape lens, a simulation's layers, the GPU
+  planner, the probe) on `PackedVariationParams`. The WGSL change is the
+  binding and `get_param`'s one line (the shader dumps). The sticky
+  superset keeps 1600 as its extras' budget (each extra lengthens every
+  row, and so every upload); the probe keeps 1600 as its batching budget,
+  a variation wider alone probed in a batch of its own.
+- **The buffer keeps its old size** (`MIN_VARIATION_PARAMS_BYTES`,
+  2,457,600 bytes) and grows past it only for a flame that needs more.
+  Sized to its rows (16 KiB for most flames), it moved two of the
+  fourteen timed flames far past the noise -- subflame-julian 24%
+  slower, init-migration 26% faster -- with the shader's work the same
+  (the pictures byte-identical). Bisected: not the indexing form (the
+  old struct-of-rows form at the new size moved them alike), not the
+  stride (1600 floats, flat, moved them), not the init kernel; the old
+  shader text and stride at a 4 MiB buffer still moved them, and exactly
+  2,457,600 bytes put them back. It is where the renderer's buffers
+  made after this one land: a dummy buffer after a small one, making
+  the two total the old size, was fast; anything else mostly slow. So
+  the timing tool now times each flame at eight placements (a buffer
+  made first shifting the renderer's) and builds compare by the median
+  over them. Made last, sized to its rows, the median ratio was 0.994
+  but Square Tile moved +3%; at the old size and place, every flame
+  lands as before.
+- **No cost, measured** (`time_ordinary_flames`, eight placements, two
+  runs a build, GTX 1660 SUPER): median ratio 0.995, every flame within
+  0.976-1.006, inside the runs' spread. 378 of the visual suite's 390
+  configs and the eight presets render byte-identical to before; the
+  other 12 (the presets without a fixed seed, the solids) differ as two
+  runs of the old build do.
+- **The init kernel has one case a variation**, not a pair: each
+  thread's run start and init from a table (`INIT_PAIRS`), each run
+  copied by a loop. A case a pair copied an init's arrays for each, and
+  100 transforms of an 8192-float table took the driver past ten minutes
+  and 5 GB (the test process outlived its shell; stopping it was refused,
+  and it ended on its own); one case, four seconds. The old kernel, a
+  line a slot, would have been worse -- 1600 kept it from being tried.
+- **Tests**: the rows a stride apart (`the_rows_are_a_stride_apart`),
+  the shaders reading the rows the host packs, the capacity rule, and a
+  GPU gate (ignored: it registers a variation) -- 100 transforms of a
+  Rhai variation's 8192-float table, 3.3 MB, grow a renderer made for
+  one linear transform, drawn byte for byte as a fresh renderer, its
+  table's entry reaching the shader.
+- **The contract moved** (`variation_slots_per_flame` 1600 to 262,144):
+  tell the API repository (RELEASE.md §3).
+
+**Step 3** (2026-11-07), measured flame by flame (`time_ordinary_flames`
+with `FLAME_TIMING_VARIATIONS`, eight placements; the variation on a
+turning shrink weighted 8 to two linears'), each picture byte-identical
+to before in every mode, 2D and 3D:
+
+| built-in | flame (ms per 16 dispatches) | before | after |
+| --- | --- | --- | --- |
+| polychoron | 16-cell, 2D / 3D | 139.5 / 228.5 | 21.9 / 23.4 |
+| polychoron | 120-cell, 2D / 3D | 155.3 / 332.3 | 87.1 / 85.9 |
+| menger | 4-gap, 3D | 311.0 | 81.2 |
+| menger | 4-gap 4D, 3D | 321.8 | 69.2 |
+| menger | 2D, any mode (the body reads no table) | 72.5-72.7 | 69.9-70.4 |
+
+- polychoron's init copies its shape's vertices (2400 floats the most),
+  menger's its 4-gap point set (896); the body reads four `get_param`s a
+  vertex. The init kernel takes the name-gated libraries its variations
+  use, as the main shader does. su_mobius moved likewise drew no gain
+  (its 992 floats read twice a call: group 3 at 34.3 before, 34.1 / 35.7
+  after), so it stays; polyhedron's 360 gained nothing in the twin
+  experiment, so it stays too. Runs minutes apart drifted a few percent
+  on the noisier flames (polyhedron, unchanged, 35.2 to 38.0), which is
+  why each comparison was made against the old build timed then.
+- The contract's `largest_shipped_variation_slots` moved 259 to 2410
+  (polychoron), and polychoron's and menger's `init_param_count` with
+  it: the variation corpus changes, tell the API repository.
+
+**Step 4** (2026-11-07): the twins follow their built-ins. The
+translator already makes a def's `wgsl_init` the twin's `prepare` and a
+computed slot read `p.slots[e]`, so polychoron's and menger's twins,
+retranslated from the new built-ins, keep their vertices in `prepare`'s
+slots too. Two translator additions: a table copied whole into a
+variable never written (`var verts = POLYCHORA_VERTS;`) is read as the
+table, and `prepare`'s tables are written at its top (in `prepare` the
+language fills a local once a call, no module constant). Every other
+twin retranslates byte-identical.
+
+- Held: compile; pairs; density in 3D (both are 4D) at the defaults and
+  in each table mode -- polychoron's 5-cell, 120-cell and 600-cell,
+  menger's two 4-gap modes -- with the density gate's new
+  `VARIATION_TWINS_PARAMS=k=v`, which the defaults do not reach.
+- Timed against the new built-ins (`time_variation_twins`, which takes
+  the same knob): 1.00-1.04 in every mode (polychoron's was 5.65).
+- Not needed: the CPU pair judge's `prepare` reuse. Both variations
+  draw, so their pairs are judged by density and the judge never runs
+  them; no twin with a large `prepare` is judged by formula today.
+- The translator's general move of a table into `prepare` (for twins
+  whose built-ins keep a constant table) stays unbuilt: of the measured
+  ones, su_mobius's built-in gained nothing from it and polyhedron's twin
+  nothing, so the twins mirror their built-ins instead.
+
+**Found for step 4** (the twins): a Rhai array holds at most 8192
+floats and a loop runs at most 4096 times, `prepare`'s included, and
+`prepare` builds its result in the init as locals (three copies of each
+array). A table past 8192 floats takes several arrays. The user,
+2026-11-07: the cap is fine; expand it later if something needs it.
 
 ## Open questions
 

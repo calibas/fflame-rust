@@ -2016,7 +2016,7 @@ mod tests {
     /// values written via `apply_config_value` for any of the four
     /// VariationParam ConfigPath variants must be readable via
     /// `Transform::get_variation_param` (the canonical read path used
-    /// by `GpuVariationParams::from_transform` for shader packing).
+    /// by `pack_gpu_variation_params` for shader packing).
     /// Regression test: animated camera world-space position must reach
     /// the config during video export. `apply_config_value` previously
     /// handled only `CameraZ` (and the rotations) — `CameraX`/`CameraY`
