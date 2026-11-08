@@ -245,16 +245,21 @@ pub fn check(inv: &UserInverse, params: &ParamValues) -> Result<(), String> {
     Ok(())
 }
 
-/// The inverse of the user's variation `key`, compiled and checked once
-/// per key (a key is its source's, so an edit is another): `None` when
-/// it declares none or is not the user's; why it is refused otherwise.
+/// The inverse of the variation `key`, compiled and checked once per key
+/// (a key is its source's, so an edit is another): a Rhai variation's
+/// own, or for a built-in its twin's -- so writing a twin's inverse gives
+/// the built-in one in the Flame Attractor, under its own name and
+/// parameters, where it has none in Rust (`scene::ifs_analysis` asks
+/// this only then). `None` when it declares none; why it is refused
+/// otherwise.
 pub fn of(key: &str) -> Option<Result<Arc<UserInverse>, String>> {
     static CACHE: OnceLock<Mutex<HashMap<String, Option<Result<Arc<UserInverse>, String>>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     if let Some(hit) = cache.lock().ok()?.get(key) {
         return hit.clone();
     }
-    let built = crate::variations::custom::source_of(key).and_then(|s| compile(&s, key)).map(|r| r.map(Arc::new));
+    let source = crate::variations::custom::source_of(key).or_else(|| crate::variations::twins::source(key).map(str::to_string));
+    let built = source.and_then(|s| compile(&s, key)).map(|r| r.map(Arc::new));
     if let Ok(mut c) = cache.lock() {
         c.insert(key.to_string(), built.clone());
     }

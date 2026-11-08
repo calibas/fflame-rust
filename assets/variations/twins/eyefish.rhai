@@ -13,3 +13,15 @@ fn variation(z, p) {
     let scale = 2.0 / r_xy;
     complex(scale * z.re, scale * z.im)
 }
+
+fn inverse(z, p, branch) {
+    let s = z.abs();
+    if s >= 2.0 {
+        return no_preimage();
+    }
+    z / (2.0 - s)
+}
+
+fn image_gap(z, p) {
+    z.abs() - 2.0
+}

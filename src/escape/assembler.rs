@@ -8699,6 +8699,10 @@ fn push_ifs_sum_markers(out: &mut Vec<String>, text: &str, sums: bool, user: boo
             "//__IFS_USER_SIGMA__" => Some((8.0, "return ifs_user_sigma(i, v);")),
             "//__IFS_USER_JACOBIAN__" => Some((8.0, "return ifs_user_jacobian(i, v);")),
             "//__IFS_USER_GAP__" => Some((8.0, "return ifs_user_gap(i, p);")),
+            // No preimage: past the 1e37 every test of the walk reads as a
+            // number lost, before the pre affine can shrink it, as the
+            // CPU's infinity is (`NonlinearMap2::apply_inverse`).
+            "//__IFS_USER_POINT__" => Some((8.0, "if (!ifs_user_side(u)) { return vec2<f32>(3.4e38, 3.4e38); }")),
             _ => None,
         };
         match call {
@@ -8717,12 +8721,19 @@ fn push_ifs_sum_markers(out: &mut Vec<String>, text: &str, sums: bool, user: boo
 /// they read their values through, which ride behind the xaos graph
 /// (`ifs::pack_flame`); and the three the kernel's switches call: the
 /// inverse along the row's branch, its Jacobian by central differences
-/// -- a step of 2e-4 of the point's size, where the f32 cube root of
-/// epsilon's 5e-3 lost a few percent within that of hemisphere's edge,
-/// whose inverse is singular there, and the outer arc of its set with it
-/// -- one-sided where a side leaves the image, and the local σ that
-/// Jacobian gives, `1/σ_max` (1 where there is no preimage, as the
-/// CPU's). A difference across a cut or
+/// -- a step of 1e-3 of the point's size, f32's rounding some 1e-4 of the
+/// derivative; the twins' pictures did not move between 2e-4 and 2e-3 --
+/// one-sided where a side leaves the image, and the local σ that Jacobian
+/// gives, `1/σ_max`. Where there is no preimage the row's point leaves at
+/// 3.4e38 (`//__IFS_USER_POINT__`), past the 1e37 every test of the walk
+/// reads as a number lost, whatever the pre affine -- as the CPU's
+/// infinity (`NonlinearMap2::apply_inverse`) -- with σ one: no term folds
+/// for it, in the gap's step or in the walk, and a path frozen there keeps
+/// only a positive bound it had. Measured against the reference walk:
+/// 100% on every twin and borrowing built-in. At 1e30 with σ one, as
+/// bubble's built-in row has it, a gapped branch's step bound the piece
+/// that far (98.9% for that row); with σ zero a path that left claimed
+/// distance zero. A difference across a cut or
 /// the image's edge comes out huge, and its σ small: the sound way.
 fn ifs_user_block(user: &super::ifs::UserKernels) -> String {
     use crate::variations::user_inverse::{GAP_WGSL_NAME, WGSL_NAME};
@@ -8748,7 +8759,7 @@ fn ifs_user_block(user: &super::ifs::UserKernels) -> String {
     out.push_str(
         "fn ifs_user_side(u: vec2<f32>) -> bool {\n    return abs(u.x) < 1e29 && abs(u.y) < 1e29;\n}\n\
          fn ifs_user_diff(i: u32, v: vec2<f32>, d: vec2<f32>, u0: vec2<f32>) -> vec2<f32> {\n    let a = ifs_user_inverse(i, v + d);\n    let b = ifs_user_inverse(i, v - d);\n    let h = length(d);\n    if (ifs_user_side(a) && !ifs_user_side(b)) {\n        return (a - u0) / h;\n    }\n    if (ifs_user_side(b) && !ifs_user_side(a)) {\n        return (u0 - b) / h;\n    }\n    return (a - b) / (2.0 * h);\n}\n\
-         fn ifs_user_jacobian(i: u32, v: vec2<f32>) -> mat2x2<f32> {\n    let h = 2e-4 * max(length(v), 1e-2);\n    let u0 = ifs_user_inverse(i, v);\n    return mat2x2<f32>(ifs_user_diff(i, v, vec2<f32>(h, 0.0), u0), ifs_user_diff(i, v, vec2<f32>(0.0, h), u0));\n}\n\
+         fn ifs_user_jacobian(i: u32, v: vec2<f32>) -> mat2x2<f32> {\n    let h = 1e-3 * max(length(v), 1e-2);\n    let u0 = ifs_user_inverse(i, v);\n    return mat2x2<f32>(ifs_user_diff(i, v, vec2<f32>(h, 0.0), u0), ifs_user_diff(i, v, vec2<f32>(0.0, h), u0));\n}\n\
          fn ifs_user_sigma(i: u32, v: vec2<f32>) -> f32 {\n    if (!ifs_user_side(ifs_user_inverse(i, v))) {\n        return 1.0;\n    }\n    let j = ifs_user_jacobian(i, v);\n    let fro2 = dot(j[0], j[0]) + dot(j[1], j[1]);\n    let det = j[0].x * j[1].y - j[1].x * j[0].y;\n    let s_max = sqrt(max((fro2 + sqrt(max(fro2 * fro2 - 4.0 * det * det, 0.0))) * 0.5, 0.0));\n    if (!(s_max > 0.0) || !(s_max <= 1e32)) {\n        return 0.0;\n    }\n    return 1.0 / s_max;\n}\n",
     );
     out

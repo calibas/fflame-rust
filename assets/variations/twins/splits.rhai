@@ -58,10 +58,5 @@ fn inverse(z, p, branch) {
     let north = (branch & 2) == 2;
     let dx = (if east { p.x } else { -p.x }) + (if north { p.ushear } else { -p.dshear });
     let dy = (if north { p.y } else { -p.y }) + (if east { p.rshear } else { -p.lshear });
-    let u = complex(z.re - dx, z.im - dy);
-    if (u.re >= 0.0) == east && (u.im >= 0.0) == north {
-        u
-    } else {
-        no_preimage()
-    }
+    complex(z.re - dx, z.im - dy)
 }

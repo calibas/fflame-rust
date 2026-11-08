@@ -1,10 +1,23 @@
 """The twins' inverses, written by hand (docs/projects/rhai-planners.md, B1).
 
 The Flame Attractor walks a flame backwards and needs each variation's
-exact inverse. The built-ins carry theirs in Rust (`variations::inverse`);
-a twin carries its own in Rhai, `fn inverse(z, p, branch)`, so an edited
-twin keeps one while it still undoes the twin's forward map -- checked
-when it is used (`variations::user_inverse::check`).
+exact inverse. Twenty-six built-ins carry theirs in Rust
+(`variations::inverse`); a twin carries its own in Rhai, `fn inverse(z, p,
+branch)`, so an edited twin keeps one while it still undoes the twin's
+forward map -- checked when it is used (`variations::user_inverse::check`).
+**A built-in with none in Rust takes its twin's** (`user_inverse::of`), so
+adding an entry here gives a built-in the Flame Attractor: write the
+inverse, run this script, and the twins' test
+(`the_twins_inverses_undo_their_maps`) checks it; the GPU gates are
+`a_twins_own_inverse_renders_the_flame_attractor` and
+`a_builtin_borrows_its_twins_inverse` (escape::ifs).
+
+Where it has no preimage an inverse gives `no_preimage()`; where its image
+is not the whole plane, a `fn image_gap` (GAPS below) scores a point off
+it. An inverse that has none on most of its branches at most points --
+splits' by its quadrant -- read every pixel as the set on the GPU (an open
+item in the plan), so splits' gives each branch's point, as the built-in
+kernel does.
 
 Each is transcribed from the built-in kernel's inverse in
 `scene/ifs_analysis.rs` (`kernel_inverse_gen`), against the TWIN's forward
@@ -120,18 +133,15 @@ INVERSES = {
     complex(sin(z.re * h) * (1.0 + m), if z.im < 0.0 { -y } else { y })
 }
 """),
-    # One branch per quadrant of the preimage: bit 0 x >= 0, bit 1 y >= 0.
+    # One branch per quadrant of the preimage: bit 0 x >= 0, bit 1 y >= 0,
+    # each branch's point given whichever quadrant it lands in, as the
+    # built-in kernel does (`Kernel::Splits`; see the module note).
     "splits": (4, """fn inverse(z, p, branch) {
     let east = (branch & 1) == 1;
     let north = (branch & 2) == 2;
     let dx = (if east { p.x } else { -p.x }) + (if north { p.ushear } else { -p.dshear });
     let dy = (if north { p.y } else { -p.y }) + (if east { p.rshear } else { -p.lshear });
-    let u = complex(z.re - dx, z.im - dy);
-    if (u.re >= 0.0) == east && (u.im >= 0.0) == north {
-        u
-    } else {
-        no_preimage()
-    }
+    complex(z.re - dx, z.im - dy)
 }
 """),
     # Two preimages a turn, asin(x) and pi - asin(x), over turns -2 to 2.
@@ -143,6 +153,98 @@ INVERSES = {
     let s = asin(z.re);
     let x = if (branch & 1) == 0 {{ s }} else {{ {PI} - s }};
     complex(x + {TAU} * turn, z.im)
+}}
+"""),
+    # A rotation by |z|^2, which keeps |z|.
+    "swirl": (1, """fn inverse(z, p, branch) {
+    let r2 = z.norm_sqr();
+    let s = sin(r2);
+    let c = cos(r2);
+    complex(z.re * s + z.im * c, z.im * s - z.re * c)
+}
+"""),
+    # z^2 / (|z| + 1e-6): the square's two roots, the radius from the
+    # quadratic its 1e-6 makes.
+    "horseshoe": (2, f"""fn inverse(z, p, branch) {{
+    let s = z.abs();
+    let r = (s + sqrt(s * s + 4.0e-6 * s)) / 2.0;
+    let th = atan2(z.im, z.re) / 2.0 + (if branch == 0 {{ 0.0 }} else {{ {PI} }});
+    complex(r * cos(th), r * sin(th))
+}}
+"""),
+    # (angle from +y over pi, radius - 1), with the twin's own pi.
+    "polar": (1, """fn inverse(z, p, branch) {
+    if abs(z.re) > 1.0 || z.im < -1.0 {
+        return no_preimage();
+    }
+    let th = 3.14159265359 * z.re;
+    let r = z.im + 1.0;
+    complex(r * sin(th), r * cos(th))
+}
+"""),
+    # e^(x - 1) at the angle pi*y: y's turns -2 to 2.
+    "exponential": (5, f"""fn inverse(z, p, branch) {{
+    let m = z.abs();
+    if m <= 0.0 {{
+        return no_preimage();
+    }}
+    complex(1.0 + ln(m), atan2(z.im, z.re) / {PI} + 2.0 * (to_float(branch) - 2.0))
+}}
+"""),
+    # The complex exponential: its logarithm, turns -1 to 1.
+    "exp": (3, f"""fn inverse(z, p, branch) {{
+    let m = z.abs();
+    if m <= 0.0 {{
+        return no_preimage();
+    }}
+    complex(ln(m), atan2(z.im, z.re) + {TAU} * (to_float(branch) - 1.0))
+}}
+"""),
+    # (log_base |z|, the angle): one turn of the angle, its strip.
+    "log": (1, """fn inverse(z, p, branch) {
+    let denom = p.denom;
+    let r = exp(z.re / denom * 0.5);
+    complex(r * cos(z.im), r * sin(z.im))
+}
+"""),
+    # 2r/(r + 1) on the swapped point, its radius from the quadratic the
+    # twin's 1e-6 makes; onto the disc of radius 2.
+    "fisheye": (1, """fn inverse(z, p, branch) {
+    let s = z.abs();
+    if s >= 2.0 {
+        return no_preimage();
+    }
+    if s <= 0.0 {
+        return complex(0.0, 0.0);
+    }
+    let e = 1.0e-6;
+    let b = s * (1.0 + e);
+    let r0 = (b + sqrt(b * b + 4.0 * (2.0 - s) * s * e)) / (2.0 * (2.0 - s));
+    complex(z.im * r0 / s, z.re * r0 / s)
+}
+"""),
+    # 2z/(|z| + 1), onto the disc of radius 2.
+    "eyefish": (1, """fn inverse(z, p, branch) {
+    let s = z.abs();
+    if s >= 2.0 {
+        return no_preimage();
+    }
+    z / (2.0 - s)
+}
+"""),
+    # sin on each axis: per axis two preimages a turn over turns -1 and
+    # 0, four, and their sixteen pairs.
+    "sinusoidal": (16, f"""fn inverse(z, p, branch) {{
+    if abs(z.re) > 1.0 || abs(z.im) > 1.0 {{
+        return no_preimage();
+    }}
+    let bx = branch % 4;
+    let by = branch / 4;
+    let sx = asin(z.re);
+    let sy = asin(z.im);
+    let x = (if (bx & 1) == 0 {{ sx }} else {{ {PI} - sx }}) + {TAU} * (to_float(bx / 2) - 1.0);
+    let y = (if (by & 1) == 0 {{ sy }} else {{ {PI} - sy }}) + {TAU} * (to_float(by / 2) - 1.0);
+    complex(x, y)
 }}
 """),
 }
@@ -171,6 +273,26 @@ GAPS = {
 """,
     "cylinder": """fn image_gap(z, p) {
     abs(z.re) - 1.0
+}
+""",
+    "polar": """fn image_gap(z, p) {
+    max(abs(z.re) - 1.0, -1.0 - z.im)
+}
+""",
+    "log": f"""fn image_gap(z, p) {{
+    abs(z.im) - {PI}
+}}
+""",
+    "fisheye": """fn image_gap(z, p) {
+    z.abs() - 2.0
+}
+""",
+    "eyefish": """fn image_gap(z, p) {
+    z.abs() - 2.0
+}
+""",
+    "sinusoidal": """fn image_gap(z, p) {
+    max(abs(z.re), abs(z.im)) - 1.0
 }
 """,
 }
