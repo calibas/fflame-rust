@@ -1000,6 +1000,9 @@ impl FlameRenderer {
         // world coordinates -- so it is packed again, before the bind
         // groups below are made against the buffer.
         if let Some(c) = &self.cylinders {
+            if crate::scene::cylinder::stale_symbol(c, flame) {
+                log::debug!("resize: the plan on screen names transforms this flame has not; packed with them as the identity until the next plan");
+            }
             let mut packed = if c.composable {
                 crate::scene::cylinder::pack(c, flame, &crate::variations::global_registry())
             } else {
