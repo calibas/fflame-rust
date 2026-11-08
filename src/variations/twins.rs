@@ -1183,6 +1183,10 @@ mod tests {
     fn the_twins_inverses_undo_their_maps() {
         let with: Vec<&str> = TWINS.iter().filter(|(_, s)| s.contains("fn inverse(")).map(|(n, _)| *n).collect();
         assert!(with.len() >= 20, "{with:?}");
+        // A forward map that draws has none for a sum's Newton solve (B2).
+        let fwd = |n: &str| crate::variations::user_inverse::compile(&own(n), n).and_then(Result::ok).map(|i| i.forward_wgsl.is_some());
+        assert_eq!(fwd("julia"), Some(false), "julia draws its root");
+        assert_eq!(fwd("bubble"), Some(true));
         for name in with {
             match crate::variations::user_inverse::compile(&own(name), name) {
                 Some(Ok(inv)) => assert!(inv.branches >= 1, "{name}"),

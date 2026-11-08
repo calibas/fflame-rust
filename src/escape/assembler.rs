@@ -8705,12 +8705,20 @@ fn push_ifs_sum_markers(out: &mut Vec<String>, text: &str, sums: bool, user: boo
             "//__IFS_USER_POINT__" => Some((8.0, "if (!ifs_user_side(u)) { return vec2<f32>(3.4e38, 3.4e38); }")),
             _ => None,
         };
-        match call {
-            Some((k, c)) if (k == 7.0 && sums) || (k == 8.0 && user) => {
+        // A sum's kernel is a user kernel by the row's kernel kind, `k`
+        // (`lin_t.w`), as the Newton shader reads it (B2).
+        let newton = match l.trim() {
+            "//__IFS_USER_FORWARD__" => Some("return ifs_user_forward(i, z);"),
+            "//__IFS_USER_SUM_INVERSE__" => Some("return ifs_user_inverse(i, v);"),
+            _ => None,
+        };
+        match (call, newton) {
+            (Some((k, c)), _) if (k == 7.0 && sums) || (k == 8.0 && user) => {
                 out.push(format!("    if (ifs_maps[i].kind == {k:.1}) {{ {c} }}"))
             }
-            Some(_) => {}
-            None => out.push(l.to_string()),
+            (_, Some(c)) if user => out.push(format!("    if (k == 8.0) {{ {c} }}")),
+            (Some(_), _) | (_, Some(_)) => {}
+            (None, None) => out.push(l.to_string()),
         }
     }
 }
@@ -8736,18 +8744,30 @@ fn push_ifs_sum_markers(out: &mut Vec<String>, text: &str, sums: bool, user: boo
 /// distance zero. A difference across a cut or
 /// the image's edge comes out huge, and its σ small: the sound way.
 fn ifs_user_block(user: &super::ifs::UserKernels) -> String {
-    use crate::variations::user_inverse::{GAP_WGSL_NAME, WGSL_NAME};
+    use crate::variations::user_inverse::{FORWARD_WGSL_NAME, GAP_WGSL_NAME, WGSL_NAME};
     let mut out = String::from(
         "fn get_param(xform_id: u32, variation_id: u32, slot: u32) -> f32 {\n    return ifs_xaos[xform_id + variation_id + slot];\n}\n",
     );
-    let (mut cases, mut gaps) = (String::new(), String::new());
-    for (f, (_, wgsl, gap)) in user.functions.iter().enumerate() {
-        out.push_str(&wgsl.replace(WGSL_NAME, &format!("{WGSL_NAME}{f}")).replace(GAP_WGSL_NAME, &format!("{GAP_WGSL_NAME}{f}")));
+    let (mut cases, mut gaps, mut forwards) = (String::new(), String::new(), String::new());
+    for (f, (_, wgsl, gap, fwd)) in user.functions.iter().enumerate() {
+        out.push_str(
+            &wgsl
+                .replace(WGSL_NAME, &format!("{WGSL_NAME}{f}"))
+                .replace(GAP_WGSL_NAME, &format!("{GAP_WGSL_NAME}{f}"))
+                .replace(FORWARD_WGSL_NAME, &format!("{FORWARD_WGSL_NAME}{f}")),
+        );
         cases.push_str(&format!("        case {f}u: {{ return {WGSL_NAME}{f}(v, base, branch); }}\n"));
         if *gap {
             gaps.push_str(&format!("        case {f}u: {{ g = {GAP_WGSL_NAME}{f}(v, base, 0.0).x; }}\n"));
         }
+        if *fwd {
+            forwards.push_str(&format!("        case {f}u: {{ return {FORWARD_WGSL_NAME}{f}(z, base, 0.0); }}\n"));
+        }
     }
+    // Its forward map, for a sum's Newton solve (B2).
+    out.push_str(&format!(
+        "fn ifs_user_forward(i: u32, z: vec2<f32>) -> vec2<f32> {{\n    let base = u32(ifs_maps[i].params.y);\n    switch u32(ifs_maps[i].params.x) {{\n{forwards}        default: {{}}\n    }}\n    return z * 1e30;\n}}\n"
+    ));
     // Its image gap where it declares one (`fn image_gap`), in the
     // kernel's frame, scaled as the unit disc's (`params.z`).
     out.push_str(&format!(
@@ -8864,7 +8884,7 @@ pub fn assemble_ifs_user(
                 // BEFORE the formula's own body: `ifs_inv_point` calls
                 // into the solve, and WGSL declares before it uses.
                 if sums {
-                    out.push(super::ifs::IFS_NEWTON.trim().to_string());
+                    push_ifs_sum_markers(&mut out, super::ifs::IFS_NEWTON.trim(), sums, users);
                 }
                 // The formula's body carries two marker lines of its
                 // own, which is how the sum dispatch gets INSIDE

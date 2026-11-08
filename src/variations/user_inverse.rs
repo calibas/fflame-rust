@@ -52,6 +52,10 @@ pub const WGSL_NAME: &str = "ifs_user_inv";
 /// The name it calls an image gap by, likewise.
 pub const GAP_WGSL_NAME: &str = "ifs_user_gap";
 
+/// The name it calls a forward map by, likewise: a sum's Newton solve
+/// steps on it (B2).
+pub const FORWARD_WGSL_NAME: &str = "ifs_user_fwd";
+
 /// A variation's inverse, compiled.
 pub struct UserInverse {
     /// The variation's key.
@@ -72,6 +76,11 @@ pub struct UserInverse {
     /// ifs_user_gap(v, base, 0.0)` ([`GAP_WGSL_NAME`]), its gap the real
     /// part; none where the variation declares none.
     pub gap: Option<(Program, String)>,
+    /// `fn variation` as the shader calls it, `fn ifs_user_fwd(z, base,
+    /// 0.0)` ([`FORWARD_WGSL_NAME`]), for a sum's Newton solve (B2); none
+    /// for one that draws, or reaches for what only a flame has -- such a
+    /// kernel is not summed (`scene::ifs_analysis`).
+    pub forward_wgsl: Option<String>,
 }
 
 impl UserInverse {
@@ -158,7 +167,10 @@ fn compile_declared(source: &str, key: &str) -> Result<UserInverse, String> {
         None
     };
     let forward_draws = crate::lang::wgsl::variation_shape(&forward).is_ok_and(|s| s.rng);
-    let inv = UserInverse { key: key.to_string(), forward, inverse, branches, forward_draws, wgsl, gap };
+    let forward_wgsl = crate::lang::wgsl::inverse_kernel(&forward, FORWARD_WGSL_NAME).ok();
+    #[cfg(not(target_arch = "wasm32"))]
+    let forward_wgsl = forward_wgsl.filter(|w| crate::lang::wgsl::validate_inverse_kernel(w).is_ok());
+    let inv = UserInverse { key: key.to_string(), forward, inverse, branches, forward_draws, wgsl, gap, forward_wgsl };
     check(&inv, &ParamValues::defaults(&inv.forward))?;
     Ok(inv)
 }
@@ -264,6 +276,15 @@ pub fn of(key: &str) -> Option<Result<Arc<UserInverse>, String>> {
         c.insert(key.to_string(), built.clone());
     }
     built
+}
+
+/// The variation `key`'s name, kept for the session: a sum names its
+/// kernel by a `&'static str` (`SumMap2::kind`), and a key is short and
+/// asked for once per variation.
+pub fn static_name(key: &str) -> &'static str {
+    static NAMES: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let mut names = NAMES.get_or_init(Default::default).lock().expect("the names");
+    names.entry(key.to_string()).or_insert_with(|| Box::leak(key.to_string().into_boxed_str()))
 }
 
 /// An inverse at one transform's parameter values: a user kernel.
