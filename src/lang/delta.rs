@@ -215,6 +215,116 @@ pub fn with_derived_equations(p: &Program) -> Option<Program> {
     Some(out)
 }
 
+/// **A variation's forward difference** (docs/projects/rhai-planners.md,
+/// C3): `F(Z + d) - F(Z)` of its transform section, by the rules above, as
+/// a transform section of its own -- the reference point `Z` its input
+/// point, the deviation `d` its `ctx.accum`, the draw its colour channel
+/// (a forced arm's, the same at the reference and the sample), the new
+/// deviation the point it gives. So the interpreter runs it for a
+/// reference orbit, and the variation lowering compiles it for a replay,
+/// as either runs any variation.
+///
+/// The way in is the escape loop's: the body is one pass of `z = F(z)`,
+/// its input point `#z` and its result written to `z`, whose derived loop
+/// equations step `#dz` to `F(Z + dz) - F(Z)` from `#z = Z`. `None` where
+/// they do not derive -- a function with no form, an early return, a value
+/// carried -- and the replay keeps such a variation's steps absolute.
+pub fn variation_difference(p: &Program) -> Option<Program> {
+    if p.kind != super::EntryKind::Transform || p.transform.is_empty() {
+        return None;
+    }
+    let var = |name: &str, ty: Ty, global: bool| Var { name: name.into(), ty, span: Default::default(), stored_real: false, global, perturb: false, dims: Vec::new(), size: Vec::new() };
+    let mut q = p.clone();
+    // The draw: a uniform while it derives, as the parameters are.
+    q.vars.push(var("forced_draw", Ty::Float, true));
+    let draw = q.vars.len() - 1;
+    let as_loop = |e: &IExpr| match e.kind {
+        IExprKind::Predef(Predef::Pixel) => Some(mk(IExprKind::Predef(Predef::Z), Ty::Complex)),
+        IExprKind::Predef(Predef::Draw) => Some(mk(IExprKind::Var(draw), Ty::Float)),
+        _ => None,
+    };
+    q.loop_body = map_stmts(&p.transform, &as_loop, &|pl: &Place| if *pl == Place::Pixel { Place::Z } else { pl.clone() });
+    q.transform.clear();
+    q.init.clear();
+    q.bailout = None;
+    let mut out = with_derived_equations(&q)?;
+    if !out.carried.is_empty() || out.perturb_when.is_some() {
+        return None;
+    }
+    out.vars.push(var("dif_z", Ty::Complex, false));
+    out.vars.push(var("dif_d", Ty::Complex, false));
+    out.vars.push(var("dif_out", Ty::Complex, false));
+    let (z, d, dev) = (out.vars.len() - 3, out.vars.len() - 2, out.vars.len() - 1);
+    let as_transform = |e: &IExpr| match e.kind {
+        IExprKind::Predef(Predef::Z) => Some(mk(IExprKind::Var(z), Ty::Complex)),
+        IExprKind::Predef(Predef::DZ) => Some(mk(IExprKind::Var(d), Ty::Complex)),
+        IExprKind::Var(v) if v == draw => Some(mk(IExprKind::Predef(Predef::VarColor), Ty::Float)),
+        _ => None,
+    };
+    let mut body = vec![
+        IStmt::Assign(Place::Var(z), mk(IExprKind::Predef(Predef::Pixel), Ty::Complex)),
+        IStmt::Assign(Place::Var(d), mk(IExprKind::Predef(Predef::Accum), Ty::Complex)),
+        IStmt::Assign(Place::Var(dev), zero_of(Ty::Complex)),
+    ];
+    body.extend(map_stmts(&out.perturb_loop, &as_transform, &|pl: &Place| if *pl == Place::DZ { Place::Var(dev) } else { pl.clone() }));
+    body.push(IStmt::Assign(Place::Pixel, mk(IExprKind::Var(dev), Ty::Complex)));
+    out.transform = body;
+    out.loop_body.clear();
+    out.perturb_loop.clear();
+    out.perturb_init.clear();
+    for v in &mut out.vars {
+        v.perturb = false;
+    }
+    out.vars[draw].global = false;
+    Some(out)
+}
+
+/// `stmts` with every expression `f` rewrites rewritten (where it answers,
+/// whole) and every place written mapped by `place`.
+fn map_stmts(stmts: &[IStmt], f: &dyn Fn(&IExpr) -> Option<IExpr>, place: &dyn Fn(&Place) -> Place) -> Vec<IStmt> {
+    let s = |body: &[IStmt]| map_stmts(body, f, place);
+    let e = |x: &IExpr| map_expr(x, f);
+    stmts
+        .iter()
+        .map(|st| match st {
+            IStmt::Assign(p, x) => IStmt::Assign(place(p), e(x)),
+            IStmt::SetElem { var, index, value } => IStmt::SetElem { var: *var, index: e(index), value: e(value) },
+            IStmt::If { arms, otherwise } => IStmt::If { arms: arms.iter().map(|(c, b)| (e(c), s(b))).collect(), otherwise: s(otherwise) },
+            IStmt::While { cond, body } => IStmt::While { cond: e(cond), body: s(body) },
+            IStmt::Repeat { body, cond } => IStmt::Repeat { body: s(body), cond: e(cond) },
+            IStmt::Map { call, input, out } => IStmt::Map { call: *call, input: Box::new([e(&input[0]), e(&input[1]), e(&input[2])]), out: *out },
+            IStmt::Host(h, args) => IStmt::Host(*h, args.iter().map(e).collect()),
+            IStmt::Scope(body) => IStmt::Scope(s(body)),
+            IStmt::Break | IStmt::Continue | IStmt::Return => st.clone(),
+        })
+        .collect()
+}
+
+/// `x` with every subexpression `f` rewrites rewritten.
+fn map_expr(x: &IExpr, f: &dyn Fn(&IExpr) -> Option<IExpr>) -> IExpr {
+    if let Some(y) = f(x) {
+        return y;
+    }
+    let b = |a: &IExpr| Box::new(map_expr(a, f));
+    let kind = match &x.kind {
+        IExprKind::Elem(v, a) => IExprKind::Elem(*v, b(a)),
+        IExprKind::Convert(a) => IExprKind::Convert(b(a)),
+        IExprKind::Unary(o, a) => IExprKind::Unary(*o, b(a)),
+        IExprKind::PowInt(a, n) => IExprKind::PowInt(b(a), *n),
+        IExprKind::Modulus(a) => IExprKind::Modulus(b(a)),
+        IExprKind::Call(g, a) => IExprKind::Call(*g, b(a)),
+        IExprKind::UserCall(g, a) => IExprKind::UserCall(*g, b(a)),
+        IExprKind::UserDeriv(g, a) => IExprKind::UserDeriv(*g, b(a)),
+        IExprKind::UserJac(g, a, t) => IExprKind::UserJac(*g, b(a), *t),
+        IExprKind::MakeComplex(a, c) => IExprKind::MakeComplex(b(a), b(c)),
+        IExprKind::Binary(o, a, c) => IExprKind::Binary(*o, b(a), b(c)),
+        IExprKind::UserDiff(g, a, c) => IExprKind::UserDiff(*g, b(a), b(c)),
+        IExprKind::Host(h, args) => IExprKind::Host(*h, args.iter().map(|a| map_expr(a, f)).collect()),
+        k => k.clone(),
+    };
+    IExpr { kind, ty: x.ty }
+}
+
 fn stmt_reads_foreign(s: &IStmt, p: &Program) -> bool {
     fn e(x: &IExpr, p: &Program) -> bool {
         match &x.kind {

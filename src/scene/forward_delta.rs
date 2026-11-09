@@ -101,9 +101,13 @@ pub fn kernel_forward_difference_gen<T: Transcendental>(k: &Kernel, v: &[T; 2], 
             return kernel_forward_difference_gen(&root, &[v[0].clone(), v[1].neg()], &[e[0].clone(), e[1].neg()], arm);
         }
     }
-    // A user kernel has no difference form: it runs in the interpreter.
-    if let Kernel::User { .. } = *k {
-        return None;
+    // A user kernel's form is derived from its own body
+    // (`lang::delta::variation_difference`; rhai-planners C3) and run in
+    // the interpreter, in f64.
+    if let Kernel::User { slot } = *k {
+        let kernel = crate::variations::user_inverse::kernel(slot);
+        let r = kernel.forward_difference([v[0].to_f64(), v[1].to_f64()], [e[0].to_f64(), e[1].to_f64()], arm)?;
+        return (r[0].is_finite() && r[1].is_finite()).then(|| [v[0].lit(r[0]), v[0].lit(r[1])]);
     }
     let w = [v[0].add(&e[0]), v[1].add(&e[1])];
     let x = cnorm2(v);
@@ -433,8 +437,8 @@ pub fn forward_row(m: &Map2) -> [f32; ROW_FLOATS] {
             Kernel::Elliptic => (6.0, [0.0; 3]),
             // Its turns are the inverse's; going forward it has none.
             Kernel::Cylinder { .. } => (8.0, [0.0; 3]),
-            // Never packed: the inverse walk refuses a user kernel
-            // (`Backward::plan`), as no replay shader runs one.
+            // Packed, never read: a user kernel has no form yet, so its
+            // steps run absolute (`Backward::word_refs`, rhai-planners C2).
             Kernel::User { .. } => (-1.0, [0.0; 3]),
             // Its steps, past the three slots: a difference needs only
             // what crossing each axis adds.

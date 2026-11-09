@@ -259,6 +259,12 @@ pub(crate) fn register_into(registry: &mut crate::variations::VariationRegistry,
     Ok(dl.name.clone())
 }
 
+/// Whether `key` is a Rhai variation this session registered: asked of
+/// every variation a shader builds, so it reads no files.
+pub fn is_registered(key: &str) -> bool {
+    registered().lock().is_ok_and(|k| k.contains_key(key))
+}
+
 /// The source of the user's variation `name` -- its key, or the
 /// `INFO.name` a formula's `vary` calls it by (the KIFS plan, C1e): as
 /// registered, else a Rhai transformation in their formula library, else
