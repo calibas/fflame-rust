@@ -602,7 +602,14 @@ function takes the point, and the ids when it has parameters (as
   CPU in the interpreter and on the GPU spliced behind the hand forms
   (`forward_delta::replay_delta_wgsl`); a body that derives none replays
   absolute. Grand-julian with its julians Rhai twins renders the
-  built-in's density block by block to 1e6. The twins of the eleven planar kernels carry one, and of
+  built-in's density block by block to 1e6. The walk's CPU evaluator
+  replays a word over its points at once, map by map, and runs a user
+  kernel's forward map as one pass of the interpreter for all of them
+  (`VariationRun::call_batch`, E4: each node dispatched once, values the
+  same in every lane kept single, branches under masks, every lane the
+  scalar call's to the bit), 3.4x the scalar replay; grand-julian's
+  twin plans in about twice the built-in's time, where it took three to
+  six times. The twins of the eleven planar kernels carry one, and of
   julia3D and julia3Dz a 3D one (`scripts/twin_inverses.py`, which the
   translator appends): an edited twin keeps its inverse while it still
   undoes the map. Gates: `the_twins_inverses_undo_their_maps`;

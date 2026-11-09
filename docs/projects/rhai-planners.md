@@ -616,12 +616,35 @@ discretion. Can we add an inverse to hyperbolic as well?"
   Gates: batch against scalar bit for bit over every twin's forward map
   at many points and draws; the corpus through the twins as before; the
   twin's plan times against D1's.
+  *Built*: `lang/interp/batch.rs`. A column is typed -- floats and
+  complexes as such, anything else as the scalar run's values -- so a
+  float's or a complex's arithmetic, calls and conversions run as plain
+  loops, each exactly what `binary`, `call` or `convert` does with a lane
+  of that type, and anything else goes lane by lane through those same
+  functions (factored out of the scalar `eval` for it, so the two cannot
+  part). 515 of the 640 twins batch; the rest -- a loop, an array, a
+  state kept between calls -- run as scalar calls, and every twin's batch
+  is its scalar calls bit for bit at 198 points and three draws
+  (`a_batch_is_its_scalar_calls`). Julian's twin: 0.333 µs a scalar call,
+  0.105 µs a point batched by 256 or more (3.2x; its pow, atan2, cos and
+  sin alone are about 70 ns). In the walk, `lands_batch` replays a word
+  over its job's points map by map (`Kernel::forward_batch`,
+  `apply_branch_batch`); a word through a blurred transform, whose draws
+  are a stream a point, replays point by point. Over 400 random words and
+  20,000 of grand-julian's twin's sample points, 7.7M of 8M landing, every
+  answer is the point replay's, 3.4x faster
+  (`the_batched_replay_is_the_point_replay`). The twin's plans: 1.0, 2.0,
+  3.8 and 2.4 s against the built-in's 0.5, 1.0, 2.0 and 1.0 s -- about
+  twice, where it took three to six times (the earlier numbers measured
+  beside another test, so the ratio is the comparison); the densities
+  block by block as before. Its read, one orbit, is sequential and stays
+  scalar: 1.26 s against 0.38 s.
 
 ## Order of work
 
 A1, A2, B1 with the twins' inverses and the borrowing built-ins, B2, B3,
 C1, C2 and C3 done (2026-11-08); D1, D2, D3 and D4 done (2026-11-09);
-E1 and E2 done; then E3, E4.
+E1, E2, E3 (found at parity) and E4 done.
 
 ## Decisions for the user
 

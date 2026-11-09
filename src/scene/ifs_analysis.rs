@@ -340,6 +340,16 @@ impl Kernel {
         kernel_forward_gen(self, &z, k)
     }
 
+    /// [`Self::forward`] at each of `zs`, in place: a user kernel's in one
+    /// pass of its interpreter (rhai-planners E4), the others point by
+    /// point.
+    pub fn forward_batch(&self, zs: &mut [[f64; 2]], k: u32) {
+        match *self {
+            Kernel::User { slot } => crate::variations::user_inverse::kernel(slot).forward_batch(zs, k),
+            _ => zs.iter_mut().for_each(|z| *z = self.forward(*z, k)),
+        }
+    }
+
     /// The inverse kernel on `v`, along `branch`. A `v` with no
     /// preimage on that branch lands at infinity; the walk never asks
     /// for one, because [`NonlinearMap2::image_gap`] answers first
@@ -1407,6 +1417,14 @@ impl NonlinearMap2 {
     pub fn apply_branch(&self, p: [f64; 2], k: u32) -> [f64; 2] {
         let z = self.kernel.forward(self.pre.apply(p), k);
         self.post.apply([self.w * z[0], self.w * z[1]])
+    }
+
+    /// [`Self::apply_branch`] at each of `ps`, in place, its kernel's
+    /// forward map in one pass ([`Kernel::forward_batch`]).
+    pub fn apply_branch_batch(&self, ps: &mut [[f64; 2]], k: u32) {
+        ps.iter_mut().for_each(|p| *p = self.pre.apply(*p));
+        self.kernel.forward_batch(ps, k);
+        ps.iter_mut().for_each(|z| *z = self.post.apply([self.w * z[0], self.w * z[1]]));
     }
 
     /// Measure [`Self::third`] over a ball, by central-differencing
@@ -3238,6 +3256,18 @@ impl SumMap2 {
     /// The forward map along the kernel's branch `k`.
     pub fn apply_branch(&self, p: [f64; 2], k: u32) -> [f64; 2] {
         self.post.apply(self.phase(self.pre.apply(p), k))
+    }
+
+    /// [`Self::apply_branch`] at each of `ps`, in place, its kernel's
+    /// forward map in one pass ([`Kernel::forward_batch`]).
+    pub fn apply_branch_batch(&self, ps: &mut [[f64; 2]], k: u32) {
+        ps.iter_mut().for_each(|p| *p = self.pre.apply(*p));
+        let mut kernel = ps.to_vec();
+        self.kernel.forward_batch(&mut kernel, k);
+        for (p, b) in ps.iter_mut().zip(&kernel) {
+            let a = self.lin.apply(*p);
+            *p = self.post.apply([a[0] + self.kw * b[0], a[1] + self.kw * b[1]]);
+        }
     }
 
     /// Newton's seed for `v = post⁻¹(q)`, from whichever term leads

@@ -13,6 +13,8 @@ use super::check::LOOP_CAP;
 use super::ir::*;
 use super::Dialect;
 
+mod batch;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Value {
     Bool(bool),
@@ -353,6 +355,9 @@ pub struct VariationRun<'p> {
     /// The variables a call starts afresh ([`Self::reset_locals`]): all
     /// but `prepare`'s values and `init`'s state.
     locals: Vec<VarId>,
+    /// Whether its body runs batched, and draws ([`Self::call_batch`]),
+    /// read the first time it is asked.
+    batch_shape: Option<(bool, bool)>,
 }
 
 impl<'p> VariationRun<'p> {
@@ -366,7 +371,7 @@ impl<'p> VariationRun<'p> {
         m.exec(&p.global_body, &mut sh);
         m.exec(&p.init, &mut sh);
         let locals = (0..p.vars.len()).filter(|&v| !p.vars[v].global && !crate::lang::delta::writes_var(&p.init, v)).collect();
-        VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], point_w: 0.0, w_out: None, locals }
+        VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], point_w: 0.0, w_out: None, locals, batch_shape: None }
     }
 
     /// Every `rand()` of every call `u`, in [0, 1): the arm of a
@@ -1060,59 +1065,85 @@ impl<'p> Machine<'p> {
                 let IExprKind::Call(f, x) = &a.kind else { unreachable!() };
                 Value::Float(f.eval_f(self.eval(x, sh).as_f64()))
             }
-            IExprKind::Convert(a) => {
-                let v = self.eval(a, sh);
-                match e.ty {
-                    // Fractint tests the real part alone.
-                    Ty::Bool if self.prog.dialect == Dialect::Fractint => Value::Bool(v.as_f64() != 0.0),
-                    Ty::Bool => Value::Bool(v.as_bool()),
-                    Ty::Int => Value::Int(v.as_int()),
-                    Ty::UInt => Value::UInt(v.as_uint()),
-                    Ty::Float => Value::Float(v.as_f64()),
-                    Ty::Complex => Value::Complex(v.as_c64()),
-                }
-            }
-            IExprKind::MakeComplex(a, b) => Value::Complex(C64::new(self.eval(a, sh).as_f64(), self.eval(b, sh).as_f64())),
-            IExprKind::Unary(UnOp::Neg, a) => match self.eval(a, sh) {
-                Value::Int(i) => Value::Int(i.wrapping_neg()),
-                Value::UInt(u) => Value::UInt(u.wrapping_neg()),
-                Value::Float(f) => Value::Float(-f),
-                Value::Complex(c) => Value::Complex(c.neg()),
-                Value::Bool(b) => Value::Bool(b),
-            },
+            IExprKind::Convert(a) => convert(self.eval(a, sh), e.ty, self.prog.dialect),
+            IExprKind::MakeComplex(a, b) => make_complex(self.eval(a, sh), self.eval(b, sh)),
+            IExprKind::Unary(UnOp::Neg, a) => negate(self.eval(a, sh)),
             IExprKind::Unary(UnOp::Not, a) => Value::Bool(!self.eval(a, sh).as_bool()),
             // A real factor scales (IExpr::is_lifted_real).
             IExprKind::Binary(BinOp::Mul, a, b) if e.ty == Ty::Complex && (a.is_lifted_real() || b.is_lifted_real()) => {
                 let (k, z) = if a.is_lifted_real() { (a, b) } else { (b, a) };
-                Value::Complex(self.eval(z, sh).as_c64().scale(self.eval(k, sh).as_c64().re))
+                scale_by_real(self.eval(z, sh), self.eval(k, sh))
             }
             IExprKind::Binary(op, a, b) => binary(*op, self.eval(a, sh), self.eval(b, sh), e.ty, self.prog.dialect),
-            IExprKind::PowInt(a, n) => match self.eval(a, sh) {
-                Value::Complex(c) => Value::Complex(c.powi(*n)),
-                v => Value::Float(v.as_f64().powi(*n as i32)),
-            },
-            IExprKind::Modulus(a) => match self.eval(a, sh) {
-                Value::Complex(c) => Value::Float(c.norm_sqr()),
-                v => {
-                    let x = v.as_f64();
-                    Value::Float(x * x)
-                }
-            },
+            IExprKind::PowInt(a, n) => pow_int(self.eval(a, sh), *n),
+            IExprKind::Modulus(a) => modulus(self.eval(a, sh)),
             IExprKind::Call(f, a) => call(*f, self.eval(a, sh), e.ty, self.prog.dialect),
-            IExprKind::UserCall(id, a) => {
-                let f = USER_FUNCTIONS[self.params.funcs[*id].min(USER_FUNCTIONS.len() - 1)];
-                Value::Complex(f.eval_c(self.eval(a, sh).as_c64()))
-            }
+            IExprKind::UserCall(id, a) => user_call(self.params.funcs[*id], self.eval(a, sh)),
             IExprKind::FuncChoice(id) => Value::Int(self.params.funcs[*id] as i32),
             IExprKind::UserDiff(id, a, d) => Value::Complex(user_diff(self.params.funcs[*id], self.eval(a, sh).as_c64(), self.eval(d, sh).as_c64())),
-            IExprKind::UserDeriv(id, a) => {
-                let f = USER_FUNCTIONS[self.params.funcs[*id].min(USER_FUNCTIONS.len() - 1)];
-                Value::Complex(f.deriv_c(self.eval(a, sh).as_c64()))
-            }
+            IExprKind::UserDeriv(id, a) => user_deriv(self.params.funcs[*id], self.eval(a, sh)),
             IExprKind::UserJac(id, a, b) => Value::Complex(user_jac(self.params.funcs[*id], self.eval(a, sh).as_c64(), *b)),
             IExprKind::Elem(v, index) => self.arrays[*v][self.element(*v, index, sh)],
         }
     }
+}
+
+/// A conversion to `ty` ([`IExprKind::Convert`]): the scalar run's and
+/// the batch's (`batch`), one function so the two cannot part.
+fn convert(v: Value, ty: Ty, dialect: Dialect) -> Value {
+    match ty {
+        // Fractint tests the real part alone.
+        Ty::Bool if dialect == Dialect::Fractint => Value::Bool(v.as_f64() != 0.0),
+        Ty::Bool => Value::Bool(v.as_bool()),
+        Ty::Int => Value::Int(v.as_int()),
+        Ty::UInt => Value::UInt(v.as_uint()),
+        Ty::Float => Value::Float(v.as_f64()),
+        Ty::Complex => Value::Complex(v.as_c64()),
+    }
+}
+
+fn make_complex(re: Value, im: Value) -> Value {
+    Value::Complex(C64::new(re.as_f64(), im.as_f64()))
+}
+
+fn negate(v: Value) -> Value {
+    match v {
+        Value::Int(i) => Value::Int(i.wrapping_neg()),
+        Value::UInt(u) => Value::UInt(u.wrapping_neg()),
+        Value::Float(f) => Value::Float(-f),
+        Value::Complex(c) => Value::Complex(c.neg()),
+        Value::Bool(b) => Value::Bool(b),
+    }
+}
+
+/// A complex scaled by a real factor (a lifted real's product).
+fn scale_by_real(z: Value, k: Value) -> Value {
+    Value::Complex(z.as_c64().scale(k.as_c64().re))
+}
+
+fn pow_int(v: Value, n: i64) -> Value {
+    match v {
+        Value::Complex(c) => Value::Complex(c.powi(n)),
+        v => Value::Float(v.as_f64().powi(n as i32)),
+    }
+}
+
+fn modulus(v: Value) -> Value {
+    match v {
+        Value::Complex(c) => Value::Float(c.norm_sqr()),
+        v => {
+            let x = v.as_f64();
+            Value::Float(x * x)
+        }
+    }
+}
+
+fn user_call(choice: usize, v: Value) -> Value {
+    Value::Complex(USER_FUNCTIONS[choice.min(USER_FUNCTIONS.len() - 1)].eval_c(v.as_c64()))
+}
+
+fn user_deriv(choice: usize, v: Value) -> Value {
+    Value::Complex(USER_FUNCTIONS[choice.min(USER_FUNCTIONS.len() - 1)].deriv_c(v.as_c64()))
 }
 
 fn predef(p: Predef, sh: &Shared) -> Value {
