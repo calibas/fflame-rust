@@ -5453,7 +5453,6 @@ mod tests {
     #[test]
     #[ignore = "registers twins, reads output/flame-zoom; minutes of chaos game"]
     fn the_corpus_plans_through_rhai_twins() {
-        const KNOWN_SUMS: [&str; 2] = ["juliascope-arms", "random1"];
         crate::variations::twins::BORROW.with(|b| b.set(false));
         let mut files: Vec<_> = std::fs::read_dir("output/flame-zoom").expect("the corpus").flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "fflame")).collect();
         files.sort();
@@ -5476,13 +5475,6 @@ mod tests {
             let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };
             let t = match Backward::read(&twin, reg) {
                 Ok(t) => t,
-                // A root that draws, summed with an affine: the sum's maps
-                // are one per arm, and a user kernel's sum counts its
-                // inverse's branches (`SumMap2::branches`) -- open.
-                Err(why) if KNOWN_SUMS.contains(&name.as_str()) && why.contains("must be alone in its sum") => {
-                    println!("  {name}: known, {why}");
-                    continue;
-                }
                 Err(why) => {
                     failures.push(format!("{name}: the twins' walk refused: {why}"));
                     continue;

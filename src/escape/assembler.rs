@@ -8814,12 +8814,13 @@ fn ifs_user_block(user: &super::ifs::UserKernels) -> String {
             gaps.push_str(&format!("        case {f}u: {{ g = {GAP_WGSL_NAME}{f}(v, base, 0.0).x; }}\n"));
         }
         if *fwd {
-            forwards.push_str(&format!("        case {f}u: {{ return {FORWARD_WGSL_NAME}{f}(z, base, 0.0); }}\n"));
+            forwards.push_str(&format!("        case {f}u: {{ return {FORWARD_WGSL_NAME}{f}(z, base, u); }}\n"));
         }
     }
-    // Its forward map, for a sum's Newton solve (B2).
+    // Its forward map, for a sum's Newton solve (B2), along the row's arm:
+    // its draw in `params.z` where it draws (D2).
     out.push_str(&format!(
-        "fn ifs_user_forward(i: u32, z: vec2<f32>) -> vec2<f32> {{\n    let base = u32(ifs_maps[i].params.y);\n    switch u32(ifs_maps[i].params.x) {{\n{forwards}        default: {{}}\n    }}\n    return z * 1e30;\n}}\n"
+        "fn ifs_user_forward(i: u32, z: vec2<f32>) -> vec2<f32> {{\n    let base = u32(ifs_maps[i].params.y);\n    let u = ifs_maps[i].params.z;\n    switch u32(ifs_maps[i].params.x) {{\n{forwards}        default: {{}}\n    }}\n    return z * 1e30;\n}}\n"
     ));
     // Its image gap: the hole its image of the ball leaves (`params.w`),
     // as an inversion's, where it has one (`UserKernel::hole_radius`);

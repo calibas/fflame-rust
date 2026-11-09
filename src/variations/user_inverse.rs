@@ -106,9 +106,11 @@ pub struct UserInverse {
     /// part; none where the variation declares none.
     pub gap: Option<(Program, String)>,
     /// `fn variation` as the shader calls it, `fn ifs_user_fwd(z, base,
-    /// 0.0)` ([`FORWARD_WGSL_NAME`]), for a sum's Newton solve (B2); none
-    /// for one that draws, or reaches for what only a flame has -- such a
-    /// kernel is not summed (`scene::ifs_analysis`).
+    /// u)` ([`FORWARD_WGSL_NAME`]), for a sum's Newton solve (B2): one that
+    /// draws reads every draw as `u`, its arm's (D2; `delta::draw_as_color`).
+    /// None for one that reaches for what only a flame has, or draws and
+    /// reads its colour too -- such a kernel is not summed in mode D
+    /// (`scene::ifs_analysis`).
     pub forward_wgsl: Option<String>,
     /// Its forward difference `F(Z + d) - F(Z)`, derived from `variation`
     /// without the cancellation (`lang::delta::variation_difference`;
@@ -216,7 +218,11 @@ fn compile_declared(source: &str, key: &str) -> Result<UserInverse, String> {
         None
     };
     let forward_draws = crate::lang::wgsl::variation_shape(&forward).is_ok_and(|s| s.rng);
-    let forward_wgsl = crate::lang::wgsl::inverse_kernel(&forward, FORWARD_WGSL_NAME).ok();
+    let forward_wgsl = if forward_draws {
+        crate::lang::delta::draw_as_color(&forward).and_then(|p| crate::lang::wgsl::inverse_kernel(&p, FORWARD_WGSL_NAME).ok())
+    } else {
+        crate::lang::wgsl::inverse_kernel(&forward, FORWARD_WGSL_NAME).ok()
+    };
     #[cfg(not(target_arch = "wasm32"))]
     let forward_wgsl = forward_wgsl.filter(|w| crate::lang::wgsl::validate_inverse_kernel(w).is_ok());
     let difference = crate::lang::delta::variation_difference(&forward);
@@ -1060,6 +1066,57 @@ fn inverse(z, p, branch) {
             }
         }
         println!("worst relative difference: {worst:.1e}");
+    }
+
+    /// **A drawing kernel summed with an affine** (rhai-planners D2):
+    /// julian's twin at power 3 plus a linear part has a map per arm, each
+    /// solved by Newton from the inverse, and every one undoes its own
+    /// arm's forward map; bubble's twin, which draws nothing, keeps a map
+    /// per branch of its inverse.
+    #[test]
+    fn a_drawing_kernel_sums_along_each_arm() {
+        use crate::scene::ifs_analysis::{Affine2, Kernel, SumMap2};
+        let twin = |name: &str, slots: &[f32]| {
+            let src = crate::lang::rhai::with_own_id(crate::variations::twins::source(name).expect("a twin"), &crate::scripted::mint_id());
+            let inv = Arc::new(compile(&src, &format!("{name}_sum")).expect("declared").expect("checks"));
+            kernel_slot(&inv, slots).expect("a slot")
+        };
+        let sum = |slot: u32, branch: u32| {
+            let pre = Affine2 { m: [[0.8, 0.2], [-0.2, 0.8]], t: [0.1, -0.15] };
+            let lin = Affine2 { m: [[0.3, 0.0], [0.0, 0.3]], t: [0.05, 0.02] };
+            SumMap2 {
+                pre,
+                pre_inv: pre.inverse().expect("invertible"),
+                post: Affine2::IDENTITY,
+                post_inv: Affine2::IDENTITY,
+                lin,
+                lin_inv: lin.inverse(),
+                kernel: Kernel::User { slot },
+                kind: "user",
+                branch,
+                kw: 0.7,
+                third: 0.0,
+                kernel_leads: true,
+            }
+        };
+        let julian = twin("julian", &[3.0, 1.0]);
+        assert_eq!(sum(julian, 0).branches(), 3, "julian's three arms, its inverse's one branch");
+        let codes: Vec<u32> = kernel(julian).arms().expect("arms").iter().map(|a| a.code).collect();
+        for b in 0..3 {
+            let s = sum(julian, b);
+            assert_eq!((s.arm(), s.seed_branch()), (codes[b as usize], 0));
+            // A sum along one arm need not be one-to-one: the solve finds a
+            // preimage there, which its arm sends back to the point.
+            for p in [[0.4, 0.3], [-0.6, 0.2], [0.1, -0.7]] {
+                let q = s.apply_branch(p, s.arm());
+                let (back, res) = s.solve(q).unwrap_or_else(|| panic!("arm {b}: no solve at {p:?}"));
+                let again = s.apply_branch(back, s.arm());
+                assert!(res < 1e-10 && (again[0] - q[0]).hypot(again[1] - q[1]) < 1e-9, "arm {b} at {p:?}: {back:?} goes to {again:?}, not {q:?}");
+            }
+        }
+        let bubble = twin("bubble", &[]);
+        assert_eq!(sum(bubble, 0).branches(), 2, "bubble's two inverse branches, no arms");
+        assert_eq!((sum(bubble, 1).arm(), sum(bubble, 1).seed_branch()), (1, 1));
     }
 
     /// What a user kernel's call costs (rhai-planners D1): through the
