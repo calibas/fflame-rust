@@ -463,7 +463,8 @@ do, in this order -- the first makes every later gate quicker.
   `a_user_kernel_compiles_beside_a_lens` fails on any marker left.
   Not yet: cylinder's, elliptic's, fisheye's, juliascope's and
   sinusoidal's inverses (splits' and juliascope's forward maps) still
-  derive no difference, for constructs other than an early return.
+  derive no difference, for constructs other than an early return --
+  all derived in E2.
 - **D4. No preimage on most branches** (splits' twin when it said so):
   every pixel read as the set on the GPU where the CPU reference did not.
   Reproduced from the twin's old inverse and traced.
@@ -521,6 +522,60 @@ discretion. Can we add an inverse to hyperbolic as well?"
   deviations down to 1e-13; the shader's against the CPU's
   (`the_shader_user_forms_are_the_cpu_ones`); every escape formula's
   derivation as before (the escape suite).
+  *Built*: every twin with an inverse derives both forms (21 of 21; 15 of
+  20 inverses and 18 forward maps before). The four constructs as
+  planned, with two findings on the way:
+  - *Ints the early return moves into an arm.* Sinusoidal's `branch % 4`
+    is the same at every pixel, but the rewrite of its early return sets
+    it inside a branch on the point; an int set under a test that varies
+    is two values too, and a branch's mismatch takes the pixel's from
+    the pixel's arm (`uniform_vars`'s second list).
+  - *A step's deviation*: juliascope's sector index is `trunc(round(n θ /
+    2π))`, so `round` and its kin deviate by the plain difference of
+    their steps -- zero but where the reference and the pixel part at
+    one, whole there, a branch on the iterate's reading of a value.
+  The forms hold to the direct difference in big floats: 2,456 compared,
+  the worst 4.4e-11 (elliptic's forward map beside the segment between
+  its foci), including deviations that cross a step, a sector's edge or
+  a quadrant's (`every_twins_derived_differences_are_the_direct_ones_in_big_floats`);
+  juliascope's to the mirrored root's hand form and splits' inverse to
+  the built-in kernel's (the two hand-form tests). On the GPU every
+  twin's forward form is its CPU form to 4.6e-6 -- the test covered
+  julian and bubble alone before -- except elliptic's, 6.3e-3 at a
+  deviation crossing y = 0: its formula takes `sqrt(xmax - 1)` with
+  `xmax` 1 + O(y²), which keeps few of f32's digits there, in the
+  built-in's shader as in the twin's (bound 1e-2, recorded). Every
+  twin's forms compile into the delta walk and pass Chrome's operator
+  rules (`every_twins_forms_compile_into_the_delta_walk`).
+  In use: at 2^30 the delta walk of elliptic, cylinder, juliascope,
+  sinusoidal and hyperbolic agrees 1.0000 with each twin's CPU walk
+  (`the_newly_derived_twins_hold_at_depth`; the forms scaled by 1.5 drop
+  it to 39-98.6%), and in Focused Rendering juliascope-arms,
+  juliascope-rays, elliptic-splits-julian and cylinder-turns-julian
+  render as through the built-ins, block by block, at 1e2 and 1e4
+  (`the_newly_derived_twins_render_as_the_builtins`).
+  - *Hyperbolic's hole*, found by that depth gate: its handover walked one
+    level. Its forward map passes the "unbounded at the origin" probe --
+    500 along x at 1e-3 -- and the hole sampler, whose rings never come
+    near the origin, read a hole of 0.12 its image does not have
+    (`(0, y)` is its own image). Inside it the walk scored a gap; past
+    it the CPU's `image_gap` and the GPU's `ifs_user_gap` never asked
+    the kernel's own gap. Now a hole is kept only where the inverse
+    finds no preimage in the disc for points well inside it (spherical's
+    twin keeps its own: its inverse gives the outer preimage alone), and
+    past a hole a user kernel's gap is asked. Hyperbolic's handover walks
+    16 levels, and its Flame Attractor draws what the hole blanked
+    (1,252 interior pixels at the borrowing gate's view, 657 before;
+    100% against the CPU walk either way, which shared the hole).
+  - *Not splits' deep zoom.* Three of its four branches have no preimage
+    at any point, and an image gap has no branch to say which, so the
+    handover stops at level 0 and the GPU's f32 takes over. Its
+    built-in has no mode D picture at all. A per-branch image gap
+    (`fn image_gap(z, p, branch)`) would carry it.
+  On the escape engine: the rules are the derivation's, so a formula
+  with a step, a real's inverse sine or an int the pixel decides now
+  derives where it took the direct path; every escape and language test
+  holds.
 - **E3. A3: a drawing Rhai variation with no inverse.** Its arms are read
   off its forward map only when it declares an inverse. To be planned
   from the forward planner's arms (`ifs_ball`, `word_tree`).
@@ -531,7 +586,7 @@ discretion. Can we add an inverse to hyperbolic as well?"
 
 A1, A2, B1 with the twins' inverses and the borrowing built-ins, B2, B3,
 C1, C2 and C3 done (2026-11-08); D1, D2, D3 and D4 done (2026-11-09);
-E1 done; then E2, E3, E4.
+E1 and E2 done; then E3, E4.
 
 ## Decisions for the user
 

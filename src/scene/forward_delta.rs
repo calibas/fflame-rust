@@ -1002,13 +1002,17 @@ mod tests {
             let inv = std::sync::Arc::new(compile(&src, &format!("{name}_shader_form")).expect("declared").expect("checks"));
             kernel_slot(&inv, slots).expect("a slot")
         };
-        let cases = [
-            ("julian n=2 d=1", twin("julian", &[2.0, 1.0])),
-            ("julian n=2 d=-1", twin("julian", &[2.0, -1.0])),
-            ("julian n=15 d=-1", twin("julian", &[15.0, -1.0])),
-            ("julian n=-3 d=0.5", twin("julian", &[-3.0, 0.5])),
-            ("bubble", twin("bubble", &[])),
+        let mut cases = vec![
+            ("julian n=2 d=1".to_string(), twin("julian", &[2.0, 1.0])),
+            ("julian n=2 d=-1".to_string(), twin("julian", &[2.0, -1.0])),
+            ("julian n=15 d=-1".to_string(), twin("julian", &[15.0, -1.0])),
+            ("julian n=-3 d=0.5".to_string(), twin("julian", &[-3.0, 0.5])),
         ];
+        // And every other twin with an inverse, at its defaults: each
+        // derives its forward map's difference (rhai-planners E2).
+        for (name, _) in crate::variations::twins::TWINS.iter().filter(|(n, s)| s.contains("fn inverse(") && *n != "julian") {
+            cases.push((name.to_string(), twin(name, &crate::variations::user_inverse::named(name, &[]))));
+        }
         let mut worst_all = 0.0f64;
         for (name, slot) in cases {
             let k = kernel(slot);
@@ -1065,6 +1069,17 @@ mod tests {
             }
             println!("  {name}: {n} differences, worst relative error {worst:.2e} ({worst_where})");
             assert!(n > 1000, "{name}: only {n} checkable");
+            // Elliptic's own formula keeps few of f32's digits beside the
+            // segment between its foci, where `xmax` is 1 + O(y²) and it
+            // takes `sqrt(xmax - 1)`: its shader form there, a crossing of
+            // y = 0 the plain difference of the f32 map, is the map's own
+            // accuracy (measured 6.3e-3 at a deviation of 0.02 crossing it).
+            // The built-in's shader has the same formula, which the twin
+            // keeps bit for bit.
+            if name == "elliptic" {
+                assert!(worst < 1e-2, "{name}: worst relative error {worst:.2e}");
+                continue;
+            }
             worst_all = worst_all.max(worst);
         }
         assert!(worst_all < 1e-5, "worst relative error {worst_all:.2e}");
