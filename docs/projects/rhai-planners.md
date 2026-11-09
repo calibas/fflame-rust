@@ -440,6 +440,29 @@ do, in this order -- the first makes every later gate quicker.
   input point, its result and its branch), and the derived difference of
   `fn inverse` (`variation_difference`, its branch the uniform channel)
   on the CPU and in mode D's `ifs_kernel_difference`, spliced as C3's.
+  *Built*: `delta::one_pass` makes the inverse one pass of a loop, which
+  `bigeval::BigMachine` runs in big floats (`UserKernel::big_inverse`,
+  taken by `big_kernel_inverse`); `variation_difference` takes the colour
+  channel as its uniform too (a body reading both a draw and its colour
+  has none), and the rewrite of early returns into branches
+  (`without_returns`; `no_preimage()` past an image's edge) took the twins'
+  inverses that derive from 7 of 20 to 15 (forward maps: 18). The twins'
+  derived inverse differences are the built-ins' hand forms to 6.8e-16,
+  and julian's big-float inverse the built-in's to 1e-60
+  (`a_twins_inverse_difference_and_big_inverse_are_its_builtins`). In mode
+  D: julia's and julian's twins draw their built-ins' pictures at 2^20,
+  2^44 and -- julia's, centred on its set to sixty digits -- 2^64, on the
+  absolute walk and the delta walk alike, 99.9% of pixels; at 2^64 the
+  inverse in f64, the gate's control, agrees 78%
+  (`a_twins_flame_attractor_holds_at_depth`). Two traps on the way: a
+  fixed point is no target -- its picture is the same at every scale, so
+  the f64 control passed there too -- and `IFS_DIFFERENCE` was spliced
+  whole, its marker left a comment, so the delta walk gave every user row
+  bubble's form (77% at 2^44, 32% on julian); now through the markers, and
+  `a_user_kernel_compiles_beside_a_lens` fails on any marker left.
+  Not yet: cylinder's, elliptic's, fisheye's, juliascope's and
+  sinusoidal's inverses (splits' and juliascope's forward maps) still
+  derive no difference, for constructs other than an early return.
 - **D4. No preimage on most branches** (splits' twin when it said so):
   every pixel read as the set on the GPU where the CPU reference did not.
   Reproduced from the twin's old inverse and traced.
