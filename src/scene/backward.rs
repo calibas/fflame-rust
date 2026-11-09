@@ -514,21 +514,11 @@ impl Evaluate for CpuEval {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rayon::prelude::*;
-            jobs.par_iter()
-                .flat_map_iter(|j| {
-                    let (word, points) = (j.word, j.points);
-                    points.iter().map(move |&i| b.lands(word, b.sample[i as usize], view) as u8)
-                })
-                .collect()
+            jobs.par_iter().flat_map_iter(|j| b.lands_batch(j.word, j.points, view)).collect()
         }
         #[cfg(target_arch = "wasm32")]
         {
-            jobs.iter()
-                .flat_map(|j| {
-                    let (word, points) = (j.word, j.points);
-                    points.iter().map(move |&i| b.lands(word, b.sample[i as usize], view) as u8)
-                })
-                .collect()
+            jobs.iter().flat_map(|j| b.lands_batch(j.word, j.points, view)).collect()
         }
     }
 }
@@ -1189,6 +1179,16 @@ fn forward(map: &IfsMap<Map2>, x: [f64; 2], k: u32) -> [f64; 2] {
         Map2::Nonlinear(n) => n.apply_branch(x, k),
         Map2::Sum(s) => s.apply_branch(x, k),
         other => other.apply(x),
+    }
+}
+
+/// [`forward`] at each of `xs`, in place: a user kernel's forward map in
+/// one pass for all of them (rhai-planners E4).
+fn forward_batch(map: &IfsMap<Map2>, xs: &mut [[f64; 2]], k: u32) {
+    match &map.forward {
+        Map2::Nonlinear(n) => n.apply_branch_batch(xs, k),
+        Map2::Sum(s) => s.apply_branch_batch(xs, k),
+        other => xs.iter_mut().for_each(|x| *x = other.apply(*x)),
     }
 }
 
@@ -2827,6 +2827,36 @@ impl Backward {
             Some(y) => self.in_view(view, y),
             None => false,
         }
+    }
+
+    /// [`Self::lands`] for each of `points` (the sample's), the word
+    /// replayed over all of them at once, map by map: a user kernel's
+    /// forward map runs once a symbol for them all -- one pass of its
+    /// interpreter (rhai-planners E4). A point that leaves the finite
+    /// plane stays out, as the replay stops it. A word through a blurred
+    /// transform, whose draw is a stream per point, replays point by
+    /// point.
+    fn lands_batch(&self, word: &[u32], points: &[u32], view: View) -> Vec<u8> {
+        let mut steps = Vec::with_capacity(word.len());
+        for &sym in word {
+            let t = sym_transform(sym) as usize;
+            let Some(info) = self.transforms.iter().find(|i| i.index == t) else {
+                return vec![0; points.len()];
+            };
+            if info.blur.is_some() {
+                return points.iter().map(|&i| self.lands(word, self.sample[i as usize], view) as u8).collect();
+            }
+            steps.push((info.map, sym_arm(sym)));
+        }
+        let mut ps: Vec<[f64; 2]> = points.iter().map(|&i| self.sample[i as usize]).collect();
+        let mut alive = vec![true; ps.len()];
+        for (map, arm) in steps {
+            forward_batch(&self.ifs.maps[map], &mut ps, arm);
+            for (a, p) in alive.iter_mut().zip(&ps) {
+                *a &= finite(*p);
+            }
+        }
+        ps.iter().zip(&alive).map(|(&p, &a)| (a && self.in_view(view, p)) as u8).collect()
     }
 
 
@@ -5348,6 +5378,49 @@ mod tests {
             ..Default::default()
         }))
         .expect("device")
+    }
+
+    /// **The walk's batched replay is its point replay** (rhai-planners
+    /// E4): grand-julian with every julian its twin, 400 words of one to
+    /// fourteen symbols drawn from its alphabet, each replayed over a fifth
+    /// of the sample at once (`lands_batch`, a user kernel's forward map
+    /// one pass of its interpreter) against point by point (`lands`) --
+    /// every answer the same; and the CPU evaluator's time over them both
+    /// ways.
+    #[test]
+    #[ignore = "registers a twin, reads output/flame-zoom"]
+    fn the_batched_replay_is_the_point_replay() {
+        let (cfg, twin) = rhai_grand_julian();
+        let guard = crate::variations::global_registry();
+        let t = Backward::read(&twin, &guard).expect("the twin");
+        drop(guard);
+        // Wide, so the words land: a pixel's worth of the attractor's span.
+        let view = View::of(2.0, t.sample_point(0.75), 192, 192);
+        let mut st = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = |m: usize| {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 33) as usize) % m
+        };
+        let words: Vec<Vec<u32>> = (0..400).map(|_| (0..1 + next(14)).map(|_| t.alphabet[next(t.alphabet.len())].sym).collect()).collect();
+        let points: Vec<u32> = (0..t.sample.len() as u32).step_by(5).collect();
+        let (mut lit, mut differ) = (0usize, 0usize);
+        let t0 = std::time::Instant::now();
+        let batched: Vec<Vec<u8>> = words.iter().map(|w| t.lands_batch(w, &points, view)).collect();
+        let tb = t0.elapsed().as_secs_f64();
+        let t0 = std::time::Instant::now();
+        for (w, got) in words.iter().zip(&batched) {
+            for (&i, &g) in points.iter().zip(got) {
+                let want = t.lands(w, t.sample[i as usize], view) as u8;
+                lit += want as usize;
+                differ += (g != want) as usize;
+            }
+        }
+        let ts = t0.elapsed().as_secs_f64();
+        println!("{} words over {} points: {lit} land; batched {tb:.2} s, point by point {ts:.2} s ({:.1}x)", words.len(), points.len(), ts / tb);
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        let _ = cfg;
+        assert!(lit > 0, "no word lands anything: the gate measures nothing");
+        assert_eq!(differ, 0, "{differ} answers differ");
     }
 
     /// **A Rhai julian plans as the built-in** (docs/projects/rhai-planners.md,

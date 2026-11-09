@@ -436,6 +436,21 @@ impl UserKernel {
         self.forward_u(z, ((code % DRAW_GRID) as f64 + 0.5) / DRAW_GRID as f64)
     }
 
+    /// [`Self::forward`] at each of `zs`, in place: one pass of the
+    /// interpreter for all of them ([`VariationRun::call_batch`]; the
+    /// walk's evaluator, rhai-planners E4), each the scalar call's to the
+    /// bit.
+    pub fn forward_batch(&'static self, zs: &mut [[f64; 2]], code: u32) {
+        let u = ((code % DRAW_GRID) as f64 + 0.5) / DRAW_GRID as f64;
+        with_run(self as *const _ as usize, Which::Forward, &self.inverse.forward, &self.params, |run| {
+            run.set_draw(u);
+            let points: Vec<C64> = zs.iter().map(|z| C64::new(z[0], z[1])).collect();
+            for (z, out) in zs.iter_mut().zip(run.call_batch(&points, C64::ZERO, 1.0)) {
+                *z = [out.re, out.im];
+            }
+        })
+    }
+
     /// The forward map with every draw of the call `u`.
     pub fn forward_u(&'static self, z: [f64; 2], u: f64) -> [f64; 2] {
         with_run(self as *const _ as usize, Which::Forward, &self.inverse.forward, &self.params, |run| {
