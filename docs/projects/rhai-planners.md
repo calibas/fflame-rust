@@ -1,15 +1,18 @@
 # Rhai variations in Focused Rendering and the Flame Attractor
 
-Status: **Parts A (steps 1-2) and B (B1-B3) built** (2026-11-08, branch
-`rhai-planners`): every twin whose built-in derives a bound derives one
-from its own code; a Rhai variation declares its inverse and the Flame
-Attractor draws it, alone, summed with an affine, and as a solid; and a
-built-in with no inverse in Rust takes its twin's. Part C (Focused
-Rendering's inverse walk for a Rhai variation, which takes A3 in) and the
-items under *Open* are left. The user (2026-11-08): both features
-compatible with Rhai scripts; decisions 1-3 below taken as proposed, all
-of Part B; of the inverse walk refusing a Rhai inverse, "This is an
-important feature, and part of the reason we're doing all this.
+Status: **Parts A (steps 1-2), B (B1-B3) and C (C1-C3) built** (2026-11-08,
+branch `rhai-planners`): every twin whose built-in derives a bound derives
+one from its own code; a Rhai variation declares its inverse and the Flame
+Attractor draws it, alone, summed with an affine, and as a solid; a
+built-in with no inverse in Rust takes its twin's; and Focused Rendering's
+inverse walk plans a flame with a Rhai variation that has an inverse --
+its arms read off its forward map, its deep zoom through a difference form
+derived from its body -- as the built-in's, to 1e6. The items under *Open*
+are left. The user (2026-11-08): both features compatible with Rhai
+scripts; decisions 1-3 below taken as proposed, all of Part B; of the
+inverse walk refusing a Rhai inverse, "This is an important feature, and
+part of the reason we're doing all this"; and the goal, "I want Rhai twins
+to be able to do everything the built-ins can."
 
 ## Why a Rhai variation does not work in them
 
@@ -293,7 +296,46 @@ What is missing is three other things.
    view some 1e-4 of the attractor's size, where grand-julian goes to
    1e6.
 
-### Proposed
+### Built
+
+- **C1, arms** (`6c4f6661`): read off the forward map per kernel
+  (`UserKernel::arms`): every draw of a call set to each step of a grid of
+  256 in turn, at six points; a run of steps with the same images an arm's,
+  its share bisected (a pick of `floor(2.5·u)` shares 0.4, 0.4, 0.2), its
+  code the middle step. The grid is the one draw convention everywhere: the
+  analysis's sixteen sample draws are sixteen of its steps, a word's symbol
+  carries an arm's code, and a replay build wraps a Rhai body's draws to
+  read it, `(code + ½)/256`, exact in f32 and the interpreter's fixed draw
+  to the bit (`bound::force_arms`). A flame with a Rhai variation that
+  draws and has an inverse is the walk's (`cylinder::armed`); a twin that
+  borrows its built-in (julia's) is planned and replayed as the built-in.
+- **C2, the walk** (`6c4f6661`): a user kernel's arms and shares in the
+  alphabet and the chaos game; built-in roots keep their arithmetic to the
+  bit. Grand-julian with every julian its twin plans within five words of
+  the built-in's in thousands, coverage 1.0000 alike at 1e2 and 1e3, on the
+  CPU and the GPU planner (`a_rhai_julian_plans_as_the_builtin`); the
+  twin's walk reads in 2.1 s against 0.38 s, its maps in the interpreter.
+- **C3, the forms**: `lang::delta::variation_difference` as proposed below
+  -- the body one pass of an escape loop, the derived equations a
+  transform section again; julian's and bubble's twins' forms are the
+  built-ins' hand forms to 3.9e-13 down to deviations of 1e-13
+  (`a_twins_derived_difference_is_its_builtins`). On the GPU
+  (`lang::wgsl::difference_kernel`) it needed its sines exact near zero:
+  `sin(d/2)` of a small deviation through a GPU's own `sin`, good to an
+  absolute 1e-7, was noise -- the hand forms' `fd_sin` reason -- so the
+  lowering takes the escape engine's series (`exact_near_zero`); then
+  every twin's shader form is its CPU form to 1.7e-6
+  (`the_shader_user_forms_are_the_cpu_ones`). Spliced per flame
+  (`forward_delta::replay_delta_wgsl`): `ct_fwd_diff`'s call of
+  `fd_kernel` becomes a dispatcher's only where a flame has a form, so
+  every other shader is its text; a row of kernel 9 names its form by the
+  key's 24-bit hash (a sticky superset may keep a variation the flame
+  dropped) and has its values behind the rows. Grand-julian's twin then
+  renders the built-in's density block by block at 1e2, 1e4 and 1e6, no
+  block past five standard errors (at 1e4 before the forms, 37)
+  (`a_rhai_julian_renders_as_the_builtin`).
+
+### As proposed
 
 - **C1. Arms from the forward map.** Per kernel (per parameter values,
   as the hole): every draw of a call set to one `u` (the fixed-draw
@@ -333,8 +375,8 @@ What is missing is three other things.
 
 ## Order of work
 
-A1, A2, B1 with the twins' inverses and the borrowing built-ins, B2 and
-B3 done (2026-11-08); then C1, C2, C3 (A3 is C1); *Open*.
+A1, A2, B1 with the twins' inverses and the borrowing built-ins, B2, B3,
+C1, C2 and C3 done (2026-11-08); *Open* left.
 
 ## Decisions for the user
 

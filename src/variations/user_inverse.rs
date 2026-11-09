@@ -81,6 +81,10 @@ pub const GAP_WGSL_NAME: &str = "ifs_user_gap";
 /// steps on it (B2).
 pub const FORWARD_WGSL_NAME: &str = "ifs_user_fwd";
 
+/// The name the offset replay calls a forward difference by, before
+/// `forward_delta::replay_delta_wgsl` makes it a key's own (C3).
+pub const DIFFERENCE_WGSL_NAME: &str = "fd_user_dif";
+
 /// A variation's inverse, compiled.
 pub struct UserInverse {
     /// The variation's key.
@@ -111,6 +115,9 @@ pub struct UserInverse {
     /// rhai-planners C3): the offset replay's step through it. None where
     /// it does not derive, and the replay keeps its steps absolute.
     pub difference: Option<Program>,
+    /// The difference as the offset replay calls it, `fn fd_user_dif(z, d,
+    /// base, u)` ([`DIFFERENCE_WGSL_NAME`]; `lang::wgsl::difference_kernel`).
+    pub difference_wgsl: Option<String>,
 }
 
 impl UserInverse {
@@ -213,7 +220,12 @@ fn compile_declared(source: &str, key: &str) -> Result<UserInverse, String> {
     #[cfg(not(target_arch = "wasm32"))]
     let forward_wgsl = forward_wgsl.filter(|w| crate::lang::wgsl::validate_inverse_kernel(w).is_ok());
     let difference = crate::lang::delta::variation_difference(&forward);
-    let inv = UserInverse { key: key.to_string(), forward, inverse, branches, forward_draws, wgsl, gap, forward_wgsl, difference };
+    let difference_wgsl = difference.as_ref().and_then(|p| crate::lang::wgsl::difference_kernel(p, DIFFERENCE_WGSL_NAME).ok());
+    #[cfg(not(target_arch = "wasm32"))]
+    let difference_wgsl = difference_wgsl.filter(|w| crate::lang::wgsl::validate_inverse_kernel(w).is_ok());
+    // One without the other is none: the walk takes a form both run.
+    let difference = difference.filter(|_| difference_wgsl.is_some());
+    let inv = UserInverse { key: key.to_string(), forward, inverse, branches, forward_draws, wgsl, gap, forward_wgsl, difference, difference_wgsl };
     check(&inv, &ParamValues::defaults(&inv.forward))?;
     Ok(inv)
 }
@@ -339,6 +351,8 @@ pub struct UserKernel {
     /// parameters' slots, then the inverse's `prepare` values
     /// (`interp::globals`).
     pub packed: Vec<f32>,
+    /// The parameters' slots, as the flame packs them.
+    slots: Vec<f32>,
     /// [`Self::hole_radius`] by the bits of the reach it was asked at.
     holes: Mutex<HashMap<u64, f64>>,
     /// [`Self::arms`], read once.
@@ -377,6 +391,16 @@ impl UserKernel {
         let u = ((code % DRAW_GRID) as f64 + 0.5) / DRAW_GRID as f64;
         let out = VariationRun::new(p, &self.params, 1).with_color(u).call(C64::new(z[0], z[1]), C64::new(d[0], d[1]), 1.0).0;
         Some([out.re, out.im])
+    }
+
+    /// What the offset replay's difference reads through `get_param(base,
+    /// 0u, slot)`: the parameters' slots, then the difference's `prepare`
+    /// values -- the forward map's, which it derives from.
+    pub fn difference_values(&self) -> Vec<f32> {
+        let Some(p) = &self.inverse.difference else { return Vec::new() };
+        let mut v = self.slots.clone();
+        v.extend(interp::globals(p, &self.params, &Env::at(C64::ZERO, 1)));
+        v
     }
 
     /// The grid draws the analysis takes its forward map at: its arms', or,
@@ -460,7 +484,7 @@ pub fn kernel_slot(inv: &Arc<UserInverse>, slots: &[f32]) -> Result<u32, String>
     let result = check(inv, &params).map(|()| {
         let mut packed = slots.to_vec();
         packed.extend(interp::globals(&inv.inverse, &params, &Env::at(C64::ZERO, 1)));
-        UserKernel { inverse: inv.clone(), params, packed, holes: Default::default(), arms: OnceLock::new() }
+        UserKernel { inverse: inv.clone(), params, packed, slots: slots.to_vec(), holes: Default::default(), arms: OnceLock::new() }
     });
     let mut t = table().write().expect("the user kernels' table");
     if let Some(hit) = t.1.get(&id) {
@@ -477,6 +501,16 @@ pub fn kernel_slot(inv: &Arc<UserInverse>, slots: &[f32]) -> Result<u32, String>
 /// The user kernel in `slot` ([`kernel_slot`]).
 pub fn kernel(slot: u32) -> Arc<UserKernel> {
     table().read().expect("the user kernels' table").0[slot as usize].clone()
+}
+
+/// The offset replay's name for the variation `key`'s difference: a row
+/// names it (`forward_delta`'s kernel 9) by this, and the shader switches on
+/// it -- the key's own, so a shader that kept a variation the flame dropped
+/// (the sticky superset) still picks the right one. FNV-1a, to 24 bits, so
+/// it rides a row's `f32` exactly.
+pub fn difference_id(key: &str) -> u32 {
+    let h = key.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193));
+    h & 0x00ff_ffff
 }
 
 /// Whether the variation `key` is a Rhai variation whose forward map draws

@@ -1165,9 +1165,13 @@ fn user_arm_list(map: &IfsMap<Map2>) -> Option<Result<Vec<(u32, f64)>, String>> 
 
 /// Whether a map's forward difference has a form the offset replay runs
 /// (`forward_delta`, `replay_delta.wgsl`): every built-in kernel's; a user
-/// kernel's not yet.
+/// kernel's where its body derives one (`user_inverse::UserInverse::difference`,
+/// rhai-planners C3).
 fn has_forward_form(m: &Map2) -> bool {
-    !matches!(m.nonlinear().map(|n| n.kernel).or_else(|| m.sum().map(|s| s.kernel)), Some(Kernel::User { .. }))
+    match m.nonlinear().map(|n| n.kernel).or_else(|| m.sum().map(|s| s.kernel)) {
+        Some(Kernel::User { slot }) => crate::variations::user_inverse::kernel(slot).inverse.difference.is_some(),
+        _ => true,
+    }
 }
 
 /// A map's forward arms, as [`TransformInfo::arm_list`] keeps them with
@@ -1992,6 +1996,18 @@ impl Backward {
         for t in &self.transforms {
             rows[t.index * ROW_FLOATS..(t.index + 1) * ROW_FLOATS].copy_from_slice(&forward_row(&self.ifs.maps[t.map].forward));
         }
+        // A Rhai variation's derived form (kernel 9, rhai-planners C3):
+        // which one, and its values after every row, at an offset from
+        // its own.
+        for t in &self.transforms {
+            let m = &self.ifs.maps[t.map].forward;
+            let Some(Kernel::User { slot }) = m.nonlinear().map(|n| n.kernel).or_else(|| m.sum().map(|s| s.kernel)) else { continue };
+            let k = crate::variations::user_inverse::kernel(slot);
+            let at = t.index * ROW_FLOATS;
+            rows[at + 2] = crate::variations::user_inverse::difference_id(&k.inverse.key) as f32;
+            rows[at + 3] = (rows.len() - at) as f32;
+            rows.extend(k.difference_values());
+        }
         rows
     }
 
@@ -2412,8 +2428,8 @@ impl Backward {
         // of it; a renewal's word, kept by geometry, has them after its
         // blur already (`close`).
         let blurred = |s: u32| self.alphabet.iter().any(|a| a.sym == s && a.renewal.is_some());
-        // Nor a map with no difference form -- a Rhai variation's, until it
-        // has one (rhai-planners C3): its steps run absolute.
+        // Nor a map with no difference form -- a Rhai variation whose body
+        // derives none (rhai-planners C3): its steps run absolute.
         let formless = |s: u32| self.sym_map(s).is_some_and(|(m, _)| !has_forward_form(&m.forward));
         let start = word.iter().rposition(|&s| blurred(s) || formless(s)).map_or(0, |j| j + 1);
         let seeded_at = match self.alphabet.iter().position(|a| a.sym == word[0]) {
@@ -2450,10 +2466,12 @@ impl Backward {
         // (`what_the_references_hold`), and running every seed through
         // every word doubled a web plan; so the other seeds are run only
         // where such a map is.
+        // A user kernel is many-to-one where its inverse has branches.
+        let user_many = |k: &Kernel| matches!(*k, Kernel::User { slot } if crate::variations::user_inverse::kernel(slot).inverse.branches > 1);
         let many = |from: usize| {
             syms[from..].iter().any(|(map, _)| match &map.forward {
-                Map2::Nonlinear(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc | Kernel::Splits { .. } | Kernel::Cylinder { .. }),
-                Map2::Sum(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc),
+                Map2::Nonlinear(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc | Kernel::Splits { .. } | Kernel::Cylinder { .. }) || user_many(&k.kernel),
+                Map2::Sum(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc) || user_many(&k.kernel),
                 _ => false,
             })
         };
@@ -5358,9 +5376,11 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
-    /// **A Rhai julian renders as the built-in** (rhai-planners C2): a
+    /// **A Rhai julian renders as the built-in** (rhai-planners C2, C3): a
     /// render drawing the twin's plan, its draws forced by their grid
-    /// codes, lays down the built-in's density, at 1e2 and 1e4.
+    /// codes and its words past f32 replayed as offsets through the twin's
+    /// derived forms, lays down the built-in's density block by block, at
+    /// 1e2, 1e4 and 1e6.
     #[test]
     #[ignore = "needs a GPU, registers a twin, reads output/flame-zoom"]
     fn a_rhai_julian_renders_as_the_builtin() {
@@ -5375,7 +5395,7 @@ mod tests {
         let mut failures = Vec::new();
         const N: u32 = 192;
         const REPS: usize = 6;
-        for z in [1e2f32, 1e4] {
+        for z in [1e2f32, 1e4, 1e6] {
             let at = b.sample_point(0.75);
             let mut c = cfg.clone();
             c.zoom = z;
@@ -5392,6 +5412,11 @@ mod tests {
             let (_, _, mx, _, my, _, zz) = cmp.pooled[0];
             if zz.abs() > 4.0 && (mx / my - 1.0).abs() > 0.02 {
                 failures.push(format!("x{z:.0e}: the twin's density is {:.4} of the built-in's ({zz:+.1} standard errors)", mx / my));
+            }
+            // Block by block: before the forms, 37 blocks at 1e4 passed five
+            // standard errors, the twin's absolute replay displaced.
+            if cmp.over_5 * 20 > cmp.judged {
+                failures.push(format!("x{z:.0e}: {} of {} blocks differ by more than five standard errors", cmp.over_5, cmp.judged));
             }
         }
         crate::variations::twins::BORROW.with(|b| b.set(true));

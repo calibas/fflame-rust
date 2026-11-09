@@ -835,6 +835,28 @@ pub fn inverse_kernel3(p: &Program, name: &str) -> Result<String, String> {
     Ok(format!("{m}\nfn {name}(v: vec3<f32>, base: u32, branch: f32) -> vec3<f32> {{\n    var vc = branch;\n    return {prefix}variation_3d(v, base, 0u, &vc);\n}}\n"))
 }
 
+/// A variation's derived forward difference (`delta::variation_difference`;
+/// docs/projects/rhai-planners.md, C3) as the offset replay calls it: `fn
+/// {name}(z: vec2<f32>, d: vec2<f32>, base: u32, u: f32) -> vec2<f32>`,
+/// `F(z + d) - F(z)` at the forced draw `u`, its values read through
+/// `get_param(base, 0u, slot)`. By [`inverse_kernel`]'s rules, but for the
+/// deviation it reads as its running sum.
+pub fn difference_kernel(p: &Program, name: &str) -> Result<String, String> {
+    let s = variation_shape(p)?;
+    if s.rng || s.init_rng || s.rgb || s.hide || !s.state.is_empty() || writes(&p.transform, Place::Color) {
+        return Err("a difference reads only its point, its deviation and its draw".into());
+    }
+    let prefix: &'static str = Box::leak(format!("{name}_").into_boxed_str());
+    let shape = VariationShape { ids: true, color: true, accum: true, ..s };
+    let m = variation_module_exact(p, &shape, ", accum: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>", false, false, prefix, true);
+    for needle in ["transforms[", "rng_next", "_state(", "point_w", "palette_", "texture", "emit_", "params."] {
+        if m.contains(needle) {
+            return Err(format!("a difference reaches for what only a flame has (`{needle}`)"));
+        }
+    }
+    Ok(format!("{m}\nfn {name}(z: vec2<f32>, d: vec2<f32>, base: u32, u: f32) -> vec2<f32> {{\n    var vc = u;\n    return {prefix}variation_2d(z, d, base, 0u, &vc);\n}}\n"))
+}
+
 /// [`inverse_kernel`]'s WGSL is a valid module beside the one function the
 /// mode D shader gives it, `get_param`.
 #[cfg(not(target_arch = "wasm32"))]
@@ -907,7 +929,15 @@ fn variation_init(p: &Program, name: &str, prefix: &'static str) -> Result<Optio
 /// 3D with the point's third part beside `#pixel`), the state's load and
 /// store, `init`'s function, and the helpers, all prefixed.
 fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, emit_z: bool, prefix: &'static str) -> String {
+    variation_module_exact(p, own, sig, three, emit_z, prefix, false)
+}
+
+/// [`variation_module`], its sines exact near zero where `exact` -- a
+/// derived difference's (`difference_kernel`), whose `sin(d/2)` of a small
+/// deviation a GPU's own `sin`, good to an absolute 1e-7, makes noise.
+fn variation_module_exact(p: &Program, own: &VariationShape, sig: &str, three: bool, emit_z: bool, prefix: &'static str, exact: bool) -> String {
     let mut g = Gen::new(p, Ctx::Variation, prefix);
+    g.exact_near_zero = exact;
     // A 2D body's copy in a 3D flame: its emissions at the z it is given.
     g.emit_z = emit_z;
     // Its tables, module constants: one for each set of literals.

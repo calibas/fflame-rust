@@ -413,6 +413,59 @@ pub fn map_forward_jacobian(m: &Map2, z: [f64; 2], arm: u32) -> Option<[[f64; 2]
 /// Floats per map row in the shader's table (`replay_delta.wgsl`).
 pub const ROW_FLOATS: usize = 24;
 
+/// `replay_delta.wgsl` as a flame's offset replay runs it: with the
+/// derived forward differences of its Rhai variations (`keys`) spliced in
+/// (docs/projects/rhai-planners.md, C3) -- or, with none, the file's own
+/// text, so every other shader is what it was.
+///
+/// A row of kernel 9 names its form by the key's
+/// [`difference_id`](crate::variations::user_inverse::difference_id) in its
+/// slot 2, and has its values at its own offset plus slot 3 (the walk
+/// writes both, `Backward::forward_rows`). `ct_fwd_diff`'s call of
+/// `fd_kernel` becomes `fd_kernel_user`'s, which passes such a row to
+/// `fd_user` with the row's offset and the arm's forced draw.
+pub fn replay_delta_wgsl<'a>(keys: impl IntoIterator<Item = &'a str>) -> String {
+    use crate::variations::user_inverse::{difference_id, of};
+    let mut forms: Vec<(u32, String)> = Vec::new();
+    for key in keys {
+        let Some(Ok(inv)) = of(key) else { continue };
+        let Some(w) = inv.difference_wgsl.as_ref() else { continue };
+        let id = difference_id(key);
+        if !forms.iter().any(|(i, _)| *i == id) {
+            forms.push((id, w.clone()));
+        }
+    }
+    replay_delta_with(&mut forms, include_str!("../../shaders/core/replay_delta.wgsl"))
+}
+
+/// [`replay_delta_wgsl`] for the forms `(id, wgsl)`, over `base`, the
+/// file's text.
+pub fn replay_delta_with(forms: &mut [(u32, String)], base: &str) -> String {
+    use crate::variations::user_inverse::DIFFERENCE_WGSL_NAME;
+    const CALL: &str = "let kd = fd_kernel(u32(cylinders[o + 1u]), kp, kq, v, e, arm);";
+    if forms.is_empty() {
+        return base.to_string();
+    }
+    forms.sort_by_key(|f| f.0);
+    assert!(base.contains(CALL), "replay_delta.wgsl's kernel call moved: the user forms have nowhere to go");
+    let mut out = base.replace(CALL, "let kd = fd_kernel_user(o, u32(cylinders[o + 1u]), kp, kq, v, e, arm);");
+    out.push_str(
+        "\n// A Rhai variation's forward difference (rhai-planners C3): kernel 9,\n// its values at the row's offset plus its slot 3.\n\
+         fn fd_user_param(xform_id: u32, variation_id: u32, slot: u32) -> f32 {\n    return cylinders[xform_id + variation_id + slot];\n}\n",
+    );
+    let mut cases = String::new();
+    for (id, w) in forms.iter() {
+        let name = format!("{DIFFERENCE_WGSL_NAME}{id}");
+        out.push_str(&w.replace("get_param(", "fd_user_param(").replace(DIFFERENCE_WGSL_NAME, &name));
+        cases.push_str(&format!("        case {id}u: {{ return {name}(v, e, o + u32(cylinders[o + 3u]), u); }}\n"));
+    }
+    out.push_str(&format!(
+        "fn fd_user(o: u32, v: vec2<f32>, e: vec2<f32>, arm: u32) -> vec2<f32> {{\n    let u = (f32(arm) + 0.5) / 256.0;\n    switch u32(cylinders[o + 2u]) {{\n{cases}        default: {{}}\n    }}\n    return FD_POLE;\n}}\n\n\
+         fn fd_kernel_user(o: u32, k: u32, p: vec3<f32>, q: vec4<f32>, v: vec2<f32>, e: vec2<f32>, arm: u32) -> vec2<f32> {{\n    if (k == 9u) {{\n        return fd_user(o, v, e, arm);\n    }}\n    return fd_kernel(k, p, q, v, e, arm);\n}}\n"
+    ));
+    out
+}
+
 /// A forward map as the shader's row: see `replay_delta.wgsl` for the
 /// layout. An inverse variant, which the replay never runs, is written
 /// as the identity.
@@ -437,9 +490,10 @@ pub fn forward_row(m: &Map2) -> [f32; ROW_FLOATS] {
             Kernel::Elliptic => (6.0, [0.0; 3]),
             // Its turns are the inverse's; going forward it has none.
             Kernel::Cylinder { .. } => (8.0, [0.0; 3]),
-            // Packed, never read: a user kernel has no form yet, so its
-            // steps run absolute (`Backward::word_refs`, rhai-planners C2).
-            Kernel::User { .. } => (-1.0, [0.0; 3]),
+            // A Rhai variation's derived form (rhai-planners C3): which
+            // one, and where its values are, the walk writes into the row
+            // (`Backward::forward_rows`); see `replay_delta_wgsl`.
+            Kernel::User { .. } => (9.0, [0.0; 3]),
             // Its steps, past the three slots: a difference needs only
             // what crossing each axis adds.
             Kernel::Splits { x, y, .. } => {
@@ -706,13 +760,17 @@ mod tests {
     /// `utilities.wgsl` has it, `replay_delta.wgsl`, and one job per
     /// thread -- `(z, δ)` then `(arm, row offset)`.
     fn harness() -> String {
+        harness_with(&std::fs::read_to_string("shaders/core/replay_delta.wgsl").expect("replay_delta.wgsl").replace("\r\n", "\n"))
+    }
+
+    /// [`harness`] over `delta`, `replay_delta.wgsl` as a flame has it.
+    fn harness_with(delta: &str) -> String {
         // LF, whatever the checkout: on a `core.autocrlf` one the files are
         // CRLF, and the search for the function's closing `\n}\n` never
         // matched.
         let util = std::fs::read_to_string("shaders/core/utilities.wgsl").expect("utilities.wgsl").replace("\r\n", "\n");
         let a = util.find("fn ff_atan2(").expect("ff_atan2");
         let end = a + util[a..].find("\n}\n").expect("its end") + 3;
-        let delta = std::fs::read_to_string("shaders/core/replay_delta.wgsl").expect("replay_delta.wgsl").replace("\r\n", "\n");
         let head = "@group(0) @binding(0) var<storage, read> cylinders: array<f32>;\n\
                     @group(0) @binding(1) var<storage, read> jobs: array<vec4<f32>>;\n\
                     @group(0) @binding(2) var<storage, read_write> out: array<vec2<f32>>;\n";
@@ -745,10 +803,15 @@ mod tests {
     /// Run `jobs` -- `(z, δ, arm)` against the map whose row is at offset
     /// 0 of `rows` -- through the shader's forms.
     fn run(device: &wgpu::Device, queue: &wgpu::Queue, rows: &[f32], jobs: &[([f32; 2], [f32; 2], u32)]) -> Vec<[f32; 2]> {
+        run_with(device, queue, &harness(), rows, jobs)
+    }
+
+    /// [`run`] through the shader `src` ([`harness_with`]).
+    fn run_with(device: &wgpu::Device, queue: &wgpu::Queue, src: &str, rows: &[f32], jobs: &[([f32; 2], [f32; 2], u32)]) -> Vec<[f32; 2]> {
         use wgpu::util::DeviceExt;
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("forward forms"),
-            source: wgpu::ShaderSource::Wgsl(harness().into()),
+            source: wgpu::ShaderSource::Wgsl(src.to_string().into()),
         });
         let pipe = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("forward forms"),
@@ -914,6 +977,90 @@ mod tests {
                 if !(err <= worst) {
                     worst = err;
                     worst_where = format!("arm {arm} at {z:?} with δ {d:?}: shader {g:?}, cpu {want:?}");
+                }
+            }
+            println!("  {name}: {n} differences, worst relative error {worst:.2e} ({worst_where})");
+            assert!(n > 1000, "{name}: only {n} checkable");
+            worst_all = worst_all.max(worst);
+        }
+        assert!(worst_all < 1e-5, "worst relative error {worst_all:.2e}");
+    }
+
+    /// **The shader's derived forms are the CPU's** (docs/projects/rhai-planners.md,
+    /// C3): the twins' forward differences as a flame's offset replay has
+    /// them -- spliced into `replay_delta.wgsl` (`replay_delta_with`), a row
+    /// of kernel 9 naming one, its values behind the row -- against the
+    /// interpreter's in f64, held as the built-ins' forms are, arm for arm.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_shader_user_forms_are_the_cpu_ones() {
+        use crate::scene::ifs_analysis::{Affine2, Kernel, NonlinearMap2};
+        use crate::variations::user_inverse::{compile, difference_id, kernel, kernel_slot};
+        let (device, queue) = device();
+        let twin = |name: &str, slots: &[f32]| {
+            let src = crate::lang::rhai::with_own_id(crate::variations::twins::source(name).expect("a twin"), &crate::scripted::mint_id());
+            let inv = std::sync::Arc::new(compile(&src, &format!("{name}_shader_form")).expect("declared").expect("checks"));
+            kernel_slot(&inv, slots).expect("a slot")
+        };
+        let cases = [
+            ("julian n=2 d=1", twin("julian", &[2.0, 1.0])),
+            ("julian n=2 d=-1", twin("julian", &[2.0, -1.0])),
+            ("julian n=15 d=-1", twin("julian", &[15.0, -1.0])),
+            ("julian n=-3 d=0.5", twin("julian", &[-3.0, 0.5])),
+            ("bubble", twin("bubble", &[])),
+        ];
+        let mut worst_all = 0.0f64;
+        for (name, slot) in cases {
+            let k = kernel(slot);
+            let pre = Affine2 { m: [[0.9, 0.3], [-0.3, 0.9]], t: [0.15, -0.2] };
+            let post = Affine2 { m: [[1.1, 0.0], [0.2, 0.8]], t: [0.0, 0.0] };
+            let map = Map2::Nonlinear(NonlinearMap2 {
+                kernel: Kernel::User { slot },
+                branch: 0,
+                pre,
+                post,
+                pre_inv: pre.inverse().expect("invertible"),
+                post_inv: post.inverse().expect("invertible"),
+                hole: 0.0,
+                w: 0.6,
+                third: 0.0,
+            });
+            let mut rows = forward_row(&map).to_vec();
+            rows[2] = difference_id(&k.inverse.key) as f32;
+            rows[3] = rows.len() as f32;
+            rows.extend(k.difference_values());
+            let mut forms = vec![(difference_id(&k.inverse.key), k.inverse.difference_wgsl.clone().expect("a shader form"))];
+            let delta = std::fs::read_to_string("shaders/core/replay_delta.wgsl").expect("replay_delta.wgsl").replace("\r\n", "\n");
+            let src = harness_with(&replay_delta_with(&mut forms, &delta));
+            let mut jobs: Vec<([f32; 2], [f32; 2], u32)> = Vec::new();
+            for &code in &k.draws() {
+                for rad in [0.2f32, 0.55, 1.1] {
+                    for i in 0..16 {
+                        let a = std::f32::consts::TAU * i as f32 / 16.0 + 0.05;
+                        let z = [rad * a.cos(), rad * a.sin()];
+                        for p in 1..=12 {
+                            let mag = rad * 10f32.powi(-p);
+                            for dir in [[1.0f32, 0.0], [0.0, 1.0], [0.6, -0.8], [-0.3, -0.954]] {
+                                jobs.push((z, [mag * dir[0], mag * dir[1]], code));
+                            }
+                        }
+                    }
+                }
+            }
+            let got = run_with(&device, &queue, &src, &rows, &jobs);
+            let (mut worst, mut n) = (0.0f64, 0usize);
+            let mut worst_where = String::new();
+            for ((z, d, code), g) in jobs.iter().zip(&got) {
+                let Some(want) = map_forward_difference(&map, [z[0] as f64, z[1] as f64], [d[0] as f64, d[1] as f64], *code) else { continue };
+                let norm = want[0].hypot(want[1]);
+                if !(norm > 0.0) || !norm.is_finite() || norm > 1e20 {
+                    continue;
+                }
+                let err = (g[0] as f64 - want[0]).hypot(g[1] as f64 - want[1]) / norm;
+                n += 1;
+                if !(err <= worst) {
+                    worst = err;
+                    worst_where = format!("draw {code} at {z:?} with δ {d:?}: shader {g:?}, cpu {want:?}");
                 }
             }
             println!("  {name}: {n} differences, worst relative error {worst:.2e} ({worst_where})");

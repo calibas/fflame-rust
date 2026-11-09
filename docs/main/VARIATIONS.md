@@ -587,11 +587,22 @@ function takes the point, and the ids when it has parameters (as
   one in fifty spared, and the gap must be a lower bound near the image
   -- else the analysis refuses the transform, naming the worst point
   (`NotAffine::Inverse`). A many-valued forward map (`rand()` picking a
-  root) is taken at sixteen fixed draws, one an arm. It may reach for
+  root) has its arms read off it -- every draw of a call set to each step
+  of a grid of 256, a run of steps with the same images an arm, its share
+  bisected (`UserKernel::arms`; rhai-planners C1). It may reach for
   nothing only a flame has (a random number in the inverse, state, the
   weight, a texture). In mode D its WGSL is spliced per variation
-  (*ESCAPE.md*, Mode D); Focused Rendering's inverse walk refuses it
-  for now. The twins of the eleven planar kernels carry one, and of
+  (*ESCAPE.md*, Mode D). **Focused Rendering's inverse walk** takes it
+  too (C2): a flame with one that draws is the walk's, a word names an
+  arm by its grid draw, and a replay build wraps the body's draws to
+  read it (`bound::force_arms`). Past f32 the replay runs in offsets
+  through the variation's **forward difference derived from its body**
+  (C3, `lang::delta::variation_difference`: the body as one pass of an
+  escape loop, whose derived equations are `F(Z + d) − F(Z)`), on the
+  CPU in the interpreter and on the GPU spliced behind the hand forms
+  (`forward_delta::replay_delta_wgsl`); a body that derives none replays
+  absolute. Grand-julian with its julians Rhai twins renders the
+  built-in's density block by block to 1e6. The twins of the eleven planar kernels carry one, and of
   julia3D and julia3Dz a 3D one (`scripts/twin_inverses.py`, which the
   translator appends): an edited twin keeps its inverse while it still
   undoes the map. Gates: `the_twins_inverses_undo_their_maps`;
