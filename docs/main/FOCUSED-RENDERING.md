@@ -237,6 +237,14 @@ transform readable as maps it can invert:
   affine roles, then `julia`, `julian`, `spherical`, `bubble`,
   `hemisphere`, `disc`, `blob`, and the walk-only `elliptic`, `splits`,
   `cylinder` and `juliascope`.
+- **A Rhai variation with its own inverse** (`fn inverse`;
+  [rhai-planners.md](../projects/rhai-planners.md), Part C): its arms
+  read off its forward map, each named by a draw on a grid of 256
+  (`user_inverse::UserKernel::arms`), which a replay build forces
+  (`bound::force_arms`); one that draws makes the flame the walk's.
+  Its offset replay runs through a forward difference derived from its
+  body (`lang::delta::variation_difference`), kernel 9 of the rows,
+  spliced per flame (`forward_delta::replay_delta_wgsl`).
 - **Blurs**: a `pre_blur` that is its transform's only pre-phase
   variation, and a transform whose one variation ignores its input (a
   free blur).
