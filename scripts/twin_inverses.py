@@ -14,10 +14,9 @@ inverse, run this script, and the twins' test
 
 Where it has no preimage an inverse gives `no_preimage()`; where its image
 is not the whole plane, a `fn image_gap` (GAPS below) scores a point off
-it. An inverse that has none on most of its branches at most points --
-splits' by its quadrant -- read every pixel as the set on the GPU (an open
-item in the plan), so splits' gives each branch's point, as the built-in
-kernel does.
+it. Splits' has none on three of its four branches at any point, which
+mode D read as the set until the walk's radius stopped flushing a
+no-preimage point's to zero (rhai-planners D4).
 
 Each is transcribed from the built-in kernel's inverse in
 `scene/ifs_analysis.rs` (`kernel_inverse_gen`), against the TWIN's forward
@@ -133,15 +132,20 @@ INVERSES = {
     complex(sin(z.re * h) * (1.0 + m), if z.im < 0.0 { -y } else { y })
 }
 """),
-    # One branch per quadrant of the preimage: bit 0 x >= 0, bit 1 y >= 0,
-    # each branch's point given whichever quadrant it lands in, as the
-    # built-in kernel does (`Kernel::Splits`; see the module note).
+    # One branch per quadrant of the preimage: bit 0 x >= 0, bit 1 y >= 0;
+    # none where the shifted point is not in the branch's quadrant, as the
+    # built-in kernel (`Kernel::Splits`).
     "splits": (4, """fn inverse(z, p, branch) {
     let east = (branch & 1) == 1;
     let north = (branch & 2) == 2;
     let dx = (if east { p.x } else { -p.x }) + (if north { p.ushear } else { -p.dshear });
     let dy = (if north { p.y } else { -p.y }) + (if east { p.rshear } else { -p.lshear });
-    complex(z.re - dx, z.im - dy)
+    let u = complex(z.re - dx, z.im - dy);
+    if (u.re >= 0.0) == east && (u.im >= 0.0) == north {
+        u
+    } else {
+        no_preimage()
+    }
 }
 """),
     # Two preimages a turn, asin(x) and pi - asin(x), over turns -2 to 2.
@@ -232,6 +236,21 @@ INVERSES = {
     z / (2.0 - s)
 }
 """),
+    # (x / (|z|^2 + 1e-6), y): y kept, x a root of u x^2 - x + u k = 0 with
+    # k = y^2 + 1e-6 -- the small root, through the origin (branch 0), or
+    # the large; none where 4 u^2 k > 1, nor on the large one at u = 0.
+    "hyperbolic": (2, """fn inverse(z, p, branch) {
+    let u = z.re;
+    let k = z.im * z.im + 1.0e-6;
+    let d = 1.0 - 4.0 * u * u * k;
+    if d < 0.0 || (branch == 1 && u == 0.0) {
+        return no_preimage();
+    }
+    let s = 1.0 + sqrt(d);
+    let x = if branch == 0 { 2.0 * u * k / s } else { s / (2.0 * u) };
+    complex(x, z.im)
+}
+"""),
     # sin on each axis: per axis two preimages a turn over turns -1 and
     # 0, four, and their sixteen pairs.
     "sinusoidal": (16, f"""fn inverse(z, p, branch) {{
@@ -293,6 +312,16 @@ GAPS = {
 """,
     "sinusoidal": """fn image_gap(z, p) {
     max(abs(z.re), abs(z.im)) - 1.0
+}
+""",
+    # The image is |u| sqrt(v^2 + 1e-6) <= 1/2, inside |u v| <= 1/2. A point
+    # (a, b) = (|u|, |v|) d from that: a box of half-side d about it holds
+    # the nearest, whose |x y| >= (a - d)(b - d), so d is at least the small
+    # root of (a - d)(b - d) = 1/2, written so nothing cancels.
+    "hyperbolic": """fn image_gap(z, p) {
+    let a = abs(z.re);
+    let b = abs(z.im);
+    2.0 * (a * b - 0.5) / (a + b + sqrt((a - b) * (a - b) + 2.0))
 }
 """,
 }

@@ -10144,6 +10144,8 @@ mod gpu_tests {
             ("fisheye", with("fisheye", shrink, 0.6)),
             ("eyefish", with("eyefish", shrink, 0.6)),
             ("sinusoidal", with("sinusoidal", shrink, 0.7)),
+            // Off the origin, where its x leaves as 1/x.
+            ("hyperbolic", with("hyperbolic", [0.5, 0.2, -0.2, 0.5, 1.0, 0.0], 0.6)),
         ];
         let mut failures = Vec::new();
         for (name, flame) in cases {

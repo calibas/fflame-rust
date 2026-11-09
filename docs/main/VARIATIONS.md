@@ -472,7 +472,7 @@ plane, summed with an affine, and as a solid. **A built-in with no
 `InverseDef` takes its twin's** (`user_inverse::of`): writing a twin's
 inverse in `scripts/twin_inverses.py` gives the built-in the Flame
 Attractor (swirl, horseshoe, polar, exponential, exp, log, fisheye,
-eyefish, sinusoidal so far).
+eyefish, sinusoidal, hyperbolic so far).
 
 See [forward-bounds.md](../projects/deep-zoom/forward-bounds.md) and
 [ifs-general.md](../projects/deep-zoom/ifs-general.md).
