@@ -1,9 +1,12 @@
 # Rhai variations in Focused Rendering and the Flame Attractor
 
-Status: **Part A steps 1-2 built** (2026-11-08, branch `rhai-planners`):
-every twin whose built-in derives a bound derives one from its own code;
-Part B in progress. The user (2026-11-08): both features compatible with
-Rhai scripts; decisions 1-3 below taken as proposed, all phases.
+Status: **Parts A (steps 1-2) and B (B1-B3) built** (2026-11-08, branch
+`rhai-planners`): every twin whose built-in derives a bound derives one
+from its own code; a Rhai variation declares its inverse and the Flame
+Attractor draws it, alone, summed with an affine, and as a solid; and a
+built-in with no inverse in Rust takes its twin's. A3 and the items under
+*Open* are left. The user (2026-11-08): both features compatible with
+Rhai scripts; decisions 1-3 below taken as proposed, all of Part B.
 
 ## Why a Rhai variation does not work in them
 
@@ -151,6 +154,75 @@ fn inverse(z, p, branch) { ... }   // the preimage on branch 0 .. n-1
   keeps its inverse while the check passes. The affine roles need none
   (a twin of `linear` is affine by its maths, borrowed while unedited).
 
+### Built
+
+- **B1** (`91e60913`, `58769dd5`): `fn inverse(z, p, branch)`,
+  `INFO.inverse_branches`, `no_preimage()`, and `fn image_gap(z, p)` --
+  the gap was not in the design: where an inverse has no preimage the
+  walk knows nothing of that piece, and the built-ins' unit discs score
+  such a point by their gap, so a twin without one drew less than its
+  built-in. `variations::user_inverse` compiles and checks them (400
+  points, radius 4 -- radius 2 never reached bubble's outer branch -- one
+  in fifty spared), at the defaults when compiled and at each transform's
+  values when used (`kernel_slot`, one slot per values). `Kernel::User {
+  slot }`; derivatives by central differences, carried through the dual
+  numbers by `Real::outside2`; no difference form, no BigFloat inverse
+  (the deep-zoom handover stops at it), no smooth radius (the delta
+  walk's remainder unbounded). Kind 8 on the GPU, its values behind the
+  xaos graph. Many-valued forward maps at sixteen fixed draws (seeded
+  draws missed an arm of julia's and its ball came out short); a forward
+  map unbounded at the origin probed, so spherical's twin takes the
+  built-in's bulk ball.
+- **No preimage, on the GPU** took the longest. A branch with none must
+  leave as the CPU's does -- at infinity, no term folded, the path
+  keeping only a positive bound it had (the frozen rule) -- and a finite
+  far point does not: at 1e30 with σ one a gapped branch's step bound
+  the piece that far (bubble's built-in row has it so, and agrees 98.9%
+  with its own reference walk); with σ zero a path claimed distance
+  zero. So the row's point leaves at 3.4e38, past the walk's 1e37 for a
+  number lost, before the pre-affine. Every twin and borrowing built-in
+  then agrees 100% with its reference walk.
+- **The twins' inverses** (`scripts/twin_inverses.py`): the eleven planar
+  kernels', transcribed from `kernel_inverse_gen` against the twin's
+  forward map where they differ (spherical's 1e-6); disc's rings fixed at
+  twelve and cylinder's turns at -2..2, where the built-ins read them off
+  the ball. Juliascope, elliptic, splits and cylinder, which the built-in
+  walk alone takes, now render in mode D through their twins. Then nine
+  built-ins with none in Rust borrow their twins' (`user_inverse::of`):
+  swirl, horseshoe, polar, exponential, exp, log, fisheye, eyefish,
+  sinusoidal.
+- **B2** (`bef63f10`): summed with an affine, as a `SumMap2`: Newton over
+  the forward map, each inverse branch seeding a solve; on the GPU the
+  forward map compiled beside the inverse and dispatched by the row's
+  kernel kind inside the Newton shader. A forward map that draws (julia's
+  twin) has none to compile and is not summed. Bubble, spherical and
+  hemisphere twins summed with linear agree 99.5-100% (the built-ins'
+  sums 98.4-100%).
+- **B3** (`f642d975`): `fn inverse3(v, p)`, `Kernel3::User3`, kind 4,
+  σ from the 3×3 Jacobian's σ_max in closed form; julia3D's and
+  julia3Dz's twins. Each agrees with a CPU march of its own analysis
+  (99.9%, 100%); julia3Dz's solid is the built-in's to the pixel,
+  julia3D's a little thinner -- its σ the exact local one where the
+  built-in kernel takes `1/n²` of it everywhere, a bound.
+
+### Open
+
+- **An inverse with no preimage on most branches at most points** read
+  every pixel as the set on the GPU (splits' twin, three of whose four
+  branches have none at any point, when it gave `no_preimage()` there),
+  where its CPU reference did not. Not understood; splits' twin gives
+  each branch's point instead, as the built-in kernel does.
+- **Focused Rendering's inverse walk** (`Backward`) refuses a user
+  kernel: its replay shader has no body for one.
+- **Deep zoom** through a user kernel: no BigFloat inverse and no
+  difference form, so the handover stops at the first one and f32 takes
+  over from there.
+- **Cost**: a user kernel's σ is four extra inverses a step on the GPU
+  (six in 3D), and a sum's Newton solve runs the forward map in the
+  interpreter on the CPU. Disc's twin, at twelve fixed rings, summed with
+  linear took the per-pixel CPU reference hours at 96².
+- **A3** below.
+
 ### Phases
 
 - **B1. Planar, alone in its transform:** the language (`fn inverse`,
@@ -170,8 +242,8 @@ fn inverse(z, p, branch) { ... }   // the preimage on branch 0 .. n-1
 
 ## Order of work
 
-A1 (soundness for Rhai bodies) and A2 (the 32) done; then B1, B1's
-twins, B2, B3; A3.
+A1, A2, B1 with the twins' inverses and the borrowing built-ins, B2 and
+B3 done (2026-11-08); A3 and *Open* left.
 
 ## Decisions for the user
 
