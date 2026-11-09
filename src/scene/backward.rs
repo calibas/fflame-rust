@@ -5530,8 +5530,49 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU, registers a twin, reads output/flame-zoom"]
     fn a_rhai_julian_renders_as_the_builtin() {
-        use crate::renderer::density_gates::{compare_blocks, print_compared, replicated_blocks};
         let (cfg, twin) = rhai_grand_julian();
+        let failures = twin_renders_as_builtin(&cfg, &twin, "grand-julian", &[(1e2f32, 0.75), (1e4, 0.75), (1e4, 0.25), (1e6, 0.75)]);
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// **The fixtures through the twins whose forward forms E2 derived
+    /// render as through the built-ins** (docs/projects/rhai-planners.md,
+    /// E2): juliascope's twin's form (its exponent read from an int),
+    /// splits' (its `if` expressions over its parameters), elliptic's and
+    /// cylinder's, in the offset replay, block by block against the
+    /// built-in's density, as `a_rhai_julian_renders_as_the_builtin`. Not
+    /// the fixtures with a final or a bipolar transform, whose sample
+    /// points fall outside a view the built-in plans. `CORPUS=a,b` runs
+    /// those alone.
+    #[test]
+    #[ignore = "needs a GPU; registers twins, reads output/flame-zoom; minutes"]
+    fn the_newly_derived_twins_render_as_the_builtins() {
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        let only: Option<Vec<String>> = std::env::var("CORPUS").ok().map(|v| v.split(',').map(str::to_string).collect());
+        let mut failures = Vec::new();
+        for name in ["juliascope-arms", "juliascope-rays", "elliptic-splits-julian", "cylinder-turns-julian"] {
+            if only.as_ref().is_some_and(|o| !o.iter().any(|x| x == name)) {
+                continue;
+            }
+            let text = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")).expect("the fixture");
+            let mut cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+            cfg.levels_enabled = false;
+            cfg.cylinder_always = true;
+            let twin = twinned(&cfg.flame);
+            crate::variations::custom::ensure(&twin);
+            failures.extend(twin_renders_as_builtin(&cfg, &twin, name, &[(1e2f32, 0.75), (1e4, 0.75)]));
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// The twin's plans and density against the built-in's at each `(zoom,
+    /// frac)` view, the frac a point of the built-in's sample: the failures.
+    fn twin_renders_as_builtin(cfg: &crate::config::FractalConfig, twin: &Flame, tag: &str, views: &[(f32, f64)]) -> Vec<String> {
+        use crate::renderer::density_gates::{compare_blocks, print_compared, replicated_blocks};
+        let twin = twin.clone();
         let guard = crate::variations::global_registry();
         let reg = &*guard;
         let t0 = std::time::Instant::now();
@@ -5544,7 +5585,7 @@ mod tests {
         let mut failures = Vec::new();
         const N: u32 = 192;
         const REPS: usize = 6;
-        for (z, frac) in [(1e2f32, 0.75), (1e4, 0.75), (1e4, 0.25), (1e6, 0.75)] {
+        for &(z, frac) in views {
             let at = b.sample_point(frac);
             let mut c = cfg.clone();
             c.zoom = z;
@@ -5569,21 +5610,20 @@ mod tests {
             let (xb, _) = replicated_blocks(&device, &queue, &c, Some(&pb), N, 1024, 8, REPS);
             let (xt, img) = replicated_blocks(&device, &queue, &ct, Some(&pt), N, 1024, 8, REPS);
             let _ = std::fs::create_dir_all("output/rhai-planners");
-            let _ = image::save_buffer(format!("output/rhai-planners/grand-julian-twin-{z:.0e}-{frac}.png"), &img, N, N, image::ColorType::Rgba8);
+            let _ = image::save_buffer(format!("output/rhai-planners/{tag}-twin-{z:.0e}-{frac}.png"), &img, N, N, image::ColorType::Rgba8);
             let cmp = compare_blocks(&xt, &xb, &xb);
-            print_compared(&format!("x{z:.0e} at {frac}: the twin against the built-in"), &cmp);
+            print_compared(&format!("{tag} x{z:.0e} at {frac}: the twin against the built-in"), &cmp);
             let (_, _, mx, _, my, _, zz) = cmp.pooled[0];
             if zz.abs() > 4.0 && (mx / my - 1.0).abs() > 0.02 {
-                failures.push(format!("x{z:.0e}: the twin's density is {:.4} of the built-in's ({zz:+.1} standard errors)", mx / my));
+                failures.push(format!("{tag} x{z:.0e}: the twin's density is {:.4} of the built-in's ({zz:+.1} standard errors)", mx / my));
             }
             // Block by block: before the forms, 37 blocks at 1e4 passed five
             // standard errors, the twin's absolute replay displaced.
             if cmp.over_5 * 20 > cmp.judged {
-                failures.push(format!("x{z:.0e}: {} of {} blocks differ by more than five standard errors", cmp.over_5, cmp.judged));
+                failures.push(format!("{tag} x{z:.0e}: {} of {} blocks differ by more than five standard errors", cmp.over_5, cmp.judged));
             }
         }
-        crate::variations::twins::BORROW.with(|b| b.set(true));
-        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        failures
     }
 
     /// **The GPU plans a view of the plot as completely as the CPU**

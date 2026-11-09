@@ -547,7 +547,9 @@ impl UserKernel {
     /// other kernel, as for any other built-in.
     ///
     /// **Sampled**: the least `|K(z)|` over sixteen rings of the disc at
-    /// 128 angles each, every arm, less a thousandth. An inversion's least
+    /// 128 angles each, every arm, less a thousandth -- and none where the
+    /// inverse finds a preimage in the disc for a point well inside that.
+    /// An inversion's least
     /// is on the rim and its modulus the same all round it (spherical's,
     /// a root's), so there the sample is the exact hole and the walk the
     /// built-in's; a kernel that dips between samples is read a little
@@ -575,7 +577,27 @@ impl UserKernel {
                 }
             }
         }
-        let h = if least.is_finite() { least * (1.0 - 1e-3) } else { 0.0 };
+        let mut h = if least.is_finite() { least * (1.0 - 1e-3) } else { 0.0 };
+        // A hole is where the INVERSE gives no preimage in the disc. A map
+        // unbounded along one line only -- hyperbolic's `x / |z|^2`, its
+        // `y` kept -- reads one off the rings, which never come near the
+        // origin, and has none: its inverse takes `(0, y)` to itself.
+        // Spherical's twin, whose 1e-6 brings the origin's neighbourhood
+        // back in, keeps its hole: its inverse gives the outer preimage
+        // alone, as the built-in kernel's (rhai-planners E2).
+        'probe: for f in [0.5, 1e-1, 1e-2, 1e-4] {
+            for k in 0..64 {
+                let a = std::f64::consts::TAU * (k as f64 + 0.5) / 64.0;
+                let v = [h * f * a.cos(), h * f * a.sin()];
+                for branch in 0..self.inverse.branches {
+                    let u = self.inverse(v, branch);
+                    if is_preimage(u) && u[0].hypot(u[1]) <= r_pre {
+                        h = 0.0;
+                        break 'probe;
+                    }
+                }
+            }
+        }
         self.holes.lock().expect("the holes").insert(r_pre.to_bits(), h);
         h
     }
@@ -974,6 +996,24 @@ pub fn kernel3(slot: u32) -> &'static UserKernel3 {
     })
 }
 
+/// A twin's parameter slots at its defaults, with `set` by name -- as a
+/// flame packs them.
+#[cfg(test)]
+pub(crate) fn named(name: &str, set: &[(&str, f64)]) -> Vec<f32> {
+    let src = crate::variations::twins::source(name).expect("a twin");
+    let p = crate::lang::rhai::transformation(src).expect("compiles");
+    let mut slots = Vec::new();
+    for x in &p.params {
+        let v = set.iter().find(|(n, _)| *n == x.name).map_or(x.default, |&(_, v)| (v, 0.0));
+        slots.push(v.0 as f32);
+        if x.ty() == crate::lang::ir::Ty::Complex {
+            slots.push(v.1 as f32);
+        }
+    }
+    slots.extend(p.funcs.iter().map(|f| f.default as f32));
+    slots
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1063,6 +1103,13 @@ fn inverse(z, p, branch) {
         // inversion, as its grown ball drew it.
         let log = user("log", &[std::f32::consts::E]);
         assert!(!log.unbounded_at_origin() && log.hole_radius(1.0) == 0.0, "log's twin read as an inversion");
+        // Unbounded along one line only, and no hole: hyperbolic's inverse
+        // takes `(0, y)` to itself (E2). Read as a hole of 0.12, it stopped
+        // the deep zoom's handover at its first level.
+        let hyperbolic = user("hyperbolic", &[]);
+        for r in [0.3, 1.0, 4.5] {
+            assert_eq!(hyperbolic.hole_radius(r), 0.0, "hyperbolic's twin at {r}");
+        }
     }
 
     /// **A forward map's arms are read off it** (rhai-planners C1):
@@ -1118,6 +1165,9 @@ fn inverse(z, p, branch) {
             (user("julian", &[15.0, -1.0]), Kernel::Root { n: 15, d: -1.0, mirror: false }),
             (user("julian", &[-3.0, 0.5]), Kernel::Root { n: -3, d: 0.5, mirror: false }),
             (user("bubble", &[]), Kernel::Bubble),
+            // Its odd arms mirrored (E2: its exponent read from an int).
+            (user("juliascope", &[3.0, 1.0]), Kernel::Root { n: 3, d: 1.0, mirror: true }),
+            (user("juliascope", &[2.0, -1.0]), Kernel::Root { n: 2, d: -1.0, mirror: true }),
         ];
         let mut worst = 0.0f64;
         for (slot, builtin) in cases {
@@ -1152,6 +1202,85 @@ fn inverse(z, p, branch) {
         }
     }
 
+    /// **Every twin's derived differences are the direct ones, in big
+    /// floats** (rhai-planners E2): `F(z + d) − F(z)` at each of its draws
+    /// and `G(v + d) − G(v)` along each branch, as the derived forms give
+    /// them in f64, against both maps run in big floats (`bigeval`, four
+    /// limbs) at `z` and at `z + d` exactly and subtracted -- for every
+    /// twin with an inverse, at its defaults and deviations down to 1e-13.
+    /// Where a deviation crosses a step or a branch's edge the form gives
+    /// the plain difference, which is large; the direct one agrees there
+    /// too: the last three points are 1e-3 from an edge (x = 0: splits'
+    /// steps, juliascope's sector at its power 2; splits' quadrant at its
+    /// shift), which the largest deviation crosses. A point either map
+    /// leaves undefined is skipped.
+    #[test]
+    fn every_twins_derived_differences_are_the_direct_ones_in_big_floats() {
+        use crate::escape::bigfloat::{BigComplex, BigFloat};
+        let big = |x: f64| BigFloat::from_f64(x, 4);
+        let run = |prog: &Arc<Program>, params: &ParamValues, z: [f64; 2], d: [f64; 2]| -> Option<[f64; 2]> {
+            let at = |w: [BigFloat; 2]| -> Option<[BigFloat; 2]> {
+                let mut m = crate::lang::bigeval::BigMachine::new(prog.clone(), params.clone(), Env::at(C64::ZERO, 1), BigComplex { re: w[0].clone(), im: w[1].clone() }, 4).ok()?;
+                m.step().ok()?;
+                let out = m.z();
+                Some([out.re.clone(), out.im.clone()])
+            };
+            let a = at([big(z[0]), big(z[1])])?;
+            let b = at([big(z[0]).add(&big(d[0])), big(z[1]).add(&big(d[1]))])?;
+            let out = [b[0].sub(&a[0]).to_f64(), b[1].sub(&a[1]).to_f64()];
+            let sane = |w: &[BigFloat; 2]| w.iter().all(|c| c.to_f64().abs() < 1e29);
+            (sane(&a) && sane(&b) && out.iter().all(|c| c.is_finite())).then_some(out)
+        };
+        let names: Vec<&str> = crate::variations::twins::TWINS.iter().filter(|(_, s)| s.contains("fn inverse(")).map(|(n, _)| *n).collect();
+        let (mut worst, mut compared) = ((0.0f64, String::new()), 0usize);
+        let mut failures = Vec::new();
+        for name in names {
+            let mut each = [0usize; 2];
+            let src = crate::lang::rhai::with_own_id(crate::variations::twins::source(name).expect("a twin"), &crate::scripted::mint_id());
+            let inv = Arc::new(compile(&src, &format!("{name}_e2")).expect("declared").expect("checks"));
+            let slot = kernel_slot(&inv, &named(name, &[])).expect("a slot");
+            let k = kernel(slot);
+            let forward = crate::lang::delta::draw_as_color(&inv.forward).unwrap_or_else(|| inv.forward.clone());
+            for z in [[0.37, 0.21], [-0.53, 0.45], [0.31, -0.26], [-0.24, -0.47], [-1e-3, 0.5], [0.399, 0.2], [0.5, 1e-3]] {
+                for scale in [1e-2, 1e-6, 1e-10, 1e-13] {
+                    let r = scale * f64::hypot(z[0], z[1]);
+                    let d = [r * 0.6, -r * 0.8];
+                    let mut check = |what: String, side: usize, got: Option<[f64; 2]>, want: Option<[f64; 2]>| {
+                        let (Some(got), Some(want)) = (got, want) else { return };
+                        let size = want[0].hypot(want[1]);
+                        let err = (got[0] - want[0]).hypot(got[1] - want[1]) / size.max(1e-300);
+                        if size == 0.0 && got == [0.0, 0.0] {
+                            return;
+                        }
+                        compared += 1;
+                        each[side] += 1;
+                        if err > worst.0 {
+                            worst = (err, what.clone());
+                        }
+                        if !(err < 1e-8) {
+                            failures.push(format!("{what}: {got:?} against {want:?} ({err:.1e})"));
+                        }
+                    };
+                    for &code in &k.draws() {
+                        let u = ((code % DRAW_GRID) as f64 + 0.5) / DRAW_GRID as f64;
+                        let prog = Arc::new(crate::lang::delta::one_pass(&forward, u));
+                        check(format!("{name} forward at {z:?}, draw {code}, deviation {scale:e}"), 0, k.forward_difference(z, d, code), run(&prog, &k.params, z, d));
+                    }
+                    for branch in 0..inv.branches {
+                        let prog = Arc::new(crate::lang::delta::one_pass(&inv.inverse, branch as f64));
+                        check(format!("{name} inverse at {z:?}, branch {branch}, deviation {scale:e}"), 1, k.inverse_difference(z, d, branch), run(&prog, &k.params, z, d));
+                    }
+                }
+            }
+            // Each map met somewhere.
+            if each.contains(&0) {
+                failures.push(format!("{name}: compared {} forward and {} inverse", each[0], each[1]));
+            }
+        }
+        println!("{compared} differences compared; worst {:.1e} ({})", worst.0, worst.1);
+        assert!(failures.is_empty(), "{} of {compared}:\n{}", failures.len(), failures.join("\n"));
+    }
+
     /// **A twin's derived inverse difference, and its big-float inverse,
     /// are its built-in's** (rhai-planners D3): `G(v + d) − G(v)` derived
     /// from julian's, bubble's and hemisphere's twins' inverses against the
@@ -1174,6 +1303,9 @@ fn inverse(z, p, branch) {
             (user("julian", &[3.0, 1.0]), Kernel::Root { n: 3, d: 1.0, mirror: false }),
             (user("bubble", &[]), Kernel::Bubble),
             (user("hemisphere", &[]), Kernel::Hemisphere),
+            // E2: its quadrant test over bools. At its defaults, x = y = 0.4
+            // and no shear: the steps (0.8, 0) and (0, 0.8) from (-0.4, -0.4).
+            (user("splits", &named("splits", &[])), Kernel::Splits { base: [-0.4, -0.4], x: [0.8, 0.0], y: [0.0, 0.8] }),
         ];
         let mut worst = 0.0f64;
         for (slot, builtin) in cases {

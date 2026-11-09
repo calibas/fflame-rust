@@ -1662,12 +1662,24 @@ complex: `BinOp::DiffAbs`, the compiler's own operator; `uf_diffabs`,
   pixels escape after hundreds of steps of an expanding map, past what
   f32 deviations can follow.
 
-What does not derive: an inverse function, a power of a varying
-exponent, a branch in the init on the pixel, a loop inside the loop or
-in the init, an int or bool carried or set in a branch on the iterate,
-more than one value carried -- unless it stands in an arm a parameter
-picks (or a user function's choice). Such a formula stays on the
-direct path, as before.
+- **Steps, a real's inverse functions, and ints the pixel decides**
+  (written for the Rhai variations' difference forms, rhai-planners
+  E2; they hold for formulas alike): `round`, `floor`, `ceil` and
+  `trunc` deviate by the plain difference of their steps; a real's
+  `asin`, `acos` and `atan` as the angle of a point (`asin a =
+  arg(sqrt(1 - a²) + i a)`), over sqrt's and arg's forms. An int or bool
+  a deviation decides (a sector's index rounded from an angle, a test
+  kept in a variable, a value set under a test that varies) is carried
+  as two values, the reference's and the pixel's from its full values:
+  a float made of it deviates by their difference, and a branch on it
+  is a branch on the iterate (`Deriver::discrete`).
+
+What does not derive: an inverse function of a complex, a power of a
+varying exponent, a branch in the init on the pixel, a loop inside the
+loop or in the init, an int or bool carried from pass to pass, more
+than one value carried -- unless it stands in an arm a parameter picks
+(or a user function's choice). Such a formula stays on the direct path,
+as before.
 
 **Hybrids** (`lang/hybrid.rs`, the Hybrid Designer panel): Kalles
 Fraktaler's hybrid designer, as its manual describes it. Up to four

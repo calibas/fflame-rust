@@ -6721,6 +6721,41 @@ mod tests {
         }
     }
 
+    /// **Every twin's inverse, its image gap, forward map and inverse
+    /// difference compile into the delta walk** (rhai-planners E2): each
+    /// twin with an inverse, alone in mode D's shader, validated -- the
+    /// derived forms' new constructs (an int carried as two values, the
+    /// inverse sine's angle form, a step's plain difference) as the WGSL
+    /// lowering writes them. Every twin's inverse derives a difference now.
+    #[test]
+    fn every_twins_forms_compile_into_the_delta_walk() {
+        use crate::variations::{twins, user_inverse};
+        let flat = super::get_ifs("ifs_flame").unwrap();
+        let col = super::get_ifs_coloring("ifs_distance", flat);
+        let none = super::UserKernels::default();
+        for (name, src) in twins::TWINS.iter().filter(|(_, s)| s.contains("fn inverse(")) {
+            let inv = user_inverse::compile(src, name).unwrap().unwrap();
+            let gap = inv.gap.as_ref().map(|(_, w)| w.as_str());
+            let fwd = inv.forward_wgsl.as_deref();
+            let dinv = inv.inverse_difference_wgsl.as_deref();
+            assert!(dinv.is_some(), "{name}'s twin derives no inverse difference");
+            let wgsl = format!("{}{}{}{}", inv.wgsl, gap.unwrap_or(""), fwd.unwrap_or(""), dinv.unwrap_or(""));
+            let user = super::UserKernels {
+                functions: vec![super::UserFunction { key: (*name).into(), wgsl, gap: gap.is_some(), forward: fwd.is_some(), inverse_difference: dinv.is_some() }],
+                ..Default::default()
+            };
+            let src = crate::escape::assembler::assemble_ifs_user(flat, col, 4, None, true, true, false, &user, &none);
+            // Chrome's grammar, which naga's is looser than.
+            let mixes = crate::variations::shader_lint::mixed_operators(&src);
+            assert!(mixes.is_empty(), "{name}: {mixes:?}");
+            use wgpu::naga;
+            let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(&src)));
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        }
+    }
+
     /// Every solid's walk reads its colour depth at its `colour_depth`
     /// parameter's slot. The quaternion Julia's read one past it, a slot
     /// never written, so its colour depth was 1 whatever the slider said.
@@ -10408,6 +10443,143 @@ mod gpu_tests {
         }
         crate::variations::twins::BORROW.with(|b| b.set(true));
         assert!(judged >= 4, "only {judged} views had structure to judge");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// **The twins whose differences E2 derived draw their CPU walk at
+    /// depth** (docs/projects/rhai-planners.md, E2). At 2^30 a pixel is
+    /// 4e-11 of a plane f32 resolves to 6e-8, and f64 still resolves it:
+    /// each twin's delta walk -- its derived inverse difference spliced
+    /// into mode D -- and its absolute walk are held to its own CPU
+    /// reference walk (f64). The handover walks 15 to 22 levels in f64
+    /// first, which is why the absolute walk holds too; the delta walk
+    /// reads the forms all the same -- each scaled by 1.5 on the GPU, it
+    /// agreed 73% (juliascope), 39% (sinusoidal), 44% (hyperbolic) and
+    /// 98.6% (cylinder, whose set is small). Elliptic, cylinder and
+    /// juliascope have no built-in mode D picture; sinusoidal and
+    /// hyperbolic are built-ins that borrow their twins'. Hyperbolic's
+    /// handover stopped at its first level before E2, on a hole its image
+    /// does not have (`UserKernel::hole_radius`). Not splits: three of its
+    /// four branches have no preimage at any point and an image gap has
+    /// no branch to say which, so its handover stops at level 0.
+    /// `DEPTH_TWINS=a,b` runs those alone, `DEPTH_ZOOM` at another depth.
+    #[test]
+    #[ignore = "needs a GPU; registers the twins"]
+    fn the_newly_derived_twins_hold_at_depth() {
+        use crate::scene::ifs_analysis::analyse_2d;
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        let only: Option<Vec<String>> = std::env::var("DEPTH_TWINS").ok().map(|v| v.split(',').map(str::to_string).collect());
+        const DEEP_LEVELS: u32 = 80;
+        let with = |v: &str, a: [f32; 6], w: f32| {
+            kernel_flame(vec![
+                (v, a, w, 0.3),
+                ("linear", [0.5, 0.0, 0.0, 0.5, 0.5, 0.3], 1.0, 0.8),
+                ("linear", [0.45, 0.0, 0.0, 0.45, -0.4, 0.4], 1.0, 0.6),
+                ("linear", [0.5, 0.0, 0.0, 0.5, 0.0, -0.5], 1.0, 0.1),
+            ])
+        };
+        let mut scope = kernel_flame(vec![("juliascope", [1.0, 0.0, 0.0, 1.0, -0.25, -0.2], 1.0, 0.3)]);
+        scope.transforms[0].set_variation_param("juliascope", "power", 2.0);
+        let cases: Vec<(&str, Flame)> = vec![
+            ("elliptic", kernel_flame(vec![("elliptic", [0.6, 0.2, -0.2, 0.6, 0.0, 0.0], 0.8, 0.3), ("linear", [0.5, 0.0, 0.0, 0.5, 0.4, 0.3], 1.0, 0.8)])),
+            ("cylinder", kernel_flame(vec![("cylinder", [0.5, 0.2, -0.2, 0.5, 0.0, 0.0], 0.9, 0.3), ("linear", [0.5, 0.0, 0.0, 0.5, 0.3, 0.4], 1.0, 0.8)])),
+            ("juliascope", scope),
+            ("sinusoidal", with("sinusoidal", [0.5, 0.2, -0.2, 0.5, 0.0, 0.0], 0.7)),
+            ("hyperbolic", with("hyperbolic", [0.5, 0.2, -0.2, 0.5, 1.0, 0.0], 0.6)),
+        ];
+        let (mut failures, mut judged) = (Vec::new(), 0usize);
+        for (name, builtin) in cases {
+            if only.as_ref().is_some_and(|o| !o.iter().any(|x| x == name)) {
+                continue;
+            }
+            let twin = twin_flame(&builtin, name);
+            crate::variations::custom::ensure(&twin);
+            let guard = global_registry();
+            let ifs = analyse_2d(&twin, &guard).unwrap_or_else(|e| panic!("{name}: the twin does not qualify: {:?}", e.len()));
+            drop(guard);
+            assert!(ifs.has_delta_forms(), "{name}: the twin's maps have no difference forms");
+            // A point of the attractor, by a chaos game.
+            let mut target = ifs.ball.centre;
+            let mut st = 0x2545_F491_4F6C_DD1Du64;
+            for _ in 0..200 {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                target = ifs.maps[((st >> 33) as usize) % ifs.maps.len()].forward.apply(target);
+            }
+            let zoom: f64 = std::env::var("DEPTH_ZOOM").ok().and_then(|z| z.parse().ok()).unwrap_or(30.0);
+            let span = 4.0 / zoom.exp2();
+            let px = span / H as f64;
+            {
+                let seeds = crate::scene::ifs_estimate::seed_beam(&ifs, target, view_basis(span * W as f64 / H as f64, span, 0.0), px, DEEP_LEVELS, BEAM);
+                println!("    {name}: the handover walks {} levels", seeds.level);
+            }
+            let frame = |delta: f32| {
+                let mut c = config_for(twin.clone());
+                c.escape.center_re = format!("{:?}", target[0]);
+                c.escape.center_im = format!("{:?}", plane_im(target[1]));
+                c.escape.zoom_log2 = zoom;
+                c.escape.formula_params.insert("levels".to_string(), DEEP_LEVELS as f32);
+                c.escape.formula_params.insert("beam".to_string(), BEAM as f32);
+                c.escape.formula_params.insert("delta".to_string(), delta);
+                c
+            };
+            // The CPU's reading of each pixel: in the set, out of it, or
+            // within three pixels of its edge (not judged).
+            let mut reading = Vec::with_capacity((W * H) as usize);
+            for y in 0..H {
+                for x in 0..W {
+                    let u = (x as f64 + 0.5) / W as f64 - 0.5;
+                    let v = (y as f64 + 0.5) / H as f64 - 0.5;
+                    let q = [target[0] + u * span * W as f64 / H as f64, target[1] + v * span];
+                    let d = estimate(&ifs, q, DEEP_LEVELS, BEAM).distance;
+                    reading.push(if d < 0.25 * px { Some(true) } else if d > 3.0 * px { Some(false) } else { None });
+                }
+            }
+            let score = |rgba: &[u8]| -> (f64, usize, usize) {
+                let (mut inside, mut outside) = (Vec::new(), Vec::new());
+                for (i, r) in reading.iter().enumerate() {
+                    let b = brightness(rgba, i as u32 % W, i as u32 / W);
+                    match r {
+                        Some(true) => inside.push(b),
+                        Some(false) => outside.push(b),
+                        None => {}
+                    }
+                }
+                let mean = |v: &Vec<f64>| v.iter().sum::<f64>() / v.len().max(1) as f64;
+                let cut = 0.5 * (mean(&inside) + mean(&outside));
+                let lit_in = inside.iter().filter(|&&b| b > cut).count();
+                let dark_out = outside.iter().filter(|&&b| b <= cut).count();
+                ((lit_in + dark_out) as f64 / (inside.len() + outside.len()).max(1) as f64, inside.len(), outside.len())
+            };
+            let (deltas, absolute) = (render(&frame(1.0)), render(&frame(0.0)));
+            if let Ok(dir) = std::env::var("DEPTH_TWINS_PNG") {
+                // Red: the CPU's set; green: the GPU's lit pixels.
+                let _ = std::fs::create_dir_all(&dir);
+                let bmax = (0..W * H).map(|i| brightness(&deltas, i % W, i / W)).fold(0.0f64, f64::max).max(1e-9);
+                let mut img = vec![0u8; (W * H * 4) as usize];
+                for i in 0..(W * H) as usize {
+                    img[i * 4] = if reading[i] == Some(true) { 255 } else if reading[i].is_none() { 90 } else { 0 };
+                    img[i * 4 + 1] = (255.0 * brightness(&deltas, i as u32 % W, i as u32 / W) / bmax) as u8;
+                    img[i * 4 + 3] = 255;
+                }
+                let _ = image::save_buffer(format!("{dir}/{name}-depth.png"), &img, W, H, image::ColorType::Rgba8);
+            }
+            let (agree, ni, no) = score(&deltas);
+            let (control, _, _) = score(&absolute);
+            println!("  {name} at 2^{zoom}: the delta walk agrees {agree:.4} with the CPU walk (interior {ni} / exterior {no}); the absolute walk {control:.4}");
+            if ni < 50 || no < 50 {
+                println!("    (no structure in the view)");
+                continue;
+            }
+            judged += 1;
+            if agree < 0.995 {
+                failures.push(format!("{name}: the delta walk agrees {agree:.4}"));
+            }
+            if control < 0.995 {
+                failures.push(format!("{name}: the absolute walk agrees {control:.4}"));
+            }
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        assert!(only.is_some() || judged >= 5, "only {judged} views had structure to judge");
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 

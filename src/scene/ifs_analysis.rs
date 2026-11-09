@@ -1662,7 +1662,11 @@ impl NonlinearMap2 {
                 let (post_lo, _) = self.post.singular_values();
                 return Some((self.hole - r) * self.w.abs() * post_lo);
             }
-            return None;
+            // Past the hole a user kernel may know its image's edge too
+            // (`ifs_user_gap` alike).
+            if !matches!(self.kernel, Kernel::User { .. }) {
+                return None;
+            }
         }
         // A user kernel's own image gap (`fn image_gap`), in the
         // kernel's frame, scaled as the unit disc's.
