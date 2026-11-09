@@ -50,3 +50,19 @@ fn variation3(v, p) {
     let z_out = r * v.z / (r2d_sqrt * to_float(abs_power));
     vec3(r * cos(angle), r * sin(angle), z_out)
 }
+
+fn inverse3(v, p) {
+    let power = to_int(to_float(p.power));
+    if power == 1 {
+        return v;
+    }
+    let ro = v.x * v.x + v.y * v.y;
+    if power == -1 {
+        return vec3(v.x / ro, -v.y / ro, v.z / ro);
+    }
+    let pf = to_float(power);
+    let r = sqrt(ro);
+    let th = if power == -2 { -pf * atan2(v.y, v.x) } else { pf * atan2(v.y, v.x) };
+    let rxy = pow(r, pf);
+    vec3(rxy * cos(th), rxy * sin(th), v.z * abs(pf) * rxy / r)
+}

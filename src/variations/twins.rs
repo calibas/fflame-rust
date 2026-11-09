@@ -1181,6 +1181,14 @@ mod tests {
     /// compiled and checked at its defaults (`user_inverse::check`).
     #[test]
     fn the_twins_inverses_undo_their_maps() {
+        // The solid's (B3).
+        for name in ["julia3D", "julia3Dz"] {
+            match crate::variations::user_inverse::compile3(&own(name), name) {
+                Some(Ok(_)) => {}
+                Some(Err(e)) => panic!("{name}'s 3D inverse: {e}"),
+                None => panic!("{name} has no 3D inverse"),
+            }
+        }
         let with: Vec<&str> = TWINS.iter().filter(|(_, s)| s.contains("fn inverse(")).map(|(n, _)| *n).collect();
         assert!(with.len() >= 20, "{with:?}");
         // A forward map that draws has none for a sum's Newton solve (B2).

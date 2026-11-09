@@ -726,6 +726,34 @@ fn user_gen<T: Real>(p: &[T; 2], f: impl Fn([f64; 2]) -> [f64; 2]) -> [T; 2] {
     T::outside2(p, f(x), &|| user_jacobian(x, &f))
 }
 
+/// [`user_jacobian`] in three dimensions (a `Kernel3::User3`'s).
+pub fn user_jacobian3(x: [f64; 3], f: &dyn Fn([f64; 3]) -> [f64; 3]) -> [[f64; 3]; 3] {
+    let h = 6.0e-6 * (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt().max(1e-3);
+    let mut j = [[0.0; 3]; 3];
+    for c in 0..3 {
+        let (mut a, mut b) = (x, x);
+        a[c] += h;
+        b[c] -= h;
+        let (fa, fb) = (f(a), f(b));
+        for r in 0..3 {
+            j[r][c] = (fa[r] - fb[r]) / (2.0 * h);
+        }
+    }
+    j
+}
+
+/// The largest singular value of a 3×3: the root of `JᵀJ`'s largest
+/// eigenvalue.
+pub fn singular_max3(j: [[f64; 3]; 3]) -> f64 {
+    let mut g = [[0.0; 3]; 3];
+    for (a, row) in g.iter_mut().enumerate() {
+        for (b, cell) in row.iter_mut().enumerate() {
+            *cell = (0..3).map(|k| j[k][a] * j[k][b]).sum();
+        }
+    }
+    symmetric3_eigenvalues(&g).iter().fold(0.0f64, |m, &e| m.max(e)).max(0.0).sqrt()
+}
+
 /// The Jacobian of `f` at `x` by central differences, row-major
 /// (`J[i][j] = ∂f_i/∂x_j`). The step is f64's cube-root epsilon times
 /// the point's size, at least 1e-3 of a unit near the origin: rounding
@@ -2076,6 +2104,11 @@ pub enum Kernel3 {
     /// the picture and `k` is hidden, which is the slice Bourke's
     /// lobed solids live in (step 4).
     Quaternion { n: i32, d: f64, c: [f64; 4], depth: bool },
+    /// A Rhai variation's own 3D inverse (`fn inverse3(v, p)`;
+    /// docs/projects/rhai-planners.md, B3): a slot in
+    /// `variations::user_inverse`'s table, as the plane's `Kernel::User`.
+    /// One branch; the carried scalar passes through.
+    User3 { slot: u32 },
 }
 
 /// The Hamilton product of `(x, y, z, w)` quaternions, scalar `w`.
@@ -2196,11 +2229,18 @@ pub fn kernel3_inverse_gen<T: Transcendental>(
     v: &[T; 3],
     aux: &T,
 ) -> ([T; 3], T) {
+    // A user kernel's value, at f64: the one caller that differentiates
+    // (`Map3::jacobian`) differences it itself.
+    if let Kernel3::User3 { slot } = *k {
+        let u = crate::variations::user_inverse::kernel3(slot).inverse([v[0].to_f64(), v[1].to_f64(), v[2].to_f64()]);
+        return ([v[0].lit(u[0]), v[0].lit(u[1]), v[0].lit(u[2])], aux.clone());
+    }
     let n = k.power() as f64;
     let nf = v[0].lit(n);
     let rxy = v[0].hypot(&v[1]);
     let theta = T::atan2(&v[1], &v[0]).mul(&nf);
     match *k {
+        Kernel3::User3 { .. } => unreachable!("taken above"),
         Kernel3::Quaternion { d, c, depth, .. } => {
             let q = if depth {
                 [v[0].clone(), v[1].clone(), aux.clone(), v[2].clone()]
@@ -2276,12 +2316,17 @@ impl Kernel3 {
     pub fn power(&self) -> i32 {
         match *self {
             Kernel3::Root3 { n } | Kernel3::RootZ3 { n } | Kernel3::Quaternion { n, .. } => n,
+            // No power of its own.
+            Kernel3::User3 { .. } => 0,
         }
     }
 
     /// The forward kernel on `z` in the pre-frame with the scalar
     /// `aux`, along branch `k`; the 3D roots pass `aux` through.
     pub fn forward(&self, z: [f64; 3], aux: f64, k: u32) -> ([f64; 3], f64) {
+        if let Kernel3::User3 { slot } = *self {
+            return (crate::variations::user_inverse::kernel3(slot).forward(z, k), aux);
+        }
         let n = self.power() as f64;
         let r2d = z[0] * z[0] + z[1] * z[1];
         let a = (z[1].atan2(z[0]) + std::f64::consts::TAU * k as f64) / n;
@@ -2313,6 +2358,7 @@ impl Kernel3 {
                 let z_out = r * z[2] / (r2d.sqrt() * n.abs());
                 ([r * a.cos(), r * a.sin(), z_out], aux)
             }
+            Kernel3::User3 { .. } => unreachable!("taken above"),
         }
     }
 
@@ -2378,6 +2424,18 @@ impl Kernel3 {
     pub fn local_sigma_factor(&self, v: [f64; 3], aux: f64) -> f64 {
         let n = self.power() as f64;
         match *self {
+            // The forward's σ_min at the preimage: the inverse Jacobian's
+            // largest singular value reciprocated, by central differences.
+            Kernel3::User3 { slot } => {
+                let k = crate::variations::user_inverse::kernel3(slot);
+                let j = user_jacobian3(v, &|x| k.inverse(x));
+                let hi = singular_max3(j);
+                if hi > 0.0 && hi.is_finite() {
+                    1.0 / hi
+                } else {
+                    0.0
+                }
+            }
             // The plane's root formula on the 4D magnitude (step 3):
             // |v|^(1 - n/d), the transverse directions being no
             // smaller a stretch than the root's own plane.
@@ -2413,7 +2471,7 @@ impl Kernel3 {
                 let n = (n as f64).abs();
                 (1.0 / (n * n), 1.0)
             }
-            Kernel3::RootZ3 { .. } => (1.0, 1.0),
+            Kernel3::RootZ3 { .. } | Kernel3::User3 { .. } => (1.0, 1.0),
             // A permutation of the output changes no singular value,
             // so `depth` does not appear here.
             Kernel3::Quaternion { n, d, .. } => {
@@ -2426,7 +2484,26 @@ impl Kernel3 {
     pub fn unbounded_at_origin(&self) -> bool {
         match *self {
             Kernel3::Quaternion { d, .. } => d < 0.0,
+            Kernel3::User3 { slot } => crate::variations::user_inverse::kernel3(slot).unbounded_at_origin(),
             _ => self.power() < 0,
+        }
+    }
+
+    /// How many arms the forward map has: a root's power; a user
+    /// kernel's [`FORWARD_ARMS`](crate::variations::user_inverse::FORWARD_ARMS)
+    /// fixed draws when it draws, else one. Its power is none, and taken
+    /// for its arms the ball's search sampled no arm and found a ball of a
+    /// third the size.
+    pub fn arms(&self) -> u32 {
+        match *self {
+            Kernel3::User3 { slot } => {
+                if crate::variations::user_inverse::kernel3(slot).inverse.forward_draws {
+                    crate::variations::user_inverse::FORWARD_ARMS
+                } else {
+                    1
+                }
+            }
+            _ => self.power().unsigned_abs(),
         }
     }
 
@@ -2440,6 +2517,7 @@ impl Kernel3 {
             Kernel3::Root3 { .. } => "julia3D",
             Kernel3::RootZ3 { .. } => "julia3Dz",
             Kernel3::Quaternion { .. } => "quaternion_julia",
+            Kernel3::User3 { slot } => crate::variations::user_inverse::static_name(&crate::variations::user_inverse::kernel3(*slot).inverse.key),
         }
     }
 }
@@ -2599,6 +2677,10 @@ impl Map3 {
         match self {
             Map3::Affine(a) => Some(a.m),
             Map3::Nonlinear(_) => None,
+            Map3::NonlinearInverse(r) if matches!(r.kernel, Kernel3::User3 { .. }) => {
+                let j = user_jacobian3(q, &|x| r.apply_inverse_aux(x, aux).0);
+                j.iter().flatten().all(|x| x.is_finite()).then_some(j)
+            }
             Map3::NonlinearInverse(r) => {
                 if !r.aux_is_carried() {
                     return None;
@@ -2854,7 +2936,12 @@ fn variation_stage(
             // A Rhai variation's own inverse (docs/projects/rhai-planners.md,
             // B1), in the plane; the solid's is B3.
             let root = root.or_else(|| {
-                (space == Space::Planar && crate::variations::user_inverse::of(name).is_some()).then(|| std::borrow::Cow::Owned(name.clone()))
+                let user = match space {
+                    Space::Planar => crate::variations::user_inverse::of(name).is_some(),
+                    // Its 3D inverse, `fn inverse3` (B3).
+                    _ => crate::variations::user_inverse::of3(name).is_some(),
+                };
+                user.then(|| std::borrow::Cow::Owned(name.clone()))
             });
             let Some(root) = root else {
                 return Err(NotAffine::Variation(name.clone()));
@@ -2963,6 +3050,16 @@ fn kernel3_from_registry(
     kind: &str,
 ) -> Result<Kernel3, NotAffine> {
     let p = |name: &str| t.get_variation_param_or_default(kind, name, registry) as f64;
+    if registry.inverse(kind).is_none() {
+        if let Some(inverse) = crate::variations::user_inverse::of3(kind) {
+            let refused = |why: String| NotAffine::Inverse(kind.to_string(), why);
+            let inverse = inverse.map_err(refused)?;
+            let info = registry.get(kind).ok_or_else(|| NotAffine::Variation(kind.to_string()))?;
+            let slots: Vec<f32> = info.parameters.iter().map(|q| t.get_variation_param_or_default(kind, &q.name, registry)).collect();
+            let slot = crate::variations::user_inverse::kernel_slot3(&inverse, &slots).map_err(refused)?;
+            return Ok(Kernel3::User3 { slot });
+        }
+    }
     let def = registry.inverse(kind).ok_or_else(|| NotAffine::Variation(kind.to_string()))?;
     let crate::variations::inverse::InverseKernel::Solid(build) = def.kernel else {
         return Err(NotAffine::Variation(kind.to_string()));
@@ -4851,7 +4948,7 @@ fn ball_3d_numeric(maps: &[IfsMap<Map3>]) -> Option<(Ball<[f64; 3]>, f64)> {
         (state >> 11) as f64 / (1u64 << 53) as f64
     };
     let four_d = maps.iter().any(|m| m.forward.nonlinear().is_some_and(|n| n.kernel.uses_aux()));
-    let branches_of = |m: &Map3| m.nonlinear().map_or(1, |n| n.kernel.power().unsigned_abs());
+    let branches_of = |m: &Map3| m.nonlinear().map_or(1, |n| n.kernel.arms());
     let step = |m: &Map3, p: [f64; 3], aux: f64, k: u32| -> ([f64; 3], f64) {
         match m {
             Map3::Nonlinear(r) => r.apply_branch_aux(p, aux, k),

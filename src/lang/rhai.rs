@@ -510,9 +510,20 @@ pub fn image_gap_transformation(source: &str) -> Result<Program, Vec<Diag>> {
     planner_function(source, "image_gap")
 }
 
+/// The program a transformation's 3D inverse compiles to: `fn
+/// inverse3(v, p)`, the preimage of `v` under `variation3` -- one branch,
+/// as the solid walk's kernels have (B3) -- lowered as `variation3` is.
+pub fn inverse_transformation3(source: &str) -> Result<Program, Vec<Diag>> {
+    planner_function_in(source, "inverse3", true)
+}
+
 fn planner_function(source: &str, entry: &'static str) -> Result<Program, Vec<Diag>> {
+    planner_function_in(source, entry, false)
+}
+
+fn planner_function_in(source: &str, entry: &'static str, three: bool) -> Result<Program, Vec<Diag>> {
     let previous = INVERSE.with(|c| c.replace(Some(entry)));
-    let lowered = lower_full(source, EntryKind::Transform, &[], false, SimFn::Step(0));
+    let lowered = lower_full(source, EntryKind::Transform, &[], three, SimFn::Step(0));
     INVERSE.with(|c| c.set(previous));
     checked(lowered?, EntryKind::Transform)
 }
@@ -2515,9 +2526,18 @@ impl<'s> Lowerer<'s> {
     }
 
     fn transform_section3(&mut self, span: Span, fields: Vec<String>) -> R<Section> {
-        let Some(f) = self.fns.get("variation3").cloned() else {
+        // A 3D inverse, `inverse3(v, p)`, lowers as `variation3` does
+        // ([`inverse_transformation3`]): one branch, no context.
+        let entry = self.inverse.unwrap_or("variation3");
+        let Some(f) = self.fns.get(entry).cloned() else {
+            if entry == "inverse3" {
+                return self.err(Position::NONE, "a 3D inverse is `fn inverse3(v, p)`");
+            }
             return self.err(Position::NONE, "a 3D transformation has `fn variation3(v, p)`");
         };
+        if entry == "inverse3" && (f.params.is_empty() || f.params.len() > 2) {
+            return self.err(f.body.position(), "`inverse3(v)` or `inverse3(v, p)`");
+        }
         if f.params.is_empty() || f.params.len() > 3 {
             return self.err(f.body.position(), "`variation3(v)`, `variation3(v, p)` or `variation3(v, p, ctx)`");
         }

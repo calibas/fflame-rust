@@ -959,6 +959,7 @@ fn ifs_qpow(q: vec4<f32>, n: f32) -> vec4<f32> {
 fn ifs_kernel_inverse3(i: u32, v: vec3<f32>, w: f32) -> vec4<f32> {
     let kind = ifs_maps[i].extra.z;
     let n = ifs_maps[i].extra.w;
+//__IFS_USER_INVERSE3__
     if (kind == 3.0) {
         // Reassemble: projection 1 (Depth) carried the k component and
         // put the scalar in the 3D point, so it goes back in the k
@@ -996,6 +997,7 @@ fn ifs_kernel_inverse3(i: u32, v: vec3<f32>, w: f32) -> vec4<f32> {
 fn ifs_kernel_sigma3(i: u32, v: vec3<f32>, w: f32) -> f32 {
     let kind = ifs_maps[i].extra.z;
     let n = ifs_maps[i].extra.w;
+//__IFS_USER_SIGMA3__
     if (kind == 3.0) {
         let d = ifs_maps[i].extra2.y;
         return pow(max(length(vec4<f32>(v, w)), 1e-30), 1.0 - n / d);
@@ -2890,6 +2892,7 @@ pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfi
         },
         xaos: vec![0.0; 4],
         user: UserKernels::default(),
+        user3: UserKernels::default(),
         solid: Some((ifs3, Vec::new())),
     }
 }
@@ -3330,6 +3333,7 @@ pub struct IfsMap3Gpu {
 
 /// The 3D rows, in the flame's transform order.
 pub fn pack_maps3(ifs: &Ifs3, colors: &[f32]) -> Vec<IfsMap3Gpu> {
+    let user = user_kernels3(ifs);
     let rows_of = |a: &Affine3| -> [[f32; 4]; 3] {
         let row = |i: usize| [a.m[i][0] as f32, a.m[i][1] as f32, a.m[i][2] as f32, a.t[i] as f32];
         [row(0), row(1), row(2)]
@@ -3377,6 +3381,14 @@ pub fn pack_maps3(ifs: &Ifs3, colors: &[f32]) -> Vec<IfsMap3Gpu> {
                             let proj = if depth { 1.0f32 } else { 0.0 };
                             (3.0, pre, [c[3] as f32, d as f32, scale as f32, proj])
                         }
+                        // A Rhai variation's own 3D inverse (B3): x its
+                        // function, y where its values start in the user
+                        // block (`pack_flame` moves it past the graph), z
+                        // one as the roots' (it passes w through).
+                        Kernel3::User3 { slot } => {
+                            let (f, at) = user.at(slot);
+                            (4.0, r.pre_inv, [f as f32, at as f32, 1.0, 0.0])
+                        }
                     };
                     IfsMap3Gpu {
                         rows: rows_of(&post),
@@ -3422,6 +3434,8 @@ pub struct PackedIfs {
     /// The flame's user kernels: their inverses' WGSL, which the shader
     /// splices, and their values, which ride at the end of `xaos`.
     pub user: UserKernels,
+    /// The solid's (`fn inverse3`, B3), their values after the plane's.
+    pub user3: UserKernels,
     /// The SOLID analysis and its rows, when the flame also qualifies
     /// in three dimensions.
     ///
@@ -3530,7 +3544,43 @@ pub fn pack_flame(
         }
         xaos.extend_from_slice(&user.params);
     }
-    Ok(PackedIfs { globals, rows, ifs, colors, measure, xaos, user, solid })
+    // The solid's after them, the same way (B3).
+    let mut solid = solid;
+    let user3 = solid.as_ref().map(|(ifs3, _)| user_kernels3(ifs3)).unwrap_or_default();
+    if let (false, Some((_, rows3))) = (user3.params.is_empty(), solid.as_mut()) {
+        let base = xaos.len().max(4) as f32;
+        xaos.resize(xaos.len().max(4), 0.0);
+        for r in rows3.iter_mut().filter(|r| r.extra[2] == 4.0) {
+            r.extra2[1] += base;
+        }
+        xaos.extend_from_slice(&user3.params);
+    }
+    Ok(PackedIfs { globals, rows, ifs, colors, measure, xaos, user, user3, solid })
+}
+
+/// [`user_kernels`] for the solid: each distinct 3D inverse a function
+/// (`ifs_user_inv3{f}`), each kernel's values in one block.
+pub fn user_kernels3(ifs: &Ifs3) -> UserKernels {
+    use crate::scene::ifs_analysis::Kernel3;
+    let mut u = UserKernels::default();
+    for m in &ifs.maps {
+        let Some(Kernel3::User3 { slot }) = m.inverse.nonlinear().map(|n| n.kernel) else { continue };
+        if u.slots.iter().any(|s| s.0 == slot) {
+            continue;
+        }
+        let kernel = crate::variations::user_inverse::kernel3(slot);
+        let key = &kernel.inverse.key;
+        let f = match u.functions.iter().position(|(k, _, _, _)| k == key) {
+            Some(f) => f,
+            None => {
+                u.functions.push((key.clone(), kernel.inverse.wgsl.clone(), false, false));
+                u.functions.len() - 1
+            }
+        };
+        u.slots.push((slot, f as u32, u.params.len() as u32));
+        u.params.extend_from_slice(&kernel.packed);
+    }
+    u
 }
 
 /// The flame's user kernels as mode D's shader takes them
@@ -7478,6 +7528,7 @@ mod tests {
             ifs: ifs.clone(),
             colors,
             user: UserKernels::default(),
+            user3: UserKernels::default(),
             solid: None,
         };
         pack_globals(&ifs, &mut packed.globals);
@@ -9750,7 +9801,7 @@ mod gpu_tests {
     /// The flame with the built-in `name` replaced by its Rhai twin,
     /// which it carries: the twin's key in every transform's weights,
     /// order and parameters.
-    fn twin_flame(flame: &Flame, name: &str) -> Flame {
+    pub(super) fn twin_flame(flame: &Flame, name: &str) -> Flame {
         let key = crate::variations::twins::key(name).expect("a twin");
         let mut f = flame.clone();
         for t in &mut f.transforms {
@@ -10089,7 +10140,7 @@ mod gpu_tests {
                 let _ = image::save_buffer(format!("{dir}/{name}-misread.png"), &img, W, H, image::ColorType::Rgba8);
                 let packed = pack_flame(&c.flame, &global_registry(), None).expect("packs");
                 let def = get_ifs("ifs_flame").expect("mode D");
-                let src = crate::escape::assembler::assemble_ifs_user(def, get_ifs_coloring("ifs_distance", def), 4, None, false, false, false, &packed.user);
+                let src = crate::escape::assembler::assemble_ifs_user(def, get_ifs_coloring("ifs_distance", def), 4, None, false, false, false, &packed.user, &packed.user3);
                 let _ = std::fs::write(format!("{dir}/{name}-ifs.wgsl"), src);
             }
             println!("  {name}: {} maps, ball {:.4}; agrees with the reference {:.1}% (interior {} / exterior {})", ifs.maps.len(), ifs.ball.radius, agree * 100.0, inside.len(), outside.len());
@@ -15529,6 +15580,119 @@ fn distance(s, p) {
             t.set_variation_param("julia3Dz", "power", 2.0);
         }
         fl
+    }
+
+    /// The share of `rgba`'s pixels whose hit agrees with a CPU sphere
+    /// trace of `ifs3` along the same rays (`estimate_aux`), as
+    /// `the_gpu_solid_agrees_with_a_cpu_march_on_a_julia3d_pair` measures.
+    fn solid_march_agreement(config: &crate::config::FractalConfig, ifs3: &crate::scene::ifs_analysis::Ifs3, rgba: &[u8], n: u32, levels: u32) -> f64 {
+        let cam = solid_camera(&config.escape, ifs3);
+        let tan_half = (cam.fov as f64 * 0.5).tan();
+        let mut agree = 0usize;
+        for y in 0..n {
+            for x in 0..n {
+                let i = ((y * n + x) * 4) as usize;
+                let gpu_hit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
+                let u = (x as f64 + 0.5) / n as f64 - 0.5;
+                let v = (y as f64 + 0.5) / n as f64 - 0.5;
+                let mut dir: [f64; 3] = std::array::from_fn(|k| cam.forward[k] + cam.right[k] * (u * 2.0 * tan_half) - cam.up[k] * (v * 2.0 * tan_half));
+                let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                for d in dir.iter_mut() {
+                    *d /= len;
+                }
+                let oc: [f64; 3] = std::array::from_fn(|k| cam.eye[k] - ifs3.ball.centre[k]);
+                let b = oc[0] * dir[0] + oc[1] * dir[1] + oc[2] * dir[2];
+                let c_term = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2] - ifs3.ball.radius * ifs3.ball.radius;
+                let disc = b * b - c_term;
+                let mut cpu_hit = false;
+                if disc >= 0.0 {
+                    let root = disc.sqrt();
+                    let mut t = (-b - root).max(0.0);
+                    let t_max = -b + root;
+                    let px_at = 2.0 * tan_half / n as f64;
+                    for _ in 0..96 {
+                        if t > t_max {
+                            break;
+                        }
+                        let p: [f64; 3] = std::array::from_fn(|k| cam.eye[k] + dir[k] * t);
+                        let d = crate::scene::ifs_estimate::estimate_aux(ifs3, p, 0.0, levels, 1).distance;
+                        if d < px_at * t {
+                            cpu_hit = true;
+                            break;
+                        }
+                        t += d;
+                    }
+                }
+                agree += (gpu_hit == cpu_hit) as usize;
+            }
+        }
+        agree as f64 / (n * n) as f64
+    }
+
+    /// **A twin's own 3D inverse renders the solid**
+    /// (docs/projects/rhai-planners.md, B3): julia3D's and julia3Dz's twins,
+    /// borrowing nothing on this thread, analyse to `Kernel3::User3` and the
+    /// solid shader draws them through their spliced `fn inverse3`, agreeing
+    /// with a CPU march of their own analysis as the built-ins agree with
+    /// theirs. Against the built-ins' pictures: julia3Dz's is the same to
+    /// the pixel; julia3D's twin is a little thinner, its σ the exact local
+    /// one where the built-in's kernel takes `1/n²` of it everywhere, a
+    /// bound (`Kernel3::sigma_const`).
+    #[test]
+    #[ignore = "needs a GPU; registers the twins"]
+    fn a_twins_own_3d_inverse_renders_the_solid() {
+        use crate::scene::ifs_analysis::{analyse_3d, Kernel3};
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        let mut failures = Vec::new();
+        let builtin_flame = |name: &str| if name == "julia3D" { julia3d_pair_flame() } else { julia3dz_pair_flame() };
+        for name in ["julia3D", "julia3Dz"] {
+            let builtin = builtin_flame(name);
+            let twin = twin_flame(&builtin, name);
+            crate::variations::custom::ensure(&twin);
+            let guard = global_registry();
+            let ifs_t = match analyse_3d(&twin, &guard) {
+                Ok(ifs) => ifs,
+                Err(e) => {
+                    failures.push(format!("{name}: the twin does not qualify: {}", e.iter().map(|d| d.describe(&guard)).collect::<Vec<_>>().join("; ")));
+                    continue;
+                }
+            };
+            let ifs_b = analyse_3d(&builtin, &guard).expect("the built-in qualifies");
+            drop(guard);
+            assert!(ifs_t.maps.iter().any(|m| matches!(m.inverse.nonlinear().map(|n| n.kernel), Some(Kernel3::User3 { .. }))), "{name}: not its own inverse");
+            let (device, queue) = device();
+            const N: u32 = 96;
+            let draw = |flame: Flame| {
+                let cfg = solid_config_for(flame, "ifs_distance");
+                let job = crate::renderer::RenderJob::new(&cfg, N, N);
+                pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data
+            };
+            let (got, want) = (draw(twin), draw(builtin));
+            if let Ok(dir) = std::env::var("INVERSE_TWINS_PNG") {
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = image::save_buffer(format!("{dir}/{name}-solid-twin.png"), &got, N, N, image::ColorType::Rgba8);
+                let _ = image::save_buffer(format!("{dir}/{name}-solid-builtin.png"), &want, N, N, image::ColorType::Rgba8);
+            }
+            let hit = |px: &[u8]| px[0] as u32 + px[1] as u32 + px[2] as u32 > 24;
+            let (mut differ, mut hits) = (0usize, 0usize);
+            for (g, w) in got.chunks(4).zip(want.chunks(4)) {
+                differ += (hit(g) != hit(w)) as usize;
+                hits += hit(g) as usize;
+            }
+            let agree = solid_march_agreement(&solid_config_for(twin_flame(&builtin_flame(name), name), "ifs_distance"), &ifs_t, &got, N, 24);
+            println!(
+                "  {name}: balls {:.4} / {:.4}; {hits} hits, agrees with its CPU march {:.1}%; {differ} of {} pixels' hits differ from the built-in's",
+                ifs_t.ball.radius,
+                ifs_b.ball.radius,
+                agree * 100.0,
+                N * N
+            );
+            if hits < 200 || agree < 0.97 {
+                failures.push(format!("{name}: {hits} hits, agrees {agree:.3} with its march"));
+            }
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     fn solid_config_for(flame: Flame, coloring: &str) -> crate::config::FractalConfig {
