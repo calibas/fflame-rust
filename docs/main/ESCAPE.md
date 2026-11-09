@@ -1950,7 +1950,10 @@ drops, so its shader is the text it was; the variations' keys are in the
 pipeline's. Its Jacobian and local σ are central differences of its
 inverse (the solid's σ_max of the 3×3 in closed form); where it has no
 preimage its point leaves at 3.4e38, which every test of the walk reads
-as a number lost, as the CPU's infinity. Against the reference walk the
+as a number lost, as the CPU's infinity. Where its forward map is
+unbounded at the origin, as an inversion's, `params.w` is the hole its
+image of the ball leaves (`UserKernel::hole_radius`, sampled), scored as
+the built-in inversions' holes are. Against the reference walk the
 twins and the built-ins borrowing their inverses agree 99.5-100%.
 
 **Solids written in Rhai** (the KIFS plan, B3; the formula language's

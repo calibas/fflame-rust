@@ -4,9 +4,12 @@ Status: **Parts A (steps 1-2) and B (B1-B3) built** (2026-11-08, branch
 `rhai-planners`): every twin whose built-in derives a bound derives one
 from its own code; a Rhai variation declares its inverse and the Flame
 Attractor draws it, alone, summed with an affine, and as a solid; and a
-built-in with no inverse in Rust takes its twin's. A3 and the items under
-*Open* are left. The user (2026-11-08): both features compatible with
-Rhai scripts; decisions 1-3 below taken as proposed, all of Part B.
+built-in with no inverse in Rust takes its twin's. Part C (Focused
+Rendering's inverse walk for a Rhai variation, which takes A3 in) and the
+items under *Open* are left. The user (2026-11-08): both features
+compatible with Rhai scripts; decisions 1-3 below taken as proposed, all
+of Part B; of the inverse walk refusing a Rhai inverse, "This is an
+important feature, and part of the reason we're doing all this.
 
 ## Why a Rhai variation does not work in them
 
@@ -103,8 +106,8 @@ own script, has neither.
    pin their random arm by rewriting the built-in's WGSL text
    (`bound::force_arms`), which a Rhai body is not, so an edited twin of
    either has no bound, and neither does a user's many-valued script.
-   Needs a way to say "this `rand()` picks one of `n` arms"
-   (an `INFO.arms` naming it, say). Proposed last, if wanted.
+   Needs a way to say "this `rand()` picks one of `n` arms". Now C1:
+   the arms read off the forward map, nothing declared.
 
 ## Part B: the Flame Attractor
 
@@ -213,7 +216,7 @@ fn inverse(z, p, branch) { ... }   // the preimage on branch 0 .. n-1
   where its CPU reference did not. Not understood; splits' twin gives
   each branch's point instead, as the built-in kernel does.
 - **Focused Rendering's inverse walk** (`Backward`) refuses a user
-  kernel: its replay shader has no body for one.
+  kernel: Part C.
 - **Deep zoom** through a user kernel: no BigFloat inverse and no
   difference form, so the handover stops at the first one and f32 takes
   over from there.
@@ -240,10 +243,89 @@ fn inverse(z, p, branch) { ... }   // the preimage on branch 0 .. n-1
   Rhai variation with an inverse could take that route too. Not needed
   for B1.
 
+### Fixed after B3 (2026-11-08, from use)
+
+- **A Rhai inverse beside a camera lens drew nothing**: the lens brings
+  the flame's `get_param` into mode D's shader, and the user kernels
+  defined another, so the shader did not compile (the reported grand
+  julian with a Rhai julian). They read through their own
+  (`ifs_user_param`); and the solid's path tracer, which had no user
+  kernels at all, splices them as the walk does
+  (`assemble_ifs_path_user`). Gate: `a_user_kernel_compiles_beside_a_lens`.
+- **A Rhai julian of negative distance drew another picture than the
+  built-in**: an inversion's image of the ball leaves a hole about the
+  origin, which the walk scores as a gap rather than inverting into
+  (`Kernel::hole_radius`), and a user kernel had none. Its hole is now
+  the least modulus of its forward map over the ball's reach, sampled
+  (`UserKernel::hole_radius`), where the map is unbounded at the origin
+  -- and that probe, which asked for past 100 at 1e-3 and so missed
+  every julian of negative distance (32 at power 2, 1.6 at power 15),
+  also takes a modulus rising toward the origin as a pole's does, by the
+  same factor ring after ring -- not log's, which rises by a logarithm,
+  and read as an inversion took the bulk ball and lost a quarter of its
+  set in the borrowing gate. The two
+  CPU walks then agree on every pixel, and the GPU pictures on all but
+  68 of 147,456. Gate: `a_user_inversion_has_its_builtins_hole`.
+
+## Part C: Focused Rendering's inverse walk
+
+The walk that plans `grand-julian` (`scene::backward`) refused any flame
+with a user kernel, saying its replay shader had no body for one. That
+was wrong: a word is replayed through the flame's own compiled variations
+(`ct_apply_symbol` calls `apply_variations`), Rhai bodies among them.
+What is missing is three other things.
+
+1. **Arms** (A3). The walk exists for many-valued flames: its alphabet
+   is (transform, arm), and the GPU forces a word's arm by rewriting the
+   variation's draw (`bound::ARMED`, julian's and juliascope's WGSL
+   spelled out). A Rhai body's `rand()` lowers to `rng_nextf(rng)`,
+   which nothing rewrites, and the CPU knows the map only at sixteen
+   fixed draws, not its arms.
+2. **The walk's own arithmetic**: `forward_arms`, `forward` and
+   `arm_of` know a root's arms by `Kernel::Root`; the inverse it can
+   already take (the user's, in the interpreter).
+3. **Deep zoom past f32**: a word replays as an offset from a reference
+   orbit once its plain replay's error would show (`backward::WordRefs`),
+   through each kernel's forward difference form `F(z + δ) − F(z)`,
+   computed without the cancellation -- written by hand per built-in
+   kernel (`scene::forward_delta`, `shaders/core/replay_delta.wgsl`). A
+   user kernel has none, so its words would stay absolute: good to a
+   view some 1e-4 of the attractor's size, where grand-julian goes to
+   1e6.
+
+### Proposed
+
+- **C1. Arms from the forward map.** Per kernel (per parameter values,
+  as the hole): every draw of a call set to one `u` (the fixed-draw
+  convention the analysis already uses), `u` on a grid of 256, grouped
+  by image at a handful of probe points; each group an arm, its
+  probability the measure of its interval of `u` (the boundaries
+  bisected), forced by its middle draw. A symbol's arm field carries that
+  draw's index for a user kernel, so the replay's forced value is
+  `(index + ½)/256`: a `ff_forced_draw` around every `rng_nextf` of a
+  Rhai body in a replay build, as `force_arms` wraps julian's. A body
+  whose draws do not fall into at most 64 arms (a blur's continuous draw)
+  is refused, as `blur` is. The forward planner's bounds take the same
+  arms (A3 as written, with nothing for the script to declare).
+- **C2. The walk takes user kernels**, absolute replay: arms, forward
+  maps and `arm_of` through C1; the refusal goes. Gate: the reported
+  grand julian with a Rhai julian plans the words its built-in plans and
+  renders its density, at zooms the absolute replay holds (1e2, 1e4).
+- **C3. A derived difference form** for a Rhai body: `lang::delta`
+  already derives them for escape formulas (pairs of reference value and
+  deviation, by cancellation-free rules for every function it knows,
+  over generators for WGSL and an f64 model). Applied to a variation's
+  body, with `atan2`'s form added (the argument of a ratio, and the turns
+  across the cut) and a forced draw's deviation zero; compiled to WGSL
+  for the replay (spliced per flame, as mode D's user kernels are) and
+  run in f64 for the references. Gates: the derived form against the
+  f64 difference on the twins, as `the_shader_forward_forms_are_the_cpu_ones`;
+  the grand julian at 1e6 as its built-in.
+
 ## Order of work
 
 A1, A2, B1 with the twins' inverses and the borrowing built-ins, B2 and
-B3 done (2026-11-08); A3 and *Open* left.
+B3 done (2026-11-08); then C1, C2, C3 (A3 is C1); *Open*.
 
 ## Decisions for the user
 

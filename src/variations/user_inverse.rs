@@ -97,15 +97,24 @@ impl UserInverse {
     }
 
     /// Whether the forward map sends the pre-origin's neighbourhood far
-    /// out -- past 100 anywhere on the circle of radius 1e-3 -- as an
-    /// inversion does: the ball is then the sample's bulk
-    /// (`Kernel::unbounded_at_origin`). Spherical's twin is bounded, by its
-    /// 1e-6, at 500: a ball grown to hold that is not the built-in's.
+    /// out, as an inversion does: the ball is then the sample's bulk
+    /// (`Kernel::unbounded_at_origin`), and its image of the ball has a
+    /// hole (`UserKernel::hole_radius`). Either past 100 anywhere on the
+    /// circle of radius 1e-3 -- spherical's twin is bounded, by its 1e-6,
+    /// at 500, and a ball grown to hold that is not the built-in's -- or
+    /// rising toward the origin as a pole does: each of the circles of
+    /// radius 1e-2, 1e-4, 1e-6 and 1e-8 wholly farther out than the last,
+    /// by the same factor each time. That is a root of negative distance
+    /// at any power, as the built-in's `d < 0` is: at power 2 its modulus
+    /// at 1e-3 is 32, at power 15 it is 1.6. `log`'s twin, unbounded there
+    /// too but by a logarithm, is not an inversion.
     pub fn unbounded_at_origin(&self, params: &ParamValues) -> bool {
-        (0..8).any(|k| {
-            let a = std::f64::consts::TAU * k as f64 / 8.0;
-            let v = self.forward_at(params, [1e-3 * a.cos(), 1e-3 * a.sin()], 0);
-            !(v[0].hypot(v[1]) <= 100.0)
+        unbounded_by_rings(|r| {
+            moduli((0..8).map(|k| {
+                let a = std::f64::consts::TAU * k as f64 / 8.0;
+                let v = self.forward_at(params, [r * a.cos(), r * a.sin()], 0);
+                v[0].hypot(v[1])
+            }))
         })
     }
 
@@ -296,6 +305,8 @@ pub struct UserKernel {
     /// parameters' slots, then the inverse's `prepare` values
     /// (`interp::globals`).
     pub packed: Vec<f32>,
+    /// [`Self::hole_radius`] by the bits of the reach it was asked at.
+    holes: Mutex<HashMap<u64, f64>>,
 }
 
 impl UserKernel {
@@ -314,6 +325,45 @@ impl UserKernel {
     /// How far `v` lies outside the image, where the variation says.
     pub fn gap(&self, v: [f64; 2]) -> Option<f64> {
         self.inverse.gap_at(&self.params, v)
+    }
+
+    /// The hole its image of the disc `|z| <= r_pre` leaves about the
+    /// origin, as `Kernel::hole_radius` gives the inversions' -- where the
+    /// forward map is unbounded at the origin, as theirs are; 0 for any
+    /// other kernel, as for any other built-in.
+    ///
+    /// **Sampled**: the least `|K(z)|` over sixteen rings of the disc at
+    /// 128 angles each, every arm, less a thousandth. An inversion's least
+    /// is on the rim and its modulus the same all round it (spherical's,
+    /// a root's), so there the sample is the exact hole and the walk the
+    /// built-in's; a kernel that dips between samples is read a little
+    /// past its hole there. Kept by reach, since the Extent asks again at
+    /// every radius it is dragged through.
+    pub fn hole_radius(&self, r_pre: f64) -> f64 {
+        if !(r_pre > 0.0) || !self.unbounded_at_origin() {
+            return 0.0;
+        }
+        if let Some(&h) = self.holes.lock().expect("the holes").get(&r_pre.to_bits()) {
+            return h;
+        }
+        let arms = if self.inverse.forward_draws { FORWARD_ARMS } else { 1 };
+        let mut least = f64::INFINITY;
+        for ring in 1..=16 {
+            let r = r_pre * ring as f64 / 16.0;
+            for k in 0..128 {
+                let a = std::f64::consts::TAU * k as f64 / 128.0;
+                for arm in 0..arms {
+                    let v = self.forward([r * a.cos(), r * a.sin()], arm);
+                    // A sample that is not a number says nothing of where
+                    // the image is, so it cannot make a hole; an infinite
+                    // one is far from it.
+                    least = least.min(if v[0].is_nan() || v[1].is_nan() { 0.0 } else { v[0].hypot(v[1]) });
+                }
+            }
+        }
+        let h = if least.is_finite() { least * (1.0 - 1e-3) } else { 0.0 };
+        self.holes.lock().expect("the holes").insert(r_pre.to_bits(), h);
+        h
     }
 }
 
@@ -336,7 +386,7 @@ pub fn kernel_slot(inv: &Arc<UserInverse>, slots: &[f32]) -> Result<u32, String>
     let result = check(inv, &params).map(|()| {
         let mut packed = slots.to_vec();
         packed.extend(interp::globals(&inv.inverse, &params, &Env::at(C64::ZERO, 1)));
-        UserKernel { inverse: inv.clone(), params, packed }
+        UserKernel { inverse: inv.clone(), params, packed, holes: Default::default() }
     });
     let mut t = table().write().expect("the user kernels' table");
     if let Some(hit) = t.1.get(&id) {
@@ -392,12 +442,39 @@ impl UserInverse3 {
     /// Whether `variation3` sends the pre-origin's neighbourhood far out,
     /// as [`UserInverse::unbounded_at_origin`].
     pub fn unbounded_at_origin(&self, params: &ParamValues) -> bool {
-        (0..8).any(|k| {
-            let a = std::f64::consts::TAU * k as f64 / 8.0;
-            let v = self.forward_at(params, [1e-3 * a.cos(), 1e-3 * a.sin(), 0.5e-3 * (k as f64 - 3.5).signum()], 0);
-            !((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() <= 100.0)
+        unbounded_by_rings(|r| {
+            moduli((0..8).map(|k| {
+                let a = std::f64::consts::TAU * k as f64 / 8.0;
+                let v = self.forward_at(params, [r * a.cos(), r * a.sin(), 0.5 * r * (k as f64 - 3.5).signum()], 0);
+                (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+            }))
         })
     }
+}
+
+/// The least and greatest of a ring's moduli; a modulus that is not a
+/// number counts as none (least 0) and as far out (greatest infinite).
+fn moduli(m: impl Iterator<Item = f64>) -> (f64, f64) {
+    m.fold((f64::INFINITY, 0.0f64), |(lo, hi), m| if m.is_nan() { (0.0, f64::INFINITY) } else { (lo.min(m), hi.max(m)) })
+}
+
+/// [`UserInverse::unbounded_at_origin`]'s rule over `ring(r)`, the least
+/// and greatest modulus of the forward map on the circle (sphere) of
+/// radius `r` about the origin.
+fn unbounded_by_rings(ring: impl Fn(f64) -> (f64, f64)) -> bool {
+    if !(ring(1e-3).1 <= 100.0) {
+        return true;
+    }
+    let rings: Vec<(f64, f64)> = [1e-2, 1e-4, 1e-6, 1e-8].into_iter().map(ring).collect();
+    if !rings.windows(2).all(|w| w[1].0 > w[0].1) {
+        return false;
+    }
+    // A pole's growth: the same factor each ring, past 1.05. A
+    // logarithm's falls off (log's twin: 2.0, 1.5, 1.33), and its
+    // singularity is too mild for the inversions' bulk ball.
+    let grow: Vec<f64> = rings.windows(2).map(|w| (w[1].0 * w[1].1).sqrt() / (w[0].0 * w[0].1).sqrt()).collect();
+    let (lo, hi) = grow.iter().fold((f64::INFINITY, 0.0f64), |(lo, hi), &g| (lo.min(g), hi.max(g)));
+    lo > 1.05 && hi <= 1.1 * lo
 }
 
 /// The variation's 3D inverse from its source: `None` when it declares
@@ -597,6 +674,42 @@ fn inverse(z, p, branch) {
             let (got, want) = (user.forward(z, 0), Kernel::Bubble.forward(z, 0));
             assert!((got[0] - want[0]).hypot(got[1] - want[1]) < 1e-12, "{z:?}: {got:?} {want:?}");
         }
+    }
+
+    /// **A user inversion has its built-in's hole**: julian's twin at a
+    /// negative distance -- power 2 as in the reported grand julian, and
+    /// power 15, whose modulus at 1e-3 is 1.6 -- and spherical's twin are
+    /// unbounded at the origin as their built-ins are, and leave the hole
+    /// theirs leave in the image of a disc (`Kernel::hole_radius`), less
+    /// the sample's thousandth; julian's at a positive distance, bubble's
+    /// and log's, neither. Without the hole a Rhai julian of negative
+    /// distance drew another picture than its built-in.
+    #[test]
+    fn a_user_inversion_has_its_builtins_hole() {
+        use crate::scene::ifs_analysis::Kernel;
+        let user = |name: &str, slots: &[f32]| {
+            let src = crate::lang::rhai::with_own_id(crate::variations::twins::source(name).expect("a twin"), &crate::scripted::mint_id());
+            let inv = Arc::new(compile(&src, &format!("{name}_hole")).expect("declared").expect("checks"));
+            Kernel::User { slot: kernel_slot(&inv, slots).expect("a slot") }
+        };
+        let cases = [
+            (user("julian", &[2.0, -1.0]), Kernel::Root { n: 2, d: -1.0, mirror: false }),
+            (user("julian", &[15.0, -1.0]), Kernel::Root { n: 15, d: -1.0, mirror: false }),
+            (user("julian", &[3.0, 1.0]), Kernel::Root { n: 3, d: 1.0, mirror: false }),
+            (user("spherical", &[]), Kernel::Spherical),
+            (user("bubble", &[]), Kernel::Bubble),
+        ];
+        for (got, want) in cases {
+            assert_eq!(got.unbounded_at_origin(), want.unbounded_at_origin(), "{want:?}");
+            for r in [0.3, 1.0, 4.5] {
+                let (hg, hw) = (got.hole_radius(r), want.hole_radius(r));
+                assert!(hg <= hw * (1.0 + 1e-9) && hg >= hw * (1.0 - 2e-3), "{want:?} at {r}: {hg} against {hw}");
+            }
+        }
+        // Unbounded at the origin by a logarithm, not a pole: no
+        // inversion, as its grown ball drew it.
+        let log = user("log", &[std::f32::consts::E]);
+        assert!(!log.unbounded_at_origin() && log.hole_radius(1.0) == 0.0, "log's twin read as an inversion");
     }
 
     #[test]
