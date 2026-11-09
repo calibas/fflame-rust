@@ -8720,6 +8720,7 @@ fn push_ifs_markers(out: &mut Vec<String>, text: &str, sums: bool, user: bool, u
             "//__IFS_USER_SIGMA__" => Some((8.0, "return ifs_user_sigma(i, v);")),
             "//__IFS_USER_JACOBIAN__" => Some((8.0, "return ifs_user_jacobian(i, v);")),
             "//__IFS_USER_GAP__" => Some((8.0, "return ifs_user_gap(i, p);")),
+            "//__IFS_USER_DIFF__" => Some((8.0, "return ifs_user_difference(i, v, dv);")),
             // No preimage: past the 1e37 every test of the walk reads as a
             // number lost, before the pre affine can shrink it, as the
             // CPU's infinity is (`NonlinearMap2::apply_inverse`).
@@ -8765,7 +8766,8 @@ fn ifs_user_block3(user: &super::ifs::UserKernels) -> String {
     use crate::variations::user_inverse::WGSL_NAME3;
     let mut out = String::from(IFS_USER_PARAM);
     let mut cases = String::new();
-    for (f, (_, wgsl, _, _)) in user.functions.iter().enumerate() {
+    for (f, uf) in user.functions.iter().enumerate() {
+        let wgsl = &uf.wgsl;
         out.push_str(&ifs_user_text(wgsl).replace(WGSL_NAME3, &format!("{WGSL_NAME3}{f}")));
         cases.push_str(&format!("        case {f}u: {{ return {WGSL_NAME3}{f}(v, base, 0.0); }}\n"));
     }
@@ -8799,15 +8801,17 @@ fn ifs_user_block3(user: &super::ifs::UserKernels) -> String {
 /// distance zero. A difference across a cut or
 /// the image's edge comes out huge, and its σ small: the sound way.
 fn ifs_user_block(user: &super::ifs::UserKernels) -> String {
-    use crate::variations::user_inverse::{FORWARD_WGSL_NAME, GAP_WGSL_NAME, WGSL_NAME};
+    use crate::variations::user_inverse::{FORWARD_WGSL_NAME, GAP_WGSL_NAME, INVERSE_DIFFERENCE_WGSL_NAME, WGSL_NAME};
     let mut out = String::from(IFS_USER_PARAM);
-    let (mut cases, mut gaps, mut forwards) = (String::new(), String::new(), String::new());
-    for (f, (_, wgsl, gap, fwd)) in user.functions.iter().enumerate() {
+    let (mut cases, mut gaps, mut forwards, mut dinvs) = (String::new(), String::new(), String::new(), String::new());
+    for (f, uf) in user.functions.iter().enumerate() {
+        let (wgsl, gap, fwd) = (&uf.wgsl, &uf.gap, &uf.forward);
         out.push_str(
             &ifs_user_text(wgsl)
                 .replace(WGSL_NAME, &format!("{WGSL_NAME}{f}"))
                 .replace(GAP_WGSL_NAME, &format!("{GAP_WGSL_NAME}{f}"))
-                .replace(FORWARD_WGSL_NAME, &format!("{FORWARD_WGSL_NAME}{f}")),
+                .replace(FORWARD_WGSL_NAME, &format!("{FORWARD_WGSL_NAME}{f}"))
+                .replace(INVERSE_DIFFERENCE_WGSL_NAME, &format!("{INVERSE_DIFFERENCE_WGSL_NAME}{f}")),
         );
         cases.push_str(&format!("        case {f}u: {{ return {WGSL_NAME}{f}(v, base, branch); }}\n"));
         if *gap {
@@ -8816,7 +8820,15 @@ fn ifs_user_block(user: &super::ifs::UserKernels) -> String {
         if *fwd {
             forwards.push_str(&format!("        case {f}u: {{ return {FORWARD_WGSL_NAME}{f}(z, base, u); }}\n"));
         }
+        if uf.inverse_difference {
+            dinvs.push_str(&format!("        case {f}u: {{ return vec3<f32>({INVERSE_DIFFERENCE_WGSL_NAME}{f}(v, dv, base, branch), 1.0); }}\n"));
+        }
     }
+    // Its inverse's difference, for the delta walk (D3), in the kernel's
+    // frame as the built-ins' (`ifs_kernel_difference`), `ok` its third.
+    out.push_str(&format!(
+        "fn ifs_user_difference(i: u32, v: vec2<f32>, dv: vec2<f32>) -> vec3<f32> {{\n    let base = u32(ifs_maps[i].params.y);\n    let branch = ifs_maps[i].branch;\n    switch u32(ifs_maps[i].params.x) {{\n{dinvs}        default: {{}}\n    }}\n    return vec3<f32>(0.0, 0.0, 0.0);\n}}\n"
+    ));
     // Its forward map, for a sum's Newton solve (B2), along the row's arm:
     // its draw in `params.z` where it draws (D2).
     out.push_str(&format!(
@@ -8972,7 +8984,9 @@ pub fn assemble_ifs_user(
                     if !measure {
                         push_ifs_sum_markers(&mut out, super::ifs::IFS_JACOBIAN.trim(), sums, users);
                     }
-                    out.push(super::ifs::IFS_DIFFERENCE.trim().to_string());
+                    // Through the markers: a user kernel's difference is
+                    // dispatched inside it (rhai-planners D3).
+                    push_ifs_sum_markers(&mut out, super::ifs::IFS_DIFFERENCE.trim(), sums, users);
                     out.push(super::ifs::IFS_DELTA_WALK.trim().to_string());
                 }
             }

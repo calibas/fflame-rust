@@ -1955,6 +1955,16 @@ unbounded at the origin, as an inversion's, `params.w` is the hole its
 image of the ball leaves (`UserKernel::hole_radius`, sampled), scored as
 the built-in inversions' holes are. Against the reference walk the
 twins and the built-ins borrowing their inverses agree 99.5-100%.
+Summed with an affine, a kernel that draws is a row per arm, its draw
+in `params.z` for the forward map Newton steps on
+(`lang::delta::draw_as_color`), its `branch` the seed. **At depth**
+(rhai-planners D3) the handover takes its inverse in big floats -- the
+inverse as one pass of a loop, run by `lang::bigeval`
+(`UserKernel::big_inverse`) -- and the delta walk its inverse's
+difference derived from the body (`delta::variation_difference`, the
+branch its uniform), dispatched inside `ifs_kernel_difference`
+(`//__IFS_USER_DIFF__`); julia's twin draws its built-in's picture at
+2^64.
 
 **Solids written in Rhai** (the KIFS plan, B3; the formula language's
 solid entry) register beside these under their `custom-` names

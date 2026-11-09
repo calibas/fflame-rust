@@ -234,16 +234,24 @@ pub fn variation_difference(p: &Program) -> Option<Program> {
         return None;
     }
     let var = |name: &str, ty: Ty, global: bool| Var { name: name.into(), ty, span: Default::default(), stored_real: false, global, perturb: false, dims: Vec::new(), size: Vec::new() };
+    // One channel in: a forward map's draw, or an inverse's branch (its
+    // colour, D3) -- the same at the reference and the sample. A body
+    // reading both has none to give the result.
+    let (draws, colours) = (reads_predef(&p.transform, Predef::Draw), reads_predef(&p.transform, Predef::VarColor));
+    if draws && colours {
+        return None;
+    }
     let mut q = p.clone();
-    // The draw: a uniform while it derives, as the parameters are.
+    // The channel: a uniform while it derives, as the parameters are.
     q.vars.push(var("forced_draw", Ty::Float, true));
     let draw = q.vars.len() - 1;
     let as_loop = |e: &IExpr| match e.kind {
         IExprKind::Predef(Predef::Pixel) => Some(mk(IExprKind::Predef(Predef::Z), Ty::Complex)),
-        IExprKind::Predef(Predef::Draw) => Some(mk(IExprKind::Var(draw), Ty::Float)),
+        IExprKind::Predef(Predef::Draw | Predef::VarColor) => Some(mk(IExprKind::Var(draw), Ty::Float)),
         _ => None,
     };
-    q.loop_body = map_stmts(&p.transform, &as_loop, &|pl: &Place| if *pl == Place::Pixel { Place::Z } else { pl.clone() });
+    // Its early returns as branches (`no_preimage()` past an image's edge).
+    q.loop_body = map_stmts(&without_returns(&p.transform)?, &as_loop, &|pl: &Place| if *pl == Place::Pixel { Place::Z } else { pl.clone() });
     q.transform.clear();
     q.init.clear();
     q.bailout = None;
@@ -279,24 +287,77 @@ pub fn variation_difference(p: &Program) -> Option<Program> {
     Some(out)
 }
 
+/// `stmts` with every `return` taken out (rhai-planners D3): an `if` with
+/// a return in an arm takes the statements after it into every arm, where
+/// a return then drops what follows it -- so `if c { a; return } b` is
+/// `if c { a } else { b }`, which the derivation takes. A scope's return
+/// leaves the scope alone, as the language has it. `None` for a return
+/// inside a loop.
+fn without_returns(stmts: &[IStmt]) -> Option<Vec<IStmt>> {
+    fn has_return(stmts: &[IStmt]) -> bool {
+        stmts.iter().any(|s| match s {
+            IStmt::Return => true,
+            IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| has_return(b)) || has_return(otherwise),
+            IStmt::While { body, .. } | IStmt::Repeat { body, .. } => has_return(body),
+            // A scope's return is its own.
+            _ => false,
+        })
+    }
+    let mut out = Vec::new();
+    for (i, s) in stmts.iter().enumerate() {
+        match s {
+            IStmt::Return => return Some(out),
+            IStmt::Scope(body) => out.extend(without_returns(body)?),
+            IStmt::While { body, .. } | IStmt::Repeat { body, .. } if has_return(body) => return None,
+            IStmt::If { arms, otherwise } if has_return(std::slice::from_ref(s)) => {
+                let rest = &stmts[i + 1..];
+                let with_rest = |b: &[IStmt]| without_returns(&[b, rest].concat());
+                let arms = arms.iter().map(|(c, b)| Some((c.clone(), with_rest(b)?))).collect::<Option<Vec<_>>>()?;
+                out.push(IStmt::If { arms, otherwise: with_rest(otherwise)? });
+                return Some(out);
+            }
+            _ => out.push(s.clone()),
+        }
+    }
+    Some(out)
+}
+
+/// Whether `stmts` read `which` anywhere.
+fn reads_predef(stmts: &[IStmt], which: Predef) -> bool {
+    let found = std::cell::Cell::new(false);
+    let _ = map_stmts(
+        stmts,
+        &|x: &IExpr| {
+            if matches!(&x.kind, IExprKind::Predef(p) if *p == which) {
+                found.set(true);
+            }
+            None
+        },
+        &|pl: &Place| pl.clone(),
+    );
+    found.get()
+}
+
+/// A variation's transform section as one pass of a formula's loop, for a
+/// run in big floats (`lang::bigeval`; rhai-planners D3): its point in
+/// `#pixel` as ever, its result written to `z`, its colour channel -- an
+/// inverse's branch -- the constant `color`.
+pub fn one_pass(p: &Program, color: f64) -> Program {
+    let mut q = p.clone();
+    let as_pass = |e: &IExpr| matches!(e.kind, IExprKind::Predef(Predef::VarColor)).then(|| mk(IExprKind::Float(color), Ty::Float));
+    q.loop_body = map_stmts(&p.transform, &as_pass, &|pl: &Place| if *pl == Place::Pixel { Place::Z } else { pl.clone() });
+    q.transform.clear();
+    q.bailout = None;
+    q
+}
+
 /// A variation whose draws read its colour channel instead (rhai-planners
 /// D2): every `rand()` the value a caller passes there, as a forced arm
 /// is -- mode D's Newton steps on a summed kernel's forward map along an
 /// arm, and the shader takes no draws. `None` for a variation that reads
 /// its colour already, whose channel is taken.
 pub fn draw_as_color(p: &Program) -> Option<Program> {
-    let reads = std::cell::Cell::new(false);
-    let _ = map_stmts(
-        &p.transform,
-        &|x: &IExpr| {
-            if matches!(x.kind, IExprKind::Predef(Predef::VarColor)) {
-                reads.set(true);
-            }
-            None
-        },
-        &|pl: &Place| pl.clone(),
-    );
-    if reads.get() {
+    if reads_predef(&p.transform, Predef::VarColor) {
         return None;
     }
     let mut q = p.clone();

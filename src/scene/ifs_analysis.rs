@@ -1191,7 +1191,10 @@ pub fn kernel_has_difference(k: &Kernel) -> bool {
         // A mirrored root's is not needed: the difference forms are the
         // escape engine's, and it is the walk's alone.
         Kernel::Root { n, d, mirror } => !mirror && root_powers(n, d).is_some(),
-        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } | Kernel::User { .. } => false,
+        Kernel::Disc | Kernel::Blob { .. } | Kernel::Elliptic | Kernel::Cylinder { .. } => false,
+        // Derived from its inverse's body, where it derives
+        // (`user_inverse::UserInverse::inverse_difference`; rhai-planners D3).
+        Kernel::User { slot } => crate::variations::user_inverse::kernel(slot).inverse.inverse_difference.is_some(),
     }
 }
 
@@ -1248,7 +1251,12 @@ pub fn kernel_difference_gen<T: Real>(
     let x = cnorm2(z);
 
     match *k {
-        Kernel::User { .. } => None,
+        // Its derived form, in the interpreter, in f64 (D3).
+        Kernel::User { slot } => {
+            let df = [d[0].to_f64(), d[1].to_f64()];
+            let r = crate::variations::user_inverse::kernel(slot).inverse_difference(zf, df, branch)?;
+            (r[0].is_finite() && r[1].is_finite()).then(|| [z[0].lit(r[0]), z[0].lit(r[1])])
+        }
         Kernel::Root { mirror: true, .. } => None,
         Kernel::Root { n, d: dist, .. } => {
             let (a, b) = root_powers(n, dist)?;
@@ -4465,12 +4473,13 @@ fn set_holes(maps: &mut [IfsMap<Map2>], ball: &Ball<[f64; 2]>) {
             // until now -- the same reason the hole above is set here
             // and not where the map is built. A kernel with an exact
             // form never reads it and does not pay for it.
-            // A user kernel claims no smooth radius, so nothing is
-            // measured, and its remainder is unbounded: a lineage
-            // through one always rebases.
-            if matches!(r.kernel, Kernel::User { .. }) {
+            // A user kernel without a derived form (rhai-planners D3)
+            // claims no smooth radius, so nothing is measured, and its
+            // remainder is unbounded: a lineage through one rebases.
+            let exact = kernel_has_difference(&r.kernel);
+            if !exact && matches!(r.kernel, Kernel::User { .. }) {
                 r.third = f64::INFINITY;
-            } else if !kernel_has_difference(&r.kernel) {
+            } else if !exact {
                 let (bc, br) = (ball.centre, ball.radius);
                 r.measure_third(bc, br);
             }

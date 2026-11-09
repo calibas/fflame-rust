@@ -85,6 +85,10 @@ pub const FORWARD_WGSL_NAME: &str = "ifs_user_fwd";
 /// `forward_delta::replay_delta_wgsl` makes it a key's own (C3).
 pub const DIFFERENCE_WGSL_NAME: &str = "fd_user_dif";
 
+/// The name mode D's delta walk calls an inverse's difference by, before
+/// the assembler makes it a slot's own (D3).
+pub const INVERSE_DIFFERENCE_WGSL_NAME: &str = "ifs_user_dinv";
+
 /// A variation's inverse, compiled.
 pub struct UserInverse {
     /// The variation's key.
@@ -120,6 +124,17 @@ pub struct UserInverse {
     /// The difference as the offset replay calls it, `fn fd_user_dif(z, d,
     /// base, u)` ([`DIFFERENCE_WGSL_NAME`]; `lang::wgsl::difference_kernel`).
     pub difference_wgsl: Option<String>,
+    /// Its INVERSE's difference `G(V + d) - G(V)` along a branch, derived as
+    /// the forward's is, the branch the uniform channel (D3): mode D's delta
+    /// walk carries a pixel's offset through it. None where it does not
+    /// derive, and a lineage through it rebases.
+    pub inverse_difference: Option<Program>,
+    /// As the delta walk's shader calls it, `fn ifs_user_dinv(v, d, base,
+    /// branch)` ([`INVERSE_DIFFERENCE_WGSL_NAME`]).
+    pub inverse_difference_wgsl: Option<String>,
+    /// The inverse as one pass of a loop, by branch, for a run in big
+    /// floats (`lang::bigeval`; [`UserKernel::big_inverse`]).
+    big: Mutex<HashMap<u32, Arc<Program>>>,
 }
 
 impl UserInverse {
@@ -231,7 +246,26 @@ fn compile_declared(source: &str, key: &str) -> Result<UserInverse, String> {
     let difference_wgsl = difference_wgsl.filter(|w| crate::lang::wgsl::validate_inverse_kernel(w).is_ok());
     // One without the other is none: the walk takes a form both run.
     let difference = difference.filter(|_| difference_wgsl.is_some());
-    let inv = UserInverse { key: key.to_string(), forward, inverse, branches, forward_draws, wgsl, gap, forward_wgsl, difference, difference_wgsl };
+    let inverse_difference = crate::lang::delta::variation_difference(&inverse);
+    let inverse_difference_wgsl = inverse_difference.as_ref().and_then(|p| crate::lang::wgsl::difference_kernel(p, INVERSE_DIFFERENCE_WGSL_NAME).ok());
+    #[cfg(not(target_arch = "wasm32"))]
+    let inverse_difference_wgsl = inverse_difference_wgsl.filter(|w| crate::lang::wgsl::validate_inverse_kernel(w).is_ok());
+    let inverse_difference = inverse_difference.filter(|_| inverse_difference_wgsl.is_some());
+    let inv = UserInverse {
+        key: key.to_string(),
+        forward,
+        inverse,
+        branches,
+        forward_draws,
+        wgsl,
+        gap,
+        forward_wgsl,
+        difference,
+        difference_wgsl,
+        inverse_difference,
+        inverse_difference_wgsl,
+        big: Mutex::new(HashMap::new()),
+    };
     check(&inv, &ParamValues::defaults(&inv.forward))?;
     Ok(inv)
 }
@@ -372,6 +406,7 @@ enum Which {
     Inverse,
     Gap,
     Difference,
+    InverseDifference,
     Forward3,
     Inverse3,
 }
@@ -438,6 +473,35 @@ impl UserKernel {
             let out = run.call(C64::new(z[0], z[1]), C64::new(d[0], d[1]), 1.0).0;
             [out.re, out.im]
         }))
+    }
+
+    /// `G(v + d) - G(v)` along `branch`, without forming the difference
+    /// ([`UserInverse::inverse_difference`]); none where it has no form.
+    pub fn inverse_difference(&'static self, v: [f64; 2], d: [f64; 2], branch: u32) -> Option<[f64; 2]> {
+        let p = self.inverse.inverse_difference.as_ref()?;
+        Some(with_run(self as *const _ as usize, Which::InverseDifference, p, &self.params, |run| {
+            run.set_color(branch as f64);
+            let out = run.call(C64::new(v[0], v[1]), C64::new(d[0], d[1]), 1.0).0;
+            [out.re, out.im]
+        }))
+    }
+
+    /// The inverse at `v` along `branch` in big floats, `v`'s width: one
+    /// pass of the inverse as a loop, run by `lang::bigeval` (D3) -- the
+    /// Flame Attractor's handover past f64. None where a big float has no
+    /// answer (a division by zero, a root off its domain) or there is no
+    /// preimage.
+    pub fn big_inverse(&'static self, v: &[crate::escape::bigfloat::BigFloat; 2], branch: u32) -> Option<[crate::escape::bigfloat::BigFloat; 2]> {
+        let prog = {
+            let mut big = self.inverse.big.lock().ok()?;
+            big.entry(branch).or_insert_with(|| Arc::new(crate::lang::delta::one_pass(&self.inverse.inverse, branch as f64))).clone()
+        };
+        let n = v[0].n_limbs().max(v[1].n_limbs());
+        let pixel = crate::escape::bigfloat::BigComplex { re: v[0].clone(), im: v[1].clone() };
+        let mut m = crate::lang::bigeval::BigMachine::new(prog, self.params.clone(), Env::at(C64::ZERO, 1), pixel, n).ok()?;
+        m.step().ok()?;
+        let z = m.z();
+        Some([z.re.clone(), z.im.clone()])
     }
 
     /// What the offset replay's difference reads through `get_param(base,
@@ -574,6 +638,14 @@ pub fn kernel(slot: u32) -> &'static UserKernel {
         *k.borrow_mut() = all;
         hit
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Off: the handover takes a user kernel's inverse in f64, lifted, as
+    /// it did before [`UserKernel::big_inverse`] -- the control of the gate
+    /// that proves the big floats matter (`a_twins_flame_attractor_holds_at_depth`).
+    pub(crate) static BIG_INVERSE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 /// The offset replay's name for the variation `key`'s difference: a row
@@ -1066,6 +1138,74 @@ fn inverse(z, p, branch) {
             }
         }
         println!("worst relative difference: {worst:.1e}");
+    }
+
+    #[test]
+    #[ignore = "measurement"]
+    fn which_twins_derive_differences() {
+        for (name, src) in crate::variations::twins::TWINS.iter().filter(|(_, s)| s.contains("fn inverse(")) {
+            let src = crate::lang::rhai::with_own_id(src, &crate::scripted::mint_id());
+            match compile(&src, name) {
+                Some(Ok(inv)) => println!("  {name}: forward {}, inverse {}", inv.difference.is_some(), inv.inverse_difference.is_some()),
+                other => println!("  {name}: {:?}", other.map(|r| r.err())),
+            }
+        }
+    }
+
+    /// **A twin's derived inverse difference, and its big-float inverse,
+    /// are its built-in's** (rhai-planners D3): `G(v + d) − G(v)` derived
+    /// from julian's, bubble's and hemisphere's twins' inverses against the
+    /// built-in kernels' hand forms (`kernel_difference_gen`), down to
+    /// deviations of 1e-13; and julian's twin's inverse run in big floats
+    /// (`bigeval`) against the built-in's generic body in big floats, at
+    /// four limbs, to 1e-60.
+    #[test]
+    fn a_twins_inverse_difference_and_big_inverse_are_its_builtins() {
+        use crate::escape::bigfloat::BigFloat;
+        use crate::scene::ifs_analysis::{kernel_difference_gen, kernel_inverse_gen, Kernel};
+        let user = |name: &str, slots: &[f32]| {
+            let src = crate::lang::rhai::with_own_id(crate::variations::twins::source(name).expect("a twin"), &crate::scripted::mint_id());
+            let inv = Arc::new(compile(&src, &format!("{name}_dinv")).expect("declared").expect("checks"));
+            assert!(inv.inverse_difference.is_some(), "{name}'s twin derives no inverse difference");
+            kernel_slot(&inv, slots).expect("a slot")
+        };
+        let cases = [
+            (user("julian", &[2.0, 1.0]), Kernel::Root { n: 2, d: 1.0, mirror: false }),
+            (user("julian", &[3.0, 1.0]), Kernel::Root { n: 3, d: 1.0, mirror: false }),
+            (user("bubble", &[]), Kernel::Bubble),
+            (user("hemisphere", &[]), Kernel::Hemisphere),
+        ];
+        let mut worst = 0.0f64;
+        for (slot, builtin) in cases {
+            assert!(crate::scene::ifs_analysis::kernel_has_difference(&builtin), "{builtin:?} has a form");
+            for v in [[0.37, 0.21], [-0.53, 0.45], [0.31, -0.26], [-0.24, -0.47]] {
+                for branch in 0..kernel(slot).inverse.branches {
+                    for scale in [1e-2, 1e-6, 1e-10, 1e-13] {
+                        let r = scale * f64::hypot(v[0], v[1]);
+                        let d = [r * 0.6, -r * 0.8];
+                        let w = [v[0] + d[0], v[1] + d[1]];
+                        let Some(want) = kernel_difference_gen(&builtin, &v, &w, &d, branch) else { continue };
+                        let got = kernel_difference_gen(&Kernel::User { slot }, &v, &w, &d, branch).expect("the twin's");
+                        let err = (got[0] - want[0]).hypot(got[1] - want[1]) / want[0].hypot(want[1]);
+                        worst = worst.max(err);
+                        assert!(err < 1e-9, "{builtin:?} at {v:?}, branch {branch}, deviation {scale:e}: {got:?} against {want:?}");
+                    }
+                }
+            }
+        }
+        println!("worst relative difference: {worst:.1e}");
+        // In big floats.
+        let slot = user("julian", &[3.0, 1.0]);
+        let big = |x: f64| BigFloat::from_f64(x, 4);
+        for v in [[0.37, 0.21], [-0.53, 0.45]] {
+            let bv = [big(v[0]).add(&BigFloat::from_f64(1e-30, 4)), big(v[1])];
+            let got = kernel(slot).big_inverse(&bv, 0).expect("a big inverse");
+            let want = kernel_inverse_gen(&Kernel::Root { n: 3, d: 1.0, mirror: false }, &bv, 0);
+            for i in 0..2 {
+                let rel = got[i].sub(&want[i]).to_f64().abs() / want[i].to_f64().abs().max(1e-300);
+                assert!(rel < 1e-60, "{v:?} part {i}: {rel:e}");
+            }
+        }
     }
 
     /// **A drawing kernel summed with an affine** (rhai-planners D2):

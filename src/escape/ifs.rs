@@ -3570,10 +3570,10 @@ pub fn user_kernels3(ifs: &Ifs3) -> UserKernels {
         }
         let kernel = crate::variations::user_inverse::kernel3(slot);
         let key = &kernel.inverse.key;
-        let f = match u.functions.iter().position(|(k, _, _, _)| k == key) {
+        let f = match u.functions.iter().position(|uf| uf.key == *key) {
             Some(f) => f,
             None => {
-                u.functions.push((key.clone(), kernel.inverse.wgsl.clone(), false, false));
+                u.functions.push(UserFunction { key: key.clone(), wgsl: kernel.inverse.wgsl.clone(), ..Default::default() });
                 u.functions.len() - 1
             }
         };
@@ -3590,14 +3590,27 @@ pub fn user_kernels3(ifs: &Ifs3) -> UserKernels {
 /// carry.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct UserKernels {
-    /// `(key, wgsl, gap, forward)` of each inverse, in first use:
-    /// function `f` is the `f`th; its WGSL holds its image gap's function
-    /// too when `gap`, and its forward map's when `forward` (B2).
-    pub functions: Vec<(String, String, bool, bool)>,
+    /// Each inverse, in first use: function `f` is the `f`th.
+    pub functions: Vec<UserFunction>,
     /// Every kernel's values, one after another.
     pub params: Vec<f32>,
     /// Each kernel's slot, function and offset into `params`.
     slots: Vec<(u32, u32, u32)>,
+}
+
+/// One variation's functions in mode D's shader ([`UserKernels`]).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UserFunction {
+    /// The variation's key.
+    pub key: String,
+    /// Its inverse's WGSL, and after it each of the others it has.
+    pub wgsl: String,
+    /// Its image gap's function is in `wgsl` (B1).
+    pub gap: bool,
+    /// Its forward map's, for a sum's Newton solve (B2).
+    pub forward: bool,
+    /// Its inverse's difference, for the delta walk (D3).
+    pub inverse_difference: bool,
 }
 
 impl UserKernels {
@@ -3608,7 +3621,7 @@ impl UserKernels {
 
     /// The pipeline's identity for these functions: their keys.
     pub fn key(&self) -> String {
-        self.functions.iter().map(|(k, _, _, _)| k.as_str()).collect::<Vec<_>>().join(",")
+        self.functions.iter().map(|uf| uf.key.as_str()).collect::<Vec<_>>().join(",")
     }
 }
 
@@ -3624,13 +3637,14 @@ pub fn user_kernels(ifs: &Ifs2) -> UserKernels {
         }
         let kernel = crate::variations::user_inverse::kernel(slot);
         let key = &kernel.inverse.key;
-        let f = match u.functions.iter().position(|(k, _, _, _)| k == key) {
+        let f = match u.functions.iter().position(|uf| uf.key == *key) {
             Some(f) => f,
             None => {
                 let gap = kernel.inverse.gap.as_ref().map(|(_, w)| w.as_str());
                 let fwd = kernel.inverse.forward_wgsl.as_deref();
-                let wgsl = format!("{}{}{}", kernel.inverse.wgsl, gap.unwrap_or(""), fwd.unwrap_or(""));
-                u.functions.push((key.clone(), wgsl, gap.is_some(), fwd.is_some()));
+                let dinv = kernel.inverse.inverse_difference_wgsl.as_deref();
+                let wgsl = format!("{}{}{}{}", kernel.inverse.wgsl, gap.unwrap_or(""), fwd.unwrap_or(""), dinv.unwrap_or(""));
+                u.functions.push(UserFunction { key: key.clone(), wgsl, gap: gap.is_some(), forward: fwd.is_some(), inverse_difference: dinv.is_some() });
                 u.functions.len() - 1
             }
         };
@@ -4004,6 +4018,7 @@ fn ifs_kernel_difference(i: u32, v: vec2<f32>, vw: vec2<f32>, dv: vec2<f32>) -> 
     if (!ifs_has_difference(i)) {
         return bad;
     }
+//__IFS_USER_DIFF__
     // `t = |vw|² − |v|² = 2v·dv + |dv|²`, the norm's own difference,
     // itself written so nothing cancels.
     let t = 2.0 * dot(v, dv) + dot(dv, dv);
@@ -5672,7 +5687,17 @@ fn big_kernel_inverse(
     if !v[0].to_f64().is_finite() || !v[1].to_f64().is_finite() {
         return None;
     }
-    let out = kernel_inverse_gen(&kernel, v, branch);
+    // A Rhai variation's, its inverse's body run in big floats
+    // (`UserKernel::big_inverse`; rhai-planners D3), where the generic
+    // body's user path works in f64.
+    #[cfg(test)]
+    let big = crate::variations::user_inverse::BIG_INVERSE.with(|b| b.get());
+    #[cfg(not(test))]
+    let big = true;
+    let out = match kernel {
+        crate::scene::ifs_analysis::Kernel::User { slot } if big => crate::variations::user_inverse::kernel(slot).big_inverse(v, branch)?,
+        _ => kernel_inverse_gen(&kernel, v, branch),
+    };
     let f = [out[0].to_f64(), out[1].to_f64()];
     if !f[0].is_finite() || !f[1].is_finite() || f[0].abs() > 1e29 || f[1].abs() > 1e29 {
         return None;
@@ -6639,8 +6664,9 @@ pub fn pack_maps(
 #[cfg(test)]
 mod tests {
     /// A Flame Attractor with a Rhai inverse compiles beside a camera lens,
-    /// and the solid's path tracer takes its inverse as its walk does
-    /// (docs/projects/rhai-planners.md). The lens brings the flame's
+    /// the solid's path tracer takes its inverse as its walk does, and the
+    /// delta walk its inverse's difference (docs/projects/rhai-planners.md),
+    /// no marker left. The lens brings the flame's
     /// `get_param` into the shader, and the user kernels once defined
     /// another: every such picture was black. The path tracer once had no
     /// user kernels at all.
@@ -6653,10 +6679,15 @@ mod tests {
         let inv = user_inverse::compile(twins::source("bubble").unwrap(), "bubble").unwrap().unwrap();
         let gap = inv.gap.as_ref().map(|(_, w)| w.as_str());
         let fwd = inv.forward_wgsl.as_deref();
-        let wgsl = format!("{}{}{}", inv.wgsl, gap.unwrap_or(""), fwd.unwrap_or(""));
-        let user = super::UserKernels { functions: vec![("bubble".into(), wgsl, gap.is_some(), fwd.is_some())], ..Default::default() };
+        let dinv = inv.inverse_difference_wgsl.as_deref();
+        assert!(dinv.is_some(), "bubble's twin derives its inverse's difference");
+        let wgsl = format!("{}{}{}{}", inv.wgsl, gap.unwrap_or(""), fwd.unwrap_or(""), dinv.unwrap_or(""));
+        let user = super::UserKernels {
+            functions: vec![super::UserFunction { key: "bubble".into(), wgsl, gap: gap.is_some(), forward: fwd.is_some(), inverse_difference: dinv.is_some() }],
+            ..Default::default()
+        };
         let inv3 = user_inverse::compile3(twins::source("julia3D").unwrap(), "julia3D").unwrap().unwrap();
-        let user3 = super::UserKernels { functions: vec![("julia3D".into(), inv3.wgsl.clone(), false, false)], ..Default::default() };
+        let user3 = super::UserKernels { functions: vec![super::UserFunction { key: "julia3D".into(), wgsl: inv3.wgsl.clone(), ..Default::default() }], ..Default::default() };
         let none = super::UserKernels::default();
         let flat = super::get_ifs("ifs_flame").unwrap();
         let solid = super::get_ifs("ifs_flame_3d").unwrap();
@@ -6665,10 +6696,17 @@ mod tests {
         for (what, src) in [
             ("the walk", assemble_ifs_user(flat, col(flat), 4, Some(&lens), false, false, false, &user, &none)),
             ("the walk with sums", assemble_ifs_user(flat, col(flat), 4, Some(&lens), false, true, false, &user, &none)),
+            // The delta walk dispatches the inverse's difference (D3).
+            ("the delta walk", assemble_ifs_user(flat, col(flat), 4, Some(&lens), true, false, false, &user, &none)),
             ("the solid's walk", assemble_ifs_user(solid, col(solid), 4, Some(&lens), false, false, false, &none, &user3)),
             ("the solid's path tracer", assemble_ifs_path_user(solid, col(solid), 4, Some(&lens), false, false, &user3)),
         ] {
             assert!(src.contains("ifs_user_param("), "{what}: no user kernel spliced");
+            // A marker left as a comment drops its dispatch silently: the
+            // delta walk's once did, and every user row took bubble's form.
+            if let Some(m) = src.lines().map(str::trim).find(|l| l.starts_with("//__") && l.ends_with("__")) {
+                panic!("{what} left a marker: {m}");
+            }
             use wgpu::naga;
             let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{what}: {}", e.emit_to_string(&src)));
             naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
@@ -10214,6 +10252,157 @@ mod gpu_tests {
     /// 59.6% on the affine arm and 90.7% on the nonlinear one, and
     /// only having both made it obvious that the fault was in the
     /// test and not in the thing under test.
+    /// **A twin's Flame Attractor holds at depth** (docs/projects/rhai-planners.md,
+    /// D3): the twins, borrowing nothing, drawn at 2^20, 2^44 and -- julia's,
+    /// centred on its set to sixty digits -- 2^64: the handover's references
+    /// taken through the twin's inverse in big floats
+    /// (`UserKernel::big_inverse`), the delta walk carrying pixels through
+    /// its derived inverse difference, set and exterior pixel for pixel
+    /// where the built-in's are, on every view with structure. Measured:
+    /// 99.9% on julia's and julian's, and at 2^64 99.88% where the inverse
+    /// in f64 -- the control, required to fail -- agrees 78%.
+    #[test]
+    #[ignore = "needs a GPU; registers the twins"]
+    fn a_twins_flame_attractor_holds_at_depth() {
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        let (mut failures, mut judged) = (Vec::new(), 0usize);
+        let mut julian = kernel_flame(vec![("julian", [1.0, 0.0, 0.0, 1.0, -0.3, 0.1], 1.0, 0.3)]);
+        julian.transforms[0].set_variation_param("julian", "power", 3.0);
+        let cases = [
+            ("julia", julia_ifs_flame([-0.4, 0.6])),
+            ("julian", julian),
+            ("bubble", bubble_ifs_flame()),
+            ("hemisphere", hemisphere_ifs_flame()),
+            ("blob", blob_ifs_flame()),
+            ("spherical", spherical_ifs_flame()),
+            ("disc", disc_ifs_flame()),
+        ];
+        for (name, builtin) in cases {
+            let twin = twin_flame(&builtin, name);
+            crate::variations::custom::ensure(&twin);
+            let guard = global_registry();
+            let ifs = crate::scene::ifs_analysis::analyse_2d(&builtin, &guard).expect("the built-in qualifies");
+            let ifs_t = crate::scene::ifs_analysis::analyse_2d(&twin, &guard).expect("the twin qualifies");
+            drop(guard);
+            assert!(
+                ifs_t.maps.iter().any(|m| m.inverse.nonlinear().is_some_and(|n| matches!(n.kernel, crate::scene::ifs_analysis::Kernel::User { .. }) && m.inverse.has_difference())),
+                "{name}: the twin's maps are not user kernels with a form"
+            );
+            assert_eq!(ifs_t.has_delta_forms(), ifs.has_delta_forms(), "{name}: the twin's delta walk is not the built-in's");
+            // A point of the attractor, by a chaos game: one map after
+            // another in turn lands bubble's where nothing is at depth.
+            let mut target = ifs.ball.centre;
+            let mut st = 0x2545_F491_4F6C_DD1Du64;
+            for _ in 0..200 {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                target = ifs.maps[((st >> 33) as usize) % ifs.maps.len()].forward.apply(target);
+            }
+            // Past f64 the view needs a centre ON the set to more digits
+            // than f64 has, and not a fixed point -- whose picture is the
+            // same at every scale, so a walk off by f64's rounding still
+            // draws it (measured: the f64 inverse passed there). So the
+            // flame's own forward map, `±√(z − c)` from the flame's (f32)
+            // `c`, sixty steps along a pseudo-random choice of root, from
+            // its repelling fixed point, in big floats: a point of the set
+            // to every digit, its orbit aperiodic.
+            let exact = (name == "julia").then(|| {
+                use crate::escape::bigfloat::BigFloat;
+                let n = 8;
+                let t0 = &builtin.transforms[0];
+                let (cr, ci) = (-(t0.e as f64), -(t0.f as f64));
+                let big = |x: f64| BigFloat::from_f64(x, n);
+                let half = big(0.5);
+                // The principal square root of `a + ib`.
+                let csqrt = |a: &BigFloat, b: &BigFloat| {
+                    let r = a.mul(a).add(&b.mul(b)).sqrt();
+                    let re = r.add(a).mul(&half).sqrt();
+                    let im = r.sub(a).mul(&half).sqrt();
+                    let im = if b.to_f64() < 0.0 { big(0.0).sub(&im) } else { im };
+                    (re, im)
+                };
+                let (sre, sim) = csqrt(&big(1.0 - 4.0 * cr), &big(-4.0 * ci));
+                let (mut zre, mut zim) = (big(1.0).add(&sre).mul(&half), sim.mul(&half));
+                let mut st = 0x9E37_79B9_7F4A_7C15u64;
+                for _ in 0..60 {
+                    st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    let (wre, wim) = csqrt(&zre.sub(&big(cr)), &zim.sub(&big(ci)));
+                    (zre, zim) = if (st >> 40) & 1 == 0 { (wre, wim) } else { (big(0.0).sub(&wre), big(0.0).sub(&wim)) };
+                }
+                let dec = |x: &BigFloat| x.to_fixed(n).expect("in range").to_decimal(60);
+                (dec(&zre), dec(&big(0.0).sub(&zim)))
+            });
+            // The absolute walk, and the delta walk (its `delta` parameter):
+            // the twin's inverse difference on the GPU, spliced (D3).
+            let walks: &[f32] = if ifs.has_delta_forms() { &[0.0, 1.0] } else { &[0.0] };
+            for (zoom, &delta) in [20.0f64, 44.0, 64.0].into_iter().flat_map(|z| walks.iter().map(move |d| (z, d))) {
+                if zoom > 50.0 && exact.is_none() {
+                    continue;
+                }
+                let frame = |flame: Flame| {
+                    let mut c = config_for(flame);
+                    match (&exact, zoom > 50.0) {
+                        (Some((re, im)), true) => {
+                            c.escape.center_re = re.clone();
+                            c.escape.center_im = im.clone();
+                        }
+                        _ => {
+                            c.escape.center_re = format!("{:?}", target[0]);
+                            c.escape.center_im = format!("{:?}", plane_im(target[1]));
+                        }
+                    }
+                    c.escape.zoom_log2 = zoom;
+                    c.escape.formula_params.insert("levels".to_string(), 80.0);
+                    c.escape.formula_params.insert("beam".to_string(), BEAM as f32);
+                    c.escape.formula_params.insert("delta".to_string(), delta);
+                    c
+                };
+                let (got, want) = (render(&frame(twin.clone())), render(&frame(builtin.clone())));
+                let lit = |rgba: &[u8], x: u32, y: u32| brightness(rgba, x, y);
+                let (mut agree, mut set) = (0usize, 0usize);
+                let cut = |rgba: &[u8]| {
+                    let all: Vec<f64> = (0..W * H).map(|i| lit(rgba, i % W, i / W)).collect();
+                    let (lo, hi) = all.iter().fold((f64::INFINITY, 0.0f64), |(lo, hi), &b| (lo.min(b), hi.max(b)));
+                    0.5 * (lo + hi)
+                };
+                let (cg, cw) = (cut(&got), cut(&want));
+                for i in 0..W * H {
+                    let (g, w) = (lit(&got, i % W, i / W) > cg, lit(&want, i % W, i / W) > cw);
+                    agree += (g == w) as usize;
+                    set += w as usize;
+                }
+                let share = agree as f64 / (W * H) as f64;
+                let walk = if delta > 0.5 { "delta" } else { "absolute" };
+                println!("  {name} at 2^{zoom}, {walk} walk: {share:.4} of pixels agree with the built-in ({set} lit)");
+                // The control, past f64: the handover taking the twin's
+                // inverse in f64, as before `big_inverse`, must draw
+                // another picture -- or this view measures nothing.
+                if exact.is_some() && zoom > 50.0 && delta < 0.5 {
+                    crate::variations::user_inverse::BIG_INVERSE.with(|b| b.set(false));
+                    let control = render(&frame(twin.clone()));
+                    crate::variations::user_inverse::BIG_INVERSE.with(|b| b.set(true));
+                    let cc = cut(&control);
+                    let same = (0..W * H).filter(|&i| (lit(&control, i % W, i / W) > cc) == (lit(&want, i % W, i / W) > cw)).count();
+                    let control_share = same as f64 / (W * H) as f64;
+                    println!("    with the inverse in f64: {control_share:.4} agree");
+                    if control_share > 0.95 {
+                        failures.push(format!("{name} at 2^{zoom}: the f64 inverse agrees {control_share:.4} too -- the view does not need the big floats"));
+                    }
+                }
+                if set < 100 || set + 100 > (W * H) as usize {
+                    println!("    (no structure in the view)");
+                    continue;
+                }
+                judged += 1;
+                if share < 0.98 {
+                    failures.push(format!("{name} at 2^{zoom}: {share:.4} agree"));
+                }
+            }
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        assert!(judged >= 4, "only {judged} views had structure to judge");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     #[test]
     #[ignore = "needs a GPU"]
     fn the_gpu_agrees_on_a_nonlinear_set_at_depth() {
