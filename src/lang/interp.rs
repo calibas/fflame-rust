@@ -350,6 +350,9 @@ pub struct VariationRun<'p> {
     /// last call gave (`#{ z, w }`).
     point_w: f64,
     w_out: Option<f64>,
+    /// The variables a call starts afresh ([`Self::reset_locals`]): all
+    /// but `prepare`'s values and `init`'s state.
+    locals: Vec<VarId>,
 }
 
 impl<'p> VariationRun<'p> {
@@ -362,7 +365,8 @@ impl<'p> VariationRun<'p> {
         // `prepare`'s values, at f64, which the body reads as its own.
         m.exec(&p.global_body, &mut sh);
         m.exec(&p.init, &mut sh);
-        VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], point_w: 0.0, w_out: None }
+        let locals = (0..p.vars.len()).filter(|&v| !p.vars[v].global && !crate::lang::delta::writes_var(&p.init, v)).collect();
+        VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], point_w: 0.0, w_out: None, locals }
     }
 
     /// Every `rand()` of every call `u`, in [0, 1): the arm of a
@@ -396,6 +400,33 @@ impl<'p> VariationRun<'p> {
     pub fn with_color(mut self, c: f64) -> Self {
         self.color = c;
         self
+    }
+
+    /// [`Self::with_draw`] on a run kept between calls.
+    pub fn set_draw(&mut self, u: f64) {
+        self.m.fixed_draw.set(Some((u.clamp(0.0, 1.0 - 1e-9) * 4294967296.0) as u32));
+    }
+
+    /// [`Self::with_color`] on a run kept between calls.
+    pub fn set_color(&mut self, c: f64) {
+        self.color = c;
+    }
+
+    /// Every variable but `prepare`'s values and `init`'s state back to
+    /// zero, as a call's own start has them on the GPU (each a `var`
+    /// zeroed where the function begins): a run kept between calls
+    /// (`user_inverse`'s kernels, rhai-planners D1) then calls as a fresh
+    /// one does, without building one -- half the cost of a call.
+    pub fn reset_locals(&mut self) {
+        let p = self.m.prog;
+        for &v in &self.locals {
+            let var = &p.vars[v];
+            if var.is_array() {
+                self.m.arrays[v].iter_mut().for_each(|x| *x = Value::zero(var.ty));
+            } else {
+                self.m.vars[v] = Value::zero(var.ty);
+            }
+        }
     }
 
     /// The point for `z`, and the colour it wrote if it writes one, given

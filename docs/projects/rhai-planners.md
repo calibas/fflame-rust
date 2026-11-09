@@ -390,10 +390,54 @@ What is missing is three other things.
   shader's against the CPU's, as `the_shader_forward_forms_are_the_cpu_ones`;
   the grand julian at 1e6 as its built-in.
 
+## Part D: the open items
+
+The user (2026-11-09): "keep going, and we'll plan on addressing all the
+open issues." Toward the goal, Rhai twins doing everything the built-ins
+do, in this order -- the first makes every later gate quicker.
+
+- **D1. Speed.** A user kernel's call builds its interpreter afresh --
+  allocating its variables, running `prepare` -- then runs the body:
+  0.67 µs a call against 0.35 µs on a run kept (julian's twin), and the
+  walk's read of grand-julian's twin 2.1 s against the built-in's 0.38 s.
+  Each kernel keeps a run per thread for each of its programs, its
+  locals zeroed and its draw or branch set per call. Compiling a body to
+  closures, instead of walking its tree, is the step after, if wanted.
+  *Built*: a kept run per kernel program per thread (kernels leaked: the
+  table never let one go, so a run can borrow one), 0.39 µs a call; and
+  each thread's own copy of the kernel table, since the walk's threads all
+  meeting at its lock cost 40% of a call with every core calling. The
+  twin's read 1.4 s; its plans 3.2-12 s against the built-in's 0.6-2.1 s,
+  where they were 3.8-14.3 s -- and before, its 1e4 plan ran into the
+  walk's 20 s budget and came out 6% coarser. What is left is the
+  interpreter: 155M forward calls in that plan, the CPU evaluator
+  replaying sample points along words (the GPU planner, which runs the
+  body compiled, takes every view it resolves -- to about 1e6 on
+  grand-julian). Next, if wanted: the evaluator replaying a word's points
+  as one batch, each node interpreted once for all of them.
+- **D2. A drawing kernel summed with an affine** (juliascope-arms,
+  random1). A sum's maps are one per forward arm, each solved by Newton
+  from the kernel's inverse; a root's `branch` is both (its inverse is
+  single-valued), a user kernel's has to say both: `arm × branches +
+  seed`, the arm's grid draw for the forward phase and the seed for the
+  inverse. Mode D's Newton takes it too: the forward map compiled with
+  its draws read from the colour channel, and the arm's draw in the row.
+- **D3. The Flame Attractor's deep zoom through a user kernel.** Its
+  handover takes the inverse in f64 and lifts it to BigFloat, which holds
+  to some 1e13-1e15; and its delta walk has no inverse difference, so
+  every lineage through one rebases. A BigFloat run of the inverse's body
+  (`lang::bigeval` runs formula loops today; a transform section wants its
+  input point, its result and its branch), and the derived difference of
+  `fn inverse` (`variation_difference`, its branch the uniform channel)
+  on the CPU and in mode D's `ifs_kernel_difference`, spliced as C3's.
+- **D4. No preimage on most branches** (splits' twin when it said so):
+  every pixel read as the set on the GPU where the CPU reference did not.
+  Reproduced from the twin's old inverse and traced.
+
 ## Order of work
 
 A1, A2, B1 with the twins' inverses and the borrowing built-ins, B2, B3,
-C1, C2 and C3 done (2026-11-08); *Open* left.
+C1, C2 and C3 done (2026-11-08); then D1, D2, D3, D4.
 
 ## Decisions for the user
 

@@ -5542,8 +5542,11 @@ mod tests {
         let (cfg, twin) = rhai_grand_julian();
         let guard = crate::variations::global_registry();
         let reg = &*guard;
+        let t0 = std::time::Instant::now();
         let b = Backward::read(&cfg.flame, reg).expect("the built-in");
+        let t1 = std::time::Instant::now();
         let t = Backward::read(&twin, reg).expect("the twin");
+        println!("read: built-in {:.0} ms, twin {:.0} ms", (t1 - t0).as_secs_f64() * 1e3, t1.elapsed().as_secs_f64() * 1e3);
         drop(guard);
         let (device, queue) = render_device();
         let mut failures = Vec::new();
@@ -5557,8 +5560,20 @@ mod tests {
             let view = View::of(z as f64, at, N, N);
             let mut ct = c.clone();
             ct.flame = twin.clone();
-            let (pb, pt) = (b.plan(view).expect("a plan"), t.plan(view).expect("a plan"));
-            println!("  x{z:.0e} at {frac}: built-in {} words, lost {:.2e} | twin {} words, lost {:.2e}", pb.words.len(), pb.lost, pt.words.len(), pt.lost);
+            let t0 = std::time::Instant::now();
+            let pb = b.plan(view).expect("a plan");
+            let t1 = std::time::Instant::now();
+            let pt = t.plan(view).expect("a plan");
+            let (sb, st) = ((t1 - t0).as_secs_f64(), t1.elapsed().as_secs_f64());
+            println!(
+                "  x{z:.0e} at {frac}: built-in {} words, lost {:.2e}, {sb:.1} s{} | twin {} words, lost {:.2e}, {st:.1} s{}",
+                pb.words.len(),
+                pb.lost,
+                if pb.timed_out { ", timed out" } else { "" },
+                pt.words.len(),
+                pt.lost,
+                if pt.timed_out { ", timed out" } else { "" }
+            );
             let (xb, _) = replicated_blocks(&device, &queue, &c, Some(&pb), N, 1024, 8, REPS);
             let (xt, img) = replicated_blocks(&device, &queue, &ct, Some(&pt), N, 1024, 8, REPS);
             let _ = std::fs::create_dir_all("output/rhai-planners");
