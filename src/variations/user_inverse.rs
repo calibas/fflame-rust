@@ -355,6 +355,195 @@ pub fn kernel(slot: u32) -> Arc<UserKernel> {
     table().read().expect("the user kernels' table").0[slot as usize].clone()
 }
 
+// ---------------------------------------------------------------- 3D
+
+/// The name mode D's solid shader calls a 3D inverse by (B3).
+pub const WGSL_NAME3: &str = "ifs_user_inv3";
+
+/// A variation's 3D inverse (`fn inverse3(v, p)`; docs/projects/
+/// rhai-planners.md, B3): one branch, as the solid walk's kernels have,
+/// checked as the plane's is (`check3`).
+pub struct UserInverse3 {
+    pub key: String,
+    /// `fn variation3(v, p)`.
+    pub forward: Program,
+    /// `fn inverse3(v, p)`.
+    pub inverse: Program,
+    /// Whether `variation3` draws: a many-valued map, each value an arm.
+    pub forward_draws: bool,
+    /// The inverse as the solid shader calls it, `fn ifs_user_inv3(v, base,
+    /// 0.0) -> vec3<f32>` ([`WGSL_NAME3`]).
+    pub wgsl: String,
+}
+
+impl UserInverse3 {
+    /// `variation3` at `v`, along `arm` (mod [`FORWARD_ARMS`]), as
+    /// [`UserInverse::forward_at`].
+    pub fn forward_at(&self, params: &ParamValues, v: [f64; 3], arm: u32) -> [f64; 3] {
+        let u = ((arm % FORWARD_ARMS) as f64 + 0.5) / FORWARD_ARMS as f64;
+        VariationRun::new(&self.forward, params, 1).with_draw(u).call3(v, [0.0; 3], 1.0).0
+    }
+
+    /// `inverse3` at `v`.
+    pub fn inverse_at(&self, params: &ParamValues, v: [f64; 3]) -> [f64; 3] {
+        VariationRun::new(&self.inverse, params, 1).call3(v, [0.0; 3], 1.0).0
+    }
+
+    /// Whether `variation3` sends the pre-origin's neighbourhood far out,
+    /// as [`UserInverse::unbounded_at_origin`].
+    pub fn unbounded_at_origin(&self, params: &ParamValues) -> bool {
+        (0..8).any(|k| {
+            let a = std::f64::consts::TAU * k as f64 / 8.0;
+            let v = self.forward_at(params, [1e-3 * a.cos(), 1e-3 * a.sin(), 0.5e-3 * (k as f64 - 3.5).signum()], 0);
+            !((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() <= 100.0)
+        })
+    }
+}
+
+/// The variation's 3D inverse from its source: `None` when it declares
+/// none; why it does not compile otherwise. Checked at its defaults.
+pub fn compile3(source: &str, key: &str) -> Option<Result<UserInverse3, String>> {
+    if !crate::lang::rhai::has_function(source, "inverse3") {
+        return None;
+    }
+    Some((|| {
+        let first = |d: &[crate::lang::Diag]| {
+            d.iter().find(|x| x.severity == crate::lang::Severity::Error).map(|x| x.render(source)).unwrap_or_else(|| "it does not compile".to_string())
+        };
+        if !crate::lang::rhai::has_function(source, "variation3") {
+            return Err("a 3D inverse is of a 3D variation, `fn variation3(v, p)`".to_string());
+        }
+        let forward = crate::lang::rhai::transformation3(source).map_err(|d| first(&d))?;
+        let inverse = crate::lang::rhai::inverse_transformation3(source).map_err(|d| format!("its 3D inverse: {}", first(&d)))?;
+        let wgsl = crate::lang::wgsl::inverse_kernel3(&inverse, WGSL_NAME3)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::lang::wgsl::validate_inverse_kernel(&wgsl).map_err(|e| format!("the compiler produced invalid WGSL for the 3D inverse (a bug): {e}"))?;
+        let forward_draws = crate::lang::wgsl::variation_shape(&forward).is_ok_and(|s| s.rng);
+        let inv = UserInverse3 { key: key.to_string(), forward, inverse, forward_draws, wgsl };
+        check3(&inv, &ParamValues::defaults(&inv.forward))?;
+        Ok(inv)
+    })())
+}
+
+/// [`check`] in the ball of radius 4: `variation3` then `inverse3` gives
+/// each point back to a relative 1e-6, but one in fifty.
+pub fn check3(inv: &UserInverse3, params: &ParamValues) -> Result<(), String> {
+    let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+    let mut next = || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let (mut tried, mut missed) = (0u32, 0u32);
+    let mut worst: Option<(f64, [f64; 3], [f64; 3], [f64; 3])> = None;
+    for i in 0..400u32 {
+        // A point in the ball, by volume.
+        let (z, ph) = (2.0 * next() - 1.0, std::f64::consts::TAU * next());
+        let r = 4.0 * next().cbrt();
+        let s = (1.0 - z * z).max(0.0).sqrt();
+        let x = [r * s * ph.cos(), r * s * ph.sin(), r * z];
+        let v = inv.forward_at(params, x, i);
+        let m = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if !m.is_finite() || m > 1e6 {
+            continue;
+        }
+        tried += 1;
+        let u = inv.inverse_at(params, v);
+        let scale = 1.0f64.max(r);
+        let e = ((u[0] - x[0]).powi(2) + (u[1] - x[1]).powi(2) + (u[2] - x[2]).powi(2)).sqrt() / scale;
+        if !(e <= 1e-6) {
+            missed += 1;
+            if worst.is_none_or(|w| !(e <= w.0)) {
+                worst = Some((e, x, v, u));
+            }
+        }
+    }
+    if tried < 100 {
+        return Err(format!("its 3D forward map gave {tried} finite points of 400 over the ball of radius 4: too few to check its inverse"));
+    }
+    if missed * 50 > tried {
+        let (_, x, v, u) = worst.expect("a miss");
+        return Err(format!(
+            "its 3D inverse does not undo it: `variation3` sends ({:.6}, {:.6}, {:.6}) to ({:.6}, {:.6}, {:.6}), and `inverse3` gives ({:.6}, {:.6}, {:.6}); {missed} of {tried} points missed",
+            x[0], x[1], x[2], v[0], v[1], v[2], u[0], u[1], u[2]
+        ));
+    }
+    Ok(())
+}
+
+/// The 3D inverse of the variation `key`, compiled and checked once per
+/// key: a Rhai variation's own, or for a built-in its twin's, as [`of`].
+pub fn of3(key: &str) -> Option<Result<Arc<UserInverse3>, String>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<Result<Arc<UserInverse3>, String>>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().ok()?.get(key) {
+        return hit.clone();
+    }
+    let source = crate::variations::custom::source_of(key).or_else(|| crate::variations::twins::source(key).map(str::to_string));
+    let built = source.and_then(|s| compile3(&s, key)).map(|r| r.map(Arc::new));
+    if let Ok(mut c) = cache.lock() {
+        c.insert(key.to_string(), built.clone());
+    }
+    built
+}
+
+/// A 3D inverse at one transform's parameter values.
+pub struct UserKernel3 {
+    pub inverse: Arc<UserInverse3>,
+    pub params: ParamValues,
+    /// The parameters' slots, then the inverse's `prepare` values.
+    pub packed: Vec<f32>,
+}
+
+impl UserKernel3 {
+    pub fn forward(&self, v: [f64; 3], arm: u32) -> [f64; 3] {
+        self.inverse.forward_at(&self.params, v, arm)
+    }
+
+    pub fn inverse(&self, v: [f64; 3]) -> [f64; 3] {
+        self.inverse.inverse_at(&self.params, v)
+    }
+
+    pub fn unbounded_at_origin(&self) -> bool {
+        self.inverse.unbounded_at_origin(&self.params)
+    }
+}
+
+type Table3 = (Vec<Arc<UserKernel3>>, HashMap<(String, Vec<u32>), Result<u32, String>>);
+
+fn table3() -> &'static RwLock<Table3> {
+    static TABLE: OnceLock<RwLock<Table3>> = OnceLock::new();
+    TABLE.get_or_init(Default::default)
+}
+
+/// [`kernel_slot`] for a 3D inverse ([`check3`] at these values).
+pub fn kernel_slot3(inv: &Arc<UserInverse3>, slots: &[f32]) -> Result<u32, String> {
+    let id = (inv.key.clone(), slots.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+    if let Some(hit) = table3().read().ok().and_then(|t| t.1.get(&id).cloned()) {
+        return hit;
+    }
+    let params = ParamValues::from_slots(&inv.forward, slots);
+    let result = check3(inv, &params).map(|()| {
+        let mut packed = slots.to_vec();
+        packed.extend(interp::globals(&inv.inverse, &params, &Env::at(C64::ZERO, 1)));
+        UserKernel3 { inverse: inv.clone(), params, packed }
+    });
+    let mut t = table3().write().expect("the 3D user kernels' table");
+    if let Some(hit) = t.1.get(&id) {
+        return hit.clone();
+    }
+    let slot = result.map(|k| {
+        t.0.push(Arc::new(k));
+        (t.0.len() - 1) as u32
+    });
+    t.1.insert(id, slot.clone());
+    slot
+}
+
+/// The 3D user kernel in `slot` ([`kernel_slot3`]).
+pub fn kernel3(slot: u32) -> Arc<UserKernel3> {
+    table3().read().expect("the 3D user kernels' table").0[slot as usize].clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

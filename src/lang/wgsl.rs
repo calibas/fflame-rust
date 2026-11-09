@@ -800,6 +800,41 @@ pub fn inverse_kernel(p: &Program, name: &str) -> Result<String, String> {
     Ok(format!("{m}\nfn {name}(v: vec2<f32>, base: u32, branch: f32) -> vec2<f32> {{\n    var vc = branch;\n    return {prefix}variation_2d(v, base, 0u, &vc);\n}}\n"))
 }
 
+/// [`inverse_kernel`] for a 3D inverse (`fn inverse3(v, p)`, B3): `fn
+/// {name}(v: vec3<f32>, base: u32, branch: f32) -> vec3<f32>`, by the same
+/// rules.
+pub fn inverse_kernel3(p: &Program, name: &str) -> Result<String, String> {
+    let s = variation_shape(p)?;
+    let refuse = |what: &str| Err(format!("an inverse {what}: the Flame Attractor runs it outside a flame"));
+    if s.rng || s.init_rng {
+        return refuse("draws no random numbers");
+    }
+    if s.accum {
+        return refuse("reads no running sum (`ctx.accum`)");
+    }
+    if s.rgb || s.hide || writes(&p.transform, Place::Color) || !s.state.is_empty() {
+        return refuse("writes no colour, hides nothing and keeps no state");
+    }
+    let prefix: &'static str = Box::leak(format!("{name}_").into_boxed_str());
+    let shape = VariationShape { ids: true, color: true, ..s };
+    let m = variation_module(p, &shape, ", xform_id: u32, variation_id: u32, vc: ptr<function, f32>", true, false, prefix);
+    for (needle, what) in [
+        ("transforms[", "reads no weight or affine (`ctx.weight`, `ctx.a` ...)"),
+        ("rng_next", "draws no random numbers"),
+        ("_state(", "keeps no state"),
+        ("point_w", "reads no 4th coordinate"),
+        ("palette_", "reads no palette or texture"),
+        ("texture", "reads no palette or texture"),
+        ("emit_", "emits no points"),
+        ("params.", "reads no camera"),
+    ] {
+        if m.contains(needle) {
+            return refuse(what);
+        }
+    }
+    Ok(format!("{m}\nfn {name}(v: vec3<f32>, base: u32, branch: f32) -> vec3<f32> {{\n    var vc = branch;\n    return {prefix}variation_3d(v, base, 0u, &vc);\n}}\n"))
+}
+
 /// [`inverse_kernel`]'s WGSL is a valid module beside the one function the
 /// mode D shader gives it, `get_param`.
 #[cfg(not(target_arch = "wasm32"))]

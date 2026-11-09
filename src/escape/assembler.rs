@@ -8687,7 +8687,28 @@ pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> Strin
 /// three would otherwise have to learn about sums, and there are
 /// dozens across the walk, the beam and three colourings.
 fn push_ifs_sum_markers(out: &mut Vec<String>, text: &str, sums: bool, user: bool) {
+    push_ifs_markers(out, text, sums, user, false)
+}
+
+/// [`push_ifs_sum_markers`], and the solid's user markers when `user3`
+/// (B3): a kind-4 row's inverse and σ, `ifs_user_block3`'s.
+fn push_ifs_markers(out: &mut Vec<String>, text: &str, sums: bool, user: bool, user3: bool) {
     for l in text.lines() {
+        match l.trim() {
+            "//__IFS_USER_INVERSE3__" => {
+                if user3 {
+                    out.push("    if (kind == 4.0) { return vec4<f32>(ifs_user_inverse3(i, v), w); }".to_string());
+                }
+                continue;
+            }
+            "//__IFS_USER_SIGMA3__" => {
+                if user3 {
+                    out.push("    if (kind == 4.0) { return ifs_user_sigma3(i, v); }".to_string());
+                }
+                continue;
+            }
+            _ => {}
+        }
         let call = match l.trim() {
             "//__IFS_SUM_POINT__" => Some((7.0, "return ifs_sum_inv_point(i, p);")),
             "//__IFS_SUM_SIGMA__" => Some((7.0, "return ifs_sum_inv_sigma(i, p);")),
@@ -8721,6 +8742,31 @@ fn push_ifs_sum_markers(out: &mut Vec<String>, text: &str, sums: bool, user: boo
             (None, None) => out.push(l.to_string()),
         }
     }
+}
+
+/// The solid's own Rhai inverses (kind-4 rows, `fn inverse3`; B3): each
+/// its function renamed by its index, the `get_param` they read through,
+/// the dispatcher, and the local σ, `1/σ_max` of the inverse's Jacobian by
+/// central differences -- σ_max exactly, the root of `JᵀJ`'s largest
+/// eigenvalue in closed form (`symmetric3_eigenvalues`'s method), since a
+/// bound larger than σ_max is a step longer than the surface allows.
+fn ifs_user_block3(user: &super::ifs::UserKernels) -> String {
+    use crate::variations::user_inverse::WGSL_NAME3;
+    let mut out = String::from(
+        "fn get_param(xform_id: u32, variation_id: u32, slot: u32) -> f32 {\n    return ifs_xaos[xform_id + variation_id + slot];\n}\n",
+    );
+    let mut cases = String::new();
+    for (f, (_, wgsl, _, _)) in user.functions.iter().enumerate() {
+        out.push_str(&wgsl.replace(WGSL_NAME3, &format!("{WGSL_NAME3}{f}")));
+        cases.push_str(&format!("        case {f}u: {{ return {WGSL_NAME3}{f}(v, base, 0.0); }}\n"));
+    }
+    out.push_str(&format!(
+        "fn ifs_user_inverse3(i: u32, v: vec3<f32>) -> vec3<f32> {{\n    let base = u32(ifs_maps[i].extra2.y);\n    switch u32(ifs_maps[i].extra2.x) {{\n{cases}        default: {{}}\n    }}\n    return v * 1e30;\n}}\n"
+    ));
+    out.push_str(
+        "fn ifs_user_sigma3(i: u32, v: vec3<f32>) -> f32 {\n    let h = 1e-3 * max(length(v), 1e-2);\n    let a = (ifs_user_inverse3(i, v + vec3<f32>(h, 0.0, 0.0)) - ifs_user_inverse3(i, v - vec3<f32>(h, 0.0, 0.0))) / (2.0 * h);\n    let b = (ifs_user_inverse3(i, v + vec3<f32>(0.0, h, 0.0)) - ifs_user_inverse3(i, v - vec3<f32>(0.0, h, 0.0))) / (2.0 * h);\n    let c = (ifs_user_inverse3(i, v + vec3<f32>(0.0, 0.0, h)) - ifs_user_inverse3(i, v - vec3<f32>(0.0, 0.0, h))) / (2.0 * h);\n    let g00 = dot(a, a);\n    let g11 = dot(b, b);\n    let g22 = dot(c, c);\n    let g01 = dot(a, b);\n    let g02 = dot(a, c);\n    let g12 = dot(b, c);\n    let p1 = g01 * g01 + g02 * g02 + g12 * g12;\n    var top = max(g00, max(g11, g22));\n    if (p1 > 0.0) {\n        let q = (g00 + g11 + g22) / 3.0;\n        let p2 = (g00 - q) * (g00 - q) + (g11 - q) * (g11 - q) + (g22 - q) * (g22 - q) + 2.0 * p1;\n        let p = sqrt(p2 / 6.0);\n        let b00 = (g00 - q) / p;\n        let b11 = (g11 - q) / p;\n        let b22 = (g22 - q) / p;\n        let b01 = g01 / p;\n        let b02 = g02 / p;\n        let b12 = g12 / p;\n        let det = b00 * (b11 * b22 - b12 * b12) - b01 * (b01 * b22 - b12 * b02) + b02 * (b01 * b12 - b11 * b02);\n        let r = clamp(det * 0.5, -1.0, 1.0);\n        top = q + 2.0 * p * cos(acos(r) / 3.0);\n    }\n    let s_max = sqrt(max(top, 0.0));\n    if (!(s_max > 0.0) || !(s_max <= 1e32)) {\n        return 0.0;\n    }\n    return 1.0 / s_max;\n}\n",
+    );
+    out
 }
 
 /// The flame's own Rhai inverses (kind-8 rows; docs/projects/rhai-planners.md,
@@ -8814,7 +8860,8 @@ pub fn assemble_ifs_rig(
     sums: bool,
     placed: bool,
 ) -> String {
-    assemble_ifs_user(def, coloring, beam, lens, delta, sums, placed, &super::ifs::UserKernels::default())
+    let none = super::ifs::UserKernels::default();
+    assemble_ifs_user(def, coloring, beam, lens, delta, sums, placed, &none, &none)
 }
 
 /// The same, with the flame's own Rhai inverses (`user`; kind-8 rows,
@@ -8830,8 +8877,10 @@ pub fn assemble_ifs_user(
     sums: bool,
     placed: bool,
     user: &super::ifs::UserKernels,
+    user3: &super::ifs::UserKernels,
 ) -> String {
     let users = !user.functions.is_empty() && !def.solid;
+    let users3 = !user3.functions.is_empty() && def.solid;
     // A SUM row's inverse is a Newton solve over the kernel's forward
     // body (`ifs-general.md` D3), which only a flame that HAS one
     // pays for. Spliced or not, exactly as the delta walk is, so a
@@ -8891,9 +8940,12 @@ pub fn assemble_ifs_user(
                 // `ifs_inv_point` and `ifs_inv_sigma` rather than
                 // wrapping them. Dropped when there is no sum, so the
                 // text is what it was.
-                push_ifs_sum_markers(&mut out, def.wgsl.trim(), sums, users);
+                push_ifs_markers(&mut out, def.wgsl.trim(), sums, users, users3);
                 if users {
                     out.push(ifs_user_block(user));
+                }
+                if users3 {
+                    out.push(ifs_user_block3(user3));
                 }
                 if def.solid {
                     out.push(ifs_trap_point_wgsl(orbit).trim().to_string());

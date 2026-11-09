@@ -48,3 +48,19 @@ fn variation3(v, p) {
     let tmp = r * sqrt(r2d);
     vec3(tmp * cos(angle), tmp * sin(angle), r * z)
 }
+
+fn inverse3(v, p) {
+    let pf = to_float(p.power);
+    if to_int(pf) == 0 {
+        return v;
+    }
+    let m = sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    if m <= 0.0 {
+        return vec3(0.0, 0.0, 0.0);
+    }
+    let rho = pow(m, pf);
+    let rxy = sqrt(v.x * v.x + v.y * v.y);
+    let th = pf * atan2(v.y, v.x);
+    let s = rho * rxy / m;
+    vec3(s * cos(th), s * sin(th), rho * v.z / m * abs(pf))
+}

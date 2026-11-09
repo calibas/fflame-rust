@@ -7876,7 +7876,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             // (rhai-planners B1): their keys are the shader's, and a key
             // is its source's, so an edit is another pipeline.
             let user = self.ifs.as_ref().map(|p| p.user.clone()).unwrap_or_default();
-            let utag = if user.functions.is_empty() { String::new() } else { format!("|user:{}", user.key()) };
+            let user3 = self.ifs.as_ref().map(|p| p.user3.clone()).unwrap_or_default();
+            let mut utag = if user.functions.is_empty() { String::new() } else { format!("|user:{}", user.key()) };
+            if !user3.functions.is_empty() {
+                utag.push_str(&format!("|user3:{}", user3.key()));
+            }
             let key =
                 format!("ifs|{}|{}|b{beam}|{lens_id}{dtag}{stag}{ptag}{utag}", def.name, coloring.name);
             if !self.pipelines.contains_key(&key) {
@@ -7889,6 +7893,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     sums,
                     placed,
                     &user,
+                    &user3,
                 );
                 let module = device.create_shader_module(ShaderModuleDescriptor {
                     label: Some(&format!("Escape Shader {key}")),

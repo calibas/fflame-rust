@@ -298,6 +298,49 @@ GAPS = {
 }
 
 
+# name -> `fn inverse3(v, p)`: a 3D twin's inverse for the solid (B3), one
+# branch, as `scene::ifs_analysis::Kernel3`'s are.
+INVERSES3 = {
+    # julia3D: |out| = rho^(1/n) at the same elevation, azimuth over n --
+    # undone by rho = |v|^n, the azimuth times n, z scaled back by |n|.
+    "julia3D": """fn inverse3(v, p) {
+    let pf = to_float(p.power);
+    if to_int(pf) == 0 {
+        return v;
+    }
+    let m = sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    if m <= 0.0 {
+        return vec3(0.0, 0.0, 0.0);
+    }
+    let rho = pow(m, pf);
+    let rxy = sqrt(v.x * v.x + v.y * v.y);
+    let th = pf * atan2(v.y, v.x);
+    let s = rho * rxy / m;
+    vec3(s * cos(th), s * sin(th), rho * v.z / m * abs(pf))
+}
+""",
+    # julia3Dz: the plane's root on xy, z by r^(1 - n)/|n|; its twin's
+    # special powers kept -- 1 the identity, -1 an inversion and -2 a root,
+    # both conjugated.
+    "julia3Dz": """fn inverse3(v, p) {
+    let power = to_int(to_float(p.power));
+    if power == 1 {
+        return v;
+    }
+    let ro = v.x * v.x + v.y * v.y;
+    if power == -1 {
+        return vec3(v.x / ro, -v.y / ro, v.z / ro);
+    }
+    let pf = to_float(power);
+    let r = sqrt(ro);
+    let th = if power == -2 { -pf * atan2(v.y, v.x) } else { pf * atan2(v.y, v.x) };
+    let rxy = pow(r, pf);
+    vec3(rxy * cos(th), rxy * sin(th), v.z * abs(pf) * rxy / r)
+}
+""",
+}
+
+
 def with_inverse(name, text):
     """The twin's text with its inverse and image gap, where it has them and
     does not yet: the functions at the end, its branch count in `INFO`."""
@@ -308,11 +351,13 @@ def with_inverse(name, text):
         text = text.rstrip("\n") + "\n\n" + fn
     if name in GAPS and "fn image_gap(" not in text:
         text = text.rstrip("\n") + "\n\n" + GAPS[name]
+    if name in INVERSES3 and "fn inverse3(" not in text:
+        text = text.rstrip("\n") + "\n\n" + INVERSES3[name]
     return text
 
 
 if __name__ == "__main__":
-    for name in INVERSES:
+    for name in list(INVERSES) + [n for n in INVERSES3 if n not in INVERSES]:
         path = f"assets/variations/twins/{name}.rhai"
         text = open(path, encoding="utf-8").read()
         new = with_inverse(name, text)
