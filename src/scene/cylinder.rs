@@ -890,22 +890,22 @@ impl Cylinders {
     /// Whether some transform draws among several images -- a flame the
     /// inverse walk plans.
     fn armed(flame: &Flame) -> bool {
-        flame.transforms.iter().any(|t| {
-            t.weight > 0.0
-                && t.variations.iter().any(|(n, w)| *w != 0.0 && crate::variations::bound::arms_for(n).is_some())
-        })
+        flame.transforms.iter().any(Self::armed_transform)
+    }
+
+    /// Whether `t` draws among several images: a built-in's arms
+    /// (`bound::ARMED`), or a Rhai variation with an inverse whose forward
+    /// map draws (`user_inverse::draws_arms`; rhai-planners C1).
+    fn armed_transform(t: &crate::scene::transforms::Transform) -> bool {
+        t.weight > 0.0
+            && t.variations.iter().any(|(n, w)| {
+                *w != 0.0 && (crate::variations::bound::arms_for(n).is_some() || crate::variations::user_inverse::draws_arms(n))
+            })
     }
 
     /// Why an armed flame gets no plan: the inverse walk refused it.
     fn walk_refused(flame: &Flame, why: &str) -> NoCylinders {
-        let index = flame
-            .transforms
-            .iter()
-            .position(|t| {
-                t.weight > 0.0
-                    && t.variations.iter().any(|(n, w)| *w != 0.0 && crate::variations::bound::arms_for(n).is_some())
-            })
-            .unwrap_or(0);
+        let index = flame.transforms.iter().position(Self::armed_transform).unwrap_or(0);
         NoCylinders::Unbounded { index, why: format!("the inverse walk cannot plan this flame: {why}") }
     }
 

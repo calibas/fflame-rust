@@ -4694,8 +4694,8 @@ async fn ball_2d_numeric(maps: &[IfsMap<Map2>], bulk: bool, slicer: &super::slic
         match m {
             Map2::Nonlinear(r) => match r.kernel {
                 Kernel::Root { n, .. } => r.apply_branch(p, (u * (n.unsigned_abs() as f64)).floor() as u32),
-                // Its arm is its draws' value (`UserInverse::forward_at`).
-                Kernel::User { .. } => r.apply_branch(p, (u * crate::variations::user_inverse::FORWARD_ARMS as f64) as u32),
+                // Its draws' value, on the grid (`UserInverse::forward_at`).
+                Kernel::User { .. } => r.apply_branch(p, (u * crate::variations::user_inverse::DRAW_GRID as f64) as u32),
                 _ => r.apply_branch(p, 0),
             },
             other => other.apply(p),
@@ -4777,14 +4777,14 @@ async fn ball_2d_numeric(maps: &[IfsMap<Map2>], bulk: bool, slicer: &super::slic
                 let a = std::f64::consts::TAU * j as f64 / count as f64;
                 let q = [centre[0] + radius * ring * a.cos(), centre[1] + radius * ring * a.sin()];
                 for m in maps {
-                    let branches = match m.forward.nonlinear().map(|r| r.kernel) {
-                        Some(Kernel::Root { n, .. }) => n.unsigned_abs(),
+                    let branches: Vec<u32> = match m.forward.nonlinear().map(|r| r.kernel) {
+                        Some(Kernel::Root { n, .. }) => (0..n.unsigned_abs()).collect(),
                         // A forward map that draws (julian's twin picking
-                        // its root): each of its arms.
-                        Some(Kernel::User { slot }) if crate::variations::user_inverse::kernel(slot).inverse.forward_draws => crate::variations::user_inverse::FORWARD_ARMS,
-                        _ => 1,
+                        // its root): each of its arms' draws.
+                        Some(Kernel::User { slot }) => crate::variations::user_inverse::kernel(slot).draws(),
+                        _ => vec![0],
                     };
-                    for k in 0..branches {
+                    for k in branches {
                         let img = match &m.forward {
                             Map2::Nonlinear(r) => r.apply_branch(q, k),
                             other => other.apply(q),
@@ -4826,8 +4826,8 @@ async fn bulk_ball_2d(maps: &[IfsMap<Map2>], slicer: &super::slice::Slicer) -> O
         match m {
             Map2::Nonlinear(r) => match r.kernel {
                 Kernel::Root { n, .. } => r.apply_branch(p, (u * (n.unsigned_abs() as f64)).floor() as u32),
-                // Its arm is its draws' value (`UserInverse::forward_at`).
-                Kernel::User { .. } => r.apply_branch(p, (u * crate::variations::user_inverse::FORWARD_ARMS as f64) as u32),
+                // Its draws' value, on the grid (`UserInverse::forward_at`).
+                Kernel::User { .. } => r.apply_branch(p, (u * crate::variations::user_inverse::DRAW_GRID as f64) as u32),
                 _ => r.apply_branch(p, 0),
             },
             other => other.apply(p),

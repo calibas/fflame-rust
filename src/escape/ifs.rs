@@ -9842,28 +9842,7 @@ mod gpu_tests {
     /// which it carries: the twin's key in every transform's weights,
     /// order and parameters.
     pub(super) fn twin_flame(flame: &Flame, name: &str) -> Flame {
-        let key = crate::variations::twins::key(name).expect("a twin");
-        let mut f = flame.clone();
-        for t in &mut f.transforms {
-            if let Some(w) = t.variations.remove(name) {
-                t.variations.insert(key.clone(), w);
-            }
-            for v in &mut t.variation_order {
-                if v == name {
-                    *v = key.clone();
-                }
-            }
-            let params: Vec<(String, f32)> = t.variation_params.drain().collect();
-            for (k, v) in params {
-                let k = match k.strip_prefix(&format!("{name}.")) {
-                    Some(rest) => format!("{key}.{rest}"),
-                    None => k,
-                };
-                t.variation_params.insert(k, v);
-            }
-        }
-        f.custom_variations = vec![crate::variations::twins::carried(name).expect("a twin")];
-        f
+        crate::variations::twins::twin_flame(flame, name)
     }
 
     /// **A twin's own Rhai inverse renders the Flame Attractor**

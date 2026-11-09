@@ -1095,6 +1095,10 @@ struct TransformInfo {
     index: usize,
     weight: f64,
     arms: u32,
+    /// A user kernel's arms, `(arm, share)` -- each named by its grid draw
+    /// and drawn by its share ([`forward_arm_list`]); `None` for a root's,
+    /// `0 .. arms`, each drawn alike.
+    arm_list: Option<Vec<(u32, f64)>>,
     map: usize,
     /// Its `pre_blur`, or its one variation that ignores its input,
     /// taken out of the maps by the analysis and drawn here -- only ever
@@ -1106,18 +1110,72 @@ struct TransformInfo {
     branches: Vec<usize>,
 }
 
-/// How many arms a map's FORWARD has -- a root's `|n|`; everything
-/// else is single-valued going forward, whatever its inverse's branch
-/// count.
+impl TransformInfo {
+    /// The arm a draw `u` in [0, 1) picks.
+    fn arm_at(&self, u: f64) -> u32 {
+        let Some(list) = &self.arm_list else {
+            return ((u * self.arms as f64) as u32).min(self.arms - 1);
+        };
+        let mut u = u;
+        for &(arm, share) in list {
+            if u < share {
+                return arm;
+            }
+            u -= share;
+        }
+        list.last().map_or(0, |a| a.0)
+    }
+}
+
+/// How many arms a map's FORWARD has -- a root's `|n|`, a user kernel's
+/// ([`forward_arm_list`]); everything else is single-valued going
+/// forward, whatever its inverse's branch count.
 fn forward_arms(map: &IfsMap<Map2>) -> u32 {
     let root = |k: &Kernel| match *k {
         Kernel::Root { n, .. } => n.unsigned_abs().max(1),
+        Kernel::User { slot } => crate::variations::user_inverse::kernel(slot).arms().map_or(1, |a| a.len() as u32),
         _ => 1,
     };
     match &map.forward {
         Map2::Nonlinear(n) => root(&n.kernel),
         Map2::Sum(s) => root(&s.kernel),
         _ => 1,
+    }
+}
+
+/// A user kernel's forward arms, `(arm, share)`: the images its draws
+/// pick among, read off its map, each named by the grid draw a word's
+/// symbol carries and a replay forces (`user_inverse::UserKernel::arms`;
+/// docs/projects/rhai-planners.md, C1). `None` for any other map, and
+/// `Some(Err(key))` for one whose draws pick no arms, which no word can
+/// name.
+fn user_arm_list(map: &IfsMap<Map2>) -> Option<Result<Vec<(u32, f64)>, String>> {
+    let kernel = match &map.forward {
+        Map2::Nonlinear(n) => n.kernel,
+        Map2::Sum(s) => s.kernel,
+        _ => return None,
+    };
+    let Kernel::User { slot } = kernel else { return None };
+    let k = crate::variations::user_inverse::kernel(slot);
+    Some(match k.arms() {
+        Some(arms) => Ok(arms.iter().map(|a| (a.code, a.share)).collect()),
+        None => Err(k.inverse.key.clone()),
+    })
+}
+
+/// Whether a map's forward difference has a form the offset replay runs
+/// (`forward_delta`, `replay_delta.wgsl`): every built-in kernel's; a user
+/// kernel's not yet.
+fn has_forward_form(m: &Map2) -> bool {
+    !matches!(m.nonlinear().map(|n| n.kernel).or_else(|| m.sum().map(|s| s.kernel)), Some(Kernel::User { .. }))
+}
+
+/// A map's forward arms, as [`TransformInfo::arm_list`] keeps them with
+/// their shares, or `0 .. forward_arms` for a root's.
+fn forward_arm_codes(map: &IfsMap<Map2>) -> Vec<u32> {
+    match user_arm_list(map) {
+        Some(Ok(list)) => list.into_iter().map(|a| a.0).collect(),
+        _ => (0..forward_arms(map)).collect(),
     }
 }
 
@@ -1473,7 +1531,7 @@ async fn tail_sample(
                 }
                 w -= c.weight;
             }
-            let arm = ((u() * t.arms as f64) as u32).min(t.arms - 1);
+            let arm = t.arm_at(u());
             let y = forward_blurred(&ifs.maps[t.map], x, arm, t.blur, &mut u);
             if !finite(y) || y[0].abs() > 1e12 || y[1].abs() > 1e12 {
                 break;
@@ -1618,12 +1676,6 @@ impl Backward {
         if ifs.maps.is_empty() {
             return Err("no maps".into());
         }
-        // A Rhai variation's own inverse (`Kernel::User`) serves the
-        // Flame Attractor; the replay this walk's plans run in has no
-        // body for it (docs/projects/rhai-planners.md, B1).
-        if let Some(n) = ifs.maps.iter().find_map(|m| m.forward.nonlinear().filter(|n| matches!(n.kernel, Kernel::User { .. }))) {
-            return Err(format!("{} has its own inverse, which this walk does not take yet", registry.label(&n.kernel.variation())));
-        }
         let mut transforms: Vec<TransformInfo> = Vec::new();
         for (mi, m) in ifs.maps.iter().enumerate() {
             if let Some(t) = transforms.iter_mut().find(|t| t.index == m.transform_index) {
@@ -1638,10 +1690,26 @@ impl Backward {
             if let Some(b) = blur {
                 Self::blur_planned(m, b).map_err(|why| format!("transform {}: {why}", m.transform_index))?;
             }
+            // A Rhai variation's own inverse (`Kernel::User`, rhai-planners
+            // C2): its arms as read off its forward map, which a replay
+            // forces by their grid draws (`bound::force_arms`).
+            let arm_list = match user_arm_list(m) {
+                Some(Ok(list)) => Some(list),
+                Some(Err(key)) => {
+                    return Err(format!(
+                        "transform {}: {} draws among more than {} images, or continuously, so no word can name its arm",
+                        m.transform_index,
+                        registry.label(&key),
+                        crate::variations::bound::MAX_ARMS
+                    ))
+                }
+                None => None,
+            };
             transforms.push(TransformInfo {
                 index: m.transform_index,
                 weight,
                 arms: forward_arms(m),
+                arm_list,
                 map: mi,
                 blur,
                 // Its output disc wants the attractor: set below.
@@ -1665,13 +1733,17 @@ impl Backward {
             if !(t.weight > 0.0) {
                 continue;
             }
-            for arm in 0..t.arms {
+            let arms: Vec<(u32, f64)> = match &t.arm_list {
+                Some(list) => list.iter().map(|&(arm, share)| (arm, t.weight / total * share)).collect(),
+                None => (0..t.arms).map(|arm| (arm, t.weight / total / t.arms as f64)).collect(),
+            };
+            for (arm, prob) in arms {
                 alphabet.push(Sym {
                     sym: sym_of(t.index as u32, arm),
                     map: t.map,
                     branches: t.branches.clone(),
                     arm,
-                    prob: t.weight / total / t.arms as f64,
+                    prob,
                     renewal: t.renewal,
                 });
             }
@@ -1699,7 +1771,7 @@ impl Backward {
                 }
                 u -= c.weight;
             }
-            let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+            let arm = t.arm_at(lcg());
             let y = forward_blurred(&ifs.maps[t.map], x, arm, t.blur, &mut lcg);
             if finite(y) && y[0].abs() < 1e12 && y[1].abs() < 1e12 {
                 x = y;
@@ -2340,7 +2412,10 @@ impl Backward {
         // of it; a renewal's word, kept by geometry, has them after its
         // blur already (`close`).
         let blurred = |s: u32| self.alphabet.iter().any(|a| a.sym == s && a.renewal.is_some());
-        let start = word.iter().rposition(|&s| blurred(s)).map_or(0, |j| j + 1);
+        // Nor a map with no difference form -- a Rhai variation's, until it
+        // has one (rhai-planners C3): its steps run absolute.
+        let formless = |s: u32| self.sym_map(s).is_some_and(|(m, _)| !has_forward_form(&m.forward));
+        let start = word.iter().rposition(|&s| blurred(s) || formless(s)).map_or(0, |j| j + 1);
         let seeded_at = match self.alphabet.iter().position(|a| a.sym == word[0]) {
             Some(ai) if self.renewal_here(ai, disc.plotted).is_some() => 1,
             _ => 0,
@@ -2594,7 +2669,7 @@ impl Backward {
         }
         let mut best = None;
         let mut best_d = f64::INFINITY;
-        for k in 0..arms {
+        for k in forward_arm_codes(map) {
             let y = forward(map, x, k);
             if !finite(y) {
                 continue;
@@ -4571,7 +4646,7 @@ mod tests {
                 }
                 u -= c.weight;
             }
-            let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+            let arm = t.arm_at(lcg());
             let map = &b.ifs.maps[t.map];
             let y = forward(map, x, arm);
             if !finite(y) || y[0].abs() > 1e12 {
@@ -4663,7 +4738,7 @@ mod tests {
                     }
                     u -= c.weight;
                 }
-                let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+                let arm = t.arm_at(lcg());
                 let y = forward(&b.ifs.maps[t.map], x, arm);
                 if !finite(y) || y[0].abs() > 1e12 {
                     x = [0.31, 0.17];
@@ -4953,7 +5028,7 @@ mod tests {
                         if u < c.weight { t = c; break; }
                         u -= c.weight;
                     }
-                    let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+                    let arm = t.arm_at(lcg());
                     let y = forward(&b.ifs.maps[t.map], x, arm);
                     if !finite(y) || y[0].abs() > 1e12 { x = [0.31, 0.17]; hist.clear(); continue; }
                     x = y;
@@ -5019,7 +5094,7 @@ mod tests {
                 }
                 u -= c.weight;
             }
-            let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+            let arm = t.arm_at(lcg());
             let y = forward_blurred(&b.ifs.maps[t.map], x, arm, t.blur, &mut lcg);
             if !finite(y) || y[0].abs() > 1e12 {
                 x = [0.31, 0.17];
@@ -5170,6 +5245,157 @@ mod tests {
             }
         }
         println!("total: CPU {cpu_total:.0} ms, GPU {gpu_total:.0} ms, {:.1}x", cpu_total / gpu_total);
+    }
+
+    /// grand-julian as a 2D render, and the same flame with every julian
+    /// its Rhai twin, registered; borrowing nothing on this thread, so the
+    /// twin's maps are user kernels (rhai-planners C2).
+    fn rhai_grand_julian() -> (crate::config::FractalConfig, Flame) {
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        let text = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame").expect("grand-julian");
+        let mut cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.levels_enabled = false;
+        cfg.cylinder_always = true;
+        let twin = crate::variations::twins::twin_flame(&cfg.flame, "julian");
+        crate::variations::custom::ensure(&twin);
+        (cfg, twin)
+    }
+
+    /// A device the renderer runs on, as the density gates' is.
+    fn render_device() -> (wgpu::Device, wgpu::Queue) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::all(), ..wgpu::InstanceDescriptor::new_without_display_handle() });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("adapter");
+        let al = adapter.limits();
+        let mut limits = wgpu::Limits::default();
+        limits.max_storage_buffers_per_shader_stage = al.max_storage_buffers_per_shader_stage;
+        limits.max_storage_buffer_binding_size = al.max_storage_buffer_binding_size;
+        limits.max_buffer_size = al.max_buffer_size;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("plan render test"),
+            required_features: wgpu::Features::CLEAR_TEXTURE,
+            required_limits: limits,
+            ..Default::default()
+        }))
+        .expect("device")
+    }
+
+    /// **A Rhai julian plans as the built-in** (docs/projects/rhai-planners.md,
+    /// C2): grand-julian with every julian its Rhai twin, borrowing
+    /// nothing, is walked through user kernels -- its arms read off the
+    /// twin's forward map, its inverse run in the interpreter -- with the
+    /// built-in's alphabet; and its plans, the CPU's and the GPU planner's
+    /// (which forces the twin's draws, `bound::force_arms`), cover as much
+    /// of an independent chaos game as the built-in's. Measured: within
+    /// five words of the built-in's in thousands, coverage 1.0000 alike at
+    /// 1e2 and 1e3 (1e4 is past the chaos game), the twin read in 2.1 s
+    /// against 0.38 s.
+    #[test]
+    #[ignore = "needs a GPU, registers a twin, reads output/flame-zoom; minutes of chaos game"]
+    fn a_rhai_julian_plans_as_the_builtin() {
+        let (cfg, twin) = rhai_grand_julian();
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let t0 = std::time::Instant::now();
+        let b = Backward::read(&cfg.flame, reg).expect("the built-in");
+        let t1 = std::time::Instant::now();
+        let t = Backward::read(&twin, reg).expect("the twin");
+        println!("read: built-in {:.0} ms, twin {:.0} ms", (t1 - t0).as_secs_f64() * 1e3, t1.elapsed().as_secs_f64() * 1e3);
+        assert!(
+            t.ifs.maps.iter().all(|m| matches!(m.forward.nonlinear().map(|n| n.kernel), Some(Kernel::User { .. }))),
+            "the twin's maps are not user kernels"
+        );
+        assert_eq!(b.alphabet.len(), t.alphabet.len(), "the alphabets");
+        for (x, y) in b.alphabet.iter().zip(&t.alphabet) {
+            assert_eq!(sym_transform(x.sym), sym_transform(y.sym));
+            assert!((x.prob - y.prob).abs() <= 1e-6 * x.prob, "{}: {} against {}", x.sym, y.prob, x.prob);
+        }
+        // The twin's words in the built-in's symbols, arm for arm, so the
+        // built-in's chaos game judges both.
+        let to_builtin: std::collections::HashMap<u32, u32> = t.alphabet.iter().zip(&b.alphabet).map(|(y, x)| (y.sym, x.sym)).collect();
+        let translated = |p: &Cylinders| {
+            let mut p = p.clone();
+            for w in &mut p.words {
+                w.word = w.word.iter().map(|s| to_builtin[s]).collect();
+            }
+            p
+        };
+        let (device, queue) = test_device();
+        let planner = std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(&device, &queue));
+        let mut failures = Vec::new();
+        for z in [1e2f64, 1e3, 1e4] {
+            for frac in [0.25f64, 0.75] {
+                let view = View::of(z, b.sample_point(frac), 1280, 720);
+                let pb = b.plan(view).expect("a built-in plan");
+                let pt = t.plan(view).expect("a twin plan");
+                let gt = t.plan_for(&twin, view, PlanOptions { gpu: Some(&planner), ..Default::default() }).expect("a GPU plan");
+                let cb = coverage(&b, &pb, view, 3000);
+                let ct = coverage(&b, &translated(&pt), view, 3000);
+                let cg = coverage(&b, &translated(&gt), view, 3000);
+                let shown = |c: Option<f64>| c.map_or("n/a".to_string(), |c| format!("{c:.4}"));
+                println!(
+                    "  x{z:.0e} at {frac}: built-in {} words, coverage {} | twin {} words, {} | twin on the GPU {} words, {}",
+                    pb.words.len(),
+                    shown(cb),
+                    pt.words.len(),
+                    shown(ct),
+                    gt.words.len(),
+                    shown(cg)
+                );
+                if let (Some(cb), Some(ct), Some(cg)) = (cb, ct, cg) {
+                    if ct < cb - 0.005 || cg < cb - 0.005 {
+                        failures.push(format!("x{z:.0e} at {frac}: the twin's plans cover {ct:.4} (GPU {cg:.4}) where the built-in's cover {cb:.4}"));
+                    }
+                }
+            }
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// **A Rhai julian renders as the built-in** (rhai-planners C2): a
+    /// render drawing the twin's plan, its draws forced by their grid
+    /// codes, lays down the built-in's density, at 1e2 and 1e4.
+    #[test]
+    #[ignore = "needs a GPU, registers a twin, reads output/flame-zoom"]
+    fn a_rhai_julian_renders_as_the_builtin() {
+        use crate::renderer::density_gates::{compare_blocks, print_compared, replicated_blocks};
+        let (cfg, twin) = rhai_grand_julian();
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let b = Backward::read(&cfg.flame, reg).expect("the built-in");
+        let t = Backward::read(&twin, reg).expect("the twin");
+        drop(guard);
+        let (device, queue) = render_device();
+        let mut failures = Vec::new();
+        const N: u32 = 192;
+        const REPS: usize = 6;
+        for z in [1e2f32, 1e4] {
+            let at = b.sample_point(0.75);
+            let mut c = cfg.clone();
+            c.zoom = z;
+            (c.pan_x, c.pan_y) = (at[0], at[1]);
+            let view = View::of(z as f64, at, N, N);
+            let mut ct = c.clone();
+            ct.flame = twin.clone();
+            let (xb, _) = replicated_blocks(&device, &queue, &c, Some(&b.plan(view).expect("a plan")), N, 1024, 8, REPS);
+            let (xt, img) = replicated_blocks(&device, &queue, &ct, Some(&t.plan(view).expect("a plan")), N, 1024, 8, REPS);
+            let _ = std::fs::create_dir_all("output/rhai-planners");
+            let _ = image::save_buffer(format!("output/rhai-planners/grand-julian-twin-{z:.0e}.png"), &img, N, N, image::ColorType::Rgba8);
+            let cmp = compare_blocks(&xt, &xb, &xb);
+            print_compared(&format!("x{z:.0e}: the twin against the built-in"), &cmp);
+            let (_, _, mx, _, my, _, zz) = cmp.pooled[0];
+            if zz.abs() > 4.0 && (mx / my - 1.0).abs() > 0.02 {
+                failures.push(format!("x{z:.0e}: the twin's density is {:.4} of the built-in's ({zz:+.1} standard errors)", mx / my));
+            }
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// **The GPU plans a view of the plot as completely as the CPU**
@@ -6779,7 +7005,7 @@ mod tests {
                         }
                         u -= c.weight;
                     }
-                    let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+                    let arm = t.arm_at(lcg());
                     let y = forward(&b.ifs.maps[t.map], x, arm);
                     if !finite(y) || y[0].abs() > 1e12 {
                         x = [0.31, 0.17];
@@ -6923,7 +7149,7 @@ mod tests {
             let mut u = lcg() * total;
             let mut t = &b.transforms[b.transforms.len() - 1];
             for c in &b.transforms { if u < c.weight { t = c; break; } u -= c.weight; }
-            let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+            let arm = t.arm_at(lcg());
             let y = forward(&b.ifs.maps[t.map], x, arm);
             if !finite(y) || y[0].abs() > 1e12 { x = [0.31, 0.17]; hist.clear(); continue; }
             x = y;

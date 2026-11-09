@@ -673,6 +673,34 @@ pub fn carried(name: &str) -> Option<CustomSource> {
     super::custom::carried(source(name)?)
 }
 
+/// `flame` with every `name` the built-in's twin, which it carries: the
+/// planners' gates (tests).
+#[cfg(test)]
+pub fn twin_flame(flame: &crate::scene::transforms::Flame, name: &str) -> crate::scene::transforms::Flame {
+    let key = crate::variations::twins::key(name).expect("a twin");
+    let mut f = flame.clone();
+    for t in &mut f.transforms {
+        if let Some(w) = t.variations.remove(name) {
+            t.variations.insert(key.clone(), w);
+        }
+        for v in &mut t.variation_order {
+            if v == name {
+                *v = key.clone();
+            }
+        }
+        let params: Vec<(String, f32)> = t.variation_params.drain().collect();
+        for (k, v) in params {
+            let k = match k.strip_prefix(&format!("{name}.")) {
+                Some(rest) => format!("{key}.{rest}"),
+                None => k,
+            };
+            t.variation_params.insert(k, v);
+        }
+    }
+    f.custom_variations = vec![crate::variations::twins::carried(name).expect("a twin")];
+    f
+}
+
 /// The twin's registry key: what a transform names it by.
 pub fn key(name: &str) -> Option<String> {
     super::custom::key_of(source(name)?)

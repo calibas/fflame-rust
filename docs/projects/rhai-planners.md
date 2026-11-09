@@ -313,13 +313,22 @@ What is missing is three other things.
   renders its density, at zooms the absolute replay holds (1e2, 1e4).
 - **C3. A derived difference form** for a Rhai body: `lang::delta`
   already derives them for escape formulas (pairs of reference value and
-  deviation, by cancellation-free rules for every function it knows,
-  over generators for WGSL and an f64 model). Applied to a variation's
-  body, with `atan2`'s form added (the argument of a ratio, and the turns
-  across the cut) and a forced draw's deviation zero; compiled to WGSL
-  for the replay (spliced per flame, as mode D's user kernels are) and
-  run in f64 for the references. Gates: the derived form against the
-  f64 difference on the twins, as `the_shader_forward_forms_are_the_cpu_ones`;
+  deviation, by cancellation-free rules for every function it knows --
+  `atan2` of a complex, with the turns across the cut, and a power the
+  same for every pixel among them). The way in, without a second
+  deriver: the variation's body is one pass of an escape loop, `z =
+  F(z)` (its input point `#z`, its result written to `z`), so the
+  derived loop equations are `#dz' = F(Z + dz) − F(Z)` -- the forward
+  difference. Its draws are a uniform global while it derives (a forced
+  draw is the same at the reference and the sample). The equations are
+  then a transform section again: the reference point its input, the
+  deviation `ctx.accum`, the draw the colour channel, the new deviation
+  its result -- so the interpreter runs it for the references (f64) and
+  the variation lowering compiles it for the replay, spliced per flame
+  behind a marker in `replay_delta.wgsl` as mode D's user kernels are,
+  its values behind the forward rows (kernel 9). Gates: the derived form
+  of each twin against its built-in's hand form at tiny deviations; the
+  shader's against the CPU's, as `the_shader_forward_forms_are_the_cpu_ones`;
   the grand julian at 1e6 as its built-in.
 
 ## Order of work

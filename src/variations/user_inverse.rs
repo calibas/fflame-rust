@@ -40,10 +40,35 @@ use crate::lang::ir::Program;
 /// Attractor's walk (disc's rings are capped at twelve).
 pub const MAX_BRANCHES: u32 = 16;
 
-/// How many arms a forward map that draws is taken at
-/// ([`UserInverse::forward_at`]): every draw `(arm + ½)/16`, so a root
-/// picked by `floor(n·rand())` meets each of its arms up to a power of 16.
+/// The grid a forward map's draws are taken on
+/// ([`UserInverse::forward_at`]; docs/projects/rhai-planners.md, C1): code
+/// `c` sets every draw of the call to `(c + ½)/256` -- the interpreter's
+/// fixed draw and the replay's forced one (`bound::force_arms`) alike,
+/// exact in both. An arm is named by such a code ([`UserKernel::arms`]),
+/// which is what a word's symbol carries for it.
+pub const DRAW_GRID: u32 = 256;
+
+/// How many draws a forward map that draws is taken at where its arms are
+/// not known -- its checks, and a draw that picks no arm -- spread over
+/// the grid ([`spread`]): a root picked by `floor(n·rand())` meets each of
+/// its arms up to a power of 16.
 pub const FORWARD_ARMS: u32 = 16;
+
+/// The `i`th of the [`FORWARD_ARMS`] draws spread over the grid, as a code.
+pub fn spread(i: u32) -> u32 {
+    let step = DRAW_GRID / FORWARD_ARMS;
+    (i % FORWARD_ARMS) * step + step / 2
+}
+
+/// One of a forward map's arms (C1): the image its draws pick over some
+/// interval of `u`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Arm {
+    /// The grid draw it is taken at, and forced at ([`DRAW_GRID`]).
+    pub code: u32,
+    /// The share of draws that pick it.
+    pub share: f64,
+}
 
 /// The name mode D's shader calls an inverse by, before the assembler
 /// makes it a slot's own (`escape::assembler`).
@@ -81,17 +106,25 @@ pub struct UserInverse {
     /// for one that draws, or reaches for what only a flame has -- such a
     /// kernel is not summed (`scene::ifs_analysis`).
     pub forward_wgsl: Option<String>,
+    /// Its forward difference `F(Z + d) - F(Z)`, derived from `variation`
+    /// without the cancellation (`lang::delta::variation_difference`;
+    /// rhai-planners C3): the offset replay's step through it. None where
+    /// it does not derive, and the replay keeps its steps absolute.
+    pub difference: Option<Program>,
 }
 
 impl UserInverse {
-    /// The forward map at `z`, along `arm` (mod [`FORWARD_ARMS`]): every
-    /// draw of the call `(arm + ½)/FORWARD_ARMS`, so a many-valued map
-    /// (julian's `rand()` picking its root) gives each of its values on
-    /// some arm, the same one each time. Seeded draws missed an arm:
-    /// eight of them met only one of julia's two, and its ball came out
-    /// short.
-    pub fn forward_at(&self, params: &ParamValues, z: [f64; 2], arm: u32) -> [f64; 2] {
-        let u = ((arm % FORWARD_ARMS) as f64 + 0.5) / FORWARD_ARMS as f64;
+    /// The forward map at `z` at the grid draw `code` (mod [`DRAW_GRID`]):
+    /// every draw of the call `(code + ½)/256`, so a many-valued map
+    /// (julian's `rand()` picking its root) gives one of its values, the
+    /// same one each time. Seeded draws missed an arm: eight of them met
+    /// only one of julia's two, and its ball came out short.
+    pub fn forward_at(&self, params: &ParamValues, z: [f64; 2], code: u32) -> [f64; 2] {
+        self.forward_u(params, z, ((code % DRAW_GRID) as f64 + 0.5) / DRAW_GRID as f64)
+    }
+
+    /// The forward map at `z` with every draw of the call `u`, in [0, 1).
+    pub fn forward_u(&self, params: &ParamValues, z: [f64; 2], u: f64) -> [f64; 2] {
         let out = VariationRun::new(&self.forward, params, 1).with_draw(u).call(C64::new(z[0], z[1]), C64::ZERO, 1.0).0;
         [out.re, out.im]
     }
@@ -179,7 +212,8 @@ fn compile_declared(source: &str, key: &str) -> Result<UserInverse, String> {
     let forward_wgsl = crate::lang::wgsl::inverse_kernel(&forward, FORWARD_WGSL_NAME).ok();
     #[cfg(not(target_arch = "wasm32"))]
     let forward_wgsl = forward_wgsl.filter(|w| crate::lang::wgsl::validate_inverse_kernel(w).is_ok());
-    let inv = UserInverse { key: key.to_string(), forward, inverse, branches, forward_draws, wgsl, gap, forward_wgsl };
+    let difference = crate::lang::delta::variation_difference(&forward);
+    let inv = UserInverse { key: key.to_string(), forward, inverse, branches, forward_draws, wgsl, gap, forward_wgsl, difference };
     check(&inv, &ParamValues::defaults(&inv.forward))?;
     Ok(inv)
 }
@@ -205,7 +239,7 @@ pub fn check(inv: &UserInverse, params: &ParamValues) -> Result<(), String> {
     for i in 0..400u32 {
         let (a, r) = (std::f64::consts::TAU * next(), 4.0 * next().sqrt());
         let z = [r * a.cos(), r * a.sin()];
-        let v = inv.forward_at(params, z, i);
+        let v = inv.forward_at(params, z, spread(i));
         if !(v[0].is_finite() && v[1].is_finite()) || v[0].hypot(v[1]) > 1e6 {
             continue;
         }
@@ -307,11 +341,51 @@ pub struct UserKernel {
     pub packed: Vec<f32>,
     /// [`Self::hole_radius`] by the bits of the reach it was asked at.
     holes: Mutex<HashMap<u64, f64>>,
+    /// [`Self::arms`], read once.
+    arms: OnceLock<Option<Vec<Arm>>>,
 }
 
 impl UserKernel {
-    pub fn forward(&self, z: [f64; 2], arm: u32) -> [f64; 2] {
-        self.inverse.forward_at(&self.params, z, arm)
+    /// The forward map at the grid draw `code` ([`UserInverse::forward_at`]).
+    pub fn forward(&self, z: [f64; 2], code: u32) -> [f64; 2] {
+        self.inverse.forward_at(&self.params, z, code)
+    }
+
+    /// Its forward map's arms (docs/projects/rhai-planners.md, C1): one, of
+    /// every draw, for a map that draws nothing; for one that draws, the
+    /// images its draws pick among (julian's twin's `floor(n·rand())`
+    /// roots), or `None` when they fall into more than
+    /// [`MAX_ARMS`](crate::variations::bound::MAX_ARMS) -- a blur's
+    /// continuous draw -- which no word can name.
+    ///
+    /// Read off the map ([`find_arms`]): every draw of a call set to each
+    /// step of the grid in turn, at six points; a run of steps with the
+    /// same images at all six is an arm's, runs with the same images one
+    /// arm, its share their lengths with each edge bisected -- so a power
+    /// of 2.5 shares 0.4, 0.4, 0.2, as its draws do -- and its code the
+    /// middle step of its longest run.
+    pub fn arms(&self) -> Option<&[Arm]> {
+        self.arms
+            .get_or_init(|| find_arms(|z, u| self.inverse.forward_u(&self.params, z, u), self.inverse.forward_draws))
+            .as_deref()
+    }
+
+    /// `F(z + d) - F(z)` at the grid draw `code`, without forming the
+    /// difference ([`UserInverse::difference`]); none where it has no form.
+    pub fn forward_difference(&self, z: [f64; 2], d: [f64; 2], code: u32) -> Option<[f64; 2]> {
+        let p = self.inverse.difference.as_ref()?;
+        let u = ((code % DRAW_GRID) as f64 + 0.5) / DRAW_GRID as f64;
+        let out = VariationRun::new(p, &self.params, 1).with_color(u).call(C64::new(z[0], z[1]), C64::new(d[0], d[1]), 1.0).0;
+        Some([out.re, out.im])
+    }
+
+    /// The grid draws the analysis takes its forward map at: its arms', or,
+    /// where its draws pick no arms, [`FORWARD_ARMS`] spread over the grid.
+    pub fn draws(&self) -> Vec<u32> {
+        match self.arms() {
+            Some(arms) => arms.iter().map(|a| a.code).collect(),
+            None => (0..FORWARD_ARMS).map(spread).collect(),
+        }
     }
 
     pub fn inverse(&self, v: [f64; 2], branch: u32) -> [f64; 2] {
@@ -346,14 +420,14 @@ impl UserKernel {
         if let Some(&h) = self.holes.lock().expect("the holes").get(&r_pre.to_bits()) {
             return h;
         }
-        let arms = if self.inverse.forward_draws { FORWARD_ARMS } else { 1 };
+        let draws = self.draws();
         let mut least = f64::INFINITY;
         for ring in 1..=16 {
             let r = r_pre * ring as f64 / 16.0;
             for k in 0..128 {
                 let a = std::f64::consts::TAU * k as f64 / 128.0;
-                for arm in 0..arms {
-                    let v = self.forward([r * a.cos(), r * a.sin()], arm);
+                for &code in &draws {
+                    let v = self.forward([r * a.cos(), r * a.sin()], code);
                     // A sample that is not a number says nothing of where
                     // the image is, so it cannot make a hole; an infinite
                     // one is far from it.
@@ -386,7 +460,7 @@ pub fn kernel_slot(inv: &Arc<UserInverse>, slots: &[f32]) -> Result<u32, String>
     let result = check(inv, &params).map(|()| {
         let mut packed = slots.to_vec();
         packed.extend(interp::globals(&inv.inverse, &params, &Env::at(C64::ZERO, 1)));
-        UserKernel { inverse: inv.clone(), params, packed, holes: Default::default() }
+        UserKernel { inverse: inv.clone(), params, packed, holes: Default::default(), arms: OnceLock::new() }
     });
     let mut t = table().write().expect("the user kernels' table");
     if let Some(hit) = t.1.get(&id) {
@@ -403,6 +477,92 @@ pub fn kernel_slot(inv: &Arc<UserInverse>, slots: &[f32]) -> Result<u32, String>
 /// The user kernel in `slot` ([`kernel_slot`]).
 pub fn kernel(slot: u32) -> Arc<UserKernel> {
     table().read().expect("the user kernels' table").0[slot as usize].clone()
+}
+
+/// Whether the variation `key` is a Rhai variation whose forward map draws
+/// and that has an inverse: one whose draws a word names by an arm
+/// (`UserKernel::arms`), so a flame with it is the inverse walk's
+/// (`scene::cylinder`) and a replay forces its draws
+/// (`bound::force_arms`). A built-in's arms are `bound::ARMED`'s; an
+/// unedited twin that borrows its built-in (`twins::planner_name`, julia's)
+/// is planned and replayed as the built-in is.
+pub fn draws_arms(key: &str) -> bool {
+    crate::variations::bound::arms_for(key).is_none()
+        && crate::variations::custom::is_registered(key)
+        && crate::variations::twins::planner_name(key) == key
+        && matches!(of(key), Some(Ok(inv)) if inv.forward_draws)
+}
+
+/// The arms of a forward map `f(z, u)` -- every draw of a call `u` -- read
+/// off it ([`UserKernel::arms`]); `draws` false is a map that draws
+/// nothing, one arm.
+fn find_arms(f: impl Fn([f64; 2], f64) -> [f64; 2], draws: bool) -> Option<Vec<Arm>> {
+    if !draws {
+        return Some(vec![Arm { code: 0, share: 1.0 }]);
+    }
+    // Off every axis and circle a twin's arms might meet on.
+    const PROBES: [[f64; 2]; 6] = [[0.37, 0.21], [-0.83, 0.45], [1.31, -0.66], [-0.24, -1.87], [2.63, 0.94], [0.06, 0.61]];
+    let at = |u: f64| -> Vec<[f64; 2]> { PROBES.iter().map(|&z| f(z, u)).collect() };
+    let close = |p: &[f64; 2], q: &[f64; 2]| {
+        (p[0].to_bits() == q[0].to_bits() && p[1].to_bits() == q[1].to_bits()) || (p[0] - q[0]).hypot(p[1] - q[1]) <= 1e-9 * (1.0 + p[0].hypot(p[1]))
+    };
+    let same = |a: &[[f64; 2]], b: &[[f64; 2]]| a.iter().zip(b).all(|(p, q)| close(p, q));
+    let u_of = |c: u32| (c as f64 + 0.5) / DRAW_GRID as f64;
+    let images: Vec<Vec<[f64; 2]>> = (0..DRAW_GRID).map(|c| at(u_of(c))).collect();
+    // Runs of steps with the same images, `(start, end, arm)`; an arm is
+    // named by the images of its first step.
+    let mut runs: Vec<(u32, u32, usize)> = Vec::new();
+    let mut first: Vec<u32> = Vec::new();
+    for c in 0..DRAW_GRID {
+        if let Some(run) = runs.last_mut() {
+            if same(&images[c as usize], &images[run.0 as usize]) {
+                run.1 = c + 1;
+                continue;
+            }
+        }
+        let arm = match first.iter().position(|&s| same(&images[c as usize], &images[s as usize])) {
+            Some(a) => a,
+            None => {
+                first.push(c);
+                if first.len() > crate::variations::bound::MAX_ARMS as usize {
+                    return None;
+                }
+                first.len() - 1
+            }
+        };
+        runs.push((c, c + 1, arm));
+    }
+    // A draw that changes nothing: one arm, named 0 as every map with one.
+    if first.len() == 1 {
+        return Some(vec![Arm { code: 0, share: 1.0 }]);
+    }
+    // Each edge between two runs, bisected: a draw is 24 bits, so thirty
+    // halvings of a step reach it.
+    let mut edges = vec![0.0];
+    for w in runs.windows(2) {
+        let left = &images[w[0].0 as usize];
+        let (mut lo, mut hi) = (u_of(w[0].1 - 1), u_of(w[1].0));
+        for _ in 0..30 {
+            let mid = 0.5 * (lo + hi);
+            if same(&at(mid), left) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        edges.push(0.5 * (lo + hi));
+    }
+    edges.push(1.0);
+    let mut arms = vec![Arm { code: 0, share: 0.0 }; first.len()];
+    let mut longest = vec![0u32; first.len()];
+    for (i, &(s, e, a)) in runs.iter().enumerate() {
+        arms[a].share += edges[i + 1] - edges[i];
+        if e - s > longest[a] {
+            longest[a] = e - s;
+            arms[a].code = (s + e - 1) / 2;
+        }
+    }
+    Some(arms)
 }
 
 // ---------------------------------------------------------------- 3D
@@ -427,10 +587,10 @@ pub struct UserInverse3 {
 }
 
 impl UserInverse3 {
-    /// `variation3` at `v`, along `arm` (mod [`FORWARD_ARMS`]), as
+    /// `variation3` at `v` at the grid draw `code`, as
     /// [`UserInverse::forward_at`].
-    pub fn forward_at(&self, params: &ParamValues, v: [f64; 3], arm: u32) -> [f64; 3] {
-        let u = ((arm % FORWARD_ARMS) as f64 + 0.5) / FORWARD_ARMS as f64;
+    pub fn forward_at(&self, params: &ParamValues, v: [f64; 3], code: u32) -> [f64; 3] {
+        let u = ((code % DRAW_GRID) as f64 + 0.5) / DRAW_GRID as f64;
         VariationRun::new(&self.forward, params, 1).with_draw(u).call3(v, [0.0; 3], 1.0).0
     }
 
@@ -518,7 +678,7 @@ pub fn check3(inv: &UserInverse3, params: &ParamValues) -> Result<(), String> {
         let r = 4.0 * next().cbrt();
         let s = (1.0 - z * z).max(0.0).sqrt();
         let x = [r * s * ph.cos(), r * s * ph.sin(), r * z];
-        let v = inv.forward_at(params, x, i);
+        let v = inv.forward_at(params, x, spread(i));
         let m = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
         if !m.is_finite() || m > 1e6 {
             continue;
@@ -572,8 +732,10 @@ pub struct UserKernel3 {
 }
 
 impl UserKernel3 {
+    /// `variation3` at `v` on the `arm`th of the [`FORWARD_ARMS`] draws
+    /// spread over the grid (`Kernel3::arms`).
     pub fn forward(&self, v: [f64; 3], arm: u32) -> [f64; 3] {
-        self.inverse.forward_at(&self.params, v, arm)
+        self.inverse.forward_at(&self.params, v, spread(arm))
     }
 
     pub fn inverse(&self, v: [f64; 3]) -> [f64; 3] {
@@ -710,6 +872,81 @@ fn inverse(z, p, branch) {
         // inversion, as its grown ball drew it.
         let log = user("log", &[std::f32::consts::E]);
         assert!(!log.unbounded_at_origin() && log.hole_radius(1.0) == 0.0, "log's twin read as an inversion");
+    }
+
+    /// **A forward map's arms are read off it** (rhai-planners C1):
+    /// julian's twin at power 2, 3, 15 and -3 has that many arms, an equal
+    /// share each, each forced by a code inside its own interval of the
+    /// draw; a pick of `floor(2.5·u)` shares 0.4, 0.4, 0.2, as its draws
+    /// do; a continuous draw has no arms, and a draw that changes nothing
+    /// one, named 0.
+    #[test]
+    fn a_forward_maps_arms_are_read_off_it() {
+        let src = crate::lang::rhai::with_own_id(crate::variations::twins::source("julian").expect("a twin"), &crate::scripted::mint_id());
+        let inv = Arc::new(compile(&src, "julian_arms").expect("declared").expect("checks"));
+        for power in [2.0f32, 3.0, 15.0, -3.0] {
+            let k = kernel(kernel_slot(&inv, &[power, 1.0]).expect("a slot"));
+            let arms = k.arms().expect("arms");
+            let n = power.abs() as usize;
+            assert_eq!(arms.len(), n, "power {power}");
+            for (i, a) in arms.iter().enumerate() {
+                assert!((a.share - 1.0 / n as f64).abs() < 1e-6, "power {power}, arm {i}: share {}", a.share);
+                let u = (a.code as f64 + 0.5) / DRAW_GRID as f64;
+                assert_eq!((n as f64 * u).floor() as usize, i, "power {power}: arm {i}'s code {} picks another", a.code);
+            }
+            assert_eq!(k.draws().len(), n);
+        }
+        let arms = find_arms(|z, u| [z[0] + (2.5 * u).floor(), z[1]], true).expect("arms");
+        let shares: Vec<f64> = arms.iter().map(|a| a.share).collect();
+        assert!(shares.len() == 3 && (shares[0] - 0.4).abs() < 1e-6 && (shares[1] - 0.4).abs() < 1e-6 && (shares[2] - 0.2).abs() < 1e-6, "{shares:?}");
+        assert!(find_arms(|z, u| [z[0] + u, z[1]], true).is_none(), "a continuous draw named arms");
+        assert_eq!(find_arms(|z, _| z, true), Some(vec![Arm { code: 0, share: 1.0 }]));
+        assert_eq!(find_arms(|z, _| z, false), Some(vec![Arm { code: 0, share: 1.0 }]));
+    }
+
+    /// **A twin's derived difference is its built-in's hand form**
+    /// (rhai-planners C3): the forward difference `F(z + d) − F(z)` derived
+    /// from julian's and bubble's twin bodies
+    /// (`lang::delta::variation_difference`), run in the interpreter,
+    /// against the built-in kernels' (`forward_delta`), at deviations from
+    /// 1e-2 to 1e-13 of the point -- where forming the difference keeps
+    /// none of its digits -- arm for arm.
+    #[test]
+    fn a_twins_derived_difference_is_its_builtins() {
+        use crate::scene::forward_delta::kernel_forward_difference_gen;
+        use crate::scene::ifs_analysis::Kernel;
+        let user = |name: &str, slots: &[f32]| {
+            let src = crate::lang::rhai::with_own_id(crate::variations::twins::source(name).expect("a twin"), &crate::scripted::mint_id());
+            let inv = Arc::new(compile(&src, &format!("{name}_difference")).expect("declared").expect("checks"));
+            assert!(inv.difference.is_some(), "{name}'s twin derives no difference");
+            kernel_slot(&inv, slots).expect("a slot")
+        };
+        let cases = [
+            (user("julian", &[2.0, 1.0]), Kernel::Root { n: 2, d: 1.0, mirror: false }),
+            (user("julian", &[2.0, -1.0]), Kernel::Root { n: 2, d: -1.0, mirror: false }),
+            (user("julian", &[15.0, -1.0]), Kernel::Root { n: 15, d: -1.0, mirror: false }),
+            (user("julian", &[-3.0, 0.5]), Kernel::Root { n: -3, d: 0.5, mirror: false }),
+            (user("bubble", &[]), Kernel::Bubble),
+        ];
+        let mut worst = 0.0f64;
+        for (slot, builtin) in cases {
+            let k = kernel(slot);
+            let codes = k.draws();
+            for v in [[0.37, 0.21], [-0.83, 0.45], [1.31, -0.66], [-0.24, -1.87]] {
+                for (i, &code) in codes.iter().enumerate() {
+                    for scale in [1e-2, 1e-5, 1e-9, 1e-13] {
+                        let r = scale * f64::hypot(v[0], v[1]);
+                        let e = [r * 0.6, -r * 0.8];
+                        let want = kernel_forward_difference_gen(&builtin, &v, &e, i as u32).expect("the built-in's");
+                        let got = kernel_forward_difference_gen(&Kernel::User { slot }, &v, &e, code).expect("the twin's");
+                        let err = (got[0] - want[0]).hypot(got[1] - want[1]) / want[0].hypot(want[1]);
+                        worst = worst.max(err);
+                        assert!(err < 1e-9, "{builtin:?} at {v:?}, arm {i}, deviation {scale:e}: {got:?} against {want:?}");
+                    }
+                }
+            }
+        }
+        println!("worst relative difference: {worst:.1e}");
     }
 
     #[test]
