@@ -1439,7 +1439,10 @@ fn sampled_third(inv: &Map2, centre: [f64; 2], radius: f64) -> f64 {
                 if !(clear > 0.0) {
                     continue;
                 }
-                let step = (clear * 0.05).clamp(1e-9, radius * 0.05);
+                // A floor of 1e-9, unless the ball itself is smaller (a set
+                // that is nearly a point), where the floor would pass the
+                // ceiling.
+                let step = (clear * 0.05).clamp(1e-9f64.min(radius * 0.05), radius * 0.05);
                 let (Some(a), Some(b)) = (
                     inv.hessian([q[0] + step, q[1]]),
                     inv.hessian([q[0] - step, q[1]]),
@@ -1755,7 +1758,7 @@ impl Map2 {
             Map2::Affine(a) => a.apply(p),
             Map2::Nonlinear(r) => r.apply_branch(p, 0),
             Map2::NonlinearInverse(r) => r.apply_inverse(p),
-            Map2::Sum(r) => r.apply_branch(p, r.branch),
+            Map2::Sum(r) => r.apply_branch(p, r.arm()),
             // A Newton solve that did not converge is not a point.
             // Infinity is what the walk reads as "no step here", the
             // same answer a non-finite inverse gives it.
@@ -3173,6 +3176,35 @@ pub const CYLINDER_TURNS: i32 = 32;
 pub const NEWTON_STEPS: usize = 12;
 
 impl SumMap2 {
+    /// A drawing user kernel's arms and its inverse's branch count, when its
+    /// map's `branch` says both (rhai-planners D2): its sum's maps are one
+    /// per arm, each solved from every branch of the inverse, so `branch` is
+    /// `arm × branches + seed`. A root's `branch` is both at once -- its
+    /// inverse is single-valued -- and any other kernel's draws nothing.
+    fn user_arms(&self) -> Option<(&'static [crate::variations::user_inverse::Arm], u32)> {
+        let Kernel::User { slot } = self.kernel else { return None };
+        let user = crate::variations::user_inverse::kernel(slot);
+        let arms = user.arms().filter(|a| a.len() > 1)?;
+        Some((arms, user.inverse.branches.max(1)))
+    }
+
+    /// The forward arm this map's phase takes: its draw's grid code for a
+    /// drawing user kernel, else its branch.
+    pub fn arm(&self) -> u32 {
+        match self.user_arms() {
+            Some((arms, n)) => arms[((self.branch / n) as usize).min(arms.len() - 1)].code,
+            None => self.branch,
+        }
+    }
+
+    /// The inverse's branch Newton is seeded from.
+    pub fn seed_branch(&self) -> u32 {
+        match self.user_arms() {
+            Some((_, n)) => self.branch % n,
+            None => self.branch,
+        }
+    }
+
     /// The normal phase at `z`: `L(z) + w·K(z)`.
     fn phase(&self, z: [f64; 2], k: u32) -> [f64; 2] {
         let a = self.lin.apply(z);
@@ -3182,7 +3214,7 @@ impl SumMap2 {
 
     /// Its derivative: `L_M + w·J_K(z)`.
     fn phase_jacobian(&self, z: [f64; 2]) -> Option<[[f64; 2]; 2]> {
-        let j = forward_kernel_jacobian(&self.kernel, z, self.branch)?;
+        let j = forward_kernel_jacobian(&self.kernel, z, self.arm())?;
         let m = &self.lin.m;
         let out = [
             [m[0][0] + self.kw * j[0][0], m[0][1] + self.kw * j[0][1]],
@@ -3219,7 +3251,7 @@ impl SumMap2 {
     fn seed(&self, v: [f64; 2]) -> Option<[f64; 2]> {
         let from_kernel = {
             let s = [v[0] / self.kw, v[1] / self.kw];
-            let z = self.kernel.inverse(s, self.branch);
+            let z = self.kernel.inverse(s, self.seed_branch());
             (z[0].is_finite() && z[1].is_finite() && z[0].abs() < 1e29 && z[1].abs() < 1e29)
                 .then_some(z)
         };
@@ -3228,7 +3260,7 @@ impl SumMap2 {
             .map(|l| l.apply(v))
             .filter(|z| z.iter().all(|c| c.is_finite()));
         let residual = |z: [f64; 2]| {
-            let f = self.phase(z, self.branch);
+            let f = self.phase(z, self.arm());
             let r = f64::hypot(f[0] - v[0], f[1] - v[1]);
             if r.is_finite() { r } else { f64::INFINITY }
         };
@@ -3261,8 +3293,9 @@ impl SumMap2 {
         let v = self.post_inv.apply(q);
         let scale = f64::hypot(v[0], v[1]).max(1.0);
         let mut z = self.seed(v)?;
+        let arm = self.arm();
         for step in 0..NEWTON_STEPS {
-            let f = self.phase(z, self.branch);
+            let f = self.phase(z, arm);
             let r = [f[0] - v[0], f[1] - v[1]];
             let res = f64::hypot(r[0], r[1]);
             if res <= NEWTON_TOL * scale {
@@ -3286,7 +3319,7 @@ impl SumMap2 {
         // One last look: eight steps that never met the tolerance may
         // still have landed somewhere usable, and the caller is told
         // the residual either way.
-        let f = self.phase(z, self.branch);
+        let f = self.phase(z, arm);
         let res = f64::hypot(f[0] - v[0], f[1] - v[1]) / scale;
         (res <= 1e-6).then(|| (self.pre_inv.apply(z), res, NEWTON_STEPS))
     }
@@ -3379,8 +3412,13 @@ impl SumMap2 {
         match self.kernel {
             Kernel::Root { n, .. } => n.unsigned_abs().max(1),
             Kernel::Bubble => 2,
-            // Each of its inverse's branches seeds a solve.
-            Kernel::User { slot } => crate::variations::user_inverse::kernel(slot).inverse.branches,
+            // Each of its inverse's branches seeds a solve, along each of
+            // its arms where it draws ([`Self::arm`]).
+            Kernel::User { slot } => {
+                let user = crate::variations::user_inverse::kernel(slot);
+                let arms = user.arms().map_or(1, |a| a.len() as u32);
+                arms * user.inverse.branches.max(1)
+            }
             _ => 1,
         }
     }
@@ -3500,15 +3538,15 @@ pub fn transform_map_2d_ordered(
         return Err(NotAffine::MixedSum(kind.to_string()));
     }
     // A user kernel summed with an affine (docs/projects/rhai-planners.md,
-    // B2): the shader's Newton solve steps on its forward map, which one
-    // that draws -- a root picked by `rand()` -- cannot give it.
+    // B2): the shader's Newton solve steps on its forward map -- one that
+    // draws, along each of its arms (D2), so not one whose draws pick none.
     let kind: &'static str = match kind {
         std::borrow::Cow::Borrowed(k) => k,
         std::borrow::Cow::Owned(k) => {
             let summable = match kernel {
                 Kernel::User { slot } => {
-                    let inv = &crate::variations::user_inverse::kernel(slot).inverse;
-                    !inv.forward_draws && inv.forward_wgsl.is_some()
+                    let user = crate::variations::user_inverse::kernel(slot);
+                    user.inverse.forward_wgsl.is_some() && user.arms().is_some()
                 }
                 _ => true,
             };

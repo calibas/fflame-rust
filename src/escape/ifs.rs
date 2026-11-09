@@ -6603,10 +6603,13 @@ pub fn pack_maps(
                         }
                         // A Rhai variation's own (B2): its forward map and
                         // inverse are its functions', x and y as its own
-                        // rows have them.
+                        // rows have them; z its arm's draw, where it draws
+                        // (D2), the row's branch then the seed's.
                         Kernel::User { slot } => {
+                            use crate::variations::user_inverse::DRAW_GRID;
                             let (f, at) = user.at(slot);
-                            (8.0, [f as f32, at as f32, 0.0, 0.0])
+                            let u = ((r.arm() % DRAW_GRID) as f32 + 0.5) / DRAW_GRID as f32;
+                            (8.0, [f as f32, at as f32, u, 0.0])
                         }
                         Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } | Kernel::Root { mirror: true, .. } => {
                             unreachable!("analyse_2d refuses the walk's own kernels (Kernel::walk_only)")
@@ -6620,7 +6623,7 @@ pub fn pack_maps(
                     pre_m: m4(&r.pre_inv),
                     pre_t: t2(&r.pre_inv),
                     kind: 7.0,
-                    branch: r.branch as f32,
+                    branch: r.seed_branch() as f32,
                     params,
                     delta,
                     measure: meas,
@@ -9897,6 +9900,12 @@ mod gpu_tests {
             ("bubble+linear", summed(bubble_ifs_flame(), "bubble", 0.3)),
             ("spherical+linear", summed(spherical_ifs_flame(), "spherical", 0.3)),
             ("hemisphere+linear", summed(hemisphere_ifs_flame(), "hemisphere", 0.3)),
+            // A drawing kernel summed (D2): a map per arm, its draw in the row.
+            ("julian+linear", {
+                let mut f = kernel_flame(vec![("julian", [0.8, 0.0, 0.0, 0.8, -0.2, 0.1], 1.0, 0.3), ("linear", [0.5, 0.0, 0.0, 0.5, 0.4, 0.3], 1.0, 0.8)]);
+                f.transforms[0].set_variation_param("julian", "power", 2.0);
+                summed(f, "julian", 0.3)
+            }),
         ];
         let mut failures = Vec::new();
         for (label, builtin) in cases.into_iter().chain(sums) {
@@ -10020,7 +10029,10 @@ mod gpu_tests {
                             let (a, r) = (k as f64 * 2.399963, ifs_b.ball.radius * ((k as f64 + 0.5) / 64.0).sqrt());
                             let q = [ifs_b.ball.centre[0] + r * a.cos(), ifs_b.ball.centre[1] + r * a.sin()];
                             let (db, dt) = (estimate(&ifs_b, q, LEVELS, BEAM).distance, estimate(&ifs_t, q, LEVELS, BEAM).distance);
-                            worst_cpu = worst_cpu.max((db - dt).abs() / ifs_b.ball.radius);
+                            // Relative to the ball, or to the distance where
+                            // that is larger: julian summed reads 1e9 inside
+                            // a ball of 0.28, both walks alike to 1e-7.
+                            worst_cpu = worst_cpu.max((db - dt).abs() / ifs_b.ball.radius.max(db.abs()));
                         }
                     }
                     println!(

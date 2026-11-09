@@ -279,6 +279,32 @@ pub fn variation_difference(p: &Program) -> Option<Program> {
     Some(out)
 }
 
+/// A variation whose draws read its colour channel instead (rhai-planners
+/// D2): every `rand()` the value a caller passes there, as a forced arm
+/// is -- mode D's Newton steps on a summed kernel's forward map along an
+/// arm, and the shader takes no draws. `None` for a variation that reads
+/// its colour already, whose channel is taken.
+pub fn draw_as_color(p: &Program) -> Option<Program> {
+    let reads = std::cell::Cell::new(false);
+    let _ = map_stmts(
+        &p.transform,
+        &|x: &IExpr| {
+            if matches!(x.kind, IExprKind::Predef(Predef::VarColor)) {
+                reads.set(true);
+            }
+            None
+        },
+        &|pl: &Place| pl.clone(),
+    );
+    if reads.get() {
+        return None;
+    }
+    let mut q = p.clone();
+    let as_color = |e: &IExpr| matches!(e.kind, IExprKind::Predef(Predef::Draw)).then(|| mk(IExprKind::Predef(Predef::VarColor), Ty::Float));
+    q.transform = map_stmts(&p.transform, &as_color, &|pl: &Place| pl.clone());
+    Some(q)
+}
+
 /// `stmts` with every expression `f` rewrites rewritten (where it answers,
 /// whole) and every place written mapped by `place`.
 fn map_stmts(stmts: &[IStmt], f: &dyn Fn(&IExpr) -> Option<IExpr>, place: &dyn Fn(&Place) -> Place) -> Vec<IStmt> {

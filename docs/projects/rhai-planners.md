@@ -422,6 +422,16 @@ do, in this order -- the first makes every later gate quicker.
   seed`, the arm's grid draw for the forward phase and the seed for the
   inverse. Mode D's Newton takes it too: the forward map compiled with
   its draws read from the colour channel, and the arm's draw in the row.
+  *Built*: `SumMap2::arm` and `seed_branch` (`branches` arms times the
+  inverse's); `delta::draw_as_color` compiles a drawing forward map with
+  its draws as the third argument, which the sum row's `params.z` carries,
+  its `branch` the seed. All 32 corpus fixtures now walk through their
+  twins (juliascope-arms and random1 with the built-in's very words), and
+  a twin julian summed with linear draws the built-in's Flame Attractor to
+  the pixel (`a_twins_own_inverse_renders_the_flame_attractor`; its CPU
+  walks agree to 4e-8). On the way: `sampled_third` panicked on a set
+  nearly a point -- its step's floor passed its ceiling -- a fixture's
+  doing, but the built-in's too.
 - **D3. The Flame Attractor's deep zoom through a user kernel.** Its
   handover takes the inverse in f64 and lifts it to BigFloat, which holds
   to some 1e13-1e15; and its delta walk has no inverse difference, so
