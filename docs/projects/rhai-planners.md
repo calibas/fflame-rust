@@ -216,8 +216,9 @@ fn inverse(z, p, branch) { ... }   // the preimage on branch 0 .. n-1
 - **An inverse with no preimage on most branches at most points** read
   every pixel as the set on the GPU (splits' twin, three of whose four
   branches have none at any point, when it gave `no_preimage()` there),
-  where its CPU reference did not. Not understood; splits' twin gives
-  each branch's point instead, as the built-in kernel does.
+  where its CPU reference did not. *Fixed in D4*: the walk's radius
+  flushed a no-preimage point's to zero; splits' twin says
+  `no_preimage()` again.
 - **Focused Rendering's inverse walk** (`Backward`) refuses a user
   kernel: Part C.
 - **Deep zoom** through a user kernel: no BigFloat inverse and no
@@ -466,11 +467,26 @@ do, in this order -- the first makes every later gate quicker.
 - **D4. No preimage on most branches** (splits' twin when it said so):
   every pixel read as the set on the GPU where the CPU reference did not.
   Reproduced from the twin's old inverse and traced.
+  *Built*: not the inverse, the radius. Mode D sends a point with no
+  preimage to 3.4e38, and the walk measured its distance from the ball's
+  centre as `m·length(d/m)` past 1e15 (`ifs_radius2`, `ifs_radius4`). A
+  GPU divides by multiplying by the reciprocal; 1/m is subnormal past
+  8.5e37 and flushes to zero, so the point measured a radius of zero --
+  the centre, inside the ball, a path that never leaves. Every probe of
+  the walk's own logic (the frozen rule, the gaps, the nothing-known
+  ending, σ) read sound; a misread pixel's CPU distance was the same
+  with and without the quadrant check (~29 px), and only the GPU's moved,
+  to 0. Now `length(d·2^-100)·2^100`: a power of two scales exactly and
+  the squares stay normal to f32's largest; below 1e15 the arithmetic,
+  and so every affine walk, is byte for byte what it was. Splits' twin
+  says `no_preimage()` off its quadrant again, as its built-in kernel
+  does: 44.8% to 100% (`a_twins_own_inverse_renders_the_flame_attractor`,
+  every other row unchanged; the deep-zoom and borrowing gates as before).
 
 ## Order of work
 
 A1, A2, B1 with the twins' inverses and the borrowing built-ins, B2, B3,
-C1, C2 and C3 done (2026-11-08); then D1, D2, D3, D4.
+C1, C2 and C3 done (2026-11-08); D1, D2, D3 and D4 done (2026-11-09).
 
 ## Decisions for the user
 

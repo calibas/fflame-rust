@@ -368,12 +368,13 @@ fn ifs_inv_sigma(i: u32, p: vec2<f32>) -> f32 {
 
 // The plane's radius, without `length()`'s overflow: a julia orbit
 // squares its radius per level and passes f32's square by its ninth.
-// See ifs_radius4 in the solid walk.
+// Scaled by a power of two, never divided by `m`: see ifs_radius4 in
+// the solid walk.
 fn ifs_radius2(q: vec2<f32>, c: vec2<f32>) -> f32 {
     let d = q - c;
     let m = max(abs(d.x), abs(d.y));
     if (m > 1e15) {
-        return m * length(d / m);
+        return length(d * 7.888609052210118e-31) * 1.2676506002282294e30;
     }
     return length(d);
 }
@@ -1102,13 +1103,18 @@ struct IfsCand3 {
 fn ifs_radius4(q: vec3<f32>, w: f32, c: vec3<f32>) -> f32 {
     let d = vec4<f32>(q - c, w - ifs_ball_w());
     let m = max(max(abs(d.x), abs(d.y)), max(abs(d.z), abs(d.w)));
-    // Exact and overflow-free where overflow is possible: the largest
-    // component times the norm of the vector scaled by it, whose
-    // components are at most one. Below that, `length()` itself, so
-    // every affine walk's arithmetic -- and every affine preset's
-    // bytes -- is exactly what it was.
+    // Overflow-free where overflow is possible: the norm of the vector
+    // scaled by 2^-100, scaled back. A power of two scales exactly,
+    // and past 1e15 its squares stay normal up to f32's largest. Not
+    // `m * length(d / m)`, which this was: a GPU divides by
+    // multiplying by the reciprocal, 1/m is subnormal past 8.5e37 and
+    // flushes to zero, and a point a user kernel's inverse sent to
+    // 3.4e38 -- no preimage -- measured a radius of zero, the ball's
+    // centre (docs/projects/rhai-planners.md, D4). Below 1e15,
+    // `length()` itself, so every affine walk's arithmetic -- and
+    // every affine preset's bytes -- is exactly what it was.
     if (m > 1e15) {
-        return m * length(d / m);
+        return length(d * 7.888609052210118e-31) * 1.2676506002282294e30;
     }
     return length(d);
 }
