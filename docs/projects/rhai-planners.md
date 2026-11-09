@@ -483,10 +483,55 @@ do, in this order -- the first makes every later gate quicker.
   does: 44.8% to 100% (`a_twins_own_inverse_renders_the_flame_attractor`,
   every other row unchanged; the deep-zoom and borrowing gates as before).
 
+## Part E: what Part D left, and hyperbolic
+
+The user (2026-11-09): "Let's continue with all 3, the order at your
+discretion. Can we add an inverse to hyperbolic as well?"
+
+- **E1. Hyperbolic's inverse.** `(x / (|z|² + 1e-6), y)`: y kept, x a
+  root of `u x² − x + u k = 0`, `k = y² + 1e-6` -- two branches, the small
+  root through the origin and the large one; none where `4u²k > 1`. Its
+  image gap is the small root of `(a − d)(b − d) = ½` at `(|u|, |v|)`, a
+  lower bound by the box about the point that holds the image's nearest.
+  Written in `scripts/twin_inverses.py`; the built-in borrows it.
+  *Built*: 100% against the CPU walk (`a_builtin_borrows_its_twins_inverse`),
+  and both its difference forms derive. Splits' entry in the script now
+  matches its twin (D4's restore would have been undone by a retranslation).
+- **E2. The difference forms that do not derive.** Traced to the
+  derivation's refusals, four constructs:
+  1. *A value the same at every pixel, set where the pixel decides*:
+     elliptic's and fisheye's constants after an early return (the
+     rewrite takes the rest of the body into an arm), splits' forward
+     map's `if` expressions over its parameters. And juliascope's forward
+     map's `pow(r2, cn)`, whose exponent reads the int `power`, which the
+     analysis counts as varying. `uniform_vars` takes ints and bools too,
+     and an assignment under a test that varies is not uniform -- the
+     variable becomes a pair, which the branch's mismatch already fixes.
+  2. *A test over bools*: splits' inverse's `(u.re >= 0.0) == east`.
+  3. *Inverse trigonometry*: cylinder's and sinusoidal's `asin`, derived
+     as `atan2(√(1 − a²), a)` (acos and atan alike), over the forms of
+     sqrt and the complex atan2, guards and all.
+  4. *An int the pixel decides*: juliascope's inverse's sector index,
+     `round` of the angle. An int or bool read from a deviation is
+     carried as two values, the reference's and the pixel's full one, as
+     a branch's tests are; a branch on it is a branch on the iterate, and
+     a float made of it deviates by the difference of the two.
+  Gates: each new form against its built-in's hand form where one exists,
+  and against a big-float direct difference (`lang::bigeval`) at
+  deviations down to 1e-13; the shader's against the CPU's
+  (`the_shader_user_forms_are_the_cpu_ones`); every escape formula's
+  derivation as before (the escape suite).
+- **E3. A3: a drawing Rhai variation with no inverse.** Its arms are read
+  off its forward map only when it declares an inverse. To be planned
+  from the forward planner's arms (`ifs_ball`, `word_tree`).
+- **E4. The walk's CPU evaluator, batched.** To be planned from a profile
+  of the twin's plan.
+
 ## Order of work
 
 A1, A2, B1 with the twins' inverses and the borrowing built-ins, B2, B3,
-C1, C2 and C3 done (2026-11-08); D1, D2, D3 and D4 done (2026-11-09).
+C1, C2 and C3 done (2026-11-08); D1, D2, D3 and D4 done (2026-11-09);
+E1 done; then E2, E3, E4.
 
 ## Decisions for the user
 
