@@ -334,6 +334,23 @@ What is missing is three other things.
   renders the built-in's density block by block at 1e2, 1e4 and 1e6, no
   block past five standard errors (at 1e4 before the forms, 37)
   (`a_rhai_julian_renders_as_the_builtin`).
+- **The corpus** (`the_corpus_plans_through_rhai_twins`): every deep-zoom
+  fixture the built-in walk plans, each kernel whose twin has an inverse
+  its twin, borrowing off -- 30 of 32 walked through user kernels with the
+  built-in's alphabet, their plans covering what the built-in's cover at
+  the saved view and at 1e3 (julian-disc's in a fifth of the words: its
+  twin's twelve fixed rings). A `pre_blur` beside a user kernel needed a
+  renewal of its own (the disc holding all the blurred transform can
+  output): its forward map's image of the dilated input, sampled on rings
+  evenly spaced and halving, about the input's centre and the kernel's
+  origin -- rings at quarters of a reach of 30 missed bubble's peak at
+  `|z| = 2`, and grand-julian's zooms lost 4% of their saved views.
+- **Open, the walk**: a user kernel that draws, summed with an affine
+  (juliascope-arms, random1). Its sum's maps are one per arm, each solved
+  by Newton from the inverse's branches, where `SumMap2::branches` counts
+  a user kernel's inverse branches alone; and mode D's Newton has no
+  forward map with a forced draw. The corpus gate names the two and checks
+  they are refused for this reason.
 
 ### As proposed
 

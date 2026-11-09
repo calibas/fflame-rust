@@ -1937,8 +1937,8 @@ impl Backward {
             return Err("pre_blur is planned beside one kernel alone (not an affine, not a sum) so far".into());
         };
         match b {
-            Blur::Pre(_) if !matches!(n.kernel, Kernel::Bubble | Kernel::Cylinder { .. }) => {
-                Err(format!("pre_blur is planned beside bubble and cylinder so far, not {}", n.kernel.variation()))
+            Blur::Pre(_) if !matches!(n.kernel, Kernel::Bubble | Kernel::Cylinder { .. } | Kernel::User { .. }) => {
+                Err(format!("pre_blur is planned beside bubble, cylinder and a Rhai variation so far, not {}", n.kernel.variation()))
             }
             _ => Ok(()),
         }
@@ -1972,6 +1972,53 @@ impl Backward {
                 let iw = 1.0 / n.w;
                 let strip = Some([n.post_inv.m[0][0] * iw, n.post_inv.m[0][1] * iw, n.post_inv.t[0] * iw]);
                 Renewal { out_centre: n.post.apply([n.w * k[0], n.w * k[1]]), out_radius: pmax * n.w.abs() * half, strip }
+            }
+            // A Rhai variation's (rhai-planners C2): its image of the same
+            // dilated input, sampled -- every arm, on rings of the disc
+            // both evenly spaced and halving toward its centre, since a
+            // blur's reach makes the disc huge beside the kernel's own
+            // scale (bubble's image peaks at |z| = 2; rings at quarters
+            // of a reach of 30 missed it, and a plan 4% of its view) --
+            // boxed, with a margin; where a sample is not finite, the
+            // whole plane, kept in doubt.
+            Blur::Pre(b) if matches!(n.kernel, Kernel::User { .. }) => {
+                let Kernel::User { slot } = n.kernel else { unreachable!("matched") };
+                let k = crate::variations::user_inverse::kernel(slot);
+                let c = n.pre.apply(centre);
+                let (_, smax) = crate::scene::ifs_analysis::singular_values_of(n.pre.m);
+                let r = 1.02 * smax * extent + b.reach();
+                let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+                let codes = k.draws();
+                let mut take = |p: [f64; 2]| {
+                    for &code in &codes {
+                        let y = k.forward(p, code);
+                        for i in 0..2 {
+                            lo[i] = lo[i].min(y[i]);
+                            hi[i] = hi[i].max(y[i]);
+                        }
+                    }
+                };
+                // About the disc's centre, and about the kernel's origin,
+                // where its structure is, inside the disc.
+                let far = c[0].hypot(c[1]) + r;
+                let rings = |span: f64| (0..=32).map(move |i| span * i as f64 / 32.0).chain((1..24).map(move |i| span * 0.5f64.powi(i)));
+                for (o, span) in [(c, r), ([0.0, 0.0], far)] {
+                    for rho in rings(span) {
+                        for j in 0..64 {
+                            let a = std::f64::consts::TAU * j as f64 / 64.0;
+                            let p = [o[0] + rho * a.cos(), o[1] + rho * a.sin()];
+                            if (p[0] - c[0]).hypot(p[1] - c[1]) <= r {
+                                take(p);
+                            }
+                        }
+                    }
+                }
+                let half = 1.05 * 0.5 * (hi[0] - lo[0]).hypot(hi[1] - lo[1]);
+                if !half.is_finite() {
+                    return Renewal { out_centre, out_radius: f64::INFINITY, strip: None };
+                }
+                let kc = [0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1])];
+                Renewal { out_centre: n.post.apply([n.w * kc[0], n.w * kc[1]]), out_radius: pmax * n.w.abs() * half, strip: None }
             }
             Blur::Pre(b) => {
                 let c = n.pre.apply(centre);
@@ -5376,11 +5423,118 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// `flame` with every variation whose twin has an inverse its twin,
+    /// the twins carried (rhai-planners C2): what the walk plans through
+    /// user kernels alone, where the built-in walk planned kernels.
+    fn twinned(flame: &Flame) -> Flame {
+        let mut names: Vec<String> = flame.transforms.iter().flat_map(|t| t.variations.keys().cloned()).collect();
+        names.sort();
+        names.dedup();
+        let mut f = flame.clone();
+        let mut carried = Vec::new();
+        for name in names {
+            if !crate::variations::twins::source(&name).is_some_and(|s| s.contains("fn inverse(")) {
+                continue;
+            }
+            f = crate::variations::twins::twin_flame(&f, &name);
+            carried.extend(f.custom_variations.drain(..));
+        }
+        f.custom_variations = carried;
+        f
+    }
+
+    /// **The walk plans the deep-zoom corpus through Rhai twins as through
+    /// the built-ins** (docs/projects/rhai-planners.md, C2): every fixture
+    /// the built-in walk plans, with each kernel whose twin has an inverse
+    /// its twin and borrowing off, is walked through user kernels with the
+    /// built-in's alphabet, and its plans cover as much of an independent
+    /// chaos game -- the built-in's, its words translated arm for arm.
+    /// `CORPUS=a,b` runs those fixtures alone.
+    #[test]
+    #[ignore = "registers twins, reads output/flame-zoom; minutes of chaos game"]
+    fn the_corpus_plans_through_rhai_twins() {
+        const KNOWN_SUMS: [&str; 2] = ["juliascope-arms", "random1"];
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        let mut files: Vec<_> = std::fs::read_dir("output/flame-zoom").expect("the corpus").flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "fflame")).collect();
+        files.sort();
+        let only: Option<Vec<String>> = std::env::var("CORPUS").ok().map(|v| v.split(',').map(str::to_string).collect());
+        let (mut walked, mut failures) = (0usize, Vec::new());
+        for path in files {
+            let name = path.file_stem().unwrap().to_string_lossy().to_string();
+            if only.as_ref().is_some_and(|o| !o.contains(&name)) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Ok(cfg) = serde_json::from_str::<crate::config::FractalConfig>(&text) else { continue };
+            let twin = twinned(&cfg.flame);
+            if twin.custom_variations.is_empty() {
+                continue;
+            }
+            crate::variations::custom::ensure(&twin);
+            let guard = crate::variations::global_registry();
+            let reg = &*guard;
+            let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };
+            let t = match Backward::read(&twin, reg) {
+                Ok(t) => t,
+                // A root that draws, summed with an affine: the sum's maps
+                // are one per arm, and a user kernel's sum counts its
+                // inverse's branches (`SumMap2::branches`) -- open.
+                Err(why) if KNOWN_SUMS.contains(&name.as_str()) && why.contains("must be alone in its sum") => {
+                    println!("  {name}: known, {why}");
+                    continue;
+                }
+                Err(why) => {
+                    failures.push(format!("{name}: the twins' walk refused: {why}"));
+                    continue;
+                }
+            };
+            walked += 1;
+            if b.alphabet.len() != t.alphabet.len() {
+                failures.push(format!("{name}: alphabets of {} and {}", b.alphabet.len(), t.alphabet.len()));
+                continue;
+            }
+            let to_builtin: std::collections::HashMap<u32, u32> = t.alphabet.iter().zip(&b.alphabet).map(|(y, x)| (y.sym, x.sym)).collect();
+            for z in [cfg.zoom as f64, 1e3] {
+                let view = View::of(z, if z == cfg.zoom as f64 { [cfg.pan_x, cfg.pan_y] } else { b.sample_point(0.75) }, 1280, 720);
+                let (pb, pt) = match (b.plan(view), t.plan(view)) {
+                    (Ok(pb), Ok(pt)) => (pb, pt),
+                    (Err(_), Err(_)) => continue,
+                    (Ok(_), Err(why)) => {
+                        failures.push(format!("{name} x{z:.0e}: the twins' plan failed where the built-in's did not: {why:?}"));
+                        continue;
+                    }
+                    (Err(why), Ok(_)) => {
+                        println!("  {name} x{z:.0e}: the built-in's plan failed ({why:?}), the twins' did not");
+                        continue;
+                    }
+                };
+                let mut tr = pt.clone();
+                for w in &mut tr.words {
+                    w.word = w.word.iter().map(|s| to_builtin[s]).collect();
+                }
+                let (cb, ct) = (coverage(&b, &pb, view, 2000), coverage(&b, &tr, view, 2000));
+                println!("  {name} x{z:.0e}: built-in {} words, coverage {cb:?} | twins {} words, {ct:?}", pb.words.len(), pt.words.len());
+                if let (Some(cb), Some(ct)) = (cb, ct) {
+                    if ct < cb - 0.01 {
+                        failures.push(format!("{name} x{z:.0e}: the twins' plan covers {ct:.4} where the built-in's covers {cb:.4}"));
+                    }
+                }
+            }
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        println!("{walked} fixtures walked through twins");
+        assert!(walked >= 3 || only.is_some(), "only {walked} fixtures walked");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     /// **A Rhai julian renders as the built-in** (rhai-planners C2, C3): a
     /// render drawing the twin's plan, its draws forced by their grid
     /// codes and its words past f32 replayed as offsets through the twin's
     /// derived forms, lays down the built-in's density block by block, at
-    /// 1e2, 1e4 and 1e6.
+    /// 1e2, 1e4 and 1e6. Measured: every view within a few standard errors;
+    /// at 1e4 the twin's plan at 0.25 is 6% fewer words (10,076 against
+    /// 10,738), neither losing any mass, its density 1.0002 of the
+    /// built-in's -- the same cover, split differently.
     #[test]
     #[ignore = "needs a GPU, registers a twin, reads output/flame-zoom"]
     fn a_rhai_julian_renders_as_the_builtin() {
@@ -5395,20 +5549,22 @@ mod tests {
         let mut failures = Vec::new();
         const N: u32 = 192;
         const REPS: usize = 6;
-        for z in [1e2f32, 1e4, 1e6] {
-            let at = b.sample_point(0.75);
+        for (z, frac) in [(1e2f32, 0.75), (1e4, 0.75), (1e4, 0.25), (1e6, 0.75)] {
+            let at = b.sample_point(frac);
             let mut c = cfg.clone();
             c.zoom = z;
             (c.pan_x, c.pan_y) = (at[0], at[1]);
             let view = View::of(z as f64, at, N, N);
             let mut ct = c.clone();
             ct.flame = twin.clone();
-            let (xb, _) = replicated_blocks(&device, &queue, &c, Some(&b.plan(view).expect("a plan")), N, 1024, 8, REPS);
-            let (xt, img) = replicated_blocks(&device, &queue, &ct, Some(&t.plan(view).expect("a plan")), N, 1024, 8, REPS);
+            let (pb, pt) = (b.plan(view).expect("a plan"), t.plan(view).expect("a plan"));
+            println!("  x{z:.0e} at {frac}: built-in {} words, lost {:.2e} | twin {} words, lost {:.2e}", pb.words.len(), pb.lost, pt.words.len(), pt.lost);
+            let (xb, _) = replicated_blocks(&device, &queue, &c, Some(&pb), N, 1024, 8, REPS);
+            let (xt, img) = replicated_blocks(&device, &queue, &ct, Some(&pt), N, 1024, 8, REPS);
             let _ = std::fs::create_dir_all("output/rhai-planners");
-            let _ = image::save_buffer(format!("output/rhai-planners/grand-julian-twin-{z:.0e}.png"), &img, N, N, image::ColorType::Rgba8);
+            let _ = image::save_buffer(format!("output/rhai-planners/grand-julian-twin-{z:.0e}-{frac}.png"), &img, N, N, image::ColorType::Rgba8);
             let cmp = compare_blocks(&xt, &xb, &xb);
-            print_compared(&format!("x{z:.0e}: the twin against the built-in"), &cmp);
+            print_compared(&format!("x{z:.0e} at {frac}: the twin against the built-in"), &cmp);
             let (_, _, mx, _, my, _, zz) = cmp.pooled[0];
             if zz.abs() > 4.0 && (mx / my - 1.0).abs() > 0.02 {
                 failures.push(format!("x{z:.0e}: the twin's density is {:.4} of the built-in's ({zz:+.1} standard errors)", mx / my));
