@@ -1935,6 +1935,24 @@ in plane units it underflows f32 at zooms the walk still resolves.
 | `mandelbox_solid` | Mandelbox (Solid) | Lowe's box fold, sphere fold and scale, `z = s fold(z) + c`, the point or a Julia constant; the distance `0.95 |z| / |dr|`. Solid; needs no flame; default `ifs_trap` |
 | `mandelbulb_solid` | Mandelbulb (Solid) | White and Nylander's power in spherical coordinates, `z = zⁿ + c`, the point or a Julia constant; Hart's estimate times the Step Factor. Solid; needs no flame; default `ifs_trap` |
 
+**A Rhai variation's own inverse** ([rhai-planners.md](../projects/rhai-planners.md),
+Part B; [VARIATIONS.md](VARIATIONS.md), *Variations written in Rhai*):
+a flame row whose kernel is the user's (`Kernel::User`) is **kind 8**,
+`params.x` its function and `params.y` where its values start; a solid's
+(`Kernel3::User3`) is kind 4, the same in `extra2`; a sum with one is
+kind 7 with kernel kind 8. Its values (its parameters, then its
+`prepare`'s) ride behind the xaos graph in `ifs_xaos`, so no binding is
+added (`pack_flame`, `UserKernels`). Its inverse, image gap and forward
+map are compiled per variation (`lang::wgsl::inverse_kernel`) and spliced
+with a `get_param` over that buffer, dispatched from marker lines inside
+the kernel's switches (`//__IFS_USER_*__`), which a flame without one
+drops, so its shader is the text it was; the variations' keys are in the
+pipeline's. Its Jacobian and local σ are central differences of its
+inverse (the solid's σ_max of the 3×3 in closed form); where it has no
+preimage its point leaves at 3.4e38, which every test of the walk reads
+as a number lost, as the CPU's infinity. Against the reference walk the
+twins and the built-ins borrowing their inverses agree 99.5-100%.
+
 **Solids written in Rhai** (the KIFS plan, B3; the formula language's
 solid entry) register beside these under their `custom-` names
 (`escape::custom::compile_solid`, found by `ifs::get_ifs`, never

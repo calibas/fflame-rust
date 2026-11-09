@@ -462,6 +462,18 @@ tight silently drops part of the picture.
   many arms (`julian`, `juliascope`). The planner enumerates the arms,
   and a replay build rewrites the draw to read a forced arm.
 
+**A Rhai variation's own** ([rhai-planners.md](../projects/rhai-planners.md)):
+`derive` reads a registered Rhai variation's compiled body as a
+built-in's, so it has a derived bound wherever its built-in twin would
+(472 of the 472 twins whose built-in derives); and one may declare its
+inverse (`fn inverse`, *Variations written in Rhai*), which the analysis
+takes as `Kernel::User` / `Kernel3::User3` -- the Flame Attractor in the
+plane, summed with an affine, and as a solid. **A built-in with no
+`InverseDef` takes its twin's** (`user_inverse::of`): writing a twin's
+inverse in `scripts/twin_inverses.py` gives the built-in the Flame
+Attractor (swirl, horseshoe, polar, exponential, exp, log, fisheye,
+eyefish, sinusoidal so far).
+
 See [forward-bounds.md](../projects/deep-zoom/forward-bounds.md) and
 [ifs-general.md](../projects/deep-zoom/ifs-general.md).
 
@@ -560,6 +572,33 @@ function takes the point, and the ids when it has parameters (as
   `ctx.weight` without parameters declares `NeedsTransform` for the
   ids. The function takes them in `variation_call`'s order. Gate:
   `the_hooked_twins_render_as_the_builtins` (`blur`, `macmillan`).
+- **Its own inverse** (`variations::user_inverse`; [rhai-planners.md](../projects/rhai-planners.md),
+  Part B), for the Flame Attractor: `fn inverse(z, p, branch)` gives the
+  preimage of `z` under `variation` on branch `0 .. INFO.inverse_branches`
+  (1 by default, at most 16), or `no_preimage()` where there is none;
+  `fn image_gap(z, p)` a lower bound on how far `z` lies outside the
+  image (0 or less inside), where the image is not the plane, which the
+  walk scores a point off it by as it does the built-ins' unit discs;
+  `fn inverse3(v, p)` the solid's, one branch. Each is lowered as a
+  transformation (`rhai::inverse_transformation`, its `branch` read from
+  the colour coordinate the callers set) and **checked where it is
+  used**: forward then inverse at 400 points over the disc (ball) of
+  radius 4 must give each point back on some branch to a relative 1e-6,
+  one in fifty spared, and the gap must be a lower bound near the image
+  -- else the analysis refuses the transform, naming the worst point
+  (`NotAffine::Inverse`). A many-valued forward map (`rand()` picking a
+  root) is taken at sixteen fixed draws, one an arm. It may reach for
+  nothing only a flame has (a random number in the inverse, state, the
+  weight, a texture). In mode D its WGSL is spliced per variation
+  (*ESCAPE.md*, Mode D); Focused Rendering's inverse walk refuses it
+  for now. The twins of the eleven planar kernels carry one, and of
+  julia3D and julia3Dz a 3D one (`scripts/twin_inverses.py`, which the
+  translator appends): an edited twin keeps its inverse while it still
+  undoes the map. Gates: `the_twins_inverses_undo_their_maps`;
+  `a_twins_own_inverse_renders_the_flame_attractor`,
+  `a_builtin_borrows_its_twins_inverse`,
+  `a_twins_own_3d_inverse_renders_the_solid` (GPU, against the
+  reference walk).
 - **3D**: `fn variation3(v, p)` is the 3D body, its point a vector; alone
   it makes the variation `only_3d` (no 2D body, kept out of the lens
   menu). Either body takes the hooks either needs, and a 3D body
