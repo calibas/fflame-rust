@@ -579,8 +579,43 @@ discretion. Can we add an inverse to hyperbolic as well?"
 - **E3. A3: a drawing Rhai variation with no inverse.** Its arms are read
   off its forward map only when it declares an inverse. To be planned
   from the forward planner's arms (`ifs_ball`, `word_tree`).
+  *Found: nothing to build -- the twins are at the built-ins' parity.*
+  An armed flame's ONLY planner is the inverse walk, by design
+  (`Cylinders::plan_inner`): the forward cover walk it replaced "is
+  structurally unable to contract here and measured 17 to 60 seconds a
+  plan", so a flame the walk refuses is refused, with its reason. The
+  armed built-ins, julian and juliascope, both have inverses; a built-in
+  that drew among arms without one would be planned as a Rhai one is:
+  not armed, so the forward planner, whose derivation takes a draw as
+  `[0, 1)` and bounds every arm at once -- blur's bound, and julian's
+  before the walk, which cannot shrink at depth. Routing such a variation
+  to the walk instead would only refuse the shallow plans it gets. An
+  inverse, `fn inverse`, is what plans it at depth.
 - **E4. The walk's CPU evaluator, batched.** To be planned from a profile
   of the twin's plan.
+  *The profile* (D1's): a twin's plan is 80% interpretation -- 155M
+  forward calls at 0.39 µs in grand-julian's 1e4 plan, a tree walk of
+  about 10 ns a node, where the built-in kernel's forward is native. No
+  algorithmic saving in the walk: a child word PREPENDS its symbol, so
+  its first map acts on the sample point and the parent's on other
+  points, and nothing of the parent's replay carries over.
+  *The plan*:
+  1. `VariationRun::call_batch`: one call over many points, each node of
+     the body dispatched once for all of them. A value is a column, or
+     one value where it is the same in every lane (a parameter, a
+     constant, a forced draw); a branch runs its arms under per-lane
+     masks, an early return masks its lanes out. Every per-lane
+     operation is the scalar interpreter's own (`binary`, `call`), so a
+     lane's result is the scalar call's bit for bit. A body outside the
+     subset -- a loop, an array, an unforced draw, a host call -- falls
+     back to scalar calls.
+  2. `UserKernel::forward_batch` and a batched `Map2` forward; the CPU
+     evaluator replays a word over its job's points map by map, so a
+     user kernel runs once per symbol for all of them (blur's per-point
+     streams kept per lane).
+  Gates: batch against scalar bit for bit over every twin's forward map
+  at many points and draws; the corpus through the twins as before; the
+  twin's plan times against D1's.
 
 ## Order of work
 
