@@ -359,11 +359,51 @@ pub struct UserKernel {
     arms: OnceLock<Option<Vec<Arm>>>,
 }
 
+/// Which of a kernel's programs a kept run runs ([`with_run`]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Which {
+    Forward,
+    Inverse,
+    Gap,
+    Difference,
+    Forward3,
+    Inverse3,
+}
+
+thread_local! {
+    /// Each kernel's runs on this thread, by the kernel and the program:
+    /// a kernel is the table's for the session (`kernel_slot`), so its
+    /// programs and values outlive any run of them.
+    static RUNS: std::cell::RefCell<HashMap<(usize, Which), VariationRun<'static>>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// `f` on this thread's run of `prog` at `params`, for the kernel at
+/// `key`, made the first time and its locals zeroed each call
+/// (rhai-planners D1): building a run afresh was half of every call.
+fn with_run<R>(key: usize, which: Which, prog: &'static Program, params: &'static ParamValues, f: impl FnOnce(&mut VariationRun<'static>) -> R) -> R {
+    RUNS.with(|runs| {
+        let mut runs = runs.borrow_mut();
+        let run = runs.entry((key, which)).or_insert_with(|| VariationRun::new(prog, params, 1));
+        run.reset_locals();
+        f(run)
+    })
+}
+
 impl UserKernel {
     /// The forward map at the grid draw `code` ([`UserInverse::forward_at`]).
-    pub fn forward(&self, z: [f64; 2], code: u32) -> [f64; 2] {
-        self.inverse.forward_at(&self.params, z, code)
+    pub fn forward(&'static self, z: [f64; 2], code: u32) -> [f64; 2] {
+        self.forward_u(z, ((code % DRAW_GRID) as f64 + 0.5) / DRAW_GRID as f64)
     }
+
+    /// The forward map with every draw of the call `u`.
+    pub fn forward_u(&'static self, z: [f64; 2], u: f64) -> [f64; 2] {
+        with_run(self as *const _ as usize, Which::Forward, &self.inverse.forward, &self.params, |run| {
+            run.set_draw(u);
+            let out = run.call(C64::new(z[0], z[1]), C64::ZERO, 1.0).0;
+            [out.re, out.im]
+        })
+    }
+
 
     /// Its forward map's arms (docs/projects/rhai-planners.md, C1): one, of
     /// every draw, for a map that draws nothing; for one that draws, the
@@ -378,19 +418,20 @@ impl UserKernel {
     /// arm, its share their lengths with each edge bisected -- so a power
     /// of 2.5 shares 0.4, 0.4, 0.2, as its draws do -- and its code the
     /// middle step of its longest run.
-    pub fn arms(&self) -> Option<&[Arm]> {
-        self.arms
-            .get_or_init(|| find_arms(|z, u| self.inverse.forward_u(&self.params, z, u), self.inverse.forward_draws))
-            .as_deref()
+    pub fn arms(&'static self) -> Option<&'static [Arm]> {
+        self.arms.get_or_init(|| find_arms(|z, u| self.forward_u(z, u), self.inverse.forward_draws)).as_deref()
     }
 
     /// `F(z + d) - F(z)` at the grid draw `code`, without forming the
     /// difference ([`UserInverse::difference`]); none where it has no form.
-    pub fn forward_difference(&self, z: [f64; 2], d: [f64; 2], code: u32) -> Option<[f64; 2]> {
+    pub fn forward_difference(&'static self, z: [f64; 2], d: [f64; 2], code: u32) -> Option<[f64; 2]> {
         let p = self.inverse.difference.as_ref()?;
         let u = ((code % DRAW_GRID) as f64 + 0.5) / DRAW_GRID as f64;
-        let out = VariationRun::new(p, &self.params, 1).with_color(u).call(C64::new(z[0], z[1]), C64::new(d[0], d[1]), 1.0).0;
-        Some([out.re, out.im])
+        Some(with_run(self as *const _ as usize, Which::Difference, p, &self.params, |run| {
+            run.set_color(u);
+            let out = run.call(C64::new(z[0], z[1]), C64::new(d[0], d[1]), 1.0).0;
+            [out.re, out.im]
+        }))
     }
 
     /// What the offset replay's difference reads through `get_param(base,
@@ -405,15 +446,19 @@ impl UserKernel {
 
     /// The grid draws the analysis takes its forward map at: its arms', or,
     /// where its draws pick no arms, [`FORWARD_ARMS`] spread over the grid.
-    pub fn draws(&self) -> Vec<u32> {
+    pub fn draws(&'static self) -> Vec<u32> {
         match self.arms() {
             Some(arms) => arms.iter().map(|a| a.code).collect(),
             None => (0..FORWARD_ARMS).map(spread).collect(),
         }
     }
 
-    pub fn inverse(&self, v: [f64; 2], branch: u32) -> [f64; 2] {
-        self.inverse.inverse_at(&self.params, v, branch)
+    pub fn inverse(&'static self, v: [f64; 2], branch: u32) -> [f64; 2] {
+        with_run(self as *const _ as usize, Which::Inverse, &self.inverse.inverse, &self.params, |run| {
+            run.set_color(branch as f64);
+            let out = run.call(C64::new(v[0], v[1]), C64::ZERO, 1.0).0;
+            [out.re, out.im]
+        })
     }
 
     pub fn unbounded_at_origin(&self) -> bool {
@@ -421,8 +466,9 @@ impl UserKernel {
     }
 
     /// How far `v` lies outside the image, where the variation says.
-    pub fn gap(&self, v: [f64; 2]) -> Option<f64> {
-        self.inverse.gap_at(&self.params, v)
+    pub fn gap(&'static self, v: [f64; 2]) -> Option<f64> {
+        let (p, _) = self.inverse.gap.as_ref()?;
+        Some(with_run(self as *const _ as usize, Which::Gap, p, &self.params, |run| run.call(C64::new(v[0], v[1]), C64::ZERO, 1.0).0.re))
     }
 
     /// The hole its image of the disc `|z| <= r_pre` leaves about the
@@ -437,7 +483,7 @@ impl UserKernel {
     /// built-in's; a kernel that dips between samples is read a little
     /// past its hole there. Kept by reach, since the Extent asks again at
     /// every radius it is dragged through.
-    pub fn hole_radius(&self, r_pre: f64) -> f64 {
+    pub fn hole_radius(&'static self, r_pre: f64) -> f64 {
         if !(r_pre > 0.0) || !self.unbounded_at_origin() {
             return 0.0;
         }
@@ -465,8 +511,12 @@ impl UserKernel {
     }
 }
 
-fn table() -> &'static RwLock<(Vec<Arc<UserKernel>>, HashMap<(String, Vec<u32>), Result<u32, String>>)> {
-    static TABLE: OnceLock<RwLock<(Vec<Arc<UserKernel>>, HashMap<(String, Vec<u32>), Result<u32, String>>)>> = OnceLock::new();
+type Table = (Vec<&'static UserKernel>, HashMap<(String, Vec<u32>), Result<u32, String>>);
+
+/// The kernels, each kept for the session (leaked: the table never let
+/// one go), so a run of one can borrow it ([`with_run`]).
+fn table() -> &'static RwLock<Table> {
+    static TABLE: OnceLock<RwLock<Table>> = OnceLock::new();
     TABLE.get_or_init(Default::default)
 }
 
@@ -491,16 +541,33 @@ pub fn kernel_slot(inv: &Arc<UserInverse>, slots: &[f32]) -> Result<u32, String>
         return hit.clone();
     }
     let slot = result.map(|k| {
-        t.0.push(Arc::new(k));
+        t.0.push(Box::leak(Box::new(k)));
         (t.0.len() - 1) as u32
     });
     t.1.insert(id, slot.clone());
     slot
 }
 
+thread_local! {
+    /// This thread's copy of the kernels: the table only grows and keeps
+    /// every kernel for the session, so a copy stays true, and the walk's
+    /// threads stop meeting at the table's lock -- 40% of a call's time,
+    /// measured with every core calling.
+    static KERNELS: std::cell::RefCell<Vec<&'static UserKernel>> = const { std::cell::RefCell::new(Vec::new()) };
+    static KERNELS3: std::cell::RefCell<Vec<&'static UserKernel3>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// The user kernel in `slot` ([`kernel_slot`]).
-pub fn kernel(slot: u32) -> Arc<UserKernel> {
-    table().read().expect("the user kernels' table").0[slot as usize].clone()
+pub fn kernel(slot: u32) -> &'static UserKernel {
+    KERNELS.with(|k| {
+        if let Some(&hit) = k.borrow().get(slot as usize) {
+            return hit;
+        }
+        let all = table().read().expect("the user kernels' table").0.clone();
+        let hit = all[slot as usize];
+        *k.borrow_mut() = all;
+        hit
+    })
 }
 
 /// The offset replay's name for the variation `key`'s difference: a row
@@ -768,12 +835,16 @@ pub struct UserKernel3 {
 impl UserKernel3 {
     /// `variation3` at `v` on the `arm`th of the [`FORWARD_ARMS`] draws
     /// spread over the grid (`Kernel3::arms`).
-    pub fn forward(&self, v: [f64; 3], arm: u32) -> [f64; 3] {
-        self.inverse.forward_at(&self.params, v, spread(arm))
+    pub fn forward(&'static self, v: [f64; 3], arm: u32) -> [f64; 3] {
+        let u = (spread(arm) as f64 + 0.5) / DRAW_GRID as f64;
+        with_run(self as *const _ as usize, Which::Forward3, &self.inverse.forward, &self.params, |run| {
+            run.set_draw(u);
+            run.call3(v, [0.0; 3], 1.0).0
+        })
     }
 
-    pub fn inverse(&self, v: [f64; 3]) -> [f64; 3] {
-        self.inverse.inverse_at(&self.params, v)
+    pub fn inverse(&'static self, v: [f64; 3]) -> [f64; 3] {
+        with_run(self as *const _ as usize, Which::Inverse3, &self.inverse.inverse, &self.params, |run| run.call3(v, [0.0; 3], 1.0).0)
     }
 
     pub fn unbounded_at_origin(&self) -> bool {
@@ -781,7 +852,7 @@ impl UserKernel3 {
     }
 }
 
-type Table3 = (Vec<Arc<UserKernel3>>, HashMap<(String, Vec<u32>), Result<u32, String>>);
+type Table3 = (Vec<&'static UserKernel3>, HashMap<(String, Vec<u32>), Result<u32, String>>);
 
 fn table3() -> &'static RwLock<Table3> {
     static TABLE: OnceLock<RwLock<Table3>> = OnceLock::new();
@@ -805,16 +876,24 @@ pub fn kernel_slot3(inv: &Arc<UserInverse3>, slots: &[f32]) -> Result<u32, Strin
         return hit.clone();
     }
     let slot = result.map(|k| {
-        t.0.push(Arc::new(k));
+        t.0.push(Box::leak(Box::new(k)));
         (t.0.len() - 1) as u32
     });
     t.1.insert(id, slot.clone());
     slot
 }
 
-/// The 3D user kernel in `slot` ([`kernel_slot3`]).
-pub fn kernel3(slot: u32) -> Arc<UserKernel3> {
-    table3().read().expect("the 3D user kernels' table").0[slot as usize].clone()
+/// The 3D user kernel in `slot` ([`kernel_slot3`]), as [`kernel`].
+pub fn kernel3(slot: u32) -> &'static UserKernel3 {
+    KERNELS3.with(|k| {
+        if let Some(&hit) = k.borrow().get(slot as usize) {
+            return hit;
+        }
+        let all = table3().read().expect("the 3D user kernels' table").0.clone();
+        let hit = all[slot as usize];
+        *k.borrow_mut() = all;
+        hit
+    })
 }
 
 #[cfg(test)]
@@ -981,6 +1060,42 @@ fn inverse(z, p, branch) {
             }
         }
         println!("worst relative difference: {worst:.1e}");
+    }
+
+    /// What a user kernel's call costs (rhai-planners D1): through the
+    /// kernel's kept run against a run held, one thread; and with every
+    /// core calling, looking the kernel up against holding it.
+    #[test]
+    #[ignore = "measurement"]
+    fn time_user_kernel_calls() {
+        let src = crate::lang::rhai::with_own_id(crate::variations::twins::source("julian").expect("a twin"), &crate::scripted::mint_id());
+        let inv = Arc::new(compile(&src, "julian_time").expect("declared").expect("checks"));
+        let k = kernel(kernel_slot(&inv, &[2.0, -1.0]).expect("a slot"));
+        let n = 200_000;
+        let t0 = std::time::Instant::now();
+        let mut acc = 0.0;
+        for i in 0..n {
+            acc += k.forward([0.3 + 1e-6 * i as f64, 0.2], 63)[0];
+        }
+        let fresh = t0.elapsed().as_secs_f64() / n as f64;
+        let t0 = std::time::Instant::now();
+        let mut run = VariationRun::new(&inv.forward, &k.params, 1).with_draw(63.5 / 256.0);
+        for i in 0..n {
+            acc += run.call(C64::new(0.3 + 1e-6 * i as f64, 0.2), C64::ZERO, 1.0).0.re;
+        }
+        let reused = t0.elapsed().as_secs_f64() / n as f64;
+        println!("fresh run a call {:.2} us, reused {:.2} us ({acc})", fresh * 1e6, reused * 1e6);
+        use rayon::prelude::*;
+        let slot = kernel_slot(&inv, &[2.0, -1.0]).expect("a slot");
+        let m = 4_000_000u64;
+        let t0 = std::time::Instant::now();
+        let s: f64 = (0..m).into_par_iter().map(|i| kernel(slot).forward([0.3 + 1e-9 * i as f64, 0.2], 63)[0]).sum();
+        let looked = t0.elapsed().as_secs_f64() / m as f64;
+        let k = kernel(slot);
+        let t0 = std::time::Instant::now();
+        let s2: f64 = (0..m).into_par_iter().map(|i| k.forward([0.3 + 1e-9 * i as f64, 0.2], 63)[0]).sum();
+        let held = t0.elapsed().as_secs_f64() / m as f64;
+        println!("parallel: {:.3} us a call looking the kernel up, {:.3} us holding it ({s} {s2})", looked * 1e6, held * 1e6);
     }
 
     #[test]
