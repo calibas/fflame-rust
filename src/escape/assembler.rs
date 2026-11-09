@@ -8744,20 +8744,29 @@ fn push_ifs_markers(out: &mut Vec<String>, text: &str, sums: bool, user: bool, u
     }
 }
 
+/// What the user kernels read their values through: their own name for
+/// `get_param`, since a camera lens brings the flame's (over its own
+/// buffer) into the same shader.
+const IFS_USER_PARAM: &str = "fn ifs_user_param(xform_id: u32, variation_id: u32, slot: u32) -> f32 {\n    return ifs_xaos[xform_id + variation_id + slot];\n}\n";
+
+/// A user kernel's compiled text, reading through [`IFS_USER_PARAM`].
+fn ifs_user_text(wgsl: &str) -> String {
+    wgsl.replace("get_param(", "ifs_user_param(")
+}
+
 /// The solid's own Rhai inverses (kind-4 rows, `fn inverse3`; B3): each
-/// its function renamed by its index, the `get_param` they read through,
-/// the dispatcher, and the local σ, `1/σ_max` of the inverse's Jacobian by
-/// central differences -- σ_max exactly, the root of `JᵀJ`'s largest
-/// eigenvalue in closed form (`symmetric3_eigenvalues`'s method), since a
-/// bound larger than σ_max is a step longer than the surface allows.
+/// its function renamed by its index, the reader they take their values
+/// through, the dispatcher, and the local σ, `1/σ_max` of the inverse's
+/// Jacobian by central differences -- σ_max exactly, the root of `JᵀJ`'s
+/// largest eigenvalue in closed form (`symmetric3_eigenvalues`'s method),
+/// since a bound larger than σ_max is a step longer than the surface
+/// allows.
 fn ifs_user_block3(user: &super::ifs::UserKernels) -> String {
     use crate::variations::user_inverse::WGSL_NAME3;
-    let mut out = String::from(
-        "fn get_param(xform_id: u32, variation_id: u32, slot: u32) -> f32 {\n    return ifs_xaos[xform_id + variation_id + slot];\n}\n",
-    );
+    let mut out = String::from(IFS_USER_PARAM);
     let mut cases = String::new();
     for (f, (_, wgsl, _, _)) in user.functions.iter().enumerate() {
-        out.push_str(&wgsl.replace(WGSL_NAME3, &format!("{WGSL_NAME3}{f}")));
+        out.push_str(&ifs_user_text(wgsl).replace(WGSL_NAME3, &format!("{WGSL_NAME3}{f}")));
         cases.push_str(&format!("        case {f}u: {{ return {WGSL_NAME3}{f}(v, base, 0.0); }}\n"));
     }
     out.push_str(&format!(
@@ -8771,8 +8780,8 @@ fn ifs_user_block3(user: &super::ifs::UserKernels) -> String {
 
 /// The flame's own Rhai inverses (kind-8 rows; docs/projects/rhai-planners.md,
 /// B1), each the function its variation's `fn inverse` compiles to
-/// (`lang::wgsl::inverse_kernel`), renamed by its index; the `get_param`
-/// they read their values through, which ride behind the xaos graph
+/// (`lang::wgsl::inverse_kernel`), renamed by its index; the reader
+/// they take their values through, which ride behind the xaos graph
 /// (`ifs::pack_flame`); and the three the kernel's switches call: the
 /// inverse along the row's branch, its Jacobian by central differences
 /// -- a step of 1e-3 of the point's size, f32's rounding some 1e-4 of the
@@ -8791,13 +8800,11 @@ fn ifs_user_block3(user: &super::ifs::UserKernels) -> String {
 /// the image's edge comes out huge, and its σ small: the sound way.
 fn ifs_user_block(user: &super::ifs::UserKernels) -> String {
     use crate::variations::user_inverse::{FORWARD_WGSL_NAME, GAP_WGSL_NAME, WGSL_NAME};
-    let mut out = String::from(
-        "fn get_param(xform_id: u32, variation_id: u32, slot: u32) -> f32 {\n    return ifs_xaos[xform_id + variation_id + slot];\n}\n",
-    );
+    let mut out = String::from(IFS_USER_PARAM);
     let (mut cases, mut gaps, mut forwards) = (String::new(), String::new(), String::new());
     for (f, (_, wgsl, gap, fwd)) in user.functions.iter().enumerate() {
         out.push_str(
-            &wgsl
+            &ifs_user_text(wgsl)
                 .replace(WGSL_NAME, &format!("{WGSL_NAME}{f}"))
                 .replace(GAP_WGSL_NAME, &format!("{GAP_WGSL_NAME}{f}"))
                 .replace(FORWARD_WGSL_NAME, &format!("{FORWARD_WGSL_NAME}{f}")),
@@ -8814,10 +8821,12 @@ fn ifs_user_block(user: &super::ifs::UserKernels) -> String {
     out.push_str(&format!(
         "fn ifs_user_forward(i: u32, z: vec2<f32>) -> vec2<f32> {{\n    let base = u32(ifs_maps[i].params.y);\n    switch u32(ifs_maps[i].params.x) {{\n{forwards}        default: {{}}\n    }}\n    return z * 1e30;\n}}\n"
     ));
-    // Its image gap where it declares one (`fn image_gap`), in the
-    // kernel's frame, scaled as the unit disc's (`params.z`).
+    // Its image gap: the hole its image of the ball leaves (`params.w`),
+    // as an inversion's, where it has one (`UserKernel::hole_radius`);
+    // else where it declares one (`fn image_gap`), in the kernel's
+    // frame, scaled as the unit disc's (`params.z`).
     out.push_str(&format!(
-        "fn ifs_user_gap(i: u32, p: vec2<f32>) -> f32 {{\n    let m = ifs_maps[i].inv_m;\n    let t = ifs_maps[i].inv_t;\n    let v = vec2<f32>(m.x * p.x + m.y * p.y + t.x, m.z * p.x + m.w * p.y + t.y);\n    let base = u32(ifs_maps[i].params.y);\n    var g = -1.0;\n    switch u32(ifs_maps[i].params.x) {{\n{gaps}        default: {{}}\n    }}\n    if (g > 0.0) {{\n        return g * ifs_maps[i].params.z;\n    }}\n    return -1.0;\n}}\n"
+        "fn ifs_user_gap(i: u32, p: vec2<f32>) -> f32 {{\n    let m = ifs_maps[i].inv_m;\n    let t = ifs_maps[i].inv_t;\n    let v = vec2<f32>(m.x * p.x + m.y * p.y + t.x, m.z * p.x + m.w * p.y + t.y);\n    let hole = ifs_maps[i].params.w;\n    if (hole > 0.0) {{\n        let r = length(v);\n        if (r < hole) {{\n            return (hole - r) * ifs_maps[i].params.z;\n        }}\n        return -1.0;\n    }}\n    let base = u32(ifs_maps[i].params.y);\n    var g = -1.0;\n    switch u32(ifs_maps[i].params.x) {{\n{gaps}        default: {{}}\n    }}\n    if (g > 0.0) {{\n        return g * ifs_maps[i].params.z;\n    }}\n    return -1.0;\n}}\n"
     ));
     out.push_str(&format!(
         "fn ifs_user_inverse(i: u32, v: vec2<f32>) -> vec2<f32> {{\n    let f = u32(ifs_maps[i].params.x);\n    let base = u32(ifs_maps[i].params.y);\n    let branch = ifs_maps[i].branch;\n    switch f {{\n{cases}        default: {{}}\n    }}\n    return v * 1e30;\n}}\n"
@@ -9273,7 +9282,23 @@ pub fn assemble_ifs_path(
     sums: bool,
     placed: bool,
 ) -> String {
-    let walk = assemble_ifs_rig(def, coloring, beam, lens, false, sums, placed);
+    let none = super::ifs::UserKernels::default();
+    assemble_ifs_path_user(def, coloring, beam, lens, sums, placed, &none)
+}
+
+/// The same, with the solid's own Rhai inverses (`user3`; kind-4 rows,
+/// docs/projects/rhai-planners.md, B3) spliced in, as the walk's are.
+pub fn assemble_ifs_path_user(
+    def: &IfsDef,
+    coloring: &IfsColoringDef,
+    beam: u32,
+    lens: Option<&str>,
+    sums: bool,
+    placed: bool,
+    user3: &super::ifs::UserKernels,
+) -> String {
+    let none = super::ifs::UserKernels::default();
+    let walk = assemble_ifs_user(def, coloring, beam, lens, false, sums, placed, &none, user3);
     let cut = walk
         .find("@compute @workgroup_size(8, 8, 1)\nfn escape_main")
         .expect("the solid template ends in the walk's entry point");

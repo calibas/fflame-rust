@@ -680,6 +680,12 @@ impl Kernel {
     /// power-15 root, in f32 it is `|v| < 0.003`, and the GPU was
     /// freezing paths there some 10^17 times more often than the CPU
     /// reference.
+    ///
+    /// A user kernel's is sampled from its forward map, where that map is
+    /// unbounded at the origin as these two are
+    /// (`UserKernel::hole_radius`): without it a Rhai julian of negative
+    /// distance read 1,523 of 2,304 pixels as a chaos game does where its
+    /// built-in read 1,796, and with it the two walks agree on every one.
     pub fn hole_radius(&self, r_pre: f64) -> f64 {
         if !(r_pre > 0.0) {
             return 0.0;
@@ -687,6 +693,7 @@ impl Kernel {
         match *self {
             Kernel::Spherical => 1.0 / r_pre,
             Kernel::Root { n, d, .. } if d < 0.0 => r_pre.powf(d / (n as f64).abs()),
+            Kernel::User { slot } => crate::variations::user_inverse::kernel(slot).hole_radius(r_pre),
             _ => 0.0,
         }
     }

@@ -6553,10 +6553,11 @@ pub fn pack_maps(
                         // A Rhai variation's own inverse: x its function,
                         // y where its values start in the user block
                         // (`user_kernels`; `pack_flame` moves it past the
-                        // xaos graph the block rides behind).
+                        // xaos graph the block rides behind); w its hole,
+                        // as an inversion's.
                         Kernel::User { slot } => {
                             let (f, at) = user.at(slot);
-                            (8.0, [f as f32, at as f32, gap, 0.0])
+                            (8.0, [f as f32, at as f32, gap, r.hole as f32])
                         }
                         Kernel::Elliptic | Kernel::Splits { .. } | Kernel::Cylinder { .. } | Kernel::Root { mirror: true, .. } => {
                             unreachable!("analyse_2d refuses the walk's own kernels (Kernel::walk_only)")
@@ -6634,6 +6635,45 @@ pub fn pack_maps(
 
 #[cfg(test)]
 mod tests {
+    /// A Flame Attractor with a Rhai inverse compiles beside a camera lens,
+    /// and the solid's path tracer takes its inverse as its walk does
+    /// (docs/projects/rhai-planners.md). The lens brings the flame's
+    /// `get_param` into the shader, and the user kernels once defined
+    /// another: every such picture was black. The path tracer once had no
+    /// user kernels at all.
+    #[test]
+    fn a_user_kernel_compiles_beside_a_lens() {
+        use crate::variations::{twins, user_inverse};
+        let mut cfg = crate::config::escape::EscapeConfig::default();
+        cfg.lens = "julian".to_string();
+        let lens = crate::escape::lens::lens_source(&cfg, &crate::variations::global_registry()).expect("a lens");
+        let inv = user_inverse::compile(twins::source("bubble").unwrap(), "bubble").unwrap().unwrap();
+        let gap = inv.gap.as_ref().map(|(_, w)| w.as_str());
+        let fwd = inv.forward_wgsl.as_deref();
+        let wgsl = format!("{}{}{}", inv.wgsl, gap.unwrap_or(""), fwd.unwrap_or(""));
+        let user = super::UserKernels { functions: vec![("bubble".into(), wgsl, gap.is_some(), fwd.is_some())], ..Default::default() };
+        let inv3 = user_inverse::compile3(twins::source("julia3D").unwrap(), "julia3D").unwrap().unwrap();
+        let user3 = super::UserKernels { functions: vec![("julia3D".into(), inv3.wgsl.clone(), false, false)], ..Default::default() };
+        let none = super::UserKernels::default();
+        let flat = super::get_ifs("ifs_flame").unwrap();
+        let solid = super::get_ifs("ifs_flame_3d").unwrap();
+        let col = |def| super::get_ifs_coloring("ifs_distance", def);
+        use crate::escape::assembler::{assemble_ifs_path_user, assemble_ifs_user};
+        for (what, src) in [
+            ("the walk", assemble_ifs_user(flat, col(flat), 4, Some(&lens), false, false, false, &user, &none)),
+            ("the walk with sums", assemble_ifs_user(flat, col(flat), 4, Some(&lens), false, true, false, &user, &none)),
+            ("the solid's walk", assemble_ifs_user(solid, col(solid), 4, Some(&lens), false, false, false, &none, &user3)),
+            ("the solid's path tracer", assemble_ifs_path_user(solid, col(solid), 4, Some(&lens), false, false, &user3)),
+        ] {
+            assert!(src.contains("ifs_user_param("), "{what}: no user kernel spliced");
+            use wgpu::naga;
+            let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{what}: {}", e.emit_to_string(&src)));
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        }
+    }
+
     /// Every solid's walk reads its colour depth at its `colour_depth`
     /// parameter's slot. The quaternion Julia's read one past it, a slot
     /// never written, so its colour depth was 1 whatever the slider said.
