@@ -2770,7 +2770,10 @@ pub static IFS_MANDELBULB: IfsDef = IfsDef {
         ParamDef::new(
             "step_factor",
             "Step Factor",
-            "Scales the distance the march steps by. The bulb's estimate is not a                       bound: beside thin parts it was measured at 1.7 times the true distance,                       so a ray can step past a hair. Lower it if thin parts break up, at the                       cost of more steps.",
+            "Scales the distance the march steps by. The bulb's estimate is not a \
+                      bound: beside thin parts it was measured at 1.7 times the true distance, \
+                      so a ray can step past a hair. Lower it if thin parts break up, at the \
+                      cost of more steps.",
             Spec::float(1.0, 0.25, 1.0),
         ),
     ],
@@ -13416,6 +13419,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             ("mandelbox_solid", "ifs_address", &[("scale", 2.6), ("min_radius", 0.3), ("fixed_radius", 1.4), ("fold_limit", 0.8)], 0.0),
             ("mandelbox_solid", "ifs_trap", &[("mode", 1.0), ("cx", 0.6), ("cy", -0.4), ("cz", 0.3)], 0.0),
             ("mandelbox_solid", "ifs_level", &[("colour_depth", 7.0), ("levels", 24.0)], 1.5),
+            ("mandelbulb_solid", "ifs_trap", &[], 0.0),
+            ("mandelbulb_solid", "ifs_level", &[], 0.0),
+            ("mandelbulb_solid", "ifs_address", &[], 0.0),
+            ("mandelbulb_solid", "ifs_distance", &[], 0.0),
+            ("mandelbulb_solid", "ifs_address", &[("power", 3.0), ("colour_depth", 5.0)], 0.0),
+            ("mandelbulb_solid", "ifs_trap", &[("mode", 1.0), ("cx", 0.35), ("cy", -0.6), ("cz", 0.2)], 0.0),
+            ("mandelbulb_solid", "ifs_level", &[("step_factor", 0.6), ("levels", 20.0)], 1.5),
         ];
         let mut failures = Vec::new();
         let mut timing = Vec::new();

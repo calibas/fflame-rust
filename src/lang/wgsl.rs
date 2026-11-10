@@ -1161,6 +1161,12 @@ pub fn solid(p: &Program, slots: &[usize], func_base: usize, depth_slot: usize) 
     let zw = find("s_z__w");
     let dr = find("s_dr");
     let address = find("s_address");
+    // A solid that computes its colourings' readings itself (a built-in's
+    // twin): the orbit trap's point, the level, the colour, each as its
+    // state last held it -- the solid keeps them to Colour Depth.
+    let trap = p.vars.iter().position(|v| v.name == "s_trap" && !v.global && !v.is_array() && v.ty == Ty::Complex);
+    let level = find("s_level");
+    let color = find("s_color");
     let mut g = Gen::new(p, Ctx::Formula, "ufs_");
     g.slots = slots.to_vec();
     for (i, k) in g.func_slots.iter_mut().enumerate() {
@@ -1193,6 +1199,9 @@ pub fn solid(p: &Program, slots: &[usize], func_base: usize, depth_slot: usize) 
     };
     let spread = dr.map(|v| format!("            spread = f32({});\n", g.var(v))).unwrap_or_default();
     let addr = address.map(|v| format!("            address = fract(f32({}));\n", g.var(v))).unwrap_or_default();
+    let point = trap.map_or_else(|| "trap_p".to_string(), |v| g.var(v));
+    let level = level.map_or_else(|| "log2(max(abs(spread), 1.0))".to_string(), |v| format!("f32({})", g.var(v)));
+    let color = color.map_or_else(|| "address".to_string(), |v| format!("f32({})", g.var(v)));
     let _ = write!(
         body,
         "fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {{
@@ -1243,10 +1252,10 @@ pub fn solid(p: &Program, slots: &[usize], func_base: usize, depth_slot: usize) 
             break;
         }}
     }}
-    res.point = trap_p;
+    res.point = {point};
     res.address = address;
-    res.color = address;
-    res.level = log2(max(abs(spread), 1.0));
+    res.color = {color};
+    res.level = {level};
     res.distance = solid_distance(s, pos.xy, pos.z);
     if (escape_k >= 0) {{
         res.escaped = 1u;
@@ -2866,7 +2875,11 @@ impl<'p> Gen<'p> {
                 let [x, y, z] = [&input[0], &input[1], &input[2]].map(|e| self.expr(e));
                 let k = self.loops;
                 self.loops += 1;
-                let _ = writeln!(out, "{pad}let map{k} = esc_solid_map({call}u, vec3<f32>({x}, {y}, {z}));");
+                if *call == crate::lang::ir::TRAP_POINT_CALL {
+                    let _ = writeln!(out, "{pad}let map{k} = ifs_trap_point(vec3<f32>({x}, {y}, {z}));");
+                } else {
+                    let _ = writeln!(out, "{pad}let map{k} = esc_solid_map({call}u, vec3<f32>({x}, {y}, {z}));");
+                }
                 for (part, axis) in parts.iter().zip(["x", "y", "z"]) {
                     let v = self.var(*part);
                     let _ = writeln!(out, "{pad}{v} = map{k}.{axis};");

@@ -121,6 +121,7 @@ pub const COLORING_TWINS: &[(&str, &str)] = &[
 /// tests hold each to its built-in (`escape::ifs`).
 pub const SOLID_TWINS: &[(&str, &str)] = &[
     ("mandelbox_solid", include_str!("../../assets/formulas/twins/solids/mandelbox.rhai")),
+    ("mandelbulb_solid", include_str!("../../assets/formulas/twins/solids/mandelbulb.rhai")),
 ];
 
 /// The twin of the built-in solid `name`, when it has one.

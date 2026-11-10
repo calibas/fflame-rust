@@ -347,6 +347,8 @@ impl Lowerer<'_> {
             _ if PLANE_FUNCTIONS.contains(&n) => first().filter(|k| *k == Kind::Quat),
             // A solid's call of a built-in variation (P5).
             "vary" => (self.solid && args.get(1).is_some_and(|a| self.is_vec(a, scope))).then_some(Kind::Vec3),
+            // A solid's Orbit transformations, which its trap measures.
+            "trap_point" => self.solid.then_some(Kind::Vec3),
             _ => None,
         }
     }
@@ -458,6 +460,9 @@ impl Lowerer<'_> {
         let n = f.name.as_str();
         if n == "vary" && self.solid {
             return self.vary_map(f, p, scope);
+        }
+        if n == "trap_point" && self.solid {
+            return self.trap_point(f, p, scope);
         }
         if let Some(def) = self.fns.get(n).cloned() {
             if matches!(n, "start" | "step" | "escaped" | "distance" | "finish" | "prepare" | "init" | "variation" | "variation3") {
@@ -1352,6 +1357,29 @@ impl Lowerer<'_> {
         let input: [ast::Expr; 3] = input.parts.try_into().map_err(|_| Diag::error(span, "three parts"))?;
         let out3: [String; 3] = out.clone().try_into().map_err(|_| Diag::error(span, "three parts"))?;
         self.pending.push(ast::Stmt::Map { call, input: Box::new(input), out: out3, span });
+        Ok(Vector::new(Kind::Vec3, out.into_iter().map(|n| mk(ExprKind::Name(n), span)).collect()))
+    }
+
+    /// `trap_point(v)`: the point a built-in solid's orbit trap measures,
+    /// `v` through the Orbit transformations when there are any (the
+    /// shader's `ifs_trap_point`) -- a twin's own trap reads it as its
+    /// built-in's does. The GPU's, per pixel, as `vary` is.
+    fn trap_point(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope) -> R<Vector> {
+        if f.args.len() != 1 {
+            return self.err(p, "`trap_point(v)`: the point of a vector the orbit trap measures");
+        }
+        let input = self.vexpr(&f.args[0], scope)?;
+        if input.kind != Kind::Vec3 {
+            return self.err(f.args[0].position(), "`trap_point` takes a vector: a quaternion's vector part is `q.v`");
+        }
+        let span = self.pos.span(p);
+        let out = self.vec_local(Kind::Vec3, "trap");
+        for n in &out {
+            self.pending.push(ast::Stmt::Decl { ty: TypeName::Float, name: n.clone(), init: None, dims: None, span });
+        }
+        let input: [ast::Expr; 3] = input.parts.try_into().map_err(|_| Diag::error(span, "three parts"))?;
+        let out3: [String; 3] = out.clone().try_into().map_err(|_| Diag::error(span, "three parts"))?;
+        self.pending.push(ast::Stmt::Map { call: crate::lang::ir::TRAP_POINT_CALL, input: Box::new(input), out: out3, span });
         Ok(Vector::new(Kind::Vec3, out.into_iter().map(|n| mk(ExprKind::Name(n), span)).collect()))
     }
 

@@ -280,7 +280,7 @@ impl FormulaEditorPanel {
         let is = |key: &str| vec![t!(key).to_string()];
         // A solid's walk too (B3).
         if kind == EntryKind::Solid {
-            if let Some(e) = checked.as_ref().ok().and_then(custom::solid_error) {
+            if let Some(e) = checked.as_ref().ok().and_then(|p| custom::solid_error(p, &text)) {
                 errors.push(e);
             }
         }
