@@ -207,10 +207,36 @@ pub struct ArmedDef {
 
 /// `src` with every occurrence of the variation's draw replaced by its
 /// forced form, or `None` if the variation has no arms.
+///
+/// A Rhai variation's arms are not this table's: they are read off its
+/// forward map (`user_inverse::UserKernel::arms`), each named by a draw on
+/// a grid of 256, and a word's symbol carries that draw. So every draw of
+/// its body -- `rand()` and the twins' `draw_u32()` -- is wrapped to read
+/// it, `(code + ½)/256` or those bits, exactly the interpreter's fixed draw
+/// (docs/archive/projects/rhai-planners.md, C1), with the two helpers beside it.
 pub fn force_arms(name: &str, src: &str) -> Option<String> {
-    let def = arms_for(name)?;
-    Some(src.replace(def.draw, def.forced))
+    if let Some(def) = arms_for(name) {
+        return Some(src.replace(def.draw, def.forced));
+    }
+    if !crate::variations::user_inverse::draws_arms(name) {
+        return None;
+    }
+    let body = src.replace("rng_nextf(rng)", "ff_forced_draw(rng_nextf(rng))").replace("rng_next(rng)", "ff_forced_draw_u32(rng_next(rng))");
+    Some(format!("{body}\n{FORCED_DRAW_WGSL}"))
 }
+
+/// The forced draws of a Rhai variation's arms ([`force_arms`]): the grid
+/// draw `ct_forced_arm` names, as a float in [0, 1) and as its 32 bits.
+/// `(2c + 1)·2²³` is `(c + ½)/256` of 2³², exact in a `u32`.
+pub const FORCED_DRAW_WGSL: &str = r#"
+fn ff_forced_draw(drawn: f32) -> f32 {
+    return select(drawn, (f32(ct_forced_arm) + 0.5) / 256.0, ct_forced_arm >= 0);
+}
+
+fn ff_forced_draw_u32(drawn: u32) -> u32 {
+    return select(drawn, ((2u * u32(ct_forced_arm)) + 1u) << 23u, ct_forced_arm >= 0);
+}
+"#;
 
 /// The variations whose draw picks an arm. Append-only, like
 /// [`BOUNDS`].
@@ -842,6 +868,16 @@ mod derived_gate {
             v
         };
 
+        // `BOUNDS_TWINS=1`: every twin registered too, each derived from
+        // its OWN compiled body (`derive_own`) -- a pattern only the formula
+        // language emits checked against what its shader computes
+        // (docs/archive/projects/rhai-planners.md, A1).
+        let twins = std::env::var("BOUNDS_TWINS").is_ok_and(|v| v == "1");
+        if twins {
+            for (_, src) in crate::variations::twins::TWINS {
+                let _ = crate::variations::custom::register(src);
+            }
+        }
         let names: Vec<String> = {
             let reg = crate::variations::global_registry();
             reg.ordered_names.clone()
@@ -858,7 +894,12 @@ mod derived_gate {
             let mut claims: Vec<Ball> = Vec::new();
             for name in &names {
                 let pf = default_params(name);
-                let Ok(claim) = crate::variations::derive::derive(name, &pf, 1.0, *disc) else {
+                let claim = if twins && crate::scripted::is_key(name) {
+                    crate::variations::derive::derive_own(name, &pf, 1.0, *disc)
+                } else {
+                    crate::variations::derive::derive(name, &pf, 1.0, *disc)
+                };
+                let Ok(claim) = claim else {
                     continue;
                 };
                 if !claim.r.is_finite() || claim.r > 1.0e12 {
@@ -1123,5 +1164,38 @@ mod forced_arm_build_tests {
             replay.contains("ff_forced_arm_f(floor(abs(power) * rng_nextf(rng)))"),
             "julian's draw is wrapped in the replay build"
         );
+    }
+
+    /// A Rhai variation's draws (rhai-planners C1): julian's twin, which
+    /// does not borrow its armed built-in, reads the forced grid draw in a
+    /// replay build, whose shader validates; any other build is its body.
+    #[test]
+    #[ignore = "registers a twin"]
+    fn a_rhai_variations_draws_are_forced_only_under_replay() {
+        use crate::shader_builder_v2::{ShaderBuilder, ShaderConstants};
+        let mut flame = crate::scene::transforms::Flame::new();
+        let mut xf = crate::scene::transforms::Transform::new();
+        xf.set_variation("julian", 1.0);
+        flame.transforms.push(xf);
+        let flame = crate::variations::twins::twin_flame(&flame, "julian");
+        crate::variations::custom::ensure(&flame);
+        let key = crate::variations::twins::key("julian").expect("a twin");
+        assert!(crate::variations::user_inverse::draws_arms(&key), "the twin's draws are not an arm's");
+        let mut active = std::collections::HashMap::new();
+        active.insert(key.clone(), 1.0f32);
+        let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
+        let build = |targeting: bool, replay: bool| {
+            let constants = ShaderConstants { num_transforms: 1, cylinder_targeting: targeting, cylinder_replay: replay, ..ShaderConstants::default() };
+            builder.build_from_template(&flame, &active, false, false, false, true, &constants)
+        };
+        let plain = build(false, false);
+        assert!(!plain.contains("ff_forced_draw"), "an untargeted build must not force a draw");
+        let replay = build(true, true);
+        assert!(replay.contains("ff_forced_draw(rng_nextf(rng))"), "the twin's draw is not wrapped in the replay build");
+        use wgpu::naga;
+        let module = naga::front::wgsl::parse_str(&replay).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&replay)));
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{e:?}"));
     }
 }

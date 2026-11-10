@@ -101,12 +101,21 @@ pub fn kernel_forward_difference_gen<T: Transcendental>(k: &Kernel, v: &[T; 2], 
             return kernel_forward_difference_gen(&root, &[v[0].clone(), v[1].neg()], &[e[0].clone(), e[1].neg()], arm);
         }
     }
+    // A user kernel's form is derived from its own body
+    // (`lang::delta::variation_difference`; rhai-planners C3) and run in
+    // the interpreter, in f64.
+    if let Kernel::User { slot } = *k {
+        let kernel = crate::variations::user_inverse::kernel(slot);
+        let r = kernel.forward_difference([v[0].to_f64(), v[1].to_f64()], [e[0].to_f64(), e[1].to_f64()], arm)?;
+        return (r[0].is_finite() && r[1].is_finite()).then(|| [v[0].lit(r[0]), v[0].lit(r[1])]);
+    }
     let w = [v[0].add(&e[0]), v[1].add(&e[1])];
     let x = cnorm2(v);
     // `|v + ε|² − |v|² = 2v·ε + |ε|²`, which cancels nothing.
     let dot = v[0].mul(&e[0]).add(&v[1].mul(&e[1]));
     let t = dot.add(&dot).add(&cnorm2(e));
     match *k {
+        Kernel::User { .. } => unreachable!("taken above"),
         Kernel::Root { n, d, .. } => {
             let xv = x.to_f64();
             if !(xv > 0.0) || !(cnorm2(&w).to_f64() > 0.0) {
@@ -374,6 +383,18 @@ pub fn map_forward_difference(m: &Map2, z: [f64; 2], d: [f64; 2], arm: u32) -> O
 pub fn map_forward_jacobian(m: &Map2, z: [f64; 2], arm: u32) -> Option<[[f64; 2]; 2]> {
     use super::ifs_analysis::kernel_forward_gen;
     use super::ifs_real::jacobian2;
+    let j = match m {
+        Map2::Affine(a) => return a.m.iter().flatten().all(|v| v.is_finite()).then_some(a.m),
+        Map2::Nonlinear(n) => jacobian2(n.pre.apply(z), |v| kernel_forward_gen(&n.kernel, &v, arm))?,
+        Map2::Sum(s) => jacobian2(s.pre.apply(z), |v| kernel_forward_gen(&s.kernel, &v, arm))?,
+        Map2::NonlinearInverse(_) | Map2::SumInverse(_) => return None,
+    };
+    map_jacobian_of_kernels(m, j)
+}
+
+/// The map's Jacobian from its kernel's `j`: the weight, the affines and,
+/// for a sum, its linear part; `None` where it is not finite.
+fn map_jacobian_of_kernels(m: &Map2, j: [[f64; 2]; 2]) -> Option<[[f64; 2]; 2]> {
     let mul = |a: &[[f64; 2]; 2], b: &[[f64; 2]; 2]| {
         [
             [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1]],
@@ -381,14 +402,11 @@ pub fn map_forward_jacobian(m: &Map2, z: [f64; 2], arm: u32) -> Option<[[f64; 2]
         ]
     };
     let out = match m {
-        Map2::Affine(a) => a.m,
         Map2::Nonlinear(n) => {
-            let j = jacobian2(n.pre.apply(z), |v| kernel_forward_gen(&n.kernel, &v, arm))?;
             let wj = [[n.w * j[0][0], n.w * j[0][1]], [n.w * j[1][0], n.w * j[1][1]]];
             mul(&n.post.m, &mul(&wj, &n.pre.m))
         }
         Map2::Sum(s) => {
-            let j = jacobian2(s.pre.apply(z), |v| kernel_forward_gen(&s.kernel, &v, arm))?;
             let l = &s.lin.m;
             let phase = [
                 [l[0][0] + s.kw * j[0][0], l[0][1] + s.kw * j[0][1]],
@@ -396,13 +414,112 @@ pub fn map_forward_jacobian(m: &Map2, z: [f64; 2], arm: u32) -> Option<[[f64; 2]
             ];
             mul(&s.post.m, &mul(&phase, &s.pre.m))
         }
-        Map2::NonlinearInverse(_) | Map2::SumInverse(_) => return None,
+        _ => return None,
     };
     out.iter().flatten().all(|v| v.is_finite()).then_some(out)
 }
 
+/// [`map_forward_jacobian`] at each of `zs` along `arm`, a user kernel's
+/// for all of them at once (rhai-planners E4): its derivative is central
+/// differences of its forward map ([`user_jacobian`]), five calls a point
+/// -- here one batch of the interpreter for every stencil -- and each
+/// Jacobian is the one-point path's to the bit, its dual chain's
+/// arithmetic as it is. Any other map, point by point.
+///
+/// [`user_jacobian`]: super::ifs_analysis::user_jacobian
+pub fn map_forward_jacobians(m: &Map2, zs: &[[f64; 2]], arm: u32) -> Vec<Option<[[f64; 2]; 2]>> {
+    use super::ifs_analysis::Kernel;
+    let (kernel, pre) = match m {
+        Map2::Nonlinear(n) if matches!(n.kernel, Kernel::User { .. }) => (n.kernel, n.pre),
+        Map2::Sum(s) if matches!(s.kernel, Kernel::User { .. }) => (s.kernel, s.pre),
+        _ => return zs.iter().map(|&z| map_forward_jacobian(m, z, arm)).collect(),
+    };
+    let xs: Vec<[f64; 2]> = zs.iter().map(|&z| pre.apply(z)).collect();
+    let hs: Vec<f64> = xs.iter().map(|x| 6.0e-6 * x[0].hypot(x[1]).max(1e-3)).collect();
+    let mut pts = Vec::with_capacity(5 * xs.len());
+    for (x, &h) in xs.iter().zip(&hs) {
+        pts.extend([*x, [x[0] + h, x[1]], [x[0] - h, x[1]], [x[0], x[1] + h], [x[0], x[1] - h]]);
+    }
+    kernel.forward_batch(&mut pts, arm);
+    let ok = |u: [f64; 2]| crate::variations::user_inverse::is_preimage(u);
+    pts.chunks(5)
+        .zip(&hs)
+        .map(|(s, &h)| {
+            let f0 = s[0];
+            // The dual's value: none where it is not finite (`jacobian2`).
+            if !(f0[0].is_finite() && f0[1].is_finite()) {
+                return None;
+            }
+            let along = |fa: [f64; 2], fb: [f64; 2]| match (ok(fa), ok(fb)) {
+                (true, true) | (false, false) => [(fa[0] - fb[0]) / (2.0 * h), (fa[1] - fb[1]) / (2.0 * h)],
+                (true, false) => [(fa[0] - f0[0]) / h, (fa[1] - f0[1]) / h],
+                (false, true) => [(f0[0] - fb[0]) / h, (f0[1] - fb[1]) / h],
+            };
+            let (dx, dy) = (along(s[1], s[2]), along(s[3], s[4]));
+            let j = [[dx[0], dy[0]], [dx[1], dy[1]]];
+            // Through the dual's chain from its seeds, as `outside2`: each
+            // part `1 j + 0 j'`.
+            let chain = |c: usize| [1.0 * j[c][0] + 0.0 * j[c][1], 0.0 * j[c][0] + 1.0 * j[c][1]];
+            map_jacobian_of_kernels(m, [chain(0), chain(1)])
+        })
+        .collect()
+}
+
 /// Floats per map row in the shader's table (`replay_delta.wgsl`).
 pub const ROW_FLOATS: usize = 24;
+
+/// `replay_delta.wgsl` as a flame's offset replay runs it: with the
+/// derived forward differences of its Rhai variations (`keys`) spliced in
+/// (docs/archive/projects/rhai-planners.md, C3) -- or, with none, the file's own
+/// text, so every other shader is what it was.
+///
+/// A row of kernel 9 names its form by the key's
+/// [`difference_id`](crate::variations::user_inverse::difference_id) in its
+/// slot 2, and has its values at its own offset plus slot 3 (the walk
+/// writes both, `Backward::forward_rows`). `ct_fwd_diff`'s call of
+/// `fd_kernel` becomes `fd_kernel_user`'s, which passes such a row to
+/// `fd_user` with the row's offset and the arm's forced draw.
+pub fn replay_delta_wgsl<'a>(keys: impl IntoIterator<Item = &'a str>) -> String {
+    use crate::variations::user_inverse::{difference_id, of};
+    let mut forms: Vec<(u32, String)> = Vec::new();
+    for key in keys {
+        let Some(Ok(inv)) = of(key) else { continue };
+        let Some(w) = inv.difference_wgsl.as_ref() else { continue };
+        let id = difference_id(key);
+        if !forms.iter().any(|(i, _)| *i == id) {
+            forms.push((id, w.clone()));
+        }
+    }
+    replay_delta_with(&mut forms, include_str!("../../shaders/core/replay_delta.wgsl"))
+}
+
+/// [`replay_delta_wgsl`] for the forms `(id, wgsl)`, over `base`, the
+/// file's text.
+pub fn replay_delta_with(forms: &mut [(u32, String)], base: &str) -> String {
+    use crate::variations::user_inverse::DIFFERENCE_WGSL_NAME;
+    const CALL: &str = "let kd = fd_kernel(u32(cylinders[o + 1u]), kp, kq, v, e, arm);";
+    if forms.is_empty() {
+        return base.to_string();
+    }
+    forms.sort_by_key(|f| f.0);
+    assert!(base.contains(CALL), "replay_delta.wgsl's kernel call moved: the user forms have nowhere to go");
+    let mut out = base.replace(CALL, "let kd = fd_kernel_user(o, u32(cylinders[o + 1u]), kp, kq, v, e, arm);");
+    out.push_str(
+        "\n// A Rhai variation's forward difference (rhai-planners C3): kernel 9,\n// its values at the row's offset plus its slot 3.\n\
+         fn fd_user_param(xform_id: u32, variation_id: u32, slot: u32) -> f32 {\n    return cylinders[xform_id + variation_id + slot];\n}\n",
+    );
+    let mut cases = String::new();
+    for (id, w) in forms.iter() {
+        let name = format!("{DIFFERENCE_WGSL_NAME}{id}");
+        out.push_str(&w.replace("get_param(", "fd_user_param(").replace(DIFFERENCE_WGSL_NAME, &name));
+        cases.push_str(&format!("        case {id}u: {{ return {name}(v, e, o + u32(cylinders[o + 3u]), u); }}\n"));
+    }
+    out.push_str(&format!(
+        "fn fd_user(o: u32, v: vec2<f32>, e: vec2<f32>, arm: u32) -> vec2<f32> {{\n    let u = (f32(arm) + 0.5) / 256.0;\n    switch u32(cylinders[o + 2u]) {{\n{cases}        default: {{}}\n    }}\n    return FD_POLE;\n}}\n\n\
+         fn fd_kernel_user(o: u32, k: u32, p: vec3<f32>, q: vec4<f32>, v: vec2<f32>, e: vec2<f32>, arm: u32) -> vec2<f32> {{\n    if (k == 9u) {{\n        return fd_user(o, v, e, arm);\n    }}\n    return fd_kernel(k, p, q, v, e, arm);\n}}\n"
+    ));
+    out
+}
 
 /// A forward map as the shader's row: see `replay_delta.wgsl` for the
 /// layout. An inverse variant, which the replay never runs, is written
@@ -428,6 +545,10 @@ pub fn forward_row(m: &Map2) -> [f32; ROW_FLOATS] {
             Kernel::Elliptic => (6.0, [0.0; 3]),
             // Its turns are the inverse's; going forward it has none.
             Kernel::Cylinder { .. } => (8.0, [0.0; 3]),
+            // A Rhai variation's derived form (rhai-planners C3): which
+            // one, and where its values are, the walk writes into the row
+            // (`Backward::forward_rows`); see `replay_delta_wgsl`.
+            Kernel::User { .. } => (9.0, [0.0; 3]),
             // Its steps, past the three slots: a difference needs only
             // what crossing each axis adds.
             Kernel::Splits { x, y, .. } => {
@@ -694,13 +815,17 @@ mod tests {
     /// `utilities.wgsl` has it, `replay_delta.wgsl`, and one job per
     /// thread -- `(z, δ)` then `(arm, row offset)`.
     fn harness() -> String {
+        harness_with(&std::fs::read_to_string("shaders/core/replay_delta.wgsl").expect("replay_delta.wgsl").replace("\r\n", "\n"))
+    }
+
+    /// [`harness`] over `delta`, `replay_delta.wgsl` as a flame has it.
+    fn harness_with(delta: &str) -> String {
         // LF, whatever the checkout: on a `core.autocrlf` one the files are
         // CRLF, and the search for the function's closing `\n}\n` never
         // matched.
         let util = std::fs::read_to_string("shaders/core/utilities.wgsl").expect("utilities.wgsl").replace("\r\n", "\n");
         let a = util.find("fn ff_atan2(").expect("ff_atan2");
         let end = a + util[a..].find("\n}\n").expect("its end") + 3;
-        let delta = std::fs::read_to_string("shaders/core/replay_delta.wgsl").expect("replay_delta.wgsl").replace("\r\n", "\n");
         let head = "@group(0) @binding(0) var<storage, read> cylinders: array<f32>;\n\
                     @group(0) @binding(1) var<storage, read> jobs: array<vec4<f32>>;\n\
                     @group(0) @binding(2) var<storage, read_write> out: array<vec2<f32>>;\n";
@@ -733,10 +858,15 @@ mod tests {
     /// Run `jobs` -- `(z, δ, arm)` against the map whose row is at offset
     /// 0 of `rows` -- through the shader's forms.
     fn run(device: &wgpu::Device, queue: &wgpu::Queue, rows: &[f32], jobs: &[([f32; 2], [f32; 2], u32)]) -> Vec<[f32; 2]> {
+        run_with(device, queue, &harness(), rows, jobs)
+    }
+
+    /// [`run`] through the shader `src` ([`harness_with`]).
+    fn run_with(device: &wgpu::Device, queue: &wgpu::Queue, src: &str, rows: &[f32], jobs: &[([f32; 2], [f32; 2], u32)]) -> Vec<[f32; 2]> {
         use wgpu::util::DeviceExt;
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("forward forms"),
-            source: wgpu::ShaderSource::Wgsl(harness().into()),
+            source: wgpu::ShaderSource::Wgsl(src.to_string().into()),
         });
         let pipe = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("forward forms"),
@@ -906,6 +1036,192 @@ mod tests {
             }
             println!("  {name}: {n} differences, worst relative error {worst:.2e} ({worst_where})");
             assert!(n > 1000, "{name}: only {n} checkable");
+            worst_all = worst_all.max(worst);
+        }
+        assert!(worst_all < 1e-5, "worst relative error {worst_all:.2e}");
+    }
+
+    /// **The shader's derived forms are the CPU's** (docs/archive/projects/rhai-planners.md,
+    /// C3): the twins' forward differences as a flame's offset replay has
+    /// them -- spliced into `replay_delta.wgsl` (`replay_delta_with`), a row
+    /// of kernel 9 naming one, its values behind the row -- against the
+    /// interpreter's in f64, held as the built-ins' forms are, arm for arm.
+    /// **A batch of user kernels' Jacobians is the one-point path's**
+    /// (rhai-planners E4): julian's, bubble's, juliascope's, elliptic's,
+    /// splits' and cylinder's twins, plain and summed with an affine, at
+    /// 300 points and each arm, bit for bit.
+    #[test]
+    fn batched_user_jacobians_are_the_one_point_ones() {
+        use crate::scene::ifs_analysis::{Affine2, Kernel, NonlinearMap2, SumMap2};
+        use crate::variations::user_inverse::{compile, kernel, kernel_slot};
+        let twin = |name: &str, slots: &[f32]| {
+            let src = crate::lang::rhai::with_own_id(crate::variations::twins::source(name).expect("a twin"), &crate::scripted::mint_id());
+            let inv = std::sync::Arc::new(compile(&src, &format!("{name}_jacobians")).expect("declared").expect("checks"));
+            kernel_slot(&inv, slots).expect("a slot")
+        };
+        let pre = Affine2 { m: [[0.9, 0.3], [-0.3, 0.9]], t: [0.15, -0.2] };
+        let post = Affine2 { m: [[1.1, 0.0], [0.2, 0.8]], t: [0.0, 0.0] };
+        let zs: Vec<[f64; 2]> = (0..300).map(|i| {
+            let a = 0.37 + i as f64 * 0.21;
+            let r = 0.05 + 0.01 * i as f64;
+            [r * a.cos(), r * a.sin()]
+        }).chain([[0.0, 0.0], [1e-9, 0.0]]).collect();
+        let same = |a: Option<[[f64; 2]; 2]>, b: Option<[[f64; 2]; 2]>| match (a, b) {
+            (Some(a), Some(b)) => a.iter().flatten().zip(b.iter().flatten()).all(|(x, y)| x.to_bits() == y.to_bits()),
+            (None, None) => true,
+            _ => false,
+        };
+        let named = |n: &str| twin(n, &crate::variations::user_inverse::named(n, &[]));
+        for slot in [twin("julian", &[3.0, 1.0]), twin("bubble", &[]), named("juliascope"), named("elliptic"), named("splits"), named("cylinder")] {
+            let nl = NonlinearMap2 { kernel: Kernel::User { slot }, branch: 0, pre, post, pre_inv: pre.inverse().expect("invertible"), post_inv: post.inverse().expect("invertible"), hole: 0.0, w: 0.6, third: 0.0 };
+            let mut maps = vec![Map2::Nonlinear(nl)];
+            let lin = Affine2 { m: [[0.4, 0.1], [-0.1, 0.4]], t: [0.0, 0.0] };
+            maps.push(Map2::Sum(SumMap2 {
+                pre,
+                pre_inv: pre.inverse().expect("invertible"),
+                post,
+                post_inv: post.inverse().expect("invertible"),
+                lin,
+                lin_inv: lin.inverse(),
+                kernel: Kernel::User { slot },
+                kind: "user",
+                branch: 0,
+                kw: 0.6,
+                third: 0.0,
+                kernel_leads: true,
+            }));
+            for m in &maps {
+                for &code in &kernel(slot).draws() {
+                    let batch = map_forward_jacobians(m, &zs, code);
+                    for (z, got) in zs.iter().zip(batch) {
+                        assert!(same(got, map_forward_jacobian(m, *z, code)), "{slot} at {z:?}, arm {code}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A batch of a user kernel's inverses is its one-point inverses, bit
+    /// for bit (rhai-planners E4): julian's and bubble's twins, every
+    /// branch, inside and outside the image.
+    #[test]
+    fn batched_user_inverses_are_the_one_point_ones() {
+        use crate::scene::ifs_analysis::{Affine2, Kernel, NonlinearMap2};
+        use crate::variations::user_inverse::{compile, kernel, kernel_slot};
+        let twin = |name: &str, slots: &[f32]| {
+            let src = crate::lang::rhai::with_own_id(crate::variations::twins::source(name).expect("a twin"), &crate::scripted::mint_id());
+            let inv = std::sync::Arc::new(compile(&src, &format!("{name}_inverses")).expect("declared").expect("checks"));
+            kernel_slot(&inv, slots).expect("a slot")
+        };
+        let pre = Affine2 { m: [[0.9, 0.3], [-0.3, 0.9]], t: [0.15, -0.2] };
+        let post = Affine2 { m: [[1.1, 0.0], [0.2, 0.8]], t: [0.0, 0.0] };
+        let qs: Vec<[f64; 2]> = (0..300).map(|i| {
+            let a = 0.37 + i as f64 * 0.21;
+            let r = 0.02 + 0.012 * i as f64;
+            [r * a.cos(), r * a.sin()]
+        }).collect();
+        let bits = |p: [f64; 2]| [p[0].to_bits(), p[1].to_bits()];
+        for slot in [twin("julian", &[3.0, 1.0]), twin("bubble", &[])] {
+            for branch in 0..kernel(slot).inverse.branches {
+                let nl = NonlinearMap2 { kernel: Kernel::User { slot }, branch, pre, post, pre_inv: pre.inverse().expect("invertible"), post_inv: post.inverse().expect("invertible"), hole: 0.0, w: 0.6, third: 0.0 };
+                let mut batch = qs.clone();
+                nl.apply_inverse_batch(&mut batch);
+                for (q, got) in qs.iter().zip(batch) {
+                    assert_eq!(bits(got), bits(nl.apply_inverse(*q)), "{slot} branch {branch} at {q:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_shader_user_forms_are_the_cpu_ones() {
+        use crate::scene::ifs_analysis::{Affine2, Kernel, NonlinearMap2};
+        use crate::variations::user_inverse::{compile, difference_id, kernel, kernel_slot};
+        let (device, queue) = device();
+        let twin = |name: &str, slots: &[f32]| {
+            let src = crate::lang::rhai::with_own_id(crate::variations::twins::source(name).expect("a twin"), &crate::scripted::mint_id());
+            let inv = std::sync::Arc::new(compile(&src, &format!("{name}_shader_form")).expect("declared").expect("checks"));
+            kernel_slot(&inv, slots).expect("a slot")
+        };
+        let mut cases = vec![
+            ("julian n=2 d=1".to_string(), twin("julian", &[2.0, 1.0])),
+            ("julian n=2 d=-1".to_string(), twin("julian", &[2.0, -1.0])),
+            ("julian n=15 d=-1".to_string(), twin("julian", &[15.0, -1.0])),
+            ("julian n=-3 d=0.5".to_string(), twin("julian", &[-3.0, 0.5])),
+        ];
+        // And every other twin with an inverse, at its defaults: each
+        // derives its forward map's difference (rhai-planners E2).
+        for (name, _) in crate::variations::twins::TWINS.iter().filter(|(n, s)| s.contains("fn inverse(") && *n != "julian") {
+            cases.push((name.to_string(), twin(name, &crate::variations::user_inverse::named(name, &[]))));
+        }
+        let mut worst_all = 0.0f64;
+        for (name, slot) in cases {
+            let k = kernel(slot);
+            let pre = Affine2 { m: [[0.9, 0.3], [-0.3, 0.9]], t: [0.15, -0.2] };
+            let post = Affine2 { m: [[1.1, 0.0], [0.2, 0.8]], t: [0.0, 0.0] };
+            let map = Map2::Nonlinear(NonlinearMap2 {
+                kernel: Kernel::User { slot },
+                branch: 0,
+                pre,
+                post,
+                pre_inv: pre.inverse().expect("invertible"),
+                post_inv: post.inverse().expect("invertible"),
+                hole: 0.0,
+                w: 0.6,
+                third: 0.0,
+            });
+            let mut rows = forward_row(&map).to_vec();
+            rows[2] = difference_id(&k.inverse.key) as f32;
+            rows[3] = rows.len() as f32;
+            rows.extend(k.difference_values());
+            let mut forms = vec![(difference_id(&k.inverse.key), k.inverse.difference_wgsl.clone().expect("a shader form"))];
+            let delta = std::fs::read_to_string("shaders/core/replay_delta.wgsl").expect("replay_delta.wgsl").replace("\r\n", "\n");
+            let src = harness_with(&replay_delta_with(&mut forms, &delta));
+            let mut jobs: Vec<([f32; 2], [f32; 2], u32)> = Vec::new();
+            for &code in &k.draws() {
+                for rad in [0.2f32, 0.55, 1.1] {
+                    for i in 0..16 {
+                        let a = std::f32::consts::TAU * i as f32 / 16.0 + 0.05;
+                        let z = [rad * a.cos(), rad * a.sin()];
+                        for p in 1..=12 {
+                            let mag = rad * 10f32.powi(-p);
+                            for dir in [[1.0f32, 0.0], [0.0, 1.0], [0.6, -0.8], [-0.3, -0.954]] {
+                                jobs.push((z, [mag * dir[0], mag * dir[1]], code));
+                            }
+                        }
+                    }
+                }
+            }
+            let got = run_with(&device, &queue, &src, &rows, &jobs);
+            let (mut worst, mut n) = (0.0f64, 0usize);
+            let mut worst_where = String::new();
+            for ((z, d, code), g) in jobs.iter().zip(&got) {
+                let Some(want) = map_forward_difference(&map, [z[0] as f64, z[1] as f64], [d[0] as f64, d[1] as f64], *code) else { continue };
+                let norm = want[0].hypot(want[1]);
+                if !(norm > 0.0) || !norm.is_finite() || norm > 1e20 {
+                    continue;
+                }
+                let err = (g[0] as f64 - want[0]).hypot(g[1] as f64 - want[1]) / norm;
+                n += 1;
+                if !(err <= worst) {
+                    worst = err;
+                    worst_where = format!("draw {code} at {z:?} with δ {d:?}: shader {g:?}, cpu {want:?}");
+                }
+            }
+            println!("  {name}: {n} differences, worst relative error {worst:.2e} ({worst_where})");
+            assert!(n > 1000, "{name}: only {n} checkable");
+            // Elliptic's own formula keeps few of f32's digits beside the
+            // segment between its foci, where `xmax` is 1 + O(y²) and it
+            // takes `sqrt(xmax - 1)`: its shader form there, a crossing of
+            // y = 0 the plain difference of the f32 map, is the map's own
+            // accuracy (measured 6.3e-3 at a deviation of 0.02 crossing it).
+            // The built-in's shader has the same formula, which the twin
+            // keeps bit for bit.
+            if name == "elliptic" {
+                assert!(worst < 1e-2, "{name}: worst relative error {worst:.2e}");
+                continue;
+            }
             worst_all = worst_all.max(worst);
         }
         assert!(worst_all < 1e-5, "worst relative error {worst_all:.2e}");

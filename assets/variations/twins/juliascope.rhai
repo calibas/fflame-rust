@@ -48,3 +48,18 @@ fn variation3(v, p) {
     let r = pow(r2, cn);
     vec3(r * cos(a), r * sin(a), v.z)
 }
+
+fn inverse(z, p, branch) {
+    let power = to_int(to_float(p.power));
+    let n = to_float(power);
+    let m = abs(power);
+    let th = atan2(z.im, z.re);
+    let k = ((to_int(round(n * th / 6.28318530717959)) % m) + m) % m;
+    let rr = pow(z.abs(), n / p.dist);
+    let a = n * th;
+    if (k & 1) == 1 {
+        complex(rr * cos(a), -rr * sin(a))
+    } else {
+        complex(rr * cos(a), rr * sin(a))
+    }
+}

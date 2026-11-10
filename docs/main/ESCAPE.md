@@ -1662,12 +1662,24 @@ complex: `BinOp::DiffAbs`, the compiler's own operator; `uf_diffabs`,
   pixels escape after hundreds of steps of an expanding map, past what
   f32 deviations can follow.
 
-What does not derive: an inverse function, a power of a varying
-exponent, a branch in the init on the pixel, a loop inside the loop or
-in the init, an int or bool carried or set in a branch on the iterate,
-more than one value carried -- unless it stands in an arm a parameter
-picks (or a user function's choice). Such a formula stays on the
-direct path, as before.
+- **Steps, a real's inverse functions, and ints the pixel decides**
+  (written for the Rhai variations' difference forms, rhai-planners
+  E2; they hold for formulas alike): `round`, `floor`, `ceil` and
+  `trunc` deviate by the plain difference of their steps; a real's
+  `asin`, `acos` and `atan` as the angle of a point (`asin a =
+  arg(sqrt(1 - a²) + i a)`), over sqrt's and arg's forms. An int or bool
+  a deviation decides (a sector's index rounded from an angle, a test
+  kept in a variable, a value set under a test that varies) is carried
+  as two values, the reference's and the pixel's from its full values:
+  a float made of it deviates by their difference, and a branch on it
+  is a branch on the iterate (`Deriver::discrete`).
+
+What does not derive: an inverse function of a complex, a power of a
+varying exponent, a branch in the init on the pixel, a loop inside the
+loop or in the init, an int or bool carried from pass to pass, more
+than one value carried -- unless it stands in an arm a parameter picks
+(or a user function's choice). Such a formula stays on the direct path,
+as before.
 
 **Hybrids** (`lang/hybrid.rs`, the Hybrid Designer panel): Kalles
 Fraktaler's hybrid designer, as its manual describes it. Up to four
@@ -1934,6 +1946,37 @@ in plane units it underflows f32 at zooms the walk still resolves.
 | `kifs_solid` | KIFS (Solid) | Knighty's kaleidoscopic IFS: rotate, fold (tetrahedral, cubic, octahedral, Menger, icosahedral or dodecahedral), rotate, `z = s z − o (s − 1)`. Solid; needs no flame; default `ifs_level` |
 | `mandelbox_solid` | Mandelbox (Solid) | Lowe's box fold, sphere fold and scale, `z = s fold(z) + c`, the point or a Julia constant; the distance `0.95 |z| / |dr|`. Solid; needs no flame; default `ifs_trap` |
 | `mandelbulb_solid` | Mandelbulb (Solid) | White and Nylander's power in spherical coordinates, `z = zⁿ + c`, the point or a Julia constant; Hart's estimate times the Step Factor. Solid; needs no flame; default `ifs_trap` |
+
+**A Rhai variation's own inverse** ([rhai-planners.md](../archive/projects/rhai-planners.md),
+Part B; [VARIATIONS.md](VARIATIONS.md), *Variations written in Rhai*):
+a flame row whose kernel is the user's (`Kernel::User`) is **kind 8**,
+`params.x` its function and `params.y` where its values start; a solid's
+(`Kernel3::User3`) is kind 4, the same in `extra2`; a sum with one is
+kind 7 with kernel kind 8. Its values (its parameters, then its
+`prepare`'s) ride behind the xaos graph in `ifs_xaos`, so no binding is
+added (`pack_flame`, `UserKernels`). Its inverse, image gap and forward
+map are compiled per variation (`lang::wgsl::inverse_kernel`) and spliced
+with a `get_param` over that buffer, dispatched from marker lines inside
+the kernel's switches (`//__IFS_USER_*__`), which a flame without one
+drops, so its shader is the text it was; the variations' keys are in the
+pipeline's. Its Jacobian and local σ are central differences of its
+inverse (the solid's σ_max of the 3×3 in closed form); where it has no
+preimage its point leaves at 3.4e38, which every test of the walk reads
+as a number lost, as the CPU's infinity. Where its forward map is
+unbounded at the origin, as an inversion's, `params.w` is the hole its
+image of the ball leaves (`UserKernel::hole_radius`, sampled), scored as
+the built-in inversions' holes are. Against the reference walk the
+twins and the built-ins borrowing their inverses agree 99.5-100%.
+Summed with an affine, a kernel that draws is a row per arm, its draw
+in `params.z` for the forward map Newton steps on
+(`lang::delta::draw_as_color`), its `branch` the seed. **At depth**
+(rhai-planners D3) the handover takes its inverse in big floats -- the
+inverse as one pass of a loop, run by `lang::bigeval`
+(`UserKernel::big_inverse`) -- and the delta walk its inverse's
+difference derived from the body (`delta::variation_difference`, the
+branch its uniform), dispatched inside `ifs_kernel_difference`
+(`//__IFS_USER_DIFF__`); julia's twin draws its built-in's picture at
+2^64.
 
 **Solids written in Rhai** (the KIFS plan, B3; the formula language's
 solid entry) register beside these under their `custom-` names

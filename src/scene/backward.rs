@@ -510,26 +510,51 @@ pub struct Gathered {
 pub struct CpuEval;
 
 impl Evaluate for CpuEval {
+    /// The jobs a node's children make -- each word its child's symbol,
+    /// then the node's word -- replayed together (`lands_together`): the
+    /// shared rest of their words one batch over every child's points, so
+    /// a user kernel's forward map runs over a node's worth of them at once
+    /// (rhai-planners E4).
     fn lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob]) -> Vec<u8> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            use rayon::prelude::*;
-            jobs.par_iter()
-                .flat_map_iter(|j| {
-                    let (word, points) = (j.word, j.points);
-                    points.iter().map(move |&i| b.lands(word, b.sample[i as usize], view) as u8)
-                })
-                .collect()
+        // A built-in kernel's map runs point by point whatever the batch:
+        // its jobs, each on a thread, as they always ran.
+        if !b.ifs.maps.iter().any(user_kernel) {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rayon::prelude::*;
+                return jobs.par_iter().flat_map_iter(|j| b.lands_batch(j.word, j.points, view)).collect();
+            }
+            #[cfg(target_arch = "wasm32")]
+            return jobs.iter().flat_map(|j| b.lands_batch(j.word, j.points, view)).collect();
         }
-        #[cfg(target_arch = "wasm32")]
-        {
-            jobs.iter()
-                .flat_map(|j| {
-                    let (word, points) = (j.word, j.points);
-                    points.iter().map(move |&i| b.lands(word, b.sample[i as usize], view) as u8)
-                })
-                .collect()
+        // Grouped by the rest of the word, each group at most
+        // `GROUP_POINTS`: batches large enough, and enough of them for
+        // every thread.
+        const GROUP_POINTS: usize = 4096;
+        let mut groups: Vec<(Vec<usize>, usize)> = Vec::new();
+        let mut at: std::collections::HashMap<&[u32], usize> = std::collections::HashMap::new();
+        for (i, j) in jobs.iter().enumerate() {
+            let key = j.word.get(1..).unwrap_or(&[]);
+            let g = match at.get(key) {
+                Some(&g) if groups[g].1 + j.points.len() <= GROUP_POINTS => g,
+                _ => {
+                    groups.push((Vec::new(), 0));
+                    at.insert(key, groups.len() - 1);
+                    groups.len() - 1
+                }
+            };
+            groups[g].0.push(i);
+            groups[g].1 += j.points.len();
         }
+        let groups: Vec<Vec<usize>> = groups.into_iter().map(|(g, _)| g).collect();
+        let answers: Vec<Vec<Vec<u8>>> = map_all(&groups, |g| b.lands_together(jobs, g, view));
+        let mut per_job: Vec<Vec<u8>> = vec![Vec::new(); jobs.len()];
+        for (g, a) in groups.iter().zip(answers) {
+            for (&i, a) in g.iter().zip(a) {
+                per_job[i] = a;
+            }
+        }
+        per_job.concat()
     }
 }
 
@@ -1095,6 +1120,10 @@ struct TransformInfo {
     index: usize,
     weight: f64,
     arms: u32,
+    /// A user kernel's arms, `(arm, share)` -- each named by its grid draw
+    /// and drawn by its share ([`forward_arm_list`]); `None` for a root's,
+    /// `0 .. arms`, each drawn alike.
+    arm_list: Option<Vec<(u32, f64)>>,
     map: usize,
     /// Its `pre_blur`, or its one variation that ignores its input,
     /// taken out of the maps by the analysis and drawn here -- only ever
@@ -1106,12 +1135,30 @@ struct TransformInfo {
     branches: Vec<usize>,
 }
 
-/// How many arms a map's FORWARD has -- a root's `|n|`; everything
-/// else is single-valued going forward, whatever its inverse's branch
-/// count.
+impl TransformInfo {
+    /// The arm a draw `u` in [0, 1) picks.
+    fn arm_at(&self, u: f64) -> u32 {
+        let Some(list) = &self.arm_list else {
+            return ((u * self.arms as f64) as u32).min(self.arms - 1);
+        };
+        let mut u = u;
+        for &(arm, share) in list {
+            if u < share {
+                return arm;
+            }
+            u -= share;
+        }
+        list.last().map_or(0, |a| a.0)
+    }
+}
+
+/// How many arms a map's FORWARD has -- a root's `|n|`, a user kernel's
+/// ([`forward_arm_list`]); everything else is single-valued going
+/// forward, whatever its inverse's branch count.
 fn forward_arms(map: &IfsMap<Map2>) -> u32 {
     let root = |k: &Kernel| match *k {
         Kernel::Root { n, .. } => n.unsigned_abs().max(1),
+        Kernel::User { slot } => crate::variations::user_inverse::kernel(slot).arms().map_or(1, |a| a.len() as u32),
         _ => 1,
     };
     match &map.forward {
@@ -1121,12 +1168,105 @@ fn forward_arms(map: &IfsMap<Map2>) -> u32 {
     }
 }
 
+/// A user kernel's forward arms, `(arm, share)`: the images its draws
+/// pick among, read off its map, each named by the grid draw a word's
+/// symbol carries and a replay forces (`user_inverse::UserKernel::arms`;
+/// docs/archive/projects/rhai-planners.md, C1). `None` for any other map, and
+/// `Some(Err(key))` for one whose draws pick no arms, which no word can
+/// name.
+fn user_arm_list(map: &IfsMap<Map2>) -> Option<Result<Vec<(u32, f64)>, String>> {
+    let kernel = match &map.forward {
+        Map2::Nonlinear(n) => n.kernel,
+        Map2::Sum(s) => s.kernel,
+        _ => return None,
+    };
+    let Kernel::User { slot } = kernel else { return None };
+    let k = crate::variations::user_inverse::kernel(slot);
+    Some(match k.arms() {
+        Some(arms) => Ok(arms.iter().map(|a| (a.code, a.share)).collect()),
+        None => Err(k.inverse.key.clone()),
+    })
+}
+
+/// Whether a map's forward difference has a form the offset replay runs
+/// (`forward_delta`, `replay_delta.wgsl`): every built-in kernel's; a user
+/// kernel's where its body derives one (`user_inverse::UserInverse::difference`,
+/// rhai-planners C3).
+fn has_forward_form(m: &Map2) -> bool {
+    match m.nonlinear().map(|n| n.kernel).or_else(|| m.sum().map(|s| s.kernel)) {
+        Some(Kernel::User { slot }) => crate::variations::user_inverse::kernel(slot).inverse.difference.is_some(),
+        _ => true,
+    }
+}
+
+/// A map's forward arms, as [`TransformInfo::arm_list`] keeps them with
+/// their shares, or `0 .. forward_arms` for a root's.
+fn forward_arm_codes(map: &IfsMap<Map2>) -> Vec<u32> {
+    match user_arm_list(map) {
+        Some(Ok(list)) => list.into_iter().map(|a| a.0).collect(),
+        _ => (0..forward_arms(map)).collect(),
+    }
+}
+
 /// The forward map along arm `k`.
 fn forward(map: &IfsMap<Map2>, x: [f64; 2], k: u32) -> [f64; 2] {
     match &map.forward {
         Map2::Nonlinear(n) => n.apply_branch(x, k),
         Map2::Sum(s) => s.apply_branch(x, k),
         other => other.apply(x),
+    }
+}
+
+/// The forward Jacobian at each step `(map, arm)` of `steps` from its point
+/// in `zs`: each user kernel's map's for all its steps in one batch
+/// (`map_forward_jacobians`; rhai-planners E4), any other's step by step.
+fn step_jacobians(steps: &[(&IfsMap<Map2>, u32)], zs: &[[f64; 2]]) -> Vec<Option<[[f64; 2]; 2]>> {
+    use crate::scene::forward_delta::{map_forward_jacobian, map_forward_jacobians};
+    #[cfg(test)]
+    let t = crate::variations::user_inverse::profile::ON.load(std::sync::atomic::Ordering::Relaxed).then(std::time::Instant::now);
+    let mut out: Vec<Option<[[f64; 2]; 2]>> = vec![None; steps.len()];
+    let mut done = vec![false; steps.len()];
+    for i in 0..steps.len() {
+        if done[i] {
+            continue;
+        }
+        let (map, arm) = steps[i];
+        if !user_kernel(map) {
+            out[i] = map_forward_jacobian(&map.forward, zs[i], arm);
+            done[i] = true;
+            continue;
+        }
+        let at: Vec<usize> = (i..steps.len()).filter(|&k| !done[k] && std::ptr::eq(steps[k].0, map) && steps[k].1 == arm).collect();
+        let points: Vec<[f64; 2]> = at.iter().map(|&k| zs[k]).collect();
+        for (&k, j) in at.iter().zip(map_forward_jacobians(&map.forward, &points, arm)) {
+            out[k] = j;
+            done[k] = true;
+        }
+    }
+    #[cfg(test)]
+    if let Some(t) = t {
+        crate::variations::user_inverse::profile::add(crate::variations::user_inverse::profile::JACOBIANS, t.elapsed());
+    }
+    out
+}
+
+/// Whether `map`'s kernel is a user kernel's (`Kernel::User`), plain or
+/// summed.
+fn user_kernel(map: &IfsMap<Map2>) -> bool {
+    match &map.forward {
+        Map2::Nonlinear(n) => matches!(n.kernel, Kernel::User { .. }),
+        Map2::Sum(s) => matches!(s.kernel, Kernel::User { .. }),
+        _ => false,
+    }
+}
+
+/// [`forward`] at each of `xs`, in place: a user kernel's forward map in
+/// one pass for all of them (rhai-planners E4).
+fn forward_batch(map: &IfsMap<Map2>, xs: &mut [[f64; 2]], k: u32) {
+    match &map.forward {
+        Map2::Nonlinear(n) => n.apply_branch_batch(xs, k),
+        Map2::Sum(s) => s.apply_branch_batch(xs, k),
+        other => xs.iter_mut().for_each(|x| *x = other.apply(*x)),
     }
 }
 
@@ -1473,7 +1613,7 @@ async fn tail_sample(
                 }
                 w -= c.weight;
             }
-            let arm = ((u() * t.arms as f64) as u32).min(t.arms - 1);
+            let arm = t.arm_at(u());
             let y = forward_blurred(&ifs.maps[t.map], x, arm, t.blur, &mut u);
             if !finite(y) || y[0].abs() > 1e12 || y[1].abs() > 1e12 {
                 break;
@@ -1632,10 +1772,26 @@ impl Backward {
             if let Some(b) = blur {
                 Self::blur_planned(m, b).map_err(|why| format!("transform {}: {why}", m.transform_index))?;
             }
+            // A Rhai variation's own inverse (`Kernel::User`, rhai-planners
+            // C2): its arms as read off its forward map, which a replay
+            // forces by their grid draws (`bound::force_arms`).
+            let arm_list = match user_arm_list(m) {
+                Some(Ok(list)) => Some(list),
+                Some(Err(key)) => {
+                    return Err(format!(
+                        "transform {}: {} draws among more than {} images, or continuously, so no word can name its arm",
+                        m.transform_index,
+                        registry.label(&key),
+                        crate::variations::bound::MAX_ARMS
+                    ))
+                }
+                None => None,
+            };
             transforms.push(TransformInfo {
                 index: m.transform_index,
                 weight,
                 arms: forward_arms(m),
+                arm_list,
                 map: mi,
                 blur,
                 // Its output disc wants the attractor: set below.
@@ -1659,13 +1815,17 @@ impl Backward {
             if !(t.weight > 0.0) {
                 continue;
             }
-            for arm in 0..t.arms {
+            let arms: Vec<(u32, f64)> = match &t.arm_list {
+                Some(list) => list.iter().map(|&(arm, share)| (arm, t.weight / total * share)).collect(),
+                None => (0..t.arms).map(|arm| (arm, t.weight / total / t.arms as f64)).collect(),
+            };
+            for (arm, prob) in arms {
                 alphabet.push(Sym {
                     sym: sym_of(t.index as u32, arm),
                     map: t.map,
                     branches: t.branches.clone(),
                     arm,
-                    prob: t.weight / total / t.arms as f64,
+                    prob,
                     renewal: t.renewal,
                 });
             }
@@ -1693,7 +1853,7 @@ impl Backward {
                 }
                 u -= c.weight;
             }
-            let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+            let arm = t.arm_at(lcg());
             let y = forward_blurred(&ifs.maps[t.map], x, arm, t.blur, &mut lcg);
             if finite(y) && y[0].abs() < 1e12 && y[1].abs() < 1e12 {
                 x = y;
@@ -1783,13 +1943,16 @@ impl Backward {
         let mut landing: Vec<Index> = Vec::with_capacity(alphabet.len());
         for a in &alphabet {
             let mut entries: Vec<(Cell, u32)> = Vec::with_capacity(sample.len());
-            for (i, p) in sample.iter().enumerate() {
-                let y = forward(&ifs.maps[a.map], *p, a.arm);
-                if finite(y) && y[0].abs() < 1e12 && y[1].abs() < 1e12 {
-                    entries.push((key(y), i as u32));
-                }
-                if i % 4096 == 0 {
-                    slicer.tick().await;
+            // A slicer's tick each 4096, the batch a user kernel's forward
+            // map runs over at once (rhai-planners E4).
+            for (chunk, ps) in sample.chunks(4096).enumerate() {
+                slicer.tick().await;
+                let mut ys = ps.to_vec();
+                forward_batch(&ifs.maps[a.map], &mut ys, a.arm);
+                for (j, y) in ys.into_iter().enumerate() {
+                    if finite(y) && y[0].abs() < 1e12 && y[1].abs() < 1e12 {
+                        entries.push((key(y), (chunk * 4096 + j) as u32));
+                    }
                 }
             }
             slicer.tick().await;
@@ -1855,8 +2018,8 @@ impl Backward {
             return Err("pre_blur is planned beside one kernel alone (not an affine, not a sum) so far".into());
         };
         match b {
-            Blur::Pre(_) if !matches!(n.kernel, Kernel::Bubble | Kernel::Cylinder { .. }) => {
-                Err(format!("pre_blur is planned beside bubble and cylinder so far, not {}", n.kernel.variation()))
+            Blur::Pre(_) if !matches!(n.kernel, Kernel::Bubble | Kernel::Cylinder { .. } | Kernel::User { .. }) => {
+                Err(format!("pre_blur is planned beside bubble, cylinder and a Rhai variation so far, not {}", n.kernel.variation()))
             }
             _ => Ok(()),
         }
@@ -1891,6 +2054,53 @@ impl Backward {
                 let strip = Some([n.post_inv.m[0][0] * iw, n.post_inv.m[0][1] * iw, n.post_inv.t[0] * iw]);
                 Renewal { out_centre: n.post.apply([n.w * k[0], n.w * k[1]]), out_radius: pmax * n.w.abs() * half, strip }
             }
+            // A Rhai variation's (rhai-planners C2): its image of the same
+            // dilated input, sampled -- every arm, on rings of the disc
+            // both evenly spaced and halving toward its centre, since a
+            // blur's reach makes the disc huge beside the kernel's own
+            // scale (bubble's image peaks at |z| = 2; rings at quarters
+            // of a reach of 30 missed it, and a plan 4% of its view) --
+            // boxed, with a margin; where a sample is not finite, the
+            // whole plane, kept in doubt.
+            Blur::Pre(b) if matches!(n.kernel, Kernel::User { .. }) => {
+                let Kernel::User { slot } = n.kernel else { unreachable!("matched") };
+                let k = crate::variations::user_inverse::kernel(slot);
+                let c = n.pre.apply(centre);
+                let (_, smax) = crate::scene::ifs_analysis::singular_values_of(n.pre.m);
+                let r = 1.02 * smax * extent + b.reach();
+                let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+                let codes = k.draws();
+                let mut take = |p: [f64; 2]| {
+                    for &code in &codes {
+                        let y = k.forward(p, code);
+                        for i in 0..2 {
+                            lo[i] = lo[i].min(y[i]);
+                            hi[i] = hi[i].max(y[i]);
+                        }
+                    }
+                };
+                // About the disc's centre, and about the kernel's origin,
+                // where its structure is, inside the disc.
+                let far = c[0].hypot(c[1]) + r;
+                let rings = |span: f64| (0..=32).map(move |i| span * i as f64 / 32.0).chain((1..24).map(move |i| span * 0.5f64.powi(i)));
+                for (o, span) in [(c, r), ([0.0, 0.0], far)] {
+                    for rho in rings(span) {
+                        for j in 0..64 {
+                            let a = std::f64::consts::TAU * j as f64 / 64.0;
+                            let p = [o[0] + rho * a.cos(), o[1] + rho * a.sin()];
+                            if (p[0] - c[0]).hypot(p[1] - c[1]) <= r {
+                                take(p);
+                            }
+                        }
+                    }
+                }
+                let half = 1.05 * 0.5 * (hi[0] - lo[0]).hypot(hi[1] - lo[1]);
+                if !half.is_finite() {
+                    return Renewal { out_centre, out_radius: f64::INFINITY, strip: None };
+                }
+                let kc = [0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1])];
+                Renewal { out_centre: n.post.apply([n.w * kc[0], n.w * kc[1]]), out_radius: pmax * n.w.abs() * half, strip: None }
+            }
             Blur::Pre(b) => {
                 let c = n.pre.apply(centre);
                 let (_, smax) = crate::scene::ifs_analysis::singular_values_of(n.pre.m);
@@ -1913,6 +2123,18 @@ impl Backward {
         }
         for t in &self.transforms {
             rows[t.index * ROW_FLOATS..(t.index + 1) * ROW_FLOATS].copy_from_slice(&forward_row(&self.ifs.maps[t.map].forward));
+        }
+        // A Rhai variation's derived form (kernel 9, rhai-planners C3):
+        // which one, and its values after every row, at an offset from
+        // its own.
+        for t in &self.transforms {
+            let m = &self.ifs.maps[t.map].forward;
+            let Some(Kernel::User { slot }) = m.nonlinear().map(|n| n.kernel).or_else(|| m.sum().map(|s| s.kernel)) else { continue };
+            let k = crate::variations::user_inverse::kernel(slot);
+            let at = t.index * ROW_FLOATS;
+            rows[at + 2] = crate::variations::user_inverse::difference_id(&k.inverse.key) as f32;
+            rows[at + 3] = (rows.len() - at) as f32;
+            rows.extend(k.difference_values());
         }
         rows
     }
@@ -2289,7 +2511,6 @@ impl Backward {
         disc: View,
         through_finals: bool,
     ) -> Option<WordRefs> {
-        use crate::scene::forward_delta::map_forward_jacobian;
         let c = view.centre;
         let r = view.radius;
         let finals = if through_finals { self.finals.as_ref() } else { None };
@@ -2334,7 +2555,10 @@ impl Backward {
         // of it; a renewal's word, kept by geometry, has them after its
         // blur already (`close`).
         let blurred = |s: u32| self.alphabet.iter().any(|a| a.sym == s && a.renewal.is_some());
-        let start = word.iter().rposition(|&s| blurred(s)).map_or(0, |j| j + 1);
+        // Nor a map with no difference form -- a Rhai variation whose body
+        // derives none (rhai-planners C3): its steps run absolute.
+        let formless = |s: u32| self.sym_map(s).is_some_and(|(m, _)| !has_forward_form(&m.forward));
+        let start = word.iter().rposition(|&s| blurred(s) || formless(s)).map_or(0, |j| j + 1);
         let seeded_at = match self.alphabet.iter().position(|a| a.sym == word[0]) {
             Some(ai) if self.renewal_here(ai, disc.plotted).is_some() => 1,
             _ => 0,
@@ -2369,10 +2593,12 @@ impl Backward {
         // (`what_the_references_hold`), and running every seed through
         // every word doubled a web plan; so the other seeds are run only
         // where such a map is.
+        // A user kernel is many-to-one where its inverse has branches.
+        let user_many = |k: &Kernel| matches!(*k, Kernel::User { slot } if crate::variations::user_inverse::kernel(slot).inverse.branches > 1);
         let many = |from: usize| {
             syms[from..].iter().any(|(map, _)| match &map.forward {
-                Map2::Nonlinear(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc | Kernel::Splits { .. } | Kernel::Cylinder { .. }),
-                Map2::Sum(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc),
+                Map2::Nonlinear(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc | Kernel::Splits { .. } | Kernel::Cylinder { .. }) || user_many(&k.kernel),
+                Map2::Sum(k) => matches!(k.kernel, Kernel::Bubble | Kernel::Disc) || user_many(&k.kernel),
                 _ => false,
             })
         };
@@ -2401,9 +2627,9 @@ impl Backward {
                 amp[n] = smax;
                 size[n] = r / smin;
             }
+            let jacs = step_jacobians(&syms[start..n], &z[start..n]);
             for k in (start..n).rev() {
-                let (map, arm) = syms[k];
-                let Some(j) = map_forward_jacobian(&map.forward, z[k], arm) else { break };
+                let Some(j) = jacs[k - start] else { break };
                 prod = [
                     [prod[0][0] * j[0][0] + prod[0][1] * j[1][0], prod[0][0] * j[0][1] + prod[0][1] * j[1][1]],
                     [prod[1][0] * j[0][0] + prod[1][1] * j[1][0], prod[1][0] * j[0][1] + prod[1][1] * j[1][1]],
@@ -2588,7 +2814,7 @@ impl Backward {
         }
         let mut best = None;
         let mut best_d = f64::INFINITY;
-        for k in 0..arms {
+        for k in forward_arm_codes(map) {
             let y = forward(map, x, k);
             if !finite(y) {
                 continue;
@@ -2600,6 +2826,29 @@ impl Backward {
             }
         }
         (best_d <= 1e-6 * scale).then_some(best?)
+    }
+
+    /// [`Self::arm_of`] for each `(xs[i], ps[i])`, by its scan: every arm's
+    /// code for every point at once, each a pass of the user kernel's
+    /// interpreter (rhai-planners E4) -- the nearest within the tolerance,
+    /// the first of equals, as the scan's. A point with no preimage
+    /// (`xs[i]` not finite) has none.
+    fn arms_batch(&self, map: &IfsMap<Map2>, xs: &[[f64; 2]], ps: &[[f64; 2]]) -> Vec<Option<u32>> {
+        let mut best: Vec<(f64, Option<u32>)> = vec![(f64::INFINITY, None); xs.len()];
+        for k in forward_arm_codes(map) {
+            let mut ys = xs.to_vec();
+            forward_batch(map, &mut ys, k);
+            for ((b, y), p) in best.iter_mut().zip(&ys).zip(ps) {
+                if !finite(*y) {
+                    continue;
+                }
+                let d = (y[0] - p[0]).hypot(y[1] - p[1]);
+                if d < b.0 {
+                    *b = (d, Some(k));
+                }
+            }
+        }
+        best.into_iter().zip(ps).map(|((d, k), p)| k.filter(|_| d <= 1e-6 * (1.0 + p[0].abs().max(p[1].abs())))).collect()
     }
 
     /// The forward image of `x` along `word`, or `None` where a map
@@ -2676,11 +2925,106 @@ impl Backward {
     }
 
     /// Whether `x`'s forward image along `word` lands in the view.
+    /// The point replay, which `lands_batch` is held to.
+    #[cfg(test)]
     fn lands(&self, word: &[u32], x: [f64; 2], view: View) -> bool {
         match self.forward_along(word, x) {
             Some(y) => self.in_view(view, y),
             None => false,
         }
+    }
+
+    /// [`Self::lands`] for each of `points` (the sample's), the word
+    /// replayed over all of them at once, map by map: a user kernel's
+    /// forward map runs once a symbol for them all -- one pass of its
+    /// interpreter (rhai-planners E4). A point that leaves the finite
+    /// plane stays out, as the replay stops it. A word through a blurred
+    /// transform, whose draw is a stream per point, replays point by
+    /// point.
+    fn lands_batch(&self, word: &[u32], points: &[u32], view: View) -> Vec<u8> {
+        let xs: Vec<[f64; 2]> = points.iter().map(|&i| self.sample[i as usize]).collect();
+        self.forward_along_batch(word, &xs).into_iter().map(|y| y.is_some_and(|y| self.in_view(view, y)) as u8).collect()
+    }
+
+    /// [`Self::lands_batch`] for each of `jobs` at `group`, words that differ
+    /// in their first symbol alone: each first map over its job's points,
+    /// then the shared rest of the words one batch over all of them --
+    /// each point's replay as `forward_along`'s, map by map. A group
+    /// through a blurred transform replays job by job.
+    fn lands_together(&self, jobs: &[EvalJob], group: &[usize], view: View) -> Vec<Vec<u8>> {
+        let lone = || group.iter().map(|&i| self.lands_batch(jobs[i].word, jobs[i].points, view)).collect();
+        let step = |sym: u32| -> Option<Option<(usize, u32)>> {
+            let t = sym_transform(sym) as usize;
+            let info = self.transforms.iter().find(|i| i.index == t)?;
+            Some(info.blur.is_none().then_some((info.map, sym_arm(sym))))
+        };
+        if group.len() < 2 {
+            return lone();
+        }
+        let first = &jobs[group[0]];
+        let Some(rest) = first.word.get(1..).unwrap_or(&[]).iter().map(|&s| step(s)).collect::<Option<Option<Vec<(usize, u32)>>>>() else {
+            return group.iter().map(|&i| vec![0; jobs[i].points.len()]).collect();
+        };
+        let Some(rest) = rest else { return lone() };
+        let mut heads = Vec::with_capacity(group.len());
+        for &i in group {
+            match jobs[i].word.first().map(|&s| step(s)) {
+                Some(Some(Some(head))) => heads.push(Some(head)),
+                // An unknown transform: nothing lands.
+                Some(None) => heads.push(None),
+                _ => return lone(),
+            }
+        }
+        let total: usize = group.iter().map(|&i| jobs[i].points.len()).sum();
+        let mut ps: Vec<[f64; 2]> = Vec::with_capacity(total);
+        let mut alive: Vec<bool> = Vec::with_capacity(total);
+        for (&i, head) in group.iter().zip(&heads) {
+            let mut xs: Vec<[f64; 2]> = jobs[i].points.iter().map(|&k| self.sample[k as usize]).collect();
+            match head {
+                Some((map, arm)) => {
+                    forward_batch(&self.ifs.maps[*map], &mut xs, *arm);
+                    alive.extend(xs.iter().map(|&p| finite(p)));
+                }
+                None => alive.extend(std::iter::repeat_n(false, xs.len())),
+            }
+            ps.extend(xs);
+        }
+        for (map, arm) in rest {
+            forward_batch(&self.ifs.maps[map], &mut ps, arm);
+            for (a, p) in alive.iter_mut().zip(&ps) {
+                *a &= finite(*p);
+            }
+        }
+        let mut answers = ps.iter().zip(&alive).map(|(&p, &a)| (a && self.in_view(view, p)) as u8);
+        group.iter().map(|&i| answers.by_ref().take(jobs[i].points.len()).collect()).collect()
+    }
+
+    /// [`Self::forward_along`] for each of `xs`, the word replayed over
+    /// all of them at once, map by map (rhai-planners E4): a point that
+    /// leaves the finite plane stays out, as the replay stops it. A word
+    /// through a blurred transform, whose draw is a stream per point,
+    /// replays point by point.
+    fn forward_along_batch(&self, word: &[u32], xs: &[[f64; 2]]) -> Vec<Option<[f64; 2]>> {
+        let mut steps = Vec::with_capacity(word.len());
+        for &sym in word {
+            let t = sym_transform(sym) as usize;
+            let Some(info) = self.transforms.iter().find(|i| i.index == t) else {
+                return vec![None; xs.len()];
+            };
+            if info.blur.is_some() {
+                return xs.iter().map(|&x| self.forward_along(word, x)).collect();
+            }
+            steps.push((info.map, sym_arm(sym)));
+        }
+        let mut ps = xs.to_vec();
+        let mut alive = vec![true; ps.len()];
+        for (map, arm) in steps {
+            forward_batch(&self.ifs.maps[map], &mut ps, arm);
+            for (a, p) in alive.iter_mut().zip(&ps) {
+                *a &= finite(*p);
+            }
+        }
+        ps.into_iter().zip(alive).map(|(p, a)| a.then_some(p)).collect()
     }
 
 
@@ -2705,18 +3049,30 @@ impl Backward {
         // (`renewal_here`).
         let blur = self.partial_blur(ai);
         let mut out = Vec::new();
-        for &p in pts {
-            if !exempt && !self.near_landing(ai, p) {
-                tr.pruned += 1;
-                continue;
-            }
-            for &mb in &a.branches {
-                let q = self.ifs.maps[mb].inverse.apply(p);
+        // A user kernel's arms, read for every point at once: one pass of
+        // its interpreter a code (`arms_batch`), each point's the scan's.
+        let batched = forward_arms(map) > 1 && user_kernel(map);
+        let kept: Vec<[f64; 2]> = pts.iter().copied().filter(|&p| exempt || self.near_landing(ai, p)).collect();
+        tr.pruned += pts.len() - kept.len();
+        let pre: Vec<Vec<[f64; 2]>> = a
+            .branches
+            .iter()
+            .map(|&mb| {
+                let mut qs = kept.clone();
+                self.ifs.maps[mb].inverse.apply_batch(&mut qs);
+                qs
+            })
+            .collect();
+        let arms: Vec<Vec<Option<u32>>> = if batched { pre.iter().map(|qs| self.arms_batch(map, qs, &kept)).collect() } else { Vec::new() };
+        for (pi, &p) in kept.iter().enumerate() {
+            for (bi, &mb) in a.branches.iter().enumerate() {
+                let q = pre[bi][pi];
                 if !finite(q) || q[0].abs() > 1e12 || q[1].abs() > 1e12 {
                     tr.no_preimage += 1;
                     continue;
                 }
-                let Some(arm) = self.arm_of(map, q, p) else {
+                let arm = if batched { arms[bi][pi] } else { self.arm_of(map, q, p) };
+                let Some(arm) = arm else {
                     tr.no_arm += 1;
                     continue;
                 };
@@ -3607,7 +3963,15 @@ impl Backward {
         // Oldest first, as a word is applied.
         history.reverse();
         let n = self.sample.len();
-        Some((0..m).filter_map(|j| self.forward_along_salted(&history, self.sample[(i.wrapping_mul(2654435761) + j * 7919) % n], j as u64 + 1)).collect())
+        let from = |j: usize| self.sample[(i.wrapping_mul(2654435761) + j * 7919) % n];
+        // Each replay its own blur draws (the salt), where a map blurs;
+        // else one batch for all of them (rhai-planners E4).
+        let blurred = history.iter().any(|&s| self.transforms.iter().find(|t| t.index == sym_transform(s) as usize).is_some_and(|t| t.blur.is_some()));
+        if blurred {
+            return Some((0..m).filter_map(|j| self.forward_along_salted(&history, from(j), j as u64 + 1)).collect());
+        }
+        let xs: Vec<[f64; 2]> = (0..m).map(from).collect();
+        Some(self.forward_along_batch(&history, &xs).into_iter().flatten().collect())
     }
 
     /// **A child with near misses, looked at closer** (tracker C3). Its
@@ -3631,10 +3995,12 @@ impl Backward {
         // spread past the view, too deep and they gather round a point
         // that misses; measured on random1, the depth that lands runs
         // from 8 to 12 by candidate.
+        let xs: Vec<[f64; 2]> = cands.iter().map(|&c| self.sample[c as usize]).collect();
         let mut near: Vec<(u32, f64, [f64; 2])> = cands
             .iter()
-            .filter_map(|&c| {
-                let y = self.forward_along(word, self.sample[c as usize])?;
+            .zip(self.forward_along_batch(word, &xs))
+            .filter_map(|(&c, y)| {
+                let y = y?;
                 Some((c, self.view_distance(view, y), y))
             })
             .collect();
@@ -3646,8 +4012,10 @@ impl Backward {
                 slicer.tick().await;
                 let before = found.len();
                 let mut spread = 0.0f64;
-                for z in self.near_points(c as usize, k, RESCUE_POINTS).unwrap_or_default() {
-                    let Some(y) = self.forward_along(word, z) else { continue };
+                let zs = self.near_points(c as usize, k, RESCUE_POINTS).unwrap_or_default();
+                let ys = self.forward_along_batch(word, &zs);
+                for (z, y) in zs.into_iter().zip(ys) {
+                    let Some(y) = y else { continue };
                     if self.in_view(view, y) {
                         found.push(z);
                     }
@@ -4565,7 +4933,7 @@ mod tests {
                 }
                 u -= c.weight;
             }
-            let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+            let arm = t.arm_at(lcg());
             let map = &b.ifs.maps[t.map];
             let y = forward(map, x, arm);
             if !finite(y) || y[0].abs() > 1e12 {
@@ -4657,7 +5025,7 @@ mod tests {
                     }
                     u -= c.weight;
                 }
-                let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+                let arm = t.arm_at(lcg());
                 let y = forward(&b.ifs.maps[t.map], x, arm);
                 if !finite(y) || y[0].abs() > 1e12 {
                     x = [0.31, 0.17];
@@ -4947,7 +5315,7 @@ mod tests {
                         if u < c.weight { t = c; break; }
                         u -= c.weight;
                     }
-                    let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+                    let arm = t.arm_at(lcg());
                     let y = forward(&b.ifs.maps[t.map], x, arm);
                     if !finite(y) || y[0].abs() > 1e12 { x = [0.31, 0.17]; hist.clear(); continue; }
                     x = y;
@@ -5013,7 +5381,7 @@ mod tests {
                 }
                 u -= c.weight;
             }
-            let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+            let arm = t.arm_at(lcg());
             let y = forward_blurred(&b.ifs.maps[t.map], x, arm, t.blur, &mut lcg);
             if !finite(y) || y[0].abs() > 1e12 {
                 x = [0.31, 0.17];
@@ -5164,6 +5532,639 @@ mod tests {
             }
         }
         println!("total: CPU {cpu_total:.0} ms, GPU {gpu_total:.0} ms, {:.1}x", cpu_total / gpu_total);
+    }
+
+    /// grand-julian as a 2D render, and the same flame with every julian
+    /// its Rhai twin, registered; borrowing nothing on this thread, so the
+    /// twin's maps are user kernels (rhai-planners C2).
+    fn rhai_grand_julian() -> (crate::config::FractalConfig, Flame) {
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        let text = std::fs::read_to_string("output/flame-zoom/grand-julian.fflame").expect("grand-julian");
+        let mut cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.levels_enabled = false;
+        cfg.cylinder_always = true;
+        let twin = crate::variations::twins::twin_flame(&cfg.flame, "julian");
+        crate::variations::custom::ensure(&twin);
+        (cfg, twin)
+    }
+
+    /// A device the renderer runs on, as the density gates' is.
+    fn render_device() -> (wgpu::Device, wgpu::Queue) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::all(), ..wgpu::InstanceDescriptor::new_without_display_handle() });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("adapter");
+        let al = adapter.limits();
+        let mut limits = wgpu::Limits::default();
+        limits.max_storage_buffers_per_shader_stage = al.max_storage_buffers_per_shader_stage;
+        limits.max_storage_buffer_binding_size = al.max_storage_buffer_binding_size;
+        limits.max_buffer_size = al.max_buffer_size;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("plan render test"),
+            required_features: wgpu::Features::CLEAR_TEXTURE,
+            required_limits: limits,
+            ..Default::default()
+        }))
+        .expect("device")
+    }
+
+    /// PROFILE: where grand-julian's twin's plan spends its time against
+    /// the built-in's -- each view's plan time, and the user kernels'
+    /// calls by kind, their count and time summed over threads.
+    #[test]
+    #[ignore = "profile; registers a twin, reads output/flame-zoom"]
+    fn profile_the_twins_plan() {
+        use crate::variations::user_inverse::profile;
+        use std::sync::atomic::Ordering;
+        let (cfg, twin) = rhai_grand_julian();
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let t0 = std::time::Instant::now();
+        let b = Backward::read(&cfg.flame, reg).expect("the built-in");
+        let rb = t0.elapsed().as_secs_f64();
+        profile::ON.store(true, Ordering::Relaxed);
+        let t0 = std::time::Instant::now();
+        let t = Backward::read(&twin, reg).expect("the twin");
+        let rt = t0.elapsed().as_secs_f64();
+        drop(guard);
+        let report = |what: &str| {
+            let (kinds, points) = profile::take();
+            let mut line = format!("    {what}:");
+            for (k, (calls, secs)) in kinds.iter().enumerate() {
+                if *calls > 0 {
+                    line += &format!(" {} {calls} calls {secs:.2} s ({:.2} us);", profile::NAMES[k], secs * 1e6 / *calls as f64);
+                }
+            }
+            if points > 0 {
+                line += &format!(" {points} batch points");
+            }
+            println!("{line}");
+        };
+        println!("read: built-in {rb:.2} s, twin {rt:.2} s");
+        report("the twin's read");
+        // The replay alone, one thread: the same words over the same points.
+        {
+            let view = View::of(2.0, b.sample_point(0.75), 192, 192);
+            let mut st = 0x2545_F491_4F6C_DD1Du64;
+            let mut next = |m: usize| {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((st >> 33) as usize) % m
+            };
+            let words: Vec<Vec<u32>> = (0..200).map(|_| (0..1 + next(14)).map(|_| t.alphabet[next(t.alphabet.len())].sym).collect()).collect();
+            let points: Vec<u32> = (0..t.sample.len() as u32).step_by(5).collect();
+            let maps: usize = words.iter().map(|w| w.len() * points.len()).sum();
+            let time = |x: &Backward| {
+                let t0 = std::time::Instant::now();
+                let n: usize = words.iter().map(|w| x.lands_batch(w, &points, view).iter().map(|&v| v as usize).sum::<usize>()).sum();
+                (t0.elapsed().as_secs_f64(), n)
+            };
+            let ((sb, nb), (st_, nt)) = (time(&b), time(&t));
+            println!("replay, one thread, {maps} map applications: built-in {sb:.2} s ({:.3} us each, {nb} land) | twin {st_:.2} s ({:.3} us each, {nt} land) ({:.1}x)", sb * 1e6 / maps as f64, st_ * 1e6 / maps as f64, st_ / sb);
+            report("the replay's calls");
+        }
+        for (z, frac) in [(1e2f64, 0.75), (1e4, 0.75), (1e4, 0.25), (1e6, 0.75)] {
+            let at = b.sample_point(frac);
+            let view = View::of(z, at, 192, 192);
+            profile::ON.store(false, Ordering::Relaxed);
+            let t0 = std::time::Instant::now();
+            let pb = b.plan(view).expect("a plan");
+            let sb = t0.elapsed().as_secs_f64();
+            profile::ON.store(true, Ordering::Relaxed);
+            let t0 = std::time::Instant::now();
+            let pt = t.plan(view).expect("a plan");
+            let st = t0.elapsed().as_secs_f64();
+            println!("x{z:.0e} at {frac}: built-in {} words {sb:.2} s | twin {} words {st:.2} s ({:.1}x)", pb.words.len(), pt.words.len(), st / sb);
+            report("the twin's calls");
+            // Unprofiled, the best of three each, alternating.
+            profile::ON.store(false, Ordering::Relaxed);
+            let (mut bb, mut bt) = (f64::INFINITY, f64::INFINITY);
+            for _ in 0..3 {
+                let t0 = std::time::Instant::now();
+                let _ = b.plan(view);
+                bb = bb.min(t0.elapsed().as_secs_f64());
+                let t0 = std::time::Instant::now();
+                let _ = t.plan(view);
+                bt = bt.min(t0.elapsed().as_secs_f64());
+            }
+            println!("    unprofiled, best of three: built-in {bb:.3} s, twin {bt:.3} s ({:.2}x)", bt / bb);
+            let phases = |x: &Backward| {
+                let (_, tr) = x.plan_traced(view);
+                let s = |d: std::time::Duration| d.as_secs_f64();
+                format!("seed {:.3} gather {:.3} verify {:.3} replay {:.3} fates {:.3} topup {:.3} close {:.3} after {:.3}", s(tr.t_seed), s(tr.t_gather), s(tr.t_verify), s(tr.t_replay), s(tr.t_fates), s(tr.t_topup), s(tr.t_close), s(tr.t_after))
+            };
+            println!("    built-in: {}", phases(&b));
+            println!("    twin:     {}", phases(&t));
+            // One thread, profiled, both plans: each kind's share of its
+            // plan's time (rhai-one-form step 0).
+            let one = rayon::ThreadPoolBuilder::new().num_threads(1).build().expect("a pool");
+            for (what, x) in [("built-in", &b), ("twin", &t)] {
+                let _ = profile::take();
+                profile::ON.store(true, Ordering::Relaxed);
+                let t0 = std::time::Instant::now();
+                let _ = one.install(|| x.plan(view));
+                let total = t0.elapsed().as_secs_f64();
+                profile::ON.store(false, Ordering::Relaxed);
+                let (kinds, points) = profile::take();
+                let mut line = format!("    one thread, {what}: {total:.3} s;");
+                for (k, (calls, secs)) in kinds.iter().enumerate() {
+                    if *calls > 0 {
+                        line += &format!(" {} {:.3} s ({:.0}%, {calls} calls);", profile::NAMES[k], secs, 100.0 * secs / total);
+                    }
+                }
+                if points > 0 {
+                    line += &format!(" {points} batch points ({:.1} ns a point in forward batches)", kinds[7].1 * 1e9 / points as f64);
+                }
+                println!("{line}");
+            }
+        }
+        profile::ON.store(false, Ordering::Relaxed);
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+    }
+
+    /// PROFILE: grand-julian's twin's plan against the built-in's by
+    /// thread count, the best of three each (rhai-one-form step 0): on one
+    /// thread they take the same time, on every thread the twin 1.17x.
+    #[test]
+    #[ignore = "profile; registers a twin, reads output/flame-zoom"]
+    fn scale_the_twins_plan() {
+        let (cfg, twin) = rhai_grand_julian();
+        let guard = crate::variations::global_registry();
+        let b = Backward::read(&cfg.flame, &guard).expect("the built-in");
+        let t = Backward::read(&twin, &guard).expect("the twin");
+        drop(guard);
+        for (z, frac) in [(1e4f64, 0.75), (1e4, 0.25)] {
+            let view = View::of(z, b.sample_point(frac), 192, 192);
+            for threads in [1usize, 2, 4, 6, 8, 12] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().expect("a pool");
+                let (mut bb, mut bt) = (f64::INFINITY, f64::INFINITY);
+                for _ in 0..3 {
+                    let t0 = std::time::Instant::now();
+                    let _ = pool.install(|| b.plan(view));
+                    bb = bb.min(t0.elapsed().as_secs_f64());
+                    let t0 = std::time::Instant::now();
+                    let _ = pool.install(|| t.plan(view));
+                    bt = bt.min(t0.elapsed().as_secs_f64());
+                }
+                println!("x{z:.0e} at {frac}, {threads:2} threads: built-in {bb:.3} s, twin {bt:.3} s ({:.2}x)", bt / bb);
+            }
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+    }
+
+    /// **The walk's batched replay is its point replay** (rhai-planners
+    /// E4): grand-julian with every julian its twin, 400 words of one to
+    /// fourteen symbols drawn from its alphabet, each replayed over a fifth
+    /// of the sample at once (`lands_batch`, a user kernel's forward map
+    /// one pass of its interpreter) against point by point (`lands`) --
+    /// every answer the same; and the CPU evaluator's time over them both
+    /// ways.
+    #[test]
+    #[ignore = "registers a twin, reads output/flame-zoom"]
+    fn the_batched_replay_is_the_point_replay() {
+        let (cfg, twin) = rhai_grand_julian();
+        let guard = crate::variations::global_registry();
+        let t = Backward::read(&twin, &guard).unwrap_or_else(|e| panic!("the twin: {e:?}"));
+        drop(guard);
+        // Wide, so the words land: a pixel's worth of the attractor's span.
+        let view = View::of(2.0, t.sample_point(0.75), 192, 192);
+        let mut st = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = |m: usize| {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((st >> 33) as usize) % m
+        };
+        let words: Vec<Vec<u32>> = (0..400).map(|_| (0..1 + next(14)).map(|_| t.alphabet[next(t.alphabet.len())].sym).collect()).collect();
+        let points: Vec<u32> = (0..t.sample.len() as u32).step_by(5).collect();
+        let (mut lit, mut differ) = (0usize, 0usize);
+        let t0 = std::time::Instant::now();
+        let batched: Vec<Vec<u8>> = words.iter().map(|w| t.lands_batch(w, &points, view)).collect();
+        let tb = t0.elapsed().as_secs_f64();
+        let t0 = std::time::Instant::now();
+        for (w, got) in words.iter().zip(&batched) {
+            for (&i, &g) in points.iter().zip(got) {
+                let want = t.lands(w, t.sample[i as usize], view) as u8;
+                lit += want as usize;
+                differ += (g != want) as usize;
+            }
+        }
+        let ts = t0.elapsed().as_secs_f64();
+        println!("{} words over {} points: {lit} land; batched {tb:.2} s, point by point {ts:.2} s ({:.1}x)", words.len(), points.len(), ts / tb);
+        // And as the walk asks: each suffix with every symbol before it, over
+        // two point sets, the jobs grouped by what they share
+        // (`CpuEval::lands`) against job by job.
+        let (first, rest): (Vec<u32>, Vec<u32>) = (points.iter().copied().step_by(7).collect(), points.iter().copied().skip(3).step_by(11).collect());
+        let children: Vec<Vec<u32>> = words.iter().take(30).flat_map(|w| t.alphabet.iter().map(move |a| std::iter::once(a.sym).chain(w.iter().copied()).collect::<Vec<u32>>())).collect();
+        let jobs: Vec<EvalJob> = children.iter().flat_map(|w| [EvalJob { word: w, points: &first }, EvalJob { word: w, points: &rest }]).collect();
+        let grouped = CpuEval.lands(&t, view, &jobs);
+        let alone: Vec<u8> = jobs.iter().flat_map(|j| t.lands_batch(j.word, j.points, view)).collect();
+        let together_lit = grouped.iter().filter(|&&v| v == 1).count();
+        println!("{} jobs grouped: {together_lit} land", jobs.len());
+        assert!(together_lit > 0, "no grouped job lands anything");
+        assert!(grouped == alone, "the grouped replay differs from job by job");
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        let _ = cfg;
+        assert!(lit > 0, "no word lands anything: the gate measures nothing");
+        assert_eq!(differ, 0, "{differ} answers differ");
+    }
+
+    /// **A Rhai julian plans as the built-in** (docs/archive/projects/rhai-planners.md,
+    /// C2): grand-julian with every julian its Rhai twin, borrowing
+    /// nothing, is walked through user kernels -- its arms read off the
+    /// twin's forward map, its inverse run in the interpreter -- with the
+    /// built-in's alphabet; and its plans, the CPU's and the GPU planner's
+    /// (which forces the twin's draws, `bound::force_arms`), cover as much
+    /// of an independent chaos game as the built-in's. Measured: within
+    /// five words of the built-in's in thousands, coverage 1.0000 alike at
+    /// 1e2 and 1e3 (1e4 is past the chaos game), the twin read in 2.1 s
+    /// against 0.38 s.
+    #[test]
+    #[ignore = "needs a GPU, registers a twin, reads output/flame-zoom; minutes of chaos game"]
+    fn a_rhai_julian_plans_as_the_builtin() {
+        let (cfg, twin) = rhai_grand_julian();
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let t0 = std::time::Instant::now();
+        let b = Backward::read(&cfg.flame, reg).expect("the built-in");
+        let t1 = std::time::Instant::now();
+        let t = Backward::read(&twin, reg).expect("the twin");
+        println!("read: built-in {:.0} ms, twin {:.0} ms", (t1 - t0).as_secs_f64() * 1e3, t1.elapsed().as_secs_f64() * 1e3);
+        assert!(
+            t.ifs.maps.iter().all(|m| matches!(m.forward.nonlinear().map(|n| n.kernel), Some(Kernel::User { .. }))),
+            "the twin's maps are not user kernels"
+        );
+        assert_eq!(b.alphabet.len(), t.alphabet.len(), "the alphabets");
+        for (x, y) in b.alphabet.iter().zip(&t.alphabet) {
+            assert_eq!(sym_transform(x.sym), sym_transform(y.sym));
+            assert!((x.prob - y.prob).abs() <= 1e-6 * x.prob, "{}: {} against {}", x.sym, y.prob, x.prob);
+        }
+        // The twin's words in the built-in's symbols, arm for arm, so the
+        // built-in's chaos game judges both.
+        let to_builtin: std::collections::HashMap<u32, u32> = t.alphabet.iter().zip(&b.alphabet).map(|(y, x)| (y.sym, x.sym)).collect();
+        let translated = |p: &Cylinders| {
+            let mut p = p.clone();
+            for w in &mut p.words {
+                w.word = w.word.iter().map(|s| to_builtin[s]).collect();
+            }
+            p
+        };
+        let (device, queue) = test_device();
+        let planner = std::sync::Mutex::new(crate::scene::plan_gpu::GpuPlanner::new(&device, &queue));
+        let mut failures = Vec::new();
+        for z in [1e2f64, 1e3, 1e4] {
+            for frac in [0.25f64, 0.75] {
+                let view = View::of(z, b.sample_point(frac), 1280, 720);
+                let pb = b.plan(view).expect("a built-in plan");
+                let pt = t.plan(view).expect("a twin plan");
+                let gt = t.plan_for(&twin, view, PlanOptions { gpu: Some(&planner), ..Default::default() }).expect("a GPU plan");
+                let cb = coverage(&b, &pb, view, 3000);
+                let ct = coverage(&b, &translated(&pt), view, 3000);
+                let cg = coverage(&b, &translated(&gt), view, 3000);
+                let shown = |c: Option<f64>| c.map_or("n/a".to_string(), |c| format!("{c:.4}"));
+                println!(
+                    "  x{z:.0e} at {frac}: built-in {} words, coverage {} | twin {} words, {} | twin on the GPU {} words, {}",
+                    pb.words.len(),
+                    shown(cb),
+                    pt.words.len(),
+                    shown(ct),
+                    gt.words.len(),
+                    shown(cg)
+                );
+                if let (Some(cb), Some(ct), Some(cg)) = (cb, ct, cg) {
+                    if ct < cb - 0.005 || cg < cb - 0.005 {
+                        failures.push(format!("x{z:.0e} at {frac}: the twin's plans cover {ct:.4} (GPU {cg:.4}) where the built-in's cover {cb:.4}"));
+                    }
+                }
+            }
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// `flame` with every variation whose twin has an inverse its twin,
+    /// the twins carried (rhai-planners C2): what the walk plans through
+    /// user kernels alone, where the built-in walk planned kernels.
+    fn twinned(flame: &Flame) -> Flame {
+        let mut names: Vec<String> = flame.transforms.iter().flat_map(|t| t.variations.keys().cloned()).collect();
+        names.sort();
+        names.dedup();
+        let mut f = flame.clone();
+        let mut carried = Vec::new();
+        for name in names {
+            if !crate::variations::twins::source(&name).is_some_and(|s| s.contains("fn inverse(")) {
+                continue;
+            }
+            f = crate::variations::twins::twin_flame(&f, &name);
+            carried.extend(f.custom_variations.drain(..));
+        }
+        f.custom_variations = carried;
+        f
+    }
+
+    /// **The walk plans the deep-zoom corpus through Rhai twins as through
+    /// the built-ins** (docs/archive/projects/rhai-planners.md, C2): every fixture
+    /// the built-in walk plans, with each kernel whose twin has an inverse
+    /// its twin and borrowing off, is walked through user kernels with the
+    /// built-in's alphabet, and its plans cover as much of an independent
+    /// chaos game -- the built-in's, its words translated arm for arm.
+    /// `CORPUS=a,b` runs those fixtures alone.
+    #[test]
+    #[ignore = "registers twins, reads output/flame-zoom; minutes of chaos game"]
+    fn the_corpus_plans_through_rhai_twins() {
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        let mut files: Vec<_> = std::fs::read_dir("output/flame-zoom").expect("the corpus").flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "fflame")).collect();
+        files.sort();
+        let only: Option<Vec<String>> = std::env::var("CORPUS").ok().map(|v| v.split(',').map(str::to_string).collect());
+        let (mut walked, mut failures) = (0usize, Vec::new());
+        for path in files {
+            let name = path.file_stem().unwrap().to_string_lossy().to_string();
+            if only.as_ref().is_some_and(|o| !o.contains(&name)) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Ok(cfg) = serde_json::from_str::<crate::config::FractalConfig>(&text) else { continue };
+            let twin = twinned(&cfg.flame);
+            if twin.custom_variations.is_empty() {
+                continue;
+            }
+            crate::variations::custom::ensure(&twin);
+            let guard = crate::variations::global_registry();
+            let reg = &*guard;
+            let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };
+            let t = match Backward::read(&twin, reg) {
+                Ok(t) => t,
+                Err(why) => {
+                    failures.push(format!("{name}: the twins' walk refused: {why}"));
+                    continue;
+                }
+            };
+            walked += 1;
+            if b.alphabet.len() != t.alphabet.len() {
+                failures.push(format!("{name}: alphabets of {} and {}", b.alphabet.len(), t.alphabet.len()));
+                continue;
+            }
+            let to_builtin: std::collections::HashMap<u32, u32> = t.alphabet.iter().zip(&b.alphabet).map(|(y, x)| (y.sym, x.sym)).collect();
+            for z in [cfg.zoom as f64, 1e3] {
+                let view = View::of(z, if z == cfg.zoom as f64 { [cfg.pan_x, cfg.pan_y] } else { b.sample_point(0.75) }, 1280, 720);
+                let (pb, pt) = match (b.plan(view), t.plan(view)) {
+                    (Ok(pb), Ok(pt)) => (pb, pt),
+                    (Err(_), Err(_)) => continue,
+                    (Ok(_), Err(why)) => {
+                        failures.push(format!("{name} x{z:.0e}: the twins' plan failed where the built-in's did not: {why:?}"));
+                        continue;
+                    }
+                    (Err(why), Ok(_)) => {
+                        println!("  {name} x{z:.0e}: the built-in's plan failed ({why:?}), the twins' did not");
+                        continue;
+                    }
+                };
+                let mut tr = pt.clone();
+                for w in &mut tr.words {
+                    w.word = w.word.iter().map(|s| to_builtin[s]).collect();
+                }
+                let (cb, ct) = (coverage(&b, &pb, view, 2000), coverage(&b, &tr, view, 2000));
+                println!("  {name} x{z:.0e}: built-in {} words, coverage {cb:?} | twins {} words, {ct:?}", pb.words.len(), pt.words.len());
+                if let (Some(cb), Some(ct)) = (cb, ct) {
+                    if ct < cb - 0.01 {
+                        failures.push(format!("{name} x{z:.0e}: the twins' plan covers {ct:.4} where the built-in's covers {cb:.4}"));
+                    }
+                }
+            }
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        println!("{walked} fixtures walked through twins");
+        assert!(walked >= 3 || only.is_some(), "only {walked} fixtures walked");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// **A Rhai julian renders as the built-in** (rhai-planners C2, C3): a
+    /// render drawing the twin's plan, its draws forced by their grid
+    /// codes and its words past f32 replayed as offsets through the twin's
+    /// derived forms, lays down the built-in's density block by block, at
+    /// 1e2, 1e4 and 1e6. Measured: every view within a few standard errors;
+    /// at 1e4 the twin's plan at 0.25 is 6% fewer words (10,076 against
+    /// 10,738), neither losing any mass, its density 1.0002 of the
+    /// built-in's -- the same cover, split differently.
+    #[test]
+    #[ignore = "needs a GPU, registers a twin, reads output/flame-zoom"]
+    fn a_rhai_julian_renders_as_the_builtin() {
+        let (cfg, twin) = rhai_grand_julian();
+        let failures = twin_renders_as_builtin(&cfg, &twin, "grand-julian", &[(1e2f32, 0.75), (1e4, 0.75), (1e4, 0.25), (1e6, 0.75)]);
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// **The fixtures through the twins whose forward forms E2 derived
+    /// render as through the built-ins** (docs/archive/projects/rhai-planners.md,
+    /// E2): juliascope's twin's form (its exponent read from an int),
+    /// splits' (its `if` expressions over its parameters), elliptic's and
+    /// cylinder's, in the offset replay, block by block against the
+    /// built-in's density, as `a_rhai_julian_renders_as_the_builtin`. Not
+    /// the fixtures with a final or a bipolar transform, whose sample
+    /// points fall outside a view the built-in plans. `CORPUS=a,b` runs
+    /// those alone.
+    #[test]
+    #[ignore = "needs a GPU; registers twins, reads output/flame-zoom; minutes"]
+    fn the_newly_derived_twins_render_as_the_builtins() {
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        let only: Option<Vec<String>> = std::env::var("CORPUS").ok().map(|v| v.split(',').map(str::to_string).collect());
+        let mut failures = Vec::new();
+        for name in ["juliascope-arms", "juliascope-rays", "elliptic-splits-julian", "cylinder-turns-julian"] {
+            if only.as_ref().is_some_and(|o| !o.iter().any(|x| x == name)) {
+                continue;
+            }
+            let text = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")).expect("the fixture");
+            let mut cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+            cfg.levels_enabled = false;
+            cfg.cylinder_always = true;
+            let twin = twinned(&cfg.flame);
+            crate::variations::custom::ensure(&twin);
+            failures.extend(twin_renders_as_builtin(&cfg, &twin, name, &[(1e2f32, 0.75), (1e4, 0.75)]));
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// MEASUREMENT (rhai-one-form step 4): juliascope-rays at 1e4, the view
+    /// whose density gate is borderline -- each block's difference in
+    /// standard errors at the gate's samples three times over, then at four
+    /// times the replicates and at four times the frames. A real difference
+    /// keeps its block and grows its z with the samples; noise moves.
+    #[test]
+    #[ignore = "needs a GPU; registers a twin, reads output/flame-zoom; minutes"]
+    fn what_the_juliascope_rays_block_is() {
+        use crate::renderer::density_gates::{mean_se, replicated_blocks};
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        let text = std::fs::read_to_string("output/flame-zoom/juliascope-rays.fflame").expect("the fixture");
+        let mut cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.levels_enabled = false;
+        cfg.cylinder_always = true;
+        let twin = twinned(&cfg.flame);
+        crate::variations::custom::ensure(&twin);
+        let guard = crate::variations::global_registry();
+        let b = Backward::read(&cfg.flame, &guard).expect("the built-in");
+        let t = Backward::read(&twin, &guard).expect("the twin");
+        drop(guard);
+        let (device, queue) = render_device();
+        const N: u32 = 192;
+        let at = b.sample_point(0.75);
+        let mut c = cfg.clone();
+        c.zoom = 1e4;
+        (c.pan_x, c.pan_y) = (at[0], at[1]);
+        let view = View::of(1e4, at, N, N);
+        let mut ct = c.clone();
+        ct.flame = twin.clone();
+        let (pb, pt) = (b.plan(view).expect("a plan"), t.plan(view).expect("a plan"));
+        // The plans, word by word: the same words, the same probabilities?
+        {
+            let index = |p: &Cylinders| p.words.iter().map(|w| (w.word.clone(), (w.prob, w.eff, w.draw))).collect::<std::collections::HashMap<_, _>>();
+            let (ib, it) = (index(&pb), index(&pt));
+            let only_b = ib.keys().filter(|k| !it.contains_key(*k)).count();
+            let only_t = it.keys().filter(|k| !ib.contains_key(*k)).count();
+            let (mut worst_p, mut worst_e) = (0.0f64, 0.0f64);
+            for (k, (p, e, _)) in &ib {
+                if let Some((q, f, _)) = it.get(k) {
+                    worst_p = worst_p.max((q / p - 1.0).abs());
+                    worst_e = worst_e.max((f / e - 1.0).abs());
+                }
+            }
+            println!(
+                "  plans: built-in {} words, mass {:.6e}, lost {:.2e} | twin {} words, mass {:.6e}, lost {:.2e}; {only_b} only the built-in's, {only_t} only the twin's; shared words' prob differ by at most {worst_p:.2e}, eff by {worst_e:.2e}",
+                pb.words.len(), pb.mass, pb.lost, pt.words.len(), pt.mass, pt.lost
+            );
+            let alphabet = |x: &Backward| x.alphabet.iter().map(|s| (s.sym, s.arm, s.prob)).collect::<Vec<_>>();
+            println!("  alphabets: built-in {:?}", alphabet(&b));
+            println!("             twin     {:?}", alphabet(&t));
+        }
+        // Each plan on the other flame, at four times the frames: block 66
+        // against the built-in on its own plan.
+        let (base, _) = replicated_blocks(&device, &queue, &c, Some(&pb), N, 1024, 32, 6);
+        let block = |x: &[Vec<f64>], k: usize| mean_se(&x.iter().map(|r| r[k]).collect::<Vec<_>>());
+        for (what, cfg_, plan) in [("the twin on its own plan", &ct, &pt)] {
+            let (x, _) = replicated_blocks(&device, &queue, cfg_, Some(plan), N, 1024, 32, 6);
+            let ((mx, sx), (mb, sb)) = (block(&x, 66), block(&base, 66));
+            println!("  {what}: block 66 ratio {:.4} z {:+.1}", mx / mb, (mx - mb) / (sx * sx + sb * sb).sqrt());
+        }
+        println!("  the word: built-in {:?}, twin {:?}", pb.words[0].word, pt.words[0].word);
+        // The free orbits: each flame untargeted, the whole attractor and
+        // nearer, block by block.
+        for z in [1.0f32, 30.0] {
+            let (mut u, mut ut) = (cfg.clone(), cfg.clone());
+            u.zoom = z;
+            (u.pan_x, u.pan_y) = (at[0], at[1]);
+            ut.zoom = z;
+            (ut.pan_x, ut.pan_y) = (at[0], at[1]);
+            ut.flame = twin.clone();
+            let (xb, _) = replicated_blocks(&device, &queue, &u, None, N, 1024, 32, 6);
+            let (xt, _) = replicated_blocks(&device, &queue, &ut, None, N, 1024, 32, 6);
+            let nb = xb[0].len();
+            let mut zs: Vec<(f64, usize, f64)> = (0..nb)
+                .filter_map(|k| {
+                    let ((mt, st), (mb, sb)) = (block(&xt, k), block(&xb, k));
+                    let se = (st * st + sb * sb).sqrt();
+                    (se > 0.0).then(|| ((mt - mb) / se, k, mt / mb.max(f64::MIN_POSITIVE)))
+                })
+                .collect();
+            let judged = zs.len();
+            zs.sort_by(|a, b| b.0.abs().total_cmp(&a.0.abs()));
+            let over = zs.iter().filter(|x| x.0.abs() > 5.0).count();
+            println!("  untargeted at x{z}: {judged} judged, {over} over 5; worst {:?}", zs.iter().take(4).map(|(z, k, r)| format!("block {k} z {z:+.1} ratio {r:.3}")).collect::<Vec<_>>());
+        }
+        // Without offsets: plans with no references, the plain replay.
+        {
+            OFFSETS_OFF.store(true, std::sync::atomic::Ordering::Relaxed);
+            let (qb, qt) = (b.plan(view).expect("a plan"), t.plan(view).expect("a plan"));
+            let (xb, _) = replicated_blocks(&device, &queue, &c, Some(&qb), N, 1024, 32, 6);
+            let (xt, _) = replicated_blocks(&device, &queue, &ct, Some(&qt), N, 1024, 32, 6);
+            OFFSETS_OFF.store(false, std::sync::atomic::Ordering::Relaxed);
+            for k in [66usize, 52] {
+                let ((mx, sx), (mb, sb)) = (block(&xt, k), block(&xb, k));
+                println!("  no offsets, 32 frames: block {k} the twin over the built-in {:.4} z {:+.1}", mx / mb, (mx - mb) / (sx * sx + sb * sb).sqrt());
+            }
+            let ((m1, _), (m2, _)) = (block(&xb, 66), block(&base, 66));
+            println!("  block 66, the built-in without offsets over with: {:.4}", m1 / m2);
+        }
+        for (what, frames, reps) in [("4x frames", 32usize, 6usize)] {
+            let (xb, _) = replicated_blocks(&device, &queue, &c, Some(&pb), N, 1024, frames, reps);
+            let (xt, _) = replicated_blocks(&device, &queue, &ct, Some(&pt), N, 1024, frames, reps);
+            let nb = xb[0].len();
+            let block = |x: &[Vec<f64>], k: usize| mean_se(&x.iter().map(|r| r[k]).collect::<Vec<_>>());
+            let mean_block = (0..nb).map(|k| block(&xb, k).0).sum::<f64>() / nb as f64;
+            let mut zs: Vec<(f64, usize, f64, f64)> = (0..nb)
+                .filter_map(|k| {
+                    let ((mt, st), (mb, sb)) = (block(&xt, k), block(&xb, k));
+                    let se = (st * st + sb * sb).sqrt();
+                    (se > 0.0).then(|| ((mt - mb) / se, k, mt / mb.max(f64::MIN_POSITIVE), mb / mean_block))
+                })
+                .collect();
+            let judged = zs.len();
+            zs.sort_by(|a, b| b.0.abs().total_cmp(&a.0.abs()));
+            let top: Vec<String> = zs.iter().take(4).map(|(z, k, r, d)| format!("block {k} z {z:+.1} ratio {r:.3} (density {d:.3} of the mean block)")).collect();
+            println!("  {what} ({frames} frames, {reps} replicates): {judged} judged; {}", top.join("; "));
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+    }
+
+    /// The twin's plans and density against the built-in's at each `(zoom,
+    /// frac)` view, the frac a point of the built-in's sample: the failures.
+    fn twin_renders_as_builtin(cfg: &crate::config::FractalConfig, twin: &Flame, tag: &str, views: &[(f32, f64)]) -> Vec<String> {
+        use crate::renderer::density_gates::{compare_blocks, print_compared, replicated_blocks};
+        let twin = twin.clone();
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let t0 = std::time::Instant::now();
+        let b = Backward::read(&cfg.flame, reg).expect("the built-in");
+        let t1 = std::time::Instant::now();
+        let t = Backward::read(&twin, reg).expect("the twin");
+        println!("read: built-in {:.0} ms, twin {:.0} ms", (t1 - t0).as_secs_f64() * 1e3, t1.elapsed().as_secs_f64() * 1e3);
+        drop(guard);
+        let (device, queue) = render_device();
+        let mut failures = Vec::new();
+        const N: u32 = 192;
+        const REPS: usize = 6;
+        for &(z, frac) in views {
+            let at = b.sample_point(frac);
+            let mut c = cfg.clone();
+            c.zoom = z;
+            (c.pan_x, c.pan_y) = (at[0], at[1]);
+            let view = View::of(z as f64, at, N, N);
+            let mut ct = c.clone();
+            ct.flame = twin.clone();
+            let t0 = std::time::Instant::now();
+            let pb = b.plan(view).expect("a plan");
+            let t1 = std::time::Instant::now();
+            let pt = t.plan(view).expect("a plan");
+            let (sb, st) = ((t1 - t0).as_secs_f64(), t1.elapsed().as_secs_f64());
+            println!(
+                "  x{z:.0e} at {frac}: built-in {} words, lost {:.2e}, {sb:.1} s{} | twin {} words, lost {:.2e}, {st:.1} s{}",
+                pb.words.len(),
+                pb.lost,
+                if pb.timed_out { ", timed out" } else { "" },
+                pt.words.len(),
+                pt.lost,
+                if pt.timed_out { ", timed out" } else { "" }
+            );
+            let (xb, _) = replicated_blocks(&device, &queue, &c, Some(&pb), N, 1024, 8, REPS);
+            let (xt, img) = replicated_blocks(&device, &queue, &ct, Some(&pt), N, 1024, 8, REPS);
+            let _ = std::fs::create_dir_all("output/rhai-planners");
+            let _ = image::save_buffer(format!("output/rhai-planners/{tag}-twin-{z:.0e}-{frac}.png"), &img, N, N, image::ColorType::Rgba8);
+            let cmp = compare_blocks(&xt, &xb, &xb);
+            print_compared(&format!("{tag} x{z:.0e} at {frac}: the twin against the built-in"), &cmp);
+            let (_, _, mx, _, my, _, zz) = cmp.pooled[0];
+            if zz.abs() > 4.0 && (mx / my - 1.0).abs() > 0.02 {
+                failures.push(format!("{tag} x{z:.0e}: the twin's density is {:.4} of the built-in's ({zz:+.1} standard errors)", mx / my));
+            }
+            // Block by block: before the forms, 37 blocks at 1e4 passed five
+            // standard errors, the twin's absolute replay displaced.
+            if cmp.over_5 * 20 > cmp.judged {
+                failures.push(format!("{tag} x{z:.0e}: {} of {} blocks differ by more than five standard errors", cmp.over_5, cmp.judged));
+            }
+        }
+        failures
     }
 
     /// **The GPU plans a view of the plot as completely as the CPU**
@@ -5579,8 +6580,12 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; reads output/flame-zoom"]
     fn the_offset_replay_holds_per_sample() {
-        let guard = crate::variations::global_registry();
-        let reg = &*guard;
+        // `OFFSET_TWINS=1` replays each flame with its variations' Rhai
+        // twins instead (rhai-one-form step 4), their own planner data.
+        let twins = std::env::var("OFFSET_TWINS").is_ok();
+        if twins {
+            crate::variations::twins::BORROW.with(|b| b.set(false));
+        }
         let (device, queue) = test_device();
         let mut worst_offsets = 0.0f64;
         // The `final-*` flames carry a `bipolar` final (C2c), written by
@@ -5601,8 +6606,13 @@ mod tests {
                 }
             }
             let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
-            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
-            let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };
+            let mut cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            if twins {
+                cfg.flame = twinned(&cfg.flame);
+                crate::variations::custom::ensure(&cfg.flame);
+            }
+            let read = Backward::read(&cfg.flame, &crate::variations::global_registry());
+            let Ok(b) = read else { continue };
             let gpu = crate::scene::plan_gpu::PlanGpu::new(&device, &queue, &cfg.flame, b.sample());
             // The finals' flames at points off their blob: at 0.75 each
             // view is its glow, planned as one blur's word.
@@ -5636,7 +6646,9 @@ mod tests {
                     continue;
                 }
                 let step = (plan.words.len() / 400).max(1);
-                let pts: Vec<usize> = (0..b.sample.len()).step_by(b.sample.len() / 48).collect();
+                // `OFFSET_POINTS=n` starts from n sample points, 48 by default.
+                let per: usize = std::env::var("OFFSET_POINTS").ok().and_then(|v| v.parse().ok()).unwrap_or(48);
+                let pts: Vec<usize> = (0..b.sample.len()).step_by((b.sample.len() / per).max(1)).collect();
                 let mut jobs: Vec<[f32; 4]> = Vec::new();
                 let mut which: Vec<(usize, usize)> = Vec::new();
                 for w in (0..plan.words.len()).step_by(step) {
@@ -5658,6 +6670,9 @@ mod tests {
                     let with = plan.refs.iter().filter(|r| r.is_some()).count();
                     println!("  {name} {z:.0e} at {frac}: no word to check ({with} of {} carry references, every one a blur's)", plan.words.len());
                     continue;
+                }
+                if twins {
+                    println!("  {name} {z:.0e}: the first word {:?}", plan.words[0].word);
                 }
                 let got = gpu.offset_endpoints(&cfg.flame, &table, &jobs);
                 let (mut n, mut plain_sum, mut off_sum) = (0usize, 0.0f64, 0.0f64);
@@ -6773,7 +7788,7 @@ mod tests {
                         }
                         u -= c.weight;
                     }
-                    let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+                    let arm = t.arm_at(lcg());
                     let y = forward(&b.ifs.maps[t.map], x, arm);
                     if !finite(y) || y[0].abs() > 1e12 {
                         x = [0.31, 0.17];
@@ -6917,7 +7932,7 @@ mod tests {
             let mut u = lcg() * total;
             let mut t = &b.transforms[b.transforms.len() - 1];
             for c in &b.transforms { if u < c.weight { t = c; break; } u -= c.weight; }
-            let arm = ((lcg() * t.arms as f64) as u32).min(t.arms - 1);
+            let arm = t.arm_at(lcg());
             let y = forward(&b.ifs.maps[t.map], x, arm);
             if !finite(y) || y[0].abs() > 1e12 { x = [0.31, 0.17]; hist.clear(); continue; }
             x = y;

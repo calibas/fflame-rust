@@ -338,7 +338,7 @@ fn write_regions<T: bytemuck::Pod>(queue: &Queue, buffer: &Buffer, parent: &[T],
 /// its rows, one flame ran 24% slower and another 26% faster with the
 /// shader's work unchanged, and timed at eight placements (made after
 /// the others, or at 4 MiB) some still moved 3%. At this size every flame
-/// that fits it lands as before (docs/projects/variation-param-storage.md).
+/// that fits it lands as before (docs/archive/projects/variation-param-storage.md).
 pub const MIN_VARIATION_PARAMS_BYTES: u64 = (MAX_TRANSFORMS_UNIFIED * 1600 * 4) as u64;
 
 /// The variation parameter buffer's size for `flame`, in bytes: its rows

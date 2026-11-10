@@ -12,6 +12,10 @@ pub mod bound;
 // bounds are what wasm has, exactly as before.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod derive;
+/// The interval arithmetic both bound evaluators share, and the one over
+/// a Rhai variation's own code, which the web build has too.
+pub mod interval;
+pub mod rhai_bound;
 pub mod inverse;
 pub mod defs;
 pub mod docs;
@@ -20,6 +24,8 @@ pub mod analytic_blur;
 pub mod custom;
 // Rhai twins of the built-ins (rhai-plugins P7 steps 3 and 4).
 pub mod twins;
+// A Rhai variation's own inverse, for the Flame Attractor (rhai-planners B1).
+pub mod user_inverse;
 
 use definition::VariationDef;
 pub use definition::{Feature, MAX_ORBIT_LENGTH, ORBIT_LENGTH_PARAM};

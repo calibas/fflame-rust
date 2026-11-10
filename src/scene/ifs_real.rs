@@ -92,6 +92,27 @@ pub trait Real: Clone {
     fn is_finite(&self) -> bool {
         self.to_f64().is_finite()
     }
+
+    /// Whether this number carries derivatives (a [`Dual`]): whether a
+    /// map computed outside it ([`Real::outside2`]) is worth differencing
+    /// for its Jacobian.
+    const DERIVATIVES: bool = false;
+
+    /// A planar map's value at `inputs`, computed OUTSIDE this arithmetic
+    /// -- a Rhai variation's, in the interpreter
+    /// (`scene::ifs_analysis::Kernel::User`) -- as this number: `value`,
+    /// and for a [`Dual`] its derivative chained through `jac`
+    /// (`jac()[c][i] = ∂out_c/∂in_i`), asked only then. Of a
+    /// `Dual<Dual>`, the first derivative alone: `jac` is held constant,
+    /// so a second derivative through such a map is not known, and its
+    /// callers do not ask for one (`Map2::hessian`).
+    fn outside2(inputs: &[Self; 2], value: [f64; 2], jac: &dyn Fn() -> [[f64; 2]; 2]) -> [Self; 2]
+    where
+        Self: Sized,
+    {
+        let _ = jac;
+        [inputs[0].lit(value[0]), inputs[0].lit(value[1])]
+    }
 }
 
 /// What the root, the disc and the blob need on top of [`Real`].
@@ -339,6 +360,13 @@ impl<T: Real> Real for Dual<T> {
     fn is_finite(&self) -> bool {
         self.v.is_finite() && self.d[0].is_finite() && self.d[1].is_finite()
     }
+    const DERIVATIVES: bool = true;
+    fn outside2(inputs: &[Self; 2], value: [f64; 2], jac: &dyn Fn() -> [[f64; 2]; 2]) -> [Self; 2] {
+        let [a, b] = T::outside2(&[inputs[0].v.clone(), inputs[1].v.clone()], value, jac);
+        let j = jac();
+        let chain = |c: usize, k: usize| inputs[0].d[k].mul(&inputs[0].d[k].lit(j[c][0])).add(&inputs[1].d[k].mul(&inputs[1].d[k].lit(j[c][1])));
+        [Dual { v: a, d: [chain(0, 0), chain(0, 1)] }, Dual { v: b, d: [chain(1, 0), chain(1, 1)] }]
+    }
 }
 
 impl<T: Transcendental> Transcendental for Dual<T> {
@@ -556,6 +584,13 @@ impl<T: Real> Real for Dual3<T> {
     }
     fn is_finite(&self) -> bool {
         self.v.is_finite() && self.d.iter().all(|x| x.is_finite())
+    }
+    const DERIVATIVES: bool = true;
+    fn outside2(inputs: &[Self; 2], value: [f64; 2], jac: &dyn Fn() -> [[f64; 2]; 2]) -> [Self; 2] {
+        let [a, b] = T::outside2(&[inputs[0].v.clone(), inputs[1].v.clone()], value, jac);
+        let j = jac();
+        let chain = |c: usize, k: usize| inputs[0].d[k].mul(&inputs[0].d[k].lit(j[c][0])).add(&inputs[1].d[k].mul(&inputs[1].d[k].lit(j[c][1])));
+        [Dual3 { v: a, d: [chain(0, 0), chain(0, 1), chain(0, 2)] }, Dual3 { v: b, d: [chain(1, 0), chain(1, 1), chain(1, 2)] }]
     }
 }
 

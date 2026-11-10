@@ -23,3 +23,13 @@ fn variation(z, p) {
     let r2 = z.norm_sqr();
     complex(ln(r2) * denom, atan2(z.im, z.re))
 }
+
+fn inverse(z, p, branch) {
+    let denom = p.denom;
+    let r = exp(z.re / denom * 0.5);
+    complex(r * cos(z.im), r * sin(z.im))
+}
+
+fn image_gap(z, p) {
+    abs(z.im) - 3.14159265358979
+}

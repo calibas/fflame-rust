@@ -15,3 +15,10 @@ fn variation(z, p) {
     let c = cos(r2);
     complex(z.re * s - z.im * c, z.re * c + z.im * s)
 }
+
+fn inverse(z, p, branch) {
+    let r2 = z.norm_sqr();
+    let s = sin(r2);
+    let c = cos(r2);
+    complex(z.re * s + z.im * c, z.im * s - z.re * c)
+}

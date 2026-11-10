@@ -2125,9 +2125,12 @@ impl ShaderBuilder {
         if constants.cylinder_replay {
             shader.push_str(&processor.process(include_str!("../shaders/core/replay.wgsl")));
             shader.push('\n');
-            // The forward difference forms the offset steps run.
+            // The forward difference forms the offset steps run, with the
+            // Rhai variations' derived ones beside them (rhai-planners C3):
+            // every variation the shader holds, so one the sticky superset
+            // kept has its form too.
             if constants.cylinder_offsets {
-                shader.push_str(include_str!("../shaders/core/replay_delta.wgsl"));
+                shader.push_str(&crate::scene::forward_delta::replay_delta_wgsl(active.iter().map(|(n, _)| n.as_str())));
                 shader.push('\n');
             }
         }

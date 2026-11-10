@@ -482,6 +482,52 @@ pub fn transformation3(source: &str) -> Result<Program, Vec<Diag>> {
     checked(lowered, EntryKind::Transform)
 }
 
+thread_local! {
+    /// Lowering a transformation's INVERSE (`fn inverse(z, p, branch)`;
+    /// docs/archive/projects/rhai-planners.md, B1) in place of its `variation`.
+    static INVERSE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// The program a transformation's inverse compiles to: `fn inverse(z, p,
+/// branch)`, the preimage of `z` under `variation` on the branch `branch`
+/// (0 to `INFO.inverse_branches - 1`), or `no_preimage()` where there is
+/// none -- what the Flame Attractor walks backwards. Lowered as a
+/// transformation whose point is `z`, so it runs wherever a variation's
+/// body does: the interpreter, and a flame variation's WGSL. Its `branch`
+/// arrives as the colour coordinate (`ctx.color`), which an inverse has no
+/// other use for; the callers set it (`variations::user_inverse`).
+pub fn inverse_transformation(source: &str) -> Result<Program, Vec<Diag>> {
+    planner_function(source, "inverse")
+}
+
+/// The program a transformation's image gap compiles to: `fn
+/// image_gap(z, p)`, a lower bound on how far `z` lies outside the image
+/// of `variation` -- 0 or less inside it -- which the Flame Attractor
+/// scores a point by where `inverse` has no preimage, as it does the
+/// built-ins' unit discs. Lowered as [`inverse_transformation`] is, its
+/// number the real part of the point it gives.
+pub fn image_gap_transformation(source: &str) -> Result<Program, Vec<Diag>> {
+    planner_function(source, "image_gap")
+}
+
+/// The program a transformation's 3D inverse compiles to: `fn
+/// inverse3(v, p)`, the preimage of `v` under `variation3` -- one branch,
+/// as the solid walk's kernels have (B3) -- lowered as `variation3` is.
+pub fn inverse_transformation3(source: &str) -> Result<Program, Vec<Diag>> {
+    planner_function_in(source, "inverse3", true)
+}
+
+fn planner_function(source: &str, entry: &'static str) -> Result<Program, Vec<Diag>> {
+    planner_function_in(source, entry, false)
+}
+
+fn planner_function_in(source: &str, entry: &'static str, three: bool) -> Result<Program, Vec<Diag>> {
+    let previous = INVERSE.with(|c| c.replace(Some(entry)));
+    let lowered = lower_full(source, EntryKind::Transform, &[], three, SimFn::Step(0));
+    INVERSE.with(|c| c.set(previous));
+    checked(lowered?, EntryKind::Transform)
+}
+
 /// A transformation's 2D program, or its 3D one when it has only that:
 /// what checking it as written means.
 pub fn transformation_any(source: &str) -> Result<Program, Vec<Diag>> {
@@ -684,6 +730,7 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         maps: Vec::new(),
         param_vecs: HashMap::new(),
         three,
+        inverse: INVERSE.with(|c| c.get()),
         solid: kind == EntryKind::Solid,
         effect: kind == EntryKind::Effect,
         sim_coloring: kind == EntryKind::SimColoring,
@@ -948,6 +995,10 @@ struct Lowerer<'s> {
     param_vecs: HashMap<String, vec::Kind>,
     /// Lowering a transformation's 3D function, `variation3` (B2).
     three: bool,
+    /// Lowering a transformation's inverse, `fn inverse(z, p, branch)`
+    /// ([`inverse_transformation`]), or its `fn image_gap(z, p)`
+    /// ([`image_gap_transformation`]): the function's name.
+    inverse: Option<&'static str>,
     /// Lowering a solid (B3): its `z` is a vector of its own, not the
     /// formula's iterate.
     solid: bool,
@@ -1541,8 +1592,14 @@ impl<'s> Lowerer<'s> {
                         )
                     }
                 },
+                // How many branches its inverse has (`fn inverse(z, p,
+                // branch)`): `variations::user_inverse` reads it apart.
+                "inverse_branches" if self.transform => match v {
+                    Expr::IntegerConstant(n, _) if (1..=crate::variations::user_inverse::MAX_BRANCHES as i64).contains(n) => {}
+                    _ => return self.err(*p, format!("`inverse_branches` is how many preimages `fn inverse` picks among: a whole number from 1 to {}", crate::variations::user_inverse::MAX_BRANCHES)),
+                },
                 o if self.transform => {
-                    return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name`, `resets_orbits`, `replace`, `slow`, `phase`, `category` and `z`, not `{o}`"))
+                    return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `description`, `author`, `name`, `resets_orbits`, `replace`, `slow`, `phase`, `category`, `z` and `inverse_branches`, not `{o}`"))
                 }
                 // An effect's identity (design rule 7: a UUID, or a
                 // built-in's name) and its place in the pipeline, read
@@ -1780,6 +1837,9 @@ impl<'s> Lowerer<'s> {
     fn transform_section(&mut self, span: Span, fields: Vec<String>) -> R<Section> {
         if self.three {
             return self.transform_section3(span, fields);
+        }
+        if let Some(entry) = self.inverse {
+            return self.inverse_section(span, fields, entry);
         }
         let Some(f) = self.fns.get("variation").cloned() else {
             if self.fns.contains_key("variation3") {
@@ -2390,10 +2450,94 @@ impl<'s> Lowerer<'s> {
     /// p[, ctx])`, the point `v` a vector local set from `#pixel` and
     /// `#pixelz`, the last value -- a vector, or `#{ z: v, color }` --
     /// written back to them; `ctx.accum` a vector.
+    /// A transformation's inverse as its section: `inverse(z, p,
+    /// branch)`, lowered as `variation(z, p)` is, its `branch` an int local
+    /// read from the colour coordinate the callers set it in.
+    fn inverse_section(&mut self, span: Span, fields: Vec<String>, entry: &'static str) -> R<Section> {
+        let gap = entry == "image_gap";
+        let Some(f) = self.fns.get(entry).cloned() else {
+            return self.err(Position::NONE, if gap { "an image gap is `fn image_gap(z, p)`" } else { "an inverse is `fn inverse(z, p, branch)`" });
+        };
+        if gap && (f.params.is_empty() || f.params.len() > 2) {
+            return self.err(f.body.position(), "`image_gap(z)` or `image_gap(z, p)`");
+        }
+        if gap && returns_early(&f.body) {
+            return self.err(f.body.position(), "`image_gap` is one value: an `if` of values, not a `return`");
+        }
+        if f.params.is_empty() || f.params.len() > 3 {
+            return self.err(f.body.position(), "`inverse(z)`, `inverse(z, p)` or `inverse(z, p, branch)`");
+        }
+        if !fields.is_empty() {
+            return self.err(f.body.position(), "an inverse keeps no state: a variation with `init` has none for the Flame Attractor");
+        }
+        let mut scope = Scope::new(Fn3::Variation, fields);
+        let point = self.local(&f.params[0], TypeName::Complex);
+        let mut body = vec![ast::Stmt::Decl { ty: TypeName::Complex, name: point.clone(), init: Some(mk(ExprKind::Predef("pixel".into()), span)), dims: None, span }];
+        scope.bind(&f.params[0], Binding::Local(point));
+        if let Some(p) = f.params.get(1) {
+            scope.bind(p, Binding::Params);
+        }
+        if let Some(b) = f.params.get(2) {
+            let name = self.local(b, TypeName::Int);
+            let color = mk(ExprKind::Predef("vcolor".into()), span);
+            let round = mk(ExprKind::Call { name: "round".into(), args: vec![color], user: false }, span);
+            let branch = mk(ExprKind::Call { name: "to_int".into(), args: vec![round], user: false }, span);
+            body.push(ast::Stmt::Decl { ty: TypeName::Int, name: name.clone(), init: Some(branch), dims: None, span });
+            scope.bind(b, Binding::Local(name));
+        }
+        const RESULT: &str = "`inverse` ends with the preimage, or `no_preimage()`";
+        if returns_early(&f.body) {
+            let how = Returns::Variation { three: false };
+            let outer = self.returns.replace(how.clone());
+            let inner = self.scope_body(&how, &f.body, &mut scope);
+            self.returns = outer;
+            body.push(ast::Stmt::Scope { body: inner?, span });
+            return Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true });
+        }
+        let stmts = f.body.statements();
+        let Some((last, rest)) = stmts.split_last() else { return self.err(f.body.position(), RESULT) };
+        for st in rest {
+            self.stmt(st, &mut scope, &mut body)?;
+        }
+        let value = match final_value(last) {
+            // The gap, a number: the real part of the point it gives.
+            Some(Final::Expr(x)) if gap => {
+                let g = self.expr(x, &mut scope)?;
+                mk(ExprKind::Complex(Box::new(g), Box::new(mk(ExprKind::Float(0.0), span))), span)
+            }
+            Some(Final::If(fc, p)) if gap => {
+                let g = self.if_value(fc, p, &mut scope)?;
+                mk(ExprKind::Complex(Box::new(g), Box::new(mk(ExprKind::Float(0.0), span))), span)
+            }
+            _ if gap => return self.err(last.position(), "`image_gap` ends with the gap, a number"),
+            Some(Final::Expr(x)) => {
+                let (v, color) = self.point2(x, &mut scope)?;
+                if !color.is_empty() {
+                    return self.err(last.position(), "an inverse gives a point, not a colour");
+                }
+                v
+            }
+            Some(Final::If(fc, p)) => self.if_value(fc, p, &mut scope)?,
+            _ => return self.err(last.position(), RESULT),
+        };
+        let at = self.pos.span(last.position());
+        self.set_point2(value, Vec::new(), at, &mut body);
+        Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
+    }
+
     fn transform_section3(&mut self, span: Span, fields: Vec<String>) -> R<Section> {
-        let Some(f) = self.fns.get("variation3").cloned() else {
+        // A 3D inverse, `inverse3(v, p)`, lowers as `variation3` does
+        // ([`inverse_transformation3`]): one branch, no context.
+        let entry = self.inverse.unwrap_or("variation3");
+        let Some(f) = self.fns.get(entry).cloned() else {
+            if entry == "inverse3" {
+                return self.err(Position::NONE, "a 3D inverse is `fn inverse3(v, p)`");
+            }
             return self.err(Position::NONE, "a 3D transformation has `fn variation3(v, p)`");
         };
+        if entry == "inverse3" && (f.params.is_empty() || f.params.len() > 2) {
+            return self.err(f.body.position(), "`inverse3(v)` or `inverse3(v, p)`");
+        }
         if f.params.is_empty() || f.params.len() > 3 {
             return self.err(f.body.position(), "`variation3(v)`, `variation3(v, p)` or `variation3(v, p, ctx)`");
         }
@@ -4201,6 +4345,19 @@ impl<'s> Lowerer<'s> {
             let y = self.expr(&f.args[1], scope)?;
             let at = mk(ExprKind::Complex(Box::new(x), Box::new(y)), span);
             return Ok(mk(ExprKind::Call { name: "__init_at".into(), args: vec![at], user: false }, span));
+        }
+        // An inverse's "no preimage here" (docs/archive/projects/rhai-planners.md,
+        // B1): the point at 1e30, the sentinel the Flame Attractor's own
+        // kernels give, which its walk reads as that piece having escaped.
+        if name == "no_preimage" {
+            if !f.args.is_empty() {
+                return self.err(p, "`no_preimage()` takes nothing");
+            }
+            if self.inverse != Some("inverse") {
+                return self.err(p, "`no_preimage()` is an inverse's: `fn inverse(z, p, branch)`");
+            }
+            let far = || mk(ExprKind::Float(1e30), span);
+            return Ok(mk(ExprKind::Complex(Box::new(far()), Box::new(far())), span));
         }
         // A helper of the script's own, inlined; it reads only its
         // arguments.

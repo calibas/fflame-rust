@@ -1301,7 +1301,7 @@ Steps, in the order that unlocks the most first (the user picks):
      `cpu_rects`) and the shader builder bakes in over a stub, so the
      def's WGSL is not the whole variation -- refused by name
      (`HOST_BAKED`). A twin would need that table from `prepare`: the
-     parameter storage to hold it (docs/projects/variation-param-storage.md)
+     parameter storage to hold it (docs/archive/projects/variation-param-storage.md)
      and a relational pass over thousands of segments, at present Rust
      on the CPU. **The camera** for stereogram, which forks its eyes in
      camera space: `ctx.camera_x` .. `ctx.camera_z`, `ctx.camera_pitch`,

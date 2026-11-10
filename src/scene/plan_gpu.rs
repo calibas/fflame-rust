@@ -221,7 +221,7 @@ impl PlanGpu {
         let src = format!(
             "{}\n{}\n{}",
             builder.build_plan_eval(flame),
-            include_str!("../../shaders/core/replay_delta.wgsl"),
+            crate::scene::forward_delta::replay_delta_wgsl(flame.transforms.iter().flat_map(|t| t.variations.keys().map(String::as_str))),
             r#"
 @group(2) @binding(0) var<storage, read> cylinders: array<f32>;
 @group(2) @binding(1) var<storage, read> dz_jobs: array<vec4<f32>>;
@@ -408,7 +408,7 @@ fn dz_endpoints(@builtin(global_invocation_id) gid: vec3<u32>) {
         let src = format!(
             "{}\n{}\n{}",
             builder.build_plan_eval(flame),
-            include_str!("../../shaders/core/replay_delta.wgsl"),
+            crate::scene::forward_delta::replay_delta_wgsl(flame.transforms.iter().flat_map(|t| t.variations.keys().map(String::as_str))),
             include_str!("../../shaders/core/plan_offsets.wgsl"),
         );
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("Plan Offsets"), source: wgpu::ShaderSource::Wgsl(src.into()) });

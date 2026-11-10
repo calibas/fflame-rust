@@ -673,6 +673,34 @@ pub fn carried(name: &str) -> Option<CustomSource> {
     super::custom::carried(source(name)?)
 }
 
+/// `flame` with every `name` the built-in's twin, which it carries: the
+/// planners' gates (tests).
+#[cfg(test)]
+pub fn twin_flame(flame: &crate::scene::transforms::Flame, name: &str) -> crate::scene::transforms::Flame {
+    let key = crate::variations::twins::key(name).expect("a twin");
+    let mut f = flame.clone();
+    for t in &mut f.transforms {
+        if let Some(w) = t.variations.remove(name) {
+            t.variations.insert(key.clone(), w);
+        }
+        for v in &mut t.variation_order {
+            if v == name {
+                *v = key.clone();
+            }
+        }
+        let params: Vec<(String, f32)> = t.variation_params.drain().collect();
+        for (k, v) in params {
+            let k = match k.strip_prefix(&format!("{name}.")) {
+                Some(rest) => format!("{key}.{rest}"),
+                None => k,
+            };
+            t.variation_params.insert(k, v);
+        }
+    }
+    f.custom_variations = vec![crate::variations::twins::carried(name).expect("a twin")];
+    f
+}
+
 /// The twin's registry key: what a transform names it by.
 pub fn key(name: &str) -> Option<String> {
     super::custom::key_of(source(name)?)
@@ -828,12 +856,24 @@ pub fn builtin_of_key(key: &str) -> Option<&'static str> {
     unedited().read().ok()?.get(key).copied()
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Off: no twin borrows its built-in's planner data, so a test on
+    /// this thread reaches a twin's own -- its Rhai inverse
+    /// (`user_inverse`), its own derived bounds.
+    pub(crate) static BORROW: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
 /// The name the deep-zoom planner's tables know the variation `name` by
 /// (`inverse`, `bound`, `derive`): an unedited twin's built-in's, as its
 /// own; anything else its own. Not a many-valued built-in's: the replay
 /// forces its arm in the built-in's WGSL text (`bound::force_arms`),
 /// which a twin's is not, so a twin of one has no planner data.
 pub fn planner_name(name: &str) -> &str {
+    #[cfg(test)]
+    if !BORROW.with(|b| b.get()) {
+        return name;
+    }
     match builtin_of_key(name) {
         Some(b) if super::bound::arms_for(b).is_none() => b,
         _ => name,
@@ -1025,6 +1065,45 @@ mod tests {
         assert_eq!(found(&own("julia")), Some("julia"));
     }
 
+    /// **How far Focused Rendering's derived bounds reach a Rhai
+    /// variation's own code** (a measure, not a gate): each twin's compiled
+    /// body through the interval evaluator (`derive::derive_own`), against
+    /// its built-in's, at the parameters' defaults, over one disc. Prints
+    /// the counts and why a twin refuses where its built-in derives.
+    /// Ignored: it registers every twin.
+    #[test]
+    #[ignore = "a measure; registers every twin"]
+    fn measure_derived_bounds_of_twins() {
+        use crate::variations::{bound::Ball, derive};
+        let ball = Ball::new([0.3, -0.2], 0.5);
+        let (mut both, mut builtin_only, mut twin_only, mut neither) = (0, 0, 0, 0);
+        let mut why: std::collections::BTreeMap<String, Vec<&str>> = Default::default();
+        for (name, src) in chosen_twins() {
+            let Ok(key) = super::super::custom::register(src) else { continue };
+            let reg = super::super::global_registry().clone();
+            let info = reg.get(name).unwrap();
+            let defaults: std::collections::HashMap<String, f64> = info.parameters.iter().map(|p| (p.name.to_string(), f64::from(p.slot_default()))).collect();
+            let params = |p: &str| defaults.get(p).copied().unwrap_or(0.0);
+            let builtin = derive::derive(name, &params, 1.0, ball);
+            let twin = derive::derive_own(&key, &params, 1.0, ball);
+            match (&builtin, &twin) {
+                (Ok(_), Ok(_)) => both += 1,
+                (Ok(_), Err(e)) => {
+                    builtin_only += 1;
+                    why.entry(e.to_string()).or_default().push(name);
+                }
+                (Err(_), Ok(_)) => twin_only += 1,
+                (Err(_), Err(_)) => neither += 1,
+            }
+        }
+        println!("derived: both {both}, the built-in alone {builtin_only}, the twin alone {twin_only}, neither {neither}");
+        let mut reasons: Vec<_> = why.into_iter().collect();
+        reasons.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
+        for (reason, names) in reasons {
+            println!("  {:3} {reason}: {}", names.len(), names.iter().take(8).cloned().collect::<Vec<_>>().join(" "));
+        }
+    }
+
     /// **A variation is named by its label where the user reads it**: a
     /// Rhai variation by its title, never its key, in the Flame
     /// Attractor's and Focused Rendering's refusals as in the panels, and
@@ -1123,6 +1202,56 @@ mod tests {
     /// WRITER, not a test: `TWIN_SKELETONS=julia,rings2` writes each
     /// one's skeleton to `assets/variations/twins/<name>.rhai`, where none
     /// is yet.
+    /// **The twins' inverses undo their forward maps**
+    /// (docs/archive/projects/rhai-planners.md, B1): every twin's that has one,
+    /// written by hand (`scripts/twin_inverses.py`) -- the eleven planar
+    /// kernels' and the built-ins' that have none in Rust -- each
+    /// compiled and checked at its defaults (`user_inverse::check`).
+    #[test]
+    fn the_twins_inverses_undo_their_maps() {
+        // The solid's (B3).
+        for name in ["julia3D", "julia3Dz"] {
+            match crate::variations::user_inverse::compile3(&own(name), name) {
+                Some(Ok(_)) => {}
+                Some(Err(e)) => panic!("{name}'s 3D inverse: {e}"),
+                None => panic!("{name} has no 3D inverse"),
+            }
+        }
+        let with: Vec<&str> = TWINS.iter().filter(|(_, s)| s.contains("fn inverse(")).map(|(n, _)| *n).collect();
+        assert!(with.len() >= 20, "{with:?}");
+        // A forward map for a sum's Newton solve (B2) -- one that draws, its
+        // draws read from a parameter, an arm's (D2).
+        let fwd = |n: &str| crate::variations::user_inverse::compile(&own(n), n).and_then(Result::ok).map(|i| i.forward_wgsl.is_some());
+        assert_eq!(fwd("julia"), Some(true), "julia draws its root, read from the arm's draw");
+        assert_eq!(fwd("bubble"), Some(true));
+        for name in with {
+            match crate::variations::user_inverse::compile(&own(name), name) {
+                Some(Ok(inv)) => assert!(inv.branches >= 1, "{name}"),
+                Some(Err(e)) => panic!("{name}: {e}"),
+                None => panic!("{name} has no inverse"),
+            }
+        }
+    }
+
+    /// `TWIN_WGSL_DUMP=a,b`: each twin's compiled 2D and 3D bodies, to
+    /// `output/twin-wgsl/<name>-2d.wgsl` and `-3d.wgsl` -- what the
+    /// renderer and the bounds' evaluator read.
+    #[test]
+    #[ignore = "writes files"]
+    fn dump_twin_wgsl() {
+        let Ok(names) = std::env::var("TWIN_WGSL_DUMP") else { return };
+        let dir = std::path::Path::new("output/twin-wgsl");
+        std::fs::create_dir_all(dir).unwrap();
+        for name in names.split(',') {
+            let dl = super::super::custom::compile(&own(name)).unwrap();
+            std::fs::write(dir.join(format!("{name}-2d.wgsl")), dl.shader_2d.unwrap_or_default()).unwrap();
+            std::fs::write(dir.join(format!("{name}-3d.wgsl")), dl.shader_3d.unwrap_or_default()).unwrap();
+            if let Some(Ok(inv)) = crate::variations::user_inverse::compile(&own(name), name) {
+                std::fs::write(dir.join(format!("{name}-inverse.wgsl")), &inv.wgsl).unwrap();
+            }
+        }
+    }
+
     #[test]
     #[ignore = "writes files"]
     fn write_variation_twin_skeletons() {

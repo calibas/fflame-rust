@@ -36,3 +36,9 @@ fn variation(z, p) {
     let scale = r * (p2 + ((p1 - p2) / 2.0) * (sin(p3 * theta) + 1.0));
     complex(scale * cos(theta), scale * sin(theta))
 }
+
+fn inverse(z, p, branch) {
+    let th = atan2(z.im, z.re);
+    let s = p.low + ((p.high - p.low) / 2.0) * (sin(to_float(p.waves) * th) + 1.0);
+    complex(z.im / s, z.re / s)
+}
