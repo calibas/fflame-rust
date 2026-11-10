@@ -5988,6 +5988,127 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// MEASUREMENT (rhai-one-form step 4): juliascope-rays at 1e4, the view
+    /// whose density gate is borderline -- each block's difference in
+    /// standard errors at the gate's samples three times over, then at four
+    /// times the replicates and at four times the frames. A real difference
+    /// keeps its block and grows its z with the samples; noise moves.
+    #[test]
+    #[ignore = "needs a GPU; registers a twin, reads output/flame-zoom; minutes"]
+    fn what_the_juliascope_rays_block_is() {
+        use crate::renderer::density_gates::{mean_se, replicated_blocks};
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        let text = std::fs::read_to_string("output/flame-zoom/juliascope-rays.fflame").expect("the fixture");
+        let mut cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.levels_enabled = false;
+        cfg.cylinder_always = true;
+        let twin = twinned(&cfg.flame);
+        crate::variations::custom::ensure(&twin);
+        let guard = crate::variations::global_registry();
+        let b = Backward::read(&cfg.flame, &guard).expect("the built-in");
+        let t = Backward::read(&twin, &guard).expect("the twin");
+        drop(guard);
+        let (device, queue) = render_device();
+        const N: u32 = 192;
+        let at = b.sample_point(0.75);
+        let mut c = cfg.clone();
+        c.zoom = 1e4;
+        (c.pan_x, c.pan_y) = (at[0], at[1]);
+        let view = View::of(1e4, at, N, N);
+        let mut ct = c.clone();
+        ct.flame = twin.clone();
+        let (pb, pt) = (b.plan(view).expect("a plan"), t.plan(view).expect("a plan"));
+        // The plans, word by word: the same words, the same probabilities?
+        {
+            let index = |p: &Cylinders| p.words.iter().map(|w| (w.word.clone(), (w.prob, w.eff, w.draw))).collect::<std::collections::HashMap<_, _>>();
+            let (ib, it) = (index(&pb), index(&pt));
+            let only_b = ib.keys().filter(|k| !it.contains_key(*k)).count();
+            let only_t = it.keys().filter(|k| !ib.contains_key(*k)).count();
+            let (mut worst_p, mut worst_e) = (0.0f64, 0.0f64);
+            for (k, (p, e, _)) in &ib {
+                if let Some((q, f, _)) = it.get(k) {
+                    worst_p = worst_p.max((q / p - 1.0).abs());
+                    worst_e = worst_e.max((f / e - 1.0).abs());
+                }
+            }
+            println!(
+                "  plans: built-in {} words, mass {:.6e}, lost {:.2e} | twin {} words, mass {:.6e}, lost {:.2e}; {only_b} only the built-in's, {only_t} only the twin's; shared words' prob differ by at most {worst_p:.2e}, eff by {worst_e:.2e}",
+                pb.words.len(), pb.mass, pb.lost, pt.words.len(), pt.mass, pt.lost
+            );
+            let alphabet = |x: &Backward| x.alphabet.iter().map(|s| (s.sym, s.arm, s.prob)).collect::<Vec<_>>();
+            println!("  alphabets: built-in {:?}", alphabet(&b));
+            println!("             twin     {:?}", alphabet(&t));
+        }
+        // Each plan on the other flame, at four times the frames: block 66
+        // against the built-in on its own plan.
+        let (base, _) = replicated_blocks(&device, &queue, &c, Some(&pb), N, 1024, 32, 6);
+        let block = |x: &[Vec<f64>], k: usize| mean_se(&x.iter().map(|r| r[k]).collect::<Vec<_>>());
+        for (what, cfg_, plan) in [("the twin on its own plan", &ct, &pt)] {
+            let (x, _) = replicated_blocks(&device, &queue, cfg_, Some(plan), N, 1024, 32, 6);
+            let ((mx, sx), (mb, sb)) = (block(&x, 66), block(&base, 66));
+            println!("  {what}: block 66 ratio {:.4} z {:+.1}", mx / mb, (mx - mb) / (sx * sx + sb * sb).sqrt());
+        }
+        println!("  the word: built-in {:?}, twin {:?}", pb.words[0].word, pt.words[0].word);
+        // The free orbits: each flame untargeted, the whole attractor and
+        // nearer, block by block.
+        for z in [1.0f32, 30.0] {
+            let (mut u, mut ut) = (cfg.clone(), cfg.clone());
+            u.zoom = z;
+            (u.pan_x, u.pan_y) = (at[0], at[1]);
+            ut.zoom = z;
+            (ut.pan_x, ut.pan_y) = (at[0], at[1]);
+            ut.flame = twin.clone();
+            let (xb, _) = replicated_blocks(&device, &queue, &u, None, N, 1024, 32, 6);
+            let (xt, _) = replicated_blocks(&device, &queue, &ut, None, N, 1024, 32, 6);
+            let nb = xb[0].len();
+            let mut zs: Vec<(f64, usize, f64)> = (0..nb)
+                .filter_map(|k| {
+                    let ((mt, st), (mb, sb)) = (block(&xt, k), block(&xb, k));
+                    let se = (st * st + sb * sb).sqrt();
+                    (se > 0.0).then(|| ((mt - mb) / se, k, mt / mb.max(f64::MIN_POSITIVE)))
+                })
+                .collect();
+            let judged = zs.len();
+            zs.sort_by(|a, b| b.0.abs().total_cmp(&a.0.abs()));
+            let over = zs.iter().filter(|x| x.0.abs() > 5.0).count();
+            println!("  untargeted at x{z}: {judged} judged, {over} over 5; worst {:?}", zs.iter().take(4).map(|(z, k, r)| format!("block {k} z {z:+.1} ratio {r:.3}")).collect::<Vec<_>>());
+        }
+        // Without offsets: plans with no references, the plain replay.
+        {
+            OFFSETS_OFF.store(true, std::sync::atomic::Ordering::Relaxed);
+            let (qb, qt) = (b.plan(view).expect("a plan"), t.plan(view).expect("a plan"));
+            let (xb, _) = replicated_blocks(&device, &queue, &c, Some(&qb), N, 1024, 32, 6);
+            let (xt, _) = replicated_blocks(&device, &queue, &ct, Some(&qt), N, 1024, 32, 6);
+            OFFSETS_OFF.store(false, std::sync::atomic::Ordering::Relaxed);
+            for k in [66usize, 52] {
+                let ((mx, sx), (mb, sb)) = (block(&xt, k), block(&xb, k));
+                println!("  no offsets, 32 frames: block {k} the twin over the built-in {:.4} z {:+.1}", mx / mb, (mx - mb) / (sx * sx + sb * sb).sqrt());
+            }
+            let ((m1, _), (m2, _)) = (block(&xb, 66), block(&base, 66));
+            println!("  block 66, the built-in without offsets over with: {:.4}", m1 / m2);
+        }
+        for (what, frames, reps) in [("4x frames", 32usize, 6usize)] {
+            let (xb, _) = replicated_blocks(&device, &queue, &c, Some(&pb), N, 1024, frames, reps);
+            let (xt, _) = replicated_blocks(&device, &queue, &ct, Some(&pt), N, 1024, frames, reps);
+            let nb = xb[0].len();
+            let block = |x: &[Vec<f64>], k: usize| mean_se(&x.iter().map(|r| r[k]).collect::<Vec<_>>());
+            let mean_block = (0..nb).map(|k| block(&xb, k).0).sum::<f64>() / nb as f64;
+            let mut zs: Vec<(f64, usize, f64, f64)> = (0..nb)
+                .filter_map(|k| {
+                    let ((mt, st), (mb, sb)) = (block(&xt, k), block(&xb, k));
+                    let se = (st * st + sb * sb).sqrt();
+                    (se > 0.0).then(|| ((mt - mb) / se, k, mt / mb.max(f64::MIN_POSITIVE), mb / mean_block))
+                })
+                .collect();
+            let judged = zs.len();
+            zs.sort_by(|a, b| b.0.abs().total_cmp(&a.0.abs()));
+            let top: Vec<String> = zs.iter().take(4).map(|(z, k, r, d)| format!("block {k} z {z:+.1} ratio {r:.3} (density {d:.3} of the mean block)")).collect();
+            println!("  {what} ({frames} frames, {reps} replicates): {judged} judged; {}", top.join("; "));
+        }
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+    }
+
     /// The twin's plans and density against the built-in's at each `(zoom,
     /// frac)` view, the frac a point of the built-in's sample: the failures.
     fn twin_renders_as_builtin(cfg: &crate::config::FractalConfig, twin: &Flame, tag: &str, views: &[(f32, f64)]) -> Vec<String> {
@@ -6459,8 +6580,12 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; reads output/flame-zoom"]
     fn the_offset_replay_holds_per_sample() {
-        let guard = crate::variations::global_registry();
-        let reg = &*guard;
+        // `OFFSET_TWINS=1` replays each flame with its variations' Rhai
+        // twins instead (rhai-one-form step 4), their own planner data.
+        let twins = std::env::var("OFFSET_TWINS").is_ok();
+        if twins {
+            crate::variations::twins::BORROW.with(|b| b.set(false));
+        }
         let (device, queue) = test_device();
         let mut worst_offsets = 0.0f64;
         // The `final-*` flames carry a `bipolar` final (C2c), written by
@@ -6481,8 +6606,13 @@ mod tests {
                 }
             }
             let Ok(text) = std::fs::read_to_string(format!("output/flame-zoom/{name}.fflame")) else { continue };
-            let cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
-            let Ok(b) = Backward::read(&cfg.flame, reg) else { continue };
+            let mut cfg: crate::config::FractalConfig = serde_json::from_str(&text).expect("config");
+            if twins {
+                cfg.flame = twinned(&cfg.flame);
+                crate::variations::custom::ensure(&cfg.flame);
+            }
+            let read = Backward::read(&cfg.flame, &crate::variations::global_registry());
+            let Ok(b) = read else { continue };
             let gpu = crate::scene::plan_gpu::PlanGpu::new(&device, &queue, &cfg.flame, b.sample());
             // The finals' flames at points off their blob: at 0.75 each
             // view is its glow, planned as one blur's word.
@@ -6516,7 +6646,9 @@ mod tests {
                     continue;
                 }
                 let step = (plan.words.len() / 400).max(1);
-                let pts: Vec<usize> = (0..b.sample.len()).step_by(b.sample.len() / 48).collect();
+                // `OFFSET_POINTS=n` starts from n sample points, 48 by default.
+                let per: usize = std::env::var("OFFSET_POINTS").ok().and_then(|v| v.parse().ok()).unwrap_or(48);
+                let pts: Vec<usize> = (0..b.sample.len()).step_by((b.sample.len() / per).max(1)).collect();
                 let mut jobs: Vec<[f32; 4]> = Vec::new();
                 let mut which: Vec<(usize, usize)> = Vec::new();
                 for w in (0..plan.words.len()).step_by(step) {
@@ -6538,6 +6670,9 @@ mod tests {
                     let with = plan.refs.iter().filter(|r| r.is_some()).count();
                     println!("  {name} {z:.0e} at {frac}: no word to check ({with} of {} carry references, every one a blur's)", plan.words.len());
                     continue;
+                }
+                if twins {
+                    println!("  {name} {z:.0e}: the first word {:?}", plan.words[0].word);
                 }
                 let got = gpu.offset_endpoints(&cfg.flame, &table, &jobs);
                 let (mut n, mut plain_sum, mut off_sum) = (0usize, 0.0f64, 0.0f64);
