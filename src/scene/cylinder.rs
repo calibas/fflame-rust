@@ -10271,7 +10271,18 @@ mod tests {
         let (mut views, mut both, mut desktop_only, mut web_only) = (0usize, 0usize, Vec::new(), Vec::new());
         let mut ratios: Vec<(f64, String)> = Vec::new();
         let (mut t_desktop, mut t_web) = (0.0f64, 0.0f64);
+        // Each view's two times and outcomes, for where the time goes.
+        let mut timed: Vec<(f64, f64, String, String, String)> = Vec::new();
+        let kind = |r: &Result<Cylinders, NoCylinders>| match r {
+            Ok(c) => format!("{} words", c.words.len()),
+            Err(e) => format!("{e:?}").chars().take(90).collect(),
+        };
+        // `FIXTURES=a,b` plans only the fixtures whose names hold one.
+        let only: Option<Vec<String>> = std::env::var("FIXTURES").ok().map(|v| v.split(',').map(str::to_string).collect());
         for path in &files {
+            if only.as_ref().is_some_and(|o| !o.iter().any(|n| path.to_string_lossy().contains(n.as_str()))) {
+                continue;
+            }
             let Ok(text) = std::fs::read_to_string(path) else { continue };
             let Ok(cfg) = serde_json::from_str::<crate::config::FractalConfig>(&text) else { continue };
             if !cfg.flame.custom_variations.is_empty() {
@@ -10285,12 +10296,16 @@ mod tests {
                 WEB_ROUTE.store(false, Ordering::Relaxed);
                 let t0 = Instant::now();
                 let desktop = Cylinders::plan(&cfg.flame, reg, view);
-                t_desktop += t0.elapsed().as_secs_f64();
+                let timed_desktop = t0.elapsed().as_secs_f64();
+                t_desktop += timed_desktop;
                 WEB_ROUTE.store(true, Ordering::Relaxed);
                 let t0 = Instant::now();
                 let web = Cylinders::plan(&cfg.flame, reg, view);
-                t_web += t0.elapsed().as_secs_f64();
+                let tw = t0.elapsed().as_secs_f64();
+                t_web += tw;
                 WEB_ROUTE.store(false, Ordering::Relaxed);
+                let td = timed_desktop;
+                timed.push((td, tw, tag.clone(), kind(&desktop), kind(&web)));
                 match (desktop, web) {
                     (Ok(d), Ok(w)) => {
                         both += 1;
@@ -10309,6 +10324,13 @@ mod tests {
         println!("  the web's words over the desktop's: least {:.3}, median {:.3}, 90% {:.3}, most {:.3}; {} equal", q(0.0), q(0.5), q(0.9), q(1.0), ratios.iter().filter(|r| r.0 == 1.0).count());
         println!("  the most: {:?}", ratios.iter().rev().take(6).map(|(r, n)| format!("{n} {r:.2}")).collect::<Vec<_>>());
         println!("  planning: desktop {t_desktop:.1} s, web {t_web:.1} s");
+        timed.sort_by(|a, b| (b.1 - b.0).total_cmp(&(a.1 - a.0)));
+        let same = timed.iter().filter(|x| x.3 == x.4).map(|x| x.1 - x.0).sum::<f64>();
+        let differ = timed.iter().filter(|x| x.3 != x.4).map(|x| x.1 - x.0).sum::<f64>();
+        println!("  the web's extra time: {same:.1} s where the outcomes are the same, {differ:.1} s where they differ");
+        for (td, tw, tag, d, w) in timed.iter().take(12) {
+            println!("    {tag}: desktop {td:.2} s ({d}) | web {tw:.2} s ({w})");
+        }
         for d in desktop_only.iter().take(30) {
             println!("    desktop alone: {}", d.chars().take(220).collect::<String>());
         }

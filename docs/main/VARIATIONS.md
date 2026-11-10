@@ -454,10 +454,13 @@ variation's contribution lands (weight included). It must
 tight silently drops part of the picture.
 - `BOUNDS` holds hand-derived bounds — `spherical`, `bubble`, `julian`,
   `pre_blur`, `blur` — each with its derivation beside it.
-- Anything else is derived from the shipped WGSL by
-  [derive.rs](../../src/variations/derive.rs): interval arithmetic over
-  the naga IR, refusing any construct it does not model. Desktop only;
-  the web build has no WGSL front end and uses the hand bounds alone.
+- Anything else is derived by interval arithmetic
+  ([interval.rs](../../src/variations/interval.rs)), refusing any
+  construct it does not model: a built-in's from its shipped WGSL over
+  naga IR on the desktop ([derive.rs](../../src/variations/derive.rs));
+  a Rhai variation's from its own code on every platform
+  ([rhai_bound.rs](../../src/variations/rhai_bound.rs)); and on the web,
+  which has no WGSL front end, a built-in's from its twin's code.
 - `ARMED` lists the variations whose random draw picks one of finitely
   many arms (`julian`, `juliascope`). The planner enumerates the arms,
   and a replay build rewrites the draw to read a forced arm.

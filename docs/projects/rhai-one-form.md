@@ -286,8 +286,28 @@ times nearer, 684 views.
 (The corpus of `.flame` files `how_many_corpus_flames_enumerate` reads
 from `output/` is not on this machine; these fixtures stand in.)
 
-Planning all 684 views took 607 s on the desktop's route and 753 s on
-the web's: not yet explained, and the next measurement (per view).
+**The time.** Planning all 684 views took 604 s on the desktop's route
+and 757 s on the web's. Per view:
+
+- Where both routes come to the same outcome, the web's took 212 s
+  *less* in all: a tree bound is cheaper than naga's walk
+  (`time_a_bound`: julian 4.2 us against 12.8, jac_asn 0.44 ms against
+  0.52, minkowskope 0.17 ms against 0.18).
+- All the extra time, 366 s, is where the outcomes differ, and the web's
+  route gets further before refusing. jac_asn, truchet2 and glynnspiro
+  have no bound from naga, so the desktop refuses them at once
+  (`Unbounded`, `NoInvariantBall`); the tree bounds them, and the
+  forward planner enumerates until it passes `MAX_WORDS` (jac_asn: 47 s
+  a view, about 100,000 bounds at 0.44 ms, to refuse `TooManyWords`).
+  minkowskope reaches the cap on both routes, after 10.8 s on the
+  desktop's and 62-67 s on the web's: its tree discs are wider at the
+  discs the walk asks about, so more words survive to be bounded.
+
+So the cost is the forward planner's search, which has no time budget
+and stops only at its word cap, now reached by variations that used to
+be refused for want of a bound. A follow-up, not part of route B: a time
+budget for the forward planner, as the inverse walk has
+(`backward::TIME_BUDGET`), or a cap counted before a level is bounded.
 
 ## Step 3: decide P9, by measurement
 

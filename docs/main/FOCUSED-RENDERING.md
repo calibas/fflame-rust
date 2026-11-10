@@ -216,12 +216,23 @@ keeps the words whose image meets the view, breadth first. It needs:
   kept as it is, which is sound;
 - some word to reach the view (`ViewIsEmpty`).
 
-Forward bounds come from two places. Five are written by hand
-(`bound::BOUNDS`: `spherical`, `bubble`, `julian`, `pre_blur`, `blur`).
-On the **desktop**, any other variation's bound is derived from its
-shipped WGSL by interval arithmetic over naga IR (`variations::derive`),
-retried once on a subdivided input before refusing. The **web** build
-has no WGSL front end, so it has the five hand bounds only.
+Forward bounds come from three places (`ifs_ball::derived`). Five are
+written by hand (`bound::BOUNDS`: `spherical`, `bubble`, `julian`,
+`pre_blur`, `blur`) and come first. Any other is derived by interval
+arithmetic, retried once on a subdivided input before refusing:
+
+- a **built-in's on the desktop**, from its shipped WGSL over naga IR
+  (`variations::derive`);
+- a **Rhai variation's**, from its own code (`variations::rhai_bound`,
+  the same rules over `lang::ir`), on every platform; on the desktop its
+  compiled WGSL is the fallback where that refuses;
+- a **built-in's on the web**, which has no WGSL front end, from its
+  twin's code: 640 of the 647 have one. The 7 without are unbounded
+  there.
+
+Both evaluators share `variations::interval`. Over the twins the tree's
+bound is the WGSL's at the median and within 6% at the 99th percentile
+([rhai-one-form.md](../projects/rhai-one-form.md), step 2).
 
 **The inverse walk** pulls the view back through the maps' inverses,
 guided by an indexed sample of the attractor, instead of pushing a disc
