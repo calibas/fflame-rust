@@ -752,6 +752,118 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
     })
 }
 
+/// A transformation's inverse (`fn inverse(z, p, branch)`,
+/// `rhai::inverse_transformation`) as the Flame Attractor's shader calls
+/// it (docs/archive/projects/rhai-planners.md, B1): `fn {name}(v: vec2<f32>, base:
+/// u32, branch: f32) -> vec2<f32>`, its parameters -- the user's, then
+/// `prepare`'s -- read as `get_param(base, 0u, slot)`, which the mode D
+/// shader defines over a buffer of its own, and its branch handed in as the
+/// colour coordinate it is lowered to read. Refused where it reaches for
+/// anything only a flame has: a random number, state, the running sum, the
+/// weight or the transform, a texture, a 4th coordinate, an emitted point,
+/// or a colour, direct colour or hide flag written.
+pub fn inverse_kernel(p: &Program, name: &str) -> Result<String, String> {
+    let s = variation_shape(p)?;
+    let refuse = |what: &str| Err(format!("an inverse {what}: the Flame Attractor runs it outside a flame"));
+    if s.rng || s.init_rng {
+        return refuse("draws no random numbers");
+    }
+    if s.accum {
+        return refuse("reads no running sum (`ctx.accum`)");
+    }
+    if s.rgb || s.hide || writes(&p.transform, Place::Color) {
+        return refuse("writes no colour and hides nothing");
+    }
+    if !s.state.is_empty() {
+        return refuse("keeps no state");
+    }
+    let prefix: &'static str = Box::leak(format!("{name}_").into_boxed_str());
+    let shape = VariationShape { ids: true, color: true, ..s };
+    let m = variation_module(p, &shape, ", xform_id: u32, variation_id: u32, vc: ptr<function, f32>", false, false, prefix);
+    // What a flame's prelude alone defines, by name: the weight and the
+    // affine (`transforms[...]`), the RNG, state, the 4th coordinate, the
+    // palette, emissions, the camera.
+    for (needle, what) in [
+        ("transforms[", "reads no weight or affine (`ctx.weight`, `ctx.a` ...)"),
+        ("rng_next", "draws no random numbers"),
+        ("_state(", "keeps no state"),
+        ("point_w", "reads no 4th coordinate"),
+        ("palette_", "reads no palette or texture"),
+        ("texture", "reads no palette or texture"),
+        ("emit_", "emits no points"),
+        ("params.", "reads no camera"),
+    ] {
+        if m.contains(needle) {
+            return refuse(what);
+        }
+    }
+    Ok(format!("{m}\nfn {name}(v: vec2<f32>, base: u32, branch: f32) -> vec2<f32> {{\n    var vc = branch;\n    return {prefix}variation_2d(v, base, 0u, &vc);\n}}\n"))
+}
+
+/// [`inverse_kernel`] for a 3D inverse (`fn inverse3(v, p)`, B3): `fn
+/// {name}(v: vec3<f32>, base: u32, branch: f32) -> vec3<f32>`, by the same
+/// rules.
+pub fn inverse_kernel3(p: &Program, name: &str) -> Result<String, String> {
+    let s = variation_shape(p)?;
+    let refuse = |what: &str| Err(format!("an inverse {what}: the Flame Attractor runs it outside a flame"));
+    if s.rng || s.init_rng {
+        return refuse("draws no random numbers");
+    }
+    if s.accum {
+        return refuse("reads no running sum (`ctx.accum`)");
+    }
+    if s.rgb || s.hide || writes(&p.transform, Place::Color) || !s.state.is_empty() {
+        return refuse("writes no colour, hides nothing and keeps no state");
+    }
+    let prefix: &'static str = Box::leak(format!("{name}_").into_boxed_str());
+    let shape = VariationShape { ids: true, color: true, ..s };
+    let m = variation_module(p, &shape, ", xform_id: u32, variation_id: u32, vc: ptr<function, f32>", true, false, prefix);
+    for (needle, what) in [
+        ("transforms[", "reads no weight or affine (`ctx.weight`, `ctx.a` ...)"),
+        ("rng_next", "draws no random numbers"),
+        ("_state(", "keeps no state"),
+        ("point_w", "reads no 4th coordinate"),
+        ("palette_", "reads no palette or texture"),
+        ("texture", "reads no palette or texture"),
+        ("emit_", "emits no points"),
+        ("params.", "reads no camera"),
+    ] {
+        if m.contains(needle) {
+            return refuse(what);
+        }
+    }
+    Ok(format!("{m}\nfn {name}(v: vec3<f32>, base: u32, branch: f32) -> vec3<f32> {{\n    var vc = branch;\n    return {prefix}variation_3d(v, base, 0u, &vc);\n}}\n"))
+}
+
+/// A variation's derived forward difference (`delta::variation_difference`;
+/// docs/archive/projects/rhai-planners.md, C3) as the offset replay calls it: `fn
+/// {name}(z: vec2<f32>, d: vec2<f32>, base: u32, u: f32) -> vec2<f32>`,
+/// `F(z + d) - F(z)` at the forced draw `u`, its values read through
+/// `get_param(base, 0u, slot)`. By [`inverse_kernel`]'s rules, but for the
+/// deviation it reads as its running sum.
+pub fn difference_kernel(p: &Program, name: &str) -> Result<String, String> {
+    let s = variation_shape(p)?;
+    if s.rng || s.init_rng || s.rgb || s.hide || !s.state.is_empty() || writes(&p.transform, Place::Color) {
+        return Err("a difference reads only its point, its deviation and its draw".into());
+    }
+    let prefix: &'static str = Box::leak(format!("{name}_").into_boxed_str());
+    let shape = VariationShape { ids: true, color: true, accum: true, ..s };
+    let m = variation_module_exact(p, &shape, ", accum: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>", false, false, prefix, true);
+    for needle in ["transforms[", "rng_next", "_state(", "point_w", "palette_", "texture", "emit_", "params."] {
+        if m.contains(needle) {
+            return Err(format!("a difference reaches for what only a flame has (`{needle}`)"));
+        }
+    }
+    Ok(format!("{m}\nfn {name}(z: vec2<f32>, d: vec2<f32>, base: u32, u: f32) -> vec2<f32> {{\n    var vc = u;\n    return {prefix}variation_2d(z, d, base, 0u, &vc);\n}}\n"))
+}
+
+/// [`inverse_kernel`]'s WGSL is a valid module beside the one function the
+/// mode D shader gives it, `get_param`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn validate_inverse_kernel(wgsl: &str) -> Result<(), String> {
+    validate_module(&format!("fn get_param(xform_id: u32, variation_id: u32, slot: u32) -> f32 {{\n    return f32(xform_id + variation_id + slot);\n}}\n{wgsl}"))
+}
+
 /// A variation's `prepare` as the init pass runs it (a built-in's
 /// `wgsl_init`): `fn init_<name>(user: array<f32, N>) -> array<f32, M>`,
 /// its parameters read from `user`, the values the body reads written to
@@ -817,7 +929,15 @@ fn variation_init(p: &Program, name: &str, prefix: &'static str) -> Result<Optio
 /// 3D with the point's third part beside `#pixel`), the state's load and
 /// store, `init`'s function, and the helpers, all prefixed.
 fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, emit_z: bool, prefix: &'static str) -> String {
+    variation_module_exact(p, own, sig, three, emit_z, prefix, false)
+}
+
+/// [`variation_module`], its sines exact near zero where `exact` -- a
+/// derived difference's (`difference_kernel`), whose `sin(d/2)` of a small
+/// deviation a GPU's own `sin`, good to an absolute 1e-7, makes noise.
+fn variation_module_exact(p: &Program, own: &VariationShape, sig: &str, three: bool, emit_z: bool, prefix: &'static str, exact: bool) -> String {
     let mut g = Gen::new(p, Ctx::Variation, prefix);
+    g.exact_near_zero = exact;
     // A 2D body's copy in a 3D flame: its emissions at the z it is given.
     g.emit_z = emit_z;
     // Its tables, module constants: one for each set of literals.

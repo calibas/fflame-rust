@@ -15,3 +15,21 @@ fn variation(z, p) {
     let denom = r0 + 1.0e-6;
     complex(r * z.im / denom, r * z.re / denom)
 }
+
+fn inverse(z, p, branch) {
+    let s = z.abs();
+    if s >= 2.0 {
+        return no_preimage();
+    }
+    if s <= 0.0 {
+        return complex(0.0, 0.0);
+    }
+    let e = 1.0e-6;
+    let b = s * (1.0 + e);
+    let r0 = (b + sqrt(b * b + 4.0 * (2.0 - s) * s * e)) / (2.0 * (2.0 - s));
+    complex(z.im * r0 / s, z.re * r0 / s)
+}
+
+fn image_gap(z, p) {
+    z.abs() - 2.0
+}

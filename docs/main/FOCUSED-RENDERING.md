@@ -216,12 +216,35 @@ keeps the words whose image meets the view, breadth first. It needs:
   kept as it is, which is sound;
 - some word to reach the view (`ViewIsEmpty`).
 
-Forward bounds come from two places. Five are written by hand
-(`bound::BOUNDS`: `spherical`, `bubble`, `julian`, `pre_blur`, `blur`).
-On the **desktop**, any other variation's bound is derived from its
-shipped WGSL by interval arithmetic over naga IR (`variations::derive`),
-retried once on a subdivided input before refusing. The **web** build
-has no WGSL front end, so it has the five hand bounds only.
+**The forward search has the inverse walk's time budget**
+(`PlanOptions::budget`: 20 s on the desktop, 1.5 s on the web, where
+it plans on the page's thread). Past it, every word not yet expanded is kept as
+it stands, as the depth cap keeps its frontier: the plan is complete and
+says so (`Cylinders::timed_out`), its unexpanded words larger than the
+view and so less efficient. It is checked between words and not before
+the first level; a frontier the table cannot hold is still
+`TooManyWords`; a cancel (the view has moved on) stops it. Measured on
+`jac_asn`, whose bound is a loop: it used to search 47 s to refuse with
+too many words, and now plans in the budget
+([rhai-one-form.md](../projects/rhai-one-form.md), the time budget).
+
+Forward bounds come from three places (`ifs_ball::derived`). Five are
+written by hand (`bound::BOUNDS`: `spherical`, `bubble`, `julian`,
+`pre_blur`, `blur`) and come first. Any other is derived by interval
+arithmetic, retried once on a subdivided input before refusing:
+
+- a **built-in's on the desktop**, from its shipped WGSL over naga IR
+  (`variations::derive`);
+- a **Rhai variation's**, from its own code (`variations::rhai_bound`,
+  the same rules over `lang::ir`), on every platform; on the desktop its
+  compiled WGSL is the fallback where that refuses;
+- a **built-in's on the web**, which has no WGSL front end, from its
+  twin's code: 640 of the 647 have one. The 7 without are unbounded
+  there.
+
+Both evaluators share `variations::interval`. Over the twins the tree's
+bound is the WGSL's at the median and within 6% at the 99th percentile
+([rhai-one-form.md](../projects/rhai-one-form.md), step 2).
 
 **The inverse walk** pulls the view back through the maps' inverses,
 guided by an indexed sample of the attractor, instead of pushing a disc
@@ -237,6 +260,14 @@ transform readable as maps it can invert:
   affine roles, then `julia`, `julian`, `spherical`, `bubble`,
   `hemisphere`, `disc`, `blob`, and the walk-only `elliptic`, `splits`,
   `cylinder` and `juliascope`.
+- **A Rhai variation with its own inverse** (`fn inverse`;
+  [rhai-planners.md](../archive/projects/rhai-planners.md), Part C): its arms
+  read off its forward map, each named by a draw on a grid of 256
+  (`user_inverse::UserKernel::arms`), which a replay build forces
+  (`bound::force_arms`); one that draws makes the flame the walk's.
+  Its offset replay runs through a forward difference derived from its
+  body (`lang::delta::variation_difference`), kernel 9 of the rows,
+  spliced per flame (`forward_delta::replay_delta_wgsl`).
 - **Blurs**: a `pre_blur` that is its transform's only pre-phase
   variation, and a transform whose one variation ignores its input (a
   free blur).

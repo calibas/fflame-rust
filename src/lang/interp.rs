@@ -13,6 +13,10 @@ use super::check::LOOP_CAP;
 use super::ir::*;
 use super::Dialect;
 
+mod batch;
+#[cfg(test)]
+pub(crate) use batch::count_nodes;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Value {
     Bool(bool),
@@ -31,6 +35,17 @@ impl Value {
             Ty::UInt => Value::UInt(0),
             Ty::Float => Value::Float(0.0),
             Ty::Complex => Value::Complex(C64::ZERO),
+        }
+    }
+
+    /// Zero of this value's type.
+    pub(crate) fn zero_like(self) -> Value {
+        match self {
+            Value::Bool(_) => Value::Bool(false),
+            Value::Int(_) => Value::Int(0),
+            Value::UInt(_) => Value::UInt(0),
+            Value::Float(_) => Value::Float(0.0),
+            Value::Complex(_) => Value::Complex(C64::ZERO),
         }
     }
 
@@ -188,6 +203,24 @@ pub fn globals(p: &Program, params: &ParamValues, env: &Env) -> Vec<f32> {
     out
 }
 
+/// What a variation's call starts from ([`VariationRun::new`]): every
+/// variable and array after `prepare` and `init` ran at `params`, in f64,
+/// and which
+/// of them a call keeps from the last (`init`'s state) rather than starting
+/// afresh. A variable that is neither is zero where a call begins
+/// (`VariationRun::reset_locals`). For the interval evaluator
+/// (`variations::rhai_bound`), which takes `prepare`'s values as numbers.
+pub(crate) fn call_start(p: &Program, params: &ParamValues) -> (Vec<Value>, Vec<Vec<Value>>, Vec<bool>) {
+    let env = Env::at(C64::ZERO, 1);
+    let mut m = Machine::new(p, params);
+    m.flame_rng.set(Some(1));
+    let mut sh = Shared::new(&env);
+    m.exec(&p.global_body, &mut sh);
+    m.exec(&p.init, &mut sh);
+    let state = (0..p.vars.len()).map(|v| !p.vars[v].global && crate::lang::delta::writes_var(&p.init, v)).collect();
+    (m.vars, m.arrays, state)
+}
+
 /// One program's running state.
 struct Machine<'p> {
     prog: &'p Program,
@@ -201,6 +234,9 @@ struct Machine<'p> {
     /// from its place on the first draw, as the GPU's `uf_draw`.
     draw: std::cell::Cell<u32>,
     flame_rng: std::cell::Cell<Option<u32>>,
+    /// Every draw this one raw value (`VariationRun::with_draw`): an arm
+    /// of a many-valued map picked rather than drawn.
+    fixed_draw: std::cell::Cell<Option<u32>>,
 }
 
 /// The PCG output of a state (`shaders/core/rng.wgsl` `rng_next`).
@@ -347,6 +383,13 @@ pub struct VariationRun<'p> {
     /// last call gave (`#{ z, w }`).
     point_w: f64,
     w_out: Option<f64>,
+    /// The variables a call starts afresh ([`Self::reset_locals`]): all
+    /// but `prepare`'s values and `init`'s state.
+    locals: Vec<VarId>,
+    /// Whether its body runs batched, and draws ([`Self::call_batch`]),
+    /// read the first time it is asked; and what its batches reuse.
+    batch_shape: Option<(bool, bool)>,
+    scratch: batch::Scratch,
 }
 
 impl<'p> VariationRun<'p> {
@@ -359,7 +402,16 @@ impl<'p> VariationRun<'p> {
         // `prepare`'s values, at f64, which the body reads as its own.
         m.exec(&p.global_body, &mut sh);
         m.exec(&p.init, &mut sh);
-        VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], point_w: 0.0, w_out: None }
+        let locals = (0..p.vars.len()).filter(|&v| !p.vars[v].global && !crate::lang::delta::writes_var(&p.init, v)).collect();
+        VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], point_w: 0.0, w_out: None, locals, batch_shape: None, scratch: Default::default() }
+    }
+
+    /// Every `rand()` of every call `u`, in [0, 1): the arm of a
+    /// many-valued map (julian's root) picked, not drawn
+    /// (`variations::user_inverse::UserInverse::forward_at`).
+    pub fn with_draw(self, u: f64) -> Self {
+        self.m.fixed_draw.set(Some((u.clamp(0.0, 1.0 - 1e-9) * 4294967296.0) as u32));
+        self
     }
 
     /// Each call given the 4th coordinate `w` (`ctx.w`; the probe's 0).
@@ -385,6 +437,33 @@ impl<'p> VariationRun<'p> {
     pub fn with_color(mut self, c: f64) -> Self {
         self.color = c;
         self
+    }
+
+    /// [`Self::with_draw`] on a run kept between calls.
+    pub fn set_draw(&mut self, u: f64) {
+        self.m.fixed_draw.set(Some((u.clamp(0.0, 1.0 - 1e-9) * 4294967296.0) as u32));
+    }
+
+    /// [`Self::with_color`] on a run kept between calls.
+    pub fn set_color(&mut self, c: f64) {
+        self.color = c;
+    }
+
+    /// Every variable but `prepare`'s values and `init`'s state back to
+    /// zero, as a call's own start has them on the GPU (each a `var`
+    /// zeroed where the function begins): a run kept between calls
+    /// (`user_inverse`'s kernels, rhai-planners D1) then calls as a fresh
+    /// one does, without building one -- half the cost of a call.
+    pub fn reset_locals(&mut self) {
+        let p = self.m.prog;
+        for &v in &self.locals {
+            let var = &p.vars[v];
+            if var.is_array() {
+                self.m.arrays[v].iter_mut().for_each(|x| *x = Value::zero(var.ty));
+            } else {
+                self.m.vars[v] = Value::zero(var.ty);
+            }
+        }
     }
 
     /// The point for `z`, and the colour it wrote if it writes one, given
@@ -496,7 +575,7 @@ impl<'p> PerturbStepper<'p> {
 
     pub(crate) fn step(&self, z: C64, dz: C64, dpixel: C64) -> C64 {
         let env = Env { pixel: self.reference.add(dpixel), ..self.env };
-        let mut m = Machine { prog: self.formula, params: self.params, vars: self.vars.clone(), arrays: self.arrays.clone(), draw: Default::default(), flame_rng: Default::default() };
+        let mut m = Machine { prog: self.formula, params: self.params, vars: self.vars.clone(), arrays: self.arrays.clone(), draw: Default::default(), flame_rng: Default::default(), fixed_draw: Default::default() };
         let mut sh = Shared::new(&env);
         sh.z = z;
         sh.dz = dz;
@@ -544,7 +623,7 @@ impl DerivStepper {
 
     /// One pass from the iterate `z`.
     pub(crate) fn step(&mut self, z: C64) {
-        let mut m = Machine { prog: &self.prog, params: &self.params, vars: std::mem::take(&mut self.vars), arrays: std::mem::take(&mut self.arrays), draw: Default::default(), flame_rng: Default::default() };
+        let mut m = Machine { prog: &self.prog, params: &self.params, vars: std::mem::take(&mut self.vars), arrays: std::mem::take(&mut self.arrays), draw: Default::default(), flame_rng: Default::default(), fixed_draw: Default::default() };
         let mut sh = Shared::new(&self.env);
         sh.z = z;
         m.exec(&self.prog.loop_body, &mut sh);
@@ -850,6 +929,7 @@ impl<'p> Machine<'p> {
             arrays,
             draw: std::cell::Cell::new(0),
             flame_rng: std::cell::Cell::new(None),
+            fixed_draw: std::cell::Cell::new(None),
         }
     }
 
@@ -861,6 +941,9 @@ impl<'p> Machine<'p> {
 
     /// The next raw draw, all 32 bits ([`Predef::DrawU32`]).
     fn next_u32(&self, sh: &Shared) -> u32 {
+        if let Some(v) = self.fixed_draw.get() {
+            return v;
+        }
         if let Some(s) = self.flame_rng.get() {
             self.flame_rng.set(Some(pcg_step(s)));
             return pcg_out(s);
@@ -1014,59 +1097,85 @@ impl<'p> Machine<'p> {
                 let IExprKind::Call(f, x) = &a.kind else { unreachable!() };
                 Value::Float(f.eval_f(self.eval(x, sh).as_f64()))
             }
-            IExprKind::Convert(a) => {
-                let v = self.eval(a, sh);
-                match e.ty {
-                    // Fractint tests the real part alone.
-                    Ty::Bool if self.prog.dialect == Dialect::Fractint => Value::Bool(v.as_f64() != 0.0),
-                    Ty::Bool => Value::Bool(v.as_bool()),
-                    Ty::Int => Value::Int(v.as_int()),
-                    Ty::UInt => Value::UInt(v.as_uint()),
-                    Ty::Float => Value::Float(v.as_f64()),
-                    Ty::Complex => Value::Complex(v.as_c64()),
-                }
-            }
-            IExprKind::MakeComplex(a, b) => Value::Complex(C64::new(self.eval(a, sh).as_f64(), self.eval(b, sh).as_f64())),
-            IExprKind::Unary(UnOp::Neg, a) => match self.eval(a, sh) {
-                Value::Int(i) => Value::Int(i.wrapping_neg()),
-                Value::UInt(u) => Value::UInt(u.wrapping_neg()),
-                Value::Float(f) => Value::Float(-f),
-                Value::Complex(c) => Value::Complex(c.neg()),
-                Value::Bool(b) => Value::Bool(b),
-            },
+            IExprKind::Convert(a) => convert(self.eval(a, sh), e.ty, self.prog.dialect),
+            IExprKind::MakeComplex(a, b) => make_complex(self.eval(a, sh), self.eval(b, sh)),
+            IExprKind::Unary(UnOp::Neg, a) => negate(self.eval(a, sh)),
             IExprKind::Unary(UnOp::Not, a) => Value::Bool(!self.eval(a, sh).as_bool()),
             // A real factor scales (IExpr::is_lifted_real).
             IExprKind::Binary(BinOp::Mul, a, b) if e.ty == Ty::Complex && (a.is_lifted_real() || b.is_lifted_real()) => {
                 let (k, z) = if a.is_lifted_real() { (a, b) } else { (b, a) };
-                Value::Complex(self.eval(z, sh).as_c64().scale(self.eval(k, sh).as_c64().re))
+                scale_by_real(self.eval(z, sh), self.eval(k, sh))
             }
             IExprKind::Binary(op, a, b) => binary(*op, self.eval(a, sh), self.eval(b, sh), e.ty, self.prog.dialect),
-            IExprKind::PowInt(a, n) => match self.eval(a, sh) {
-                Value::Complex(c) => Value::Complex(c.powi(*n)),
-                v => Value::Float(v.as_f64().powi(*n as i32)),
-            },
-            IExprKind::Modulus(a) => match self.eval(a, sh) {
-                Value::Complex(c) => Value::Float(c.norm_sqr()),
-                v => {
-                    let x = v.as_f64();
-                    Value::Float(x * x)
-                }
-            },
+            IExprKind::PowInt(a, n) => pow_int(self.eval(a, sh), *n),
+            IExprKind::Modulus(a) => modulus(self.eval(a, sh)),
             IExprKind::Call(f, a) => call(*f, self.eval(a, sh), e.ty, self.prog.dialect),
-            IExprKind::UserCall(id, a) => {
-                let f = USER_FUNCTIONS[self.params.funcs[*id].min(USER_FUNCTIONS.len() - 1)];
-                Value::Complex(f.eval_c(self.eval(a, sh).as_c64()))
-            }
+            IExprKind::UserCall(id, a) => user_call(self.params.funcs[*id], self.eval(a, sh)),
             IExprKind::FuncChoice(id) => Value::Int(self.params.funcs[*id] as i32),
             IExprKind::UserDiff(id, a, d) => Value::Complex(user_diff(self.params.funcs[*id], self.eval(a, sh).as_c64(), self.eval(d, sh).as_c64())),
-            IExprKind::UserDeriv(id, a) => {
-                let f = USER_FUNCTIONS[self.params.funcs[*id].min(USER_FUNCTIONS.len() - 1)];
-                Value::Complex(f.deriv_c(self.eval(a, sh).as_c64()))
-            }
+            IExprKind::UserDeriv(id, a) => user_deriv(self.params.funcs[*id], self.eval(a, sh)),
             IExprKind::UserJac(id, a, b) => Value::Complex(user_jac(self.params.funcs[*id], self.eval(a, sh).as_c64(), *b)),
             IExprKind::Elem(v, index) => self.arrays[*v][self.element(*v, index, sh)],
         }
     }
+}
+
+/// A conversion to `ty` ([`IExprKind::Convert`]): the scalar run's and
+/// the batch's (`batch`), one function so the two cannot part.
+fn convert(v: Value, ty: Ty, dialect: Dialect) -> Value {
+    match ty {
+        // Fractint tests the real part alone.
+        Ty::Bool if dialect == Dialect::Fractint => Value::Bool(v.as_f64() != 0.0),
+        Ty::Bool => Value::Bool(v.as_bool()),
+        Ty::Int => Value::Int(v.as_int()),
+        Ty::UInt => Value::UInt(v.as_uint()),
+        Ty::Float => Value::Float(v.as_f64()),
+        Ty::Complex => Value::Complex(v.as_c64()),
+    }
+}
+
+fn make_complex(re: Value, im: Value) -> Value {
+    Value::Complex(C64::new(re.as_f64(), im.as_f64()))
+}
+
+fn negate(v: Value) -> Value {
+    match v {
+        Value::Int(i) => Value::Int(i.wrapping_neg()),
+        Value::UInt(u) => Value::UInt(u.wrapping_neg()),
+        Value::Float(f) => Value::Float(-f),
+        Value::Complex(c) => Value::Complex(c.neg()),
+        Value::Bool(b) => Value::Bool(b),
+    }
+}
+
+/// A complex scaled by a real factor (a lifted real's product).
+fn scale_by_real(z: Value, k: Value) -> Value {
+    Value::Complex(z.as_c64().scale(k.as_c64().re))
+}
+
+fn pow_int(v: Value, n: i64) -> Value {
+    match v {
+        Value::Complex(c) => Value::Complex(c.powi(n)),
+        v => Value::Float(v.as_f64().powi(n as i32)),
+    }
+}
+
+fn modulus(v: Value) -> Value {
+    match v {
+        Value::Complex(c) => Value::Float(c.norm_sqr()),
+        v => {
+            let x = v.as_f64();
+            Value::Float(x * x)
+        }
+    }
+}
+
+fn user_call(choice: usize, v: Value) -> Value {
+    Value::Complex(USER_FUNCTIONS[choice.min(USER_FUNCTIONS.len() - 1)].eval_c(v.as_c64()))
+}
+
+fn user_deriv(choice: usize, v: Value) -> Value {
+    Value::Complex(USER_FUNCTIONS[choice.min(USER_FUNCTIONS.len() - 1)].deriv_c(v.as_c64()))
 }
 
 fn predef(p: Predef, sh: &Shared) -> Value {

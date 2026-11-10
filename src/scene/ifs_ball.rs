@@ -38,6 +38,8 @@ use crate::scene::ifs_analysis::{affine_role, Affine2, AffineRole, Space};
 use crate::scene::transforms::Transform;
 use crate::variations::bound::{self, Ball};
 use crate::variations::{VariationPhase, VariationRegistry};
+use crate::variations::interval::Refusal;
+use crate::variations::inverse::ParamFn;
 
 /// Why a transform cannot push a disc.
 #[derive(Debug, Clone, PartialEq)]
@@ -347,69 +349,86 @@ fn one(
         }
     }
 
-    // Otherwise derive one from the variation's shipped WGSL
-    // (`docs/projects/deep-zoom/forward-bounds.md`).
+    // Otherwise derive one (`docs/projects/deep-zoom/forward-bounds.md`).
     //
     // **The weight is applied here, not there.** A derived bound is
-    // of the body alone -- `V(p)` -- because that is what the WGSL
+    // of the body alone -- `V(p)` -- because that is what the body
     // computes. The dispatcher multiplies a `Normal`-phase
     // variation's result by the weight before summing it, so the
     // caller has to; a `Pre` or `Post` one is applied with no weight
     // of its own, and the few that want theirs read it inside the
     // body where the evaluator already resolves it.
+    match derived(name, &pf, w, b, arm, registry) {
+        Ok(out) => Ok(match chain {
+            Chain::Sum => Ball::new([out.c[0] * w, out.c[1] * w], out.r * w.abs()),
+            Chain::Replace => out,
+        }),
+        // No code to derive from: a built-in with no twin, on the web; a
+        // Rhai source that does not compile.
+        Err(Refusal::NoBody) => Err(NoBall::Unbounded(name.to_string(), Some("no code to work its bound out from".to_string()))),
+        Err(why) => Err(NoBall::Unbounded(name.to_string(), Some(why.to_string()))),
+    }
+}
+
+/// **A variation's derived bound** over `b`, of its body alone: by
+/// interval arithmetic over its code (docs/projects/rhai-one-form.md,
+/// route B).
+///
+/// - On the desktop a built-in's from its shipped WGSL (`derive`, naga),
+///   as before.
+/// - A Rhai variation's from its own code (`rhai_bound`) on every
+///   platform; on the desktop its compiled WGSL is the fallback where
+///   that refuses.
+/// - On the web, which has no WGSL front end, a built-in's from its
+///   twin's code: the twin computes the built-in's function.
+///
+/// **Retry once on a finer grid before giving up.** Interval arithmetic's
+/// error grows with the width of its input, so a refusal can be the
+/// body's real behaviour or just the dependency problem -- `elliptic`
+/// divides by half the sum of the distances to (±1, 0), which is at least
+/// 1 by the ellipse property and which intervals read as possibly zero
+/// because they cannot see the two square roots are linked. Splitting the
+/// input tells the two apart: `elliptic` comes back at k=3, and `curl`
+/// and `rays`, whose poles are real, refuse at every k. Only on refusal,
+/// so the common path pays nothing, and once, because a finer grid than
+/// this buys almost nothing (k=8 recovered three more bodies of 647 for
+/// sixty-four times the work).
+/// Tests: every variation takes the web's route on the desktop -- a
+/// built-in its twin's code, no naga at all (`the_web_route_plans_the_
+/// corpus_as_the_desktop`). Global, so a test that sets it runs alone.
+#[cfg(test)]
+pub(crate) static WEB_ROUTE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn derived(name: &str, pf: ParamFn, w: f64, b: Ball, arm: Option<u32>, registry: &VariationRegistry) -> Result<Ball, Refusal> {
+    use crate::variations::rhai_bound;
+    let branch = arm.map(|k| {
+        let n = crate::variations::bound::arms_for(name).map_or(1, |d| (d.arms)(pf)).max(1);
+        (k % n, n)
+    });
+    let tree = || match branch {
+        Some(br) => rhai_bound::derive_branch(registry, name, pf, w, b, br),
+        None => rhai_bound::derive(registry, name, pf, w, b).or_else(|_| rhai_bound::derive_subdivided(registry, name, pf, w, b, 3)),
+    };
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // **Retry once on a finer grid before giving up.**
-        //
-        // Interval arithmetic's error grows with the width of its
-        // input, so a refusal can be the body's real behaviour or
-        // just the dependency problem -- `elliptic` divides by half
-        // the sum of the distances to (±1, 0), which is at least 1 by
-        // the ellipse property and which intervals read as possibly
-        // zero because they cannot see the two square roots are
-        // linked. Splitting the input tells the two apart: `elliptic`
-        // comes back at k=3, and `curl` and `rays`, whose poles are
-        // real, refuse at every k.
-        //
-        // Only on refusal, so the common path pays nothing, and once,
-        // because the measurement says a finer grid than this buys
-        // almost nothing (k=8 recovered three more bodies of 647 for
-        // sixty-four times the work).
-        let derived = match arm {
-            Some(k) => {
-                let n = crate::variations::bound::arms_for(name)
-                    .map_or(1, |d| (d.arms)(&pf))
-                    .max(1);
-                crate::variations::derive::derive_branch(name, &pf, w, b, (k % n, n))
-            }
-            None => crate::variations::derive::derive(name, &pf, w, b)
-                .or_else(|_| crate::variations::derive::derive_subdivided(name, &pf, w, b, 3)),
+        use crate::variations::derive;
+        let naga = || match branch {
+            Some(br) => derive::derive_branch(name, pf, w, b, br),
+            None => derive::derive(name, pf, w, b).or_else(|_| derive::derive_subdivided(name, pf, w, b, 3)),
         };
-        return match derived {
-            Ok(out) => Ok(match chain {
-                Chain::Sum => Ball::new(
-                    [out.c[0] * w, out.c[1] * w],
-                    out.r * w.abs(),
-                ),
-                Chain::Replace => out,
-            }),
-            // A variation of the user's has no shipped body to derive
-            // from (`derive::body_for`): say so, not "no 2D body".
-            Err(crate::variations::derive::Refusal::NoBody) if crate::scripted::is_key(name) => {
-                Err(NoBall::Unbounded(name.to_string(), Some("bounds are worked out for built-in variations only, so far".to_string())))
-            }
-            Err(why) => Err(NoBall::Unbounded(name.to_string(), Some(why.to_string()))),
-        };
+        #[cfg(test)]
+        if WEB_ROUTE.load(std::sync::atomic::Ordering::Relaxed) {
+            return tree();
+        }
+        let builtin = registry.get(crate::variations::twins::planner_name(name)).is_some_and(|i| i.provenance.is_builtin());
+        if builtin {
+            naga()
+        } else {
+            tree().or_else(|why| naga().map_err(|_| why))
+        }
     }
-    // The web build has no WGSL front end to parse with, so the hand
-    // bounds are all it has -- and there a decline really is the end
-    // of the search. See `variations::mod`.
     #[cfg(target_arch = "wasm32")]
-    Err(if bound::for_name(name).is_some() {
-        NoBall::Declines(name.to_string())
-    } else {
-        NoBall::Unbounded(name.to_string(), None)
-    })
+    tree()
 }
 
 #[cfg(test)]

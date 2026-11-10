@@ -454,13 +454,28 @@ variation's contribution lands (weight included). It must
 tight silently drops part of the picture.
 - `BOUNDS` holds hand-derived bounds — `spherical`, `bubble`, `julian`,
   `pre_blur`, `blur` — each with its derivation beside it.
-- Anything else is derived from the shipped WGSL by
-  [derive.rs](../../src/variations/derive.rs): interval arithmetic over
-  the naga IR, refusing any construct it does not model. Desktop only;
-  the web build has no WGSL front end and uses the hand bounds alone.
+- Anything else is derived by interval arithmetic
+  ([interval.rs](../../src/variations/interval.rs)), refusing any
+  construct it does not model: a built-in's from its shipped WGSL over
+  naga IR on the desktop ([derive.rs](../../src/variations/derive.rs));
+  a Rhai variation's from its own code on every platform
+  ([rhai_bound.rs](../../src/variations/rhai_bound.rs)); and on the web,
+  which has no WGSL front end, a built-in's from its twin's code.
 - `ARMED` lists the variations whose random draw picks one of finitely
   many arms (`julian`, `juliascope`). The planner enumerates the arms,
   and a replay build rewrites the draw to read a forced arm.
+
+**A Rhai variation's own** ([rhai-planners.md](../archive/projects/rhai-planners.md)):
+`derive` reads a registered Rhai variation's compiled body as a
+built-in's, so it has a derived bound wherever its built-in twin would
+(472 of the 472 twins whose built-in derives); and one may declare its
+inverse (`fn inverse`, *Variations written in Rhai*), which the analysis
+takes as `Kernel::User` / `Kernel3::User3` -- the Flame Attractor in the
+plane, summed with an affine, and as a solid. **A built-in with no
+`InverseDef` takes its twin's** (`user_inverse::of`): writing a twin's
+inverse in `scripts/twin_inverses.py` gives the built-in the Flame
+Attractor (swirl, horseshoe, polar, exponential, exp, log, fisheye,
+eyefish, sinusoidal, hyperbolic so far).
 
 See [forward-bounds.md](../projects/deep-zoom/forward-bounds.md) and
 [ifs-general.md](../projects/deep-zoom/ifs-general.md).
@@ -560,6 +575,54 @@ function takes the point, and the ids when it has parameters (as
   `ctx.weight` without parameters declares `NeedsTransform` for the
   ids. The function takes them in `variation_call`'s order. Gate:
   `the_hooked_twins_render_as_the_builtins` (`blur`, `macmillan`).
+- **Its own inverse** (`variations::user_inverse`; [rhai-planners.md](../archive/projects/rhai-planners.md),
+  Part B), for the Flame Attractor: `fn inverse(z, p, branch)` gives the
+  preimage of `z` under `variation` on branch `0 .. INFO.inverse_branches`
+  (1 by default, at most 16), or `no_preimage()` where there is none;
+  `fn image_gap(z, p)` a lower bound on how far `z` lies outside the
+  image (0 or less inside), where the image is not the plane, which the
+  walk scores a point off it by as it does the built-ins' unit discs;
+  `fn inverse3(v, p)` the solid's, one branch. Each is lowered as a
+  transformation (`rhai::inverse_transformation`, its `branch` read from
+  the colour coordinate the callers set) and **checked where it is
+  used**: forward then inverse at 400 points over the disc (ball) of
+  radius 4 must give each point back on some branch to a relative 1e-6,
+  one in fifty spared, and the gap must be a lower bound near the image
+  -- else the analysis refuses the transform, naming the worst point
+  (`NotAffine::Inverse`). A many-valued forward map (`rand()` picking a
+  root) has its arms read off it -- every draw of a call set to each step
+  of a grid of 256, a run of steps with the same images an arm, its share
+  bisected (`UserKernel::arms`; rhai-planners C1). It may reach for
+  nothing only a flame has (a random number in the inverse, state, the
+  weight, a texture). In mode D its WGSL is spliced per variation
+  (*ESCAPE.md*, Mode D). **Focused Rendering's inverse walk** takes it
+  too (C2): a flame with one that draws is the walk's, a word names an
+  arm by its grid draw, and a replay build wraps the body's draws to
+  read it (`bound::force_arms`). Past f32 the replay runs in offsets
+  through the variation's **forward difference derived from its body**
+  (C3, `lang::delta::variation_difference`: the body as one pass of an
+  escape loop, whose derived equations are `F(Z + d) − F(Z)`), on the
+  CPU in the interpreter and on the GPU spliced behind the hand forms
+  (`forward_delta::replay_delta_wgsl`); a body that derives none replays
+  absolute. Grand-julian with its julians Rhai twins renders the
+  built-in's density block by block to 1e6. The walk's CPU evaluator
+  replays a word over its points at once, map by map, and runs a user
+  kernel's forward map as one pass of the interpreter for all of them
+  (`VariationRun::call_batch`, E4: each node dispatched once, values the
+  same in every lane kept single, branches under masks, every lane the
+  scalar call's to the bit), 5x the scalar replay; the jobs a node's
+  children make replay the node's word as one batch, and the walk's
+  other per-point calls of a user kernel -- its arms, inverses,
+  Jacobians, rescues -- run batched too (E4b): grand-julian's twin plans
+  within about 20% of the built-in's time, where it took two to three
+  times. The twins of the eleven planar kernels carry one, and of
+  julia3D and julia3Dz a 3D one (`scripts/twin_inverses.py`, which the
+  translator appends): an edited twin keeps its inverse while it still
+  undoes the map. Gates: `the_twins_inverses_undo_their_maps`;
+  `a_twins_own_inverse_renders_the_flame_attractor`,
+  `a_builtin_borrows_its_twins_inverse`,
+  `a_twins_own_3d_inverse_renders_the_solid` (GPU, against the
+  reference walk).
 - **3D**: `fn variation3(v, p)` is the 3D body, its point a vector; alone
   it makes the variation `only_3d` (no 2D body, kept out of the lens
   menu). Either body takes the hooks either needs, and a 3D body
@@ -727,7 +790,7 @@ function takes the point, and the ids when it has parameters (as
     its table, which naga copies to a local at every read of it indexed
     at run time (`spill_to_internal_variable`), the built-in paying the
     copy once a read too. Both now keep their vertices in derived slots
-    (docs/projects/variation-param-storage.md): the built-in 2-10x
+    (docs/archive/projects/variation-param-storage.md): the built-in 2-10x
     faster, and the twin, translated from it, 1.00-1.04 of it -- menger's
     the same, in its 4-gap modes.
   - **Renamed parameters** (the user, 2026-11-06: no Rhai or WGSL

@@ -73,11 +73,26 @@
 //! reference's arm from the same state the reference's, and each
 //! deviation is their plain difference ([`Deriver::iterate_branch`]).
 //!
-//! What has no such form -- an inverse function, a power of a varying
-//! exponent, a branch in the init on the pixel, a loop inside the
-//! formula's loop or in its init, an int or bool carried or set in a
-//! branch on the iterate -- leaves the formula without equations, on the
-//! direct path as before.
+//! **Steps, inverse functions of a real, and ints the pixel decides**
+//! (docs/archive/projects/rhai-planners.md, E2, for the variations' difference
+//! forms): `round`, `floor`, `ceil` and `trunc` deviate by the plain
+//! difference of their steps, zero but where A and A + d part at one;
+//! a real's `asin`, `acos` and `atan` as the angle of a point, `asin a =
+//! arg(sqrt(1 - a^2) + i a)`, over sqrt's form and arg's. An int or bool a
+//! deviation decides -- a sector's index rounded from an angle, a test
+//! kept in a variable, one set under a test that varies -- is carried as
+//! two values, the reference's and the pixel's from its full values, as a
+//! branch's tests are ([`Deriver::discrete`]): a float made of one
+//! deviates by their difference, a branch on one is a branch on the
+//! iterate, and a mismatch takes the pixel's value from the pixel's arm.
+//! A value the same at every pixel set under a test that varies is not
+//! one ([`uniform_vars`]).
+//!
+//! What has no such form -- an inverse function of a complex, a power of
+//! a varying exponent, a branch in the init on the pixel, a loop inside
+//! the formula's loop or in its init, an int or bool carried from pass to
+//! pass -- leaves the formula without equations, on the direct path as
+//! before.
 //! Unless it stands in an arm (or an init's case) a parameter's choice
 //! picks: then the equations are derived without it, and hold when that
 //! arm is not taken, which the derived `perturb` setting says. In a
@@ -215,6 +230,203 @@ pub fn with_derived_equations(p: &Program) -> Option<Program> {
     Some(out)
 }
 
+/// **A variation's forward difference** (docs/archive/projects/rhai-planners.md,
+/// C3): `F(Z + d) - F(Z)` of its transform section, by the rules above, as
+/// a transform section of its own -- the reference point `Z` its input
+/// point, the deviation `d` its `ctx.accum`, the draw its colour channel
+/// (a forced arm's, the same at the reference and the sample), the new
+/// deviation the point it gives. So the interpreter runs it for a
+/// reference orbit, and the variation lowering compiles it for a replay,
+/// as either runs any variation.
+///
+/// The way in is the escape loop's: the body is one pass of `z = F(z)`,
+/// its input point `#z` and its result written to `z`, whose derived loop
+/// equations step `#dz` to `F(Z + dz) - F(Z)` from `#z = Z`. `None` where
+/// they do not derive -- a function with no form, an early return, a value
+/// carried -- and the replay keeps such a variation's steps absolute.
+pub fn variation_difference(p: &Program) -> Option<Program> {
+    if p.kind != super::EntryKind::Transform || p.transform.is_empty() {
+        return None;
+    }
+    let var = |name: &str, ty: Ty, global: bool| Var { name: name.into(), ty, span: Default::default(), stored_real: false, global, perturb: false, dims: Vec::new(), size: Vec::new() };
+    // One channel in: a forward map's draw, or an inverse's branch (its
+    // colour, D3) -- the same at the reference and the sample. A body
+    // reading both has none to give the result.
+    let (draws, colours) = (reads_predef(&p.transform, Predef::Draw), reads_predef(&p.transform, Predef::VarColor));
+    if draws && colours {
+        return None;
+    }
+    let mut q = p.clone();
+    // The channel: a uniform while it derives, as the parameters are.
+    q.vars.push(var("forced_draw", Ty::Float, true));
+    let draw = q.vars.len() - 1;
+    let as_loop = |e: &IExpr| match e.kind {
+        IExprKind::Predef(Predef::Pixel) => Some(mk(IExprKind::Predef(Predef::Z), Ty::Complex)),
+        IExprKind::Predef(Predef::Draw | Predef::VarColor) => Some(mk(IExprKind::Var(draw), Ty::Float)),
+        _ => None,
+    };
+    // Its early returns as branches (`no_preimage()` past an image's edge).
+    q.loop_body = map_stmts(&without_returns(&p.transform)?, &as_loop, &|pl: &Place| if *pl == Place::Pixel { Place::Z } else { pl.clone() });
+    q.transform.clear();
+    q.init.clear();
+    q.bailout = None;
+    let mut out = with_derived_equations(&q)?;
+    if !out.carried.is_empty() || out.perturb_when.is_some() {
+        return None;
+    }
+    out.vars.push(var("dif_z", Ty::Complex, false));
+    out.vars.push(var("dif_d", Ty::Complex, false));
+    out.vars.push(var("dif_out", Ty::Complex, false));
+    let (z, d, dev) = (out.vars.len() - 3, out.vars.len() - 2, out.vars.len() - 1);
+    let as_transform = |e: &IExpr| match e.kind {
+        IExprKind::Predef(Predef::Z) => Some(mk(IExprKind::Var(z), Ty::Complex)),
+        IExprKind::Predef(Predef::DZ) => Some(mk(IExprKind::Var(d), Ty::Complex)),
+        IExprKind::Var(v) if v == draw => Some(mk(IExprKind::Predef(Predef::VarColor), Ty::Float)),
+        _ => None,
+    };
+    let mut body = vec![
+        IStmt::Assign(Place::Var(z), mk(IExprKind::Predef(Predef::Pixel), Ty::Complex)),
+        IStmt::Assign(Place::Var(d), mk(IExprKind::Predef(Predef::Accum), Ty::Complex)),
+        IStmt::Assign(Place::Var(dev), zero_of(Ty::Complex)),
+    ];
+    body.extend(map_stmts(&out.perturb_loop, &as_transform, &|pl: &Place| if *pl == Place::DZ { Place::Var(dev) } else { pl.clone() }));
+    body.push(IStmt::Assign(Place::Pixel, mk(IExprKind::Var(dev), Ty::Complex)));
+    out.transform = body;
+    out.loop_body.clear();
+    out.perturb_loop.clear();
+    out.perturb_init.clear();
+    for v in &mut out.vars {
+        v.perturb = false;
+    }
+    out.vars[draw].global = false;
+    Some(out)
+}
+
+/// `stmts` with every `return` taken out (rhai-planners D3): an `if` with
+/// a return in an arm takes the statements after it into every arm, where
+/// a return then drops what follows it -- so `if c { a; return } b` is
+/// `if c { a } else { b }`, which the derivation takes. A scope's return
+/// leaves the scope alone, as the language has it. `None` for a return
+/// inside a loop.
+fn without_returns(stmts: &[IStmt]) -> Option<Vec<IStmt>> {
+    fn has_return(stmts: &[IStmt]) -> bool {
+        stmts.iter().any(|s| match s {
+            IStmt::Return => true,
+            IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| has_return(b)) || has_return(otherwise),
+            IStmt::While { body, .. } | IStmt::Repeat { body, .. } => has_return(body),
+            // A scope's return is its own.
+            _ => false,
+        })
+    }
+    let mut out = Vec::new();
+    for (i, s) in stmts.iter().enumerate() {
+        match s {
+            IStmt::Return => return Some(out),
+            IStmt::Scope(body) => out.extend(without_returns(body)?),
+            IStmt::While { body, .. } | IStmt::Repeat { body, .. } if has_return(body) => return None,
+            IStmt::If { arms, otherwise } if has_return(std::slice::from_ref(s)) => {
+                let rest = &stmts[i + 1..];
+                let with_rest = |b: &[IStmt]| without_returns(&[b, rest].concat());
+                let arms = arms.iter().map(|(c, b)| Some((c.clone(), with_rest(b)?))).collect::<Option<Vec<_>>>()?;
+                out.push(IStmt::If { arms, otherwise: with_rest(otherwise)? });
+                return Some(out);
+            }
+            _ => out.push(s.clone()),
+        }
+    }
+    Some(out)
+}
+
+/// Whether `stmts` read `which` anywhere.
+fn reads_predef(stmts: &[IStmt], which: Predef) -> bool {
+    let found = std::cell::Cell::new(false);
+    let _ = map_stmts(
+        stmts,
+        &|x: &IExpr| {
+            if matches!(&x.kind, IExprKind::Predef(p) if *p == which) {
+                found.set(true);
+            }
+            None
+        },
+        &|pl: &Place| pl.clone(),
+    );
+    found.get()
+}
+
+/// A variation's transform section as one pass of a formula's loop, for a
+/// run in big floats (`lang::bigeval`; rhai-planners D3): its point in
+/// `#pixel` as ever, its result written to `z`, its colour channel -- an
+/// inverse's branch -- the constant `color`.
+pub fn one_pass(p: &Program, color: f64) -> Program {
+    let mut q = p.clone();
+    let as_pass = |e: &IExpr| matches!(e.kind, IExprKind::Predef(Predef::VarColor)).then(|| mk(IExprKind::Float(color), Ty::Float));
+    q.loop_body = map_stmts(&p.transform, &as_pass, &|pl: &Place| if *pl == Place::Pixel { Place::Z } else { pl.clone() });
+    q.transform.clear();
+    q.bailout = None;
+    q
+}
+
+/// A variation whose draws read its colour channel instead (rhai-planners
+/// D2): every `rand()` the value a caller passes there, as a forced arm
+/// is -- mode D's Newton steps on a summed kernel's forward map along an
+/// arm, and the shader takes no draws. `None` for a variation that reads
+/// its colour already, whose channel is taken.
+pub fn draw_as_color(p: &Program) -> Option<Program> {
+    if reads_predef(&p.transform, Predef::VarColor) {
+        return None;
+    }
+    let mut q = p.clone();
+    let as_color = |e: &IExpr| matches!(e.kind, IExprKind::Predef(Predef::Draw)).then(|| mk(IExprKind::Predef(Predef::VarColor), Ty::Float));
+    q.transform = map_stmts(&p.transform, &as_color, &|pl: &Place| pl.clone());
+    Some(q)
+}
+
+/// `stmts` with every expression `f` rewrites rewritten (where it answers,
+/// whole) and every place written mapped by `place`.
+fn map_stmts(stmts: &[IStmt], f: &dyn Fn(&IExpr) -> Option<IExpr>, place: &dyn Fn(&Place) -> Place) -> Vec<IStmt> {
+    let s = |body: &[IStmt]| map_stmts(body, f, place);
+    let e = |x: &IExpr| map_expr(x, f);
+    stmts
+        .iter()
+        .map(|st| match st {
+            IStmt::Assign(p, x) => IStmt::Assign(place(p), e(x)),
+            IStmt::SetElem { var, index, value } => IStmt::SetElem { var: *var, index: e(index), value: e(value) },
+            IStmt::If { arms, otherwise } => IStmt::If { arms: arms.iter().map(|(c, b)| (e(c), s(b))).collect(), otherwise: s(otherwise) },
+            IStmt::While { cond, body } => IStmt::While { cond: e(cond), body: s(body) },
+            IStmt::Repeat { body, cond } => IStmt::Repeat { body: s(body), cond: e(cond) },
+            IStmt::Map { call, input, out } => IStmt::Map { call: *call, input: Box::new([e(&input[0]), e(&input[1]), e(&input[2])]), out: *out },
+            IStmt::Host(h, args) => IStmt::Host(*h, args.iter().map(e).collect()),
+            IStmt::Scope(body) => IStmt::Scope(s(body)),
+            IStmt::Break | IStmt::Continue | IStmt::Return => st.clone(),
+        })
+        .collect()
+}
+
+/// `x` with every subexpression `f` rewrites rewritten.
+fn map_expr(x: &IExpr, f: &dyn Fn(&IExpr) -> Option<IExpr>) -> IExpr {
+    if let Some(y) = f(x) {
+        return y;
+    }
+    let b = |a: &IExpr| Box::new(map_expr(a, f));
+    let kind = match &x.kind {
+        IExprKind::Elem(v, a) => IExprKind::Elem(*v, b(a)),
+        IExprKind::Convert(a) => IExprKind::Convert(b(a)),
+        IExprKind::Unary(o, a) => IExprKind::Unary(*o, b(a)),
+        IExprKind::PowInt(a, n) => IExprKind::PowInt(b(a), *n),
+        IExprKind::Modulus(a) => IExprKind::Modulus(b(a)),
+        IExprKind::Call(g, a) => IExprKind::Call(*g, b(a)),
+        IExprKind::UserCall(g, a) => IExprKind::UserCall(*g, b(a)),
+        IExprKind::UserDeriv(g, a) => IExprKind::UserDeriv(*g, b(a)),
+        IExprKind::UserJac(g, a, t) => IExprKind::UserJac(*g, b(a), *t),
+        IExprKind::MakeComplex(a, c) => IExprKind::MakeComplex(b(a), b(c)),
+        IExprKind::Binary(o, a, c) => IExprKind::Binary(*o, b(a), b(c)),
+        IExprKind::UserDiff(g, a, c) => IExprKind::UserDiff(*g, b(a), b(c)),
+        IExprKind::Host(h, args) => IExprKind::Host(*h, args.iter().map(|a| map_expr(a, f)).collect()),
+        k => k.clone(),
+    };
+    IExpr { kind, ty: x.ty }
+}
+
 fn stmt_reads_foreign(s: &IStmt, p: &Program) -> bool {
     fn e(x: &IExpr, p: &Program) -> bool {
         match &x.kind {
@@ -323,6 +535,13 @@ struct Deriver<'p> {
     /// The loop's float and complex variables that hold the same value
     /// at every pixel ([`uniform_vars`]): kept once, as the int ones.
     uniform_floats: Vec<bool>,
+    /// The variables standing for an int or bool temporary a deviation
+    /// decides ([`Deriver::discrete`]): its value at the reference and
+    /// at the pixel.
+    discretes: Vec<Option<(VarId, VarId)>>,
+    /// The loop's variables set under a test the pixel decides
+    /// ([`uniform_vars`]): an int or bool among them is two values.
+    set_under_test: Vec<bool>,
     /// The tests of the arms (and the init's case) the statement being
     /// derived stands in.
     path: Vec<IExpr>,
@@ -364,22 +583,38 @@ fn and(a: Option<IExpr>, b: IExpr) -> IExpr {
 /// at zero then). Their deviation is zero, so they take none (an
 /// exponent read from one, `let k = p.power; z ** k`, is the same for
 /// every pixel, as `z ** p.power`'s).
-fn uniform_vars(p: &Program) -> Vec<bool> {
-    fn assigns<'a>(stmts: &'a [IStmt], out: &mut Vec<(VarId, &'a IExpr)>) {
+///
+/// The loop's ints and bools are read the same way, so a float made of
+/// one the same everywhere is too (juliascope's `dist / to_float(power)`,
+/// an exponent). And a value set in the loop under a test that is not
+/// the same at every pixel is not either, whatever it is set to: a
+/// constant after an early return, which the rewrite takes into the
+/// arm, or a parameter an `if` expression over the point picks
+/// (rhai-planners E2). The variable is then a pair, which a branch on
+/// the iterate fixes where the reference and the pixel part. Each
+/// variable the loop sets under such a test is the second list: an int
+/// or bool among them is two values ([`Deriver::discrete`]) for the same
+/// reason.
+fn uniform_vars(p: &Program) -> (Vec<bool>, Vec<bool>) {
+    fn assigns<'a>(stmts: &'a [IStmt], under: &[&'a IExpr], track: bool, out: &mut Vec<(VarId, &'a IExpr, Vec<&'a IExpr>)>) {
         for s in stmts {
             match s {
-                IStmt::Scope(body) => assigns(body, out),
+                IStmt::Scope(body) => assigns(body, under, track, out),
                 IStmt::Host(..) => {}
                 IStmt::Break | IStmt::Continue | IStmt::Return => {}
-                IStmt::Assign(Place::Var(v), e) => out.push((*v, e)),
+                IStmt::Assign(Place::Var(v), e) => out.push((*v, e, under.to_vec())),
                 IStmt::Assign(..) | IStmt::SetElem { .. } | IStmt::Map { .. } => {}
                 IStmt::If { arms, otherwise } => {
-                    for (_, b) in arms {
-                        assigns(b, out);
+                    let mut tests = under.to_vec();
+                    if track {
+                        tests.extend(arms.iter().map(|(c, _)| c));
                     }
-                    assigns(otherwise, out);
+                    for (_, b) in arms {
+                        assigns(b, &tests, track, out);
+                    }
+                    assigns(otherwise, &tests, track, out);
                 }
-                IStmt::While { body, .. } | IStmt::Repeat { body, .. } => assigns(body, out),
+                IStmt::While { body, .. } | IStmt::Repeat { body, .. } => assigns(body, under, track, out),
             }
         }
     }
@@ -396,20 +631,29 @@ fn uniform_vars(p: &Program) -> Vec<bool> {
             _ => per_image(e),
         }
     }
-    let mut uniform: Vec<bool> = (0..p.vars.len()).map(|v| matches!(p.vars[v].ty, Ty::Float | Ty::Complex) && !p.vars[v].global && writes_var(&p.loop_body, v)).collect();
+    let mut uniform: Vec<bool> =
+        (0..p.vars.len()).map(|v| matches!(p.vars[v].ty, Ty::Float | Ty::Complex | Ty::Int | Ty::UInt | Ty::Bool) && !p.vars[v].global && writes_var(&p.loop_body, v)).collect();
     let mut all = Vec::new();
-    assigns(&p.init, &mut all);
-    assigns(&p.loop_body, &mut all);
+    assigns(&p.init, &[], false, &mut all);
+    assigns(&p.loop_body, &[], true, &mut all);
     loop {
         let mut changed = false;
-        for &(v, e) in &all {
-            if uniform[v] && !uniformly(e, p, &uniform) {
+        for (v, e, under) in &all {
+            let v = *v;
+            if uniform[v] && (!uniformly(e, p, &uniform) || under.iter().any(|c| !uniformly(c, p, &uniform))) {
                 uniform[v] = false;
                 changed = true;
             }
         }
         if !changed {
-            return uniform;
+            // And which the loop sets under such a test.
+            let mut set_under_test = vec![false; p.vars.len()];
+            for (v, _, under) in &all {
+                if under.iter().any(|c| !uniformly(c, p, &uniform)) {
+                    set_under_test[*v] = true;
+                }
+            }
+            return (uniform, set_under_test);
         }
     }
 }
@@ -885,6 +1129,37 @@ impl<'p> Deriver<'p> {
                 )
             }
             Builtin::Abs if ty == Ty::Float => bin(BinOp::DiffAbs, ra, x),
+            // A step's deviation is the plain difference of its steps
+            // (rhai-planners E2): zero but where A and A + d part at one,
+            // whole there, nothing to cancel -- a branch on the iterate's
+            // reading, of a value.
+            Builtin::Round | Builtin::Floor | Builtin::Ceil | Builtin::Trunc if ty == a_ty => {
+                bin(BinOp::Sub, call(f, bin(BinOp::Add, ra.clone(), x), ty), call(f, ra, ty))
+            }
+            // The inverse sine, cosine and tangent of a real, as the angle
+            // of a point on the unit circle or the line re = 1: asin a =
+            // arg(sqrt(1 - a^2) + i a), acos a = arg(a + i sqrt(1 - a^2)),
+            // atan a = arg(1 + i a) -- over sqrt's form and arg's, guards
+            // and cut alike (E2). `1 - a^2` as `(1 - a)(1 + a)`, its
+            // deviation `-x (2A + x)`.
+            Builtin::Asin | Builtin::Acos | Builtin::Atan if ty == Ty::Float && a_ty == Ty::Float => {
+                let one = || konst(1.0, Ty::Float);
+                let point = |re: IExpr, im: IExpr| mk(IExprKind::MakeComplex(Box::new(re), Box::new(im)), Ty::Complex);
+                let (at, by) = if f == Builtin::Atan {
+                    (point(one(), ra), point(konst(0.0, Ty::Float), x))
+                } else {
+                    let t = bin(BinOp::Mul, bin(BinOp::Sub, one(), ra.clone()), bin(BinOp::Add, one(), ra.clone()));
+                    let dt = neg(bin(BinOp::Mul, x.clone(), bin(BinOp::Add, bin(BinOp::Mul, konst(2.0, Ty::Float), ra.clone()), x.clone())));
+                    let ds = self.call_deviation(Builtin::Sqrt, t.clone(), dt, Ty::Float, Ty::Float)?;
+                    let s = call(Builtin::Sqrt, t, Ty::Float);
+                    if f == Builtin::Asin {
+                        (point(s, ra), point(ds, x))
+                    } else {
+                        (point(ra, s), point(x, ds))
+                    }
+                };
+                self.call_deviation(Builtin::Atan2, at, by, Ty::Complex, Ty::Float)?
+            }
             Builtin::Recip => {
                 // -(da / A) / (A + da)
                 let t = bin(BinOp::Div, widen(x.clone(), ty), widen(ra.clone(), ty));
@@ -985,6 +1260,7 @@ impl<'p> Deriver<'p> {
     }
 
     fn new(p: &'p Program) -> Self {
+        let (uniform_floats, set_under_test) = uniform_vars(p);
         Deriver {
             p,
             out: p.clone(),
@@ -993,7 +1269,9 @@ impl<'p> Deriver<'p> {
             z_ref: None,
             z_written: false,
             uniforms: vec![None; p.vars.len()],
-            uniform_floats: uniform_vars(p),
+            uniform_floats,
+            discretes: vec![None; p.vars.len()],
+            set_under_test,
             path: Vec::new(),
             excluded: Vec::new(),
             carried: vec![None; p.vars.len()],
@@ -1157,9 +1435,48 @@ impl<'p> Deriver<'p> {
                                 // `pair` does through `inits` too.
                                 continue;
                             }
-                            let (r, d) = self.pair(e, written, is_loop)?;
-                            out.append(&mut self.pending);
                             let ty = self.p.vars[*v].ty;
+                            let (r, d) = if matches!(ty, Ty::Int | Ty::UInt | Ty::Bool) {
+                                let mark = self.pending.len();
+                                let (r, at_pixel) = match self.pair(e, written, is_loop).filter(|(_, d)| d.is_none()) {
+                                    Some((r, _)) => (r, None),
+                                    None => {
+                                        self.pending.truncate(mark);
+                                        self.discrete(e, written)?
+                                    }
+                                };
+                                out.append(&mut self.pending);
+                                if at_pixel.is_some() || self.discretes[*v].is_some() || self.set_under_test[*v] {
+                                    // The pixel decides it (a sector's
+                                    // index, or a value set where the pixel
+                                    // says): the reference's value and the
+                                    // pixel's, from here on.
+                                    if self.uniforms[*v].is_some() {
+                                        return None;
+                                    }
+                                    let (rv, pv) = match self.discretes[*v] {
+                                        Some(both) => both,
+                                        None => {
+                                            let name = self.p.vars[*v].name.clone();
+                                            let both = (self.new_var(format!("{name}_ref"), ty), self.new_var(format!("{name}_pix"), ty));
+                                            self.discretes[*v] = Some(both);
+                                            both
+                                        }
+                                    };
+                                    let at_pixel = at_pixel.unwrap_or_else(|| r.clone());
+                                    out.push(IStmt::Assign(Place::Var(rv), r));
+                                    out.push(IStmt::Assign(Place::Var(pv), at_pixel));
+                                    if !written.contains(v) {
+                                        written.push(*v);
+                                    }
+                                    continue;
+                                }
+                                (r, None)
+                            } else {
+                                let rd = self.pair(e, written, is_loop)?;
+                                out.append(&mut self.pending);
+                                rd
+                            };
                             let uniform = self.uniform_floats[*v] && self.carried[*v].is_none();
                             if matches!(ty, Ty::Int | Ty::UInt | Ty::Bool) || uniform {
                                 // The same for every pixel (a pass's phase,
@@ -1381,12 +1698,21 @@ impl<'p> Deriver<'p> {
             assigned_in(c, &mut assigned, &mut dz);
         }
         let mut fixes: Vec<(VarId, VarId, Ty)> = Vec::new();
+        // An int or bool of two values: the pixel's from the pixel's arm,
+        // the reference's from the reference's.
+        let mut both: Vec<(VarId, VarId, Ty)> = Vec::new();
         for v in 0..self.p.vars.len() {
             if self.uniforms[v].is_some_and(|u| assigned.contains(&u)) {
                 refuse_branch("an int or bool set in a branch on the iterate");
                 return None;
             }
             let ty = self.p.vars[v].ty;
+            if let Some((rv, pv)) = self.discretes[v] {
+                if after.contains(&v) && (assigned.contains(&rv) || assigned.contains(&pv)) {
+                    both.push((rv, pv, ty));
+                }
+                continue;
+            }
             if let Some((_, cur, dev)) = self.carried[v] {
                 if assigned.contains(&cur) || assigned.contains(&dev) {
                     fixes.push((cur, dev, ty));
@@ -1407,7 +1733,7 @@ impl<'p> Deriver<'p> {
         let mut mismatch = Vec::new();
         // The entry state, kept.
         let mut kept = Vec::new();
-        for &(r, d, ty) in &fixes {
+        for &(r, d, ty) in fixes.iter().chain(&both) {
             for e in [r, d] {
                 let k = self.new_var("kept".into(), ty);
                 mismatch.push(IStmt::Assign(Place::Var(k), var(e, ty)));
@@ -1428,6 +1754,12 @@ impl<'p> Deriver<'p> {
             mismatch.push(IStmt::Assign(Place::Var(f), bin(BinOp::Add, var(r, ty), var(d, ty))));
             fulls.push(f);
         }
+        let mut pixels = Vec::new();
+        for &(_, p, ty) in &both {
+            let f = self.new_var("pixel".into(), ty);
+            mismatch.push(IStmt::Assign(Place::Var(f), var(p, ty)));
+            pixels.push(f);
+        }
         let full_z = kept_z.map(|(zr, _, _)| {
             let f = self.new_var("full_z".into(), Ty::Complex);
             mismatch.push(IStmt::Assign(Place::Var(f), bin(BinOp::Add, var(zr, Ty::Complex), dz_e.clone())));
@@ -1445,6 +1777,9 @@ impl<'p> Deriver<'p> {
         // The deviations: the pixel's full values less the reference's.
         for (&(r, d, ty), &f) in fixes.iter().zip(&fulls) {
             mismatch.push(IStmt::Assign(Place::Var(d), bin(BinOp::Sub, var(f, ty), var(r, ty))));
+        }
+        for (&(_, p, ty), &f) in both.iter().zip(&pixels) {
+            mismatch.push(IStmt::Assign(Place::Var(p), var(f, ty)));
         }
         if let (Some((zr, _, _)), Some(f)) = (kept_z, full_z) {
             mismatch.push(IStmt::Assign(Place::DZ, bin(BinOp::Sub, var(f, Ty::Complex), var(zr, Ty::Complex))));
@@ -1484,12 +1819,90 @@ impl<'p> Deriver<'p> {
                 (test(*op, ra, rb), test(*op, fa, fb))
             }
             _ => {
-                let (r, d) = self.pair(c, written, true)?;
-                if d.is_some() || r.ty != Ty::Bool {
-                    return None;
+                let mark = self.pending.len();
+                match self.pair(c, written, true) {
+                    Some((r, None)) if r.ty == Ty::Bool => (r.clone(), r),
+                    _ if c.ty == Ty::Bool => {
+                        // A test over bools and ints the pixel decides.
+                        self.pending.truncate(mark);
+                        let (r, p) = self.discrete(c, written)?;
+                        let p = p.unwrap_or_else(|| r.clone());
+                        (r, p)
+                    }
+                    _ => return None,
                 }
-                (r.clone(), r)
             }
+        })
+    }
+
+    /// An int or a bool at the reference and, where a deviation decides
+    /// it, at the pixel (rhai-planners E2): a sector's index rounded from
+    /// an angle, a test over one, a test kept in a variable. It has no
+    /// deviation to follow it by, so it is both values -- the pixel's
+    /// from its full values, as a branch's tests are, where the plain
+    /// value is right but near a step -- and a float made of it deviates
+    /// by their difference. `None` for the pixel's where it is the
+    /// reference's at every pixel.
+    fn discrete(&mut self, e: &IExpr, written: &[VarId]) -> Option<(IExpr, Option<IExpr>)> {
+        let numeric = |t: Ty| matches!(t, Ty::Float | Ty::Complex);
+        let full = |r: &IExpr, d: Option<IExpr>| match d {
+            Some(d) => {
+                let ty = r.ty.join(d.ty);
+                bin(BinOp::Add, widen(r.clone(), ty), widen(d, ty))
+            }
+            None => r.clone(),
+        };
+        let ty = e.ty;
+        let uniform = |this: &mut Self| -> Option<(IExpr, Option<IExpr>)> {
+            let (r, d) = this.pair(e, written, true)?;
+            d.is_none().then_some((r, None))
+        };
+        if numeric(ty) {
+            return uniform(self);
+        }
+        Some(match &e.kind {
+            IExprKind::Var(v) if written.contains(v) && self.discretes[*v].is_some() => {
+                let (r, p) = self.discretes[*v].expect("checked");
+                (mk(IExprKind::Var(r), ty), Some(mk(IExprKind::Var(p), ty)))
+            }
+            // A comparison of numbers.
+            IExprKind::Binary(op, a, b) if numeric(a.ty) || numeric(b.ty) => {
+                let (ra, da) = self.pair(a, written, true)?;
+                let (rb, db) = self.pair(b, written, true)?;
+                let r = mk(IExprKind::Binary(*op, Box::new(ra.clone()), Box::new(rb.clone())), ty);
+                if da.is_none() && db.is_none() {
+                    (r, None)
+                } else {
+                    (r, Some(mk(IExprKind::Binary(*op, Box::new(full(&ra, da)), Box::new(full(&rb, db))), ty)))
+                }
+            }
+            IExprKind::Binary(op, a, b) => {
+                let ((ra, pa), (rb, pb)) = (self.discrete(a, written)?, self.discrete(b, written)?);
+                let r = mk(IExprKind::Binary(*op, Box::new(ra.clone()), Box::new(rb.clone())), ty);
+                let p = (pa.is_some() || pb.is_some()).then(|| mk(IExprKind::Binary(*op, Box::new(pa.unwrap_or(ra)), Box::new(pb.unwrap_or(rb))), ty));
+                (r, p)
+            }
+            IExprKind::Unary(op, a) => {
+                let (r, p) = self.discrete(a, written)?;
+                (mk(IExprKind::Unary(*op, Box::new(r)), ty), p.map(|p| mk(IExprKind::Unary(*op, Box::new(p)), ty)))
+            }
+            // A conversion or a function to an int or bool: of the
+            // argument at the reference, and at the pixel.
+            IExprKind::Convert(a) | IExprKind::Call(_, a) => {
+                let rebuild = |x: IExpr| match &e.kind {
+                    IExprKind::Call(f, _) => mk(IExprKind::Call(*f, Box::new(x)), ty),
+                    _ => mk(IExprKind::Convert(Box::new(x)), ty),
+                };
+                let (r, p) = if numeric(a.ty) {
+                    let (ra, da) = self.pair(a, written, true)?;
+                    let p = da.map(|d| full(&ra, Some(d)));
+                    (ra, p)
+                } else {
+                    self.discrete(a, written)?
+                };
+                (rebuild(r), p.map(rebuild))
+            }
+            _ => return uniform(self),
         })
     }
 
@@ -1589,6 +2002,9 @@ impl<'p> Deriver<'p> {
                 } else if let Some((_, current, deviation)) = self.carried[*v].filter(|_| is_loop) {
                     let t = self.p.vars[*v].ty;
                     (mk(IExprKind::Var(current), t), Some(mk(IExprKind::Var(deviation), t)))
+                } else if self.discretes[*v].is_some() && written.contains(v) {
+                    // Two values, not a deviation: `discrete` reads it.
+                    return None;
                 } else if let Some(u) = self.uniforms[*v].filter(|_| written.contains(v)) {
                     (mk(IExprKind::Var(u), self.p.vars[*v].ty), None)
                 } else if let Some((rv, dv)) = self.pairs[*v].filter(|_| written.contains(v)) {
@@ -1606,7 +2022,18 @@ impl<'p> Deriver<'p> {
                 }
             }
             IExprKind::Convert(a) => {
-                let (r, d) = self.pair(a, written, is_loop)?;
+                let mark = self.pending.len();
+                let tried = self.pair(a, written, is_loop);
+                if tried.is_none() && !matches!(a.ty, Ty::Float | Ty::Complex) && matches!(ty, Ty::Float | Ty::Complex) {
+                    // A float of an int or bool the pixel decides: the
+                    // difference of its two values, exact.
+                    self.pending.truncate(mark);
+                    let (r, p) = self.discrete(a, written)?;
+                    let conv = |x: IExpr| mk(IExprKind::Convert(Box::new(x)), ty);
+                    let d = p.map(|p| bin(BinOp::Sub, conv(p), conv(r.clone())));
+                    return Some((conv(r), d));
+                }
+                let (r, d) = tried?;
                 // From an int or a bool, or to one: the same for every
                 // pixel, the conversion kept (`widen` lifts a real to a
                 // complex alone).

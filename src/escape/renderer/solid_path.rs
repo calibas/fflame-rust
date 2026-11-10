@@ -898,9 +898,13 @@ impl EscapeRenderer {
         let sums = self.ifs.as_ref().is_some_and(|p| p.rows.iter().any(|r| r.kind == 7.0));
         // Points and headlamps compiled in, or not (`assembler::ifs_rig`).
         let placed = self.solid_lighting.0.placed_lights();
-        let key = format!("ifs_path|{}|{}|b{beam}|{lens_id}|{sums}|{placed}", def.name, coloring.name);
+        // The solid's own Rhai inverses (rhai-planners B3), as the walk's
+        // pipeline keys and splices them.
+        let user3 = self.ifs.as_ref().map(|p| p.user3.clone()).unwrap_or_default();
+        let utag = if user3.functions.is_empty() { String::new() } else { format!("|user3:{}", user3.key()) };
+        let key = format!("ifs_path|{}|{}|b{beam}|{lens_id}|{sums}|{placed}{utag}", def.name, coloring.name);
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_ifs_path(def, coloring, beam, lens_src.as_deref(), sums, placed);
+            let source = assembler::assemble_ifs_path_user(def, coloring, beam, lens_src.as_deref(), sums, placed, &user3);
             #[cfg(test)]
             let source = match self.path_source_patch {
                 Some(patch) => patch(source),
