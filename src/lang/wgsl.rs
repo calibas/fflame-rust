@@ -1167,6 +1167,9 @@ pub fn solid(p: &Program, slots: &[usize], func_base: usize, depth_slot: usize) 
     let trap = p.vars.iter().position(|v| v.name == "s_trap" && !v.global && !v.is_array() && v.ty == Ty::Complex);
     let level = find("s_level");
     let color = find("s_color");
+    // The Branch Address as the walk ends, where `address` is read at
+    // Colour Depth (the KIFS's twin counts its folds past it).
+    let branch = find("s_branch");
     let mut g = Gen::new(p, Ctx::Formula, "ufs_");
     g.slots = slots.to_vec();
     for (i, k) in g.func_slots.iter_mut().enumerate() {
@@ -1201,6 +1204,7 @@ pub fn solid(p: &Program, slots: &[usize], func_base: usize, depth_slot: usize) 
     let addr = address.map(|v| format!("            address = fract(f32({}));\n", g.var(v))).unwrap_or_default();
     let point = trap.map_or_else(|| "trap_p".to_string(), |v| g.var(v));
     let level = level.map_or_else(|| "log2(max(abs(spread), 1.0))".to_string(), |v| format!("f32({})", g.var(v)));
+    let branch = branch.map_or_else(|| "address".to_string(), |v| format!("fract(f32({}))", g.var(v)));
     let color = color.map_or_else(|| "address".to_string(), |v| format!("f32({})", g.var(v)));
     let _ = write!(
         body,
@@ -1253,7 +1257,7 @@ pub fn solid(p: &Program, slots: &[usize], func_base: usize, depth_slot: usize) 
         }}
     }}
     res.point = {point};
-    res.address = address;
+    res.address = {branch};
     res.color = {color};
     res.level = {level};
     res.distance = solid_distance(s, pos.xy, pos.z);
