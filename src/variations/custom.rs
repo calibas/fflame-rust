@@ -360,6 +360,12 @@ fn registered() -> &'static Mutex<HashMap<String, String>> {
     R.get_or_init(Default::default)
 }
 
+/// Held while `ensure` registers a source: one at a time.
+fn ensuring() -> &'static Mutex<()> {
+    static E: OnceLock<Mutex<()>> = OnceLock::new();
+    E.get_or_init(Default::default)
+}
+
 /// Why a carried source did not register, by its key (`ensure`).
 fn failures() -> &'static Mutex<HashMap<String, String>> {
     static F: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
@@ -382,19 +388,32 @@ pub fn error_of(key: &str) -> Option<String> {
 /// anything builds its shader. Cheap when each is registered with this
 /// source already; a source that does not compile is logged once and its
 /// variation renders as an unknown name does.
+///
+/// Safe from any thread: a source counts as known only once its attempt
+/// is over, and one thread registers at a time, so a second asking for
+/// the same source waits for it instead of going on before the registry
+/// has it (rhai-one-form step 4: a twin's flame read as having no
+/// variations while another thread was registering the same twin).
 pub fn ensure(flame: &Flame) {
+    let known = |src: &CustomSource| registered().lock().is_ok_and(|k| k.get(&src.entry) == Some(&src.source));
     for src in all_sources(flame) {
-        let Ok(mut known) = registered().lock() else { return };
-        if known.get(&src.entry) == Some(&src.source) {
+        if known(src) {
             continue;
         }
-        // Remembered either way, so a failure is not retried every frame.
-        known.insert(src.entry.clone(), src.source.clone());
-        drop(known);
+        let _one = ensuring().lock().unwrap_or_else(|e| e.into_inner());
+        // Another thread may have registered it while this one waited.
+        if known(src) {
+            continue;
+        }
         // Against the variations it carries (`vary`), under the key the
         // flame names, which its transforms run.
         let carried = crate::lang::rhai::carried_variations(src);
         let result = lang::rhai::with_variations(&carried, || compile_as(&src.source, &src.entry).and_then(|dl| register_payload(dl, &src.source)));
+        // Remembered either way (`register_payload` remembers a success), so
+        // a failure is not retried every frame.
+        if let Ok(mut known) = registered().lock() {
+            known.insert(src.entry.clone(), src.source.clone());
+        }
         if let Ok(mut failed) = failures().lock() {
             match &result {
                 Err(e) => failed.insert(src.entry.clone(), e.clone()),
@@ -425,6 +444,33 @@ fn all_sources(flame: &Flame) -> Vec<&CustomSource> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`ensure` is safe from any thread** (rhai-one-form step 4): eight
+    /// threads ensure one flame carrying a source nobody registered, and
+    /// each finds the variation registered when its call returns. Before,
+    /// the first marked the source known and compiled it, and the others
+    /// returned at once, before the registry had it.
+    #[test]
+    #[ignore = "registers a variation"]
+    fn every_thread_finds_what_it_ensured() {
+        let src = crate::lang::rhai::with_own_id(crate::variations::twins::source("julian").expect("a twin"), &crate::scripted::mint_id());
+        let carried = super::carried(&src).expect("a key");
+        let key = carried.entry.clone();
+        let mut flame = Flame::default();
+        flame.custom_variations.push(carried);
+        let missing = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    ensure(&flame);
+                    if crate::variations::global_registry().get(&key).is_none() {
+                        missing.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                });
+            }
+        });
+        assert_eq!(missing.into_inner(), 0, "threads returned from `ensure` before `{key}` was registered");
+    }
 
     /// Compiled under its `INFO.name`, so a test reads the WGSL by a name
     /// it knows; [`compile`] gives it its key.
