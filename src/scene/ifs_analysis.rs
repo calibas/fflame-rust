@@ -243,7 +243,7 @@ pub enum Kernel {
     /// **The walk's alone** (`walk_only`).
     Cylinder { k0: i32 },
     /// A Rhai variation's own inverse (`fn inverse(z, p, branch)`;
-    /// docs/projects/rhai-planners.md, B1): the slot of it and one
+    /// docs/archive/projects/rhai-planners.md, B1): the slot of it and one
     /// transform's parameter values in `variations::user_inverse`'s
     /// table, where it was checked against its forward map. Both maps
     /// run in the interpreter at f64; derivatives are central
@@ -2175,7 +2175,7 @@ pub enum Kernel3 {
     /// lobed solids live in (step 4).
     Quaternion { n: i32, d: f64, c: [f64; 4], depth: bool },
     /// A Rhai variation's own 3D inverse (`fn inverse3(v, p)`;
-    /// docs/projects/rhai-planners.md, B3): a slot in
+    /// docs/archive/projects/rhai-planners.md, B3): a slot in
     /// `variations::user_inverse`'s table, as the plane's `Kernel::User`.
     /// One branch; the carried scalar passes through.
     User3 { slot: u32 },
@@ -3003,7 +3003,7 @@ fn variation_stage(
             // (`ifs-general.md` D1). The transform's kind is decided
             // once the whole stage is known.
             let root = registry.inverse(name).filter(|d| d.is_kernel_in(space)).map(|d| std::borrow::Cow::Borrowed(d.name));
-            // A Rhai variation's own inverse (docs/projects/rhai-planners.md,
+            // A Rhai variation's own inverse (docs/archive/projects/rhai-planners.md,
             // B1), in the plane; the solid's is B3.
             let root = root.or_else(|| {
                 let user = match space {
@@ -3609,7 +3609,7 @@ pub fn transform_map_2d_ordered(
     if stage.any && matches!(kernel, Kernel::Cylinder { .. }) {
         return Err(NotAffine::MixedSum(kind.to_string()));
     }
-    // A user kernel summed with an affine (docs/projects/rhai-planners.md,
+    // A user kernel summed with an affine (docs/archive/projects/rhai-planners.md,
     // B2): the shader's Newton solve steps on its forward map -- one that
     // draws, along each of its arms (D2), so not one whose draws pick none.
     let kind: &'static str = match kind {

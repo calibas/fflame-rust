@@ -251,6 +251,14 @@ Moved here from the escape engine's design record (now
 main doc, [docs/main/ESCAPE.md](../main/ESCAPE.md), was written. Everything
 else in that record is built. These are not:
 
+- **Splits' deep zoom in the Flame Attractor** (from the archived
+  [rhai-planners.md](../archive/projects/rhai-planners.md), D4 and E2):
+  three of splits' four inverse branches have no preimage at any point,
+  and a Rhai variation's `fn image_gap(z, p)` has no branch to say which,
+  so the deep zoom's handover stops at its first level and f32 takes
+  over. An image gap per branch, `fn image_gap(z, p, branch)`, would let
+  the handover pass them as it passes the built-ins' gaps. The built-in
+  splits has no Flame Attractor picture at all.
 - **Perturbation tiers for the transcendental formulas** —
   `tetration`, `exponential`, `trig`, `collatz`. The deltas exist
   (`exp(Z+d) = exp(Z)·exp(d)`); each needs its own error analysis.

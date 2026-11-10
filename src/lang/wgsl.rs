@@ -754,7 +754,7 @@ pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Resu
 
 /// A transformation's inverse (`fn inverse(z, p, branch)`,
 /// `rhai::inverse_transformation`) as the Flame Attractor's shader calls
-/// it (docs/projects/rhai-planners.md, B1): `fn {name}(v: vec2<f32>, base:
+/// it (docs/archive/projects/rhai-planners.md, B1): `fn {name}(v: vec2<f32>, base:
 /// u32, branch: f32) -> vec2<f32>`, its parameters -- the user's, then
 /// `prepare`'s -- read as `get_param(base, 0u, slot)`, which the mode D
 /// shader defines over a buffer of its own, and its branch handed in as the
@@ -836,7 +836,7 @@ pub fn inverse_kernel3(p: &Program, name: &str) -> Result<String, String> {
 }
 
 /// A variation's derived forward difference (`delta::variation_difference`;
-/// docs/projects/rhai-planners.md, C3) as the offset replay calls it: `fn
+/// docs/archive/projects/rhai-planners.md, C3) as the offset replay calls it: `fn
 /// {name}(z: vec2<f32>, d: vec2<f32>, base: u32, u: f32) -> vec2<f32>`,
 /// `F(z + d) - F(z)` at the forced draw `u`, its values read through
 /// `get_param(base, 0u, slot)`. By [`inverse_kernel`]'s rules, but for the

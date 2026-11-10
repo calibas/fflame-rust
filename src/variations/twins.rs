@@ -1203,7 +1203,7 @@ mod tests {
     /// one's skeleton to `assets/variations/twins/<name>.rhai`, where none
     /// is yet.
     /// **The twins' inverses undo their forward maps**
-    /// (docs/projects/rhai-planners.md, B1): every twin's that has one,
+    /// (docs/archive/projects/rhai-planners.md, B1): every twin's that has one,
     /// written by hand (`scripts/twin_inverses.py`) -- the eleven planar
     /// kernels' and the built-ins' that have none in Rust -- each
     /// compiled and checked at its defaults (`user_inverse::check`).

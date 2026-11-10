@@ -8780,7 +8780,7 @@ fn ifs_user_block3(user: &super::ifs::UserKernels) -> String {
     out
 }
 
-/// The flame's own Rhai inverses (kind-8 rows; docs/projects/rhai-planners.md,
+/// The flame's own Rhai inverses (kind-8 rows; docs/archive/projects/rhai-planners.md,
 /// B1), each the function its variation's `fn inverse` compiles to
 /// (`lang::wgsl::inverse_kernel`), renamed by its index; the reader
 /// they take their values through, which ride behind the xaos graph
@@ -8887,7 +8887,7 @@ pub fn assemble_ifs_rig(
 }
 
 /// The same, with the flame's own Rhai inverses (`user`; kind-8 rows,
-/// docs/projects/rhai-planners.md, B1) spliced in -- or, without any,
+/// docs/archive/projects/rhai-planners.md, B1) spliced in -- or, without any,
 /// the text it has always been.
 #[allow(clippy::too_many_arguments)]
 pub fn assemble_ifs_user(
@@ -9302,7 +9302,7 @@ pub fn assemble_ifs_path(
 }
 
 /// The same, with the solid's own Rhai inverses (`user3`; kind-4 rows,
-/// docs/projects/rhai-planners.md, B3) spliced in, as the walk's are.
+/// docs/archive/projects/rhai-planners.md, B3) spliced in, as the walk's are.
 pub fn assemble_ifs_path_user(
     def: &IfsDef,
     coloring: &IfsColoringDef,

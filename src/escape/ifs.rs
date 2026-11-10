@@ -1110,7 +1110,7 @@ fn ifs_radius4(q: vec3<f32>, w: f32, c: vec3<f32>) -> f32 {
     // multiplying by the reciprocal, 1/m is subnormal past 8.5e37 and
     // flushes to zero, and a point a user kernel's inverse sent to
     // 3.4e38 -- no preimage -- measured a radius of zero, the ball's
-    // centre (docs/projects/rhai-planners.md, D4). Below 1e15,
+    // centre (docs/archive/projects/rhai-planners.md, D4). Below 1e15,
     // `length()` itself, so every affine walk's arithmetic -- and
     // every affine preset's bytes -- is exactly what it was.
     if (m > 1e15) {
@@ -3590,7 +3590,7 @@ pub fn user_kernels3(ifs: &Ifs3) -> UserKernels {
 }
 
 /// The flame's user kernels as mode D's shader takes them
-/// (docs/projects/rhai-planners.md, B1): each distinct inverse a
+/// (docs/archive/projects/rhai-planners.md, B1): each distinct inverse a
 /// function of its own, `ifs_user_inv{f}`, and each kernel's packed
 /// values (`UserKernel::packed`) in one block, at an offset its rows
 /// carry.
@@ -6671,7 +6671,7 @@ pub fn pack_maps(
 mod tests {
     /// A Flame Attractor with a Rhai inverse compiles beside a camera lens,
     /// the solid's path tracer takes its inverse as its walk does, and the
-    /// delta walk its inverse's difference (docs/projects/rhai-planners.md),
+    /// delta walk its inverse's difference (docs/archive/projects/rhai-planners.md),
     /// no marker left. The lens brings the flame's
     /// `get_param` into the shader, and the user kernels once defined
     /// another: every such picture was black. The path tracer once had no
@@ -9928,7 +9928,7 @@ mod gpu_tests {
     }
 
     /// **A twin's own Rhai inverse renders the Flame Attractor**
-    /// (docs/projects/rhai-planners.md, B1). With no twin borrowing its
+    /// (docs/archive/projects/rhai-planners.md, B1). With no twin borrowing its
     /// built-in's kernel on this thread, each twin with an inverse
     /// analyses to user kernels (`Kernel::User`) -- compiled, checked
     /// against its forward map at the flame's parameters -- and the
@@ -10151,7 +10151,7 @@ mod gpu_tests {
     }
 
     /// **A built-in with no inverse in Rust takes its twin's**
-    /// (docs/projects/rhai-planners.md, B1): swirl, horseshoe and the rest
+    /// (docs/archive/projects/rhai-planners.md, B1): swirl, horseshoe and the rest
     /// of `scripts/twin_inverses.py`'s, in flames of the built-in itself,
     /// qualify for the Flame Attractor as user kernels and render as their
     /// CPU reference walks. `INVERSE_BUILTINS=a,b` runs those alone.
@@ -10295,7 +10295,7 @@ mod gpu_tests {
     /// 59.6% on the affine arm and 90.7% on the nonlinear one, and
     /// only having both made it obvious that the fault was in the
     /// test and not in the thing under test.
-    /// **A twin's Flame Attractor holds at depth** (docs/projects/rhai-planners.md,
+    /// **A twin's Flame Attractor holds at depth** (docs/archive/projects/rhai-planners.md,
     /// D3): the twins, borrowing nothing, drawn at 2^20, 2^44 and -- julia's,
     /// centred on its set to sixty digits -- 2^64: the handover's references
     /// taken through the twin's inverse in big floats
@@ -10447,7 +10447,7 @@ mod gpu_tests {
     }
 
     /// **The twins whose differences E2 derived draw their CPU walk at
-    /// depth** (docs/projects/rhai-planners.md, E2). At 2^30 a pixel is
+    /// depth** (docs/archive/projects/rhai-planners.md, E2). At 2^30 a pixel is
     /// 4e-11 of a plane f32 resolves to 6e-8, and f64 still resolves it:
     /// each twin's delta walk -- its derived inverse difference spliced
     /// into mode D -- and its absolute walk are held to its own CPU
@@ -16030,7 +16030,7 @@ fn distance(s, p) {
     }
 
     /// **A twin's own 3D inverse renders the solid**
-    /// (docs/projects/rhai-planners.md, B3): julia3D's and julia3Dz's twins,
+    /// (docs/archive/projects/rhai-planners.md, B3): julia3D's and julia3Dz's twins,
     /// borrowing nothing on this thread, analyse to `Kernel3::User3` and the
     /// solid shader draws them through their spliced `fn inverse3`, agreeing
     /// with a CPU march of their own analysis as the built-ins agree with

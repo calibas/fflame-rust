@@ -462,7 +462,7 @@ tight silently drops part of the picture.
   many arms (`julian`, `juliascope`). The planner enumerates the arms,
   and a replay build rewrites the draw to read a forced arm.
 
-**A Rhai variation's own** ([rhai-planners.md](../projects/rhai-planners.md)):
+**A Rhai variation's own** ([rhai-planners.md](../archive/projects/rhai-planners.md)):
 `derive` reads a registered Rhai variation's compiled body as a
 built-in's, so it has a derived bound wherever its built-in twin would
 (472 of the 472 twins whose built-in derives); and one may declare its
@@ -572,7 +572,7 @@ function takes the point, and the ids when it has parameters (as
   `ctx.weight` without parameters declares `NeedsTransform` for the
   ids. The function takes them in `variation_call`'s order. Gate:
   `the_hooked_twins_render_as_the_builtins` (`blur`, `macmillan`).
-- **Its own inverse** (`variations::user_inverse`; [rhai-planners.md](../projects/rhai-planners.md),
+- **Its own inverse** (`variations::user_inverse`; [rhai-planners.md](../archive/projects/rhai-planners.md),
   Part B), for the Flame Attractor: `fn inverse(z, p, branch)` gives the
   preimage of `z` under `variation` on branch `0 .. INFO.inverse_branches`
   (1 by default, at most 16), or `no_preimage()` where there is none;

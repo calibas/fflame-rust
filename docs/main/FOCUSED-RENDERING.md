@@ -238,7 +238,7 @@ transform readable as maps it can invert:
   `hemisphere`, `disc`, `blob`, and the walk-only `elliptic`, `splits`,
   `cylinder` and `juliascope`.
 - **A Rhai variation with its own inverse** (`fn inverse`;
-  [rhai-planners.md](../projects/rhai-planners.md), Part C): its arms
+  [rhai-planners.md](../archive/projects/rhai-planners.md), Part C): its arms
   read off its forward map, each named by a draw on a grid of 256
   (`user_inverse::UserKernel::arms`), which a replay build forces
   (`bound::force_arms`); one that draws makes the flame the walk's.

@@ -213,7 +213,7 @@ pub struct ArmedDef {
 /// a grid of 256, and a word's symbol carries that draw. So every draw of
 /// its body -- `rand()` and the twins' `draw_u32()` -- is wrapped to read
 /// it, `(code + ½)/256` or those bits, exactly the interpreter's fixed draw
-/// (docs/projects/rhai-planners.md, C1), with the two helpers beside it.
+/// (docs/archive/projects/rhai-planners.md, C1), with the two helpers beside it.
 pub fn force_arms(name: &str, src: &str) -> Option<String> {
     if let Some(def) = arms_for(name) {
         return Some(src.replace(def.draw, def.forced));
@@ -871,7 +871,7 @@ mod derived_gate {
         // `BOUNDS_TWINS=1`: every twin registered too, each derived from
         // its OWN compiled body (`derive_own`) -- a pattern only the formula
         // language emits checked against what its shader computes
-        // (docs/projects/rhai-planners.md, A1).
+        // (docs/archive/projects/rhai-planners.md, A1).
         let twins = std::env::var("BOUNDS_TWINS").is_ok_and(|v| v == "1");
         if twins {
             for (_, src) in crate::variations::twins::TWINS {
