@@ -3462,11 +3462,14 @@ impl EscapeRenderer {
         // The lens and the transformations move the points iterated, in
         // every mode.
         let maps = super::lens::maps_identity(escape, &crate::variations::global_registry());
-        if super::ifs::get_ifs(&escape.formula).is_some() {
+        if let Some(def) = super::ifs::get_ifs(&escape.formula) {
             return format!(
-                "ifs|{}|{}|{}|{}|{}|{}|{}x{}|s{}|{}|{}|{}|{maps}",
+                "ifs|{}|{}|{}|{}|{}|{}|{}|{}x{}|s{}|{}|{}|{}|{maps}",
                 escape.formula,
                 Self::walk_params_key(escape),
+                // Which walk the colouring needs: Measure's own, with its
+                // Lookup Region, or the distance walk the rest share.
+                super::ifs::walk_colouring_key(def, &escape.coloring, &escape.coloring_params),
                 escape.center_re,
                 escape.center_im,
                 escape.zoom_log2,
