@@ -1006,6 +1006,9 @@ impl<'p> Printer<'p> {
             Predef::Supersample => self.ctx_field("supersample"),
             Predef::Value => self.ctx_field("value"),
             Predef::Rotation => self.ctx_field("rotation"),
+            Predef::FieldSum => P::atom("sum"),
+            Predef::FieldGrad => P::atom("grad"),
+            Predef::FieldTerms => P::atom("n"),
             Predef::Index | Predef::Solid if self.fun == Fun::Finish => {
                 P::atom(self.slot_decl(if q == Predef::Index { Slot::Index } else { Slot::Solid }).0)
             }

@@ -148,6 +148,17 @@ pub fn solid(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Solid)
 }
 
+/// A mode B field (docs/projects/rhai-solids-fields.md): `fn start(pos,
+/// p)` and `fn term(s, p)`.
+pub fn field(source: &str) -> Result<Program, Vec<Diag>> {
+    compile(source, EntryKind::Field)
+}
+
+/// A mode B field's colouring: `fn shade(sum, grad, n, p)`.
+pub fn field_coloring(source: &str) -> Result<Program, Vec<Diag>> {
+    compile(source, EntryKind::FieldColoring)
+}
+
 /// An effect (P2): `fn effect(c, p, ctx)`, per pixel of an image.
 pub fn effect(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Effect)
@@ -637,6 +648,10 @@ pub fn kind_of(source: &str) -> Option<EntryKind> {
         Some(EntryKind::SimModel)
     } else if has("variation") || has("variation3") {
         Some(EntryKind::Transform)
+    } else if has("term") {
+        Some(EntryKind::Field)
+    } else if has("shade") {
+        Some(EntryKind::FieldColoring)
     } else if has("distance") {
         Some(EntryKind::Solid)
     } else if has("finish") {
@@ -948,6 +963,8 @@ enum Returns {
     Color,
     /// A simulation model's function: a vector of four (`result` says so).
     SimModel { result: String },
+    /// A field colouring's `shade`: the palette position, or `#{ t, lum }`.
+    FieldShade,
     /// An inlined body that returns early (rhai-plugins P7 step 1): its
     /// value into the result's locals -- one, or a vector's parts
     /// (`kind`) -- the one's type the join of every value it is given.
@@ -1464,6 +1481,10 @@ impl<'s> Lowerer<'s> {
             "a simulation model"
         } else if kind == EntryKind::Solid {
             "a solid"
+        } else if kind == EntryKind::Field {
+            "a field"
+        } else if kind == EntryKind::FieldColoring {
+            "a field colouring"
         } else {
             "a formula"
         };
@@ -1506,6 +1527,10 @@ impl<'s> Lowerer<'s> {
             "Model"
         } else if kind == EntryKind::Solid {
             "Solid"
+        } else if kind == EntryKind::Field {
+            "Field"
+        } else if kind == EntryKind::FieldColoring {
+            "Field Colouring"
         } else {
             "Formula"
         }
@@ -1707,6 +1732,23 @@ impl<'s> Lowerer<'s> {
                     Expr::Array(items, _) if items.iter().all(|i| matches!(i, Expr::StringConstant(..))) => {}
                     _ => return self.err(*p, "`slow` is a list of the parameters committed when a drag ends: `[\"levels\"]`"),
                 },
+                // A field: whether its terms give a gradient (Hillshade's
+                // light), and the field colouring a fresh pick takes.
+                "gradient" if kind == EntryKind::Field => match v {
+                    Expr::BoolConstant(..) => {}
+                    _ => return self.err(*p, "`gradient` is `true` or `false`: whether the terms set `grad`, which Hillshade lights"),
+                },
+                "coloring" if kind == EntryKind::Field => match v {
+                    Expr::StringConstant(s, _) if crate::escape::fields::FIELD_COLORINGS.iter().any(|c| c.name == s.as_str()) => {}
+                    _ => {
+                        let all: Vec<String> = crate::escape::fields::FIELD_COLORINGS.iter().map(|c| format!("\"{}\"", c.name)).collect();
+                        return self.err(*p, format!("`coloring` is one of the field colourings: {}", all.join(", ")));
+                    }
+                },
+                o if matches!(kind, EntryKind::Field | EntryKind::FieldColoring) => {
+                    let extra = if kind == EntryKind::Field { ", `gradient` and `coloring`" } else { "" };
+                    return self.err(*p, format!("a field's `INFO` has `title`, `id`, `description` and `author`{extra}, not `{o}`"));
+                }
                 o if kind == EntryKind::Solid => {
                     return self.err(*p, format!("a solid's `INFO` has `title`, `id`, `description`, `author`, `radius`, `depth`, `march`, `coloring` and `slow`, not `{o}`"))
                 }
@@ -1800,6 +1842,10 @@ impl<'s> Lowerer<'s> {
             let f = &self.fns["prepare"];
             return self.err(f.body.position(), "a simulation model has no `prepare`: its values are computed in `cell_step`");
         }
+        if matches!(kind, EntryKind::Field | EntryKind::FieldColoring) && self.fns.contains_key("prepare") {
+            let f = &self.fns["prepare"];
+            return self.err(f.body.position(), "a field has no `prepare` yet: compute its values in `start` or `term`");
+        }
         // prepare: once per image, its map's fields read as `p.name`.
         if let Some(prep) = self.fns.get("prepare").cloned() {
             let mut scope = Scope::new(Fn3::Prepare, Vec::new());
@@ -1837,6 +1883,8 @@ impl<'s> Lowerer<'s> {
             EntryKind::Effect => sections.push(self.effect_section(span)?),
             EntryKind::SimColoring => sections.push(self.sim_coloring_section(span)?),
             EntryKind::SimModel => sections.push(self.sim_model_section(span)?),
+            EntryKind::Field => sections.extend(self.field_sections(span)?),
+            EntryKind::FieldColoring => sections.push(self.field_coloring_section(span)?),
         }
         default.items.push(Setting { name: "title".into(), value: SettingValue::Strings(vec![title.clone()]), span });
         let setting = region.filter(|r| r != "both");
@@ -1977,6 +2025,74 @@ impl<'s> Lowerer<'s> {
         self.body_returning(rest, &Returns::SimColoring, &mut scope, &mut body)?;
         let Some(f) = final_value(last) else { return self.err(last.position(), RESULT) };
         self.put_result(&Returns::SimColoring, f, last.position(), &mut scope, &mut body)?;
+        Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
+    }
+
+    /// A field's functions as its sections (docs/projects/rhai-solids-
+    /// fields.md): `start(pos, p)` the init, `pos` the plane's point (a
+    /// complex) and its map the state, which needs `value`, the term's
+    /// value, and may have `grad`, its gradient (a complex); `term(s, p)`
+    /// the loop, run the term count's times, the template summing `value`
+    /// and `grad` after each.
+    fn field_sections(&mut self, span: Span) -> R<Vec<Section>> {
+        let get = |l: &Self, name: &str| l.fns.get(name).cloned();
+        let (Some(start), Some(term)) = (get(self, "start"), get(self, "term")) else {
+            return Err(Diag::error(Span::default(), "a field has `fn start(pos, p)` and `fn term(s, p)`"));
+        };
+        if start.params.is_empty() || start.params.len() > 3 {
+            return self.err(start.body.position(), "`start(pos, p)` or `start(pos, p, ctx)`");
+        }
+        let mut scope = Scope::new(Fn3::Start, Vec::new());
+        scope.bind(&start.params[0], Binding::Value(mk(ExprKind::Predef("pixel".into()), span)));
+        for (name, role) in start.params.iter().skip(1).zip([Binding::Params, Binding::Ctx]) {
+            scope.bind(name, role);
+        }
+        let mut init = Vec::new();
+        self.state_body(&start.body, &mut scope, &mut init)?;
+        let fields = scope.fields.clone();
+        if !fields.iter().any(|f| f == "value") {
+            return self.err(start.body.position(), "the state needs `value`, each term's value, which the field sums: `#{ value: 0.0 }`");
+        }
+        if term.params.is_empty() || term.params.len() > 3 {
+            return self.err(term.body.position(), "`term(s, p)` or `term(s, p, ctx)`: `ctx.maxiter` is the term count");
+        }
+        let mut scope = Scope::new(Fn3::Step, fields);
+        scope.bind(&term.params[0], Binding::State);
+        for (name, role) in term.params.iter().skip(1).zip([Binding::Params, Binding::Ctx]) {
+            scope.bind(name, role);
+        }
+        let mut lp = Vec::new();
+        self.state_body(&term.body, &mut scope, &mut lp)?;
+        Ok(vec![
+            Section { kind: SectionKind::Init, span, body: init, last_is_bailout: false, labelled: true },
+            Section { kind: SectionKind::Loop, span, body: lp, last_is_bailout: false, labelled: true },
+        ])
+    }
+
+    /// A field colouring's `shade(sum, grad, n, p)` as its section: the
+    /// field's sum (a number), its gradient (a complex), the term count (an
+    /// int); its last value the palette position, or `#{ t, lum }`.
+    fn field_coloring_section(&mut self, span: Span) -> R<Section> {
+        let Some(f) = self.fns.get("shade").cloned() else {
+            return self.err(Position::NONE, "a field colouring has `fn shade(sum, grad, n, p)`");
+        };
+        if f.params.len() < 3 || f.params.len() > 4 {
+            return self.err(f.body.position(), "`shade(sum, grad, n)` or `shade(sum, grad, n, p)`");
+        }
+        let mut scope = Scope::new(Fn3::Effect, Vec::new());
+        for (name, predef) in f.params.iter().zip(["field_sum", "field_grad", "field_terms"]) {
+            scope.bind(name, Binding::Value(mk(ExprKind::Predef(predef.into()), span)));
+        }
+        if let Some(p) = f.params.get(3) {
+            scope.bind(p, Binding::Params);
+        }
+        const RESULT: &str = "`shade` ends with the palette position, a number, or `#{ t, lum }`";
+        let stmts = f.body.statements();
+        let Some((last, rest)) = stmts.split_last() else { return self.err(f.body.position(), RESULT) };
+        let mut body = Vec::new();
+        self.body_returning(rest, &Returns::FieldShade, &mut scope, &mut body)?;
+        let Some(fin) = final_value(last) else { return self.err(last.position(), RESULT) };
+        self.put_result(&Returns::FieldShade, fin, last.position(), &mut scope, &mut body)?;
         Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
     }
 
@@ -2381,6 +2497,28 @@ impl<'s> Lowerer<'s> {
                     return self.err(p, result.clone());
                 }
                 state.parts
+            }
+            Returns::FieldShade => {
+                let zero = || mk(ExprKind::Float(0.0), at);
+                let (t, lum) = match f {
+                    Final::Expr(Expr::Map(m, mp)) => {
+                        let (mut t, mut lum) = (None, None);
+                        for (k, v) in &m.0 {
+                            match k.name.as_str() {
+                                "t" => t = Some(self.expr(v, scope)?),
+                                "lum" => lum = Some(self.expr(v, scope)?),
+                                o => return self.err(k.pos, format!("a field colouring's result has `t` and `lum`, not `{o}`")),
+                            }
+                        }
+                        match t {
+                            Some(t) => (t, lum),
+                            None => return self.err(*mp, "the result needs `t`, the palette position"),
+                        }
+                    }
+                    Final::Expr(e) => (self.expr(e, scope)?, None),
+                    _ => return self.err(p, "`shade` ends with the palette position, a number, or `#{ t, lum }`"),
+                };
+                vec![t, lum.unwrap_or_else(|| mk(ExprKind::Float(1.0), at)), zero(), zero()]
             }
         };
         self.flush(body);

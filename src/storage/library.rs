@@ -32,6 +32,10 @@ pub enum Kind {
     SimColoring,
     /// A simulation's model (P4).
     SimModel,
+    /// A mode B field, and a field's colouring
+    /// (docs/projects/rhai-solids-fields.md).
+    Field,
+    FieldColoring,
     /// An Ultra Fractal or Fractint file: many entries, of its kind.
     UfFormulas,
     UfColorings,
@@ -43,7 +47,7 @@ pub enum Kind {
 impl Kind {
     /// A GPU Rhai entry that can be a plug-in (`storage::links::Link::plugin`).
     pub fn can_be_plugin(self) -> bool {
-        matches!(self, Kind::Variation | Kind::Effect | Kind::Formula | Kind::Coloring | Kind::Solid | Kind::SimColoring | Kind::SimModel)
+        matches!(self, Kind::Variation | Kind::Effect | Kind::Formula | Kind::Coloring | Kind::Solid | Kind::SimColoring | Kind::SimModel | Kind::Field | Kind::FieldColoring)
     }
 }
 
@@ -193,6 +197,8 @@ fn formula_entry(file: &str, source: &str, origin: Origin, link: Link) -> Entry 
         Some(EntryKind::Effect) => Kind::Effect,
         Some(EntryKind::SimColoring) => Kind::SimColoring,
         Some(EntryKind::SimModel) => Kind::SimModel,
+        Some(EntryKind::Field) => Kind::Field,
+        Some(EntryKind::FieldColoring) => Kind::FieldColoring,
         None => Kind::Unknown,
     };
     if let Some(labels) = rhai::source_labels(source) {
@@ -325,13 +331,15 @@ fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate
             carried.entry = key.clone();
             Ok((key, carried))
         }
-        Kind::Formula | Kind::Coloring | Kind::Solid => {
+        Kind::Formula | Kind::Coloring | Kind::Solid | Kind::Field | Kind::FieldColoring => {
             use crate::config::escape::{CustomDialect, CustomSource};
             use crate::escape::custom;
             use crate::lang::EntryKind;
             let ek = match kind {
                 Kind::Formula => EntryKind::Formula,
                 Kind::Coloring => EntryKind::Coloring,
+                Kind::Field => EntryKind::Field,
+                Kind::FieldColoring => EntryKind::FieldColoring,
                 _ => EntryKind::Solid,
             };
             let src = custom::with_called_variations(ek, CustomSource { dialect: CustomDialect::Rhai, entry: title.to_string(), source: source.to_string(), variations: Vec::new() });
@@ -339,6 +347,8 @@ fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate
             let compiled = match ek {
                 EntryKind::Formula => custom::compile_formula(&src, &name).map(|_| ()),
                 EntryKind::Coloring => custom::compile_coloring(&src, &name).map(|_| ()),
+                EntryKind::Field => custom::compile_field(&src, &name).map(|_| ()),
+                EntryKind::FieldColoring => custom::compile_field_coloring(&src, &name).map(|_| ()),
                 _ => custom::compile_solid(&src, &name).map(|_| ()),
             };
             compiled.map_err(|d| d.first().map(|x| x.render(source)).unwrap_or_else(|| "it does not compile".to_string()))?;

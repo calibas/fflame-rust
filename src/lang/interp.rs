@@ -1257,6 +1257,10 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::Supersample => Value::Float(env.supersample),
         Predef::Value => Value::Float(sh.index),
         Predef::Rotation => Value::Complex(C64::new(env.rotation.cos(), env.rotation.sin())),
+        // A field colouring's inputs: the GPU's alone.
+        Predef::FieldSum => Value::Float(0.0),
+        Predef::FieldGrad => Value::Complex(C64::ZERO),
+        Predef::FieldTerms => Value::Int(0),
     }
 }
 

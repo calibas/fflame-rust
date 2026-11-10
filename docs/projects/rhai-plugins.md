@@ -1428,14 +1428,14 @@ under each branch.
      replace the built-ins is D7's per-kind decision (D2 keeps the WGSL
      until they are done).
 5. **`rhai-solids-fields`** -- P7 steps 4 and 5 for mode D and mode B.
+   **Built 2026-11-10, not merged** ([rhai-solids-fields.md](rhai-solids-fields.md)).
    - Twins of Mandelbox, Mandelbulb, the KIFS and the quaternion Julia.
      The two Flame Attractor solids are the flame itself: nothing to
      twin.
-   - Twins of the three fields beside them (decided in the KIFS plan):
-     a never-escaping formula and an averaging colouring, Weierstrass's
-     analytic gradient for the hillshade the part to check.
+   - Twins of the three fields and their three colourings -- as a Rhai
+     field kind in mode B (the user's pick, 2026-11-10), not the
+     never-escaping formula the KIFS plan had sketched.
    - Edit as Rhai for solids and fields.
-   - Depends on 2 for the fields' colourings.
 6. **`rhai-tracks`** -- P5, animation tracks as scripts.
    - A track is a pure function of time (D4): CPU Rhai compiled once
      per track, run each frame after the keyframes.

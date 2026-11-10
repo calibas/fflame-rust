@@ -54,6 +54,8 @@ struct EntryRow {
     as_sim_coloring: Vec<String>,
     /// As a simulation's model (P4): Rhai only.
     as_sim_model: Vec<String>,
+    as_field: Vec<String>,
+    as_field_coloring: Vec<String>,
 }
 
 impl EntryRow {
@@ -66,6 +68,8 @@ impl EntryRow {
             EntryKind::Effect => &self.as_effect,
             EntryKind::SimColoring => &self.as_sim_coloring,
             EntryKind::SimModel => &self.as_sim_model,
+            EntryKind::Field => &self.as_field,
+            EntryKind::FieldColoring => &self.as_field_coloring,
         }
     }
 }
@@ -235,6 +239,8 @@ impl FormulaEditorPanel {
             EntryKind::Effect => lang::rhai::effect(&text),
             EntryKind::SimColoring => lang::rhai::sim_coloring(&text),
             EntryKind::SimModel => lang::rhai::sim_model(&text, lang::rhai::SimFn::Step(0)),
+            EntryKind::Field => lang::rhai::field(&text),
+            EntryKind::FieldColoring => lang::rhai::field_coloring(&text),
         };
         let mut errors: Vec<String> = match &checked {
             Ok(_) => Vec::new(),
@@ -294,6 +300,8 @@ impl FormulaEditorPanel {
             EntryKind::Effect => "formula_editor.rhai_is_effect",
             EntryKind::SimColoring => "formula_editor.rhai_is_sim_coloring",
             EntryKind::SimModel => "formula_editor.rhai_is_sim_model",
+            EntryKind::Field => "formula_editor.rhai_is_field",
+            EntryKind::FieldColoring => "formula_editor.rhai_is_field_coloring",
         };
         let mut errors = Some(errors);
         let mut row = |k: EntryKind| if k == kind { errors.take().unwrap_or_default() } else { is(key) };
@@ -306,8 +314,22 @@ impl FormulaEditorPanel {
             row(EntryKind::SimColoring),
             row(EntryKind::SimModel),
         );
+        let (as_field, as_field_coloring) = (row(EntryKind::Field), row(EntryKind::FieldColoring));
         self.parse_errors = Vec::new();
-        self.entries = vec![EntryRow { name: title, source: text.clone(), likely: kind, as_formula, as_coloring, as_transform, as_solid, as_effect, as_sim_coloring, as_sim_model }];
+        self.entries = vec![EntryRow {
+            name: title,
+            source: text.clone(),
+            likely: kind,
+            as_formula,
+            as_coloring,
+            as_transform,
+            as_solid,
+            as_effect,
+            as_sim_coloring,
+            as_sim_model,
+            as_field,
+            as_field_coloring,
+        }];
         self.checked = Some(text);
     }
 
@@ -345,7 +367,14 @@ impl FormulaEditorPanel {
                 let check = |kind| {
                     let (p, d) = match kind {
                         EntryKind::Formula => lang::switch::check_formula(&file, e, dialect),
-                        EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => lang::check::check(e, kind, dialect),
+                        EntryKind::Coloring
+                        | EntryKind::Transform
+                        | EntryKind::Solid
+                        | EntryKind::Effect
+                        | EntryKind::SimColoring
+                        | EntryKind::SimModel
+                        | EntryKind::Field
+                        | EntryKind::FieldColoring => lang::check::check(e, kind, dialect),
                     };
                     let mut msgs = own.clone();
                     msgs.extend(d.iter().filter(|x| x.severity == Severity::Error).map(render));
@@ -378,6 +407,8 @@ impl FormulaEditorPanel {
                     as_effect: vec![t!("formula_editor.effect_rhai_only").to_string()],
                     as_sim_coloring: vec![t!("formula_editor.sim_rhai_only").to_string()],
                     as_sim_model: vec![t!("formula_editor.sim_rhai_only").to_string()],
+                    as_field: vec![t!("formula_editor.field_rhai_only").to_string()],
+                    as_field_coloring: vec![t!("formula_editor.field_rhai_only").to_string()],
                 }
             })
             .collect();
@@ -414,6 +445,8 @@ impl FormulaEditorPanel {
             EntryKind::Formula => custom::compile_formula(&src, &name).map(|_| ()),
             EntryKind::Coloring => custom::compile_coloring(&src, &name).map(|_| ()),
             EntryKind::Solid => custom::compile_solid(&src, &name).map(|_| ()),
+            EntryKind::Field => custom::compile_field(&src, &name).map(|_| ()),
+            EntryKind::FieldColoring => custom::compile_field_coloring(&src, &name).map(|_| ()),
             EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => return,
         };
         if let Err(d) = compiled {
@@ -427,14 +460,14 @@ impl FormulaEditorPanel {
         }
         let escape = &cm.config().escape;
         let (current, path_src, path_name, description) = match kind {
-            // A solid is the formula's choice (B3).
-            EntryKind::Formula | EntryKind::Solid => (
+            // A solid and a field are the formula's choice (B3).
+            EntryKind::Formula | EntryKind::Solid | EntryKind::Field => (
                 escape.custom_formula.as_ref(),
                 ConfigPath::EscapeCustomFormula,
                 ConfigPath::EscapeFormula,
                 "history.action.use_custom_formula",
             ),
-            EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => (
+            EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::FieldColoring => (
                 escape.custom_coloring.as_ref(),
                 ConfigPath::EscapeCustomColoring,
                 ConfigPath::EscapeColoring,
@@ -484,6 +517,8 @@ impl FormulaEditorPanel {
                     _ if minted => t!("formula_editor.id_minted", entry = src.entry),
                     EntryKind::Formula => t!("formula_editor.using_formula", entry = src.entry),
                     EntryKind::Solid => t!("formula_editor.using_solid", entry = src.entry),
+                    EntryKind::Field => t!("formula_editor.using_field", entry = src.entry),
+                    EntryKind::FieldColoring => t!("formula_editor.using_field_coloring", entry = src.entry),
                     EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => t!("formula_editor.using_coloring", entry = src.entry),
                 }
                 .to_string());
@@ -943,8 +978,10 @@ impl FormulaEditorPanel {
             }
             let escape = &cm.config().escape;
             let (carried, name) = match kind {
-                EntryKind::Formula | EntryKind::Solid => (escape.custom_formula.as_ref(), &escape.formula),
-                EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => (escape.custom_coloring.as_ref(), &escape.coloring),
+                EntryKind::Formula | EntryKind::Solid | EntryKind::Field => (escape.custom_formula.as_ref(), &escape.formula),
+                EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::FieldColoring => {
+                    (escape.custom_coloring.as_ref(), &escape.coloring)
+                }
             };
             let Some(carried) = carried else { continue };
             if entry_ident(carried) != entry || !name.starts_with(custom::PREFIX) {
@@ -1235,7 +1272,7 @@ impl FormulaEditorPanel {
                 ui.strong(&row.name);
                 // What it most likely is leads, the rest in their order.
                 use EntryKind::*;
-                const ALL: [EntryKind; 7] = [Formula, Coloring, Transform, Solid, Effect, SimColoring, SimModel];
+                const ALL: [EntryKind; 9] = [Formula, Coloring, Transform, Solid, Effect, SimColoring, SimModel, Field, FieldColoring];
                 let mut order = ALL;
                 order.sort_by_key(|k| *k != row.likely);
                 for kind in order {
@@ -1249,6 +1286,8 @@ impl FormulaEditorPanel {
                         EntryKind::Effect => t!("formula_editor.use_effect"),
                         EntryKind::SimColoring => t!("formula_editor.use_sim_coloring"),
                         EntryKind::SimModel => t!("formula_editor.use_sim_model"),
+                        EntryKind::Field => t!("formula_editor.use_field"),
+                        EntryKind::FieldColoring => t!("formula_editor.use_field_coloring"),
                     };
                     // The kind it is not is offered only when it compiles
                     // as that too; the kind it is shows its errors.

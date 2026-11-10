@@ -1,6 +1,8 @@
 # Rhai twins of the solids and fields
 
-Status: **planned 2026-11-10, step 1 in progress.** Branch
+Status: **steps 1-6 done 2026-11-10** (every solid and field twinned,
+each with Edit as Rhai; the reference is ESCAPE.md, *The built-in
+solids' twins*, *A Rhai field*, *The built-in fields' twins*). Branch
 `rhai-solids-fields`. Part of [rhai-plugins.md](rhai-plugins.md), P7
 ("every built-in editable as Rhai"): the last built-in kinds without held
 twins.
@@ -70,6 +72,22 @@ Read 2026-11-10:
    fields and three field colourings, Weierstrass's analytic gradient
    (for Hillshade) the part to check, and Edit as Rhai.
 
+## What was built
+
+| Step | Done | Measured (`*_twins_render_as_their_builtins`, 192x48) |
+|---|---|---|
+| 1. Mandelbox | template parameters a solid declares (`custom::solid_layout`) | at most ~10 of 36,864 bytes differ; 1.04-1.09x |
+| 2. Mandelbulb | the state's `trap`, `level`, `color` read by the scaffold | as above |
+| 3. Quaternion Julia | Slice Value declared; `INFO.coloring` | as above |
+| 4. KIFS | `branch` as the walk ends; `trap_point` | one rotated pixel's branch digit (f64 rotations) |
+| 5. Edit Solid as Rhai | the panel button and its test | |
+| 6. Fields (decision 1: B) | `EntryKind::Field` / `FieldColoring`, `reduce`, `library::Kind::Field` / `FieldColoring`, six twins, Edit as Rhai for both | byte for byte but 19 bytes off by one and two chaotic pixels; median 1.01x, worst 1.09x |
+
+The solid twins compare within 0.1% of bytes because the driver fuses
+multiply-adds where it chooses. Neither the field twins nor the solid
+twins carry presets (Edit as Rhai keeps the view), and a field has no
+`prepare`.
+
 ## Decisions for the user
 
 1. **How the fields become Rhai.** The KIFS plan's decision D
@@ -89,6 +107,8 @@ Read 2026-11-10:
      n, p)`. The same template, so the twins can be held exactly, and
      the fields stay in mode B as decided.
 
-   Recommended: B.
+   Recommended: B. **Decided 2026-11-10: B** (the user's pick), built as
+   `fn start(pos, p[, ctx])` and `fn term(s, p[, ctx])` (the state with
+   `value` and an optional `grad`) and `fn shade(sum, grad, n[, p])`.
 2. Whether the solid twins then replace their built-ins (D7, kind by
    kind): not part of this branch.

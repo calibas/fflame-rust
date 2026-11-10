@@ -1359,6 +1359,73 @@ fn escaped(s, p) {
     The measure made a renderer for each run until batch 5, so it timed
     the pipelines' building too (about 2 ms, more for a twin's longer
     WGSL), which read as the colourings' cost on the short renders.
+- **The built-in solids' twins** (`escape::twins::SOLID_TWINS`,
+  `assets/formulas/twins/solids/*.rhai`; steps 1-5 of
+  [rhai-solids-fields.md](../projects/rhai-solids-fields.md)): the
+  Mandelbox, the Mandelbulb, the Quaternion Julia and the KIFS, each a
+  Rhai solid that renders as its built-in. The Escape panel's **Edit
+  Solid as Rhai** puts the twin in place, one undo step, its settings
+  and the camera kept, and opens it in the Formula Editor as a solid.
+  What a solid needed for them:
+  - **Template parameters it declares** (`custom::solid_layout`): a
+    solid's `PARAMS` may name any of the template's first seven
+    (`iterations`, `w_slice`, ...) or `colour_depth`, which then take
+    that parameter's slot with the solid's own default, range and hint
+    -- the Quaternion Julia reads Slice Value so, and each twin gives
+    Colour Depth its built-in's hint. `INFO.coloring` names the default
+    colouring, `INFO.slow` marks it slow.
+  - **The colouring scaffold read from the state** (`lang::wgsl::solid`):
+    a state `trap` (complex), `level` or `color` is reported as the walk
+    ends; `branch`, the Branch Address, as the walk ends; `address` is
+    captured at Colour Depth; `dr` is the spread. Without them the
+    scaffold computes what it always has.
+  - `trap_point(v)`: the built-ins' `ifs_trap_point` (Orbit
+    transformations' mapping of the trap's point; the identity on the
+    CPU).
+  - Held by `solid_twins_render_as_their_builtins` (`SOLIDS=` picks some)
+    through `renderer::render` at views and settings for each path: at
+    most about 10 bytes of 36,864 differ (the driver fuses multiply-adds
+    where it chooses; a KIFS rotation rounded in f64 flips a pixel's
+    branch digit), within a 0.1% tolerance, at 1.04-1.09x the
+    built-in's time. `every_solid_twin_compiles_as_its_builtin` holds
+    their parameters, titles and colourings.
+- **A Rhai field** (`EntryKind::Field`, a file with `fn term`; mode B,
+  *Mode B: fields* below): `fn start(pos, p[, ctx])` returns the state
+  at the pixel `pos` (complex), and `fn term(s, p[, ctx])` is one term,
+  returning the state with `value`, the term's value, and optionally
+  `grad` (complex), its gradient, which the template sums
+  (`lang::wgsl::field`: the field's own `FieldState` and `FieldStep`,
+  `FieldDef::own_state`, spliced at `//__FIELD_STATE__` where a built-in
+  gets the template's eight floats). `INFO` has `title`, `gradient`
+  (`true` for a field whose `grad` Hillshade should light) and
+  `coloring`, its default colouring. `ctx.maxiter` is the term count.
+  `reduce(t)` (a field's alone) reduces an angle to [-pi, pi] as the
+  built-ins' `esc_reduce` does, for a phase that grows term by term; the
+  language's `sin` and `cos` reduce their own arguments. A field has no
+  `prepare`. Used from the Formula Editor ("Use as field") or the
+  formula picker's plug-ins (`library::Kind::Field`).
+- **A Rhai field colouring** (`EntryKind::FieldColoring`, a file with
+  `fn shade`): `fn shade(sum, grad, n[, p])` -- the field's sum, its
+  summed gradient and the term count -- returns the palette position, or
+  `#{ t, lum }`, `lum` multiplying the colour (Hillshade's light). It is
+  offered in a field's colouring picker (`library::Kind::FieldColoring`).
+- **The built-in fields' twins** (`escape::twins::FIELD_TWINS`,
+  `FIELD_COLORING_TWINS`, `assets/formulas/twins/fields/*.rhai`; step 6):
+  Weierstrass, Markus-Lyapunov and Standard Map FTLE, and the Field
+  Value, Diverging and Hillshade colourings, each with its built-in's
+  parameters, title, gradient flag and default colouring exactly
+  (`every_field_twin_compiles_as_its_builtin`). **Edit Field as Rhai**
+  beside the formula picker and **Edit as Rhai** in a field's colouring
+  section put a twin in place, one undo step each, the settings and the
+  view kept. Through the renderer, each field at its first preset with
+  every colouring and settings for each generator and sequence, the
+  field, the colouring and both swapped in
+  (`field_twins_render_as_their_builtins`): byte for byte but for 19
+  bytes off by one (Weierstrass's sine generator at b = 2.7) and two
+  pixels of the Standard Map at K = 2.5 under the Field Value colouring,
+  where the chaotic sea amplifies a fused multiply-add and the palette
+  wraps; median time 1.01x the built-in's, worst 1.09x. The twins carry
+  no presets: Edit as Rhai keeps the view.
 - **UF and Fractint formulas and colourings convert** (`lang/to_rhai.rs`;
   the Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
   checked program is printed in these shapes, the file opened left as
@@ -1927,6 +1994,8 @@ The colourings are `field_value` (Field Value), `field_diverging`
 `field_hillshade` (Hillshade, from the analytic gradient; flat lighting
 on a field without one, `FieldDef::has_gradient`). Fields write no
 terminal records, so they have no recolour cache and do not perturb.
+A field or a field colouring can be written in Rhai, and each built-in
+has a twin (*A Rhai field*, *The built-in fields' twins*, above).
 
 ---
 

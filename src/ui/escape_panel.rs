@@ -66,8 +66,21 @@ fn edit_coloring_as_rhai(
     formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
     open_formula_editor: &mut bool,
 ) {
-    use crate::lang::EntryKind;
-    let name = crate::escape::custom::name_of(EntryKind::Coloring, &src);
+    edit_coloring_twin(config_manager, builtin, src, crate::lang::EntryKind::Coloring, formula_editor, open_formula_editor);
+}
+
+/// Edit as Rhai for a colouring: an escape colouring (`EntryKind::Coloring`)
+/// or a field's (`EntryKind::FieldColoring`; docs/projects/rhai-solids-
+/// fields.md).
+fn edit_coloring_twin(
+    config_manager: &mut ConfigManager,
+    builtin: &str,
+    src: crate::config::escape::CustomSource,
+    kind: crate::lang::EntryKind,
+    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
+    open_formula_editor: &mut bool,
+) {
+    let name = crate::escape::custom::name_of(kind, &src);
     let changes = vec![
         (ConfigPath::EscapeCustomColoring, ConfigValue::String(crate::config::manager::custom_source_json(&Some(src.clone())))),
         (ConfigPath::EscapeColoring, ConfigValue::String(name)),
@@ -76,20 +89,36 @@ fn edit_coloring_as_rhai(
         return;
     }
     let file = crate::storage::formula_store::file_name_for(&format!("{builtin}-coloring.rhai")).unwrap_or_else(|| "coloring.rhai".into());
-    formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_in_use(EntryKind::Coloring, file, &src);
+    formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_in_use(kind, file, &src);
     *open_formula_editor = true;
 }
 
-/// The user's plug-ins in the formula picker (formulas and solids) or the
-/// colouring picker (P3), after a separator. Choosing one is the Formula
-/// Editor's Use: its source carried in the config, its slot named, and
-/// Escape entered in the same undo step -- a colouring with what a fresh
-/// pick of it sets, as a built-in's.
-fn plugin_entries(ui: &mut egui::Ui, config_manager: &mut ConfigManager, current: &str, formulas: bool) {
+/// Which picker [`plugin_entries`] fills.
+#[derive(Clone, Copy, PartialEq)]
+enum PluginSlot {
+    /// The formula picker: formulas, solids and fields.
+    Formula,
+    /// The escape-time colouring picker.
+    Coloring,
+    /// A mode B field's colouring picker.
+    FieldColoring,
+}
+
+/// The user's plug-ins in the formula picker (formulas, solids and fields)
+/// or a colouring picker (P3), after a separator. Choosing one is the
+/// Formula Editor's Use: its source carried in the config, its slot named,
+/// and Escape entered in the same undo step -- an escape colouring with
+/// what a fresh pick of it sets, as a built-in's.
+fn plugin_entries(ui: &mut egui::Ui, config_manager: &mut ConfigManager, current: &str, slot: PluginSlot) {
     use crate::storage::library::{plugins, Kind};
+    let formulas = slot == PluginSlot::Formula;
     let list: Vec<_> = plugins()
         .into_iter()
-        .filter(|p| if formulas { matches!(p.kind, Kind::Formula | Kind::Solid) } else { p.kind == Kind::Coloring })
+        .filter(|p| match slot {
+            PluginSlot::Formula => matches!(p.kind, Kind::Formula | Kind::Solid | Kind::Field),
+            PluginSlot::Coloring => p.kind == Kind::Coloring,
+            PluginSlot::FieldColoring => p.kind == Kind::FieldColoring,
+        })
         .collect();
     if list.is_empty() {
         return;
@@ -103,9 +132,11 @@ fn plugin_entries(ui: &mut egui::Ui, config_manager: &mut ConfigManager, current
                 (vec![(ConfigPath::EscapeCustomFormula, source), (ConfigPath::EscapeFormula, ConfigValue::String(p.key.clone()))], "history.action.use_custom_formula")
             } else {
                 let mut changes = vec![(ConfigPath::EscapeCustomColoring, source), (ConfigPath::EscapeColoring, ConfigValue::String(p.key.clone()))];
-                if let Ok(def) = crate::escape::custom::compile_coloring(&p.carried, &p.key) {
+                if slot == PluginSlot::Coloring {
+                    if let Ok(def) = crate::escape::custom::compile_coloring(&p.carried, &p.key) {
                     let esc = &config_manager.active_config().escape;
-                    changes.extend(pick_changes(crate::escape::get_formula(&esc.formula), esc, def));
+                        changes.extend(pick_changes(crate::escape::get_formula(&esc.formula), esc, def));
+                    }
                 }
                 (changes, "history.action.use_custom_coloring")
             };
@@ -268,7 +299,7 @@ pub fn render_escape_content(
                         );
                     }
                 }
-                plugin_entries(ui, config_manager, &esc.formula, true);
+                plugin_entries(ui, config_manager, &esc.formula, PluginSlot::Formula);
             });
         // A built-in with a twin in Rhai (`escape::twins`): put the twin
         // in its place, the picture unchanged, and open it in the Formula
@@ -277,6 +308,15 @@ pub fn render_escape_content(
             if let Some(src) = crate::escape::twins::custom_source(&esc.formula) {
                 if ui.button(t!("escape_panel.edit_as_formula")).on_hover_text(t!("escape_panel.edit_as_formula_tip")).clicked() {
                     edit_as_formula(config_manager, &esc.formula, src, formula_editor, open_formula_editor);
+                }
+            }
+        }
+        // A built-in field with a twin (`escape::twins::FIELD_TWINS`): the
+        // same, as a field.
+        if let Some(f) = field {
+            if let Some(src) = crate::escape::twins::field_custom_source(f.name) {
+                if ui.button(t!("escape_panel.edit_field_as_rhai")).on_hover_text(t!("escape_panel.edit_field_as_rhai_tip")).clicked() {
+                    edit_formula_twin(config_manager, f.name, src, crate::lang::EntryKind::Field, formula_editor, open_formula_editor);
                 }
             }
         }
@@ -2458,7 +2498,14 @@ fn show_coloring_section(
                             );
                         }
                     }
+                    plugin_entries(ui, config_manager, &esc.coloring, PluginSlot::FieldColoring);
                 });
+            // A built-in with a twin (`escape::twins::FIELD_COLORING_TWINS`).
+            if let Some(src) = crate::escape::twins::field_coloring_custom_source(coloring.name) {
+                if ui.button(t!("escape_panel.edit_as_rhai")).on_hover_text(t!("escape_panel.edit_coloring_as_rhai_tip")).clicked() {
+                    edit_coloring_twin(config_manager, coloring.name, src, crate::lang::EntryKind::FieldColoring, formula_editor, open_formula_editor);
+                }
+            }
         });
     // The scale/offset pair is the hardest control here to guess at;
         // offer a starting point rather than leaving the user to probe.
@@ -2515,7 +2562,7 @@ fn show_coloring_section(
                         pick_coloring(config_manager, formula_def, esc, c);
                     }
                 }
-                plugin_entries(ui, config_manager, &esc.coloring, false);
+                plugin_entries(ui, config_manager, &esc.coloring, PluginSlot::Coloring);
             });
         // A built-in with a twin in Rhai (`escape::twins::COLORING_TWINS`):
         // put the twin in its place, the picture unchanged, and open it in
@@ -3040,6 +3087,44 @@ mod tests {
         assert!(crate::escape::ifs::get_ifs(&esc.formula).is_some_and(|d| d.solid), "it registers as a solid");
         let _ = manager.undo();
         assert_eq!(manager.config().escape.formula, "mandelbulb_solid", "one undo step");
+    }
+
+    /// A field's Edit as Rhai and its colouring's put their twins in place:
+    /// the parameters carry over by name, the view stays, the editor opens,
+    /// the twins register as a field and a field colouring, and an undo
+    /// each restores the built-ins.
+    #[test]
+    fn edit_field_as_rhai_puts_the_twins_in_place_and_opens_them() {
+        use crate::lang::EntryKind;
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = RenderMode::Escape;
+        config.escape.formula = "weierstrass".into();
+        config.escape.coloring = "field_hillshade".into();
+        config.escape.formula_params.insert("b".into(), 2.5);
+        config.escape.coloring_params.insert("relief".into(), 3.0);
+        config.escape.zoom_log2 = 1.5;
+        let mut manager = ConfigManager::new(config);
+        let (mut editor, mut open) = (None, false);
+        let src = crate::escape::twins::field_custom_source("weierstrass").unwrap();
+        edit_formula_twin(&mut manager, "weierstrass", src.clone(), EntryKind::Field, &mut editor, &mut open);
+        let csrc = crate::escape::twins::field_coloring_custom_source("field_hillshade").unwrap();
+        edit_coloring_twin(&mut manager, "field_hillshade", csrc.clone(), EntryKind::FieldColoring, &mut editor, &mut open);
+        let esc = &manager.config().escape;
+        assert!(esc.formula.starts_with(crate::escape::custom::PREFIX), "{}", esc.formula);
+        assert!(esc.coloring.starts_with(crate::escape::custom::PREFIX), "{}", esc.coloring);
+        assert_eq!(esc.custom_formula.as_ref().map(|s| s.source.as_str()), Some(src.source.as_str()));
+        assert_eq!(esc.custom_coloring.as_ref().map(|s| s.source.as_str()), Some(csrc.source.as_str()));
+        assert_eq!(esc.formula_params.get("b"), Some(&2.5), "the field's parameters carry over");
+        assert_eq!(esc.coloring_params.get("relief"), Some(&3.0), "the colouring's carry over");
+        assert_eq!(esc.zoom_log2, 1.5, "the view stays");
+        assert!(open && editor.is_some(), "the editor opens");
+        crate::escape::custom::ensure(esc);
+        let f = crate::escape::fields::get_field(&esc.formula).expect("it registers as a field");
+        assert_eq!(crate::escape::fields::get_field_coloring(&esc.coloring, f).name, esc.coloring, "the twin is the field's colouring in use");
+        let _ = manager.undo();
+        assert_eq!(manager.config().escape.coloring, "field_hillshade", "one undo step for the colouring");
+        let _ = manager.undo();
+        assert_eq!(manager.config().escape.formula, "weierstrass", "and one for the field");
     }
 
     /// The colouring's Edit as Rhai puts its twin in place: the settings

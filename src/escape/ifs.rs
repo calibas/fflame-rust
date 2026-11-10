@@ -13493,6 +13493,90 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// **The field twins render as their built-ins** (docs/projects/rhai-
+    /// solids-fields.md): each built-in field at its first preset with its
+    /// colouring, and each field colouring over Weierstrass -- the field,
+    /// the colouring, and both, put in place as Edit as Rhai puts them --
+    /// through `renderer::render`, compared byte for byte (a share of 0.1%
+    /// allowed, as the solids'), and timed.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn field_twins_render_as_their_builtins() {
+        use crate::lang::EntryKind;
+        let (device, queue) = device();
+        // (field, colouring, extra field parameters, extra colouring parameters)
+        type Case = (&'static str, &'static str, &'static [(&'static str, f32)], &'static [(&'static str, f32)]);
+        let cases: &[Case] = &[
+            ("weierstrass", "field_hillshade", &[], &[]),
+            ("weierstrass", "field_value", &[], &[]),
+            ("weierstrass", "field_diverging", &[], &[]),
+            ("weierstrass", "field_hillshade", &[("generator", 1.0), ("b", 2.7)], &[("azimuth", 200.0)]),
+            ("weierstrass", "field_hillshade", &[("generator", 2.0), ("a", 0.7)], &[]),
+            ("markus_lyapunov", "field_diverging", &[], &[]),
+            ("markus_lyapunov", "field_diverging", &[("seq_bits", 6.0), ("seq_len", 3.0)], &[]),
+            ("standard_map_ftle", "field_diverging", &[], &[]),
+            ("standard_map_ftle", "field_value", &[("k", 2.5)], &[("scale", 3.0)]),
+        ];
+        let mut failures = Vec::new();
+        let mut timing = Vec::new();
+        for (field, coloring, fparams, cparams) in cases {
+            let def = crate::escape::fields::get_field(field).expect("a built-in field");
+            let preset = &def.presets[0];
+            let mut c = crate::config::FractalConfig::default();
+            c.render_mode = RenderMode::Escape;
+            c.escape.formula = field.to_string();
+            c.escape.coloring = coloring.to_string();
+            c.escape.center_re = preset.center_re.to_string();
+            c.escape.center_im = preset.center_im.to_string();
+            c.escape.zoom_log2 = preset.zoom_log2;
+            c.escape.max_iter = preset.max_iter;
+            for (k, v) in preset.formula_params.iter().chain(fparams.iter()) {
+                c.escape.formula_params.insert(k.to_string(), *v);
+            }
+            if *coloring == preset.coloring {
+                for (k, v) in preset.coloring_params.iter() {
+                    c.escape.coloring_params.insert(k.to_string(), *v);
+                }
+            }
+            for (k, v) in cparams.iter() {
+                c.escape.coloring_params.insert(k.to_string(), *v);
+            }
+            let fsrc = crate::escape::twins::field_custom_source(field).expect("a field twin");
+            let csrc = crate::escape::twins::field_coloring_custom_source(coloring).expect("a colouring twin");
+            let mut tf = c.clone();
+            tf.escape.formula = crate::escape::custom::name_of(EntryKind::Field, &fsrc);
+            tf.escape.custom_formula = Some(fsrc);
+            let mut tc = c.clone();
+            tc.escape.coloring = crate::escape::custom::name_of(EntryKind::FieldColoring, &csrc);
+            tc.escape.custom_coloring = Some(csrc);
+            let mut both = tf.clone();
+            both.escape.coloring = tc.escape.coloring.clone();
+            both.escape.custom_coloring = tc.escape.custom_coloring.clone();
+            let go = |cfg: &crate::config::FractalConfig| {
+                let out = pollster::block_on(crate::renderer::render(&device, &queue, crate::renderer::RenderJob::new(cfg, W, H), &mut crate::renderer::NoProgress)).expect("render");
+                (out.rgba_data, out.render_time_ms)
+            };
+            let _ = (go(&c), go(&tf), go(&tc), go(&both));
+            let (b, tb) = go(&c);
+            for (what, cfg) in [("the field", &tf), ("the colouring", &tc), ("both", &both)] {
+                let (w, tw) = go(cfg);
+                let differ = b.iter().zip(&w).filter(|(x, y)| x != y).count();
+                let worst = b.iter().zip(&w).map(|(x, y)| (*x as i32 - *y as i32).abs()).max().unwrap_or(0);
+                let tag = format!("{field} {coloring} {fparams:?} {cparams:?}, {what}");
+                println!("  {tag}: {differ} of {} bytes differ (worst {worst}) | built-in {tb:.1} ms, twin {tw:.1} ms", b.len());
+                timing.push(tw / tb.max(1e-9));
+                if differ * 1000 > b.len() {
+                    failures.push(format!("{tag}: {differ} bytes differ, worst {worst}"));
+                }
+            }
+            let distinct: std::collections::BTreeSet<&[u8]> = b.chunks(4).collect();
+            assert!(distinct.len() > 8, "{field} {coloring}: too little drawn to compare");
+        }
+        timing.sort_by(|a, b| a.total_cmp(b));
+        println!("  the twin's time over the built-in's: median {:.2}, worst {:.2}", timing[timing.len() / 2], timing[timing.len() - 1]);
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     /// **The coarse pass lands on a later frame, and no call waits for
     /// it** (the web's hang on choosing Measure, 2026-11-10): the first
     /// `ensure_coarse` starts the pass and returns at once with it
