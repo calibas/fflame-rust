@@ -2182,6 +2182,11 @@ projected coordinates. Open questions include:
   projects to depends on its z.
 - The camera moves.
 
+Two ways in, as experiments (2026-11-09): plan in the flame's space and
+test against the frustum, first for flames where z is a passenger --
+[planner-experiments.md](../../experimental/planner-experiments.md), 4
+and 5.
+
 ## Other
 
 - **O1. Other platforms -- later.** The planner's kernel has never run on
