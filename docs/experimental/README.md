@@ -10,6 +10,7 @@ it goes to [docs/archive/](../archive/) with a banner saying so.
 
 | Doc | What it is |
 |---|---|
+| [planner-experiments.md](planner-experiments.md) | Five experiments from the 2026-11-09 review of `rhai-planners`: a distance field from Focused Rendering's samples, inverses by Newton's method, plans from the Flame Attractor's beam walk, Focused Rendering in 3D (z as a passenger; true 3D). Not started. |
 | [3d-lut.md](3d-lut.md) | A 3D colour lookup table after the tonemap. Not started. |
 | [filmic-tunable.md](filmic-tunable.md) | A tunable (Hable-style) filmic highlight curve beside the shipped Clip/MaxNorm/Reinhard/Filmic. Not started. |
 | [per-transform-color-adjustments.md](per-transform-color-adjustments.md) | Hue/saturation/brightness adjustments per transform. Not started; it predates `Transform.opacity` and the current colour modes. |
