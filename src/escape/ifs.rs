@@ -3108,6 +3108,23 @@ fn ifs_color(res: IfsResult) -> IfsShade {
 pub static IFS_COLORINGS: &[&IfsColoringDef] =
     &[&IFS_DISTANCE, &IFS_LEVEL, &IFS_ADDRESS, &IFS_TRAP, &IFS_MEASURE_COLORING];
 
+/// **What of a colouring the WALK reads**, for the recolour cache's key
+/// (`EscapeRenderer::iterate_key_for`). Four colourings paint what the
+/// distance walk leaves, so changing among them is a recolour. Measure
+/// is a walk of its own (`assembler::assemble_ifs` swaps the evaluation
+/// for `ifs_measure`), and its Lookup Region (`cells`, `cparam(0)`) says
+/// where that walk stops -- so it and its region are walk inputs, and
+/// its Brightness, read by `ifs_color`, is not. Without this the cache
+/// answered a switch back to a distance colouring from Measure's records,
+/// and a Lookup Region change did nothing at all.
+pub fn walk_colouring_key(def: &IfsDef, coloring: &str, params: &std::collections::BTreeMap<String, f32>) -> String {
+    if def.solid || coloring != IFS_MEASURE_COLORING.name {
+        return "distance".to_string();
+    }
+    let cells = params.get("cells").copied().unwrap_or_else(|| IFS_MEASURE_COLORING.parameters[0].slot_default());
+    format!("measure:cells={cells}")
+}
+
 /// Whether `coloring` colours `def`, so the panel offers it: Measure
 /// reads the flat attractor's measure walk alone (the assembler's
 /// `measure`), which no solid has -- on one it was a flat colour.
@@ -17028,6 +17045,61 @@ fn distance(s, p) {
                  not being hit and the comparison is vacuous"
             );
         }
+    }
+
+    /// **Measure is a walk of its own, and Lookup Region is one of its
+    /// inputs** (2026-11-10): the recolour cache must not answer either
+    /// change. The Measure colouring's walk reads the measure, where the
+    /// other four read a distance, and its Lookup Region (`cells`) says
+    /// where that walk stops -- so neither is a colouring edit. On one
+    /// renderer: distance, Measure, distance again (drawn as a fresh walk
+    /// draws it), Measure again, Measure at another Lookup Region -- each
+    /// a walk -- and a Brightness change, the one that IS a recolour.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn measure_and_its_lookup_region_are_not_recolours() {
+        let (device, queue) = device();
+        let base = config_for(sierpinski_flame());
+        let render_on = |engines: Option<&mut crate::renderer::RenderEngines>, coloring: &str, params: &[(&str, f32)]| -> (Vec<u8>, &'static str) {
+            let mut c = base.clone();
+            c.escape.coloring = coloring.to_string();
+            c.escape.coloring_params.clear();
+            for (k, v) in params {
+                c.escape.coloring_params.insert(k.to_string(), *v);
+            }
+            let mut job = crate::renderer::RenderJob::new(&c, W, H);
+            let mut path = "";
+            let out = match engines {
+                Some(e) => {
+                    job = job.with_engines(e);
+                    let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render");
+                    path = e.escape.as_ref().map_or("", |r| r.last_path);
+                    out
+                }
+                None => pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render"),
+            };
+            (out.rgba_data, path)
+        };
+        let mut engines = crate::renderer::RenderEngines::default();
+        let mut paths = Vec::new();
+        let _ = render_on(Some(&mut engines), "ifs_distance", &[]);
+        let (_, p) = render_on(Some(&mut engines), "ifs_measure", &[("cells", 4.0)]);
+        paths.push(("to Measure", p));
+        let (back, p) = render_on(Some(&mut engines), "ifs_distance", &[]);
+        paths.push(("back to distance", p));
+        let (_, p) = render_on(Some(&mut engines), "ifs_measure", &[("cells", 4.0)]);
+        paths.push(("to Measure again", p));
+        let (_, p) = render_on(Some(&mut engines), "ifs_measure", &[("cells", 16.0)]);
+        paths.push(("Lookup Region 4 to 16", p));
+        let (_, bright) = render_on(Some(&mut engines), "ifs_measure", &[("cells", 16.0), ("scale", 2.0)]);
+        println!("  paths: {paths:?}; a Brightness change: {bright}");
+        for (what, p) in &paths {
+            assert_ne!(*p, "recolor", "{what} was answered by the recolour cache");
+        }
+        assert_eq!(bright, "recolor", "a Brightness change should recolour, not walk");
+        let (fresh, _) = render_on(None, "ifs_distance", &[]);
+        let differing = back.iter().zip(&fresh).filter(|(a, b)| a != b).count();
+        assert_eq!(differing, 0, "back to distance differs from a fresh walk in {differing} bytes");
     }
 
     /// The record the walk writes and the record the recolour reads
