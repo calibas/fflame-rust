@@ -122,6 +122,7 @@ pub const COLORING_TWINS: &[(&str, &str)] = &[
 pub const SOLID_TWINS: &[(&str, &str)] = &[
     ("mandelbox_solid", include_str!("../../assets/formulas/twins/solids/mandelbox.rhai")),
     ("mandelbulb_solid", include_str!("../../assets/formulas/twins/solids/mandelbulb.rhai")),
+    ("quaternion_julia_solid", include_str!("../../assets/formulas/twins/solids/quaternion_julia.rhai")),
 ];
 
 /// The twin of the built-in solid `name`, when it has one.

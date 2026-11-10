@@ -13426,6 +13426,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             ("mandelbulb_solid", "ifs_address", &[("power", 3.0), ("colour_depth", 5.0)], 0.0),
             ("mandelbulb_solid", "ifs_trap", &[("mode", 1.0), ("cx", 0.35), ("cy", -0.6), ("cz", 0.2)], 0.0),
             ("mandelbulb_solid", "ifs_level", &[("step_factor", 0.6), ("levels", 20.0)], 1.5),
+            ("quaternion_julia_solid", "ifs_level", &[], 0.0),
+            ("quaternion_julia_solid", "ifs_trap", &[], 0.0),
+            ("quaternion_julia_solid", "ifs_address", &[], 0.0),
+            ("quaternion_julia_solid", "ifs_distance", &[], 0.0),
+            ("quaternion_julia_solid", "ifs_address", &[("power", 3.0), ("w_slice", 0.1)], 0.0),
+            ("quaternion_julia_solid", "ifs_level", &[("slice_axis", 0.0), ("w_slice", -0.3)], 1.0),
+            ("quaternion_julia_solid", "ifs_level", &[("slice_axis", 1.0), ("cx", -0.2), ("cy", 0.6), ("cz", 0.2), ("bailout", 4.0)], 1.5),
+            ("quaternion_julia_solid", "ifs_trap", &[("slice_axis", 2.0), ("colour_depth", 6.0), ("levels", 64.0)], 1.0),
         ];
         let mut failures = Vec::new();
         let mut timing = Vec::new();
