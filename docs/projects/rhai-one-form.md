@@ -303,11 +303,48 @@ and 757 s on the web's. Per view:
   desktop's and 62-67 s on the web's: its tree discs are wider at the
   discs the walk asks about, so more words survive to be bounded.
 
-So the cost is the forward planner's search, which has no time budget
-and stops only at its word cap, now reached by variations that used to
-be refused for want of a bound. A follow-up, not part of route B: a time
-budget for the forward planner, as the inverse walk has
-(`backward::TIME_BUDGET`), or a cap counted before a level is bounded.
+So the cost is the forward planner's search, which had no time budget
+and stopped only at its word cap, now reached by variations that used to
+be refused for want of a bound.
+
+### The forward search's time budget -- built (2026-11-10)
+
+The user asked for it next. The forward search (`Cylinders::plan_inner`)
+now takes the inverse walk's budget and cancel flag
+(`PlanOptions::budget`, `cancel`), which it was handed and ignored:
+20 s on the desktop, 1.5 s on the web (`INLINE_BUDGET`). Past the
+budget it keeps every word not yet expanded as it stands -- the depth
+cap's rule, sound because such a word's image is larger than the view --
+and the plan says it timed out. It checks between words, so each is
+expanded whole or kept whole, and not before the first level (whose
+root is the empty word); a frontier wider than the table is still
+`TooManyWords`; a cancel returns `TimedOut`.
+
+Gates:
+
+- `a_forward_search_out_of_time_keeps_its_frontier`: the gasket at 1e4
+  with no time stops after its first level, says so, and is complete --
+  every word of the full plan extends one of its words, none of its
+  words extends another, and its mass covers the full plan's.
+- `a_cancelled_forward_search_stops`.
+- `a_timed_out_forward_plan_draws_the_full_plans_picture` (GPU): the
+  gasket at 256x, the full plan (depth 6) against the timed one
+  (depth 1), by density, judged as the plans on the way are against the
+  landed plan (a tier past 1.5% at four standard errors, a dense block
+  past 10%). They agree to 0.04-0.06% over the view, a dense block to
+  0.4-0.6%. Both differ from the plain chaos game by more than from
+  each other -- the full plan 0.9993 of it, its worst dense block 0.9%;
+  the timed plan 0.9997 and 0.7% (`TRUTH=1 IPT=4096`) -- and longer
+  orbits do not shrink it, so it is not burn-in. That sub-percent
+  difference between a targeted gasket and its chaos game was not known
+  before; it is recorded here, not chased.
+
+The slow fixtures again, the web's route (`FIXTURES=jac_asn,minkowskope,
+truchet2,glynnspiro`): jac_asn plans at all four depths in 20 s, about
+3,700 words each, where it searched 47 s to refuse; minkowskope plans at
+three, about 2,000 words, where both routes refused with too many words
+(the desktop's still does, at 10.6 s, under the budget); truchet2 and
+glynnspiro reach the word cap in about a second either way.
 
 ## Step 3: decide P9, by measurement
 

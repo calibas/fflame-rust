@@ -422,9 +422,10 @@ pub struct Cylinders {
     /// flame with a real invariant ball, which is every flame that
     /// targeted before family M existed.
     pub sampling_leak: f64,
-    /// Whether the inverse walk ran out of time (`backward::TIME_BUDGET`)
-    /// and forced its frontier as it stood: complete, but its words are
-    /// wherever the walk had reached, and there can be very many of them.
+    /// Whether the plan ran out of time (`PlanOptions::budget`) and kept
+    /// its frontier as it stood: complete, but its words are wherever the
+    /// search had reached -- the inverse walk's, or the forward search's,
+    /// whose unexpanded words are larger than the view.
     pub timed_out: bool,
     /// The fraction of forced samples that land in the frame, weighted
     /// by the words' probabilities. One everywhere except the inverse
@@ -1292,12 +1293,34 @@ impl Cylinders {
             Some(bag)
         };
 
-        for _depth in 0..MAX_DEPTH {
+        // **The search's time budget** (`PlanOptions::budget`, as the
+        // inverse walk's): past it, every node not yet expanded is kept as
+        // it stands, as the depth cap keeps its frontier -- complete, less
+        // efficient. Checked between nodes, so each node is either
+        // expanded whole or kept whole; and not before the first level,
+        // whose root is the empty word. A cancel stops it outright: the
+        // view has moved on.
+        let started = std::time::Instant::now();
+        let mut timed_out = false;
+        let cancelled = || opts.cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+        for depth in 0..MAX_DEPTH {
             if frontier.is_empty() {
                 break;
             }
             let mut next: Vec<Node> = Vec::new();
-            for node in frontier.drain(..) {
+            let mut nodes = std::mem::take(&mut frontier).into_iter();
+            while let Some(node) = nodes.next() {
+                if depth > 0 {
+                    if cancelled() {
+                        return Err(NoCylinders::TimedOut { nodes: kept.len() + next.len() });
+                    }
+                    if started.elapsed() > opts.budget {
+                        timed_out = true;
+                        next.push(node);
+                        next.extend(nodes);
+                        break;
+                    }
+                }
                 for &(sym, w) in &alphabet {
                     let i = sym_transform(sym) as usize;
                     // **The new symbol is applied FIRST, not last.**
@@ -1465,6 +1488,10 @@ impl Cylinders {
             // reaches 25981 without it, which is the branching factor
             // to the depth and the same symptom `spherical.fflame`
             // showed above.
+            if timed_out {
+                frontier = next;
+                break;
+            }
             let Some(beam) = (mobius.is_some() || root_images.is_some()).then(|| {
                 if root_images.is_some() {
                     ROOT_BEAM
@@ -1488,10 +1515,14 @@ impl Cylinders {
             }
             frontier = next;
         }
-        // Anything still on the frontier hit the depth cap. Keeping
-        // it is sound: its image is larger than the view, so its
-        // samples spread wider than they need to, which costs
-        // efficiency and not correctness.
+        // Anything still on the frontier hit the depth cap or the time
+        // budget. Keeping it is sound: its image is larger than the view,
+        // so its samples spread wider than they need to, which costs
+        // efficiency and not correctness. A budget's frontier can be
+        // wider than the table holds, which is still `TooManyWords`.
+        if timed_out && kept.len() + frontier.len() > MAX_WORDS {
+            return Err(NoCylinders::TooManyWords(kept.len() + frontier.len()));
+        }
         for node in frontier {
             kept.push(Cylinder {
                 word: node.word,
@@ -1515,7 +1546,7 @@ impl Cylinders {
             mass,
             lost,
             sampling_leak,
-            timed_out: false,
+            timed_out,
             efficiency: 1.0,
             depth,
             composable,
@@ -6147,6 +6178,76 @@ mod gpu_tests {
             );
         }
     }
+
+    /// **A timed-out forward plan draws the full plan's picture**, less
+    /// efficiently: the gasket at 256x, its full plan (depth 6) and its
+    /// plan with no time (depth 1), by density in replicates. The timed
+    /// plan's samples land in the view about `full.mass / timed.mass` as
+    /// often (its words cover the full plan's), so it gets more frames, up
+    /// to 480.
+    ///
+    /// Judged as the plans on the way are against the landed plan (a
+    /// complete plan stopped short, the same kind of thing): a tier off by
+    /// more than 1.5% (5% middle, 15% faint) at four standard errors, or a
+    /// dense block by 10%. Not five standard errors a block: measured
+    /// (2026-11-10, `TRUTH=1 IPT=4096`), both plans differ from the plain
+    /// chaos game by a fraction of a percent -- the full plan 0.9993 of it
+    /// over the view, its worst dense block 0.9% off; the timed plan 0.9997
+    /// and 0.7% -- and from each other by 0.04% and 0.4%, which longer
+    /// orbits do not shrink. The timed plan is the nearer the truth.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_timed_out_forward_plan_draws_the_full_plans_picture() {
+        use crate::scene::backward::PlanOptions;
+        const N: u32 = 192;
+        const REPS: usize = 6;
+        let (device, queue) = device();
+        let mut cfg = FractalConfig::default();
+        cfg.flame = super::tests::gasket();
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.levels_enabled = false;
+        cfg.cylinder_always = true;
+        cfg.zoom = 256.0;
+        (cfg.pan_x, cfg.pan_y) = (0.5, 0.0);
+        let view = View::of(cfg.zoom as f64, [cfg.pan_x, cfg.pan_y], N, N);
+        let (full, timed) = {
+            let reg = crate::variations::global_registry();
+            let full = Cylinders::plan(&cfg.flame, &reg, view).expect("the gasket plans");
+            let timed = Cylinders::plan_opts(&cfg.flame, &reg, view, PlanOptions { budget: std::time::Duration::ZERO, ..Default::default() }).expect("a timed plan");
+            (full, timed)
+        };
+        assert!(timed.timed_out && full.depth > timed.depth, "depth {} against {}", full.depth, timed.depth);
+        let frames = 8usize;
+        let more = ((frames as f64) * timed.mass / full.mass).ceil().clamp(frames as f64, 480.0) as usize;
+        let ipt: u32 = std::env::var("IPT").ok().and_then(|v| v.parse().ok()).unwrap_or(1024);
+        let (xf, _) = replicated_blocks(&device, &queue, &cfg, Some(&full), N, ipt, frames, REPS);
+        let (xt, _) = replicated_blocks(&device, &queue, &cfg, Some(&timed), N, ipt, more, REPS);
+        // The truth: the plain chaos game, as many samples in the view.
+        if std::env::var("TRUTH").is_ok() {
+            let (xu, _) = replicated_blocks(&device, &queue, &cfg, None, N, ipt, 480, REPS);
+            print_compared("the full plan against the chaos game", &compare_blocks(&xf, &xu, &xf));
+            print_compared("the timed plan against the chaos game", &compare_blocks(&xt, &xu, &xf));
+        }
+        let cmp = compare_blocks(&xt, &xf, &xf);
+        print_compared(&format!("{ipt} a thread: timed ({} words, depth {}, mass {:.3e}, {more} frames) against full ({} words, depth {}, mass {:.3e}, {frames} frames)", timed.words.len(), timed.depth, timed.mass, full.words.len(), full.depth, full.mass), &cmp);
+        let mut failures = Vec::new();
+        for (tier, n, mx, _, my, _, z) in &cmp.pooled {
+            let tol = match *tier {
+                "all" | "dense" => 0.015,
+                "middle" => 0.05,
+                "faint" => 0.15,
+                _ => continue,
+            };
+            let off = (mx / my.max(f64::MIN_POSITIVE) - 1.0).abs();
+            if *n > 0 && z.abs() > 4.0 && off > tol {
+                failures.push(format!("the {tier} tier is off by {off:.3} ({z:+.1} standard errors)"));
+            }
+        }
+        if cmp.worst_dense > 0.10 {
+            failures.push(format!("a dense block differs by {:.3}", cmp.worst_dense));
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
 }
 
 #[cfg(test)]
@@ -6220,7 +6321,7 @@ mod tests {
     /// view empty past 2^16, which is what found this.
     const ON_SET: [f64; 2] = [0.0, 0.0];
 
-    fn gasket() -> Flame {
+    pub(super) fn gasket() -> Flame {
         flame_of(vec![
             affine(0.5, 0.0, 0.0, 0.5, 0.0, 0.0, 1.0),
             affine(0.5, 0.0, 0.0, 0.5, 0.5, 0.0, 1.0),
@@ -10337,6 +10438,45 @@ mod tests {
         for w in web_only.iter().take(30) {
             println!("    web alone: {w}");
         }
+    }
+
+    /// **A forward search out of time keeps its frontier, complete**
+    /// (docs/projects/rhai-one-form.md, the time budget): the gasket at
+    /// 1e4 planned in full and with no time at all. The timed plan stops
+    /// after its first level and says so; every word the full plan keeps
+    /// extends one of its words (a word's ancestors are its suffixes:
+    /// the outermost map applies last), none of its words extends
+    /// another, and it carries at least the full plan's measure.
+    #[test]
+    fn a_forward_search_out_of_time_keeps_its_frontier() {
+        use crate::scene::backward::PlanOptions;
+        let reg = crate::variations::global_registry();
+        let view = View::of(1e4, ON_SET, 256, 256);
+        let full = Cylinders::plan(&gasket(), &reg, view).expect("the gasket plans");
+        assert!(!full.timed_out && full.depth > 3, "a deep plan: depth {}", full.depth);
+        let timed = Cylinders::plan_opts(&gasket(), &reg, view, PlanOptions { budget: std::time::Duration::ZERO, ..Default::default() }).expect("a timed-out plan is still a plan");
+        assert!(timed.timed_out, "it says it ran out of time");
+        assert!(timed.words.iter().all(|w| w.word.len() <= 2), "it stopped early: {:?}", timed.words.iter().map(|w| w.word.len()).max());
+        let ends_in = |w: &[u32], tail: &[u32]| w.len() >= tail.len() && w[w.len() - tail.len()..] == *tail;
+        for f in &full.words {
+            assert!(timed.words.iter().any(|t| ends_in(&f.word, &t.word)), "{:?} extends no timed word", f.word);
+        }
+        for (i, a) in timed.words.iter().enumerate() {
+            for (j, b) in timed.words.iter().enumerate() {
+                assert!(i == j || !ends_in(&a.word, &b.word), "{:?} extends {:?}", a.word, b.word);
+            }
+        }
+        assert!(timed.mass >= full.mass * (1.0 - 1e-12), "timed mass {} against {}", timed.mass, full.mass);
+    }
+
+    /// A cancelled forward search stops: its view has moved on.
+    #[test]
+    fn a_cancelled_forward_search_stops() {
+        use crate::scene::backward::PlanOptions;
+        let reg = crate::variations::global_registry();
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let out = Cylinders::plan_opts(&gasket(), &reg, View::of(1e4, ON_SET, 256, 256), PlanOptions { cancel: Some(&cancel), ..Default::default() });
+        assert!(matches!(out, Err(NoCylinders::TimedOut { .. })), "{out:?}");
     }
 
     /// **A plan made for another flame packs without a panic** (the
