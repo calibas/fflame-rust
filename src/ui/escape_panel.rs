@@ -26,8 +26,23 @@ fn edit_as_formula(
     formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
     open_formula_editor: &mut bool,
 ) {
-    use crate::lang::EntryKind;
-    let name = crate::escape::custom::name_of(EntryKind::Formula, &src);
+    edit_formula_twin(config_manager, builtin, src, crate::lang::EntryKind::Formula, formula_editor, open_formula_editor);
+}
+
+/// Edit as Formula, for an escape formula (`EntryKind::Formula`) or a mode
+/// D solid (`EntryKind::Solid`; docs/projects/rhai-solids-fields.md): the
+/// built-in `builtin`'s twin becomes the formula, its parameters and the
+/// view kept, one undo step back to the built-in; the Formula Editor holds
+/// the twin in use and asks to be opened.
+fn edit_formula_twin(
+    config_manager: &mut ConfigManager,
+    builtin: &str,
+    src: crate::config::escape::CustomSource,
+    kind: crate::lang::EntryKind,
+    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
+    open_formula_editor: &mut bool,
+) {
+    let name = crate::escape::custom::name_of(kind, &src);
     let changes = vec![
         (ConfigPath::EscapeCustomFormula, ConfigValue::String(crate::config::manager::custom_source_json(&Some(src.clone())))),
         (ConfigPath::EscapeFormula, ConfigValue::String(name)),
@@ -36,7 +51,7 @@ fn edit_as_formula(
         return;
     }
     let file = crate::storage::formula_store::file_name_for(&format!("{builtin}.rhai")).unwrap_or_else(|| "formula.rhai".into());
-    formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_in_use(EntryKind::Formula, file, &src);
+    formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_in_use(kind, file, &src);
     *open_formula_editor = true;
 }
 
@@ -262,6 +277,15 @@ pub fn render_escape_content(
             if let Some(src) = crate::escape::twins::custom_source(&esc.formula) {
                 if ui.button(t!("escape_panel.edit_as_formula")).on_hover_text(t!("escape_panel.edit_as_formula_tip")).clicked() {
                     edit_as_formula(config_manager, &esc.formula, src, formula_editor, open_formula_editor);
+                }
+            }
+        }
+        // A built-in solid with a twin (`escape::twins::SOLID_TWINS`): the
+        // same, as a solid.
+        if ifs_def.is_some_and(|d| d.solid) {
+            if let Some(src) = crate::escape::twins::solid_custom_source(&esc.formula) {
+                if ui.button(t!("escape_panel.edit_solid_as_rhai")).on_hover_text(t!("escape_panel.edit_solid_as_rhai_tip")).clicked() {
+                    edit_formula_twin(config_manager, &esc.formula, src, crate::lang::EntryKind::Solid, formula_editor, open_formula_editor);
                 }
             }
         }
@@ -2989,6 +3013,33 @@ mod tests {
         let _ = manager.undo();
         assert_eq!(manager.config().escape.formula, "burning_ship", "one undo step");
         assert_eq!(manager.config().render_mode, RenderMode::TwoD);
+    }
+
+    /// A solid's Edit as Rhai puts its twin in place: its parameters carry
+    /// over by name, the camera stays, the editor opens on it in use as a
+    /// solid, the twin registers as a mode D solid, and one undo restores
+    /// the built-in.
+    #[test]
+    fn edit_solid_as_rhai_puts_the_twin_in_place_and_opens_it() {
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = RenderMode::Escape;
+        config.escape.formula = "mandelbulb_solid".into();
+        config.escape.formula_params.insert("power".into(), 5.0);
+        config.escape.cam_yaw = 1.25;
+        let mut manager = ConfigManager::new(config);
+        let (mut editor, mut open) = (None, false);
+        let src = crate::escape::twins::solid_custom_source("mandelbulb_solid").unwrap();
+        edit_formula_twin(&mut manager, "mandelbulb_solid", src.clone(), crate::lang::EntryKind::Solid, &mut editor, &mut open);
+        let esc = &manager.config().escape;
+        assert!(esc.formula.starts_with(crate::escape::custom::PREFIX), "{}", esc.formula);
+        assert_eq!(esc.custom_formula.as_ref().map(|s| s.source.as_str()), Some(src.source.as_str()));
+        assert_eq!(esc.formula_params.get("power"), Some(&5.0), "the power carries over");
+        assert_eq!(esc.cam_yaw, 1.25, "the camera stays");
+        assert!(open && editor.is_some(), "the editor opens");
+        crate::escape::custom::ensure(esc);
+        assert!(crate::escape::ifs::get_ifs(&esc.formula).is_some_and(|d| d.solid), "it registers as a solid");
+        let _ = manager.undo();
+        assert_eq!(manager.config().escape.formula, "mandelbulb_solid", "one undo step");
     }
 
     /// The colouring's Edit as Rhai puts its twin in place: the settings

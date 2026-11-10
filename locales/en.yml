@@ -2655,6 +2655,8 @@ escape_panel:
   angle_tip: "The parameter's angle about 0, in degrees"
   edit_as_formula: "Edit as Formula"
   edit_as_formula_tip: "Put this formula's Rhai twin in its place -- the same picture -- and open it in the Formula Editor to change as your own. Mann damping and the biomorph test are the built-in's alone."
+  edit_solid_as_rhai: "Edit Solid as Rhai"
+  edit_solid_as_rhai_tip: "Put this solid's Rhai twin in its place -- the same picture, its settings and the camera kept -- and open it in the Formula Editor to change as your own. The built-in is untouched."
   edit_as_rhai: "Edit as Rhai"
   edit_coloring_as_rhai_tip: "Put this colouring's Rhai twin in its place -- the same picture, its settings kept -- and open it in the Formula Editor to change as your own. The built-in is untouched."
   contrast: "Auto Contrast"
