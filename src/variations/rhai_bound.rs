@@ -1290,6 +1290,38 @@ mod tests {
 "));
     }
 
+    /// TIMING: one bound of julian, swirl and spherical through each way
+    /// in -- naga's `derive` (warm), this module's `derive` by name (its
+    /// program found and its parameters read each call, as the planner
+    /// calls it), and `bound_program` alone on a compiled program.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[ignore = "timing; run with --ignored --nocapture"]
+    fn time_a_bound() {
+        let reg = crate::variations::global_registry();
+        let ball = Ball::new([0.6, -0.4], 0.25);
+        for name in ["julian", "swirl", "spherical", "juliascope", "jac_asn", "minkowskope", "truchet2"] {
+            let info = reg.get(name).expect("a built-in").clone();
+            let pf = |q: &str| info.parameters.iter().find(|d| d.name == q).map(|d| d.slot_default() as f64).unwrap_or(0.0);
+            let each = |f: &dyn Fn() -> bool| {
+                let _ = f();
+                let n = 2000;
+                let t0 = std::time::Instant::now();
+                let mut ok = 0;
+                for _ in 0..n {
+                    ok += usize::from(f());
+                }
+                (t0.elapsed().as_secs_f64() * 1e6 / n as f64, ok)
+            };
+            let (naga, naga_ok) = each(&|| crate::variations::derive::derive(name, &pf, 1.0, ball).is_ok());
+            let (by_name, tree_ok) = each(&|| derive(&reg, name, &pf, 1.0, ball).is_ok());
+            let p = program_for(&reg, name).expect("a twin");
+            let v = values(&p, &pf);
+            let (alone, _) = each(&|| bound_program(&p, &v, 1.0, cell(ball), Interval::new(0.0, 1.0)).is_ok());
+            println!("  {name:<12} naga {naga:9.1} us ({}) | by name {by_name:9.1} us ({}) | bound_program {alone:9.1} us", if naga_ok > 0 { "bounds" } else { "refuses" }, if tree_ok > 0 { "bounds" } else { "refuses" });
+        }
+    }
+
     /// Pinning julian's draw to one arm's slice shrinks its bound, as
     /// `derive`'s `pinning_the_arm_makes_julian_shrink` measures of the
     /// WGSL.
