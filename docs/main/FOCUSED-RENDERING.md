@@ -216,6 +216,18 @@ keeps the words whose image meets the view, breadth first. It needs:
   kept as it is, which is sound;
 - some word to reach the view (`ViewIsEmpty`).
 
+**The forward search has the inverse walk's time budget**
+(`PlanOptions::budget`: 20 s on the desktop, 1.5 s on the web, where
+it plans on the page's thread). Past it, every word not yet expanded is kept as
+it stands, as the depth cap keeps its frontier: the plan is complete and
+says so (`Cylinders::timed_out`), its unexpanded words larger than the
+view and so less efficient. It is checked between words and not before
+the first level; a frontier the table cannot hold is still
+`TooManyWords`; a cancel (the view has moved on) stops it. Measured on
+`jac_asn`, whose bound is a loop: it used to search 47 s to refuse with
+too many words, and now plans in the budget
+([rhai-one-form.md](../projects/rhai-one-form.md), the time budget).
+
 Forward bounds come from three places (`ifs_ball::derived`). Five are
 written by hand (`bound::BOUNDS`: `spherical`, `bubble`, `julian`,
 `pre_blur`, `blur`) and come first. Any other is derived by interval
