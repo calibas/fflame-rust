@@ -419,17 +419,21 @@ enum Which {
 pub(crate) mod profile {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     pub static ON: AtomicBool = AtomicBool::new(false);
-    pub static CALLS: [AtomicU64; 9] = [const { AtomicU64::new(0) }; 9];
-    pub static NANOS: [AtomicU64; 9] = [const { AtomicU64::new(0) }; 9];
+    pub static CALLS: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
+    pub static NANOS: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
     pub static POINTS: AtomicU64 = AtomicU64::new(0);
-    pub const NAMES: [&str; 9] = ["forward", "inverse", "gap", "difference", "inverse difference", "forward3", "inverse3", "forward batch", "inverse batch"];
+    /// The kinds of call, `Which`'s order, then the walk's Jacobians
+    /// (`backward::step_jacobians`, built-in maps' too), whose time holds
+    /// the forward batches they make.
+    pub const NAMES: [&str; 10] = ["forward", "inverse", "gap", "difference", "inverse difference", "forward3", "inverse3", "forward batch", "inverse batch", "jacobians"];
+    pub const JACOBIANS: usize = 9;
     pub fn add(k: usize, t: std::time::Duration) {
         CALLS[k].fetch_add(1, Ordering::Relaxed);
         NANOS[k].fetch_add(t.as_nanos() as u64, Ordering::Relaxed);
     }
     /// Each kind's (calls, seconds), and the batch's points, reset.
     pub fn take() -> (Vec<(u64, f64)>, u64) {
-        let out = (0..9).map(|k| (CALLS[k].swap(0, Ordering::Relaxed), NANOS[k].swap(0, Ordering::Relaxed) as f64 * 1e-9)).collect();
+        let out = (0..10).map(|k| (CALLS[k].swap(0, Ordering::Relaxed), NANOS[k].swap(0, Ordering::Relaxed) as f64 * 1e-9)).collect();
         (out, POINTS.swap(0, Ordering::Relaxed))
     }
 }
@@ -1331,6 +1335,43 @@ fn inverse(z, p, branch) {
             line += &format!(" {size}: {:.1} ns ({:.2}x);", each * 1e9, each / native);
         }
         println!("{line}");
+        // What a point pays a node (rhai-one-form step 0): the body's tree
+        // nodes, each a column the batch makes or reads.
+        let (stmts, exprs) = crate::lang::interp::count_nodes(&kernel(slot).inverse.forward.transform);
+        println!("the forward body: {stmts} statements, {exprs} expression nodes");
+        // Every thread at once, each its own copy of the points: whether the
+        // kernel scales as the native one does (rhai-one-form step 0).
+        {
+            use rayon::prelude::*;
+            let threads = rayon::current_num_threads();
+            let per = reps / 8;
+            let wall = |f: &(dyn Fn(usize) -> f64 + Sync)| {
+                let t0 = std::time::Instant::now();
+                let s: f64 = (0..threads).into_par_iter().map(f).sum();
+                (t0.elapsed().as_secs_f64(), s)
+            };
+            let (tn, sn) = wall(&|_| {
+                let mut s = 0.0;
+                for r in 0..per {
+                    for z in &zs {
+                        s += builtin.forward(*z, (r & 1) as u32)[0];
+                    }
+                }
+                s
+            });
+            let (tt, st) = wall(&|_| {
+                let mut s = 0.0;
+                for r in 0..per {
+                    let mut buf = zs.clone();
+                    twin.forward_batch(&mut buf, code[r & 1]);
+                    s += buf[0][0];
+                }
+                s
+            });
+            let one = |t: f64| t / (per * zs.len()) as f64 * 1e9;
+            println!("{threads} threads at once, 256 a batch: native {:.1} ns a point a thread, twin {:.1} ns ({:.2}x)", one(tn), one(tt), tt / tn);
+            sink += sn + st;
+        }
         assert!(sink.is_finite() || sink.is_nan());
     }
 

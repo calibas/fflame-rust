@@ -2505,6 +2505,64 @@ mod tests {
         }
     }
 
+    /// **What the twins derive** (rhai-one-form step 0): each built-in's
+    /// bound from its own WGSL against its Rhai twin's, from the twin's
+    /// compiled WGSL, at one disc -- how many of each derive, how long a
+    /// derivation takes, and where both do, how much wider the twin's
+    /// disc is. The twin's numbers are the baseline an interval evaluator
+    /// over the Rhai form has to meet. Registers every twin: run alone.
+    #[test]
+    #[ignore = "a census; registers every twin"]
+    fn what_twins_derive() {
+        let ball = Ball::new([0.6, -0.4], 0.25);
+        let (mut both, mut builtin_only, mut twin_only, mut neither, mut unregistered) = (0usize, Vec::new(), Vec::new(), 0usize, 0usize);
+        let (mut t_builtin, mut t_twin, mut n_builtin, mut n_twin) = (0.0f64, 0.0f64, 0usize, 0usize);
+        let mut ratios: Vec<(f64, &str)> = Vec::new();
+        // The twin's own body, not its built-in's (`twins::planner_name`).
+        crate::variations::twins::BORROW.with(|b| b.set(false));
+        for (name, src) in crate::variations::twins::TWINS.iter() {
+            if crate::variations::global_registry().get(name).is_none() {
+                continue;
+            }
+            let pb = params_of(name);
+            let t0 = std::time::Instant::now();
+            let b = derive(name, &pb, 1.0, ball);
+            t_builtin += t0.elapsed().as_secs_f64();
+            n_builtin += 1;
+            let Ok(key) = crate::variations::custom::register(src) else {
+                unregistered += 1;
+                continue;
+            };
+            let pt = params_of(&key);
+            let t0 = std::time::Instant::now();
+            let t = derive(&key, &pt, 1.0, ball);
+            t_twin += t0.elapsed().as_secs_f64();
+            n_twin += 1;
+            match (b, t) {
+                (Ok(b), Ok(t)) => {
+                    both += 1;
+                    let dc = ((t.c[0] - b.c[0]).powi(2) + (t.c[1] - b.c[1]).powi(2)).sqrt();
+                    ratios.push(((t.r + dc) / b.r.max(1e-30), *name));
+                }
+                (Ok(_), Err(e)) => builtin_only.push(format!("{name} ({e})")),
+                (Err(_), Ok(_)) => twin_only.push(name.to_string()),
+                (Err(_), Err(_)) => neither += 1,
+            }
+        }
+        ratios.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let q = |f: f64| ratios.get(((ratios.len() as f64 - 1.0) * f) as usize).map_or(f64::NAN, |r| r.0);
+        println!();
+        println!("  {n_builtin} built-ins with a twin; {unregistered} twins did not register");
+        println!("  both derive {both}; the built-in alone {}; the twin alone {}; neither {neither}", builtin_only.len(), twin_only.len());
+        println!("  a derivation: built-in {:.2} ms, twin {:.2} ms (first calls parse)", t_builtin * 1e3 / n_builtin as f64, t_twin * 1e3 / n_twin.max(1) as f64);
+        println!("  the twin's disc over the built-in's, where both derive: median {:.3}, 90% {:.3}, 99% {:.3}, worst {:.3}", q(0.5), q(0.9), q(0.99), q(1.0));
+        let tight = ratios.iter().filter(|r| r.0 <= 1.0 + 1e-9).count();
+        println!("  {tight} of {both} as tight or tighter; the widest: {:?}", ratios.iter().rev().take(10).collect::<Vec<_>>());
+        println!("  the built-in alone: {}", builtin_only.join(", "));
+        println!("  the twin alone: {}", twin_only.join(", "));
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+    }
+
     /// The `transforms[i].variations[j]` shortcut rests on a
     /// measurement: that `variations` is the only field of that global
     /// any body reads. If a body ever reads another, the chain would

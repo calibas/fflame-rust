@@ -1222,6 +1222,8 @@ fn forward(map: &IfsMap<Map2>, x: [f64; 2], k: u32) -> [f64; 2] {
 /// (`map_forward_jacobians`; rhai-planners E4), any other's step by step.
 fn step_jacobians(steps: &[(&IfsMap<Map2>, u32)], zs: &[[f64; 2]]) -> Vec<Option<[[f64; 2]; 2]>> {
     use crate::scene::forward_delta::{map_forward_jacobian, map_forward_jacobians};
+    #[cfg(test)]
+    let t = crate::variations::user_inverse::profile::ON.load(std::sync::atomic::Ordering::Relaxed).then(std::time::Instant::now);
     let mut out: Vec<Option<[[f64; 2]; 2]>> = vec![None; steps.len()];
     let mut done = vec![false; steps.len()];
     for i in 0..steps.len() {
@@ -1240,6 +1242,10 @@ fn step_jacobians(steps: &[(&IfsMap<Map2>, u32)], zs: &[[f64; 2]]) -> Vec<Option
             out[k] = j;
             done[k] = true;
         }
+    }
+    #[cfg(test)]
+    if let Some(t) = t {
+        crate::variations::user_inverse::profile::add(crate::variations::user_inverse::profile::JACOBIANS, t.elapsed());
     }
     out
 }
@@ -5652,8 +5658,60 @@ mod tests {
             };
             println!("    built-in: {}", phases(&b));
             println!("    twin:     {}", phases(&t));
+            // One thread, profiled, both plans: each kind's share of its
+            // plan's time (rhai-one-form step 0).
+            let one = rayon::ThreadPoolBuilder::new().num_threads(1).build().expect("a pool");
+            for (what, x) in [("built-in", &b), ("twin", &t)] {
+                let _ = profile::take();
+                profile::ON.store(true, Ordering::Relaxed);
+                let t0 = std::time::Instant::now();
+                let _ = one.install(|| x.plan(view));
+                let total = t0.elapsed().as_secs_f64();
+                profile::ON.store(false, Ordering::Relaxed);
+                let (kinds, points) = profile::take();
+                let mut line = format!("    one thread, {what}: {total:.3} s;");
+                for (k, (calls, secs)) in kinds.iter().enumerate() {
+                    if *calls > 0 {
+                        line += &format!(" {} {:.3} s ({:.0}%, {calls} calls);", profile::NAMES[k], secs, 100.0 * secs / total);
+                    }
+                }
+                if points > 0 {
+                    line += &format!(" {points} batch points ({:.1} ns a point in forward batches)", kinds[7].1 * 1e9 / points as f64);
+                }
+                println!("{line}");
+            }
         }
         profile::ON.store(false, Ordering::Relaxed);
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+    }
+
+    /// PROFILE: grand-julian's twin's plan against the built-in's by
+    /// thread count, the best of three each (rhai-one-form step 0): on one
+    /// thread they take the same time, on every thread the twin 1.17x.
+    #[test]
+    #[ignore = "profile; registers a twin, reads output/flame-zoom"]
+    fn scale_the_twins_plan() {
+        let (cfg, twin) = rhai_grand_julian();
+        let guard = crate::variations::global_registry();
+        let b = Backward::read(&cfg.flame, &guard).expect("the built-in");
+        let t = Backward::read(&twin, &guard).expect("the twin");
+        drop(guard);
+        for (z, frac) in [(1e4f64, 0.75), (1e4, 0.25)] {
+            let view = View::of(z, b.sample_point(frac), 192, 192);
+            for threads in [1usize, 2, 4, 6, 8, 12] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().expect("a pool");
+                let (mut bb, mut bt) = (f64::INFINITY, f64::INFINITY);
+                for _ in 0..3 {
+                    let t0 = std::time::Instant::now();
+                    let _ = pool.install(|| b.plan(view));
+                    bb = bb.min(t0.elapsed().as_secs_f64());
+                    let t0 = std::time::Instant::now();
+                    let _ = pool.install(|| t.plan(view));
+                    bt = bt.min(t0.elapsed().as_secs_f64());
+                }
+                println!("x{z:.0e} at {frac}, {threads:2} threads: built-in {bb:.3} s, twin {bt:.3} s ({:.2}x)", bt / bb);
+            }
+        }
         crate::variations::twins::BORROW.with(|b| b.set(true));
     }
 
