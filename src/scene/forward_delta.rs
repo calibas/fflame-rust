@@ -383,6 +383,18 @@ pub fn map_forward_difference(m: &Map2, z: [f64; 2], d: [f64; 2], arm: u32) -> O
 pub fn map_forward_jacobian(m: &Map2, z: [f64; 2], arm: u32) -> Option<[[f64; 2]; 2]> {
     use super::ifs_analysis::kernel_forward_gen;
     use super::ifs_real::jacobian2;
+    let j = match m {
+        Map2::Affine(a) => return a.m.iter().flatten().all(|v| v.is_finite()).then_some(a.m),
+        Map2::Nonlinear(n) => jacobian2(n.pre.apply(z), |v| kernel_forward_gen(&n.kernel, &v, arm))?,
+        Map2::Sum(s) => jacobian2(s.pre.apply(z), |v| kernel_forward_gen(&s.kernel, &v, arm))?,
+        Map2::NonlinearInverse(_) | Map2::SumInverse(_) => return None,
+    };
+    map_jacobian_of_kernels(m, j)
+}
+
+/// The map's Jacobian from its kernel's `j`: the weight, the affines and,
+/// for a sum, its linear part; `None` where it is not finite.
+fn map_jacobian_of_kernels(m: &Map2, j: [[f64; 2]; 2]) -> Option<[[f64; 2]; 2]> {
     let mul = |a: &[[f64; 2]; 2], b: &[[f64; 2]; 2]| {
         [
             [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1]],
@@ -390,14 +402,11 @@ pub fn map_forward_jacobian(m: &Map2, z: [f64; 2], arm: u32) -> Option<[[f64; 2]
         ]
     };
     let out = match m {
-        Map2::Affine(a) => a.m,
         Map2::Nonlinear(n) => {
-            let j = jacobian2(n.pre.apply(z), |v| kernel_forward_gen(&n.kernel, &v, arm))?;
             let wj = [[n.w * j[0][0], n.w * j[0][1]], [n.w * j[1][0], n.w * j[1][1]]];
             mul(&n.post.m, &mul(&wj, &n.pre.m))
         }
         Map2::Sum(s) => {
-            let j = jacobian2(s.pre.apply(z), |v| kernel_forward_gen(&s.kernel, &v, arm))?;
             let l = &s.lin.m;
             let phase = [
                 [l[0][0] + s.kw * j[0][0], l[0][1] + s.kw * j[0][1]],
@@ -405,9 +414,55 @@ pub fn map_forward_jacobian(m: &Map2, z: [f64; 2], arm: u32) -> Option<[[f64; 2]
             ];
             mul(&s.post.m, &mul(&phase, &s.pre.m))
         }
-        Map2::NonlinearInverse(_) | Map2::SumInverse(_) => return None,
+        _ => return None,
     };
     out.iter().flatten().all(|v| v.is_finite()).then_some(out)
+}
+
+/// [`map_forward_jacobian`] at each of `zs` along `arm`, a user kernel's
+/// for all of them at once (rhai-planners E4): its derivative is central
+/// differences of its forward map ([`user_jacobian`]), five calls a point
+/// -- here one batch of the interpreter for every stencil -- and each
+/// Jacobian is the one-point path's to the bit, its dual chain's
+/// arithmetic as it is. Any other map, point by point.
+///
+/// [`user_jacobian`]: super::ifs_analysis::user_jacobian
+pub fn map_forward_jacobians(m: &Map2, zs: &[[f64; 2]], arm: u32) -> Vec<Option<[[f64; 2]; 2]>> {
+    use super::ifs_analysis::Kernel;
+    let (kernel, pre) = match m {
+        Map2::Nonlinear(n) if matches!(n.kernel, Kernel::User { .. }) => (n.kernel, n.pre),
+        Map2::Sum(s) if matches!(s.kernel, Kernel::User { .. }) => (s.kernel, s.pre),
+        _ => return zs.iter().map(|&z| map_forward_jacobian(m, z, arm)).collect(),
+    };
+    let xs: Vec<[f64; 2]> = zs.iter().map(|&z| pre.apply(z)).collect();
+    let hs: Vec<f64> = xs.iter().map(|x| 6.0e-6 * x[0].hypot(x[1]).max(1e-3)).collect();
+    let mut pts = Vec::with_capacity(5 * xs.len());
+    for (x, &h) in xs.iter().zip(&hs) {
+        pts.extend([*x, [x[0] + h, x[1]], [x[0] - h, x[1]], [x[0], x[1] + h], [x[0], x[1] - h]]);
+    }
+    kernel.forward_batch(&mut pts, arm);
+    let ok = |u: [f64; 2]| crate::variations::user_inverse::is_preimage(u);
+    pts.chunks(5)
+        .zip(&hs)
+        .map(|(s, &h)| {
+            let f0 = s[0];
+            // The dual's value: none where it is not finite (`jacobian2`).
+            if !(f0[0].is_finite() && f0[1].is_finite()) {
+                return None;
+            }
+            let along = |fa: [f64; 2], fb: [f64; 2]| match (ok(fa), ok(fb)) {
+                (true, true) | (false, false) => [(fa[0] - fb[0]) / (2.0 * h), (fa[1] - fb[1]) / (2.0 * h)],
+                (true, false) => [(fa[0] - f0[0]) / h, (fa[1] - f0[1]) / h],
+                (false, true) => [(f0[0] - fb[0]) / h, (f0[1] - fb[1]) / h],
+            };
+            let (dx, dy) = (along(s[1], s[2]), along(s[3], s[4]));
+            let j = [[dx[0], dy[0]], [dx[1], dy[1]]];
+            // Through the dual's chain from its seeds, as `outside2`: each
+            // part `1 j + 0 j'`.
+            let chain = |c: usize| [1.0 * j[c][0] + 0.0 * j[c][1], 0.0 * j[c][0] + 1.0 * j[c][1]];
+            map_jacobian_of_kernels(m, [chain(0), chain(1)])
+        })
+        .collect()
 }
 
 /// Floats per map row in the shader's table (`replay_delta.wgsl`).
@@ -991,6 +1046,93 @@ mod tests {
     /// them -- spliced into `replay_delta.wgsl` (`replay_delta_with`), a row
     /// of kernel 9 naming one, its values behind the row -- against the
     /// interpreter's in f64, held as the built-ins' forms are, arm for arm.
+    /// **A batch of user kernels' Jacobians is the one-point path's**
+    /// (rhai-planners E4): julian's, bubble's, juliascope's, elliptic's,
+    /// splits' and cylinder's twins, plain and summed with an affine, at
+    /// 300 points and each arm, bit for bit.
+    #[test]
+    fn batched_user_jacobians_are_the_one_point_ones() {
+        use crate::scene::ifs_analysis::{Affine2, Kernel, NonlinearMap2, SumMap2};
+        use crate::variations::user_inverse::{compile, kernel, kernel_slot};
+        let twin = |name: &str, slots: &[f32]| {
+            let src = crate::lang::rhai::with_own_id(crate::variations::twins::source(name).expect("a twin"), &crate::scripted::mint_id());
+            let inv = std::sync::Arc::new(compile(&src, &format!("{name}_jacobians")).expect("declared").expect("checks"));
+            kernel_slot(&inv, slots).expect("a slot")
+        };
+        let pre = Affine2 { m: [[0.9, 0.3], [-0.3, 0.9]], t: [0.15, -0.2] };
+        let post = Affine2 { m: [[1.1, 0.0], [0.2, 0.8]], t: [0.0, 0.0] };
+        let zs: Vec<[f64; 2]> = (0..300).map(|i| {
+            let a = 0.37 + i as f64 * 0.21;
+            let r = 0.05 + 0.01 * i as f64;
+            [r * a.cos(), r * a.sin()]
+        }).chain([[0.0, 0.0], [1e-9, 0.0]]).collect();
+        let same = |a: Option<[[f64; 2]; 2]>, b: Option<[[f64; 2]; 2]>| match (a, b) {
+            (Some(a), Some(b)) => a.iter().flatten().zip(b.iter().flatten()).all(|(x, y)| x.to_bits() == y.to_bits()),
+            (None, None) => true,
+            _ => false,
+        };
+        let named = |n: &str| twin(n, &crate::variations::user_inverse::named(n, &[]));
+        for slot in [twin("julian", &[3.0, 1.0]), twin("bubble", &[]), named("juliascope"), named("elliptic"), named("splits"), named("cylinder")] {
+            let nl = NonlinearMap2 { kernel: Kernel::User { slot }, branch: 0, pre, post, pre_inv: pre.inverse().expect("invertible"), post_inv: post.inverse().expect("invertible"), hole: 0.0, w: 0.6, third: 0.0 };
+            let mut maps = vec![Map2::Nonlinear(nl)];
+            let lin = Affine2 { m: [[0.4, 0.1], [-0.1, 0.4]], t: [0.0, 0.0] };
+            maps.push(Map2::Sum(SumMap2 {
+                pre,
+                pre_inv: pre.inverse().expect("invertible"),
+                post,
+                post_inv: post.inverse().expect("invertible"),
+                lin,
+                lin_inv: lin.inverse(),
+                kernel: Kernel::User { slot },
+                kind: "user",
+                branch: 0,
+                kw: 0.6,
+                third: 0.0,
+                kernel_leads: true,
+            }));
+            for m in &maps {
+                for &code in &kernel(slot).draws() {
+                    let batch = map_forward_jacobians(m, &zs, code);
+                    for (z, got) in zs.iter().zip(batch) {
+                        assert!(same(got, map_forward_jacobian(m, *z, code)), "{slot} at {z:?}, arm {code}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A batch of a user kernel's inverses is its one-point inverses, bit
+    /// for bit (rhai-planners E4): julian's and bubble's twins, every
+    /// branch, inside and outside the image.
+    #[test]
+    fn batched_user_inverses_are_the_one_point_ones() {
+        use crate::scene::ifs_analysis::{Affine2, Kernel, NonlinearMap2};
+        use crate::variations::user_inverse::{compile, kernel, kernel_slot};
+        let twin = |name: &str, slots: &[f32]| {
+            let src = crate::lang::rhai::with_own_id(crate::variations::twins::source(name).expect("a twin"), &crate::scripted::mint_id());
+            let inv = std::sync::Arc::new(compile(&src, &format!("{name}_inverses")).expect("declared").expect("checks"));
+            kernel_slot(&inv, slots).expect("a slot")
+        };
+        let pre = Affine2 { m: [[0.9, 0.3], [-0.3, 0.9]], t: [0.15, -0.2] };
+        let post = Affine2 { m: [[1.1, 0.0], [0.2, 0.8]], t: [0.0, 0.0] };
+        let qs: Vec<[f64; 2]> = (0..300).map(|i| {
+            let a = 0.37 + i as f64 * 0.21;
+            let r = 0.02 + 0.012 * i as f64;
+            [r * a.cos(), r * a.sin()]
+        }).collect();
+        let bits = |p: [f64; 2]| [p[0].to_bits(), p[1].to_bits()];
+        for slot in [twin("julian", &[3.0, 1.0]), twin("bubble", &[])] {
+            for branch in 0..kernel(slot).inverse.branches {
+                let nl = NonlinearMap2 { kernel: Kernel::User { slot }, branch, pre, post, pre_inv: pre.inverse().expect("invertible"), post_inv: post.inverse().expect("invertible"), hole: 0.0, w: 0.6, third: 0.0 };
+                let mut batch = qs.clone();
+                nl.apply_inverse_batch(&mut batch);
+                for (q, got) in qs.iter().zip(batch) {
+                    assert_eq!(bits(got), bits(nl.apply_inverse(*q)), "{slot} branch {branch} at {q:?}");
+                }
+            }
+        }
+    }
+
     #[test]
     #[ignore = "needs a GPU"]
     fn the_shader_user_forms_are_the_cpu_ones() {

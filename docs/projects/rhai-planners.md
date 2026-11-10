@@ -639,6 +639,64 @@ discretion. Can we add an inverse to hyperbolic as well?"
   beside another test, so the ratio is the comparison); the densities
   block by block as before. Its read, one orbit, is sequential and stays
   scalar: 1.26 s against 0.38 s.
+- **E4b. Within 20% of the built-in.** The user (2026-11-09): "It seems
+  like we should be able to get them with 10% of each other's
+  performance", then "20% is close enough." A profile of grand-julian's
+  twin against the built-in (`profile_the_twins_plan`: each kind of user
+  kernel call counted and timed, the plans timed unprofiled, the walk's
+  own phase times) found the same work done -- the plans' words the same
+  -- and three costs the built-in does not pay:
+  1. *The interpreter's batch, against native code.* Typed columns ran
+     their arithmetic through a per-lane match on the column's kind;
+     each node made two allocations; a variable read copied its column;
+     every statement and assignment scanned the lanes' mask. Now: float
+     and complex loops on slices (a column with a column, with one value,
+     one value with a column), buffers from a pool per thread, variables
+     read where they are (`Cow`), a call's scratch kept on the run, the
+     mask read again only after a statement that can change it. Julian's
+     twin batched: 68 ns a point, the built-in kernel's 70 -- and 0.8 µs
+     a call, which is what shows at a small batch (1.10x at 145 points).
+  2. *Interpreted calls a point where the built-in's are free.* `rescue`'s
+     near points replayed a word of 4 to 16 symbols over 128 points a
+     depth, point by point -- the walk's fates and close phases ran 2.3 to
+     2.7x the built-in's; the pull-back read a preimage's arm by a scan of
+     every arm, where a root reads it off the output's angle; the
+     reference chains' Jacobians were five interpreted calls a step
+     (central differences), where the built-in's are dual numbers; the
+     read's landing index called the map for every sample point and
+     symbol; the pull-back's inverses one a point. Each now one batch of
+     the interpreter: `forward_along_batch`, `arms_batch`,
+     `map_forward_jacobians` (its dual chain's arithmetic as it is, bit
+     for bit), the index in chunks of 4096, `apply_inverse_batch`. The
+     twin's read: 0.41 s against 0.34 s, where it was 3.8x.
+  3. *Batch sizes.* A node's children's words are their symbols, then the
+     node's word: the evaluator groups jobs by that shared rest
+     (`lands_together`), each first map over its job's points and the rest
+     one batch over all of them, groups of at most 4096 points so every
+     thread has work. A built-in flame keeps its jobs as they were (its
+     maps run point by point whatever the batch). Applying the first maps
+     across all jobs by symbol was measured too, and was slower: the
+     copying cost more than the batches saved.
+  The plans, unprofiled, the best of three alternating, alone: 1.17, 1.19,
+  1.18 and 1.26x the built-in's at grand-julian's four views (from 1.7,
+  1.7, 1.6 and 2.4x); between runs 1.10 to 1.27x, the noise about 10%.
+  Single-threaded, the twin's replay is 0.9x the built-in's.
+  What is left: the batch's fixed cost at verify's and top-up's small
+  candidate sets, and the reference chains' orbits, one interpreted call
+  a step. Compiling a body once to a flat, typed instruction list would
+  take most of a node's 30 ns of fixed cost, and give one-point calls the
+  same speed -- not built.
+  Gates, all bit for bit: `a_batch_is_its_scalar_calls`,
+  `batched_user_jacobians_are_the_one_point_ones`,
+  `batched_user_inverses_are_the_one_point_ones`, the grouped replay in
+  `the_batched_replay_is_the_point_replay`; the corpus through the twins,
+  the density gates. One of those is borderline at one view:
+  `the_newly_derived_twins_render_as_the_builtins` judges 28 blocks of
+  juliascope-rays at 1e4, where its 5% allows one past five standard
+  errors, and one middle block fluctuates with the GPU's draws -- worst
+  |z| 4.0, 6.2 and 6.3 run alone (0, 1 and 1 over), 11.2 beside three
+  other GPU tests (2 over: failed). Its plan is one word, the same, and
+  the Jacobians the references read are the one-point path's bit for bit.
 
 ## Order of work
 

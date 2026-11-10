@@ -356,8 +356,9 @@ pub struct VariationRun<'p> {
     /// but `prepare`'s values and `init`'s state.
     locals: Vec<VarId>,
     /// Whether its body runs batched, and draws ([`Self::call_batch`]),
-    /// read the first time it is asked.
+    /// read the first time it is asked; and what its batches reuse.
     batch_shape: Option<(bool, bool)>,
+    scratch: batch::Scratch,
 }
 
 impl<'p> VariationRun<'p> {
@@ -371,7 +372,7 @@ impl<'p> VariationRun<'p> {
         m.exec(&p.global_body, &mut sh);
         m.exec(&p.init, &mut sh);
         let locals = (0..p.vars.len()).filter(|&v| !p.vars[v].global && !crate::lang::delta::writes_var(&p.init, v)).collect();
-        VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], point_w: 0.0, w_out: None, locals, batch_shape: None }
+        VariationRun { m, env, color: 0.0, hid: false, rgb: None, coefs: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], point_w: 0.0, w_out: None, locals, batch_shape: None, scratch: Default::default() }
     }
 
     /// Every `rand()` of every call `u`, in [0, 1): the arm of a
