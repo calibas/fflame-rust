@@ -128,6 +128,8 @@ const FX_RETURN: &str = "return FxOut(vec4<f32>(effect_r, effect_g, effect_b, ef
 /// The line that ends a simulation's colouring or model function, and an
 /// early `return` in it.
 const SIM_RETURN: &str = "return vec4<f32>(effect_r, effect_g, effect_b, effect_a);";
+/// A field colouring's `field_color` returns its two places.
+const FIELD_SHADE_RETURN: &str = "return FieldShade(effect_r, effect_g);";
 /// How many reads made once each (`Host::EscPaletteLoad`, a texture's
 /// load) the program makes of the kind `which` picks, by their slots --
 /// each a load's third argument.
@@ -1280,6 +1282,74 @@ fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {{
 "
     );
     Ok(g.finish("", body))
+}
+
+/// **A Rhai field's WGSL** (docs/projects/rhai-solids-fields.md): its own
+/// `FieldState` (every state variable, a field each) and `FieldStep`, which
+/// the field template then does not declare (`FieldDef::own_state`), and
+/// `field_init` and `field_step`: `start` and `term`, the step handing the
+/// template the state's `value` and `grad` (zero without one) to sum.
+pub fn field(p: &Program) -> Result<String, String> {
+    if !p.funcs.is_empty() {
+        return Err("a field's function parameters are a later step".into());
+    }
+    let find = |name: &str, ty: Ty| p.vars.iter().position(|v| v.name == name && !v.global && !v.is_array() && v.ty == ty);
+    let Some(value) = find("s_value", Ty::Float) else {
+        return Err("the state needs `value`, a number: each term's value".into());
+    };
+    let grad = find("s_grad", Ty::Complex);
+    let mut g = Gen::new(p, Ctx::Formula, "uffd_");
+    let mut body = String::from("struct FieldState {\n");
+    for (i, v) in p.vars.iter().enumerate() {
+        if !v.global && !v.perturb {
+            let _ = writeln!(body, "    v{i}: {},", var_ty(v));
+        }
+    }
+    body.push_str("}\n\nstruct FieldStep {\n    state: FieldState,\n    value: f32,\n    grad: vec2<f32>,\n}\n\n");
+    body.push_str("fn field_init(pixel: vec2<f32>) -> FieldState {\n    var s: FieldState;\n");
+    g.stmts(&p.init, 1, &mut body);
+    body.push_str("    return s;\n}\n\n");
+    body.push_str("fn field_step(n: u32, pixel: vec2<f32>, s_in: FieldState) -> FieldStep {\n    var s = s_in;\n");
+    g.stmts(&p.loop_body, 1, &mut body);
+    let gr = grad.map_or_else(|| "vec2<f32>(0.0, 0.0)".to_string(), |v| g.var(v));
+    let _ = writeln!(body, "    return FieldStep(s, f32({}), {gr});\n}}", g.var(value));
+    Ok(g.finish("", body))
+}
+
+/// **A Rhai field colouring's WGSL**: `field_color(sum, grad, n_terms)`,
+/// `shade`'s body over its locals, returning the palette position and the
+/// brightness it wrote (`effect_r`, `effect_g`).
+pub fn field_coloring(p: &Program) -> Result<String, String> {
+    if !p.funcs.is_empty() {
+        return Err("a field colouring's function parameters are a later step".into());
+    }
+    let mut g = Gen::new(p, Ctx::ColoringFinal, "uffc_");
+    g.ret = FIELD_SHADE_RETURN;
+    let mut body = String::from(
+        "fn field_color(sum: f32, grad: vec2<f32>, n_terms: u32) -> FieldShade {\n    var effect_r = 0.0;\n    var effect_g = 1.0;\n    var effect_b = 0.0;\n    var effect_a = 0.0;\n",
+    );
+    for (i, v) in p.vars.iter().enumerate() {
+        let _ = writeln!(body, "    {};", var_decl(i, v));
+    }
+    g.stmts(&p.transform, 1, &mut body);
+    let _ = writeln!(body, "    {FIELD_SHADE_RETURN}\n}}");
+    Ok(g.finish("", body))
+}
+
+/// [`validate_formula`] for a field, against the field template's
+/// `fparam` and `params.max_iter`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn validate_field(wgsl: &str) -> Result<(), String> {
+    const STUBS: &str = "struct P {\n    max_iter: u32,\n}\nvar<private> params: P;\nfn fparam(i: u32) -> f32 {\n    return f32(i);\n}\n";
+    validate_module(&format!("{STUBS}{wgsl}"))
+}
+
+/// [`validate_formula`] for a field colouring, against the template's
+/// `cparam` and `FieldShade`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn validate_field_coloring(wgsl: &str) -> Result<(), String> {
+    const STUBS: &str = "struct FieldShade {\n    t: f32,\n    lum: f32,\n}\nfn cparam(i: u32) -> f32 {\n    return f32(i);\n}\n";
+    validate_module(&format!("{STUBS}{wgsl}"))
 }
 
 /// [`validate_formula`] for a solid's walk, against the mode-D template's
@@ -3111,6 +3181,10 @@ impl<'p> Gen<'p> {
             (Predef::Supersample, _) => "esc_supersample()".into(),
             (Predef::Value, _) => "v".into(),
             (Predef::Rotation, _) => "params.rot_cs".into(),
+            // A field colouring's inputs: `field_color`'s arguments.
+            (Predef::FieldSum, _) => "sum".into(),
+            (Predef::FieldGrad, _) => "grad".into(),
+            (Predef::FieldTerms, _) => "i32(n_terms)".into(),
             (Predef::Pass, Ctx::Formula) => "s.npass".into(),
             // The perturbation equations read the reference's pass.
             (Predef::Pass, _) => "pass_index".into(),
@@ -3859,6 +3933,7 @@ impl<'p> Gen<'p> {
                 Fract => format!("fract({v})"),
                 // Component by component, halves to even.
                 RoundEven => format!("round({v})"),
+                Reduce => unreachable!("a real's alone (`Builtin::result_ty`)"),
                 Hash2 => format!("{}({v})", self.use_(Helper::Hash2)),
                 IsNan => format!("{}({v})", self.use_(Helper::CIsNan)),
                 IsInf => format!("{}({v})", self.use_(Helper::CIsInf)),
@@ -3922,6 +3997,7 @@ impl<'p> Gen<'p> {
             Floor => format!("floor({v})"),
             // WGSL's own: halves to even.
             RoundEven => format!("round({v})"),
+            Reduce => format!("{}({v})", self.use_(Helper::Reduce)),
             IsNan => return format!("{}({v})", self.use_(Helper::IsNan)),
             IsInf => return format!("{}({v})", self.use_(Helper::IsInf)),
             Expm1 => format!("{}({v})", self.use_(Helper::FExpm1)),
@@ -3943,7 +4019,7 @@ fn complex_helper(f: Builtin) -> Helper {
     match f {
         SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Tap | Disc => unreachable!("an image read, emitted by `Gen::call`"),
         Hash2 => Helper::Hash2,
-        Fract | RoundEven => unreachable!("emitted by `Gen::call`, real or complex"),
+        Fract | RoundEven | Reduce => unreachable!("emitted by `Gen::call`, real or complex"),
         Log2 => unreachable!("a real's alone (`Builtin::result_ty`)"),
         // `Gen::call` passes the value through.
         F32 => Helper::CIdent,
@@ -5160,8 +5236,9 @@ pub(crate) mod tests {
     fn everything_the_language_has_compiles_to_valid_wgsl() {
         let mut calls = String::new();
         // An effect's reads of its image are an effect's alone
-        // (`an_effect_compiles_to_a_module_naga_accepts`).
-        for (name, _) in super::super::builtins::BUILTINS.iter().filter(|(n, _)| !n.starts_with("__")) {
+        // (`an_effect_compiles_to_a_module_naga_accepts`), and `reduce` is a
+        // field's (`field_twins_render_as_their_builtins`).
+        for (name, _) in super::super::builtins::BUILTINS.iter().filter(|(n, _)| !n.starts_with("__") && *n != "reduce") {
             // A real's alone: `log2`.
             if *name != "log2" {
                 let _ = writeln!(calls, "  c = c + {name}(z)");
@@ -5677,7 +5754,8 @@ fn step(s, p) {
     /// `asin`, found by compiling UF's public formulas).
     #[test]
     fn every_builtin_alone_brings_its_helpers() {
-        for (name, b) in super::super::builtins::BUILTINS.iter().filter(|(n, _)| !n.starts_with("__")) {
+        // `reduce` is a field's alone (`field_twins_render_as_their_builtins`).
+        for (name, b) in super::super::builtins::BUILTINS.iter().filter(|(n, b)| !n.starts_with("__") && *b != Builtin::Reduce) {
             // The tests are bools: used as one.
             let body = if matches!(b, Builtin::IsInf | Builtin::IsNan) {
                 format!("if {name}(z)\n  z = 0\n endif")
@@ -5742,7 +5820,9 @@ fn step(s, p) {
             for e in &parsed.entries {
                 let (p, d) = match kind {
                     EntryKind::Formula => super::super::switch::check_formula(&parsed, e, dialect),
-                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => check(e, kind, dialect),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Field | EntryKind::FieldColoring => {
+                        check(e, kind, dialect)
+                    }
                 };
                 let errors: Vec<String> = d.iter().filter(|x| x.severity == super::super::Severity::Error).map(|x| x.render(text)).collect();
                 match p {
@@ -5778,7 +5858,9 @@ fn step(s, p) {
                         let back = super::super::rhai::coloring(&text);
                         (text, back)
                     }
-                    EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => unreachable!("the test files hold no transformations, solids or effects"),
+                    EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Field | EntryKind::FieldColoring => {
+                        unreachable!("the test files hold no transformations, solids, effects or fields")
+                    }
                 };
                 let back = back.unwrap_or_else(|d| panic!("{file} / {name} as Rhai: {:?}", d[0].render(&text)));
                 (*file, format!("{name} as Rhai"), back)
@@ -5802,7 +5884,9 @@ fn step(s, p) {
                     None => Ok(()),
                 }),
                 EntryKind::Coloring => validate_coloring(&coloring(p)),
-                EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => unreachable!("the test files hold no transformations, solids or effects"),
+                EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Field | EntryKind::FieldColoring => {
+                        unreachable!("the test files hold no transformations, solids, effects or fields")
+                    }
             };
             if let Err(e) = checked {
                 panic!("{file} / {name}: {e}");

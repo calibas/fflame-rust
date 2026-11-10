@@ -126,6 +126,32 @@ pub const SOLID_TWINS: &[(&str, &str)] = &[
     ("kifs_solid", include_str!("../../assets/formulas/twins/solids/kifs.rhai")),
 ];
 
+/// The built-in mode B fields' twins and their colourings' (P7 step 4,
+/// docs/projects/rhai-solids-fields.md): each a Rhai field or field
+/// colouring that renders as its built-in, which the Escape panel's Edit
+/// as Rhai puts in its place. Sources in `assets/formulas/twins/fields/`.
+pub const FIELD_TWINS: &[(&str, &str)] = &[
+    ("weierstrass", include_str!("../../assets/formulas/twins/fields/weierstrass.rhai")),
+    ("markus_lyapunov", include_str!("../../assets/formulas/twins/fields/markus_lyapunov.rhai")),
+    ("standard_map_ftle", include_str!("../../assets/formulas/twins/fields/standard_map_ftle.rhai")),
+];
+
+pub const FIELD_COLORING_TWINS: &[(&str, &str)] = &[
+    ("field_value", include_str!("../../assets/formulas/twins/fields/value.rhai")),
+    ("field_diverging", include_str!("../../assets/formulas/twins/fields/diverging.rhai")),
+    ("field_hillshade", include_str!("../../assets/formulas/twins/fields/hillshade.rhai")),
+];
+
+/// The built-in field `name`'s twin as the config carries it.
+pub fn field_custom_source(name: &str) -> Option<crate::config::escape::CustomSource> {
+    carried(name, FIELD_TWINS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)?)
+}
+
+/// The built-in field colouring `name`'s twin as the config carries it.
+pub fn field_coloring_custom_source(name: &str) -> Option<crate::config::escape::CustomSource> {
+    carried(name, FIELD_COLORING_TWINS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)?)
+}
+
 /// The twin of the built-in solid `name`, when it has one.
 pub fn solid_source(name: &str) -> Option<&'static str> {
     SOLID_TWINS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
@@ -259,6 +285,36 @@ mod tests {
                     assert!(same(b, t), "{name}: the ball at {} = {v}: {b} against {t}", p.name);
                 }
             }
+        }
+    }
+
+    /// **Each field twin and field colouring twin compiles as its built-in**
+    /// (docs/projects/rhai-solids-fields.md): registered with the
+    /// built-in's title and parameters exactly, a field's gradient flag
+    /// and default colouring the built-in's.
+    #[test]
+    fn every_field_twin_compiles_as_its_builtin() {
+        use super::super::lang::EntryKind;
+        for (name, _) in FIELD_TWINS {
+            let builtin = super::super::fields::FIELDS.iter().find(|f| f.name == *name).expect("a built-in field");
+            let src = field_custom_source(name).expect("a twin");
+            let key = super::super::custom::name_of(EntryKind::Field, &src);
+            let twin = super::super::custom::compile_field(&src, &key)
+                .unwrap_or_else(|d| panic!("{name}: {:?}", d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>()));
+            assert_eq!(twin.display_name, builtin.display_name, "{name}: its title");
+            assert_eq!(twin.has_gradient, builtin.has_gradient, "{name}: its gradient");
+            assert_eq!(twin.default_coloring, builtin.default_coloring, "{name}: its default colouring");
+            assert_eq!(twin.parameters, builtin.parameters, "{name}: its parameters");
+            assert!(twin.own_state, "{name}: its own state");
+        }
+        for (name, _) in FIELD_COLORING_TWINS {
+            let builtin = super::super::fields::FIELD_COLORINGS.iter().find(|c| c.name == *name).expect("a built-in field colouring");
+            let src = field_coloring_custom_source(name).expect("a twin");
+            let key = super::super::custom::name_of(EntryKind::FieldColoring, &src);
+            let twin = super::super::custom::compile_field_coloring(&src, &key)
+                .unwrap_or_else(|d| panic!("{name}: {:?}", d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>()));
+            assert_eq!(twin.display_name, builtin.display_name, "{name}: its title");
+            assert_eq!(twin.parameters, builtin.parameters, "{name}: its parameters");
         }
     }
 

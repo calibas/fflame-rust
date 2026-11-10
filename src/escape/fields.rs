@@ -50,6 +50,10 @@ pub struct FieldDef {
     /// count are as particular as any formula's.
     pub presets: &'static [super::EscapePreset],
     pub wgsl: &'static str,
+    /// Whether `wgsl` declares its own `FieldState` and `FieldStep` (a
+    /// Rhai field's, `lang::wgsl::field`), which the template then leaves
+    /// out; a built-in's use the template's eight floats.
+    pub own_state: bool,
 }
 
 /// A mode-B coloring: scalar field (+ gradient) → palette position
@@ -108,6 +112,7 @@ pub static WEIERSTRASS: FieldDef = FieldDef {
             Spec::float(0.0, 0.0, 6.28318),
         ),
     ],
+    own_state: false,
     wgsl: r#"
 // Generator pair: g(t) and g'(t), selected by fparam(2). `t` arrives
 // already reduced to [-pi, pi] by esc_reduce.
@@ -178,6 +183,7 @@ pub static MARKUS_LYAPUNOV: FieldDef = FieldDef {
     has_gradient: false,
     default_coloring: "field_diverging",
     presets: super::presets::MARKUS_LYAPUNOV,
+    own_state: false,
     parameters: &[
         ParamDef::new(
             "seq_bits",
@@ -247,6 +253,7 @@ pub static STANDARD_MAP_FTLE: FieldDef = FieldDef {
     has_gradient: false,
     default_coloring: "field_diverging",
     presets: super::presets::STANDARD_MAP_FTLE,
+    own_state: false,
     parameters: &[ParamDef::new(
         "k",
         "Kick Strength",
@@ -407,11 +414,40 @@ pub static FIELDS: &[&FieldDef] = &[&WEIERSTRASS, &MARKUS_LYAPUNOV, &STANDARD_MA
 pub static FIELD_COLORINGS: &[&FieldColoringDef] =
     &[&FIELD_VALUE, &FIELD_DIVERGING, &FIELD_HILLSHADE];
 
-/// Look up a FIELD formula by name. `None` = the name belongs to
-/// mode A (or is unknown) — the caller routes to the formula
-/// registry, which carries the unknown-name fallback.
+/// The user's fields and field colourings, compiled from Rhai and
+/// registered under their names (`escape::custom::compile_field`,
+/// `compile_field_coloring`; docs/projects/rhai-solids-fields.md).
+fn custom() -> &'static std::sync::RwLock<(Vec<&'static FieldDef>, Vec<&'static FieldColoringDef>)> {
+    static R: std::sync::OnceLock<std::sync::RwLock<(Vec<&'static FieldDef>, Vec<&'static FieldColoringDef>)>> = std::sync::OnceLock::new();
+    R.get_or_init(Default::default)
+}
+
+/// Register a user's field under its name.
+pub(crate) fn register_custom_field(def: &'static FieldDef) {
+    if let Ok(mut r) = custom().write() {
+        r.0.retain(|d| d.name != def.name);
+        r.0.push(def);
+    }
+}
+
+/// Register a user's field colouring under its name.
+pub(crate) fn register_custom_field_coloring(def: &'static FieldColoringDef) {
+    if let Ok(mut r) = custom().write() {
+        r.1.retain(|d| d.name != def.name);
+        r.1.push(def);
+    }
+}
+
+/// Look up a FIELD formula by name -- a built-in, or a user's. `None` =
+/// the name belongs to mode A (or is unknown) — the caller routes to the
+/// formula registry, which carries the unknown-name fallback.
 pub fn get_field(name: &str) -> Option<&'static FieldDef> {
-    FIELDS.iter().find(|f| f.name == name).copied()
+    FIELDS.iter().find(|f| f.name == name).copied().or_else(|| custom().read().ok()?.0.iter().find(|f| f.name == name).copied())
+}
+
+/// The field colouring named `name`, a built-in or a user's.
+pub fn find_field_coloring(name: &str) -> Option<&'static FieldColoringDef> {
+    FIELD_COLORINGS.iter().find(|c| c.name == name).copied().or_else(|| custom().read().ok()?.1.iter().find(|c| c.name == name).copied())
 }
 
 /// Resolve the coloring for a field render. `EscapeConfig::coloring`
@@ -420,10 +456,7 @@ pub fn get_field(name: &str) -> Option<&'static FieldDef> {
 /// declared default, so switching to a field never renders the wrong
 /// registry's shader.
 pub fn get_field_coloring(name: &str, field: &FieldDef) -> &'static FieldColoringDef {
-    FIELD_COLORINGS
-        .iter()
-        .find(|c| c.name == name)
-        .copied()
+    find_field_coloring(name)
         .unwrap_or_else(|| {
             FIELD_COLORINGS
                 .iter()

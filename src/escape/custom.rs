@@ -151,6 +151,8 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
         EntryKind::Effect => b"effect",
         EntryKind::SimColoring => b"sim_coloring",
         EntryKind::SimModel => b"sim_model",
+        EntryKind::Field => b"field",
+        EntryKind::FieldColoring => b"field_coloring",
     });
     eat(match src.dialect {
         CustomDialect::UltraFractal => b"uf",
@@ -198,6 +200,8 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
             EntryKind::Effect => lang::rhai::effect(&src.source),
             EntryKind::SimColoring => lang::rhai::sim_coloring(&src.source),
             EntryKind::SimModel => lang::rhai::sim_model(&src.source, lang::rhai::SimFn::Step(0)),
+            EntryKind::Field => lang::rhai::field(&src.source),
+            EntryKind::FieldColoring => lang::rhai::field_coloring(&src.source),
         });
     }
     if src.dialect == CustomDialect::Hybrid {
@@ -222,6 +226,7 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
         EntryKind::Solid => return Err(vec![Diag::error(lang::Span::default(), "a solid is written in Rhai")]),
         EntryKind::Effect => return Err(vec![Diag::error(lang::Span::default(), "an effect is written in Rhai")]),
         EntryKind::SimColoring | EntryKind::SimModel => return Err(vec![Diag::error(lang::Span::default(), "a simulation's colouring or model is written in Rhai")]),
+        EntryKind::Field | EntryKind::FieldColoring => return Err(vec![Diag::error(lang::Span::default(), "a field and its colouring are written in Rhai")]),
     };
     diags.extend(d);
     match program {
@@ -264,6 +269,7 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Solid => return Err("a solid is written in Rhai".to_string()),
         EntryKind::Effect => return Err("an effect is written in Rhai".to_string()),
         EntryKind::SimColoring | EntryKind::SimModel => return Err("a simulation's colouring or model is written in Rhai".to_string()),
+        EntryKind::Field | EntryKind::FieldColoring => return Err("a field and its colouring are written in Rhai".to_string()),
     };
     let program = match program {
         Some(p) if !lang::has_errors(&diags) => p,
@@ -294,7 +300,9 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Formula => lang::to_rhai::formula(&program, &header)?,
         EntryKind::Coloring => lang::to_rhai::coloring(&program, &header)?,
         EntryKind::Transform => return Err("a transformation does not convert to Rhai yet".to_string()),
-        EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => return Err("it is written in Rhai".to_string()),
+        EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Field | EntryKind::FieldColoring => {
+            return Err("it is written in Rhai".to_string())
+        }
     };
     // What it printed must compile back: one that does not is the
     // converter's bug, not the user's to fix.
@@ -306,6 +314,8 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Effect => lang::rhai::effect(&rhai),
         EntryKind::SimColoring => lang::rhai::sim_coloring(&rhai),
         EntryKind::SimModel => lang::rhai::sim_model(&rhai, lang::rhai::SimFn::Step(0)),
+        EntryKind::Field => lang::rhai::field(&rhai),
+        EntryKind::FieldColoring => lang::rhai::field_coloring(&rhai),
     };
     back.map_err(|d| format!("the conversion does not compile ({})", d.first().map(|x| x.render(&rhai)).unwrap_or_default()))?;
     Ok(rhai)
@@ -371,6 +381,61 @@ fn record_layout(src: &CustomSource, name: &str) -> Result<(), Vec<Diag>> {
 /// `name`, when its `PARAMS` has conditions or grids.
 pub fn param_layout(name: &str) -> Option<Arc<crate::params::layout::ParamLayout>> {
     registry().read().ok()?.layouts.get(name).cloned()
+}
+
+/// **Compile a Rhai field and register it under `name`** as a mode B
+/// field (docs/projects/rhai-solids-fields.md): its parameters, whether
+/// its terms give a gradient (`INFO.gradient`), the field colouring a
+/// fresh pick takes (`INFO.coloring`, else Field Value), and its own state
+/// and step (`lang::wgsl::field`).
+pub fn compile_field(src: &CustomSource, name: &str) -> Result<&'static super::fields::FieldDef, Vec<Diag>> {
+    if let Some(def) = super::fields::get_field(name) {
+        return Ok(def);
+    }
+    let fail = |m: String| vec![Diag::error(lang::Span::default(), m)];
+    let p = check_entry(EntryKind::Field, src)?;
+    record_layout(src, name)?;
+    let wgsl = lang::wgsl::field(&p).map_err(fail)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    lang::wgsl::validate_field(&wgsl).map_err(|e| fail(format!("the compiler produced invalid WGSL (a bug): {e}")))?;
+    let def = super::fields::FieldDef {
+        name: leak(name.to_string()),
+        display_name: display_name(&p),
+        has_gradient: lang::rhai::info_bool(&src.source, "gradient").unwrap_or(false),
+        default_coloring: lang::rhai::info_string(&src.source, "coloring")
+            .and_then(|c| super::fields::FIELD_COLORINGS.iter().find(|d| d.name == c).map(|d| d.name))
+            .unwrap_or("field_value"),
+        parameters: Box::leak(param_defs(&p).into_boxed_slice()),
+        presets: &[],
+        wgsl: leak(wgsl),
+        own_state: true,
+    };
+    let def: &'static super::fields::FieldDef = Box::leak(Box::new(def));
+    super::fields::register_custom_field(def);
+    Ok(def)
+}
+
+/// **Compile a Rhai field colouring and register it under `name`**: its
+/// parameters and its `field_color` (`lang::wgsl::field_coloring`).
+pub fn compile_field_coloring(src: &CustomSource, name: &str) -> Result<&'static super::fields::FieldColoringDef, Vec<Diag>> {
+    if let Some(def) = super::fields::find_field_coloring(name) {
+        return Ok(def);
+    }
+    let fail = |m: String| vec![Diag::error(lang::Span::default(), m)];
+    let p = check_entry(EntryKind::FieldColoring, src)?;
+    record_layout(src, name)?;
+    let wgsl = lang::wgsl::field_coloring(&p).map_err(fail)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    lang::wgsl::validate_field_coloring(&wgsl).map_err(|e| fail(format!("the compiler produced invalid WGSL (a bug): {e}")))?;
+    let def = super::fields::FieldColoringDef {
+        name: leak(name.to_string()),
+        display_name: display_name(&p),
+        parameters: Box::leak(param_defs(&p).into_boxed_slice()),
+        wgsl: leak(wgsl),
+    };
+    let def: &'static super::fields::FieldColoringDef = Box::leak(Box::new(def));
+    super::fields::register_custom_field_coloring(def);
+    Ok(def)
 }
 
 /// Why a checked solid does not compile to its walk, if it does not (the
@@ -1520,22 +1585,25 @@ pub fn ensure(escape: &EscapeConfig) {
             continue;
         }
         let known = match kind {
-            // A solid is a formula's choice too (B3).
-            EntryKind::Formula => formula(name).is_some() || super::ifs::get_ifs(name).is_some(),
-            EntryKind::Coloring => coloring(name).is_some(),
+            // A solid and a field are a formula's choice too (B3; the
+            // fields' twins).
+            EntryKind::Formula => formula(name).is_some() || super::ifs::get_ifs(name).is_some() || super::fields::get_field(name).is_some(),
+            EntryKind::Coloring => coloring(name).is_some() || super::fields::find_field_coloring(name).is_some(),
             // An escape config carries no transformation (nor an effect,
             // nor a simulation's colouring).
-            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => true,
+            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Field | EntryKind::FieldColoring => true,
         };
         if known || registry().read().is_ok_and(|r| r.failed.contains(name)) {
             continue;
         }
-        let solid = kind == EntryKind::Formula && src.dialect == CustomDialect::Rhai && lang::rhai::kind_of(&src.source) == Some(EntryKind::Solid);
+        let is = |k: EntryKind| src.dialect == CustomDialect::Rhai && lang::rhai::kind_of(&src.source) == Some(k);
         let result = match kind {
-            EntryKind::Formula if solid => compile_solid(src, name).map(|_| ()),
+            EntryKind::Formula if is(EntryKind::Solid) => compile_solid(src, name).map(|_| ()),
+            EntryKind::Formula if is(EntryKind::Field) => compile_field(src, name).map(|_| ()),
             EntryKind::Formula => compile_formula(src, name).map(|_| ()),
+            EntryKind::Coloring if is(EntryKind::FieldColoring) => compile_field_coloring(src, name).map(|_| ()),
             EntryKind::Coloring => compile_coloring(src, name).map(|_| ()),
-            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => Ok(()),
+            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Field | EntryKind::FieldColoring => Ok(()),
         };
         if let Err(diags) = result {
             let msgs: Vec<String> = diags.iter().map(|d| d.render(&src.source)).collect();
@@ -1873,6 +1941,8 @@ mod tests {
                 let compiled = match kind {
                     EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
                     EntryKind::Solid => compile_solid(&src, &name).map(|_| ()),
+                    EntryKind::Field => compile_field(&src, &name).map(|_| ()),
+                    EntryKind::FieldColoring => compile_field_coloring(&src, &name).map(|_| ()),
                     EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => compile_coloring(&src, &name).map(|_| ()),
                 };
                 if let Err(d) = compiled {
@@ -1894,7 +1964,14 @@ mod tests {
                 let name = name_of(kind, &src);
                 let ok = match kind {
                     EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
-                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => compile_coloring(&src, &name).map(|_| ()),
+                    EntryKind::Coloring
+                    | EntryKind::Transform
+                    | EntryKind::Solid
+                    | EntryKind::Effect
+                    | EntryKind::SimColoring
+                    | EntryKind::SimModel
+                    | EntryKind::Field
+                    | EntryKind::FieldColoring => compile_coloring(&src, &name).map(|_| ()),
                 };
                 if let Err(d) = ok {
                     panic!("{file} / {}: {:?}", e.name, d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>());

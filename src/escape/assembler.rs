@@ -6489,18 +6489,7 @@ fn esc_reduce(t: f32) -> f32 {
     return r;
 }
 
-// Eight floats of per-pixel loop state (the FTLE tangent matrix plus
-// the map's own point needs more than a vec4).
-struct FieldState {
-    a: vec4<f32>,
-    b: vec4<f32>,
-}
-
-struct FieldStep {
-    state: FieldState,
-    value: f32,
-    grad: vec2<f32>,
-}
+//__FIELD_STATE__
 
 // What a field coloring returns: palette position + luminance (the
 // hillshade channel; 1.0 elsewhere).
@@ -9340,6 +9329,22 @@ pub fn assemble_ifs_path_user(
 /// Assemble a mode-B field shader: splice one field def and one field
 /// coloring into [`FIELD_TEMPLATE`]. Same marker discipline as
 /// [`assemble`].
+/// The field state a built-in field uses: eight floats. A Rhai field
+/// declares its own (`FieldDef::own_state`).
+const FIELD_STATE_WGSL: &str = "// Eight floats of per-pixel loop state (the FTLE tangent matrix plus
+// the map's own point needs more than a vec4).
+struct FieldState {
+    a: vec4<f32>,
+    b: vec4<f32>,
+}
+
+struct FieldStep {
+    state: FieldState,
+    value: f32,
+    grad: vec2<f32>,
+}
+";
+
 pub fn assemble_field(field: &FieldDef, coloring: &FieldColoringDef) -> String {
     assemble_field_with_lens(field, coloring, None)
 }
@@ -9356,6 +9361,8 @@ pub fn assemble_field_with_lens(
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__LENS_APPLY__" => lens_apply_span(&mut out, lens),
+            "//__FIELD_STATE__" if field.own_state => {}
+            "//__FIELD_STATE__" => out.push(FIELD_STATE_WGSL.trim_end().to_string()),
             "//__FIELD__" => out.push(field.wgsl.trim().to_string()),
             "//__FIELD_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
             _ => out.push(line.to_string()),
