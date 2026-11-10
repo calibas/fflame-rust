@@ -1,7 +1,8 @@
 # One evaluated form for a Rhai body
 
-Status: **step 0 measured 2026-11-09; the plan waits on decision 1**
-(below). Branch `rhai-planners`,
+Status: **step 0 measured, step 4's race fixed 2026-11-09; the
+juliascope-rays difference is open (step 4) and the plan waits on
+decision 1** (below). Branch `rhai-planners`,
 after its Parts A to E
 ([rhai-planners.md](../archive/projects/rhai-planners.md), archived).
 It comes from a review of that branch, which read the plan record, the
@@ -243,19 +244,70 @@ is decided.
 
 ## Step 4: the tests
 
-- **Twin tests share the global registry.** A test that registers twins
-  (`custom::ensure`) writes `global_registry_mut`, so two of them in
-  one `cargo test` run race, and each must be run alone. Give them a
-  registry of their own; where a code path reads the global one with no
-  way to pass another, record it here rather than thread a parameter
-  through the renderer for a test.
-- **The juliascope-rays density gate** at 1e4 judges 28 blocks and
-  allows one past five standard errors; alone it gives 0 or 1, beside
-  other GPU tests it has given 2. Measure first whether more samples a
-  render move the borderline block (if its excess shrinks with samples
-  it was noise; if it does not, it is a real difference to find), then
-  either raise the samples or fix what it found. The threshold is not
-  loosened.
+### The registry race: fixed (2026-11-09)
+
+It was not the tests. `custom::ensure` marked a source known before it
+compiled and registered it, so a second thread ensuring the same source
+returned before the registry had it, and its flame read as having no
+variations ("transform 1 has no variations"). Reproduced three runs in
+three: `the_batched_replay_is_the_point_replay` beside
+`a_rhai_variations_draws_are_forced_only_under_replay`, which registers
+the same julian twin. Now one registration runs at a time, and a source
+counts as known once its attempt is over. The three twin tests pass
+together three runs in three. The app calls `ensure` wherever a flame is
+read, on the render, thumbnail and export threads, so the app had the
+race too.
+
+- Regression test: `every_thread_finds_what_it_ensured` (ignored: it
+  registers a variation). Eight threads ensure one new source; it fails
+  on the old `ensure` and passes on the new.
+- No registry of their own was needed: the twin tests can run in one
+  `cargo test` again. The escape, simulation and effect registries'
+  `ensure` were read and do not have the race (the first two check what
+  is registered, the last holds its lock throughout).
+
+### juliascope-rays at 1e4: a real 1% difference, cause not found
+
+`what_the_juliascope_rays_block_is` (ignored, GPU) measures each block's
+difference in standard errors at the gate's samples, then with more:
+
+| Samples | Block 66's z | Its ratio, twin over built-in |
+|---|---|---|
+| The gate's (8 frames, 6 replicates), three runs | +3.8, +4.4, +2.5 | 1.006-1.011 |
+| 4x the replicates | +7.8 | 1.009 |
+| 4x the frames | +8.8 to +12.7 | 1.010-1.011 |
+
+Block 66 keeps its place and its z grows with the samples, so the twin
+puts about 1% more light in it than the built-in does. It is a
+middle-tier block, 0.05 of the mean block's density, beside dense ones.
+The other high blocks move from run to run: noise. So the gate is right,
+the threshold stays, and raising the samples would make it fail every
+run, not pass.
+
+What it is not:
+
+- **The plan.** Both plan one word, arms (2, 1, 0, 0), the masses equal
+  to 7 digits (4.164931e-4 and 4.164934e-4), the twin's arm
+  probabilities 1/7 to 4e-7. (The plans cannot be swapped between the
+  flames: the twin names its arms by draw code on the 256 grid, 18, 54,
+  91, ..., the built-in by 0 to 6.)
+- **The free orbit, untargeted.** Each flame untargeted at x1 and x30:
+  no block past five standard errors, ratios within 0.3%.
+- **The offset replay.** `the_offset_replay_holds_per_sample` on the
+  twin (`OFFSET_TWINS=1`, new) from 20,000 sample points
+  (`OFFSET_POINTS`, new): at 1e4, 20,000 in view, mean error 0.0002 px,
+  worst 0.0007, bias (+0.0002, +0.0000) px, the built-in's figures to
+  every digit printed; the same at 1e6 and 1e8. The twin's own words
+  were replayed (their arms' grid codes).
+
+**Next lead:** what only the targeted render does. A replay build forces
+a twin's draws for the word's arms (`bound::force_arms`); if the forcing
+reaches the free orbit's own draws in a targeted render, the free orbit
+there is not the untargeted one measured above.
+`a_rhai_variations_draws_are_forced_only_under_replay` checks the build's
+text, not the free orbit's distribution. Measure the free orbit inside a
+targeted render (the twin's against the built-in's), then the forced
+sample's arm in the render against `PlanGpu`'s.
 
 ## Order
 
