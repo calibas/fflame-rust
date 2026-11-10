@@ -14,6 +14,8 @@ use super::ir::*;
 use super::Dialect;
 
 mod batch;
+#[cfg(test)]
+pub(crate) use batch::count_nodes;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Value {

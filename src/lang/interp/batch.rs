@@ -574,6 +574,58 @@ impl VariationRun<'_> {
     }
 }
 
+/// A body's statements and expression nodes, every arm counted
+/// (rhai-one-form step 0: what a batch dispatches a call).
+#[cfg(test)]
+pub(crate) fn count_nodes(stmts: &[IStmt]) -> (usize, usize) {
+    fn expr(e: &IExpr) -> usize {
+        1 + match &e.kind {
+            IExprKind::Convert(a)
+            | IExprKind::Unary(_, a)
+            | IExprKind::PowInt(a, _)
+            | IExprKind::Modulus(a)
+            | IExprKind::Call(_, a)
+            | IExprKind::UserCall(_, a)
+            | IExprKind::UserDeriv(_, a)
+            | IExprKind::UserJac(_, a, _)
+            | IExprKind::Elem(_, a) => expr(a),
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => expr(a) + expr(b),
+            IExprKind::Host(_, args) => args.iter().map(expr).sum(),
+            _ => 0,
+        }
+    }
+    let (mut s, mut x) = (0, 0);
+    for st in stmts {
+        s += 1;
+        match st {
+            IStmt::Assign(_, e) => x += expr(e),
+            IStmt::SetElem { index, value, .. } => x += expr(index) + expr(value),
+            IStmt::If { arms, otherwise } => {
+                for (c, b) in arms {
+                    x += expr(c);
+                    let (bs, bx) = count_nodes(b);
+                    (s, x) = (s + bs, x + bx);
+                }
+                let (bs, bx) = count_nodes(otherwise);
+                (s, x) = (s + bs, x + bx);
+            }
+            IStmt::While { cond, body } | IStmt::Repeat { body, cond } => {
+                x += expr(cond);
+                let (bs, bx) = count_nodes(body);
+                (s, x) = (s + bs, x + bx);
+            }
+            IStmt::Scope(b) => {
+                let (bs, bx) = count_nodes(b);
+                (s, x) = (s + bs, x + bx);
+            }
+            IStmt::Map { input, .. } => x += input.iter().map(expr).sum::<usize>(),
+            IStmt::Host(_, args) => x += args.iter().map(expr).sum::<usize>(),
+            IStmt::Break | IStmt::Continue | IStmt::Return => {}
+        }
+    }
+    (s, x)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,6 +1,7 @@
 # One evaluated form for a Rhai body
 
-Status: **planned 2026-11-09, not started.** Branch `rhai-planners`,
+Status: **step 0 measured 2026-11-09; the plan waits on decision 1**
+(below). Branch `rhai-planners`,
 after its Parts A to E
 ([rhai-planners.md](../archive/projects/rhai-planners.md), archived).
 It comes from a review of that branch, which read the plan record, the
@@ -46,21 +47,111 @@ The numeric walkers (scalar, batch, dual, interval) can share one
 lowered form. The two symbolic ones (WGSL, the difference derivation)
 want a tree and keep it.
 
-## Step 0: measure
+## Step 0: measured (2026-11-09)
 
-Before any of it, on the built branch, each a printed number:
+On the desktop: an i5-10400F, 6 cores and 12 threads. Each number comes
+from an ignored test, kept so that it can be measured again.
 
-1. Where a twin's plan spends its remaining 20%: the batch
-   interpreter's tree walk and type matches, or its buffers and masks.
-   `profile_the_twins_plan` and `time_a_batch` exist; add a counter for
-   nodes visited a point. If the tree walk is under half of it, step 1
-   is worth less than it looks and the plan is revisited here.
-2. The Jacobians' share of a plan (`step_jacobians`), which says what an
-   exact dual pass can save.
-3. On the desktop, how many of the 640 twins `derive` bounds through
-   their WGSL today, and how long deriving one takes
-   (`what_deriving_a_bound_costs`). This is the target the Rhai form has
-   to match in step 2.
+### 1. Where a twin's remaining 20% goes: not the tree walk
+
+- **The kernel, one thread** (`time_the_twin_kernel_against_the_builtin`):
+  julian's twin batched against the built-in's native root kernel, by
+  batch size: 1.76x at 16 points, 1.18x at 64, 1.10x at 145, 1.03x at
+  256. Its body is 9 statements and 37 expression nodes.
+- **The plan's batches** average about 205 points: at 1e2, 37.5M points
+  in 182,703 forward batches. The other views are the same.
+- **The plan, one thread** (`profile_the_twins_plan`, its one-thread
+  rows): twin and built-in take the same time.
+
+  | View | Built-in | Twin |
+  |---|---|---|
+  | 1e2 at 0.75 | 3.34 s | 3.35 s |
+  | 1e4 at 0.75 | 6.30 s | 6.30 s |
+  | 1e4 at 0.25 | 13.46 s | 13.11 s |
+  | 1e6 at 0.75 | 4.90 s | 5.12 s |
+
+  Forward batches are 83-86% of the twin's plan, at 73-74 ns a point
+  against the native kernel's 70.
+- **The plan, by threads** (`scale_the_twins_plan`, best of three), the
+  twin's time over the built-in's:
+
+  | Threads | 1e4 at 0.75 | 1e4 at 0.25 |
+  |---|---|---|
+  | 1 | 1.02x | 0.97x |
+  | 2 | 1.00x | 1.00x |
+  | 4 | 1.03x | 1.00x |
+  | 6 | 1.07x | 1.03x |
+  | 8 | 1.11x | 1.07x |
+  | 12 | 1.16x | 1.16x |
+
+- **The kernel on every thread at once**, 256 points a batch: native
+  113.6 ns a point a thread, the twin 128.7 ns (1.13x, against 1.03x on
+  one thread).
+
+So the 1.17x appears only where two threads share a core. The batch
+writes every node's column to memory and reads it back; the native
+kernel keeps its values in registers. Two hyperthreads share a core's
+L1 and L2 caches and its load and store units, and the batch's memory
+traffic is what they compete for. Run alone, the interpreter costs
+nothing at the plan's batch sizes. A typed instruction list would cut
+dispatch per node, and dispatch is not what this costs.
+
+### 2. The Jacobians' share: 1%
+
+`step_jacobians`, counted as its own kind of call: 0.035-0.157 s of the
+twin's one-thread plan, 1% at every view, and 0.1-0.2% of the
+built-in's. An exact dual pass would make a twin's Jacobians exact, as
+the built-ins' are; it would not make the plan noticeably faster.
+
+### 3. Bounds today (`what_twins_derive`)
+
+On the desktop, each built-in's bound from its own WGSL against its
+twin's bound from the twin's compiled WGSL, at one disc (centre
+(0.6, -0.4), radius 0.25), with borrowing off:
+
+- 542 of the 640 twins derive a bound. 540 built-ins do, and every one
+  of their twins does too. Two twins (`julia`, `glsl_circuits`) derive
+  where their built-in does not. 98 derive neither way.
+- Where both derive, the twin's disc over the built-in's: median 1.000,
+  90th percentile 1.000, 99th 1.018, worst 1.122 (`sym_ng7`; the
+  widest ten are the `sym_*` family). 519 of the 540 are as tight or
+  tighter.
+- A derivation takes 12-14 ms either way, nearly all of it naga parsing
+  a module the first time.
+
+**Borrowing.** In the app an unedited twin borrows its built-in's
+planner data (`twins::planner_name`), its bound included. On the web
+the built-in has only the five hand bounds, so an unedited twin has
+only those too. Bounds from the Rhai form would reach the web's
+built-ins through their twins, edited twins, and users' own
+variations.
+
+### What step 0 changes
+
+- **Step 1's speed case is gone.** What remains of the gap is memory
+  traffic under hyperthreading. What might close it is evaluating a
+  batch in blocks small enough to stay in L1 (32 or 64 lanes); today
+  that costs dispatch (1.18x at 64 points on one thread), and that is
+  where a cheaper dispatch would help. It is unmeasured and is an
+  experiment, not a step: chunk `call_batch` in the current interpreter
+  and time it at 12 threads first.
+- **Step 1's other case, one form for four evaluators, stands, but
+  smaller.** Of the four, the scalar and batch evaluators already
+  exist and are at parity; the dual evaluator buys exactness at 1% of
+  the time; the interval evaluator is the one the web needs.
+- **The web's bounds have three routes:**
+  - A. The naga walk on the web. wgpu on the web carries no naga (the
+    browser takes WGSL), and `derive` builds its module through the
+    probe's shader assembly, which is desktop only. The cost is naga's
+    WGSL front end and the probe's assembly in the web build: wasm
+    size, not measured.
+  - B. An interval walker over `lang::ir`, the tree, with `derive`'s
+    rules. No naga, no new form, one more walker.
+  - C. The instruction list as planned, its interval evaluator a loop
+    over it.
+
+  Each of the three would be judged against the census above: 542 twins
+  deriving, and discs as tight as these.
 
 ## Step 1: the instruction list
 
@@ -173,7 +264,11 @@ run), then step 1's three evaluators, step 2, step 3.
 
 ## Decisions for the user
 
-1. After step 0: whether the measured shares justify step 1.
+1. **After step 0 (now):** step 1 as planned, or the web's bounds by
+   route A or B with no instruction list. My recommendation is B: it
+   has no wasm size cost and no new form, and the measurements leave
+   the instruction list no speed to win. The dual Jacobians, if
+   wanted for exactness, would then be a walker over the tree too.
 2. After step 2's table: whether the web takes twins' bounds for
    built-ins.
 3. After step 3: P9.
