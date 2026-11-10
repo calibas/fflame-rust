@@ -1947,7 +1947,7 @@ in plane units it underflows f32 at zooms the walk still resolves.
 | `mandelbox_solid` | Mandelbox (Solid) | Lowe's box fold, sphere fold and scale, `z = s fold(z) + c`, the point or a Julia constant; the distance `0.95 |z| / |dr|`. Solid; needs no flame; default `ifs_trap` |
 | `mandelbulb_solid` | Mandelbulb (Solid) | White and Nylander's power in spherical coordinates, `z = zⁿ + c`, the point or a Julia constant; Hart's estimate times the Step Factor. Solid; needs no flame; default `ifs_trap` |
 
-**A Rhai variation's own inverse** ([rhai-planners.md](../projects/rhai-planners.md),
+**A Rhai variation's own inverse** ([rhai-planners.md](../archive/projects/rhai-planners.md),
 Part B; [VARIATIONS.md](VARIATIONS.md), *Variations written in Rhai*):
 a flame row whose kernel is the user's (`Kernel::User`) is **kind 8**,
 `params.x` its function and `params.y` where its values start; a solid's

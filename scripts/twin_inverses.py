@@ -1,4 +1,4 @@
-"""The twins' inverses, written by hand (docs/projects/rhai-planners.md, B1).
+"""The twins' inverses, written by hand (docs/archive/projects/rhai-planners.md, B1).
 
 The Flame Attractor walks a flame backwards and needs each variation's
 exact inverse. Twenty-six built-ins carry theirs in Rust

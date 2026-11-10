@@ -1171,7 +1171,7 @@ fn forward_arms(map: &IfsMap<Map2>) -> u32 {
 /// A user kernel's forward arms, `(arm, share)`: the images its draws
 /// pick among, read off its map, each named by the grid draw a word's
 /// symbol carries and a replay forces (`user_inverse::UserKernel::arms`;
-/// docs/projects/rhai-planners.md, C1). `None` for any other map, and
+/// docs/archive/projects/rhai-planners.md, C1). `None` for any other map, and
 /// `Some(Err(key))` for one whose draws pick no arms, which no word can
 /// name.
 fn user_arm_list(map: &IfsMap<Map2>) -> Option<Result<Vec<(u32, f64)>, String>> {
@@ -5712,7 +5712,7 @@ mod tests {
         assert_eq!(differ, 0, "{differ} answers differ");
     }
 
-    /// **A Rhai julian plans as the built-in** (docs/projects/rhai-planners.md,
+    /// **A Rhai julian plans as the built-in** (docs/archive/projects/rhai-planners.md,
     /// C2): grand-julian with every julian its Rhai twin, borrowing
     /// nothing, is walked through user kernels -- its arms read off the
     /// twin's forward map, its inverse run in the interpreter -- with the
@@ -5806,7 +5806,7 @@ mod tests {
     }
 
     /// **The walk plans the deep-zoom corpus through Rhai twins as through
-    /// the built-ins** (docs/projects/rhai-planners.md, C2): every fixture
+    /// the built-ins** (docs/archive/projects/rhai-planners.md, C2): every fixture
     /// the built-in walk plans, with each kernel whose twin has an inverse
     /// its twin and borrowing off, is walked through user kernels with the
     /// built-in's alphabet, and its plans cover as much of an independent
@@ -5899,7 +5899,7 @@ mod tests {
     }
 
     /// **The fixtures through the twins whose forward forms E2 derived
-    /// render as through the built-ins** (docs/projects/rhai-planners.md,
+    /// render as through the built-ins** (docs/archive/projects/rhai-planners.md,
     /// E2): juliascope's twin's form (its exponent read from an int),
     /// splits' (its `if` expressions over its parameters), elliptic's and
     /// cylinder's, in the offset replay, block by block against the

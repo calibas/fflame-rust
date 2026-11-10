@@ -1,4 +1,4 @@
-//! A Rhai variation's own inverse (docs/projects/rhai-planners.md, B1).
+//! A Rhai variation's own inverse (docs/archive/projects/rhai-planners.md, B1).
 //!
 //! The Flame Attractor walks a flame's attractor backwards, so it needs
 //! each variation's exact inverse, and the built-ins carry theirs in Rust
@@ -41,7 +41,7 @@ use crate::lang::ir::Program;
 pub const MAX_BRANCHES: u32 = 16;
 
 /// The grid a forward map's draws are taken on
-/// ([`UserInverse::forward_at`]; docs/projects/rhai-planners.md, C1): code
+/// ([`UserInverse::forward_at`]; docs/archive/projects/rhai-planners.md, C1): code
 /// `c` sets every draw of the call to `(c + ½)/256` -- the interpreter's
 /// fixed draw and the replay's forced one (`bound::force_arms`) alike,
 /// exact in both. An arm is named by such a code ([`UserKernel::arms`]),
@@ -538,7 +538,7 @@ impl UserKernel {
     }
 
 
-    /// Its forward map's arms (docs/projects/rhai-planners.md, C1): one, of
+    /// Its forward map's arms (docs/archive/projects/rhai-planners.md, C1): one, of
     /// every draw, for a map that draws nothing; for one that draws, the
     /// images its draws pick among (julian's twin's `floor(n·rand())`
     /// roots), or `None` when they fall into more than

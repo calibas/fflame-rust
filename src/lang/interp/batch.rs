@@ -1,5 +1,5 @@
 //! **A variation's call over many points at once**
-//! (docs/projects/rhai-planners.md, E4).
+//! (docs/archive/projects/rhai-planners.md, E4).
 //!
 //! The walk's CPU evaluator replays each word over a few hundred points,
 //! and a Rhai kernel's forward map was a tree walk a point -- 80% of a

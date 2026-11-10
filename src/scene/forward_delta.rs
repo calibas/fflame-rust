@@ -470,7 +470,7 @@ pub const ROW_FLOATS: usize = 24;
 
 /// `replay_delta.wgsl` as a flame's offset replay runs it: with the
 /// derived forward differences of its Rhai variations (`keys`) spliced in
-/// (docs/projects/rhai-planners.md, C3) -- or, with none, the file's own
+/// (docs/archive/projects/rhai-planners.md, C3) -- or, with none, the file's own
 /// text, so every other shader is what it was.
 ///
 /// A row of kernel 9 names its form by the key's
@@ -1041,7 +1041,7 @@ mod tests {
         assert!(worst_all < 1e-5, "worst relative error {worst_all:.2e}");
     }
 
-    /// **The shader's derived forms are the CPU's** (docs/projects/rhai-planners.md,
+    /// **The shader's derived forms are the CPU's** (docs/archive/projects/rhai-planners.md,
     /// C3): the twins' forward differences as a flame's offset replay has
     /// them -- spliced into `replay_delta.wgsl` (`replay_delta_with`), a row
     /// of kernel 9 naming one, its values behind the row -- against the

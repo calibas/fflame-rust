@@ -1,7 +1,19 @@
 # Rhai variations in Focused Rendering and the Flame Attractor
 
+> **Archived 2026-11-09** -- finished: Parts A to E built on branch
+> `rhai-planners`. A Rhai variation derives Focused Rendering's bounds
+> from its own code, declares its inverse for the Flame Attractor and the
+> inverse walk, and derives its difference forms for both engines' deep
+> zoom; every twin with an inverse does all of it, and grand-julian's twin
+> plans within 20% of its built-in's time. How it works now:
+> [VARIATIONS.md](../../main/VARIATIONS.md),
+> [FOCUSED-RENDERING.md](../../main/FOCUSED-RENDERING.md),
+> [ESCAPE.md](../../main/ESCAPE.md). Left open: splits' deep zoom in the
+> Flame Attractor, which wants an image gap per branch -- in
+> [escape-sim-followups.md](../../projects/escape-sim-followups.md).
+
 Status: **Parts A (steps 1-2), B (B1-B3) and C (C1-C3) built** (2026-11-08,
-branch `rhai-planners`): every twin whose built-in derives a bound derives
+branch `rhai-planners`); D and E on 2026-11-09 (below): every twin whose built-in derives a bound derives
 one from its own code; a Rhai variation declares its inverse and the Flame
 Attractor draws it, alone, summed with an affine, and as a solid; a
 built-in with no inverse in Rust takes its twin's; and Focused Rendering's

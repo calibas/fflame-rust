@@ -484,7 +484,7 @@ pub fn transformation3(source: &str) -> Result<Program, Vec<Diag>> {
 
 thread_local! {
     /// Lowering a transformation's INVERSE (`fn inverse(z, p, branch)`;
-    /// docs/projects/rhai-planners.md, B1) in place of its `variation`.
+    /// docs/archive/projects/rhai-planners.md, B1) in place of its `variation`.
     static INVERSE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
 }
 
@@ -4346,7 +4346,7 @@ impl<'s> Lowerer<'s> {
             let at = mk(ExprKind::Complex(Box::new(x), Box::new(y)), span);
             return Ok(mk(ExprKind::Call { name: "__init_at".into(), args: vec![at], user: false }, span));
         }
-        // An inverse's "no preimage here" (docs/projects/rhai-planners.md,
+        // An inverse's "no preimage here" (docs/archive/projects/rhai-planners.md,
         // B1): the point at 1e30, the sentinel the Flame Attractor's own
         // kernels give, which its walk reads as that piece having escaped.
         if name == "no_preimage" {

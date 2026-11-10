@@ -74,7 +74,7 @@
 //! deviation is their plain difference ([`Deriver::iterate_branch`]).
 //!
 //! **Steps, inverse functions of a real, and ints the pixel decides**
-//! (docs/projects/rhai-planners.md, E2, for the variations' difference
+//! (docs/archive/projects/rhai-planners.md, E2, for the variations' difference
 //! forms): `round`, `floor`, `ceil` and `trunc` deviate by the plain
 //! difference of their steps, zero but where A and A + d part at one;
 //! a real's `asin`, `acos` and `atan` as the angle of a point, `asin a =
@@ -230,7 +230,7 @@ pub fn with_derived_equations(p: &Program) -> Option<Program> {
     Some(out)
 }
 
-/// **A variation's forward difference** (docs/projects/rhai-planners.md,
+/// **A variation's forward difference** (docs/archive/projects/rhai-planners.md,
 /// C3): `F(Z + d) - F(Z)` of its transform section, by the rules above, as
 /// a transform section of its own -- the reference point `Z` its input
 /// point, the deviation `d` its `ctx.accum`, the draw its colour channel
