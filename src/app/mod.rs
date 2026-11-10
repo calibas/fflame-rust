@@ -2465,7 +2465,15 @@ impl App {
                     let packed = self.ifs_pack_cache.pack_for(def, &final_config, &registry);
                     let fp = terrain.footprint_renderer();
                     fp.set_ifs(packed);
-                    fp.ensure_coarse(device, queue, &final_config.escape, &final_config.flame);
+                    // The measure's coarse pass lands on a later frame
+                    // (`ensure_coarse` never waits): ask until it does,
+                    // and draw the sections again when it has.
+                    if fp.ensure_coarse(device, queue, &final_config.escape, &final_config.flame) {
+                        terrain.invalidate_footprint();
+                    }
+                    if terrain.footprint_renderer().coarse_pending() {
+                        self.window.request_redraw();
+                    }
                 }
                 // A texture's image arrives on its own schedule; the
                 // config's recipe, which the footprint is keyed on,
@@ -2657,12 +2665,20 @@ impl App {
                     // the ball; without one it renders black. Keyed on
                     // the flame, so a pan or a zoom does not rebuild
                     // it.
-                    escape.ensure_coarse(
+                    // It lands on a later frame (`ensure_coarse` never
+                    // waits, which hung the web): asked each frame until
+                    // it does, the picture drawn again when it has.
+                    if escape.ensure_coarse(
                         &self.gpu.device,
                         &self.gpu.queue,
                         &target.escape,
                         &target.flame,
-                    );
+                    ) {
+                        self.escape_dirty = true;
+                    }
+                    if escape.coarse_pending() {
+                        self.window.request_redraw();
+                    }
                     if escape.set_solid_lighting(
                         &final_config.solid_shading,
                         crate::escape::path_core::solid_fog(final_config),
@@ -2734,7 +2750,10 @@ impl App {
                     escape.reset_solid_path();
                     self.escape_dirty = false;
                 }
-                if self.escape_dirty {
+                // While the measure's coarse pass is on its way the last
+                // picture stays: drawn now it would be black, for a frame
+                // or two, until the pass lands and draws it again.
+                if self.escape_dirty && !escape.coarse_pending() {
                     // The frames a picture takes, for the governor's measure
                     // of its GPU cost (governor.rs).
                     if self.governor.picture_from.is_none() {

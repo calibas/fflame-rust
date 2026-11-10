@@ -5218,8 +5218,117 @@ pub fn coarse_measure_for(
     res: u32,
     batches: u32,
 ) -> Option<crate::scene::ifs_estimate::CoarseMeasure> {
+    let job = start_coarse_measure(device, queue, flame, ball_centre, ball_radius, res, batches)?;
+    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    match job.poll() {
+        Some(true) => job.finish(),
+        _ => {
+            job.cancel();
+            None
+        }
+    }
+}
+
+/// **A coarse pass on its way**: [`start_coarse_measure`] has submitted
+/// its batches and asked for the readback, and [`Self::poll`] says when it
+/// has landed. A browser maps a buffer only once the page's thread has
+/// gone back to its event loop, so nothing there may wait for it -- the
+/// app asks each frame instead (`EscapeRenderer::ensure_coarse`). Waiting
+/// in a frame was the web's hang on choosing Measure: `recv` on a map that
+/// could not land until the frame returned.
+pub struct CoarseJob {
+    renderer: crate::renderer::compute_kernel::FlameRenderer,
+    stage: wgpu::Buffer,
+    /// 0 while mapping, 1 mapped, 2 failed.
+    state: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    res: u32,
+    centre: [f64; 2],
+    radius: f64,
+}
+
+impl CoarseJob {
+    /// `None` while the readback maps; then whether it mapped.
+    pub fn poll(&self) -> Option<bool> {
+        match self.state.load(std::sync::atomic::Ordering::Acquire) {
+            0 => None,
+            s => Some(s == 1),
+        }
+    }
+
+    /// The measure, from a readback [`Self::poll`] says has mapped.
+    pub fn finish(self) -> Option<crate::scene::ifs_estimate::CoarseMeasure> {
+        if self.poll() != Some(true) {
+            self.cancel();
+            return None;
+        }
+        let res = self.res;
+        let n = (res * res) as usize;
+        let mut hits = vec![0u32; n];
+        let mut palette_sum = vec![0.0f64; n];
+        {
+            let data = self.stage.slice(..).get_mapped_range();
+            let px: &[[f32; 4]] = bytemuck::cast_slice(&data);
+            for i in 0..n {
+                let a = px[i][3];
+                if a > 0.0 && a.is_finite() {
+                    hits[i] = a as u32;
+                    // rgb is the MEAN, so the sum is mean x count.
+                    palette_sum[i] = px[i][0].clamp(0.0, 1.0) as f64 * a as f64;
+                }
+            }
+        }
+        self.stage.unmap();
+        self.renderer.destroy();
+
+        // Normalised by what LANDED, not by what was dispatched.
+        //
+        // The invariant measure is a probability measure and this
+        // estimates it, so the divisor is the sample total that reached
+        // the grid. It also makes the result independent of whatever
+        // constant the accumulator's alpha carries -- the histogram's
+        // `color_scale`, the burn-in the dispatch count includes and the
+        // plot does not, the samples a bad-value respawn drops. Counting
+        // the dispatch instead read 12.5x the chaos game's density, and
+        // chasing which of those constants it was would have been chasing
+        // a number that cancels.
+        let landed: u64 = hits.iter().map(|h| *h as u64).sum();
+        Some(crate::scene::ifs_estimate::CoarseMeasure {
+            res: res as usize,
+            centre: self.centre,
+            radius: self.radius,
+            hits,
+            palette_sum,
+            samples: landed.max(1),
+        })
+    }
+
+    /// Give it up: its renderer's resources go now.
+    pub fn cancel(self) {
+        self.renderer.destroy();
+    }
+}
+
+/// [`coarse_measure_for`]'s work, submitted and its readback asked for,
+/// without waiting: the GPU runs the batches in order, and the job says
+/// when the readback has landed. `None` where the device cannot hold the
+/// readback, or the arguments describe no grid.
+#[allow(clippy::too_many_arguments)]
+pub fn start_coarse_measure(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    flame: &crate::scene::transforms::Flame,
+    ball_centre: [f64; 2],
+    ball_radius: f64,
+    res: u32,
+    batches: u32,
+) -> Option<CoarseJob> {
     use crate::scene::palette::{ColorStop, Palette};
     if res == 0 || res % 16 != 0 || !(ball_radius > 0.0) {
+        return None;
+    }
+    let row = (res as u64) * 16;
+    let size = row * res as u64;
+    if size > device.limits().max_buffer_size {
         return None;
     }
     // `t^(1/2.2)` at enough stops that the texture's interpolation
@@ -5259,8 +5368,9 @@ pub fn coarse_measure_for(
     renderer.load_config(device, &mut enc, queue, &config, &ramp, 256, 20);
     queue.submit(std::iter::once(enc.finish()));
 
+    // Each batch its own submission, in order; nothing waits between
+    // them, so a frame that starts the job is not held by it.
     const WORKGROUPS: u32 = 256;
-    let mut total: u64 = 0;
     for b in 0..batches.max(1) {
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("coarse measure batch"),
@@ -5271,20 +5381,12 @@ pub fn coarse_measure_for(
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, config.speed_factor,
             b == 0, b == 0,
         );
-        total += n;
         renderer.accumulate_pass(&mut enc, queue, device, n);
         queue.submit(std::iter::once(enc.finish()));
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     }
 
     // Read the accumulator: rgb the density-weighted mean colour --
     // here the palette coordinate -- and a the raw hit count.
-    let row = (res as u64) * 16;
-    let size = row * res as u64;
-    if size > device.limits().max_buffer_size {
-        renderer.destroy();
-        return None;
-    }
     let stage = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("coarse measure readback"),
         size,
@@ -5312,54 +5414,12 @@ pub fn coarse_measure_for(
         wgpu::Extent3d { width: res, height: res, depth_or_array_layers: 1 },
     );
     queue.submit(std::iter::once(enc.finish()));
-    let (tx, rx) = std::sync::mpsc::channel();
+    let state = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+    let flag = state.clone();
     stage.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
+        flag.store(if r.is_ok() { 1 } else { 2 }, std::sync::atomic::Ordering::Release);
     });
-    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-    if rx.recv().ok()?.is_err() {
-        renderer.destroy();
-        return None;
-    }
-    let n = (res * res) as usize;
-    let mut hits = vec![0u32; n];
-    let mut palette_sum = vec![0.0f64; n];
-    {
-        let data = stage.slice(..).get_mapped_range();
-        let px: &[[f32; 4]] = bytemuck::cast_slice(&data);
-        for i in 0..n {
-            let a = px[i][3];
-            if a > 0.0 && a.is_finite() {
-                hits[i] = a as u32;
-                // rgb is the MEAN, so the sum is mean x count.
-                palette_sum[i] = px[i][0].clamp(0.0, 1.0) as f64 * a as f64;
-            }
-        }
-    }
-    stage.unmap();
-    renderer.destroy();
-
-    // Normalised by what LANDED, not by what was dispatched.
-    //
-    // The invariant measure is a probability measure and this
-    // estimates it, so the divisor is the sample total that reached
-    // the grid. It also makes the result independent of whatever
-    // constant the accumulator's alpha carries -- the histogram's
-    // `color_scale`, the burn-in the dispatch count includes and the
-    // plot does not, the samples a bad-value respawn drops. Counting
-    // the dispatch instead read 12.5x the chaos game's density, and
-    // chasing which of those constants it was would have been chasing
-    // a number that cancels.
-    let landed: u64 = hits.iter().map(|h| *h as u64).sum();
-    let _ = total;
-    Some(crate::scene::ifs_estimate::CoarseMeasure {
-        res: res as usize,
-        centre: ball_centre,
-        radius: ball_radius,
-        hits,
-        palette_sum,
-        samples: landed.max(1),
-    })
+    Some(CoarseJob { renderer, stage, state, res, centre: ball_centre, radius: ball_radius })
 }
 
 /// How many `vec4`s of the params' `fdata` block one seed occupies.
@@ -13306,6 +13366,67 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                  inverse-sRGB ramp is not recovering it"
             );
         }
+    }
+
+    /// **The coarse pass lands on a later frame, and no call waits for
+    /// it** (the web's hang on choosing Measure, 2026-11-10): the first
+    /// `ensure_coarse` starts the pass and returns at once with it
+    /// pending; asked again each "frame", one call finds it landed, says
+    /// so, and leaves the pass with the shader. Choosing another colouring
+    /// while one is on its way drops it, and choosing Measure again starts
+    /// another.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored --nocapture"]
+    fn the_coarse_pass_lands_on_a_later_frame() {
+        use crate::scene::transforms::{Flame, Transform};
+        let (device, queue) = device();
+        let mut t = Transform::default();
+        t.a = 0.7071; t.b = 0.7071; t.c = -0.7071; t.d = 0.7071; t.f = -0.3;
+        t.variations.clear();
+        t.variation_order.clear();
+        t.set_variation("flatten", 1.0);
+        t.set_variation("julian", 1.0);
+        t.set_variation_param("julian", "power", 2.0);
+        let mut u = t.clone();
+        u.f = 0.2;
+        u.set_variation_param("julian", "power", 3.0);
+        let mut flame = Flame::default();
+        flame.transforms = vec![t, u];
+        let mut config = config_for(flame);
+        config.escape.coloring = "ifs_measure".to_string();
+        let def = get_ifs(&config.escape.formula).expect("the flame attractor");
+        let mut escape = crate::escape::EscapeRenderer::new(&device, W, H);
+        escape.set_ifs(pack_for(def, &config, &crate::variations::global_registry()));
+
+        let t0 = std::time::Instant::now();
+        assert!(!escape.ensure_coarse(&device, &queue, &config.escape, &config.flame), "the first call lands nothing");
+        let started = t0.elapsed();
+        assert!(escape.coarse_pending(), "it started the pass");
+
+        // Choosing another colouring drops it; Measure again starts anew.
+        let mut other = config.escape.clone();
+        other.coloring = "ifs_distance".to_string();
+        assert!(!escape.ensure_coarse(&device, &queue, &other, &config.flame));
+        assert!(!escape.coarse_pending(), "a colouring change drops the pass");
+        assert!(!escape.ensure_coarse(&device, &queue, &config.escape, &config.flame));
+        assert!(escape.coarse_pending());
+
+        let mut frames = 0;
+        let landed = loop {
+            frames += 1;
+            if escape.ensure_coarse(&device, &queue, &config.escape, &config.flame) {
+                break true;
+            }
+            if frames > 5000 {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        println!("  started in {:.1} ms; landed after {frames} frames, {:.0} ms", started.as_secs_f64() * 1e3, t0.elapsed().as_secs_f64() * 1e3);
+        assert!(landed, "the pass never landed");
+        assert!(!escape.coarse_pending());
+        assert!(!escape.ensure_coarse(&device, &queue, &config.escape, &config.flame), "once landed, the flame's pass is not built again");
+        assert!(!escape.coarse_pending());
     }
 
     /// The MEASURE colouring draws something through the ordinary
