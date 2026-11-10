@@ -13434,6 +13434,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             ("quaternion_julia_solid", "ifs_level", &[("slice_axis", 0.0), ("w_slice", -0.3)], 1.0),
             ("quaternion_julia_solid", "ifs_level", &[("slice_axis", 1.0), ("cx", -0.2), ("cy", 0.6), ("cz", 0.2), ("bailout", 4.0)], 1.5),
             ("quaternion_julia_solid", "ifs_trap", &[("slice_axis", 2.0), ("colour_depth", 6.0), ("levels", 64.0)], 1.0),
+            ("kifs_solid", "ifs_level", &[], 0.0),
+            ("kifs_solid", "ifs_trap", &[], 0.0),
+            ("kifs_solid", "ifs_address", &[], 0.0),
+            ("kifs_solid", "ifs_distance", &[], 0.0),
+            ("kifs_solid", "ifs_address", &[("fold", 0.0), ("scale", 2.0)], 0.0),
+            ("kifs_solid", "ifs_level", &[("fold", 1.0), ("scale", 2.5)], 0.0),
+            ("kifs_solid", "ifs_address", &[("fold", 2.0), ("scale", 2.0), ("offset_y", 0.0), ("offset_z", 0.0), ("address_symmetry", 0.0)], 0.0),
+            ("kifs_solid", "ifs_level", &[("fold", 4.0), ("scale", 2.6), ("offset_x", 1.0), ("offset_y", 0.2), ("offset_z", 0.1)], 1.2),
+            ("kifs_solid", "ifs_trap", &[("fold", 5.0), ("scale", 2.617924)], 0.0),
+            ("kifs_solid", "ifs_address", &[("fold", 4.0), ("scale", 2.5), ("offset_x", 0.850650808), ("offset_y", 0.525731112), ("offset_z", 0.0)], 0.0),
+            ("kifs_solid", "ifs_address", &[("rot1_x", 12.0), ("rot1_z", -7.0), ("rot2_y", 15.0), ("address_symmetry", 2.0), ("colour_depth", 5.0)], 0.0),
+            ("kifs_solid", "ifs_level", &[("levels", 20.0)], 1.5),
         ];
         let mut failures = Vec::new();
         let mut timing = Vec::new();
