@@ -1693,7 +1693,23 @@ impl<'s> Lowerer<'s> {
                     Expr::StringConstant(s, _) if matches!(s.as_str(), "near" | "inside") => {}
                     _ => return self.err(*p, "`march` is \"near\" (a hit within a pixel of the solid) or \"inside\" (a hit only in it)"),
                 },
-                o if kind == EntryKind::Solid => return self.err(*p, format!("a solid's `INFO` has `title`, `id`, `description`, `author`, `radius`, `depth` and `march`, not `{o}`")),
+                // The colouring a fresh pick takes (`custom::compile_solid`).
+                "coloring" if kind == EntryKind::Solid => match v {
+                    Expr::StringConstant(s, _) if crate::escape::ifs::IFS_COLORINGS.iter().any(|c| c.name == s.as_str()) => {}
+                    _ => {
+                        let all: Vec<String> = crate::escape::ifs::IFS_COLORINGS.iter().map(|c| format!("\"{}\"", c.name)).collect();
+                        return self.err(*p, format!("`coloring` is one of mode D's: {}", all.join(", ")));
+                    }
+                },
+                // The parameters committed when a drag ends, as a built-in
+                // solid's Iterations and March Steps are.
+                "slow" if kind == EntryKind::Solid => match v {
+                    Expr::Array(items, _) if items.iter().all(|i| matches!(i, Expr::StringConstant(..))) => {}
+                    _ => return self.err(*p, "`slow` is a list of the parameters committed when a drag ends: `[\"levels\"]`"),
+                },
+                o if kind == EntryKind::Solid => {
+                    return self.err(*p, format!("a solid's `INFO` has `title`, `id`, `description`, `author`, `radius`, `depth`, `march`, `coloring` and `slow`, not `{o}`"))
+                }
                 "center" | "magn" | "maxiter" | "angle" if !self.coloring => {
                     let value = self.literal(v)?;
                     default.items.push(Setting { name: name.clone(), value: SettingValue::Expr(value), span: self.pos.span(*p) });

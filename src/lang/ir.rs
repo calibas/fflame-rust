@@ -507,6 +507,12 @@ pub enum IStmt {
     Scope(Vec<IStmt>),
 }
 
+/// `IStmt::Map`'s call for `trap_point(v)`: not a variation but the
+/// solid's Orbit transformations, what the built-in solids' orbit traps
+/// measure (`ifs_trap_point`; docs/projects/rhai-solids-fields.md). The
+/// identity off the GPU.
+pub const TRAP_POINT_CALL: u32 = u32::MAX;
+
 /// A solid's call of a built-in flame variation (3d-look-and-tools P5,
 /// C3): which variation, and its parameters' values.
 #[derive(Clone, Debug, PartialEq)]

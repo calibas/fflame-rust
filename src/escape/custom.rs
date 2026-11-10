@@ -375,8 +375,8 @@ pub fn param_layout(name: &str) -> Option<Arc<crate::params::layout::ParamLayout
 
 /// Why a checked solid does not compile to its walk, if it does not (the
 /// editor's check, before it is used).
-pub fn solid_error(p: &ir::Program) -> Option<String> {
-    let layout = match solid_layout(p) {
+pub fn solid_error(p: &ir::Program, source: &str) -> Option<String> {
+    let layout = match solid_layout(p, source) {
         Ok(l) => l,
         Err(e) => return Some(e),
     };
@@ -430,9 +430,14 @@ pub(crate) struct SolidLayout {
     depth_slot: usize,
 }
 
-pub(crate) fn solid_layout(p: &ir::Program) -> Result<SolidLayout, String> {
+pub(crate) fn solid_layout(p: &ir::Program, source: &str) -> Result<SolidLayout, String> {
     let mut template = super::ifs::template_parameters().to_vec();
-    let defs = param_defs(p);
+    let mut defs = param_defs(p);
+    // `INFO.slow`: committed when a drag ends.
+    for s in lang::rhai::info_strings(source, "slow") {
+        let d = defs.iter_mut().find(|d| d.name == s).ok_or_else(|| format!("`INFO.slow` names `{s}`, which is not in `PARAMS`"))?;
+        d.slow = true;
+    }
     // Each program parameter's defs: two for a complex, one otherwise;
     // the user functions' after them.
     let mut at = 0usize;
@@ -499,7 +504,7 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     let fail = |m: String| vec![Diag::error(lang::Span::default(), m)];
     let p = check_entry(EntryKind::Solid, src)?;
     record_layout(src, name)?;
-    let layout = solid_layout(&p).map_err(fail)?;
+    let layout = solid_layout(&p, &src.source).map_err(fail)?;
     let depth_slot = layout.depth_slot;
     // Its parameters, their colour depth and ball, then what `prepare`
     // computes: one block of 64.
@@ -555,7 +560,11 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
         display_name: leak(p.name.clone()),
         solid: true,
         needs_flame: false,
-        default_coloring: "ifs_trap",
+        // `INFO.coloring`: the colouring a fresh pick takes, one of mode
+        // D's (a built-in's twin keeps the built-in's).
+        default_coloring: lang::rhai::info_string(&src.source, "coloring")
+            .and_then(|c| super::ifs::IFS_COLORINGS.iter().find(|d| d.name == c).map(|d| d.name))
+            .unwrap_or("ifs_trap"),
         parameters: Box::leak(parameters.into_boxed_slice()),
         presets: &[],
         wgsl: leak(wgsl),
