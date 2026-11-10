@@ -835,11 +835,11 @@ needs the census did not, the int step and `ctx.layer`):
 | Effects | 15 | all 15, the definitions (D1) | yes, the Effects panel |
 | Escape formulas | 26 | all 26 (`escape::twins`) | yes, Edit as Formula |
 | Escape colourings | 28 | 28 (six batches, branch `rhai-escape-colourings`; plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
-| Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
+| Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion; in progress on `rhai-solids-fields` | no |
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
 | Simulation colourings | 13 | all 13 | yes, the simulation panel (2026-11-03) |
-| Flame variations | 647 | 444 (`variations::twins`, branch `rhai-variation-hooks`; plan in step 3), besides the 10 test fixtures | yes, a transform's variation (2026-11-05) |
+| Flame variations | 647 | 640 (`variations::twins`, branch `rhai-variation-hooks`, merged; the 7 left are in step 3), besides the 10 test fixtures | yes, a transform's variation (2026-11-05) |
 
 Steps, in the order that unlocks the most first (the user picks):
 
