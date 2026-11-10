@@ -10243,6 +10243,80 @@ mod tests {
         }
     }
 
+    /// **The web's route plans the fixtures as the desktop's**
+    /// (docs/projects/rhai-one-form.md, step 2): each 2D fixture -- the deep
+    /// zoom corpus (`output/flame-zoom`) and the visual suite's 2D and
+    /// per-variation configs -- at its own framing and 64, 1024 and 16384
+    /// times nearer, planned with the desktop's bounds (a built-in's from
+    /// its WGSL) and with the web's (every bound from Rhai code, a
+    /// built-in's from its twin; `ifs_ball::WEB_ROUTE`): which views each
+    /// plans, and the words of those both plan. Sets a global switch: run
+    /// alone.
+    #[test]
+    #[ignore = "reads output/flame-zoom; sets a global switch, run alone"]
+    fn the_web_route_plans_the_fixtures_as_the_desktop() {
+        use crate::scene::ifs_ball::WEB_ROUTE;
+        use std::sync::atomic::Ordering;
+        use std::time::Instant;
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        for dir in ["output/flame-zoom", "tests/visual/configs/2d", "tests/visual/configs/variations"] {
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                files.extend(rd.flatten().map(|e| e.path()).filter(|p| p.extension().and_then(|x| x.to_str()) == Some("fflame")));
+            }
+        }
+        files.sort();
+        assert!(!files.is_empty(), "no fixtures");
+        let (mut views, mut both, mut desktop_only, mut web_only) = (0usize, 0usize, Vec::new(), Vec::new());
+        let mut ratios: Vec<(f64, String)> = Vec::new();
+        let (mut t_desktop, mut t_web) = (0.0f64, 0.0f64);
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Ok(cfg) = serde_json::from_str::<crate::config::FractalConfig>(&text) else { continue };
+            if !cfg.flame.custom_variations.is_empty() {
+                crate::variations::custom::ensure(&cfg.flame);
+            }
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            for mult in [1.0f64, 64.0, 1024.0, 16384.0] {
+                let view = View::of((cfg.zoom.max(1e-6) as f64) * mult, [cfg.pan_x, cfg.pan_y], 512, 512);
+                let tag = format!("{stem} x{mult}");
+                views += 1;
+                WEB_ROUTE.store(false, Ordering::Relaxed);
+                let t0 = Instant::now();
+                let desktop = Cylinders::plan(&cfg.flame, reg, view);
+                t_desktop += t0.elapsed().as_secs_f64();
+                WEB_ROUTE.store(true, Ordering::Relaxed);
+                let t0 = Instant::now();
+                let web = Cylinders::plan(&cfg.flame, reg, view);
+                t_web += t0.elapsed().as_secs_f64();
+                WEB_ROUTE.store(false, Ordering::Relaxed);
+                match (desktop, web) {
+                    (Ok(d), Ok(w)) => {
+                        both += 1;
+                        ratios.push((w.words.len() as f64 / d.words.len().max(1) as f64, tag));
+                    }
+                    (Ok(_), Err(e)) => desktop_only.push(format!("{tag}: {e:?}")),
+                    (Err(_), Ok(_)) => web_only.push(tag),
+                    (Err(_), Err(_)) => {}
+                }
+            }
+        }
+        ratios.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let q = |f: f64| ratios.get(((ratios.len() as f64 - 1.0) * f) as usize).map_or(f64::NAN, |r| r.0);
+        println!();
+        println!("  {} fixtures, {views} views: both plan {both}; the desktop alone {}; the web alone {}", files.len(), desktop_only.len(), web_only.len());
+        println!("  the web's words over the desktop's: least {:.3}, median {:.3}, 90% {:.3}, most {:.3}; {} equal", q(0.0), q(0.5), q(0.9), q(1.0), ratios.iter().filter(|r| r.0 == 1.0).count());
+        println!("  the most: {:?}", ratios.iter().rev().take(6).map(|(r, n)| format!("{n} {r:.2}")).collect::<Vec<_>>());
+        println!("  planning: desktop {t_desktop:.1} s, web {t_web:.1} s");
+        for d in desktop_only.iter().take(30) {
+            println!("    desktop alone: {}", d.chars().take(220).collect::<String>());
+        }
+        for w in web_only.iter().take(30) {
+            println!("    web alone: {w}");
+        }
+    }
+
     /// **A plan made for another flame packs without a panic** (the
     /// user's crash, 2026-11-08: a resize packed a four-transform flame's
     /// plan against a three-transform one): its missing transforms are
