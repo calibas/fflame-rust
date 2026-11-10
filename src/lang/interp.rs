@@ -38,6 +38,17 @@ impl Value {
         }
     }
 
+    /// Zero of this value's type.
+    pub(crate) fn zero_like(self) -> Value {
+        match self {
+            Value::Bool(_) => Value::Bool(false),
+            Value::Int(_) => Value::Int(0),
+            Value::UInt(_) => Value::UInt(0),
+            Value::Float(_) => Value::Float(0.0),
+            Value::Complex(_) => Value::Complex(C64::ZERO),
+        }
+    }
+
     pub fn as_bool(self) -> bool {
         match self {
             Value::Bool(b) => b,
@@ -190,6 +201,24 @@ pub fn globals(p: &Program, params: &ParamValues, env: &Env) -> Vec<f32> {
         }
     }
     out
+}
+
+/// What a variation's call starts from ([`VariationRun::new`]): every
+/// variable and array after `prepare` and `init` ran at `params`, in f64,
+/// and which
+/// of them a call keeps from the last (`init`'s state) rather than starting
+/// afresh. A variable that is neither is zero where a call begins
+/// (`VariationRun::reset_locals`). For the interval evaluator
+/// (`variations::rhai_bound`), which takes `prepare`'s values as numbers.
+pub(crate) fn call_start(p: &Program, params: &ParamValues) -> (Vec<Value>, Vec<Vec<Value>>, Vec<bool>) {
+    let env = Env::at(C64::ZERO, 1);
+    let mut m = Machine::new(p, params);
+    m.flame_rng.set(Some(1));
+    let mut sh = Shared::new(&env);
+    m.exec(&p.global_body, &mut sh);
+    m.exec(&p.init, &mut sh);
+    let state = (0..p.vars.len()).map(|v| !p.vars[v].global && crate::lang::delta::writes_var(&p.init, v)).collect();
+    (m.vars, m.arrays, state)
 }
 
 /// One program's running state.

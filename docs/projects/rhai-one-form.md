@@ -154,7 +154,10 @@ variations.
   Each of the three would be judged against the census above: 542 twins
   deriving, and discs as tight as these.
 
-## Step 1: the instruction list
+## Step 1: the instruction list -- not built (decision 1: route B)
+
+The user chose route B on 2026-11-09: no instruction list. What follows
+is the step as it was planned, kept for the record of what was weighed.
 
 `lang/tape.rs`: a variation body lowered once to a list of typed
 instructions over numbered registers.
@@ -197,38 +200,103 @@ Evaluators moved onto it, one commit each:
    run after it (`the_newly_derived_twins_hold_at_depth`,
    `the_newly_derived_twins_render_as_the_builtins`).
 
-## Step 2: bounds from the list, and on the web
+## Step 2: bounds from the Rhai code (route B) -- built (2026-11-10)
 
-An interval evaluator over the list, with `derive`'s `Interval` and its
-rules (a draw is `[0, 1)`; a maybe condition evaluates both ranges and
-joins; a loop iterates to a settled exit or refuses; state and poles
-refuse).
+An interval evaluator over the Rhai variation's own tree, `lang::ir`
+(`variations::rhai_bound`), with `derive`'s arithmetic: `Interval`, its
+rules and the box-to-disc step moved out of `derive.rs` into
+`variations::interval`, which the web builds too (`derive.rs` re-exports
+them, so its paths are unchanged).
 
-- A **Rhai variation's** bound comes from its list on every platform,
-  with no WGSL in between.
-- A **built-in with a twin** takes its twin's bound on the web, where
-  it has none today. That is sound only as far as the twin computes the
-  built-in's function, which the twins' parity tests assert.
-- The naga walk stays on the desktop for what has no Rhai body: the 7
-  built-ins without a twin and variations downloaded as WGSL. It is not
-  removed.
+**The rules are `derive`'s**, over the tree's statements instead of
+naga's: each value the closed range it takes over the input box,
+widened for f32; a draw `[0, 1)` or a pinned arm's slice; a maybe
+condition runs both arms and joins them, a return, `break` or
+`continue` inside one too; a loop runs until its exit is certain and
+refuses past 512 rounds (the GPU's cap is 4096); a pole or a domain exit
+is a value with no bound, refused only where it reaches the point; state
+`init` writes refuses where it is read before it is written; the colour
+a call is given is unknown (a point that depends on it refuses). Arrays
+are tracked element by element, an index that is a range reading or
+writing each element it can reach. `prepare` runs through the same rules
+at the flame's parameters, so a value it picks stays one number (eJulia's
+`sign == 1.0` is decided), with the interpreter's widened numbers where
+the rules refuse it.
 
-Gates, on the desktop, over all 640 twins: the list's bound contains
-the images of sampled points of its disc (soundness); it is compared
-with the naga walk's for the same variation (a table of ratios, and
-every variation one bounds and the other refuses, by name); the corpus
-flames the forward planner plans today still plan, with the same word
-counts within the bounds' difference. Then a web build plans a flame
-whose variation has no hand bound.
+Three things the tree needed that naga's walk did not, each found by the
+census below:
 
-Open until measured: whether the list's bounds are as tight as naga's.
-The WGSL bodies and the Rhai twins are written differently, and
-interval arithmetic's width depends on how an expression is written.
+- **Narrowing by a condition.** `max(a, b)` lowers to `t = a; if b > t
+  { t = b; }`. With the test undecided, both arms joined give the hull
+  of `a` and `b`, not the max, so `1 / max(r, 1e-6)` reached zero. Each
+  arm now narrows the variables its comparison sets against a value
+  (`b > t` holding: `t` no higher than `b` can be). This removed every
+  pole and domain refusal the census had (109 + 79 discs).
+- **A value times itself is its square** (`z.re * z.re`), never
+  negative; two draws are two values.
+- **A complex times or over a real** scales each part: spherical's
+  `z / r2` was `x c / c^2`, twenty times too wide at the census's
+  widest disc.
+
+### Where the bounds come from (`ifs_ball::derived`)
+
+| | Desktop | Web |
+|---|---|---|
+| A built-in | its WGSL, by naga (as before) | its twin's code |
+| A Rhai variation | its code; its compiled WGSL by naga where that refuses | its code |
+| A built-in with no twin (7) | its WGSL | none: refused, as before |
+
+The five hand bounds still come first, on both.
+
+### The census (`what_the_twins_bound`)
+
+Every twin at its built-in's defaults, at four discs (centres (0.6,
+-0.4), (0, 0), (-1.5, 1), (2, 0.3); radii 0.25, 0.5, 0.1, 1): 2,560 discs.
+
+| | Discs |
+|---|---|
+| Both bound | 2,080 |
+| The tree alone | 128 |
+| Naga alone | 0 |
+| Neither | 352 |
+
+- Where both bound, the tree's disc over naga's: median 1.000, 90th
+  percentile 1.000, 99th 1.057, worst 1.360 (`sym_bg5`; the widest are
+  the `sym_*` and `crop` families). 1,674 of the 2,080 are as tight or
+  tighter.
+- **Sound at every disc:** each tree bound holds the interpreter's image
+  of a 9 x 9 grid of its box at 16 draws; a miss fails the test.
+- A tree bound takes 0.07 ms; naga's 12-14 ms, nearly all parsing.
+
+### Planning the fixtures both ways
+
+`the_web_route_plans_the_fixtures_as_the_desktop` (ignored; sets a
+global switch, `ifs_ball::WEB_ROUTE`, that sends every variation down
+the web's route on the desktop, so it runs alone): 171 2D fixtures (the
+deep zoom corpus in `output/flame-zoom`, the visual suite's 2D and
+per-variation configs) at their own framing and 64, 1024 and 16384
+times nearer, 684 views.
+
+| | Views |
+|---|---|
+| Both plan | 161, every one with the same words |
+| The desktop alone | 0 |
+| The web's route alone | 2 (glynnlissa, glynnspiro, at their framing) |
+
+(The corpus of `.flame` files `how_many_corpus_flames_enumerate` reads
+from `output/` is not on this machine; these fixtures stand in.)
+
+Planning all 684 views took 607 s on the desktop's route and 753 s on
+the web's: not yet explained, and the next measurement (per view).
 
 ## Step 3: decide P9, by measurement
 
-Not a build. With exact Jacobians from step 1, run P9's own gate
-offline on the CPU for the Rhai kernels and the built-ins: carry
+Not a build. Route B builds no instruction list, so the exact
+Jacobians this wanted from step 1 are the built-ins' alone (dual numbers,
+`ifs_real::Dual`); a Rhai kernel's are its five-point stencil's, or a
+dual walker over the tree would have to be written first. Run P9's own
+gate offline on the CPU for the built-ins, and for the Rhai kernels
+once they have one: carry
 `d = J d` along each reference chain in place of the difference forms
 and report `the_offset_replay_holds_per_sample`'s 99th percentile at
 1e4 to 1e8, with P9's second-order remainder (`hessian2`) beside it,
@@ -316,13 +384,14 @@ run), then step 1's three evaluators, step 2, step 3.
 
 ## Decisions for the user
 
-1. **After step 0 (now):** step 1 as planned, or the web's bounds by
+1. **After step 0: decided 2026-11-09, route B.** Step 1 as planned, or the web's bounds by
    route A or B with no instruction list. My recommendation is B: it
    has no wasm size cost and no new form, and the measurements leave
    the instruction list no speed to win. The dual Jacobians, if
    wanted for exactness, would then be a walker over the tree too.
-2. After step 2's table: whether the web takes twins' bounds for
-   built-ins.
+2. **After step 2 (now):** whether the web takes twins' bounds for
+   built-ins. Built that way, as the plan proposed; the switch is one
+   line in `ifs_ball::derived` if not.
 3. After step 3: P9.
 
 ## Not in this plan

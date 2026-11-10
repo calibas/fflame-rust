@@ -12,6 +12,10 @@ pub mod bound;
 // bounds are what wasm has, exactly as before.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod derive;
+/// The interval arithmetic both bound evaluators share, and the one over
+/// a Rhai variation's own code, which the web build has too.
+pub mod interval;
+pub mod rhai_bound;
 pub mod inverse;
 pub mod defs;
 pub mod docs;
