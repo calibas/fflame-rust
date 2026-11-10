@@ -1969,7 +1969,7 @@ fn distance(s, p) {
         use crate::lang::interp;
         let p = crate::lang::rhai::solid(QUAT_JULIA).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(QUAT_JULIA)).collect::<Vec<_>>()));
         let base = crate::escape::ifs::template_parameters().len();
-        let w = crate::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("WGSL");
+        let w = crate::lang::wgsl::solid_from(&p, base, base + p.param_slots()).expect("WGSL");
         assert!(w.contains("length(vec4<f32>("), "the walk's escape reads the whole quaternion:\n{w}");
         #[cfg(not(target_arch = "wasm32"))]
         crate::lang::wgsl::validate_solid(&w).expect("validates");

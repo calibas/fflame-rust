@@ -44,7 +44,7 @@ struct Registry {
     /// A solid's parameter block: where its own parameters start (after
     /// the template's), and where its globals do (after its parameters,
     /// its colour depth and its ball).
-    solid_globals: HashMap<String, (usize, usize)>,
+    solid_globals: HashMap<String, (SolidSlots, usize)>,
     /// A solid's calls of built-in variations (3d-look-and-tools P5),
     /// which the maps flame carries ([`solid_maps`]).
     solid_maps: HashMap<String, Vec<ir::MapCall>>,
@@ -376,8 +376,114 @@ pub fn param_layout(name: &str) -> Option<Arc<crate::params::layout::ParamLayout
 /// Why a checked solid does not compile to its walk, if it does not (the
 /// editor's check, before it is used).
 pub fn solid_error(p: &ir::Program) -> Option<String> {
-    let base = super::ifs::template_parameters().len();
-    lang::wgsl::solid(p, base, base + param_defs(p).len()).err()
+    let layout = match solid_layout(p) {
+        Ok(l) => l,
+        Err(e) => return Some(e),
+    };
+    lang::wgsl::solid(p, &layout.slots.params, layout.slots.funcs, layout.depth_slot).err()
+}
+
+/// Where each of a solid's parameters sits in its block.
+#[derive(Clone, Debug)]
+pub(crate) struct SolidSlots {
+    /// Each parameter's first slot.
+    params: Vec<usize>,
+    /// Where its user functions' choices start.
+    funcs: usize,
+}
+
+impl SolidSlots {
+    /// The parameter values a block holds, as `ParamValues::from_slots`
+    /// reads a contiguous one.
+    fn values(&self, p: &ir::Program, block: &[f32]) -> lang::interp::ParamValues {
+        let at = |k: usize| block.get(k).copied().unwrap_or(0.0) as f64;
+        let values = p
+            .params
+            .iter()
+            .zip(&self.params)
+            .map(|(x, &k)| if x.ty() == ir::Ty::Complex { (at(k), at(k + 1)) } else { (at(k), 0.0) })
+            .collect();
+        let funcs = (0..p.funcs.len()).map(|i| at(self.funcs + i).round().max(0.0) as usize).collect();
+        lang::interp::ParamValues { values, funcs }
+    }
+}
+
+/// **A solid's parameter block**: the template's parameters (the built-in
+/// solids' seven), then the solid's own, then Colour Depth, then -- unless
+/// `prepare` gives the ball -- Ball Radius.
+///
+/// A solid may declare one of the template's parameters, or
+/// `colour_depth`, in its own `PARAMS`: its declaration then takes that
+/// parameter's place and slot -- its caption, hint, default and range --
+/// and `p.<name>` reads it. That is how a built-in's twin keeps the
+/// built-in's Iterations default and range, its Colour Depth hint, and
+/// reads the Slice Value (docs/projects/rhai-solids-fields.md).
+pub(crate) struct SolidLayout {
+    /// The template's parameters, with the solid's own in place of any it
+    /// declares.
+    template: Vec<ParamDef>,
+    /// Its other parameters, in order.
+    own: Vec<ParamDef>,
+    /// Its Colour Depth, if it declares one.
+    depth: Option<ParamDef>,
+    slots: SolidSlots,
+    depth_slot: usize,
+}
+
+pub(crate) fn solid_layout(p: &ir::Program) -> Result<SolidLayout, String> {
+    let mut template = super::ifs::template_parameters().to_vec();
+    let defs = param_defs(p);
+    // Each program parameter's defs: two for a complex, one otherwise;
+    // the user functions' after them.
+    let mut at = 0usize;
+    let mut own = Vec::new();
+    let mut depth = None;
+    // A parameter's place: the template's index, Colour Depth, or the
+    // next of its own.
+    enum Place {
+        Template(usize),
+        Depth,
+        Own(usize),
+    }
+    let mut places = Vec::new();
+    let mut own_floats = 0usize;
+    for x in &p.params {
+        let n = x.ty().floats();
+        let mine = &defs[at..at + n];
+        at += n;
+        let name = x.name.as_str();
+        if let Some(i) = template.iter().position(|d| d.name == name) {
+            if n != 1 {
+                return Err(format!("`{name}` is the template's parameter, a number: declare it as one"));
+            }
+            template[i] = mine[0].clone();
+            places.push(Place::Template(i));
+        } else if name == "colour_depth" {
+            if n != 1 {
+                return Err("`colour_depth` is a number: how many of the first iterations the colourings read".into());
+            }
+            depth = Some(mine[0].clone());
+            places.push(Place::Depth);
+        } else {
+            places.push(Place::Own(own_floats));
+            own_floats += n;
+            own.extend_from_slice(mine);
+        }
+    }
+    // The user functions' choices follow its own parameters.
+    own.extend_from_slice(&defs[at..]);
+    let base = template.len();
+    let funcs = base + own_floats;
+    let depth_slot = base + own.len();
+    let params = places
+        .iter()
+        .map(|pl| match pl {
+            Place::Template(i) => *i,
+            Place::Depth => depth_slot,
+            Place::Own(k) => base + k,
+        })
+        .collect();
+    Ok(SolidLayout { template, own, depth, slots: SolidSlots { params, funcs }, depth_slot })
 }
 
 /// Compile a Rhai solid (the KIFS plan, B3) and register it under `name`
@@ -393,21 +499,20 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     let fail = |m: String| vec![Diag::error(lang::Span::default(), m)];
     let p = check_entry(EntryKind::Solid, src)?;
     record_layout(src, name)?;
-    let template = super::ifs::template_parameters();
-    let own = param_defs(&p);
-    let depth_slot = template.len() + own.len();
+    let layout = solid_layout(&p).map_err(fail)?;
+    let depth_slot = layout.depth_slot;
     // Its parameters, their colour depth and ball, then what `prepare`
     // computes: one block of 64.
     let globals: usize = p.globals.iter().map(|&v| p.vars[v].floats()).sum();
     if depth_slot + 2 + globals > 64 {
         return Err(fail(format!(
             "a solid's parameters and `prepare` values take {} slots; it has {} and {}",
-            64 - template.len() - 2,
-            own.len(),
+            64 - layout.template.len() - 2,
+            layout.own.len(),
             globals
         )));
     }
-    let wgsl = lang::wgsl::solid(&p, template.len(), depth_slot).map_err(fail)?;
+    let wgsl = lang::wgsl::solid(&p, &layout.slots.params, layout.slots.funcs, depth_slot).map_err(fail)?;
     #[cfg(not(target_arch = "wasm32"))]
     lang::wgsl::validate_solid(&wgsl).map_err(|e| fail(format!("the compiler produced invalid WGSL (a bug): {e}")))?;
     let radius = lang::rhai::info_number(&src.source, "radius");
@@ -424,15 +529,17 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     }
     let radius = radius.unwrap_or(2.0).max(1e-3);
     let depth = lang::rhai::info_number(&src.source, "depth").unwrap_or(3.0).clamp(1.0, 12.0).round();
-    let mut parameters: Vec<ParamDef> = template.to_vec();
-    parameters.extend(own);
-    parameters.push(ParamDef::owned(
-        "colour_depth",
-        "Colour Depth",
-        "How many of the first iterations the colourings read: the orbit trap's closest approach, the level's \
-         running derivative and the address. Raise it when zoomed in.",
-        float_kind(depth, (1.0, 12.0), false),
-    ));
+    let mut parameters: Vec<ParamDef> = layout.template.clone();
+    parameters.extend(layout.own.iter().cloned());
+    parameters.push(layout.depth.clone().unwrap_or_else(|| {
+        ParamDef::owned(
+            "colour_depth",
+            "Colour Depth",
+            "How many of the first iterations the colourings read: the orbit trap's closest approach, the level's \
+             running derivative and the address. Raise it when zoomed in.",
+            float_kind(depth, (1.0, 12.0), false),
+        )
+    }));
     // Its slot is kept without it: `prepare`'s values start after it.
     if ball.is_none() {
         parameters.push(ParamDef::owned(
@@ -465,7 +572,7 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     // Its `prepare`, which the renderer has the interpreter compute.
     if !p.globals.is_empty() {
         if let Ok(mut r) = registry().write() {
-            r.solid_globals.insert(name.to_string(), (template.len(), depth_slot + 2));
+            r.solid_globals.insert(name.to_string(), (layout.slots.clone(), depth_slot + 2));
             r.programs.insert(name.to_string(), Arc::new(p));
         }
     }
@@ -1318,17 +1425,19 @@ pub fn solid_maps(name: &str) -> Vec<ir::MapCall> {
 }
 
 pub fn globals(name: &str, block: &[f32], env: &lang::interp::Env) -> Option<(usize, Vec<f32>)> {
-    let (p, base, at) = {
+    let (p, slots, at) = {
         let r = registry().read().ok()?;
         let p = r.programs.get(name)?.clone();
-        let (base, at) = match p.kind {
-            EntryKind::Coloring => (0, p.param_slots()),
-            EntryKind::Solid => *r.solid_globals.get(name)?,
-            _ => (0, 0),
+        let (slots, at) = match p.kind {
+            EntryKind::Coloring => (None, p.param_slots()),
+            EntryKind::Solid => {
+                let (s, at) = r.solid_globals.get(name)?;
+                (Some(s.clone()), *at)
+            }
+            _ => (None, 0),
         };
-        (p, base, at)
+        (p, slots, at)
     };
-    let block = block.get(base..).unwrap_or_default();
     // Everything `global:` can read: the parameters and the image.
     let mut key: Vec<u64> = block.iter().map(|v| u64::from(v.to_bits())).collect();
     key.extend([
@@ -1348,7 +1457,12 @@ pub fn globals(name: &str, block: &[f32], env: &lang::interp::Env) -> Option<(us
             return Some((at, v.clone()));
         }
     }
-    let params = lang::interp::ParamValues::from_slots(&p, block);
+    // A solid's parameters where its layout puts them; anything else's
+    // from the block's start.
+    let params = match &slots {
+        Some(s) => s.values(&p, block),
+        None => lang::interp::ParamValues::from_slots(&p, block),
+    };
     let values = lang::interp::globals(&p, &params, env);
     if let Ok(mut l) = last.lock() {
         l.insert(name.to_string(), (key, values.clone()));
@@ -1364,15 +1478,15 @@ pub fn globals(name: &str, block: &[f32], env: &lang::interp::Env) -> Option<(us
 /// without one, which has the Ball Radius parameter instead
 /// ([`compile_solid`]).
 pub fn solid_ball(def: &super::ifs::IfsDef, params: &std::collections::BTreeMap<String, f32>) -> Option<f64> {
-    let (p, base) = {
+    let (p, slots) = {
         let r = registry().read().ok()?;
-        (r.programs.get(def.name)?.clone(), r.solid_globals.get(def.name)?.0)
+        (r.programs.get(def.name)?.clone(), r.solid_globals.get(def.name)?.0.clone())
     };
     let v = ball_global(&p)?;
     let at: usize = p.globals.iter().take_while(|&&g| g != v).map(|&g| p.vars[g].floats()).sum();
     let mut block = vec![0.0f32; def.parameters.len()];
     super::pack_params(def.parameters, params, &mut block);
-    let params = lang::interp::ParamValues::from_slots(&p, block.get(base..)?);
+    let params = slots.values(&p, &block);
     let env = lang::interp::Env::at(lang::builtins::C64::ZERO, 1);
     lang::interp::globals(&p, &params, &env).get(at).map(|&r| f64::from(r))
 }

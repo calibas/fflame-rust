@@ -13385,6 +13385,84 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
     }
 
+    /// **The solid twins render as their built-ins** (docs/projects/rhai-
+    /// solids-fields.md): each built-in solid and its Rhai twin
+    /// (`escape::twins::SOLID_TWINS`), put in its place as Edit as Rhai
+    /// puts it -- the same parameters, by name -- rendered through
+    /// `renderer::render` at settings that take each path: each colouring,
+    /// each mode, the parameters moved, a nearer view. Both are timed.
+    ///
+    /// The pictures may differ in a few bytes, on pixels where the march's
+    /// hit or the level's band turns on a rounding: the twin's vectors are
+    /// lowered to their parts, the built-in's are WGSL vectors, and a
+    /// driver fuses a multiply and an add (FMA) where it chooses, which
+    /// WGSL gives no way to forbid. Measured on the Mandelbox (2026-11-10):
+    /// 2 to 6 bytes of 36,864, each 1 apart but one level band's 7; writing
+    /// the built-in's `length` and `dot` out as the twin's are moved none
+    /// of them. A share of 0.1% of the bytes is allowed.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn solid_twins_render_as_their_builtins() {
+        let (device, queue) = device();
+        let only: Option<Vec<String>> = std::env::var("SOLIDS").ok().map(|v| v.split(',').map(str::to_string).collect());
+        // (built-in, colouring, parameters, zoom)
+        type Case = (&'static str, &'static str, &'static [(&'static str, f32)], f64);
+        let cases: &[Case] = &[
+            ("mandelbox_solid", "ifs_trap", &[], 0.0),
+            ("mandelbox_solid", "ifs_level", &[], 0.0),
+            ("mandelbox_solid", "ifs_address", &[], 0.0),
+            ("mandelbox_solid", "ifs_distance", &[], 0.0),
+            ("mandelbox_solid", "ifs_trap", &[("scale", -1.5)], 1.2),
+            ("mandelbox_solid", "ifs_address", &[("scale", 2.6), ("min_radius", 0.3), ("fixed_radius", 1.4), ("fold_limit", 0.8)], 0.0),
+            ("mandelbox_solid", "ifs_trap", &[("mode", 1.0), ("cx", 0.6), ("cy", -0.4), ("cz", 0.3)], 0.0),
+            ("mandelbox_solid", "ifs_level", &[("colour_depth", 7.0), ("levels", 24.0)], 1.5),
+        ];
+        let mut failures = Vec::new();
+        let mut timing = Vec::new();
+        for (builtin, coloring, params, zoom) in cases {
+            if only.as_ref().is_some_and(|o| !o.iter().any(|n| builtin.contains(n.as_str()))) {
+                continue;
+            }
+            let mut c = crate::config::FractalConfig::default();
+            c.render_mode = RenderMode::Escape;
+            c.escape.formula = builtin.to_string();
+            c.escape.coloring = coloring.to_string();
+            c.escape.zoom_log2 = *zoom;
+            c.escape.cam_yaw = 0.9;
+            c.escape.cam_pitch = 0.42;
+            for (k, v) in params.iter() {
+                c.escape.formula_params.insert(k.to_string(), *v);
+            }
+            c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            let src = crate::escape::twins::solid_custom_source(builtin).expect("a twin");
+            let mut tc = c.clone();
+            tc.escape.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Solid, &src);
+            tc.escape.custom_formula = Some(src);
+            let go = |cfg: &crate::config::FractalConfig| {
+                let out = pollster::block_on(crate::renderer::render(&device, &queue, crate::renderer::RenderJob::new(cfg, W, H), &mut crate::renderer::NoProgress)).expect("render");
+                (out.rgba_data, out.render_time_ms)
+            };
+            // Each once to compile, then timed.
+            let _ = (go(&c), go(&tc));
+            let ((b, tb), (w, tw)) = (go(&c), go(&tc));
+            let differ = b.iter().zip(&w).filter(|(x, y)| x != y).count();
+            let worst = b.iter().zip(&w).map(|(x, y)| (*x as i32 - *y as i32).abs()).max().unwrap_or(0);
+            let lit = b.chunks(4).filter(|px| px[0] as u32 + px[1] as u32 + px[2] as u32 > 24).count();
+            let tag = format!("{builtin} {coloring} {params:?} zoom {zoom}");
+            println!("  {tag}: {differ} of {} bytes differ (worst {worst}), {lit} lit | built-in {tb:.1} ms, twin {tw:.1} ms", b.len());
+            timing.push(tw / tb.max(1e-9));
+            assert!(lit > (W * H) as usize / 20, "{tag}: too little drawn to compare");
+            if differ * 1000 > b.len() {
+                failures.push(format!("{tag}: {differ} bytes differ, worst {worst}"));
+            }
+        }
+        if !timing.is_empty() {
+            timing.sort_by(|a, b| a.total_cmp(b));
+            println!("  the twin's time over the built-in's: median {:.2}, worst {:.2}", timing[timing.len() / 2], timing[timing.len() - 1]);
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     /// **The coarse pass lands on a later frame, and no call waits for
     /// it** (the web's hang on choosing Measure, 2026-11-10): the first
     /// `ensure_coarse` starts the pass and returns at once with it
@@ -15705,7 +15783,7 @@ fn distance(s, p) {
             println!("{what}: the Rhai walk's distance against the twin's, worst relative difference {worst:.2e}");
             assert!(worst < 1e-9, "{what}: {worst}");
             let base = template_parameters().len();
-            let wgsl = crate::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("a walk");
+            let wgsl = crate::lang::wgsl::solid_from(&p, base, base + p.param_slots()).expect("a walk");
             crate::lang::wgsl::validate_solid(&wgsl).expect("valid WGSL");
         }
     }

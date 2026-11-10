@@ -111,6 +111,28 @@ pub const COLORING_TWINS: &[(&str, &str)] = &[
     ("image_trap", include_str!("../../assets/formulas/twins/colorings/image_trap.rhai")),
 ];
 
+/// The built-in mode D solids' twins (P7 step 4,
+/// docs/projects/rhai-solids-fields.md): each a Rhai solid that renders as
+/// its built-in, which the Escape panel's Edit as Rhai puts in the
+/// built-in's place. A twin keeps its built-in's parameters by name, its
+/// arithmetic step for step, and the colourings' readings (`dr`, the
+/// `address` its built-in accumulates); its `prepare` gives the built-in's
+/// ball. The sources are `assets/formulas/twins/solids/*.rhai`; the GPU
+/// tests hold each to its built-in (`escape::ifs`).
+pub const SOLID_TWINS: &[(&str, &str)] = &[
+    ("mandelbox_solid", include_str!("../../assets/formulas/twins/solids/mandelbox.rhai")),
+];
+
+/// The twin of the built-in solid `name`, when it has one.
+pub fn solid_source(name: &str) -> Option<&'static str> {
+    SOLID_TWINS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
+}
+
+/// The solid's twin as the config carries it.
+pub fn solid_custom_source(name: &str) -> Option<crate::config::escape::CustomSource> {
+    carried(name, solid_source(name)?)
+}
+
 /// The twin of the built-in formula `name`, when it has one.
 pub fn source(name: &str) -> Option<&'static str> {
     TWINS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
@@ -185,6 +207,55 @@ mod tests {
             // What picking it sets (`INFO.bailout`, `INFO.pick`).
             assert_eq!(twin.recommended_bailout, builtin.recommended_bailout, "{name}: its recommended bailout");
             assert_eq!(twin.pick_params, builtin.pick_params, "{name}: what a fresh pick sets");
+        }
+    }
+
+    /// **Each solid twin compiles as its built-in** (docs/projects/rhai-
+    /// solids-fields.md): registered as a mode D solid with the built-in's
+    /// title and every parameter it has -- names, captions, hints, kinds,
+    /// defaults, ranges, choices -- the template's and Colour Depth
+    /// included, in any order (a config carries them by name), and none
+    /// else; its default colouring the built-in's; and `prepare`'s ball
+    /// the built-in's, at the defaults and with each parameter moved.
+    #[test]
+    fn every_solid_twin_compiles_as_its_builtin() {
+        for (name, _) in SOLID_TWINS {
+            let builtin = super::super::ifs::get_ifs(name).expect("a built-in solid");
+            let src = solid_custom_source(name).expect("a twin");
+            let key = super::super::custom::name_of(super::super::lang::EntryKind::Solid, &src);
+            let twin = super::super::custom::compile_solid(&src, &key)
+                .unwrap_or_else(|d| panic!("{name}: {:?}", d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>()));
+            assert_eq!(twin.display_name, builtin.display_name, "{name}: its title");
+            assert_eq!(twin.default_coloring, builtin.default_coloring, "{name}: its default colouring");
+            assert_eq!(twin.march_inside, builtin.march_inside, "{name}: its march");
+            for b in builtin.parameters {
+                let t = twin.parameters.iter().find(|x| x.name == b.name).unwrap_or_else(|| panic!("{name}: no `{}`", b.name));
+                assert_eq!(t, b, "{name}.{}", b.name);
+            }
+            assert_eq!(twin.parameters.len(), builtin.parameters.len(), "{name}: no other parameters ({:?})", twin.parameters.iter().map(|p| &p.name).collect::<Vec<_>>());
+            // The ball, as `standalone_radius` gives the built-in's: to f32,
+            // as `prepare`'s values are handed on (and the shader reads
+            // either ball in f32).
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            let ball = |esc: &crate::config::escape::EscapeConfig| {
+                (super::super::ifs::standalone_radius(builtin, esc), super::super::ifs::standalone_radius(twin, esc))
+            };
+            let same = |b: f64, t: f64| b as f32 == t as f32;
+            let (b, t) = ball(&esc);
+            assert!(same(b, t), "{name}: the ball at the defaults: {b} against {t}");
+            for p in builtin.parameters.iter().skip(7) {
+                let (lo, hi) = p.slot_range();
+                for v in [lo, hi, 0.5 * (lo + hi) + 0.137] {
+                    esc.formula_params.clear();
+                    esc.formula_params.insert(p.name.to_string(), v);
+                    if p.name == "mode" {
+                        esc.formula_params.insert("cx".into(), 1.3);
+                        esc.formula_params.insert("cz".into(), -0.7);
+                    }
+                    let (b, t) = ball(&esc);
+                    assert!(same(b, t), "{name}: the ball at {} = {v}: {b} against {t}", p.name);
+                }
+            }
         }
     }
 

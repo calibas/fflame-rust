@@ -1133,7 +1133,25 @@ pub(crate) fn constant_arrays(p: &Program, bodies: &[&[IStmt]]) -> Vec<Option<Ve
 /// `base` on (the template's own come first), its function parameters'
 /// choices after them; `colour_depth` is at `depth_slot`, the ball after
 /// it, and what `prepare` computes (the globals) from `depth_slot + 2`.
-pub fn solid(p: &Program, base: usize, depth_slot: usize) -> Result<String, String> {
+/// [`solid`] with its parameters in a row from `base`, its user functions
+/// after them: the layout of a solid that declares none of the template's
+/// parameters (tests).
+#[cfg(test)]
+pub fn solid_from(p: &Program, base: usize, depth_slot: usize) -> Result<String, String> {
+    let mut slots = Vec::new();
+    let mut at = base;
+    for x in &p.params {
+        slots.push(at);
+        at += x.ty().floats();
+    }
+    solid(p, &slots, at, depth_slot)
+}
+
+/// `slots`: each parameter's slot in the block, `func_base` where the user
+/// functions' choices start, `depth_slot` Colour Depth's
+/// (`escape::custom::solid_layout`: a parameter the template has sits at
+/// the template's slot).
+pub fn solid(p: &Program, slots: &[usize], func_base: usize, depth_slot: usize) -> Result<String, String> {
     let find = |name: &str| p.vars.iter().position(|v| v.name == name && !v.global && !v.is_array());
     let (Some(zx), Some(zy), Some(zz)) = (find("s_z__x"), find("s_z__y"), find("s_z__z")) else {
         return Err("the state needs `z`, the iterate, a vector or a quaternion".into());
@@ -1144,8 +1162,9 @@ pub fn solid(p: &Program, base: usize, depth_slot: usize) -> Result<String, Stri
     let dr = find("s_dr");
     let address = find("s_address");
     let mut g = Gen::new(p, Ctx::Formula, "ufs_");
-    for k in g.slots.iter_mut().chain(g.func_slots.iter_mut()) {
-        *k += base;
+    g.slots = slots.to_vec();
+    for (i, k) in g.func_slots.iter_mut().enumerate() {
+        *k = func_base + i;
     }
     g.global_base = Some(depth_slot + 2);
     let mut body = String::from("struct SolidState {\n");
