@@ -409,13 +409,59 @@ enum Which {
     InverseDifference,
     Forward3,
     Inverse3,
+    ForwardBatch,
+    InverseBatch,
+}
+
+/// PROFILE (tests): each kind of call's count and time, summed over
+/// threads, while `ON`.
+#[cfg(test)]
+pub(crate) mod profile {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    pub static ON: AtomicBool = AtomicBool::new(false);
+    pub static CALLS: [AtomicU64; 9] = [const { AtomicU64::new(0) }; 9];
+    pub static NANOS: [AtomicU64; 9] = [const { AtomicU64::new(0) }; 9];
+    pub static POINTS: AtomicU64 = AtomicU64::new(0);
+    pub const NAMES: [&str; 9] = ["forward", "inverse", "gap", "difference", "inverse difference", "forward3", "inverse3", "forward batch", "inverse batch"];
+    pub fn add(k: usize, t: std::time::Duration) {
+        CALLS[k].fetch_add(1, Ordering::Relaxed);
+        NANOS[k].fetch_add(t.as_nanos() as u64, Ordering::Relaxed);
+    }
+    /// Each kind's (calls, seconds), and the batch's points, reset.
+    pub fn take() -> (Vec<(u64, f64)>, u64) {
+        let out = (0..9).map(|k| (CALLS[k].swap(0, Ordering::Relaxed), NANOS[k].swap(0, Ordering::Relaxed) as f64 * 1e-9)).collect();
+        (out, POINTS.swap(0, Ordering::Relaxed))
+    }
 }
 
 thread_local! {
     /// Each kernel's runs on this thread, by the kernel and the program:
     /// a kernel is the table's for the session (`kernel_slot`), so its
     /// programs and values outlive any run of them.
-    static RUNS: std::cell::RefCell<HashMap<(usize, Which), VariationRun<'static>>> = std::cell::RefCell::new(HashMap::new());
+    static RUNS: std::cell::RefCell<HashMap<(usize, Which), VariationRun<'static>, std::hash::BuildHasherDefault<RunHasher>>> = std::cell::RefCell::new(HashMap::default());
+    /// A batch's points, the vector reused ([`UserKernel::forward_batch`]).
+    static POINTS: std::cell::RefCell<Vec<C64>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The runs' table's hash: a key is a kernel's address and a small enum,
+/// which SipHash's resistance does nothing for, at a share of every call.
+#[derive(Default)]
+struct RunHasher(u64);
+
+impl std::hash::Hasher for RunHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0.rotate_left(5) ^ u64::from(b)).wrapping_mul(0x517c_c1b7_2722_0a95);
+        }
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        self.0 = (self.0.rotate_left(5) ^ n as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
 }
 
 /// `f` on this thread's run of `prog` at `params`, for the kernel at
@@ -424,9 +470,16 @@ thread_local! {
 fn with_run<R>(key: usize, which: Which, prog: &'static Program, params: &'static ParamValues, f: impl FnOnce(&mut VariationRun<'static>) -> R) -> R {
     RUNS.with(|runs| {
         let mut runs = runs.borrow_mut();
+        #[cfg(test)]
+        let t = profile::ON.load(std::sync::atomic::Ordering::Relaxed).then(std::time::Instant::now);
         let run = runs.entry((key, which)).or_insert_with(|| VariationRun::new(prog, params, 1));
         run.reset_locals();
-        f(run)
+        let out = f(run);
+        #[cfg(test)]
+        if let Some(t) = t {
+            profile::add(which as usize, t.elapsed());
+        }
+        out
     })
 }
 
@@ -442,11 +495,35 @@ impl UserKernel {
     /// bit.
     pub fn forward_batch(&'static self, zs: &mut [[f64; 2]], code: u32) {
         let u = ((code % DRAW_GRID) as f64 + 0.5) / DRAW_GRID as f64;
-        with_run(self as *const _ as usize, Which::Forward, &self.inverse.forward, &self.params, |run| {
-            run.set_draw(u);
-            let points: Vec<C64> = zs.iter().map(|z| C64::new(z[0], z[1])).collect();
-            for (z, out) in zs.iter_mut().zip(run.call_batch(&points, C64::ZERO, 1.0)) {
+        #[cfg(test)]
+        profile::POINTS.fetch_add(zs.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        POINTS.with(|points| {
+            let mut points = points.borrow_mut();
+            points.clear();
+            points.extend(zs.iter().map(|z| C64::new(z[0], z[1])));
+            with_run(self as *const _ as usize, Which::ForwardBatch, &self.inverse.forward, &self.params, |run| {
+                run.set_draw(u);
+                run.call_batch(&mut points, C64::ZERO, 1.0);
+            });
+            for (z, out) in zs.iter_mut().zip(points.iter()) {
                 *z = [out.re, out.im];
+            }
+        })
+    }
+
+    /// [`Self::inverse`] at each of `vs` along `branch`, in place: one pass
+    /// of the interpreter for all of them, as [`Self::forward_batch`].
+    pub fn inverse_batch(&'static self, vs: &mut [[f64; 2]], branch: u32) {
+        POINTS.with(|points| {
+            let mut points = points.borrow_mut();
+            points.clear();
+            points.extend(vs.iter().map(|v| C64::new(v[0], v[1])));
+            with_run(self as *const _ as usize, Which::InverseBatch, &self.inverse.inverse, &self.params, |run| {
+                run.set_color(branch as f64);
+                run.call_batch(&mut points, C64::ZERO, 1.0);
+            });
+            for (v, out) in vs.iter_mut().zip(points.iter()) {
+                *v = [out.re, out.im];
             }
         })
     }
@@ -1215,6 +1292,46 @@ fn inverse(z, p, branch) {
                 other => println!("  {name}: {:?}", other.map(|r| r.err())),
             }
         }
+    }
+
+    /// TIMING: julian's twin's forward map batched against the built-in
+    /// root kernel's, point by point, on the same 256 points.
+    #[test]
+    #[ignore = "timing; run with --ignored --nocapture"]
+    fn time_the_twin_kernel_against_the_builtin() {
+        use crate::scene::ifs_analysis::Kernel;
+        let src = crate::lang::rhai::with_own_id(crate::variations::twins::source("julian").expect("a twin"), &crate::scripted::mint_id());
+        let inv = Arc::new(compile(&src, "julian_time").expect("declared").expect("checks"));
+        let slot = kernel_slot(&inv, &[2.0, 1.0]).expect("a slot");
+        let (twin, builtin) = (Kernel::User { slot }, Kernel::Root { n: 2, d: 1.0, mirror: false });
+        let zs: Vec<[f64; 2]> = (0..256).map(|i| [0.3 + 0.002 * i as f64, -0.2 + 0.0013 * i as f64]).collect();
+        let reps = 20_000;
+        let mut sink = 0.0;
+        let t0 = std::time::Instant::now();
+        for r in 0..reps {
+            for z in &zs {
+                sink += builtin.forward(*z, (r & 1) as u32)[0];
+            }
+        }
+        let native = t0.elapsed().as_secs_f64() / (reps * zs.len()) as f64;
+        let code = kernel(slot).draws();
+        let mut line = format!("native root {:.1} ns a point; twin batched by", native * 1e9);
+        for size in [16usize, 64, 145, 256] {
+            let t0 = std::time::Instant::now();
+            let mut done = 0usize;
+            for r in 0..reps {
+                for chunk in zs.chunks(size) {
+                    let mut buf = chunk.to_vec();
+                    twin.forward_batch(&mut buf, code[r & 1]);
+                    sink += buf[0][0];
+                    done += chunk.len();
+                }
+            }
+            let each = t0.elapsed().as_secs_f64() / done as f64;
+            line += &format!(" {size}: {:.1} ns ({:.2}x);", each * 1e9, each / native);
+        }
+        println!("{line}");
+        assert!(sink.is_finite() || sink.is_nan());
     }
 
     /// **Every twin's derived differences are the direct ones, in big

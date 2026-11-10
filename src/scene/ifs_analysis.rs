@@ -340,6 +340,16 @@ impl Kernel {
         kernel_forward_gen(self, &z, k)
     }
 
+    /// [`Self::inverse`] at each of `vs` along `branch`, in place: a user
+    /// kernel's in one pass of its interpreter (rhai-planners E4), the
+    /// others point by point.
+    pub fn inverse_batch(&self, vs: &mut [[f64; 2]], branch: u32) {
+        match *self {
+            Kernel::User { slot } => crate::variations::user_inverse::kernel(slot).inverse_batch(vs, branch),
+            _ => vs.iter_mut().for_each(|v| *v = self.inverse(*v, branch)),
+        }
+    }
+
     /// [`Self::forward`] at each of `zs`, in place: a user kernel's in one
     /// pass of its interpreter (rhai-planners E4), the others point by
     /// point.
@@ -1536,6 +1546,16 @@ impl NonlinearMap2 {
         self.pre_inv.apply(u)
     }
 
+    /// [`Self::apply_inverse`] at each of `qs`, in place, its kernel's
+    /// inverse in one pass ([`Kernel::inverse_batch`]).
+    pub fn apply_inverse_batch(&self, qs: &mut [[f64; 2]]) {
+        qs.iter_mut().for_each(|q| *q = self.before_kernel(*q));
+        self.kernel.inverse_batch(qs, self.branch);
+        for u in qs.iter_mut() {
+            *u = if !(u[0].is_finite() && u[1].is_finite()) || u[0].abs() > 1e29 || u[1].abs() > 1e29 { [f64::INFINITY, f64::INFINITY] } else { self.pre_inv.apply(*u) };
+        }
+    }
+
     /// `S⁻¹(q + δ) − S⁻¹(q)`, **without forming the difference**
     /// (`ifs-perturbation-delta.md` §3).
     ///
@@ -1795,6 +1815,16 @@ impl Map2 {
             Map2::SumInverse(r) => {
                 r.solve(p).map_or([f64::INFINITY, f64::INFINITY], |(z, _)| z)
             }
+        }
+    }
+
+    /// [`Self::apply`] at each of `ps`, in place: a nonlinear inverse's
+    /// user kernel in one pass of its interpreter (rhai-planners E4), any
+    /// other map point by point.
+    pub fn apply_batch(&self, ps: &mut [[f64; 2]]) {
+        match self {
+            Map2::NonlinearInverse(r) => r.apply_inverse_batch(ps),
+            other => ps.iter_mut().for_each(|p| *p = other.apply(*p)),
         }
     }
 

@@ -17,7 +17,16 @@
 //! as scalar calls, one a point.
 
 use super::*;
+use std::borrow::Cow;
 use std::rc::Rc;
+
+/// What a run keeps between batches: its variables' columns and the lanes'
+/// mask, the vectors reused rather than made a call.
+#[derive(Default)]
+pub(super) struct Scratch {
+    vars: Vec<Col>,
+    active: Vec<bool>,
+}
 
 /// A value across a batch's lanes: one every lane holds, or a column --
 /// of floats and of complexes as such, the scalar run's `Value::Float`
@@ -25,9 +34,78 @@ use std::rc::Rc;
 #[derive(Clone, Debug)]
 enum Col {
     One(Value),
-    F(Rc<Vec<f64>>),
-    C(Rc<Vec<C64>>),
+    F(Buf<f64>),
+    C(Buf<C64>),
     V(Rc<Vec<Value>>),
+}
+
+/// A column's storage, its buffer kept for the next column once done with
+/// (each thread's pool): a call makes as many columns as its body has
+/// nodes, and allocating each was most of a small batch's overhead.
+struct Buf<T: Pooled>(Vec<T>);
+
+/// A column's element, pooled per thread.
+trait Pooled: Copy + 'static {
+    fn pool() -> &'static std::thread::LocalKey<std::cell::RefCell<Vec<Vec<Self>>>>;
+}
+
+thread_local! {
+    static FLOAT_BUFS: std::cell::RefCell<Vec<Vec<f64>>> = const { std::cell::RefCell::new(Vec::new()) };
+    static COMPLEX_BUFS: std::cell::RefCell<Vec<Vec<C64>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl Pooled for f64 {
+    fn pool() -> &'static std::thread::LocalKey<std::cell::RefCell<Vec<Vec<f64>>>> {
+        &FLOAT_BUFS
+    }
+}
+
+impl Pooled for C64 {
+    fn pool() -> &'static std::thread::LocalKey<std::cell::RefCell<Vec<Vec<C64>>>> {
+        &COMPLEX_BUFS
+    }
+}
+
+impl<T: Pooled> FromIterator<T> for Buf<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(it: I) -> Self {
+        let mut v = T::pool().try_with(|p| p.borrow_mut().pop()).ok().flatten().unwrap_or_default();
+        v.clear();
+        v.extend(it);
+        Buf(v)
+    }
+}
+
+impl<T: Pooled> Drop for Buf<T> {
+    fn drop(&mut self) {
+        let v = std::mem::take(&mut self.0);
+        if v.capacity() > 0 {
+            let _ = T::pool().try_with(|p| {
+                let mut p = p.borrow_mut();
+                if p.len() < 64 {
+                    p.push(v);
+                }
+            });
+        }
+    }
+}
+
+impl<T: Pooled> std::ops::Deref for Buf<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        &self.0
+    }
+}
+
+impl<T: Pooled> Clone for Buf<T> {
+    fn clone(&self) -> Self {
+        self.iter().copied().collect()
+    }
+}
+
+impl<T: Pooled + std::fmt::Debug> std::fmt::Debug for Buf<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 impl Col {
@@ -66,9 +144,9 @@ impl Col {
     /// Values as a column, typed where they all are one type.
     fn pack(vals: Vec<Value>) -> Col {
         if vals.iter().all(|v| matches!(v, Value::Float(_))) {
-            Col::F(Rc::new(vals.iter().map(|v| v.as_f64()).collect()))
+            Col::F(vals.iter().map(|v| v.as_f64()).collect())
         } else if vals.iter().all(|v| matches!(v, Value::Complex(_))) {
-            Col::C(Rc::new(vals.iter().map(|v| v.as_c64()).collect()))
+            Col::C(vals.iter().map(|v| v.as_c64()).collect())
         } else {
             Col::V(Rc::new(vals))
         }
@@ -90,9 +168,9 @@ impl Col {
         }
     }
 
-    /// `v` into this column on the `active` lanes.
-    fn assign(&mut self, v: Col, active: &[bool]) {
-        if active.iter().all(|&a| a) {
+    /// `v` into this column on the `active` lanes (`all`: every lane).
+    fn assign(&mut self, v: Col, active: &[bool], all: bool) {
+        if all {
             *self = v;
             return;
         }
@@ -101,12 +179,49 @@ impl Col {
     }
 }
 
+/// `op` of two floats' columns, as slices where they are -- a column with a
+/// column, with one value, or one value with a column: loops doing no more
+/// a lane than `op` -- and lane by lane otherwise. Each lane is
+/// `op(x.f(i), y.f(i))`.
+fn float2(x: &Col, y: &Col, n: usize, op: impl Fn(f64, f64) -> f64) -> Col {
+    let col = Col::F;
+    match (x, y) {
+        (Col::F(a), Col::F(b)) => col(a.iter().zip(b.iter()).map(|(&p, &q)| op(p, q)).collect()),
+        (Col::F(a), Col::One(k)) => {
+            let k = k.as_f64();
+            col(a.iter().map(|&p| op(p, k)).collect())
+        }
+        (Col::One(k), Col::F(b)) => {
+            let k = k.as_f64();
+            col(b.iter().map(|&q| op(k, q)).collect())
+        }
+        _ => floats(n, |i| op(x.f(i), y.f(i))),
+    }
+}
+
+/// [`float2`] of complexes: each lane `op(x.c(i), y.c(i))`.
+fn complex2(x: &Col, y: &Col, n: usize, op: impl Fn(C64, C64) -> C64) -> Col {
+    let col = Col::C;
+    match (x, y) {
+        (Col::C(a), Col::C(b)) => col(a.iter().zip(b.iter()).map(|(&p, &q)| op(p, q)).collect()),
+        (Col::C(a), Col::One(k)) => {
+            let k = k.as_c64();
+            col(a.iter().map(|&p| op(p, k)).collect())
+        }
+        (Col::One(k), Col::C(b)) => {
+            let k = k.as_c64();
+            col(b.iter().map(|&q| op(k, q)).collect())
+        }
+        _ => complexes(n, |i| op(x.c(i), y.c(i))),
+    }
+}
+
 fn floats(n: usize, f: impl Fn(usize) -> f64) -> Col {
-    Col::F(Rc::new((0..n).map(f).collect()))
+    Col::F((0..n).map(f).collect())
 }
 
 fn complexes(n: usize, f: impl Fn(usize) -> C64) -> Col {
-    Col::C(Rc::new((0..n).map(f).collect()))
+    Col::C((0..n).map(f).collect())
 }
 
 /// A batch's state: each variable's column, the point and the colour,
@@ -191,8 +306,12 @@ impl Machine<'_> {
     /// [`Machine::exec`] over every lane `active` holds: a lane that
     /// returns leaves it.
     fn exec_batch(&self, stmts: &[IStmt], l: &mut Lanes, active: &mut [bool]) {
+        // Whether every lane is active, read again only after a statement
+        // that can mask one (a return, a branch): a body without either
+        // reads the mask once.
+        let mut all = active.iter().all(|&a| a);
         for s in stmts {
-            if !active.iter().any(|&a| a) {
+            if !all && !active.iter().any(|&a| a) {
                 return;
             }
             match s {
@@ -203,19 +322,22 @@ impl Machine<'_> {
                 }
                 // A palette read or an emission: nothing the point depends on.
                 IStmt::Host(..) => {}
-                IStmt::Return => active.iter_mut().for_each(|a| *a = false),
+                IStmt::Return => {
+                    active.iter_mut().for_each(|a| *a = false);
+                    return;
+                }
                 IStmt::Assign(place, e) => {
-                    let v = self.eval_batch(e, l);
+                    let v = self.eval_batch(e, l).into_owned();
                     match place {
-                        Place::Var(id) => l.vars[*id].assign(v, active),
+                        Place::Var(id) => l.vars[*id].assign(v, active, all),
                         // As the scalar run's `as_c64` and `as_f64`.
                         Place::Pixel => {
                             let v = if matches!(v, Col::C(_)) { v } else { complexes(l.n, |i| v.c(i)) };
-                            l.pixel.assign(v, active)
+                            l.pixel.assign(v, active, all)
                         }
                         Place::Color => {
                             let v = if matches!(v, Col::F(_)) { v } else { floats(l.n, |i| v.f(i)) };
-                            l.color.assign(v, active)
+                            l.color.assign(v, active, all)
                         }
                         _ => unreachable!("`shape` admits no other place"),
                     }
@@ -250,6 +372,8 @@ impl Machine<'_> {
                             break;
                         }
                     }
+                    // An arm may have returned.
+                    all = active.iter().all(|&a| a);
                 }
                 _ => unreachable!("`shape` admits no other statement"),
             }
@@ -260,13 +384,22 @@ impl Machine<'_> {
     /// float's and a complex's arithmetic, calls and conversions on their
     /// own columns, exactly as `binary`, `call` and `convert` take a lane
     /// of that type; anything else lane by lane through them.
-    fn eval_batch(&self, e: &IExpr, l: &Lanes) -> Col {
+    fn eval_batch<'l>(&self, e: &IExpr, l: &'l Lanes) -> Cow<'l, Col> {
+        match &e.kind {
+            // A variable, the point, the colour: read where they are.
+            IExprKind::Var(id) => Cow::Borrowed(&l.vars[*id]),
+            IExprKind::Predef(Predef::Pixel) => Cow::Borrowed(&l.pixel),
+            IExprKind::Predef(Predef::VarColor) => Cow::Borrowed(&l.color),
+            _ => Cow::Owned(self.eval_made(e, l)),
+        }
+    }
+
+    /// [`Self::eval_batch`] of a node that makes its value.
+    fn eval_made(&self, e: &IExpr, l: &Lanes) -> Col {
         let (n, dialect) = (l.n, self.prog.dialect);
         match &e.kind {
             IExprKind::Host(Host::GridParam, args) => self.eval_batch(&args[3], l).map(n, |r| Value::Float(self.params.values[grid_cell(args, r.as_int())].0)),
-            IExprKind::Var(id) => l.vars[*id].clone(),
-            IExprKind::Predef(Predef::Pixel) => l.pixel.clone(),
-            IExprKind::Predef(Predef::VarColor) => l.color.clone(),
+            IExprKind::Var(_) | IExprKind::Predef(Predef::Pixel | Predef::VarColor) => unreachable!("read where it is (`eval_batch`)"),
             // A literal, a parameter, a forced draw, the call's and the
             // image's values: every lane's, as the scalar run gives it.
             IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) | IExprKind::Complex(..) | IExprKind::Param(_) | IExprKind::Predef(_) | IExprKind::FuncChoice(_) | IExprKind::Host(..) => {
@@ -285,8 +418,8 @@ impl Machine<'_> {
             }
             IExprKind::Convert(a) => {
                 let x = self.eval_batch(a, l);
-                match (&x, e.ty) {
-                    (Col::F(_), Ty::Float) | (Col::C(_), Ty::Complex) => x,
+                match (&*x, e.ty) {
+                    (Col::F(_), Ty::Float) | (Col::C(_), Ty::Complex) => x.into_owned(),
                     (Col::C(_), Ty::Float) => floats(n, |i| x.f(i)),
                     (Col::F(_), Ty::Complex) => complexes(n, |i| x.c(i)),
                     _ => x.map(n, |v| convert(v, e.ty, dialect)),
@@ -297,13 +430,24 @@ impl Machine<'_> {
                 if x.is_one() && y.is_one() {
                     return x.zip(&y, n, make_complex);
                 }
-                complexes(n, |i| C64::new(x.f(i), y.f(i)))
+                match (&*x, &*y) {
+                    (Col::F(a), Col::F(b)) => Col::C(a.iter().zip(b.iter()).map(|(&p, &q)| C64::new(p, q)).collect()),
+                    (Col::F(a), Col::One(k)) => {
+                        let k = k.as_f64();
+                        Col::C(a.iter().map(|&p| C64::new(p, k)).collect())
+                    }
+                    (Col::One(k), Col::F(b)) => {
+                        let k = k.as_f64();
+                        Col::C(b.iter().map(|&q| C64::new(k, q)).collect())
+                    }
+                    _ => complexes(n, |i| C64::new(x.f(i), y.f(i))),
+                }
             }
             IExprKind::Unary(UnOp::Neg, a) => {
                 let x = self.eval_batch(a, l);
-                match &x {
-                    Col::F(v) => Col::F(Rc::new(v.iter().map(|t| -t).collect())),
-                    Col::C(v) => Col::C(Rc::new(v.iter().map(|c| c.neg()).collect())),
+                match &*x {
+                    Col::F(v) => Col::F(v.iter().map(|t| -t).collect()),
+                    Col::C(v) => Col::C(v.iter().map(|c| c.neg()).collect()),
                     _ => x.map(n, negate),
                 }
             }
@@ -314,7 +458,14 @@ impl Machine<'_> {
                 if z.is_one() && k.is_one() {
                     return z.zip(&k, n, scale_by_real);
                 }
-                complexes(n, |i| z.c(i).scale(k.c(i).re))
+                match (&*z, &*k) {
+                    (Col::C(a), Col::One(k)) => {
+                        let k = k.as_c64().re;
+                        Col::C(a.iter().map(|c| c.scale(k)).collect())
+                    }
+                    (Col::C(a), Col::C(b)) => Col::C(a.iter().zip(b.iter()).map(|(c, k)| c.scale(k.re)).collect()),
+                    _ => complexes(n, |i| z.c(i).scale(k.c(i).re)),
+                }
             }
             IExprKind::Binary(op, a, b) => {
                 let (x, y) = (self.eval_batch(a, l), self.eval_batch(b, l));
@@ -322,33 +473,33 @@ impl Machine<'_> {
                     return x.zip(&y, n, |p, q| binary(*op, p, q, e.ty, dialect));
                 }
                 match (e.ty, op) {
-                    (Ty::Float, BinOp::Add) => floats(n, |i| x.f(i) + y.f(i)),
-                    (Ty::Float, BinOp::Sub) => floats(n, |i| x.f(i) - y.f(i)),
-                    (Ty::Float, BinOp::Mul) => floats(n, |i| x.f(i) * y.f(i)),
-                    (Ty::Float, BinOp::Div) => floats(n, |i| x.f(i) / y.f(i)),
-                    (Ty::Float, BinOp::Mod) => floats(n, |i| x.f(i) % y.f(i)),
-                    (Ty::Float, BinOp::Pow) => floats(n, |i| x.f(i).powf(y.f(i))),
-                    (Ty::Complex, BinOp::Add) => complexes(n, |i| x.c(i).add(y.c(i))),
-                    (Ty::Complex, BinOp::Sub) => complexes(n, |i| x.c(i).sub(y.c(i))),
-                    (Ty::Complex, BinOp::Mul) => complexes(n, |i| x.c(i).mul(y.c(i))),
-                    (Ty::Complex, BinOp::Div) => complexes(n, |i| x.c(i).div(y.c(i))),
-                    (Ty::Complex, BinOp::Pow) => complexes(n, |i| x.c(i).powc(y.c(i))),
+                    (Ty::Float, BinOp::Add) => float2(&x, &y, n, |p, q| p + q),
+                    (Ty::Float, BinOp::Sub) => float2(&x, &y, n, |p, q| p - q),
+                    (Ty::Float, BinOp::Mul) => float2(&x, &y, n, |p, q| p * q),
+                    (Ty::Float, BinOp::Div) => float2(&x, &y, n, |p, q| p / q),
+                    (Ty::Float, BinOp::Mod) => float2(&x, &y, n, |p, q| p % q),
+                    (Ty::Float, BinOp::Pow) => float2(&x, &y, n, f64::powf),
+                    (Ty::Complex, BinOp::Add) => complex2(&x, &y, n, C64::add),
+                    (Ty::Complex, BinOp::Sub) => complex2(&x, &y, n, C64::sub),
+                    (Ty::Complex, BinOp::Mul) => complex2(&x, &y, n, C64::mul),
+                    (Ty::Complex, BinOp::Div) => complex2(&x, &y, n, C64::div),
+                    (Ty::Complex, BinOp::Pow) => complex2(&x, &y, n, C64::powc),
                     _ => x.zip(&y, n, |p, q| binary(*op, p, q, e.ty, dialect)),
                 }
             }
             IExprKind::PowInt(a, k) => {
                 let x = self.eval_batch(a, l);
-                match &x {
-                    Col::C(v) => Col::C(Rc::new(v.iter().map(|c| c.powi(*k)).collect())),
-                    Col::F(v) => Col::F(Rc::new(v.iter().map(|t| t.powi(*k as i32)).collect())),
+                match &*x {
+                    Col::C(v) => Col::C(v.iter().map(|c| c.powi(*k)).collect()),
+                    Col::F(v) => Col::F(v.iter().map(|t| t.powi(*k as i32)).collect()),
                     _ => x.map(n, |v| pow_int(v, *k)),
                 }
             }
             IExprKind::Modulus(a) => {
                 let x = self.eval_batch(a, l);
-                match &x {
-                    Col::C(v) => Col::F(Rc::new(v.iter().map(|c| c.norm_sqr()).collect())),
-                    Col::F(v) => Col::F(Rc::new(v.iter().map(|t| t * t).collect())),
+                match &*x {
+                    Col::C(v) => Col::F(v.iter().map(|c| c.norm_sqr()).collect()),
+                    Col::F(v) => Col::F(v.iter().map(|t| t * t).collect()),
                     _ => x.map(n, modulus),
                 }
             }
@@ -358,9 +509,9 @@ impl Machine<'_> {
                 if x.is_one() || (*f == Builtin::Round && dialect == Dialect::Fractint) {
                     return x.map(n, |v| call(*f, v, e.ty, dialect));
                 }
-                match (&x, e.ty) {
-                    (Col::F(v), Ty::Float) => Col::F(Rc::new(v.iter().map(|&t| f.eval_f(t)).collect())),
-                    (Col::C(v), Ty::Float) => Col::F(Rc::new(v.iter().map(|&c| f.eval_c(c).re).collect())),
+                match (&*x, e.ty) {
+                    (Col::F(v), Ty::Float) => Col::F(v.iter().map(|&t| f.eval_f(t)).collect()),
+                    (Col::C(v), Ty::Float) => Col::F(v.iter().map(|&c| f.eval_c(c).re).collect()),
                     (Col::F(_) | Col::C(_), Ty::Complex) => complexes(n, |i| f.eval_c(x.c(i))),
                     _ => x.map(n, |v| call(*f, v, e.ty, dialect)),
                 }
@@ -388,19 +539,17 @@ impl Machine<'_> {
 
 impl VariationRun<'_> {
     /// Each of `zs` through the body as [`Self::call`] gives its point from
-    /// fresh locals, in one pass (the module note). The colours, hidings
-    /// and direct colours the calls write are not kept.
-    pub fn call_batch(&mut self, zs: &[C64], accum: C64, weight: f64) -> Vec<C64> {
+    /// fresh locals, in place, in one pass (the module note). The colours,
+    /// hidings and direct colours the calls write are not kept.
+    pub fn call_batch(&mut self, zs: &mut [C64], accum: C64, weight: f64) {
         let prog = self.m.prog;
         let (ok, draws) = *self.batch_shape.get_or_insert_with(|| shape(prog, &self.locals));
         if !ok || (draws && self.m.fixed_draw.get().is_none()) || zs.len() < 2 {
-            return zs
-                .iter()
-                .map(|&z| {
-                    self.reset_locals();
-                    self.call(z, accum, weight).0
-                })
-                .collect();
+            for z in zs.iter_mut() {
+                self.reset_locals();
+                *z = self.call(*z, accum, weight).0;
+            }
+            return;
         }
         // Every lane starts from fresh locals and the run's kept values.
         self.reset_locals();
@@ -410,16 +559,18 @@ impl VariationRun<'_> {
         sh.vcolor_in = self.color;
         sh.coefs = self.coefs;
         let n = zs.len();
-        let mut l = Lanes {
-            n,
-            vars: self.m.vars.iter().map(|&v| Col::One(v)).collect(),
-            pixel: Col::C(Rc::new(zs.to_vec())),
-            color: Col::One(Value::Float(self.color)),
-            sh: &sh,
-        };
-        let mut active = vec![true; n];
+        let Scratch { mut vars, mut active } = std::mem::take(&mut self.scratch);
+        vars.extend(self.m.vars.iter().map(|&v| Col::One(v)));
+        active.resize(n, true);
+        let mut l = Lanes { n, vars, pixel: Col::C(zs.iter().copied().collect()), color: Col::One(Value::Float(self.color)), sh: &sh };
         self.m.exec_batch(&prog.transform, &mut l, &mut active);
-        (0..n).map(|i| l.pixel.at(i).as_c64()).collect()
+        for (i, z) in zs.iter_mut().enumerate() {
+            *z = l.pixel.c(i);
+        }
+        let Lanes { mut vars, .. } = l;
+        vars.clear();
+        active.clear();
+        self.scratch = Scratch { vars, active };
     }
 }
 
@@ -469,7 +620,8 @@ mod tests {
                 fell_back.push(*name);
             }
             for u in [0.0, 0.37, 0.999] {
-                let got = VariationRun::new(&p, &params, 1).with_draw(u).with_color(0.4).call_batch(&zs, C64::ZERO, 1.0);
+                let mut got = zs.clone();
+                VariationRun::new(&p, &params, 1).with_draw(u).with_color(0.4).call_batch(&mut got, C64::ZERO, 1.0);
                 // A fresh run: a twin that keeps a state between calls (one
                 // that falls back) gives each call in its order.
                 let mut run = VariationRun::new(&p, &params, 1).with_draw(u).with_color(0.4);
@@ -514,7 +666,9 @@ mod tests {
             let mut done = 0usize;
             while done < reps * 256 {
                 for chunk in zs.chunks(size) {
-                    sink += run.call_batch(chunk, C64::ZERO, 1.0)[0].re;
+                    let mut out = chunk.to_vec();
+                    run.call_batch(&mut out, C64::ZERO, 1.0);
+                    sink += out[0].re;
                     done += chunk.len();
                 }
             }

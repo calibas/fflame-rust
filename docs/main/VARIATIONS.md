@@ -607,9 +607,12 @@ function takes the point, and the ids when it has parameters (as
   kernel's forward map as one pass of the interpreter for all of them
   (`VariationRun::call_batch`, E4: each node dispatched once, values the
   same in every lane kept single, branches under masks, every lane the
-  scalar call's to the bit), 3.4x the scalar replay; grand-julian's
-  twin plans in about twice the built-in's time, where it took three to
-  six times. The twins of the eleven planar kernels carry one, and of
+  scalar call's to the bit), 5x the scalar replay; the jobs a node's
+  children make replay the node's word as one batch, and the walk's
+  other per-point calls of a user kernel -- its arms, inverses,
+  Jacobians, rescues -- run batched too (E4b): grand-julian's twin plans
+  within about 20% of the built-in's time, where it took two to three
+  times. The twins of the eleven planar kernels carry one, and of
   julia3D and julia3Dz a 3D one (`scripts/twin_inverses.py`, which the
   translator appends): an edited twin keeps its inverse while it still
   undoes the map. Gates: `the_twins_inverses_undo_their_maps`;

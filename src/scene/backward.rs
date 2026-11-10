@@ -510,16 +510,51 @@ pub struct Gathered {
 pub struct CpuEval;
 
 impl Evaluate for CpuEval {
+    /// The jobs a node's children make -- each word its child's symbol,
+    /// then the node's word -- replayed together (`lands_together`): the
+    /// shared rest of their words one batch over every child's points, so
+    /// a user kernel's forward map runs over a node's worth of them at once
+    /// (rhai-planners E4).
     fn lands(&mut self, b: &Backward, view: View, jobs: &[EvalJob]) -> Vec<u8> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            use rayon::prelude::*;
-            jobs.par_iter().flat_map_iter(|j| b.lands_batch(j.word, j.points, view)).collect()
+        // A built-in kernel's map runs point by point whatever the batch:
+        // its jobs, each on a thread, as they always ran.
+        if !b.ifs.maps.iter().any(user_kernel) {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rayon::prelude::*;
+                return jobs.par_iter().flat_map_iter(|j| b.lands_batch(j.word, j.points, view)).collect();
+            }
+            #[cfg(target_arch = "wasm32")]
+            return jobs.iter().flat_map(|j| b.lands_batch(j.word, j.points, view)).collect();
         }
-        #[cfg(target_arch = "wasm32")]
-        {
-            jobs.iter().flat_map(|j| b.lands_batch(j.word, j.points, view)).collect()
+        // Grouped by the rest of the word, each group at most
+        // `GROUP_POINTS`: batches large enough, and enough of them for
+        // every thread.
+        const GROUP_POINTS: usize = 4096;
+        let mut groups: Vec<(Vec<usize>, usize)> = Vec::new();
+        let mut at: std::collections::HashMap<&[u32], usize> = std::collections::HashMap::new();
+        for (i, j) in jobs.iter().enumerate() {
+            let key = j.word.get(1..).unwrap_or(&[]);
+            let g = match at.get(key) {
+                Some(&g) if groups[g].1 + j.points.len() <= GROUP_POINTS => g,
+                _ => {
+                    groups.push((Vec::new(), 0));
+                    at.insert(key, groups.len() - 1);
+                    groups.len() - 1
+                }
+            };
+            groups[g].0.push(i);
+            groups[g].1 += j.points.len();
         }
+        let groups: Vec<Vec<usize>> = groups.into_iter().map(|(g, _)| g).collect();
+        let answers: Vec<Vec<Vec<u8>>> = map_all(&groups, |g| b.lands_together(jobs, g, view));
+        let mut per_job: Vec<Vec<u8>> = vec![Vec::new(); jobs.len()];
+        for (g, a) in groups.iter().zip(answers) {
+            for (&i, a) in g.iter().zip(a) {
+                per_job[i] = a;
+            }
+        }
+        per_job.concat()
     }
 }
 
@@ -1179,6 +1214,43 @@ fn forward(map: &IfsMap<Map2>, x: [f64; 2], k: u32) -> [f64; 2] {
         Map2::Nonlinear(n) => n.apply_branch(x, k),
         Map2::Sum(s) => s.apply_branch(x, k),
         other => other.apply(x),
+    }
+}
+
+/// The forward Jacobian at each step `(map, arm)` of `steps` from its point
+/// in `zs`: each user kernel's map's for all its steps in one batch
+/// (`map_forward_jacobians`; rhai-planners E4), any other's step by step.
+fn step_jacobians(steps: &[(&IfsMap<Map2>, u32)], zs: &[[f64; 2]]) -> Vec<Option<[[f64; 2]; 2]>> {
+    use crate::scene::forward_delta::{map_forward_jacobian, map_forward_jacobians};
+    let mut out: Vec<Option<[[f64; 2]; 2]>> = vec![None; steps.len()];
+    let mut done = vec![false; steps.len()];
+    for i in 0..steps.len() {
+        if done[i] {
+            continue;
+        }
+        let (map, arm) = steps[i];
+        if !user_kernel(map) {
+            out[i] = map_forward_jacobian(&map.forward, zs[i], arm);
+            done[i] = true;
+            continue;
+        }
+        let at: Vec<usize> = (i..steps.len()).filter(|&k| !done[k] && std::ptr::eq(steps[k].0, map) && steps[k].1 == arm).collect();
+        let points: Vec<[f64; 2]> = at.iter().map(|&k| zs[k]).collect();
+        for (&k, j) in at.iter().zip(map_forward_jacobians(&map.forward, &points, arm)) {
+            out[k] = j;
+            done[k] = true;
+        }
+    }
+    out
+}
+
+/// Whether `map`'s kernel is a user kernel's (`Kernel::User`), plain or
+/// summed.
+fn user_kernel(map: &IfsMap<Map2>) -> bool {
+    match &map.forward {
+        Map2::Nonlinear(n) => matches!(n.kernel, Kernel::User { .. }),
+        Map2::Sum(s) => matches!(s.kernel, Kernel::User { .. }),
+        _ => false,
     }
 }
 
@@ -1865,13 +1937,16 @@ impl Backward {
         let mut landing: Vec<Index> = Vec::with_capacity(alphabet.len());
         for a in &alphabet {
             let mut entries: Vec<(Cell, u32)> = Vec::with_capacity(sample.len());
-            for (i, p) in sample.iter().enumerate() {
-                let y = forward(&ifs.maps[a.map], *p, a.arm);
-                if finite(y) && y[0].abs() < 1e12 && y[1].abs() < 1e12 {
-                    entries.push((key(y), i as u32));
-                }
-                if i % 4096 == 0 {
-                    slicer.tick().await;
+            // A slicer's tick each 4096, the batch a user kernel's forward
+            // map runs over at once (rhai-planners E4).
+            for (chunk, ps) in sample.chunks(4096).enumerate() {
+                slicer.tick().await;
+                let mut ys = ps.to_vec();
+                forward_batch(&ifs.maps[a.map], &mut ys, a.arm);
+                for (j, y) in ys.into_iter().enumerate() {
+                    if finite(y) && y[0].abs() < 1e12 && y[1].abs() < 1e12 {
+                        entries.push((key(y), (chunk * 4096 + j) as u32));
+                    }
                 }
             }
             slicer.tick().await;
@@ -2430,7 +2505,6 @@ impl Backward {
         disc: View,
         through_finals: bool,
     ) -> Option<WordRefs> {
-        use crate::scene::forward_delta::map_forward_jacobian;
         let c = view.centre;
         let r = view.radius;
         let finals = if through_finals { self.finals.as_ref() } else { None };
@@ -2547,9 +2621,9 @@ impl Backward {
                 amp[n] = smax;
                 size[n] = r / smin;
             }
+            let jacs = step_jacobians(&syms[start..n], &z[start..n]);
             for k in (start..n).rev() {
-                let (map, arm) = syms[k];
-                let Some(j) = map_forward_jacobian(&map.forward, z[k], arm) else { break };
+                let Some(j) = jacs[k - start] else { break };
                 prod = [
                     [prod[0][0] * j[0][0] + prod[0][1] * j[1][0], prod[0][0] * j[0][1] + prod[0][1] * j[1][1]],
                     [prod[1][0] * j[0][0] + prod[1][1] * j[1][0], prod[1][0] * j[0][1] + prod[1][1] * j[1][1]],
@@ -2748,6 +2822,29 @@ impl Backward {
         (best_d <= 1e-6 * scale).then_some(best?)
     }
 
+    /// [`Self::arm_of`] for each `(xs[i], ps[i])`, by its scan: every arm's
+    /// code for every point at once, each a pass of the user kernel's
+    /// interpreter (rhai-planners E4) -- the nearest within the tolerance,
+    /// the first of equals, as the scan's. A point with no preimage
+    /// (`xs[i]` not finite) has none.
+    fn arms_batch(&self, map: &IfsMap<Map2>, xs: &[[f64; 2]], ps: &[[f64; 2]]) -> Vec<Option<u32>> {
+        let mut best: Vec<(f64, Option<u32>)> = vec![(f64::INFINITY, None); xs.len()];
+        for k in forward_arm_codes(map) {
+            let mut ys = xs.to_vec();
+            forward_batch(map, &mut ys, k);
+            for ((b, y), p) in best.iter_mut().zip(&ys).zip(ps) {
+                if !finite(*y) {
+                    continue;
+                }
+                let d = (y[0] - p[0]).hypot(y[1] - p[1]);
+                if d < b.0 {
+                    *b = (d, Some(k));
+                }
+            }
+        }
+        best.into_iter().zip(ps).map(|((d, k), p)| k.filter(|_| d <= 1e-6 * (1.0 + p[0].abs().max(p[1].abs())))).collect()
+    }
+
     /// The forward image of `x` along `word`, or `None` where a map
     /// sends it to infinity.
     fn forward_along(&self, word: &[u32], x: [f64; 2]) -> Option<[f64; 2]> {
@@ -2822,6 +2919,8 @@ impl Backward {
     }
 
     /// Whether `x`'s forward image along `word` lands in the view.
+    /// The point replay, which `lands_batch` is held to.
+    #[cfg(test)]
     fn lands(&self, word: &[u32], x: [f64; 2], view: View) -> bool {
         match self.forward_along(word, x) {
             Some(y) => self.in_view(view, y),
@@ -2837,18 +2936,81 @@ impl Backward {
     /// transform, whose draw is a stream per point, replays point by
     /// point.
     fn lands_batch(&self, word: &[u32], points: &[u32], view: View) -> Vec<u8> {
+        let xs: Vec<[f64; 2]> = points.iter().map(|&i| self.sample[i as usize]).collect();
+        self.forward_along_batch(word, &xs).into_iter().map(|y| y.is_some_and(|y| self.in_view(view, y)) as u8).collect()
+    }
+
+    /// [`Self::lands_batch`] for each of `jobs` at `group`, words that differ
+    /// in their first symbol alone: each first map over its job's points,
+    /// then the shared rest of the words one batch over all of them --
+    /// each point's replay as `forward_along`'s, map by map. A group
+    /// through a blurred transform replays job by job.
+    fn lands_together(&self, jobs: &[EvalJob], group: &[usize], view: View) -> Vec<Vec<u8>> {
+        let lone = || group.iter().map(|&i| self.lands_batch(jobs[i].word, jobs[i].points, view)).collect();
+        let step = |sym: u32| -> Option<Option<(usize, u32)>> {
+            let t = sym_transform(sym) as usize;
+            let info = self.transforms.iter().find(|i| i.index == t)?;
+            Some(info.blur.is_none().then_some((info.map, sym_arm(sym))))
+        };
+        if group.len() < 2 {
+            return lone();
+        }
+        let first = &jobs[group[0]];
+        let Some(rest) = first.word.get(1..).unwrap_or(&[]).iter().map(|&s| step(s)).collect::<Option<Option<Vec<(usize, u32)>>>>() else {
+            return group.iter().map(|&i| vec![0; jobs[i].points.len()]).collect();
+        };
+        let Some(rest) = rest else { return lone() };
+        let mut heads = Vec::with_capacity(group.len());
+        for &i in group {
+            match jobs[i].word.first().map(|&s| step(s)) {
+                Some(Some(Some(head))) => heads.push(Some(head)),
+                // An unknown transform: nothing lands.
+                Some(None) => heads.push(None),
+                _ => return lone(),
+            }
+        }
+        let total: usize = group.iter().map(|&i| jobs[i].points.len()).sum();
+        let mut ps: Vec<[f64; 2]> = Vec::with_capacity(total);
+        let mut alive: Vec<bool> = Vec::with_capacity(total);
+        for (&i, head) in group.iter().zip(&heads) {
+            let mut xs: Vec<[f64; 2]> = jobs[i].points.iter().map(|&k| self.sample[k as usize]).collect();
+            match head {
+                Some((map, arm)) => {
+                    forward_batch(&self.ifs.maps[*map], &mut xs, *arm);
+                    alive.extend(xs.iter().map(|&p| finite(p)));
+                }
+                None => alive.extend(std::iter::repeat_n(false, xs.len())),
+            }
+            ps.extend(xs);
+        }
+        for (map, arm) in rest {
+            forward_batch(&self.ifs.maps[map], &mut ps, arm);
+            for (a, p) in alive.iter_mut().zip(&ps) {
+                *a &= finite(*p);
+            }
+        }
+        let mut answers = ps.iter().zip(&alive).map(|(&p, &a)| (a && self.in_view(view, p)) as u8);
+        group.iter().map(|&i| answers.by_ref().take(jobs[i].points.len()).collect()).collect()
+    }
+
+    /// [`Self::forward_along`] for each of `xs`, the word replayed over
+    /// all of them at once, map by map (rhai-planners E4): a point that
+    /// leaves the finite plane stays out, as the replay stops it. A word
+    /// through a blurred transform, whose draw is a stream per point,
+    /// replays point by point.
+    fn forward_along_batch(&self, word: &[u32], xs: &[[f64; 2]]) -> Vec<Option<[f64; 2]>> {
         let mut steps = Vec::with_capacity(word.len());
         for &sym in word {
             let t = sym_transform(sym) as usize;
             let Some(info) = self.transforms.iter().find(|i| i.index == t) else {
-                return vec![0; points.len()];
+                return vec![None; xs.len()];
             };
             if info.blur.is_some() {
-                return points.iter().map(|&i| self.lands(word, self.sample[i as usize], view) as u8).collect();
+                return xs.iter().map(|&x| self.forward_along(word, x)).collect();
             }
             steps.push((info.map, sym_arm(sym)));
         }
-        let mut ps: Vec<[f64; 2]> = points.iter().map(|&i| self.sample[i as usize]).collect();
+        let mut ps = xs.to_vec();
         let mut alive = vec![true; ps.len()];
         for (map, arm) in steps {
             forward_batch(&self.ifs.maps[map], &mut ps, arm);
@@ -2856,7 +3018,7 @@ impl Backward {
                 *a &= finite(*p);
             }
         }
-        ps.iter().zip(&alive).map(|(&p, &a)| (a && self.in_view(view, p)) as u8).collect()
+        ps.into_iter().zip(alive).map(|(p, a)| a.then_some(p)).collect()
     }
 
 
@@ -2881,18 +3043,30 @@ impl Backward {
         // (`renewal_here`).
         let blur = self.partial_blur(ai);
         let mut out = Vec::new();
-        for &p in pts {
-            if !exempt && !self.near_landing(ai, p) {
-                tr.pruned += 1;
-                continue;
-            }
-            for &mb in &a.branches {
-                let q = self.ifs.maps[mb].inverse.apply(p);
+        // A user kernel's arms, read for every point at once: one pass of
+        // its interpreter a code (`arms_batch`), each point's the scan's.
+        let batched = forward_arms(map) > 1 && user_kernel(map);
+        let kept: Vec<[f64; 2]> = pts.iter().copied().filter(|&p| exempt || self.near_landing(ai, p)).collect();
+        tr.pruned += pts.len() - kept.len();
+        let pre: Vec<Vec<[f64; 2]>> = a
+            .branches
+            .iter()
+            .map(|&mb| {
+                let mut qs = kept.clone();
+                self.ifs.maps[mb].inverse.apply_batch(&mut qs);
+                qs
+            })
+            .collect();
+        let arms: Vec<Vec<Option<u32>>> = if batched { pre.iter().map(|qs| self.arms_batch(map, qs, &kept)).collect() } else { Vec::new() };
+        for (pi, &p) in kept.iter().enumerate() {
+            for (bi, &mb) in a.branches.iter().enumerate() {
+                let q = pre[bi][pi];
                 if !finite(q) || q[0].abs() > 1e12 || q[1].abs() > 1e12 {
                     tr.no_preimage += 1;
                     continue;
                 }
-                let Some(arm) = self.arm_of(map, q, p) else {
+                let arm = if batched { arms[bi][pi] } else { self.arm_of(map, q, p) };
+                let Some(arm) = arm else {
                     tr.no_arm += 1;
                     continue;
                 };
@@ -3783,7 +3957,15 @@ impl Backward {
         // Oldest first, as a word is applied.
         history.reverse();
         let n = self.sample.len();
-        Some((0..m).filter_map(|j| self.forward_along_salted(&history, self.sample[(i.wrapping_mul(2654435761) + j * 7919) % n], j as u64 + 1)).collect())
+        let from = |j: usize| self.sample[(i.wrapping_mul(2654435761) + j * 7919) % n];
+        // Each replay its own blur draws (the salt), where a map blurs;
+        // else one batch for all of them (rhai-planners E4).
+        let blurred = history.iter().any(|&s| self.transforms.iter().find(|t| t.index == sym_transform(s) as usize).is_some_and(|t| t.blur.is_some()));
+        if blurred {
+            return Some((0..m).filter_map(|j| self.forward_along_salted(&history, from(j), j as u64 + 1)).collect());
+        }
+        let xs: Vec<[f64; 2]> = (0..m).map(from).collect();
+        Some(self.forward_along_batch(&history, &xs).into_iter().flatten().collect())
     }
 
     /// **A child with near misses, looked at closer** (tracker C3). Its
@@ -3807,10 +3989,12 @@ impl Backward {
         // spread past the view, too deep and they gather round a point
         // that misses; measured on random1, the depth that lands runs
         // from 8 to 12 by candidate.
+        let xs: Vec<[f64; 2]> = cands.iter().map(|&c| self.sample[c as usize]).collect();
         let mut near: Vec<(u32, f64, [f64; 2])> = cands
             .iter()
-            .filter_map(|&c| {
-                let y = self.forward_along(word, self.sample[c as usize])?;
+            .zip(self.forward_along_batch(word, &xs))
+            .filter_map(|(&c, y)| {
+                let y = y?;
                 Some((c, self.view_distance(view, y), y))
             })
             .collect();
@@ -3822,8 +4006,10 @@ impl Backward {
                 slicer.tick().await;
                 let before = found.len();
                 let mut spread = 0.0f64;
-                for z in self.near_points(c as usize, k, RESCUE_POINTS).unwrap_or_default() {
-                    let Some(y) = self.forward_along(word, z) else { continue };
+                let zs = self.near_points(c as usize, k, RESCUE_POINTS).unwrap_or_default();
+                let ys = self.forward_along_batch(word, &zs);
+                for (z, y) in zs.into_iter().zip(ys) {
+                    let Some(y) = y else { continue };
                     if self.in_view(view, y) {
                         found.push(z);
                     }
@@ -5380,6 +5566,97 @@ mod tests {
         .expect("device")
     }
 
+    /// PROFILE: where grand-julian's twin's plan spends its time against
+    /// the built-in's -- each view's plan time, and the user kernels'
+    /// calls by kind, their count and time summed over threads.
+    #[test]
+    #[ignore = "profile; registers a twin, reads output/flame-zoom"]
+    fn profile_the_twins_plan() {
+        use crate::variations::user_inverse::profile;
+        use std::sync::atomic::Ordering;
+        let (cfg, twin) = rhai_grand_julian();
+        let guard = crate::variations::global_registry();
+        let reg = &*guard;
+        let t0 = std::time::Instant::now();
+        let b = Backward::read(&cfg.flame, reg).expect("the built-in");
+        let rb = t0.elapsed().as_secs_f64();
+        profile::ON.store(true, Ordering::Relaxed);
+        let t0 = std::time::Instant::now();
+        let t = Backward::read(&twin, reg).expect("the twin");
+        let rt = t0.elapsed().as_secs_f64();
+        drop(guard);
+        let report = |what: &str| {
+            let (kinds, points) = profile::take();
+            let mut line = format!("    {what}:");
+            for (k, (calls, secs)) in kinds.iter().enumerate() {
+                if *calls > 0 {
+                    line += &format!(" {} {calls} calls {secs:.2} s ({:.2} us);", profile::NAMES[k], secs * 1e6 / *calls as f64);
+                }
+            }
+            if points > 0 {
+                line += &format!(" {points} batch points");
+            }
+            println!("{line}");
+        };
+        println!("read: built-in {rb:.2} s, twin {rt:.2} s");
+        report("the twin's read");
+        // The replay alone, one thread: the same words over the same points.
+        {
+            let view = View::of(2.0, b.sample_point(0.75), 192, 192);
+            let mut st = 0x2545_F491_4F6C_DD1Du64;
+            let mut next = |m: usize| {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((st >> 33) as usize) % m
+            };
+            let words: Vec<Vec<u32>> = (0..200).map(|_| (0..1 + next(14)).map(|_| t.alphabet[next(t.alphabet.len())].sym).collect()).collect();
+            let points: Vec<u32> = (0..t.sample.len() as u32).step_by(5).collect();
+            let maps: usize = words.iter().map(|w| w.len() * points.len()).sum();
+            let time = |x: &Backward| {
+                let t0 = std::time::Instant::now();
+                let n: usize = words.iter().map(|w| x.lands_batch(w, &points, view).iter().map(|&v| v as usize).sum::<usize>()).sum();
+                (t0.elapsed().as_secs_f64(), n)
+            };
+            let ((sb, nb), (st_, nt)) = (time(&b), time(&t));
+            println!("replay, one thread, {maps} map applications: built-in {sb:.2} s ({:.3} us each, {nb} land) | twin {st_:.2} s ({:.3} us each, {nt} land) ({:.1}x)", sb * 1e6 / maps as f64, st_ * 1e6 / maps as f64, st_ / sb);
+            report("the replay's calls");
+        }
+        for (z, frac) in [(1e2f64, 0.75), (1e4, 0.75), (1e4, 0.25), (1e6, 0.75)] {
+            let at = b.sample_point(frac);
+            let view = View::of(z, at, 192, 192);
+            profile::ON.store(false, Ordering::Relaxed);
+            let t0 = std::time::Instant::now();
+            let pb = b.plan(view).expect("a plan");
+            let sb = t0.elapsed().as_secs_f64();
+            profile::ON.store(true, Ordering::Relaxed);
+            let t0 = std::time::Instant::now();
+            let pt = t.plan(view).expect("a plan");
+            let st = t0.elapsed().as_secs_f64();
+            println!("x{z:.0e} at {frac}: built-in {} words {sb:.2} s | twin {} words {st:.2} s ({:.1}x)", pb.words.len(), pt.words.len(), st / sb);
+            report("the twin's calls");
+            // Unprofiled, the best of three each, alternating.
+            profile::ON.store(false, Ordering::Relaxed);
+            let (mut bb, mut bt) = (f64::INFINITY, f64::INFINITY);
+            for _ in 0..3 {
+                let t0 = std::time::Instant::now();
+                let _ = b.plan(view);
+                bb = bb.min(t0.elapsed().as_secs_f64());
+                let t0 = std::time::Instant::now();
+                let _ = t.plan(view);
+                bt = bt.min(t0.elapsed().as_secs_f64());
+            }
+            println!("    unprofiled, best of three: built-in {bb:.3} s, twin {bt:.3} s ({:.2}x)", bt / bb);
+            let phases = |x: &Backward| {
+                let (_, tr) = x.plan_traced(view);
+                let s = |d: std::time::Duration| d.as_secs_f64();
+                format!("seed {:.3} gather {:.3} verify {:.3} replay {:.3} fates {:.3} topup {:.3} close {:.3} after {:.3}", s(tr.t_seed), s(tr.t_gather), s(tr.t_verify), s(tr.t_replay), s(tr.t_fates), s(tr.t_topup), s(tr.t_close), s(tr.t_after))
+            };
+            println!("    built-in: {}", phases(&b));
+            println!("    twin:     {}", phases(&t));
+        }
+        profile::ON.store(false, Ordering::Relaxed);
+        crate::variations::twins::BORROW.with(|b| b.set(true));
+    }
+
     /// **The walk's batched replay is its point replay** (rhai-planners
     /// E4): grand-julian with every julian its twin, 400 words of one to
     /// fourteen symbols drawn from its alphabet, each replayed over a fifth
@@ -5417,6 +5694,18 @@ mod tests {
         }
         let ts = t0.elapsed().as_secs_f64();
         println!("{} words over {} points: {lit} land; batched {tb:.2} s, point by point {ts:.2} s ({:.1}x)", words.len(), points.len(), ts / tb);
+        // And as the walk asks: each suffix with every symbol before it, over
+        // two point sets, the jobs grouped by what they share
+        // (`CpuEval::lands`) against job by job.
+        let (first, rest): (Vec<u32>, Vec<u32>) = (points.iter().copied().step_by(7).collect(), points.iter().copied().skip(3).step_by(11).collect());
+        let children: Vec<Vec<u32>> = words.iter().take(30).flat_map(|w| t.alphabet.iter().map(move |a| std::iter::once(a.sym).chain(w.iter().copied()).collect::<Vec<u32>>())).collect();
+        let jobs: Vec<EvalJob> = children.iter().flat_map(|w| [EvalJob { word: w, points: &first }, EvalJob { word: w, points: &rest }]).collect();
+        let grouped = CpuEval.lands(&t, view, &jobs);
+        let alone: Vec<u8> = jobs.iter().flat_map(|j| t.lands_batch(j.word, j.points, view)).collect();
+        let together_lit = grouped.iter().filter(|&&v| v == 1).count();
+        println!("{} jobs grouped: {together_lit} land", jobs.len());
+        assert!(together_lit > 0, "no grouped job lands anything");
+        assert!(grouped == alone, "the grouped replay differs from job by job");
         crate::variations::twins::BORROW.with(|b| b.set(true));
         let _ = cfg;
         assert!(lit > 0, "no word lands anything: the gate measures nothing");
