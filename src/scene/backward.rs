@@ -5727,7 +5727,7 @@ mod tests {
     fn the_batched_replay_is_the_point_replay() {
         let (cfg, twin) = rhai_grand_julian();
         let guard = crate::variations::global_registry();
-        let t = Backward::read(&twin, &guard).expect("the twin");
+        let t = Backward::read(&twin, &guard).unwrap_or_else(|e| panic!("the twin: {e:?}"));
         drop(guard);
         // Wide, so the words land: a pixel's worth of the attractor's span.
         let view = View::of(2.0, t.sample_point(0.75), 192, 192);
