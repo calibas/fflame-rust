@@ -929,6 +929,9 @@ pub struct EscapeRenderer {
     /// -- not another one. A 1024 grid is 12 MB, and it is dropped
     /// with the flame.
     ifs_coarse_cpu: Option<crate::scene::ifs_estimate::CoarseMeasure>,
+    /// The coarse pass on its way, with the `ifs_token` it is for
+    /// ([`Self::ensure_coarse`]).
+    ifs_coarse_job: Option<(u64, super::ifs::CoarseJob)>,
     ifs_geom_px: u32,
     /// Interaction preview (mode D): render one pixel in each 2×2
     /// block while the user is still moving something, every pixel
@@ -1947,6 +1950,7 @@ impl EscapeRenderer {
             ifs_delta_active: false,
             ifs_coarse_token: 0,
             ifs_coarse_cpu: None,
+            ifs_coarse_job: None,
             ifs_geom_px: 0,
             preview: false,
             ifs: None,
@@ -3594,7 +3598,10 @@ impl EscapeRenderer {
             key
         });
 
-        let coloring = super::get_coloring(&escape.coloring);
+        // An escape formula's colouring; a Flame Attractor's is the IFS
+        // one above, whose name the escape registry does not know (it
+        // warned on every recolour).
+        let coloring = ifs_key.is_none().then(|| super::get_coloring(&escape.coloring));
         let deriv = self.derivative_active(escape);
         // The fit the shader will apply. `None` (nothing measured yet,
         // or the mode is off) writes the IDENTITY, so the recolor pass
@@ -3609,10 +3616,11 @@ impl EscapeRenderer {
         let layer = super::layer_of(escape);
         let key = match ifs_key {
             Some(k) => k,
-            None => format!("recolor|{}|{}|{}", coloring.name, layer.map_or("", |l| l.name), deriv),
+            None => format!("recolor|{}|{}|{}", coloring.expect("an escape formula's").name, layer.map_or("", |l| l.name), deriv),
         };
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_recolor_layered(coloring, layer, deriv);
+            // An IFS key's pipeline was built above.
+            let source = assembler::assemble_recolor_layered(coloring.expect("an escape formula's"), layer, deriv);
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
@@ -4439,31 +4447,89 @@ impl EscapeRenderer {
     /// Without this the measure colouring renders BLACK: the buffer
     /// is bound at its one dummy element, every lookup reads no
     /// measure, and every pixel reads zero density.
+    ///
+    /// **Never waits.** The first call for a flame starts the pass
+    /// (`ifs::start_coarse_measure`); each later call looks whether its
+    /// readback has landed, and the one that finds it hands the pass to
+    /// the shader and says so: `true`, the picture should be drawn
+    /// again. Until then [`Self::coarse_pending`]. A browser lands a
+    /// readback only between frames, so waiting inside one hung the
+    /// page; on the desktop it held the frame. A job for a flame since
+    /// replaced, or for a colouring no longer chosen, is dropped.
     pub fn ensure_coarse(
         &mut self,
         device: &Device,
         queue: &Queue,
         escape: &EscapeConfig,
         flame: &crate::scene::transforms::Flame,
-    ) {
-        if escape.coloring != "ifs_measure" {
-            return;
+    ) -> bool {
+        let wanted = escape.coloring == "ifs_measure" && self.ifs.is_some() && self.ifs_token != 0 && self.ifs_coarse_token != self.ifs_token;
+        if self.ifs_coarse_job.as_ref().is_some_and(|(t, _)| !wanted || *t != self.ifs_token) {
+            if let Some((_, job)) = self.ifs_coarse_job.take() {
+                job.cancel();
+            }
         }
-        let Some(packed) = self.ifs.as_ref() else { return };
-        if self.ifs_token == 0 || self.ifs_coarse_token == self.ifs_token {
-            return;
+        if !wanted {
+            return false;
         }
-        let (centre, radius) = (packed.ifs.ball.centre, packed.ifs.ball.radius);
-        let flame = flame.clone();
-        let Some(coarse) = super::ifs::coarse_measure_for(
-            device, queue, &flame, centre, radius, COARSE_RES, COARSE_BATCHES,
-        ) else {
-            return;
+        let Some((_, job)) = self.ifs_coarse_job.as_ref() else {
+            let Some(packed) = self.ifs.as_ref() else { return false };
+            let (centre, radius) = (packed.ifs.ball.centre, packed.ifs.ball.radius);
+            match super::ifs::start_coarse_measure(device, queue, flame, centre, radius, COARSE_RES, COARSE_BATCHES) {
+                Some(job) => self.ifs_coarse_job = Some((self.ifs_token, job)),
+                // The device cannot hold the readback: given up for this
+                // flame, which renders black as it always did then.
+                None => self.ifs_coarse_token = self.ifs_token,
+            }
+            return false;
+        };
+        // The desktop lands a readback when the device is polled; a
+        // browser on its own, between frames.
+        let _ = device.poll(wgpu::PollType::Poll);
+        if job.poll().is_none() {
+            return false;
+        }
+        let (_, job) = self.ifs_coarse_job.take().expect("looked at above");
+        let Some(coarse) = job.finish() else {
+            // A failed readback: given up for this flame, as above.
+            self.ifs_coarse_token = self.ifs_token;
+            return false;
         };
         let packed_rows = super::ifs::pack_coarse(&coarse);
-        if self.set_coarse(device, queue, &packed_rows) {
-            self.ifs_coarse_token = self.ifs_token;
+        let set = self.set_coarse(device, queue, &packed_rows);
+        // After `set_coarse`, which moves `ifs_token` when it grows the
+        // buffer: the token recorded before would never match again, and
+        // every frame would start the pass anew.
+        self.ifs_coarse_token = self.ifs_token;
+        if set {
             self.ifs_coarse_cpu = Some(coarse);
+        }
+        set
+    }
+
+    /// Whether a coarse pass is on its way: the caller keeps asking
+    /// [`Self::ensure_coarse`] each frame until it lands.
+    pub fn coarse_pending(&self) -> bool {
+        self.ifs_coarse_job.is_some()
+    }
+
+    /// [`Self::ensure_coarse`] for a render that has one chance -- an
+    /// export, a thumbnail, the command line: on the desktop it waits
+    /// for the pass. A browser cannot wait inside a call, so there the
+    /// pass is started and this render goes without it (the measure
+    /// colouring black), as one made before the pass existed did.
+    pub fn ensure_coarse_now(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        escape: &EscapeConfig,
+        flame: &crate::scene::transforms::Flame,
+    ) {
+        self.ensure_coarse(device, queue, escape, flame);
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.coarse_pending() {
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            self.ensure_coarse(device, queue, escape, flame);
         }
     }
 
