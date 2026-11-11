@@ -5494,7 +5494,7 @@ mod tests {
         let mut seen: Vec<u32> = Vec::new();
         for frame in 0..=10 {
             let time = frame as f64;
-            let values = controller.evaluate_at_time(time);
+            let values = controller.evaluate_at_time(time, &crate::config::FractalConfig::default());
             let mut frame_config = base.clone();
             crate::animation::export::apply_animation_values(&mut frame_config, &values);
             seen.push(frame_config.sim.steps);

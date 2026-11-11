@@ -150,9 +150,11 @@ fn value(t, s, p, ctx) { #{ zoom: s.x } }
   `.anim`:
   - the source (design rule 2), its id and version (rule 7), and the
     parameter values;
-  - the declared targets, cached, each with its own `TrackBinding`, so
-    `"transform.2.weight"` follows its transform through a reorder as a
-    keyframe track's target does.
+  - not bound (`Track::bind`): a script names a transform by its position
+    in its own text (`"transform.2.weight"`), so rewriting the track's
+    `target` through a reorder, as a keyframe track's is, would part it
+    from what the script writes. A target the config no longer has is
+    skipped. (Planned as a binding a target; changed when built.)
   - `Track::target` holds the first target, so code reading one target
     still works. The script's list is the truth.
 - **`src/animation/script.rs`** (new): the engine, compile and cache, the
