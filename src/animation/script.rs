@@ -115,6 +115,12 @@ pub struct Output {
 struct Ctx {
     under: Rc<FractalConfig>,
     signals: Rc<BTreeMap<String, f64>>,
+    /// The time it is read at: the frame's in `value`, the step's end in a
+    /// step.
+    time: f64,
+    /// The Formula Editor's check: a signal it does not have reads 0.5,
+    /// so a track reading the user's signals can be checked and used.
+    any_signal: bool,
     duration: f64,
     reads: Option<Rc<RefCell<std::collections::BTreeSet<String>>>>,
 }
@@ -127,6 +133,8 @@ struct Ctx {
 pub struct Moment {
     pub under: Rc<FractalConfig>,
     pub signals: Rc<BTreeMap<String, f64>>,
+    /// Every signal reads, a missing one as 0.5: the check's.
+    pub any_signal: bool,
 }
 
 struct Compiled {
@@ -252,6 +260,7 @@ fn engine() -> Engine {
         .register_type_with_name::<Ctx>("Context")
         .register_get("duration", |c: &mut Ctx| c.duration)
         .register_get("dt", |_: &mut Ctx| STEP)
+        .register_get("time", |c: &mut Ctx| c.time)
         .register_fn("get", |c: &mut Ctx, name: &str| -> Result<f64, Box<EvalAltResult>> {
             let key = resolve_target(name).map_err(|e| -> Box<EvalAltResult> { e.into() })?;
             if let Some(reads) = &c.reads {
@@ -260,6 +269,9 @@ fn engine() -> Engine {
             read(&c.under, &key).ok_or_else(|| format!("`{name}` has no number to read").into())
         })
         .register_fn("signal", |c: &mut Ctx, name: &str| -> Result<f64, Box<EvalAltResult>> {
+            if c.any_signal && !c.signals.contains_key(name) {
+                return Ok(0.5);
+            }
             c.signals.get(name).copied().ok_or_else(|| {
                 let known: Vec<&str> = c.signals.keys().map(String::as_str).collect();
                 format!("no signal `{name}` here (a live signal never reaches an export); the signals are: {}", known.join(", ")).into()
@@ -442,7 +454,7 @@ pub fn evaluate(source: &str, values: &BTreeMap<String, f64>, frame: &Frame) -> 
         for def in &c.declared.params {
             p.insert(def.name.as_ref().into(), param_value(def, values.get(def.name.as_ref()).copied()));
         }
-        let ctx = Ctx { under: Rc::clone(&frame.at.under), signals: Rc::clone(&frame.at.signals), duration: frame.duration, reads: None };
+        let ctx = Ctx { under: Rc::clone(&frame.at.under), signals: Rc::clone(&frame.at.signals), time: t, any_signal: frame.at.any_signal, duration: frame.duration, reads: None };
         let result: Dynamic = if c.stateful {
             let s = state_at(c, source, values, &p, frame)?;
             c.engine.call_fn(&mut Scope::new(), &c.ast, "value", (t, s, p, ctx))
@@ -475,7 +487,7 @@ pub fn evaluate(source: &str, values: &BTreeMap<String, f64>, frame: &Frame) -> 
 pub fn try_run(source: &str) -> Result<Declared, String> {
     let declared = declare(source)?;
     let under = Rc::new(FractalConfig::default());
-    let at = Moment { under: Rc::clone(&under), signals: Rc::new(BTreeMap::new()) };
+    let at = Moment { under: Rc::clone(&under), signals: Rc::new(BTreeMap::new()), any_signal: true };
     let m = at.clone();
     let at_time = move |_: f64| m.clone();
     for time in [0.0, 0.25, 1.0] {
@@ -515,7 +527,7 @@ fn state_at(c: &Compiled, source: &str, values: &BTreeMap<String, f64>, p: &Map,
     let key = fingerprint(source, values, frame, &reads.borrow());
     let ctx_at = |time: f64| {
         let m = (frame.at_time)(time);
-        Ctx { under: m.under, signals: m.signals, duration: frame.duration, reads: Some(Rc::clone(&reads)) }
+        Ctx { under: m.under, signals: m.signals, time, any_signal: m.any_signal, duration: frame.duration, reads: Some(Rc::clone(&reads)) }
     };
     let found = STATES.with(|s| {
         let states = s.borrow();
@@ -611,7 +623,7 @@ fn value(t, p, ctx) {
     /// reads the config under it.
     /// A frame at `t` over `under`, nothing else animated.
     fn frame_on(under: &Rc<FractalConfig>, t: f64, duration: f64, f: impl FnOnce(&Frame) -> Result<Vec<Output>, String>) -> Result<Vec<Output>, String> {
-        let at = Moment { under: Rc::clone(under), signals: Rc::new(BTreeMap::from([("beat".to_string(), 0.25)])) };
+        let at = Moment { under: Rc::clone(under), signals: Rc::new(BTreeMap::from([("beat".to_string(), 0.25)])), any_signal: false };
         let m = at.clone();
         let at_time = move |_: f64| m.clone();
         let frame = Frame { time: t, duration, at, rested: under, at_time: &at_time, dependencies: 0 };
@@ -660,6 +672,18 @@ fn value(t, p, ctx) {
         }
         assert_ne!(noise(1.5, 0), noise(1.5, 1), "seeds are channels");
         assert!((0..1000).map(|n| unit(mix(n))).all(|h| (0.0..1.0).contains(&h)));
+    }
+
+    /// The shipped track examples run, and the check lets a track read a
+    /// signal it does not have.
+    #[test]
+    fn the_track_examples_run() {
+        let tracks: Vec<_> = crate::storage::formula_store::EXAMPLES.iter().filter(|(_, s)| looks_like_track(s)).collect();
+        assert_eq!(tracks.len(), 3, "{:?}", tracks.iter().map(|(f, _)| f).collect::<Vec<_>>());
+        for (file, source) in tracks {
+            try_run(source).unwrap_or_else(|e| panic!("{file}: {e}"));
+        }
+        try_run("const TARGETS = #{ zoom: \"set\" };\nfn value(t, p, ctx) { #{ zoom: ctx.signal(\"mine\") } }").expect("a signal the check lacks reads");
     }
 
     /// What is not a track says why.

@@ -1926,6 +1926,11 @@ mod tests {
     fn every_example_entry_compiles() {
         use crate::storage::formula_store::{is_coloring_file, is_fractint, is_rhai, EXAMPLES};
         for (file, text) in EXAMPLES {
+            // An animation track is the CPU world's
+            // (`animation::script::tests::the_track_examples_run`).
+            if crate::animation::script::looks_like_track(text) {
+                continue;
+            }
             // A Rhai file is one formula or colouring, as its functions say.
             if is_rhai(file) {
                 let src = CustomSource { dialect: CustomDialect::Rhai, entry: lang::rhai::title(text).unwrap_or_default(), source: text.to_string(), variations: Vec::new() };

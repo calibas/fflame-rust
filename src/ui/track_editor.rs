@@ -36,6 +36,13 @@ pub struct TrackEditorState {
     pub preview_keyframes: Vec<Keyframe>,
     /// Interpolation mode for preview keyframes
     pub preview_interpolation: Interpolation,
+    /// The script track whose window is open, by index
+    /// (docs/projects/rhai-tracks.md).
+    pub script_panel: Option<usize>,
+    /// A track source to open in the Formula Editor: a script track's Edit
+    /// there, or a new one from an example. Taken by the caller, which
+    /// holds the editor.
+    pub open_in_formula_editor: Option<String>,
 }
 
 /// Signal track parameters for track editor
@@ -234,6 +241,9 @@ pub fn render_track_editor(
         if ui.add_enabled(has_animation, add_button).clicked() {
             open_add_track_panel(state);
         }
+        if let Some(animation) = controller.animation.as_mut() {
+            script_track_menu(ui, animation, state);
+        }
     });
 
     ui.separator();
@@ -281,6 +291,7 @@ fn render_tracks_visual(
 
     // Colors
     let bar_color = Color32::from_rgb(80, 120, 180);
+    let script_bar_color = Color32::from_rgb(140, 100, 190);
     let bar_bg_color = Color32::from_gray(60);
     let bar_hover_color = Color32::from_gray(75); // Subtle hover effect
     let keyframe_color = Color32::from_rgb(255, 200, 100);
@@ -353,7 +364,9 @@ fn render_tracks_visual(
                     Pos2::new(adjusted_bar_left.max(bar_left).min(bar_right), rect.center().y - BAR_HEIGHT / 2.0),
                     Pos2::new(adjusted_bar_right.max(bar_left).min(bar_right), rect.center().y + BAR_HEIGHT / 2.0),
                 );
-                painter.rect_filled(track_rect, CornerRadius::same(2), bar_color);
+                let script = script_row(animation, track_index);
+                let fill = if script.is_some() { script_bar_color } else { bar_color };
+                painter.rect_filled(track_rect, CornerRadius::same(2), fill);
 
                 // Keyframe dots with hover/click interaction
                 let mut clicked_keyframe: Option<usize> = None;
@@ -444,12 +457,17 @@ fn render_tracks_visual(
                     Pos2::new(rect.left() + LABEL_WIDTH - 4.0, rect.bottom()),
                 );
                 let flame_target = track.flame_target;
-                let is_broken = is_track_broken(config, track);
+                // A script track: its title, a warning when it does not
+                // run or shares a target, its targets on hover.
+                let is_broken = is_track_broken(config, track) || script.as_ref().is_some_and(|s| s.warn());
                 // Convert to 1-based display + prepend flame prefix
-                let full_display = target_display(flame_target, &path);
+                let full_display = match &script {
+                    Some(s) => s.describe(),
+                    None => target_display(flame_target, &path),
+                };
                 // Truncate label if too long (by characters: a flame or
                 // parameter name can be any script)
-                let display_name = super::ellipsize(&full_display, 17);
+                let display_name = super::ellipsize(script.as_ref().map_or(&full_display, |s| &s.title), 17);
                 let label_color = if is_broken {
                     Color32::from_rgb(220, 140, 60)
                 } else {
@@ -470,7 +488,9 @@ fn render_tracks_visual(
                 // Add tooltip with full track name on hover
                 let label_response = ui.interact(label_rect, egui::Id::new(format!("track_label_{}", track_index)), Sense::hover());
                 if label_response.hovered() {
-                    if is_broken {
+                    if script.is_some() {
+                        label_response.on_hover_text(&full_display);
+                    } else if is_broken {
                         label_response.on_hover_text(format!(
                             "{}\n\n⚠ Broken: target parameter doesn't exist in the current config.",
                             full_display,
@@ -543,9 +563,212 @@ fn render_tracks_visual(
         // any edit would then be applied to the wrong target). Follow the
         // track, and close the panel outright if it was the deleted one.
         state.editing_track_index = adjust_index_after_removal(state.editing_track_index, index);
+        state.script_panel = adjust_index_after_removal(state.script_panel, index);
     }
 
     response
+}
+
+// ============================================================================
+// SCRIPT TRACKS (docs/projects/rhai-tracks.md, step 5)
+// ============================================================================
+
+/// What a script track's row shows.
+struct ScriptRow {
+    title: String,
+    /// Its targets: name, mode, and whether another track writes it too.
+    targets: Vec<(String, crate::animation::script::Mode, bool)>,
+    /// Why it does not compile or did not run.
+    error: Option<String>,
+}
+
+impl ScriptRow {
+    fn warn(&self) -> bool {
+        self.error.is_some() || self.targets.iter().any(|t| t.2)
+    }
+
+    fn describe(&self) -> String {
+        use crate::animation::script::Mode;
+        let mut s = self.title.clone();
+        for (name, mode, clash) in &self.targets {
+            let how = match mode {
+                Mode::Set => t!("track_editor.script_mode_set"),
+                Mode::Add => t!("track_editor.script_mode_add"),
+                Mode::Scale => t!("track_editor.script_mode_scale"),
+            };
+            s.push_str(&format!("\n  {name}: {how}"));
+            if *clash {
+                s.push_str(&format!(" -- {}", t!("track_editor.script_clash")));
+            }
+        }
+        if let Some(e) = &self.error {
+            s.push_str(&format!("\n\n⚠ {e}"));
+        }
+        s
+    }
+}
+
+/// Every track's targets by `ConfigPath` key: a keyframe or signal
+/// track's one, a script's declared ones.
+fn written_keys(animation: &Animation) -> Vec<Vec<String>> {
+    animation
+        .tracks
+        .iter()
+        .map(|t| match &t.source {
+            TrackSource::Script { source, .. } => crate::animation::script::declare(source).map(|d| d.targets.into_iter().map(|x| x.key).collect()).unwrap_or_default(),
+            _ => vec![t.target.clone()],
+        })
+        .collect()
+}
+
+/// Track `index`'s row, when it is a script track.
+fn script_row(animation: &Animation, index: usize) -> Option<ScriptRow> {
+    let TrackSource::Script { source, .. } = &animation.tracks.get(index)?.source else { return None };
+    let keys = written_keys(animation);
+    let shared = |key: &str| keys.iter().enumerate().any(|(i, k)| i != index && k.iter().any(|x| x == key));
+    Some(match crate::animation::script::declare(source) {
+        Ok(d) => ScriptRow {
+            title: d.title,
+            targets: d.targets.iter().map(|x| (x.name.clone(), x.mode, shared(&x.key))).collect(),
+            error: crate::animation::script::error_of(source),
+        },
+        Err(e) => ScriptRow { title: t!("track_editor.script_track").to_string(), targets: Vec::new(), error: Some(e) },
+    })
+}
+
+/// The menu adding a script track: one of the shipped examples, one of
+/// the user's track plug-ins, or a new one begun in the Formula Editor.
+fn script_track_menu(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditorState) {
+    use crate::animation::script::looks_like_track;
+    let examples: Vec<(String, String)> = crate::storage::formula_store::EXAMPLES
+        .iter()
+        .filter(|(_, s)| looks_like_track(s))
+        .map(|(_, s)| (crate::animation::script::declare(s).map(|d| d.title).unwrap_or_default(), s.to_string()))
+        .collect();
+    let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::Track);
+    ui.menu_button(t!("track_editor.add_script_track"), |ui| {
+        let mut add: Option<String> = None;
+        for (title, source) in &examples {
+            if ui.button(title).clicked() {
+                add = Some(source.clone());
+            }
+        }
+        if !plugins.is_empty() {
+            ui.separator();
+            ui.weak(t!("track_editor.script_plugins"));
+            for p in &plugins {
+                if ui.button(&p.title).clicked() {
+                    add = Some(p.carried.source.clone());
+                }
+            }
+        }
+        ui.separator();
+        if ui.button(t!("track_editor.script_new")).on_hover_text(t!("track_editor.script_new_tip")).clicked() {
+            state.open_in_formula_editor = examples.first().map(|(_, s)| s.clone());
+            ui.close();
+        }
+        if let Some(source) = add {
+            if let Ok(track) = Track::script(source) {
+                let index = animation.add_track(track);
+                state.script_panel = Some(index);
+            }
+            ui.close();
+        }
+    });
+}
+
+/// A script track's parameter values, as the parameter renderer reads
+/// and writes them: a number by its kind, unset at its default.
+struct TrackParams<'a>(&'a mut std::collections::BTreeMap<String, f64>);
+
+impl super::params::ParamStore for TrackParams<'_> {
+    fn get(&self, def: &crate::params::ParamDef) -> Option<crate::params::Value> {
+        use crate::params::{ParamKind as K, Value as V};
+        let Some(v) = self.0.get(&*def.name).copied() else { return Some(def.kind.default_value()) };
+        Some(match &def.kind {
+            K::Float { .. } => V::Float(v),
+            K::Int { .. } => V::Int(v.round() as i64),
+            K::Bool { .. } => V::Bool(v != 0.0),
+            K::Choice { .. } => V::Choice(v.round().max(0.0) as usize),
+            #[allow(unreachable_patterns)]
+            _ => def.kind.default_value(),
+        })
+    }
+
+    fn set(&mut self, def: &crate::params::ParamDef, value: crate::params::Value) {
+        use crate::params::Value as V;
+        let v = match value {
+            V::Float(x) => x,
+            V::Int(i) => i as f64,
+            V::Bool(b) => f64::from(u8::from(b)),
+            V::Choice(c) => c as f64,
+            _ => return,
+        };
+        self.0.insert(def.name.to_string(), v);
+    }
+
+    fn set_many(&mut self, edits: Vec<(&crate::params::ParamDef, crate::params::Value)>, _why: &str) {
+        for (d, v) in edits {
+            self.set(d, v);
+        }
+    }
+}
+
+/// A script track's window: its title, its targets and how it writes
+/// each, a warning for a target another track writes too (the later track
+/// wins) and for an error, its parameters, and Edit in the Formula Editor.
+pub fn render_script_track_panel(ctx: &egui::Context, controller: &mut AnimationController, state: &mut TrackEditorState) {
+    let Some(index) = state.script_panel else { return };
+    let Some(animation) = controller.animation.as_mut() else {
+        state.script_panel = None;
+        return;
+    };
+    let Some(row) = script_row(animation, index) else {
+        state.script_panel = None;
+        return;
+    };
+    let mut open = true;
+    egui::Window::new(t!("track_editor.script_window", name = row.title.clone()))
+        .id(egui::Id::new("script_track_panel"))
+        .open(&mut open)
+        .resizable(true)
+        .default_width(320.0)
+        .show(ctx, |ui| {
+            for (name, mode, clash) in &row.targets {
+                use crate::animation::script::Mode;
+                let how = match mode {
+                    Mode::Set => t!("track_editor.script_mode_set"),
+                    Mode::Add => t!("track_editor.script_mode_add"),
+                    Mode::Scale => t!("track_editor.script_mode_scale"),
+                };
+                ui.horizontal(|ui| {
+                    ui.monospace(name);
+                    ui.label(how);
+                    if *clash {
+                        ui.colored_label(Color32::from_rgb(220, 140, 60), format!("⚠ {}", t!("track_editor.script_clash")));
+                    }
+                });
+            }
+            if let Some(e) = &row.error {
+                ui.colored_label(Color32::from_rgb(240, 120, 120), e);
+            }
+            ui.separator();
+            let TrackSource::Script { source, params } = &mut animation.tracks[index].source else { return };
+            if let Ok(declared) = crate::animation::script::declare(source) {
+                if declared.params.is_empty() {
+                    ui.weak(t!("track_editor.script_no_params"));
+                } else {
+                    super::params::list(ui, &mut TrackParams(params), &super::params::List::new(&declared.params, "script_track"));
+                }
+            }
+            ui.separator();
+            if ui.button(t!("track_editor.script_edit")).on_hover_text(t!("track_editor.script_edit_tip")).clicked() {
+                state.open_in_formula_editor = Some(source.clone());
+            }
+        });
+    if !open {
+        state.script_panel = None;
+    }
 }
 
 // ============================================================================
@@ -1203,9 +1426,10 @@ pub fn open_add_track_panel(state: &mut TrackEditorState) {
 
 /// Open the track editor panel to edit an existing track by index
 pub fn open_edit_track_panel(state: &mut TrackEditorState, track_index: usize, track: &Track) {
-    // A script track is edited in the Formula Editor (rhai-tracks.md,
-    // step 5 gives it a panel of its own here).
+    // A script track has a window of its own: its parameters, targets
+    // and errors, and Edit in the Formula Editor.
     if matches!(track.source, TrackSource::Script { .. }) {
+        state.script_panel = Some(track_index);
         return;
     }
     state.track_editor_panel_open = true;
@@ -1711,5 +1935,56 @@ mod tests {
         state.new_track_target = ConfigPath::Exposure.to_string_key();
         initialize_preview_keyframes(&mut state, &config, EditingTarget::Main, 5.0);
         assert_eq!(state.preview_interpolation, Interpolation::Linear);
+    }
+
+    /// **A script track in the track editor** (docs/projects/rhai-tracks.md,
+    /// step 5): its row names it and its targets, marks a target another
+    /// track writes, and its window draws its parameters into the track,
+    /// lays out without an error over two frames, follows its track across
+    /// a deletion, and hands Edit to the Formula Editor.
+    #[test]
+    fn a_script_track_shows_its_targets_and_parameters() {
+        use super::*;
+        let breathing = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == "track-breathing.rhai").unwrap().1;
+        let mut animation = Animation::new("a".into(), 4.0);
+        animation.add_track(Track::linear("Zoom".into(), serde_json::json!(1.0), serde_json::json!(2.0), 4.0));
+        animation.add_track(Track::script(breathing.to_string()).unwrap());
+        let row = script_row(&animation, 1).expect("a script row");
+        assert_eq!(row.title, "Breathing");
+        let zoom = row.targets.iter().find(|t| t.0 == "zoom").expect("zoom");
+        let rotation = row.targets.iter().find(|t| t.0 == "rotation").expect("rotation");
+        assert!(zoom.2 && !rotation.2, "the keyframed zoom is shared, the rotation is not");
+        assert!(row.warn() && row.describe().contains("zoom"));
+        assert!(script_row(&animation, 0).is_none(), "a keyframe track is not a script");
+
+        let mut controller = AnimationController::new();
+        controller.load(animation);
+        let mut state = TrackEditorState::default();
+        let track = controller.animation.as_ref().unwrap().tracks[1].clone();
+        open_edit_track_panel(&mut state, 1, &track);
+        assert_eq!(state.script_panel, Some(1));
+        assert!(!state.track_editor_panel_open, "not the keyframe panel");
+        let ctx = egui::Context::default();
+        for _ in 0..2 {
+            let _ = ctx.run_ui(Default::default(), |ui| {
+                render_script_track_panel(ui.ctx(), &mut controller, &mut state);
+            });
+        }
+        assert_eq!(state.script_panel, Some(1), "still open");
+
+        // The parameter store writes into the track.
+        let TrackSource::Script { source, params } = &mut controller.animation.as_mut().unwrap().tracks[1].source else { panic!() };
+        let declared = crate::animation::script::declare(source).unwrap();
+        let depth = declared.params.iter().find(|d| d.name == "depth").unwrap();
+        let mut store = TrackParams(params);
+        use super::super::params::ParamStore;
+        assert!(matches!(store.get(depth), Some(crate::params::Value::Float(v)) if (v - 0.1).abs() < 1e-6), "its default");
+        store.set(depth, crate::params::Value::Float(0.4));
+        assert_eq!(params.get("depth"), Some(&0.4));
+
+        // A deletion before it moves the window with its track.
+        controller.animation.as_mut().unwrap().remove_track(0);
+        state.script_panel = adjust_index_after_removal(state.script_panel, 0);
+        assert_eq!(state.script_panel, Some(0));
     }
 }

@@ -311,7 +311,7 @@ impl AnimationController {
         let at_time = |t: f64| {
             let mut c = (*rested).clone();
             super::export::apply_animation_values(&mut c, &self.held_values(t, signals));
-            script::Moment { under: std::rc::Rc::new(c), signals: signals_at(t) }
+            script::Moment { under: std::rc::Rc::new(c), signals: signals_at(t), any_signal: false }
         };
         let dependencies = {
             use std::hash::{Hash, Hasher};
@@ -324,7 +324,7 @@ impl AnimationController {
         let frame = script::Frame {
             time,
             duration: animation.duration,
-            at: script::Moment { under: std::rc::Rc::clone(&config), signals: signals_at(time) },
+            at: script::Moment { under: std::rc::Rc::clone(&config), signals: signals_at(time), any_signal: false },
             rested: &rested,
             at_time: &at_time,
             dependencies,

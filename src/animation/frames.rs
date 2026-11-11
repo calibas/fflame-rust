@@ -178,4 +178,37 @@ mod tests {
         assert_eq!(checked, video);
         assert!(video.windows(2).all(|w| w[0] != w[1]), "every frame moves");
     }
+
+    /// **A video gives the frames playback gave**, script tracks and all
+    /// (docs/projects/rhai-tracks.md): the shipped examples -- an added
+    /// breath, a spring that keeps a state, smoothed jitter -- over a
+    /// keyframed zoom, played live with each frame applied to the config
+    /// the next reads, then exported from the config playback left.
+    #[test]
+    fn a_video_of_script_tracks_gives_the_frames_playback_gave() {
+        use crate::animation::{Animation, AnimationController, Track};
+        let example = |f: &str| crate::storage::formula_store::EXAMPLES.iter().find(|(n, _)| *n == f).unwrap().1.to_string();
+        let mut animation = Animation::new("scripts".into(), 2.0);
+        animation.add_track(Track::linear("Zoom".into(), serde_json::json!(1.0), serde_json::json!(2.0), 2.0));
+        animation.add_track(Track::script(example("track-springy-zoom.rhai")).unwrap());
+        animation.add_track(Track::script(example("track-breathing.rhai")).unwrap());
+        animation.add_track(Track::script(example("track-smoothed-jitter.rhai")).unwrap());
+        let fps = 24;
+        let mut live = AnimationController::new();
+        live.load(animation);
+        let mut config = crate::resources::presets::create_default_preset();
+        let mut played = Vec::new();
+        for frame in 0..=(2 * fps) {
+            live.current_time = frame as f64 / fps as f64;
+            let values = live.evaluate_frame(None, &config);
+            apply_animation_values(&mut config, &values);
+            played.push(serde_json::to_value(&config).unwrap());
+        }
+        let mut source = FrameSource::new(live.animation.as_ref().unwrap(), config.clone(), fps, &HashMap::new());
+        for frame in 0..source.frames() {
+            let exported = serde_json::to_value(source.config(frame)).unwrap();
+            assert_eq!(exported, played[frame as usize], "frame {frame}");
+        }
+        assert_ne!(played[6], played[18], "the frames move");
+    }
 }
