@@ -638,18 +638,18 @@ fn script_row(animation: &Animation, index: usize) -> Option<ScriptRow> {
 
 /// The menu adding a script track: one of the shipped examples, one of
 /// the user's track plug-ins, or a new one begun in the Formula Editor.
+///
+/// Drawn every frame the panel shows, so it does nothing until opened: the
+/// examples are found once (compiling every shipped formula to find the
+/// tracks cost 34 ms a frame, a tenth of the flame's frame rate), and the
+/// plug-ins are listed only while the menu is open.
 fn script_track_menu(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditorState) {
-    use crate::animation::script::looks_like_track;
-    let examples: Vec<(String, String)> = crate::storage::formula_store::EXAMPLES
-        .iter()
-        .filter(|(_, s)| looks_like_track(s))
-        .map(|(_, s)| (crate::animation::script::declare(s).map(|d| d.title).unwrap_or_default(), s.to_string()))
-        .collect();
-    let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::Track);
     ui.menu_button(t!("track_editor.add_script_track"), |ui| {
+        let examples = track_examples();
+        let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::Track);
         let mut add: Option<String> = None;
-        for (title, source) in &examples {
-            if ui.button(title).clicked() {
+        for (title, source) in examples {
+            if ui.button(title.as_str()).clicked() {
                 add = Some(source.clone());
             }
         }
@@ -675,6 +675,18 @@ fn script_track_menu(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEd
             ui.close();
         }
     });
+}
+
+/// The shipped example tracks, title and source, found once.
+fn track_examples() -> &'static [(String, String)] {
+    static EXAMPLES: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    EXAMPLES.get_or_init(|| {
+        crate::storage::formula_store::EXAMPLES
+            .iter()
+            .filter(|(_, s)| crate::animation::script::looks_like_track(s))
+            .map(|(_, s)| (crate::animation::script::declare(s).map(|d| d.title).unwrap_or_default(), s.to_string()))
+            .collect()
+    })
 }
 
 /// A script track's parameter values, as the parameter renderer reads

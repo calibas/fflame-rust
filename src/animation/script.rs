@@ -233,8 +233,18 @@ pub fn declare(source: &str) -> Result<Declared, String> {
 
 /// Whether `source` reads as a track: it has `TARGETS` and `fn value`
 /// (what the Formula Editor tells a track from the GPU kinds by).
+///
+/// Cheap where it is called often (the library's scan, a menu): a file
+/// without both words is answered without compiling, and the engine that
+/// parses is made once a thread.
 pub fn looks_like_track(source: &str) -> bool {
-    let Ok(ast) = engine().compile(source) else { return false };
+    if !(source.contains("TARGETS") && source.contains("value")) {
+        return false;
+    }
+    thread_local! {
+        static PARSER: Engine = engine();
+    }
+    let Ok(ast) = PARSER.with(|e| e.compile(source)) else { return false };
     let has_value = ast.iter_functions().any(|f| f.name == "value");
     let has_targets = ast.statements().iter().any(|s| matches!(s, rhai::Stmt::Var(x, ..) if x.0.name.as_str() == "TARGETS"));
     has_value && has_targets
@@ -713,3 +723,4 @@ fn value(t, p, ctx) {
         assert!(declare(reads_no_state).unwrap_err().contains("value(t, s, p, ctx)"));
     }
 }
+
