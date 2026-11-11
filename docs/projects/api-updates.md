@@ -176,8 +176,8 @@ Ships first, so that everything after can be added safely.
   `*_shape`, `hexnix3D.3side` -> `triangle_scale`, old names tolerated in
   stored configs), effects (`distance_field`; `textureSampleLevel`;
   decision 4), scripts (`escape_deep`, `sim_sweep`, six changed).
-- **Animations**: store `motion_blur`; decide `base_config` (sent and
-  dropped today -- store it, or stop sending it; decision 5); raise the
+- **Animations**: store `motion_blur`; `base_config` stays unstored (the
+  flame is referenced by `flame_id`; decision 5); raise the
   32 KB `tracks` cap to hold script sources (or store a track's source
   apart).
 - Clean up the abandoned `client-sync-2026-10` branch and the uncommitted
@@ -240,20 +240,35 @@ From the config review (§4). Each needs `min_reader` in place first.
 
 ## 5. Decisions for the user
 
-1. **0.5's floor** (rule 6): keep serving it filtered with an update
-   notice (recommended), or turn it away with an update message.
+1. **0.5's floor** (rule 6): **decided 2026-11-11: serve it filtered,
+   with an update notice.**
 2. **The variation slot policy cap**: raise to ~4096, or apply it to
    uploads only (polychoron ships at 2410 > 512).
-3. **`simulation` in `render_modes`**: store simulation flames online, or
-   keep refusing them.
+3. **`simulation` in `render_modes`**: **decided 2026-11-11, a hard
+   requirement**: "Any config we currently support, flames, simulations
+   or escape-time, needs to be able to be saved online." Simulations are
+   stored (legacy-filtered), and every config the app can make must fit
+   the server's limits (256 KB config, 16 KB a transform, 32 KB tracks).
+   Check the largest real configs against them.
 4. **Which effect WGSL the API holds** until P6 stores Rhai: the twins'
    generated WGSL or the hand-written reference.
-5. **An animation's `base_config`**: store it server-side, or stop
-   sending it (today it is silently dropped).
-6. **Header negotiation vs URL versioning** (`/api/v2`): headers are
-   recommended -- the changes are additive, and one route set is easier
-   to keep honest; ffapi's TODO already says URL versioning only for a
-   non-additive change.
+5. **An animation's `base_config`**: **decided 2026-11-11: not stored.**
+   The flame is saved as its own flame and the animation references it by
+   `flame_id`; on load the client makes the server's copy of that flame
+   the `base_config` (`api::mod`). The copy sent on save is redundant: the
+   server dropping it loses nothing. The client may stop sending it.
+6. **How a client identifies itself**: under discussion 2026-11-11. The
+   user wants a general-purpose API and asked why not a POST/PUT field
+   rather than a header. The proposal in reply: a payload describes
+   itself in the body (config `version` / `min_reader`), so writes need no
+   negotiation. Reads (lists, search, catalogs) have no body, so the
+   server cannot learn there what a reader understands. Instead, nothing
+   is required of a client: responses carry the full current vocabulary,
+   and tolerating unknown values is part of the API's contract (0.6 on).
+   The one frozen exception, 0.5, is recognised by its fixed User-Agent
+   (`ureq/2.*`; 0.6 sends `FractalArtEditor/<version>`) and served the
+   legacy shape. Update notices come from a `GET` of the latest version.
+   URL versioning only for a change that cannot be additive.
 7. **How far back to test**: keep a 0.5 build and a 0.6 build in CI
    against a staging server (recommended), or test by hand per release.
 
