@@ -162,6 +162,21 @@ Two separate things would fix it:
 Everyday git operations (0.4-1.2 s) are not slow for Windows; the size
 hurts clone, fetch and repack.
 
+**Done 2026-11-11 (the user's picks).** History rewritten with `git
+filter-repo`, dropping:
+- the strays: `pkg/`, `tests/visual/current/`, `swiftshader/`,
+  `animation.mp4`, the root `spherical_*.png` and two stray test PNGs;
+- the 431 superseded visual-baseline versions. Every current baseline is
+  kept in every commit that has it, but old commits no longer carry the
+  baselines they had.
+
+`.git` went from ~261 MB to **47 MB** (45.5 MiB packed). A bundle of every
+ref from before the rewrite is in `output/pre-rewrite-2026-11-11.bundle`.
+The baselines stay in git from here on (no LFS); when the history grows
+again, run the same filter. The 159 local branches already merged into main
+were deleted. GitHub keeps the old objects reachable from its PR refs until
+GitHub support purges them.
+
 ---
 
 ## 5. The dependencies
