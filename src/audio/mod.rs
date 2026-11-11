@@ -30,6 +30,7 @@
 //! - `onset` - Transient/beat detection (0 or 1)
 
 mod analyzer;
+mod fft;
 mod decode;
 
 // Platform-specific audio playback implementations

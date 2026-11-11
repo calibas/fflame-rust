@@ -5,7 +5,7 @@
 //! - Onset detection (transients, beats)
 //! - Spectral features (centroid, flux)
 
-use rustfft::{num_complex::Complex, FftPlanner};
+use super::fft::{Complex, Fft};
 use std::collections::HashMap;
 use std::f32::consts::PI;
 
@@ -174,7 +174,7 @@ impl AudioAnalyzer {
     }
 
     /// Compute Short-Time Fourier Transform
-    fn compute_stft(&self, samples: &[f32]) -> Vec<Vec<Complex<f32>>> {
+    fn compute_stft(&self, samples: &[f32]) -> Vec<Vec<Complex>> {
         let fft_size = self.config.fft_size;
         let hop_size = self.config.hop_size;
 
@@ -183,11 +183,10 @@ impl AudioAnalyzer {
         }
 
         let num_frames = (samples.len() - fft_size) / hop_size + 1;
-        let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(fft_size);
+        let fft = Fft::new(fft_size);
 
         let mut result = Vec::with_capacity(num_frames);
-        let mut buffer: Vec<Complex<f32>> = vec![Complex::new(0.0, 0.0); fft_size];
+        let mut buffer: Vec<Complex> = vec![Complex::default(); fft_size];
 
         for frame_idx in 0..num_frames {
             let start = frame_idx * hop_size;
