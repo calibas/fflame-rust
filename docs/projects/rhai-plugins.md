@@ -1436,9 +1436,10 @@ under each branch.
      field kind in mode B (the user's pick, 2026-11-10), not the
      never-escaping formula the KIFS plan had sketched.
    - Edit as Rhai for solids and fields.
-6. **`rhai-tracks`** -- P5, animation tracks as scripts. **Planned
-   2026-11-10** ([rhai-tracks.md](rhai-tracks.md)): the user amended D4
-   there -- state is allowed, stepped at a fixed rate from time zero.
+6. **`rhai-tracks`** -- P5, animation tracks as scripts. **Built
+   2026-11-10, not merged** ([rhai-tracks.md](rhai-tracks.md)): the user
+   amended D4 there -- state is allowed, stepped at a fixed rate from
+   time zero.
    - A track is a pure function of time (D4): CPU Rhai compiled once
      per track, run each frame after the keyframes.
    - Its targets declared, so the timeline shows them and a clash with

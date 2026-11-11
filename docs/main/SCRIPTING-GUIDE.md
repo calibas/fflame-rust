@@ -17,6 +17,12 @@ read and are the best worked examples: **Basic Random** for the
 general shape, **Mandala** for symmetry, **Gnarl** for parameter feel,
 **Zoom Dive** for animation, **Decompose Group** for heavy machinery.
 
+An **animation track** written in Rhai is another thing: a script the
+animation runs every frame, declaring the settings it writes and
+returning their values at a time -- with a state stepped at a fixed rate
+when it needs one. It is written in the Formula Editor, not here; see
+[ANIMATION.md](ANIMATION.md), *Script tracks*.
+
 ## The shape of a script
 
 ```rhai
