@@ -310,10 +310,8 @@ fn render_tracks_visual(
                         (first, last)
                     }
                 }
-                TrackSource::Signal { .. } => {
-                    // Signals span full duration
-                    (0.0, layout.duration)
-                }
+                // Signals and scripts span the full duration.
+                TrackSource::Signal { .. } | TrackSource::Script { .. } => (0.0, layout.duration),
             };
 
             // Allocate full row with click sensing
@@ -1205,6 +1203,11 @@ pub fn open_add_track_panel(state: &mut TrackEditorState) {
 
 /// Open the track editor panel to edit an existing track by index
 pub fn open_edit_track_panel(state: &mut TrackEditorState, track_index: usize, track: &Track) {
+    // A script track is edited in the Formula Editor (rhai-tracks.md,
+    // step 5 gives it a panel of its own here).
+    if matches!(track.source, TrackSource::Script { .. }) {
+        return;
+    }
     state.track_editor_panel_open = true;
     state.editing_track_index = Some(track_index);
     state.new_track_target = track.target.clone();
@@ -1229,6 +1232,7 @@ pub fn open_edit_track_panel(state: &mut TrackEditorState, track_index: usize, t
             };
             NewTrackType::Signal
         }
+        TrackSource::Script { .. } => unreachable!("returned above"),
     };
     state.target_selector_state = TargetSelectorState::default();
 }

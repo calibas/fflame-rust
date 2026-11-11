@@ -1902,7 +1902,7 @@ fn a_script_can_define_an_animation_the_app_can_play() {
     controller.load(animation);
     let at = |time: f64| -> HashMap<String, f64> {
         controller
-            .evaluate_at_time(time)
+            .evaluate_at_time(time, &crate::config::FractalConfig::default())
             .into_iter()
             .filter_map(|(_, target, value)| value.as_f64().map(|v| (target, v)))
             .collect()

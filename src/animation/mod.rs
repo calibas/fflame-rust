@@ -11,6 +11,7 @@ mod controller;
 mod interpolation;
 pub mod export;
 pub mod frames;
+pub mod script;
 
 pub use controller::AnimationController;
 pub use interpolation::{EasingFunction, Interpolation};
@@ -78,6 +79,13 @@ pub struct Animation {
     /// Written only when changed, so older files load with it off.
     #[serde(default, skip_serializing_if = "MotionBlur::is_default")]
     pub motion_blur: MotionBlur,
+
+    /// Each script target's rest value and what scripts last wrote to it
+    /// (`script::Rest`), by its `ConfigPath` key. Runtime only; cloned
+    /// with the animation into the video export, whose base is the app's
+    /// config with the tracks' last values in it.
+    #[serde(skip)]
+    pub script_rest: std::collections::HashMap<String, script::Rest>,
 }
 
 /// Motion blur (docs/archive/projects/motion-blur.md): a frame is the average of
@@ -338,6 +346,19 @@ pub enum TrackSource {
         #[serde(default)]
         fade_out_easing: EasingFunction,
     },
+
+    /// A Rhai script writing the targets it declares (`script`;
+    /// docs/projects/rhai-tracks.md), run after the keyframe and signal
+    /// tracks. The track's `target` is its first target's key; the
+    /// script's `TARGETS` are the truth.
+    Script {
+        /// The script, as the animation carries it (design rule 2).
+        source: String,
+        /// Its parameters' values, by name; a parameter absent is at its
+        /// default.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        params: std::collections::BTreeMap<String, f64>,
+    },
 }
 
 /// Single keyframe defining parameter value at specific time
@@ -387,6 +408,7 @@ impl Animation {
             generators: Vec::new(),
             loop_mode: LoopMode::Once,
             motion_blur: MotionBlur::default(),
+            script_rest: Default::default(),
         }
     }
 
@@ -400,6 +422,7 @@ impl Animation {
             generators: Vec::new(),
             loop_mode: LoopMode::Once,
             motion_blur: MotionBlur::default(),
+            script_rest: Default::default(),
         }
     }
 
@@ -513,6 +536,8 @@ impl Animation {
                     *min_output *= k;
                     *max_output *= k;
                 }
+                // Its script names what it writes.
+                TrackSource::Script { .. } => {}
             }
         }
     }
@@ -536,7 +561,7 @@ impl Animation {
     /// follow during the session. Safe to re-run.
     pub fn bind_to_config(&mut self, config: &FractalConfig) {
         for track in &mut self.tracks {
-            track.bound = resolve_track_binding(config, track.flame_target, &track.target);
+            track.bind(config);
         }
     }
 
@@ -809,7 +834,23 @@ impl Track {
     /// but isn't bound yet" — and a later delete of the target
     /// transform would silently fail to mark the track broken.
     pub fn bind(&mut self, config: &FractalConfig) {
+        // A script names its targets in its own text, a transform by its
+        // position (`"transform.2.weight"`), so it is not bound: rewriting
+        // `target` through a reorder would part it from what the script
+        // writes. A target the config no longer has is skipped.
+        if matches!(self.source, TrackSource::Script { .. }) {
+            self.bound = TrackBinding::default();
+            return;
+        }
         self.bound = resolve_track_binding(config, self.flame_target, &self.target);
+    }
+
+    /// A script track (`script`), its target its first declared target's
+    /// key; or why `source` is not a track.
+    pub fn script(source: String) -> Result<Self, String> {
+        let declared = script::declare(&source)?;
+        let target = declared.targets.first().map(|t| t.key.clone()).unwrap_or_default();
+        Ok(Self::new(target, TrackSource::Script { source, params: Default::default() }))
     }
 
     /// Create keyframe track with single keyframe (constant value)
@@ -1058,7 +1099,7 @@ mod tests {
 
         let mut controller = AnimationController::new();
         controller.load(anim.clone());
-        let values = controller.evaluate_at_time(0.0);
+        let values = controller.evaluate_at_time(0.0, &crate::config::FractalConfig::default());
         assert!(values.iter().all(|(_, key, _)| key != "Transform.1.Weight"), "{values:?}");
         crate::animation::export::apply_animation_values(&mut config, &values);
         assert_eq!(config.flame.transforms[1].weight, 3.0, "the transform now at index 1 keeps its weight");
@@ -1075,7 +1116,7 @@ mod tests {
         anim.rebind_targets(&config);
         assert!(!anim.tracks[0].bound.broken);
         controller.load(anim);
-        let values = controller.evaluate_at_time(0.0);
+        let values = controller.evaluate_at_time(0.0, &crate::config::FractalConfig::default());
         crate::animation::export::apply_animation_values(&mut config, &values);
         assert_eq!(config.flame.transforms[1].weight, 9.0);
     }
@@ -1130,7 +1171,7 @@ mod tests {
         assert!(anim.tracks.iter().all(|t| t.bound.broken));
         let mut controller = AnimationController::new();
         controller.load(anim.clone());
-        let values = controller.evaluate_at_time(0.0);
+        let values = controller.evaluate_at_time(0.0, &crate::config::FractalConfig::default());
         assert!(values.is_empty(), "a broken track applied: {values:?}");
 
         // Undo the removal: they un-break and apply to it.
@@ -1139,7 +1180,7 @@ mod tests {
         assert!(anim.tracks.iter().all(|t| !t.bound.broken));
         controller.load(anim);
         let mut c = manager.active_config().clone();
-        crate::animation::export::apply_animation_values(&mut c, &controller.evaluate_at_time(0.0));
+        crate::animation::export::apply_animation_values(&mut c, &controller.evaluate_at_time(0.0, &crate::config::FractalConfig::default()));
         assert_eq!(c.escape.transforms[1].amount, 0.25);
         assert_eq!(c.escape.transforms[1].params.get("c1"), Some(&0.75));
         assert_eq!(c.escape.transforms[0].amount, 1.0, "the other is left alone");

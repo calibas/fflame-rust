@@ -123,8 +123,8 @@ impl FrameSource {
     pub fn config(&mut self, frame: u32) -> FractalConfig {
         let time = self.time(frame);
         let values = match &self.signals {
-            Some(s) => self.controller.evaluate_at_time_with_signals(time, Some(s)),
-            None => self.controller.evaluate_at_time(time),
+            Some(s) => self.controller.evaluate_at_time_with_signals(time, Some(s), &self.base),
+            None => self.controller.evaluate_at_time(time, &self.base),
         };
         let mut config = self.base.clone();
         apply_animation_values(&mut config, &values);
