@@ -14,7 +14,7 @@
 //! writes are a handful per frame, and every reader is on the UI
 //! thread.
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use std::sync::Mutex;
 
 /// Where the current reference orbit came from — the difference
@@ -109,7 +109,7 @@ pub struct EscapeDiag {
     pub render_cpu_ms: f32,
 }
 
-static DIAG: Lazy<Mutex<EscapeDiag>> = Lazy::new(|| Mutex::new(EscapeDiag::default()));
+static DIAG: LazyLock<Mutex<EscapeDiag>> = LazyLock::new(|| Mutex::new(EscapeDiag::default()));
 
 /// Coherent copy of the current snapshot.
 pub fn snapshot() -> EscapeDiag {

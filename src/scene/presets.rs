@@ -45,7 +45,7 @@ impl PresetLibrary {
 
 // ===== GLOBAL SINGLETON =====
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 /// Global preset library singleton (immutable)
 ///
@@ -58,6 +58,6 @@ use once_cell::sync::Lazy;
 /// let preset = library.get(0);
 /// ```
 pub fn global_preset_library() -> &'static PresetLibrary {
-    static LIBRARY: Lazy<PresetLibrary> = Lazy::new(PresetLibrary::new);
+    static LIBRARY: LazyLock<PresetLibrary> = LazyLock::new(PresetLibrary::new);
     &LIBRARY
 }

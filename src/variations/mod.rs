@@ -851,8 +851,8 @@ pub fn current_param_key(key: &str) -> std::borrow::Cow<'_, str> {
 }
 
 fn registry_lock() -> &'static RwLock<VariationRegistry> {
-    use once_cell::sync::Lazy;
-    static REGISTRY: Lazy<RwLock<VariationRegistry>> = Lazy::new(|| RwLock::new(VariationRegistry::new()));
+    use std::sync::LazyLock;
+    static REGISTRY: LazyLock<RwLock<VariationRegistry>> = LazyLock::new(|| RwLock::new(VariationRegistry::new()));
     &REGISTRY
 }
 

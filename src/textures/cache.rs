@@ -85,8 +85,8 @@ pub fn save(key: &str, image: &image::RgbaImage) {
 }
 
 #[cfg(target_arch = "wasm32")]
-static SESSION: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, image::RgbaImage>>> =
-    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+static SESSION: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, image::RgbaImage>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 #[cfg(target_arch = "wasm32")]
 pub fn exists(key: &str) -> bool {

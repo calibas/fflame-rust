@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use rust_i18n::t;
 
@@ -441,7 +441,7 @@ impl Default for EffectRegistry {
 }
 
 /// Global effect registry singleton
-static EFFECT_REGISTRY: Lazy<RwLock<EffectRegistry>> = Lazy::new(|| {
+static EFFECT_REGISTRY: LazyLock<RwLock<EffectRegistry>> = LazyLock::new(|| {
     let mut registry = EffectRegistry::new();
     register_builtin_effects(&mut registry);
     RwLock::new(registry)
@@ -478,8 +478,8 @@ pub fn global_effect_registry_mut() -> RwLockWriteGuard<'static, EffectRegistry>
 /// whereas an effect's depends on what the registry holds right now.
 ///
 /// Drained by the app, which turns it into a fetch.
-static MISSING_EFFECTS: Lazy<std::sync::Mutex<std::collections::BTreeSet<String>>> =
-    Lazy::new(Default::default);
+static MISSING_EFFECTS: LazyLock<std::sync::Mutex<std::collections::BTreeSet<String>>> =
+    LazyLock::new(Default::default);
 
 /// Note that a flame referenced an effect that is not registered.
 pub fn note_missing_effect(name: &str) {
@@ -514,7 +514,7 @@ pub fn take_missing_effects() -> Vec<String> {
 /// nobody can see. Add a function to `blend_modes.wgsl` and this
 /// follows.
 fn blend_library_symbols() -> &'static [String] {
-    static SYMBOLS: Lazy<Vec<String>> = Lazy::new(|| {
+    static SYMBOLS: LazyLock<Vec<String>> = LazyLock::new(|| {
         embedded_shaders::BLEND_MODES
             .lines()
             .filter_map(|l| l.trim().strip_prefix("fn "))
@@ -536,7 +536,7 @@ fn missing_blend_library_symbol(shader: &str) -> Option<&'static str> {
         let call = format!("{sym}(");
         let definition = format!("fn {sym}(");
         if shader.contains(&call) && !shader.contains(&definition) {
-            // The `&'static` comes from the leaked Lazy, which lives for
+            // The `&'static` comes from the leaked LazyLock, which lives for
             // the process.
             Some(sym.as_str())
         } else {

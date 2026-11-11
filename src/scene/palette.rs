@@ -1909,7 +1909,7 @@ mod tests {
 
 // ===== GLOBAL SINGLETON =====
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use std::sync::RwLock;
 
 /// Global palette library singleton (mutable via RwLock)
@@ -1928,7 +1928,7 @@ use std::sync::RwLock;
 /// library.add(custom_palette);
 /// ```
 pub fn global_palette_library() -> &'static RwLock<PaletteLibrary> {
-    static LIBRARY: Lazy<RwLock<PaletteLibrary>> = Lazy::new(|| {
+    static LIBRARY: LazyLock<RwLock<PaletteLibrary>> = LazyLock::new(|| {
         RwLock::new(PaletteLibrary::new())
     });
     &LIBRARY

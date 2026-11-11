@@ -789,8 +789,8 @@ fn apply_config_value(
 /// fine in every terminal. Probe PATH first (terminal launches, Windows,
 /// Linux), then the conventional install locations.
 #[cfg(not(target_arch = "wasm32"))]
-static FFMPEG_PATH: once_cell::sync::Lazy<Option<std::path::PathBuf>> =
-    once_cell::sync::Lazy::new(|| {
+static FFMPEG_PATH: std::sync::LazyLock<Option<std::path::PathBuf>> =
+    std::sync::LazyLock::new(|| {
         let candidates = [
             "ffmpeg", // PATH — covers terminals, Windows, most Linux
             "/opt/homebrew/bin/ffmpeg", // Homebrew, Apple Silicon

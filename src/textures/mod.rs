@@ -196,8 +196,8 @@ pub fn generation_cost(recipe: &FractalConfig) -> f64 {
 pub const AUTO_GENERATE_COST: f64 = 1.0e10;
 
 /// Cache keys the user has asked to generate this session.
-static APPROVED: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashSet<String>>> =
-    once_cell::sync::Lazy::new(Default::default);
+static APPROVED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
 
 /// Let the texture with cache key `key` generate however long it takes:
 /// the user asked for it.

@@ -338,7 +338,7 @@ mod native {
 
     /// Shared ureq Agent for connection pooling (HTTP keep-alive).
     /// Without this, every request creates a fresh TCP+TLS connection (~300-700ms overhead).
-    static AGENT: once_cell::sync::Lazy<ureq::Agent> = once_cell::sync::Lazy::new(|| {
+    static AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
         ureq::AgentBuilder::new()
             .timeout_connect(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(30))

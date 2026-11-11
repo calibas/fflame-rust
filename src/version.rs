@@ -157,7 +157,7 @@ impl std::fmt::Display for VersionInfo {
 
 /// Get the global version info singleton
 pub fn get_version_info() -> &'static VersionInfo {
-    static VERSION: once_cell::sync::Lazy<VersionInfo> = once_cell::sync::Lazy::new(VersionInfo::current);
+    static VERSION: std::sync::LazyLock<VersionInfo> = std::sync::LazyLock::new(VersionInfo::current);
     &VERSION
 }
 
