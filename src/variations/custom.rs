@@ -790,7 +790,7 @@ mod tests {
             ]
         );
         let base = crate::escape::ifs::template_parameters().len();
-        let w = crate::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("WGSL");
+        let w = crate::lang::wgsl::solid_from(&p, base, base + p.param_slots()).expect("WGSL");
         for k in 0..3 {
             assert!(w.contains(&format!("esc_solid_map({k}u, vec3<f32>(")), "call {k}:\n{w}");
         }

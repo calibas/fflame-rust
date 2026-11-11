@@ -835,11 +835,11 @@ needs the census did not, the int step and `ctx.layer`):
 | Effects | 15 | all 15, the definitions (D1) | yes, the Effects panel |
 | Escape formulas | 26 | all 26 (`escape::twins`) | yes, Edit as Formula |
 | Escape colourings | 28 | 28 (six batches, branch `rhai-escape-colourings`; plan in step 2) | yes, the Escape panel's colouring (2026-11-05) |
-| Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion | no |
+| Mode D solids | 6 | none held; examples for Mandelbox, the KIFS Menger, a quaternion; in progress on `rhai-solids-fields` | no |
 | Mode B fields | 3 | none | no |
 | Simulation models | 31 | all 31 (P4 steps 7 and 9, done 2026-11-03) | yes, the simulation panel (2026-11-03) |
 | Simulation colourings | 13 | all 13 | yes, the simulation panel (2026-11-03) |
-| Flame variations | 647 | 444 (`variations::twins`, branch `rhai-variation-hooks`; plan in step 3), besides the 10 test fixtures | yes, a transform's variation (2026-11-05) |
+| Flame variations | 647 | 640 (`variations::twins`, branch `rhai-variation-hooks`, merged; the 7 left are in step 3), besides the 10 test fixtures | yes, a transform's variation (2026-11-05) |
 
 Steps, in the order that unlocks the most first (the user picks):
 
@@ -1428,14 +1428,14 @@ under each branch.
      replace the built-ins is D7's per-kind decision (D2 keeps the WGSL
      until they are done).
 5. **`rhai-solids-fields`** -- P7 steps 4 and 5 for mode D and mode B.
+   **Built 2026-11-10, not merged** ([rhai-solids-fields.md](rhai-solids-fields.md)).
    - Twins of Mandelbox, Mandelbulb, the KIFS and the quaternion Julia.
      The two Flame Attractor solids are the flame itself: nothing to
      twin.
-   - Twins of the three fields beside them (decided in the KIFS plan):
-     a never-escaping formula and an averaging colouring, Weierstrass's
-     analytic gradient for the hillshade the part to check.
+   - Twins of the three fields and their three colourings -- as a Rhai
+     field kind in mode B (the user's pick, 2026-11-10), not the
+     never-escaping formula the KIFS plan had sketched.
    - Edit as Rhai for solids and fields.
-   - Depends on 2 for the fields' colourings.
 6. **`rhai-tracks`** -- P5, animation tracks as scripts.
    - A track is a pure function of time (D4): CPU Rhai compiled once
      per track, run each frame after the keyframes.

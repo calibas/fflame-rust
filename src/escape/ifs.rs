@@ -2770,7 +2770,10 @@ pub static IFS_MANDELBULB: IfsDef = IfsDef {
         ParamDef::new(
             "step_factor",
             "Step Factor",
-            "Scales the distance the march steps by. The bulb's estimate is not a                       bound: beside thin parts it was measured at 1.7 times the true distance,                       so a ray can step past a hair. Lower it if thin parts break up, at the                       cost of more steps.",
+            "Scales the distance the march steps by. The bulb's estimate is not a \
+                      bound: beside thin parts it was measured at 1.7 times the true distance, \
+                      so a ray can step past a hair. Lower it if thin parts break up, at the \
+                      cost of more steps.",
             Spec::float(1.0, 0.25, 1.0),
         ),
     ],
@@ -13385,6 +13388,195 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
     }
 
+    /// **The solid twins render as their built-ins** (docs/projects/rhai-
+    /// solids-fields.md): each built-in solid and its Rhai twin
+    /// (`escape::twins::SOLID_TWINS`), put in its place as Edit as Rhai
+    /// puts it -- the same parameters, by name -- rendered through
+    /// `renderer::render` at settings that take each path: each colouring,
+    /// each mode, the parameters moved, a nearer view. Both are timed.
+    ///
+    /// The pictures may differ in a few bytes, on pixels where the march's
+    /// hit or the level's band turns on a rounding: the twin's vectors are
+    /// lowered to their parts, the built-in's are WGSL vectors, and a
+    /// driver fuses a multiply and an add (FMA) where it chooses, which
+    /// WGSL gives no way to forbid. Measured on the Mandelbox (2026-11-10):
+    /// 2 to 6 bytes of 36,864, each 1 apart but one level band's 7; writing
+    /// the built-in's `length` and `dot` out as the twin's are moved none
+    /// of them. A share of 0.1% of the bytes is allowed.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn solid_twins_render_as_their_builtins() {
+        let (device, queue) = device();
+        let only: Option<Vec<String>> = std::env::var("SOLIDS").ok().map(|v| v.split(',').map(str::to_string).collect());
+        // (built-in, colouring, parameters, zoom)
+        type Case = (&'static str, &'static str, &'static [(&'static str, f32)], f64);
+        let cases: &[Case] = &[
+            ("mandelbox_solid", "ifs_trap", &[], 0.0),
+            ("mandelbox_solid", "ifs_level", &[], 0.0),
+            ("mandelbox_solid", "ifs_address", &[], 0.0),
+            ("mandelbox_solid", "ifs_distance", &[], 0.0),
+            ("mandelbox_solid", "ifs_trap", &[("scale", -1.5)], 1.2),
+            ("mandelbox_solid", "ifs_address", &[("scale", 2.6), ("min_radius", 0.3), ("fixed_radius", 1.4), ("fold_limit", 0.8)], 0.0),
+            ("mandelbox_solid", "ifs_trap", &[("mode", 1.0), ("cx", 0.6), ("cy", -0.4), ("cz", 0.3)], 0.0),
+            ("mandelbox_solid", "ifs_level", &[("colour_depth", 7.0), ("levels", 24.0)], 1.5),
+            ("mandelbulb_solid", "ifs_trap", &[], 0.0),
+            ("mandelbulb_solid", "ifs_level", &[], 0.0),
+            ("mandelbulb_solid", "ifs_address", &[], 0.0),
+            ("mandelbulb_solid", "ifs_distance", &[], 0.0),
+            ("mandelbulb_solid", "ifs_address", &[("power", 3.0), ("colour_depth", 5.0)], 0.0),
+            ("mandelbulb_solid", "ifs_trap", &[("mode", 1.0), ("cx", 0.35), ("cy", -0.6), ("cz", 0.2)], 0.0),
+            ("mandelbulb_solid", "ifs_level", &[("step_factor", 0.6), ("levels", 20.0)], 1.5),
+            ("quaternion_julia_solid", "ifs_level", &[], 0.0),
+            ("quaternion_julia_solid", "ifs_trap", &[], 0.0),
+            ("quaternion_julia_solid", "ifs_address", &[], 0.0),
+            ("quaternion_julia_solid", "ifs_distance", &[], 0.0),
+            ("quaternion_julia_solid", "ifs_address", &[("power", 3.0), ("w_slice", 0.1)], 0.0),
+            ("quaternion_julia_solid", "ifs_level", &[("slice_axis", 0.0), ("w_slice", -0.3)], 1.0),
+            ("quaternion_julia_solid", "ifs_level", &[("slice_axis", 1.0), ("cx", -0.2), ("cy", 0.6), ("cz", 0.2), ("bailout", 4.0)], 1.5),
+            ("quaternion_julia_solid", "ifs_trap", &[("slice_axis", 2.0), ("colour_depth", 6.0), ("levels", 64.0)], 1.0),
+            ("kifs_solid", "ifs_level", &[], 0.0),
+            ("kifs_solid", "ifs_trap", &[], 0.0),
+            ("kifs_solid", "ifs_address", &[], 0.0),
+            ("kifs_solid", "ifs_distance", &[], 0.0),
+            ("kifs_solid", "ifs_address", &[("fold", 0.0), ("scale", 2.0)], 0.0),
+            ("kifs_solid", "ifs_level", &[("fold", 1.0), ("scale", 2.5)], 0.0),
+            ("kifs_solid", "ifs_address", &[("fold", 2.0), ("scale", 2.0), ("offset_y", 0.0), ("offset_z", 0.0), ("address_symmetry", 0.0)], 0.0),
+            ("kifs_solid", "ifs_level", &[("fold", 4.0), ("scale", 2.6), ("offset_x", 1.0), ("offset_y", 0.2), ("offset_z", 0.1)], 1.2),
+            ("kifs_solid", "ifs_trap", &[("fold", 5.0), ("scale", 2.617924)], 0.0),
+            ("kifs_solid", "ifs_address", &[("fold", 4.0), ("scale", 2.5), ("offset_x", 0.850650808), ("offset_y", 0.525731112), ("offset_z", 0.0)], 0.0),
+            ("kifs_solid", "ifs_address", &[("rot1_x", 12.0), ("rot1_z", -7.0), ("rot2_y", 15.0), ("address_symmetry", 2.0), ("colour_depth", 5.0)], 0.0),
+            ("kifs_solid", "ifs_level", &[("levels", 20.0)], 1.5),
+        ];
+        let mut failures = Vec::new();
+        let mut timing = Vec::new();
+        for (builtin, coloring, params, zoom) in cases {
+            if only.as_ref().is_some_and(|o| !o.iter().any(|n| builtin.contains(n.as_str()))) {
+                continue;
+            }
+            let mut c = crate::config::FractalConfig::default();
+            c.render_mode = RenderMode::Escape;
+            c.escape.formula = builtin.to_string();
+            c.escape.coloring = coloring.to_string();
+            c.escape.zoom_log2 = *zoom;
+            c.escape.cam_yaw = 0.9;
+            c.escape.cam_pitch = 0.42;
+            for (k, v) in params.iter() {
+                c.escape.formula_params.insert(k.to_string(), *v);
+            }
+            c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            let src = crate::escape::twins::solid_custom_source(builtin).expect("a twin");
+            let mut tc = c.clone();
+            tc.escape.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Solid, &src);
+            tc.escape.custom_formula = Some(src);
+            let go = |cfg: &crate::config::FractalConfig| {
+                let out = pollster::block_on(crate::renderer::render(&device, &queue, crate::renderer::RenderJob::new(cfg, W, H), &mut crate::renderer::NoProgress)).expect("render");
+                (out.rgba_data, out.render_time_ms)
+            };
+            // Each once to compile, then timed.
+            let _ = (go(&c), go(&tc));
+            let ((b, tb), (w, tw)) = (go(&c), go(&tc));
+            let differ = b.iter().zip(&w).filter(|(x, y)| x != y).count();
+            let worst = b.iter().zip(&w).map(|(x, y)| (*x as i32 - *y as i32).abs()).max().unwrap_or(0);
+            let lit = b.chunks(4).filter(|px| px[0] as u32 + px[1] as u32 + px[2] as u32 > 24).count();
+            let tag = format!("{builtin} {coloring} {params:?} zoom {zoom}");
+            println!("  {tag}: {differ} of {} bytes differ (worst {worst}), {lit} lit | built-in {tb:.1} ms, twin {tw:.1} ms", b.len());
+            timing.push(tw / tb.max(1e-9));
+            assert!(lit > (W * H) as usize / 20, "{tag}: too little drawn to compare");
+            if differ * 1000 > b.len() {
+                failures.push(format!("{tag}: {differ} bytes differ, worst {worst}"));
+            }
+        }
+        if !timing.is_empty() {
+            timing.sort_by(|a, b| a.total_cmp(b));
+            println!("  the twin's time over the built-in's: median {:.2}, worst {:.2}", timing[timing.len() / 2], timing[timing.len() - 1]);
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// **The field twins render as their built-ins** (docs/projects/rhai-
+    /// solids-fields.md): each built-in field at its first preset with its
+    /// colouring, and each field colouring over Weierstrass -- the field,
+    /// the colouring, and both, put in place as Edit as Rhai puts them --
+    /// through `renderer::render`, compared byte for byte (a share of 0.1%
+    /// allowed, as the solids'), and timed.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn field_twins_render_as_their_builtins() {
+        use crate::lang::EntryKind;
+        let (device, queue) = device();
+        // (field, colouring, extra field parameters, extra colouring parameters)
+        type Case = (&'static str, &'static str, &'static [(&'static str, f32)], &'static [(&'static str, f32)]);
+        let cases: &[Case] = &[
+            ("weierstrass", "field_hillshade", &[], &[]),
+            ("weierstrass", "field_value", &[], &[]),
+            ("weierstrass", "field_diverging", &[], &[]),
+            ("weierstrass", "field_hillshade", &[("generator", 1.0), ("b", 2.7)], &[("azimuth", 200.0)]),
+            ("weierstrass", "field_hillshade", &[("generator", 2.0), ("a", 0.7)], &[]),
+            ("markus_lyapunov", "field_diverging", &[], &[]),
+            ("markus_lyapunov", "field_diverging", &[("seq_bits", 6.0), ("seq_len", 3.0)], &[]),
+            ("standard_map_ftle", "field_diverging", &[], &[]),
+            ("standard_map_ftle", "field_value", &[("k", 2.5)], &[("scale", 3.0)]),
+        ];
+        let mut failures = Vec::new();
+        let mut timing = Vec::new();
+        for (field, coloring, fparams, cparams) in cases {
+            let def = crate::escape::fields::get_field(field).expect("a built-in field");
+            let preset = &def.presets[0];
+            let mut c = crate::config::FractalConfig::default();
+            c.render_mode = RenderMode::Escape;
+            c.escape.formula = field.to_string();
+            c.escape.coloring = coloring.to_string();
+            c.escape.center_re = preset.center_re.to_string();
+            c.escape.center_im = preset.center_im.to_string();
+            c.escape.zoom_log2 = preset.zoom_log2;
+            c.escape.max_iter = preset.max_iter;
+            for (k, v) in preset.formula_params.iter().chain(fparams.iter()) {
+                c.escape.formula_params.insert(k.to_string(), *v);
+            }
+            if *coloring == preset.coloring {
+                for (k, v) in preset.coloring_params.iter() {
+                    c.escape.coloring_params.insert(k.to_string(), *v);
+                }
+            }
+            for (k, v) in cparams.iter() {
+                c.escape.coloring_params.insert(k.to_string(), *v);
+            }
+            let fsrc = crate::escape::twins::field_custom_source(field).expect("a field twin");
+            let csrc = crate::escape::twins::field_coloring_custom_source(coloring).expect("a colouring twin");
+            let mut tf = c.clone();
+            tf.escape.formula = crate::escape::custom::name_of(EntryKind::Field, &fsrc);
+            tf.escape.custom_formula = Some(fsrc);
+            let mut tc = c.clone();
+            tc.escape.coloring = crate::escape::custom::name_of(EntryKind::FieldColoring, &csrc);
+            tc.escape.custom_coloring = Some(csrc);
+            let mut both = tf.clone();
+            both.escape.coloring = tc.escape.coloring.clone();
+            both.escape.custom_coloring = tc.escape.custom_coloring.clone();
+            let go = |cfg: &crate::config::FractalConfig| {
+                let out = pollster::block_on(crate::renderer::render(&device, &queue, crate::renderer::RenderJob::new(cfg, W, H), &mut crate::renderer::NoProgress)).expect("render");
+                (out.rgba_data, out.render_time_ms)
+            };
+            let _ = (go(&c), go(&tf), go(&tc), go(&both));
+            let (b, tb) = go(&c);
+            for (what, cfg) in [("the field", &tf), ("the colouring", &tc), ("both", &both)] {
+                let (w, tw) = go(cfg);
+                let differ = b.iter().zip(&w).filter(|(x, y)| x != y).count();
+                let worst = b.iter().zip(&w).map(|(x, y)| (*x as i32 - *y as i32).abs()).max().unwrap_or(0);
+                let tag = format!("{field} {coloring} {fparams:?} {cparams:?}, {what}");
+                println!("  {tag}: {differ} of {} bytes differ (worst {worst}) | built-in {tb:.1} ms, twin {tw:.1} ms", b.len());
+                timing.push(tw / tb.max(1e-9));
+                if differ * 1000 > b.len() {
+                    failures.push(format!("{tag}: {differ} bytes differ, worst {worst}"));
+                }
+            }
+            let distinct: std::collections::BTreeSet<&[u8]> = b.chunks(4).collect();
+            assert!(distinct.len() > 8, "{field} {coloring}: too little drawn to compare");
+        }
+        timing.sort_by(|a, b| a.total_cmp(b));
+        println!("  the twin's time over the built-in's: median {:.2}, worst {:.2}", timing[timing.len() / 2], timing[timing.len() - 1]);
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     /// **The coarse pass lands on a later frame, and no call waits for
     /// it** (the web's hang on choosing Measure, 2026-11-10): the first
     /// `ensure_coarse` starts the pass and returns at once with it
@@ -15705,7 +15897,7 @@ fn distance(s, p) {
             println!("{what}: the Rhai walk's distance against the twin's, worst relative difference {worst:.2e}");
             assert!(worst < 1e-9, "{what}: {worst}");
             let base = template_parameters().len();
-            let wgsl = crate::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("a walk");
+            let wgsl = crate::lang::wgsl::solid_from(&p, base, base + p.param_slots()).expect("a walk");
             crate::lang::wgsl::validate_solid(&wgsl).expect("valid WGSL");
         }
     }

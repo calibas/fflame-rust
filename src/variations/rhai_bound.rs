@@ -404,6 +404,8 @@ fn real_fn(f: Builtin, x: Interval) -> V {
         Ceil => ok(x.monotone_exact(f64::ceil)),
         Floor => ok(x.monotone_exact(f64::floor)),
         F32 => ok(x.widen()),
+        // Within a turn of zero, whatever the argument.
+        Reduce => ok(Interval::new(-PI, PI).widen()),
         Fract => ok(Interval::new(0.0, 1.0)),
         other => V::Bad(Refusal::Intrinsic(other.name().to_string())),
     }

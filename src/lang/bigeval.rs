@@ -528,6 +528,10 @@ impl BigMachine {
             Predef::HasDerivative => BigValue::Bool(false),
             Predef::RenderPx | Predef::Supersample | Predef::Value => BigValue::Float(BigFloat::zero(self.n)),
             Predef::Rotation => BigValue::Complex(BigComplex::zero(self.n)),
+            // A field colouring's: never in a reference orbit.
+            Predef::FieldSum => BigValue::Float(BigFloat::zero(self.n)),
+            Predef::FieldTerms => BigValue::Int(0),
+            Predef::FieldGrad => BigValue::Complex(BigComplex::zero(self.n)),
         }
     }
 
@@ -773,6 +777,7 @@ impl BigMachine {
             Ceil => self.round_each(z, f64::ceil),
             Floor => self.round_each(z, f64::floor),
             RoundEven => self.round_each(z, f64::round_ties_even),
+            Reduce => unreachable!("a field's alone, never in a reference orbit"),
             Real => real(z.re.clone()),
             Imag => real(z.im.clone()),
             Conj => BigComplex { re: z.re.clone(), im: z.im.neg() },

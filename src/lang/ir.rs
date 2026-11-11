@@ -266,6 +266,11 @@ pub enum Predef {
     /// unit complex (cos, sin), the uniform's own.
     Value,
     Rotation,
+    /// A field colouring's inputs (`EntryKind::FieldColoring`): the
+    /// field's sum, its gradient, the term count.
+    FieldSum,
+    FieldGrad,
+    FieldTerms,
 }
 
 impl Predef {
@@ -289,6 +294,9 @@ impl Predef {
             Predef::HasDerivative => Ty::Bool,
             Predef::RenderPx | Predef::Supersample | Predef::Value => Ty::Float,
             Predef::Rotation => Ty::Complex,
+            Predef::FieldSum => Ty::Float,
+            Predef::FieldGrad => Ty::Complex,
+            Predef::FieldTerms => Ty::Int,
             Predef::WhiteSq
             | Predef::ScrnMax
             | Predef::IsMand
@@ -506,6 +514,12 @@ pub enum IStmt {
     /// breaks.
     Scope(Vec<IStmt>),
 }
+
+/// `IStmt::Map`'s call for `trap_point(v)`: not a variation but the
+/// solid's Orbit transformations, what the built-in solids' orbit traps
+/// measure (`ifs_trap_point`; docs/projects/rhai-solids-fields.md). The
+/// identity off the GPU.
+pub const TRAP_POINT_CALL: u32 = u32::MAX;
 
 /// A solid's call of a built-in flame variation (3d-look-and-tools P5,
 /// C3): which variation, and its parameters' values.
