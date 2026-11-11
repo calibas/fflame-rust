@@ -33,9 +33,11 @@ pub enum Kind {
     /// A simulation's model (P4).
     SimModel,
     /// A mode B field, and a field's colouring
-    /// (docs/projects/rhai-solids-fields.md).
+    /// (docs/archive/projects/rhai-solids-fields.md).
     Field,
     FieldColoring,
+    /// An animation track (docs/projects/rhai-tracks.md).
+    Track,
     /// An Ultra Fractal or Fractint file: many entries, of its kind.
     UfFormulas,
     UfColorings,
@@ -47,7 +49,7 @@ pub enum Kind {
 impl Kind {
     /// A GPU Rhai entry that can be a plug-in (`storage::links::Link::plugin`).
     pub fn can_be_plugin(self) -> bool {
-        matches!(self, Kind::Variation | Kind::Effect | Kind::Formula | Kind::Coloring | Kind::Solid | Kind::SimColoring | Kind::SimModel | Kind::Field | Kind::FieldColoring)
+        matches!(self, Kind::Variation | Kind::Effect | Kind::Formula | Kind::Coloring | Kind::Solid | Kind::SimColoring | Kind::SimModel | Kind::Field | Kind::FieldColoring | Kind::Track)
     }
 }
 
@@ -199,6 +201,8 @@ fn formula_entry(file: &str, source: &str, origin: Origin, link: Link) -> Entry 
         Some(EntryKind::SimModel) => Kind::SimModel,
         Some(EntryKind::Field) => Kind::Field,
         Some(EntryKind::FieldColoring) => Kind::FieldColoring,
+        // A track is the CPU world's: no GPU kind reads it.
+        None if crate::animation::script::looks_like_track(source) => Kind::Track,
         None => Kind::Unknown,
     };
     if let Some(labels) = rhai::source_labels(source) {
@@ -362,6 +366,15 @@ fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate
             let name = crate::sim::custom::register_model(source)?;
             Ok((name, crate::sim::custom::carried(source)))
         }
+        // Nothing to register: the track editor offers it, and adding it
+        // puts its source in the animation. Its key is its id, else its
+        // title.
+        Kind::Track => {
+            let declared = crate::animation::script::declare(source)?;
+            let key = crate::lang::rhai::info_string(source, "id").unwrap_or_else(|| declared.title.clone());
+            use crate::config::escape::{CustomDialect, CustomSource};
+            Ok((key, CustomSource { dialect: CustomDialect::Rhai, entry: title.to_string(), source: source.to_string(), variations: Vec::new() }))
+        }
         _ => Err("not a kind of plug-in".to_string()),
     }
 }
@@ -373,6 +386,21 @@ mod tests {
     /// The shipped entries are all there, each read: the script starters
     /// by their declarations, the formula examples and the effects by
     /// their kinds and titles.
+    /// An animation track reads as one (docs/projects/rhai-tracks.md), and
+    /// can be a plug-in, keyed by its id.
+    #[test]
+    fn a_track_is_a_track() {
+        let src = "const INFO = #{ title: \"Turn\", id: \"5b0f8c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e\" };
+const TARGETS = #{ rotation: \"set\" };
+fn value(t, p, ctx) { #{ rotation: t } }";
+        let e = formula_entry("turn.rhai", src, Origin::Local, Link::default());
+        assert_eq!((e.kind, e.title.as_str()), (Kind::Track, "Turn"));
+        assert!(Kind::Track.can_be_plugin());
+        let (key, carried) = register_kind(Kind::Track, "Turn", src).expect("registers");
+        assert_eq!(key, "5b0f8c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e");
+        assert_eq!(carried.source, src);
+    }
+
     #[test]
     fn the_scan_reads_every_shipped_entry() {
         let all = scan();

@@ -112,7 +112,7 @@ pub const COLORING_TWINS: &[(&str, &str)] = &[
 ];
 
 /// The built-in mode D solids' twins (P7 step 4,
-/// docs/projects/rhai-solids-fields.md): each a Rhai solid that renders as
+/// docs/archive/projects/rhai-solids-fields.md): each a Rhai solid that renders as
 /// its built-in, which the Escape panel's Edit as Rhai puts in the
 /// built-in's place. A twin keeps its built-in's parameters by name, its
 /// arithmetic step for step, and the colourings' readings (`dr`, the
@@ -127,7 +127,7 @@ pub const SOLID_TWINS: &[(&str, &str)] = &[
 ];
 
 /// The built-in mode B fields' twins and their colourings' (P7 step 4,
-/// docs/projects/rhai-solids-fields.md): each a Rhai field or field
+/// docs/archive/projects/rhai-solids-fields.md): each a Rhai field or field
 /// colouring that renders as its built-in, which the Escape panel's Edit
 /// as Rhai puts in its place. Sources in `assets/formulas/twins/fields/`.
 pub const FIELD_TWINS: &[(&str, &str)] = &[
@@ -289,7 +289,7 @@ mod tests {
     }
 
     /// **Each field twin and field colouring twin compiles as its built-in**
-    /// (docs/projects/rhai-solids-fields.md): registered with the
+    /// (docs/archive/projects/rhai-solids-fields.md): registered with the
     /// built-in's title and parameters exactly, a field's gradient flag
     /// and default colouring the built-in's.
     #[test]

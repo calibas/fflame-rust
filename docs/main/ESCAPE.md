@@ -1361,7 +1361,7 @@ fn escaped(s, p) {
     WGSL), which read as the colourings' cost on the short renders.
 - **The built-in solids' twins** (`escape::twins::SOLID_TWINS`,
   `assets/formulas/twins/solids/*.rhai`; steps 1-5 of
-  [rhai-solids-fields.md](../projects/rhai-solids-fields.md)): the
+  [rhai-solids-fields.md](../archive/projects/rhai-solids-fields.md)): the
   Mandelbox, the Mandelbulb, the Quaternion Julia and the KIFS, each a
   Rhai solid that renders as its built-in. The Escape panel's **Edit
   Solid as Rhai** puts the twin in place, one undo step, its settings

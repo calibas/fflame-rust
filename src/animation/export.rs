@@ -725,7 +725,7 @@ pub fn moment_configs(
         .into_iter()
         .map(|t| {
             let mut config = base.clone();
-            apply_animation_values(&mut config, &controller.evaluate_moment(t, signals));
+            apply_animation_values(&mut config, &controller.evaluate_moment(t, signals, base));
             config
         })
         .collect()

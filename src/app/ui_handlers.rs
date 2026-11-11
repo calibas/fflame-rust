@@ -1350,7 +1350,7 @@ impl App {
     fn handle_animation_seek(&mut self, ui_response: &UiResponse) {
         if ui_response.animation_seek_changed {
             // Evaluate current frame and apply values
-            let frame_values = self.animation_controller.evaluate_frame(Some(&self.signal_manager));
+            let frame_values = self.animation_controller.evaluate_frame(Some(&self.signal_manager), self.config_manager.active_config());
 
             for (flame_target, path_str, json_value) in frame_values {
                 if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {

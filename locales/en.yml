@@ -1838,6 +1838,22 @@ animation_panel:
 
 # Track Editor (Animation panel sub-section)
 track_editor:
+  # Script tracks (docs/projects/rhai-tracks.md)
+  script_track: "Script track"
+  add_script_track: "Add Script Track"
+  script_plugins: "Your track plug-ins"
+  script_new: "New in the Formula Editor..."
+  script_new_tip: "Open the Formula Editor on an example track to write your own; Use as track adds it to the animation."
+  script_window: "Script Track: %{name}"
+  script_mode_set: "set"
+  script_mode_add: "added to"
+  script_mode_scale: "scaled"
+  script_clash: "another script track writes this too; the later one wins"
+  script_over_set: "replaces the track under it (ctx.get reads that track's value)"
+  script_over_adjust: "applied to the track under it"
+  script_no_params: "This script has no parameters."
+  script_edit: "Edit in the Formula Editor"
+  script_edit_tip: "Open this track's script in the Formula Editor. With Live on, each edit that runs replaces this track."
   # Animation header
   name: "Name:"
   duration: "Duration:"
@@ -3096,6 +3112,10 @@ formula_editor:
   use_variation: "Use as variation"
   use_lens: "Use as lens"
   use_solid: "Use as solid"
+  use_track: "Use as track"
+  use_track_tip: "Add this script to the animation as a track, or replace the track it came from. Its parameters are kept; with Live on, each edit that runs replaces it again."
+  using_track: "Track \"%{name}\" is in the animation"
+  track_replaced: "Track \"%{name}\" replaced in the animation"
   use_field: "Use as field"
   use_field_coloring: "Use as field colouring"
   use_effect: "Use as effect"

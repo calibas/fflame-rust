@@ -3,7 +3,8 @@
 **Overview:** An animation is a list of **tracks**, each driving one
 config parameter over time from keyframes or from a named **signal**
 (an audio analysis, a live audio input, a procedural waveform, a
-`.signal` file). The app plays it by writing the evaluated values into
+`.signal` file) -- or several, from a Rhai **script track** (*Script
+tracks*, below). The app plays it by writing the evaluated values into
 the active config every frame; the video exporter evaluates the same
 tracks at each frame's time and renders that frame's config through the
 still-render path. Every render mode animates: flames, escape-time
@@ -31,6 +32,9 @@ fractals and simulations, where a `Sim.Steps` track is the run itself.
   — `Interpolation`, `EasingFunction`, `geometric_lerp`
 - [src/animation/controller.rs](../../src/animation/controller.rs) —
   `AnimationController`: playback clock and track evaluation
+- [src/animation/script.rs](../../src/animation/script.rs) — script
+  tracks: compiling, `TARGETS` and `PARAMS`, the stepper and its
+  checkpoints, `ctx`
 - [src/animation/export.rs](../../src/animation/export.rs) — the video
   loop, and the exporter's own apply path (`apply_animation_values`)
 - [src/app/animation_update.rs](../../src/app/animation_update.rs) —
@@ -748,6 +752,93 @@ in [EXPORT.md](EXPORT.md) (*Video Export*). What belongs to animation:
     -w 1920 -H 1080 --fps 30 --video-codec h265 --hw-accel none --video-quality 18 \
     --audio track.mp3 --audio-offset=-2.0
   ```
+
+---
+
+## Script tracks
+
+A **script track** (`TrackSource::Script`; plan and record in
+[rhai-tracks.md](../projects/rhai-tracks.md)) is a Rhai script that
+writes the targets it declares, every frame. It is written in the
+Formula Editor (**Use as track**), or added from the track editor's
+**Add Script Track** menu: the shipped examples (Breathing, Springy
+Zoom, Smoothed Jitter, in `assets/formulas/track-*.rhai`), the user's
+track plug-ins (`library::Kind::Track`), or a new one begun in the
+editor. The animation carries its source and its parameter values, so a
+`.anim` plays anywhere.
+
+```rhai
+const PARAMS = #{ depth: #{ value: 0.1, min: 0.0, max: 1.0, caption: "Depth" } };
+const INFO = #{ title: "Breathing" };
+// "set" replaces the value under the track, "add" adds to it, "scale" multiplies it.
+const TARGETS = #{ zoom: "add" };
+fn value(t, p, ctx) { #{ zoom: p.depth * sin(t) } }
+```
+
+- **Targets** are a fixed map, read without running the script: the
+  names `config.set` takes (`"zoom"`, `"exposure"`,
+  `"escape.zoom_log10"`), and a normal transform's values as
+  `"transform.N.weight"`, `"transform.N.a"`, `"transform.N.julian.power"`
+  (`script::resolve_target`, the generator `anim` API's spellings).
+  Device settings are refused. A script track is not bound
+  (*Binding*, above): it names a transform by its position, so a
+  reorder does not move it, and a target the config no longer has is
+  skipped. The track's own `target` is its first target's key.
+- **`PARAMS` and `INFO`** follow the formula language's rules (the map is
+  read through `lang`, as a field colouring's), so the track editor draws
+  the parameters as every kind's are; the values live in the track.
+- **`fn value(t, p, ctx)`** returns a map of target to number. A target
+  left out is not written that frame; one not declared is an error.
+- **The value under a script** is what it reads (`ctx.get(name)`) and
+  what `"add"` and `"scale"` combine with: the base config with the
+  keyframe and signal tracks applied. Scripts run after those, whatever
+  the order of the list, so a keyframe track on a script's target is its
+  input, not a clash: Springy Zoom follows a keyframed zoom on a spring.
+  Scripts run among themselves in track order, and a later script
+  writing a target replaces an earlier one; the track editor warns of
+  that, and notes a target with a keyframe or signal track under it.
+  - Live playback writes into the config the next frame reads, so each
+    script target keeps its **rest** value and what scripts last wrote
+    (`script::Rest`, `Animation::script_rest`, runtime only): while the
+    config holds what was written, the value under is the rest; once it
+    holds something else, the user changed it, and that is the new rest.
+    So an `"add"` adds to the same value every frame. Only the live
+    evaluation (`evaluate_frame`) records rests; the video export reads
+    the ones the animation carries, since its base is the app's config
+    holding the last values played.
+- **State.** With `fn start(p, ctx)` and `fn step(s, dt, p, ctx)`, a track
+  keeps a state, and `fn value(t, s, p, ctx)` reads it.
+  - It is stepped at `script::STEP`, 1/240 s, from time zero: the state at
+    `t` is the state after `floor(t / STEP)` steps, whatever came before.
+    A scrub, a dropped frame (its steps run, then it draws), a 30 or 60
+    fps export and a motion-blur moment all see the same state, to the
+    bit (`a_state_is_the_same_however_its_time_is_reached`).
+  - A checkpoint is kept each second, so a backward seek, a loop's wrap
+    or ping-pong's turn replays at most a second of steps.
+  - A step's `ctx` reads the config under the scripts at the step's end.
+    The checkpoints are keyed by what the state depends on: the source,
+    the parameters, the other tracks and the duration, and the rest
+    values of the names its steps read (recorded as they read them). An
+    edit to any of them replays the state.
+  - There is no cap on catching up: an expensive script is a poor fit
+    for live animation (the user, 2026-11-10).
+- **`ctx`**: `get(name)`, `signal(name)` (0 to 1; a recorded signal
+  replays exactly, a live one -- a microphone, MIDI -- stays live, and is
+  an error where it is missing, as in an export), `time`, `dt`,
+  `duration`. **`noise(x)`**, `noise(x, seed)` (smooth value noise in -1
+  to 1) and **`hash(n)`**, `hash(n, seed)` (in 0 to 1) are deterministic,
+  integer hashing and plain arithmetic, the same bits on every platform.
+- **The sandbox**: no files, no `import`, no `eval`, `sleep` or
+  `timestamp`; 200,000 operations a call (a generator has 5,000,000). An
+  error is logged once and shown on the track (`script::error_of`); the
+  frame goes on without it.
+- Rhai is built without `sync`, so each thread compiles the tracks it
+  evaluates, once (the video export's thread its own).
+- **The track editor**: a script track's row shows its title, in a
+  colour of its own, with a warning for an error or a shared target and
+  its targets on hover. **Edit** opens its window: its targets and
+  modes, its error, its parameters, and **Edit in the Formula Editor**,
+  where Live replaces the track on each edit that runs.
 
 ---
 

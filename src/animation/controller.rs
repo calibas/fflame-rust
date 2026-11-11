@@ -1,8 +1,11 @@
 //! Animation playback controller
 
 use super::{Animation, EasingFunction, Interpolation, Keyframe, LoopMode, PlaybackState, Track, TrackSource};
-use crate::config::EditingTarget;
+use crate::config::{EditingTarget, FractalConfig};
 use crate::signal::SignalManager;
+
+/// A frame's values: `(flame, ConfigPath key, value)`, applied in order.
+type Values = Vec<(EditingTarget, String, serde_json::Value)>;
 
 /// Controls animation playback and evaluates frame values
 pub struct AnimationController {
@@ -150,21 +153,33 @@ impl AnimationController {
         }
     }
 
-    /// Evaluate all tracks at current time.
+    /// Evaluate all tracks at current time, live: on `base`, the config
+    /// the values will be applied to.
     ///
     /// Returns vec of `(flame_target, path_string, value)` triples for
     /// parameters that should be updated. The flame_target tells the
     /// apply path which flame (Main or a specific subflame) the path
     /// resolves against.
-    pub fn evaluate_frame(&mut self, signal_manager: Option<&SignalManager>) -> Vec<(EditingTarget, String, serde_json::Value)> {
-        self.evaluate_at_time_with_signals(self.current_time, signal_manager)
+    ///
+    /// The one evaluation that records the script targets' rests
+    /// (`script::Rest`): the live config is the only one that holds what
+    /// the scripts wrote. The video export's base holds the app's last
+    /// values and never its own, so its evaluations read the rests and
+    /// leave them.
+    pub fn evaluate_frame(&mut self, signal_manager: Option<&SignalManager>, base: &FractalConfig) -> Values {
+        let (values, rests) = self.evaluate_inner(self.current_time, signal_manager, base);
+        if let (Some(animation), Some(rests)) = (self.animation.as_mut(), rests) {
+            animation.script_rest = rests;
+        }
+        values
     }
 
-    /// Evaluate all tracks at a specific time (for export, no signal support).
+    /// Evaluate all tracks at a specific time (for export, no signal
+    /// support), on `base`, the config the values will be applied to.
     ///
     /// Returns vec of `(flame_target, path_string, value)` triples.
     /// Signal tracks are skipped when no SignalManager is provided.
-    pub fn evaluate_at_time(&self, time: f64) -> Vec<(EditingTarget, String, serde_json::Value)> {
+    pub fn evaluate_at_time(&self, time: f64, base: &FractalConfig) -> Values {
         let Some(ref animation) = self.animation else {
             return Vec::new();
         };
@@ -186,19 +201,24 @@ impl AnimationController {
             }
         }
 
+        let (scripts, _) = self.script_values(base, &values, time, None);
+        values.extend(scripts);
         values
     }
 
-    /// Evaluate all tracks at a specific time with signal support.
+    /// Evaluate all tracks at a specific time with signal support, on
+    /// `base`, the config the values will be applied to.
     ///
     /// This version supports Signal tracks when a SignalManager is provided.
-    pub fn evaluate_at_time_with_signals(
-        &mut self,
-        time: f64,
-        signal_manager: Option<&SignalManager>,
-    ) -> Vec<(EditingTarget, String, serde_json::Value)> {
+    pub fn evaluate_at_time_with_signals(&mut self, time: f64, signal_manager: Option<&SignalManager>, base: &FractalConfig) -> Values {
+        self.evaluate_inner(time, signal_manager, base).0
+    }
+
+    /// Every track at `time`, and the script targets' rests as this
+    /// evaluation found them (`None` without an animation).
+    fn evaluate_inner(&mut self, time: f64, signal_manager: Option<&SignalManager>, base: &FractalConfig) -> (Values, Option<std::collections::HashMap<String, super::script::Rest>>) {
         let Some(ref animation) = self.animation else {
-            return Vec::new();
+            return (Vec::new(), None);
         };
 
         // Clone track info to avoid borrow conflicts with signal smoothing
@@ -230,7 +250,107 @@ impl AnimationController {
             }
         }
 
-        values
+        if self.animation.is_none() {
+            return (values, None);
+        }
+        let (scripts, rests) = self.script_values(base, &values, time, signal_manager);
+        values.extend(scripts);
+        (values, Some(rests))
+    }
+
+    /// The script tracks' values at `time` (docs/projects/rhai-tracks.md),
+    /// in track order, after the keyframe and signal tracks' `under`, and
+    /// the script targets' rests as they now stand.
+    ///
+    /// A script reads the value under the scripts: `base` with each script
+    /// target put back to its rest where `base` still holds what scripts
+    /// wrote (else what `base` holds is the new rest: someone changed it),
+    /// then `under` applied. Its outputs combine with that by their modes,
+    /// so an `"add"` adds to the same value every frame, live or exported.
+    /// A later track writing the same target replaces an earlier one.
+    ///
+    /// A stateful script's steps read the config under the scripts at
+    /// their own times: the rested base with the keyframe and signal tracks
+    /// at that time (`held_values`; `signals` as the frame has them).
+    fn script_values(&self, base: &FractalConfig, under: &[(EditingTarget, String, serde_json::Value)], time: f64, signals: Option<&SignalManager>) -> (Values, std::collections::HashMap<String, super::script::Rest>) {
+        use super::script::{self, Rest};
+        let Some(animation) = self.animation.as_ref() else {
+            return (Vec::new(), Default::default());
+        };
+        let mut rests = animation.script_rest.clone();
+        let scripts: Vec<_> = animation
+            .tracks
+            .iter()
+            .filter(|t| !t.bound.broken)
+            .filter_map(|t| match &t.source {
+                TrackSource::Script { source, params } => Some((source, params)),
+                _ => None,
+            })
+            .collect();
+        if scripts.is_empty() {
+            return (Vec::new(), rests);
+        }
+        let mut restore = Vec::new();
+        for (key, r) in rests.iter_mut() {
+            let Some(current) = script::read(base, key) else { continue };
+            if r.holds_written(current) {
+                restore.push((EditingTarget::Main, key.clone(), serde_json::json!(r.rest)));
+            } else {
+                r.rest = current;
+            }
+        }
+        let mut config = base.clone();
+        super::export::apply_animation_values(&mut config, &restore);
+        let rested = std::rc::Rc::new(config.clone());
+        super::export::apply_animation_values(&mut config, under);
+        let config = std::rc::Rc::new(config);
+        let signals_at = |t: f64| {
+            let values = signals.map(|m| m.signal_names().into_iter().filter_map(|n| Some((n.clone(), m.get_live_value(&n, t)? as f64))).collect()).unwrap_or_default();
+            std::rc::Rc::new(values)
+        };
+        let at_time = |t: f64| {
+            let mut c = (*rested).clone();
+            super::export::apply_animation_values(&mut c, &self.held_values(t, signals));
+            script::Moment { under: std::rc::Rc::new(c), signals: signals_at(t), any_signal: false }
+        };
+        let dependencies = {
+            use std::hash::{Hash, Hasher};
+            let others: Vec<&Track> = animation.tracks.iter().filter(|t| !matches!(t.source, TrackSource::Script { .. })).collect();
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_string(&others).unwrap_or_default().hash(&mut h);
+            animation.duration.to_bits().hash(&mut h);
+            h.finish()
+        };
+        let frame = script::Frame {
+            time,
+            duration: animation.duration,
+            at: script::Moment { under: std::rc::Rc::clone(&config), signals: signals_at(time), any_signal: false },
+            rested: &rested,
+            at_time: &at_time,
+            dependencies,
+        };
+        let mut values = Vec::new();
+        for (source, params) in scripts {
+            match script::evaluate(source, params, &frame) {
+                Ok(outputs) => {
+                    script::note_error(source, None);
+                    for o in outputs {
+                        let Some(below) = script::read(&config, &o.key) else { continue };
+                        values.push((EditingTarget::Main, o.key, serde_json::json!(o.mode.combine(below, o.value))));
+                    }
+                }
+                Err(e) => script::note_error(source, Some(e)),
+            }
+        }
+        // What the config will hold once they are applied, through the one
+        // setter, clamps and all: what the next frame compares against.
+        let mut written = (*config).clone();
+        super::export::apply_animation_values(&mut written, &values);
+        for (_, key, _) in &values {
+            let (Some(w), Some(rest)) = (script::read(&written, key), script::read(&rested, key)) else { continue };
+            rests.entry(key.clone()).or_insert(Rest { rest, written: w }).written = w;
+        }
+        (values, rests)
     }
 
     /// Evaluate single track at specific time (pure - no state mutation)
@@ -243,6 +363,8 @@ impl AnimationController {
             TrackSource::Signal { .. } => {
                 None // Signal tracks require SignalManager
             }
+            // Evaluated after the others (`script_values`).
+            TrackSource::Script { .. } => None,
         }
     }
 
@@ -281,6 +403,7 @@ impl AnimationController {
                     track_idx,
                 )
             }
+            TrackSource::Script { .. } => None,
         }
     }
 
@@ -382,11 +505,17 @@ impl AnimationController {
     /// smoothing once; its moments must not advance it again, so a
     /// smoothed signal track holds the frame's smoothed value across the
     /// shutter, and an unsmoothed one is read at the moment.
-    pub fn evaluate_moment(
-        &self,
-        time: f64,
-        signal_manager: Option<&SignalManager>,
-    ) -> Vec<(EditingTarget, String, serde_json::Value)> {
+    pub fn evaluate_moment(&self, time: f64, signal_manager: Option<&SignalManager>, base: &FractalConfig) -> Values {
+        let mut values = self.held_values(time, signal_manager);
+        let (scripts, _) = self.script_values(base, &values, time, signal_manager);
+        values.extend(scripts);
+        values
+    }
+
+    /// The keyframe and signal tracks at `time`, leaving the controller as
+    /// it was: a smoothed signal holds the frame's smoothed value. What a
+    /// motion-blur moment and a script's step see under the scripts.
+    fn held_values(&self, time: f64, signal_manager: Option<&SignalManager>) -> Values {
         let Some(ref animation) = self.animation else {
             return Vec::new();
         };
@@ -415,6 +544,7 @@ impl AnimationController {
                         *fade_in, *fade_in_easing, *fade_out, *fade_out_easing, time,
                     ))
                 })(),
+                TrackSource::Script { .. } => None,
             };
             if let Some(value) = value {
                 values.push((track.flame_target, track.target.clone(), value));
@@ -646,17 +776,17 @@ mod tests {
         controller.load(animation);
 
         // At start
-        let values = controller.evaluate_at_time(0.0);
+        let values = controller.evaluate_at_time(0.0, &crate::config::FractalConfig::default());
         let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert_eq!(val, 0.0);
 
         // At middle
-        let values = controller.evaluate_at_time(5.0);
+        let values = controller.evaluate_at_time(5.0, &crate::config::FractalConfig::default());
         let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert_eq!(val, 5.0);
 
         // At end
-        let values = controller.evaluate_at_time(10.0);
+        let values = controller.evaluate_at_time(10.0, &crate::config::FractalConfig::default());
         let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert_eq!(val, 10.0);
     }
@@ -678,7 +808,7 @@ mod tests {
         controller.load(animation);
 
         let at = |c: &AnimationController, t: f64| -> f64 {
-            c.evaluate_at_time(t)
+            c.evaluate_at_time(t, &crate::config::FractalConfig::default())
                 .iter()
                 .find(|(_, k, _)| k == "Zoom")
                 .unwrap()
@@ -718,17 +848,17 @@ mod tests {
 
         // Test signal evaluation at different times
         // At t=0.0, signal=0.0, output=0.0
-        let values = controller.evaluate_at_time_with_signals(0.0, Some(&signal_manager));
+        let values = controller.evaluate_at_time_with_signals(0.0, Some(&signal_manager), &crate::config::FractalConfig::default());
         let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert!((val - 0.0).abs() < 0.01);
 
         // At t=0.2, signal=1.0, output=10.0
-        let values = controller.evaluate_at_time_with_signals(0.2, Some(&signal_manager));
+        let values = controller.evaluate_at_time_with_signals(0.2, Some(&signal_manager), &crate::config::FractalConfig::default());
         let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert!((val - 10.0).abs() < 0.01);
 
         // At t=0.1, signal=0.5, output=5.0
-        let values = controller.evaluate_at_time_with_signals(0.1, Some(&signal_manager));
+        let values = controller.evaluate_at_time_with_signals(0.1, Some(&signal_manager), &crate::config::FractalConfig::default());
         let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert!((val - 5.0).abs() < 0.01);
     }
@@ -755,7 +885,7 @@ mod tests {
             controller.set_step(1.0 / fps as f64);
             let mut last = f64::NAN;
             for k in 0..=fps {
-                let values = controller.evaluate_at_time_with_signals(k as f64 / fps as f64, Some(&signals));
+                let values = controller.evaluate_at_time_with_signals(k as f64 / fps as f64, Some(&signals), &crate::config::FractalConfig::default());
                 last = values.iter().find(|(_, key, _)| key == "Exposure").unwrap().2.as_f64().unwrap();
             }
             last
@@ -793,15 +923,225 @@ mod tests {
         // before the keyframes, which hold their first value there.
         for frame in 1..30 {
             let t = frame as f64 / 30.0;
-            let a = plain.evaluate_at_time_with_signals(t, Some(&signals));
-            let b = blurred.evaluate_at_time_with_signals(t, Some(&signals));
+            let a = plain.evaluate_at_time_with_signals(t, Some(&signals), &crate::config::FractalConfig::default());
+            let b = blurred.evaluate_at_time_with_signals(t, Some(&signals), &crate::config::FractalConfig::default());
             assert_eq!(a, b, "frame {frame}: the moments changed what followed");
             for dt in [-0.01, 0.01] {
-                let moment = blurred.evaluate_moment(t + dt, Some(&signals));
+                let moment = blurred.evaluate_moment(t + dt, Some(&signals), &crate::config::FractalConfig::default());
                 assert_eq!(value(&moment, "Exposure"), value(&b, "Exposure"), "the smoothed track holds the frame's value");
                 assert!((value(&moment, "Gamma") - (t + dt)).abs() < 1e-9, "the keyframes are read at the moment");
             }
         }
     }
 
+    // ---- Script tracks (docs/projects/rhai-tracks.md, step 1) ----
+
+    fn zoom_of(config: &FractalConfig) -> f64 {
+        super::super::script::read(config, &super::super::script::resolve_target("zoom").unwrap()).unwrap()
+    }
+
+    fn with_tracks(tracks: Vec<Track>) -> Animation {
+        let mut a = Animation::new("scripts".into(), 4.0);
+        for t in tracks {
+            a.add_track(t);
+        }
+        a
+    }
+
+    const ADD_HALF_T: &str = "const TARGETS = #{ zoom: \"add\" };\nfn value(t, p, ctx) { #{ zoom: 0.5 * t } }";
+
+    /// **An `"add"` adds to the same value every frame, live and in the
+    /// export.** Played live, each frame applied to the config the next
+    /// one reads, the zoom is its rest plus the script's value, never the
+    /// last frame's plus it again. The export's base is the app's config
+    /// after playback, holding the last value written; carrying the rests
+    /// in the animation, it gives the frames playback gave -- and a zoom
+    /// the user set after playback is the new rest.
+    #[test]
+    fn an_added_value_does_not_compound_live_or_exported() {
+        use super::super::export::apply_animation_values;
+        let base = FractalConfig::default();
+        let rest = zoom_of(&base);
+        let mut live = AnimationController::new();
+        live.load(with_tracks(vec![Track::script(ADD_HALF_T.into()).unwrap()]));
+        let mut config = base.clone();
+        let times = [0.0, 0.5, 1.0, 1.0, 1.0, 2.5, 0.25];
+        for t in times {
+            live.current_time = t;
+            let v = live.evaluate_frame(None, &config);
+            apply_animation_values(&mut config, &v);
+            assert!((zoom_of(&config) - (rest + 0.5 * t)).abs() < 1e-5, "live at {t}: {}", zoom_of(&config));
+        }
+        let mut export = AnimationController::new();
+        export.load(live.animation.clone().unwrap());
+        for t in times {
+            let mut frame = config.clone();
+            apply_animation_values(&mut frame, &export.evaluate_at_time(t, &config));
+            assert!((zoom_of(&frame) - (rest + 0.5 * t)).abs() < 1e-5, "exported at {t}: {}", zoom_of(&frame));
+        }
+        let mut edited = config.clone();
+        apply_animation_values(&mut edited, &[(EditingTarget::Main, "Zoom".into(), serde_json::json!(3.0))]);
+        let mut frame = edited.clone();
+        apply_animation_values(&mut frame, &export.evaluate_at_time(1.0, &edited));
+        assert!((zoom_of(&frame) - 3.5).abs() < 1e-5, "the user's zoom is the new rest: {}", zoom_of(&frame));
+    }
+
+    /// A script goes on top of the keyframes: it reads, and adds to, the
+    /// keyframed value. Two scripts on one target: the later one wins.
+    #[test]
+    fn a_script_adjusts_the_keyframes_and_the_later_script_wins() {
+        use super::super::export::apply_animation_values;
+        let base = FractalConfig::default();
+        let keyed = Track::linear("Zoom".into(), serde_json::json!(1.0), serde_json::json!(2.0), 4.0);
+        let c = |tracks: Vec<Track>, t: f64| {
+            let mut ctl = AnimationController::new();
+            ctl.load(with_tracks(tracks));
+            let mut frame = base.clone();
+            apply_animation_values(&mut frame, &ctl.evaluate_at_time(t, &base));
+            zoom_of(&frame)
+        };
+        assert!((c(vec![keyed.clone(), Track::script(ADD_HALF_T.into()).unwrap()], 2.0) - (1.5 + 1.0)).abs() < 1e-5);
+        let reads = "const TARGETS = #{ rotation: \"set\" };\nfn value(t, p, ctx) { #{ rotation: ctx.get(\"zoom\") } }";
+        let mut ctl = AnimationController::new();
+        ctl.load(with_tracks(vec![keyed.clone(), Track::script(reads.into()).unwrap()]));
+        let v = ctl.evaluate_at_time(2.0, &base);
+        let rotation = v.iter().find(|(_, k, _)| k == "Rotation").expect("a rotation").2.as_f64().unwrap();
+        assert!((rotation - 1.5).abs() < 1e-5, "ctx reads the keyframed zoom: {rotation}");
+        let set_two = "const TARGETS = #{ zoom: \"set\" };\nfn value(t, p, ctx) { #{ zoom: 2.0 } }";
+        let set_three = "const TARGETS = #{ zoom: \"set\" };\nfn value(t, p, ctx) { #{ zoom: 3.0 } }";
+        assert_eq!(c(vec![Track::script(set_two.into()).unwrap(), Track::script(set_three.into()).unwrap()], 1.0), 3.0);
+    }
+
+    /// A script track round-trips through a `.anim` with its parameters,
+    /// and a broken one, or one that fails, writes nothing.
+    #[test]
+    fn a_script_track_round_trips_and_a_broken_one_is_skipped() {
+        let mut track = Track::script(ADD_HALF_T.into()).unwrap();
+        if let TrackSource::Script { params, .. } = &mut track.source {
+            params.insert("depth".into(), 0.25);
+        }
+        let json = with_tracks(vec![track]).to_json().unwrap();
+        let loaded = Animation::from_json(&json).unwrap();
+        let TrackSource::Script { source, params } = &loaded.tracks[0].source else { panic!("a script track") };
+        assert_eq!((source.as_str(), params.get("depth")), (ADD_HALF_T, Some(&0.25)));
+        assert_eq!(loaded.tracks[0].target, "Zoom");
+        let base = FractalConfig::default();
+        let mut broken = loaded.clone();
+        broken.tracks[0].bound.broken = true;
+        let mut ctl = AnimationController::new();
+        ctl.load(broken);
+        assert!(ctl.evaluate_at_time(1.0, &base).is_empty());
+        let fails = "const TARGETS = #{ zoom: \"set\" };\nfn value(t, p, ctx) { #{ zoom: 1.0 / 0.0 } }";
+        let mut ctl = AnimationController::new();
+        ctl.load(with_tracks(vec![Track::script(fails.into()).unwrap()]));
+        assert!(ctl.evaluate_at_time(1.0, &base).is_empty());
+        assert!(super::super::script::error_of(fails).is_some_and(|e| e.contains("finite")));
+    }
+
+    // ---- Script tracks with state (rhai-tracks.md, step 2) ----
+
+    /// A spring following the keyframed zoom: lag and overshoot, which no
+    /// formula of `t` alone gives.
+    const SPRING: &str = r#"
+const PARAMS = #{
+    stiffness: #{ value: 40.0, min: 1.0, max: 400.0 },
+    damping: #{ value: 6.0, min: 0.0, max: 50.0 },
+};
+const TARGETS = #{ rotation: "set" };
+fn start(p, ctx) { #{ x: ctx.get("zoom"), v: 0.0 } }
+fn step(s, dt, p, ctx) {
+    let a = p.stiffness * (ctx.get("zoom") - s.x) - p.damping * s.v;
+    s.v += a * dt;
+    s.x += s.v * dt;
+    s
+}
+fn value(t, s, p, ctx) { #{ rotation: s.x } }
+"#;
+
+    fn spring_animation() -> Animation {
+        let mut a = with_tracks(vec![
+            Track::linear("Zoom".into(), serde_json::json!(1.0), serde_json::json!(3.0), 2.0),
+            Track::script(SPRING.into()).unwrap(),
+        ]);
+        a.duration = 6.0;
+        a
+    }
+
+    fn rotation_at(ctl: &AnimationController, t: f64, base: &FractalConfig) -> f64 {
+        ctl.evaluate_at_time(t, base).iter().find(|(_, k, _)| k == "Rotation").expect("a rotation").2.as_f64().unwrap()
+    }
+
+    /// **The same time gives the same state**, however it is reached:
+    /// played forward at 60 fps, at 30, with frames dropped, scrubbed
+    /// backward from the end, or jumped to cold on a fresh controller.
+    /// And it is a state: it lags the zoom and overshoots it.
+    #[test]
+    fn a_state_is_the_same_however_its_time_is_reached() {
+        let base = FractalConfig::default();
+        let mut sixty = AnimationController::new();
+        sixty.load(spring_animation());
+        let mut at_sixty = Vec::new();
+        for k in 0..=360 {
+            at_sixty.push(rotation_at(&sixty, k as f64 / 60.0, &base));
+        }
+        let mut thirty = AnimationController::new();
+        thirty.load(spring_animation());
+        for k in 0..=180 {
+            assert_eq!(rotation_at(&thirty, k as f64 / 30.0, &base), at_sixty[2 * k], "30 fps frame {k}");
+        }
+        let mut dropping = AnimationController::new();
+        dropping.load(spring_animation());
+        for k in (0..=360).step_by(7) {
+            assert_eq!(rotation_at(&dropping, k as f64 / 60.0, &base), at_sixty[k], "with frames dropped, frame {k}");
+        }
+        for k in (0..=360).rev().step_by(11) {
+            assert_eq!(rotation_at(&sixty, k as f64 / 60.0, &base), at_sixty[k], "scrubbed back, frame {k}");
+        }
+        let mut cold = AnimationController::new();
+        cold.load(spring_animation());
+        assert_eq!(rotation_at(&cold, 4.5, &base), at_sixty[270]);
+        // A motion-blur moment either side of a frame leaves its state.
+        for offset in [-0.007, 0.004] {
+            let _ = sixty.evaluate_moment(1.0 + offset, None, &base);
+            assert_eq!(rotation_at(&sixty, 1.0, &base), at_sixty[60], "after a moment at {offset}");
+        }
+        // Lag: at 1 s the keyframed zoom is 2; the spring is behind it.
+        assert!(at_sixty[60] < 2.0, "it lags: {}", at_sixty[60]);
+        // Overshoot: past 2 s the zoom holds at 3; the spring passes it.
+        let peak = at_sixty[120..].iter().cloned().fold(f64::MIN, f64::max);
+        assert!(peak > 3.0, "it overshoots: {peak}");
+        assert!((at_sixty[360] - 3.0).abs() < 0.05, "and settles: {}", at_sixty[360]);
+    }
+
+    /// An edit a state depends on replays it: a changed keyframe track,
+    /// a changed parameter, and a changed value it reads from the base.
+    #[test]
+    fn an_edit_a_state_depends_on_replays_it() {
+        let base = FractalConfig::default();
+        let mut ctl = AnimationController::new();
+        ctl.load(spring_animation());
+        let before = rotation_at(&ctl, 1.0, &base);
+        if let TrackSource::Keyframes { keyframes } = &mut ctl.animation.as_mut().unwrap().tracks[0].source {
+            keyframes[1].value = serde_json::json!(5.0);
+        }
+        let keyed = rotation_at(&ctl, 1.0, &base);
+        assert_ne!(before, keyed, "a keyframe edit replays");
+        let mut fresh = AnimationController::new();
+        fresh.load(ctl.animation.clone().unwrap());
+        assert_eq!(rotation_at(&fresh, 1.0, &base), keyed);
+        if let TrackSource::Script { params, .. } = &mut ctl.animation.as_mut().unwrap().tracks[1].source {
+            params.insert("stiffness".into(), 100.0);
+        }
+        assert_ne!(rotation_at(&ctl, 1.0, &base), keyed, "a parameter edit replays");
+        // Without the keyframes the spring follows the base's zoom.
+        let mut free = with_tracks(vec![Track::script(SPRING.into()).unwrap()]);
+        free.duration = 6.0;
+        let mut ctl = AnimationController::new();
+        ctl.load(free);
+        let mut moved = base.clone();
+        super::super::export::apply_animation_values(&mut moved, &[(EditingTarget::Main, "Zoom".into(), serde_json::json!(2.5))]);
+        let a = rotation_at(&ctl, 3.0, &base);
+        let b = rotation_at(&ctl, 3.0, &moved);
+        assert!((a - zoom_of(&base)).abs() < 1e-3 && (b - 2.5).abs() < 1e-3, "it follows the base it reads: {a} {b}");
+    }
 }
