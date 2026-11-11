@@ -1,7 +1,7 @@
 # Rhai animation tracks
 
-Status: **planned 2026-11-10, decisions taken, step 1 in progress.**
-Branch `rhai-tracks`. P5 of
+Status: **steps 1-6 built 2026-11-10**, not merged; the reference is
+ANIMATION.md, *Script tracks*. Branch `rhai-tracks`. P5 of
 [rhai-plugins.md](rhai-plugins.md): a Rhai script as an animation track.
 
 ## Decided (the user, 2026-11-10)
@@ -214,6 +214,34 @@ fn value(t, s, p, ctx) { #{ zoom: s.x } }
    - Docs: ANIMATION.md, SCRIPTING-GUIDE.md, and this plan's record.
 7. **Gates**: the lib tests, a video export of the examples compared
    with the live frames, `release.py check`.
+
+## What was built
+
+| Step | Done | Held by |
+|---|---|---|
+| 1. A stateless track | `TrackSource::Script`, `animation::script`, the modes, the value under the scripts and the rests | `an_added_value_does_not_compound_live_or_exported`, `a_script_adjusts_the_keyframes_and_the_later_script_wins`, `a_script_track_round_trips_and_a_broken_one_is_skipped` |
+| 2. State | `start` / `step` at 1/240 s, checkpoints each second, keyed by what the state depends on | `a_state_is_the_same_however_its_time_is_reached` (60 fps, 30 fps, dropped frames, scrubbed back, a cold jump, motion-blur moments: bit for bit), `an_edit_a_state_depends_on_replays_it` |
+| 3. `ctx` | `get`, `signal`, `time`, `dt`, `duration`, `noise`, `hash`, the budget | `signals_hash_and_noise`, `a_broken_track_says_why` |
+| 4. Formula Editor, library | the track row, Use as track, Live, `Kind::Track` | `a_track_file_is_used_as_a_track_and_followed_live`, `a_track_is_a_track` |
+| 5. Track editor | the row, the window, Add Script Track | `a_script_track_shows_its_targets_and_parameters` |
+| 6. Examples, docs | Breathing, Springy Zoom, Smoothed Jitter; ANIMATION.md, SCRIPTING-GUIDE.md | `the_track_examples_run`, `a_video_of_script_tracks_gives_the_frames_playback_gave` (the export's `FrameSource` equals playback, config for config) |
+
+Where it differs from the plan:
+- **Not bound** (*Where it goes*): the plan gave each target a binding.
+- **The value under the scripts, live**: the plan took it from the
+  render mode's snapshot at entry to animation. The video export's base
+  is the app's config after playback, holding what the tracks last
+  wrote, so a snapshot only the app holds would not reach it: each
+  target's rest travels in the animation instead (`script::Rest`).
+- **Decision 3 needed nothing**: the panels keep an animation present,
+  so Use as track always has one (a fresh one is made if not).
+- **The check reads a missing signal as 0.5**, so a track reading the
+  user's signals can be checked and used in the editor; `ctx.time` was
+  added for a step's input (Smoothed Jitter).
+
+Left: a track's own parameters are not targets other tracks can
+animate (they live in the track, not the config); a script cannot
+`import` a library yet (the plan's "P0's libraries can be imported").
 
 ## Decisions for the user
 
