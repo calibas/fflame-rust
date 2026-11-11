@@ -1,5 +1,12 @@
-// An animation track with a state: the zoom follows its keyframes on a
-// spring, lagging behind each move and overshooting where it stops.
+// An animation track with a state: the zoom follows another zoom track
+// on a spring, lagging behind each move and overshooting where it stops.
+//
+// How to use it: add a keyframe track on Zoom with the motion you want
+// (or a signal track), then this track. Script tracks run after keyframe
+// and signal tracks, whatever the order of the list, so this one reads
+// the keyframed zoom with ctx.get("zoom") and writes its sprung version
+// over it. Without a zoom track under it, it reads the fractal's own
+// zoom, which does not move, and so neither does the spring.
 //
 // A track with `start` and `step` keeps a state, stepped 240 times a
 // second from time zero: the same time always gives the same state,

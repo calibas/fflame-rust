@@ -576,29 +576,62 @@ fn render_tracks_visual(
 /// What a script track's row shows.
 struct ScriptRow {
     title: String,
-    /// Its targets: name, mode, and whether another track writes it too.
-    targets: Vec<(String, crate::animation::script::Mode, bool)>,
+    /// Its targets: name, mode, and what else writes them.
+    targets: Vec<(String, crate::animation::script::Mode, Under)>,
     /// Why it does not compile or did not run.
     error: Option<String>,
 }
 
+/// What lies under a script track's target. Scripts run after the keyframe
+/// and signal tracks whatever the order of the list, so a keyframe track
+/// on the same target is not a clash: it is what the script reads
+/// (`ctx.get`) and what `"add"` and `"scale"` build on. Two scripts on one
+/// target are: the later one wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Under {
+    /// The fractal's own value.
+    Own,
+    /// A keyframe or signal track's.
+    Track,
+    /// Another script writes it too.
+    Script,
+}
+
+impl Under {
+    /// What it means for a target written `mode`; `None` for the plain case.
+    fn note(self, mode: crate::animation::script::Mode) -> Option<String> {
+        use crate::animation::script::Mode;
+        match (self, mode) {
+            (Under::Own, _) => None,
+            (Under::Track, Mode::Set) => Some(t!("track_editor.script_over_set").to_string()),
+            (Under::Track, _) => Some(t!("track_editor.script_over_adjust").to_string()),
+            (Under::Script, _) => Some(t!("track_editor.script_clash").to_string()),
+        }
+    }
+}
+
+fn mode_text(mode: crate::animation::script::Mode) -> std::borrow::Cow<'static, str> {
+    use crate::animation::script::Mode;
+    match mode {
+        Mode::Set => t!("track_editor.script_mode_set"),
+        Mode::Add => t!("track_editor.script_mode_add"),
+        Mode::Scale => t!("track_editor.script_mode_scale"),
+    }
+}
+
 impl ScriptRow {
+    /// A warning: it does not run, or another script writes one of its
+    /// targets.
     fn warn(&self) -> bool {
-        self.error.is_some() || self.targets.iter().any(|t| t.2)
+        self.error.is_some() || self.targets.iter().any(|t| t.2 == Under::Script)
     }
 
     fn describe(&self) -> String {
-        use crate::animation::script::Mode;
         let mut s = self.title.clone();
-        for (name, mode, clash) in &self.targets {
-            let how = match mode {
-                Mode::Set => t!("track_editor.script_mode_set"),
-                Mode::Add => t!("track_editor.script_mode_add"),
-                Mode::Scale => t!("track_editor.script_mode_scale"),
-            };
-            s.push_str(&format!("\n  {name}: {how}"));
-            if *clash {
-                s.push_str(&format!(" -- {}", t!("track_editor.script_clash")));
+        for (name, mode, under) in &self.targets {
+            s.push_str(&format!("\n  {name}: {}", mode_text(*mode)));
+            if let Some(note) = under.note(*mode) {
+                s.push_str(&format!(" -- {note}"));
             }
         }
         if let Some(e) = &self.error {
@@ -608,15 +641,15 @@ impl ScriptRow {
     }
 }
 
-/// Every track's targets by `ConfigPath` key: a keyframe or signal
-/// track's one, a script's declared ones.
-fn written_keys(animation: &Animation) -> Vec<Vec<String>> {
+/// Every track's targets by `ConfigPath` key -- a keyframe or signal
+/// track's one, a script's declared ones -- and whether it is a script.
+fn written_keys(animation: &Animation) -> Vec<(bool, Vec<String>)> {
     animation
         .tracks
         .iter()
         .map(|t| match &t.source {
-            TrackSource::Script { source, .. } => crate::animation::script::declare(source).map(|d| d.targets.into_iter().map(|x| x.key).collect()).unwrap_or_default(),
-            _ => vec![t.target.clone()],
+            TrackSource::Script { source, .. } => (true, crate::animation::script::declare(source).map(|d| d.targets.into_iter().map(|x| x.key).collect()).unwrap_or_default()),
+            _ => (false, vec![t.target.clone()]),
         })
         .collect()
 }
@@ -625,11 +658,18 @@ fn written_keys(animation: &Animation) -> Vec<Vec<String>> {
 fn script_row(animation: &Animation, index: usize) -> Option<ScriptRow> {
     let TrackSource::Script { source, .. } = &animation.tracks.get(index)?.source else { return None };
     let keys = written_keys(animation);
-    let shared = |key: &str| keys.iter().enumerate().any(|(i, k)| i != index && k.iter().any(|x| x == key));
+    let under = |key: &str| {
+        let others = keys.iter().enumerate().filter(|(i, (_, k))| *i != index && k.iter().any(|x| x == key));
+        let mut u = Under::Own;
+        for (_, (script, _)) in others {
+            u = if *script { Under::Script } else if u == Under::Own { Under::Track } else { u };
+        }
+        u
+    };
     Some(match crate::animation::script::declare(source) {
         Ok(d) => ScriptRow {
             title: d.title,
-            targets: d.targets.iter().map(|x| (x.name.clone(), x.mode, shared(&x.key))).collect(),
+            targets: d.targets.iter().map(|x| (x.name.clone(), x.mode, under(&x.key))).collect(),
             error: crate::animation::script::error_of(source),
         },
         Err(e) => ScriptRow { title: t!("track_editor.script_track").to_string(), targets: Vec::new(), error: Some(e) },
@@ -746,18 +786,18 @@ pub fn render_script_track_panel(ctx: &egui::Context, controller: &mut Animation
         .resizable(true)
         .default_width(320.0)
         .show(ctx, |ui| {
-            for (name, mode, clash) in &row.targets {
-                use crate::animation::script::Mode;
-                let how = match mode {
-                    Mode::Set => t!("track_editor.script_mode_set"),
-                    Mode::Add => t!("track_editor.script_mode_add"),
-                    Mode::Scale => t!("track_editor.script_mode_scale"),
-                };
-                ui.horizontal(|ui| {
+            for (name, mode, under) in &row.targets {
+                ui.horizontal_wrapped(|ui| {
                     ui.monospace(name);
-                    ui.label(how);
-                    if *clash {
-                        ui.colored_label(Color32::from_rgb(220, 140, 60), format!("⚠ {}", t!("track_editor.script_clash")));
+                    ui.label(mode_text(*mode));
+                    match (under, under.note(*mode)) {
+                        (Under::Script, Some(note)) => {
+                            ui.colored_label(Color32::from_rgb(220, 140, 60), format!("⚠ {note}"));
+                        }
+                        (_, Some(note)) => {
+                            ui.weak(note);
+                        }
+                        _ => {}
                     }
                 });
             }
@@ -1965,9 +2005,15 @@ mod tests {
         assert_eq!(row.title, "Breathing");
         let zoom = row.targets.iter().find(|t| t.0 == "zoom").expect("zoom");
         let rotation = row.targets.iter().find(|t| t.0 == "rotation").expect("rotation");
-        assert!(zoom.2 && !rotation.2, "the keyframed zoom is shared, the rotation is not");
-        assert!(row.warn() && row.describe().contains("zoom"));
+        assert_eq!((zoom.2, rotation.2), (Under::Track, Under::Own), "the zoom is over its keyframe track, the rotation over the fractal's own");
+        assert!(!row.warn(), "a keyframe track under a script is its input, not a clash");
+        assert!(row.describe().contains("zoom"));
         assert!(script_row(&animation, 0).is_none(), "a keyframe track is not a script");
+        // A second script on the zoom is a clash, for both.
+        let mut two = animation.clone();
+        two.add_track(Track::script(breathing.to_string()).unwrap());
+        assert!(script_row(&two, 1).unwrap().warn() && script_row(&two, 2).unwrap().warn());
+        assert_eq!(script_row(&two, 2).unwrap().targets.iter().find(|t| t.0 == "zoom").unwrap().2, Under::Script);
 
         let mut controller = AnimationController::new();
         controller.load(animation);

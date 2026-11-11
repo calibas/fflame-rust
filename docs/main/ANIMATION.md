@@ -791,9 +791,12 @@ fn value(t, p, ctx) { #{ zoom: p.depth * sin(t) } }
   left out is not written that frame; one not declared is an error.
 - **The value under a script** is what it reads (`ctx.get(name)`) and
   what `"add"` and `"scale"` combine with: the base config with the
-  keyframe and signal tracks applied. Scripts run after those, in track
-  order; a later track writing a target replaces an earlier one, and the
-  track editor marks a target two tracks write.
+  keyframe and signal tracks applied. Scripts run after those, whatever
+  the order of the list, so a keyframe track on a script's target is its
+  input, not a clash: Springy Zoom follows a keyframed zoom on a spring.
+  Scripts run among themselves in track order, and a later script
+  writing a target replaces an earlier one; the track editor warns of
+  that, and notes a target with a keyframe or signal track under it.
   - Live playback writes into the config the next frame reads, so each
     script target keeps its **rest** value and what scripts last wrote
     (`script::Rest`, `Animation::script_rest`, runtime only): while the
