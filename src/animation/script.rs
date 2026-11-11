@@ -1,4 +1,4 @@
-//! Script tracks (docs/projects/rhai-tracks.md): a Rhai script as an
+//! Script tracks (docs/archive/projects/rhai-tracks.md): a Rhai script as an
 //! animation track, writing many targets, each set, added to or scaled.
 //!
 //! A track's source declares, at its top level, `TARGETS` (what it writes

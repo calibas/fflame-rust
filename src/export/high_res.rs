@@ -120,7 +120,7 @@ pub struct HighResExporter {
     variation_params_buffer: Buffer,
     xaos_buffer: Buffer,  // Xaos transition weights (identity if not used)
     // Biased selection weights + likelihood ratios
-    // (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). Always allocated
+    // (docs/archive/deep-zoom/flame-deep-zoom.md stage 1). Always allocated
     // and filled neutrally when the feature is off, because an
     // export must render what the app renders -- the same table,
     // from the same `build_table`.
@@ -430,7 +430,7 @@ impl HighResExporter {
             width, height, workgroups, samples_per_dispatch, buffer_size_mb
         );
 
-        // **Targeting** (docs/projects/deep-zoom/flame-deep-zoom.md): ONE plan, for
+        // **Targeting** (docs/archive/deep-zoom/flame-deep-zoom.md): ONE plan, for
         // the whole export view. Every dispatch emits samples for the whole
         // image and the tiles only scatter them, so there is one view to
         // plan however the image is tiled. Planned here, before anything

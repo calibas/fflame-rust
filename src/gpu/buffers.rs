@@ -124,7 +124,7 @@ pub struct GpuTransform {
     // JWildfire-extension plane affines (positional `[a, c, b, d, e, f]`
     // matching the XML write order). Read in the shader as
     // `array<f32, 6>` with JWildfire-style 00/01/10/11/20/21 indexing.
-    // See `docs/projects/jwf-features.md` for the composition rule.
+    // See `docs/archive/projects/jwf-features.md` for the composition rule.
     pub yz_coefs: [f32; 6],
     pub zx_coefs: [f32; 6],
     pub yz_post_coefs: [f32; 6],
@@ -858,7 +858,7 @@ pub struct GpuParams {
     pub path_origin: [f32; 3],
     /// Where the path filters' count and minimum length were: the Path
     /// Editor they served was replaced by word editing
-    /// (docs/projects/deep-zoom/word-editing.md). Kept as padding so `post_symmetry`
+    /// (docs/archive/deep-zoom/word-editing.md). Kept as padding so `post_symmetry`
     /// stays on its 16-byte boundary. Mirror in header.wgsl.
     pub _pad_path_filters: [u32; 2],
     pub background_r: f32, // Background color R (for depth fog)
@@ -891,7 +891,7 @@ pub struct GpuParams {
     pub shadow_radius: f32,
     pub shadow_count: u32,
     /// The correction window `m` for biased selection
-    /// (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). Carved from the
+    /// (docs/archive/deep-zoom/flame-deep-zoom.md stage 1). Carved from the
     /// first of the three shadow pads, so the struct's size and every
     /// later field's offset are unchanged -- there is no layout churn
     /// to get wrong, which is the whole reason it sits here rather
@@ -920,7 +920,7 @@ pub struct GpuParams {
     /// region — the one number the enumeration cannot compute for
     /// itself, because `Cylinders::lost` only sees words it tried to
     /// bound, never the measure that was never in the root region at
-    /// all (`docs/projects/deep-zoom/inversive-targeting.md` §1b).
+    /// all (`docs/archive/deep-zoom/inversive-targeting.md` §1b).
     ///
     /// Appended after `shadow_dirs`, which is 16-byte aligned, so no
     /// existing field's offset moves.
@@ -1249,7 +1249,7 @@ pub struct FlameBuffers {
     pub dummy_xaos_buffer: Buffer,
 
     // Biased selection weights and their likelihood ratios
-    // (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). Layout is
+    // (docs/archive/deep-zoom/flame-deep-zoom.md stage 1). Layout is
     // `scene::importance::build_table`'s: N biased weights, then the
     // N×N ratio matrix. None when the feature is off, and the dummy
     // is bound then — the shader does not declare the binding at all
@@ -1258,7 +1258,7 @@ pub struct FlameBuffers {
     pub bias_buffer: Option<Buffer>,
     pub dummy_bias_buffer: Buffer,
 
-    // The enumerated cylinders (docs/projects/deep-zoom/flame-deep-zoom.md
+    // The enumerated cylinders (docs/archive/deep-zoom/flame-deep-zoom.md
     // stage 2), packed by `scene::cylinder::pack`. None when the view
     // is not being targeted, which is the common case -- targeting is
     // for depth and a shallow view has nothing to target.

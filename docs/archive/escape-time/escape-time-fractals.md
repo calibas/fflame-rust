@@ -1,6 +1,6 @@
 # Escape-Time, Field & Orbit-Trap Fractals
 
-> **Archived 2026-10-10** -- the engine shipped; this is its dated design record. What is left moved to escape-sim-followups. Read [ESCAPE.md](../../main/ESCAPE.md), [escape-sim-followups.md](../../projects/escape-sim-followups.md) for how it works now; this is the record of what was planned and measured when it was written.
+> **Archived 2026-10-10** -- the engine shipped; this is its dated design record. What is left moved to escape-sim-followups. Read [ESCAPE.md](../../main/ESCAPE.md), [escape-sim-followups.md](../projects/escape-sim-followups.md) for how it works now; this is the record of what was planned and measured when it was written.
 
 **Status:** SHIPPED and live on the `escape-time` branch — 26
 formulas, 14 colorings, 3 field formulas, deep zoom by perturbation
@@ -18,7 +18,7 @@ under [docs/archive/escape-time/](../archive/escape-time/).
 
 ## What is left
 
-Moved to [escape-sim-followups.md](../../projects/escape-sim-followups.md), "The escape
+Moved to [escape-sim-followups.md](../projects/escape-sim-followups.md), "The escape
 engine: not built", when the engine's main doc was written.
 
 A family of per-pixel fragment rendering modes (Mandelbrot, Burning
@@ -48,7 +48,7 @@ phase. Source conversations with the math worked out:
   field-mode fractals, the Hepting–Hart escape buffer, and the
   chaos-game bridges. Referenced throughout as *[ETI]*.
 
-Sibling plan: [flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) — deep zoom
+Sibling plan: [flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) — deep zoom
 for the *chaos game* via importance sampling. Independent feature,
 but §7 there names the two pieces built shared with this plan (the
 Lipschitz extension, the deep camera type).
@@ -143,7 +143,7 @@ center. The fragment camera:
 - `rotation: f32`.
 
 This representation is deliberately **shared** with the flame
-deep-zoom plan ([flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) §7) — a
+deep-zoom plan ([flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) §7) — a
 chaos-game deep-zoom camera hits the identical f32-center wall.
 Design the type once, not mode-private.
 
@@ -4852,7 +4852,7 @@ Scope and caveats, recorded honestly:
   is determinant-flavored, so this is a small extension of it, and
   the number gates whether the mode is offered for a given flame.
   **Second customer:** the flame deep-zoom plan
-  ([flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) §7) consumes the same
+  ([flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) §7) consumes the same
   extension three ways — build it as shared analysis, not
   mode-C-private.
 - **Bounding disk** `T(D_R) ⊂ D_R` — conservative bound needed with

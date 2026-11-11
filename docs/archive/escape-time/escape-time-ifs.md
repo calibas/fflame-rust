@@ -62,7 +62,7 @@
 >    stretch/squash map reads as neutral, which is exactly the case a
 >    largest-singular-value test is needed for. The plan already caught
 >    this and scopes the extension as shared work with
->    [flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) §7. (A
+>    [flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) §7. (A
 >    largest-singular-value helper for a 2×2 does exist, in
 >    `variations/analytic_blur.rs`, sizing blur kernels.)
 > 2. **There is no affine-inverse helper.** Nothing inverts a flame's

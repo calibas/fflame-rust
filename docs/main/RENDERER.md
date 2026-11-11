@@ -339,7 +339,7 @@ Solid rendering applies to `RenderMode::ThreeD` when `solid_strength > 0`
 or lighting is active (`SolidShadingSettings::active`, i.e.
 `shading_strength > 0`). Design record:
 [solid-rendering.md](../archive/projects/solid-rendering.md); backlog:
-[solid-rendering-todo.md](../projects/solid-rendering-todo.md).
+[solid-rendering-todo.md](../archive/projects/solid-rendering-todo.md).
 
 - **Occlusion.** The histogram grows a fifth word a pixel, the
   nearest-depth region (`FlameBuffers::set_solid_depth_region`), which

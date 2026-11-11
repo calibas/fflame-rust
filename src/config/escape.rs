@@ -289,7 +289,7 @@ pub struct EscapeConfig {
     pub palette_map: PaletteMap,
 
     /// A second colouring blended into the first before the palette
-    /// lookup (`docs/projects/escape-coloring-survey.md`, item 5). No
+    /// lookup (`docs/archive/projects/escape-coloring-survey.md`, item 5). No
     /// colouring is no layer, which is the default and is skipped.
     #[serde(default, skip_serializing_if = "ColoringLayer::is_default")]
     pub layer: ColoringLayer,
@@ -465,7 +465,7 @@ impl EscapeConfig {
     }
 
     /// Whether the 3D terrain carries the surface texture: a kind at a
-    /// strength (docs/projects/surface-textures.md). It has its own
+    /// strength (docs/archive/projects/surface-textures.md). It has its own
     /// lighting, so the 2D relief's switch does not enter.
     pub fn surface_texture_active(&self) -> bool {
         self.terrain_active()
@@ -998,7 +998,7 @@ impl EscapeContrast {
 }
 
 /// A curve on the coloring's value, applied before the palette wraps
-/// it (`docs/projects/escape-coloring-survey.md` P1).
+/// it (`docs/archive/projects/escape-coloring-survey.md` P1).
 ///
 /// Every curve is `g(v) = k f(v/k)` with `f(1) = 1`, where `k` is
 /// [`PaletteMap::pivot`]: the value every curve leaves where Linear
@@ -1588,7 +1588,7 @@ pub struct EscapeShading {
     pub texture_scale: f32,
     /// Where the texture applies, by slope (`TextureWhere`), and the
     /// slope it turns at, ± its softness (degrees). The 3D terrain and the
-    /// 2D relief share them (docs/projects/surface-textures.md).
+    /// 2D relief share them (docs/archive/projects/surface-textures.md).
     #[serde(default, skip_serializing_if = "TextureWhere::is_default")]
     pub texture_where: TextureWhere,
     #[serde(default = "default_texture_angle", skip_serializing_if = "is_default_texture_angle")]
@@ -2032,7 +2032,7 @@ pub enum ShadingTexture {
     /// phase 3). Nothing without a texture.
     Simulation,
     /// Ridged octaves with a fractal falloff: weathered stone, for
-    /// roughening cliffs (docs/projects/surface-textures.md).
+    /// roughening cliffs (docs/archive/projects/surface-textures.md).
     Rock,
 }
 

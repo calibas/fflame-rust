@@ -432,9 +432,9 @@ it, and being offline is not an error. Each row says whether it is
 seeded, and the panel counts those as "not available to download yet".
 
 Local WGSL plug-in files (`plugins/effects/<name>.json`) were
-retired 2026-11-01 ([rhai-plugins.md](../projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them.
+retired 2026-11-01 ([rhai-plugins.md](../archive/projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them.
 
-**Rhai plug-ins** ([rhai-plugins.md](../projects/rhai-plugins.md), P3): a Rhai variation, effect, formula, colouring, solid or simulation colouring in the user's formulas with **Load at start** set in the Formula Editor (`formulas/_links.json`, `storage::links::Link::plugin`) is registered at every start, after the downloads (`storage::library::load_plugins`, from `load_installed_resources`: desktop, web and headless), under its key in the user's namespace (`Provenance::Local`). It is then in the lists without a config carrying it -- the variation pickers, the Effects panel's Add lists and the escape panel's formula and colouring pickers, each under "Your plug-ins" -- and choosing it carries its source into the config, as Use does. Saving the file registers the new version; turning it off unlists it; deleting it forgets the flag. One that does not register is named at start (a notice; stderr headless: `storage::library::plugin_failures`).
+**Rhai plug-ins** ([rhai-plugins.md](../archive/projects/rhai-plugins.md), P3): a Rhai variation, effect, formula, colouring, solid or simulation colouring in the user's formulas with **Load at start** set in the Formula Editor (`formulas/_links.json`, `storage::links::Link::plugin`) is registered at every start, after the downloads (`storage::library::load_plugins`, from `load_installed_resources`: desktop, web and headless), under its key in the user's namespace (`Provenance::Local`). It is then in the lists without a config carrying it -- the variation pickers, the Effects panel's Add lists and the escape panel's formula and colouring pickers, each under "Your plug-ins" -- and choosing it carries its source into the config, as Use does. Saving the file registers the new version; turning it off unlists it; deleting it forgets the flag. One that does not register is named at start (a notice; stderr headless: `storage::library::plugin_failures`).
 
 **Refusals** (`effects::check_download`, `register_from_api`):
 
@@ -455,7 +455,7 @@ client splices on the marker actually present.
 ## Effects written in Rhai
 
 An effect can be written in the formula language's Rhai
-([rhai-plugins.md](../projects/rhai-plugins.md), P2; the language is in
+([rhai-plugins.md](../archive/projects/rhai-plugins.md), P2; the language is in
 [ESCAPE.md](ESCAPE.md#the-formula-language)): `fn effect(c, p, ctx)`,
 run per pixel, `c` the input's colour there (an `rgba`), `p` its
 parameters, `ctx` its context. [effects/custom.rs](../../src/effects/custom.rs)

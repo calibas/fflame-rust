@@ -19,4 +19,4 @@ python python/build.py     # from the root: builds this and puts it in the packa
 - `src/scripts.rs` — Rhai, as the gallery's script module runs it.
 
 The design, the measurements and the copied code awaiting review:
-[docs/projects/pyfflame.md](../../docs/projects/pyfflame.md).
+[docs/archive/projects/pyfflame.md](../../docs/archive/projects/pyfflame.md).

@@ -63,7 +63,7 @@ pub const TWINS: &[(&str, &str)] = &[
     ("origami", include_str!("../../assets/formulas/twins/origami.rhai")),
 ];
 
-/// The built-in colourings' twins (P7 step 2, docs/projects/rhai-plugins.md):
+/// The built-in colourings' twins (P7 step 2, docs/archive/projects/rhai-plugins.md):
 /// each a Rhai colouring that renders as its built-in, which the Escape
 /// panel's Edit as Rhai puts in the built-in's place. A twin keeps its
 /// built-in's parameters by name; WGSL's `round` (halves to even) it

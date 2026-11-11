@@ -20,7 +20,7 @@ here, with deep zoom by perturbation to effectively unlimited depth.
 - [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md) — deep zoom for *flames*, a different feature
 - Design record: [escape-time-fractals.md](../archive/escape-time/escape-time-fractals.md)
   (archived; §1-3 and §5-8 are the structure, the dated sections the measurements)
-- Open items: [escape-sim-followups.md](../projects/escape-sim-followups.md),
+- Open items: [escape-sim-followups.md](../archive/projects/escape-sim-followups.md),
   *The escape engine: not built*
 
 **Code locations:**
@@ -385,7 +385,7 @@ reads the orbit's (x, y).
 | `image_trap` | Image Trap | Ultra Fractal's: the texture sampled where the orbit lands, its alpha the coverage. `TextureInLoop`, `DirectAlpha` |
 
 The survey behind the newer colourings, and what is still a candidate,
-is [escape-coloring-survey.md](../projects/escape-coloring-survey.md).
+is [escape-coloring-survey.md](../archive/projects/escape-coloring-survey.md).
 
 ---
 
@@ -398,7 +398,7 @@ variations and effects written in it. The language's own form is **Rhai** (the
 scripting language the program embeds; since phase 4), and **Ultra
 Fractal's formula language** -- which accepts Fractint's shape too --
 is read as well. The plan, its phases and what is left are in
-[escape-formula-language.md](../projects/escape-formula-language.md).
+[escape-formula-language.md](../archive/projects/escape-formula-language.md).
 
 **Where it lives.** `src/lang/`: `rhai.rs` (a Rhai formula
 lowered to the parse tree), `to_rhai.rs` (a checked UF or Fractint
@@ -1300,7 +1300,7 @@ fn escaped(s, p) {
     parted by whole units after the first few lines.
 - **The built-in colourings' twins** (`escape::twins::COLORING_TWINS`,
   `assets/formulas/twins/colorings/*.rhai`; P7 step 2 in
-  [rhai-plugins.md](../projects/rhai-plugins.md), six batches): every
+  [rhai-plugins.md](../archive/projects/rhai-plugins.md), six batches): every
   built-in colouring -- Escape
   Count, Orbit Trap, Sphere Average, Decomposition, Basic, Gaussian
   Integer, Itinerary, (reading the loop's values, `ctx` above) Smooth,

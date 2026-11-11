@@ -1,6 +1,6 @@
 # Perturbation in delta form: the second design (plan, 2026-09-17)
 
-> **Archived 2026-10-10** -- superseded by the flame deep-zoom plan (its own §10 redirects there). Read [FOCUSED-RENDERING.md](../../main/FOCUSED-RENDERING.md), [flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) for how it works now; this is the record of what was planned and measured when it was written.
+> **Archived 2026-10-10** -- superseded by the flame deep-zoom plan (its own §10 redirects there). Read [FOCUSED-RENDERING.md](../../main/FOCUSED-RENDERING.md), [flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) for how it works now; this is the record of what was planned and measured when it was written.
 
 The first design is
 [ifs-nonlinear-perturbation.md](ifs-nonlinear-perturbation.md): the
@@ -13,7 +13,7 @@ written together:
 - this one -- the reference/delta split carried through EVERY level,
   which is what "perturbation" means in the escape engine and was
   not what the first design built;
-- [ifs-general.md](../../projects/deep-zoom/ifs-general.md) -- the math a map has to supply
+- [ifs-general.md](../deep-zoom/ifs-general.md) -- the math a map has to supply
   moved into the variation that owns it, so the set of IFSs this
   reaches is the catalogue rather than six kernels;
 - [ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md)
@@ -46,7 +46,7 @@ handover cost, at the level it happens. Not the bound's looseness,
 the cut's image, or anything in
 [ifs-distance-rendering.md](../escape-time/ifs-distance-rendering.md) §8.15. And
 not any set the walk does not accept today: that is
-[ifs-general.md](../../projects/deep-zoom/ifs-general.md)'s job.
+[ifs-general.md](../deep-zoom/ifs-general.md)'s job.
 
 ---
 
@@ -463,7 +463,7 @@ Rung 1 (rational) exists in `BigFloat`; the algebraic rung needs
 `sqrt`, which exists; the Taylor rung's kernels need `exp`, `sin`,
 `cos` in `BigFloat`, which do not exist and are ~200 lines with
 argument reduction and a series, plus gates against f64 in the range
-f64 is exact. [ifs-general.md](../../projects/deep-zoom/ifs-general.md) §D2 makes every
+f64 is exact. [ifs-general.md](../deep-zoom/ifs-general.md) §D2 makes every
 kernel generic over the scalar so the `BigFloat` rung is the same
 code as the f64 one; until then it is today's
 `big_kernel_inverse`, extended per rung.
@@ -1003,7 +1003,7 @@ waiting to pass.
 - **D3. The exact forms are per kernel and gated against BigFloat.**
   `D_m(Z, δ)` is a function beside the inverse in
   [ifs_analysis.rs](../../src/scene/ifs_analysis.rs) (and in
-  [ifs-general.md](../../projects/deep-zoom/ifs-general.md)'s shape, beside the inverse in
+  [ifs-general.md](../deep-zoom/ifs-general.md)'s shape, beside the inverse in
   the variation), in f64 and in WGSL, and G1 checks it against
   `BigFloat` differences at δ from 1e-30 to 1 relative to `|Z|`.
   The escape engine's rule for Feather -- "the delta of each
@@ -1113,11 +1113,11 @@ The risks, ranked:
 ## 8. Deliberately not here
 
 - **Sets the walk does not accept.** Sums, xaos, non-affine finals,
-  non-contractive maps: [ifs-general.md](../../projects/deep-zoom/ifs-general.md).
+  non-contractive maps: [ifs-general.md](../deep-zoom/ifs-general.md).
 - **Density.** [ifs-measure-by-inverse-walk.md](ifs-measure-by-inverse-walk.md)
   reads this walk's endpoints; nothing here changes for it.
 - **The forced-prefix chaos game** of
-  [flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) stage 2. Its prefix IS a
+  [flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) stage 2. Its prefix IS a
   reference orbit and this plan's difference forms apply to it in
   the FORWARD direction, which that plan's stage 3 said was
   impossible. Noted there; built, if it is, after the measure plan
@@ -1150,7 +1150,7 @@ delta walk of items 5 and 9 is parked rather than extended.
    deep handover -- which is §3 HERE, since a handover hands over a
    linearisation and the quadratic is what straightens it.
 3. ~~**The scalar-generic kernel**~~ -- done 2026-09-17,
-   [ifs-general.md](../../projects/deep-zoom/ifs-general.md) §9a to §9c. `Real`,
+   [ifs-general.md](../deep-zoom/ifs-general.md) §9a to §9c. `Real`,
    `Transcendental` and `Dual` landed; the six planar kernels are
    one body each, bit-identical to the f64 bodies they replaced;
    the Jacobian and the Hessian are differentiated rather than
@@ -1162,7 +1162,7 @@ delta walk of items 5 and 9 is parked rather than extended.
    implements neither trait, which is item 8 below, so the
    difference forms of §3 here have one implementation for the
    algebraic kernels and will need the second after item 8.
-4. ~~**Xaos**~~ -- done 2026-09-18, [ifs-general.md](../../projects/deep-zoom/ifs-general.md)
+4. ~~**Xaos**~~ -- done 2026-09-18, [ifs-general.md](../deep-zoom/ifs-general.md)
    §9d. The walk expands admissible children only, on the CPU and in
    both shaders, and the measure became the Markov chain it always
    was under a graph. A uniform xaos is bit-identical to none; a
@@ -1182,7 +1182,7 @@ delta walk of items 5 and 9 is parked rather than extended.
    default: turning it on is a judgement about shipping a second
    walk, not a gate waiting to pass.
 6. ~~**Sums, by Newton**~~ -- done 2026-09-18,
-   [ifs-general.md](../../projects/deep-zoom/ifs-general.md) §9e. A kernel summed with an
+   [ifs-general.md](../deep-zoom/ifs-general.md) §9e. A kernel summed with an
    affine is a map on both sides now: Newton from the dominant
    term's seed, decided at the point rather than at the map, and in
    the shader over the kernel's own forward body with the Jacobian
@@ -1402,8 +1402,8 @@ waiting on a solid whose SURFACE has structure at depth.
 
 Items 5 to 9 were built in the order §9 listed them. A review of
 what they achieved against the branch's actual destinations --
-[flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) and
-[ifs-general.md](../../projects/deep-zoom/ifs-general.md) -- found that the order had drifted
+[flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) and
+[ifs-general.md](../deep-zoom/ifs-general.md) -- found that the order had drifted
 from the purpose, and this section records what was found and what
 replaces §9 from here.
 
@@ -1464,7 +1464,7 @@ inverse -- the catalogue is the wall, and that lever was not touched.
 
 ### The destinations, and why the inverse direction was the wrong end
 
-[flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) renders the CHAOS GAME at
+[flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) renders the CHAOS GAME at
 depth. Its stage 2 enumerates the symbol prefixes whose composed
 image touches the viewport, forces samples through them, and weights
 each by the prefix's `∏p`; its stage 3 carries a sample's offset
@@ -1530,7 +1530,7 @@ not on the path:
 Replaces §9's tail. Each item names the plan it lives in.
 
 10. ~~**Stage 1 of the deep zoom**~~ -- done 2026-09-18,
-    [flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) §11. The mechanism is
+    [flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) §11. The mechanism is
     in and correct: off contributes no code, `q ≡ p` is
     bit-identical, and the correction recovers 95% of an imposed
     bias. Two things the measurements changed -- the warm-up was
@@ -1551,7 +1551,7 @@ Replaces §9's tail. Each item names the plan it lives in.
     piece both plans named and nobody built, and the reach lever for
     ifs-general too.
 12. **`InverseDef`s for the corpus's real blockers**
-    ([ifs-general.md](../../projects/deep-zoom/ifs-general.md) §8, the corpus meter).
+    ([ifs-general.md](../deep-zoom/ifs-general.md) §8, the corpus meter).
     Interleaved with 11 as the meter says; a day each on the
     generic-body machinery.
 13. **Stage 3 as forward difference forms**, per kernel, generic --

@@ -299,5 +299,5 @@ return false`.)
 
 ## Related
 
-- [`jwf-features.md`](../../projects/jwf-features.md) — JWF camera rotation entry (shipped with stage 1)
+- [`jwf-features.md`](../projects/jwf-features.md) — JWF camera rotation entry (shipped with stage 1)
 - [`../experimental/PROPOSAL-true-3d-affine.md`](../../experimental/PROPOSAL-true-3d-affine.md) — unrelated, but in the same general "make 3D rendering more capable" theme

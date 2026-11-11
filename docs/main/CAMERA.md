@@ -562,7 +562,7 @@ rays (`//__LENS_APPLY_RAY__` in `ifs_ray`). The terrain passes splice
 their sub-pixel jitter there instead, and the View panel hides the Lens
 section for a terrain. Flames and simulations have no lens yet: the plan
 to bring it to every mode, under this convention, is
-[camera-lens-everywhere.md](../projects/camera-lens-everywhere.md).
+[camera-lens-everywhere.md](../experimental/camera-lens-everywhere.md).
 
 ---
 

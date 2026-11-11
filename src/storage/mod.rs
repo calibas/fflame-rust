@@ -62,7 +62,7 @@ pub fn load_installed_resources() -> Vec<String> {
 /// (`plugins/variations/*.json`, `plugins/effects/*.json`), which are no
 /// longer loaded.
 ///
-/// Retired 2026-11-01 (docs/projects/rhai-plugins.md, D3): nothing in
+/// Retired 2026-11-01 (docs/archive/projects/rhai-plugins.md, D3): nothing in
 /// the UI ever installed one, and Rhai plug-ins replace them. Listed for
 /// one release so a user who placed one by hand learns why it is gone;
 /// the files are left where they are.

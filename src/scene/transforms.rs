@@ -375,7 +375,7 @@ pub struct Transform {
     /// registry order (the pre-feature behavior), so old `.fflame` files
     /// (no `variation_order`) render exactly as before. Entries that are
     /// no longer active are ignored. One canonical name per transform
-    /// (no duplicates — see `docs/projects/jwf-features.md`). Serialized
+    /// (no duplicates — see `docs/archive/projects/jwf-features.md`). Serialized
     /// only when non-empty (see the manual `Serialize`/`Deserialize`).
     pub variation_order: Vec<String>,
 
@@ -387,7 +387,7 @@ pub struct Transform {
     /// the value differs from the variation def's natural-phase priority
     /// (`Pre`→−1 / `Normal`→0 / `Post`→1), and is honored only for
     /// variations whose def phase is `VariationPhase::Any`. Empty for
-    /// nearly every transform. See `docs/projects/jwf-features.md`.
+    /// nearly every transform. See `docs/archive/projects/jwf-features.md`.
     pub variation_priorities: HashMap<String, i32>,
 
     /// Color palette position (0.0 to 1.0)
@@ -446,7 +446,7 @@ pub struct Transform {
     /// `[1, 0, 0, 1, 0, 0]` — when this is identity (and `zx_coefs`
     /// is also identity), the affine dispatch picks the "flat" path
     /// matching Apophysis math byte-for-byte. See
-    /// `docs/projects/jwf-features.md` ("zxCoefs / yzCoefs") for the
+    /// `docs/archive/projects/jwf-features.md` ("zxCoefs / yzCoefs") for the
     /// full composition rule.
     pub yz_coefs: [f32; 6],
 

@@ -1,5 +1,5 @@
 //! Simulation colourings and models written in Rhai
-//! (docs/projects/rhai-plugins.md, P4). A model is below the colourings
+//! (docs/archive/projects/rhai-plugins.md, P4). A model is below the colourings
 //! ([`compile_model`]): the same naming, registry and carrying.
 //!
 //! A colouring's source -- `fn cell_color(cell, p, ctx)`, a cell's sample

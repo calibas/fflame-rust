@@ -1,4 +1,4 @@
-//! The surface texture on the 3D terrain (docs/projects/surface-textures.md):
+//! The surface texture on the 3D terrain (docs/archive/projects/surface-textures.md):
 //! a bump from Grain, Paper, Rock or the simulation texture, mapped
 //! triplanar, anchored to the plane, with octaves that keep its size on
 //! screen as the view zooms, filtered by the pixel's footprint, and masked
@@ -20,7 +20,7 @@ pub const SURFACE_OCTAVES: usize = 6;
 /// a new landform.
 pub const SURFACE_BUMP: f32 = 0.25;
 
-/// A kind's octave window (docs/projects/surface-textures.md): octave `k`
+/// A kind's octave window (docs/archive/projects/surface-textures.md): octave `k`
 /// of the plane's dyadic ladder weighs a window over `j = k - c`, `c` the
 /// log2 of the target wavelength, from `-J` (finest) to 1 (coarsest), with
 /// a fractal falloff `2^(H j)`.

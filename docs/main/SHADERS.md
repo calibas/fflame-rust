@@ -247,7 +247,7 @@ a variation others move is classified too, so an ungated placement
 cannot carry the move into it. A moved variation applies its weight in
 the emission. The overrides come from `collect_phase_overrides` and
 are part of `ShaderConstants`, so editing one rebuilds the shader; see
-[jwf-features.md](../projects/jwf-features.md).
+[jwf-features.md](../archive/projects/jwf-features.md).
 
 Arguments after the point follow the variation's declaration, built
 for all six phase sites by one function (`variation_call`), which also
@@ -913,8 +913,8 @@ one symbol of a word, called by both the render's replay arm and
 `replay_delta.wgsl` is the shader copy of `scene::forward_delta`,
 held to it by `the_shader_forward_forms_are_the_cpu_ones`. See
 [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md),
-[gpu-cylinder-planning.md](../projects/deep-zoom/gpu-cylinder-planning.md)
-and [deep-zoom-precision.md](../projects/deep-zoom/deep-zoom-precision.md).
+[gpu-cylinder-planning.md](../archive/deep-zoom/gpu-cylinder-planning.md)
+and [deep-zoom-precision.md](../archive/deep-zoom/deep-zoom-precision.md).
 
 ---
 

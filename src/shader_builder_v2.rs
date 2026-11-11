@@ -387,30 +387,30 @@ pub struct ShaderConstants {
     /// deposit are all stripped and the shader is byte-identical to a
     /// build without the feature. Tracked here so toggling it triggers
     /// a rebuild via the cache's constants-changed check. See
-    /// docs/projects/deep-zoom/flame-deep-zoom.md stage 1.
+    /// docs/archive/deep-zoom/flame-deep-zoom.md stage 1.
     pub importance_sampling: bool,
 
     /// Whether the forced prefix plots in VIEW-RELATIVE coordinates
-    /// (`docs/projects/deep-zoom/flame-deep-zoom.md`). Only ever set together
+    /// (`docs/archive/deep-zoom/flame-deep-zoom.md`). Only ever set together
     /// with the composed arm, and only for a flame whose plot path
     /// has nothing else that works in world coordinates.
     pub cylinder_relative: bool,
 
     /// Whether the forced prefix is REPLAYED symbol by symbol rather
     /// than applied as one composed matrix
-    /// (`docs/projects/deep-zoom/flame-deep-zoom.md`). Set when the flame has a
+    /// (`docs/archive/deep-zoom/flame-deep-zoom.md`). Set when the flame has a
     /// map that is bounded but not affine, where no single matrix
     /// exists. Only read when `cylinder_targeting` is on.
     pub cylinder_replay: bool,
 
     /// Whether the replay's last steps run in OFFSETS from reference
-    /// orbits (`docs/projects/deep-zoom/deep-zoom-precision.md`), which the plan
+    /// orbits (`docs/archive/deep-zoom/deep-zoom-precision.md`), which the plan
     /// carries where the view is too deep for f32. Only with the replay,
     /// in 2D, and with `cylinder_relative`, whose plot it feeds.
     pub cylinder_offsets: bool,
 
     /// Whether the frame-coverage counters are compiled in (auto
-    /// exposure — `docs/projects/deep-zoom/flame-deep-zoom.md`). Drives
+    /// exposure — `docs/archive/deep-zoom/flame-deep-zoom.md`). Drives
     /// `FRAME_COVERAGE`; when false the binding, the per-thread
     /// tallies and the flush are all stripped, so a render that is
     /// not auto-exposing is byte-identical to one built before the
@@ -418,7 +418,7 @@ pub struct ShaderConstants {
     pub frame_coverage: bool,
 
     /// Whether cylinder targeting runs for this flame and view
-    /// (`docs/projects/deep-zoom/flame-deep-zoom.md` stage 2). Drives
+    /// (`docs/archive/deep-zoom/flame-deep-zoom.md` stage 2). Drives
     /// `CYLINDER_TARGETING` — when false the binding, the word draw
     /// and the forced prefix are stripped. Tracked here so entering
     /// and leaving targeting triggers a rebuild through the cache's
@@ -528,7 +528,7 @@ pub struct ShaderConstants {
     /// `PartialEq` derive, editing a priority invalidates the cached
     /// shader and forces a rebuild (priority edits are rare, unlike
     /// weight drags, so a rebuild is acceptable). Empty for the vast
-    /// majority of flames. See `docs/projects/jwf-features.md`.
+    /// majority of flames. See `docs/archive/projects/jwf-features.md`.
     pub variation_priorities: std::collections::BTreeMap<u32, std::collections::BTreeMap<u32, i32>>,
 }
 
@@ -1896,7 +1896,7 @@ impl ShaderBuilder {
         processor.set("PROBE_PAIRED", constants.probe && constants.probe_paired);
         // IMPORTANCE_SAMPLING gates biased transform selection and the
         // windowed likelihood-ratio correction that makes it unbiased
-        // (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). Off strips the
+        // (docs/archive/deep-zoom/flame-deep-zoom.md stage 1). Off strips the
         // binding, both biased selection functions, the per-thread
         // window state and the stochastic deposit -- the shader is the
         // text it was before the feature existed, which
@@ -1906,13 +1906,13 @@ impl ShaderBuilder {
         processor.set("IMPORTANCE_SAMPLING", constants.importance_sampling);
         // CYLINDER_TARGETING forces an enumerated prefix at plot time
         // so every sample lands in the viewport
-        // (docs/projects/deep-zoom/flame-deep-zoom.md stage 2). Off strips the
+        // (docs/archive/deep-zoom/flame-deep-zoom.md stage 2). Off strips the
         // binding, the draw and the prefix.
         processor.set("CYLINDER_TARGETING", constants.cylinder_targeting);
         processor.set("PERSISTENT_ORBITS", constants.persistent_orbits);
         // FRAME_COVERAGE tallies plot attempts and in-frame landings so
         // the tone map can be told what share of the work the viewport
-        // holds (docs/projects/deep-zoom/flame-deep-zoom.md).
+        // holds (docs/archive/deep-zoom/flame-deep-zoom.md).
         processor.set("FRAME_COVERAGE", constants.frame_coverage);
         // CYLINDER_REPLAY picks which arm of the forced prefix is
         // emitted: the composed matrix, or the symbol walk.
@@ -1921,7 +1921,7 @@ impl ShaderBuilder {
         // coordinates so a deep zoom is not quantised by f32.
         processor.set("CYLINDER_RELATIVE", constants.cylinder_relative);
         // CYLINDER_OFFSETS carries the replay's deep steps as offsets from
-        // reference orbits (docs/projects/deep-zoom/deep-zoom-precision.md).
+        // reference orbits (docs/archive/deep-zoom/deep-zoom-precision.md).
         processor.set("CYLINDER_OFFSETS", constants.cylinder_offsets && constants.cylinder_replay);
         // FLATTEN_Z_PER_ITER used to insert a blanket `current.z = 0.0;`
         // at the end of each iteration under preserve_z=false. That
@@ -2152,7 +2152,7 @@ impl ShaderBuilder {
     }
 
     /// The planner's GPU kernel for `flame` -- see
-    /// `docs/projects/deep-zoom/gpu-cylinder-planning.md` and `scene::plan_gpu`.
+    /// `docs/archive/deep-zoom/gpu-cylinder-planning.md` and `scene::plan_gpu`.
     ///
     /// The flame's definitions, built with the replay flag on so the
     /// armed variations' draws read a forced arm, followed by
@@ -2619,7 +2619,7 @@ fn flame_map3(xform_id: u32, u: vec3<f32>, seed: u32) -> vec3<f32> {{\n\
                 // (`temp = f(temp)`). An Any variation MOVED into pre is a
                 // normal-style body, so apply its weight here and honor
                 // Feature::Replace (assign vs accumulate); see the table in
-                // docs/projects/jwf-features.md.
+                // docs/archive/projects/jwf-features.md.
                 let body = if placed.moved {
                     let w = format!("xform.variations[{}]", idx);
                     if info.has_feature(Feature::Replace) {

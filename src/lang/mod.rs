@@ -1,11 +1,11 @@
 //! The formula language: Rhai, and Ultra Fractal's (which accepts
 //! Fractint's shape), compiled to WGSL -- the one compiler for every kind
 //! written in it: escape-time formulas, colourings and solids, flame
-//! variations, effects (docs/projects/rhai-plugins.md, design rule 1).
+//! variations, effects (docs/archive/projects/rhai-plugins.md, design rule 1).
 //! Its own module since 2026-11-02; it was the escape engine's.
 //!
 //! The plan, the language reference this follows and the order of work
-//! are in `docs/projects/escape-formula-language.md`. In brief: a file
+//! are in `docs/archive/projects/escape-formula-language.md`. In brief: a file
 //! holds entries (`Name { ... }`), an entry holds sections (`init:`,
 //! `loop:`, `bailout:`, `final:`, `default:` ...), and an entry is
 //! either a fractal FORMULA (`.ufm`, `.frm`) or a COLOURING (`.ucl`).
@@ -59,14 +59,14 @@ pub enum EntryKind {
     /// The position is `#pixel` and `#pixelz`; `distance` writes the
     /// estimate as `#index` in `final:`.
     Solid,
-    /// A post-processing effect (docs/projects/rhai-plugins.md, P2), Rhai
+    /// A post-processing effect (docs/archive/projects/rhai-plugins.md, P2), Rhai
     /// only: `fn effect(c, p, ctx)`, the input's colour at the pixel to
     /// the output's, run per pixel of the image. `#pixel` is the pixel's
     /// position in the image (0 to 1); the result is written to the
     /// `effect_*` places, and reads of the input are the `__sample_*`
     /// and `__load_*` built-ins.
     Effect,
-    /// A simulation's colouring (docs/projects/rhai-plugins.md, P4), Rhai
+    /// A simulation's colouring (docs/archive/projects/rhai-plugins.md, P4), Rhai
     /// only: `fn cell_color(cell, p, ctx)`, a cell's sample -- its state
     /// and the derived fields the template measures -- to a colour and its
     /// coverage. The sample's reads are the `__cell` built-in, the

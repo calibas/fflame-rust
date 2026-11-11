@@ -10,6 +10,13 @@ it goes to [docs/archive/](../archive/) with a banner saying so.
 
 | Doc | What it is |
 |---|---|
+| [terrain-speed.md](terrain-speed.md) | A deep escape terrain's section renders out of the governor's reach. A rough outline; measure first. |
+| [preview-slicing.md](preview-slicing.md) | The Fractal Browser's previews as a job advanced a few ms a frame. Planned 2026-11-04; four decisions. |
+| [camera-lens-everywhere.md](camera-lens-everywhere.md) | The camera lens in every mode. Planned 2026-10-10; three decisions. |
+| [slow-frame-slider-hold.md](slow-frame-slider-hold.md) | Hold any slider's drag once its frames turn slow. Planned 2026-10-12. |
+| [online-assets.md](online-assets.md) | Skies and textures from providers (Poly Haven first). Planned and decided 2026-10-21. |
+| [hyperbolic-camera-extras.md](hyperbolic-camera-extras.md) | The hyperbolic camera's roadmap: pathing and navigation through the animation system next. |
+| [wasm-modules.md](wasm-modules.md) | The web app against the desktop, and ways to load parts on demand. Researched 2026-10-23. |
 | [planner-experiments.md](planner-experiments.md) | Five experiments from the 2026-11-09 review of `rhai-planners`: a distance field from Focused Rendering's samples, inverses by Newton's method, plans from the Flame Attractor's beam walk, Focused Rendering in 3D (z as a passenger; true 3D). Not started. |
 | [3d-lut.md](3d-lut.md) | A 3D colour lookup table after the tonemap. Not started. |
 | [filmic-tunable.md](filmic-tunable.md) | A tunable (Hable-style) filmic highlight curve beside the shipped Clip/MaxNorm/Reinhard/Filmic. Not started. |
@@ -30,5 +37,5 @@ it goes to [docs/archive/](../archive/) with a banner saying so.
 - **Skill levels in the UI** (progressive disclosure): phase 2 of the
   archived [UX plan](../archive/projects/ux-improvements.md), never built.
 - **Temporal antialiasing and spectral rendering** for the escape
-  engine: listed in [escape-sim-followups.md](../projects/escape-sim-followups.md),
+  engine: listed in [escape-sim-followups.md](../archive/projects/escape-sim-followups.md),
   costed in the archived new-families research.

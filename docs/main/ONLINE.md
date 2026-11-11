@@ -437,7 +437,7 @@ arrives. The registration checks are in [EFFECTS.md](EFFECTS.md).
 
 Local WGSL plug-in files -- a variation or effect in the download's
 JSON under `<app data>/plugins/variations/` or `plugins/effects/` --
-were retired 2026-11-01 ([rhai-plugins.md](../projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them. A start that finds such files names them in a
+were retired 2026-11-01 ([rhai-plugins.md](../archive/projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them. A start that finds such files names them in a
 notice (stderr headless) for one release and leaves them in place
 (`storage::retired_plugin_files`). Their replacement is local: Rhai
 plug-ins, a flag on a file of the user's formulas

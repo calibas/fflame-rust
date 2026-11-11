@@ -675,7 +675,7 @@ reseeding on it would make every model unusable.
 
 ## Colourings written in Rhai
 
-A colouring may be a Rhai script ([rhai-plugins.md](../projects/rhai-plugins.md),
+A colouring may be a Rhai script ([rhai-plugins.md](../archive/projects/rhai-plugins.md),
 P4): `fn cell_color(cell, p, ctx)`, a cell's sample to a colour and its
 coverage, compiled by the formula language
 ([ESCAPE.md](ESCAPE.md#the-formula-language), `EntryKind::SimColoring`)
@@ -733,7 +733,7 @@ to the `sim_color` the colour template calls.
 
 ## Models written in Rhai
 
-A model may be a Rhai script too ([rhai-plugins.md](../projects/rhai-plugins.md),
+A model may be a Rhai script too ([rhai-plugins.md](../archive/projects/rhai-plugins.md),
 P4 steps 2-9): `EntryKind::SimModel`, each function compiled by the
 formula language to the WGSL the step, seed and agent templates call --
 any model the built-ins are, each of the 31 with a twin.

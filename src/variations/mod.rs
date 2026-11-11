@@ -112,7 +112,7 @@ pub enum VariationPhase {
     /// variations honour it. With no override the variation defaults to
     /// the **normal** bucket. The combine form when moved to pre/post is
     /// chosen by [`crate::variations::definition::Feature::Replace`].
-    /// See `docs/projects/jwf-features.md`.
+    /// See `docs/archive/projects/jwf-features.md`.
     Any,
 }
 

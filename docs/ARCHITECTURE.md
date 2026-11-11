@@ -159,8 +159,8 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | `src/provenance.rs` | Where a thing came from, one model for every kind: `Origin` (`Builtin`, `Local`, `Api`), which the library's lists, the Scripts and Textures panels read; a registry entry's `Provenance` (`Builtin`, `Api { version }`, `Local`) adds the server's version to a download | [ONLINE.md](main/ONLINE.md) |
 | `src/contract.rs` | Generates the client/API contract, `docs/generated/engine-contract.json` | [RELEASE.md](RELEASE.md) |
 | `src/script/` | Sandboxed Rhai scripting: the host and seeded RNG (`host.rs`), the registered API (`api.rs`, `builtins.rs`, `color.rs`, `anim.rs`), the script library and store, the `generate` CLI (`cli.rs`), the calls every surface without the editor makes -- list, source, parameters, run stages -- shared by `wasm/script` and `wasm/python` (`headless.rs`) | [SCRIPTING.md](main/SCRIPTING.md), [SCRIPTING-GUIDE.md](main/SCRIPTING-GUIDE.md) |
-| `src/lang/` | The formula language, the GPU dialect: Rhai, Ultra Fractal's and Fractint's compiled to WGSL, for escape formulas, colourings and solids, flame variations, effects, and simulation models and colourings. Rhai is only parsed, never run: its syntax tree is lowered to the language's IR (lexer, parser, checker, `ir.rs`, `wgsl.rs`; the CPU interpreter `interp.rs` and the deep-zoom passes beside them) | [ESCAPE.md](main/ESCAPE.md#the-formula-language), [rhai-plugins.md](projects/rhai-plugins.md) |
-| `src/scripted.rs` | What every user-written script shares: its UUID (`mint_id`), its version (the SHA-256 of its source), its labels by locale (`Label`), its registry key `u<uuid>_<hash8>` (`key`), and the `Ledger` of what is registered | [rhai-plugins.md](projects/rhai-plugins.md) |
+| `src/lang/` | The formula language, the GPU dialect: Rhai, Ultra Fractal's and Fractint's compiled to WGSL, for escape formulas, colourings and solids, flame variations, effects, and simulation models and colourings. Rhai is only parsed, never run: its syntax tree is lowered to the language's IR (lexer, parser, checker, `ir.rs`, `wgsl.rs`; the CPU interpreter `interp.rs` and the deep-zoom passes beside them) | [ESCAPE.md](main/ESCAPE.md#the-formula-language), [rhai-plugins.md](archive/projects/rhai-plugins.md) |
+| `src/scripted.rs` | What every user-written script shares: its UUID (`mint_id`), its version (the SHA-256 of its source), its labels by locale (`Label`), its registry key `u<uuid>_<hash8>` (`key`), and the `Ledger` of what is registered | [rhai-plugins.md](archive/projects/rhai-plugins.md) |
 
 ### Verification and diagnostics
 
@@ -180,7 +180,7 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | `assets/` | `presets.fflame`, `palettes/` (packs and loose files), `scripts/`, `textures/`, `fonts/`, `branding/` |
 | `build.rs` | Build provenance (version, git hash, profile), the WASM palette manifest, embedded texture presets, asset and shader copies into the target directory, the Windows icon |
 | `wasm/` | Gallery crates `script`, `render`, `flame`, `escape`, `sim`; see [wasm/README.md](../wasm/README.md). `python`: the library for WASI, pyfflame's engine |
-| `python/` | `pyfflame`: the WASI module run by wasmtime, its GPU work by wgpu-py -- config editing, `.flame` conversion, scripts, rendering, animation, video; [projects/pyfflame.md](projects/pyfflame.md) |
+| `python/` | `pyfflame`: the WASI module run by wasmtime, its GPU work by wgpu-py -- config editing, `.flame` conversion, scripts, rendering, animation, video; [projects/pyfflame.md](archive/projects/pyfflame.md) |
 | `tests/` | `regression.rs`, `shader_dumps/`, `test_configs/`, and `visual/` (383 configs in `2d`, `3d`, `escape`, `sim`, `solid`, `tonemap`, `variations`) |
 | `benches/` | `flame_bench.rs` (Criterion) |
 | `scripts/` | `release.py`, `run_benchmarks.py`, `check_doc_links.py`, audits and one-shot codemods |
@@ -374,7 +374,7 @@ written, built-in twins and the user's own alike, edited in the Formula
 Editor. **The scripting API** (`src/script/`) is full Rhai on the CPU,
 sandboxed: generators, modifiers and libraries, below.
 The direction, every kind written in Rhai, is
-[projects/rhai-plugins.md](projects/rhai-plugins.md).
+[projects/rhai-plugins.md](archive/projects/rhai-plugins.md).
 
 Rhai scripts generate a config (generators) or change a copy of the
 current one (modifiers), under execution budgets and with a pinned PRNG,
@@ -458,7 +458,7 @@ pyfflame's run under `python scripts/release.py gallery`.
 | Desktop app and CLI | `cargo run --release`; release builds use `cargo build --profile dist` | wgpu backends: Vulkan, Metal, GLES (no DX12) |
 | Web app | `./build-wasm.sh` (or `.bat`): `--profile dist` plus wasm-bindgen | WebGPU only; [WASM.md](WASM.md) |
 | Gallery modules | `wasm-pack build --target web --release` in `wasm/script`, `wasm/render` | each depends on the library with `default-features = false`; [wasm/README.md](../wasm/README.md) |
-| Python | `python python/build.py` (the module, `cargo build` in `wasm/python` for `wasm32-wasip1`, into the package; `--wheel`) | one pure-Python wheel; [projects/pyfflame.md](projects/pyfflame.md) |
+| Python | `python python/build.py` (the module, `cargo build` in `wasm/python` for `wasm32-wasip1`, into the package; `--wheel`) | one pure-Python wheel; [projects/pyfflame.md](archive/projects/pyfflame.md) |
 
 Profiles in `Cargo.toml`: `release`; `dist` (fat LTO, stripped,
 `panic = "abort"`); `dist-symbols` (dist with names kept); `dist-debug`
@@ -548,7 +548,7 @@ Detail: [TESTING-GUIDE.md](TESTING-GUIDE.md).
 | [TESTING-GUIDE.md](TESTING-GUIDE.md) | tests, benchmarks, probes |
 | [WASM.md](WASM.md) | building and running the web app |
 | [tutorials/](tutorials/README.md) | user-facing introductions |
-| [projects/](projects/README.md) | active plans; the paused flame deep-zoom work is in [projects/deep-zoom/](projects/deep-zoom/deep-zoom-tracker.md) |
+| [projects/](projects/README.md) | active plans; the paused flame deep-zoom work is in [projects/deep-zoom/](archive/deep-zoom/deep-zoom-tracker.md) |
 | [experimental/](experimental/README.md) | ideas not yet planned |
 | [archive/](archive/README.md) | finished projects and history, e.g. [the histogram's evolution](archive/histogram/README.md), [persistent orbits](archive/projects/persistent-orbits.md), [the delta-based config migration](archive/delta-migration/) |
 | `docs/generated/` | generated reports and the API contract; do not edit by hand |

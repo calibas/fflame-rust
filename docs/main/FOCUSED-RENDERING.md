@@ -38,21 +38,21 @@ ordered lives in the tracker, not here.
 - [UI.md](UI.md) — the View panel and the panel system
 
 **Design record** (history, measurements, and the open work):
-- [deep-zoom-tracker.md](../projects/deep-zoom/deep-zoom-tracker.md) —
+- [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-tracker.md) —
   **start here**: status, measurements, agreed order of work
-- [flame-deep-zoom.md](../projects/deep-zoom/flame-deep-zoom.md) — the
+- [flame-deep-zoom.md](../archive/deep-zoom/flame-deep-zoom.md) — the
   stages, and why a forced sample keeps the picture unbiased
-- [inversive-targeting.md](../projects/deep-zoom/inversive-targeting.md)
+- [inversive-targeting.md](../archive/deep-zoom/inversive-targeting.md)
   — the inverse walk and its completeness; family M
-- [gpu-cylinder-planning.md](../projects/deep-zoom/gpu-cylinder-planning.md)
+- [gpu-cylinder-planning.md](../archive/deep-zoom/gpu-cylinder-planning.md)
   — planning on the GPU, and on the web
-- [deep-zoom-precision.md](../projects/deep-zoom/deep-zoom-precision.md)
+- [deep-zoom-precision.md](../archive/deep-zoom/deep-zoom-precision.md)
   — past f32: the replay in offsets
-- [forward-bounds.md](../projects/deep-zoom/forward-bounds.md) — bounds
+- [forward-bounds.md](../archive/deep-zoom/forward-bounds.md) — bounds
   derived from a variation's WGSL
-- [word-editing.md](../projects/deep-zoom/word-editing.md) — trim,
+- [word-editing.md](../archive/deep-zoom/word-editing.md) — trim,
   removals, solo, the Paths panel, PathMap by path
-- [ifs-general.md](../projects/deep-zoom/ifs-general.md) — the shared IFS
+- [ifs-general.md](../archive/deep-zoom/ifs-general.md) — the shared IFS
   machinery (`InverseDef`)
 - Superseded: [ifs-measure-by-inverse-walk.md](../archive/projects/ifs-measure-by-inverse-walk.md),
   [ifs-perturbation-delta.md](../archive/projects/ifs-perturbation-delta.md)
@@ -226,7 +226,7 @@ the first level; a frontier the table cannot hold is still
 `TooManyWords`; a cancel (the view has moved on) stops it. Measured on
 `jac_asn`, whose bound is a loop: it used to search 47 s to refuse with
 too many words, and now plans in the budget
-([rhai-one-form.md](../projects/rhai-one-form.md), the time budget).
+([rhai-one-form.md](../archive/projects/rhai-one-form.md), the time budget).
 
 Forward bounds come from three places (`ifs_ball::derived`). Five are
 written by hand (`bound::BOUNDS`: `spherical`, `bubble`, `julian`,
@@ -244,7 +244,7 @@ arithmetic, retried once on a subdivided input before refusing:
 
 Both evaluators share `variations::interval`. Over the twins the tree's
 bound is the WGSL's at the median and within 6% at the 99th percentile
-([rhai-one-form.md](../projects/rhai-one-form.md), step 2).
+([rhai-one-form.md](../archive/projects/rhai-one-form.md), step 2).
 
 **The inverse walk** pulls the view back through the maps' inverses,
 guided by an indexed sample of the attractor, instead of pushing a disc
@@ -540,7 +540,7 @@ several lengths. See [COLOR.md](COLOR.md) for the styles.
 
 - **Auto exposure** -- see Brightness above.
 - **Importance-sampled selection** (stage 1 of
-  [flame-deep-zoom.md](../projects/deep-zoom/flame-deep-zoom.md);
+  [flame-deep-zoom.md](../archive/deep-zoom/flame-deep-zoom.md);
   `FractalConfig::importance`, [src/scene/importance.rs](../../src/scene/importance.rs),
   the `IMPORTANCE_SAMPLING` flag). Biased transform selection with a
   windowed likelihood-ratio correction. A config-only mechanism: it has
@@ -586,7 +586,7 @@ gitignored `output/` directory: they run only where those files exist.
 ## Known gaps and open work
 
 The open items, their measurements and their order are in
-[deep-zoom-tracker.md](../projects/deep-zoom/deep-zoom-tracker.md). The
+[deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-tracker.md). The
 ones a user can meet:
 
 - **Opacity** (tracker C17). A forced sample is plotted by the free

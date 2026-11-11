@@ -45,7 +45,7 @@ struct Transform {
 
     // JWildfire-extension plane affines, indexed `[a, c, b, d, e, f]`
     // matching the XML attribute write order. See
-    // `docs/projects/jwf-features.md` ("zxCoefs / yzCoefs") for the
+    // `docs/archive/projects/jwf-features.md` ("zxCoefs / yzCoefs") for the
     // composition rule transcribed from `TransformationAffineFullStep`.
     yz_coefs: array<f32, 6>,
     zx_coefs: array<f32, 6>,
@@ -217,7 +217,7 @@ struct AttachmentList {
 @group(0) @binding(7) var<storage, read_write> path_ids: array<u32>;
 
 // Binding 8 intentionally unused: the path filters, which word editing
-// replaced (docs/projects/deep-zoom/word-editing.md).
+// replaced (docs/archive/deep-zoom/word-editing.md).
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
 // Modifies probability of selecting dst transform when coming from src
 @group(0) @binding(9) var<storage, read> xaos_weights: array<f32>;
@@ -356,7 +356,7 @@ fn rng_nextf(rng: ptr<function, RngState>) -> f32 {
 //     sequential affine composition (in which earlier offsets would
 //     propagate through later rotations); JWildfire decouples linear
 //     and offset on purpose. See
-//     `docs/projects/jwf-features.md` ("zxCoefs / yzCoefs") for the
+//     `docs/archive/projects/jwf-features.md` ("zxCoefs / yzCoefs") for the
 //     full reasoning. We mirror their math exactly so on-disk values
 //     produce the same render in both apps.
 

@@ -1,5 +1,5 @@
 """One-shot codemod: move the formula language out of the escape engine
-(docs/projects/rhai-plugins.md, the compiler's own feature, 2026-11-02).
+(docs/archive/projects/rhai-plugins.md, the compiler's own feature, 2026-11-02).
 
 src/escape/lang/ becomes src/lang/ (`crate::lang`, the `lang` feature,
 which `engine-escape` turns on), so a build without the escape engine --

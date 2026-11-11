@@ -3457,7 +3457,7 @@ mod tests {
     }
 }
 
-/// The surface texture (docs/projects/surface-textures.md): its kind,
+/// The surface texture (docs/archive/projects/surface-textures.md): its kind,
 /// strength and scale, and where on the slope it applies. One set for the
 /// 2D relief and the 3D terrain.
 pub(crate) fn surface_texture_controls(

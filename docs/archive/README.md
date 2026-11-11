@@ -29,6 +29,7 @@ which live doc to read instead.
 |---|---|
 | [projects/](projects/) | Finished project plans, grouped by area in its [README](projects/README.md) |
 | [escape-time/](escape-time/) | The escape-time engine's design record, its finished plans and source conversations ([README](escape-time/README.md)) |
+| [deep-zoom/](deep-zoom/) | Focused Rendering (flame deep zoom): the tracker and the design docs, archived 2026-11-11 with coverage work paused ([README](deep-zoom/README.md)) |
 | [terrain/](terrain/) | The 3D height-field terrain and its height quality ([README](terrain/README.md)) |
 | [3d-camera/](3d-camera/) | The 4-angle camera, fly mode, and the camera unification ([README](3d-camera/README.md)) |
 | [experimental/](experimental/) | Proposals since implemented or overtaken ([README](experimental/README.md)) |

@@ -1,4 +1,4 @@
-//! Effects written in Rhai (docs/projects/rhai-plugins.md, P2).
+//! Effects written in Rhai (docs/archive/projects/rhai-plugins.md, P2).
 //!
 //! An effect's source -- `fn effect(c, p, ctx)`, the input's colour at a
 //! pixel to the output's -- compiles through the formula language

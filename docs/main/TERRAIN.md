@@ -35,9 +35,9 @@ machinery.
   picture, read by every tier.
 - [ifs-distance-rendering.md](../archive/escape-time/ifs-distance-rendering.md):
   mode D.
-- [escape-sim-followups.md](../projects/escape-sim-followups.md): open
+- [escape-sim-followups.md](../archive/projects/escape-sim-followups.md): open
   work, including the solid path tracer's speed.
-- [solid-rendering-todo.md](../projects/solid-rendering-todo.md): lighting
+- [solid-rendering-todo.md](../archive/projects/solid-rendering-todo.md): lighting
   and material work deferred (environment maps, point lights).
 
 **Code locations:**
@@ -876,7 +876,7 @@ frame's rows in bands the GPU's watchdog never notices:
 It is slow. The shipped Menger sponge at 1080p takes seconds a sample
 (256 samples is tens of minutes on a GTX 1660 SUPER). The measurements
 and the candidate speed-ups are the TODO in
-[escape-sim-followups.md](../projects/escape-sim-followups.md).
+[escape-sim-followups.md](../archive/projects/escape-sim-followups.md).
 
 ---
 
@@ -1052,7 +1052,7 @@ inverted map can tell it from land at distance 0 and leave it on top.
 The escape relief's texture (`EscapeShading`: Grain, Paper, Rock or the
 simulation texture, its strength and scale, and Where) is bumped into
 an escape terrain's surface: the shading normal tilts, the geometry
-does not ([surface-textures.md](../projects/surface-textures.md)). A
+does not ([surface-textures.md](../archive/projects/surface-textures.md)). A
 simulation's terrain has none. A terrain's is drawn in the Lighting &
 Material panel's Surface section, a plane's relief's in the Escape
 panel.
@@ -1594,17 +1594,17 @@ the peaks.
 - **A deep terrain is slow to play and to fill.** Its section renders,
   single steps of up to 360 ms, are no cost the quality governor's
   render scale reaches; an outline is in
-  [terrain-speed.md](../projects/terrain-speed.md).
+  [terrain-speed.md](../experimental/terrain-speed.md).
 - **The solid path tracer is slow.** Measurements and candidates are in
-  [escape-sim-followups.md](../projects/escape-sim-followups.md).
+  [escape-sim-followups.md](../archive/projects/escape-sim-followups.md).
 - **Scripts cannot reach the terrain or the path tracer.** There are no
   terrain functions, and `config.set` will not create the skip-if-default
   groups. That is the open decision D2 in
-  [escape-sim-followups.md](../projects/escape-sim-followups.md).
+  [escape-sim-followups.md](../archive/projects/escape-sim-followups.md).
   Animation tracks do reach them.
 - **No lens on the terrains.** Their rays carry the jitter where mode D's
   carry the lens; see
-  [camera-lens-everywhere.md](../projects/camera-lens-everywhere.md).
+  [camera-lens-everywhere.md](../experimental/camera-lens-everywhere.md).
 - **Deferred from the plan:** HDRI environments, sun shafts and terrain
   presets ([heightfield-3d.md](../archive/terrain/heightfield-3d.md)).
 - **A locked terrain's camera** rests on the locked top, not on the

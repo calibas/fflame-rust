@@ -122,4 +122,4 @@ python python/tools/compare_native.py tests/visual/configs/escape/*.fflame
 ```
 
 The design, what was measured, and what is open:
-[docs/projects/pyfflame.md](../docs/projects/pyfflame.md).
+[docs/archive/projects/pyfflame.md](../docs/archive/projects/pyfflame.md).

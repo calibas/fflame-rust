@@ -10,7 +10,7 @@
 > [FOCUSED-RENDERING.md](../../main/FOCUSED-RENDERING.md),
 > [ESCAPE.md](../../main/ESCAPE.md). Left open: splits' deep zoom in the
 > Flame Attractor, which wants an image gap per branch -- in
-> [escape-sim-followups.md](../../projects/escape-sim-followups.md).
+> [escape-sim-followups.md](escape-sim-followups.md).
 
 Status: **Parts A (steps 1-2), B (B1-B3) and C (C1-C3) built** (2026-11-08,
 branch `rhai-planners`); D and E on 2026-11-09 (below): every twin whose built-in derives a bound derives

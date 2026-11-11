@@ -201,7 +201,7 @@ fn parse_flame_element(
             //   createAttr("rotate", pFlame.getCamRoll())
             //   createAttr("cam_roll", (pFlame.getCamBank() * Math.PI) / 180.0)
             // So `cam_roll` here lands on `camera_bank`, in radians.
-            // See docs/projects/jwf-features.md ("Camera rotation").
+            // See docs/archive/projects/jwf-features.md ("Camera rotation").
             "cam_roll" => cam_bank = value.parse().unwrap_or(0.0),
             "cam_zpos" => cam_zpos = value.parse().unwrap_or(0.0),
             // JWildfire's modern 3-axis camera position attributes.

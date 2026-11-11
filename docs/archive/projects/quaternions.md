@@ -1,6 +1,6 @@
 # Quaternions in Rhai, Halayka's sets, escape paths
 
-> **Archived 2026-11-04** -- finished: built 2026-10-22 (branch `quaternions`) -- the `quat` type in Rhai solids and 3D variations, Halayka's sets as a solid with presets, his escape paths as a flame variation. The one open item, the shell's other face (a march of its own), is in [escape-sim-followups.md](../../projects/escape-sim-followups.md) (*3D views: not built*). Read [ESCAPE.md](../../main/ESCAPE.md) (the formula language) for how it works now; this is the record of what was decided and measured.
+> **Archived 2026-11-04** -- finished: built 2026-10-22 (branch `quaternions`) -- the `quat` type in Rhai solids and 3D variations, Halayka's sets as a solid with presets, his escape paths as a flame variation. The one open item, the shell's other face (a march of its own), is in [escape-sim-followups.md](escape-sim-followups.md) (*3D views: not built*). Read [ESCAPE.md](../../main/ESCAPE.md) (the formula language) for how it works now; this is the record of what was decided and measured.
 
 Decided 2026-10-22; built the same day (branch `quaternions`). The
 user's words: "I found other 3d quaternion

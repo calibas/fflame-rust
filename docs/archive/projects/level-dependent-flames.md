@@ -1,6 +1,6 @@
 # Level-dependent flames (Moran sets)
 
-> **Archived 2026-10-23** -- experiment complete. The Rhai variation shipped as a Formula Editor example with six presets; levels of the user's own transforms need no feature, since xaos and a subflame already draw them (the recipe is below and in [TRANSFORMS.md](../../main/TRANSFORMS.md#xaos)); mode D's opacity gap, found here, is in [escape-sim-followups.md](../../projects/escape-sim-followups.md). This is the record of what was tried and found.
+> **Archived 2026-10-23** -- experiment complete. The Rhai variation shipped as a Formula Editor example with six presets; levels of the user's own transforms need no feature, since xaos and a subflame already draw them (the recipe is below and in [TRANSFORMS.md](../../main/TRANSFORMS.md#xaos)); mode D's opacity gap, found here, is in [escape-sim-followups.md](escape-sim-followups.md). This is the record of what was tried and found.
 
 The user's words: "I do like the level-dependent flames idea though. I'm
 wondering if there's a way we can test it quick"; after the test, "keep
@@ -128,7 +128,7 @@ carpet's middle: mode D ignores opacity, and the chaos game plots only
 level 1. Had it gone ahead:
 1. Mode D honours opacity 0 for every flame (the outermost map of a
    plotted point is one that plots) -- recorded as an open gap in
-   [escape-sim-followups.md](../../projects/escape-sim-followups.md).
+   [escape-sim-followups.md](escape-sim-followups.md).
 2. Its own split expansion: the subflame shortcut has no inverse, but s
    coarse copies followed by one copy of the fine set whose xaos returns
    only to itself is the fine levels exactly, in s + |F| maps (that

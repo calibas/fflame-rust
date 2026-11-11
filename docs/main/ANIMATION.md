@@ -758,7 +758,7 @@ in [EXPORT.md](EXPORT.md) (*Video Export*). What belongs to animation:
 ## Script tracks
 
 A **script track** (`TrackSource::Script`; plan and record in
-[rhai-tracks.md](../projects/rhai-tracks.md)) is a Rhai script that
+[rhai-tracks.md](../archive/projects/rhai-tracks.md)) is a Rhai script that
 writes the targets it declares, every frame. It is written in the
 Formula Editor (**Use as track**), or added from the track editor's
 **Add Script Track** menu: the shipped examples (Breathing, Springy

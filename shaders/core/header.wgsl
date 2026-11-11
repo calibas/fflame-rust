@@ -38,7 +38,7 @@ struct Transform {
 
     // JWildfire-extension plane affines, indexed `[a, c, b, d, e, f]`
     // matching the XML attribute write order. See
-    // `docs/projects/jwf-features.md` ("zxCoefs / yzCoefs") for the
+    // `docs/archive/projects/jwf-features.md` ("zxCoefs / yzCoefs") for the
     // composition rule transcribed from `TransformationAffineFullStep`.
     yz_coefs: array<f32, 6>,
     zx_coefs: array<f32, 6>,
@@ -293,7 +293,7 @@ fn shadow_map_splat(p: vec3<f32>) {
 @group(0) @binding(7) var<storage, read_write> path_ids: array<u32>;
 {{#if PATH_TRACKING}}
 
-// **PathMap's Origin styles** (docs/projects/deep-zoom/word-editing.md §10): where
+// **PathMap's Origin styles** (docs/archive/deep-zoom/word-editing.md §10): where
 // the point was before its path carried it into the view -- a point of
 // the attractor -- read in the attractor's frame. Every other style keeps
 // `t`, the path's own colour, which the CPU packed with the path.
@@ -313,7 +313,7 @@ fn pathmap_origin(p: vec2<f32>, t: f32) -> f32 {
 }
 {{/if}}
 // Binding 8 intentionally unused: the path filters, which word editing
-// replaced (docs/projects/deep-zoom/word-editing.md).
+// replaced (docs/archive/deep-zoom/word-editing.md).
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
 // Modifies probability of selecting dst transform when coming from src
 @group(0) @binding(9) var<storage, read> xaos_weights: array<f32>;
@@ -322,7 +322,7 @@ fn pathmap_origin(p: vec2<f32>, t: f32) -> f32 {
 @group(0) @binding(10) var<storage, read> attachments: array<AttachmentList>;
 {{#if IMPORTANCE_SAMPLING}}
 // Biased selection weights and their likelihood ratios -- stage 1 of
-// docs/projects/deep-zoom/flame-deep-zoom.md. Two regions, N = num_transforms:
+// docs/archive/deep-zoom/flame-deep-zoom.md. Two regions, N = num_transforms:
 //
 //   [0, N)            q[i]  -- the BIASED selection weight, bias × weight
 //   [N, N + N*N)      r[prev*N + i] = p(prev→i) / q(prev→i)
@@ -372,7 +372,7 @@ fn bias_ratio(prev: u32, i: u32) -> f32 {
 
 {{#if FRAME_COVERAGE}}
 // Frame-coverage counters (auto exposure --
-// docs/projects/deep-zoom/flame-deep-zoom.md). Three words: [0] plot attempts that
+// docs/archive/deep-zoom/flame-deep-zoom.md). Three words: [0] plot attempts that
 // landed INSIDE the frame, [1] plot attempts, and [2] plot attempts
 // whose WORLD position fell outside `params.leak_probe` -- see there.
 // Their ratio is the share
@@ -406,7 +406,7 @@ const ORBIT_WORDS: u32 = 16u + ORBIT_SLOTS;
 {{/if}}
 {{#if CYLINDER_TARGETING}}
 // The enumerated cylinders -- stage 2 of
-// docs/projects/deep-zoom/flame-deep-zoom.md. Twelve floats a word, packed by
+// docs/archive/deep-zoom/flame-deep-zoom.md. Twelve floats a word, packed by
 // `scene::cylinder::pack`:
 //
 //   0..4  the composed 2x2      4..6  its translation

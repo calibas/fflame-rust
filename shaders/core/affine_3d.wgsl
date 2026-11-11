@@ -16,7 +16,7 @@
 //     sequential affine composition (in which earlier offsets would
 //     propagate through later rotations); JWildfire decouples linear
 //     and offset on purpose. See
-//     `docs/projects/jwf-features.md` ("zxCoefs / yzCoefs") for the
+//     `docs/archive/projects/jwf-features.md` ("zxCoefs / yzCoefs") for the
 //     full reasoning. We mirror their math exactly so on-disk values
 //     produce the same render in both apps.
 

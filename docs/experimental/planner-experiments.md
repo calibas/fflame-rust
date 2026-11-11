@@ -3,7 +3,7 @@
 Ideas from the review of branch `rhai-planners` (2026-11-09). None is
 started, none is measured, and each says what would have to be found
 out first. The work that is planned from the same review is
-[rhai-one-form.md](../projects/rhai-one-form.md).
+[rhai-one-form.md](../archive/projects/rhai-one-form.md).
 
 ## Where the two engines stand
 
@@ -75,7 +75,7 @@ interpreter is in it.
 
 ## 4. Focused Rendering in 3D: flames where z is a passenger
 
-The tracker's E2 ([deep-zoom-tracker.md](../projects/deep-zoom/deep-zoom-tracker.md))
+The tracker's E2 ([deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-tracker.md))
 asks how a plan can be made in screen space when a projected map is not
 an IFS in the plane. It need not be: plan in the flame's own space and
 test against the camera's frustum. A camera move replans, as a pan does.

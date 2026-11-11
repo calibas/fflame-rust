@@ -367,7 +367,7 @@ of all 8 audited variations active in 4 transforms each: ~64 slots.
 
 ```
 docs/projects/intra-iteration-state-and-accum.md      (new, this file)
-docs/projects/variation-port-blockers.md              (mark partial unlocks)
+docs/archive/projects/variation-port-blockers.md              (mark partial unlocks)
 src/variations/definition.rs                          (~30 LoC)
 src/variations/mod.rs                                 (~30 LoC)
 src/scene/transforms.rs                               (~80 LoC)

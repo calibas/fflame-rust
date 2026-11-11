@@ -41,7 +41,7 @@ pub enum PanelType {
     /// Config import/export dialog
     ConfigDialog,
     /// The plan's words as a tree -- "paths" in the UI: trim, remove,
-    /// solo (docs/projects/deep-zoom/word-editing.md §6)
+    /// solo (docs/archive/deep-zoom/word-editing.md §6)
     Paths,
     /// PNG Export panel
     Export,
@@ -73,7 +73,7 @@ pub enum PanelType {
     /// (docs/archive/projects/sim-textures.md)
     Textures,
     /// Escape-time formulas and colourings written in Ultra Fractal's or
-    /// Fractint's language (docs/projects/escape-formula-language.md)
+    /// Fractint's language (docs/archive/projects/escape-formula-language.md)
     FormulaEditor,
     /// Kalles Fraktaler-style hybrid formulas (escape::lang::hybrid)
     HybridDesigner,

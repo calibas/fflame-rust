@@ -224,7 +224,7 @@ picks transform 0.
 | --- | --- |
 | `select_transform_const(u)` | no xaos |
 | `select_transform_xaos(u, prev)` | xaos: weights are `weight[dst] × xaos[prev][dst]` |
-| `select_transform_biased(u)`, `select_transform_biased_xaos(u, prev)` | `IMPORTANCE_SAMPLING`: biased weights, with the likelihood ratio folded into the deposit ([flame-deep-zoom.md](../projects/deep-zoom/flame-deep-zoom.md), stage 1) |
+| `select_transform_biased(u)`, `select_transform_biased_xaos(u, prev)` | `IMPORTANCE_SAMPLING`: biased weights, with the likelihood ratio folded into the deposit ([flame-deep-zoom.md](../archive/deep-zoom/flame-deep-zoom.md), stage 1) |
 
 `select_transform(u)`, which reads `params.num_transforms` instead of
 the constant, is still in `utilities.wgsl` but nothing calls it.
@@ -635,9 +635,9 @@ cannot evaluate) imports as 0.
 Use `.fflame` for a lossless save.
 
 **Compatibility trackers:**
-[jwf-features.md](../projects/jwf-features.md) (non-variation JWildfire
+[jwf-features.md](../archive/projects/jwf-features.md) (non-variation JWildfire
 features),
-[jwf-common-variations-port.md](../projects/jwf-common-variations-port.md),
+[jwf-common-variations-port.md](../archive/projects/jwf-common-variations-port.md),
 [apophysis-remaining-features.md](../archive/projects/apophysis-remaining-features.md).
 
 ---

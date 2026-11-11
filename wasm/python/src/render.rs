@@ -4,7 +4,7 @@
 //! is the Python side's (frames to PNG files, or piped to FFmpeg).
 //!
 //! COPIED: the renderer kept per size (`renderer_for`) from wasm/render's
-//! `render_with_live`; listed for review in docs/projects/pyfflame.md,
+//! `render_with_live`; listed for review in docs/archive/projects/pyfflame.md,
 //! "Copied code".
 //!
 //! Every render is an export's: iterations per thread default to the

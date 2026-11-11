@@ -108,7 +108,7 @@ pub enum Feature {
     /// weight and pre-divide so the dispatcher's `result += w·body`
     /// cancels to the assigned value when they're the sole variation).
     /// Sourced from the JWF `=` vs `+=` classification; see
-    /// `docs/projects/jwf-features.md`.
+    /// `docs/archive/projects/jwf-features.md`.
     Replace,
 
     /// The variation can HIDE the plotted point for an iteration

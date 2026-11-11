@@ -1,6 +1,6 @@
 //! The Formula Editor: Rhai formulas, and Ultra Fractal and Fractint
 //! formula files, checked as they are typed and used as the escape
-//! formula or colouring (`docs/projects/escape-formula-language.md`; the
+//! formula or colouring (`docs/archive/projects/escape-formula-language.md`; the
 //! language is in `docs/main/ESCAPE.md`, "The formula language"), and
 //! Rhai transformations used as flame variations (the KIFS plan, C1:
 //! `variations::custom`; the flame carries the source).
@@ -74,7 +74,7 @@ impl EntryRow {
     }
 }
 
-/// A file that is an animation track (docs/projects/rhai-tracks.md): the
+/// A file that is an animation track (docs/archive/projects/rhai-tracks.md): the
 /// CPU world, so a row of its own beside the GPU kinds' (`EntryKind`).
 struct TrackRow {
     name: String,
@@ -1892,7 +1892,7 @@ mod tests {
         }
     }
 
-    /// **A track file is a track** (docs/projects/rhai-tracks.md, step 4):
+    /// **A track file is a track** (docs/archive/projects/rhai-tracks.md, step 4):
     /// it checks as one, with no GPU rows; Use as track puts it in the
     /// animation under an id of its own written into the file, and shows
     /// its value at once; a second Use replaces it, its parameters kept;

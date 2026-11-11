@@ -1,4 +1,4 @@
-//! One library over the user's two stores (docs/projects/rhai-plugins.md,
+//! One library over the user's two stores (docs/archive/projects/rhai-plugins.md,
 //! P3): the CPU scripts (`scripts/`, [`crate::script::store`]) and the
 //! GPU formulas, colourings, variations, solids and effects
 //! (`formulas/`, [`crate::storage::formula_store`]), with what ships of
@@ -36,7 +36,7 @@ pub enum Kind {
     /// (docs/archive/projects/rhai-solids-fields.md).
     Field,
     FieldColoring,
-    /// An animation track (docs/projects/rhai-tracks.md).
+    /// An animation track (docs/archive/projects/rhai-tracks.md).
     Track,
     /// An Ultra Fractal or Fractint file: many entries, of its kind.
     UfFormulas,
@@ -386,7 +386,7 @@ mod tests {
     /// The shipped entries are all there, each read: the script starters
     /// by their declarations, the formula examples and the effects by
     /// their kinds and titles.
-    /// An animation track reads as one (docs/projects/rhai-tracks.md), and
+    /// An animation track reads as one (docs/archive/projects/rhai-tracks.md), and
     /// can be a plug-in, keyed by its id.
     #[test]
     fn a_track_is_a_track() {

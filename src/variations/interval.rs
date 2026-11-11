@@ -2,7 +2,7 @@
 //! evaluators that derive a forward bound: [`derive`](super::derive), over
 //! a variation's shipped WGSL through naga (desktop only), and
 //! [`rhai_bound`](super::rhai_bound), over a Rhai variation's own code
-//! (every platform; docs/projects/rhai-one-form.md, route B). Nothing here
+//! (every platform; docs/archive/projects/rhai-one-form.md, route B). Nothing here
 //! parses anything, so the web build has it.
 
 use super::bound::Ball;

@@ -4,7 +4,7 @@
 
 Project plan for adding texture (user-supplied image) sampling as a variation framework feature. Unblocks the texture/image-sampling family of JWildfire variations and any future hand-written texture-using variations.
 
-This is **blocker #2** from [`variation-port-blockers.md`](../../projects/variation-port-blockers.md): "Texture / image / SVG sampling."
+This is **blocker #2** from [`variation-port-blockers.md`](variation-port-blockers.md): "Texture / image / SVG sampling."
 
 ## Variations unblocked
 
@@ -164,6 +164,6 @@ Roughly the order things have to land:
 
 ## Related docs
 
-- [`variation-port-blockers.md`](../../projects/variation-port-blockers.md) — blocker #2 is what this project resolves.
-- [`jwf-features.md`](../../projects/jwf-features.md) — companion doc for non-variation JWF features we don't yet support.
-- [`jwf-common-variations-port.md`](../../projects/jwf-common-variations-port.md) — variation port tracking; the texture-dependent variations listed there will move to "shipped" as this project lands them.
+- [`variation-port-blockers.md`](variation-port-blockers.md) — blocker #2 is what this project resolves.
+- [`jwf-features.md`](jwf-features.md) — companion doc for non-variation JWF features we don't yet support.
+- [`jwf-common-variations-port.md`](jwf-common-variations-port.md) — variation port tracking; the texture-dependent variations listed there will move to "shipped" as this project lands them.

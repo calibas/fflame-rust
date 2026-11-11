@@ -1,6 +1,6 @@
 # Affine flames by distance: 2D fields and 3D raymarching in the escape engine
 
-> **Archived 2026-10-10** -- finished through phase 3 (mode D shipped); open work in escape-sim-followups. Read [ESCAPE.md](../../main/ESCAPE.md), [TERRAIN.md](../../main/TERRAIN.md), [escape-sim-followups.md](../../projects/escape-sim-followups.md) for how it works now; this is the record of what was planned and measured when it was written.
+> **Archived 2026-10-10** -- finished through phase 3 (mode D shipped); open work in escape-sim-followups. Read [ESCAPE.md](../../main/ESCAPE.md), [TERRAIN.md](../../main/TERRAIN.md), [escape-sim-followups.md](../projects/escape-sim-followups.md) for how it works now; this is the record of what was planned and measured when it was written.
 
 **Status:** plan of record, 2026-09-10, on branch `ifs-distance`.
 **Phase 0 built 2026-09-10** (§5, with the census result recorded
@@ -27,7 +27,7 @@ better not share a letter.
 It supersedes the escape-time-IFS "Mode C" of
 [escape-time-fractals.md](escape-time-fractals.md) §6 for the affine
 case — see D9 — and it shares its prerequisites with that plan and
-with [flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) §7, which is why phase 0
+with [flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) §7, which is why phase 0
 is built as common analysis.
 
 ## 0. What is being asked for
@@ -249,7 +249,7 @@ The wall is the usual one: at zoom 2⁻¹⁰⁰ a pixel's coordinate is the
 centre plus an offset f32 cannot hold alongside it. The escape engine
 already has the answer's two halves — a centre stored as exact decimal
 strings with `zoom_log2` (the deep camera that
-[flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) §7 also adopts), and a
+[flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) §7 also adopts), and a
 reference-orbit machinery that iterates the centre in high precision
 and every pixel as a small delta from it.
 
@@ -1822,7 +1822,7 @@ what makes a per-view handover possible at all.
   chaos game — is a bridge for later. *Planned 2026-09-17:*
   [ifs-measure-by-inverse-walk.md](../projects/ifs-measure-by-inverse-walk.md)
   reads the invariant measure through the walk itself, and
-  [ifs-general.md](../../projects/deep-zoom/ifs-general.md) is the plan for §8's ladder.
+  [ifs-general.md](../deep-zoom/ifs-general.md) is the plan for §8's ladder.
 
 ## 8. Growing the set: what a reversible variation has to supply
 

@@ -1121,7 +1121,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // color computation, written to `vrc` via Feature::WritesRgb.
     // Each `glsl_*` is an independent hand-port of one specific
     // shadertoy algorithm (not user-supplied code — see
-    // docs/projects/variation-port-blockers.md for the distinction).
+    // docs/archive/projects/variation-port-blockers.md for the distinction).
     // Grouped by theme: iterative fractals, kaleidoscope/tilings,
     // procedural fields.
     &GLSL_MANDELBOX2D,

@@ -3,7 +3,7 @@
 The escape-time engine shipped; its reference is
 [docs/main/ESCAPE.md](../../main/ESCAPE.md), and what is still not built
 is listed in
-[projects/escape-sim-followups.md](../../projects/escape-sim-followups.md)
+[projects/escape-sim-followups.md](../projects/escape-sim-followups.md)
 ("The escape engine: not built"). This folder is how it got there.
 
 ## The design record
@@ -24,7 +24,7 @@ source work at depth. All four phases done 2026-10-04.
 **escape-camera-lens.md** -- any variation as a lens on the screen
 offset, the sites it reaches, the probe that chose the usable lenses.
 Steps 1-4 built; bringing it to every mode is planned in
-[projects/camera-lens-everywhere.md](../../projects/camera-lens-everywhere.md).
+[projects/camera-lens-everywhere.md](../../experimental/camera-lens-everywhere.md).
 
 **ifs-distance-rendering.md** -- the flame as a distance field: mode D,
 the Flame Attractor and its solid. Phases 0-3 built; the remaining
@@ -64,7 +64,7 @@ Item 2 is the one with a tail: eight formula families perturb, and the
 transcendentals, Chebyshev's two non-unity functions and the
 series-approximation measurement do not. That tail moved to
 escape-time-fractals.md (archived too since; what is still open is in
-[escape-sim-followups.md](../../projects/escape-sim-followups.md)). Its per-tier verification table — every
+[escape-sim-followups.md](../projects/escape-sim-followups.md)). Its per-tier verification table — every
 family with the error measured against exact orbits — is the reason to
 keep this document readable rather than delete it.
 

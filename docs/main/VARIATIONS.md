@@ -179,7 +179,7 @@ the map canonically, but only for flames where none of these can bite
 ([SHADERS.md](SHADERS.md#the-sticky-variation-superset)).
 
 The generated code is shown in [SHADERS.md](SHADERS.md); the
-`fx_priority` model in [jwf-features.md](../projects/jwf-features.md).
+`fx_priority` model in [jwf-features.md](../archive/projects/jwf-features.md).
 
 ---
 
@@ -477,8 +477,8 @@ inverse in `scripts/twin_inverses.py` gives the built-in the Flame
 Attractor (swirl, horseshoe, polar, exponential, exp, log, fisheye,
 eyefish, sinusoidal, hyperbolic so far).
 
-See [forward-bounds.md](../projects/deep-zoom/forward-bounds.md) and
-[ifs-general.md](../projects/deep-zoom/ifs-general.md).
+See [forward-bounds.md](../archive/deep-zoom/forward-bounds.md) and
+[ifs-general.md](../archive/deep-zoom/ifs-general.md).
 
 ---
 
@@ -489,9 +489,9 @@ The registry also takes variations at run time, in the API's
 provenance)`: when a flame names an unknown variation, the app fetches
 it from the API, caches it, and registers it (`Provenance::Api`).
 `storage::load_installed_resources` loads the cache at startup. (Local
-WGSL plug-in files under `plugins/variations/` were retired 2026-11-01 ([rhai-plugins.md](../projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them.)
+WGSL plug-in files under `plugins/variations/` were retired 2026-11-01 ([rhai-plugins.md](../archive/projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them.)
 
-**Rhai plug-ins** ([rhai-plugins.md](../projects/rhai-plugins.md), P3): a Rhai variation, effect, formula, colouring, solid or simulation colouring in the user's formulas with **Load at start** set in the Formula Editor (`formulas/_links.json`, `storage::links::Link::plugin`) is registered at every start, after the downloads (`storage::library::load_plugins`, from `load_installed_resources`: desktop, web and headless), under its key in the user's namespace (`Provenance::Local`). It is then in the lists without a config carrying it -- the variation pickers, the Effects panel's Add lists and the escape panel's formula and colouring pickers, each under "Your plug-ins" -- and choosing it carries its source into the config, as Use does. Saving the file registers the new version; turning it off unlists it; deleting it forgets the flag. One that does not register is named at start (a notice; stderr headless: `storage::library::plugin_failures`).
+**Rhai plug-ins** ([rhai-plugins.md](../archive/projects/rhai-plugins.md), P3): a Rhai variation, effect, formula, colouring, solid or simulation colouring in the user's formulas with **Load at start** set in the Formula Editor (`formulas/_links.json`, `storage::links::Link::plugin`) is registered at every start, after the downloads (`storage::library::load_plugins`, from `load_installed_resources`: desktop, web and headless), under its key in the user's namespace (`Provenance::Local`). It is then in the lists without a config carrying it -- the variation pickers, the Effects panel's Add lists and the escape panel's formula and colouring pickers, each under "Your plug-ins" -- and choosing it carries its source into the config, as Use does. Saving the file registers the new version; turning it off unlists it; deleting it forgets the flag. One that does not register is named at start (a notice; stderr headless: `storage::library::plugin_failures`).
 
 The registry's rules:
 - A built-in can never be replaced.
@@ -645,7 +645,7 @@ function takes the point, and the ids when it has parameters (as
   (`the_twins_render_as_the_builtins_in_a_flame`), and as lenses, pixel
   for pixel (`the_twins_are_lenses_as_the_builtins`).
 - **Twins of the built-ins** (`variations::twins`,
-  `assets/variations/twins/`; [rhai-plugins.md](../projects/rhai-plugins.md),
+  `assets/variations/twins/`; [rhai-plugins.md](../archive/projects/rhai-plugins.md),
   P7 step 3): 640 of the 647, each a Rhai variation under its
   built-in's display name with its parameters exactly (a parameter may
   be `free: true` with both bounds, a built-in's unlimited number, and
@@ -966,12 +966,12 @@ wiring.
 
 ## Porting and trackers
 
-- [variation-port-blockers.md](../projects/variation-port-blockers.md) —
+- [variation-port-blockers.md](../archive/projects/variation-port-blockers.md) —
   what is not ported, and what feature would unblock it
-- [jwf-common-variations-port.md](../projects/jwf-common-variations-port.md)
+- [jwf-common-variations-port.md](../archive/projects/jwf-common-variations-port.md)
   — JWildfire's common set
-- [VARIATIONS_TODOS.md](../projects/VARIATIONS_TODOS.md) — running notes
-- [jwf-features.md](../projects/jwf-features.md) — non-variation
+- [VARIATIONS_TODOS.md](../archive/projects/VARIATIONS_TODOS.md) — running notes
+- [jwf-features.md](../archive/projects/jwf-features.md) — non-variation
   JWildfire features, including `fx_priority` and variation order
 - [VARIATIONS_WIRE_FORMAT.md](../projects/VARIATIONS_WIRE_FORMAT.md) —
   the wire contract

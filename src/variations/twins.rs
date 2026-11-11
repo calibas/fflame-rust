@@ -1,4 +1,4 @@
-//! Rhai twins of the built-in variations (docs/projects/rhai-plugins.md,
+//! Rhai twins of the built-in variations (docs/archive/projects/rhai-plugins.md,
 //! P7 steps 3 and 4): each a Rhai variation that does what its built-in
 //! does, under the built-in's display name, with its built-in's
 //! parameters exactly -- names, captions, hints, kinds, defaults, ranges,

@@ -8,47 +8,23 @@ the trackers they feed. How a finished system works is in
 a banner saying what happened (move them with `scripts/move_docs.py`,
 which rewrites the references in code comments too).
 
-## Plans
+## The list
+
+[BACKLOG.md](BACKLOG.md) -- everything still open, in one place
+(consolidated 2026-11-11): decisions waiting on the user, then open items
+by area, each linking the doc with the detail (finished and paused docs in
+[docs/archive/](../archive/), plans not started in
+[docs/experimental/](../experimental/)).
+
+## Active
 
 | Doc | Status |
 |---|---|
-| [rhai-tracks.md](rhai-tracks.md) | Steps 1-6 built 2026-11-10, not merged (branch `rhai-tracks`): a Rhai script as an animation track -- P5 of rhai-plugins.md. Many targets a track, each set, added to or scaled; state only by fixed steps replayed from time zero, so a scrub, a play and an export agree (bit for bit in the tests); written in the Formula Editor; three examples. |
-| [rhai-one-form.md](rhai-one-form.md) | Paused 2026-11-10, may be revisited: route B (the user's pick) built and merged with `rhai-planners` (PR #156) -- bounds from a Rhai variation's code on every platform, the web's built-ins through their twins, the forward search's time budget, the twin tests' registry race fixed; no instruction list. Open: P9 decided by measurement (step 3) and juliascope-rays' 1% difference at 1e4. |
-| [terrain-speed.md](terrain-speed.md) | A rough outline (2026-10-31), not started: a deep escape terrain's section renders (single steps of 100-360 ms), which the quality governor's render scale cannot reach; the lit tier's antialiasing redrawn and thrown away while sections arrive (suspected); candidates from one lit picture a ground to a section budget the governor sets. |
-| [preview-slicing.md](preview-slicing.md) | Planned 2026-11-04, not started: the Fractal Browser's previews as a job advanced a few milliseconds a frame (a cooperative `render` with yield points at its GPU waits, driven as `scene::slice` drives the planner), so no frame waits for a whole render -- the simulations' full step counts above all. The order of work starts with measuring. |
-| [camera-lens-everywhere.md](camera-lens-everywhere.md) | Planned 2026-10-10, not started: the camera lens in every mode. Three decisions first. |
-| [hyperbolic-camera-extras.md](hyperbolic-camera-extras.md) | The hyperbolic camera's roadmap: its first half shipped in `hyperbolic_camera`; pathing and navigation through the animation system is next. |
-| [v0.6.0-release.md](v0.6.0-release.md) | The v0.6.0 release's TODOs, tracked while changes still land: update the API, deploy the latest modules, cross-platform testing. |
-| [slow-frame-slider-hold.md](slow-frame-slider-hold.md) | Planned 2026-10-12: hold any slider's drag once its frames turn slow, beyond the listed slow settings. |
-| [online-assets.md](online-assets.md) | Planned 2026-10-21, decided the same day, not started: skies and textures listed by providers (Poly Haven first), downloaded and kept locally; every resolution; textures on solids and terrains with valley, slope and plateau targets. |
-| [wasm-modules.md](wasm-modules.md) | Researched 2026-10-23. Section 1 done 2026-11-04: the gallery modules dropped flame variations escape and simulation configs use, so one renderer replaced them and the engine features went. Open: what the web app lacks; what its 6.5 MB gzip is made of; four ways to load parts on demand, an order of work, decisions to make. |
-
-## Paused
-
-| Doc | Status |
-|---|---|
-| [deep-zoom/](deep-zoom/) | Focused Rendering (flame deep zoom): shipped as an opt-in feature, coverage work paused. Start at [deep-zoom/README.md](deep-zoom/README.md). |
-| [escape-formula-language.md](escape-formula-language.md) | Planned 2026-10-13: Ultra Fractal and Fractint formulas and colourings, compiled to WGSL and carried in the config. Built through item 3 and its follow-ups; further UF support paused 2026-10-17. |
-| [surface-textures.md](surface-textures.md) | A terrain's surface texture (bump): step 1 built; material maps and the rest paused -- texture materials go on in [online-assets.md](online-assets.md). |
-| [escape-coloring-survey.md](escape-coloring-survey.md) | The escape colouring survey: items 1-5 built, 6-7 partly. |
-| [pyfflame.md](pyfflame.md) | Python: the engine as a WASI module (rendering, animation, scripts); the copied code awaiting review; the backlog. |
-
-## Open lists
-
-| Doc | What it tracks |
-|---|---|
-| [doc-review-findings.md](doc-review-findings.md) | What the October 2026 doc refresh found wrong in the code, and what the fix pass that followed left open (its *Still open* section). |
-| [escape-sim-followups.md](escape-sim-followups.md) | Escape-time and simulation decisions to make, what is left of the path tracer's speed, the 3D views' and the escape engine's unbuilt items, known gaps. |
-| [solid-rendering-todo.md](solid-rendering-todo.md) | Solid rendering for 3D flames: what is left. |
-| [VARIATIONS_TODOS.md](VARIATIONS_TODOS.md) | The variation backlog. |
-| [variation-port-blockers.md](variation-port-blockers.md) | Why particular variations are not ported yet. |
-| [jwf-common-variations-port.md](jwf-common-variations-port.md) | Porting JWildfire's common variations (and the cut family). |
+| [v0.6.0-release.md](v0.6.0-release.md) | The v0.6.0 release's checklist: update the API, deploy the latest modules, cross-platform testing. |
 
 ## Standing references
 
 | Doc | What it is |
 |---|---|
-| [rhai-plugins.md](rhai-plugins.md) | The plan (direction 2026-10-18, reviewed 2026-11-01): everything editable a Rhai script -- variations, effects, formulas, colourings, simulations, animation tracks, generators -- as plug-ins, local files and downloads. The review of today's three ways in, the user's decisions, the order of work (P0 the CPU sandbox with `import` through the library, P1 one GPU machinery in namespaces, P2 effects, P3 one library, P4 simulations, P5 tracks, P6 the API), and what is left of the KIFS and variations plan. |
-| [jwf-features.md](jwf-features.md) | JWildfire features: shipped, deferred, and why. |
 | [VARIATIONS_WIRE_FORMAT.md](VARIATIONS_WIRE_FORMAT.md) | The variation wire format shared with the API repository. |
 | [macos-release-checklist.md](macos-release-checklist.md) | The macOS release procedure, called from [docs/RELEASE.md](../RELEASE.md). |

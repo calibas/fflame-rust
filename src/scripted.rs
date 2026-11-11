@@ -1,5 +1,5 @@
 //! What every script a person writes shares, whatever it compiles to:
-//! its identity and its labels (docs/projects/rhai-plugins.md, design
+//! its identity and its labels (docs/archive/projects/rhai-plugins.md, design
 //! rules 7 and 8).
 //!
 //! - **Identity.** Built-ins keep their string ids (`vignette`,

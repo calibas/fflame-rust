@@ -1,6 +1,6 @@
 """One-shot codemod: give every `EffectInfo { ... }` literal in
 src/effects/mod.rs the new `labels: None,` field, after its
-`provenance:` line (P2 of docs/projects/rhai-plugins.md).
+`provenance:` line (P2 of docs/archive/projects/rhai-plugins.md).
 
 Keeps the file's line endings. Run from the repository root."""
 import re

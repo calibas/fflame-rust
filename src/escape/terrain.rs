@@ -2257,7 +2257,7 @@ pub struct TerrainView {
     /// (camera-unification C7): the coat's reflectance and roughness,
     /// the glow and the metallic (`path_core::lit_material`).
     pub material: [f32; 5],
-    /// The surface texture's bump (docs/projects/surface-textures.md);
+    /// The surface texture's bump (docs/archive/projects/surface-textures.md);
     /// off for a simulation's terrain.
     pub surface: super::surface::SurfaceTexture,
 }

@@ -943,7 +943,7 @@ fn compute_layout_entries() -> Vec<BindGroupLayoutEntry> {
                 },
                 count: None,
             },
-            // Enumerated cylinders (docs/projects/deep-zoom/flame-deep-zoom.md
+            // Enumerated cylinders (docs/archive/deep-zoom/flame-deep-zoom.md
             // stage 2). Declared by the shader only under
             // CYLINDER_TARGETING; the layout always carries it.
             BindGroupLayoutEntry {
@@ -957,7 +957,7 @@ fn compute_layout_entries() -> Vec<BindGroupLayoutEntry> {
                 count: None,
             },
             // Biased selection weights + likelihood ratios
-            // (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). Slot 11
+            // (docs/archive/deep-zoom/flame-deep-zoom.md stage 1). Slot 11
             // was the legacy subflame_transforms buffer, removed in
             // v2 of the subflame work and empty since; this takes
             // it rather than extending the layout.

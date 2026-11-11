@@ -1,7 +1,7 @@
 //! What a stored file is linked to, and where it came from: one record
 //! per file of the user's script store (`scripts/`) and formula store
 //! (`formulas/`), in a sidecar `_links.json` in each
-//! (docs/projects/rhai-plugins.md, P3).
+//! (docs/archive/projects/rhai-plugins.md, P3).
 //!
 //! Kept beside the files rather than in them, because a `.rhai` file has
 //! nowhere to put it and its header comment is the script's own prose,

@@ -37,7 +37,7 @@ pub struct TrackEditorState {
     /// Interpolation mode for preview keyframes
     pub preview_interpolation: Interpolation,
     /// The script track whose window is open, by index
-    /// (docs/projects/rhai-tracks.md).
+    /// (docs/archive/projects/rhai-tracks.md).
     pub script_panel: Option<usize>,
     /// A track source to open in the Formula Editor: a script track's Edit
     /// there, or a new one from an example. Taken by the caller, which
@@ -570,7 +570,7 @@ fn render_tracks_visual(
 }
 
 // ============================================================================
-// SCRIPT TRACKS (docs/projects/rhai-tracks.md, step 5)
+// SCRIPT TRACKS (docs/archive/projects/rhai-tracks.md, step 5)
 // ============================================================================
 
 /// What a script track's row shows.
@@ -1989,7 +1989,7 @@ mod tests {
         assert_eq!(state.preview_interpolation, Interpolation::Linear);
     }
 
-    /// **A script track in the track editor** (docs/projects/rhai-tracks.md,
+    /// **A script track in the track editor** (docs/archive/projects/rhai-tracks.md,
     /// step 5): its row names it and its targets, marks a target another
     /// track writes, and its window draws its parameters into the track,
     /// lays out without an error over two frames, follows its track across

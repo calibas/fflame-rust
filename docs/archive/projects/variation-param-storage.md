@@ -5,7 +5,7 @@
 Status: **steps 1-4 built** (2026-11-07, branch
 `variation-param-storage`; *Progress* below). The API notice is in
 [v0.6.0-release.md](../../projects/v0.6.0-release.md). Follows the variation twins (`rhai-variation-hooks`,
-[rhai-plugins.md](../../projects/rhai-plugins.md) P7 step 3).
+[rhai-plugins.md](rhai-plugins.md) P7 step 3).
 
 ## Why
 

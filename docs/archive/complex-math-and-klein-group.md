@@ -189,7 +189,7 @@ translation from the embedded Java.
 
 ### Phase 4: Documentation
 
-9. Update `docs/projects/variation-port-blockers.md`: blocker #11
+9. Update `docs/archive/projects/variation-port-blockers.md`: blocker #11
    (Complex math runtime) → resolved. klein_group → ported.
 10. Note in the blockers doc which other variations could now be
     incrementally unblocked (`pre_recip` partially, etc.).
@@ -244,7 +244,7 @@ translation from the embedded Java.
 
 ```
 docs/projects/complex-math-and-klein-group.md   (new, this file)
-docs/projects/variation-port-blockers.md        (mark #11 resolved, klein_group ported)
+docs/archive/projects/variation-port-blockers.md        (mark #11 resolved, klein_group ported)
 shaders/core/complex.wgsl                       (new, ~90 LoC)
 src/shader_builder_v2.rs                        (~30 LoC — inject complex.wgsl in 3 build paths)
 src/variations/defs/klein_group_misc.rs         (new, ~400 LoC — 7 recipes + body + 3D wrapper)

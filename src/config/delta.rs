@@ -58,22 +58,22 @@ pub enum ConfigPath {
     LevelsEnabled,
     /// Auto exposure: normalise the tone map by the density of the
     /// pixels in frame rather than by total iterations
-    /// (docs/projects/deep-zoom/flame-deep-zoom.md §14).
+    /// (docs/archive/deep-zoom/flame-deep-zoom.md §14).
     AutoExposure,
     /// Cylinder targeting: force an enumerated prefix so every sample
-    /// lands in the viewport (docs/projects/deep-zoom/flame-deep-zoom.md stage
+    /// lands in the viewport (docs/archive/deep-zoom/flame-deep-zoom.md stage
     /// 2). A REQUEST -- the renderer still declines per view.
     CylinderTargeting,
     /// Keep the plan at every zoom, even where it renders more slowly
     /// ("Always" in the UI's Focused Rendering switch).
     CylinderAlways,
     /// Trim: drop the plan's minor branches near the view
-    /// (docs/projects/deep-zoom/word-editing.md §4). 0 = off.
+    /// (docs/archive/deep-zoom/word-editing.md §4). 0 = off.
     CylinderTrim,
     /// How many levels of the word tree, from the view, trim reaches.
     CylinderTrimLevels,
     /// The pieces of the picture removed by their words
-    /// (docs/projects/deep-zoom/word-editing.md §5): a list of patterns.
+    /// (docs/archive/deep-zoom/word-editing.md §5): a list of patterns.
     WordRemovals,
     LevelsLow,
     LevelsHigh,
@@ -120,7 +120,7 @@ pub enum ConfigPath {
     },
     /// JWildfire `fx_priority` phase override for an `Any`-phase variation
     /// (raw priority `<0` pre / `0` main / `>0` post). Stored sparsely in
-    /// `Transform::variation_priorities` — see `docs/projects/jwf-features.md`.
+    /// `Transform::variation_priorities` — see `docs/archive/projects/jwf-features.md`.
     TransformVariationPriority { index: usize, variation: String },
     /// The transform's variation dispatch order (`variation_order`). Carries
     /// the whole ordered name list; used by the UI reorder controls. See
@@ -329,7 +329,7 @@ pub enum ConfigPath {
     ColorEffectParam { index: usize, param: String },
     /// Which effect an instance runs, by its registry name: a Rhai
     /// effect's key moves to its new version when the effect is edited
-    /// (`<id>@<version>`, docs/projects/rhai-plugins.md, rule 7), its
+    /// (`<id>@<version>`, docs/archive/projects/rhai-plugins.md, rule 7), its
     /// parameters kept.
     ColorEffectType { index: usize },
     DensityEffectType { index: usize },
@@ -659,7 +659,7 @@ pub enum ConfigPath {
     EscapeShadingTextureStrength,
     EscapeShadingTextureScale,
     /// Where the surface texture applies by slope, and the slope it turns
-    /// at, ± its softness (docs/projects/surface-textures.md).
+    /// at, ± its softness (docs/archive/projects/surface-textures.md).
     EscapeShadingTextureWhere,
     EscapeShadingTextureAngle,
     EscapeShadingTextureAngleSoft,

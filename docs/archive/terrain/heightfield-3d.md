@@ -589,7 +589,7 @@ Shared with the rest of the config:
 - **Terrain parameters** get `ConfigPath` arms like the relief's.
 - **Video** renders `samples` per frame. A camera path (a tour) is the
   hyperbolic roadmap's "pathing and navigation in the animation
-  system" (`docs/projects/hyperbolic-camera-extras.md`), which this
+  system" (`docs/experimental/hyperbolic-camera-extras.md`), which this
   mode would be its first consumer of. It is not part of this plan.
 
 ## 8. Defaults that decide how it feels
@@ -1271,7 +1271,7 @@ terrain.**
     ten-thousandth of the ball -- the walk's shadow rule (`ifs_shadow`:
     at a pixel's width they erased the sponge's sub-squares) -- with a
     shadow ray to every light at every bounce. The candidates are a TODO
-    in [escape-sim-followups.md](../../projects/escape-sim-followups.md).
+    in [escape-sim-followups.md](../projects/escape-sim-followups.md).
   - **Tiers** (`escape.solid_tier`, `RenderTier`): **Lit by default**,
     so every solid saved before this renders as it did. Auto walks while
     anything moves and path traces once the walk settles, shown from 8

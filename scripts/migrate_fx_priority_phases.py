@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Migrate variation defs for the fx_priority feature (two passes).
 
-See docs/projects/jwf-features.md ("<var>_fx_priority"). Two independent,
+See docs/archive/projects/jwf-features.md ("<var>_fx_priority"). Two independent,
 re-runnable passes over src/variations/defs/*.rs:
 
   Pass 1 (Any):   set `phase: VariationPhase::Normal` -> `Any` on every

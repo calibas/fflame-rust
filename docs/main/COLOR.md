@@ -56,7 +56,7 @@ pipeline this one replaced),
 (the palette transforms),
 [needs-transform-and-direct-color.md](../archive/needs-transform-and-direct-color.md)
 (direct colour),
-[word-editing.md §10](../projects/deep-zoom/word-editing.md) (PathMap).
+[word-editing.md §10](../archive/deep-zoom/word-editing.md) (PathMap).
 
 ---
 
@@ -211,7 +211,7 @@ step length of (e³ − 1)/10 ≈ 1.91.
 The speed colour reads the same palette texture, so the palette
 transforms apply. Under Focused Rendering a forced sample wears the free
 orbit's speed colour, which is one of that feature's open gaps
-([deep-zoom-tracker.md](../projects/deep-zoom/deep-zoom-tracker.md)).
+([deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-tracker.md)).
 
 ### PathMap
 

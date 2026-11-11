@@ -1,7 +1,7 @@
 //! pyfflame's engine (python/): the engine as a WASI module for Python.
 //! wasmtime runs it; its GPU calls go to the host through a wgpu custom
 //! backend (`backend`), and the host makes them with wgpu-py
-//! (python/pyfflame/_gpu.py). docs/projects/pyfflame.md has the design.
+//! (python/pyfflame/_gpu.py). docs/archive/projects/pyfflame.md has the design.
 //!
 //! One call crosses the boundary: `fflame_call`, a JSON request
 //! (`{"fn": ..., ...}`) and a block of bytes beside it (pixels to encode),

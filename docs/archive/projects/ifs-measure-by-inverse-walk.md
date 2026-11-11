@@ -1,11 +1,11 @@
 # The measure by the inverse walk: the flame's density at any zoom (plan, 2026-09-17)
 
-> **Archived 2026-10-10** -- superseded by the flame deep-zoom plan. Read [FOCUSED-RENDERING.md](../../main/FOCUSED-RENDERING.md), [flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) for how it works now; this is the record of what was planned and measured when it was written.
+> **Archived 2026-10-10** -- superseded by the flame deep-zoom plan. Read [FOCUSED-RENDERING.md](../../main/FOCUSED-RENDERING.md), [flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) for how it works now; this is the record of what was planned and measured when it was written.
 
 The third of three plans written together; the first is
 [ifs-perturbation-delta.md](ifs-perturbation-delta.md), whose §9
 orders the work of all three, and the second is
-[ifs-general.md](../../projects/deep-zoom/ifs-general.md).
+[ifs-general.md](../deep-zoom/ifs-general.md).
 
 **What is being asked for.** Mode D renders a DISTANCE to the
 attractor: a boundary, coloured by level or address. The flame's
@@ -24,10 +24,10 @@ deep-zoom machinery rather than adding a second one, and it is the
 reason the other two plans are worth their cost.
 
 **What it does not buy.** Not flames the walk refuses (that is
-[ifs-general.md](../../projects/deep-zoom/ifs-general.md)'s reach); not direct-colour
+[ifs-general.md](../deep-zoom/ifs-general.md)'s reach); not direct-colour
 variations, which colour by evaluating the forward map; not 3D; and
 not the forward-targeted chaos game of
-[flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md), which this plan may make
+[flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md), which this plan may make
 unnecessary or may not, and says how to tell.
 
 ---
@@ -49,7 +49,7 @@ unnecessary or may not, and says how to tell.
   the row-conditional matrix; the flam3 colour rule
   `c' = c·(1+s)/2 + col_i·(1−s)/2` with `s` the transform's
   `color_speed`; the per-sample `density_weight`.
-- **[flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md)**, a plan with no
+- **[flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md)**, a plan with no
   code: importance-sampled selection with a windowed correction
   (stage 1), and "cylinder targeting" (stage 2) -- enumerating the
   address prefixes whose pieces meet the viewport and forcing them,
@@ -85,7 +85,7 @@ times
 μ(B) = Σ_{|a| = k} p_a · μ(S_a⁻¹ B),     p_a = Π p_{a_j}
 ```
 
-which is [flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) §2's window
+which is [flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md) §2's window
 identity read the other way. Take `B` a pixel of area `px²` at `x`.
 `S_a⁻¹ B` is a region around `q_a` of area `px² · |det J_{S_a⁻¹}(x)|`,
 and at the depth where that area is a coarse pixel, `μ(S_a⁻¹ B)` is
@@ -195,11 +195,11 @@ ball's centre the distance walk ranks by (D3).
   recolor cache keeps working for it. `IfsRecord` gains nothing:
   the measure writes the accumulator's rgb and a directly.
 - **D7. Xaos and finals come from the general plan.** With
-  [ifs-general.md](../../projects/deep-zoom/ifs-general.md) D4 the admissible children and
+  [ifs-general.md](../deep-zoom/ifs-general.md) D4 the admissible children and
   the row-normalised `p_{i→j}` replace `p_i`; with D5 there a final
   is one more level. Until then the same flames are refused here as
   there.
-- **D8. Against the forward plan.** [flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md)
+- **D8. Against the forward plan.** [flame-deep-zoom.md](../deep-zoom/flame-deep-zoom.md)
   stage 2 enumerates the same addresses forward and forces samples
   through them; it needs the forward maps evaluated at the zoom,
   which is a delta form of every variation in the prefix and a CPU
@@ -1183,7 +1183,7 @@ never needed the correction.
 - **G2. Colour.** The same views, the mean palette coordinate per
   pixel against the chaos game's, with and without the coarse
   correction, at `color_speed` 0, 0.5 and 0.9.
-- **G3. Xaos and finals**, when [ifs-general.md](../../projects/deep-zoom/ifs-general.md)
+- **G3. Xaos and finals**, when [ifs-general.md](../deep-zoom/ifs-general.md)
   D4 and D5 land: G1 on a xaos flame and on a flame with a final.
 - **G4. Units** -- MET by `the_measures_brightness_holds_across_the_zoom`,
   §5p, though not in the shape written here. Matching the coarse

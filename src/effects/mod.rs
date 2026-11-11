@@ -646,7 +646,7 @@ impl EffectRegistry {
 }
 
 /// Register the built-in effects: each one-pass effect as its Rhai twin
-/// (D1, docs/projects/rhai-plugins.md P2 step 7: [`custom::builtin_twin`]);
+/// (D1, docs/archive/projects/rhai-plugins.md P2 step 7: [`custom::builtin_twin`]);
 /// `distance_field`, three passes, as its WGSL.
 fn register_builtin_effects(registry: &mut EffectRegistry) {
     for info in wgsl_builtins() {

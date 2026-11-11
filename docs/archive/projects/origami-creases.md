@@ -1,6 +1,6 @@
 # Origami creases: relief and terrain from the folds
 
-> **Archived 2026-10-21** -- finished: the crease relief and the terrain source built 2026-10-12. A Paper preset, the one thing left, is in [escape-sim-followups.md](../../projects/escape-sim-followups.md). Read [ESCAPE.md](../../main/ESCAPE.md) and [TERRAIN.md](../../main/TERRAIN.md) for how it works now; this is the record of what was planned and measured when it was written.
+> **Archived 2026-10-21** -- finished: the crease relief and the terrain source built 2026-10-12. A Paper preset, the one thing left, is in [escape-sim-followups.md](escape-sim-followups.md). Read [ESCAPE.md](../../main/ESCAPE.md) and [TERRAIN.md](../../main/TERRAIN.md) for how it works now; this is the record of what was planned and measured when it was written.
 
 **Status 2026-10-12:** built on branch `escape-expansion` (the relief
 field, the terrain source, the settings, tests, docs). After the user's

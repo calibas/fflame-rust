@@ -646,7 +646,7 @@ take an option's name or its index, and a bad one lists what's allowed.
 
 Everything still outstanding on the Python side — ergonomics, the rest
 of the model surface, wheel CI, and the nice-to-haves — is specced in
-[pyfflame.md](../../projects/pyfflame.md).
+[pyfflame.md](pyfflame.md).
 
 **Phase 6 — Animation-track generation.** Done.
 

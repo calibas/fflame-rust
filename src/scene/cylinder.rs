@@ -356,7 +356,7 @@ pub struct Cylinder {
     pub radius: f64,
     /// A few points the inverse walk found landing in the view under
     /// this word: where the replay's reference orbits start
-    /// (`docs/projects/deep-zoom/deep-zoom-precision.md` §2). Empty from the
+    /// (`docs/archive/deep-zoom/deep-zoom-precision.md` §2). Empty from the
     /// other enumerations, and where the walk kept a word on its
     /// replay alone.
     pub seeds: Vec<[f64; 2]>,
@@ -401,7 +401,7 @@ pub struct Cylinders {
     /// Zero for every flame that targets today, and the gate
     /// `every_working_flame_loses_nothing` keeps it that way. It is
     /// non-zero only for the leaky regions the inversive family
-    /// needs (`docs/projects/deep-zoom/inversive-targeting.md`), where the
+    /// needs (`docs/archive/deep-zoom/inversive-targeting.md`), where the
     /// alternative is refusing the flame outright.
     ///
     /// **The render stays unbiased CONDITIONAL on the kept set.** The
@@ -418,7 +418,7 @@ pub struct Cylinders {
     /// words that were dropped. This is measure belonging to words
     /// that were KEPT, in the gaps between the sample points the
     /// cover was built from — see
-    /// `docs/projects/deep-zoom/inversive-targeting.md` §12. Zero for every
+    /// `docs/archive/deep-zoom/inversive-targeting.md` §12. Zero for every
     /// flame with a real invariant ball, which is every flame that
     /// targeted before family M existed.
     pub sampling_leak: f64,
@@ -982,7 +982,7 @@ impl Cylinders {
         // inverse-walk analysis accepts is planned by pulling the view
         // back through its inverses (`backward.rs`), which is exact
         // where the forward bound below is structurally loose -- see
-        // `docs/projects/deep-zoom/inversive-targeting.md` §24. A flame it
+        // `docs/archive/deep-zoom/inversive-targeting.md` §24. A flame it
         // refuses falls through to the forward machinery.
         if armed {
             // The inverse walk is the ONLY planner for an armed flame.
@@ -1004,7 +1004,7 @@ impl Cylinders {
         // are not contractions, so the check below would refuse them;
         // and a disc bound through an inversion never shrinks, so the
         // enumeration would not terminate even if it started. See
-        // `docs/projects/deep-zoom/inversive-targeting.md`.
+        // `docs/archive/deep-zoom/inversive-targeting.md`.
         // Gated OFF -- see `mobius::ENABLED` for the measurements.
         // The module stays fully exercised by its own tests; this is
         // the one place that decides whether a real render may wait on
@@ -1126,7 +1126,7 @@ impl Cylinders {
         // Measured, one ball suffices from the very first step, so
         // only the root pays the cover's price and the walk below is
         // the ordinary cheap one. See
-        // `docs/projects/deep-zoom/inversive-targeting.md` §22.
+        // `docs/archive/deep-zoom/inversive-targeting.md` §22.
         let mut root_images: Option<std::collections::HashMap<u32, Vec<Ball>>> = None;
         let (root_c, root_r, sampling_leak) = match invariant_ball(flame, registry) {
             Ok((c, r)) => (c, r, 0.0),
@@ -2182,7 +2182,7 @@ pub const COUNT_AT: usize = 9;
 /// shift y, weights, finals]`, then one word per stride as
 /// `[cdf, H, G, len, sym0, sym1, …]`.
 ///
-/// **The replay in offsets** (`docs/projects/deep-zoom/deep-zoom-precision.md`),
+/// **The replay in offsets** (`docs/archive/deep-zoom/deep-zoom-precision.md`),
 /// when the plan carries references: `rows` is where the flame's forward
 /// maps start (`forward_delta::ROW_FLOATS` each, by transform index),
 /// and `blocks` where one offset per word starts, then the words' blocks
@@ -3400,7 +3400,7 @@ mod gpu_tests {
         assert!(after > 0.5 * before, "after a resize the plan no longer draws: coverage {after:.3} against {before:.3}");
     }
 
-    /// **PathMap colours by path** (docs/projects/deep-zoom/word-editing.md §10), on
+    /// **PathMap colours by path** (docs/archive/deep-zoom/word-editing.md §10), on
     /// the Grand Julian at zoom 1, where the plan is kept for it. Each
     /// style renders to `output/pathmap/`; they differ from one another.
     /// Level 2 splits every path to two maps. The right-click reads a
@@ -3578,7 +3578,7 @@ mod gpu_tests {
         assert!(rel < 0.03, "the same picture, divided: the view's share moved {:.2}%", 100.0 * rel);
     }
 
-    /// **The Paths panel sees what is drawn** (docs/projects/deep-zoom/word-editing.md
+    /// **The Paths panel sees what is drawn** (docs/archive/deep-zoom/word-editing.md
     /// §6), through the renderer the app holds: the tree of the plan on
     /// screen, a solo that draws one branch and restarts the picture as it
     /// is pressed and released, and a removal that takes a branch out.
@@ -3710,7 +3710,7 @@ mod gpu_tests {
     ///   the instrument is not measuring anything.
     ///
     /// This is the phase-0 validation from
-    /// `docs/projects/deep-zoom/inversive-targeting.md`: the leaky regions of
+    /// `docs/archive/deep-zoom/inversive-targeting.md`: the leaky regions of
     /// phase 1 will rely on this number, so it is calibrated here
     /// against an answer already known.
     #[test]
@@ -10345,7 +10345,7 @@ mod tests {
     }
 
     /// **The web's route plans the fixtures as the desktop's**
-    /// (docs/projects/rhai-one-form.md, step 2): each 2D fixture -- the deep
+    /// (docs/archive/projects/rhai-one-form.md, step 2): each 2D fixture -- the deep
     /// zoom corpus (`output/flame-zoom`) and the visual suite's 2D and
     /// per-variation configs -- at its own framing and 64, 1024 and 16384
     /// times nearer, planned with the desktop's bounds (a built-in's from
@@ -10441,7 +10441,7 @@ mod tests {
     }
 
     /// **A forward search out of time keeps its frontier, complete**
-    /// (docs/projects/rhai-one-form.md, the time budget): the gasket at
+    /// (docs/archive/projects/rhai-one-form.md, the time budget): the gasket at
     /// 1e4 planned in full and with no time at all. The timed plan stops
     /// after its first level and says so; every word the full plan keeps
     /// extends one of its words (a word's ancestors are its suffixes:

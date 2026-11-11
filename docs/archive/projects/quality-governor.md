@@ -1,6 +1,6 @@
 # The quality governor: a target frame rate, render scale, upscaling
 
-> **Archived 2026-10-31** -- finished: every item of the order of work built (branch `quality-governor`), the web's fallback and the Chrome fixes tried by the user in Chrome and Firefox. What is left -- a deep terrain's section renders, which the render scale cannot reach -- is its own project, [terrain-speed.md](../../projects/terrain-speed.md). For how it works now, read [RENDERER.md](../../main/RENDERER.md) (*The frame-time governor*: the flame batch, its pacing cap), [ESCAPE.md](../../main/ESCAPE.md), [TERRAIN.md](../../main/TERRAIN.md) (*Render tiers*), [SIMULATION.md](../../main/SIMULATION.md), [EXPORT.md](../../main/EXPORT.md) (*Speed*) and `src/app/governor.rs`; this is the record of what was planned, decided and measured.
+> **Archived 2026-10-31** -- finished: every item of the order of work built (branch `quality-governor`), the web's fallback and the Chrome fixes tried by the user in Chrome and Firefox. What is left -- a deep terrain's section renders, which the render scale cannot reach -- is its own project, [terrain-speed.md](../../experimental/terrain-speed.md). For how it works now, read [RENDERER.md](../../main/RENDERER.md) (*The frame-time governor*: the flame batch, its pacing cap), [ESCAPE.md](../../main/ESCAPE.md), [TERRAIN.md](../../main/TERRAIN.md) (*Render tiers*), [SIMULATION.md](../../main/SIMULATION.md), [EXPORT.md](../../main/EXPORT.md) (*Speed*) and `src/app/governor.rs`; this is the record of what was planned, decided and measured.
 
 **Status:** every item of the order of work is built (2026-10-30), and
 the web's fallback was tried in a browser (2026-10-31). Phase 1 measured
@@ -12,7 +12,7 @@ governor (item 5) for escape-time, flames, terrains and simulations, and
 the flame batch's pacing cap; exports' fixed rungs (item 6); the
 fallback without a GPU timer (item 7). Open, and a project of its own: a
 deep terrain's section renders, which the render scale cannot reach
-([terrain-speed.md](../../projects/terrain-speed.md)). All seven decisions taken
+([terrain-speed.md](../../experimental/terrain-speed.md)). All seven decisions taken
 2026-10-29: D1-D4 and D6 as recommended; D5 revised (a simulation's
 field must go far lower than 50%, a solid to 25%); D7 the user's own (an active
 simulation is letterboxed to its grid, never warped).
@@ -463,7 +463,7 @@ already says why escape's supersampling is lower (`aa_governor::readout`:
 "Governor" or "Size"). It grows to cover the scale: "67% · 2x AA,
 governed".
 
-**Holding a drag** ([slow-frame-slider-hold.md](../../projects/slow-frame-slider-hold.md))
+**Holding a drag** ([slow-frame-slider-hold.md](../../experimental/slow-frame-slider-hold.md))
 is the other half. The governor keeps frames fast where a cheaper picture
 exists; the hold covers settings with none (an iteration count, a
 compile). The hold plan's note that "governed engines hide the cost"
@@ -705,7 +705,7 @@ does yet.
 Open: a deep terrain's section renders (one step can take 360 ms) want
 splitting, or a budget the governor sets ("section detail while moving",
 *The ladder*); the render scale cannot reach them. Split out as
-[terrain-speed.md](../../projects/terrain-speed.md) (2026-10-31).
+[terrain-speed.md](../../experimental/terrain-speed.md) (2026-10-31).
 
 ## The web, as built (2026-10-30)
 

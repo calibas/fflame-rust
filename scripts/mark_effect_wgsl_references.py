@@ -1,6 +1,6 @@
 """Mark each one-pass effect's WGSL as the reference its Rhai twin replaced.
 
-One-shot codemod for docs/projects/rhai-plugins.md, P2 step 7: the
+One-shot codemod for docs/archive/projects/rhai-plugins.md, P2 step 7: the
 built-in effects are their Rhai twins (assets/effects/*.rhai) in every
 build with the compiler, so an edit to the WGSL no longer reaches the
 app. A note after each WGSL file's title line says so, and each twin's
@@ -52,7 +52,7 @@ def note(name: str, eol: str) -> str:
 
 OLD_TWIN_HEADER = [
     "// The Rhai twin of shaders/effects/{rel}",
-    "// (docs/projects/rhai-plugins.md, P2): the same parameters, in the same",
+    "// (docs/archive/projects/rhai-plugins.md, P2): the same parameters, in the same",
     "// order, so a config cannot tell which it got.",
 ]
 

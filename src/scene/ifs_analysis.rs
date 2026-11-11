@@ -4365,7 +4365,7 @@ pub enum Blur {
 
 /// [`analyse_2d_maps_sliced`], with each transform's `pre_blur` taken
 /// out and handed back beside the maps, by transform index (tracker item
-/// C2, `docs/projects/deep-zoom/deep-zoom-tracker.md`). The maps are the flame's
+/// C2, `docs/archive/deep-zoom/deep-zoom-tracker.md`). The maps are the flame's
 /// with the blur removed; the walk adds it back where it draws the
 /// sample and replays, and decides whether it can plan it at all.
 ///

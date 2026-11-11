@@ -1,7 +1,7 @@
 //! The user's formula files: Rhai formulas (`.rhai`, one formula a
 //! file: the language's own), and the Ultra Fractal (`.ufm` formulas,
 //! `.ucl` colourings) and Fractint (`.frm`) files it imports, edited in
-//! the Formula Editor (`docs/projects/escape-formula-language.md`).
+//! the Formula Editor (`docs/archive/projects/escape-formula-language.md`).
 //!
 //! One store on both platforms, through [`crate::storage::backend`]: a
 //! `formulas/` folder in the app's data directory on desktop, keys under
@@ -51,7 +51,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("kifs-2d.rhai", include_str!("../../assets/formulas/kifs-2d.rhai")),
     ("whorled-mandelbrot.rhai", include_str!("../../assets/formulas/whorled-mandelbrot.rhai")),
     ("frothy-basin.rhai", include_str!("../../assets/formulas/frothy-basin.rhai")),
-    // Animation tracks (docs/projects/rhai-tracks.md).
+    // Animation tracks (docs/archive/projects/rhai-tracks.md).
     ("track-breathing.rhai", include_str!("../../assets/formulas/track-breathing.rhai")),
     ("track-springy-zoom.rhai", include_str!("../../assets/formulas/track-springy-zoom.rhai")),
     ("track-smoothed-jitter.rhai", include_str!("../../assets/formulas/track-smoothed-jitter.rhai")),

@@ -348,7 +348,7 @@ pub enum TrackSource {
     },
 
     /// A Rhai script writing the targets it declares (`script`;
-    /// docs/projects/rhai-tracks.md), run after the keyframe and signal
+    /// docs/archive/projects/rhai-tracks.md), run after the keyframe and signal
     /// tracks. The track's `target` is its first target's key; the
     /// script's `TARGETS` are the truth.
     Script {

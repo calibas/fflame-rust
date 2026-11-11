@@ -1,6 +1,6 @@
 # Motion blur
 
-> **Archived 2026-10-29** -- finished: every engine blurred in the export and the viewport, the web app's playback tried by the user, the playback speed fixed where it was ours to fix. What is left -- the API's field, the viewport's path-traced solid, per-thread time for flames, a terrain's lit-pass timing -- is in [escape-sim-followups.md](../../projects/escape-sim-followups.md) (*Temporal antialiasing*) and, for the API, [v0.6.0-release.md](../../projects/v0.6.0-release.md). Read [ANIMATION.md](../../main/ANIMATION.md) (*Motion blur*) for how it works now; this is the record of what was planned, decided and measured.
+> **Archived 2026-10-29** -- finished: every engine blurred in the export and the viewport, the web app's playback tried by the user, the playback speed fixed where it was ours to fix. What is left -- the API's field, the viewport's path-traced solid, per-thread time for flames, a terrain's lit-pass timing -- is in [escape-sim-followups.md](escape-sim-followups.md) (*Temporal antialiasing*) and, for the API, [v0.6.0-release.md](../../projects/v0.6.0-release.md). Read [ANIMATION.md](../../main/ANIMATION.md) (*Motion blur*) for how it works now; this is the record of what was planned, decided and measured.
 
 **Status:** planned 2026-10-29, branch `motion-blur`. Built 2026-10-29:
 phase 1 (the model, the shutter, the panel) and phase 2 (escape-time

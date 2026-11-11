@@ -518,10 +518,10 @@ pub struct FlameRenderer {
     solid_strength: f32, // Solid rendering: occlusion strength (0 = off)
     /// Biased selection and its correction, mirrored from the config
     /// so the incremental shader-constants path can see it.
-    /// See docs/projects/deep-zoom/flame-deep-zoom.md stage 1.
+    /// See docs/archive/deep-zoom/flame-deep-zoom.md stage 1.
     importance: crate::config::fractal_config::ImportanceSettings,
     /// The enumerated cylinders for the CURRENT view, when it is
-    /// worth targeting (docs/projects/deep-zoom/flame-deep-zoom.md stage 2).
+    /// worth targeting (docs/archive/deep-zoom/flame-deep-zoom.md stage 2).
     /// `None` whenever the flame cannot be targeted or the view is
     /// too shallow for it to pay -- which is most of the time, and is
     /// the state that leaves the shader byte-identical.
@@ -557,7 +557,7 @@ pub struct FlameRenderer {
     /// flame and whether targeting is running at all.
     cylinder_relative: bool,
     /// Whether the current shader runs the replay's deep steps in
-    /// offsets (`docs/projects/deep-zoom/deep-zoom-precision.md`): the plan
+    /// offsets (`docs/archive/deep-zoom/deep-zoom-precision.md`): the plan
     /// carries references, and the plot is view-relative.
     cylinder_offsets: bool,
     /// **Persistent orbits** (`docs/archive/projects/persistent-orbits.md`): each
@@ -604,7 +604,7 @@ pub struct FlameRenderer {
     /// sets (`Flame::orbit_length_source`): a dispatch's length on every
     /// path, over the caller's Iterations per Thread.
     orbit_length: Option<u32>,
-    /// The plan as made, before trim (`docs/projects/deep-zoom/word-editing.md`);
+    /// The plan as made, before trim (`docs/archive/deep-zoom/word-editing.md`);
     /// `cylinders` is what is drawn. Kept so moving the trim slider
     /// retrims without replanning.
     cylinders_full: Option<crate::scene::cylinder::Cylinders>,
@@ -614,12 +614,12 @@ pub struct FlameRenderer {
     /// (`FractalConfig::word_removals`).
     applied_removals: Vec<String>,
     /// A branch drawn alone while the Words panel's solo button is held
-    /// (docs/projects/deep-zoom/word-editing.md §6): its pattern. Transient -- not
+    /// (docs/archive/deep-zoom/word-editing.md §6): its pattern. Transient -- not
     /// in the config, not undoable, not in the plan key.
     word_solo: Option<Vec<u32>>,
     /// The solo `cylinders` was cut with.
     applied_solo: Option<Vec<u32>>,
-    /// PathMap (docs/projects/deep-zoom/word-editing.md §10): the colouring the
+    /// PathMap (docs/archive/deep-zoom/word-editing.md §10): the colouring the
     /// packed table was coloured with -- style and level, `None` when
     /// PathMap is off -- and each drawn word's colour, kept so a resize
     /// can pack the table again.
@@ -1772,7 +1772,7 @@ impl FlameRenderer {
         // dispatched samples; scale the normalization density by the
         // MEASURED accepted fraction (1.0 when solid is off) so solids
         // tone-map at the brightness their surviving samples deserve.
-        // Cylinder targeting (docs/projects/deep-zoom/flame-deep-zoom.md stage
+        // Cylinder targeting (docs/archive/deep-zoom/flame-deep-zoom.md stage
         // 2) deposits weight ONE per forced sample rather than the
         // estimator's `P(A_V)`, because `P(A_V)` is 2.6e-9 at a zoom
         // of 2^20 and the u32 histogram would round every deposit to
@@ -1781,7 +1781,7 @@ impl FlameRenderer {
         // HERE instead, as an iteration count: a forced render is
         // doing the work of `N / P(A_V)` unbiased iterations, and
         // saying so is what makes its brightness match theirs.
-        // Auto exposure (docs/projects/deep-zoom/flame-deep-zoom.md): the
+        // Auto exposure (docs/archive/deep-zoom/flame-deep-zoom.md): the
         // shipped normalisation assumes the frame holds all the work.
         // A deep view does not -- most of the attractor is off-screen
         // -- so the measured in-frame share scales the count down to
@@ -2814,7 +2814,7 @@ impl FlameRenderer {
 
         // 1b. Update xaos buffer (create/drop as needed)
         let xaos_buffer_changed = self.update_xaos_buffer(device, queue, &config.flame);
-        // 1b2. Biased selection (docs/projects/deep-zoom/flame-deep-zoom.md
+        // 1b2. Biased selection (docs/archive/deep-zoom/flame-deep-zoom.md
         // stage 1). Mirrored onto the kernel so the incremental
         // shader-constants path sees the flag, and uploaded here
         // because the table is a function of the flame's weights and
@@ -4617,7 +4617,7 @@ impl FlameRenderer {
             };
             None
         };
-        // **Trim** (docs/projects/deep-zoom/word-editing.md §4): the plan as made
+        // **Trim** (docs/archive/deep-zoom/word-editing.md §4): the plan as made
         // is kept, and what is drawn is cut from it -- so the slider
         // retrims without replanning. The panel reports what is drawn.
         //
@@ -5369,7 +5369,7 @@ impl FlameRenderer {
     }
 
     /// **The path a pixel was last drawn through** (PathMap's
-    /// right-click, docs/projects/deep-zoom/word-editing.md §10): its word of the
+    /// right-click, docs/archive/deep-zoom/word-editing.md §10): its word of the
     /// plan on screen, and how many of its last maps every word on screen
     /// shares; `None` where no path drew it or PathMap is off.
     pub async fn read_path_at(&self, device: &Device, queue: &Queue, x: u32, y: u32) -> Result<Option<(Vec<u32>, usize)>, String> {

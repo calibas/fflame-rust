@@ -1,5 +1,5 @@
 //! **A forward bound from a Rhai variation's own code**
-//! (docs/projects/rhai-one-form.md, route B).
+//! (docs/archive/projects/rhai-one-form.md, route B).
 //!
 //! [`derive`](super::derive) bounds a variation by interval arithmetic
 //! over its WGSL, parsed by naga, which the web build does not carry. This

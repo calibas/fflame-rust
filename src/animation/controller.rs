@@ -258,7 +258,7 @@ impl AnimationController {
         (values, Some(rests))
     }
 
-    /// The script tracks' values at `time` (docs/projects/rhai-tracks.md),
+    /// The script tracks' values at `time` (docs/archive/projects/rhai-tracks.md),
     /// in track order, after the keyframe and signal tracks' `under`, and
     /// the script targets' rests as they now stand.
     ///
@@ -934,7 +934,7 @@ mod tests {
         }
     }
 
-    // ---- Script tracks (docs/projects/rhai-tracks.md, step 1) ----
+    // ---- Script tracks (docs/archive/projects/rhai-tracks.md, step 1) ----
 
     fn zoom_of(config: &FractalConfig) -> f64 {
         super::super::script::read(config, &super::super::script::resolve_target("zoom").unwrap()).unwrap()

@@ -180,7 +180,7 @@ mod tests {
     }
 
     /// **A video gives the frames playback gave**, script tracks and all
-    /// (docs/projects/rhai-tracks.md): the shipped examples -- an added
+    /// (docs/archive/projects/rhai-tracks.md): the shipped examples -- an added
     /// breath, a spring that keeps a state, smoothed jitter -- over a
     /// keyframed zoom, played live with each frame applied to the config
     /// the next reads, then exported from the config playback left.

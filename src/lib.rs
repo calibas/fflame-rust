@@ -42,7 +42,7 @@ pub mod probe;
 pub mod census;
 /// The formula language: Rhai (and UF's and Fractint's formulas) to WGSL,
 /// for every kind written in it -- formulas, colourings, solids,
-/// variations, effects (docs/projects/rhai-plugins.md, rule 1).
+/// variations, effects (docs/archive/projects/rhai-plugins.md, rule 1).
 pub mod lang;
 pub mod escape;
 pub mod sim;

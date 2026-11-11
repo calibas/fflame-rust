@@ -1,5 +1,5 @@
 //! A built-in variation beside its Rhai twin, input for input
-//! (docs/projects/rhai-plugins.md, P7 step 3, V1).
+//! (docs/archive/projects/rhai-plugins.md, P7 step 3, V1).
 //!
 //! The probe's own harness, two transforms a pair: the built-in in one,
 //! its twin in the next, the same parameter values in both, evaluated at

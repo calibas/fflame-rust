@@ -408,7 +408,7 @@ pub fn terrain_view(config: &FractalConfig, jitter: [f32; 2]) -> TerrainView {
 }
 
 /// The surface texture's octaves and phases for a config
-/// (docs/projects/surface-textures.md): a function of the config alone.
+/// (docs/archive/projects/surface-textures.md): a function of the config alone.
 ///
 /// The target wavelength is `texture_scale` pixels of a 1080-line view at
 /// the target. The octaves are the plane's dyadic ladder near it, octave k

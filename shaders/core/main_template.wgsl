@@ -93,7 +93,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 {{#if IMPORTANCE_SAMPLING}}
     // The window's likelihood ratio and how many choices it covers
-    // (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). `is_weight` is the
+    // (docs/archive/deep-zoom/flame-deep-zoom.md stage 1). `is_weight` is the
     // product of `p/q` over the choices since the last epoch reset,
     // which is what a deposit carries instead of 1.
     var is_weight = 1.0;
@@ -503,7 +503,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             fuse = fuse - 1u;
         } else {
 {{#if CYLINDER_TARGETING}}
-            // The FORCED PREFIX (docs/projects/deep-zoom/flame-deep-zoom.md
+            // The FORCED PREFIX (docs/archive/deep-zoom/flame-deep-zoom.md
             // stage 2). The free orbit above is the true chaos game
             // and has `current ~ mu`; this carries that point through
             // one enumerated word, whose image is inside the

@@ -91,7 +91,7 @@ fn json_is_solid(esc: &serde_json::Map<String, serde_json::Value>) -> bool {
 /// lights the camera's, so it renders as it did.
 ///
 /// v7 keys a Rhai variation by its id and version (`scripted::key`;
-/// docs/projects/rhai-plugins.md, rule 7), not its `INFO.name`. The
+/// docs/archive/projects/rhai-plugins.md, rule 7), not its `INFO.name`. The
 /// v6→v7 arm renames each one a flame carries to the key its name's
 /// derived id (`scripted::derived_id`: nothing before had an `INFO.id`)
 /// and its source give, wherever the config names it
@@ -185,7 +185,7 @@ pub struct FractalConfig {
     /// under the on-disk attribute name `cam_roll`, and writes the
     /// `roll` parameter as `rotate` (in degrees). So `cam_roll` in
     /// any imported `.flame` lands here, not on `rotation`. See
-    /// `docs/projects/jwf-features.md` ("Camera rotation") for the
+    /// `docs/archive/projects/jwf-features.md` ("Camera rotation") for the
     /// full mapping table.
     ///
     /// In radians. Default 0. 3D-mode only — has no effect in 2D.
@@ -218,7 +218,7 @@ pub struct FractalConfig {
     /// Saved image dimensions. Mirrors the `size` attribute on
     /// JWildfire / Apophysis `<flame>` elements — historically a
     /// canvas-extent concept that also participates in the zoom math
-    /// (see docs/projects/jwf-features.md "size attribute"). Today
+    /// (see docs/archive/projects/jwf-features.md "size attribute"). Today
     /// we only consume this for one thing: pre-filling the
     /// "Custom Export Size" inputs in the Export PNG dialog so
     /// users get the flame's intended dimensions by default. The
@@ -339,7 +339,7 @@ pub struct FractalConfig {
     /// Color settings
     #[serde(default)]
     pub color_mode: ColorMode,
-    /// PathMap colouring style (docs/projects/deep-zoom/word-editing.md §10)
+    /// PathMap colouring style (docs/archive/deep-zoom/word-editing.md §10)
     #[serde(default, skip_serializing_if = "PathMapStyle::is_default")]
     pub path_map_style: PathMapStyle,
     /// How many transforms of each path decide its PathMap colour, for
@@ -474,7 +474,7 @@ pub struct FractalConfig {
     pub color_effects: Vec<EffectInstance>,
 
     /// The effects the user wrote (in Rhai) that the chains use, as their
-    /// sources (docs/projects/rhai-plugins.md, P2): `entry` is the effect's
+    /// sources (docs/archive/projects/rhai-plugins.md, P2): `entry` is the effect's
     /// id, the name its instances carry. Registered wherever the config is
     /// rendered (`effects::custom::ensure`), so it renders anywhere.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -514,7 +514,7 @@ pub struct FractalConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub cylinder_always: bool,
 
-    /// **Trim** (docs/projects/deep-zoom/word-editing.md §4): drop the branches of
+    /// **Trim** (docs/archive/deep-zoom/word-editing.md §4): drop the branches of
     /// the plan's word tree, within `cylinder_trim_levels` levels of the
     /// view, whose share of the view is under this times their largest
     /// sibling's. An artistic choice -- it removes real parts of the
@@ -529,7 +529,7 @@ pub struct FractalConfig {
     #[serde(default = "default_trim_levels", skip_serializing_if = "is_default_trim_levels")]
     pub cylinder_trim_levels: u32,
 
-    /// **Removals** (docs/projects/deep-zoom/word-editing.md §5): pieces of the
+    /// **Removals** (docs/archive/deep-zoom/word-editing.md §5): pieces of the
     /// picture taken out by their words, each a pattern of maps matched
     /// against a word's last-applied maps -- `"t1a1 t1a0"`, transform and
     /// arm in the order the chaos game applies them, the map nearest the
@@ -540,7 +540,7 @@ pub struct FractalConfig {
 
     /// Auto exposure: normalise the tone map by the density of the
     /// pixels actually IN FRAME rather than by total iterations
-    /// (`docs/projects/deep-zoom/flame-deep-zoom.md`).
+    /// (`docs/archive/deep-zoom/flame-deep-zoom.md`).
     ///
     /// The shipped normalisation is `total_iters / pixel_count`, which
     /// assumes the frame holds all the work. A zoomed-in view does

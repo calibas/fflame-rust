@@ -349,7 +349,7 @@ fn one(
         }
     }
 
-    // Otherwise derive one (`docs/projects/deep-zoom/forward-bounds.md`).
+    // Otherwise derive one (`docs/archive/deep-zoom/forward-bounds.md`).
     //
     // **The weight is applied here, not there.** A derived bound is
     // of the body alone -- `V(p)` -- because that is what the body
@@ -371,7 +371,7 @@ fn one(
 }
 
 /// **A variation's derived bound** over `b`, of its body alone: by
-/// interval arithmetic over its code (docs/projects/rhai-one-form.md,
+/// interval arithmetic over its code (docs/archive/projects/rhai-one-form.md,
 /// route B).
 ///
 /// - On the desktop a built-in's from its shipped WGSL (`derive`, naga),
