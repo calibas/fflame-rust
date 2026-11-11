@@ -1,9 +1,13 @@
 # Rhai twins of the solids and fields
 
-Status: **steps 1-6 done 2026-11-10** (every solid and field twinned,
+> **Archived 2026-11-10** -- finished: steps 1 to 6 built on branch
+> `rhai-solids-fields`, merged (PR #157). Every built-in solid and field
+> has a Rhai twin and an Edit as Rhai; the reference is ESCAPE.md.
+
+Status: **steps 1-6 done 2026-11-10, merged** (every solid and field twinned,
 each with Edit as Rhai; the reference is ESCAPE.md, *The built-in
 solids' twins*, *A Rhai field*, *The built-in fields' twins*). Branch
-`rhai-solids-fields`. Part of [rhai-plugins.md](rhai-plugins.md), P7
+`rhai-solids-fields`. Part of [rhai-plugins.md](../../projects/rhai-plugins.md), P7
 ("every built-in editable as Rhai"): the last built-in kinds without held
 twins.
 

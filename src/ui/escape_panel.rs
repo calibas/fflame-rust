@@ -30,7 +30,7 @@ fn edit_as_formula(
 }
 
 /// Edit as Formula, for an escape formula (`EntryKind::Formula`) or a mode
-/// D solid (`EntryKind::Solid`; docs/projects/rhai-solids-fields.md): the
+/// D solid (`EntryKind::Solid`; docs/archive/projects/rhai-solids-fields.md): the
 /// built-in `builtin`'s twin becomes the formula, its parameters and the
 /// view kept, one undo step back to the built-in; the Formula Editor holds
 /// the twin in use and asks to be opened.

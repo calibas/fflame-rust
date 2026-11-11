@@ -1284,7 +1284,7 @@ fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {{
     Ok(g.finish("", body))
 }
 
-/// **A Rhai field's WGSL** (docs/projects/rhai-solids-fields.md): its own
+/// **A Rhai field's WGSL** (docs/archive/projects/rhai-solids-fields.md): its own
 /// `FieldState` (every state variable, a field each) and `FieldStep`, which
 /// the field template then does not declare (`FieldDef::own_state`), and
 /// `field_init` and `field_step`: `start` and `term`, the step handing the

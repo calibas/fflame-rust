@@ -33,7 +33,7 @@ pub enum Kind {
     /// A simulation's model (P4).
     SimModel,
     /// A mode B field, and a field's colouring
-    /// (docs/projects/rhai-solids-fields.md).
+    /// (docs/archive/projects/rhai-solids-fields.md).
     Field,
     FieldColoring,
     /// An Ultra Fractal or Fractint file: many entries, of its kind.

@@ -369,7 +369,7 @@ pub enum Builtin {
     RoundEven,
     /// A trig argument reduced to [-pi, pi] by the templates' Cody-Waite
     /// split (`esc_reduce`, `uf_reduce`), a field's alone
-    /// (docs/projects/rhai-solids-fields.md): `sin` and `cos` reduce their
+    /// (docs/archive/projects/rhai-solids-fields.md): `sin` and `cos` reduce their
     /// own; a value read beside them (a triangle wave's phase) needs it.
     Reduce,
     /// The base-2 log of a real, WGSL's own: what the smooth and
