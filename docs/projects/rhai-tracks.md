@@ -1,6 +1,7 @@
 # Rhai animation tracks
 
-Status: **planned 2026-11-10.** Branch `rhai-tracks`. P5 of
+Status: **planned 2026-11-10, decisions taken, step 1 in progress.**
+Branch `rhai-tracks`. P5 of
 [rhai-plugins.md](rhai-plugins.md): a Rhai script as an animation track.
 
 ## Decided (the user, 2026-11-10)
@@ -213,6 +214,10 @@ fn value(t, s, p, ctx) { #{ zoom: s.x } }
    with the live frames, `release.py check`.
 
 ## Decisions for the user
+
+**All four decided 2026-11-10 as recommended** (the user): a fixed
+`TARGETS` list, 1/240 s for every track, Use as track creates an
+animation, and signal smoothing left for later.
 
 1. **Targets: a fixed list, or computed?** A fixed `TARGETS` (recommended
    for now) lets the timeline show what a track writes before it runs and

@@ -1,8 +1,13 @@
 # One evaluated form for a Rhai body
 
-Status: **step 0 measured, step 4's race fixed 2026-11-09; the
-juliascope-rays difference is open (step 4) and the plan waits on
-decision 1** (below). Branch `rhai-planners`,
+Status: **paused 2026-11-10, the user may revisit.** Built and merged
+with `rhai-planners` (PR #156, 2026-11-10): step 0's measurements, step
+2 (route B, the user's pick: bounds from the Rhai code on every
+platform, the web's built-ins through their twins) with the forward
+search's time budget, and step 4's registry race. Step 1 is not built
+(route B needs no instruction list). Open: step 3 (decide P9 by
+measurement) and step 4's juliascope-rays 1% difference at 1e4. Branch
+`rhai-planners`,
 after its Parts A to E
 ([rhai-planners.md](../archive/projects/rhai-planners.md), archived).
 It comes from a review of that branch, which read the plan record, the
