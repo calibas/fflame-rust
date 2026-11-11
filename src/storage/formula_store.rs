@@ -51,6 +51,10 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("kifs-2d.rhai", include_str!("../../assets/formulas/kifs-2d.rhai")),
     ("whorled-mandelbrot.rhai", include_str!("../../assets/formulas/whorled-mandelbrot.rhai")),
     ("frothy-basin.rhai", include_str!("../../assets/formulas/frothy-basin.rhai")),
+    // Animation tracks (docs/projects/rhai-tracks.md).
+    ("track-breathing.rhai", include_str!("../../assets/formulas/track-breathing.rhai")),
+    ("track-springy-zoom.rhai", include_str!("../../assets/formulas/track-springy-zoom.rhai")),
+    ("track-smoothed-jitter.rhai", include_str!("../../assets/formulas/track-smoothed-jitter.rhai")),
     ("frothy-basin-coloring.rhai", include_str!("../../assets/formulas/frothy-basin-coloring.rhai")),
     ("volterra-lotka.rhai", include_str!("../../assets/formulas/volterra-lotka.rhai")),
     ("unity.rhai", include_str!("../../assets/formulas/unity.rhai")),

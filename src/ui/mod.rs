@@ -2220,6 +2220,12 @@ impl EguiLayer {
                 animation_controller.current_time,
                 signal_names,
             );
+            // A script track's window, and its Edit in the Formula Editor.
+            track_editor::render_script_track_panel(ctx, animation_controller, &mut self.track_editor_state);
+            if let Some(source) = self.track_editor_state.open_in_formula_editor.take() {
+                self.formula_editor.get_or_insert_with(formula_editor::FormulaEditorPanel::new).open_track(&source);
+                open_formula_editor = true;
+            }
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
         });

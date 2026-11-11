@@ -223,6 +223,17 @@ impl FormulaEditorPanel {
         self.status = Some(status.to_string());
     }
 
+    /// Open a track's source (the track editor's Edit in the Formula
+    /// Editor, or a new track from an example): unsaved, and in use when
+    /// it has an id, so Live follows its edits into the animation.
+    pub fn open_track(&mut self, source: &str) {
+        let title = crate::animation::script::declare(source).map(|d| d.title).unwrap_or_else(|_| "track".to_string());
+        let file = formula_store::file_name_for(&format!("{title}.rhai")).unwrap_or_else(|| "track.rhai".into());
+        self.adopt(None, file, source.to_string());
+        self.track_in_use = lang::rhai::info_string(source, "id").filter(|id| crate::scripted::is_uuid(id)).map(|id| (None, id));
+        self.status = None;
+    }
+
     fn open_stored(&mut self, file: &str) {
         match formula_store::load(file) {
             Some(text) => self.adopt(Some(file.to_string()), file.to_string(), text),
