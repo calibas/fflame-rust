@@ -1,6 +1,5 @@
 use crate::camera::gesture::ViewKind;
 use crate::config::{ConfigManager, ConfigPath, ConfigValue, FractalConfig, SolidShadingSettings};
-use rust_i18n::t;
 
 /// The Lighting panel (docs/archive/projects/3d-look-and-tools.md, P3):
 /// every lit 3D view's lighting, shadows, material and surface in one

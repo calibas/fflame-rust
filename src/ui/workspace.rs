@@ -4,7 +4,6 @@
 //! for different workflows (Beginner, Standard, Advanced, Export).
 
 use egui_dock::{DockState};
-use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
 /// Identifies which panel to display

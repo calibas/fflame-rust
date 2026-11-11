@@ -15,7 +15,6 @@
 
 use crate::config::{ConfigManager, ConfigPath, FractalConfig};
 use crate::scene::word_tree::{parse_pattern, pattern_text, Branch, Tree};
-use rust_i18n::t;
 
 /// How many of a path's children are listed before the rest are summed
 /// on one line.

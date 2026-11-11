@@ -47,7 +47,7 @@ impl Label {
 
     /// The text for the app's current locale.
     pub fn resolve(&self) -> String {
-        self.resolve_in(&rust_i18n::locale())
+        self.resolve_in(&crate::i18n::current_locale())
     }
 
     /// The text for `locale`: that locale, then another of its language

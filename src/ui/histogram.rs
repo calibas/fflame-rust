@@ -5,7 +5,6 @@
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use crate::config::{ConfigManager, ConfigPath, UpdateType};
 use crate::renderer::{DensityHistogram, HISTOGRAM_BINS};
-use rust_i18n::t;
 
 /// Height of the histogram widget in pixels
 const HISTOGRAM_HEIGHT: f32 = 120.0;

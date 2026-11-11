@@ -2,7 +2,6 @@
 //!
 //! Floating panel for exporting fractals to PNG images.
 
-use rust_i18n::t;
 use crate::config::ConfigManager;
 
 /// Peak GPU memory the export renderer holds *per output pixel*: histogram

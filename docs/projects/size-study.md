@@ -268,6 +268,19 @@ out of the desktop app (~5% of its code) and ~75 crates out of the build
 (clean builds and CI compile less; fat LTO optimises less). They do not
 change the everyday build: our own crate is what compiles on every edit.
 
+**Done 2026-11-11.** On main: `ron`, `ringbuf`, `png` 0.17 and `once_cell`
+removed. On branch `replace-i18n-fft`: our own `t!` (a table `build.rs` makes
+from the locale files) and a radix-2 FFT. env_logger's `regex` feature was
+also switched off; it was the other route by which regex reached the app,
+which the review above missed. Measured:
+- 38 crates left the app's dependency tree (516 -> 479). The estimate of ~75
+  was too high: most of rust-i18n's crates are shared with other
+  dependencies.
+- The desktop `.text` went from 32.4 to 28.8 MiB (-11%), more than estimated:
+  each `t!` call had expanded to inline code, so our own crate shrank by
+  1.6 MiB.
+- The web download went from 7.58 to 7.33 MB gzip (-3.3%).
+
 ## 6. Options, by what they buy
 
 | Option | Saves | Costs |

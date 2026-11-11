@@ -1,7 +1,6 @@
 //! TabViewer implementation for rendering docked panels
 
 use egui_dock::{egui, TabViewer};
-use rust_i18n::t;
 use super::workspace::PanelType;
 use crate::config::manager::EditingTarget;
 

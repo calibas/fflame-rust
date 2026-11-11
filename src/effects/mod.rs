@@ -12,7 +12,6 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
-use rust_i18n::t;
 
 use crate::params::{ParamDef, Spec};
 
@@ -206,7 +205,7 @@ impl EffectInfo {
     /// The label to show for this effect.
     ///
     /// Locale first, so a built-in keeps its curated and translatable
-    /// name. `rust-i18n` returns the **key** when there is no entry, so
+    /// name. `t!` returns the **key** when there is no entry, so
     /// a miss has to be detected rather than trusted — otherwise
     /// `effects.plugin_example_tint.name` is what reaches the user, which
     /// is exactly what happened before this fell back.
@@ -1787,7 +1786,7 @@ mod label_tests {
 
     /// A plugin or downloaded effect uses the label it declares.
     ///
-    /// It has no other option: `rust-i18n` returns the KEY on a miss,
+    /// It has no other option: `t!` returns the KEY on a miss,
     /// and a plugin author cannot add a locale entry. Before this fell
     /// back, `effects.plugin_example_tint.name` is what appeared in the
     /// effect picker — found by using the app, not by a test.

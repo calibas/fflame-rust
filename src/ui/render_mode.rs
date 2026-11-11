@@ -373,7 +373,6 @@ mod tests {
     /// the key itself when it is missing, which is how a typo shows.
     #[test]
     fn every_mode_label_and_tip_resolves() {
-        use rust_i18n::t;
         for m in RenderMode::ALL {
             for key in [mode_label_key(*m), mode_tip_key(*m)] {
                 let text = t!(key);

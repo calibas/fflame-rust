@@ -14,7 +14,6 @@
 //! 3D flames — invisible in the render otherwise.
 
 use egui;
-use rust_i18n::t;
 
 use crate::variations::{global_registry, VariationCategory};
 

@@ -13,7 +13,6 @@
 //! the display rate (the event loop's `AboutToWait`). Its text is built
 //! only while the pointer is on it.
 
-use rust_i18n::t;
 
 /// What the bar shows. Built by the app (`App::render_progress`) and
 /// handed to the UI once a frame.

@@ -3,7 +3,6 @@ use crate::scene::palette::{ColorMode, PathMapStyle, PaletteLibrary};
 use crate::config::{ConfigManager, ConfigPath, LazyUndoUi, UpdateType};
 use crate::renderer::DensityHistogram;
 use super::histogram::{render_histogram_with_config, render_levels_controls_managed};
-use rust_i18n::t;
 
 /// The Gamma slider's range.
 ///

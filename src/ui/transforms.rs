@@ -4,7 +4,6 @@ use crate::config::{ConfigManager, ConfigPath, UpdateType, AffineParam, Transfor
 use super::variation_params::render_variation_params;
 use super::transform_colors::{normal_color, linked_color, final_color};
 use egui::Color32;
-use rust_i18n::t;
 
 /// Which phase section a variation instance is displayed/run in.
 #[derive(Clone, Copy, PartialEq, Eq)]

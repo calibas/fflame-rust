@@ -1,4 +1,3 @@
-use rust_i18n::t;
 
 use crate::config::{ConfigManager, ConfigPath};
 
@@ -74,7 +73,7 @@ const PLATFORM_SUFFIX: &str = if cfg!(target_arch = "wasm32") {
 /// translator's work across four locales and guarantees drift the first
 /// time someone adds a binding.
 ///
-/// rust-i18n returns the key itself for a missing entry, which is how a
+/// `t!` returns the key itself for a missing entry, which is how a
 /// missing variant is detected.
 fn shortcut(key: &str) -> std::borrow::Cow<'static, str> {
     if !PLATFORM_SUFFIX.is_empty() {

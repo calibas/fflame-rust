@@ -46,7 +46,7 @@ pub enum Text {
 impl Text {
     pub fn resolve(&self) -> String {
         match self {
-            Text::Key(k) => rust_i18n::t!(*k).to_string(),
+            Text::Key(k) => t!(*k).to_string(),
             Text::Label(l) => l.resolve(),
         }
     }

@@ -4,7 +4,6 @@
 //! Batch results are displayed in the File Browser panel.
 
 use egui;
-use rust_i18n::t;
 
 use crate::scene::randomize::{RandomGeneratorSettings, SymmetryType};
 use crate::variations::global_registry;

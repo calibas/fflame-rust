@@ -11,7 +11,6 @@ use crate::audio::{
     AudioCapture, AudioManager, AudioPlayer, CaptureState, PlaybackState,
 };
 use crate::signal::generator::{GeneratorConfig, WaveformType, SAMPLE_RATE};
-use rust_i18n::t;
 use std::collections::HashSet;
 
 /// The duration generators render over when no animation is loaded.

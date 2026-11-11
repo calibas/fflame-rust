@@ -1,5 +1,4 @@
 use crate::scene::palette::{ColorStop, Palette};
-use rust_i18n::t;
 
 pub struct PaletteEditor {
     /// Generate-from-script section state.

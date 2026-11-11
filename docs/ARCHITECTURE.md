@@ -108,7 +108,7 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | --- | --- | --- |
 | `src/app/` | The running editor. `mod.rs` (about 4,800 lines) holds `App`, the winit event loop, the frame (`App::render`) and the frame governor (`Batch`, `Knee`, `adjust_iter_scale`). Beside it: `ui_handlers.rs` (acting on `UiResponse`), `gpu_updates.rs` (applying `UpdateAction` to the GPU, the overwrite window, `freeze_viewport`), `config.rs` (load/import/export, undo/redo glue, background export launch), `export.rs` (headless export and `ExportEngine`), `input.rs` (keyboard, fullscreen), `fly_camera.rs`, `animation_update.rs`, `governor.rs` (the quality governor: escape-time's, terrains', simulations' rungs, a flame's render scale and its batch's pacing cap), `aa_governor.rs` (its fallback without a GPU timer), `render_mode.rs` (the Normal/Animating/Overwrite state machine; not the render-mode policy), `render_progress.rs`, `texture_sync.rs`, `variation_fetch.rs`, `effect_fetch.rs`, `script_cloud.rs` | [UI.md](main/UI.md), [RENDERER.md](main/RENDERER.md) |
 | `src/ui/` | 56 files: the egui_dock workspace and every panel. Coordination: `mod.rs`, `workspace.rs` (`PanelType`, 32 panels; `WorkspaceLayout`), `panel_viewer.rs`, `menu_bar.rs`, `compact_menu.rs`, `response.rs` (`UiResponse`). Policy: `render_mode.rs`, `visibility.rs`. Panels include `transforms`, `triangle_editor`, `view` and `view_controls`, `tone_mapping`, `palette_editor`, `palette_library`, `fractal_browser` (with `fractal_gallery`), `escape_panel`, `sim_panel`, `textures_panel`, `lighting_panel` (Lighting), `effects_panel`, `animation_panel`, `track_editor`, `signal_panel`, `scripts_panel`, `paths_panel`, `xaos_editor`, `subflames`, `variations`, `random_generator`, `undo_history`, `export_panel` | [UI.md](main/UI.md), [FRACTAL-BROWSER.md](main/FRACTAL-BROWSER.md) |
-| `src/i18n.rs` | rust-i18n setup and locale switching; strings in `locales/*.yml` | [I18N.md](main/I18N.md) |
+| `src/i18n.rs` | `t!`'s lookup (a table `build.rs` makes from `locales/*.yml`) and locale switching | [I18N.md](main/I18N.md) |
 
 ### Model and state
 
@@ -146,7 +146,7 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | `src/png_metadata.rs` | Writing and reading the tEXt chunks every exported PNG carries | [EXPORT.md](main/EXPORT.md) |
 | `src/animation/` | `Animation`, `Track`, keyframes and interpolation; `AnimationController` (playback); `frames.rs`, an animation's frames as configs (`FrameSource`: the video export's and Python's); `export.rs`, the one video loop | [ANIMATION.md](main/ANIMATION.md) |
 | `src/signal/` | `SignalManager`, the `.signal` format, generators; inputs for animation tracks | [ANIMATION.md](main/ANIMATION.md) |
-| `src/audio/` | Decoding (symphonia), analysis (rustfft), playback and live capture (cpal on desktop, Web Audio in the browser); produces signals | [ANIMATION.md](main/ANIMATION.md) |
+| `src/audio/` | Decoding (symphonia), analysis (`audio/fft.rs`, a radix-2 FFT), playback and live capture (cpal on desktop, Web Audio in the browser); produces signals | [ANIMATION.md](main/ANIMATION.md) |
 | `src/flame_xml.rs` | Apophysis / JWildfire / Chaotica `.flame` XML import and export | [CONFIG.md](main/CONFIG.md) |
 
 ### Content, persistence and the network

@@ -13,7 +13,6 @@ use crate::config::escape::{
 };
 use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::scene::transforms::RenderMode;
-use rust_i18n::t;
 
 /// The Escape panel's Edit as Formula: the built-in `builtin`'s twin
 /// becomes the config's formula, one undo step (its parameters carry over
@@ -4026,7 +4025,7 @@ mod palette_map_tests {
             .chain(PaletteCurve::ALL.iter().map(|c| c.as_str()));
         for name in names {
             let key = format!("escape_panel.curve_{name}");
-            let got = rust_i18n::t!(&key, locale = "en");
+            let got = t!(&key, locale = "en");
             assert_ne!(got, key, "no label for curve `{name}` in locales/en.yml");
         }
     }

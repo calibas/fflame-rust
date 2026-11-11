@@ -42,8 +42,6 @@
 
 use fractal_flame_wgpu::effects::{global_effect_registry, EffectCategory};
 
-rust_i18n::i18n!("locales");
-
 fn main() {
     let out_path = std::env::args()
         .nth(1)

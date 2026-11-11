@@ -1158,7 +1158,7 @@ impl App {
             if ui_response.loaded_api_flame_id.is_some() {
                 let name = config.flame.name.clone();
                 self.egui_layer.show_api_notification(
-                    &rust_i18n::t!("api.loading_flame", name = name),
+                    &t!("api.loading_flame", name = name),
                     false,
                 );
             }
@@ -1182,7 +1182,7 @@ impl App {
                 if ui_response.loaded_api_flame_id.is_some() {
                     let name = config.flame.name.clone();
                     self.egui_layer.show_api_notification(
-                        &rust_i18n::t!("api.load_flame_success", name = name),
+                        &t!("api.load_flame_success", name = name),
                         false,
                     );
                 }
@@ -1507,7 +1507,7 @@ impl App {
                 self.egui_layer.clear_cloud_state();
 
                 self.egui_layer.show_api_notification(
-                    &rust_i18n::t!("auth.session_expired"),
+                    &t!("auth.session_expired"),
                     true,
                 );
             }
@@ -1527,10 +1527,10 @@ impl App {
         match transition {
             Transition::Lost => self
                 .egui_layer
-                .show_api_notification(&rust_i18n::t!("auth.connection_lost"), true),
+                .show_api_notification(&t!("auth.connection_lost"), true),
             Transition::Restored => self
                 .egui_layer
-                .show_api_notification(&rust_i18n::t!("auth.connection_restored"), false),
+                .show_api_notification(&t!("auth.connection_restored"), false),
             Transition::None => {}
         }
     }
@@ -1660,7 +1660,7 @@ impl App {
                         self.config_manager.rename_flame(name.clone());
                         self.flame.name = name.clone();
                         self.egui_layer.show_api_notification(
-                            &rust_i18n::t!("api.save_success", name = name),
+                            &t!("api.save_success", name = name),
                             false,
                         );
                         // Auto-refresh the Online tab
@@ -1677,7 +1677,7 @@ impl App {
                         self.api_pending_visibility = None;
                         self.api_pending_name = None;
                         self.egui_layer.show_api_notification(
-                            &rust_i18n::t!("api.save_error", error = e),
+                            &t!("api.save_error", error = e),
                             true,
                         );
                     }
@@ -1706,7 +1706,7 @@ impl App {
                 None => {
                     self.api_save_in_progress = false;
                     self.egui_layer.show_api_notification(
-                        &rust_i18n::t!("api.save_error", error = "Not signed in"),
+                        &t!("api.save_error", error = "Not signed in"),
                         true,
                     );
                     return;
@@ -1851,14 +1851,14 @@ impl App {
                                 .map(|a| a.name.clone())
                                 .unwrap_or_default();
                             self.egui_layer.show_api_notification(
-                                &rust_i18n::t!("api.animation_save_success", name = name),
+                                &t!("api.animation_save_success", name = name),
                                 false,
                             );
                         }
                         Err(e) => {
                             log::error!("Failed to save animation online: {}", e);
                             self.egui_layer.show_api_notification(
-                                &rust_i18n::t!("api.animation_save_error", error = e),
+                                &t!("api.animation_save_error", error = e),
                                 true,
                             );
                         }
@@ -1914,7 +1914,7 @@ impl App {
             Some(t) => t,
             None => {
                 self.egui_layer.show_api_notification(
-                    &rust_i18n::t!("api.animation_save_error", error = "Not signed in"),
+                    &t!("api.animation_save_error", error = "Not signed in"),
                     true,
                 );
                 return;
@@ -1969,7 +1969,7 @@ impl App {
             Some(t) => t,
             None => {
                 self.egui_layer.show_api_notification(
-                    &rust_i18n::t!("api.animation_save_error", error = "Not signed in"),
+                    &t!("api.animation_save_error", error = "Not signed in"),
                     true,
                 );
                 return;
@@ -2016,12 +2016,12 @@ impl App {
         // Show "loading" notification
         if animation_id.is_some() {
             self.egui_layer.show_api_notification(
-                &rust_i18n::t!("api.loading_animation"),
+                &t!("api.loading_animation"),
                 false,
             );
         } else if flame_id.is_some() {
             self.egui_layer.show_api_notification(
-                &rust_i18n::t!("api.loading_flame_generic"),
+                &t!("api.loading_flame_generic"),
                 false,
             );
         }
@@ -2092,7 +2092,7 @@ impl App {
                 self.url_load_started = None;
                 self.paused = false;
                 self.egui_layer.show_api_notification(
-                    &rust_i18n::t!("api.url_load_error", error = "Request timed out"),
+                    &t!("api.url_load_error", error = "Request timed out"),
                     true,
                 );
                 return;
@@ -2121,13 +2121,13 @@ impl App {
                 if let Err(e) = self.load_config_with_undo(config, format!("Load flame from URL: {}", name), api_metadata) {
                     log::error!("Failed to load flame from URL: {}", e);
                     self.egui_layer.show_api_notification(
-                        &rust_i18n::t!("api.url_load_error", error = e),
+                        &t!("api.url_load_error", error = e),
                         true,
                     );
                     return;
                 }
                 self.egui_layer.show_api_notification(
-                    &rust_i18n::t!("api.url_load_flame_success", name = name),
+                    &t!("api.url_load_flame_success", name = name),
                     false,
                 );
             }
@@ -2176,14 +2176,14 @@ impl App {
                 );
 
                 self.egui_layer.show_api_notification(
-                    &rust_i18n::t!("api.url_load_animation_success", name = anim_name),
+                    &t!("api.url_load_animation_success", name = anim_name),
                     false,
                 );
             }
             Err(e) => {
                 log::error!("Failed to load from URL: {}", e);
                 self.egui_layer.show_api_notification(
-                    &rust_i18n::t!("api.url_load_error", error = e),
+                    &t!("api.url_load_error", error = e),
                     true,
                 );
             }

@@ -40,13 +40,11 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 png = "0.18"
 futures = "0.3"
 quick-xml = "0.36"
-rust-i18n = "3.1"
 rayon = "1.10"
 sha2 = "0.10"
 
 # Audio (for audio-reactive animations)
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "flac", "ogg", "vorbis", "pcm"] }
-rustfft = "6.2"
 # default-features would enable `ahash/runtime-rng`, which makes ahash
 # pull getrandom 0.3 — and via feature unification that applies to egui's
 # ahash too, breaking the wasm32 build (getrandom 0.3 refuses
@@ -173,7 +171,9 @@ wgpu = { version = "29.0", default-features = false, features = ["std", "webgpu"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 egui-winit = { version = "0.34", default-features = true }
-env_logger = "0.11"
+# No `regex` feature: it linked a regex engine (~760 KiB) for RUST_LOG's
+# `/pattern` filter alone; `RUST_LOG=module=level` works without it.
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 pollster = { version = "0.4", features = ["macro"] }
 clap = { version = "4.5", features = ["derive"] }
 # See WASM section for why egui-wgpu defaults are disabled. Re-enable
@@ -227,6 +227,8 @@ serde_json = "1.0"
 winresource = "0.1"
 
 [dev-dependencies]
+# Holds the audio FFT (audio::fft) and the GPU FFT to a reference.
+rustfft = "6.2"
 anyhow = "1.0"
 criterion = "0.5"
 

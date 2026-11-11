@@ -2482,7 +2482,7 @@ impl App {
                     terrain.invalidate_footprint();
                 }
                 if let Some(name) = self.escape_texture.take_notice() {
-                    self.egui_layer.show_api_notification(&rust_i18n::t!("textures_panel.viewport_waiting", name = name), false);
+                    self.egui_layer.show_api_notification(&t!("textures_panel.viewport_waiting", name = name), false);
                 }
                 let mut busy = self.escape_texture.busy();
                 // The sections the view wants (plan section 12): as many
@@ -2732,7 +2732,7 @@ impl App {
                     self.escape_dirty = true;
                 }
                 if let Some(name) = self.escape_texture.take_notice() {
-                    self.egui_layer.show_api_notification(&rust_i18n::t!("textures_panel.viewport_waiting", name = name), false);
+                    self.egui_layer.show_api_notification(&t!("textures_panel.viewport_waiting", name = name), false);
                 }
                 if self.escape_texture.busy() {
                     self.window.request_redraw();

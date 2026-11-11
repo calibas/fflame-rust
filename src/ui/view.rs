@@ -1,6 +1,5 @@
 use crate::scene::transforms::{Flame, PostSymmetryType, RenderMode};
 use crate::config::{ConfigManager, ConfigPath, FractalConfig};
-use rust_i18n::t;
 
 /// Render view controls content (for docking panels)
 pub fn render_view_content(

@@ -172,6 +172,171 @@ fn main() {
 
     // Embed the shipped simulation textures
     generate_texture_presets();
+
+    // The translations, as the table `t!` reads
+    generate_locale_table();
+}
+
+/// Generate `locales.rs` in OUT_DIR: every `locales/*.yml` as a table of
+/// `(dotted.key, text)` sorted by key, for `src/i18n.rs` (`t!`).
+///
+/// The files are the subset of YAML the locales use, and this reads that
+/// subset only, refusing anything else with the file and line rather than
+/// guessing: nested maps at two spaces an indent, keys of
+/// `[A-Za-z0-9_-]`, values double-quoted (escapes `\n \t \" \\ \/ \uXXXX`;
+/// a value may run onto following lines, folded as YAML folds them: a line
+/// break is a space, a blank line a newline), `#` comments, and the
+/// top-level `_version: 1` (the file format, not a string).
+fn generate_locale_table() {
+    let out_dir = env::var("OUT_DIR").unwrap();
+    let dir = Path::new("locales");
+    let mut files: Vec<String> = fs::read_dir(dir)
+        .expect("locales/ exists")
+        .flatten()
+        .filter_map(|e| e.file_name().to_str().map(String::from))
+        .filter(|n| n.ends_with(".yml"))
+        .collect();
+    files.sort();
+    let mut code = String::from("static LOCALES: &[(&str, &[(&str, &str)])] = &[\n");
+    let mut fallback = None;
+    for (i, file) in files.iter().enumerate() {
+        let locale = file.trim_end_matches(".yml");
+        if locale == "en" {
+            fallback = Some(i);
+        }
+        let text = fs::read_to_string(dir.join(file)).unwrap_or_else(|e| panic!("locales/{file}: {e}"));
+        let mut entries = parse_locale(&text, file);
+        entries.sort();
+        if let Some(w) = entries.windows(2).find(|w| w[0].0 == w[1].0) {
+            panic!("locales/{file}: the key {} is defined twice", w[0].0);
+        }
+        code.push_str(&format!("    ({locale:?}, &[\n"));
+        for (key, value) in &entries {
+            code.push_str(&format!("        ({key:?}, {value:?}),\n"));
+        }
+        code.push_str("    ]),\n");
+    }
+    code.push_str("];\n");
+    assert!(files.len() < 255, "the locale chain packs a table's index in a byte");
+    let fallback = fallback.expect("locales/en.yml: English is every locale's fallback");
+    code.push_str(&format!("const FALLBACK: usize = {fallback};\n"));
+    let out_path = Path::new(&out_dir).join("locales.rs");
+    fs::write(&out_path, code).unwrap_or_else(|e| panic!("could not write {}: {e}", out_path.display()));
+    println!("cargo:rerun-if-changed=locales");
+}
+
+/// One locale file as `(dotted.key, text)` pairs; see `generate_locale_table`.
+fn parse_locale(text: &str, file: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut path: Vec<String> = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+    let mut n = 0;
+    while n < lines.len() {
+        let line = lines[n].trim_end_matches('\r');
+        let at = n + 1;
+        n += 1;
+        let fail = |why: &str| -> ! { panic!("locales/{file}:{at}: {why}: {line}") };
+        let trimmed = line.trim_start_matches(' ');
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.starts_with('\t') {
+            fail("a tab in the indent");
+        }
+        let indent = line.len() - trimmed.len();
+        if indent % 2 != 0 || indent / 2 > path.len() {
+            fail("not an indent of two spaces a level");
+        }
+        path.truncate(indent / 2);
+        let Some((key, rest)) = trimmed.split_once(':') else { fail("not a `key:` line") };
+        if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+            fail("a key outside [A-Za-z0-9_-]");
+        }
+        let rest = rest.trim_start_matches(' ');
+        if rest.is_empty() || rest.starts_with('#') {
+            path.push(key.to_string());
+            continue;
+        }
+        if path.is_empty() && key == "_version" {
+            if rest.trim() != "1" {
+                fail("only the version-1 file format (one file a locale) is read");
+            }
+            continue;
+        }
+        let Some(body) = rest.strip_prefix('"') else { fail("a value that is not double-quoted") };
+        // The value, folding onto following lines until the closing quote.
+        let mut value = String::new();
+        let mut chars: Vec<char> = body.chars().collect();
+        let mut i = 0;
+        loop {
+            if i == chars.len() {
+                // A line break inside the quotes: trailing spaces go, a
+                // run of blank lines is that many newlines, else a space.
+                while value.ends_with(' ') || value.ends_with('\t') {
+                    value.pop();
+                }
+                let mut blank = 0;
+                loop {
+                    let Some(next) = lines.get(n) else { fail("an unterminated string") };
+                    n += 1;
+                    let next = next.trim_end_matches('\r').trim_start_matches([' ', '\t']);
+                    if next.is_empty() {
+                        blank += 1;
+                        continue;
+                    }
+                    if blank == 0 {
+                        value.push(' ');
+                    }
+                    for _ in 0..blank {
+                        value.push('\n');
+                    }
+                    chars = next.chars().collect();
+                    i = 0;
+                    break;
+                }
+                continue;
+            }
+            match chars[i] {
+                '"' => {
+                    let after: String = chars[i + 1..].iter().collect();
+                    let after = after.trim_start_matches(' ');
+                    if !(after.is_empty() || after.starts_with('#')) {
+                        fail("text after the closing quote");
+                    }
+                    break;
+                }
+                '\\' => {
+                    let Some(&e) = chars.get(i + 1) else { fail("a line ending in a backslash") };
+                    i += 2;
+                    match e {
+                        'n' => value.push('\n'),
+                        't' => value.push('\t'),
+                        '"' => value.push('"'),
+                        '\\' => value.push('\\'),
+                        '/' => value.push('/'),
+                        'u' => {
+                            let hex: String = chars.get(i..i + 4).map(|h| h.iter().collect()).unwrap_or_default();
+                            let c = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32);
+                            let Some(c) = c else { fail("a \\u escape that is not four hex digits") };
+                            value.push(c);
+                            i += 4;
+                        }
+                        _ => fail("an escape other than \\n \\t \\\" \\\\ \\/ \\uXXXX"),
+                    }
+                    continue;
+                }
+                c => value.push(c),
+            }
+            i += 1;
+        }
+        let mut dotted = path.join(".");
+        if !dotted.is_empty() {
+            dotted.push('.');
+        }
+        dotted.push_str(key);
+        out.push((dotted, value));
+    }
+    out
 }
 
 /// Generate `texture_presets.rs` in OUT_DIR: one `(name, contents)` pair
@@ -361,13 +526,6 @@ fn copy_shaders_to_target() {
     // Tell cargo to rerun if shaders change
     println!("cargo:rerun-if-changed=shaders");
 
-    // ...or if a translation does. `rust_i18n::i18n!` reads `locales/`
-    // when the macro expands, but cargo does not know that, so without
-    // this an edited string simply does not take: the crate is not
-    // rebuilt, the binary keeps the old text, and the locale-key tests
-    // pass against a stale table. Found by renaming a key and watching
-    // the test that exists to catch exactly that go green.
-    println!("cargo:rerun-if-changed=locales");
 
     embed_windows_icon();
 }

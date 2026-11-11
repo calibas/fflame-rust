@@ -22,7 +22,6 @@
 //! └──────────────────────────────────────────────────────────────────────────┘
 
 use egui::Ui;
-use rust_i18n::t;
 use crate::animation::{Animation, AnimationController, LoopMode, MotionBlur, PlaybackState};
 use crate::animation::export::{VideoCodec, HardwareAccel};
 

@@ -1,4 +1,3 @@
-use rust_i18n::t;
 
 /// Render the Config Import/Export dialog content
 pub fn render_config_dialog_content(

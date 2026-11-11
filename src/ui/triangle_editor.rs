@@ -3,7 +3,6 @@ use crate::config::{ConfigManager, ConfigPath, AffineParam, TransformRef, Update
 use super::transform_colors::{normal_color, linked_color, final_color};
 use egui::{Color32, Pos2, Stroke, Vec2};
 use serde::{Deserialize, Serialize};
-use rust_i18n::t;
 
 /// Mouse interaction modes for the triangle editor
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]

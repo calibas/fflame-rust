@@ -9,7 +9,7 @@
 //! - LiveSignalBridge implementing SignalProducer
 //! - Macro for generating identical signal accessor impls
 
-use rustfft::{num_complex::Complex, FftPlanner};
+use super::fft::{Complex, Fft};
 use std::f32::consts::PI;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -208,7 +208,8 @@ pub(crate) struct RealtimeAnalyzer {
     window: Vec<f32>,
     buffer: Vec<f32>,
     buffer_pos: usize,
-    fft_scratch: Vec<Complex<f32>>,
+    fft: Fft,
+    fft_scratch: Vec<Complex>,
     prev_magnitudes: Vec<f32>,
     onset_threshold: f32,
     // Normalization state (exponential moving average of max values)
@@ -253,7 +254,8 @@ impl RealtimeAnalyzer {
             window,
             buffer: vec![0.0; fft_size],
             buffer_pos: 0,
-            fft_scratch: vec![Complex::new(0.0, 0.0); fft_size],
+            fft: Fft::new(fft_size),
+            fft_scratch: vec![Complex::default(); fft_size],
             prev_magnitudes: vec![0.0; fft_size / 2 + 1],
             onset_threshold,
             max_amplitude: 0.1,
@@ -296,13 +298,10 @@ impl RealtimeAnalyzer {
         signals.set_amplitude(amplitude);
 
         // Apply window and compute FFT
-        let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(self.fft_size);
-
         for i in 0..self.fft_size {
             self.fft_scratch[i] = Complex::new(self.buffer[i] * self.window[i], 0.0);
         }
-        fft.process(&mut self.fft_scratch);
+        self.fft.process(&mut self.fft_scratch);
 
         // Compute magnitude spectrum
         let num_bins = self.fft_size / 2 + 1;
