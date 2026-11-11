@@ -271,9 +271,12 @@ From the config review (§4). Each needs `min_reader` in place first.
    server cannot learn there what a reader understands. Instead, nothing
    is required of a client: responses carry the full current vocabulary,
    and tolerating unknown values is part of the API's contract (0.6 on).
-   The one frozen exception, 0.5, is recognised by its fixed User-Agent
-   (`ureq/2.*`; 0.6 sends `FractalArtEditor/<version>`) and served the
-   legacy shape. Update notices come from a `GET` of the latest version.
+   The one frozen exception, 0.5, is recognised by its fixed User-Agent,
+   exactly `ureq/2.12.1` (ureq's default, from 0.5's lock file; 0.6 sends
+   `FractalArtEditor/<version>`), and served the legacy shape. To keep
+   separate integrations safe, the legacy shape applies only to that
+   exact string with no `reader` parameter. Any other client, or any
+   request with `reader`, gets today's behaviour plus additive changes. Update notices come from a `GET` of the latest version.
    URL versioning only for a change that cannot be additive.
 7. **How far back to test**: keep a 0.5 build and a 0.6 build in CI
    against a staging server (recommended), or test by hand per release.

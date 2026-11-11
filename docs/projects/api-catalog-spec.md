@@ -226,10 +226,10 @@ GET /api/types?engine=escape&kind=formula[&q=mandel]   -- browse: types with cou
 
 ## 6. Decisions for the user
 
-1. **Where the summary is worked out**: on the server, by the engine crate
-   (S, recommended), or sent by the client (C). §3.
-2. **A script's versions**: one type with versions (recommended), or each
-   version its own type. §2.
-3. **Effects as components** (search by effect, e.g. every config with
-   Edge Glow): include them (cheap, recommended), or leave effects out of
-   the catalog.
+All decided 2026-11-11:
+
+1. **Where the summary is worked out: on the server** (S). In the user's
+   words, "we shouldn't trust the client." §3.
+2. **A script's versions: one type**, each component recording the exact
+   version. §2.
+3. **Effects are components.**
