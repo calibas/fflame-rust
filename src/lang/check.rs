@@ -423,8 +423,8 @@ impl Checker {
                     }
                     EntryKind::Formula => kind = SectionKind::Init,
                     EntryKind::Coloring => kind = SectionKind::Final,
-                    EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => kind = SectionKind::Transform,
-                    EntryKind::Solid => kind = SectionKind::Init,
+                    EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::FieldColoring => kind = SectionKind::Transform,
+                    EntryKind::Solid | EntryKind::Field => kind = SectionKind::Init,
                 }
             }
             let allowed = match (self.kind, kind) {
@@ -446,6 +446,9 @@ impl Checker {
                 // A solid: its start, step, bail and distance (B3), and
                 // what `prepare` computes once (B's leftovers).
                 (EntryKind::Solid, SectionKind::Global | SectionKind::Init | SectionKind::Loop | SectionKind::Bailout | SectionKind::Final) => true,
+                // A field: its start and its term; its colouring's `shade`.
+                (EntryKind::Field, SectionKind::Init | SectionKind::Loop) => true,
+                (EntryKind::FieldColoring, SectionKind::Transform) => true,
                 _ => false,
             };
             if !allowed {
@@ -457,6 +460,8 @@ impl Checker {
                     EntryKind::Effect => "an effect",
                     EntryKind::SimColoring => "a simulation colouring",
                     EntryKind::SimModel => "a simulation model",
+                    EntryKind::Field => "a field",
+                    EntryKind::FieldColoring => "a field colouring",
                 };
                 self.error(s.span, format!("{what} has no `{}:` section", kind.label()));
                 continue;
@@ -509,6 +514,18 @@ impl Checker {
             EntryKind::SimModel => {
                 if !has(SectionKind::Transform) {
                     self.error(entry.span, "a simulation model needs `fn cell_step`");
+                    return None;
+                }
+            }
+            EntryKind::Field => {
+                if !has(SectionKind::Loop) {
+                    self.error(entry.span, "a field needs `fn term`");
+                    return None;
+                }
+            }
+            EntryKind::FieldColoring => {
+                if !has(SectionKind::Transform) {
+                    self.error(entry.span, "a field colouring needs `fn shade`");
                     return None;
                 }
             }
@@ -1047,7 +1064,7 @@ impl Checker {
             "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_blend" | "effect_amount" | "density_mean" | "pixel_scale" if self.internal => {
                 // A simulation colouring writes its colour to the same
                 // places (P4), and has nothing else of an effect's.
-                let sim = matches!(self.kind, EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Coloring) && matches!(name, "effect_r" | "effect_g" | "effect_b" | "effect_a");
+                let sim = matches!(self.kind, EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Coloring | EntryKind::FieldColoring) && matches!(name, "effect_r" | "effect_g" | "effect_b" | "effect_a");
                 if self.kind != EntryKind::Effect && !sim {
                     self.error(span, format!("`{name}` is an effect's"));
                     return None;
@@ -1064,6 +1081,18 @@ impl Checker {
                 }
             }
             "juliac" if self.internal => Predef::JuliaC,
+            // A field colouring's inputs.
+            "field_sum" | "field_grad" | "field_terms" if self.internal => {
+                if self.kind != EntryKind::FieldColoring {
+                    self.error(span, format!("`{name}` is a field colouring's"));
+                    return None;
+                }
+                match name {
+                    "field_sum" => Predef::FieldSum,
+                    "field_grad" => Predef::FieldGrad,
+                    _ => Predef::FieldTerms,
+                }
+            }
             // What the loop knows, a colouring's (P7 step 2): the bailout
             // and degree anywhere, the orbit's ending in `finish`, the
             // step's own values in `step`.
@@ -1191,6 +1220,18 @@ impl Checker {
         }
         if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::VarHide | Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::Camera(_) | Predef::PointW | Predef::WOut | Predef::DrawU32 | Predef::PixelZ | Predef::AccumZ) {
             self.error(span, format!("a transformation reads `#pixel`, `#pi` and `#e`, not `#{name}`"));
+            return None;
+        }
+        // A field reads its point, the term count, `#pi` and `#e`; its
+        // colouring its inputs and its result's places.
+        if self.kind == EntryKind::Field && !matches!(p, Predef::Pixel | Predef::MaxIter | Predef::Pi | Predef::E) {
+            self.error(span, format!("a field reads its point, `ctx.maxiter` (the term count), `#pi` and `#e`, not `#{name}`"));
+            return None;
+        }
+        if self.kind == EntryKind::FieldColoring
+            && !matches!(p, Predef::FieldSum | Predef::FieldGrad | Predef::FieldTerms | Predef::Pi | Predef::E | Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA)
+        {
+            self.error(span, format!("a field colouring reads its sum, gradient and term count, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
         let colouring = self.kind == EntryKind::Coloring || (self.kind == EntryKind::Solid && p == Predef::Index);
@@ -1817,6 +1858,11 @@ impl Checker {
             self.error(span, format!("unknown function `{name}`{hint}"));
             return None;
         };
+        // A field's trig reduction: its alone, where nothing derives it.
+        if b == Builtin::Reduce && self.kind != EntryKind::Field {
+            self.error(span, "`reduce` is a field's: `sin` and `cos` reduce their own arguments");
+            return None;
+        }
         // An effect's reads of its image (P2): an effect's alone.
         if matches!(b, Builtin::SampleR | Builtin::SampleG | Builtin::SampleB | Builtin::SampleA | Builtin::LoadR | Builtin::LoadG | Builtin::LoadB | Builtin::LoadA)
             && self.kind != EntryKind::Effect

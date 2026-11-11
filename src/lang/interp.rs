@@ -1038,6 +1038,13 @@ impl<'p> Machine<'p> {
                 }
                 // The GPU's alone: the checker keeps it out of `prepare`,
                 // and the interpreter runs a solid in tests only.
+                // `trap_point`: the Orbit transformations are the GPU walk's;
+                // here the point itself.
+                IStmt::Map { call, input, out } if *call == TRAP_POINT_CALL => {
+                    for (e, &v) in input.iter().zip(out.iter()) {
+                        self.vars[v] = self.eval(e, sh);
+                    }
+                }
                 IStmt::Map { .. } => panic!("a solid's call of a built-in variation runs on the GPU alone"),
                 IStmt::Repeat { body, cond } => {
                     let mut k = 0;
@@ -1250,6 +1257,10 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::Supersample => Value::Float(env.supersample),
         Predef::Value => Value::Float(sh.index),
         Predef::Rotation => Value::Complex(C64::new(env.rotation.cos(), env.rotation.sin())),
+        // A field colouring's inputs: the GPU's alone.
+        Predef::FieldSum => Value::Float(0.0),
+        Predef::FieldGrad => Value::Complex(C64::ZERO),
+        Predef::FieldTerms => Value::Int(0),
     }
 }
 

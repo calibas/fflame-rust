@@ -367,6 +367,11 @@ pub enum Builtin {
     /// built-in that rounds an iterate (the Gaussian integer colouring)
     /// rounds as it does, at any size.
     RoundEven,
+    /// A trig argument reduced to [-pi, pi] by the templates' Cody-Waite
+    /// split (`esc_reduce`, `uf_reduce`), a field's alone
+    /// (docs/projects/rhai-solids-fields.md): `sin` and `cos` reduce their
+    /// own; a value read beside them (a triangle wave's phase) needs it.
+    Reduce,
     /// The base-2 log of a real, WGSL's own: what the smooth and
     /// debanded colourings take, so their twins round as they do.
     Log2,
@@ -501,6 +506,7 @@ pub const BUILTINS: &[(&str, Builtin)] = &[
     ("ceil", Builtin::Ceil),
     ("floor", Builtin::Floor),
     ("round_even", Builtin::RoundEven),
+    ("reduce", Builtin::Reduce),
     ("log2", Builtin::Log2),
     ("real", Builtin::Real),
     ("imag", Builtin::Imag),
@@ -597,6 +603,8 @@ impl Builtin {
             // A float, whatever it is given: an int rounds to itself.
             RoundEven if arg == Ty::Complex => Ty::Complex,
             RoundEven => Ty::Float,
+            Reduce if arg == Ty::Complex => return Err("`reduce` takes a real: the angle a trig function reads".to_string()),
+            Reduce => Ty::Float,
             Log2 if arg == Ty::Complex => return Err("`log2` takes a real: `ln(z) / ln(2.0)` for a complex".to_string()),
             Log2 => Ty::Float,
             _ => {
@@ -651,6 +659,7 @@ impl Builtin {
             Ceil => C64::new(z.re.ceil(), z.im.ceil()),
             Floor => C64::new(z.re.floor(), z.im.floor()),
             RoundEven => C64::new(z.re.round_ties_even(), z.im.round_ties_even()),
+            Reduce => C64::real(Reduce.eval_f(z.re)),
             Log2 => z.ln().scale(std::f64::consts::LOG2_E),
             Real => C64::real(z.re),
             Imag => C64::real(z.im),
@@ -710,6 +719,7 @@ impl Builtin {
             Log1p => one.div(one.add(z)),
             F32 | Fract => one,
             SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB | NbrX | NbrY | NbrZ | NbrW | SimRand | InitAt | Pcg | HostInt | Tap | Disc | Hash2 => C64::ZERO,
+            Reduce => one,
             Zero | Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | RoundEven | Cosxx | IsInf
             | IsNan => C64::ZERO,
         }
@@ -751,6 +761,8 @@ impl Builtin {
             Ceil => x.ceil(),
             Floor => x.floor(),
             RoundEven => x.round_ties_even(),
+            // As the GPU's: k the nearest whole turn (halves to even).
+            Reduce => x - std::f64::consts::TAU * (x / std::f64::consts::TAU).round_ties_even(),
             Log2 => x.log2(),
             Real => x,
             Imag => 0.0,

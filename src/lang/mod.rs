@@ -81,6 +81,18 @@ pub enum EntryKind {
     /// `__cell` built-in, a neighbour the `__nbr_*`, and the result is
     /// written to the `effect_r` ... `effect_a` places.
     SimModel,
+    /// A mode B field (docs/projects/rhai-solids-fields.md), Rhai only:
+    /// `fn start(pos, p)`, the state a pixel's sum starts from, and `fn
+    /// term(s, p)`, one term, which sets the state's `value` (and `grad`,
+    /// its gradient, a complex) that the field template sums -- compiled
+    /// into `FIELD_TEMPLATE`'s `field_init` and `field_step`.
+    Field,
+    /// A mode B field's colouring, Rhai only: `fn shade(sum, grad, n, p)`,
+    /// the field's sum, its gradient and the term count to a palette
+    /// position (a number) or `#{ t, lum }`, `lum` the brightness -- the
+    /// template's `field_color`. Written to the `effect_r` (t) and
+    /// `effect_g` (lum) places.
+    FieldColoring,
 }
 
 /// A byte range in the source text.

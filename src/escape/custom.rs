@@ -44,7 +44,7 @@ struct Registry {
     /// A solid's parameter block: where its own parameters start (after
     /// the template's), and where its globals do (after its parameters,
     /// its colour depth and its ball).
-    solid_globals: HashMap<String, (usize, usize)>,
+    solid_globals: HashMap<String, (SolidSlots, usize)>,
     /// A solid's calls of built-in variations (3d-look-and-tools P5),
     /// which the maps flame carries ([`solid_maps`]).
     solid_maps: HashMap<String, Vec<ir::MapCall>>,
@@ -151,6 +151,8 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
         EntryKind::Effect => b"effect",
         EntryKind::SimColoring => b"sim_coloring",
         EntryKind::SimModel => b"sim_model",
+        EntryKind::Field => b"field",
+        EntryKind::FieldColoring => b"field_coloring",
     });
     eat(match src.dialect {
         CustomDialect::UltraFractal => b"uf",
@@ -198,6 +200,8 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
             EntryKind::Effect => lang::rhai::effect(&src.source),
             EntryKind::SimColoring => lang::rhai::sim_coloring(&src.source),
             EntryKind::SimModel => lang::rhai::sim_model(&src.source, lang::rhai::SimFn::Step(0)),
+            EntryKind::Field => lang::rhai::field(&src.source),
+            EntryKind::FieldColoring => lang::rhai::field_coloring(&src.source),
         });
     }
     if src.dialect == CustomDialect::Hybrid {
@@ -222,6 +226,7 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
         EntryKind::Solid => return Err(vec![Diag::error(lang::Span::default(), "a solid is written in Rhai")]),
         EntryKind::Effect => return Err(vec![Diag::error(lang::Span::default(), "an effect is written in Rhai")]),
         EntryKind::SimColoring | EntryKind::SimModel => return Err(vec![Diag::error(lang::Span::default(), "a simulation's colouring or model is written in Rhai")]),
+        EntryKind::Field | EntryKind::FieldColoring => return Err(vec![Diag::error(lang::Span::default(), "a field and its colouring are written in Rhai")]),
     };
     diags.extend(d);
     match program {
@@ -264,6 +269,7 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Solid => return Err("a solid is written in Rhai".to_string()),
         EntryKind::Effect => return Err("an effect is written in Rhai".to_string()),
         EntryKind::SimColoring | EntryKind::SimModel => return Err("a simulation's colouring or model is written in Rhai".to_string()),
+        EntryKind::Field | EntryKind::FieldColoring => return Err("a field and its colouring are written in Rhai".to_string()),
     };
     let program = match program {
         Some(p) if !lang::has_errors(&diags) => p,
@@ -294,7 +300,9 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Formula => lang::to_rhai::formula(&program, &header)?,
         EntryKind::Coloring => lang::to_rhai::coloring(&program, &header)?,
         EntryKind::Transform => return Err("a transformation does not convert to Rhai yet".to_string()),
-        EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => return Err("it is written in Rhai".to_string()),
+        EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Field | EntryKind::FieldColoring => {
+            return Err("it is written in Rhai".to_string())
+        }
     };
     // What it printed must compile back: one that does not is the
     // converter's bug, not the user's to fix.
@@ -306,6 +314,8 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Effect => lang::rhai::effect(&rhai),
         EntryKind::SimColoring => lang::rhai::sim_coloring(&rhai),
         EntryKind::SimModel => lang::rhai::sim_model(&rhai, lang::rhai::SimFn::Step(0)),
+        EntryKind::Field => lang::rhai::field(&rhai),
+        EntryKind::FieldColoring => lang::rhai::field_coloring(&rhai),
     };
     back.map_err(|d| format!("the conversion does not compile ({})", d.first().map(|x| x.render(&rhai)).unwrap_or_default()))?;
     Ok(rhai)
@@ -373,11 +383,177 @@ pub fn param_layout(name: &str) -> Option<Arc<crate::params::layout::ParamLayout
     registry().read().ok()?.layouts.get(name).cloned()
 }
 
+/// **Compile a Rhai field and register it under `name`** as a mode B
+/// field (docs/projects/rhai-solids-fields.md): its parameters, whether
+/// its terms give a gradient (`INFO.gradient`), the field colouring a
+/// fresh pick takes (`INFO.coloring`, else Field Value), and its own state
+/// and step (`lang::wgsl::field`).
+pub fn compile_field(src: &CustomSource, name: &str) -> Result<&'static super::fields::FieldDef, Vec<Diag>> {
+    if let Some(def) = super::fields::get_field(name) {
+        return Ok(def);
+    }
+    let fail = |m: String| vec![Diag::error(lang::Span::default(), m)];
+    let p = check_entry(EntryKind::Field, src)?;
+    record_layout(src, name)?;
+    let wgsl = lang::wgsl::field(&p).map_err(fail)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    lang::wgsl::validate_field(&wgsl).map_err(|e| fail(format!("the compiler produced invalid WGSL (a bug): {e}")))?;
+    let def = super::fields::FieldDef {
+        name: leak(name.to_string()),
+        display_name: display_name(&p),
+        has_gradient: lang::rhai::info_bool(&src.source, "gradient").unwrap_or(false),
+        default_coloring: lang::rhai::info_string(&src.source, "coloring")
+            .and_then(|c| super::fields::FIELD_COLORINGS.iter().find(|d| d.name == c).map(|d| d.name))
+            .unwrap_or("field_value"),
+        parameters: Box::leak(param_defs(&p).into_boxed_slice()),
+        presets: &[],
+        wgsl: leak(wgsl),
+        own_state: true,
+    };
+    let def: &'static super::fields::FieldDef = Box::leak(Box::new(def));
+    super::fields::register_custom_field(def);
+    Ok(def)
+}
+
+/// **Compile a Rhai field colouring and register it under `name`**: its
+/// parameters and its `field_color` (`lang::wgsl::field_coloring`).
+pub fn compile_field_coloring(src: &CustomSource, name: &str) -> Result<&'static super::fields::FieldColoringDef, Vec<Diag>> {
+    if let Some(def) = super::fields::find_field_coloring(name) {
+        return Ok(def);
+    }
+    let fail = |m: String| vec![Diag::error(lang::Span::default(), m)];
+    let p = check_entry(EntryKind::FieldColoring, src)?;
+    record_layout(src, name)?;
+    let wgsl = lang::wgsl::field_coloring(&p).map_err(fail)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    lang::wgsl::validate_field_coloring(&wgsl).map_err(|e| fail(format!("the compiler produced invalid WGSL (a bug): {e}")))?;
+    let def = super::fields::FieldColoringDef {
+        name: leak(name.to_string()),
+        display_name: display_name(&p),
+        parameters: Box::leak(param_defs(&p).into_boxed_slice()),
+        wgsl: leak(wgsl),
+    };
+    let def: &'static super::fields::FieldColoringDef = Box::leak(Box::new(def));
+    super::fields::register_custom_field_coloring(def);
+    Ok(def)
+}
+
 /// Why a checked solid does not compile to its walk, if it does not (the
 /// editor's check, before it is used).
-pub fn solid_error(p: &ir::Program) -> Option<String> {
-    let base = super::ifs::template_parameters().len();
-    lang::wgsl::solid(p, base, base + param_defs(p).len()).err()
+pub fn solid_error(p: &ir::Program, source: &str) -> Option<String> {
+    let layout = match solid_layout(p, source) {
+        Ok(l) => l,
+        Err(e) => return Some(e),
+    };
+    lang::wgsl::solid(p, &layout.slots.params, layout.slots.funcs, layout.depth_slot).err()
+}
+
+/// Where each of a solid's parameters sits in its block.
+#[derive(Clone, Debug)]
+pub(crate) struct SolidSlots {
+    /// Each parameter's first slot.
+    params: Vec<usize>,
+    /// Where its user functions' choices start.
+    funcs: usize,
+}
+
+impl SolidSlots {
+    /// The parameter values a block holds, as `ParamValues::from_slots`
+    /// reads a contiguous one.
+    fn values(&self, p: &ir::Program, block: &[f32]) -> lang::interp::ParamValues {
+        let at = |k: usize| block.get(k).copied().unwrap_or(0.0) as f64;
+        let values = p
+            .params
+            .iter()
+            .zip(&self.params)
+            .map(|(x, &k)| if x.ty() == ir::Ty::Complex { (at(k), at(k + 1)) } else { (at(k), 0.0) })
+            .collect();
+        let funcs = (0..p.funcs.len()).map(|i| at(self.funcs + i).round().max(0.0) as usize).collect();
+        lang::interp::ParamValues { values, funcs }
+    }
+}
+
+/// **A solid's parameter block**: the template's parameters (the built-in
+/// solids' seven), then the solid's own, then Colour Depth, then -- unless
+/// `prepare` gives the ball -- Ball Radius.
+///
+/// A solid may declare one of the template's parameters, or
+/// `colour_depth`, in its own `PARAMS`: its declaration then takes that
+/// parameter's place and slot -- its caption, hint, default and range --
+/// and `p.<name>` reads it. That is how a built-in's twin keeps the
+/// built-in's Iterations default and range, its Colour Depth hint, and
+/// reads the Slice Value (docs/projects/rhai-solids-fields.md).
+pub(crate) struct SolidLayout {
+    /// The template's parameters, with the solid's own in place of any it
+    /// declares.
+    template: Vec<ParamDef>,
+    /// Its other parameters, in order.
+    own: Vec<ParamDef>,
+    /// Its Colour Depth, if it declares one.
+    depth: Option<ParamDef>,
+    slots: SolidSlots,
+    depth_slot: usize,
+}
+
+pub(crate) fn solid_layout(p: &ir::Program, source: &str) -> Result<SolidLayout, String> {
+    let mut template = super::ifs::template_parameters().to_vec();
+    let mut defs = param_defs(p);
+    // `INFO.slow`: committed when a drag ends.
+    for s in lang::rhai::info_strings(source, "slow") {
+        let d = defs.iter_mut().find(|d| d.name == s).ok_or_else(|| format!("`INFO.slow` names `{s}`, which is not in `PARAMS`"))?;
+        d.slow = true;
+    }
+    // Each program parameter's defs: two for a complex, one otherwise;
+    // the user functions' after them.
+    let mut at = 0usize;
+    let mut own = Vec::new();
+    let mut depth = None;
+    // A parameter's place: the template's index, Colour Depth, or the
+    // next of its own.
+    enum Place {
+        Template(usize),
+        Depth,
+        Own(usize),
+    }
+    let mut places = Vec::new();
+    let mut own_floats = 0usize;
+    for x in &p.params {
+        let n = x.ty().floats();
+        let mine = &defs[at..at + n];
+        at += n;
+        let name = x.name.as_str();
+        if let Some(i) = template.iter().position(|d| d.name == name) {
+            if n != 1 {
+                return Err(format!("`{name}` is the template's parameter, a number: declare it as one"));
+            }
+            template[i] = mine[0].clone();
+            places.push(Place::Template(i));
+        } else if name == "colour_depth" {
+            if n != 1 {
+                return Err("`colour_depth` is a number: how many of the first iterations the colourings read".into());
+            }
+            depth = Some(mine[0].clone());
+            places.push(Place::Depth);
+        } else {
+            places.push(Place::Own(own_floats));
+            own_floats += n;
+            own.extend_from_slice(mine);
+        }
+    }
+    // The user functions' choices follow its own parameters.
+    own.extend_from_slice(&defs[at..]);
+    let base = template.len();
+    let funcs = base + own_floats;
+    let depth_slot = base + own.len();
+    let params = places
+        .iter()
+        .map(|pl| match pl {
+            Place::Template(i) => *i,
+            Place::Depth => depth_slot,
+            Place::Own(k) => base + k,
+        })
+        .collect();
+    Ok(SolidLayout { template, own, depth, slots: SolidSlots { params, funcs }, depth_slot })
 }
 
 /// Compile a Rhai solid (the KIFS plan, B3) and register it under `name`
@@ -393,21 +569,20 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     let fail = |m: String| vec![Diag::error(lang::Span::default(), m)];
     let p = check_entry(EntryKind::Solid, src)?;
     record_layout(src, name)?;
-    let template = super::ifs::template_parameters();
-    let own = param_defs(&p);
-    let depth_slot = template.len() + own.len();
+    let layout = solid_layout(&p, &src.source).map_err(fail)?;
+    let depth_slot = layout.depth_slot;
     // Its parameters, their colour depth and ball, then what `prepare`
     // computes: one block of 64.
     let globals: usize = p.globals.iter().map(|&v| p.vars[v].floats()).sum();
     if depth_slot + 2 + globals > 64 {
         return Err(fail(format!(
             "a solid's parameters and `prepare` values take {} slots; it has {} and {}",
-            64 - template.len() - 2,
-            own.len(),
+            64 - layout.template.len() - 2,
+            layout.own.len(),
             globals
         )));
     }
-    let wgsl = lang::wgsl::solid(&p, template.len(), depth_slot).map_err(fail)?;
+    let wgsl = lang::wgsl::solid(&p, &layout.slots.params, layout.slots.funcs, depth_slot).map_err(fail)?;
     #[cfg(not(target_arch = "wasm32"))]
     lang::wgsl::validate_solid(&wgsl).map_err(|e| fail(format!("the compiler produced invalid WGSL (a bug): {e}")))?;
     let radius = lang::rhai::info_number(&src.source, "radius");
@@ -424,15 +599,17 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     }
     let radius = radius.unwrap_or(2.0).max(1e-3);
     let depth = lang::rhai::info_number(&src.source, "depth").unwrap_or(3.0).clamp(1.0, 12.0).round();
-    let mut parameters: Vec<ParamDef> = template.to_vec();
-    parameters.extend(own);
-    parameters.push(ParamDef::owned(
-        "colour_depth",
-        "Colour Depth",
-        "How many of the first iterations the colourings read: the orbit trap's closest approach, the level's \
-         running derivative and the address. Raise it when zoomed in.",
-        float_kind(depth, (1.0, 12.0), false),
-    ));
+    let mut parameters: Vec<ParamDef> = layout.template.clone();
+    parameters.extend(layout.own.iter().cloned());
+    parameters.push(layout.depth.clone().unwrap_or_else(|| {
+        ParamDef::owned(
+            "colour_depth",
+            "Colour Depth",
+            "How many of the first iterations the colourings read: the orbit trap's closest approach, the level's \
+             running derivative and the address. Raise it when zoomed in.",
+            float_kind(depth, (1.0, 12.0), false),
+        )
+    }));
     // Its slot is kept without it: `prepare`'s values start after it.
     if ball.is_none() {
         parameters.push(ParamDef::owned(
@@ -448,7 +625,11 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
         display_name: leak(p.name.clone()),
         solid: true,
         needs_flame: false,
-        default_coloring: "ifs_trap",
+        // `INFO.coloring`: the colouring a fresh pick takes, one of mode
+        // D's (a built-in's twin keeps the built-in's).
+        default_coloring: lang::rhai::info_string(&src.source, "coloring")
+            .and_then(|c| super::ifs::IFS_COLORINGS.iter().find(|d| d.name == c).map(|d| d.name))
+            .unwrap_or("ifs_trap"),
         parameters: Box::leak(parameters.into_boxed_slice()),
         presets: &[],
         wgsl: leak(wgsl),
@@ -465,7 +646,7 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     // Its `prepare`, which the renderer has the interpreter compute.
     if !p.globals.is_empty() {
         if let Ok(mut r) = registry().write() {
-            r.solid_globals.insert(name.to_string(), (template.len(), depth_slot + 2));
+            r.solid_globals.insert(name.to_string(), (layout.slots.clone(), depth_slot + 2));
             r.programs.insert(name.to_string(), Arc::new(p));
         }
     }
@@ -1318,17 +1499,19 @@ pub fn solid_maps(name: &str) -> Vec<ir::MapCall> {
 }
 
 pub fn globals(name: &str, block: &[f32], env: &lang::interp::Env) -> Option<(usize, Vec<f32>)> {
-    let (p, base, at) = {
+    let (p, slots, at) = {
         let r = registry().read().ok()?;
         let p = r.programs.get(name)?.clone();
-        let (base, at) = match p.kind {
-            EntryKind::Coloring => (0, p.param_slots()),
-            EntryKind::Solid => *r.solid_globals.get(name)?,
-            _ => (0, 0),
+        let (slots, at) = match p.kind {
+            EntryKind::Coloring => (None, p.param_slots()),
+            EntryKind::Solid => {
+                let (s, at) = r.solid_globals.get(name)?;
+                (Some(s.clone()), *at)
+            }
+            _ => (None, 0),
         };
-        (p, base, at)
+        (p, slots, at)
     };
-    let block = block.get(base..).unwrap_or_default();
     // Everything `global:` can read: the parameters and the image.
     let mut key: Vec<u64> = block.iter().map(|v| u64::from(v.to_bits())).collect();
     key.extend([
@@ -1348,7 +1531,12 @@ pub fn globals(name: &str, block: &[f32], env: &lang::interp::Env) -> Option<(us
             return Some((at, v.clone()));
         }
     }
-    let params = lang::interp::ParamValues::from_slots(&p, block);
+    // A solid's parameters where its layout puts them; anything else's
+    // from the block's start.
+    let params = match &slots {
+        Some(s) => s.values(&p, block),
+        None => lang::interp::ParamValues::from_slots(&p, block),
+    };
     let values = lang::interp::globals(&p, &params, env);
     if let Ok(mut l) = last.lock() {
         l.insert(name.to_string(), (key, values.clone()));
@@ -1364,15 +1552,15 @@ pub fn globals(name: &str, block: &[f32], env: &lang::interp::Env) -> Option<(us
 /// without one, which has the Ball Radius parameter instead
 /// ([`compile_solid`]).
 pub fn solid_ball(def: &super::ifs::IfsDef, params: &std::collections::BTreeMap<String, f32>) -> Option<f64> {
-    let (p, base) = {
+    let (p, slots) = {
         let r = registry().read().ok()?;
-        (r.programs.get(def.name)?.clone(), r.solid_globals.get(def.name)?.0)
+        (r.programs.get(def.name)?.clone(), r.solid_globals.get(def.name)?.0.clone())
     };
     let v = ball_global(&p)?;
     let at: usize = p.globals.iter().take_while(|&&g| g != v).map(|&g| p.vars[g].floats()).sum();
     let mut block = vec![0.0f32; def.parameters.len()];
     super::pack_params(def.parameters, params, &mut block);
-    let params = lang::interp::ParamValues::from_slots(&p, block.get(base..)?);
+    let params = slots.values(&p, &block);
     let env = lang::interp::Env::at(lang::builtins::C64::ZERO, 1);
     lang::interp::globals(&p, &params, &env).get(at).map(|&r| f64::from(r))
 }
@@ -1397,22 +1585,25 @@ pub fn ensure(escape: &EscapeConfig) {
             continue;
         }
         let known = match kind {
-            // A solid is a formula's choice too (B3).
-            EntryKind::Formula => formula(name).is_some() || super::ifs::get_ifs(name).is_some(),
-            EntryKind::Coloring => coloring(name).is_some(),
+            // A solid and a field are a formula's choice too (B3; the
+            // fields' twins).
+            EntryKind::Formula => formula(name).is_some() || super::ifs::get_ifs(name).is_some() || super::fields::get_field(name).is_some(),
+            EntryKind::Coloring => coloring(name).is_some() || super::fields::find_field_coloring(name).is_some(),
             // An escape config carries no transformation (nor an effect,
             // nor a simulation's colouring).
-            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => true,
+            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Field | EntryKind::FieldColoring => true,
         };
         if known || registry().read().is_ok_and(|r| r.failed.contains(name)) {
             continue;
         }
-        let solid = kind == EntryKind::Formula && src.dialect == CustomDialect::Rhai && lang::rhai::kind_of(&src.source) == Some(EntryKind::Solid);
+        let is = |k: EntryKind| src.dialect == CustomDialect::Rhai && lang::rhai::kind_of(&src.source) == Some(k);
         let result = match kind {
-            EntryKind::Formula if solid => compile_solid(src, name).map(|_| ()),
+            EntryKind::Formula if is(EntryKind::Solid) => compile_solid(src, name).map(|_| ()),
+            EntryKind::Formula if is(EntryKind::Field) => compile_field(src, name).map(|_| ()),
             EntryKind::Formula => compile_formula(src, name).map(|_| ()),
+            EntryKind::Coloring if is(EntryKind::FieldColoring) => compile_field_coloring(src, name).map(|_| ()),
             EntryKind::Coloring => compile_coloring(src, name).map(|_| ()),
-            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => Ok(()),
+            EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel | EntryKind::Field | EntryKind::FieldColoring => Ok(()),
         };
         if let Err(diags) = result {
             let msgs: Vec<String> = diags.iter().map(|d| d.render(&src.source)).collect();
@@ -1750,6 +1941,8 @@ mod tests {
                 let compiled = match kind {
                     EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
                     EntryKind::Solid => compile_solid(&src, &name).map(|_| ()),
+                    EntryKind::Field => compile_field(&src, &name).map(|_| ()),
+                    EntryKind::FieldColoring => compile_field_coloring(&src, &name).map(|_| ()),
                     EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => compile_coloring(&src, &name).map(|_| ()),
                 };
                 if let Err(d) = compiled {
@@ -1771,7 +1964,14 @@ mod tests {
                 let name = name_of(kind, &src);
                 let ok = match kind {
                     EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
-                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring | EntryKind::SimModel => compile_coloring(&src, &name).map(|_| ()),
+                    EntryKind::Coloring
+                    | EntryKind::Transform
+                    | EntryKind::Solid
+                    | EntryKind::Effect
+                    | EntryKind::SimColoring
+                    | EntryKind::SimModel
+                    | EntryKind::Field
+                    | EntryKind::FieldColoring => compile_coloring(&src, &name).map(|_| ()),
                 };
                 if let Err(d) = ok {
                     panic!("{file} / {}: {:?}", e.name, d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>());
