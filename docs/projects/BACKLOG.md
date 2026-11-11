@@ -11,8 +11,9 @@ When an item becomes a project, give it a plan in `docs/projects/` and
 take it off this list. When one is done or dropped, delete its line.
 
 **Active elsewhere:** the v0.6.0 release checklist
-([v0.6.0-release.md](v0.6.0-release.md)), and the API update plan and
-the size study (the next projects, planned 2026-11-11).
+([v0.6.0-release.md](v0.6.0-release.md)), the API update plan
+([api-updates.md](api-updates.md)) and the size study
+([size-study.md](size-study.md)).
 
 ---
 

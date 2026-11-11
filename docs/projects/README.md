@@ -20,7 +20,9 @@ by area, each linking the doc with the detail (finished and paused docs in
 
 | Doc | Status |
 |---|---|
-| [v0.6.0-release.md](v0.6.0-release.md) | The v0.6.0 release's checklist: update the API, deploy the latest modules, cross-platform testing. |
+| [api-updates.md](api-updates.md) | Planned 2026-11-11: every API update made so older apps keep working -- clients say what they are, the server answers legacy clients in their vocabulary, 0.6 degrades instead of failing; the config reviewed. Seven decisions. |
+| [size-study.md](size-study.md) | Measured 2026-11-11: build time, binary size, repository. The profile (fat LTO, one codegen unit) is the build-time lever, not the content; 547 variations as downloads would save ~10% of the web download; the repository's weight is binary history. Seven decisions. |
+| [v0.6.0-release.md](v0.6.0-release.md) | The v0.6.0 release's checklist: update the API (now in api-updates.md), deploy the latest modules, cross-platform testing. |
 
 ## Standing references
 
