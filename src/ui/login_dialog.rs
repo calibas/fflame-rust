@@ -6,7 +6,6 @@
 
 use std::sync::{Arc, Mutex};
 use egui;
-use rust_i18n::t;
 
 /// Which form is shown when not signed in
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

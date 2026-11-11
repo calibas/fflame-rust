@@ -17,7 +17,7 @@ impl App {
         log::info!("Fetching {} unknown variations from API: {:?}", names.len(), names);
 
         self.egui_layer.show_api_notification(
-            &rust_i18n::t!("api.loading_variations", names = names.join(", ")),
+            &t!("api.loading_variations", names = names.join(", ")),
             false,
         );
 
@@ -88,8 +88,8 @@ impl App {
         for key in keys {
             let name = crate::variations::global_registry().label(&key);
             let message = match crate::variations::custom::error_of(&key) {
-                Some(error) => rust_i18n::t!("api.variation_did_not_compile", name = name, error = error),
-                None => rust_i18n::t!("api.variation_not_carried", name = name),
+                Some(error) => t!("api.variation_did_not_compile", name = name, error = error),
+                None => t!("api.variation_not_carried", name = name),
             };
             self.egui_layer.show_api_notification(&message, true);
         }
@@ -107,7 +107,7 @@ impl App {
 
         if !unresolvable.is_empty() {
             self.egui_layer.show_api_notification(
-                &rust_i18n::t!(
+                &t!(
                     "api.variations_need_a_plugin",
                     names = unresolvable.join(", ")
                 ),
@@ -136,7 +136,7 @@ impl App {
                 // silence and the flame just drew wrong.
                 let names = std::mem::take(&mut self.variation_fetch_names).join(", ");
                 self.egui_layer.show_api_notification(
-                    &rust_i18n::t!("api.variation_fetch_timeout", names = names),
+                    &t!("api.variation_fetch_timeout", names = names),
                     true,
                 );
                 self.finalize_variation_fetches();
@@ -209,7 +209,7 @@ impl App {
             self.finalize_variation_fetches();
             if !failed.is_empty() {
                 self.egui_layer.show_api_notification(
-                    &rust_i18n::t!("api.variation_fetch_failed", names = failed.join(", ")),
+                    &t!("api.variation_fetch_failed", names = failed.join(", ")),
                     true,
                 );
             }
@@ -320,14 +320,14 @@ impl App {
             Ok(count) => {
                 crate::variations::global_registry_mut().clear_api();
                 self.egui_layer.show_api_notification(
-                    &rust_i18n::t!("api.variation_cache_cleared", count = count),
+                    &t!("api.variation_cache_cleared", count = count),
                     false,
                 );
             }
             Err(e) => {
                 log::error!("Failed to clear variation cache: {}", e);
                 self.egui_layer.show_api_notification(
-                    &rust_i18n::t!("api.variation_cache_clear_failed", error = e),
+                    &t!("api.variation_cache_clear_failed", error = e),
                     true,
                 );
             }

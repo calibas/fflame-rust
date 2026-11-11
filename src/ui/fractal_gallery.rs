@@ -14,7 +14,6 @@
 //! a time (`start_next_preview`).
 
 use egui::{self, Color32, CursorIcon, Sense, Vec2};
-use rust_i18n::t;
 
 use crate::config::FractalConfig;
 use crate::storage::{shared_thumbnail_cache, GalleryItem, TextureCache};

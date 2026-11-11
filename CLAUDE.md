@@ -79,7 +79,7 @@ Opt-in, 2D flames only (config `cylinder_targeting`; code says "cylinder targeti
 ### UI ([UI.md](docs/main/UI.md))
 - Dockable panels (`PanelType` in `src/ui/workspace.rs`: 32), each in its own `src/ui/*.rs`; cross-panel results bubble through `UiResponse` (`src/ui/response.rs`) and are handled in `src/app/ui_handlers.rs`. Menus: File, Edit, View, Rendering, Window, Help, then the mode button (named by the current mode; `src/ui/menu_bar.rs`), the language (globe) menu on the right; `src/ui/compact_menu.rs` is the mobile equivalent. Both Window menus draw their rows from `visibility::WINDOW_MENU`.
 - Input: one control set for every camera (`camera::gesture`): drag pans, Ctrl+drag or right-drag turns (2D rotates, 3D orbits), the wheel zooms toward the cursor (3D dollies; in fly mode it sets the speed). Touch: long press = right button, the viewport's Pan/Turn toggle = Ctrl. Fly mode (F2) in every 3D view: FreeLook or FPS. The table is in UI.md.
-- i18n: rust-i18n, `locales/*.yml` (en, es, ja, zh-CN; the non-English locales cover a fraction of the keys and fall back to English). Desktop loads Noto Sans JP/SC at runtime for CJK; WASM has no CJK font. [I18N.md](docs/main/I18N.md)
+- i18n: `t!` (our own: `build.rs` compiles `locales/*.yml` into a table) (en, es, ja, zh-CN; the non-English locales cover a fraction of the keys and fall back to English). Desktop loads Noto Sans JP/SC at runtime for CJK; WASM has no CJK font. [I18N.md](docs/main/I18N.md)
 
 ### Config, state, storage ([CONFIG.md](docs/main/CONFIG.md))
 - **All configuration changes flow through ConfigManager**: `ConfigPath` identifies every parameter; the `UpdateType` it returns drives selective GPU updates. Undo: delta-based, 500 states; rapid changes coalesce (500 ms inactivity, 3 s max span); camera gestures coalesce by description.
@@ -198,7 +198,7 @@ Structural actions (transform add/delete, config import/export, preset loading) 
 - **3D flame presets**: set the config's `render_mode = RenderMode::ThreeD` and `perspective_strength` (0 orthographic; ~0.1-0.3 typical); give Z structure with 3D variations (zcone, flatten, hemisphere, zscale, ...) and per-transform `g` offsets (`xform.variations.insert("zcone".into(), 0.5)`); check with camera pitch/yaw or fly mode.
 
 ## Dependencies
-See @Cargo.toml. Key: **wgpu 29.0** (desktop vulkan/metal/gles -- dx12 deliberately omitted; WASM webgpu only), **winit 0.30**, **egui 0.34** + **egui_dock 0.19**, **serde/serde_json**, **quick-xml** (.flame), **rust-i18n 3.1**, **image/png**, **bytemuck**, **cpal/symphonia/rustfft/ringbuf** (audio), **rayon** (CPU export paths), **ureq** (desktop HTTP), **rhai** + **rand_pcg** (scripting; the PCG stream is what `script + seed` means, so it is pinned).
+See @Cargo.toml. Key: **wgpu 29.0** (desktop vulkan/metal/gles -- dx12 deliberately omitted; WASM webgpu only), **winit 0.30**, **egui 0.34** + **egui_dock 0.19**, **serde/serde_json**, **quick-xml** (.flame), **image/png**, **bytemuck**, **cpal/symphonia** (audio; the FFT is ours), **rayon** (CPU export paths), **ureq** (desktop HTTP), **rhai** + **rand_pcg** (scripting; the PCG stream is what `script + seed` means, so it is pinned).
 
 ## File Formats
 - **.fflame** - JSON, the complete FractalConfig (see `src/config/fractal_config.rs`): everything needed for exact reproduction -- the flame, view and camera, rendering settings, colour and palette data, tone mapping, depth effects, and the escape/sim/terrain blocks. Versioned (`CURRENT_CONFIG_VERSION`, migrated on load); new fields are skip-if-default.

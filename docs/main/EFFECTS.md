@@ -121,7 +121,7 @@ Add lists and the corpus exporter (sorted by name) read it.
 `EffectInfo::translated_name` reads the locale first, then the labels'
 title in the current language, then the declared `display_name`, then
 the raw `name`. A locale miss is detected rather than trusted, because
-rust-i18n returns the key on a miss. `param_label` gives a parameter's
+`t!` returns the key on a miss. `param_label` gives a parameter's
 caption and hint the same way; the Effects panel draws them.
 
 Each registration of a name is counted (`EffectRegistry::revision`):

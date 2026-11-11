@@ -116,7 +116,7 @@ pub fn marks(origin: Origin, plugin: bool) -> String {
     let mut out = origin.mark().to_string();
     if plugin {
         out.push(' ');
-        out.push_str(&rust_i18n::t!("library.plugin"));
+        out.push_str(&t!("library.plugin"));
     }
     out
 }

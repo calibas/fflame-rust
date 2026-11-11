@@ -17,7 +17,6 @@ use crate::ui::variation_params::{render_variation_params, ParamTarget};
 use crate::variations::VariationCategory;
 
 use egui_dock::egui;
-use rust_i18n::t;
 
 /// One transformation's parameters, as `render_variation_params` edits
 /// them: its map, its paths.

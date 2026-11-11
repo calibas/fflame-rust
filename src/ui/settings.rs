@@ -1,6 +1,5 @@
 use crate::config::{ConfigManager, ConfigPath};
 use super::formatting::format_iterations;
-use rust_i18n::t;
 
 /// Render settings content (for docking panels)
 pub fn render_settings_content(

@@ -282,13 +282,13 @@ pub fn inactive_banner(ui: &mut egui::Ui, mode: RenderMode, reason: &'static str
         .fill(warn.gamma_multiply(0.08))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            let heading = rust_i18n::t!("visibility.inactive_heading", mode = rust_i18n::t!(mode_label_key(mode)));
+            let heading = t!("visibility.inactive_heading", mode = t!(mode_label_key(mode)));
             ui.label(egui::RichText::new(heading).strong().color(warn));
-            ui.label(rust_i18n::t!(reason));
+            ui.label(t!(reason));
             if !enter.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     for m in enter {
-                        if ui.button(rust_i18n::t!("visibility.switch_to", mode = rust_i18n::t!(mode_label_key(*m)))).clicked() {
+                        if ui.button(t!("visibility.switch_to", mode = t!(mode_label_key(*m)))).clicked() {
                             picked = Some(*m);
                         }
                     }
@@ -518,7 +518,7 @@ pub fn gated<R>(
         Vis::Show => Some(body(ui)),
         Vis::Grey(reason) => {
             let inner = ui.add_enabled_ui(false, body);
-            inner.response.on_disabled_hover_text(rust_i18n::t!(reason));
+            inner.response.on_disabled_hover_text(t!(reason));
             Some(inner.inner)
         }
         Vis::Hide => None,
@@ -634,7 +634,6 @@ mod tests {
         }
         assert!(!light_kind(LightKind::Headlamp, ViewKind::Flame3d).is_show());
     }
-    use rust_i18n::t;
 
     /// Every panel this build knows about, so the tests below cannot
     /// silently skip a new one.

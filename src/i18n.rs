@@ -1,42 +1,140 @@
-//! Internationalization (i18n) support
+//! Translations: `t!` and the locale.
 //!
-//! This module provides translation support using the rust-i18n crate.
-//! Translation files are stored in the `locales/` directory at the project root.
-//!
-//! # Usage
+//! The strings live in `locales/*.yml` (one file a locale, nested maps of
+//! double-quoted strings); `build.rs` (`generate_locale_table`) reads them
+//! into a sorted table compiled into the binary, so nothing parses YAML at
+//! run time. This replaced the `rust-i18n` crate, which brought 74 crates
+//! into the app -- a regex engine among them -- to do the same lookups
+//! (docs/projects/size-study.md §5); `t!` kept its syntax and meaning:
 //!
 //! ```rust,ignore
-//! use crate::i18n::t;
-//!
-//! // Simple translation
-//! let title = t!("app.title");
-//!
-//! // With variables
-//! let message = t!("messages.welcome", name = "Alice");
+//! t!("app.title")                          // the current locale's text
+//! t!("api.save_success", name = name)      // `%{name}` filled, by Display
+//! t!(key, locale = "en")                   // a given locale
 //! ```
 //!
-//! # Supported Languages
+//! A key is looked up in the locale, then in each shorter form of it
+//! (`zh-CN` -> `zh`), then in English; a key found nowhere comes back as
+//! itself, its `%{...}` still filled. `t!` returns `Cow<'static, str>`:
+//! borrowed from the table unless an argument was filled.
 //!
-//! - English (en) - Default
-//! - Spanish (es)
-//! - Japanese (ja)
-//! - Chinese Simplified (zh-CN)
-//! - More languages can be added by creating .yml files in locales/
+//! # Supported languages
+//!
+//! English (en, the fallback), Spanish (es), Japanese (ja), Chinese
+//! Simplified (zh-CN). A language is added by a `locales/<code>.yml` and a
+//! row in [`supported_locales`].
 
-// Note: rust-i18n::i18n!() is initialized in lib.rs
+use std::borrow::Cow;
+use std::fmt::Display;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::RwLock;
 
-/// Get current locale
+// `LOCALES: &[(&str, &[(&str, &str)])]`, each locale's keys sorted, and
+// `FALLBACK`, English's index in it.
+include!(concat!(env!("OUT_DIR"), "/locales.rs"));
+
+/// The current locale's name, as set (empty until set: English).
+static NAME: RwLock<String> = RwLock::new(String::new());
+/// The current locale's lookup order: up to four indices into `LOCALES`,
+/// one a byte, ended by `END`. Read by every `t!`, so not behind the lock.
+static CHAIN: AtomicU32 = AtomicU32::new(u32::MAX);
+const END: u8 = u8::MAX;
+
+/// The tables to look in for `locale`, in order, packed as in `CHAIN`.
+fn chain_of(locale: &str) -> u32 {
+    let mut chain = [END; 4];
+    let mut n = 0;
+    let mut push = |i: usize| {
+        let i = i as u8;
+        if n < 4 && !chain[..n].contains(&i) {
+            chain[n] = i;
+            n += 1;
+        }
+    };
+    let mut name = locale;
+    loop {
+        if let Some(i) = LOCALES.iter().position(|(code, _)| *code == name) {
+            push(i);
+        }
+        // rust-i18n's rule, kept: `zh-CN` falls back to `zh`.
+        match name.rfind('-') {
+            Some(at) => name = name[..at].trim_end_matches("-x"),
+            None => break,
+        }
+    }
+    push(FALLBACK);
+    u32::from_le_bytes(chain)
+}
+
+fn current_chain() -> u32 {
+    match CHAIN.load(Ordering::Relaxed) {
+        u32::MAX => chain_of("en"),
+        chain => chain,
+    }
+}
+
+/// The text for `key` in the locales `chain` names, if any has it.
+fn find(key: &str, chain: u32) -> Option<&'static str> {
+    chain.to_le_bytes().into_iter().take_while(|&i| i != END).find_map(|i| {
+        let table = LOCALES[i as usize].1;
+        table.binary_search_by(|(k, _)| (*k).cmp(key)).ok().map(|at| table[at].1)
+    })
+}
+
+/// What `t!` expands to. `args` fill `%{name}`; none, and the text is
+/// returned as written.
+#[doc(hidden)]
+pub fn translate(key: &str, locale: Option<&str>, args: &[(&str, &dyn Display)]) -> Cow<'static, str> {
+    let chain = locale.map_or_else(current_chain, chain_of);
+    match (find(key, chain), args.is_empty()) {
+        (Some(text), true) => Cow::Borrowed(text),
+        (Some(text), false) => Cow::Owned(fill(text, args)),
+        (None, true) => Cow::Owned(key.to_string()),
+        (None, false) => Cow::Owned(fill(key, args)),
+    }
+}
+
+/// `text` with each `%{name}` among `args` replaced by its value; a
+/// `%{name}` not among them is left as written.
+fn fill(text: &str, args: &[(&str, &dyn Display)]) -> String {
+    let mut out = String::with_capacity(text.len() + 32);
+    let mut rest = text;
+    while let Some(at) = rest.find("%{") {
+        let Some(len) = rest[at + 2..].find('}') else { break };
+        let name = &rest[at + 2..at + 2 + len];
+        out.push_str(&rest[..at]);
+        match args.iter().find(|(n, _)| *n == name) {
+            Some((_, value)) => {
+                use std::fmt::Write;
+                let _ = write!(out, "{value}");
+            }
+            None => out.push_str(&rest[at..at + 3 + len]),
+        }
+        rest = &rest[at + 3 + len..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The current locale ("en" until one is set).
 pub fn current_locale() -> String {
-    rust_i18n::locale().to_string()
+    let name = NAME.read().unwrap_or_else(|e| e.into_inner());
+    if name.is_empty() { "en".to_string() } else { name.clone() }
 }
 
-/// Set locale (e.g., "en", "es", "fr", "de", "ja", "zh-CN")
+/// Set the locale (e.g. "en", "es", "ja", "zh-CN"). One without a table
+/// is kept as named and reads its fallbacks.
 pub fn set_locale(locale: &str) {
-    rust_i18n::set_locale(locale);
+    let mut name = NAME.write().unwrap_or_else(|e| e.into_inner());
+    *name = locale.to_string();
+    CHAIN.store(chain_of(locale), Ordering::Relaxed);
 }
 
-// Re-export the t! macro for convenience
-pub use rust_i18n::t;
+/// Every locale with a table, and its keys: for tests and tools.
+pub fn tables() -> &'static [(&'static str, &'static [(&'static str, &'static str)])] {
+    LOCALES
+}
+
 
 /// Locale information for UI display
 #[derive(Debug, Clone, PartialEq)]
@@ -158,57 +256,12 @@ mod tests {
         // A missing key comes back as itself: what the check below reads.
         // (Built, or the scan would find it as a key in use.)
         let probe = ["history", "param", "no_such_setting"].join(".");
-        assert_eq!(rust_i18n::t!(probe.as_str(), locale = "en"), probe.as_str());
-        let missing: Vec<&String> = keys.iter().filter(|k| rust_i18n::t!(k.as_str(), locale = "en") == k.as_str()).collect();
+        assert_eq!(t!(probe.as_str(), locale = "en"), probe.as_str());
+        let missing: Vec<&String> = keys.iter().filter(|k| t!(k.as_str(), locale = "en") == k.as_str()).collect();
         assert!(missing.is_empty(), "{} keys have no English text:\n  {}", missing.len(), missing.iter().map(|k| k.as_str()).collect::<Vec<_>>().join("\n  "));
     }
 
-    /// A locale file as `dotted.key -> value`. The files are nested maps
-    /// at two spaces an indent level, of double-quoted strings (one of
-    /// which runs onto following lines); there is no YAML crate here,
-    /// and this is all the shape the locales use.
-    fn flatten_locale(text: &str) -> Vec<(String, String)> {
-        let mut out = Vec::new();
-        let mut stack: Vec<String> = Vec::new();
-        let mut lines = text.lines();
-        while let Some(line) = lines.next() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-            let indent = line.len() - line.trim_start_matches(' ').len();
-            let Some((key, rest)) = trimmed.split_once(':') else {
-                panic!("not a `key:` line: {line}");
-            };
-            assert_eq!(indent % 2, 0, "odd indent: {line}");
-            stack.truncate(indent / 2);
-            let rest = rest.trim();
-            if rest.is_empty() {
-                stack.push(key.to_string());
-                continue;
-            }
-            let mut value = rest.to_string();
-            // A double-quoted value continues until a line ends the quote.
-            let closed = |v: &str| v.len() >= 2 && v.ends_with('"') && !v.ends_with("\\\"");
-            if value.starts_with('"') {
-                while !closed(&value) {
-                    let next = lines.next().unwrap_or_else(|| panic!("unterminated string at {key}"));
-                    value.push(' ');
-                    value.push_str(next.trim());
-                }
-                value = value[1..value.len() - 1].to_string();
-            }
-            let mut path = stack.join(".");
-            if !path.is_empty() {
-                path.push('.');
-            }
-            path.push_str(key);
-            out.push((path, value));
-        }
-        out
-    }
-
-    /// The names inside `%{...}`: what rust-i18n substitutes.
+    /// The names inside `%{...}`: what `t!` fills.
     fn placeholders(value: &str) -> std::collections::BTreeSet<String> {
         let mut out = std::collections::BTreeSet::new();
         let mut rest = value;
@@ -230,20 +283,18 @@ mod tests {
     /// - a translation takes the same `%{...}` arguments as English.
     ///   Three of them had dropped theirs, so the performance panel read
     ///   "FPS" with no number;
-    /// - English writes every placeholder as `%{x}`. rust-i18n leaves a
+    /// - English writes every placeholder as `%{x}`. `t!` leaves a
     ///   bare `{x}` alone, so "Rendering… {percent}%" was shown with the
     ///   braces in it.
     #[test]
     fn translations_match_english_keys_and_placeholders() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
-        let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
-        let en: std::collections::HashMap<String, String> =
-            flatten_locale(&read("en.yml")).into_iter().collect();
-        assert!(en.len() > 1000, "the flattener read {} en keys", en.len());
+        let table = |code: &str| tables().iter().find(|(c, _)| *c == code).map(|(_, t)| *t).unwrap();
+        let en: std::collections::HashMap<&str, &str> = table("en").iter().copied().collect();
+        assert!(en.len() > 1000, "the table holds {} en keys", en.len());
 
         let mut problems = Vec::new();
         for (key, value) in &en {
-            let mut rest = value.as_str();
+            let mut rest = *value;
             while let Some(at) = rest.find('{') {
                 if !rest[..at].ends_with('%') && rest[at + 1..].find('}').is_some_and(|e| {
                     let name = &rest[at + 1..at + 1 + e];
@@ -255,20 +306,16 @@ mod tests {
                 rest = &rest[at + 1..];
             }
         }
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let name = entry.unwrap().file_name().to_string_lossy().to_string();
-            if !name.ends_with(".yml") || name == "en.yml" {
+        for (name, entries) in tables() {
+            if *name == "en" {
                 continue;
             }
-            for (key, value) in flatten_locale(&read(&name)) {
-                if key == "_version" {
-                    continue;
-                }
-                match en.get(&key) {
+            for &(key, value) in *entries {
+                match en.get(key) {
                     None => problems.push(format!("{name} {key}: not in en.yml")),
-                    Some(english) if placeholders(english) != placeholders(&value) => problems.push(format!(
+                    Some(english) if placeholders(english) != placeholders(value) => problems.push(format!(
                         "{name} {key}: takes {:?}, English {:?}",
-                        placeholders(&value),
+                        placeholders(value),
                         placeholders(english)
                     )),
                     Some(_) => {}

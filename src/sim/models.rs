@@ -3442,9 +3442,9 @@ pub fn mccabe_layout() -> std::sync::Arc<crate::params::layout::ParamLayout> {
                     let reach = format!("{reach:.0}");
                     past.then(|| {
                         if preview {
-                            rust_i18n::t!("sim_panel.table_past_reach_ladder", n = (row + 1).to_string(), reach = reach).to_string()
+                            t!("sim_panel.table_past_reach_ladder", n = (row + 1).to_string(), reach = reach).to_string()
                         } else {
-                            rust_i18n::t!("sim_panel.table_past_reach", reach = reach).to_string()
+                            t!("sim_panel.table_past_reach", reach = reach).to_string()
                         }
                     })
                 })),

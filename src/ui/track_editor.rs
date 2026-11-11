@@ -6,7 +6,6 @@
 //! Phase 3 adds interactions: click to seek, keyframe hover/click.
 
 use egui::{Ui, Color32, Rect, Pos2, Stroke, CornerRadius, Sense, ScrollArea};
-use rust_i18n::t;
 use crate::animation::{
     Animation, AnimationController, EasingFunction, Interpolation,
     Keyframe, Track, TrackSource,

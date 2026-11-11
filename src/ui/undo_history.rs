@@ -1,5 +1,4 @@
 use crate::config::ConfigManager;
-use rust_i18n::t;
 
 /// Translate a history description
 ///

@@ -8,7 +8,6 @@
 
 use super::menu_context::{MenuActions, MenuState};
 use super::workspace::{PanelType, Workspace};
-use rust_i18n::t;
 use super::menu_bar::rows_do_not_wrap;
 
 /// Render the compact floating menu button and its popup.

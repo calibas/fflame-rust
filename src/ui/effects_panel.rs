@@ -3,7 +3,6 @@
 //! UI for managing post-processing effects (color and density effects).
 
 use egui::Ui;
-use rust_i18n::t;
 
 use crate::animation::AnimationController;
 use crate::config::{ConfigChange, ConfigManager, ConfigPath, UpdateType};

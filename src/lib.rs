@@ -1,9 +1,24 @@
-// Load I18n macro to allow use of `t!` macro anywhere
-#[macro_use]
-extern crate rust_i18n;
-
-// Initialize rust-i18n with the locales directory
-i18n!("locales", fallback = "en");
+/// A translation: `t!("menu.file")`, `t!("api.save_success", name = name)`
+/// (`%{name}` filled by `Display`), `t!(key, locale = "en")`. Returns
+/// `Cow<'static, str>`. Defined first, so every module sees it; see
+/// [`i18n`].
+#[macro_export]
+macro_rules! t {
+    ($key:expr, locale = $locale:expr $(, $name:ident = $value:expr)* $(,)?) => {
+        $crate::i18n::translate(
+            ::core::convert::AsRef::<str>::as_ref(&$key),
+            ::core::option::Option::Some(::core::convert::AsRef::<str>::as_ref(&$locale)),
+            &[$((::core::stringify!($name), &$value as &dyn ::core::fmt::Display)),*],
+        )
+    };
+    ($key:expr $(, $name:ident = $value:expr)* $(,)?) => {
+        $crate::i18n::translate(
+            ::core::convert::AsRef::<str>::as_ref(&$key),
+            ::core::option::Option::None,
+            &[$((::core::stringify!($name), &$value as &dyn ::core::fmt::Display)),*],
+        )
+    };
+}
 
 #[cfg(feature = "web-app")]
 mod app;

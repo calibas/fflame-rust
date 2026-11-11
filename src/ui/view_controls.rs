@@ -4,7 +4,6 @@
 //! them alike.
 
 use crate::config::{ConfigManager, ConfigPath, ConfigValue};
-use rust_i18n::t;
 
 /// An angle stored in radians, shown in degrees on a −180..180 slider
 /// that takes a typed value beyond the range (the user's rule: no

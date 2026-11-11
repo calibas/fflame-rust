@@ -1,6 +1,5 @@
 use super::menu_context::{MenuActions, MenuState};
 use crate::scene::transforms::RenderMode;
-use rust_i18n::t;
 
 /// Stop menu rows wrapping.
 ///

@@ -4,7 +4,6 @@ use egui;
 use crate::scene::palette::PaletteLibrary;
 use crate::config::{ConfigManager, ConfigPath};
 use crate::resources::LoadState;
-use rust_i18n::t;
 
 /// Spawn async pack fetch (WASM only)
 #[cfg(target_arch = "wasm32")]

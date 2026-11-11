@@ -79,11 +79,11 @@ impl App {
         match crate::storage::effect_cache::clear_all() {
             Ok(count) => {
                 crate::effects::global_effect_registry_mut().clear_api();
-                self.egui_layer.show_api_notification(&rust_i18n::t!("api.effect_cache_cleared", count = count), false);
+                self.egui_layer.show_api_notification(&t!("api.effect_cache_cleared", count = count), false);
             }
             Err(e) => {
                 log::error!("Failed to clear the effect cache: {e}");
-                self.egui_layer.show_api_notification(&rust_i18n::t!("api.effect_cache_clear_failed", error = e.to_string()), true);
+                self.egui_layer.show_api_notification(&t!("api.effect_cache_clear_failed", error = e.to_string()), true);
             }
         }
     }

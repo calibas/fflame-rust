@@ -1,7 +1,6 @@
 //! Save Online dialog — unified panel for saving flame and animation to the API
 
 use egui;
-use rust_i18n::t;
 use super::response::{ApiSaveAction, ApiAnimationSaveAction};
 
 /// State for the Save Online dialog panel

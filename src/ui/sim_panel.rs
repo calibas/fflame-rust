@@ -19,7 +19,6 @@ use crate::config::sim::{
 };
 use crate::scene::transforms::RenderMode;
 use crate::sim::{COLORINGS, MODELS};
-use rust_i18n::t;
 
 /// Transport state, owned by the App (it is view state, not config).
 pub struct SimUiState<'a> {
@@ -1878,7 +1877,7 @@ mod locale_tests {
             if key == "sim_panel." {
                 continue;
             }
-            let got = rust_i18n::t!(key, locale = "en");
+            let got = t!(key, locale = "en");
             if got == key {
                 missing.push(key.to_string());
             }

@@ -1,6 +1,5 @@
 use crate::util::PerformanceMetrics;
 use super::formatting::format_iterations;
-use rust_i18n::t;
 
 /// Render the Performance panel content (used by both window and dockable panel)
 pub fn render_performance_content(

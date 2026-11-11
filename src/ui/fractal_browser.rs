@@ -8,7 +8,6 @@
 //! - Online: Flames fetched from the API (feature-gated behind `api`)
 
 use egui;
-use rust_i18n::t;
 
 use super::fractal_gallery::{FractalConfigGallery, GalleryResponse};
 use crate::config::FractalConfig;
@@ -577,7 +576,7 @@ impl FractalBrowserPanel {
                     match result {
                         Ok(name) => {
                             response.api_notification = Some((
-                                rust_i18n::t!("api.delete_success", name = name).to_string(),
+                                t!("api.delete_success", name = name).to_string(),
                                 false,
                             ));
                             // Refresh the list
@@ -588,7 +587,7 @@ impl FractalBrowserPanel {
                                 response.session_expired = true;
                             }
                             response.api_notification = Some((
-                                rust_i18n::t!("api.delete_error", error = e).to_string(),
+                                t!("api.delete_error", error = e).to_string(),
                                 true,
                             ));
                         }

@@ -8,7 +8,6 @@
 //! - Reset all to 1.0 button
 
 use egui::Color32;
-use rust_i18n::t;
 
 use crate::config::{ConfigManager, ConfigPath, UpdateType};
 use crate::scene::transforms::Flame;

@@ -144,7 +144,7 @@ impl App {
             let why = if self.config_manager.system_settings().online_account {
                 "Sign in to publish scripts and see your own.".to_string()
             } else {
-                rust_i18n::t!("api.online_account_off").to_string()
+                t!("api.online_account_off").to_string()
             };
             self.script_cloud.fail(why);
             return;
