@@ -469,6 +469,22 @@ pub fn evaluate(source: &str, values: &BTreeMap<String, f64>, frame: &Frame) -> 
     })
 }
 
+/// Run `source` as the Formula Editor's check does: declared, then
+/// evaluated at a few times on the default config, its state stepped, so
+/// an error a frame would hit shows before the track is used.
+pub fn try_run(source: &str) -> Result<Declared, String> {
+    let declared = declare(source)?;
+    let under = Rc::new(FractalConfig::default());
+    let at = Moment { under: Rc::clone(&under), signals: Rc::new(BTreeMap::new()) };
+    let m = at.clone();
+    let at_time = move |_: f64| m.clone();
+    for time in [0.0, 0.25, 1.0] {
+        let frame = Frame { time, duration: 1.0, at: at.clone(), rested: &under, at_time: &at_time, dependencies: u64::MAX };
+        evaluate(source, &BTreeMap::new(), &frame)?;
+    }
+    Ok(declared)
+}
+
 /// What a stateful track's state depends on, as one number: its source,
 /// its parameters, the frame's other tracks and duration, and the rest
 /// values of the names its steps have read.

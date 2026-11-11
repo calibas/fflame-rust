@@ -74,6 +74,14 @@ impl EntryRow {
     }
 }
 
+/// A file that is an animation track (docs/projects/rhai-tracks.md): the
+/// CPU world, so a row of its own beside the GPU kinds' (`EntryKind`).
+struct TrackRow {
+    name: String,
+    source: String,
+    errors: Vec<String>,
+}
+
 /// Where a simulation's Rhai colouring or model goes (P4 step 4): the
 /// flat one, or entry `n` of the layers (a model) or the colour layers (a
 /// colouring).
@@ -135,6 +143,11 @@ pub struct FormulaEditorPanel {
     /// What this panel put into the config: the entry Live re-applies,
     /// with the file it came from.
     in_use: Vec<(EntryKind, Option<String>, String)>,
+    /// The file as a track, when it is one.
+    track: Option<TrackRow>,
+    /// The id of the track this panel put in the animation, and the file it
+    /// came from: Live replaces its source.
+    track_in_use: Option<(Option<String>, String)>,
 }
 
 impl Default for FormulaEditorPanel {
@@ -159,6 +172,8 @@ impl FormulaEditorPanel {
             status: None,
             live: true,
             in_use: Vec::new(),
+            track: None,
+            track_in_use: None,
         };
         match p.files.first().cloned() {
             Some(f) => p.open_stored(&f),
@@ -230,6 +245,19 @@ impl FormulaEditorPanel {
     /// a formula's, `variation` a transformation's).
     fn recheck_rhai(&mut self) {
         let text = self.text.clone();
+        if crate::animation::script::looks_like_track(&text) {
+            let errors = match crate::animation::script::try_run(&text) {
+                Ok(_) => Vec::new(),
+                Err(e) => vec![e],
+            };
+            let name = crate::animation::script::declare(&text).map(|d| d.title).unwrap_or_else(|_| self.name.clone());
+            self.track = Some(TrackRow { name, source: text.clone(), errors });
+            self.entries = Vec::new();
+            self.parse_errors = Vec::new();
+            self.checked = Some(text);
+            return;
+        }
+        self.track = None;
         let kind = lang::rhai::kind_of(&text).unwrap_or(EntryKind::Formula);
         let checked = match kind {
             EntryKind::Formula => lang::rhai::program(&text),
@@ -338,6 +366,7 @@ impl FormulaEditorPanel {
         if self.dialect == CustomDialect::Rhai {
             return self.recheck_rhai();
         }
+        self.track = None;
         let dialect = match self.dialect {
             // The text editor offers UF and Fractint; a hybrid has its
             // own panel.
@@ -913,6 +942,47 @@ impl FormulaEditorPanel {
         .to_string());
     }
 
+    /// Use as track: the file goes into the animation as a script track,
+    /// or replaces the one it came from (its `INFO.id`, given here when it
+    /// has none, as every kind's Use gives one), its parameters kept. When
+    /// the animation is not playing, its values at the playhead are
+    /// applied, as a scrub applies them.
+    fn use_track(&mut self, cm: &mut ConfigManager, animation: &mut crate::animation::AnimationController) {
+        let Some(row) = &self.track else { return };
+        let mut source = row.source.clone();
+        let minted = !lang::rhai::info_string(&source, "id").is_some_and(|id| crate::scripted::is_uuid(&id));
+        if minted {
+            source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
+        }
+        let Some(id) = lang::rhai::info_string(&source, "id") else { return };
+        match place_track(animation, &source, &id) {
+            Ok(replaced) => {
+                if minted {
+                    self.text = source.clone();
+                    self.changed_at = Some(web_time::Instant::now());
+                }
+                self.track_in_use = Some((self.file.clone(), id));
+                apply_track_now(cm, animation, &source);
+                let key = if replaced { "formula_editor.track_replaced" } else { "formula_editor.using_track" };
+                self.status = Some(t!(key, name = row.name.clone()).to_string());
+            }
+            Err(e) => self.status = Some(t!("formula_editor.did_not_compile", entry = row.name.clone(), error = e).to_string()),
+        }
+    }
+
+    /// Live for a track: its edit, once it runs, replaces the track in the
+    /// animation it came from, while the animation still has it.
+    fn reapply_track(&mut self, cm: &mut ConfigManager, animation: &mut crate::animation::AnimationController) {
+        let (Some((file, id)), Some(row)) = (self.track_in_use.clone(), self.track.as_ref()) else { return };
+        if file != self.file || !row.errors.is_empty() || lang::rhai::info_string(&row.source, "id").as_deref() != Some(id.as_str()) {
+            return;
+        }
+        let source = row.source.clone();
+        if find_track(animation, &id).is_some() && place_track(animation, &source, &id).is_ok() {
+            apply_track_now(cm, animation, &source);
+        }
+    }
+
     /// Live: re-apply the entries in use whose text changed and still
     /// compiles, while the config still uses them.
     fn reapply_live(&mut self, cm: &mut ConfigManager) {
@@ -1086,7 +1156,7 @@ impl FormulaEditorPanel {
         }
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, cm: &mut ConfigManager, #[allow(unused_variables)] window: &winit::window::Window) {
+    pub fn render(&mut self, ui: &mut egui::Ui, cm: &mut ConfigManager, animation: &mut crate::animation::AnimationController, #[allow(unused_variables)] window: &winit::window::Window) {
         // The browser's picker leaves the opened text in egui's temp store.
         #[cfg(target_arch = "wasm32")]
         if let Some(text) = ui.ctx().data_mut(|d| d.remove_temp::<String>(egui::Id::new(PENDING_FORMULA_LOAD))) {
@@ -1253,14 +1323,31 @@ impl FormulaEditorPanel {
                 self.recheck();
                 if self.live {
                     self.reapply_live(cm);
+                    self.reapply_track(cm, animation);
                 }
             } else {
                 ui.ctx().request_repaint_after(RECHECK_AFTER - waited);
             }
         }
 
+        // ---- A track ----
+        let mut use_track = false;
+        if let Some(row) = &self.track {
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(&row.name);
+                let b = ui.add_enabled(row.errors.is_empty(), egui::Button::new(t!("formula_editor.use_track"))).on_hover_text(t!("formula_editor.use_track_tip"));
+                use_track = b.clicked();
+            });
+            for e in row.errors.iter().take(MESSAGES_SHOWN) {
+                ui.colored_label(egui::Color32::from_rgb(240, 120, 120), e);
+            }
+        }
+        if use_track {
+            self.use_track(cm, animation);
+        }
+
         // ---- Entries ----
-        if self.entries.is_empty() {
+        if self.entries.is_empty() && self.track.is_none() {
             ui.weak(t!("formula_editor.no_entries"));
         }
         let mut clicked: Option<(EntryKind, usize)> = None;
@@ -1460,6 +1547,61 @@ pub fn variation_as_twin(
         flame.custom_variations.push(src.clone());
     }
     Some(after)
+}
+
+/// The script track whose source has `INFO.id` `id`, by index.
+fn find_track(animation: &crate::animation::AnimationController, id: &str) -> Option<usize> {
+    use crate::animation::TrackSource;
+    animation.animation.as_ref()?.tracks.iter().position(|t| match &t.source {
+        TrackSource::Script { source, .. } => lang::rhai::info_string(source, "id").as_deref() == Some(id),
+        _ => false,
+    })
+}
+
+/// Put the track `source` (with `INFO.id` `id`) in the animation: in place
+/// of the one with that id, its parameters kept, else appended. Whether it
+/// replaced one; or why `source` is not a track.
+fn place_track(animation: &mut crate::animation::AnimationController, source: &str, id: &str) -> Result<bool, String> {
+    use crate::animation::{Animation, Track, TrackSource};
+    let mut track = Track::script(source.to_string())?;
+    let at = find_track(animation, id);
+    let anim = animation.animation.get_or_insert_with(|| Animation::new("New Animation".to_string(), 10.0));
+    match at {
+        Some(i) => {
+            if let TrackSource::Script { params: old, .. } = &anim.tracks[i].source {
+                if let TrackSource::Script { params, .. } = &mut track.source {
+                    *params = old.clone();
+                }
+            }
+            anim.tracks[i] = track;
+            Ok(true)
+        }
+        None => {
+            anim.add_track(track);
+            Ok(false)
+        }
+    }
+}
+
+/// A track's values at the playhead, when the animation is not playing:
+/// its own targets only, applied as a scrub applies them (silently), so a
+/// Use or a Live edit shows at once. A playing animation shows it on its
+/// next frame.
+fn apply_track_now(cm: &mut ConfigManager, animation: &mut crate::animation::AnimationController, source: &str) {
+    if animation.is_playing() {
+        return;
+    }
+    let Ok(declared) = crate::animation::script::declare(source) else { return };
+    let values = animation.evaluate_frame(None, cm.active_config());
+    for (flame, key, json) in values {
+        if !declared.targets.iter().any(|t| t.key == key) {
+            continue;
+        }
+        let Some(path) = ConfigPath::from_string_key(&key) else { continue };
+        if let Some(value) = crate::config::json_to_config_value(&json, &path) {
+            let _ = cm.update_param_silent_on(flame, path, value);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1737,5 +1879,56 @@ mod tests {
         for k in [Some(key), Some(new_key), bare_key].into_iter().flatten() {
             registry.remove_by_name(&k);
         }
+    }
+
+    /// **A track file is a track** (docs/projects/rhai-tracks.md, step 4):
+    /// it checks as one, with no GPU rows; Use as track puts it in the
+    /// animation under an id of its own written into the file, and shows
+    /// its value at once; a second Use replaces it, its parameters kept;
+    /// Live replaces it on an edit that runs, and a broken edit is not
+    /// used.
+    #[test]
+    fn a_track_file_is_used_as_a_track_and_followed_live() {
+        use crate::animation::{AnimationController, TrackSource};
+        let mut cm = ConfigManager::new(crate::config::FractalConfig::default());
+        let mut animation = AnimationController::new();
+        animation.load(crate::animation::Animation::new("a".into(), 4.0));
+        let mut panel = FormulaEditorPanel::new();
+        let source = "const PARAMS = #{ amount: #{ value: 0.5, min: 0.0, max: 2.0 } };\nconst TARGETS = #{ rotation: \"set\" };\nfn value(t, p, ctx) { #{ rotation: p.amount } }\n";
+        panel.adopt(None, "turn.rhai".into(), source.into());
+        panel.recheck();
+        let row = panel.track.as_ref().expect("a track row");
+        assert!(row.errors.is_empty(), "{:?}", row.errors);
+        assert!(panel.entries.is_empty(), "no GPU rows");
+        panel.use_track(&mut cm, &mut animation);
+        let id = lang::rhai::info_string(&panel.text, "id").expect("an id in the file");
+        assert!(crate::scripted::is_uuid(&id), "{:?}", panel.status);
+        let tracks = &animation.animation.as_ref().unwrap().tracks;
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].target, "Rotation");
+        assert_eq!(crate::animation::script::read(cm.config(), "Rotation"), Some(0.5), "shown at once");
+        // Its parameters set in the track; a second Use keeps them.
+        if let TrackSource::Script { params, .. } = &mut animation.animation.as_mut().unwrap().tracks[0].source {
+            params.insert("amount".into(), 1.5);
+        }
+        panel.recheck();
+        panel.use_track(&mut cm, &mut animation);
+        let tracks = &animation.animation.as_ref().unwrap().tracks;
+        assert_eq!(tracks.len(), 1, "replaced, not added");
+        let TrackSource::Script { params, .. } = &tracks[0].source else { panic!("a script track") };
+        assert_eq!(params.get("amount"), Some(&1.5));
+        // Live: an edit that runs replaces it; one that does not, does not.
+        panel.text = panel.text.replace("rotation: p.amount", "rotation: p.amount * 2.0");
+        panel.recheck();
+        panel.reapply_track(&mut cm, &mut animation);
+        let TrackSource::Script { source, .. } = &animation.animation.as_ref().unwrap().tracks[0].source else { panic!() };
+        assert!(source.contains("p.amount * 2.0"));
+        assert_eq!(crate::animation::script::read(cm.config(), "Rotation"), Some(3.0), "the edit shows at once");
+        panel.text = panel.text.replace("p.amount * 2.0", "p.nothing");
+        panel.recheck();
+        assert!(!panel.track.as_ref().unwrap().errors.is_empty(), "it does not run");
+        panel.reapply_track(&mut cm, &mut animation);
+        let TrackSource::Script { source, .. } = &animation.animation.as_ref().unwrap().tracks[0].source else { panic!() };
+        assert!(source.contains("p.amount * 2.0"), "the broken edit is not used");
     }
 }
