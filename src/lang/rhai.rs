@@ -148,7 +148,7 @@ pub fn solid(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Solid)
 }
 
-/// A mode B field (docs/projects/rhai-solids-fields.md): `fn start(pos,
+/// A mode B field (docs/archive/projects/rhai-solids-fields.md): `fn start(pos,
 /// p)` and `fn term(s, p)`.
 pub fn field(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Field)

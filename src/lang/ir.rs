@@ -517,7 +517,7 @@ pub enum IStmt {
 
 /// `IStmt::Map`'s call for `trap_point(v)`: not a variation but the
 /// solid's Orbit transformations, what the built-in solids' orbit traps
-/// measure (`ifs_trap_point`; docs/projects/rhai-solids-fields.md). The
+/// measure (`ifs_trap_point`; docs/archive/projects/rhai-solids-fields.md). The
 /// identity off the GPU.
 pub const TRAP_POINT_CALL: u32 = u32::MAX;
 

@@ -416,7 +416,7 @@ pub static FIELD_COLORINGS: &[&FieldColoringDef] =
 
 /// The user's fields and field colourings, compiled from Rhai and
 /// registered under their names (`escape::custom::compile_field`,
-/// `compile_field_coloring`; docs/projects/rhai-solids-fields.md).
+/// `compile_field_coloring`; docs/archive/projects/rhai-solids-fields.md).
 fn custom() -> &'static std::sync::RwLock<(Vec<&'static FieldDef>, Vec<&'static FieldColoringDef>)> {
     static R: std::sync::OnceLock<std::sync::RwLock<(Vec<&'static FieldDef>, Vec<&'static FieldColoringDef>)>> = std::sync::OnceLock::new();
     R.get_or_init(Default::default)

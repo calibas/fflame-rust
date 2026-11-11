@@ -384,7 +384,7 @@ pub fn param_layout(name: &str) -> Option<Arc<crate::params::layout::ParamLayout
 }
 
 /// **Compile a Rhai field and register it under `name`** as a mode B
-/// field (docs/projects/rhai-solids-fields.md): its parameters, whether
+/// field (docs/archive/projects/rhai-solids-fields.md): its parameters, whether
 /// its terms give a gradient (`INFO.gradient`), the field colouring a
 /// fresh pick takes (`INFO.coloring`, else Field Value), and its own state
 /// and step (`lang::wgsl::field`).
@@ -482,7 +482,7 @@ impl SolidSlots {
 /// parameter's place and slot -- its caption, hint, default and range --
 /// and `p.<name>` reads it. That is how a built-in's twin keeps the
 /// built-in's Iterations default and range, its Colour Depth hint, and
-/// reads the Slice Value (docs/projects/rhai-solids-fields.md).
+/// reads the Slice Value (docs/archive/projects/rhai-solids-fields.md).
 pub(crate) struct SolidLayout {
     /// The template's parameters, with the solid's own in place of any it
     /// declares.
