@@ -162,6 +162,12 @@ Ships first, so that everything after can be added safely.
 
 ### Step 3 -- catch up the server (additive, v0.6.0's list)
 
+- **The catalog's facets** ([api-catalog-spec.md](api-catalog-spec.md)):
+  each saved config's engine, scene (2D, 3D, solid, terrain), versions and
+  components (formula, model, variations: a twin unedited counts as its
+  built-in), so configs can be browsed by fractal type and searched by
+  formula or model.
+
 - **Re-pin the contract**; the moved limits (`variation_slots_per_flame`
   262,144; `largest_shipped_variation_slots` 2410 against
   `policy_cap` 512 -- decision 2).
