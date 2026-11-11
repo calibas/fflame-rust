@@ -164,7 +164,96 @@ hurts clone, fetch and repack.
 
 ---
 
-## 5. Options, by what they buy
+## 5. The dependencies
+
+Measured 2026-11-11 with `cargo bloat --release --bin FractalArtEditor
+--crates` (the release build, thin LTO; the shipped `dist` differs in
+size, not in proportion; full list in `output/bloat/crates.txt`). The
+app's code (`.text`) is 32.4 MiB of a 54.9 MiB release executable; 396
+crates are in the build, 41 of them in two versions.
+
+| Crate | Code | |
+|---|---|---|
+| this crate | 10.6 MiB | |
+| `std` | 5.5 MiB | mostly generics our code instantiates |
+| `rhai` | 2.7 MiB | the scripting engine and the formula language's parser |
+| `egui` | 1.7 MiB | |
+| `naga` | 1.6 MiB | wgpu's shader translator |
+| `serde_json` | 1.1 MiB | a deserializer per config type |
+| `wgpu_core` + `wgpu_hal` | 1.6 MiB | |
+| `rustfft` | 678 KiB | |
+| TLS: `rustls`, `ring`, `webpki`, `ureq`, `url` | ~0.9 MiB | desktop online |
+| regex: `regex_automata`, `regex_syntax`, `aho_corasick` | ~760 KiB | not ours: pulled in by `rust-i18n` |
+| `image` (+ `png`, `zune_jpeg`) | 571 KiB | |
+| `rayon` | 360 KiB | |
+| `clap` | 349 KiB | |
+| `symphonia` (mp3, flac, ogg, vorbis, wav) | ~380 KiB | |
+| `vello_cpu`, `skrifa`, `read_fonts` | ~810 KiB | not ours: egui's text rendering |
+
+### Redundant: remove
+
+- **`ron`**: never used (no reference in any Rust file). It also pulls in
+  a second `base64`.
+- **`ringbuf`**: never used (one comment: "reserved for future").
+- **`png` 0.17**: our direct dependency, while `image` uses `png` 0.18; two
+  copies compile. Bump ours to 0.18 (one file uses it).
+- **`once_cell`**: `std::sync::OnceLock` / `LazyLock` do the same (10
+  files); the crate stays in the tree through others, but not as ours.
+
+### Worth replacing in-app
+
+- **`rust-i18n`** -> our own `t!` macro and a table built by `build.rs`.
+  It brings **74 crates into the app** -- regex, a deprecated YAML parser,
+  TOML, file globbing, itertools -- linked at runtime, to look up strings
+  from four YAML files: ~760 KiB of regex code alone. Its use is uniform:
+  10,620 `t!(key)` / `t!(key, name = value)` calls in 273 files, which keep
+  their syntax. What is needed: `build.rs` reads `locales/*.yml` (a
+  two-level map of strings; a small parser, or `serde_yaml` as a
+  build-only dependency) into a static table; `t!` looks up the current
+  locale, then English, then the key, and fills `%{name}`; `set_locale` /
+  `locale()` as today. A day's work; the web app saves the same.
+- **`rustfft`** -> a radix-2 FFT. 678 KiB for the audio analyser and live
+  capture (`audio/analyzer.rs`, `audio/capture_common.rs`), which transform
+  one power-of-two window a frame. An iterative radix-2 complex FFT (or a
+  real FFT by the half-size trick) is ~70 lines and fast enough by orders of
+  magnitude at that size; held to `rustfft` by a test, kept as a
+  dev-dependency (the GPU FFT's test already uses it).
+
+### Possible, smaller gains
+
+- **`rayon`** (360 KiB): CPU export paths in 11 files; `std::thread::scope`
+  with chunking covers parallel loops. Medium effort.
+- **`chrono`** (43 KiB, plus `iana-time-zone` and Windows bindings to
+  compile): three timestamps (`build.rs`, the GPU log, a CLI log line); a
+  UTC formatter is a few lines, local time needs the OS.
+- **`futures`**: only `futures::channel::oneshot` is used; depend on
+  `futures-channel` alone, or a 40-line oneshot.
+- **`half`** (8 KiB): f16 conversions for 16-bit textures; ~30 lines by
+  hand. **`anyhow`** (13 KiB): five files. Hygiene, not size.
+- **`cpal` 0.15 -> 0.16** and **`ureq` 2 -> 3**: each removes a duplicated
+  family (`windows` 0.54, `webpki-roots` 0.26) from the build; API changes
+  to check.
+
+### Keep
+
+- **Crypto** (`aes-gcm`, `sha2`, `ring` via TLS): never by hand.
+- **TLS** (`rustls`): cannot be written in-app; the alternative is the
+  OS's TLS (`native-tls`), which on Linux means OpenSSL.
+- **`symphonia`**: audio codecs. Ogg/Vorbis (144 KiB) or FLAC (53 KiB)
+  could be dropped if those formats are not wanted.
+- **`clap`** (349 KiB): a hand parser for four subcommands and their flags
+  would lose generated help for a third of a megabyte.
+- **`image`**: 24 files decode and encode PNG, JPEG and HDR through it;
+  replacing it means a JPEG encoder and an RGBE reader of our own.
+- **`rhai`, `egui`, `egui_dock`, `naga`, `wgpu`, `serde_json`, `quick-xml`,
+  `rfd`, `winit`, `cpal`, `web-sys`**: the app's foundations.
+
+**Together**, the removals and the two replacements take ~1.5 MiB of code
+out of the desktop app (~5% of its code) and ~75 crates out of the build
+(clean builds and CI compile less; fat LTO optimises less). They do not
+change the everyday build: our own crate is what compiles on every edit.
+
+## 6. Options, by what they buy
 
 | Option | Saves | Costs |
 |---|---|---|
@@ -177,7 +266,7 @@ hurts clone, fetch and repack.
 | F. Visual baselines out of git (LFS or an external store) | stops ~1 MB of history per re-baseline | `run_tests.py` fetches baselines |
 | G. Rewrite history (`git filter-repo`) | ~258 MB -> ~60-70 MB | every hash changes; irreversible in practice |
 
-## 6. Decisions for the user
+## 7. Decisions for the user
 
 1. **A fast build profile (D1)** for trying the web app and the desktop
    between releases: recommended -- it is the one change that takes most
@@ -197,6 +286,7 @@ hurts clone, fetch and repack.
    and whether to rewrite history (G) -- irreversible, the user's call.
 6. **A crate split (E)**: not for build time (§3); possibly for the code
    base's organisation, as its own decision.
-7. **Size attribution by crate and function** (which dependencies weigh
-   what): would need `cargo bloat` or `twiggy`, built from crates.io
-   source -- to install only with the user's go-ahead.
+7. **Dependencies (§5)**: remove `ron`, `ringbuf`, bump `png`, `once_cell`
+   to std (recommended: trivial, no risk); replace `rust-i18n` and
+   `rustfft` in-app (recommended: ~1.4 MiB and ~75 crates, a day or two);
+   the smaller ones as wanted.
