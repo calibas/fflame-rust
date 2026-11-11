@@ -144,8 +144,9 @@ mod tests {
     /// The shaders a texture is made with, as of `TEXTURE_CACHE_VERSION`.
     /// Re-pinned without a bump twice: Percolation's step shader lost its
     /// `NeedsRng` comment line (2026-11-02), Lattice4's and Turing's
-    /// gained it (2026-11-03) -- comments, which move no pixel.
-    const PINNED_ENGINE: &str = "b66b374eb442ffae";
+    /// gained it (2026-11-03), and the docs archive rewrote the doc paths
+    /// in shader comments (2026-11-11) -- comments, which move no pixel.
+    const PINNED_ENGINE: &str = "6f05c964b5035029";
 
     /// When this fails, the simulation's shaders or the tone map changed,
     /// and a cached texture may no longer be what its recipe makes. If
