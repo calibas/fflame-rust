@@ -72,4 +72,25 @@ mod tests {
         }
         eprintln!("wrote {written} configs to {}", dir.display());
     }
+
+    /// Write the bundled presets back through the canonical writer (current
+    /// version, `min_reader`, no dead keys), the way a save would. Loading
+    /// already migrates them, so each preset reads the same after; check
+    /// with `dump_saved_configs` before and after.
+    ///
+    /// `RESAVE_PRESETS=1 cargo test --release --lib -- --ignored resave_presets`
+    #[test]
+    #[ignore = "a tool: RESAVE_PRESETS=1"]
+    fn resave_presets() {
+        if std::env::var("RESAVE_PRESETS").is_err() {
+            return;
+        }
+        let presets: Vec<serde_json::Value> = serde_json::from_str(crate::resources::presets::PRESETS_JSON).unwrap();
+        let configs: Vec<FractalConfig> = presets.into_iter().map(|p| FractalConfig::from_json_value(p).expect("a preset loads")).collect();
+        let text = FractalConfig::to_json_array(&configs).unwrap() + "\n";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/presets.fflame");
+        std::fs::write(path, text).unwrap();
+        eprintln!("re-saved {} presets", configs.len());
+    }
+
 }
