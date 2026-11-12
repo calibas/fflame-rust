@@ -1,6 +1,6 @@
 # API updates without breaking older apps
 
-Status: **step 1 merged** (PR #160); **step 2 built 2026-11-11** in ffapi, branch `reader-vocabulary` (migration 100); steps 3-5 to come. Sources: a
+Status: **step 1 merged** (PR #160); **step 2 built** (ffapi `reader-vocabulary`, migration 100); **step 3 mostly built 2026-11-11** (ffapi `catch-up`, migrations 101-105, stacked; client `api-catch-up`); the catalog facets and the API integration test still to come; steps 4-5 after. Sources: a
 survey of the client (`src/api/`), the config, and the server repository
 (`c:\projects\ffapi`, axum + Postgres, latest migration 099), checked
 against the code where it mattered. This plan absorbs the API half of
@@ -202,6 +202,19 @@ step 3 seeds what the corpus sync brought: the effect `distance_field`
   contract publishes an object), so it has never run.
 
 ### Step 3 -- catch up the server (additive, v0.6.0's list)
+
+**Built 2026-11-11** (ffapi branch `catch-up` on `reader-vocabulary`;
+client branch `api-catch-up`; PR.md in each): contract re-pinned (slot cap
+4096, decision 2); `library` script kind and `simulation` render mode
+(migration 102, both shown to reader 7+); effects reseeded with the twins'
+WGSL (decision 4) and the variation corpus re-imported (103, 104); the
+built-in script import regenerated; animations store `motion_blur` (105)
+and tracks get a 1 MiB cap; the client uploads simulations and sends motion
+blur; `openapi.json` refreshed from a local server. Variation names were
+already unvalidated (Rhai keys pass). Every real config measured fits the
+limits (largest blob ~11 KB of 256 KB). **Still to do:** the catalog
+facets below, and the API integration test (decision 7). The abandoned
+branch is gone (its corpora committed as 79eb91f).
 
 - **The catalog's facets** ([api-catalog-spec.md](api-catalog-spec.md)):
   each saved config's engine, scene (2D, 3D, solid, terrain), versions and
