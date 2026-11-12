@@ -392,6 +392,10 @@ fn api_phase_to_runtime(api: &crate::api::types::ApiVariationPhase) -> Variation
         ApiVariationPhase::Pre => VariationPhase::Pre,
         ApiVariationPhase::Normal => VariationPhase::Normal,
         ApiVariationPhase::Post => VariationPhase::Post,
+        ApiVariationPhase::Any => VariationPhase::Any,
+        // A phase newer than this build: the normal bucket, where an
+        // `Any` variation lands without an override too.
+        ApiVariationPhase::Unknown(_) => VariationPhase::Normal,
     }
 }
 

@@ -275,7 +275,15 @@ pub struct TrackBinding {
 }
 
 /// Single parameter track
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Read leniently: a track this build cannot read (a newer kind, a field
+/// it does not know how to parse) becomes a track whose source is
+/// [`TrackSource::Unknown`], holding the track's JSON as it was read, and
+/// is written back exactly so. It plays nothing. Before this, one such
+/// track made the whole list unreadable, and the animation loaded with no
+/// tracks at all -- and a save then erased them on the server
+/// (docs/projects/api-updates.md, hazard 3).
+#[derive(Debug, Clone)]
 pub struct Track {
     /// Target parameter path (ConfigPath string key)
     pub target: String,
@@ -285,14 +293,12 @@ pub struct Track {
     /// the flame's `subflames` list. Defaults to `Main` so older
     /// `.anim` files (predating subflame support) deserialize against
     /// the main flame exactly as they used to.
-    #[serde(default)]
     pub flame_target: EditingTarget,
 
     /// Source of track values (keyframes or procedural)
     pub source: TrackSource,
 
     /// Interpolation method (for keyframe tracks)
-    #[serde(default)]
     pub interpolation: Interpolation,
 
     /// Runtime-only handle to whichever list-items this track
@@ -303,8 +309,56 @@ pub struct Track {
     /// `target` is always the source of truth for *where to apply*; the
     /// rebind hook reads `bound` to look up where each tracked item
     /// is *now* and rewrites the index inside `target` to match.
-    #[serde(skip)]
     pub bound: TrackBinding,
+}
+
+/// The track as files and the API spell it.
+#[derive(Serialize, Deserialize)]
+struct TrackRepr {
+    target: String,
+    #[serde(default)]
+    flame_target: EditingTarget,
+    source: TrackSource,
+    #[serde(default)]
+    interpolation: Interpolation,
+}
+
+/// The same, borrowed, for writing.
+#[derive(Serialize)]
+struct TrackReprRef<'a> {
+    target: &'a str,
+    flame_target: &'a EditingTarget,
+    source: &'a TrackSource,
+    interpolation: &'a Interpolation,
+}
+
+impl Serialize for Track {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if let TrackSource::Unknown(raw) = &self.source {
+            return raw.serialize(s);
+        }
+        TrackReprRef { target: &self.target, flame_target: &self.flame_target, source: &self.source, interpolation: &self.interpolation }
+            .serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for Track {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = serde_json::Value::deserialize(d)?;
+        Ok(match serde_json::from_value::<TrackRepr>(raw.clone()) {
+            Ok(r) => Track { target: r.target, flame_target: r.flame_target, source: r.source, interpolation: r.interpolation, bound: TrackBinding::default() },
+            Err(e) => {
+                log::warn!("kept a track this version cannot read, unplayed: {e}");
+                Track {
+                    target: raw.get("target").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    flame_target: EditingTarget::default(),
+                    source: TrackSource::Unknown(raw),
+                    interpolation: Interpolation::default(),
+                    bound: TrackBinding::default(),
+                }
+            }
+        })
+    }
 }
 
 /// Source of track values
@@ -359,6 +413,12 @@ pub enum TrackSource {
         #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
         params: std::collections::BTreeMap<String, f64>,
     },
+
+    /// A track this build cannot read, as it was read: plays nothing, and
+    /// is written back unchanged (see [`Track`]). Never produced by this
+    /// enum's own serde: `Track` reads and writes it.
+    #[serde(skip)]
+    Unknown(serde_json::Value),
 }
 
 /// Single keyframe defining parameter value at specific time
@@ -537,7 +597,7 @@ impl Animation {
                     *max_output *= k;
                 }
                 // Its script names what it writes.
-                TrackSource::Script { .. } => {}
+                TrackSource::Script { .. } | TrackSource::Unknown(_) => {}
             }
         }
     }

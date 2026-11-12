@@ -117,9 +117,10 @@ fn online_row_label(flame: &crate::api::types::FlameListItem) -> String {
         M::ThreeD => "fractal_gallery.render_mode_3d",
         M::Escape => "fractal_gallery.render_mode_escape",
         M::Simulation => "fractal_gallery.render_mode_simulation",
+        M::Unknown(_) => "fractal_gallery.render_mode_newer",
     });
     match flame.render_mode {
-        M::Escape | M::Simulation => format!("{} — {}", flame.name, render_mode),
+        M::Escape | M::Simulation | M::Unknown(_) => format!("{} — {}", flame.name, render_mode),
         M::TwoD | M::ThreeD => {
             let names: Vec<String> = {
                 let registry = crate::variations::global_registry();
@@ -638,9 +639,9 @@ impl FractalBrowserPanel {
 
             ui.separator();
 
-            for &(mode, key) in ONLINE_RENDER_MODE_FILTERS {
-                if ui.selectable_label(self.online_search_render_mode == mode, t!(key).as_ref()).clicked() {
-                    self.online_search_render_mode = mode;
+            for (mode, key) in ONLINE_RENDER_MODE_FILTERS {
+                if ui.selectable_label(self.online_search_render_mode == *mode, t!(key).as_ref()).clicked() {
+                    self.online_search_render_mode = mode.clone();
                 }
             }
 
@@ -787,7 +788,7 @@ impl FractalBrowserPanel {
             } else {
                 Some(self.online_search_name.clone())
             };
-            let render_mode = self.online_search_render_mode;
+            let render_mode = self.online_search_render_mode.clone();
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
                 let result = search_online_flames(&base_url, &token, name, render_mode).await;
@@ -1166,7 +1167,7 @@ mod tests {
     /// server's render_mode enum rejects it.
     #[test]
     fn the_online_filter_offers_escape_but_not_simulation() {
-        let modes: Vec<_> = ONLINE_RENDER_MODE_FILTERS.iter().map(|(m, _)| *m).collect();
+        let modes: Vec<_> = ONLINE_RENDER_MODE_FILTERS.iter().map(|(m, _)| m.clone()).collect();
         assert_eq!(
             modes,
             vec![

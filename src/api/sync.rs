@@ -24,13 +24,16 @@ impl From<RenderMode> for ApiRenderMode {
     }
 }
 
-impl From<ApiRenderMode> for RenderMode {
-    fn from(mode: ApiRenderMode) -> Self {
-        match mode {
-            ApiRenderMode::TwoD => RenderMode::TwoD,
-            ApiRenderMode::ThreeD => RenderMode::ThreeD,
-            ApiRenderMode::Escape => RenderMode::Escape,
-            ApiRenderMode::Simulation => RenderMode::Simulation,
+impl ApiRenderMode {
+    /// The render mode this names; `None` for one from a newer server,
+    /// which this build cannot open.
+    pub fn render_mode(&self) -> Option<RenderMode> {
+        match self {
+            ApiRenderMode::TwoD => Some(RenderMode::TwoD),
+            ApiRenderMode::ThreeD => Some(RenderMode::ThreeD),
+            ApiRenderMode::Escape => Some(RenderMode::Escape),
+            ApiRenderMode::Simulation => Some(RenderMode::Simulation),
+            ApiRenderMode::Unknown(_) => None,
         }
     }
 }
@@ -338,13 +341,13 @@ mod tests {
 
     #[test]
     fn test_render_mode_roundtrip() {
-        assert_eq!(RenderMode::from(ApiRenderMode::from(RenderMode::TwoD)), RenderMode::TwoD);
-        assert_eq!(RenderMode::from(ApiRenderMode::from(RenderMode::ThreeD)), RenderMode::ThreeD);
+        assert_eq!(ApiRenderMode::from(RenderMode::TwoD).render_mode(), Some(RenderMode::TwoD));
+        assert_eq!(ApiRenderMode::from(RenderMode::ThreeD).render_mode(), Some(RenderMode::ThreeD));
         // Escape round-trips too since the API added the value
         // (2026-08-29). It used to fall back to "2d" here, guarded by a
         // client-side refusal, because the server's Postgres enum knew
         // only two values.
-        assert_eq!(RenderMode::from(ApiRenderMode::from(RenderMode::Escape)), RenderMode::Escape);
+        assert_eq!(ApiRenderMode::from(RenderMode::Escape).render_mode(), Some(RenderMode::Escape));
     }
 
     #[test]
@@ -679,7 +682,7 @@ pub fn animation_response_to_animation(resp: &AnimationResponse) -> crate::anima
         duration: resp.duration,
         tracks,
         generators,
-        loop_mode: resp.loop_mode.into(),
+        loop_mode: resp.loop_mode.clone().into(),
         // The API does not store it (docs/archive/projects/motion-blur.md, D6).
         motion_blur: Default::default(),
         script_rest: Default::default(),

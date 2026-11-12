@@ -5,6 +5,91 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A wire enum spelled as a string, which reads a value this build does
+/// not know as `Unknown(value)` instead of failing the whole response,
+/// and writes it back as read (docs/projects/api-updates.md, step 1). A
+/// newer server's new value -- a render mode, a phase, a loop mode --
+/// then costs an old client that one item, not the page it was on.
+macro_rules! wire_enum {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident {
+            $( $(#[$vmeta:meta])* $variant:ident = $wire:literal, )+
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        $vis enum $name {
+            $( $(#[$vmeta])* $variant, )+
+            /// A value this build does not know, kept as it was read.
+            Unknown(String),
+        }
+
+        impl $name {
+            /// The wire spelling.
+            pub fn as_str(&self) -> &str {
+                match self {
+                    $( Self::$variant => $wire, )+
+                    Self::Unknown(s) => s,
+                }
+            }
+
+            /// From the wire spelling; anything else is `Unknown`.
+            pub fn from_wire(s: &str) -> Self {
+                match s {
+                    $( $wire => Self::$variant, )+
+                    other => Self::Unknown(other.to_string()),
+                }
+            }
+
+            /// Whether this build knows the value.
+            pub fn is_known(&self) -> bool {
+                !matches!(self, Self::Unknown(_))
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                s.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                Ok(Self::from_wire(&String::deserialize(d)?))
+            }
+        }
+    };
+}
+
+/// A list from the API, read item by item: an item this build cannot
+/// read -- a newer server's shape -- is skipped and logged, and the rest
+/// of the list is kept. Before this, one such item failed the whole page
+/// (an escape flame in a 0.5 client's list: docs/projects/api-updates.md,
+/// hazard 2).
+#[derive(Debug, Clone)]
+pub struct Lenient<T>(pub Vec<T>);
+
+impl<T> Lenient<T> {
+    pub fn into_inner(self) -> Vec<T> {
+        self.0
+    }
+}
+
+impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lenient<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let items = Vec::<serde_json::Value>::deserialize(d)?;
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            match serde_json::from_value(item) {
+                Ok(v) => out.push(v),
+                Err(e) => log::warn!("skipped a list item this version cannot read: {e}"),
+            }
+        }
+        Ok(Lenient(out))
+    }
+}
+
 // ============================================================================
 // Auth
 // ============================================================================
@@ -47,12 +132,10 @@ pub struct ApiUser {
 // Enums (with API-compatible serde renames)
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+wire_enum! {
 pub enum ApiRenderMode {
-    #[serde(rename = "2d")]
-    TwoD,
-    #[serde(rename = "3d")]
-    ThreeD,
+    TwoD = "2d",
+    ThreeD = "3d",
     /// Escape-time fractals. Stored as FLAMES -- same endpoints, ids
     /// and access control -- and told apart by this value alone, so a
     /// consumer groups by `render_mode` rather than looking for a
@@ -63,8 +146,7 @@ pub enum ApiRenderMode {
     /// legitimately (the formula IS the fractal), and `has_3d` is
     /// false, so a `has_3d=false` filter returns escape fractals
     /// alongside 2D flames.
-    #[serde(rename = "escape")]
-    Escape,
+    Escape = "escape",
     /// Neighbour-coupled simulations. Stored as FLAMES on the same
     /// endpoints and told apart by this value alone, exactly as escape
     /// is, with the same two consequences: `transform_count` is 0 and
@@ -74,24 +156,24 @@ pub enum ApiRenderMode {
     /// value yet, so `ApiState::save_flame` / `update_flame` refuse to
     /// upload one client-side (`refuse_unsupported_online`) until it
     /// does — the same sequence escape went through on 2026-08-29.
-    #[serde(rename = "simulation")]
-    Simulation,
+    Simulation = "simulation",
+}
 }
 
+wire_enum! {
 /// Visibility for flames and palettes (private/unlisted/public).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ApiVisibility {
-    Private,
-    Unlisted,
-    Public,
+    Private = "private",
+    Unlisted = "unlisted",
+    Public = "public",
+}
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+wire_enum! {
 pub enum ApiEffectStage {
-    Density,
-    Color,
+    Density = "density",
+    Color = "color",
+}
 }
 
 // ============================================================================
@@ -469,13 +551,13 @@ pub struct UpdateLibraryNicknameRequest {
 // Animations
 // ============================================================================
 
+wire_enum! {
 /// Loop mode for animations (matches API enum).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ApiLoopMode {
-    Once,
-    Loop,
-    PingPong,
+    Once = "once",
+    Loop = "loop",
+    PingPong = "ping_pong",
+}
 }
 
 impl From<crate::animation::LoopMode> for ApiLoopMode {
@@ -494,6 +576,8 @@ impl From<ApiLoopMode> for crate::animation::LoopMode {
             ApiLoopMode::Once => crate::animation::LoopMode::Once,
             ApiLoopMode::Loop => crate::animation::LoopMode::Loop,
             ApiLoopMode::PingPong => crate::animation::LoopMode::PingPong,
+            // A newer server's mode: play it as a loop, the default.
+            ApiLoopMode::Unknown(_) => crate::animation::LoopMode::Loop,
         }
     }
 }
@@ -706,18 +790,25 @@ impl ScriptConflict {
 // Variations
 // ============================================================================
 
-/// Phase of a variation as serialized by the API.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
+wire_enum! {
+/// Phase of a variation as serialized by the API. `any` (a variation the
+/// transform may place in any phase, JWildfire's `fx_priority`) is what
+/// most shipped variations are; the server has stored it since migration
+/// 071.
 pub enum ApiVariationPhase {
-    Pre,
-    Normal,
-    Post,
+    Pre = "pre",
+    Normal = "normal",
+    Post = "post",
+    Any = "any",
+}
 }
 
-/// Parameter type as serialized by the API.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
+/// Parameter type as serialized by the API: a string (`"float"`), or
+/// `{"enum": {"choices": [...]}}`. A type this build does not know reads
+/// as `Unknown`, holding the value as it was read (and written back so),
+/// and the parameter is offered as a free float: every parameter is one
+/// float slot on the GPU.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ApiParamType {
     Float,
     UnlimitedFloat,
@@ -726,6 +817,52 @@ pub enum ApiParamType {
     Boolean,
     Angle,
     Enum { choices: Vec<String> },
+    Unknown(serde_json::Value),
+}
+
+/// The known spellings, as serde writes them.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum KnownParamType {
+    Float,
+    UnlimitedFloat,
+    Integer,
+    UnlimitedInteger,
+    Boolean,
+    Angle,
+    Enum { choices: Vec<String> },
+}
+
+impl Serialize for ApiParamType {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let known = match self {
+            Self::Float => KnownParamType::Float,
+            Self::UnlimitedFloat => KnownParamType::UnlimitedFloat,
+            Self::Integer => KnownParamType::Integer,
+            Self::UnlimitedInteger => KnownParamType::UnlimitedInteger,
+            Self::Boolean => KnownParamType::Boolean,
+            Self::Angle => KnownParamType::Angle,
+            Self::Enum { choices } => KnownParamType::Enum { choices: choices.clone() },
+            Self::Unknown(v) => return v.serialize(s),
+        };
+        known.serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ApiParamType {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(d)?;
+        Ok(match serde_json::from_value::<KnownParamType>(value.clone()) {
+            Ok(KnownParamType::Float) => Self::Float,
+            Ok(KnownParamType::UnlimitedFloat) => Self::UnlimitedFloat,
+            Ok(KnownParamType::Integer) => Self::Integer,
+            Ok(KnownParamType::UnlimitedInteger) => Self::UnlimitedInteger,
+            Ok(KnownParamType::Boolean) => Self::Boolean,
+            Ok(KnownParamType::Angle) => Self::Angle,
+            Ok(KnownParamType::Enum { choices }) => Self::Enum { choices },
+            Err(_) => Self::Unknown(value),
+        })
+    }
 }
 
 /// Single parameter of an API variation.

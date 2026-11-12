@@ -365,6 +365,8 @@ impl AnimationController {
             }
             // Evaluated after the others (`script_values`).
             TrackSource::Script { .. } => None,
+            // A track this build cannot read plays nothing.
+            TrackSource::Unknown(_) => None,
         }
     }
 
@@ -403,7 +405,7 @@ impl AnimationController {
                     track_idx,
                 )
             }
-            TrackSource::Script { .. } => None,
+            TrackSource::Script { .. } | TrackSource::Unknown(_) => None,
         }
     }
 
@@ -544,7 +546,7 @@ impl AnimationController {
                         *fade_in, *fade_in_easing, *fade_out, *fade_out_easing, time,
                     ))
                 })(),
-                TrackSource::Script { .. } => None,
+                TrackSource::Script { .. } | TrackSource::Unknown(_) => None,
             };
             if let Some(value) = value {
                 values.push((track.flame_target, track.target.clone(), value));

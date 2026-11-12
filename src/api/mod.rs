@@ -12,6 +12,8 @@ pub mod client;
 pub mod health;
 pub mod sync;
 pub mod types;
+#[cfg(test)]
+mod future_tests;
 
 use crate::config::FractalConfig;
 use crate::resources::{FetchError, FetchResult, LoadState};
@@ -250,7 +252,7 @@ impl ApiState {
         );
 
         self.flames_load_state = LoadState::Loading;
-        match client::api_get::<Vec<FlameListItem>>(&url, &token).await {
+        match client::api_get::<types::Lenient<FlameListItem>>(&url, &token).await.map(types::Lenient::into_inner) {
             Ok(flames) => {
                 self.flames = flames.clone();
                 self.flames_load_state = LoadState::Loaded;
@@ -395,7 +397,7 @@ impl ApiState {
             API_BASE_URL,
             &format!("/api/search/flames{}", params.to_query_string()),
         );
-        client::api_get(&url, &token).await
+        client::api_get::<types::Lenient<FlameListItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
 
     /// Search public flames without auth (for gallery browsing).
@@ -407,7 +409,7 @@ impl ApiState {
             API_BASE_URL,
             &format!("/api/search/flames{}", params.to_query_string()),
         );
-        client::api_get_unauth(&url).await
+        client::api_get_unauth::<types::Lenient<FlameListItem>>(&url).await.map(types::Lenient::into_inner)
     }
 
     // --- Palette library operations ---
@@ -425,7 +427,7 @@ impl ApiState {
             API_BASE_URL,
             &format!("/api/users/me/palettes?page={}&per_page={}", page, per_page),
         );
-        client::api_get(&url, &token).await
+        client::api_get::<types::Lenient<LibraryPaletteEntry>>(&url, &token).await.map(types::Lenient::into_inner)
     }
 
     /// Fetch a single palette by content hash. Public — no auth required.
@@ -542,7 +544,7 @@ impl ApiState {
             API_BASE_URL,
             &format!("/api/flames/{}/animations", flame_id),
         );
-        client::api_get(&url, &token).await
+        client::api_get::<types::Lenient<AnimationListItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
 
     // --- Helpers ---
@@ -592,7 +594,7 @@ impl ApiState {
             API_BASE_URL,
             &format!("/api/scripts?page={page}&per_page={per_page}"),
         );
-        client::api_get(&url, &token).await
+        client::api_get::<types::Lenient<types::ScriptListItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
 
     /// Create a script. Returns the server's copy — including the id,
@@ -668,7 +670,7 @@ impl ApiState {
                 urlencode(query)
             ),
         );
-        self.public_get(&url).await
+        self.public_get::<types::Lenient<types::ScriptListItem>>(&url).await.map(types::Lenient::into_inner)
     }
 
     // ========================================================================
@@ -678,7 +680,7 @@ impl ApiState {
     /// The effect catalog — everything the server knows, without shaders.
     pub async fn list_effects(&self) -> FetchResult<Vec<types::EffectListItem>> {
         let url = build_url(API_BASE_URL, "/api/effects");
-        self.public_get(&url).await
+        self.public_get::<types::Lenient<types::EffectListItem>>(&url).await.map(types::Lenient::into_inner)
     }
 
     /// One effect, with its WGSL.
@@ -701,7 +703,7 @@ impl ApiState {
     /// List all available variations on the server (summary form, no shader code).
     pub async fn list_variations(&self) -> FetchResult<Vec<types::VariationListItem>> {
         let url = build_url(API_BASE_URL, "/api/variations");
-        client::api_get::<Vec<types::VariationListItem>>(&url, "").await
+        client::api_get::<types::Lenient<types::VariationListItem>>(&url, "").await.map(types::Lenient::into_inner)
     }
 }
 
