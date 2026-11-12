@@ -112,6 +112,66 @@ pub const CURRENT_CONFIG_VERSION: u32 = 7;
 /// reader would fill it with its own old default.
 pub const MIN_READER_VERSION: u32 = 7;
 
+/// `skip_serializing_if` tests for the fields whose default is
+/// `FractalConfig::default()`'s value: a field at it is left out of a saved
+/// config. They replaced a hand-kept list that repeated the field list
+/// (`remove_default_fields`), so every field now says it on its own line --
+/// and a field whose default changes is made always-written by deleting its
+/// test (docs/projects/api-updates.md, rule 5).
+mod skip {
+    use super::*;
+
+    fn defaults() -> &'static FractalConfig {
+        static DEFAULTS: std::sync::LazyLock<FractalConfig> = std::sync::LazyLock::new(FractalConfig::default);
+        &DEFAULTS
+    }
+
+    macro_rules! at_default {
+        ($($field:ident: $ty:ty),* $(,)?) => {
+            $(pub(super) fn $field(v: &$ty) -> bool {
+                *v == defaults().$field
+            })*
+        };
+    }
+
+    at_default!(
+    zoom: f32,
+    pan_x: f64,
+    pan_y: f64,
+    rotation: f32,
+    camera_rotation_x: f32,
+    camera_rotation_y: f32,
+    camera_z: f32,
+    dof_focus_distance: f32,
+    dof_blur_strength: f32,
+    fog_strength: f32,
+    fog_start: f32,
+    density_scale: f32,
+    speed_factor: f32,
+    max_iterations: u64,
+    blend_factor: f32,
+    use_dynamic_blend: bool,
+    color_mode: ColorMode,
+    palette_rotation: f32,
+    palette_size: u32,
+    palette_squeeze: f32,
+    background_color: [f32; 3],
+    tonemap_mode: ToneMapMode,
+    highlight_mode: HighlightMode,
+    tonemap_curve: ToneCurve,
+    use_curve: bool,
+    exposure: f32,
+    gamma: f32,
+    gamma_threshold: f32,
+    brightness: f32,
+    vibrancy: f32,
+    white_level: f32,
+    saturation: f32,
+    hue_shift: f32,
+    deterministic_rng: bool,
+    );
+}
+
 /// Complete fractal configuration (excludes runtime-only settings)
 /// All fields except `flame` have defaults for compact serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,9 +211,9 @@ pub struct FractalConfig {
     pub reset_orbits: bool,
 
     /// View settings
-    #[serde(default = "default_zoom")]
+    #[serde(default = "default_zoom", skip_serializing_if = "skip::zoom")]
     pub zoom: f32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::pan_x")]
     /// View centre, in the fractal plane. **f64, unlike every other
     /// view field**, because it is the only ABSOLUTE position among
     /// them and absolute positions are what a deep zoom destroys.
@@ -179,15 +239,15 @@ pub struct FractalConfig {
     /// whatever it was written as — so no config migration and no
     /// version bump.
     pub pan_x: f64,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::pan_y")]
     pub pan_y: f64,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::rotation")]
     pub rotation: f32,  // 2D rotation (around Z axis)
 
     /// 3D Camera rotation (for 3D mode)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::camera_rotation_x")]
     pub camera_rotation_x: f32,  // Pitch (rotation around X axis)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::camera_rotation_y")]
     pub camera_rotation_y: f32,  // Yaw (rotation around Z axis — Apo's ZXY Euler convention)
     /// JWildfire / Apophysis bank angle — rotation around the Y axis,
     /// which in the default camera pose (looking down −Z) tilts the
@@ -219,7 +279,7 @@ pub struct FractalConfig {
     /// import only honors `cam_zpos` when `cam_pos_z` is absent; export
     /// writes both for backward compat with older JWildfire and Apo
     /// versions that only know `cam_zpos`).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::camera_z")]
     pub camera_z: f32,
 
     /// Perspective strength for 3D rendering (0.0 = flat/orthographic, higher
@@ -247,15 +307,15 @@ pub struct FractalConfig {
     pub image_size: (u32, u32),
 
     /// Depth of Field settings (3D mode)
-    #[serde(default = "default_dof_focus_distance")]
+    #[serde(default = "default_dof_focus_distance", skip_serializing_if = "skip::dof_focus_distance")]
     pub dof_focus_distance: f32,  // Distance from origin where image is sharpest
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::dof_blur_strength")]
     pub dof_blur_strength: f32,  // Blur amount (0.0 = disabled)
 
     /// Depth Fog settings (3D mode - atmospheric perspective)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::fog_strength")]
     pub fog_strength: f32,  // Exponential fog density (0.0 = disabled)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::fog_start")]
     pub fog_start: f32,  // Depth where fog begins
 
     /// Depth-dependent density compensation for 3D perspective (0.0 = off,
@@ -335,23 +395,23 @@ pub struct FractalConfig {
     pub filter_blur_edges: f32,
 
     /// Rendering settings
-    #[serde(default = "default_density_scale")]
+    #[serde(default = "default_density_scale", skip_serializing_if = "skip::density_scale")]
     pub density_scale: f32,
-    #[serde(default = "default_speed_factor")]
+    #[serde(default = "default_speed_factor", skip_serializing_if = "skip::speed_factor")]
     pub speed_factor: f32,
     /// Maximum total iterations to render (default: 1 billion = ~infinite for interactive use)
-    #[serde(default = "default_max_iterations")]
+    #[serde(default = "default_max_iterations", skip_serializing_if = "skip::max_iterations")]
     pub max_iterations: u64,
     /// Histogram color scale (precision vs overflow protection, default: 10.0)
     /// Blend factor for accumulation (0.01 = slow/smooth, 1.0 = fast/flickery, default: 0.1)
-    #[serde(default = "default_blend_factor")]
+    #[serde(default = "default_blend_factor", skip_serializing_if = "skip::blend_factor")]
     pub blend_factor: f32,
     /// Use dynamic blend (true = exponential convergence, false = fixed blend rate, default: true)
-    #[serde(default = "default_use_dynamic_blend")]
+    #[serde(default = "default_use_dynamic_blend", skip_serializing_if = "skip::use_dynamic_blend")]
     pub use_dynamic_blend: bool,
 
     /// Color settings
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::color_mode")]
     pub color_mode: ColorMode,
     /// PathMap colouring style (docs/archive/deep-zoom/word-editing.md §10)
     #[serde(default, skip_serializing_if = "PathMapStyle::is_default")]
@@ -368,14 +428,14 @@ pub struct FractalConfig {
     #[serde(default = "default_palette", deserialize_with = "deserialize_palette")]
     pub palette: Palette,
     /// Palette rotation: -1.0 to 1.0, shifts palette indices (Apophysis: -128 to 128)
-    #[serde(default = "default_palette_rotation")]
+    #[serde(default = "default_palette_rotation", skip_serializing_if = "skip::palette_rotation")]
     pub palette_rotation: f32,
     /// Palette texture size: 256-4096, higher values give smoother gradients
-    #[serde(default = "default_palette_size")]
+    #[serde(default = "default_palette_size", skip_serializing_if = "skip::palette_size")]
     pub palette_size: u32,
     /// Palette squeeze (linear-mode meaning): 1.0 = no change, >1 = repeat
     /// palette N times, <1 = show only N% of palette
-    #[serde(default = "default_palette_squeeze")]
+    #[serde(default = "default_palette_squeeze", skip_serializing_if = "skip::palette_squeeze")]
     pub palette_squeeze: f32,
     /// Which squeeze algorithm to use: `Linear` (the existing behavior,
     /// uniform N repeats) or `Geometric` (octave-based packing with the
@@ -397,52 +457,52 @@ pub struct FractalConfig {
     /// Composes with rotation/squeeze; does not modify the base palette stops.
     #[serde(default, skip_serializing_if = "is_default_palette_reverse")]
     pub palette_reverse: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::background_color")]
     pub background_color: [f32; 3],
 
     /// Tone mapping settings
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::tonemap_mode")]
     pub tonemap_mode: ToneMapMode,
     /// How to handle channel values that exceed [0,1] after tone mapping.
     /// `Clip` (default, Apophysis-compatible) clamps per-channel and shifts
     /// hue toward CMY/white at high brightness. `MaxNorm` divides all
     /// channels by their max to preserve hue when clipping would occur.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::highlight_mode")]
     pub highlight_mode: HighlightMode,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::tonemap_curve")]
     pub tonemap_curve: ToneCurve,
     /// Whether to actually apply the tone curve
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", skip_serializing_if = "skip::use_curve")]
     pub use_curve: bool,
-    #[serde(default = "default_exposure")]
+    #[serde(default = "default_exposure", skip_serializing_if = "skip::exposure")]
     pub exposure: f32,
-    #[serde(default = "default_gamma")]
+    #[serde(default = "default_gamma", skip_serializing_if = "skip::gamma")]
     pub gamma: f32,
     /// Gamma threshold: smooths gamma curve at low densities (Apophysis compatibility).
     /// See `DEFAULT_GAMMA_THRESHOLD` in `defaults.rs` for the current value.
-    #[serde(default = "default_gamma_threshold")]
+    #[serde(default = "default_gamma_threshold", skip_serializing_if = "skip::gamma_threshold")]
     pub gamma_threshold: f32,
     /// Brightness: logarithmic brightness scaling (Apophysis compatibility)
     /// 1.0 = standard brightness (default), higher = brighter
-    #[serde(default = "default_brightness")]
+    #[serde(default = "default_brightness", skip_serializing_if = "skip::brightness")]
     pub brightness: f32,
     /// Vibrancy: blend between old (gamma-only) and new (vibrant) color algorithms
     /// 1.0 = modern vibrant colors (default), 0.0 = classic gamma-only colors
-    #[serde(default = "default_vibrancy")]
+    #[serde(default = "default_vibrancy", skip_serializing_if = "skip::vibrancy")]
     pub vibrancy: f32,
     /// Highlights ("Fade to White" / Apophysis `white_level`): divides chroma
     /// in the log-density curve while leaving alpha alone, so bright/dense
     /// pixels bloom toward the background through alpha blend before RGB
     /// clips. Higher values bleach to white sooner; lower values keep
     /// highlights more saturated. See `DEFAULT_WHITE_LEVEL` in `defaults.rs`.
-    #[serde(default = "default_white_level")]
+    #[serde(default = "default_white_level", skip_serializing_if = "skip::white_level")]
     pub white_level: f32,
     /// Saturation: color saturation boost (1.0 = no change, >1.0 = more saturated)
-    #[serde(default = "default_saturation")]
+    #[serde(default = "default_saturation", skip_serializing_if = "skip::saturation")]
     pub saturation: f32,
 
     /// Hue shift: rotate hue in degrees (-180.0 to 180.0, 0.0 = no shift)
-    #[serde(default = "default_hue_shift")]
+    #[serde(default = "default_hue_shift", skip_serializing_if = "skip::hue_shift")]
     pub hue_shift: f32,
 
     /// Alpha blend low threshold: start blending toward linear alpha at this gamma-corrected value
@@ -495,7 +555,7 @@ pub struct FractalConfig {
     pub custom_effects: Vec<crate::config::escape::CustomSource>,
 
     /// Optional: Deterministic RNG for reproducible renders
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip::deterministic_rng")]
     pub deterministic_rng: bool,
 
     /// Importance-sampled transform selection
@@ -769,9 +829,9 @@ fn default_preserve_z() -> bool {
 
 /// Skip-serialize helper for `preserve_z`: omit when `true` (the pre-field
 /// default). Paired with `default_preserve_z` so omitted ⇒ `true` on load.
-/// **Not** listed in `remove_default_fields` — that strips against
-/// `Self::default()` (`false`), which would wrongly drop genuine `false`
-/// values; the skip+default pair is the single source of truth here.
+/// **Not** a `skip::` test -- those compare with `Self::default()`
+/// (`false`), which would wrongly drop genuine `false` values; the
+/// skip+default pair is the single source of truth here.
 fn is_default_preserve_z(v: &bool) -> bool {
     *v
 }
@@ -1378,6 +1438,21 @@ impl Default for FractalConfig {
     }
 }
 
+/// Apply `edit` to every engine's stash in a config's JSON
+/// (`engine_settings`: engine -> its engine-owned fields), for a migration
+/// arm from v7 on (see `migrate_value`).
+// No arm needs it yet (the last, v6 -> v7, predates stashes); the test holds it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn for_each_stash(obj: &mut serde_json::Map<String, serde_json::Value>, mut edit: impl FnMut(&mut serde_json::Map<String, serde_json::Value>)) {
+    if let Some(stashes) = obj.get_mut("engine_settings").and_then(|s| s.as_object_mut()) {
+        for stash in stashes.values_mut() {
+            if let Some(stash) = stash.as_object_mut() {
+                edit(stash);
+            }
+        }
+    }
+}
+
 /// The v6→v7 arm: every Rhai variation a flame (or a subflame) carries
 /// under its `INFO.name` takes its key -- the name's derived id and the
 /// source's version, `scripted::key(scripted::derived_id(name), source)`,
@@ -1619,14 +1694,10 @@ impl FractalConfig {
     }
 
     /// [`Self::to_json_value`] without the unread values put back.
-    fn canonical_value(&self) -> Result<serde_json::Value, serde_json::Error> {
+    pub(crate) fn canonical_value(&self) -> Result<serde_json::Value, serde_json::Error> {
         let mut value = serde_json::to_value(self)?;
 
         if let Some(obj) = value.as_object_mut() {
-            // Remove fields that match defaults (compact serialization)
-            let defaults = Self::default();
-            Self::remove_default_fields(obj, self, &defaults);
-
             // Build ordered object with version first, then the lowest
             // version that reads it (kept higher when a newer config's
             // unread values ride along).
@@ -1660,58 +1731,6 @@ impl FractalConfig {
     /// Omits fields that match defaults for compact output
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(&self.to_json_value()?)
-    }
-
-    /// Remove fields from JSON object that match default values
-    fn remove_default_fields(obj: &mut serde_json::Map<String, serde_json::Value>, config: &Self, defaults: &Self) {
-        // View settings
-        if config.zoom == defaults.zoom { obj.remove("zoom"); }
-        if config.pan_x == defaults.pan_x { obj.remove("pan_x"); }
-        if config.pan_y == defaults.pan_y { obj.remove("pan_y"); }
-        if config.rotation == defaults.rotation { obj.remove("rotation"); }
-        if config.camera_rotation_x == defaults.camera_rotation_x { obj.remove("camera_rotation_x"); }
-        if config.camera_rotation_y == defaults.camera_rotation_y { obj.remove("camera_rotation_y"); }
-        if config.camera_z == defaults.camera_z { obj.remove("camera_z"); }
-        if config.dof_focus_distance == defaults.dof_focus_distance { obj.remove("dof_focus_distance"); }
-        if config.dof_blur_strength == defaults.dof_blur_strength { obj.remove("dof_blur_strength"); }
-        if config.fog_strength == defaults.fog_strength { obj.remove("fog_strength"); }
-        if config.fog_start == defaults.fog_start { obj.remove("fog_start"); }
-
-        // Rendering settings
-        if config.density_scale == defaults.density_scale { obj.remove("density_scale"); }
-        if config.speed_factor == defaults.speed_factor { obj.remove("speed_factor"); }
-        if config.max_iterations == defaults.max_iterations { obj.remove("max_iterations"); }
-        if config.blend_factor == defaults.blend_factor { obj.remove("blend_factor"); }
-        if config.use_dynamic_blend == defaults.use_dynamic_blend { obj.remove("use_dynamic_blend"); }
-
-        // Color settings
-        if config.color_mode == defaults.color_mode { obj.remove("color_mode"); }
-        // Always include palette in output (it's required)
-        if config.palette_rotation == defaults.palette_rotation { obj.remove("palette_rotation"); }
-        if config.palette_size == defaults.palette_size { obj.remove("palette_size"); }
-        if config.palette_squeeze == defaults.palette_squeeze { obj.remove("palette_squeeze"); }
-        if config.palette_squeeze_mode == defaults.palette_squeeze_mode { obj.remove("palette_squeeze_mode"); }
-        if config.palette_squeeze_falloff == defaults.palette_squeeze_falloff { obj.remove("palette_squeeze_falloff"); }
-        if config.palette_log_strength == defaults.palette_log_strength { obj.remove("palette_log_strength"); }
-        if config.palette_reverse == defaults.palette_reverse { obj.remove("palette_reverse"); }
-        if config.background_color == defaults.background_color { obj.remove("background_color"); }
-
-        // Tone mapping settings
-        if config.tonemap_mode == defaults.tonemap_mode { obj.remove("tonemap_mode"); }
-        if config.highlight_mode == defaults.highlight_mode { obj.remove("highlight_mode"); }
-        if config.tonemap_curve == defaults.tonemap_curve { obj.remove("tonemap_curve"); }
-        if config.use_curve == defaults.use_curve { obj.remove("use_curve"); }
-        if config.exposure == defaults.exposure { obj.remove("exposure"); }
-        if config.gamma == defaults.gamma { obj.remove("gamma"); }
-        if config.gamma_threshold == defaults.gamma_threshold { obj.remove("gamma_threshold"); }
-        if config.brightness == defaults.brightness { obj.remove("brightness"); }
-        if config.vibrancy == defaults.vibrancy { obj.remove("vibrancy"); }
-        if config.white_level == defaults.white_level { obj.remove("white_level"); }
-        if config.saturation == defaults.saturation { obj.remove("saturation"); }
-        if config.hue_shift == defaults.hue_shift { obj.remove("hue_shift"); }
-
-        // Other
-        if config.deterministic_rng == defaults.deterministic_rng { obj.remove("deterministic_rng"); }
     }
 
     /// Import configuration from a JSON string, with version-keyed migration.
@@ -1877,6 +1896,12 @@ impl FractalConfig {
                 // v6 -> v7: a Rhai variation is keyed by its id and version,
                 // not its name.
                 6 => migrate_custom_variation_keys(obj),
+                // From here on, an arm also runs inside every engine's
+                // stash (`engine_settings`, which appeared after v7): call
+                // it on `obj`, then `for_each_stash(obj, ..)` with the same
+                // edit. An arm touching an engine-owned field (a default
+                // change to the tone map, say) must reach a stash too, or
+                // switching engines would bring back the old value.
                 other => {
                     return Err(serde_json::Error::io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,

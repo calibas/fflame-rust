@@ -262,6 +262,32 @@ are built too: client branch `catalog`, ffapi branch `catalog` (migration
 
 From the config review (§4). Each needs `min_reader` in place first.
 
+**Built 2026-11-12** (client branch `config-cleanups`, ffapi branch
+`transform-cap`; the user's picks after a review that checked §4 against
+the code):
+1. **One way to leave defaults out:** the 38 hand-listed fields take
+   generated `skip::<field>` tests and `remove_default_fields` goes. All
+   567 configs in the repository save byte-identically
+   (`config::save_dump`).
+2. **Stashes:** read leniently, carrying what they cannot read; migration
+   arms from v7 on reach them through `for_each_stash`.
+3. **Presets re-saved:** all v7 with `min_reader`, eight dead keys gone,
+   identical when loaded.
+4. **Per-transform cap 16 KB -> 64 KB** (ffapi migration 107): a `.flame`
+   import of heavy-parameter variations no longer fails to save.
+
+Dropped from §4 on review:
+- `solid_shading` is the lighting rig every engine owns, not oddly placed.
+- Default-change lockout is fixed by `min_reader` (step 1).
+- 78 flat fields: grouping them would rename everything.
+- Stash palettes are small.
+- Rhai sources in the blob wait for step 4, deferred 2026-11-12 by the
+  user ("keep things simple at the moment").
+
+Found on the way: ffapi migrations checked out CRLF on Windows failed
+sqlx's checksum (`VersionMismatch`); `.gitattributes` keeps them LF (ffapi
+main).
+
 ---
 
 ## 4. The config, reviewed

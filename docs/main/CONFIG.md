@@ -150,9 +150,11 @@ version bump and a migration arm that restores the old value (see
   lowest version that reads it: `MIN_READER_VERSION`, or the config's own
   when it came from a newer app with values kept, see *Reading a newer
   config*), then `flame`, then the remaining fields;
-- fields equal to their defaults omitted, by two mechanisms: serde's
-  `skip_serializing_if` on most fields, and `remove_default_fields` for
-  the older ones that have none;
+- fields equal to their defaults omitted, by each field's own
+  `skip_serializing_if` (the fields whose default is
+  `FractalConfig::default()`'s use the generated `skip::<field>` tests; a
+  hand-kept list, `remove_default_fields`, did this for 38 fields until
+  2026-11-12);
 - every number that is exactly an `f32` rewritten to its shortest
   round-trip decimal (`precision::normalize_f32_numbers`), so `0.98` is
   saved as `0.98` and not `0.9799999594688416`. Numbers that need f64
@@ -350,8 +352,16 @@ engine's, or its defaults the first time -- nothing is copied between
 engines. 2D and 3D flames are one engine. What the flame alone reads
 (`FLAME_ONLY`) is untouched by a switch; `image_size` and
 `deterministic_rng` are shared. `every_config_field_is_classified` holds
-every field of `FractalConfig` to one of these classes. A migration that
-renames an engine-owned field must also migrate the stash's copies.
+every field of `FractalConfig` to one of these classes.
+
+The stash is read like a file, leniently: a value this build cannot read
+is set aside (its field defaulted) instead of resetting the engine, goes
+into `FractalConfig::unread` while the engine is shown (so a save writes
+it back), and returns to the stash when the engine is left
+(`a_stash_keeps_what_it_cannot_read`). A migration arm from v7 on that
+touches an engine-owned field (a renamed key, a default change) must reach
+the stash too: `for_each_stash` in `migrate_value`. No stash predates v7,
+so no earlier arm needs to.
 
 **A drawn flame is never empty.** A config made in another engine (a
 simulation, a script's escape picture) has a flame with no transforms.
@@ -731,7 +741,8 @@ old default for files that omitted the field
 field already present).
 
 Then **always write the field**, even at its default: drop its
-`skip_serializing_if` (or its `remove_default_fields` line). An older
+`skip_serializing_if` (for a `skip::<field>` test, its line in the
+`at_default!` list too). An older
 build reading the file fills an omitted field with its own, old default,
 so the field has to say its value. `MIN_READER_VERSION` stays: an older
 build still reads the file correctly. Raise `MIN_READER_VERSION` only for

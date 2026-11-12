@@ -17,6 +17,8 @@ pub mod delta;
 pub mod escape;
 pub mod sim;
 pub mod unread;
+#[cfg(test)]
+pub mod save_dump;
 pub mod fractal_config;
 pub mod manager;
 pub mod mode;

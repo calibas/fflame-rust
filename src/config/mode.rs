@@ -211,18 +211,36 @@ pub const SHARED: &[&str] = &["image_size", "deterministic_rng"];
 /// The engines' own blocks, the mode, and the stash.
 pub const STRUCTURE: &[&str] = &["flame", "render_mode", "escape", "sim", "engine_settings", "unread"];
 
+/// Whether a JSON pointer into a config is inside an engine-owned field.
+fn owned_pointer(pointer: &str) -> bool {
+    pointer.split('/').nth(1).is_some_and(|k| ENGINE_OWNED.contains(&k))
+}
+
 /// A config's engine-owned settings, as its JSON (a field at its default
-/// is absent, as in a file).
+/// is absent, as in a file), with what this build could not read of them
+/// (`FractalConfig::unread`) put back, so it travels with the stash.
 fn owned_json(config: &FractalConfig) -> serde_json::Map<String, serde_json::Value> {
-    match serde_json::to_value(config) {
-        Ok(serde_json::Value::Object(o)) => o.into_iter().filter(|(k, _)| ENGINE_OWNED.contains(&k.as_str())).collect(),
+    let Ok(mut value) = serde_json::to_value(config) else {
+        return serde_json::Map::new();
+    };
+    crate::config::precision::normalize_f32_numbers(&mut value);
+    let unread = crate::config::unread::Unread {
+        entries: config.unread.entries.iter().filter(|e| owned_pointer(&e.pointer)).cloned().collect(),
+        ..Default::default()
+    };
+    unread.restore(&mut value);
+    match value {
+        serde_json::Value::Object(o) => o.into_iter().filter(|(k, _)| ENGINE_OWNED.contains(&k.as_str())).collect(),
         _ => serde_json::Map::new(),
     }
 }
 
 /// `config`'s engine-owned settings set from `owned` (as [`owned_json`]
 /// wrote them), read through `FractalConfig`'s own serde, so an absent
-/// field takes the default a file's would. False if they do not read.
+/// field takes the default a file's would. Read leniently: a value this
+/// build cannot read is set aside (its field defaulted) into
+/// `config.unread`, to be written back, rather than losing the engine's
+/// every setting. False only if they do not read at all.
 fn restore_owned(config: &mut FractalConfig, owned: &serde_json::Map<String, serde_json::Value>) -> bool {
     let Ok(serde_json::Value::Object(mut carrier)) = serde_json::to_value(FractalConfig::default()) else {
         return false;
@@ -231,9 +249,16 @@ fn restore_owned(config: &mut FractalConfig, owned: &serde_json::Map<String, ser
         carrier.remove(*k);
     }
     carrier.extend(owned.iter().map(|(k, v)| (k.clone(), v.clone())));
-    match serde_json::from_value::<FractalConfig>(serde_json::Value::Object(carrier)) {
+    let mut aside = Vec::new();
+    match crate::config::unread::deserialize_lenient::<FractalConfig>(serde_json::Value::Object(carrier), &mut aside) {
         Ok(read) => {
             copy_owned(&read, config, None);
+            if !aside.is_empty() {
+                if let Ok(written) = config.canonical_value() {
+                    crate::config::unread::note_filled(&mut aside, &written);
+                }
+                config.unread.entries.extend(aside);
+            }
             true
         }
         Err(e) => {
@@ -322,6 +347,8 @@ pub fn enter(before: &FractalConfig, after: &mut FractalConfig, mode: RenderMode
         };
         let chosen = after.clone();
         after.engine_settings.insert(from.key().to_string(), owned_json(before));
+        // What it could not read went into the stash with it.
+        after.unread.entries.retain(|e| !owned_pointer(&e.pointer));
         if let Some(own) = after.engine_settings.remove(to.key()) {
             restored = restore_owned(after, &own);
         }
@@ -640,4 +667,42 @@ mod tests {
             assert_eq!(m.active_config().flame.transforms.len(), preset.flame.transforms.len());
         }
     }
+
+    /// A stash holding a value this build cannot read keeps the engine's
+    /// other settings (it used to reset them all), carries the value while
+    /// the engine is shown (written back on save), and takes it back into
+    /// the stash when the engine is left.
+    #[test]
+    fn a_stash_keeps_what_it_cannot_read() {
+        let mut escape = FractalConfig::default();
+        escape.render_mode = RenderMode::Escape;
+        let mut stash = serde_json::Map::new();
+        stash.insert("tonemap_mode".into(), serde_json::json!("hologram"));
+        stash.insert("exposure".into(), serde_json::json!(3.0));
+        escape.engine_settings.insert("flame".into(), stash);
+
+        let mut flame = escape.clone();
+        enter(&escape, &mut flame, RenderMode::TwoD);
+        assert_eq!(flame.exposure, 3.0, "the readable settings are restored");
+        assert!(flame.unread.entries.iter().any(|e| e.pointer == "/tonemap_mode"));
+        assert_eq!(flame.to_json_value().unwrap()["tonemap_mode"], serde_json::json!("hologram"), "written back on save");
+
+        let mut back = flame.clone();
+        enter(&flame, &mut back, RenderMode::Escape);
+        assert_eq!(back.engine_settings["flame"]["tonemap_mode"], serde_json::json!("hologram"), "back in the stash");
+        assert!(!back.unread.entries.iter().any(|e| e.pointer == "/tonemap_mode"), "and not the escape engine's");
+        assert!(back.to_json_value().unwrap().get("tonemap_mode").is_none_or(|v| v != "hologram"));
+    }
+
+    /// `for_each_stash` reaches every engine's stash (for a migration arm).
+    #[test]
+    fn a_migration_can_reach_every_stash() {
+        let mut v = serde_json::json!({"engine_settings": {"flame": {"exposure": 1.0}, "escape": {"exposure": 2.0}}});
+        crate::config::fractal_config::for_each_stash(v.as_object_mut().unwrap(), |s| {
+            s.insert("gamma".into(), serde_json::json!(9.0));
+        });
+        assert_eq!(v["engine_settings"]["flame"]["gamma"], 9.0);
+        assert_eq!(v["engine_settings"]["escape"]["gamma"], 9.0);
+    }
+
 }
