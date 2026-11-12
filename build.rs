@@ -75,6 +75,7 @@ fn main() {
         copy_shaders_to_target();
         generate_palette_manifest();
         generate_texture_presets();
+        generate_locale_table();
         return;
     }
 

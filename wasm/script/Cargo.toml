@@ -49,5 +49,7 @@ strip = true
 
 # wasm-pack bundles wasm-opt 117, which predates rustc's bulk-memory
 # default — without these flags it rejects the module outright.
+# --enable-simd: the repo-root .cargo/config.toml builds wasm32 with
+# +simd128 (5722976b), and wasm-opt refuses v128 ops without it.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "--enable-simd"]
