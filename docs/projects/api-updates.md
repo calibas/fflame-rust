@@ -1,6 +1,6 @@
 # API updates without breaking older apps
 
-Status: **step 1 built 2026-11-11** (branch `api-client-hardening`); steps 2-5 to come. Sources: a
+Status: **step 1 merged** (PR #160); **step 2 built 2026-11-11** in ffapi, branch `reader-vocabulary` (migration 100); steps 3-5 to come. Sources: a
 survey of the client (`src/api/`), the config, and the server repository
 (`c:\projects\ffapi`, axum + Postgres, latest migration 099), checked
 against the code where it mattered. This plan absorbs the API half of
@@ -181,6 +181,17 @@ Ships first, so that everything after can be added safely.
   untouched.
 
 ### Step 2 -- the server answers each reader in its vocabulary (server, additive)
+
+**Built 2026-11-11** (ffapi branch `reader-vocabulary`, PR.md there):
+`src/reader.rs`, migration 100 (`flame_readable_by`,
+`animation_readable_by`), every flame and animation list, phase `any`, a
+409 for an animation PUT a reader below 7 would wreck, `GET
+/api/app/latest` (`APP_LATEST_VERSION` / `APP_LATEST_URL`). Not filtered:
+scripts (their kinds are strings a client degrades on, and no new kind
+exists yet: step 4 filters the new ones), and a flame's inline animation
+refs (each is guarded at its PUT). Two tests on ffapi's main fail until
+step 3 seeds what the corpus sync brought: the effect `distance_field`
+(decision 4) and the built-in scripts `escape_deep` and `sim_sweep`.
 
 - An extractor reads `?reader=` on every route (absent = 3, the original
   vocabulary) into the request's `Reader`.
