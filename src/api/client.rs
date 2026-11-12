@@ -9,9 +9,24 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 /// Build the full URL from base URL and path.
+///
+/// Every request says what this build reads: `reader=N`, N the highest
+/// config version it reads (docs/projects/api-updates.md, rule 2). The
+/// server answers in that version's vocabulary -- lists without what this
+/// build cannot open, no value it has never seen. A request without it is
+/// answered in the original vocabulary (0.5's).
 pub fn build_url(base_url: &str, path: &str) -> String {
     let base = base_url.trim_end_matches('/');
-    format!("{}{}", base, path)
+    let sep = if path.contains('?') { '&' } else { '?' };
+    format!("{base}{path}{sep}reader={}", crate::config::fractal_config::CURRENT_CONFIG_VERSION)
+}
+
+/// What the desktop app calls itself to the server: for its logs, never
+/// for what it is sent (that is `reader`'s job, and no server decision
+/// may rest on a User-Agent). The browser sends its own.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn user_agent() -> String {
+    format!("FractalArtEditor/{}", env!("CARGO_PKG_VERSION"))
 }
 
 // ============================================================================
@@ -340,6 +355,7 @@ mod native {
     /// Without this, every request creates a fresh TCP+TLS connection (~300-700ms overhead).
     static AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
         ureq::AgentBuilder::new()
+            .user_agent(&user_agent())
             .timeout_connect(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(30))
             .build()

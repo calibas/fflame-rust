@@ -707,9 +707,56 @@ impl ApiState {
     }
 }
 
+/// The newest app release, as `GET /api/app/latest` gives it
+/// (docs/projects/api-updates.md, rule 7).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct AppLatest {
+    pub version: String,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+/// Ask the server for the newest release. `None` on any failure -- the
+/// endpoint is newer than this client, and an update notice is never worth
+/// an error.
+pub async fn latest_app_version(base_url: &str) -> Option<AppLatest> {
+    let url = build_url(base_url, "/api/app/latest");
+    client::api_get_unauth::<AppLatest>(&url).await.ok()
+}
+
+/// Whether release `latest` is newer than `current`, comparing dotted
+/// numbers (`0.6.0` < `0.6.1` < `0.10.0`); anything after a `-` or `+`
+/// is ignored, and a version that does not parse is never newer.
+pub fn is_newer_release(latest: &str, current: &str) -> bool {
+    fn parts(v: &str) -> Option<Vec<u64>> {
+        let core = v.trim().trim_start_matches('v').split(['-', '+']).next()?;
+        core.split('.').map(|p| p.parse().ok()).collect()
+    }
+    match (parts(latest), parts(current)) {
+        (Some(mut a), Some(mut b)) => {
+            let n = a.len().max(b.len());
+            a.resize(n, 0);
+            b.resize(n, 0);
+            a > b
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_versions_compare_as_numbers() {
+        assert!(is_newer_release("0.6.1", "0.6.0"));
+        assert!(is_newer_release("0.10.0", "0.9.9"));
+        assert!(is_newer_release("1.0", "0.9.9"));
+        assert!(!is_newer_release("0.6.0", "0.6.0"));
+        assert!(!is_newer_release("0.6.0-beta", "0.6.0"));
+        assert!(!is_newer_release("0.5.9", "0.6.0"));
+        assert!(!is_newer_release("soon", "0.6.0"));
+    }
     use crate::scene::transforms::RenderMode;
 
     /// The Save Online seatbelt: a simulation config is refused before

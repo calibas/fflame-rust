@@ -86,6 +86,13 @@ pub struct Animation {
     /// config with the tracks' last values in it.
     #[serde(skip)]
     pub script_rest: std::collections::HashMap<String, script::Rest>,
+
+    /// What this animation held that this build could not read -- a
+    /// generator of a newer kind, a field a newer app added -- set aside
+    /// at load and written back on save (`config::unread`; a track it
+    /// cannot read is kept in place instead, `TrackSource::Unknown`).
+    #[serde(skip)]
+    pub unread: crate::config::unread::Unread,
 }
 
 /// Motion blur (docs/archive/projects/motion-blur.md): a frame is the average of
@@ -469,6 +476,7 @@ impl Animation {
             loop_mode: LoopMode::Once,
             motion_blur: MotionBlur::default(),
             script_rest: Default::default(),
+            unread: Default::default(),
         }
     }
 
@@ -483,6 +491,7 @@ impl Animation {
             loop_mode: LoopMode::Once,
             motion_blur: MotionBlur::default(),
             script_rest: Default::default(),
+            unread: Default::default(),
         }
     }
 
@@ -567,9 +576,45 @@ impl Animation {
     /// Load from JSON file. A zoom track saved in base 2 comes back in
     /// base 10 (`zoom_tracks_to_log10`).
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        let mut anim: Self = serde_json::from_str(json)?;
+        Self::from_json_value(serde_json::from_str(json)?)
+    }
+
+    /// [`Self::from_json`] from a JSON value. What this build cannot read
+    /// is set aside, not fatal: a value or a list item (a generator of a
+    /// newer kind) is kept in `unread`, and so is a field it does not
+    /// know, for the save to write back. The embedded `base_config`
+    /// keeps its own (`FractalConfig::unread`); tracks keep theirs in
+    /// place.
+    pub fn from_json_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
+        let mut unread = crate::config::unread::Unread::default();
+        let mut anim: Self = crate::config::unread::deserialize_lenient(value.clone(), &mut unread.entries)?;
+        let mut known = serde_json::to_value(&anim)?;
+        let mut read = value;
+        for v in [&mut read, &mut known] {
+            if let Some(o) = v.as_object_mut() {
+                o.remove("base_config");
+                o.remove("tracks");
+            }
+        }
+        // A field set aside above is not also an unknown one.
+        let aside: Vec<String> = unread.entries.iter().map(|e| e.pointer.clone()).collect();
+        let mut fields = crate::config::unread::Unread::default();
+        fields.capture_unknown_fields(&read, &known);
+        unread.entries.extend(fields.entries.into_iter().filter(|e| !aside.iter().any(|a| e.pointer.starts_with(a.as_str()))));
+        if !unread.entries.is_empty() {
+            crate::config::unread::note_filled(&mut unread.entries, &serde_json::to_value(&anim)?);
+        }
+        anim.unread = unread;
         anim.zoom_tracks_to_log10();
         Ok(anim)
+    }
+
+    /// The animation as a file and the API write it, with what it could
+    /// not read put back.
+    pub fn to_json_value(&self) -> Result<serde_json::Value, serde_json::Error> {
+        let mut v = serde_json::to_value(self)?;
+        self.unread.restore(&mut v);
+        Ok(v)
     }
 
     /// **Escape-time zoom tracks in base 10**, what the user sees. Tracks
@@ -604,7 +649,7 @@ impl Animation {
 
     /// Save to JSON string
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
+        serde_json::to_string_pretty(&self.to_json_value()?)
     }
 
     /// Resolve every track's `(flame_target, target)` against the given

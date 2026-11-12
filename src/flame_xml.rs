@@ -562,6 +562,7 @@ fn parse_flame_element(
         density_effects: Vec::new(),
         color_effects: Vec::new(),
         custom_effects: Vec::new(),
+        unread: Default::default(),
     })
 }
 

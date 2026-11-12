@@ -209,7 +209,7 @@ field_class!(
 pub const SHARED: &[&str] = &["image_size", "deterministic_rng"];
 
 /// The engines' own blocks, the mode, and the stash.
-pub const STRUCTURE: &[&str] = &["flame", "render_mode", "escape", "sim", "engine_settings"];
+pub const STRUCTURE: &[&str] = &["flame", "render_mode", "escape", "sim", "engine_settings", "unread"];
 
 /// A config's engine-owned settings, as its JSON (a field at its default
 /// is absent, as in a file).

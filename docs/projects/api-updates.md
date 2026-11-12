@@ -114,10 +114,26 @@ ignored on read (no `deny_unknown_fields` in either repository).
    (rule 5); unknown fields survive a save.
 5. **A config says the lowest version that can read it**, apart from the
    version that wrote it: `version` (writer, migrations) and
-   `min_reader`. A default change bumps `version` but not `min_reader`; a
-   change an older reader would get wrong bumps both. A reader older than
-   `min_reader` refuses; newer than `min_reader` but older than `version`
-   loads, warns, and keeps what it does not understand.
+   `min_reader`. A reader older than `min_reader` refuses; one at least
+   `min_reader` but older than `version` loads, warns, and keeps what it
+   does not understand (a value it cannot read is set aside, its field
+   defaulted, and put back on save unless the user changed that field;
+   fields it does not know are kept).
+   - **A default change** bumps `version`, and from then on the writer
+     always writes that field out, even at its default: configs omit
+     default fields, and an older reader would fill an omitted one with
+     its own old default. `min_reader` stays.
+   - **A change an older reader would get wrong** (a renamed key, a new
+     meaning) bumps both.
+   - **An older app re-saving a newer config** stamps its own `version`,
+     because its omitted fields follow its own defaults, and keeps the
+     config's `min_reader`. The newer app's migration steps then restore
+     those defaults. So a migration step must never overwrite a field
+     that is already present.
+   - **On the server**, a reader that knows `min_reader` (0.6 on) sees a
+     config when `min_reader <= reader`; an older one (0.5, and anything
+     before `min_reader`) only compares `version`, so it sees a config
+     when `version <= reader`.
 6. **0.5 cannot be fixed** -- its gate is compiled in. It sends no
    `reader`, so it gets the original vocabulary (rule 2): lists without
    what it cannot open, nothing it cannot parse.

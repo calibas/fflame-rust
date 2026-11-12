@@ -647,8 +647,10 @@ pub fn animation_to_create_request(
         flame_id: flame_id.map(|s| s.to_string()),
         duration: Some(animation.duration),
         loop_mode: Some(animation.loop_mode.into()),
-        tracks: serde_json::to_value(&animation.tracks).ok(),
-        generators: serde_json::to_value(&animation.generators).ok(),
+        // Through the animation's own writer, so what it set aside at load
+        // (a generator of a newer kind) goes back.
+        tracks: animation.to_json_value().ok().and_then(|v| v.get("tracks").cloned()),
+        generators: animation.to_json_value().ok().and_then(|v| v.get("generators").cloned()),
         // Stamp the config version (v3) via the canonical serializer so the
         // embedded base_config round-trips through the migration on load.
         base_config: animation.base_config.as_ref().and_then(|c| c.to_json_value().ok()),
@@ -665,9 +667,21 @@ pub fn animation_response_to_animation(resp: &AnimationResponse) -> crate::anima
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    let generators = resp.generators.as_ref()
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+    // A generator this build cannot read is set aside, not the list
+    // (`config::unread`), and goes back on save.
+    let mut unread = crate::config::unread::Unread::default();
+    let generators = match resp.generators.as_ref() {
+        Some(v) => {
+            let mut entries = Vec::new();
+            let list = crate::config::unread::deserialize_lenient(v.clone(), &mut entries).unwrap_or_default();
+            unread.entries = entries
+                .into_iter()
+                .map(|e| crate::config::unread::Entry { pointer: format!("/generators{}", e.pointer), ..e })
+                .collect();
+            list
+        }
+        None => Vec::new(),
+    };
 
     // Embedded base_config carries a config version (v3+) when saved by a
     // current client; legacy animations have no version ⇒ assume v2 (the
@@ -686,6 +700,7 @@ pub fn animation_response_to_animation(resp: &AnimationResponse) -> crate::anima
         // The API does not store it (docs/archive/projects/motion-blur.md, D6).
         motion_blur: Default::default(),
         script_rest: Default::default(),
+        unread,
     }
 }
 

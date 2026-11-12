@@ -1629,6 +1629,7 @@ browser:
 
 # API (cloud save/update)
 api:
+  update_available: "Version %{version} is available."
   save_dialog_title: "Save Online"
   save_dialog_name_label: "Flame Name:"
   save_dialog_thumbnail: "Upload thumbnail"

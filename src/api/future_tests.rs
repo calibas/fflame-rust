@@ -122,3 +122,103 @@ fn a_newer_track_is_kept_and_the_rest_play() {
     let values = ctl.evaluate_at_time(0.5, &base);
     assert!(values.iter().any(|(_, path, v)| path == "Zoom" && v.as_f64().is_some_and(|z| (z - 2.0).abs() < 1e-9)), "{values:?}");
 }
+
+/// A config from a newer app that this build may read (`min_reader` 7):
+/// it loads; a tone map mode it does not know takes its default and goes
+/// back on save; fields it does not know -- at the top, in a section, in
+/// a transform -- are written back; and the save keeps the config's
+/// `min_reader`.
+#[test]
+fn a_newer_config_loads_and_keeps_what_it_cannot_read() {
+    use crate::config::FractalConfig;
+    let mut base = FractalConfig::default();
+    base.flame.transforms.push(Default::default());
+    let mut v = base.to_json_value().unwrap();
+    v["version"] = json!(99);
+    v["min_reader"] = json!(7);
+    v["tonemap_mode"] = json!("hologram");
+    v["exposure"] = json!(2.5);
+    v["sparkle"] = json!({"on": true, "rate": 0.25});
+    v["escape"] = json!({"glow_ring": 3});
+    v["flame"]["transforms"][0]["shimmer"] = json!(0.5);
+
+    let config = FractalConfig::from_json_value(v).expect("a newer config this build may read loads");
+    assert_eq!(config.exposure, 2.5, "what it can read, it reads");
+    assert_eq!(config.tonemap_mode, FractalConfig::default().tonemap_mode, "an unknown value takes its default");
+    assert_eq!(config.unread.newer_version, Some(99));
+
+    let out = config.to_json_value().unwrap();
+    assert_eq!(out["tonemap_mode"], json!("hologram"), "and goes back on save");
+    assert_eq!(out["sparkle"], json!({"on": true, "rate": 0.25}));
+    assert_eq!(out["escape"]["glow_ring"], json!(3));
+    assert_eq!(out["flame"]["transforms"][0]["shimmer"], json!(0.5));
+    assert_eq!(out["min_reader"], json!(7));
+    // Stamped with this build's version: its omitted fields follow its
+    // own defaults, which the newer app's migrations then restore.
+    assert_eq!(out["version"], json!(crate::config::fractal_config::CURRENT_CONFIG_VERSION));
+
+    // An edit to the field wins over the value set aside.
+    let mut edited = config.clone();
+    edited.tonemap_mode = crate::scene::tonemap::ToneMapMode::Logarithmic;
+    if edited.tonemap_mode == FractalConfig::default().tonemap_mode {
+        edited.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+    }
+    let out = edited.to_json_value().unwrap();
+    assert_ne!(out["tonemap_mode"], json!("hologram"));
+}
+
+/// The gate: a config needing a newer reader (`min_reader` above this
+/// build) is refused, and so is a newer one from before `min_reader`
+/// existed (its version is its reader).
+#[test]
+fn a_config_that_needs_a_newer_reader_is_refused() {
+    use crate::config::FractalConfig;
+    let mut v = FractalConfig::default().to_json_value().unwrap();
+    v["version"] = json!(99);
+    v["min_reader"] = json!(99);
+    let e = FractalConfig::from_json_value(v.clone()).unwrap_err().to_string();
+    assert!(e.contains("newer than supported"), "{e}");
+    v.as_object_mut().unwrap().remove("min_reader");
+    assert!(FractalConfig::from_json_value(v).is_err(), "no min_reader: the version is the reader");
+}
+
+/// A config this build wrote has nothing set aside, carries `min_reader`,
+/// and round-trips unchanged.
+#[test]
+fn a_current_config_has_nothing_unread_and_round_trips() {
+    use crate::config::FractalConfig;
+    let v = FractalConfig::default().to_json_value().unwrap();
+    assert_eq!(v["min_reader"], json!(crate::config::fractal_config::MIN_READER_VERSION));
+    let back = FractalConfig::from_json_value(v.clone()).unwrap();
+    assert!(back.unread.is_empty() && back.unread.newer_version.is_none());
+    assert_eq!(back.to_json_value().unwrap(), v);
+}
+
+/// An animation from a newer app: a generator of a newer waveform is set
+/// aside (the others kept and played), a field it does not know is kept,
+/// and a save puts both back where they were. Before, the one generator
+/// emptied the list, and a save erased them.
+#[test]
+fn a_newer_animation_keeps_what_it_cannot_read() {
+    use crate::animation::Animation;
+    let anim = json!({
+        "name": "a", "duration": 2.0, "loop_mode": "Loop", "tracks": [],
+        "generators": [
+            {"name": "slow", "waveform": "Sine", "frequency": 0.5},
+            {"name": "odd", "waveform": "Fractal", "frequency": 3.0, "octaves": 4},
+            {"name": "fast", "waveform": "Square", "frequency": 4.0},
+        ],
+        "camera_shake": {"amount": 0.1},
+    });
+    let loaded = Animation::from_json_value(anim.clone()).expect("loads");
+    let names: Vec<&str> = loaded.generators.iter().map(|g| g.name.as_str()).collect();
+    assert_eq!(names, ["slow", "fast"]);
+    let out = loaded.to_json_value().unwrap();
+    let names: Vec<&str> = out["generators"].as_array().unwrap().iter().map(|g| g["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["slow", "odd", "fast"], "the set-aside generator goes back at its index");
+    assert_eq!(out["generators"][1], anim["generators"][1], "as it was read");
+    assert_eq!(out["camera_shake"], json!({"amount": 0.1}));
+    // A file's own round trip.
+    let again = Animation::from_json(&loaded.to_json().unwrap()).unwrap();
+    assert_eq!(again.to_json_value().unwrap()["generators"], out["generators"]);
+}
