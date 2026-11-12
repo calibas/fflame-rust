@@ -212,9 +212,11 @@ built-in script import regenerated; animations store `motion_blur` (105)
 and tracks get a 1 MiB cap; the client uploads simulations and sends motion
 blur; `openapi.json` refreshed from a local server. Variation names were
 already unvalidated (Rhai keys pass). Every real config measured fits the
-limits (largest blob ~11 KB of 256 KB). **Still to do:** the catalog
-facets below, and the API integration test (decision 7). The abandoned
-branch is gone (its corpora committed as 79eb91f).
+limits (largest blob ~11 KB of 256 KB). The abandoned branch is gone
+(its corpora committed as 79eb91f). The API integration test (decision 7)
+and **the catalog facets** ([api-catalog-spec.md](api-catalog-spec.md))
+are built too: client branch `catalog`, ffapi branch `catalog` (migration
+106), stacked.
 
 - **The catalog's facets** ([api-catalog-spec.md](api-catalog-spec.md)):
   each saved config's engine, scene (2D, 3D, solid, terrain), versions and

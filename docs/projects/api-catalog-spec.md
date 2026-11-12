@@ -1,6 +1,8 @@
 # The online catalog: what a saved config is, as the database records it
 
-Status: **spec, 2026-11-11, not built.** Part of
+Status: **built 2026-11-11**: client branch `catalog` (`src/catalog.rs`,
+`docs/generated/engine-catalog.json`), ffapi branch `catalog` (migration
+106, `src/catalog.rs`, `catalog_query`, `routes/types`). Part of
 [api-updates.md](api-updates.md) (step 3, and step 4's scripts). The
 server is `c:\projects\ffapi` (Postgres; migration 099).
 
@@ -115,21 +117,33 @@ The `Summary` is a small JSON document: engine, scene, versions,
 components (role, origin, key, version, display name, primary), and its
 own format version.
 
-Where it runs is decision 1:
-- **S (recommended): the server runs it.** ffapi depends on the engine
-  crate built without `web-app` and `terrain`, as the gallery modules do
-  (or a smaller crate split out of it). It summarises every config it is
-  given, so the facts cannot drift from the stored config. A third-party
-  client sends only the config. A new release re-summarises stored rows
-  with one tool run (`summary_version` says which rows are stale).
-  - Cost: the server takes a dependency on the engine and updates it each
-    release. Until it does, a newer client's new built-in names are still
-    strings and are stored as such, but a newer twin's source groups as
-    `source:` until the server catches up.
-- **C: the client sends the summary**, as it sends `variation_names` today,
-  and the server checks its shape. This is simpler on the server, but a
-  wrong or old client writes wrong facets, and stored rows are only as
-  good as whoever saved them.
+Where it runs is decision 1: **the server** ("we shouldn't trust the
+client"). **How it gets the engine's knowledge: synced like the contract**
+(the user's call, 2026-11-11, over a dependency on the engine crate or a
+shared crate):
+
+- The client generates `docs/generated/engine-catalog.json`
+  (`UPDATE_CATALOG=1 cargo test --lib catalog_is_current`). It holds the
+  **tables** only the engine knows (formula kinds, `needs_flame`, the
+  source-kind rules, display names, and every twin's registered name with
+  its built-in, append-only), and **examples**: every preset and made-up
+  cases (twins, an edit, a script, solids, terrains, a lens, layers,
+  effects), each with the summary the client computes.
+- `summarize` (`src/catalog.rs` in both repositories) reads only the
+  config's JSON and those tables. The server's is a port, and its
+  `tests/catalog_conformance.rs` must reproduce every example, so the two
+  stay one program. A change to the rules bumps `summary_version`, which
+  that test also pins.
+- A new built-in, model or twin changes only the tables: copy the file,
+  and the server groups it with no code change.
+- Every write summarises the stored flame (its blob with its transforms put
+  back) in its transaction, and at startup the server summarises every row
+  whose `summary_version` is missing or older (`summarize_stale`).
+- A twin is recognised by the name it registers under, not by hashing its
+  source, and a script by the `u<uuid>_<version>` in its name. The server
+  hashes and parses nothing. A custom formula's kind (formula, field or
+  solid) comes from the functions its source defines (`source_kinds`,
+  `lang::rhai::kind_of`'s order).
 
 ---
 
@@ -185,8 +199,9 @@ CREATE UNIQUE INDEX uq_flame_components_primary ON flame_components (flame_id) W
   are done today.
 - **`render_mode` stays**, for the old clients' filters and the legacy
   shaping (api-updates.md step 2). It gains `simulation` (decision 3 of
-  that plan). `has_3d` becomes `dimension = 3`, so a 3D escape solid or a
-  terrain now counts. Old clients only ever ask for flames.
+  that plan). `has_3d` keeps its meaning (`render_mode = '3d'`), since
+  changing a field's meaning breaks additive rule 1; `dimension` is the new
+  axis.
 - **`transforms.variation_names` stays** for the existing `?variation=`
   search. Variations are also components, so one type filter covers flames
   and escape lenses alike.

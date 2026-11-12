@@ -178,3 +178,27 @@ fn catalogs_and_the_update_check() {
     let latest = block(latest_app_version(API_BASE_URL)).expect("the server says its latest release");
     assert!(is_newer_release(&latest.version, env!("CARGO_PKG_VERSION")), "{latest:?}");
 }
+
+/// The catalog, end to end: a config the app saves with the Mandelbrot
+/// twin unedited is found by the server under Mandelbrot, with its facets.
+#[test]
+#[ignore = "needs a local ffapi: python scripts/api_integration.py"]
+fn the_server_catalogs_what_the_app_saves() {
+    let Some(base) = server() else { return };
+    let api = signed_in();
+    let mut config = FractalConfig::default();
+    config.render_mode = RenderMode::Escape;
+    let src = crate::escape::twins::custom_source("mandelbrot").unwrap();
+    config.escape.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
+    config.escape.custom_formula = Some(src);
+    config.escape.terrain.enabled = true;
+    let id = block(api.save_flame(&config, Some("it twin"), Some(ApiVisibility::Private), None)).unwrap();
+    let token = api.auth.get_token().unwrap().to_string();
+    let list: serde_json::Value = block(api_get(&format!("{base}/api/flames?per_page=100&reader=7&type=mandelbrot&role=primary"), &token)).unwrap();
+    let item = list.as_array().unwrap().iter().find(|f| f["id"] == id.as_str()).unwrap_or_else(|| panic!("not found by type: {list}"));
+    assert_eq!((item["engine"].as_str(), item["scene"].as_str(), item["dimension"].as_i64()), (Some("escape"), Some("terrain"), Some(3)));
+    assert_eq!(item["primary_type"]["display_name"], "Mandelbrot");
+    // The server's summary is the app's.
+    let app = crate::catalog::summary(&config);
+    assert_eq!((app.engine.as_str(), app.scene.as_str()), ("escape", "terrain"));
+}
