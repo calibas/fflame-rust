@@ -113,6 +113,7 @@ env var to regenerate (which is what `--fix` runs):
 | gate | committed file | regenerate with |
 |---|---|---|
 | `contract_is_current` | `docs/generated/engine-contract.json` | `UPDATE_CONTRACT=1 cargo test --lib contract_is_current` |
+| `catalog_is_current` | `docs/generated/engine-catalog.json` | `UPDATE_CATALOG=1 cargo test --lib catalog_is_current` |
 | `canonical_shader_dumps` | `tests/shader_dumps/*.wgsl` | `UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps` |
 
 A third test in the unit-test gate behaves the same way without a
@@ -132,11 +133,12 @@ The API is a separate repository. What it consumes from here:
 | artifact | produced by | when it changes |
 |---|---|---|
 | `docs/generated/engine-contract.json` | `UPDATE_CONTRACT=1 cargo test --lib contract_is_current` | vocabularies, engine limits, reserved script stems |
+| `docs/generated/engine-catalog.json` | `UPDATE_CATALOG=1 cargo test --lib catalog_is_current` | a built-in formula, model, colouring, variation or effect, a twin, a preset, or the summary's rules (`summary_version`): the API's `catalog_conformance` fails until its copy (and, for a rules change, its `catalog::summarize`) follows |
 | the variation corpus | `cargo run --release --bin export_variations_json` | any variation added or edited |
 | the script corpus | `cargo run --release --bin export_scripts_json` | any built-in script added or edited |
 | the effect corpus | `cargo run --release --bin export_effects_json` | any effect added or edited |
 
-Only the contract is committed. The three corpus binaries write to
+Only the contract and the catalog are committed. The three corpus binaries write to
 `output/variations-corpus.json`, `output/scripts-corpus.json` and
 `output/effects-corpus.json` by default (gitignored; a path given as
 the first argument overrides it), and no gate checks them — they are
