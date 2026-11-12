@@ -1,6 +1,6 @@
 # API updates without breaking older apps
 
-Status: **planned 2026-11-11, not started.** Branch to come. Sources: a
+Status: **step 1 built 2026-11-11** (branch `api-client-hardening`); steps 2-5 to come. Sources: a
 survey of the client (`src/api/`), the config, and the server repository
 (`c:\projects\ffapi`, axum + Postgres, latest migration 099), checked
 against the code where it mattered. This plan absorbs the API half of
@@ -146,6 +146,11 @@ ignored on read (no `deny_unknown_fields` in either repository).
 ## 3. The changes, in order
 
 ### Step 1 -- harden the client (app 0.6, no server change)
+
+**Built 2026-11-11 on branch `api-client-hardening`** (PR.md there): every
+item below. The update check asks `GET /api/app/latest`, which the server
+does not have yet (step 2). The "save refuses to PUT what it dropped"
+guard is not needed: nothing is dropped any more.
 
 Ships first, so that everything after can be added safely.
 

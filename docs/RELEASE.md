@@ -384,13 +384,16 @@ User data survives on both desktop platforms because it lives outside
 the app: `%APPDATA%` / `~/Library/Application Support/…` keyed by bundle
 identity (settings, downloaded plugins, scripts, effects). Replacing the
 app never touches it. `.fflame` files migrate forward on load
-(`CURRENT_CONFIG_VERSION`), and new fields are skip-if-default so an
-older build reading a newer file degrades rather than breaks.
+(`CURRENT_CONFIG_VERSION`). From 0.6 on, an older build reads a newer
+file whose `min_reader` it meets, keeping what it cannot read for the
+save (docs/main/CONFIG.md, *Reading a newer config*). 0.5 refuses every
+config newer than v3: its gate is compiled in.
 
-**Nothing tells a user an update exists.** No version check, no
-auto-update. The cheapest fix by far is an in-app version check —
-`APP_VERSION` plus one HTTP GET plus a link — and it is the thing to
-build before Sparkle or anything else.
+**The update check** (0.6 on): with online features on, the app asks
+`GET /api/app/latest` once at startup and shows a notice when it is
+behind (`poll_update_check`). The server endpoint is still to be built
+(docs/projects/api-updates.md, step 2); until then the check fails
+silently. No auto-update.
 
 ---
 

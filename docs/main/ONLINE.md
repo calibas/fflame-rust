@@ -85,6 +85,21 @@ repositories. The client implements a subset of it.
 | timeouts | 10 s to connect, 30 s overall | 30 s, 60 s for an upload, enforced with an `AbortController` |
 | run on | a spawned thread under `pollster::block_on` | `wasm_bindgen_futures::spawn_local` |
 
+**Every request says what it reads**: `build_url` appends
+`reader=<CURRENT_CONFIG_VERSION>`, so the server can answer in that
+version's vocabulary (lists without what this build cannot open, no
+value it has never seen). A request without it gets the original
+vocabulary, 0.5's ([api-updates.md](../projects/api-updates.md), rule 2;
+the server side is step 2). The desktop sends `User-Agent:
+FractalArtEditor/<version>`, for the server's logs only: what a client
+is sent never depends on it.
+
+**What it cannot read, it keeps.** An enum value this build does not
+know (a render mode, a phase, a loop mode, a parameter type) reads as
+`Unknown` and is written back as read (`wire_enum!`); a list response is
+read item by item, skipping only what fails (`Lenient`). See
+`api::future_tests`.
+
 Results come back through an `Arc<Mutex<…>>` slot that the frame loop
 polls, so the UI never waits on the network. Status codes map to
 `resources::FetchError`: 401 `Unauthorized`, 403 `Forbidden`, 404
