@@ -53,6 +53,81 @@ impl Kind {
     }
 }
 
+impl Kind {
+    /// What the server's scripts resource calls it (ffapi's `script_kind`,
+    /// the app's spellings: docs/projects/rhai-scripts-online.md, decision
+    /// 1). `None` for what is not published: a UF or Fractint file, one
+    /// whose kind could not be read.
+    pub fn wire(self) -> Option<&'static str> {
+        Some(match self {
+            Kind::Generator => "generator",
+            Kind::Modifier => "modifier",
+            Kind::ScriptLibrary => "library",
+            Kind::Formula => "formula",
+            Kind::Coloring => "coloring",
+            Kind::Variation => "variation",
+            Kind::Solid => "solid",
+            Kind::Effect => "effect",
+            Kind::SimColoring => "sim_coloring",
+            Kind::SimModel => "sim_model",
+            Kind::Field => "field",
+            Kind::FieldColoring => "field_coloring",
+            Kind::Track => "track",
+            Kind::UfFormulas | Kind::UfColorings | Kind::Fractint | Kind::Unknown => return None,
+        })
+    }
+
+    /// The kind the server names `wire`; `None` for one this build does
+    /// not know (a newer server's).
+    pub fn from_wire(wire: &str) -> Option<Kind> {
+        ALL_PUBLISHED.iter().copied().find(|k| k.wire() == Some(wire))
+    }
+
+    /// A kind the formula library holds: one Rhai entry, published under
+    /// its own `INFO.id`. The rest are the CPU scripts.
+    pub fn is_entry(self) -> bool {
+        self.can_be_plugin()
+    }
+}
+
+/// Every kind the scripts resource stores, in the order a kind filter
+/// offers them.
+pub const ALL_PUBLISHED: &[Kind] = &[
+    Kind::Generator,
+    Kind::Modifier,
+    Kind::ScriptLibrary,
+    Kind::Formula,
+    Kind::Coloring,
+    Kind::Solid,
+    Kind::Field,
+    Kind::FieldColoring,
+    Kind::Variation,
+    Kind::Effect,
+    Kind::SimModel,
+    Kind::SimColoring,
+    Kind::Track,
+];
+
+/// What a Rhai file of the formula store holds, by its functions
+/// ([`crate::lang::rhai::kind_of`]), a track by its shape.
+pub fn rhai_kind(source: &str) -> Kind {
+    use crate::lang::{rhai, EntryKind};
+    match rhai::kind_of(source) {
+        Some(EntryKind::Formula) => Kind::Formula,
+        Some(EntryKind::Coloring) => Kind::Coloring,
+        Some(EntryKind::Transform) => Kind::Variation,
+        Some(EntryKind::Solid) => Kind::Solid,
+        Some(EntryKind::Effect) => Kind::Effect,
+        Some(EntryKind::SimColoring) => Kind::SimColoring,
+        Some(EntryKind::SimModel) => Kind::SimModel,
+        Some(EntryKind::Field) => Kind::Field,
+        Some(EntryKind::FieldColoring) => Kind::FieldColoring,
+        // A track is the CPU world's: no GPU kind reads it.
+        None if crate::animation::script::looks_like_track(source) => Kind::Track,
+        None => Kind::Unknown,
+    }
+}
+
 /// Where an entry came from (design rule 7's namespaces, D6): the one
 /// origin model every kind shares.
 pub use crate::provenance::Origin;
@@ -190,21 +265,8 @@ fn formula_entry(file: &str, source: &str, origin: Origin, link: Link) -> Entry 
         };
         return e;
     }
-    use crate::lang::{rhai, EntryKind};
-    e.kind = match rhai::kind_of(source) {
-        Some(EntryKind::Formula) => Kind::Formula,
-        Some(EntryKind::Coloring) => Kind::Coloring,
-        Some(EntryKind::Transform) => Kind::Variation,
-        Some(EntryKind::Solid) => Kind::Solid,
-        Some(EntryKind::Effect) => Kind::Effect,
-        Some(EntryKind::SimColoring) => Kind::SimColoring,
-        Some(EntryKind::SimModel) => Kind::SimModel,
-        Some(EntryKind::Field) => Kind::Field,
-        Some(EntryKind::FieldColoring) => Kind::FieldColoring,
-        // A track is the CPU world's: no GPU kind reads it.
-        None if crate::animation::script::looks_like_track(source) => Kind::Track,
-        None => Kind::Unknown,
-    };
+    use crate::lang::rhai;
+    e.kind = rhai_kind(source);
     if let Some(labels) = rhai::source_labels(source) {
         let title = labels.title.resolve();
         if !title.is_empty() {

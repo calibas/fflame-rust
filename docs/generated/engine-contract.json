@@ -211,7 +211,7 @@
     "wire_path": "/render_mode"
   },
   "scripts": {
-    "$comment": "Reserved stems, and the two vocabularies a script payload carries. `builtin_scripts` is the list the API rejects at CREATE time, regardless of visibility: a user script taking a shipped stem is refused by `script::library::merge_sources` on load, so storing one produces a script nobody — including its author — can ever run. Generated from the embedded starters, because a transcribed copy is exactly the kind of implicit cross-repo dependency this file exists to eliminate.",
+    "$comment": "Reserved stems, and the two vocabularies a script payload carries. `builtin_scripts` is the list the API rejects at CREATE time, regardless of visibility: a user script taking a shipped stem is refused by `script::library::merge_sources` on load, so storing one produces a script nobody — including its author — can ever run. Generated from the embedded starters, because a transcribed copy is exactly the kind of implicit cross-repo dependency this file exists to eliminate. `kinds`: the CPU scripts (generator, modifier, library), then the formula library's entries, each published under its own `INFO.id` (docs/projects/rhai-scripts-online.md).",
     "builtin_scripts": [
       {
         "kind": "generator",
@@ -296,7 +296,17 @@
     "kinds": [
       "generator",
       "modifier",
-      "library"
+      "library",
+      "formula",
+      "coloring",
+      "solid",
+      "field",
+      "field_coloring",
+      "variation",
+      "effect",
+      "sim_model",
+      "sim_coloring",
+      "track"
     ]
   },
   "shape": "23a163e0bf37ffe9",

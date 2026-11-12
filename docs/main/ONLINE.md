@@ -130,7 +130,7 @@ settings file that says so reads as a guest.)
 | Palette Library → **Cloud Palettes** (your palette library) | the effect catalog, fetching a missing effect, updating downloaded effects |
 | the menu bar's connection and account indicator | the Scripts panel's **Public scripts**: searching and opening one |
 | the periodic health check | |
-| the Scripts panel's publishing and **Published by you** | |
+| the Scripts panel's publishing and **Published by you**; the Formula Editor's **Online** section | |
 
 A guest's request goes unauthenticated (`ApiState::public_get`); signed
 in, the same request carries the token, so the server can also answer
@@ -319,13 +319,63 @@ See [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md).
 
 ## The online script library
 
-The Scripts panel raises a `ScriptCloudRequest`; the app performs it in
-the background ([script_cloud.rs](../../src/app/script_cloud.rs)) and
-folds the answer into `ScriptCloudState`. All of it needs sign-in, and
-one request runs at a time.
+One scripts resource holds every Rhai kind
+([rhai-scripts-online.md](../projects/rhai-scripts-online.md)): the CPU
+scripts (`generator`, `modifier`, `library`) and the formula library's
+entries (`formula`, `coloring`, `solid`, `field`, `field_coloring`,
+`variation`, `effect`, `sim_model`, `sim_coloring`, `track`; the app's
+spellings, `storage::library::Kind::wire`). The server shows the entry
+kinds only to reader 7 or more.
+
+The Scripts panel and the Formula Editor raise a `ScriptCloudRequest`;
+the app performs it in the background
+([script_cloud.rs](../../src/app/script_cloud.rs)) and folds the answer
+into `ScriptCloudState`, which both panels draw. A request names its
+local file as a `Local`: `Script(stem)` in the script store, or
+`Entry(file)` in the formula store. Searching and opening a public
+script need no account; the rest needs sign-in. One request runs at a
+time.
 
 | request | does |
 | --- | --- |
+| `ListMine(kind)` | your scripts, of one kind or every kind (`GET /api/scripts?kind=`, first 100) |
+| `Search(q, kind)` | public search, of one kind or every kind (`GET /api/search/scripts`, query percent-encoded, first 50) |
+| `Publish` | create; records the returned id and version against the local file |
+| `Update` | update with the version last read; a 409 is a **conflict** the user resolves (`ScriptConflict`): the Scripts panel for a script, the Formula Editor for an entry |
+| `Adopt` | fetch someone's script and save it locally under a free name, marked as somebody else's: a CPU script in the script store (it runs under the restrictions downloaded scripts get), an entry in the formula library. A kind this build does not know is refused |
+| `Refetch` | replace a local file's content with the server's in place, keeping its provenance and plug-in flag |
+| `Unpublish` | delete it from the server; the local copy stays (and stays a plug-in) |
+
+A CPU script's payload (`script_to_create_request`) is derived from the
+source by the script's own declaration pass — display name, kind,
+flags, and the header comment as the description — so a script that
+does not compile cannot be published. It can still be saved locally.
+
+**An entry is published under its own `INFO.id`** (`api::entries`), so
+the catalog's `script:<uuid>` type and the stored script are one id
+(the server links them: `script_id` on a config's components and on
+`/api/types`, `used_by` on the script). The first to publish an id owns
+it: a create under a taken id is a 409, shown as "its id is published
+already". The Formula Editor's **Online** section publishes the entry it
+has open, once it is saved and the user's own:
+
+- one without an id of its own (none, or not a UUID) is given one first,
+  written into the file;
+- refused before sending: a UF or Fractint file (many entries, no id), a
+  source that does not compile, and a built-in's shipped source unedited
+  (`entries::shipped_of`: any twin or example, its id and line ends
+  aside) — it is the built-in;
+- the payload: the kind (`library::rhai_kind`), the id, the title,
+  description and author from `INFO` and the header (the plain or English
+  text of each label), the source.
+
+An adopted entry keeps its id: the copy is that script, and the editor
+refuses to republish it. Saving an edit of it gives it an id of its own
+(`entries::with_new_id`) and drops its cloud link and its mark as
+somebody else's: it is then a script of the user's own. A config keeps
+carrying the source of every entry it uses, published or not.
+
+--- | --- |
 | `ListMine` | your scripts (`GET /api/scripts`, first 100) |
 | `Search(q)` | public search (`GET /api/search/scripts`, query percent-encoded, first 50) |
 | `Publish` | create; records the returned id and version against the local script |
@@ -472,7 +522,7 @@ repository's conformance tests.
 | `helper_libraries` | the shader libraries spliced in by name, which a server-hosted variation cannot reach |
 | `payload_features` | `plot_emits`, a feature with a payload |
 | `shipped_without_shader_3d` | variations with no 3D body |
-| `scripts` | the reserved built-in script stems, script kinds, known flags |
+| `scripts` | the reserved built-in script stems, script kinds (the CPU ones, then the formula library's entries), known flags |
 | `shipped_variations`, `shape` | the count, and the shape fingerprint |
 
 **Regenerate** deliberately and read the diff:

@@ -247,6 +247,13 @@ are built too: client branch `catalog`, ffapi branch `catalog` (migration
 
 ### Step 4 -- P6: one scripts resource for every Rhai kind
 
+**Built 2026-11-12** to its own plan,
+[rhai-scripts-online.md](rhai-scripts-online.md) (ffapi branch
+`rhai-scripts`, migration 108; client branch `rhai-scripts-online`). What
+changed from the sketch below: the kinds are the app's spellings
+(`coloring`, not `colouring`); configs keep carrying their sources; no
+version history; UF and Fractint files are not published.
+
 - `script_kind` gains `variation`, `effect`, `formula`, `colouring`,
   `solid`, `field`, `field_colouring`, `sim_model`, `sim_colouring`,
   `track` -- every new value legacy-filtered (step 2), so 0.5 and 0.6 see

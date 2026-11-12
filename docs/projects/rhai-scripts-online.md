@@ -1,6 +1,9 @@
 # Rhai scripts online: one scripts resource for every kind
 
-**Status 2026-11-12:** planned; all six decisions in §5 taken as recommended by the user the same day (the first publisher owns an id; the Formula Editor and one online library; configs keep carrying sources; the app's spellings; the catalog link; UF/Fractint left out). This is the API plan's
+**Status 2026-11-12:** **built** on ffapi branch `rhai-scripts` (stacked
+on `flame-catalog-fields`; migration 108) and client branch
+`rhai-scripts-online`, not merged. All six decisions in §5 taken as recommended by the user the same day (the first publisher owns an id; the Formula Editor and one online library; configs keep carrying sources; the app's spellings; the catalog link; UF/Fractint left out). Where the build settled
+details the plan left open, §6 says. This is the API plan's
 step 4 ([api-updates.md](api-updates.md)), taken up by the user on
 2026-11-12 after first deferring it. The original intent is P6 of
 [rhai-plugins.md](../archive/projects/rhai-plugins.md): "a variation,
@@ -163,3 +166,41 @@ possible:
 6. **Configs keep carrying sources.** Recommended: yes. The alternative,
    a config naming `{id, version}` and fetching the source, makes configs
    depend on the network and unreadable by every app before it.
+
+---
+
+## 6. As built
+
+- **Server:** `ScriptKind::is_gpu()` marks the entry kinds. A GPU kind
+  must send `id`, the id must appear in the source, and a CPU kind sends
+  none (`script_id_required`, `script_id_not_in_source`,
+  `script_id_not_for_kind`); a taken id is 409 `script_id_taken`. An
+  update cannot move a script between the CPU and GPU classes. Fork and
+  the museum's publish refuse GPU kinds. Tests: ffapi
+  `tests/rhai_scripts.rs`.
+- **The app's one request layer:** `app::script_cloud::Local` names a
+  request's file, `Script(stem)` or `Entry(file)`; the CPU and entry paths
+  share every request and result. The payload of an entry is
+  `api::entries::create_request`.
+- **Unedited built-ins** are recognised by text, not by id: a twin may
+  carry a UUID once Use or Edit as Rhai gave it one. `entries::shipped_of`
+  compares against every twin and example with the id and line ends
+  aside.
+- **An id of its own** is minted at Publish when the entry has none (or a
+  non-UUID one), and written into the file, as making a plug-in does.
+- **An adopted entry, edited and saved,** gets a new id
+  (`entries::with_new_id`) and loses its cloud link and its mark as
+  somebody else's. Without that it could never be published (the editor
+  refuses to republish somebody else's entry), and its id would claim to
+  be the original.
+- **The kind filter** is the Scripts panel's online section, for listing
+  your own and for search. The Formula Editor's Online section shows the
+  shared status line.
+- **The contract's** `scripts.kinds` lists every kind, the CPU ones first
+  (`library::ALL_PUBLISHED`). Its shape does not move.
+- **Integration case:** `api::integration_tests::a_rhai_formula_is_published_under_its_id_and_adopted_by_another_account`.
+- **Found by it:** the server's script update required `visibility`
+  (since migration 83, 2026-08-01), and the app's Update online has
+  always sent none, so every update of a published script was a 422. The
+  server now takes it as optional, absent keeping the stored one. That
+  repairs the apps already shipped, so the client is unchanged.
