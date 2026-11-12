@@ -1608,6 +1608,13 @@ impl FractalConfig {
         // as it was read: after the f32 normalising, so its numbers keep
         // their writer's digits.
         self.unread.restore(&mut out);
+        // And the file says it still carries a newer app's fields: it is
+        // stamped with this build's version, so without this a later load
+        // by this build would read those fields as retired ones and drop
+        // them (see `from_json_value_with_default_version`).
+        if let (Some(newer), Some(obj)) = (self.unread.newer_version, out.as_object_mut()) {
+            obj.insert("newer_version".to_string(), serde_json::json!(newer));
+        }
         Ok(out)
     }
 
@@ -1986,7 +1993,11 @@ impl FractalConfig {
                 ),
             )));
         }
-        let newer = version > CURRENT_CONFIG_VERSION;
+        // A newer app wrote it, or an older one re-saved what a newer one
+        // wrote and said so (`newer_version`, see `to_json_value`).
+        let carried = value.get("newer_version").and_then(|v| v.as_u64()).map_or(0, |v| v as u32);
+        let newer_writer = version.max(carried);
+        let newer = newer_writer > CURRENT_CONFIG_VERSION;
         if newer {
             log::warn!(
                 "This config was written by a newer version (config version {version}; this build reads {CURRENT_CONFIG_VERSION}). \
@@ -2005,6 +2016,7 @@ impl FractalConfig {
             if let Some(o) = v.as_object_mut() {
                 o.remove("version");
                 o.remove("min_reader");
+                o.remove("newer_version");
             }
             v
         });
@@ -2021,7 +2033,7 @@ impl FractalConfig {
         // A newer writer's fields this build does not know are kept too.
         if let Some(read) = read {
             unread.capture_unknown_fields(&read, &serde_json::to_value(&config)?);
-            unread.newer_version = Some(version);
+            unread.newer_version = Some(newer_writer);
         }
         if min_reader > MIN_READER_VERSION {
             unread.min_reader = Some(min_reader);

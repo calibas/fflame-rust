@@ -334,7 +334,9 @@ From the config review (§4). Each needs `min_reader` in place first.
    whenever we need locally." So a local ffapi (with a scratch database)
    gets a test run that drives the client's API calls against it: save
    and load a flame, an escape config and a simulation, an animation with
-   a script track, at reader 7 and with no reader.
+   a script track, at reader 7 and with no reader. **Built 2026-11-11:**
+   `python scripts/api_integration.py` (docs/TESTING-GUIDE.md, §1b); its
+   first run found the second-load loss `newer_version` fixes.
 
 ## 6. Order
 

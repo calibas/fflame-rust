@@ -14,6 +14,8 @@ pub mod sync;
 pub mod types;
 #[cfg(test)]
 mod future_tests;
+#[cfg(test)]
+mod integration_tests;
 
 use crate::config::FractalConfig;
 use crate::resources::{FetchError, FetchResult, LoadState};
