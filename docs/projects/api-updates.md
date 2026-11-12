@@ -289,16 +289,16 @@ From the config review (§4). Each needs `min_reader` in place first.
 
 1. **0.5's floor** (rule 6): **decided 2026-11-11: serve it filtered,
    with an update notice.**
-2. **The variation slot policy cap**: raise to ~4096, or apply it to
-   uploads only (polychoron ships at 2410 > 512).
+2. **The variation slot policy cap: decided 2026-11-11, raised** (to
+   ~4096; polychoron ships at 2410 > 512).
 3. **`simulation` in `render_modes`**: **decided 2026-11-11, a hard
    requirement**: "Any config we currently support, flames, simulations
    or escape-time, needs to be able to be saved online." Simulations are
    stored (legacy-filtered), and every config the app can make must fit
    the server's limits (256 KB config, 16 KB a transform, 32 KB tracks).
    Check the largest real configs against them.
-4. **Which effect WGSL the API holds** until P6 stores Rhai: the twins'
-   generated WGSL or the hand-written reference.
+4. **Which effect WGSL the API holds** until P6 stores Rhai: **decided
+   2026-11-11, the Rhai twins' generated WGSL.**
 5. **An animation's `base_config`**: **decided 2026-11-11: not stored.**
    The flame is saved as its own flame and the animation references it by
    `flame_id`; on load the client makes the server's copy of that flame
@@ -316,8 +316,12 @@ From the config review (§4). Each needs `min_reader` in place first.
      loses anything it sees today.
    - URL versioning (`/api/v2`) is kept for a change that cannot be
      additive.
-7. **How far back to test**: keep a 0.5 build and a 0.6 build in CI
-   against a staging server (recommended), or test by hand per release.
+7. **How far back to test: decided 2026-11-11, API integration is part
+   of testing.** In the user's words: "It's easy to spin up a server
+   whenever we need locally." So a local ffapi (with a scratch database)
+   gets a test run that drives the client's API calls against it: save
+   and load a flame, an escape config and a simulation, an animation with
+   a script track, at reader 7 and with no reader.
 
 ## 6. Order
 
