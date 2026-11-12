@@ -43,7 +43,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::script::{ScriptFlags, ScriptKind};
+use crate::script::ScriptFlags;
 use crate::variations::definition::Feature;
 use crate::variations::{ParamType, VariationCategory, VariationPhase};
 
@@ -333,9 +333,12 @@ pub fn generate() -> serde_json::Value {
                          can ever run. Generated from the embedded starters, \
                          because a transcribed copy is exactly the kind of \
                          implicit cross-repo dependency this file exists to \
-                         eliminate.",
+                         eliminate. `kinds`: the CPU scripts (generator, \
+                         modifier, library), then the formula library's \
+                         entries, each published under its own `INFO.id` \
+                         (docs/projects/rhai-scripts-online.md).",
             "builtin_scripts": builtin_scripts,
-            "kinds": [ScriptKind::Generator.as_str(), ScriptKind::Modifier.as_str(), ScriptKind::Library.as_str()],
+            "kinds": crate::storage::library::ALL_PUBLISHED.iter().filter_map(|k| k.wire()).collect::<Vec<_>>(),
             "flags": {
                 "$comment": "The client WARNS on an unknown flag and drops it, \
                              so the vocabulary can grow without a coordinated \

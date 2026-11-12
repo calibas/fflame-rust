@@ -77,6 +77,9 @@ pub struct ScriptsPanel {
     /// The public-search box. Lives here rather than in app state
     /// because it is editor furniture, not a result.
     browse_query: String,
+    /// The online library's kind filter (a wire name); `None` for every
+    /// kind.
+    browse_kind: Option<&'static str>,
     /// The `library_generation` this panel last re-scanned for. An
     /// adoption writes to the store from a background task, and without
     /// this the new script would not appear until something else
@@ -108,6 +111,7 @@ impl Default for ScriptsPanel {
             palettes: Vec::new(),
             opened_untrusted: false,
             browse_query: String::new(),
+            browse_kind: None,
             seen_library_generation: 0,
         }
     }
@@ -681,9 +685,28 @@ impl ScriptsPanel {
                 }
 
                 // A conflict is a decision, so it stays until made.
-                if let Some((stem, c)) = &cloud.conflict {
+                // The formula library's conflicts are the Formula
+                // Editor's, where the text is.
+                if let Some((crate::app::script_cloud::Local::Script(stem), c)) = &cloud.conflict {
                     self.render_conflict(ui, stem, c, cloud.busy, request);
                 }
+
+                // One library for every kind: the CPU scripts, and the
+                // formula library's entries (adopting one saves it there).
+                ui.horizontal(|ui| {
+                    ui.label("Kind");
+                    let label = |k: Option<&'static str>| k.map_or_else(|| "Every kind".to_string(), kind_label);
+                    egui::ComboBox::from_id_salt("scripts_cloud_kind")
+                        .selected_text(label(self.browse_kind))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.browse_kind, None, label(None));
+                            for k in crate::storage::library::ALL_PUBLISHED {
+                                let w = k.wire();
+                                ui.selectable_value(&mut self.browse_kind, w, label(w));
+                            }
+                        });
+                });
+                let kind = self.browse_kind.map(str::to_string);
 
                 if signed_in {
                     ui.add_space(4.0);
@@ -699,7 +722,7 @@ impl ScriptsPanel {
                             .add_enabled(!cloud.busy, egui::Button::new("Refresh").small())
                             .clicked()
                         {
-                            *request = Some(Req::ListMine);
+                            *request = Some(Req::ListMine(kind.clone()));
                         }
                     });
                     if !cloud.mine_loaded {
@@ -728,7 +751,7 @@ impl ScriptsPanel {
                     let go = ui.add_enabled(!cloud.busy, egui::Button::new("Search")).clicked();
                     if go || (entry.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                     {
-                        *request = Some(Req::Search(self.browse_query.clone()));
+                        *request = Some(Req::Search(self.browse_query.clone(), kind.clone()));
                     }
                 });
 
@@ -737,8 +760,10 @@ impl ScriptsPanel {
                 // rather than leaving it to be inferred from a download
                 // button.
                 ui.weak(
-                    "Opening one saves a copy locally. Scripts from other people run with \
-                     restrictions: they may only call scripts that ship with the app.",
+                    "Opening one saves a copy locally: a script here, a formula, colouring, \
+                     variation, effect, simulation or track in the formula library. Scripts \
+                     from other people run with restrictions: they may only call scripts that \
+                     ship with the app.",
                 );
 
                 if cloud.browse.is_empty() {
@@ -779,7 +804,7 @@ impl ScriptsPanel {
         }
 
         let link = crate::script::store::link_of(&entry.id).unwrap_or_default();
-        let stem = entry.id.clone();
+        let local = crate::app::script_cloud::Local::Script(entry.id.clone());
         let source = self.text.clone();
 
         ui.horizontal(|ui| match (link.cloud_id.clone(), link.version) {
@@ -793,14 +818,14 @@ impl ScriptsPanel {
                     ))
                     .clicked()
                 {
-                    *request = Some(Req::Update { stem: stem.clone(), cloud_id: cloud_id.clone(), source: source.clone(), version });
+                    *request = Some(Req::Update { local: local.clone(), cloud_id: cloud_id.clone(), source: source.clone(), version });
                 }
                 if ui
                     .add_enabled(!cloud.busy, egui::Button::new("Unpublish"))
                     .on_hover_text("Remove it from the server. Your local copy stays.")
                     .clicked()
                 {
-                    *request = Some(Req::Unpublish { stem: stem.clone(), cloud_id });
+                    *request = Some(Req::Unpublish { local: local.clone(), cloud_id });
                 }
                 ui.weak(format!("v{version}"));
             }
@@ -811,7 +836,7 @@ impl ScriptsPanel {
                     .clicked()
                 {
                     *request = Some(Req::Publish {
-                        stem: stem.clone(),
+                        local: local.clone(),
                         source: source.clone(),
                         visibility: crate::api::types::ApiVisibility::Private,
                     });
@@ -822,7 +847,7 @@ impl ScriptsPanel {
                     .clicked()
                 {
                     *request = Some(Req::Publish {
-                        stem,
+                        local,
                         source,
                         visibility: crate::api::types::ApiVisibility::Public,
                     });
@@ -873,7 +898,7 @@ impl ScriptsPanel {
                         // must be an explicit click rather than an
                         // automatic retry.
                         *request = Some(Req::Update {
-                            stem: stem.to_string(),
+                            local: crate::app::script_cloud::Local::Script(stem.to_string()),
                             cloud_id: c.id.clone(),
                             source: self.text.clone(),
                             version: c.current_version,
@@ -891,7 +916,7 @@ impl ScriptsPanel {
                         // Adopting would save a second copy under a
                         // freed stem and mark it as somebody else's.
                         *request = Some(Req::Refetch {
-                            stem: stem.to_string(),
+                            local: crate::app::script_cloud::Local::Script(stem.to_string()),
                             id: c.id.clone(),
                         });
                     }
@@ -918,7 +943,7 @@ impl ScriptsPanel {
                 ui.weak(format!("by {}", item.owner_display_name));
             }
             if let Some(k) = &item.kind {
-                ui.weak(format!("· {k}"));
+                ui.weak(format!("· {}", kind_label(k)));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add_enabled(!busy, egui::Button::new("Open").small()).clicked() {
@@ -1298,4 +1323,27 @@ impl ScriptsPanel {
             ui.label(egui::RichText::new(status).weak());
         }
     }
+}
+
+/// A script kind as the online library names it: the app's word for its
+/// wire name, the wire name itself for one this build does not know.
+fn kind_label(wire: &str) -> String {
+    use crate::storage::library::Kind;
+    match Kind::from_wire(wire) {
+        Some(Kind::Generator) => "Generator",
+        Some(Kind::Modifier) => "Modifier",
+        Some(Kind::ScriptLibrary) => "Library",
+        Some(Kind::Formula) => "Formula",
+        Some(Kind::Coloring) => "Colouring",
+        Some(Kind::Solid) => "Solid",
+        Some(Kind::Field) => "Field",
+        Some(Kind::FieldColoring) => "Field colouring",
+        Some(Kind::Variation) => "Variation",
+        Some(Kind::Effect) => "Effect",
+        Some(Kind::SimModel) => "Simulation model",
+        Some(Kind::SimColoring) => "Simulation colouring",
+        Some(Kind::Track) => "Track",
+        _ => return wire.to_string(),
+    }
+    .to_string()
 }

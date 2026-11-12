@@ -779,6 +779,7 @@ pub fn script_to_create_request(
         flags: meta.flags.to_names(),
         visibility,
         version,
+        id: None,
     })
 }
 
