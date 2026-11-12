@@ -16,9 +16,39 @@ use serde::Serialize;
 /// build cannot open, no value it has never seen. A request without it is
 /// answered in the original vocabulary (0.5's).
 pub fn build_url(base_url: &str, path: &str) -> String {
-    let base = base_url.trim_end_matches('/');
+    let base = local_override().unwrap_or(base_url).trim_end_matches('/');
     let sep = if path.contains('?') { '&' } else { '?' };
     format!("{base}{path}{sep}reader={}", crate::config::fractal_config::CURRENT_CONFIG_VERSION)
+}
+
+/// A local server to talk to instead of the real one: `FFLAME_API_URL`, for
+/// the API integration test (`scripts/api_integration.py`) and for trying
+/// the app against an `ffapi` on this machine. Desktop only, and only a
+/// LOOPBACK address (`http://127.0.0.1:…`, `http://localhost:…`,
+/// `http://[::1]:…`): anything else is ignored with a warning, so no
+/// environment variable can send the app's sign-in token to another host.
+fn local_override() -> Option<&'static str> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static OVERRIDE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        OVERRIDE
+            .get_or_init(|| {
+                let url = std::env::var("FFLAME_API_URL").ok()?;
+                let loopback = ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"].iter().any(|p| url.starts_with(p));
+                if loopback {
+                    log::info!("API requests go to the local server {url} (FFLAME_API_URL)");
+                    Some(url)
+                } else {
+                    log::warn!("FFLAME_API_URL ignored: only a loopback address is allowed, not {url}");
+                    None
+                }
+            })
+            .as_deref()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
 }
 
 /// What the desktop app calls itself to the server: for its logs, never

@@ -222,3 +222,24 @@ fn a_newer_animation_keeps_what_it_cannot_read() {
     let again = Animation::from_json(&loaded.to_json().unwrap()).unwrap();
     assert_eq!(again.to_json_value().unwrap()["generators"], out["generators"]);
 }
+
+/// Twice round an older build: it re-saves a newer config with its own
+/// version, says so (`newer_version`), and its next load still keeps what it
+/// cannot read. Found by the API integration test: the server's copy came
+/// back as version 7, and the second load dropped the newer fields.
+#[test]
+fn a_newer_configs_unknowns_survive_two_round_trips() {
+    use crate::config::FractalConfig;
+    let mut v = FractalConfig::default().to_json_value().unwrap();
+    v["version"] = json!(99);
+    v["min_reader"] = json!(7);
+    v["sparkle"] = json!({"on": true});
+    let once = FractalConfig::from_json_value(v).unwrap().to_json_value().unwrap();
+    assert_eq!(once["version"], json!(crate::config::fractal_config::CURRENT_CONFIG_VERSION));
+    assert_eq!(once["newer_version"], json!(99));
+    let twice = FractalConfig::from_json_value(once).unwrap().to_json_value().unwrap();
+    assert_eq!(twice["sparkle"], json!({"on": true}));
+    assert_eq!(twice["newer_version"], json!(99));
+    // A config this build wrote carries no marker.
+    assert!(FractalConfig::default().to_json_value().unwrap().get("newer_version").is_none());
+}

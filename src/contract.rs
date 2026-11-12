@@ -281,7 +281,7 @@ pub fn generate() -> serde_json::Value {
                          params live in a fixed-size uniform, so that cap is \
                          physical capacity and the API must match it exactly.",
             "variation_slots_per_flame": crate::gpu::buffers::MAX_VARIATION_PARAM_SLOTS,
-            "variation_slots_per_variation_policy_cap": 512,
+            "variation_slots_per_variation_policy_cap": 4096,
             "largest_shipped_variation_slots": max_slots,
             "largest_shipped_state_count": max_state,
             "variations_per_flame": crate::scene::transforms::MAX_VARIATIONS_PER_FLAME,

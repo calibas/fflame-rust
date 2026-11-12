@@ -1,6 +1,6 @@
 # API updates without breaking older apps
 
-Status: **step 1 built 2026-11-11** (branch `api-client-hardening`); steps 2-5 to come. Sources: a
+Status: **step 1 merged** (PR #160); **step 2 built** (ffapi `reader-vocabulary`, migration 100); **step 3 mostly built 2026-11-11** (ffapi `catch-up`, migrations 101-105, stacked; client `api-catch-up`); the catalog facets and the API integration test still to come; steps 4-5 after. Sources: a
 survey of the client (`src/api/`), the config, and the server repository
 (`c:\projects\ffapi`, axum + Postgres, latest migration 099), checked
 against the code where it mattered. This plan absorbs the API half of
@@ -182,6 +182,17 @@ Ships first, so that everything after can be added safely.
 
 ### Step 2 -- the server answers each reader in its vocabulary (server, additive)
 
+**Built 2026-11-11** (ffapi branch `reader-vocabulary`, PR.md there):
+`src/reader.rs`, migration 100 (`flame_readable_by`,
+`animation_readable_by`), every flame and animation list, phase `any`, a
+409 for an animation PUT a reader below 7 would wreck, `GET
+/api/app/latest` (`APP_LATEST_VERSION` / `APP_LATEST_URL`). Not filtered:
+scripts (their kinds are strings a client degrades on, and no new kind
+exists yet: step 4 filters the new ones), and a flame's inline animation
+refs (each is guarded at its PUT). Two tests on ffapi's main fail until
+step 3 seeds what the corpus sync brought: the effect `distance_field`
+(decision 4) and the built-in scripts `escape_deep` and `sim_sweep`.
+
 - An extractor reads `?reader=` on every route (absent = 3, the original
   vocabulary) into the request's `Reader`.
 - Shaping (rule 3): phase `any` as `normal` below the reader that knows
@@ -191,6 +202,21 @@ Ships first, so that everything after can be added safely.
   contract publishes an object), so it has never run.
 
 ### Step 3 -- catch up the server (additive, v0.6.0's list)
+
+**Built 2026-11-11** (ffapi branch `catch-up` on `reader-vocabulary`;
+client branch `api-catch-up`; PR.md in each): contract re-pinned (slot cap
+4096, decision 2); `library` script kind and `simulation` render mode
+(migration 102, both shown to reader 7+); effects reseeded with the twins'
+WGSL (decision 4) and the variation corpus re-imported (103, 104); the
+built-in script import regenerated; animations store `motion_blur` (105)
+and tracks get a 1 MiB cap; the client uploads simulations and sends motion
+blur; `openapi.json` refreshed from a local server. Variation names were
+already unvalidated (Rhai keys pass). Every real config measured fits the
+limits (largest blob ~11 KB of 256 KB). The abandoned branch is gone
+(its corpora committed as 79eb91f). The API integration test (decision 7)
+and **the catalog facets** ([api-catalog-spec.md](api-catalog-spec.md))
+are built too: client branch `catalog`, ffapi branch `catalog` (migration
+106), stacked.
 
 - **The catalog's facets** ([api-catalog-spec.md](api-catalog-spec.md)):
   each saved config's engine, scene (2D, 3D, solid, terrain), versions and
@@ -278,16 +304,16 @@ From the config review (§4). Each needs `min_reader` in place first.
 
 1. **0.5's floor** (rule 6): **decided 2026-11-11: serve it filtered,
    with an update notice.**
-2. **The variation slot policy cap**: raise to ~4096, or apply it to
-   uploads only (polychoron ships at 2410 > 512).
+2. **The variation slot policy cap: decided 2026-11-11, raised** (to
+   ~4096; polychoron ships at 2410 > 512).
 3. **`simulation` in `render_modes`**: **decided 2026-11-11, a hard
    requirement**: "Any config we currently support, flames, simulations
    or escape-time, needs to be able to be saved online." Simulations are
    stored (legacy-filtered), and every config the app can make must fit
    the server's limits (256 KB config, 16 KB a transform, 32 KB tracks).
    Check the largest real configs against them.
-4. **Which effect WGSL the API holds** until P6 stores Rhai: the twins'
-   generated WGSL or the hand-written reference.
+4. **Which effect WGSL the API holds** until P6 stores Rhai: **decided
+   2026-11-11, the Rhai twins' generated WGSL.**
 5. **An animation's `base_config`**: **decided 2026-11-11: not stored.**
    The flame is saved as its own flame and the animation references it by
    `flame_id`; on load the client makes the server's copy of that flame
@@ -305,8 +331,14 @@ From the config review (§4). Each needs `min_reader` in place first.
      loses anything it sees today.
    - URL versioning (`/api/v2`) is kept for a change that cannot be
      additive.
-7. **How far back to test**: keep a 0.5 build and a 0.6 build in CI
-   against a staging server (recommended), or test by hand per release.
+7. **How far back to test: decided 2026-11-11, API integration is part
+   of testing.** In the user's words: "It's easy to spin up a server
+   whenever we need locally." So a local ffapi (with a scratch database)
+   gets a test run that drives the client's API calls against it: save
+   and load a flame, an escape config and a simulation, an animation with
+   a script track, at reader 7 and with no reader. **Built 2026-11-11:**
+   `python scripts/api_integration.py` (docs/TESTING-GUIDE.md, §1b); its
+   first run found the second-load loss `newer_version` fixes.
 
 ## 6. Order
 

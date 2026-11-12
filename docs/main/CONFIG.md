@@ -213,7 +213,11 @@ What it cannot read goes into `FractalConfig::unread`
 `to_json_value` puts each back (`Unread::restore`), unless the user has
 since changed that field: the save keeps what a newer app wrote. It
 stamps this build's `version`, since its omitted fields follow its own
-defaults, and keeps the config's `min_reader`. The app says so once, when
+defaults, keeps the config's `min_reader`, and writes `newer_version` (the
+newer writer's version). A later load by this build reads a config whose
+`newer_version` is above its own as a newer one, so the second round trip
+keeps the fields too. The newer app ignores the marker, and drops it on its
+own save. The app says so once, when
 such a config loads (`ConfigManager::take_newer_config_notice`).
 Animations do the same for their own fields and generators
 (`Animation::from_json_value`); a track keeps its JSON in place

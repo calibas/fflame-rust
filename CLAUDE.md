@@ -114,9 +114,10 @@ python scripts/release.py check      # every fast gate (versions agree, tests, w
 python scripts/release.py gallery    # the gallery crates' own tests (GPU smoke, script parity), before the modules deploy
 python scripts/release.py            # ...and a changelog preview
 ```
-Two committed files are **generated**, and a stale one fails a test rather than failing silently -- regenerate deliberately and read the diff:
+Three committed files are **generated**, and a stale one fails a test rather than failing silently -- regenerate deliberately and read the diff:
 ```bash
 UPDATE_CONTRACT=1 cargo test --lib contract_is_current        # docs/generated/engine-contract.json
+UPDATE_CATALOG=1 cargo test --lib catalog_is_current          # docs/generated/engine-catalog.json (the API's catalog; api-catalog-spec.md)
 UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps # tests/shader_dumps/
 ```
 The API's corpora come from `cargo run --release --bin export_variations_json` / `export_scripts_json` / `export_effects_json` (written to `output/`, gitignored). **A new `Feature`, `VariationCategory` or `ParamType` does NOT move the contract's shape fingerprint** -- tell the API repository directly (RELEASE.md §3). Release builds use `cargo build --profile dist` (31% smaller; the profile name is recorded in every PNG).

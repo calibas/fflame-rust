@@ -32,6 +32,10 @@ cargo run --release --bin variation_probe
 # Render configs to PNG through the library, without the release exe
 INSPECT="a.fflame=a.png" INSPECT_SIZE=1280x720 \
   cargo test --release --lib render_configs_for_inspection -- --ignored --nocapture
+
+# The API integration test: a local ffapi (../ffapi, its .env database),
+# started and stopped for the run, and the client's calls against it
+python scripts/api_integration.py
 ```
 
 ---
@@ -148,6 +152,38 @@ INSPECT="a.fflame=a.png;b.fflame=b.png" INSPECT_SIZE=1280x720 \
 (gitignored).
 
 ---
+
+## 1b. The API integration test — `scripts/api_integration.py`
+
+The client's own API calls against a real `ffapi` on this machine
+([api-updates.md](projects/api-updates.md), decision 7). The script builds
+the API (debug) from `../ffapi` (`--ffapi` to point elsewhere,
+`--skip-build` to reuse its binary), starts it on a free loopback port, runs
+the ignored `api::integration_tests` with `FFLAME_API_URL` set, and stops
+the server however the run ends. Exit status is the tests'.
+
+- **The database** is the one in ffapi's `.env`, which its own test suite
+  uses. Each test signs up a fresh account, so runs never collide.
+- **Nothing leaves the machine:** the run sets `EMAIL_API_TOKEN` empty (no
+  email; accounts register verified) and points `EMAIL_API_URL` at a dead
+  local port. Logs and thumbnails go to `output/api_integration/`, and the
+  server's own log is `output/api_integration/server.log`.
+- **What it covers:**
+  - a flame, an escape config and a simulation round-trip, and are listed
+    at reader 7 and not without a reader;
+  - a newer config's unknown fields survive the server;
+  - an animation keeps keyframe, script and unknown tracks and its motion
+    blur;
+  - the catalogs decode;
+  - the update check reads `APP_LATEST_VERSION`, which the script sets to
+    99.0.0.
+- **`FFLAME_API_URL`** is honoured by the desktop client only, and only
+  for a loopback address (`api::client::build_url`). The same variable runs
+  the app itself against a local server.
+
+Run it after changing either side of the API. Its first run found a real
+loss: a newer config's unknown fields were dropped on the second load
+(fixed by `newer_version`; docs/main/CONFIG.md, *Reading a newer config*).
 
 ## 2. Release gates — `scripts/release.py check`
 
