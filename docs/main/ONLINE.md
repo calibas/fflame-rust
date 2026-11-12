@@ -72,7 +72,7 @@ compiled in. `SystemSettings::api_base_url` is a deprecated field that
 is still read from old settings files and never written.
 
 **The spec.** [openapi.json](openapi.json) is the API's own OpenAPI
-document (82 paths), committed here as the wire authority for both
+document (83 paths; refreshed 2026-11-11 from a local server), committed here as the wire authority for both
 repositories. The client implements a subset of it.
 
 **Transport** ([client.rs](../../src/api/client.rs)). Every call is an
@@ -228,15 +228,11 @@ flames**, on the same endpoints, told apart by `render_mode` alone. An
 escape config's exact-decimal centre strings survive the round trip
 (`an_escape_config_round_trips_with_its_centre_intact`).
 
-A simulation maps to `"simulation"`, but the server's `render_mode`
-enum does not know that value yet (the committed `openapi.json` lists
-`RenderMode` as `2d`, `3d`, `escape` only; an upload is an HTTP 400
-`render_mode_invalid`). So `save_flame` and `update_flame` refuse a
-simulation client-side, before the token check and before anything is
-sent (`refuse_unsupported_online`, returning `FetchError::Unsupported`
-with a sentence the dialog shows) — the same seatbelt escape had until
-the server added `escape`. Remove it when the server adds `simulation`.
-(`simulation_configs_are_refused_by_save_and_update`)
+A simulation maps to `"simulation"`, which the server stores from
+migration 102 (2026-11-11); like escape-time, it is listed only to a
+request naming reader 7 or more. The client-side refusal it needed until
+then is gone (`simulation_configs_go_online_like_any_other`). An
+animation's motion blur travels too (migration 105).
 
 ### Names, never definitions
 

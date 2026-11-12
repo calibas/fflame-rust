@@ -910,6 +910,29 @@
         ]
       }
     },
+    "/api/app/latest": {
+      "get": {
+        "tags": [
+          "routes::app"
+        ],
+        "operationId": "latest",
+        "responses": {
+          "200": {
+            "description": "The newest app release",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppLatest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This deployment does not say"
+          }
+        }
+      }
+    },
     "/api/auth/forgot-password": {
       "post": {
         "tags": [
@@ -4909,6 +4932,9 @@
           "loop_mode": {
             "$ref": "#/components/schemas/LoopMode"
           },
+          "motion_blur": {
+            "description": "The animation's motion blur, when it has one."
+          },
           "name": {
             "type": "string"
           },
@@ -4927,6 +4953,26 @@
           },
           "visibility": {
             "$ref": "#/components/schemas/Visibility"
+          }
+        }
+      },
+      "AppLatest": {
+        "type": "object",
+        "description": "The newest app release.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to get it, if the deployment says."
+          },
+          "version": {
+            "type": "string",
+            "description": "Its version, dotted numbers (`0.6.0`)."
           }
         }
       },
@@ -5076,6 +5122,9 @@
           "generators": {},
           "loop_mode": {
             "$ref": "#/components/schemas/LoopMode"
+          },
+          "motion_blur": {
+            "description": "Opaque; absent or null for none. Clients before it never send it."
           },
           "name": {
             "type": "string"
@@ -6204,7 +6253,8 @@
         "enum": [
           "2d",
           "3d",
-          "escape"
+          "escape",
+          "simulation"
         ]
       },
       "ReorderFlamesRequest": {
@@ -6686,7 +6736,8 @@
         "type": "string",
         "enum": [
           "generator",
-          "modifier"
+          "modifier",
+          "library"
         ]
       },
       "ScriptListItem": {
