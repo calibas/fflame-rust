@@ -1630,6 +1630,7 @@ browser:
 # API (cloud save/update)
 api:
   update_available: "Version %{version} is available."
+  newer_config: "This was made by a newer version. Settings this version cannot read are not shown, and are kept when you save."
   save_dialog_title: "Save Online"
   save_dialog_name_label: "Flame Name:"
   save_dialog_thumbnail: "Upload thumbnail"
