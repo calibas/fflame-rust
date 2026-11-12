@@ -1428,6 +1428,40 @@ impl App {
     }
 
     /// Poll for completed health check results and trigger periodic checks.
+    /// Ask the server once for the newest release, and say so when this
+    /// build is behind (docs/projects/api-updates.md, rule 7). Only with
+    /// online features on; silent on any failure.
+    pub(super) fn poll_update_check(&mut self) {
+        // A config just loaded from a newer version: say what happens to
+        // what this build cannot read (docs/projects/api-updates.md, rule 5).
+        if self.config_manager.take_newer_config_notice() {
+            self.egui_layer.show_api_notification(&t!("api.newer_config"), false);
+        }
+        if let Some(latest) = self.update_check_result.lock().ok().and_then(|mut slot| slot.take()) {
+            if crate::api::is_newer_release(&latest.version, env!("CARGO_PKG_VERSION")) {
+                self.egui_layer.show_api_notification(&t!("api.update_available", version = latest.version), false);
+            }
+        }
+        if self.update_check_started || !self.config_manager.system_settings().online_account {
+            return;
+        }
+        self.update_check_started = true;
+        let slot = self.update_check_result.clone();
+        let window = self.window.clone();
+        let check = async move {
+            if let Some(latest) = crate::api::latest_app_version(crate::api::API_BASE_URL).await {
+                if let Ok(mut s) = slot.lock() {
+                    *s = Some(latest);
+                }
+                window.request_redraw();
+            }
+        };
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(check);
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(move || pollster::block_on(check));
+    }
+
     pub(super) fn poll_health_check(&mut self) {
 
         // 1. Poll async result

@@ -367,6 +367,11 @@ impl UpdateAction {
 
 /// Central manager for configuration state and undo/redo
 pub struct ConfigManager {
+    /// Set when a loaded config came from a newer version and kept
+    /// things this build cannot read (`config::unread`); the app takes it
+    /// and says so once (`take_newer_config_notice`).
+    newer_config_notice: bool,
+
     // ===== Fractal State (undo/redo enabled) =====
     /// Current configuration (last captured state)
     current: FractalConfig,
@@ -446,6 +451,7 @@ impl ConfigManager {
         crate::escape::orbit_store::set_max_total_mb(system_settings.orbit_cache_mb);
 
         Self {
+            newer_config_notice: false,
             current: config,
             preview: None,
             history: Vec::new(),
@@ -2903,6 +2909,18 @@ impl ConfigManager {
         &mut self.current
     }
 
+    fn note_newer(&mut self, config: &FractalConfig) {
+        if config.unread.newer_version.is_some() || !config.unread.is_empty() {
+            self.newer_config_notice = true;
+        }
+    }
+
+    /// Whether a config just loaded came from a newer version with things
+    /// this build cannot read: once per load, for the app to say so.
+    pub fn take_newer_config_notice(&mut self) -> bool {
+        std::mem::take(&mut self.newer_config_notice)
+    }
+
     /// Get system settings (read-only)
     /// System settings are device-specific preferences that don't belong in FractalConfig
     pub fn system_settings(&self) -> &crate::storage::SystemSettings {
@@ -2918,6 +2936,7 @@ impl ConfigManager {
     /// Creates single bidirectional snapshot for efficient undo/redo
     /// Use this for atomic operations like loading presets
     pub fn load_config(&mut self, mut new_config: FractalConfig, description: String) -> Result<(), ConfigError> {
+        self.note_newer(&new_config);
         // Clear any preview state
         self.preview = None;
 
@@ -2997,6 +3016,7 @@ impl ConfigManager {
     /// Used when restoring base config after animation stops
     /// The undo entry should have already been created by handle_animation_exit
     pub fn load_config_silent(&mut self, new_config: FractalConfig) -> Result<(), ConfigError> {
+        self.note_newer(&new_config);
         // Clear any preview state
         self.preview = None;
 

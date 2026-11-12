@@ -1,6 +1,6 @@
 # API updates without breaking older apps
 
-Status: **planned 2026-11-11, not started.** Branch to come. Sources: a
+Status: **step 1 built 2026-11-11** (branch `api-client-hardening`); steps 2-5 to come. Sources: a
 survey of the client (`src/api/`), the config, and the server repository
 (`c:\projects\ffapi`, axum + Postgres, latest migration 099), checked
 against the code where it mattered. This plan absorbs the API half of
@@ -90,38 +90,67 @@ ignored on read (no `deny_unknown_fields` in either repository).
 1. **Additive only on existing endpoints.** No field removed, renamed or
    retyped; no new value an old client cannot read sent to an old client.
    A change that cannot be additive gets a new endpoint, the old one kept.
-2. **Clients say what they are.** Every request carries
-   `X-Fflame-Client: <app version>; contract=<shape>; caps=<list>`. No
-   header means a **legacy client** (0.5, or 0.6 before this lands), and
-   the server answers in the legacy vocabulary.
-3. **The server holds the vocabulary per client.** For a legacy client:
-   phase `any` is sent as `normal`; flames of a render mode it does not
-   know are left out of lists (not errored); a script of a kind it does
-   not know is left out. A client declaring a capability gets the new
-   values.
+2. **A reader says what it reads, in the URL: `?reader=N`**, N being
+   the highest config version it can read (the app's
+   `CURRENT_CONFIG_VERSION`). It goes on every request, GETs included. No
+   header, no User-Agent sniffing: the same rule for the app and for any
+   other client. A request without `reader` gets **the original
+   vocabulary**: what 0.5 reads (reader 3).
+3. **The server holds the vocabulary per reader.** Each value that came
+   after the original vocabulary is tagged with the first reader version
+   that knows it, and a request is answered in its reader's vocabulary:
+   - a flame whose `min_reader` is above the reader, or whose render mode
+     the reader does not know, is left out of lists and searches (not
+     errored);
+   - phase `any` is sent as `normal` to a reader that does not know it;
+   - a script of a kind the reader does not know is left out.
+
+   A request with a higher `reader` gets the newer values, so new content
+   is opt-in for every client and no client receives a value it has never
+   seen.
 4. **From 0.6 on, clients degrade instead of failing**: an unknown enum
    value reads as a fallback and is kept for the round trip; an unknown
    track is kept as opaque JSON; a newer config loads read-only-safe
    (rule 5); unknown fields survive a save.
 5. **A config says the lowest version that can read it**, apart from the
    version that wrote it: `version` (writer, migrations) and
-   `min_reader`. A default change bumps `version` but not `min_reader`; a
-   change an older reader would get wrong bumps both. A reader older than
-   `min_reader` refuses; newer than `min_reader` but older than `version`
-   loads, warns, and keeps what it does not understand.
-6. **0.5 cannot be fixed** -- its gate is compiled in. The server keeps
-   it working for what it can read (rule 3: lists filtered, legacy
-   vocabulary) and tells it to update (rule 7) rather than handing it a
-   config it will refuse.
-7. **An update notice**: a response header (`X-Fflame-Update: <version>`)
-   when the client is behind; 0.6 shows it. (RELEASE.md §4b's in-app
-   update check, not built.)
+   `min_reader`. A reader older than `min_reader` refuses; one at least
+   `min_reader` but older than `version` loads, warns, and keeps what it
+   does not understand (a value it cannot read is set aside, its field
+   defaulted, and put back on save unless the user changed that field;
+   fields it does not know are kept).
+   - **A default change** bumps `version`, and from then on the writer
+     always writes that field out, even at its default: configs omit
+     default fields, and an older reader would fill an omitted one with
+     its own old default. `min_reader` stays.
+   - **A change an older reader would get wrong** (a renamed key, a new
+     meaning) bumps both.
+   - **An older app re-saving a newer config** stamps its own `version`,
+     because its omitted fields follow its own defaults, and keeps the
+     config's `min_reader`. The newer app's migration steps then restore
+     those defaults. So a migration step must never overwrite a field
+     that is already present.
+   - **On the server**, a reader that knows `min_reader` (0.6 on) sees a
+     config when `min_reader <= reader`; an older one (0.5, and anything
+     before `min_reader`) only compares `version`, so it sees a config
+     when `version <= reader`.
+6. **0.5 cannot be fixed** -- its gate is compiled in. It sends no
+   `reader`, so it gets the original vocabulary (rule 2): lists without
+   what it cannot open, nothing it cannot parse.
+7. **An update notice**: `GET /api/app/latest` gives the newest app
+   version; 0.6 asks at startup and shows a notice when it is behind
+   (RELEASE.md §4b's in-app update check, not built). Any client can ask.
 
 ---
 
 ## 3. The changes, in order
 
 ### Step 1 -- harden the client (app 0.6, no server change)
+
+**Built 2026-11-11 on branch `api-client-hardening`** (PR.md there): every
+item below. The update check asks `GET /api/app/latest`, which the server
+does not have yet (step 2). The "save refuses to PUT what it dropped"
+guard is not needed: nothing is dropped any more.
 
 Ships first, so that everything after can be added safely.
 
@@ -142,25 +171,32 @@ Ships first, so that everything after can be added safely.
   `Animation`, so a save keeps what a newer client wrote.
 - **`min_reader`** (rule 5) written on save; the gate changed to refuse
   only below it. Old files have none: read as `version`.
-- **The client header** (rule 2) on every request; the update notice
-  (rule 7) read and shown.
+- **`reader=N`** (rule 2) on every request; a `User-Agent` of its own
+  (`FractalArtEditor/<version>`), for the server's logs only; the update
+  notice (rule 7) asked for and shown.
 - Tests: a corpus of "from the future" payloads -- a flame with
   `render_mode: "hologram"`, a phase `"sideways"`, a track `{"type":
   "Teleport"}`, a config `version: 99, min_reader: 7` with unknown fields
   -- each loads, degrades as specified, and round-trips byte-stable where
   untouched.
 
-### Step 2 -- the server learns who is asking (server, additive)
+### Step 2 -- the server answers each reader in its vocabulary (server, additive)
 
-- CORS allows `X-Fflame-Client`; requests log it; a middleware parses it
-  into a `ClientCaps` (none = legacy).
-- Legacy shaping (rule 3): phase `any` as `normal` in variation responses;
-  flame lists and searches filtered to render modes the client knows;
-  script lists filtered to kinds it knows; `X-Fflame-Update` set.
+- An extractor reads `?reader=` on every route (absent = 3, the original
+  vocabulary) into the request's `Reader`.
+- Shaping (rule 3): phase `any` as `normal` below the reader that knows
+  it; flame lists and searches filtered by `min_reader` and render mode;
+  script lists filtered by kind; `GET /api/app/latest`.
 - **Fix the conformance test** that reads `render_modes` as an array (the
   contract publishes an object), so it has never run.
 
 ### Step 3 -- catch up the server (additive, v0.6.0's list)
+
+- **The catalog's facets** ([api-catalog-spec.md](api-catalog-spec.md)):
+  each saved config's engine, scene (2D, 3D, solid, terrain), versions and
+  components (formula, model, variations: a twin unedited counts as its
+  built-in), so configs can be browsed by fractal type and searched by
+  formula or model.
 
 - **Re-pin the contract**; the moved limits (`variation_slots_per_flame`
   262,144; `largest_shipped_variation_slots` 2410 against
@@ -257,18 +293,18 @@ From the config review (§4). Each needs `min_reader` in place first.
    `flame_id`; on load the client makes the server's copy of that flame
    the `base_config` (`api::mod`). The copy sent on save is redundant: the
    server dropping it loses nothing. The client may stop sending it.
-6. **How a client identifies itself**: under discussion 2026-11-11. The
-   user wants a general-purpose API and asked why not a POST/PUT field
-   rather than a header. The proposal in reply: a payload describes
-   itself in the body (config `version` / `min_reader`), so writes need no
-   negotiation. Reads (lists, search, catalogs) have no body, so the
-   server cannot learn there what a reader understands. Instead, nothing
-   is required of a client: responses carry the full current vocabulary,
-   and tolerating unknown values is part of the API's contract (0.6 on).
-   The one frozen exception, 0.5, is recognised by its fixed User-Agent
-   (`ureq/2.*`; 0.6 sends `FractalArtEditor/<version>`) and served the
-   legacy shape. Update notices come from a `GET` of the latest version.
-   URL versioning only for a change that cannot be additive.
+6. **How a client says what it reads: decided 2026-11-11, a URL
+   parameter, `?reader=N`** (rule 2). A payload describes itself in its
+   body (config `version` / `min_reader`), so writes need no negotiation.
+   Reads have no body, hence the parameter, which the user prefers to a
+   header. A request without it gets the original vocabulary.
+   - **User-Agent detection was considered and dropped.** 0.5 sends
+     ureq's default, `ureq/2.12.1`, but that is the last ureq 2 release,
+     so any Rust client on ureq 2 would have been filtered too.
+   - Escape-time is not in production yet, so no existing integration
+     loses anything it sees today.
+   - URL versioning (`/api/v2`) is kept for a change that cannot be
+     additive.
 7. **How far back to test**: keep a 0.5 build and a 0.6 build in CI
    against a staging server (recommended), or test by hand per release.
 

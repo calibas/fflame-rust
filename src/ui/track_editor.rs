@@ -321,7 +321,7 @@ fn render_tracks_visual(
                     }
                 }
                 // Signals and scripts span the full duration.
-                TrackSource::Signal { .. } | TrackSource::Script { .. } => (0.0, layout.duration),
+                TrackSource::Signal { .. } | TrackSource::Script { .. } | TrackSource::Unknown(_) => (0.0, layout.duration),
             };
 
             // Allocate full row with click sensing
@@ -458,10 +458,13 @@ fn render_tracks_visual(
                 let flame_target = track.flame_target;
                 // A script track: its title, a warning when it does not
                 // run or shares a target, its targets on hover.
-                let is_broken = is_track_broken(config, track) || script.as_ref().is_some_and(|s| s.warn());
+                // A track this build cannot read: kept, unplayed, said so.
+                let unreadable = matches!(track.source, TrackSource::Unknown(_));
+                let is_broken = unreadable || is_track_broken(config, track) || script.as_ref().is_some_and(|s| s.warn());
                 // Convert to 1-based display + prepend flame prefix
                 let full_display = match &script {
                     Some(s) => s.describe(),
+                    None if unreadable => t!("track_editor.unreadable_track").to_string(),
                     None => target_display(flame_target, &path),
                 };
                 // Truncate label if too long (by characters: a flame or
@@ -487,7 +490,7 @@ fn render_tracks_visual(
                 // Add tooltip with full track name on hover
                 let label_response = ui.interact(label_rect, egui::Id::new(format!("track_label_{}", track_index)), Sense::hover());
                 if label_response.hovered() {
-                    if script.is_some() {
+                    if script.is_some() || unreadable {
                         label_response.on_hover_text(&full_display);
                     } else if is_broken {
                         label_response.on_hover_text(format!(
@@ -648,6 +651,8 @@ fn written_keys(animation: &Animation) -> Vec<(bool, Vec<String>)> {
         .iter()
         .map(|t| match &t.source {
             TrackSource::Script { source, .. } => (true, crate::animation::script::declare(source).map(|d| d.targets.into_iter().map(|x| x.key).collect()).unwrap_or_default()),
+            // Writes nothing: it does not play.
+            TrackSource::Unknown(_) => (false, Vec::new()),
             _ => (false, vec![t.target.clone()]),
         })
         .collect()
@@ -1483,6 +1488,11 @@ pub fn open_edit_track_panel(state: &mut TrackEditorState, track_index: usize, t
         state.script_panel = Some(track_index);
         return;
     }
+    // A track this build cannot read has nothing to edit here; it is kept
+    // as it was read.
+    if matches!(track.source, TrackSource::Unknown(_)) {
+        return;
+    }
     state.track_editor_panel_open = true;
     state.editing_track_index = Some(track_index);
     state.new_track_target = track.target.clone();
@@ -1507,7 +1517,7 @@ pub fn open_edit_track_panel(state: &mut TrackEditorState, track_index: usize, t
             };
             NewTrackType::Signal
         }
-        TrackSource::Script { .. } => unreachable!("returned above"),
+        TrackSource::Script { .. } | TrackSource::Unknown(_) => unreachable!("returned above"),
     };
     state.target_selector_state = TargetSelectorState::default();
 }

@@ -831,6 +831,10 @@ pub struct App {
     /// copied out for the UI.
     pub(super) health_policy: crate::api::health::HealthPolicy,
     pub(super) last_health_check: Option<web_time::Instant>,
+    /// The update check (`poll_update_check`): asked once, when online
+    /// features are on; the answer lands here.
+    pub(super) update_check_started: bool,
+    pub(super) update_check_result: std::sync::Arc<std::sync::Mutex<Option<crate::api::AppLatest>>>,
 }
 impl App {
     pub async fn run(
@@ -1060,6 +1064,8 @@ impl App {
             api_connectivity: crate::api::ApiConnectivity::Unknown,
             health_policy: crate::api::health::HealthPolicy::default(),
             last_health_check: None,
+            update_check_started: false,
+            update_check_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
 
         // A scripted run may go without it (`FFLAME_FRAME_LOG_NO_GPU_TIMER`;
@@ -2129,6 +2135,7 @@ impl App {
 
         // Poll API health check and trigger periodic checks
         self.poll_health_check();
+        self.poll_update_check();
 
         // Handle PNG export: rendered at the picture's size -- the View
         // panel's Output Size, `FractalConfig::image_size` -- fitted to the

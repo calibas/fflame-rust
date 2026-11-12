@@ -1629,6 +1629,8 @@ browser:
 
 # API (cloud save/update)
 api:
+  update_available: "Version %{version} is available."
+  newer_config: "This was made by a newer version. Settings this version cannot read are not shown, and are kept when you save."
   save_dialog_title: "Save Online"
   save_dialog_name_label: "Flame Name:"
   save_dialog_thumbnail: "Upload thumbnail"
@@ -1713,6 +1715,7 @@ fractal_gallery:
   render_mode_3d: "3D"
   render_mode_escape: "Escape-time"
   render_mode_simulation: "Simulation"
+  render_mode_newer: "a kind of fractal this version cannot open"
   zoom: "Zoom: %{value}"
   max_iterations: "Max Iterations: %{value}"
   color_mode: "Color Mode: %{value}"
@@ -1838,6 +1841,7 @@ animation_panel:
 
 # Track Editor (Animation panel sub-section)
 track_editor:
+  unreadable_track: "A track this version cannot play (made by a newer version). It is kept as it is and saved unchanged."
   # Script tracks (docs/archive/projects/rhai-tracks.md)
   script_track: "Script track"
   add_script_track: "Add Script Track"

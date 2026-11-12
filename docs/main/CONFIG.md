@@ -146,8 +146,10 @@ version bump and a migration arm that restores the old value (see
 `FractalConfig::to_json()` is `to_json_value()` printed pretty.
 `to_json_value()` produces the canonical form:
 
-- `version` first (`CURRENT_CONFIG_VERSION`), then `flame`, then the
-  remaining fields;
+- `version` first (`CURRENT_CONFIG_VERSION`), then `min_reader` (the
+  lowest version that reads it: `MIN_READER_VERSION`, or the config's own
+  when it came from a newer app with values kept, see *Reading a newer
+  config*), then `flame`, then the remaining fields;
 - fields equal to their defaults omitted, by two mechanisms: serde's
   `skip_serializing_if` on most fields, and `remove_default_fields` for
   the older ones that have none;
@@ -157,8 +159,8 @@ version bump and a migration arm that restores the old value (see
   (the pan) are left alone.
 
 `save_to_file` writes `to_json()`. `to_json_array` and
-`save_multi_to_file` write a JSON array of configs (defaults stripped,
-version first; this path does not normalize the numbers).
+`save_multi_to_file` write a JSON array of configs, each by
+`to_json_value()`.
 `EscapeConfig::texture` embeds a whole config through `to_json_value` /
 `from_json_value`, so a texture recipe is stored and migrated like a
 file.
@@ -174,7 +176,10 @@ plain-derive JSON; see *Versioning*.
 
 `from_json(json)` → `from_json_value(value)`:
 
-1. Read `version`; refuse a version newer than `CURRENT_CONFIG_VERSION`.
+1. Read `version` and `min_reader` (absent: the version). Refuse a
+   config whose `min_reader` is newer than `CURRENT_CONFIG_VERSION`; read
+   one merely written by a newer version, with a warning (*Reading a newer
+   config*).
 2. `migrate_value` on the raw JSON, before deserializing — so an arm can
    tell an absent field (saved at its old default) from a present one.
 3. `lift_path_material`: a shape fix, not a version. An older picture
@@ -182,11 +187,37 @@ plain-derive JSON; see *Versioning*.
    tracer's settings (`escape.path` or `sim.terrain.path`); it is moved
    into `solid_shading` (`gloss`, `roughness`, `glow`), without
    overwriting values already there.
-4. Deserialize; serde fills every still-absent field with its current
-   default.
+4. Deserialize, leniently (`config::unread::deserialize_lenient`): a
+   value that fails to read is set aside and its field takes its default;
+   a list item left without a required field is set aside whole. serde
+   fills every still-absent field with its current default.
 5. `fixup_ids`: assign session-local IDs to every transform, flame and
    effect that arrived with the zero sentinel (IDs are not serialized;
    animation tracks bind to them).
+
+6. For a newer writer's config, record the fields this build does not
+   know (`Unread::capture_unknown_fields`).
+
+### Reading a newer config
+
+A config carries the version that wrote it and the lowest version that
+reads it (`min_reader`; [api-updates.md](../projects/api-updates.md),
+rule 5). A build at least `min_reader` but older than `version` loads it.
+What it cannot read goes into `FractalConfig::unread`
+([src/config/unread.rs](../../src/config/unread.rs)), by JSON pointer:
+- a value that failed to read (an enum value a newer app added, a
+  changed type), its field defaulted;
+- a list item left without a required field;
+- a field it does not know.
+
+`to_json_value` puts each back (`Unread::restore`), unless the user has
+since changed that field: the save keeps what a newer app wrote. It
+stamps this build's `version`, since its omitted fields follow its own
+defaults, and keeps the config's `min_reader`. The app says so once, when
+such a config loads (`ConfigManager::take_newer_config_notice`).
+Animations do the same for their own fields and generators
+(`Animation::from_json_value`); a track keeps its JSON in place
+(`TrackSource::Unknown`).
 
 `from_json_multi` accepts either one object or an array, and
 `load_multi_from_file` reads such a file; File > Open uses it, so one
@@ -692,7 +723,15 @@ What lives there:
 Old files that relied on the old default change with it. Bump
 `CURRENT_CONFIG_VERSION` and add a `migrate_value` arm that restores the
 old default for files that omitted the field
-(`obj.entry("field").or_insert(json!(old))`).
+(`obj.entry("field").or_insert(json!(old))`; an arm never overwrites a
+field already present).
+
+Then **always write the field**, even at its default: drop its
+`skip_serializing_if` (or its `remove_default_fields` line). An older
+build reading the file fills an omitted field with its own, old default,
+so the field has to say its value. `MIN_READER_VERSION` stays: an older
+build still reads the file correctly. Raise `MIN_READER_VERSION` only for
+a change an older build would get wrong (a renamed key, a new meaning).
 
 ### Change the undo depth
 

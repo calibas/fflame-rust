@@ -16,6 +16,7 @@ pub mod defaults;
 pub mod delta;
 pub mod escape;
 pub mod sim;
+pub mod unread;
 pub mod fractal_config;
 pub mod manager;
 pub mod mode;

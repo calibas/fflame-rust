@@ -55,5 +55,6 @@
   },
   "preserve_z": false,
   "render_mode": "2d",
-  "version": 7
+  "version": 7,
+  "min_reader": 7
 }

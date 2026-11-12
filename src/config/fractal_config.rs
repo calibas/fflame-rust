@@ -98,6 +98,20 @@ fn json_is_solid(esc: &serde_json::Map<String, serde_json::Value>) -> bool {
 /// ([`migrate_custom_variation_keys`]).
 pub const CURRENT_CONFIG_VERSION: u32 = 7;
 
+/// The lowest config version whose readers read what this build writes
+/// correctly: written as every config's `min_reader`
+/// (docs/projects/api-updates.md, rule 5). A reader refuses a config whose
+/// `min_reader` is above its own version, and reads, with a warning, one
+/// merely written by a newer version, keeping what it cannot read
+/// ([`crate::config::unread`]).
+///
+/// Raise it only for a change an older reader would get wrong: a key
+/// renamed, a value given a new meaning (v7's Rhai variation keys were
+/// one). A DEFAULT change raises `CURRENT_CONFIG_VERSION` alone, and the
+/// field is then always written, even at its default, because an older
+/// reader would fill it with its own old default.
+pub const MIN_READER_VERSION: u32 = 7;
+
 /// Complete fractal configuration (excludes runtime-only settings)
 /// All fields except `flame` have defaults for compact serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -566,6 +580,13 @@ pub struct FractalConfig {
     /// copied into another's. Empty until the config has changed engine.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub engine_settings: std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
+
+    /// What this config held that this build could not read -- values a
+    /// newer app wrote, fields it added -- set aside at load and written
+    /// back on save ([`crate::config::unread`]). Empty for every config
+    /// this build or an older one wrote.
+    #[serde(skip)]
+    pub unread: crate::config::unread::Unread,
 }
 
 /// Biased transform selection with a windowed likelihood-ratio
@@ -1352,6 +1373,7 @@ impl Default for FractalConfig {
             word_removals: Vec::new(),
             auto_exposure: false,
             engine_settings: Default::default(),
+            unread: Default::default(),
         }
     }
 }
@@ -1581,6 +1603,16 @@ impl FractalConfig {
     /// — `to_json` is just this stringified, and the cloud config blob
     /// (`api::sync`) is this value minus the palette and root transforms.
     pub(crate) fn to_json_value(&self) -> Result<serde_json::Value, serde_json::Error> {
+        let mut out = self.canonical_value()?;
+        // What a newer app wrote that this build could not read goes back
+        // as it was read: after the f32 normalising, so its numbers keep
+        // their writer's digits.
+        self.unread.restore(&mut out);
+        Ok(out)
+    }
+
+    /// [`Self::to_json_value`] without the unread values put back.
+    fn canonical_value(&self) -> Result<serde_json::Value, serde_json::Error> {
         let mut value = serde_json::to_value(self)?;
 
         if let Some(obj) = value.as_object_mut() {
@@ -1588,16 +1620,20 @@ impl FractalConfig {
             let defaults = Self::default();
             Self::remove_default_fields(obj, self, &defaults);
 
-            // Build ordered object with version first
+            // Build ordered object with version first, then the lowest
+            // version that reads it (kept higher when a newer config's
+            // unread values ride along).
             let mut ordered_obj = serde_json::Map::new();
             ordered_obj.insert("version".to_string(), serde_json::json!(CURRENT_CONFIG_VERSION));
+            let min_reader = MIN_READER_VERSION.max(self.unread.min_reader.unwrap_or(0));
+            ordered_obj.insert("min_reader".to_string(), serde_json::json!(min_reader));
 
             // Add flame first (always required), then other non-default fields
             if let Some(flame) = obj.remove("flame") {
                 ordered_obj.insert("flame".to_string(), flame);
             }
             for (k, v) in obj.iter() {
-                if k != "version" {
+                if k != "version" && k != "min_reader" {
                     ordered_obj.insert(k.clone(), v.clone());
                 }
             }
@@ -1938,59 +1974,68 @@ impl FractalConfig {
                 }
             });
 
-        if version > CURRENT_CONFIG_VERSION {
+        // The lowest version that reads it; a config from before
+        // `min_reader` existed is read by its own version and up.
+        let min_reader = value.get("min_reader").and_then(|v| v.as_u64()).map_or(version, |v| v as u32);
+        if min_reader > CURRENT_CONFIG_VERSION {
             return Err(serde_json::Error::io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "Config version {} is newer than supported version {}. Please update the application.",
-                    version, CURRENT_CONFIG_VERSION
+                    min_reader, CURRENT_CONFIG_VERSION
                 ),
             )));
+        }
+        let newer = version > CURRENT_CONFIG_VERSION;
+        if newer {
+            log::warn!(
+                "This config was written by a newer version (config version {version}; this build reads {CURRENT_CONFIG_VERSION}). \
+                 Anything it cannot read is kept and saved back."
+            );
         }
 
         // Migrate on the value (restores version-specific defaults), THEN
         // deserialize — serde fills any still-absent field with the current
         // default, correct for every field a migration arm didn't touch.
+        // (A newer config has no arm to run.)
         Self::migrate_value(version, &mut value)?;
         lift_path_material(&mut value);
-        let mut config: Self = serde_json::from_value(value)?;
+        let read = newer.then(|| {
+            let mut v = value.clone();
+            if let Some(o) = v.as_object_mut() {
+                o.remove("version");
+                o.remove("min_reader");
+            }
+            v
+        });
+
+        // A value that fails to read is set aside and its field defaulted
+        // (`config::unread`), rather than failing the config.
+        let mut unread = crate::config::unread::Unread::default();
+        let mut config: Self = crate::config::unread::deserialize_lenient(value, &mut unread.entries)?;
 
         // Assign session-local IDs to every Transform / Flame / Effect that
         // came in without one (all of them — IDs are serde-skipped).
         config.fixup_ids();
+
+        // A newer writer's fields this build does not know are kept too.
+        if let Some(read) = read {
+            unread.capture_unknown_fields(&read, &serde_json::to_value(&config)?);
+            unread.newer_version = Some(version);
+        }
+        if min_reader > MIN_READER_VERSION {
+            unread.min_reader = Some(min_reader);
+        }
+        if !unread.entries.is_empty() {
+            crate::config::unread::note_filled(&mut unread.entries, &config.canonical_value()?);
+        }
+        config.unread = unread;
         Ok(config)
     }
 
     /// Export multiple configurations to JSON array string
     pub fn to_json_array(configs: &[Self]) -> Result<String, serde_json::Error> {
-        let values: Result<Vec<serde_json::Value>, _> = configs
-            .iter()
-            .map(|config| {
-                let mut value = serde_json::to_value(config)?;
-                if let Some(obj) = value.as_object_mut() {
-                    let defaults = Self::default();
-                    Self::remove_default_fields(obj, config, &defaults);
-
-                    // Build ordered object with version first
-                    let mut ordered_obj = serde_json::Map::new();
-                    ordered_obj.insert("version".to_string(), serde_json::json!(CURRENT_CONFIG_VERSION));
-
-                    // Add flame first (always required), then other non-default fields
-                    if let Some(flame) = obj.remove("flame") {
-                        ordered_obj.insert("flame".to_string(), flame);
-                    }
-                    for (k, v) in obj.iter() {
-                        if k != "version" {
-                            ordered_obj.insert(k.clone(), v.clone());
-                        }
-                    }
-                    Ok(serde_json::Value::Object(ordered_obj))
-                } else {
-                    Ok(value)
-                }
-            })
-            .collect();
-
+        let values: Result<Vec<serde_json::Value>, _> = configs.iter().map(Self::to_json_value).collect();
         serde_json::to_string_pretty(&values?)
     }
 

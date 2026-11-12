@@ -298,6 +298,8 @@ pub fn from_api(p: &crate::api::types::ApiVariationParameter, float: (f32, f32))
         T::UnlimitedInteger => int((-100.0, 100.0), true),
         T::Boolean => ParamKind::Bool { default: p.default_value > 0.5 },
         T::Enum { choices } => ParamKind::Choice { default: p.default_value.round().max(0.0) as usize, options: Options::Owned(choices.clone()) },
+        // A type newer than this build: the float it is stored as.
+        T::Unknown(_) => number((-10.0, 10.0), true, false),
     };
     ParamDef::owned(p.name.clone(), p.display_name.clone(), p.description.clone().unwrap_or_default(), kind)
 }

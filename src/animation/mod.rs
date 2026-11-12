@@ -86,6 +86,13 @@ pub struct Animation {
     /// config with the tracks' last values in it.
     #[serde(skip)]
     pub script_rest: std::collections::HashMap<String, script::Rest>,
+
+    /// What this animation held that this build could not read -- a
+    /// generator of a newer kind, a field a newer app added -- set aside
+    /// at load and written back on save (`config::unread`; a track it
+    /// cannot read is kept in place instead, `TrackSource::Unknown`).
+    #[serde(skip)]
+    pub unread: crate::config::unread::Unread,
 }
 
 /// Motion blur (docs/archive/projects/motion-blur.md): a frame is the average of
@@ -275,7 +282,15 @@ pub struct TrackBinding {
 }
 
 /// Single parameter track
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Read leniently: a track this build cannot read (a newer kind, a field
+/// it does not know how to parse) becomes a track whose source is
+/// [`TrackSource::Unknown`], holding the track's JSON as it was read, and
+/// is written back exactly so. It plays nothing. Before this, one such
+/// track made the whole list unreadable, and the animation loaded with no
+/// tracks at all -- and a save then erased them on the server
+/// (docs/projects/api-updates.md, hazard 3).
+#[derive(Debug, Clone)]
 pub struct Track {
     /// Target parameter path (ConfigPath string key)
     pub target: String,
@@ -285,14 +300,12 @@ pub struct Track {
     /// the flame's `subflames` list. Defaults to `Main` so older
     /// `.anim` files (predating subflame support) deserialize against
     /// the main flame exactly as they used to.
-    #[serde(default)]
     pub flame_target: EditingTarget,
 
     /// Source of track values (keyframes or procedural)
     pub source: TrackSource,
 
     /// Interpolation method (for keyframe tracks)
-    #[serde(default)]
     pub interpolation: Interpolation,
 
     /// Runtime-only handle to whichever list-items this track
@@ -303,8 +316,56 @@ pub struct Track {
     /// `target` is always the source of truth for *where to apply*; the
     /// rebind hook reads `bound` to look up where each tracked item
     /// is *now* and rewrites the index inside `target` to match.
-    #[serde(skip)]
     pub bound: TrackBinding,
+}
+
+/// The track as files and the API spell it.
+#[derive(Serialize, Deserialize)]
+struct TrackRepr {
+    target: String,
+    #[serde(default)]
+    flame_target: EditingTarget,
+    source: TrackSource,
+    #[serde(default)]
+    interpolation: Interpolation,
+}
+
+/// The same, borrowed, for writing.
+#[derive(Serialize)]
+struct TrackReprRef<'a> {
+    target: &'a str,
+    flame_target: &'a EditingTarget,
+    source: &'a TrackSource,
+    interpolation: &'a Interpolation,
+}
+
+impl Serialize for Track {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if let TrackSource::Unknown(raw) = &self.source {
+            return raw.serialize(s);
+        }
+        TrackReprRef { target: &self.target, flame_target: &self.flame_target, source: &self.source, interpolation: &self.interpolation }
+            .serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for Track {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = serde_json::Value::deserialize(d)?;
+        Ok(match serde_json::from_value::<TrackRepr>(raw.clone()) {
+            Ok(r) => Track { target: r.target, flame_target: r.flame_target, source: r.source, interpolation: r.interpolation, bound: TrackBinding::default() },
+            Err(e) => {
+                log::warn!("kept a track this version cannot read, unplayed: {e}");
+                Track {
+                    target: raw.get("target").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    flame_target: EditingTarget::default(),
+                    source: TrackSource::Unknown(raw),
+                    interpolation: Interpolation::default(),
+                    bound: TrackBinding::default(),
+                }
+            }
+        })
+    }
 }
 
 /// Source of track values
@@ -359,6 +420,12 @@ pub enum TrackSource {
         #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
         params: std::collections::BTreeMap<String, f64>,
     },
+
+    /// A track this build cannot read, as it was read: plays nothing, and
+    /// is written back unchanged (see [`Track`]). Never produced by this
+    /// enum's own serde: `Track` reads and writes it.
+    #[serde(skip)]
+    Unknown(serde_json::Value),
 }
 
 /// Single keyframe defining parameter value at specific time
@@ -409,6 +476,7 @@ impl Animation {
             loop_mode: LoopMode::Once,
             motion_blur: MotionBlur::default(),
             script_rest: Default::default(),
+            unread: Default::default(),
         }
     }
 
@@ -423,6 +491,7 @@ impl Animation {
             loop_mode: LoopMode::Once,
             motion_blur: MotionBlur::default(),
             script_rest: Default::default(),
+            unread: Default::default(),
         }
     }
 
@@ -507,9 +576,45 @@ impl Animation {
     /// Load from JSON file. A zoom track saved in base 2 comes back in
     /// base 10 (`zoom_tracks_to_log10`).
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        let mut anim: Self = serde_json::from_str(json)?;
+        Self::from_json_value(serde_json::from_str(json)?)
+    }
+
+    /// [`Self::from_json`] from a JSON value. What this build cannot read
+    /// is set aside, not fatal: a value or a list item (a generator of a
+    /// newer kind) is kept in `unread`, and so is a field it does not
+    /// know, for the save to write back. The embedded `base_config`
+    /// keeps its own (`FractalConfig::unread`); tracks keep theirs in
+    /// place.
+    pub fn from_json_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
+        let mut unread = crate::config::unread::Unread::default();
+        let mut anim: Self = crate::config::unread::deserialize_lenient(value.clone(), &mut unread.entries)?;
+        let mut known = serde_json::to_value(&anim)?;
+        let mut read = value;
+        for v in [&mut read, &mut known] {
+            if let Some(o) = v.as_object_mut() {
+                o.remove("base_config");
+                o.remove("tracks");
+            }
+        }
+        // A field set aside above is not also an unknown one.
+        let aside: Vec<String> = unread.entries.iter().map(|e| e.pointer.clone()).collect();
+        let mut fields = crate::config::unread::Unread::default();
+        fields.capture_unknown_fields(&read, &known);
+        unread.entries.extend(fields.entries.into_iter().filter(|e| !aside.iter().any(|a| e.pointer.starts_with(a.as_str()))));
+        if !unread.entries.is_empty() {
+            crate::config::unread::note_filled(&mut unread.entries, &serde_json::to_value(&anim)?);
+        }
+        anim.unread = unread;
         anim.zoom_tracks_to_log10();
         Ok(anim)
+    }
+
+    /// The animation as a file and the API write it, with what it could
+    /// not read put back.
+    pub fn to_json_value(&self) -> Result<serde_json::Value, serde_json::Error> {
+        let mut v = serde_json::to_value(self)?;
+        self.unread.restore(&mut v);
+        Ok(v)
     }
 
     /// **Escape-time zoom tracks in base 10**, what the user sees. Tracks
@@ -537,14 +642,14 @@ impl Animation {
                     *max_output *= k;
                 }
                 // Its script names what it writes.
-                TrackSource::Script { .. } => {}
+                TrackSource::Script { .. } | TrackSource::Unknown(_) => {}
             }
         }
     }
 
     /// Save to JSON string
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
+        serde_json::to_string_pretty(&self.to_json_value()?)
     }
 
     /// Resolve every track's `(flame_target, target)` against the given

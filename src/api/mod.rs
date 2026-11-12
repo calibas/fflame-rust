@@ -12,6 +12,8 @@ pub mod client;
 pub mod health;
 pub mod sync;
 pub mod types;
+#[cfg(test)]
+mod future_tests;
 
 use crate::config::FractalConfig;
 use crate::resources::{FetchError, FetchResult, LoadState};
@@ -250,7 +252,7 @@ impl ApiState {
         );
 
         self.flames_load_state = LoadState::Loading;
-        match client::api_get::<Vec<FlameListItem>>(&url, &token).await {
+        match client::api_get::<types::Lenient<FlameListItem>>(&url, &token).await.map(types::Lenient::into_inner) {
             Ok(flames) => {
                 self.flames = flames.clone();
                 self.flames_load_state = LoadState::Loaded;
@@ -395,7 +397,7 @@ impl ApiState {
             API_BASE_URL,
             &format!("/api/search/flames{}", params.to_query_string()),
         );
-        client::api_get(&url, &token).await
+        client::api_get::<types::Lenient<FlameListItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
 
     /// Search public flames without auth (for gallery browsing).
@@ -407,7 +409,7 @@ impl ApiState {
             API_BASE_URL,
             &format!("/api/search/flames{}", params.to_query_string()),
         );
-        client::api_get_unauth(&url).await
+        client::api_get_unauth::<types::Lenient<FlameListItem>>(&url).await.map(types::Lenient::into_inner)
     }
 
     // --- Palette library operations ---
@@ -425,7 +427,7 @@ impl ApiState {
             API_BASE_URL,
             &format!("/api/users/me/palettes?page={}&per_page={}", page, per_page),
         );
-        client::api_get(&url, &token).await
+        client::api_get::<types::Lenient<LibraryPaletteEntry>>(&url, &token).await.map(types::Lenient::into_inner)
     }
 
     /// Fetch a single palette by content hash. Public — no auth required.
@@ -542,7 +544,7 @@ impl ApiState {
             API_BASE_URL,
             &format!("/api/flames/{}/animations", flame_id),
         );
-        client::api_get(&url, &token).await
+        client::api_get::<types::Lenient<AnimationListItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
 
     // --- Helpers ---
@@ -592,7 +594,7 @@ impl ApiState {
             API_BASE_URL,
             &format!("/api/scripts?page={page}&per_page={per_page}"),
         );
-        client::api_get(&url, &token).await
+        client::api_get::<types::Lenient<types::ScriptListItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
 
     /// Create a script. Returns the server's copy — including the id,
@@ -668,7 +670,7 @@ impl ApiState {
                 urlencode(query)
             ),
         );
-        self.public_get(&url).await
+        self.public_get::<types::Lenient<types::ScriptListItem>>(&url).await.map(types::Lenient::into_inner)
     }
 
     // ========================================================================
@@ -678,7 +680,7 @@ impl ApiState {
     /// The effect catalog — everything the server knows, without shaders.
     pub async fn list_effects(&self) -> FetchResult<Vec<types::EffectListItem>> {
         let url = build_url(API_BASE_URL, "/api/effects");
-        self.public_get(&url).await
+        self.public_get::<types::Lenient<types::EffectListItem>>(&url).await.map(types::Lenient::into_inner)
     }
 
     /// One effect, with its WGSL.
@@ -701,13 +703,60 @@ impl ApiState {
     /// List all available variations on the server (summary form, no shader code).
     pub async fn list_variations(&self) -> FetchResult<Vec<types::VariationListItem>> {
         let url = build_url(API_BASE_URL, "/api/variations");
-        client::api_get::<Vec<types::VariationListItem>>(&url, "").await
+        client::api_get::<types::Lenient<types::VariationListItem>>(&url, "").await.map(types::Lenient::into_inner)
+    }
+}
+
+/// The newest app release, as `GET /api/app/latest` gives it
+/// (docs/projects/api-updates.md, rule 7).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct AppLatest {
+    pub version: String,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+/// Ask the server for the newest release. `None` on any failure -- the
+/// endpoint is newer than this client, and an update notice is never worth
+/// an error.
+pub async fn latest_app_version(base_url: &str) -> Option<AppLatest> {
+    let url = build_url(base_url, "/api/app/latest");
+    client::api_get_unauth::<AppLatest>(&url).await.ok()
+}
+
+/// Whether release `latest` is newer than `current`, comparing dotted
+/// numbers (`0.6.0` < `0.6.1` < `0.10.0`); anything after a `-` or `+`
+/// is ignored, and a version that does not parse is never newer.
+pub fn is_newer_release(latest: &str, current: &str) -> bool {
+    fn parts(v: &str) -> Option<Vec<u64>> {
+        let core = v.trim().trim_start_matches('v').split(['-', '+']).next()?;
+        core.split('.').map(|p| p.parse().ok()).collect()
+    }
+    match (parts(latest), parts(current)) {
+        (Some(mut a), Some(mut b)) => {
+            let n = a.len().max(b.len());
+            a.resize(n, 0);
+            b.resize(n, 0);
+            a > b
+        }
+        _ => false,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_versions_compare_as_numbers() {
+        assert!(is_newer_release("0.6.1", "0.6.0"));
+        assert!(is_newer_release("0.10.0", "0.9.9"));
+        assert!(is_newer_release("1.0", "0.9.9"));
+        assert!(!is_newer_release("0.6.0", "0.6.0"));
+        assert!(!is_newer_release("0.6.0-beta", "0.6.0"));
+        assert!(!is_newer_release("0.5.9", "0.6.0"));
+        assert!(!is_newer_release("soon", "0.6.0"));
+    }
     use crate::scene::transforms::RenderMode;
 
     /// The Save Online seatbelt: a simulation config is refused before
