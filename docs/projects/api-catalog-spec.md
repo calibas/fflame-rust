@@ -213,9 +213,9 @@ GET /api/flames?reader=7                         -- only what a version-7 reader
 GET /api/types?engine=escape&kind=formula[&q=mandel]   -- browse: types with counts
 ```
 
-- `reader` is the general-purpose version filter: any client may send it.
-  Absent, everything is listed. For the legacy User-Agent (0.5),
-  `reader=3` is implied (api-updates.md decision 6).
+- `reader` is the version every request states (api-updates.md rule 2):
+  only what a reader of that version can open is listed. Absent, it is 3,
+  the original vocabulary.
 - `GET /api/types` lists types with how many public configs use each, for
   "browse by fractal type" menus. Counts are a `GROUP BY` over
   `flame_components` at first, cached if they get hot.
