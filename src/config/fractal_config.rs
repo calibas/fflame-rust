@@ -1438,6 +1438,21 @@ impl Default for FractalConfig {
     }
 }
 
+/// Apply `edit` to every engine's stash in a config's JSON
+/// (`engine_settings`: engine -> its engine-owned fields), for a migration
+/// arm from v7 on (see `migrate_value`).
+// No arm needs it yet (the last, v6 -> v7, predates stashes); the test holds it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn for_each_stash(obj: &mut serde_json::Map<String, serde_json::Value>, mut edit: impl FnMut(&mut serde_json::Map<String, serde_json::Value>)) {
+    if let Some(stashes) = obj.get_mut("engine_settings").and_then(|s| s.as_object_mut()) {
+        for stash in stashes.values_mut() {
+            if let Some(stash) = stash.as_object_mut() {
+                edit(stash);
+            }
+        }
+    }
+}
+
 /// The v6→v7 arm: every Rhai variation a flame (or a subflame) carries
 /// under its `INFO.name` takes its key -- the name's derived id and the
 /// source's version, `scripted::key(scripted::derived_id(name), source)`,
@@ -1679,7 +1694,7 @@ impl FractalConfig {
     }
 
     /// [`Self::to_json_value`] without the unread values put back.
-    fn canonical_value(&self) -> Result<serde_json::Value, serde_json::Error> {
+    pub(crate) fn canonical_value(&self) -> Result<serde_json::Value, serde_json::Error> {
         let mut value = serde_json::to_value(self)?;
 
         if let Some(obj) = value.as_object_mut() {
@@ -1881,6 +1896,12 @@ impl FractalConfig {
                 // v6 -> v7: a Rhai variation is keyed by its id and version,
                 // not its name.
                 6 => migrate_custom_variation_keys(obj),
+                // From here on, an arm also runs inside every engine's
+                // stash (`engine_settings`, which appeared after v7): call
+                // it on `obj`, then `for_each_stash(obj, ..)` with the same
+                // edit. An arm touching an engine-owned field (a default
+                // change to the tone map, say) must reach a stash too, or
+                // switching engines would bring back the old value.
                 other => {
                     return Err(serde_json::Error::io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,

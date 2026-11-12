@@ -352,8 +352,16 @@ engine's, or its defaults the first time -- nothing is copied between
 engines. 2D and 3D flames are one engine. What the flame alone reads
 (`FLAME_ONLY`) is untouched by a switch; `image_size` and
 `deterministic_rng` are shared. `every_config_field_is_classified` holds
-every field of `FractalConfig` to one of these classes. A migration that
-renames an engine-owned field must also migrate the stash's copies.
+every field of `FractalConfig` to one of these classes.
+
+The stash is read like a file, leniently: a value this build cannot read
+is set aside (its field defaulted) instead of resetting the engine, goes
+into `FractalConfig::unread` while the engine is shown (so a save writes
+it back), and returns to the stash when the engine is left
+(`a_stash_keeps_what_it_cannot_read`). A migration arm from v7 on that
+touches an engine-owned field (a renamed key, a default change) must reach
+the stash too: `for_each_stash` in `migrate_value`. No stash predates v7,
+so no earlier arm needs to.
 
 **A drawn flame is never empty.** A config made in another engine (a
 simulation, a script's escape picture) has a flame with no transforms.
