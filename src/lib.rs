@@ -37,6 +37,7 @@ pub mod version;
 pub mod variations;
 pub mod png_metadata;
 pub mod flame_xml;
+pub mod catalog;
 pub mod i18n;
 pub mod animation;
 pub mod signal;
