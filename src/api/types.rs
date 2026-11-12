@@ -152,10 +152,8 @@ pub enum ApiRenderMode {
     /// is, with the same two consequences: `transform_count` is 0 and
     /// `variation_names` is empty for these, legitimately.
     ///
-    /// The server's Postgres `render_mode` enum does NOT know this
-    /// value yet, so `ApiState::save_flame` / `update_flame` refuse to
-    /// upload one client-side (`refuse_unsupported_online`) until it
-    /// does — the same sequence escape went through on 2026-08-29.
+    /// The server stores it from migration 102 (2026-11-11), and lists it
+    /// only to a request naming reader 7 or more.
     Simulation = "simulation",
 }
 }
@@ -597,6 +595,10 @@ pub struct CreateAnimationRequest {
     pub generators: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_config: Option<serde_json::Value>,
+    /// The animation's motion blur, when it has one (the server stores it
+    /// from migration 105; an older server ignores the field).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub motion_blur: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visibility: Option<ApiVisibility>,
 }
@@ -612,6 +614,9 @@ pub struct AnimationResponse {
     pub tracks: Option<serde_json::Value>,
     pub generators: Option<serde_json::Value>,
     pub base_config: Option<serde_json::Value>,
+    /// Absent from an older server, or when the animation has none.
+    #[serde(default)]
+    pub motion_blur: Option<serde_json::Value>,
     pub flame_id: Option<String>,
     /// Full flame data embedded by the server (same shape as FlameResponse).
     /// Authoritative source for the flame config — no separate flame request needed.
