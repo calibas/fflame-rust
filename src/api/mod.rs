@@ -9,6 +9,7 @@
 
 pub mod auth;
 pub mod client;
+pub mod entries;
 pub mod health;
 pub mod sync;
 pub mod types;
@@ -559,33 +560,32 @@ impl ApiState {
     // Scripts
     // ========================================================================
 
-    /// The caller's own scripts.
+    /// The caller's own scripts, of one kind (its wire name,
+    /// `storage::library::Kind::wire`) or every kind.
     pub async fn list_my_scripts(
         &self,
+        kind: Option<&str>,
         page: u32,
         per_page: u32,
     ) -> FetchResult<Vec<types::ScriptListItem>> {
         let token = self.require_token()?;
         let url = build_url(
             API_BASE_URL,
-            &format!("/api/scripts?page={page}&per_page={per_page}"),
+            &format!("/api/scripts?page={page}&per_page={per_page}{}", kind_param(kind)),
         );
         client::api_get::<types::Lenient<types::ScriptListItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
 
     /// Create a script. Returns the server's copy — including the id,
     /// and the version to hold for the next update.
-    pub async fn create_script(
-        &self,
-        name: &str,
-        source: &str,
-        visibility: Option<ApiVisibility>,
-    ) -> FetchResult<types::ScriptResponse> {
+    ///
+    /// `req` from `sync::script_to_create_request` (a CPU script) or
+    /// `entries::create_request` (a formula-library entry, under its own
+    /// id: a 409 when that id is published already).
+    pub async fn create_script(&self, req: &types::ScriptCreateRequest) -> FetchResult<types::ScriptResponse> {
         let token = self.require_token()?;
-        let req = sync::script_to_create_request(name, source, visibility, None)
-            .map_err(FetchError::Parse)?;
         let url = build_url(API_BASE_URL, "/api/scripts");
-        client::api_post(&url, &req, &token).await
+        client::api_post(&url, req, &token).await
     }
 
     /// Fetch one script, source included.
@@ -605,19 +605,13 @@ impl ApiState {
     /// On refusal, [`types::ScriptConflict::from_error`] recovers the
     /// current version so the caller can offer a choice rather than an
     /// apology.
-    pub async fn update_script(
-        &self,
-        id: &str,
-        name: &str,
-        source: &str,
-        visibility: Option<ApiVisibility>,
-        version: u32,
-    ) -> FetchResult<types::ScriptResponse> {
+    ///
+    /// `req` carries the `version` (built as for [`Self::create_script`],
+    /// with `Some(version)`).
+    pub async fn update_script(&self, id: &str, req: &types::ScriptCreateRequest) -> FetchResult<types::ScriptResponse> {
         let token = self.require_token()?;
-        let req = sync::script_to_create_request(name, source, visibility, Some(version))
-            .map_err(FetchError::Parse)?;
         let url = build_url(API_BASE_URL, &format!("/api/scripts/{id}"));
-        client::api_put(&url, &req, &token).await
+        client::api_put(&url, req, &token).await
     }
 
     pub async fn delete_script(&self, id: &str) -> FetchResult<()> {
@@ -633,17 +627,21 @@ impl ApiState {
     /// anything loaded from here must be run through
     /// `ScriptHost::with_untrusted` — which is what makes running one
     /// survivable rather than merely allowed.
+    ///
+    /// `kind` narrows it to one kind (its wire name).
     pub async fn search_public_scripts(
         &self,
         query: &str,
+        kind: Option<&str>,
         page: u32,
         per_page: u32,
     ) -> FetchResult<Vec<types::ScriptListItem>> {
         let url = build_url(
             API_BASE_URL,
             &format!(
-                "/api/search/scripts?q={}&page={page}&per_page={per_page}",
-                urlencode(query)
+                "/api/search/scripts?q={}&page={page}&per_page={per_page}{}",
+                urlencode(query),
+                kind_param(kind)
             ),
         );
         self.public_get::<types::Lenient<types::ScriptListItem>>(&url).await.map(types::Lenient::into_inner)
@@ -717,6 +715,11 @@ pub fn is_newer_release(latest: &str, current: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// `&kind=<wire name>`, or nothing for every kind.
+fn kind_param(kind: Option<&str>) -> String {
+    kind.map(|k| format!("&kind={}", urlencode(k))).unwrap_or_default()
 }
 
 #[cfg(test)]

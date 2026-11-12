@@ -755,6 +755,11 @@ pub struct ScriptCreateRequest {
     /// from the idiom.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
+    /// A formula-library entry's `INFO.id`, the id the server stores it
+    /// under (`api::entries`); absent for a CPU script, which the server
+    /// gives one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 /// The body of a `409 Conflict`: somebody else wrote first.

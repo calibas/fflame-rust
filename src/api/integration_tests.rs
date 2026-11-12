@@ -202,3 +202,57 @@ fn the_server_catalogs_what_the_app_saves() {
     let app = crate::catalog::summary(&config);
     assert_eq!((app.engine.as_str(), app.scene.as_str()), ("escape", "terrain"));
 }
+
+/// A Rhai formula on the scripts resource (docs/projects/rhai-scripts-online.md):
+/// published under its own `INFO.id` and updated by its author; another
+/// account cannot take the id, finds it by kind, and adopts it into the
+/// formula library as somebody else's, the id kept.
+#[cfg(feature = "web-app")]
+#[test]
+#[ignore = "needs a local ffapi: python scripts/api_integration.py"]
+fn a_rhai_formula_is_published_under_its_id_and_adopted_by_another_account() {
+    use crate::app::script_cloud::{adopt, Local};
+    use crate::storage::formula_store;
+    if server().is_none() {
+        return;
+    }
+    let id = crate::scripted::mint_id();
+    let name = format!("it_spiral_{}", &id[..8]);
+    let file = format!("{name}.rhai");
+    let source = crate::lang::rhai::with_own_id(
+        &format!("const INFO = #{{ title: \"{name}\" }};\nfn start(pixel, p) {{ #{{ z: pixel }} }}\nfn step(s, p) {{ s.z = s.z * s.z; s }}\nfn escaped(s, p) {{ s.z.norm_sqr() > 4.0 }}\n"),
+        &id,
+    );
+
+    let author = signed_in();
+    let req = entries::create_request(&file, &source, Some(ApiVisibility::Public), None).unwrap();
+    let created = block(author.create_script(&req)).unwrap_or_else(|e| panic!("publish: {e}"));
+    assert_eq!(created.id, id, "stored under its own id");
+    assert_eq!(created.kind.as_deref(), Some("formula"));
+    let edited = source.replacen("4.0", "8.0", 1);
+    let update = entries::create_request(&file, &edited, None, Some(created.version)).unwrap();
+    let updated = block(author.update_script(&id, &update)).unwrap_or_else(|e| panic!("update: {e}"));
+    assert!(updated.version > created.version);
+    let mine = block(author.list_my_scripts(Some("formula"), 1, 100)).unwrap();
+    assert!(mine.iter().any(|s| s.id == id), "listed as the author's formula");
+
+    let other = signed_in();
+    let taken = block(other.create_script(&req)).expect_err("the first to publish an id owns it");
+    assert!(matches!(taken, crate::resources::FetchError::Http { status: 409, .. }), "{taken}");
+    let found = block(other.search_public_scripts(&name, Some("formula"), 1, 50)).unwrap();
+    assert!(found.iter().any(|s| s.id == id), "found by kind");
+    let generators = block(other.search_public_scripts(&name, Some("generator"), 1, 50)).unwrap();
+    assert!(!generators.iter().any(|s| s.id == id));
+
+    let resp = block(other.load_script(&id)).unwrap();
+    let Ok(Local::Entry(adopted)) = adopt(&resp) else { panic!("a formula is adopted into the formula library") };
+    let link = formula_store::link_of(&adopted).expect("a link");
+    let text = formula_store::load(&adopted).expect("saved");
+    formula_store::delete(&adopted).expect("delete the adopted copy");
+    assert!(link.from_others, "somebody else's");
+    assert_eq!(link.cloud_id.as_deref(), Some(id.as_str()));
+    assert_eq!(text, edited, "the server's latest");
+    assert_eq!(crate::lang::rhai::info_string(&text, "id").as_deref(), Some(id.as_str()), "the copy is that script: its id kept");
+
+    block(author.delete_script(&id)).unwrap_or_else(|e| panic!("unpublish: {e}"));
+}

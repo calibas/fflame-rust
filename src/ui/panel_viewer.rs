@@ -818,7 +818,15 @@ impl<'a> PanelViewer<'a> {
                 self.context
                     .formula_editor
                     .get_or_insert_with(super::formula_editor::FormulaEditorPanel::new)
-                    .render(ui, self.context.config_manager, self.context.animation_controller, self.context.window);
+                    .render(
+                        ui,
+                        self.context.config_manager,
+                        self.context.animation_controller,
+                        self.context.script_cloud,
+                        self.context.signed_in,
+                        self.context.script_cloud_request,
+                        self.context.window,
+                    );
             }
             PanelType::HybridDesigner => {
                 self.context
