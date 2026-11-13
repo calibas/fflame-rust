@@ -2879,9 +2879,9 @@ ms -- the whole render, then the GPU's part:
 | --- | --- | --- | --- | --- |
 | Mandelbrot, seahorse zoom 42, 8,000 | 31 | 39 | 20 | 25 |
 | Mandelbrot, seahorse zoom 60, 30,000, floatexp | 177 | 139 | 25 | 36 |
-| Mandelbrot, zoom 30, 20,000 | 127 | 147 | 126 | 145 (128) |
+| Mandelbrot, zoom 30, 20,000 | 127 | 132 | 126 | 131 |
 | Multibrot power 4, zoom 30 | 8 | 11 | 5 | 7 |
-| Tricorn, suite view zoom 28 | 165 | 180 (141) | 119 | 156 (119) |
+| Tricorn, suite view zoom 28 | 165 | 155 | 119 | 131 |
 | Tricorn interior, zoom 30 | 60 | 78 | 6 | 7 |
 | Burning Ship, suite view zoom 60, floatexp | 42 | 90 | 38 | 69 |
 | Burning Ship interior, zoom 30 | 88 | 173 | 6 | 8 |
@@ -2891,11 +2891,15 @@ ms -- the whole render, then the GPU's part:
 | Kaliset (both views), zoom 30, 60 | 4 | 6 | 4 | 5 |
 | Newton z^3 - 1 (both schemes), zoom 30, 400 | 5-6 | 28-29 | 4 | 27-29 |
 
-Two of the twins' GPU times grew since October with the built-ins'
-unchanged, steady over three runs: the Mandelbrot at zoom 30 and the
-Tricorn's suite view, whose twin now builds a 2 ms BLA table against the
-built-in's 22 -- likely a table that no longer skips there. Not yet
-traced.
+Two rows had grown since October with the built-ins unchanged -- the
+Mandelbrot at zoom 30 (145 ms of GPU time) and the Tricorn's suite view
+(156) -- bisected to the commit that gave custom formulas the built-ins'
+escape margin: its `ref_r2` read beside the scaled rebase's
+every-iteration low words. The rebase now decides as the built-ins' and
+forms the deviation only on a rebase (`assembler::rebase_custom_scaled`),
+and the rows read as above (2026-11-13). The Tricorn twin's BLA table
+was already small in October (1.6 ms to build against the built-in's
+16-22): its whole render still beats the built-in's.
 
 What made the references cheap: big floats keep up to eight limbs
 inline (`bigfloat::Limbs`, a `SmallVec`: an operation or a variable's
