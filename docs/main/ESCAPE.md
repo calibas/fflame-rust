@@ -2839,11 +2839,14 @@ it through `custom::native_builtins` and checks that the name renders
 the twin exactly), and what runs if the twin ever fails to compile.
 
 Retired (`twins::RETIRED`): **Spider, Cactus, Exponential, Tetration,
-Collatz, Lambda Sine, Lattès, Origami** -- none had native deep zoom, so
-all but Origami (whose twin has no perturbed tier either) gained it, and Collatz gained a
-derivative (distance estimation). Kaliset and Newton pass on the direct
-path but not at depth (Newton's twin about five times slower there); the
-rest are over the line on a path too (the tables below).
+Collatz, Lambda Sine, Lattès, Origami, Barnsley, Littlewood,
+Novaretti** -- none had native deep zoom, so all but Origami (whose twin
+has no perturbed tier either) gained it, and Collatz gained a derivative
+(distance estimation). The last three passed once interior detection
+compared only what a pass carries (below). The formulas with a native
+deep-zoom tier now pass on the direct path, Ducks and Feather aside,
+and wait on their deep views; Trig, with no native tier, reads 0 to +7%
+(the tables below).
 
 ### How fast the twins are
 
@@ -2853,22 +2856,29 @@ preset) at 2000 iterations, 1024x768, pipelines warm, the best of nine
 
 | formula | built-in | twin | | formula | built-in | twin |
 | --- | --- | --- | --- | --- | --- | --- |
-| Mandelbrot | 0.89 | 0.87 | | Exponential | 1.26 | 1.17 |
-| Multibrot | 1.94 | 2.23 | | Trig | 2.00 | 2.24 |
-| Tricorn | 1.56 | 0.83 | | Ducks | 29.05 | 32.27 |
-| Burning Ship | 1.58 | 1.75 | | Tetration | 3.75 | 3.83 |
-| McMullen | 0.54 | 0.57 | | Collatz | 0.67 | 0.70 |
-| Kaliset | 7.77 | 7.36 | | Feather | 5.17 | 5.80 |
-| Phoenix | 1.06 | 1.31 | | Newton | 0.68 | 0.71 |
-| Lambda | 1.29 | 1.30 | | Nova | 2.79 | 3.05 |
-| Spider | 1.07 | 1.03 | | Magnet | 1.19 | 1.82 |
-| Manowar | 0.40 | 0.50 | | Novaretti | 8.16 | 10.58 |
-| Barnsley | 0.79 | 1.10 | | Littlewood | 5.05 | 6.62 |
-| Cactus | 0.59 | 0.60 | | Lambda Sine | 0.98 | 0.95 |
-| Origami | 9.22 | 9.35 | | Lattès | 35.86 | 35.75 |
+| Mandelbrot | 0.95 | 0.79 | | Exponential | 1.29 | 1.10 |
+| Multibrot | 1.95 | 1.95 | | Trig | 1.93 | 1.93 |
+| Tricorn | 1.54 | 0.72 | | Ducks | 28.65 | 32.31 |
+| Burning Ship | 1.77 | 1.33 | | Tetration | 3.71 | 3.41 |
+| McMullen | 0.65 | 0.61 | | Collatz | 0.60 | 0.60 |
+| Kaliset | 7.50 | 7.71 | | Feather | 5.15 | 5.50 |
+| Phoenix | 1.07 | 1.02 | | Newton | 0.66 | 0.70 |
+| Lambda | 1.23 | 1.04 | | Nova | 2.78 | 2.90 |
+| Spider | 1.07 | 0.98 | | Magnet | 1.11 | 1.10 |
+| Manowar | 0.39 | 0.41 | | Novaretti | 7.98 | 8.12 |
+| Barnsley | 0.80 | 0.64 | | Littlewood | 4.88 | 4.08 |
+| Cactus | 0.62 | 0.60 | | Lambda Sine | 1.02 | 0.91 |
+| Origami | 9.16 | 9.23 | | Lattès | 35.95 | 35.67 |
 
-Views this fast leave a few percent to chance; the large gaps (Magnet,
-Barnsley, Littlewood, Novaretti, Phoenix, Manowar) are not.
+Views this fast leave a few percent to chance (Trig reads 0 to +7% over
+three runs, Newton +2 to +6%). Until 2026-11-13 the interior detection
+(`formula_same`) compared every variable of a program's state, a pass's
+temporaries included, which kept them and their snapshot live across
+passes: Magnet's twin was +53%, Barnsley's +40%, Littlewood's +31%,
+Novaretti's +30%, Phoenix's and Manowar's +23%. Ducks' remaining gap is
+the exact `atan2` (`uf_atan2`, IEEE at the zero pairs where Metal's is
+wrong): with the raw built-in, +3%. A branch form and a sign-carrying
+nudge of x measured no faster than the `select`.
 
 At **depth**, a twin against its built-in, each render from cold at
 512x384 with BLA where the tier has it (`measure_twins_against_their_builtins`,

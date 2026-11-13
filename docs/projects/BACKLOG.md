@@ -191,9 +191,10 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   `.ulb`, `.upr`; UF `#color` (refused, `check.rs`); `.uxf` transforms;
   KF `.kfr` hybrid import.
 - **Retire native formulas** where twins match (D7; the line: no more
-  than 5% slower on every path the built-in has, user 2026-11-13). Eight
-  retired on branch `retire-escape-builtins` (Spider, Cactus,
-  Exponential, Tetration, Collatz, Lambda Sine, Lattès, Origami;
+  than 5% slower on every path the built-in has, user 2026-11-13).
+  Eleven retired on branch `retire-escape-builtins` (Spider, Cactus,
+  Exponential, Tetration, Collatz, Lambda Sine, Lattès, Origami,
+  Barnsley, Littlewood, Novaretti;
   [ESCAPE.md](../main/ESCAPE.md#retired-built-ins)). The twins' GPU
   slowdowns since 2026-10-16 are fixed (bisected to the escape margin's
   commit). Next: Newton's twin at depth (5x the built-in: the floatexp
@@ -201,10 +202,12 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   would be 2.3x but loses accuracy for Newton and Magnet, cause open,
   `renderer::deep_rung_always`); then the gaps -- the deep Mandelbrot
   (zoom 42: the reference and table builds), Multibrot, Tricorn
-  (interior: the reference), Lambda, Kaliset, Burning Ship (2x),
-  and on the direct path Magnet, Barnsley, Littlewood, Novaretti,
-  Phoenix, Manowar, Multibrot, McMullen, Trig, Ducks, Feather, Nova
-  ("How fast the twins are"). Earlier prerequisites: compress custom
+  (interior: the reference, chiefly the nucleus search's interpreted
+  slope pass, 12 ms of 38; the Ship's 50 of 102), Lambda, Kaliset,
+  Burning Ship (2x); on the direct path only Ducks (the exact `atan2`,
+  ~10%), Feather (+7%) and Trig (borderline) remain ("How fast the twins
+  are"). A custom BLA table's build (24 interpreted steps an entry)
+  could skip its ring check for exactly quadratic steps. Earlier prerequisites: compress custom
   orbits in the store, flatten references to in-place big floats,
   Newton's `z^p sin z - 1` at a basin boundary, the scaled rung's f32
   reference sums (Ducks). §"After phase 4" item 6.
