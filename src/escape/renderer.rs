@@ -783,7 +783,15 @@ struct PerturbParamsGpu {
 /// against its native tier's 356 -- where the floatexp rung costs
 /// Newton's twin five times the built-in's time (13 ms on the scaled
 /// rung, 29 here, the built-in 6). Why the scaled rung loses them is
-/// open.
+/// open; what is known (2026-11-13): at that view the 17 pixels off by
+/// more than one all settle exactly two passes late (truth 45, got 47,
+/// mostly), long before the reference ends (76), so it is not the
+/// orbit's end; the settle test is not it (testing against `z_before`
+/// instead of the carried value changes nothing); the quotient's form is
+/// the native tier's (`(da - q db) / (B + db)`); and with Zhuoran's test
+/// off it is far worse, so the loss is in the step between rebases.
+/// Next: trace one such pixel pass by pass in f32 against the native
+/// tier's.
 fn deep_rung_always(tier: assembler::PerturbTier) -> bool {
     matches!(tier, assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { width: 2.., .. } | assembler::PerturbTier::Custom { deep: true, .. })
 }

@@ -199,7 +199,9 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   slowdowns since 2026-10-16 are fixed (bisected to the escape margin's
   commit). Next: Newton's twin at depth (5x the built-in: the floatexp
   rung, forced by the value its settle test carries; the scaled rung
-  would be 2.3x but loses accuracy for Newton and Magnet, cause open,
+  would be 2.3x but loses accuracy for Newton and Magnet -- pixels
+  settling exactly two passes late, not the settle test, the quotient's
+  form or the orbit's end; next a pass-by-pass f32 trace,
   `renderer::deep_rung_always`); then the gaps -- the deep Mandelbrot
   (zoom 42: the reference and table builds), Multibrot, Tricorn
   (interior: the reference, chiefly the nucleus search's interpreted
