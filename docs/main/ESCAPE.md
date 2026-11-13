@@ -2841,9 +2841,9 @@ the twin exactly), and what runs if the twin ever fails to compile.
 Retired (`twins::RETIRED`): **Spider, Cactus, Exponential, Tetration,
 Collatz, Lambda Sine, Lattès, Origami** -- none had native deep zoom, so
 all but Origami (whose twin has no perturbed tier either) gained it, and Collatz gained a
-derivative (distance estimation). Waiting: Kaliset and Newton pass on
-the direct path but their native tiers are not yet measured against the
-twins; the rest are over the line on a path (the tables below).
+derivative (distance estimation). Kaliset and Newton pass on the direct
+path but not at depth (Newton's twin about five times slower there); the
+rest are over the line on a path too (the tables below).
 
 ### How fast the twins are
 
@@ -2888,6 +2888,8 @@ ms -- the whole render, then the GPU's part:
 | Lambda, zoom 30 | 21 | 28 | 16 | 20 |
 | Phoenix, zoom 48, floatexp | 13 | 15 | 12 | 15 |
 | Manowar, zoom 26, floatexp | 146 | 125 | 139 | 120 |
+| Kaliset (both views), zoom 30, 60 | 4 | 6 | 4 | 5 |
+| Newton z^3 - 1 (both schemes), zoom 30, 400 | 5-6 | 28-29 | 4 | 27-29 |
 
 Two of the twins' GPU times grew since October with the built-ins'
 unchanged, steady over three runs: the Mandelbrot at zoom 30 and the

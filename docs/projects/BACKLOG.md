@@ -194,11 +194,11 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   than 5% slower on every path the built-in has, user 2026-11-13). Eight
   retired on branch `retire-escape-builtins` (Spider, Cactus,
   Exponential, Tetration, Collatz, Lambda Sine, Lattès, Origami;
-  [ESCAPE.md](../main/ESCAPE.md#retired-built-ins)). Next: measure Kaliset's
-  and Newton's native tiers against their twins (both pass on the direct
-  path); trace the twins' GPU slowdowns since 2026-10-16 (Mandelbrot at
-  zoom 30, the Tricorn's suite view and its BLA table); then the gaps --
-  the deep Mandelbrot, Multibrot, Tricorn, Lambda, Burning Ship (2x),
+  [ESCAPE.md](../main/ESCAPE.md#retired-built-ins)). Next: trace the
+  twins' GPU slowdowns since 2026-10-16 (Mandelbrot at zoom 30, the
+  Tricorn's suite view and its BLA table) and Newton's twin at depth
+  (5x the built-in, all GPU); then the gaps -- the deep Mandelbrot,
+  Multibrot, Tricorn, Lambda, Kaliset, Burning Ship (2x),
   and on the direct path Magnet, Barnsley, Littlewood, Novaretti,
   Phoenix, Manowar, Multibrot, McMullen, Trig, Ducks, Feather, Nova
   ("How fast the twins are"). Earlier prerequisites: compress custom

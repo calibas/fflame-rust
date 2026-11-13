@@ -17788,6 +17788,12 @@ fn main() {
             ("lambda", &[], ("2.88438199954338481", "0.46729682466198574"), 30.0, 3000, false),
             ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-0.8767148663342849324908252535085789479", "0.68253971831422086306603135717477825677"), 48.001, 256, true),
             ("manowar", &[], ("-0.03909223238627110991", "0.00103869199752806211"), 26.0, 3000, true),
+            // Kaliset and Newton, the two left on the line (2026-11-13):
+            // the non-escaping and convergent twins' deep views.
+            ("kaliset", &[("plus_c", 0.0)], ("1.22551892238358673", "1.57367616586387160"), 30.0, 60, false),
+            ("kaliset", &[("plus_c", 1.0)], ("-1.79112587335209006", "-0.87051608470578978"), 30.0, 60, false),
+            ("newton", &[("power", 3.0), ("scheme", 0.0), ("func", 0.0)], ("-0.50000000000000000", "0.23019701107058421"), 30.0, 400, false),
+            ("newton", &[("power", 3.0), ("scheme", 1.0), ("func", 0.0)], ("-0.50000000000000000", "0.00365726284994825"), 30.0, 400, false),
         ];
         println!("{w}x{h}, with BLA where the tier has it; times in ms: whole render, reference build, BLA table build, the rest (GPU)");
         for &(formula, params, (cx, cy), zoom, iters, floatexp) in views {
@@ -17801,17 +17807,29 @@ fn main() {
             esc.zoom_log2 = zoom;
             esc.max_iter = iters;
             esc.bailout = 4.0;
+            // One that never escapes draws by an orbit colouring.
+            if formula == "kaliset" {
+                esc.coloring = "magnitude_average".into();
+            }
             let src = crate::escape::twins::custom_source(formula).unwrap();
             let mut twin = esc.clone();
             twin.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             twin.custom_formula = Some(src);
             crate::escape::custom::ensure(&twin);
+            // The built-in's own WGSL, retired or not.
+            let run_as = |cfg: &crate::config::escape::EscapeConfig, native: bool| {
+                if native {
+                    crate::escape::custom::native_builtins(|| run(cfg, floatexp))
+                } else {
+                    run(cfg, floatexp)
+                }
+            };
             // Warm the shaders' compiles, which neither should pay here.
-            let _ = run(&esc, floatexp);
-            let _ = run(&twin, floatexp);
+            let _ = run_as(&esc, true);
+            let _ = run_as(&twin, false);
             for (who, cfg) in [("built-in", &esc), ("twin", &twin)] {
                 // The best of three: a single run swings by half.
-                let (t, orbit, bla, len) = (0..3).map(|_| run(cfg, floatexp)).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+                let (t, orbit, bla, len) = (0..3).map(|_| run_as(cfg, who == "built-in")).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
                 let rest = t * 1000.0 - f64::from(orbit) - f64::from(bla);
                 println!(
                     "{formula} {params:?} zoom {zoom}, {iters} it., {}: {who:8} {:7.0} | reference {:6.1} ({len} entries) | table {:6.1} | rest {:7.0}",
