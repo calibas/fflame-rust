@@ -1410,12 +1410,18 @@ pub fn formula(p: &Program) -> String {
         "\nfn formula_settled(s: FormulaState, pixel: vec2<f32>) -> bool {{\n    return {settled};\n}}\n"
     );
     // Two states equal to the bit, for interior detection: the state is
-    // everything the loop and the test read that changes, so a repeat
-    // proves the orbit periodic. Bits, not `==`: +0 and -0 compare
+    // what a pass carries into the next -- z, and what the loop reads
+    // before it writes (`perturb::carried_vars`) -- so a repeat proves
+    // the orbit periodic, and every pass from there was tested already.
+    // A pass's temporaries and what the loop never writes (`c`) are left
+    // out: comparing them kept them, and their snapshot, live across
+    // passes, which cost Magnet's twin half again the built-in's time on
+    // the direct path (2026-11-13). Bits, not `==`: +0 and -0 compare
     // equal and can continue differently, and Metal's fast-math folds
     // float comparisons (CLAUDE.md).
+    let carried = super::perturb::carried_vars(&p.loop_body);
     let mut same = vec!["all(bitcast<vec2<u32>>(a.z) == bitcast<vec2<u32>>(b.z))".to_string()];
-    for (i, v) in p.vars.iter().enumerate().filter(|(_, v)| !v.global && !v.perturb) {
+    for (i, v) in p.vars.iter().enumerate().filter(|(i, v)| !v.global && !v.perturb && carried.contains(i)) {
         if v.is_array() {
             // Element by element, by bits as the scalars.
             let el = match v.ty {
