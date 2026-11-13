@@ -661,7 +661,7 @@ fn uniform_vars(p: &Program) -> (Vec<bool>, Vec<bool>) {
 /// Whether a test reads only what the `perturb` setting can: the
 /// parameters, the constants and the image's values -- no variable, no
 /// pass.
-fn per_image(e: &IExpr) -> bool {
+pub(crate) fn per_image(e: &IExpr) -> bool {
     match &e.kind {
         IExprKind::Var(_) | IExprKind::Elem(..) | IExprKind::Predef(Predef::Pass) => false,
         IExprKind::Predef(q) => matches!(

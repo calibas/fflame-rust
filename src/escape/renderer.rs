@@ -775,6 +775,15 @@ struct PerturbParamsGpu {
 /// (phase 4, step 5). Measured on the Manowar twin at zoom 26 against
 /// the big-float truth: 337 of 439 sampled pixels right on the scaled
 /// rung, 420 on this one.
+///
+/// A value only the test reads (`pair` false: a convergent formula's
+/// previous z) needs it too, measured 2026-11-13: on the scaled rung
+/// Newton's twin at its z^3 - 1 basin boundary, zoom 30, counted 422 of
+/// 439 pixels within one of f64 (439 here), and Magnet's 344 right
+/// against its native tier's 356 -- where the floatexp rung costs
+/// Newton's twin five times the built-in's time (13 ms on the scaled
+/// rung, 29 here, the built-in 6). Why the scaled rung loses them is
+/// open.
 fn deep_rung_always(tier: assembler::PerturbTier) -> bool {
     matches!(tier, assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { width: 2.., .. } | assembler::PerturbTier::Custom { deep: true, .. })
 }

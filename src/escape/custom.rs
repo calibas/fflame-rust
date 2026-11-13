@@ -797,7 +797,7 @@ pub fn perturb_tier(escape: &EscapeConfig) -> Option<super::assembler::PerturbTi
         return None;
     }
     let hash = slot_hash(&escape.formula);
-    let deep = lang::perturb::grows_past_f32(&prog);
+    let deep = lang::perturb::grows_past_f32(&prog, &inputs.params, &inputs.env);
     let (stride, width) = (how.references() as u8, (1 + prog.carried.len()) as u8);
     // The built-ins' margin test needs the reference's |Z|^2 at the
     // pixel's index: one reference, nothing carried.
