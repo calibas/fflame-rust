@@ -17648,6 +17648,83 @@ fn main() {
         r.destroy();
     }
 
+    /// MEASUREMENT (retiring the built-ins, 2026-11-13): each formula twin
+    /// against its built-in on the direct path, at the built-in's home view
+    /// (its first preset, what a switch to it applies) at 2000 iterations
+    /// -- where most
+    /// pictures are made, and the only path twelve of the built-ins have.
+    /// The colouring measurement's method: one warm renderer, the best of
+    /// nine, alternating, the bailout nudged so each run iterates afresh.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn measure_formula_twins_on_the_direct_path() {
+        let (device, queue) = repro_device();
+        let (w, h) = (1024u32, 768u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
+        let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+        r.force_direct = true;
+        let mut fresh = false;
+        let mut run = |esc: &crate::config::escape::EscapeConfig| -> f64 {
+            let mut esc = esc.clone();
+            fresh = !fresh;
+            if fresh {
+                esc.bailout *= 1.000001;
+            }
+            let start = std::time::Instant::now();
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
+                let settled = r.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+            }
+            start.elapsed().as_secs_f64() * 1000.0
+        };
+        println!("{w}x{h}, each formula's home view, direct; ms, the best of nine, pipelines warm");
+        for def in crate::escape::FORMULAS {
+            let Some(src) = crate::escape::twins::custom_source(def.name) else { continue };
+            let mut esc = crate::config::escape::EscapeConfig { formula: def.name.to_string(), ..Default::default() };
+            if let Some(p) = crate::escape::formula_default_preset(def) {
+                esc.center_re = p.center_re.into();
+                esc.center_im = p.center_im.into();
+                esc.zoom_log2 = p.zoom_log2;
+                esc.max_iter = p.max_iter;
+                esc.coloring = p.coloring.into();
+                if let Some((re, im)) = p.julia {
+                    esc.julia = true;
+                    esc.julia_re = re;
+                    esc.julia_im = im;
+                }
+                esc.formula_params = p.formula_params.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+                esc.coloring_params = p.coloring_params.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+                if let Some(b) = p.bailout {
+                    esc.bailout = b;
+                }
+            }
+            // Long enough that iterating, not a dispatch's overhead, is
+            // what is timed: the home views' own counts render in under a
+            // millisecond.
+            esc.max_iter = 2000;
+            let mut twin = esc.clone();
+            twin.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
+            twin.custom_formula = Some(src);
+            for _ in 0..2 {
+                run(&esc);
+                run(&twin);
+            }
+            let (mut b, mut t) = (f64::MAX, f64::MAX);
+            for _ in 0..9 {
+                b = b.min(run(&esc));
+                t = t.min(run(&twin));
+            }
+            println!("{:14} {:>4} it.  built-in {b:7.2}  twin {t:7.2}  ({:+.1}%)", def.name, esc.max_iter, (t / b - 1.0) * 100.0);
+        }
+        r.destroy();
+    }
+
     /// MEASUREMENT (the speed work after phase 4, step 9e): each twin
     /// against its built-in at deep views, BLA as users get it, from cold:
     /// the whole render, the reference orbit's build, the BLA table's,
