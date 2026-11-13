@@ -3372,6 +3372,9 @@ impl EscapeRenderer {
     /// relief) and it can be: the formula defines one, and its tier is a
     /// single-term recurrence (docs/archive/escape-time/derivative-under-perturbation.md).
     pub(crate) fn perturbed_derivative(escape: &EscapeConfig, floatexp: bool) -> Option<&'static super::FormulaDef> {
+        // The terrain asks with its section's config, unresolved.
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
         let wanted = Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
             || escape.wants_derivative();
         let formula = super::get_formula(&escape.formula);
@@ -3404,6 +3407,8 @@ impl EscapeRenderer {
     /// perturbed path, where `perturbed_derivative` says it can carry one.
     /// Mirrors assemble_with and assemble_perturbed_full.
     pub(crate) fn derivative_active(&self, escape: &EscapeConfig) -> bool {
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
         if self.perturbed_path(escape) {
             return Self::perturbed_derivative(escape, self.floatexp_for(escape)).is_some();
         }
@@ -9508,9 +9513,12 @@ mod tests {
         for f in crate::escape::FORMULAS {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.formula = f.name.to_string();
-            let plain = EscapeRenderer::perturb_tier(&esc).is_some();
+            // A retired built-in deep-zooms as its twin, whose reference
+            // reads its program's parameters (`twins::RETIRED`).
+            let native = |t: Option<assembler::PerturbTier>| t.is_some_and(|t| !matches!(t, assembler::PerturbTier::Custom { .. }));
+            let plain = native(EscapeRenderer::perturb_tier(&esc));
             esc.julia = true;
-            let julia = EscapeRenderer::perturb_tier(&esc).is_some();
+            let julia = native(EscapeRenderer::perturb_tier(&esc));
             if plain || julia {
                 assert!(
                     carried.iter().any(|(n, _)| *n == f.name),

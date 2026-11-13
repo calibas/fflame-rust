@@ -2823,26 +2823,77 @@ The panel's notes about the path read the viewport's render height
 (`viewport_render_lines`), which the app publishes when it sizes the
 viewport; a thumbnail or an export decides at its own size.
 
+### Retired built-ins
+
+A built-in formula retires to its twin once the twin is no more than 5%
+slower on every path the built-in has (the user's line, 2026-11-13):
+the direct path at its home view (below) and, where it has a native
+deep-zoom tier, the deep views. A config naming a retired built-in
+renders the twin -- `custom::resolve` puts the twin's source and
+compiled name in its place at the renderer's entry points -- under the
+built-in's name, parameters, labels and presets, so a saved config, the
+API's catalog and a script cannot tell which they got. The built-in's
+WGSL stays: the reference the twin is held to
+(`builtin_twins_render_and_deep_zoom_as_their_builtins`, which renders
+it through `custom::native_builtins` and checks that the name renders
+the twin exactly), and what runs if the twin ever fails to compile.
+
+Retired (`twins::RETIRED`): **Spider, Cactus, Exponential, Tetration,
+Collatz, Lambda Sine, Lattès, Origami** -- none had native deep zoom, so
+all but Origami (whose twin has no perturbed tier either) gained it, and Collatz gained a
+derivative (distance estimation). Waiting: Kaliset and Newton pass on
+the direct path but their native tiers are not yet measured against the
+twins; the rest are over the line on a path (the tables below).
+
 ### How fast the twins are
 
-A twin against its built-in, each render from cold at 512x384 with BLA
-where the tier has it (`measure_twins_against_their_builtins`, the best
-of three; a single run swings by half), in ms -- the whole render, then
-the GPU's part:
+On the **direct path**, each formula at its home view (its first
+preset) at 2000 iterations, 1024x768, pipelines warm, the best of nine
+(`measure_formula_twins_on_the_direct_path`, 2026-11-13), in ms:
+
+| formula | built-in | twin | | formula | built-in | twin |
+| --- | --- | --- | --- | --- | --- | --- |
+| Mandelbrot | 0.89 | 0.87 | | Exponential | 1.26 | 1.17 |
+| Multibrot | 1.94 | 2.23 | | Trig | 2.00 | 2.24 |
+| Tricorn | 1.56 | 0.83 | | Ducks | 29.05 | 32.27 |
+| Burning Ship | 1.58 | 1.75 | | Tetration | 3.75 | 3.83 |
+| McMullen | 0.54 | 0.57 | | Collatz | 0.67 | 0.70 |
+| Kaliset | 7.77 | 7.36 | | Feather | 5.17 | 5.80 |
+| Phoenix | 1.06 | 1.31 | | Newton | 0.68 | 0.71 |
+| Lambda | 1.29 | 1.30 | | Nova | 2.79 | 3.05 |
+| Spider | 1.07 | 1.03 | | Magnet | 1.19 | 1.82 |
+| Manowar | 0.40 | 0.50 | | Novaretti | 8.16 | 10.58 |
+| Barnsley | 0.79 | 1.10 | | Littlewood | 5.05 | 6.62 |
+| Cactus | 0.59 | 0.60 | | Lambda Sine | 0.98 | 0.95 |
+| Origami | 9.22 | 9.35 | | Lattès | 35.86 | 35.75 |
+
+Views this fast leave a few percent to chance; the large gaps (Magnet,
+Barnsley, Littlewood, Novaretti, Phoenix, Manowar) are not.
+
+At **depth**, a twin against its built-in, each render from cold at
+512x384 with BLA where the tier has it (`measure_twins_against_their_builtins`,
+2026-11-13; the 2026-10-16 figures in brackets where they moved), in
+ms -- the whole render, then the GPU's part:
 
 | view | built-in | twin | GPU: built-in | twin |
 | --- | --- | --- | --- | --- |
-| Mandelbrot, seahorse zoom 42, 8,000 | 28 | 36 | 19 | 24 |
-| Mandelbrot, seahorse zoom 60, 30,000, floatexp | 164 | 106 | 24 | 30 |
-| Mandelbrot, zoom 30, 20,000 | 128 | 129 | 127 | 128 |
-| Multibrot power 4, zoom 30 | 8 | 11 | 5 | 6 |
-| Tricorn, suite view zoom 28 | 154 | 141 | 117 | 119 |
-| Tricorn interior, zoom 30 | 46 | 64 | 6 | 7 |
-| Burning Ship, suite view zoom 60, floatexp | 37 | 77 | 34 | 62 |
-| Burning Ship interior, zoom 30 | 71 | 151 | 6 | 8 |
-| Lambda, zoom 30 | 20 | 26 | 16 | 18 |
-| Phoenix, zoom 48, floatexp | 16 | 19 | 15 | 18 |
-| Manowar, zoom 26, floatexp | 127 | 116 | 119 | 111 |
+| Mandelbrot, seahorse zoom 42, 8,000 | 31 | 39 | 20 | 25 |
+| Mandelbrot, seahorse zoom 60, 30,000, floatexp | 177 | 139 | 25 | 36 |
+| Mandelbrot, zoom 30, 20,000 | 127 | 147 | 126 | 145 (128) |
+| Multibrot power 4, zoom 30 | 8 | 11 | 5 | 7 |
+| Tricorn, suite view zoom 28 | 165 | 180 (141) | 119 | 156 (119) |
+| Tricorn interior, zoom 30 | 60 | 78 | 6 | 7 |
+| Burning Ship, suite view zoom 60, floatexp | 42 | 90 | 38 | 69 |
+| Burning Ship interior, zoom 30 | 88 | 173 | 6 | 8 |
+| Lambda, zoom 30 | 21 | 28 | 16 | 20 |
+| Phoenix, zoom 48, floatexp | 13 | 15 | 12 | 15 |
+| Manowar, zoom 26, floatexp | 146 | 125 | 139 | 120 |
+
+Two of the twins' GPU times grew since October with the built-ins'
+unchanged, steady over three runs: the Mandelbrot at zoom 30 and the
+Tricorn's suite view, whose twin now builds a 2 ms BLA table against the
+built-in's 22 -- likely a table that no longer skips there. Not yet
+traced.
 
 What made the references cheap: big floats keep up to eight limbs
 inline (`bigfloat::Limbs`, a `SmallVec`: an operation or a variable's
@@ -2871,7 +2922,8 @@ What remains:
   big floats and 43 of watching against the built-in's 16, which
   watches nothing.
 - **A custom BLA table's build** from the equations: 26 ms against the
-  power table's 6 for the Mandelbrot at zoom 60.
+  power table's 6 for the Mandelbrot at zoom 60 (39 against 6 on
+  2026-11-13).
 
 ### Damping and the biomorph on custom formulas
 

@@ -22,6 +22,10 @@
 //!
 //! The sources are `assets/formulas/twins/*.rhai`; the GPU tests hold
 //! each to its built-in (`escape::app_repro_test`).
+//!
+//! Some built-ins have retired to their twins ([`RETIRED`]): a config
+//! naming one renders the twin (docs/main/ESCAPE.md, *Retired
+//! built-ins*).
 
 /// Each twin: the built-in's registry name and the Rhai source.
 pub const TWINS: &[(&str, &str)] = &[
@@ -160,6 +164,25 @@ pub fn solid_source(name: &str) -> Option<&'static str> {
 /// The solid's twin as the config carries it.
 pub fn solid_custom_source(name: &str) -> Option<crate::config::escape::CustomSource> {
     carried(name, solid_source(name)?)
+}
+
+/// The built-in formulas that ARE their twins: a config naming one renders
+/// the twin (`custom::resolve`), under the built-in's name, parameters and
+/// presets, so no config can tell which it got. The built-in's WGSL stays
+/// as the reference the twin is held to (`builtin_twins_render_and_deep_
+/// zoom_as_their_builtins`, which renders it through
+/// `custom::native_builtins`) and runs if the twin ever fails to compile.
+///
+/// A formula retires once its twin is no more than 5% slower than the
+/// built-in on every path the built-in has (the user's line, 2026-11-13;
+/// `measure_formula_twins_on_the_direct_path`, and for a native deep-zoom
+/// tier `measure_twins_against_their_builtins`). These eight have no
+/// native deep zoom, so they gain it.
+pub const RETIRED: &[&str] = &["spider", "cactus", "exponential", "tetration", "collatz", "lambda_sine", "lattes", "origami"];
+
+/// Whether the built-in formula `name` renders as its twin ([`RETIRED`]).
+pub fn retired(name: &str) -> bool {
+    RETIRED.contains(&name)
 }
 
 /// The twin of the built-in formula `name`, when it has one.

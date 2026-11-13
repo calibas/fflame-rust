@@ -190,11 +190,25 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   32, ~150 small mismatches, `random(seed)`, `.ugr` gradients; classes,
   `.ulb`, `.upr`; UF `#color` (refused, `check.rs`); `.uxf` transforms;
   KF `.kfr` hybrid import.
-- **Retire native formulas** where twins match (D7): prerequisites --
-  compress custom orbits in the store, flatten references to in-place big
-  floats, Newton's `z^p sin z - 1` at a basin boundary, the scaled
-  rung's f32 reference sums (Ducks), a possible fixed-point overflow at
-  power 9+. §"After phase 4" item 6.
+- **Retire native formulas** where twins match (D7; the line: no more
+  than 5% slower on every path the built-in has, user 2026-11-13). Eight
+  retired on branch `retire-escape-builtins` (Spider, Cactus,
+  Exponential, Tetration, Collatz, Lambda Sine, Lattès, Origami;
+  [ESCAPE.md](../main/ESCAPE.md#retired-built-ins)). Next: measure Kaliset's
+  and Newton's native tiers against their twins (both pass on the direct
+  path); trace the twins' GPU slowdowns since 2026-10-16 (Mandelbrot at
+  zoom 30, the Tricorn's suite view and its BLA table); then the gaps --
+  the deep Mandelbrot, Multibrot, Tricorn, Lambda, Burning Ship (2x),
+  and on the direct path Magnet, Barnsley, Littlewood, Novaretti,
+  Phoenix, Manowar, Multibrot, McMullen, Trig, Ducks, Feather, Nova
+  ("How fast the twins are"). Earlier prerequisites: compress custom
+  orbits in the store, flatten references to in-place big floats,
+  Newton's `z^p sin z - 1` at a basin boundary, the scaled rung's f32
+  reference sums (Ducks). §"After phase 4" item 6.
+- **Retire the colouring built-ins**: examined later (user, 2026-11-13).
+  22 of 28 twins within 5% on the direct path; image_trap +23%,
+  itinerary +17%, stripe_average +12%, position_map +10%,
+  curvature_average +8% (`measure_colouring_twins_against_their_builtins`).
 - **Held structural keyframes** (formula source and name as one target);
   a formula randomiser. §"Phase 4 … step 8".
 - **Formula library in the Fractal Browser**, and an API formula corpus.

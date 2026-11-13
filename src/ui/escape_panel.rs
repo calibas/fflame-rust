@@ -3288,7 +3288,11 @@ mod tests {
             esc.formula = f.name.to_string();
             esc.coloring = "distance_estimate".to_string();
 
-            let src = assembler::assemble(f, &colorings::DISTANCE_ESTIMATE, false);
+            // What renders: a retired built-in is its twin (`twins::RETIRED`),
+            // which may carry a derivative the built-in had not (Collatz).
+            let resolved = crate::escape::custom::resolve(&esc);
+            let def = crate::escape::get_formula(&resolved.formula);
+            let src = assembler::assemble(def, &colorings::DISTANCE_ESTIMATE, false);
             let shader_has = src.contains("const HAS_DERIVATIVE: bool = true;");
             let panel_says = EscapeRenderer::derivative_gap(&esc, 720).is_none();
             assert_eq!(
@@ -3406,8 +3410,10 @@ mod tests {
             ("ducks", true),
             ("newton", true),
             ("nova", true),
-            ("tetration", false),
-            ("lattes", false),
+            // Retired to their twins (`twins::RETIRED`), which deep-zoom
+            // by derived equations.
+            ("tetration", true),
+            ("lattes", true),
         ] {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.formula = formula.to_string();

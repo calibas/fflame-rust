@@ -1184,6 +1184,62 @@ pub fn offers_nucleus(escape: &EscapeConfig) -> bool {
     found
 }
 
+/// A config naming a retired built-in (`twins::RETIRED`), as its twin: the
+/// twin's source carried and its name compiled, everything else -- the
+/// parameters by name, the panel's bailout, damping and biomorph -- as it
+/// was. None for any other formula, under `native_builtins` (tests), or
+/// when the twin does not compile, which leaves the built-in's WGSL to
+/// render.
+fn retired_twin(escape: &EscapeConfig) -> Option<EscapeConfig> {
+    if !super::twins::retired(&escape.formula) || native_forced() {
+        return None;
+    }
+    static TWINS: OnceLock<HashMap<&'static str, (String, CustomSource)>> = OnceLock::new();
+    let twins = TWINS.get_or_init(|| {
+        super::twins::RETIRED
+            .iter()
+            .filter_map(|&n| {
+                let src = super::twins::custom_source(n)?;
+                Some((n, (name_of(EntryKind::Formula, &src), src)))
+            })
+            .collect()
+    });
+    let (name, src) = twins.get(escape.formula.as_str())?;
+    let mut twin = escape.clone();
+    twin.formula = name.clone();
+    twin.custom_formula = Some(src.clone());
+    ensure(&twin);
+    if formula(name).is_none() {
+        return None;
+    }
+    Some(twin)
+}
+
+#[cfg(test)]
+thread_local! {
+    static NATIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn native_forced() -> bool {
+    NATIVE.with(|n| n.get())
+}
+
+#[cfg(not(test))]
+fn native_forced() -> bool {
+    false
+}
+
+/// Run `f` with the retired built-ins rendering their own WGSL: the
+/// reference their twins are held to.
+#[cfg(test)]
+pub fn native_builtins<T>(f: impl FnOnce() -> T) -> T {
+    let was = NATIVE.with(|n| n.replace(true));
+    let out = f();
+    NATIVE.with(|n| n.set(was));
+    out
+}
+
 /// The config a render takes for the panel's damping and biomorph on a
 /// custom formula (plan, phase 4, step 9e). A program owns its step and
 /// its test, so the built-ins' template switches cannot reach it; here
@@ -1194,8 +1250,14 @@ pub fn offers_nucleus(escape: &EscapeConfig) -> bool {
 /// them for the built-ins, takes the variant as any custom formula.
 /// The config itself for a built-in, or when neither is on, or a
 /// variant that does not compile (which renders as the formula did).
+///
+/// A retired built-in (`twins::RETIRED`) resolves to its twin first,
+/// which then resolves as any custom formula.
 pub fn resolve(escape: &EscapeConfig) -> std::borrow::Cow<'_, EscapeConfig> {
     use std::borrow::Cow;
+    if let Some(twin) = retired_twin(escape) {
+        return Cow::Owned(resolve(&twin).into_owned());
+    }
     let Some(sized) = resolve_coloring_sizes(escape) else {
         return resolve_formula(escape);
     };

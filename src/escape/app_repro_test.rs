@@ -2549,10 +2549,16 @@ mod tests {
                 _ => (-0.8, 0.156),
             };
             let what = format!("{formula} {params:?}{}", if julia { " julia" } else { "" });
-            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            // The built-in's own WGSL, retired or not (`twins::RETIRED`).
+            let built_in = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &esc, w, h, false));
             let twin = twin_of(&esc);
             let got = output_on(&device, &queue, &renderer, &twin, w, h, false);
             assert!(crate::escape::get_formula(&twin.formula).has_feature(crate::escape::FormulaFeature::Program), "{what} did not compile");
+            // A retired built-in's name renders its twin.
+            if crate::escape::twins::retired(formula) {
+                let by_name = output_on(&device, &queue, &renderer, &esc, w, h, false);
+                assert!(differing(&by_name, &got) == 0.0, "{what}: the retired built-in's name renders its twin");
+            }
             let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
             assert!(covered > 100, "{what}: the view shows too little ({covered})");
             let d = differing(&built_in, &got);
@@ -3098,6 +3104,11 @@ mod tests {
             crate::escape::custom::ensure(&esc);
             let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
             assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
+            // ...and so does the built-in's own name, once it is its twin.
+            if crate::escape::twins::retired(formula) {
+                let by_name = crate::config::escape::EscapeConfig { formula: formula.into(), custom_formula: None, ..esc.clone() };
+                assert_eq!(crate::escape::EscapeRenderer::perturb_tier(&by_name), tier, "{formula}: the retired built-in's name deep-zooms");
+            }
             let prog = crate::lang::rhai::program(&src.source).unwrap();
             let mut values = crate::lang::interp::ParamValues::defaults(&prog);
             for (i, x) in prog.params.iter().enumerate() {
@@ -17711,13 +17722,15 @@ fn main() {
             let mut twin = esc.clone();
             twin.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             twin.custom_formula = Some(src);
+            // The built-in's own WGSL, retired or not.
+            use crate::escape::custom::native_builtins;
             for _ in 0..2 {
-                run(&esc);
+                native_builtins(|| run(&esc));
                 run(&twin);
             }
             let (mut b, mut t) = (f64::MAX, f64::MAX);
             for _ in 0..9 {
-                b = b.min(run(&esc));
+                b = b.min(native_builtins(|| run(&esc)));
                 t = t.min(run(&twin));
             }
             println!("{:14} {:>4} it.  built-in {b:7.2}  twin {t:7.2}  ({:+.1}%)", def.name, esc.max_iter, (t / b - 1.0) * 100.0);

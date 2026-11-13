@@ -9888,6 +9888,11 @@ mod tests {
                 let Some(tier) = crate::escape::EscapeRenderer::perturb_tier(&esc) else {
                     continue;
                 };
+                // A retired built-in deep-zooms as its twin, whose program
+                // carries its own test (`twins::RETIRED`).
+                if matches!(tier, PerturbTier::Custom { .. }) {
+                    continue;
+                }
                 assert_eq!(
                     tier.is_convergent(),
                     declared,
@@ -9913,6 +9918,11 @@ mod tests {
                 let Some(tier) = crate::escape::EscapeRenderer::perturb_tier(&esc) else {
                     continue;
                 };
+                // A retired built-in deep-zooms as its twin, whose program
+                // carries its own test (`twins::RETIRED`).
+                if matches!(tier, PerturbTier::Custom { .. }) {
+                    continue;
+                }
                 assert_eq!(
                     tier.is_non_escaping(),
                     declared,
