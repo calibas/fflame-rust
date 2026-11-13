@@ -853,6 +853,16 @@ fn shadow_split(sx: (f64, f64), sy: (f64, f64)) -> ([f32; 2], [f32; 2], i32) {
 /// One shadow iteration step, mirroring the fixed-point step: z^p + c
 /// with square-and-multiply, or the Ship-family fold. Compute and
 /// replay share it (the determinism contract).
+/// z^p in f64, by repeated multiplication: the escaping step of the
+/// maps fixed point cannot hold (`ReferenceOrbit::step_would_overflow`).
+fn cpow_f64(z: (f64, f64), p: u32) -> (f64, f64) {
+    let mut w = (1.0, 0.0);
+    for _ in 0..p {
+        w = (w.0 * z.0 - w.1 * z.1, w.0 * z.1 + w.1 * z.0);
+    }
+    w
+}
+
 fn shadow_step(
     sx: (f64, f64),
     sy: (f64, f64),
@@ -1139,6 +1149,43 @@ impl ReferenceOrbit {
             self.shadow = [zx, zxl, zy, zyl];
             self.corrections.push(Correction { idx, hi, lo, e: ee, dd: self.shadow });
         }
+        self.orbit.push(hi);
+        self.orbit_lo.push(lo);
+        self.orbit_e.push(ee);
+    }
+
+    /// Whether a step raising the current iterate to `power` could leave
+    /// fixed point's range (+-2^(INT_BITS - 1)): its powers, then c added,
+    /// bounded with a factor of two to spare. The loop ends at |Z| > 2,
+    /// so the iterate before the last step can be 2 -- and a power of 7
+    /// or more (Multibrot and Tricorn to 12, McMullen and Feather to 8)
+    /// overflows on the step that escapes. That wrapped to garbage, and
+    /// garbage in [128, 256) panicked `FixedPoint::from_f64` and with it
+    /// the orbit worker: the app waited for a reference that never came
+    /// (2026-11-12, a power-11 Tricorn Julia set wheel-zoomed onto an
+    /// escaping centre). Never true for a step that stays small, so
+    /// those are computed exactly as before.
+    fn step_would_overflow(&self, power: u32) -> bool {
+        let r = self.z.re.to_f64().hypot(self.z.im.to_f64());
+        let c = self.c.re.to_f64().hypot(self.c.im.to_f64());
+        let room = (1u64 << (super::fixedpoint::INT_BITS - 2)) as f64;
+        !(r.max(1.0).powi(power as i32) + c < room)
+    }
+
+    /// Push an iterate fixed point cannot hold (the escaping step of
+    /// [`Self::step_would_overflow`]), from its double-double value: its
+    /// own correction, since the compression shadow reads the fixed-point
+    /// state this iterate never had.
+    fn push_exact(&mut self, x: (f64, f64), y: (f64, f64)) {
+        const DEEP: f64 = 8.077_935_669_463_16e-28; // 2^-90, split_entry's
+        let (hi, lo, ee) = if x.0.abs().max(y.0.abs()) >= DEEP {
+            split_entry(&self.z, x.0 + x.1, y.0 + y.1)
+        } else {
+            ([0.0; 2], [0.0; 2], 0)
+        };
+        let idx = self.orbit.len() as u32;
+        self.shadow = [x.0, x.1, y.0, y.1];
+        self.corrections.push(Correction { idx, hi, lo, e: ee, dd: self.shadow });
         self.orbit.push(hi);
         self.orbit_lo.push(lo);
         self.orbit_e.push(ee);
@@ -1536,6 +1583,17 @@ impl ReferenceOrbit {
                     // pole -- so a refusal is an escape, recorded the
                     // same way the bailout would.
                     let m_pow = (self.map_params[0].max(1.0)) as u32;
+                    if self.step_would_overflow(self.power) {
+                        // The escaping step, in f64 (step_would_overflow).
+                        let (x, y) = (self.z.re.to_f64(), self.z.im.to_f64());
+                        let (cx, cy) = (self.c.re.to_f64(), self.c.im.to_f64());
+                        let (zn, zm) = (cpow_f64((x, y), self.power), cpow_f64((x, y), m_pow));
+                        let d = zm.0 * zm.0 + zm.1 * zm.1;
+                        let (qx, qy) = if d > 0.0 { ((cx * zm.0 + cy * zm.1) / d, (cy * zm.0 - cx * zm.1) / d) } else { (0.0, 0.0) };
+                        self.push_exact((zn.0 + qx, 0.0), (zn.1 + qy, 0.0));
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
                     let mut zn = self.z.clone();
                     for _ in 1..self.power {
                         zn = zn.mul(&self.z);
@@ -1564,6 +1622,18 @@ impl ReferenceOrbit {
                     // but it can never fail here: Re(D) = 1 + x^2 >= 1
                     // so |D|^2 >= 1, which is exactly the range
                     // FixedComplex::div guarantees for.
+                    if self.step_would_overflow(self.power) {
+                        // The escaping step, in f64 (step_would_overflow).
+                        let (x, y) = (self.z.re.to_f64(), self.z.im.to_f64());
+                        let (cx, cy) = (self.c.re.to_f64(), self.c.im.to_f64());
+                        let zp = cpow_f64((x, y), self.power);
+                        let (dr, di) = (1.0 + x * x, -(y * y));
+                        let d = dr * dr + di * di;
+                        let (qx, qy) = ((zp.0 * dr + zp.1 * di) / d, (zp.1 * dr - zp.0 * di) / d);
+                        self.push_exact((qx + cx, 0.0), (qy + cy, 0.0));
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
                     let mut zp = self.z.sqr();
                     for _ in 2..self.power {
                         zp = zp.mul(&self.z);
@@ -1632,6 +1702,20 @@ impl ReferenceOrbit {
                         break;
                     }
                     continue;
+                }
+                if self.step_would_overflow(self.power) {
+                    // The escaping step, in double-double from the
+                    // iterate fixed point still holds (step_would_overflow).
+                    let n = self.n_limbs;
+                    let zx = Self::fixed_dd(&self.z.re, n);
+                    let mut zy = Self::fixed_dd(&self.z.im, n);
+                    if self.ship_variant == MAP_CONJ {
+                        zy = dd::neg(zy);
+                    }
+                    let (nx, ny) = shadow_step(zx, zy, &self.c_dd, self.power, false, MAP_PLAIN);
+                    self.push_exact(nx, ny);
+                    self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                    break;
                 }
                 let mut base = FixedComplex {
                     re: self.z.re.clone(),
@@ -2757,6 +2841,7 @@ pub struct OrbitWorker {
     pub progress: std::sync::Arc<std::sync::Mutex<OrbitProgress>>,
     latest: Option<OrbitRequest>,
     epoch: u64,
+    thread: std::thread::JoinHandle<()>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2768,7 +2853,7 @@ impl OrbitWorker {
         let (tx, rx) = std::sync::mpsc::channel::<(u64, OrbitRequest)>();
         let progress = std::sync::Arc::new(std::sync::Mutex::new(OrbitProgress::default()));
         let shared = progress.clone();
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("escape-orbit".into())
             .spawn(move || {
                 let mut current: Option<(OrbitRequest, ReferenceOrbit, u64)> = None;
@@ -2963,7 +3048,14 @@ impl OrbitWorker {
                 }
             })
             .expect("spawn escape-orbit worker");
-        Self { tx, progress, latest: None, epoch: 0 }
+        Self { tx, progress, latest: None, epoch: 0, thread }
+    }
+
+    /// Whether the worker's thread has ended: only by a panic, since it
+    /// runs until its sender drops. Its requests then go nowhere and a
+    /// view waiting on them waits forever, so the renderer replaces it.
+    pub fn died(&self) -> bool {
+        self.thread.is_finished()
     }
 
     /// Post a request (deduplicated). Returns the epoch that data for
@@ -3976,6 +4068,54 @@ mod big_family_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A high power's escaping step leaves fixed point's range: it is
+    /// computed apart (`step_would_overflow`), never wrapped. The first
+    /// case is the reported view (a power-11 Tricorn Julia set whose
+    /// reference escapes), which panicked the orbit worker and hung the
+    /// app; the sweep covers every power the tiers take, both planes,
+    /// plain and conjugate, and checks the escaping entry is the step
+    /// from the one before it.
+    #[test]
+    fn a_high_power_escape_does_not_overflow() {
+        let entry = |o: &ReferenceOrbit, i: usize| (o.orbit[i][0] as f64 + o.orbit_lo[i][0] as f64, o.orbit[i][1] as f64 + o.orbit_lo[i][1] as f64);
+        let check = |re: &str, im: &str, julia: Option<(f32, f32)>, power: u32, variant: u32| {
+            let what = format!("{re} {im} {julia:?} p{power} v{variant}");
+            let o = ReferenceOrbit::compute(re, im, 9.0, None, 256, julia, power, false, variant, [0.0, 0.0]).expect("an orbit");
+            let Some(last) = o.escaped_at else { return false };
+            let last = last as usize;
+            assert_eq!(last + 1, o.orbit.len(), "{what}: the escape ends the orbit");
+            let (x, y) = entry(&o, last);
+            assert!(x * x + y * y > 4.0, "{what}: the last entry escaped ({x}, {y})");
+            if last >= 1 {
+                let (px, py) = entry(&o, last - 1);
+                let py = if variant == MAP_CONJ { -py } else { py };
+                let (cx, cy) = julia.map_or_else(|| (re.parse::<f64>().unwrap(), im.parse::<f64>().unwrap()), |(a, b)| (a as f64, b as f64));
+                let zp = cpow_f64((px, py), power);
+                let (ex, ey) = (zp.0 + cx, zp.1 + cy);
+                let err = (ex - x).hypot(ey - y) / ex.hypot(ey);
+                assert!(err < 1e-5, "{what}: the escaping entry ({x}, {y}) is the step from the one before ({ex}, {ey})");
+            }
+            // The store's compressed form replays it: its own correction.
+            let back = ReferenceOrbit::from_bytes(&o.to_bytes()).expect("round trip");
+            assert!(back.orbit == o.orbit && back.orbit_lo == o.orbit_lo && back.orbit_e == o.orbit_e, "{what}: the stored orbit");
+            true
+        };
+        assert!(check("-0.5688659359279755189931", "-0.2113318518634664522349", Some((0.295, -0.81)), 11, MAP_CONJ), "the reported view's reference escapes");
+        let mut escaped = 0;
+        for power in 2..=12 {
+            for variant in [MAP_PLAIN, MAP_CONJ] {
+                for i in 0..12 {
+                    for j in 0..12 {
+                        let (re, im) = (format!("{}", -1.3 + 0.21 * i as f64), format!("{}", -1.2 + 0.2 * j as f64));
+                        escaped += check(&re, &im, None, power, variant) as u32;
+                        escaped += check(&re, &im, Some((0.295, -0.81)), power, variant) as u32;
+                    }
+                }
+            }
+        }
+        assert!(escaped > 1000, "the sweep reaches escapes: {escaped}");
+    }
 
     #[test]
     fn shallow_orbit_matches_f64_iteration() {

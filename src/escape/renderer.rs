@@ -5566,6 +5566,14 @@ impl EscapeRenderer {
             zoom_log2: escape.zoom_log2,
             height_px,
         };
+        // A worker that panicked answers nothing: start another, and
+        // upload its orbit whole (its generations count from zero again).
+        if self.orbit_worker.as_ref().is_some_and(OrbitWorker::died) {
+            log::error!("the reference orbit worker stopped (a panic); starting a new one");
+            self.orbit_worker = None;
+            self.orbit_generation = u64::MAX;
+            self.orbit_uploaded = 0;
+        }
         let worker = self.orbit_worker.get_or_insert_with(OrbitWorker::new);
         let epoch = worker.request(req.clone());
         self.last_orbit_stale = false;
