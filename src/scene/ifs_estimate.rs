@@ -1072,6 +1072,9 @@ fn seed_beam_inner<P: SeedPoint>(
     let beam = beam.max(1) as usize;
     let cap = radius * HANDOVER_FRACTION;
     let scale = if px > 0.0 { 1.0 / px } else { 1.0 };
+    // For the objective's positional check, which walks the view's
+    // corners exactly (`positional_miss_px`).
+    let centre_f64 = centre.to_f64();
 
     let (q0, sigma0, basis0) = match &ifs.final_map {
         Some(f) => {
@@ -1447,7 +1450,20 @@ fn seed_beam_inner<P: SeedPoint>(
             };
             // The measurement cannot resolve below its own f64 noise,
             // so it does not get to claim it did (R2).
-            let err = curv.max(f64_floor(&live)) + f32_pixels(&bases, &live);
+            // And WHERE the handover puts things, which the distance
+            // cannot see. On a filled set -- a nonlinear map's -- every
+            // probe that lands inside reads 0 whatever the handover, so
+            // `curv` measured 0 at a level whose linearised view was
+            // visibly bent, and the deeper level won on f32 alone. The
+            // picture then depended on the window's size and the
+            // centre's position, since both move the level: a Flame
+            // Attractor of julian and disc drew radial spokes in a wide
+            // frame and curved bands in a square one, and changed from
+            // one to the other between two zoom steps. The miss is in
+            // pixels, the objective's unit, and its f64 noise is the
+            // same floor `curv`'s is.
+            let geom = positional_miss_px(ifs, centre_f64, view_basis, &live, &bases, &quads, px, reach0);
+            let err = curv.max(geom).max(f64_floor(&live)) + f32_pixels(&bases, &live);
             if err < best_error {
                 best_error = err;
                 best = Some((level, live.clone(), bases.clone(), quads.clone(), dead_min));
@@ -3716,6 +3732,65 @@ fn delta_reach(b: [[f64; 2]; 2], q: &[[f64; 2]; 3]) -> f64 {
 }
 
 /// `Q(uv)`, the quadratic part of a delta.
+/// How far a handover misplaces the view, in pixels: the worst, over
+/// the probe points and the live candidates, of the distance between
+/// where the candidate's delta puts a probe (`q + B·uv + Q(uv)`) and
+/// where that probe's own walk down the same address lands, divided by
+/// the pixel at that level (`px` grown as the basis has).
+///
+/// Zero for an affine IFS, whose delta is exact. A probe the address
+/// cannot carry (no preimage) is an infinite miss: the seed predicts
+/// something there that is not.
+#[allow(clippy::too_many_arguments)]
+fn positional_miss_px<P: SeedPoint>(
+    ifs: &Ifs2,
+    centre: [f64; 2],
+    view_basis: [[f64; 2]; 2],
+    live: &[Cand<P>],
+    bases: &[[[f64; 2]; 2]],
+    quads: &[[[f64; 2]; 3]],
+    px: f64,
+    reach0: f64,
+) -> f64 {
+    if !(px > 0.0) || !(reach0 > 0.0) {
+        return 0.0;
+    }
+    let mut worst = 0.0f64;
+    for uv in PROBE_UV {
+        let d = apply_basis(view_basis, uv);
+        let mut start = [centre[0] + d[0], centre[1] + d[1]];
+        if let Some(f) = &ifs.final_map {
+            start = f.inverse.as_affine().expect("the final transform is affine (J4)").apply(start);
+        }
+        for ((c, b), q) in live.iter().zip(bases).zip(quads) {
+            if c.done {
+                continue;
+            }
+            let mut p = start;
+            for &i in &c.address {
+                match p.apply_map(&ifs.maps[i as usize].inverse) {
+                    Some(next) => p = next,
+                    None => return f64::INFINITY,
+                }
+            }
+            let at = c.q.to_f64();
+            let lin = apply_basis(*b, uv);
+            let quad = apply_quad(q, uv);
+            let predicted = [at[0] + lin[0] + quad[0], at[1] + lin[1] + quad[1]];
+            let grown = basis_reach(*b) / reach0;
+            if !(grown > 0.0) {
+                return f64::INFINITY;
+            }
+            let miss = Affine2::distance(p, predicted) / (px * grown);
+            if !miss.is_finite() {
+                return f64::INFINITY;
+            }
+            worst = worst.max(miss);
+        }
+    }
+    worst
+}
+
 fn apply_quad(q: &[[f64; 2]; 3], uv: [f64; 2]) -> [f64; 2] {
     let (u, v) = (uv[0], uv[1]);
     let (a, b, c) = (u * u, u * v, v * v);
@@ -7323,6 +7398,71 @@ mod tests {
             };
             println!("beam {beam}: deepest level histogram  {}", hist(&deepest));
             println!("beam {beam}: winner  level histogram  {}", hist(&winner));
+        }
+    }
+
+    /// The reported view (`julian-disc-escape-distortion.fflame`,
+    /// 2026-11-12): a Flame Attractor of disc and julian (power 50,
+    /// dist -1) at zoom 2^7.64. The handover's delta must put the view
+    /// where each probe's own walk down the same address does, within a
+    /// pixel, in a square frame as in a wide one.
+    ///
+    /// The objective read the distance alone, which is 0 inside this
+    /// filled set whatever the handover, so in the square frame it
+    /// handed over deeper and the linearised view bent the picture into
+    /// curved bands -- a picture that changed between two zoom steps,
+    /// and with the window's shape.
+    #[test]
+    fn the_handover_does_not_bend_a_nonlinear_view() {
+        use crate::scene::transforms::{Flame, Transform};
+        let mut disc = Transform::default();
+        (disc.a, disc.b, disc.c, disc.d) = (0.87169206, 0.38354817, -0.38360286, 0.8721385);
+        disc.variations.clear();
+        disc.variation_order.clear();
+        disc.set_variation("disc", 1.0);
+        disc.weight = 15.0;
+        let mut julian = Transform::default();
+        (julian.a, julian.b, julian.c, julian.d) = (0.55268836, -0.00050711725, 0.00050711725, 0.55268836);
+        julian.variations.clear();
+        julian.variation_order.clear();
+        julian.set_variation("julian", 1.0);
+        julian.variation_params.insert("julian.power".into(), 50.0);
+        julian.variation_params.insert("julian.dist".into(), -1.0);
+        julian.weight = 0.5;
+        let mut flame = Flame::default();
+        flame.transforms = vec![disc, julian];
+        let guard = crate::variations::global_registry();
+        let ifs = crate::scene::ifs_analysis::analyse_2d(&flame, &guard).expect("qualifies");
+        drop(guard);
+
+        // The world point is the plane's (re, -im).
+        let centre = [0.006_599_195_285_755_94, 0.000_922_239_425_908_480_5];
+        let zoom = 7.6404347f64;
+        for (w, h) in [(755.0f64, 786.0f64), (1600.0, 1000.0)] {
+            let span_y = 4.0 / zoom.exp2();
+            let view = crate::escape::ifs::view_basis(span_y * w / h, span_y, 0.0);
+            let px = span_y / h;
+            let seeds = seed_beam(&ifs, centre, view, px, zoom as u32 + 64, 4);
+            let mut worst = 0.0f64;
+            for s in seeds.cands.iter().filter(|s| !s.done) {
+                for gy in 0..5 {
+                    for gx in 0..5 {
+                        let uv = [gx as f64 / 4.0 - 0.5, gy as f64 / 4.0 - 0.5];
+                        let d = apply_basis(view, uv);
+                        let mut p = [centre[0] + d[0], centre[1] + d[1]];
+                        for &i in &s.address {
+                            // No preimage: the seed predicts a point
+                            // there that does not exist.
+                            p = p.apply_map(&ifs.maps[i as usize].inverse).unwrap_or([f64::INFINITY; 2]);
+                        }
+                        let (lin, quad) = (apply_basis(s.basis, uv), apply_quad(&s.quad, uv));
+                        let predicted = [s.position[0] + lin[0] + quad[0], s.position[1] + lin[1] + quad[1]];
+                        let grown = basis_reach(s.basis) / basis_reach(view);
+                        worst = worst.max(Affine2::distance(p, predicted) / (px * grown));
+                    }
+                }
+            }
+            assert!(worst < 1.0, "{w}x{h}: handed over at level {} with the view misplaced by {worst:.1} px", seeds.level);
         }
     }
 

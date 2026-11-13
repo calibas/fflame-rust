@@ -2162,6 +2162,21 @@ at the precision the zoom asks for (`centre_at_precision`). A flame that
 does not qualify draws nothing, and the panel says which condition
 failed. Xaos flames walk their transition graph.
 
+**Where it hands over** is free for an affine flame (the deepest level:
+its delta is exact) and chosen for a nonlinear one, whose delta is a
+linearisation (`seed_beam_inner`). The choice trades f32's error, which
+shrinks with depth, against the linearisation's, measured at the probe
+points as two errors in pixels:
+- the distance a continuation reports, against the exact level-0
+  walk's;
+- where the delta puts the view, against each probe's own walk down the
+  same address (`positional_miss_px`).
+
+The second was added on 2026-11-12. Inside a filled set the distance is
+0 whatever the handover, so the first alone let a bent view win, and the
+picture changed with the zoom, the centre and the window's shape
+(`the_handover_does_not_bend_a_nonlinear_view`).
+
 **The plane's orientation is the flame's.** `view_basis` mirrors the
 plane so that screen-down is world +y, as on a flame: the escape view's
 centre, rotation and zoom are the flame's pan `(x, −y)`, rotation and
