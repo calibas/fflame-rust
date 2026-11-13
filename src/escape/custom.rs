@@ -97,6 +97,15 @@ pub fn formula(name: &str) -> Option<&'static FormulaDef> {
     registry().read().ok()?.formulas.get(name).copied()
 }
 
+/// The registered formula whose [`slot_hash`] is `hash`: the perturbed
+/// path's tier (`PerturbTier::Custom`) carries the hash, not the name.
+/// A content-hash name (`custom-<16 hex>`) is its own hash; any other --
+/// an entry with an id, `custom-u<uuid>_<version>` -- is found by its
+/// hash among the registered formulas.
+pub fn formula_of_slot(hash: u64) -> Option<&'static FormulaDef> {
+    formula(&format!("{PREFIX}{hash:016x}")).or_else(|| registry().read().ok()?.formulas.iter().find(|(name, _)| slot_hash(name) == hash).map(|(_, def)| *def))
+}
+
 pub fn coloring(name: &str) -> Option<&'static ColoringDef> {
     if !name.starts_with(PREFIX) {
         return None;
@@ -2659,3 +2668,4 @@ mod bla_cost {
         println!("again (compiled): {} steps in {:.3} s", steps.len(), t.elapsed().as_secs_f64());
     }
 }
+

@@ -5774,7 +5774,7 @@ pub fn assemble_perturbed_full(
     // A custom formula's program (`PerturbTier::Custom`), by its name;
     // it carries no derivative on this path.
     let custom_formula = match tier {
-        PerturbTier::Custom { hash, .. } => crate::escape::custom::formula(&format!("{}{hash:016x}", crate::escape::custom::PREFIX)),
+        PerturbTier::Custom { hash, .. } => crate::escape::custom::formula_of_slot(hash),
         _ => None,
     };
     // A custom formula carries its own derivative program (step 9d): one
@@ -10638,6 +10638,31 @@ mod tests {
     /// assembles on both rungs into shaders that validate, carrying its
     /// own step, start and test, with the per-pixel state the renderer
     /// allocates; rebasing as `lang::perturb` says.
+    /// A Rhai formula with an id is named `custom-u<uuid>_<version>`, not
+    /// by its hash: the perturbed path finds its program from the tier's
+    /// hash all the same. It rebuilt a `custom-<16 hex>` name until
+    /// 2026-11-12, found nothing, and every such formula's perturbed
+    /// shader failed for want of its equations -- a view that stopped
+    /// rendering one zoom step past the direct path.
+    #[test]
+    fn the_custom_tier_finds_a_formula_with_an_id() {
+        use crate::config::escape::{CustomDialect, CustomSource, EscapeConfig};
+        let source = "const INFO = #{ id: \"5d0c9a7e-3b51-4c2f-9e64-1f8a2b7c6d03\", title: \"Squares\" };\n\
+                      fn start(pixel, p, ctx) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                      fn step(s, p) { s.z = s.z * s.z + s.c; s }\n\
+                      fn escaped(s, p) { s.z.norm_sqr() > 16.0 }\n";
+        let src = CustomSource { dialect: CustomDialect::Rhai, entry: String::new(), source: source.into(), variations: Vec::new() };
+        let name = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
+        assert!(name.starts_with(&format!("{}u", crate::escape::custom::PREFIX)), "named by its id: {name}");
+        let escape = EscapeConfig { formula: name.clone(), custom_formula: Some(src), zoom_log2: 30.0, ..EscapeConfig::default() };
+        crate::escape::custom::ensure(&escape);
+        let tier = crate::escape::custom::perturb_tier(&escape).expect("derived equations: a perturbed tier");
+        let wgsl = assemble_perturbed(crate::escape::get_coloring("smooth"), false, tier);
+        assert!(wgsl.contains("fn formula_perturb_init_scaled("), "the formula's equations are spliced in");
+        let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|e| panic!("parse: {}", e.emit_to_string(&wgsl)));
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all()).validate(&module).expect("validates");
+    }
+
     #[test]
     fn the_custom_tier_validates_on_both_rungs() {
         use crate::config::escape::{CustomDialect, CustomSource};
