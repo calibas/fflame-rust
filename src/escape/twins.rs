@@ -22,6 +22,10 @@
 //!
 //! The sources are `assets/formulas/twins/*.rhai`; the GPU tests hold
 //! each to its built-in (`escape::app_repro_test`).
+//!
+//! Some built-ins have retired to their twins ([`RETIRED`]): a config
+//! naming one renders the twin (docs/main/ESCAPE.md, *Retired
+//! built-ins*).
 
 /// Each twin: the built-in's registry name and the Rhai source.
 pub const TWINS: &[(&str, &str)] = &[
@@ -160,6 +164,86 @@ pub fn solid_source(name: &str) -> Option<&'static str> {
 /// The solid's twin as the config carries it.
 pub fn solid_custom_source(name: &str) -> Option<crate::config::escape::CustomSource> {
     carried(name, solid_source(name)?)
+}
+
+/// The built-in formulas that ARE their twins: a config naming one renders
+/// the twin (`custom::resolve`), under the built-in's name, parameters and
+/// presets, so no config can tell which it got. The built-in's WGSL stays
+/// as the reference the twin is held to (`builtin_twins_render_and_deep_
+/// zoom_as_their_builtins`, which renders it through
+/// `custom::native_builtins`) and runs if the twin ever fails to compile.
+///
+/// A formula retires once its twin is no more than 5% slower than the
+/// built-in on every path the built-in has (the user's line, 2026-11-13;
+/// `measure_formula_twins_on_the_direct_path`, and for a native deep-zoom
+/// tier `measure_twins_against_their_builtins`), by the median of
+/// several runs where a view renders in a millisecond or two. All but
+/// Manowar had no native deep zoom, so they gain it. Barnsley,
+/// Littlewood, Novaretti, Trig and Manowar joined once interior
+/// detection stopped comparing a pass's temporaries (2026-11-13);
+/// Manowar's twin is faster at depth too (123 ms against 148), and on
+/// the direct path at a view heavier than its home (6-10%). Newton's
+/// joined once a twin was compiled for its structural parameters
+/// (`lang::specialize`): at depth within 2-4% of the native tier, on the
+/// direct path 11-20% faster.
+pub const RETIRED: &[&str] = &["spider", "cactus", "exponential", "tetration", "collatz", "lambda_sine", "lattes", "origami", "barnsley", "littlewood", "novaretti", "trig", "manowar", "newton"];
+
+/// Whether the built-in formula `name` renders as its twin ([`RETIRED`]).
+pub fn retired(name: &str) -> bool {
+    RETIRED.contains(&name)
+}
+
+/// The built-in colourings that are their twins, as [`RETIRED`] is for
+/// formulas: a config naming one renders the twin (`custom::resolve`)
+/// under the built-in's name and parameters, the built-in's WGSL kept as
+/// the reference (`builtin_colouring_twins_render_as_their_builtins`,
+/// through `custom::native_builtins`) and as the fallback. The same line:
+/// no more than 5% slower on either path, the median of several runs
+/// (`measure_colouring_twins_against_their_builtins`).
+///
+/// Retired 2026-11-14, compiled for their structural parameters
+/// (`lang::specialize`): every twin passes on the perturbed path (at most
+/// +3.6%, the seahorse at zoom 30), and these on the direct path (at most
+/// +5%, the Mandelbrot at 4000 iterations). Stripe Average and Position
+/// Map joined once an angle of a value guarded away from zero took the
+/// raw atan2 (`lang::wgsl`, `nonzero_facts`; +4.4% and +2.5%, 2048x1536,
+/// the best of 31); Curvature Average at +5.7% so, by the user's call --
+/// close enough -- the one past the line.
+pub const RETIRED_COLORINGS: &[&str] = &[
+    "escape_count",
+    "orbit_trap",
+    "sphere_average",
+    "decomposition",
+    "basic",
+    "gaussian_integer",
+    "itinerary",
+    "smooth",
+    "orbit_average",
+    "magnitude_average",
+    "root_basin",
+    "triangle_inequality",
+    "period",
+    "position_average",
+    "velocity",
+    "threads",
+    "exponential_smoothing",
+    "external_rays",
+    "distance_estimate",
+    "normal_map",
+    "rainbow_fringe",
+    "infinite_waves",
+    "voc_traps",
+    "direct_traps",
+    "image_trap",
+    "stripe_average",
+    "position_map",
+    "curvature_average",
+];
+
+/// Whether the built-in colouring `name` renders as its twin
+/// ([`RETIRED_COLORINGS`]).
+pub fn coloring_retired(name: &str) -> bool {
+    RETIRED_COLORINGS.contains(&name)
 }
 
 /// The twin of the built-in formula `name`, when it has one.

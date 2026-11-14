@@ -2823,26 +2823,140 @@ The panel's notes about the path read the viewport's render height
 (`viewport_render_lines`), which the app publishes when it sizes the
 viewport; a thumbnail or an export decides at its own size.
 
+### Retired built-ins
+
+A built-in formula retires to its twin once the twin is no more than 5%
+slower on every path the built-in has (the user's line, 2026-11-13):
+the direct path at its home view (below) and, where it has a native
+deep-zoom tier, the deep views. A config naming a retired built-in
+renders the twin -- `custom::resolve` puts the twin's source and
+compiled name in its place at the renderer's entry points -- under the
+built-in's name, parameters, labels and presets, so a saved config, the
+API's catalog and a script cannot tell which they got. The built-in's
+WGSL stays: the reference the twin is held to
+(`builtin_twins_render_and_deep_zoom_as_their_builtins`, which renders
+it through `custom::native_builtins` and checks that the name renders
+the twin exactly), and what runs if the twin ever fails to compile.
+
+Retired (`twins::RETIRED`): **Spider, Cactus, Exponential, Tetration,
+Collatz, Lambda Sine, Lattès, Origami, Barnsley, Littlewood, Novaretti,
+Trig, Manowar, Newton** -- Newton once compiled for its structural
+parameters (below: within 2-4% at depth, 11-20% faster direct; the
+suite's `escape-newton-sine-roots` re-recorded, the twin counting 846 of
+8192 right against the native's 386 at `sin z - 1`'s double roots,
+where no f32 path counts well) -- all but Manowar and Newton without
+native deep zoom, so all but
+Origami (whose twin has no perturbed tier either) gained it, and Collatz
+gained a derivative (distance estimation). Barnsley onwards passed once
+interior detection compared only what a pass carries (below); where a
+view renders in a millisecond or two the median of several runs decides
+(Trig's nine: about +3%). Manowar, the first with a native tier, is
+faster as its twin at depth (123 ms against 148) and on the direct path
+at a view heavier than its 0.35 ms home (-6 to -10%); the suite's deep
+Manowar baseline was re-recorded, the twin counting 420 of 439 sampled
+pixels right against the truth where the native counted 373. The other
+formulas with a native tier pass on the direct path, Ducks and Feather
+aside, and wait on their deep views (the tables below).
+
+**Colourings** retire the same way (`twins::RETIRED_COLORINGS`,
+2026-11-14), by the same line on both paths, and resolve to their twins
+in the same step. Retired: all 28. **Curvature Average** is the one
+past the line, by decision (+5.7% on the direct path, 2048x1536, the
+best of 31: close enough). Stripe Average, Position Map and it joined
+last (+4.4%, +2.5%, from +13%, +8.6%, +12.5%) once the angle of a
+value a branch holds away from zero took the raw `atan2`: the
+generator records what an arm's test proves nonzero -- `!(|w|^2 < c)`,
+`!(re w == 0 && im w == 0)`, or several joined by `||` -- and the exact
+helper's selects (the Metal zero pair) are kept for every other angle
+(`lang::wgsl::nonzero_facts`). Curvature Average's twin says its turn
+`q` is never the zero pair, which its guarded steps already ensure. On the perturbed path every twin passes (the seahorse at
+zoom 30, 4000 iterations, medians of three: at most +3.6%; Direct Traps
+-33%, Orbit Trap -23%, Sphere Average -17%, Exponential Smoothing -14%,
+Image Trap -11%). On the direct path (the Mandelbrot at 4000 iterations,
+medians of three): Direct Traps -52%, Orbit Trap -33%, Sphere Average
+-31%, Exponential Smoothing -20%, VOC Traps -14%, Gaussian Integer -8%,
+Velocity -8%, Image Trap -5%; the rest within -3% to +5% (Itinerary
++5.0%, Smooth +4.9%). A texture layer stays the built-in, and a base
+colouring's twin under one keeps no accumulator it does not use: a
+stateless custom colouring emits no `ufc_init` or `coloring_accum`
+(`lang::wgsl`), whose stubs collided with an accumulating layer's.
+
 ### How fast the twins are
 
-A twin against its built-in, each render from cold at 512x384 with BLA
-where the tier has it (`measure_twins_against_their_builtins`, the best
-of three; a single run swings by half), in ms -- the whole render, then
-the GPU's part:
+On the **direct path**, each formula at its home view (its first
+preset) at 2000 iterations, 1024x768, pipelines warm, the best of nine
+(`measure_formula_twins_on_the_direct_path`, 2026-11-13), in ms:
+
+| formula | built-in | twin | | formula | built-in | twin |
+| --- | --- | --- | --- | --- | --- | --- |
+| Mandelbrot | 0.95 | 0.79 | | Exponential | 1.29 | 1.10 |
+| Multibrot | 1.95 | 1.95 | | Trig | 1.93 | 1.93 |
+| Tricorn | 1.54 | 0.72 | | Ducks | 28.65 | 32.31 |
+| Burning Ship | 1.77 | 1.33 | | Tetration | 3.71 | 3.41 |
+| McMullen | 0.65 | 0.61 | | Collatz | 0.60 | 0.60 |
+| Kaliset | 7.50 | 7.71 | | Feather | 5.15 | 5.50 |
+| Phoenix | 1.07 | 1.02 | | Newton | 0.66 | 0.70 |
+| Lambda | 1.23 | 1.04 | | Nova | 2.78 | 2.90 |
+| Spider | 1.07 | 0.98 | | Magnet | 1.11 | 1.10 |
+| Manowar | 0.39 | 0.41 | | Novaretti | 7.98 | 8.12 |
+| Barnsley | 0.80 | 0.64 | | Littlewood | 4.88 | 4.08 |
+| Cactus | 0.62 | 0.60 | | Lambda Sine | 1.02 | 0.91 |
+| Origami | 9.16 | 9.23 | | Lattès | 35.95 | 35.67 |
+
+Views this fast leave a few percent to chance (Trig reads 0 to +7% over
+three runs, Newton +2 to +6%). Until 2026-11-13 the interior detection
+(`formula_same`) compared every variable of a program's state, a pass's
+temporaries included, which kept them and their snapshot live across
+passes: Magnet's twin was +53%, Barnsley's +40%, Littlewood's +31%,
+Novaretti's +30%, Phoenix's and Manowar's +23%. Ducks' remaining gap is
+the exact `atan2` (`uf_atan2`, IEEE at the zero pairs where Metal's is
+wrong): with the raw built-in, +3%. A branch form and a sign-carrying
+nudge of x measured no faster than the `select`.
+
+At **depth**, a twin against its built-in, each render from cold at
+512x384 with BLA where the tier has it (`measure_twins_against_their_builtins`,
+2026-11-13; the 2026-10-16 figures in brackets where they moved), in
+ms -- the whole render, then the GPU's part:
 
 | view | built-in | twin | GPU: built-in | twin |
 | --- | --- | --- | --- | --- |
-| Mandelbrot, seahorse zoom 42, 8,000 | 28 | 36 | 19 | 24 |
-| Mandelbrot, seahorse zoom 60, 30,000, floatexp | 164 | 106 | 24 | 30 |
-| Mandelbrot, zoom 30, 20,000 | 128 | 129 | 127 | 128 |
-| Multibrot power 4, zoom 30 | 8 | 11 | 5 | 6 |
-| Tricorn, suite view zoom 28 | 154 | 141 | 117 | 119 |
-| Tricorn interior, zoom 30 | 46 | 64 | 6 | 7 |
-| Burning Ship, suite view zoom 60, floatexp | 37 | 77 | 34 | 62 |
-| Burning Ship interior, zoom 30 | 71 | 151 | 6 | 8 |
-| Lambda, zoom 30 | 20 | 26 | 16 | 18 |
-| Phoenix, zoom 48, floatexp | 16 | 19 | 15 | 18 |
-| Manowar, zoom 26, floatexp | 127 | 116 | 119 | 111 |
+| Mandelbrot, seahorse zoom 42, 8,000 | 31 | 39 | 20 | 25 |
+| Mandelbrot, seahorse zoom 60, 30,000, floatexp | 177 | 139 | 25 | 36 |
+| Mandelbrot, zoom 30, 20,000 | 127 | 132 | 126 | 131 |
+| Multibrot power 4, zoom 30 | 8 | 11 | 5 | 7 |
+| Tricorn, suite view zoom 28 | 165 | 155 | 119 | 131 |
+| Tricorn interior, zoom 30 | 60 | 78 | 6 | 7 |
+| Burning Ship, suite view zoom 60, floatexp | 42 | 90 | 38 | 69 |
+| Burning Ship interior, zoom 30 | 88 | 173 | 6 | 8 |
+| Lambda, zoom 30 | 21 | 28 | 16 | 20 |
+| Phoenix, zoom 48, floatexp | 13 | 15 | 12 | 15 |
+| Manowar, zoom 26, floatexp | 146 | 125 | 139 | 120 |
+| Kaliset (both views), zoom 30, 60 | 4 | 6 | 4 | 5 |
+| Newton z^3 - 1 (both schemes), zoom 30, 400 | 5-6 | 12 (28) | 4 | 11 (27) |
+| Feather power 3, zoom 30, 600 | 10 | 11 | 7 | 10 |
+| McMullen n 2 m 3 (Julia), zoom 30, 400 | 6 | 18 | 6 | 17 |
+| Magnet I, zoom 30, 400 | 6 | 9 (35-39) | 4 | 8 (34-38) |
+| Nova power 3, zoom 30, 400 | 6 | 7 (16) | 4 | 7 (15) |
+
+The convergent twins' rows moved on 2026-11-13 (the earlier figures in
+brackets), from the floatexp rung to the scaled: a carried value only a
+settle test reads no longer forces floatexp, once the perturbation
+equations took whole powers exactly (`uf_cpoww`; `renderer::deep_rung_always`).
+What remains is generality: a twin's shader keeps its function choice,
+scheme and exponent as parameters, branching on them and looping over
+degrees at run time, where the native tier compiles one case. Newton's
+twin written for `z^3 - 1` alone, Newton's scheme, ran at the built-in's
+5 ms.
+
+Two rows had grown since October with the built-ins unchanged -- the
+Mandelbrot at zoom 30 (145 ms of GPU time) and the Tricorn's suite view
+(156) -- bisected to the commit that gave custom formulas the built-ins'
+escape margin: its `ref_r2` read beside the scaled rebase's
+every-iteration low words. The rebase now decides as the built-ins' and
+forms the deviation only on a rebase (`assembler::rebase_custom_scaled`),
+and the rows read as above (2026-11-13). The Tricorn twin's BLA table
+was already small in October (1.6 ms to build against the built-in's
+16-22): its whole render still beats the built-in's.
 
 What made the references cheap: big floats keep up to eight limbs
 inline (`bigfloat::Limbs`, a `SmallVec`: an operation or a variable's
@@ -2871,7 +2985,8 @@ What remains:
   big floats and 43 of watching against the built-in's 16, which
   watches nothing.
 - **A custom BLA table's build** from the equations: 26 ms against the
-  power table's 6 for the Mandelbrot at zoom 60.
+  power table's 6 for the Mandelbrot at zoom 60 (39 against 6 on
+  2026-11-13).
 
 ### Damping and the biomorph on custom formulas
 
@@ -2913,4 +3028,37 @@ its start, a minibrot's centre only where the start is the map's
 critical point, and damping moves that (to `(alpha - 1) / 2 alpha` for
 `z^2 + c`). The reference still relocates there, where it wraps
 exactly.
+
+### Structural parameters
+
+A custom formula or colouring (Rhai, UF, Fractint, a twin) is compiled
+for the values of its **structural parameters**, as a built-in's native
+tier is compiled for one case (`lang::specialize`, 2026-11-13). A
+parameter is structural when it picks a case -- read in a branch whose
+test is the same at every pixel (Newton's function and scheme, a
+variant, a trap's shape) -- or sets a power's exponent (the Multibrot's
+power, McMullen's `n` and `m`), directly or through a variable that
+holds only such values (`let k = p.power; z ** k`). Choices, ints and
+bools are specialized at any value; a float or complex only at a whole
+real value up to 64, so a slider moved through the values between keeps
+the general program.
+
+`custom::resolve` compiles the specialized program under its own name
+(beside the damped, biomorph and array-sized variants, `bake_of`): the
+values written in as literals, carried through the variables holding
+them and folded, and each branch on them replaced by the arm it takes,
+before the perturbation equations are derived. A literal whole power
+derives by degrees, unrolled, a negative one as the reciprocal's
+(`lang::delta`); a whole power in the equations is taken by squaring
+(`uf_cpoww`), and `PowInt` unrolls to 12. Newton's twin at its deep view
+went from 12 ms to the built-in's 5, Magnet's from 9 to 6.
+
+The cost is a compile per value: such a parameter is set, not animated
+-- a keyframed choice or whole power compiles a variant at each value it
+takes (cached once compiled; ANIMATION.md, *Not animatable*). The
+specialized code can round differently where the driver contracts the
+straight-line arithmetic, which a chaotic map amplifies: against the
+big-float truth it counts as many pixels right as the general program or
+more (the Ship with damping and the biomorph: 7991 of 8192 against the
+built-in's 7984).
 

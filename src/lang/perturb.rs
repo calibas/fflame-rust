@@ -153,6 +153,28 @@ fn done_parts(test: &IExpr) -> Vec<IExpr> {
     parts
 }
 
+/// Whether the formula's test reads the values its equations carry
+/// (`Program::carried`) only where it settles -- `|z - v|` under a fixed
+/// bound, a convergent formula's previous z -- and so to f32's
+/// resolution of an O(1) z. A test that weighs one against the view's
+/// size (`unity`'s `|r2 - 1| < 4 / (magn rows)`) needs it to the pixel,
+/// which the scaled rung does not hold: such a formula perturbs on the
+/// floatexp rung (`PerturbTier::Custom::deep`).
+pub fn reads_carried_only_to_settle(p: &Program) -> bool {
+    fn reads(e: &IExpr, vars: &[VarId]) -> bool {
+        match &e.kind {
+            IExprKind::Var(v) => vars.contains(v),
+            IExprKind::Elem(v, a) => vars.contains(v) || reads(a, vars),
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => reads(a, vars),
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => reads(a, vars) || reads(b, vars),
+            _ => false,
+        }
+    }
+    let Some(test) = p.bailout.as_ref() else { return true };
+    let vars: Vec<VarId> = p.carried.iter().map(|c| c.var).collect();
+    done_parts(test).iter().all(|d| is_settle(d) || !reads(d, &vars))
+}
+
 /// Whether a part of "done" is the iterate's settling: its distance from
 /// a variable under a bound the same at every pass.
 fn is_settle(d: &IExpr) -> bool {
@@ -233,7 +255,14 @@ pub fn modulus_bound(test: &IExpr) -> Option<IExpr> {
 /// overflowed, and the pixels never escaped: 410 of 439 right at zoom
 /// 30, 439 on the floatexp rung). Such a formula perturbs on the
 /// floatexp rung at every depth (`PerturbTier::Custom::deep`).
-pub fn grows_past_f32(p: &Program) -> bool {
+///
+/// At these parameters: a branch on a parameter (`delta::per_image`'s
+/// tests) counts only the arm that runs. Newton's twin chooses `cosh z -
+/// 1` among its functions so; counting every arm put `z^3 - 1` on the
+/// floatexp rung too, five times the scaled rung's time at zoom 30
+/// (2026-11-13).
+pub fn grows_past_f32(p: &Program, params: &super::interp::ParamValues, env: &super::interp::Env) -> bool {
+    let at = |c: &IExpr| super::delta::per_image(c).then(|| super::interp::per_image_test(p, params, env, c));
     fn e(x: &IExpr, p: &Program) -> bool {
         match &x.kind {
             IExprKind::Call(Builtin::Exp | Builtin::Expm1 | Builtin::Sinh | Builtin::Cosh, a) => reads_a_variable(a, p) || reads_z(a) || e(a, p),
@@ -250,19 +279,35 @@ pub fn grows_past_f32(p: &Program) -> bool {
             _ => false,
         }
     }
-    fn s(st: &[IStmt], p: &Program) -> bool {
+    fn s(st: &[IStmt], p: &Program, at: &dyn Fn(&IExpr) -> Option<bool>) -> bool {
         st.iter().any(|x| match x {
-            IStmt::Scope(b) => s(b, p),
+            IStmt::Scope(b) => s(b, p, at),
             IStmt::Host(_, args) => args.iter().any(|x| e(x, p)),
             IStmt::Break | IStmt::Continue | IStmt::Return => false,
             IStmt::Assign(_, v) => e(v, p),
             IStmt::SetElem { index, value, .. } => e(index, p) || e(value, p),
-            IStmt::If { arms, otherwise } => arms.iter().any(|(c, b)| e(c, p) || s(b, p)) || s(otherwise, p),
-            IStmt::While { cond, body } | IStmt::Repeat { body, cond } => e(cond, p) || s(body, p),
+            IStmt::If { arms, otherwise } => {
+                // Arm by arm as the branch runs: one whose test is the same
+                // at every pixel and holds is the only one left; one whose
+                // test fails is skipped; any other may run.
+                for (c, b) in arms {
+                    match at(c) {
+                        Some(true) => return s(b, p, at),
+                        Some(false) => continue,
+                        None => {
+                            if e(c, p) || s(b, p, at) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                s(otherwise, p, at)
+            }
+            IStmt::While { cond, body } | IStmt::Repeat { body, cond } => e(cond, p) || s(body, p, at),
             IStmt::Map { input, .. } => input.iter().any(|x| e(x, p)),
         })
     }
-    s(&p.loop_body, p)
+    s(&p.loop_body, p, &at)
 }
 
 /// Whether a formula's test never ends an orbit by escaping: none, `true`

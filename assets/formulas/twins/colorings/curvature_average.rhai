@@ -32,9 +32,14 @@ fn step(s, z, p, ctx) {
         if !(a.re * a.re + a.im * a.im < 1e-30 || b.re * b.re + b.im * b.im < 1e-30) {
             // a conj(b): its angle is the turn from b to a.
             let q = complex(a.re * b.re + a.im * b.im, a.im * b.re - a.re * b.im);
-            let t = abs(q.arg()) * 0.31830988;
-            s.total = s.total + t;
-            s.last = t;
+            // Never the zero pair with both steps nonzero; said so, the
+            // compiler takes the plain atan2 (the one Metal gets wrong
+            // only there).
+            if !(q.re == 0.0 && q.im == 0.0) {
+                let t = abs(q.arg()) * 0.31830988;
+                s.total = s.total + t;
+                s.last = t;
+            }
         }
     }
     s.before = zp;

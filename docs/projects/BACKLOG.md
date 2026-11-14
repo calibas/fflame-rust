@@ -190,11 +190,35 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   32, ~150 small mismatches, `random(seed)`, `.ugr` gradients; classes,
   `.ulb`, `.upr`; UF `#color` (refused, `check.rs`); `.uxf` transforms;
   KF `.kfr` hybrid import.
-- **Retire native formulas** where twins match (D7): prerequisites --
-  compress custom orbits in the store, flatten references to in-place big
-  floats, Newton's `z^p sin z - 1` at a basin boundary, the scaled
-  rung's f32 reference sums (Ducks), a possible fixed-point overflow at
-  power 9+. §"After phase 4" item 6.
+- **Retire native formulas** where twins match (D7; the line: no more
+  than 5% slower on every path the built-in has, the median of several
+  runs where a view is quick; user 2026-11-13). Fourteen retired on
+  branch `retire-escape-builtins` (Spider, Cactus, Exponential,
+  Tetration, Collatz, Lambda Sine, Lattès, Origami, Barnsley,
+  Littlewood, Novaretti, Trig, Manowar, Newton;
+  [ESCAPE.md](../main/ESCAPE.md#retired-built-ins)). The twins' GPU
+  slowdowns since 2026-10-16 are fixed (bisected to the escape margin's
+  commit). Custom formulas and colourings are compiled for their
+  structural parameters (ESCAPE.md, *Structural parameters*). Left, at
+  depth (twin against built-in, ms): Magnet 6.2-6.6 against 5.8-7.1
+  (median +5%, on the line), Nova 6.3-6.5 against 5.3, McMullen 9-11
+  against 6-7, Ducks 9.3 against 6.0, Kaliset 5.9 against 4.4, Phoenix
+  15-16 against 12-13, Multibrot 9.5 against 7.5, Lambda, the deep
+  Mandelbrot (zoom 42: the reference and table builds), the Tricorn and
+  Ship interiors (the nucleus search's interpreted slope pass: 12 ms of
+  the Tricorn's 38, 50 of the Ship's 102) and the Ship at floatexp (2x).
+  On the direct path only Feather (+4 to +8%, median +6%) and McMullen
+  (+6%) remain. A custom BLA table's build (24 interpreted steps an
+  entry) could skip its ring check for exactly quadratic steps. Earlier prerequisites: compress custom
+  orbits in the store, flatten references to in-place big floats,
+  Newton's `z^p sin z - 1` at a basin boundary, the scaled rung's f32
+  reference sums (Ducks). §"After phase 4" item 6.
+- **The colouring built-ins' code**: all 28 retired to their twins
+  2026-11-14 on branch `retire-escape-builtins`
+  ([ESCAPE.md](../main/ESCAPE.md#retired-built-ins); Curvature Average
+  at +5.7% on the direct path, accepted). A texture layer still draws
+  its built-in colouring, and the built-ins stay as the parity tests'
+  reference.
 - **Held structural keyframes** (formula source and name as one target);
   a formula randomiser. §"Phase 4 … step 8".
 - **Formula library in the Fractal Browser**, and an API formula corpus.

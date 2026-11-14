@@ -4641,13 +4641,33 @@ fn rebase_only_at_orbit_end() -> String {
 /// `z_full` kept f32's 2^-24 of |c| instead, and counted 58 of 439
 /// sampled pixels right at the deep seahorse view (zoom 42), 418 on the
 /// deep rung.
+///
+/// The test decides on `z_full - Z_0`, as the built-ins' does, and
+/// only a rebase forms the new deviation: `z_full` itself for a start at
+/// zero (the parameter plane's, `Z_0` the same for every pixel, so the
+/// branch is too), the records' difference with their low words for any
+/// other. Every iteration formed that difference until 2026-11-13,
+/// reading the low words beside the escape margin's `ref_r2`
+/// (`escape_margin_custom`), and the two together cost the twins their
+/// speed: the Mandelbrot's at zoom 30 146 ms of GPU time against the
+/// built-in's 128 (now 130), the Tricorn's suite view 156 against 120
+/// (now 131) -- bisected to the margin's commit; without the margin, or
+/// with the built-ins' rebase, both ran as fast as their built-ins. The
+/// low words read only in the branch still cost the Mandelbrot's 8% at
+/// that view, whose period-3 nucleus reference rebases every pixel
+/// every third pass: hence `z_full` at a zero start.
 fn rebase_custom_scaled(rebase: bool) -> String {
-    let test = if rebase { "\n         \x20           || dot(rebase_delta, rebase_delta) < dot(delta, delta)" } else { "" };
+    let test = if rebase { "\n         \x20           || dot(rebase_test, rebase_test) < dot(delta, delta)" } else { "" };
     format!(
-        "        let mc = min(m, perturb.orbit_len - 1u);\n\
-         \x20       let rebase_delta = ((ref_z(mc) - ref_z(0u)) + (ref_z_lo(mc) - ref_z_lo(0u))) + delta;\n\
+        "        let rebase_z0 = ref_z(0u);\n\
+         \x20       let rebase_test = z_full - rebase_z0;\n\
          \x20       if (m >= perturb.orbit_len - 1u{test}) {{\n\
-         \x20           w = rebase_delta * perturb.inv_s;\n\
+         \x20           if (rebase_z0.x == 0.0 && rebase_z0.y == 0.0) {{\n\
+         \x20               w = z_full * perturb.inv_s;\n\
+         \x20           }} else {{\n\
+         \x20               let mc = min(m, perturb.orbit_len - 1u);\n\
+         \x20               w = (((ref_z(mc) - rebase_z0) + (ref_z_lo(mc) - ref_z_lo(0u))) + delta) * perturb.inv_s;\n\
+         \x20           }}\n\
          \x20           m = 0u;\n\
          \x20       }}"
     )
@@ -9888,6 +9908,11 @@ mod tests {
                 let Some(tier) = crate::escape::EscapeRenderer::perturb_tier(&esc) else {
                     continue;
                 };
+                // A retired built-in deep-zooms as its twin, whose program
+                // carries its own test (`twins::RETIRED`).
+                if matches!(tier, PerturbTier::Custom { .. }) {
+                    continue;
+                }
                 assert_eq!(
                     tier.is_convergent(),
                     declared,
@@ -9913,6 +9938,11 @@ mod tests {
                 let Some(tier) = crate::escape::EscapeRenderer::perturb_tier(&esc) else {
                     continue;
                 };
+                // A retired built-in deep-zooms as its twin, whose program
+                // carries its own test (`twins::RETIRED`).
+                if matches!(tier, PerturbTier::Custom { .. }) {
+                    continue;
+                }
                 assert_eq!(
                     tier.is_non_escaping(),
                     declared,
@@ -10709,7 +10739,7 @@ mod tests {
                     } else {
                         assert!(wgsl.contains("formula_perturb_loop_scaled(z_ref, w,"), "{what}: the step");
                         assert!(wgsl.contains("formula_perturb_init_scaled(ref_z(0u)"), "{what}: the start");
-                        assert_eq!(wgsl.contains("dot(rebase_delta, rebase_delta)"), rebase, "{what}: the rebase");
+                        assert_eq!(wgsl.contains("dot(rebase_test, rebase_test)"), rebase, "{what}: the rebase");
                     }
                     let mut layouter = naga::proc::Layouter::default();
                     layouter.update(module.to_ctx()).expect("layout");

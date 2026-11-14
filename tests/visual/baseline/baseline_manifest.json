@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "2bf0d82f",
+  "git_hash": "c11b147a",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -123,12 +123,12 @@
       "sha256": "0d38329acb8c9ba8a487c5d9e7cff5795d3007b5a2714fbd7e422a82a0c78319"
     },
     "escape-deep-zoom-30.png": {
-      "bytes": 36463,
-      "sha256": "5b0afab7a73e985093b387150d6db2df91bfdbf1bfe9c6de4da726bf147e41d8"
+      "bytes": 36550,
+      "sha256": "461c32c8abf1cb601ab38714ff296493c3742ca307abc24acd8b15476361e5e9"
     },
     "escape-deep-zoom-42.png": {
-      "bytes": 32420,
-      "sha256": "d1f0ed6a5afb0e342aa7487d18d8bb0d7295729860d18f0b530f6bec19c0eb84"
+      "bytes": 32388,
+      "sha256": "f496f508ae0aad4b13ce040d4cc1dd4c7bf707b9683db586f35b5a23c36606e0"
     },
     "escape-ducks-deep-contrast.png": {
       "bytes": 35917,
@@ -163,12 +163,12 @@
       "sha256": "4437da9a7ea49ae3a76af849a7f962306dafe7f255da522bb324d2bd27b3cf42"
     },
     "escape-fe-threshold-floatexp.png": {
-      "bytes": 49473,
-      "sha256": "cb81fb983c456e46b951e42b493f59d4fd0f051b9228908c6db20014ceda7227"
+      "bytes": 49463,
+      "sha256": "af461965340e5a3b48627aa914386183357cf613609a1f32eb712f9fbf88f6b8"
     },
     "escape-fe-threshold-scaled.png": {
-      "bytes": 49080,
-      "sha256": "9b8989db582d8614938dc10a21a64622dcbf4f357bc7b16cb924ff1ac3f5145d"
+      "bytes": 49109,
+      "sha256": "b144e410360d642970e9610cbe54cbbf0a6f5d8d0f5c880931b9400f0539a03c"
     },
     "escape-fe-zoom-60-edge.png": {
       "bytes": 15944,
@@ -379,8 +379,8 @@
       "sha256": "ce79cb43dc7c4c0b058097144788aedb8452bb60eff163afd0daba4f73e91062"
     },
     "escape-manowar-deep.png": {
-      "bytes": 36492,
-      "sha256": "db34248534f93f4c548a4e87ce7cbac893699d91426e20e55f79a07efbdae681"
+      "bytes": 36507,
+      "sha256": "806d11fb34f5550122332a9115eb9a53795cac57d231f669b4c7667fe0586fb1"
     },
     "escape-manowar.png": {
       "bytes": 2321,
@@ -439,8 +439,8 @@
       "sha256": "43a051c4cf5363644e9c22a2045352fe0e9c2a5ee667f32167b92456151fd99a"
     },
     "escape-newton-sine-roots.png": {
-      "bytes": 9882,
-      "sha256": "7cb68cf8799f82c6c3308ba87c77b3b42f057f5d6b1d8bf2b19d5381de9272fc"
+      "bytes": 11975,
+      "sha256": "787e98e62440fd9e9f4217320e9bb8d0e6863205c2af927b69e0fe0bdb0aa513"
     },
     "escape-normal-map-relief.png": {
       "bytes": 14011,
@@ -523,8 +523,8 @@
       "sha256": "d97ec26312b50362c154706e80fb523bdbda41e6df7f49887d74b2a437fe5e50"
     },
     "escape-ship-deep-floatexp.png": {
-      "bytes": 40135,
-      "sha256": "82f80a93ddaa2160bd7639eb6a34ab1873afa53edcc636b78695d2c1d5028b6f"
+      "bytes": 40167,
+      "sha256": "4b577a403450f09e138235d240fbfc1791607108256a20b2e85def00b7de01ac"
     },
     "escape-ship-deep-perturbed.png": {
       "bytes": 14679,
@@ -575,8 +575,8 @@
       "sha256": "2c824a2a8ffcdbd854ea68f78bee2577314b66b12e903bf41083998ea900a27b"
     },
     "escape-tricorn-deep.png": {
-      "bytes": 46868,
-      "sha256": "25d28a48bd11305c1892418575bc2ed68ae4183ba0f2a12a5aff69966cbfae2c"
+      "bytes": 46878,
+      "sha256": "9323552d4e2ac9d130a2c59531fdd4adec2d471f7821a673e749a0184c8ce172"
     },
     "escape-tricorn.png": {
       "bytes": 3765,

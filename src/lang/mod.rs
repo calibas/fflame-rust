@@ -27,6 +27,7 @@ pub mod parser;
 pub mod periodic;
 pub mod perturb;
 pub mod rhai;
+pub mod specialize;
 pub mod to_rhai;
 pub mod switch;
 pub mod wgsl;

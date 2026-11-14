@@ -15301,6 +15301,10 @@
         "builtin": "stripe_average",
         "kind": "coloring"
       },
+      "custom-19ae73a111a5afc8": {
+        "builtin": "curvature_average",
+        "kind": "coloring"
+      },
       "custom-1c46a71531ec50f5": {
         "builtin": "occupancy",
         "kind": "sim_coloring"

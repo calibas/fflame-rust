@@ -70,6 +70,10 @@ struct Registry {
     /// `#maxiter`), checked at the defaults: [`resolve`] names a variant
     /// for other values.
     sized: HashMap<String, Arc<ir::Program>>,
+    /// The formulas with parameters that pick a case or set an exponent
+    /// (`lang::specialize`), and which: [`resolve`] compiles a variant with
+    /// their values written in.
+    structural: HashMap<String, Arc<(ir::Program, Vec<ir::ParamId>)>>,
     /// Why an entry's arrays do not compile at the settings last resolved
     /// (it renders at its default sizes), by the entry's name
     /// ([`size_failure`]).
@@ -666,11 +670,14 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
 /// (`lang::modifiers`; plan, phase 4, step 9e) and register it under
 /// `name`, the variant's: the damping parameter's name with it when
 /// damped.
-fn compile_variant(src: &CustomSource, name: &str, damped: bool, axis: Option<lang::modifiers::Axis>) -> Result<&'static FormulaDef, Vec<Diag>> {
+fn compile_variant(src: &CustomSource, name: &str, damped: bool, axis: Option<lang::modifiers::Axis>, bake: &[(ir::ParamId, (f64, f64))]) -> Result<&'static FormulaDef, Vec<Diag>> {
     if let Some(def) = formula(name) {
         return Ok(def);
     }
     let mut p = check_entry(EntryKind::Formula, src)?;
+    // The structural parameters' values first, as literals: the base's
+    // parameter indices, before a modifier adds its own.
+    lang::specialize::bake(&mut p, bake);
     if damped {
         let alpha = lang::modifiers::alpha_name(&p);
         p = lang::modifiers::damped(&p);
@@ -759,6 +766,10 @@ fn compile_program(p: ir::Program, name: &str) -> Result<&'static FormulaDef, Ve
         if p.sized_by_settings() {
             r.sized.insert(name.to_string(), p.clone());
         }
+        let structural = lang::specialize::structural_params(&p);
+        if !structural.is_empty() {
+            r.structural.insert(name.to_string(), Arc::new(((*p).clone(), structural)));
+        }
         if p.degree.is_some() {
             r.degrees.insert(name.to_string(), p.clone());
         }
@@ -797,8 +808,11 @@ pub fn perturb_tier(escape: &EscapeConfig) -> Option<super::assembler::PerturbTi
         return None;
     }
     let hash = slot_hash(&escape.formula);
-    let deep = lang::perturb::grows_past_f32(&prog);
     let (stride, width) = (how.references() as u8, (1 + prog.carried.len()) as u8);
+    // A carried value only the test reads takes the scaled rung where the
+    // test only settles on it (`renderer::deep_rung_always`); one it weighs
+    // otherwise needs the floatexp rung's precision.
+    let deep = lang::perturb::grows_past_f32(&prog, &inputs.params, &inputs.env) || (width > 1 && !how.pair && !lang::perturb::reads_carried_only_to_settle(&prog));
     // The built-ins' margin test needs the reference's |Z|^2 at the
     // pixel's index: one reference, nothing carried.
     let margin = stride == 1 && width == 1 && lang::perturb::perturb_test(&prog).as_ref().and_then(lang::perturb::modulus_bound).is_some();
@@ -1184,6 +1198,88 @@ pub fn offers_nucleus(escape: &EscapeConfig) -> bool {
     found
 }
 
+/// A config naming a retired built-in (`twins::RETIRED`), as its twin: the
+/// twin's source carried and its name compiled, everything else -- the
+/// parameters by name, the panel's bailout, damping and biomorph -- as it
+/// was. None for any other formula, under `native_builtins` (tests), or
+/// when the twin does not compile, which leaves the built-in's WGSL to
+/// render.
+fn retired_twin(escape: &EscapeConfig) -> Option<EscapeConfig> {
+    if !super::twins::retired(&escape.formula) || native_forced() {
+        return None;
+    }
+    static TWINS: OnceLock<HashMap<&'static str, (String, CustomSource)>> = OnceLock::new();
+    let twins = TWINS.get_or_init(|| {
+        super::twins::RETIRED
+            .iter()
+            .filter_map(|&n| {
+                let src = super::twins::custom_source(n)?;
+                Some((n, (name_of(EntryKind::Formula, &src), src)))
+            })
+            .collect()
+    });
+    let (name, src) = twins.get(escape.formula.as_str())?;
+    let mut twin = escape.clone();
+    twin.formula = name.clone();
+    twin.custom_formula = Some(src.clone());
+    ensure(&twin);
+    if formula(name).is_none() {
+        return None;
+    }
+    Some(twin)
+}
+
+/// [`retired_twin`] for a colouring (`twins::RETIRED_COLORINGS`).
+fn retired_coloring_twin(escape: &EscapeConfig) -> Option<EscapeConfig> {
+    if !super::twins::coloring_retired(&escape.coloring) || native_forced() {
+        return None;
+    }
+    static TWINS: OnceLock<HashMap<&'static str, (String, CustomSource)>> = OnceLock::new();
+    let twins = TWINS.get_or_init(|| {
+        super::twins::RETIRED_COLORINGS
+            .iter()
+            .filter_map(|&n| {
+                let src = super::twins::coloring_custom_source(n)?;
+                Some((n, (name_of(EntryKind::Coloring, &src), src)))
+            })
+            .collect()
+    });
+    let (name, src) = twins.get(escape.coloring.as_str())?;
+    let mut twin = escape.clone();
+    twin.coloring = name.clone();
+    twin.custom_coloring = Some(src.clone());
+    ensure(&twin);
+    if coloring(name).is_none() {
+        return None;
+    }
+    Some(twin)
+}
+
+#[cfg(test)]
+thread_local! {
+    static NATIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn native_forced() -> bool {
+    NATIVE.with(|n| n.get())
+}
+
+#[cfg(not(test))]
+fn native_forced() -> bool {
+    false
+}
+
+/// Run `f` with the retired built-ins rendering their own WGSL: the
+/// reference their twins are held to.
+#[cfg(test)]
+pub fn native_builtins<T>(f: impl FnOnce() -> T) -> T {
+    let was = NATIVE.with(|n| n.replace(true));
+    let out = f();
+    NATIVE.with(|n| n.set(was));
+    out
+}
+
 /// The config a render takes for the panel's damping and biomorph on a
 /// custom formula (plan, phase 4, step 9e). A program owns its step and
 /// its test, so the built-ins' template switches cannot reach it; here
@@ -1194,8 +1290,18 @@ pub fn offers_nucleus(escape: &EscapeConfig) -> bool {
 /// them for the built-ins, takes the variant as any custom formula.
 /// The config itself for a built-in, or when neither is on, or a
 /// variant that does not compile (which renders as the formula did).
+///
+/// A retired built-in (`twins::RETIRED`, `twins::RETIRED_COLORINGS`)
+/// resolves to its twin first, which then resolves as any custom formula
+/// or colouring.
 pub fn resolve(escape: &EscapeConfig) -> std::borrow::Cow<'_, EscapeConfig> {
     use std::borrow::Cow;
+    if let Some(twin) = retired_twin(escape) {
+        return Cow::Owned(resolve(&twin).into_owned());
+    }
+    if let Some(twin) = retired_coloring_twin(escape) {
+        return Cow::Owned(resolve(&twin).into_owned());
+    }
     let Some(sized) = resolve_coloring_sizes(escape) else {
         return resolve_formula(escape);
     };
@@ -1282,16 +1388,26 @@ pub fn size_failure(escape: &EscapeConfig) -> Option<String> {
 fn resolve_coloring_sizes(escape: &EscapeConfig) -> Option<EscapeConfig> {
     let src = escape.custom_coloring.as_ref().filter(|_| escape.coloring.starts_with(PREFIX))?;
     ensure(escape);
-    let Some((h, settings)) = sizes_of(&escape.coloring, &escape.coloring_params, escape.max_iter) else {
+    let sized = sizes_of(&escape.coloring, &escape.coloring_params, escape.max_iter);
+    if sized.is_none() {
         note_sizes(&escape.coloring, None);
-        return None;
-    };
-    let base = slot_hash(&escape.coloring);
-    let name = format!("{PREFIX}{:016x}", base.rotate_left(29) ^ h);
-    if coloring(&name).is_none() {
-        compile_once(&name, "colouring at its array sizes", src, Some(&settings), || compile_coloring(src, &name));
     }
-    note_sizes(&escape.coloring, Some(&name));
+    // And its structural parameters' values written in (`lang::specialize`),
+    // as a formula's.
+    let bake = bake_of(&escape.coloring, &escape.coloring_params);
+    if sized.is_none() && bake.is_empty() {
+        return None;
+    }
+    let base = slot_hash(&escape.coloring);
+    let h = sized.as_ref().map_or(0, |(h, _)| *h);
+    let name = format!("{PREFIX}{:016x}", (base.rotate_left(29) ^ h) ^ bake_hash(&bake).rotate_left(41));
+    if coloring(&name).is_none() {
+        let settings = sized.as_ref().map(|(_, s)| s);
+        compile_once(&name, "colouring at its array sizes or structural parameters", src, settings, || compile_coloring_baked(src, &name, &bake));
+    }
+    if sized.is_some() {
+        note_sizes(&escape.coloring, Some(&name));
+    }
     coloring(&name)?;
     let mut out = escape.clone();
     out.coloring = name;
@@ -1300,6 +1416,35 @@ fn resolve_coloring_sizes(escape: &EscapeConfig) -> Option<EscapeConfig> {
 
 /// The formula half of [`resolve`]: its arrays' sizes, the damping and
 /// the biomorph.
+/// The structural parameters' values to compile a formula's variant with
+/// (`lang::specialize::bake_values`), from the config's values as the GPU
+/// packs them; empty for a formula with none, or none at a value worth it.
+/// The structural parameters' values, hashed into a variant's name. By
+/// SipHash: a word XORed in and multiplied by FNV's prime leaves a float's
+/// high bits -- where 2.0 and 0.0 differ -- unmixed, and Orbit Trap's
+/// shape 2 at mode 0 hashed as its shape 0 at mode 2, the registry handing
+/// one the other's variant.
+fn bake_hash(bake: &[(ir::ParamId, (f64, f64))]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for (i, (re, im)) in bake {
+        (*i, re.to_bits(), im.to_bits()).hash(&mut h);
+    }
+    h.finish()
+}
+
+fn bake_of(name: &str, values: &std::collections::BTreeMap<String, f32>) -> Vec<(ir::ParamId, (f64, f64))> {
+    let Some(entry) = registry().read().ok().and_then(|r| r.structural.get(name).cloned()) else {
+        return Vec::new();
+    };
+    let (prog, structural) = &*entry;
+    let defs = param_defs(prog);
+    let mut block = vec![0.0f32; defs.len() + prog.funcs.len()];
+    super::pack_params(&defs, values, &mut block);
+    let values = lang::interp::ParamValues::from_slots(prog, &block);
+    lang::specialize::bake_values(prog, structural, &values)
+}
+
 fn resolve_formula(escape: &EscapeConfig) -> std::borrow::Cow<'_, EscapeConfig> {
     use std::borrow::Cow;
     use crate::config::escape::BiomorphMode;
@@ -1320,7 +1465,8 @@ fn resolve_formula(escape: &EscapeConfig) -> std::borrow::Cow<'_, EscapeConfig> 
     if sized.is_none() {
         note_sizes(&escape.formula, None);
     }
-    if !damped && axis.is_none() && sized.is_none() {
+    let bake = bake_of(&escape.formula, &escape.formula_params);
+    if !damped && axis.is_none() && sized.is_none() && bake.is_empty() {
         return Cow::Borrowed(escape);
     }
     // A test with no |z| has no biomorph: the variant leaves it.
@@ -1329,21 +1475,22 @@ fn resolve_formula(escape: &EscapeConfig) -> std::borrow::Cow<'_, EscapeConfig> 
     out.damping_re = 1.0;
     out.damping_im = 0.0;
     out.biomorph = BiomorphMode::Off;
-    if !damped && axis.is_none() && sized.is_none() {
+    if !damped && axis.is_none() && sized.is_none() && bake.is_empty() {
         return Cow::Owned(out);
     }
     let tag = u64::from(damped) | axis.map_or(0, |a| if a == lang::modifiers::Axis::Re { 2 } else { 4 });
     let base = slot_hash(&escape.formula);
     let sizes = sized.as_ref().map_or(0, |(h, _)| *h);
+    let baked = bake_hash(&bake);
     let name = if !damped && axis.is_none() {
-        format!("{PREFIX}{:016x}", base.rotate_left(29) ^ sizes)
+        format!("{PREFIX}{:016x}", (base.rotate_left(29) ^ sizes) ^ baked.rotate_left(41))
     } else {
-        format!("{PREFIX}{:016x}", (base.rotate_left(17) ^ tag.wrapping_mul(0x9E37_79B9_7F4A_7C15)) ^ sizes.rotate_left(7))
+        format!("{PREFIX}{:016x}", ((base.rotate_left(17) ^ tag.wrapping_mul(0x9E37_79B9_7F4A_7C15)) ^ sizes.rotate_left(7)) ^ baked.rotate_left(41))
     };
     if formula(&name).is_none() {
         let settings = sized.as_ref().map(|(_, s)| s);
-        if damped || axis.is_some() {
-            compile_once(&name, "formula with damping or biomorph", src, settings, || compile_variant(src, &name, damped, axis));
+        if damped || axis.is_some() || !bake.is_empty() {
+            compile_once(&name, "formula with damping, biomorph or its structural parameters", src, settings, || compile_variant(src, &name, damped, axis, &bake));
         } else {
             compile_once(&name, "formula at its array sizes", src, settings, || compile_formula(src, &name));
         }
@@ -1390,10 +1537,17 @@ pub fn cycle(name: &str) -> Option<lang::ir::Cycle> {
 
 /// Compile a colouring entry and register it under `name`.
 pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static ColoringDef, Vec<Diag>> {
+    compile_coloring_baked(src, name, &[])
+}
+
+/// [`compile_coloring`] with its structural parameters' values written in
+/// (`lang::specialize`): the variant [`resolve`] names.
+fn compile_coloring_baked(src: &CustomSource, name: &str, bake: &[(ir::ParamId, (f64, f64))]) -> Result<&'static ColoringDef, Vec<Diag>> {
     if let Some(def) = coloring(name) {
         return Ok(def);
     }
-    let p = check_entry(EntryKind::Coloring, src)?;
+    let mut p = check_entry(EntryKind::Coloring, src)?;
+    lang::specialize::bake(&mut p, bake);
     record_layout(src, name)?;
     let c = lang::wgsl::coloring(&p);
     #[cfg(not(target_arch = "wasm32"))]
@@ -1473,6 +1627,10 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
         let p = Arc::new(p);
         if p.sized_by_settings() {
             r.sized.insert(name.to_string(), p.clone());
+        }
+        let structural = lang::specialize::structural_params(&p);
+        if !structural.is_empty() {
+            r.structural.insert(name.to_string(), Arc::new(((*p).clone(), structural)));
         }
         if !p.globals.is_empty() {
             r.programs.insert(name.to_string(), p);
@@ -2668,4 +2826,3 @@ mod bla_cost {
         println!("again (compiled): {} steps in {:.3} s", steps.len(), t.elapsed().as_secs_f64());
     }
 }
-

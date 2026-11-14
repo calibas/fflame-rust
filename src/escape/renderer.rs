@@ -771,12 +771,24 @@ struct PerturbParamsGpu {
 /// The tiers that perturb on the deep rung at every depth: Manowar (see
 /// the render path's note: its history carries the deviation forward
 /// with coefficient 1, and f32 error accumulates), and for the same
-/// reason a custom formula whose equations carry a value besides z
-/// (phase 4, step 5). Measured on the Manowar twin at zoom 26 against
-/// the big-float truth: 337 of 439 sampled pixels right on the scaled
-/// rung, 420 on this one.
+/// reason a custom formula whose equations carry a value besides z that
+/// the loop reads (phase 4, step 5; `pair`). Measured on the Manowar
+/// twin at zoom 26 against the big-float truth: 337 of 439 sampled
+/// pixels right on the scaled rung, 420 on this one.
+///
+/// A value only the test reads (`pair` false: a convergent formula's
+/// previous z) never feeds the step, and takes the scaled rung. It did
+/// not until 2026-11-13: Newton's twin there settled exactly two passes
+/// late on a twentieth of its basin boundary's pixels, at every zoom --
+/// the reference's own `Z^k` taken by `exp(k log Z)`, whose cos and sin
+/// leave f(Z) near a root off by its whole size. Whole powers in the
+/// equations are exact now (`lang::wgsl`, `uf_cpoww`), and the scaled
+/// rung counts as many pixels right as the native tiers (Newton 434 of
+/// 439 at zoom 30, the native 425; Magnet and Nova alike), at a third of
+/// the floatexp rung's time (Newton's twin 12 ms against 28, Magnet's 9
+/// against 37, Nova's 7 against 16; the built-ins 5-6).
 fn deep_rung_always(tier: assembler::PerturbTier) -> bool {
-    matches!(tier, assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { width: 2.., .. } | assembler::PerturbTier::Custom { deep: true, .. })
+    matches!(tier, assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { width: 2.., pair: true, .. } | assembler::PerturbTier::Custom { deep: true, .. })
 }
 
 fn orbit_depth(max_iter: u32, tier: assembler::PerturbTier) -> u32 {
@@ -3372,6 +3384,9 @@ impl EscapeRenderer {
     /// relief) and it can be: the formula defines one, and its tier is a
     /// single-term recurrence (docs/archive/escape-time/derivative-under-perturbation.md).
     pub(crate) fn perturbed_derivative(escape: &EscapeConfig, floatexp: bool) -> Option<&'static super::FormulaDef> {
+        // The terrain asks with its section's config, unresolved.
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
         let wanted = Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
             || escape.wants_derivative();
         let formula = super::get_formula(&escape.formula);
@@ -3404,6 +3419,8 @@ impl EscapeRenderer {
     /// perturbed path, where `perturbed_derivative` says it can carry one.
     /// Mirrors assemble_with and assemble_perturbed_full.
     pub(crate) fn derivative_active(&self, escape: &EscapeConfig) -> bool {
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
         if self.perturbed_path(escape) {
             return Self::perturbed_derivative(escape, self.floatexp_for(escape)).is_some();
         }
@@ -5566,6 +5583,14 @@ impl EscapeRenderer {
             zoom_log2: escape.zoom_log2,
             height_px,
         };
+        // A worker that panicked answers nothing: start another, and
+        // upload its orbit whole (its generations count from zero again).
+        if self.orbit_worker.as_ref().is_some_and(OrbitWorker::died) {
+            log::error!("the reference orbit worker stopped (a panic); starting a new one");
+            self.orbit_worker = None;
+            self.orbit_generation = u64::MAX;
+            self.orbit_uploaded = 0;
+        }
         let worker = self.orbit_worker.get_or_insert_with(OrbitWorker::new);
         let epoch = worker.request(req.clone());
         self.last_orbit_stale = false;
@@ -9500,9 +9525,12 @@ mod tests {
         for f in crate::escape::FORMULAS {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.formula = f.name.to_string();
-            let plain = EscapeRenderer::perturb_tier(&esc).is_some();
+            // A retired built-in deep-zooms as its twin, whose reference
+            // reads its program's parameters (`twins::RETIRED`).
+            let native = |t: Option<assembler::PerturbTier>| t.is_some_and(|t| !matches!(t, assembler::PerturbTier::Custom { .. }));
+            let plain = native(EscapeRenderer::perturb_tier(&esc));
             esc.julia = true;
-            let julia = EscapeRenderer::perturb_tier(&esc).is_some();
+            let julia = native(EscapeRenderer::perturb_tier(&esc));
             if plain || julia {
                 assert!(
                     carried.iter().any(|(n, _)| *n == f.name),

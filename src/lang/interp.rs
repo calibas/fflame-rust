@@ -703,6 +703,15 @@ pub fn perturb_holds(p: &Program, params: &ParamValues, env: &Env) -> bool {
     m.eval(e, &sh).as_bool()
 }
 
+/// A test that reads only the parameters, the constants and the image's
+/// values (`delta::per_image`), at these: which arm of a branch on a
+/// parameter runs, for every pixel alike.
+pub fn per_image_test(p: &Program, params: &ParamValues, env: &Env, e: &IExpr) -> bool {
+    let m = Machine::new(p, params);
+    let sh = Shared::new(env);
+    m.eval(e, &sh).as_bool()
+}
+
 /// A formula's declared degree at infinity ([`Program::degree`]) for
 /// these parameters, or `None` when it declares none.
 pub fn degree_of(p: &Program, params: &ParamValues, env: &Env) -> Option<f64> {

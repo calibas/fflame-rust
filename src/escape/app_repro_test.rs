@@ -2143,7 +2143,12 @@ mod tests {
             assert!(covered > 100, "{what}: the view shows too little ({covered})");
             let d = differing(&built_in, &got);
             println!("{what}: the twin differs on {:.3}% of pixels", d * 100.0);
-            assert!(d <= 0.005, "{what}: {:.3}%", d * 100.0);
+            // The Ship specialized on its variant (`lang::specialize`): its
+            // straight-line code contracts otherwise, and the folds amplify
+            // it -- against the big-float truth the twin counts 7991 of 8192
+            // right, the built-in 7984 (2026-11-13).
+            let allowed = if formula == "burning_ship" { 0.04 } else { 0.005 };
+            assert!(d <= allowed, "{what}: {:.3}%", d * 100.0);
         }
 
         // Perturbed, the variant's own equations: forced at the views above,
@@ -2441,9 +2446,13 @@ mod tests {
             ("ducks", &[("variant", 0.0)], ("0", "0"), -0.5, false, 0.02),
             ("ducks", &[("variant", 2.0)], ("0", "0"), -0.5, false, 0.0),
             ("ducks", &[("variant", 3.0)], ("0", "0"), -0.5, true, 0.0),
-            ("lattes", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.0),
-            ("lattes", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.0),
-            ("lattes", &[("variant", 2.0)], ("0", "0"), -1.0, false, 0.0),
+            // Specialized on its variant, the same counts on every pixel
+            // against the truth; its accumulated colour moves past 1e-4 on
+            // under 1% (the compiler's contraction of the straight-line
+            // code).
+            ("lattes", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.01),
+            ("lattes", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.01),
+            ("lattes", &[("variant", 2.0)], ("0", "0"), -1.0, false, 0.01),
             // Convergent: an orbit ends as it settles (batch 4); Newton by
             // every function, and every scheme at two.
             ("magnet", &[("variant", 0.0)], ("1", "0"), -0.8, false, 0.001),
@@ -2478,9 +2487,13 @@ mod tests {
             // Escaping on Re z or |Im z| (item 2, batch 1).
             ("exponential", &[], ("-1", "0"), -1.0, false, 0.0),
             ("exponential", &[], ("0", "0"), -1.0, true, 0.0),
-            ("trig", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.0),
-            ("trig", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.0),
-            ("trig", &[("variant", 0.0)], ("0", "0"), -1.0, true, 0.0),
+            // Specialized on its variant (`lang::specialize`): its sines of
+            // an escaping z amplify the straight-line code's contraction --
+            // against the big-float truth the twin counts 8134 of 8192
+            // right, the built-in 8136 (2026-11-13).
+            ("trig", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.03),
+            ("trig", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.03),
+            ("trig", &[("variant", 0.0)], ("0", "0"), -1.0, true, 0.03),
             ("lambda_sine", &[], ("0", "0"), -1.0, false, 0.0),
             ("lambda_sine", &[], ("0", "0"), -1.0, true, 0.0),
             ("collatz", &[], ("1", "0"), 1.5, false, 0.0),
@@ -2549,10 +2562,19 @@ mod tests {
                 _ => (-0.8, 0.156),
             };
             let what = format!("{formula} {params:?}{}", if julia { " julia" } else { "" });
-            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            // The built-in's own WGSL, retired or not (`twins::RETIRED`).
+            let built_in = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &esc, w, h, false));
             let twin = twin_of(&esc);
-            let got = output_on(&device, &queue, &renderer, &twin, w, h, false);
+            // Natively too, so a case's colouring is the same on each side
+            // (Origami's Position Map is retired).
+            let got = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &twin, w, h, false));
             assert!(crate::escape::get_formula(&twin.formula).has_feature(crate::escape::FormulaFeature::Program), "{what} did not compile");
+            // A retired built-in's name renders its twin.
+            if crate::escape::twins::retired(formula) {
+                let by_name = output_on(&device, &queue, &renderer, &esc, w, h, false);
+                let live = output_on(&device, &queue, &renderer, &twin, w, h, false);
+                assert!(differing(&by_name, &live) == 0.0, "{what}: the retired built-in's name renders its twin");
+            }
             let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
             assert!(covered > 100, "{what}: the view shows too little ({covered})");
             let d = differing(&built_in, &got);
@@ -2632,11 +2654,21 @@ mod tests {
             ("feather", &[("power", 3.0)], ("-0.77291940505873225", "-1.83786610577385723"), 30.0, 600, None),
             ("mcmullen", &[("n", 2.0), ("m", 3.0)], ("-0.12291872044575830", "-0.36795489251636515"), 30.0, 400, Some((0.05, 0.03))),
             // Convergent (batch 4): the visual suite's deep views.
+            // Magnet at three depths, summed (below).
+            ("magnet", &[("variant", 0.0)], ("-0.17175811456405135", "0.09206142643187049"), 20.0, 400, None),
             ("magnet", &[("variant", 0.0)], ("-0.17175811456405135", "0.09206142643187049"), 30.0, 400, None),
+            ("magnet", &[("variant", 0.0)], ("-0.17175811456405135", "0.09206142643187049"), 40.0, 400, None),
             ("nova", &[("power", 3.0)], ("-0.36039383324484020", "0.22577954314649112"), 30.0, 400, None),
             ("newton", &[("power", 3.0), ("scheme", 0.0), ("func", 0.0)], ("-0.50000000000000000", "0.23019701107058421"), 30.0, 400, None),
             ("newton", &[("power", 3.0), ("scheme", 1.0), ("func", 0.0)], ("-0.50000000000000000", "0.00365726284994825"), 30.0, 400, None),
         ];
+        // Magnet's settle counts are chaotic in f32, its native tier's as
+        // its twin's on the scaled rung (each two passes late on a tenth of
+        // the pixels, by its rounding): view by view the two trade places
+        // (2026-11-13: the twin 363, 344, 298 at zoom 20, 30, 40, the
+        // native 365, 356, 287), so its views are held to the native's
+        // together.
+        let mut magnet = (0usize, 0usize, 0usize);
         for &(formula, params, (cre, cim), zoom, max_iter, julia) in deep {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.formula = formula.into();
@@ -2658,7 +2690,9 @@ mod tests {
             // A carrying twin runs the deep rung at every depth, as the
             // renderer has it (`deep_rung_always`); so does Manowar.
             let floatexp = zoom > 48.0 || matches!(formula, "manowar" | "phoenix" | "spider");
-            let (a, b) = (records_on(&esc, 64, 48, floatexp, true, false), records_on(&twin, 64, 48, floatexp, true, false));
+            // The built-in's own tier, retired or not (`twins::RETIRED`).
+            let a = crate::escape::custom::native_builtins(|| records_on(&esc, 64, 48, floatexp, true, false));
+            let b = records_on(&twin, 64, 48, floatexp, true, false);
             // The truth, in big floats, at every seventh pixel: the
             // twin's own program, its parameters as the GPU holds them.
             let src = twin.custom_formula.as_ref().unwrap();
@@ -2681,8 +2715,13 @@ mod tests {
                 truth.len()
             );
             assert!(escaped > truth.len() / 4, "{formula}: the view escapes too little");
+            if formula == "magnet" {
+                magnet = (magnet.0 + twin_true, magnet.1 + built_in_true, magnet.2 + truth.len());
+                continue;
+            }
             assert!(twin_true + truth.len() / 50 >= built_in_true, "{formula}: the twin {twin_true}, the built-in {built_in_true}");
         }
+        assert!(magnet.0 + magnet.2 / 50 >= magnet.1, "magnet over its views: the twin {}, the built-in {}", magnet.0, magnet.1);
 
         // A convergent formula whose test reads its previous z (carried,
         // step 5): Newton's method for z^3 = 1 at the suite's Newton deep
@@ -3098,6 +3137,11 @@ mod tests {
             crate::escape::custom::ensure(&esc);
             let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
             assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
+            // ...and so does the built-in's own name, once it is its twin.
+            if crate::escape::twins::retired(formula) {
+                let by_name = crate::config::escape::EscapeConfig { formula: formula.into(), custom_formula: None, ..esc.clone() };
+                assert_eq!(crate::escape::EscapeRenderer::perturb_tier(&by_name), tier, "{formula}: the retired built-in's name deep-zooms");
+            }
             let prog = crate::lang::rhai::program(&src.source).unwrap();
             let mut values = crate::lang::interp::ParamValues::defaults(&prog);
             for (i, x) in prog.params.iter().enumerate() {
@@ -3148,7 +3192,11 @@ mod tests {
         // wanders on (the plan's order of work, item 6).
         let cases: &[(&str, &[(&str, f32)], (&str, &str), u32, usize)] = &[
             ("newton", &[("func", 0.0)], ("0.6982638162659913", "-1.0990000000000002"), 300, 50),
-            ("newton", &[("func", 5.0)], ("-1.4976661726096265", "-2.0"), 300, 14),
+            // Specialized on its function and power (`lang::specialize`) the
+            // scaled rung counts 401 within one, 407 unspecialized, the
+            // floatexp rung 418, f64 437: this boundary's rounding moves
+            // with the compiler's contraction of the straight-line code.
+            ("newton", &[("func", 5.0)], ("-1.4976661726096265", "-2.0"), 300, 12),
             ("novaretti", &[], ("-1.1495849563492808", "-2.0"), 150, 50),
         ];
         for &(formula, params, (cre, cim), max_iter, slack) in cases {
@@ -3570,7 +3618,11 @@ mod tests {
             "stripe_average" => 0.01,
             "position_map" => 0.02,
             "normal_map" => 0.002,
-            _ => 0.0,
+            // Specialized on their structural parameters
+            // (`lang::specialize`), the colourings' straight-line code
+            // contracts otherwise than the general program's: their values
+            // move past 1e-4 on up to 0.2% of pixels (2026-11-13).
+            _ => 0.003,
         };
         let mut worst = 0.0f64;
         for (name, settings) in &cases {
@@ -3587,9 +3639,19 @@ mod tests {
                 for (k, v) in settings {
                     esc.coloring_params.insert(k.to_string(), *v);
                 }
-                let want = output_on(&device, &queue, &renderer, &esc, w, h, *perturbed);
-                let twin = twin_of(esc);
-                let got = output_on(&device, &queue, &renderer, &twin, w, h, *perturbed);
+                // The built-in's own WGSL, retired or not
+                // (`twins::RETIRED_COLORINGS`).
+                // Both natively, so a view's formula is the same on each
+                // side (the exponential is retired too).
+                let want = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &esc, w, h, *perturbed));
+                let twin = twin_of(esc.clone());
+                let got = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &twin, w, h, *perturbed));
+                // A retired built-in's name renders its twin.
+                if crate::escape::twins::coloring_retired(name) {
+                    let by_name = output_on(&device, &queue, &renderer, &esc, w, h, *perturbed);
+                    let live = output_on(&device, &queue, &renderer, &twin, w, h, *perturbed);
+                    assert!(differing(&by_name, &live) == 0.0, "{name} {settings:?} on {view}: the retired built-in's name renders its twin");
+                }
                 assert_eq!(crate::escape::get_coloring(&twin.coloring).name, twin.coloring, "{name} did not compile");
                 let covered = want.chunks(4).filter(|p| p[3] > 0.5).count();
                 assert!(covered > 100, "{name} {settings:?} on {view}: too little shows ({covered})");
@@ -3651,8 +3713,8 @@ mod tests {
             for (k, v) in settings {
                 esc.coloring_params.insert(k.to_string(), *v);
             }
-            let want = output_on(&device, &queue, &renderer, &esc, w, h, false);
-            let got = output_on(&device, &queue, &renderer, &twin_of(esc), w, h, false);
+            let want = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &esc, w, h, false));
+            let got = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &twin_of(esc), w, h, false));
             let covered = want.chunks(4).filter(|p| p[3] > 0.5).count();
             assert!(covered > 100, "{name} {settings:?} on {view}: too little shows ({covered})");
             // Shaded by a derivative, not the flat light of none.
@@ -3743,8 +3805,8 @@ mod tests {
                 twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
                 twin.custom_coloring = Some(src.clone());
                 let set = |r: &mut crate::escape::EscapeRenderer| assert!(r.set_texture(&device, &queue, &key, &tex));
-                let want = output_with(&device, &queue, &renderer, &esc, w, h, *perturbed, set);
-                let got = output_with(&device, &queue, &renderer, &twin, w, h, *perturbed, set);
+                let want = crate::escape::custom::native_builtins(|| output_with(&device, &queue, &renderer, &esc, w, h, *perturbed, set));
+                let got = crate::escape::custom::native_builtins(|| output_with(&device, &queue, &renderer, &twin, w, h, *perturbed, set));
                 assert_eq!(crate::escape::get_coloring(&twin.coloring).name, twin.coloring, "the twin did not compile");
                 // Deep, the long orbits multiply and darken to black: there
                 // the coverage shows, and the colour on the shallow views.
@@ -6615,8 +6677,9 @@ final:
             // Every shipped (scheme, func) pair must actually perturb:
             // if one silently stopped selecting the tier this test
             // would pass by rendering the direct path.
+            // The native tier, Newton being its twin now (`twins::RETIRED`).
             assert_eq!(
-                crate::escape::EscapeRenderer::perturb_tier(&esc),
+                crate::escape::custom::native_builtins(|| crate::escape::EscapeRenderer::perturb_tier(&esc)),
                 Some(crate::escape::assembler::PerturbTier::Newton {
                     p: 3,
                     scheme,
@@ -6639,7 +6702,7 @@ final:
             });
             assert_three_basins(&format!("newton scheme {scheme}"), &truth);
             for deep in [false, true] {
-                let gpu = perturbed_records(&esc, w, h, deep);
+                let gpu = crate::escape::custom::native_builtins(|| perturbed_records(&esc, w, h, deep));
                 let frac = compare_convergent(
                     &format!("newton scheme {scheme} deep {deep}"),
                     &gpu,
@@ -17634,16 +17697,158 @@ fn main() {
             let mut twin = esc.clone();
             twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
             twin.custom_coloring = Some(src);
+            // The built-in's own WGSL, retired or not.
+            use crate::escape::custom::native_builtins;
             for _ in 0..2 {
-                run(&esc);
+                native_builtins(|| run(&esc));
                 run(&twin);
             }
             let (mut b, mut t) = (f64::MAX, f64::MAX);
             for _ in 0..9 {
-                b = b.min(run(&esc));
+                b = b.min(native_builtins(|| run(&esc)));
                 t = t.min(run(&twin));
             }
             println!("{name:21} built-in {b:6.2}  twin {t:6.2}  ({:+.1}%)", (t / b - 1.0) * 100.0);
+        }
+        r.destroy();
+    }
+
+    /// MEASUREMENT (retiring the colourings, 2026-11-14): each colouring
+    /// twin against its built-in on the perturbed path, whose shader runs
+    /// the colouring too -- the Mandelbrot at the seahorse, zoom 30, 4000
+    /// iterations -- by the direct measurement's method: one warm
+    /// renderer, the best of nine, alternating.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn measure_colouring_twins_at_depth() {
+        let (device, queue) = repro_device();
+        let (w, h) = (1024u32, 768u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
+        let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+        r.force_perturbed = true;
+        let mut fresh = false;
+        let mut run = |esc: &crate::config::escape::EscapeConfig| -> f64 {
+            let mut esc = esc.clone();
+            fresh = !fresh;
+            if fresh {
+                esc.bailout *= 1.000001;
+            }
+            let start = std::time::Instant::now();
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
+                let settled = r.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+            }
+            start.elapsed().as_secs_f64() * 1000.0
+        };
+        println!("{w}x{h}, the Mandelbrot at the seahorse, zoom 30, 4000 iterations, perturbed; ms, the best of nine, pipelines warm");
+        for (name, _) in crate::escape::twins::COLORING_TWINS {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "mandelbrot".into();
+            esc.max_iter = 4000;
+            esc.center_re = "-0.7436438870371587047548108297799385780".into();
+            esc.center_im = "0.13182590420531251981651559677435626549".into();
+            esc.zoom_log2 = 30.0;
+            esc.coloring = name.to_string();
+            let src = crate::escape::twins::coloring_custom_source(name).unwrap();
+            let mut twin = esc.clone();
+            twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
+            twin.custom_coloring = Some(src);
+            use crate::escape::custom::native_builtins;
+            for _ in 0..2 {
+                native_builtins(|| run(&esc));
+                run(&twin);
+            }
+            let (mut b, mut t) = (f64::MAX, f64::MAX);
+            for _ in 0..9 {
+                b = b.min(native_builtins(|| run(&esc)));
+                t = t.min(run(&twin));
+            }
+            println!("{name:21} built-in {b:6.2}  twin {t:6.2}  ({:+.1}%)", (t / b - 1.0) * 100.0);
+        }
+        r.destroy();
+    }
+
+    /// MEASUREMENT (retiring the built-ins, 2026-11-13): each formula twin
+    /// against its built-in on the direct path, at the built-in's home view
+    /// (its first preset, what a switch to it applies) at 2000 iterations
+    /// -- where most
+    /// pictures are made, and the only path twelve of the built-ins have.
+    /// The colouring measurement's method: one warm renderer, the best of
+    /// nine, alternating, the bailout nudged so each run iterates afresh.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn measure_formula_twins_on_the_direct_path() {
+        let (device, queue) = repro_device();
+        let (w, h) = (1024u32, 768u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
+        let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+        r.force_direct = true;
+        let mut fresh = false;
+        let mut run = |esc: &crate::config::escape::EscapeConfig| -> f64 {
+            let mut esc = esc.clone();
+            fresh = !fresh;
+            if fresh {
+                esc.bailout *= 1.000001;
+            }
+            let start = std::time::Instant::now();
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
+                let settled = r.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+            }
+            start.elapsed().as_secs_f64() * 1000.0
+        };
+        println!("{w}x{h}, each formula's home view, direct; ms, the best of nine, pipelines warm");
+        for def in crate::escape::FORMULAS {
+            let Some(src) = crate::escape::twins::custom_source(def.name) else { continue };
+            let mut esc = crate::config::escape::EscapeConfig { formula: def.name.to_string(), ..Default::default() };
+            if let Some(p) = crate::escape::formula_default_preset(def) {
+                esc.center_re = p.center_re.into();
+                esc.center_im = p.center_im.into();
+                esc.zoom_log2 = p.zoom_log2;
+                esc.max_iter = p.max_iter;
+                esc.coloring = p.coloring.into();
+                if let Some((re, im)) = p.julia {
+                    esc.julia = true;
+                    esc.julia_re = re;
+                    esc.julia_im = im;
+                }
+                esc.formula_params = p.formula_params.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+                esc.coloring_params = p.coloring_params.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+                if let Some(b) = p.bailout {
+                    esc.bailout = b;
+                }
+            }
+            // Long enough that iterating, not a dispatch's overhead, is
+            // what is timed: the home views' own counts render in under a
+            // millisecond.
+            esc.max_iter = 2000;
+            let mut twin = esc.clone();
+            twin.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
+            twin.custom_formula = Some(src);
+            // The built-in's own WGSL, retired or not.
+            use crate::escape::custom::native_builtins;
+            for _ in 0..2 {
+                native_builtins(|| run(&esc));
+                run(&twin);
+            }
+            let (mut b, mut t) = (f64::MAX, f64::MAX);
+            for _ in 0..9 {
+                b = b.min(native_builtins(|| run(&esc)));
+                t = t.min(run(&twin));
+            }
+            println!("{:14} {:>4} it.  built-in {b:7.2}  twin {t:7.2}  ({:+.1}%)", def.name, esc.max_iter, (t / b - 1.0) * 100.0);
         }
         r.destroy();
     }
@@ -17698,6 +17903,20 @@ fn main() {
             ("lambda", &[], ("2.88438199954338481", "0.46729682466198574"), 30.0, 3000, false),
             ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-0.8767148663342849324908252535085789479", "0.68253971831422086306603135717477825677"), 48.001, 256, true),
             ("manowar", &[], ("-0.03909223238627110991", "0.00103869199752806211"), 26.0, 3000, true),
+            // Kaliset and Newton, the two left on the line (2026-11-13):
+            // the non-escaping and convergent twins' deep views.
+            ("kaliset", &[("plus_c", 0.0)], ("1.22551892238358673", "1.57367616586387160"), 30.0, 60, false),
+            ("kaliset", &[("plus_c", 1.0)], ("-1.79112587335209006", "-0.87051608470578978"), 30.0, 60, false),
+            ("newton", &[("power", 3.0), ("scheme", 0.0), ("func", 0.0)], ("-0.50000000000000000", "0.23019701107058421"), 30.0, 400, false),
+            ("newton", &[("power", 3.0), ("scheme", 1.0), ("func", 0.0)], ("-0.50000000000000000", "0.00365726284994825"), 30.0, 400, false),
+            // The rest with a native tier (2026-11-13): the parity test's
+            // deep views. McMullen's native tier is the Julia plane's.
+            ("feather", &[("power", 3.0)], ("-0.77291940505873225", "-1.83786610577385723"), 30.0, 600, false),
+            ("mcmullen", &[("n", 2.0), ("m", 3.0)], ("-0.12291872044575830", "-0.36795489251636515"), 30.0, 400, false),
+            ("magnet", &[("variant", 0.0)], ("-0.17175811456405135", "0.09206142643187049"), 30.0, 400, false),
+            ("nova", &[("power", 3.0)], ("-0.36039383324484020", "0.22577954314649112"), 30.0, 400, false),
+            // Ducks on its Julia plane: the never-escaping twins' deep view.
+            ("ducks", &[("variant", 0.0)], ("-0.08431922458112219", "1.53503858856856801"), 30.0, 80, false),
         ];
         println!("{w}x{h}, with BLA where the tier has it; times in ms: whole render, reference build, BLA table build, the rest (GPU)");
         for &(formula, params, (cx, cy), zoom, iters, floatexp) in views {
@@ -17711,20 +17930,38 @@ fn main() {
             esc.zoom_log2 = zoom;
             esc.max_iter = iters;
             esc.bailout = 4.0;
+            // One that never escapes draws by an orbit colouring.
+            if matches!(formula, "kaliset" | "ducks") {
+                esc.coloring = "magnitude_average".into();
+            }
+            if formula == "ducks" {
+                (esc.julia, esc.julia_re, esc.julia_im) = (true, 0.1, -0.62);
+            }
+            if formula == "mcmullen" {
+                (esc.julia, esc.julia_re, esc.julia_im) = (true, 0.05, 0.03);
+            }
             let src = crate::escape::twins::custom_source(formula).unwrap();
             let mut twin = esc.clone();
             twin.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             twin.custom_formula = Some(src);
             crate::escape::custom::ensure(&twin);
+            // The built-in's own WGSL, retired or not.
+            let run_as = |cfg: &crate::config::escape::EscapeConfig, native: bool| {
+                if native {
+                    crate::escape::custom::native_builtins(|| run(cfg, floatexp))
+                } else {
+                    run(cfg, floatexp)
+                }
+            };
             // Warm the shaders' compiles, which neither should pay here.
-            let _ = run(&esc, floatexp);
-            let _ = run(&twin, floatexp);
+            let _ = run_as(&esc, true);
+            let _ = run_as(&twin, false);
             for (who, cfg) in [("built-in", &esc), ("twin", &twin)] {
                 // The best of three: a single run swings by half.
-                let (t, orbit, bla, len) = (0..3).map(|_| run(cfg, floatexp)).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+                let (t, orbit, bla, len) = (0..3).map(|_| run_as(cfg, who == "built-in")).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
                 let rest = t * 1000.0 - f64::from(orbit) - f64::from(bla);
                 println!(
-                    "{formula} {params:?} zoom {zoom}, {iters} it., {}: {who:8} {:7.0} | reference {:6.1} ({len} entries) | table {:6.1} | rest {:7.0}",
+                    "{formula} {params:?} zoom {zoom}, {iters} it., {}: {who:8} {:7.1} | reference {:6.1} ({len} entries) | table {:6.1} | rest {:7.1}",
                     if floatexp { "floatexp" } else { "scaled" },
                     t * 1000.0,
                     orbit,

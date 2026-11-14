@@ -289,6 +289,11 @@ Keyframe values are JSON, and interpolation produces floats. Per path:
 - **Settings that re-render everything** on each change, such as the
   terrain prefilter and smoothing.
 
+A custom formula's or colouring's **structural parameters** -- a choice,
+or a whole exponent, that the shader is compiled for (ESCAPE.md,
+*Structural parameters*) -- animate, but each value they take compiles a
+variant of the shader once: keyframe them between few values, if at all.
+
 ### What the picker offers
 
 The picker groups targets by category and filters by the current mode:

@@ -658,10 +658,37 @@ fn uniform_vars(p: &Program) -> (Vec<bool>, Vec<bool>) {
     }
 }
 
+/// A power's exponent when it is a literal whole number from 1 to 64: the
+/// by-degrees form's range, unrolled.
+fn literal_degree(b: &IExpr) -> Option<i64> {
+    let v = match &b.kind {
+        IExprKind::Float(f) => *f,
+        IExprKind::Int(i) => *i as f64,
+        IExprKind::Complex(re, im) if *im == 0.0 => *re,
+        IExprKind::Convert(a) => return literal_degree(a),
+        _ => return None,
+    };
+    (v == v.round() && (1.0..=64.0).contains(&v)).then_some(v as i64)
+}
+
+/// A power's exponent when it is a literal whole number from -12 to 12,
+/// not 0.
+fn whole_exponent(b: &IExpr) -> Option<i64> {
+    let v = match &b.kind {
+        IExprKind::Float(f) => *f,
+        IExprKind::Int(i) => *i as f64,
+        IExprKind::Complex(re, im) if *im == 0.0 => *re,
+        IExprKind::Convert(a) => return whole_exponent(a),
+        IExprKind::Unary(UnOp::Neg, a) => return whole_exponent(a).map(|n| -n),
+        _ => return None,
+    };
+    (v == v.round() && v != 0.0 && v.abs() <= 12.0).then_some(v as i64)
+}
+
 /// Whether a test reads only what the `perturb` setting can: the
 /// parameters, the constants and the image's values -- no variable, no
 /// pass.
-fn per_image(e: &IExpr) -> bool {
+pub(crate) fn per_image(e: &IExpr) -> bool {
     match &e.kind {
         IExprKind::Var(_) | IExprKind::Elem(..) | IExprKind::Predef(Predef::Pass) => false,
         IExprKind::Predef(q) => matches!(
@@ -2072,6 +2099,16 @@ impl<'p> Deriver<'p> {
                 }
                 (mk(IExprKind::Unary(UnOp::Not, Box::new(r)), ty), None)
             }
+            // A power whose exponent is a negative whole literal -- a
+            // structural parameter written in (`lang::specialize`), or so
+            // written -- as the reciprocal of the positive power, which
+            // derives by degrees, unrolled (below), where a negative one
+            // takes `exp(p log A)` (McMullen's `z ** (-m)`, 2026-11-13).
+            IExprKind::Binary(BinOp::Pow, a, b) if matches!(ty, Ty::Float | Ty::Complex) && whole_exponent(b).is_some_and(|n| n < 0) => {
+                let n = whole_exponent(b).unwrap_or(-1);
+                let power = mk(IExprKind::Binary(BinOp::Pow, Box::new(widen(a.as_ref().clone(), ty)), Box::new(konst(-n as f64, ty))), ty);
+                return self.pair(&bin(BinOp::Div, konst(1.0, ty), power), written, is_loop);
+            }
             IExprKind::Binary(op, a, b) => {
                 if ty == Ty::Bool || ty.is_integer() {
                     // A test or an int: fine while it is the same for
@@ -2179,6 +2216,27 @@ impl<'p> Deriver<'p> {
                         // (A + d)^n - A^n by Q_1 = d, Q_(j+1) = (A + d) Q_j
                         // + d A^j -- two products a degree, cancellation-
                         // free at any d, no logarithm and no cut.
+                        // A literal exponent (a structural parameter written
+                        // in, `lang::specialize`): the degrees unrolled, no
+                        // test and no loop -- the same products.
+                        if let Some(n) = literal_degree(&rb) {
+                            let t = self.guard_var(ty, Role::Deviation);
+                            let power = self.guard_var(ty, Role::Reference);
+                            let (ca, cx) = (widen(ra.clone(), ty), widen(x.clone(), ty));
+                            let var = |v: VarId, t: Ty| mk(IExprKind::Var(v), t);
+                            let set = |v: VarId, e: IExpr| IStmt::Assign(Place::Var(v), e);
+                            self.pending.push(set(t, cx.clone()));
+                            if n > 1 {
+                                self.pending.push(set(power, ca.clone()));
+                            }
+                            for j in 1..n {
+                                self.pending.push(set(t, bin(BinOp::Add, bin(BinOp::Mul, bin(BinOp::Add, ca.clone(), cx.clone()), var(t, ty)), bin(BinOp::Mul, cx.clone(), var(power, ty)))));
+                                if j + 1 < n {
+                                    self.pending.push(set(power, bin(BinOp::Mul, ca.clone(), var(power, ty))));
+                                }
+                            }
+                            return Some((r, Some(var(t, ty))));
+                        }
                         let re_b = if ty == Ty::Complex { call(Builtin::Real, widen(rb.clone(), ty), Ty::Float) } else { rb.clone() };
                         let mut whole = test(
                             BinOp::And,

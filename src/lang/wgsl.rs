@@ -1410,12 +1410,18 @@ pub fn formula(p: &Program) -> String {
         "\nfn formula_settled(s: FormulaState, pixel: vec2<f32>) -> bool {{\n    return {settled};\n}}\n"
     );
     // Two states equal to the bit, for interior detection: the state is
-    // everything the loop and the test read that changes, so a repeat
-    // proves the orbit periodic. Bits, not `==`: +0 and -0 compare
+    // what a pass carries into the next -- z, and what the loop reads
+    // before it writes (`perturb::carried_vars`) -- so a repeat proves
+    // the orbit periodic, and every pass from there was tested already.
+    // A pass's temporaries and what the loop never writes (`c`) are left
+    // out: comparing them kept them, and their snapshot, live across
+    // passes, which cost Magnet's twin half again the built-in's time on
+    // the direct path (2026-11-13). Bits, not `==`: +0 and -0 compare
     // equal and can continue differently, and Metal's fast-math folds
     // float comparisons (CLAUDE.md).
+    let carried = super::perturb::carried_vars(&p.loop_body);
     let mut same = vec!["all(bitcast<vec2<u32>>(a.z) == bitcast<vec2<u32>>(b.z))".to_string()];
-    for (i, v) in p.vars.iter().enumerate().filter(|(_, v)| !v.global && !v.perturb) {
+    for (i, v) in p.vars.iter().enumerate().filter(|(i, v)| !v.global && !v.perturb && carried.contains(i)) {
         if v.is_array() {
             // Element by element, by bits as the scalars.
             let el = match v.ty {
@@ -2133,24 +2139,31 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
         body.push('\n');
     }
     let mut g = Gen::new(p, Ctx::ColoringInit, "ufc_");
-    body.push_str("fn ufc_init(z_init: vec2<f32>) -> vec4<f32> {\n");
-    for &(v, _) in &offsets {
-        let _ = writeln!(body, "    {};", var_decl(v, &p.vars[v]));
-    }
-    locals(&mut body);
-    g.stmts(&p.init, 1, &mut body);
-    pack(&mut body);
-    body.push_str("}\n\n");
+    // The accumulator's start and step only for a colouring that keeps
+    // state (`needs_accum`): the template calls them for no other, and a
+    // stateless one's stubs collided with a texture layer's own
+    // `coloring_accum` once a retired colouring's twin was the base
+    // (2026-11-14: Smooth under an Itinerary layer).
+    if needs_accum {
+        body.push_str("fn ufc_init(z_init: vec2<f32>) -> vec4<f32> {\n");
+        for &(v, _) in &offsets {
+            let _ = writeln!(body, "    {};", var_decl(v, &p.vars[v]));
+        }
+        locals(&mut body);
+        g.stmts(&p.init, 1, &mut body);
+        pack(&mut body);
+        body.push_str("}\n\n");
 
-    g.ctx = Ctx::ColoringLoop;
-    body.push_str(
-        "fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {\n",
-    );
-    unpack(&mut body);
-    locals(&mut body);
-    g.stmts(&p.loop_body, 1, &mut body);
-    pack(&mut body);
-    body.push_str("}\n\n");
+        g.ctx = Ctx::ColoringLoop;
+        body.push_str(
+            "fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {\n",
+        );
+        unpack(&mut body);
+        locals(&mut body);
+        g.stmts(&p.loop_body, 1, &mut body);
+        pack(&mut body);
+        body.push_str("}\n\n");
+    }
 
     g.ctx = Ctx::ColoringFinal;
     body.push_str("fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {\n");
@@ -2194,7 +2207,8 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
     }
 
     let wgsl = g.finish(&format!("// custom colouring: {}\n", sanitize(&p.name)), body);
-    ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init: format!("ufc_init({COLORING_Z0})"), needs_accum, ext_vec4s }
+    let accum_init = if needs_accum { format!("ufc_init({COLORING_Z0})") } else { "vec4<f32>(0.0)".to_string() };
+    ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init, needs_accum, ext_vec4s }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2243,6 +2257,10 @@ struct Gen<'p> {
     /// Each packed global's first float in its block.
     global_slots: Vec<Option<usize>>,
     loops: usize,
+    /// The complex values an enclosing branch's test proves away from
+    /// zero (`nonzero_facts`), by their `Debug` form: their angle takes the
+    /// raw `atan2`, the zero pair Metal gets wrong being out of reach.
+    nonzero: Vec<String>,
     /// Inside a constant subexpression: its literals go through
     /// `uf_k`, so WGSL does not fold it ([`constant`]).
     opaque: bool,
@@ -2333,6 +2351,7 @@ impl<'p> Gen<'p> {
             func_slots,
             global_slots,
             loops: 0,
+            nonzero: Vec::new(),
             opaque: false,
             small_vars: Vec::new(),
             true_small: false,
@@ -2896,7 +2915,11 @@ impl<'p> Gen<'p> {
                     } else {
                         let _ = writeln!(out, "{pad}}} else if ({c}) {{");
                     }
+                    let facts = nonzero_facts(cond, body);
+                    let held = self.nonzero.len();
+                    self.nonzero.extend(facts);
                     self.stmts(body, depth + 1, out);
+                    self.nonzero.truncate(held);
                 }
                 if !otherwise.is_empty() {
                     let _ = writeln!(out, "{pad}}} else {{");
@@ -3076,6 +3099,32 @@ impl<'p> Gen<'p> {
                     (_, 0) => if a.ty == Ty::Complex { "vec2<f32>(1.0, 0.0)".to_string() } else { "1.0".to_string() },
                     (_, 1) => v,
                     (Ty::Complex, 2) => format!("{}({v})", self.use_(Helper::CSqr)),
+                    // Unrolled up to 12, in `uf_cpowi`'s order -- the
+                    // base squared each step, multiplied in at each set
+                    // bit from the lowest -- so the same values without
+                    // its loop, which a power's binomial (`lang::delta`)
+                    // ran once a term: a specialized Multibrot's twin
+                    // took half again the time (2026-11-13).
+                    (Ty::Complex, 3..=12) => {
+                        let (sqr, mul) = (self.use_(Helper::CSqr), self.use_(Helper::CMul));
+                        let mut base = v.clone();
+                        let mut acc: Option<String> = None;
+                        let mut e = *n;
+                        loop {
+                            if e & 1 == 1 {
+                                acc = Some(match acc {
+                                    None => base.clone(),
+                                    Some(a) => format!("{mul}({a}, {base})"),
+                                });
+                            }
+                            e >>= 1;
+                            if e == 0 {
+                                break;
+                            }
+                            base = format!("{sqr}({base})");
+                        }
+                        acc.unwrap_or(v)
+                    }
                     (Ty::Complex, _) => format!("{}({v}, {n}i)", self.use_(Helper::CPowI)),
                     (_, 2) => format!("{}({v})", self.use_(Helper::FSq)),
                     (_, _) => format!("{}({v}, {n}i)", self.use_(Helper::FPowI)),
@@ -3325,6 +3374,10 @@ impl<'p> Gen<'p> {
             Add | Sub => format!("({l} {} {r})", op.symbol()),
             Mul if ty == Ty::Complex => format!("{}({l}, {r})", self.use_(Helper::CMul)),
             Div if ty == Ty::Complex => format!("{}({l}, {r})", self.use_(Helper::CDiv)),
+            // In the perturbation equations a whole exponent by squaring
+            // (`Helper::CPowW`); the direct path keeps the polar form, as
+            // the built-ins' `esc_cpow` has it.
+            Pow if ty == Ty::Complex && matches!(self.ctx, Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe) => format!("{}({l}, {r})", self.use_(Helper::CPowW)),
             Pow if ty == Ty::Complex => format!("{}({l}, {r})", self.use_(Helper::CPow)),
             Pow => format!("{}({l}, {r})", self.use_(Helper::FPow)),
             Mod if ty == Ty::Int => format!("{}({l}, {r})", self.use_(Helper::IMod)),
@@ -3533,6 +3586,10 @@ impl<'p> Gen<'p> {
                 match *n {
                     1 => (ca, Small),
                     2 => (format!("(s * {})", self.sq_code(&ca, a.ty)), Small),
+                    // `s^(n-1)` by products up to 12, not `pow`'s
+                    // transcendentals each pass (a specialized Multibrot's
+                    // twin, power 4: 12 ms of GPU time against 7, 2026-11-13).
+                    n if n <= 12 => (format!("({} * {})", vec!["s"; (n - 1) as usize].join(" * "), self.powi_code(&ca, a.ty, n)), Small),
                     n => (format!("(pow(s, {}.0) * {})", n - 1, self.powi_code(&ca, a.ty, n)), Small),
                 }
             }
@@ -3810,6 +3867,27 @@ impl<'p> Gen<'p> {
     }
 
     fn powi_code(&mut self, c: &str, t: Ty, n: i64) -> String {
+        if t == Ty::Complex && (3..=12).contains(&n) {
+            // Unrolled, in `uf_cpowi`'s order (see `Gen::expr`'s `PowInt`).
+            let (sqr, mul) = (self.use_(Helper::CSqr), self.use_(Helper::CMul));
+            let mut base = c.to_string();
+            let mut acc: Option<String> = None;
+            let mut e = n;
+            loop {
+                if e & 1 == 1 {
+                    acc = Some(match acc {
+                        None => base.clone(),
+                        Some(a) => format!("{mul}({a}, {base})"),
+                    });
+                }
+                e >>= 1;
+                if e == 0 {
+                    break;
+                }
+                base = format!("{sqr}({base})");
+            }
+            return acc.unwrap_or_else(|| c.to_string());
+        }
         if t == Ty::Complex {
             format!("{}({c}, {n}i)", self.use_(Helper::CPowI))
         } else {
@@ -3929,6 +4007,10 @@ impl<'p> Gen<'p> {
                 Flip => format!("{v}.yx"),
                 Cabs => format!("length({v})"),
                 Abs => format!("abs({v})"),
+                // Of a value a branch holds away from zero, the raw atan2
+                // (as the built-in colourings guard theirs): the exact
+                // helper's selects cost Curvature Average's twin 12%.
+                Atan2 if self.nonzero.contains(&format!("{:?}", a.kind)) => format!("atan2(({v}).y, ({v}).x)"),
                 Atan2 => format!("{}({v})", self.use_(Helper::CArg)),
                 Fract => format!("fract({v})"),
                 // Component by component, halves to even.
@@ -4413,6 +4495,123 @@ fn zero_of(t: Ty) -> &'static str {
     }
 }
 
+/// The complex values a branch's test proves away from zero, by their
+/// `Debug` form: each `w` of a test `!(|w|^2 < c)` -- `w.norm_sqr()` or
+/// `re w * re w + im w * im w`, `c` a positive literal -- or of several
+/// such joined by `||` under the `!`. A value the branch writes anything
+/// of is left out: the test no longer speaks for it.
+fn nonzero_facts(cond: &IExpr, body: &[IStmt]) -> Vec<String> {
+    fn square_of(e: &IExpr) -> Option<&IExpr> {
+        match &e.kind {
+            IExprKind::Modulus(w) if w.ty == Ty::Complex => Some(w),
+            IExprKind::Binary(BinOp::Add, a, b) => {
+                let part = |x: &IExpr, f: Builtin| -> Option<String> {
+                    match &x.kind {
+                        IExprKind::Binary(BinOp::Mul, l, r) => match (&l.kind, &r.kind) {
+                            (IExprKind::Call(fl, wl), IExprKind::Call(fr, wr)) if *fl == f && *fr == f && format!("{:?}", wl.kind) == format!("{:?}", wr.kind) => Some(format!("{:?}", wl.kind)),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                };
+                let (re, im) = (part(a, Builtin::Real)?, part(b, Builtin::Imag)?);
+                if re != im {
+                    return None;
+                }
+                match &a.kind {
+                    IExprKind::Binary(_, l, _) => match &l.kind {
+                        IExprKind::Call(_, w) => Some(w),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+    // `re w == 0 && im w == 0`: exactly the zero pair.
+    fn zero_pair(e: &IExpr) -> Option<&IExpr> {
+        let IExprKind::Binary(BinOp::And, a, b) = &e.kind else { return None };
+        fn part(x: &IExpr, f: Builtin) -> Option<&IExpr> {
+            match &x.kind {
+                IExprKind::Binary(BinOp::Eq, l, r) => match (&l.kind, &r.kind) {
+                    (IExprKind::Call(g, w), IExprKind::Float(z)) if *g == f && *z == 0.0 => Some(w),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        let (re, im) = (part(a, Builtin::Real)?, part(b, Builtin::Imag)?);
+        (format!("{:?}", re.kind) == format!("{:?}", im.kind)).then_some(re)
+    }
+    fn below(e: &IExpr, out: &mut Vec<IExpr>) -> bool {
+        if let Some(w) = zero_pair(e) {
+            out.push(w.clone());
+            return true;
+        }
+        match &e.kind {
+            IExprKind::Binary(BinOp::Or, a, b) => below(a, out) && below(b, out),
+            IExprKind::Binary(BinOp::Lt, x, c) => match (&c.kind, square_of(x)) {
+                (IExprKind::Float(c), Some(w)) if *c > 0.0 => {
+                    out.push(w.clone());
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+    let IExprKind::Unary(UnOp::Not, inner) = &cond.kind else { return Vec::new() };
+    let mut ws = Vec::new();
+    if !below(inner, &mut ws) {
+        return Vec::new();
+    }
+    // What the value reads that the branch might write.
+    fn reads(e: &IExpr, out: &mut Vec<String>) {
+        match &e.kind {
+            IExprKind::Var(v) => out.push(format!("v{v}")),
+            IExprKind::Predef(p) => out.push(format!("{p:?}")),
+            IExprKind::Elem(v, a) => {
+                out.push(format!("v{v}"));
+                reads(a, out);
+            }
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) => reads(a, out),
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => {
+                reads(a, out);
+                reads(b, out);
+            }
+            _ => out.push("?".into()),
+        }
+    }
+    fn writes(st: &[IStmt], out: &mut Vec<String>) {
+        for s in st {
+            match s {
+                IStmt::Assign(Place::Var(v), _) | IStmt::SetElem { var: v, .. } => out.push(format!("v{v}")),
+                IStmt::Assign(Place::Z, _) => out.push("Z".into()),
+                IStmt::Assign(..) => out.push("?".into()),
+                IStmt::If { arms, otherwise } => {
+                    arms.iter().for_each(|(_, b)| writes(b, out));
+                    writes(otherwise, out);
+                }
+                IStmt::While { body, .. } | IStmt::Repeat { body, .. } | IStmt::Scope(body) => writes(body, out),
+                IStmt::Map { out: o, .. } => o.iter().for_each(|v| out.push(format!("v{v}"))),
+                IStmt::Host(..) => out.push("?".into()),
+                IStmt::Break | IStmt::Continue | IStmt::Return => {}
+            }
+        }
+    }
+    let mut written = Vec::new();
+    writes(body, &mut written);
+    ws.into_iter()
+        .filter(|w| {
+            let mut r = Vec::new();
+            reads(w, &mut r);
+            !r.iter().any(|x| x == "?" || written.contains(x))
+        })
+        .map(|w| format!("{:?}", w.kind))
+        .collect()
+}
+
 /// An f32 literal WGSL accepts: finite, never subnormal (it would flush
 /// to zero on the GPU, and the shader lint refuses it), always with a
 /// point or an exponent.
@@ -4522,6 +4721,9 @@ enum Helper {
     CLog1p,
     CSinSmall,
     CSinhSmall,
+    /// A power in the perturbation equations: a whole exponent by
+    /// squaring (`uf_cpowi`), any other by `uf_cpow`.
+    CPowW,
 }
 
 impl Helper {
@@ -4556,6 +4758,7 @@ impl Helper {
             CSqr => "uf_csqr",
             CPowI => "uf_cpowi",
             CPow => "uf_cpow",
+            CPowW => "uf_cpoww",
             CRecip => "uf_crecip",
             CConj => "uf_cconj",
             CFlip => "uf_cflip",
@@ -4605,6 +4808,7 @@ impl Helper {
             FPow => &[],
             CSqr | CPowI => &[CMul, CDiv],
             CPow => &[CMul, CLog, CExp],
+            CPowW => &[CMul, CDiv, CPow],
             CRecip => &[CDiv],
             CArg | CArgC => &[Atan2],
             CLog => &[Atan2],
@@ -4841,6 +5045,36 @@ fn uf_draw() -> f32 {
         e = e >> 1u;
     }
     return acc;
+}",
+            // The reference's powers in the perturbation equations, `A^p`
+            // for an exponent a parameter sets: a whole one (Multibrot's,
+            // McMullen's n and m) by squaring, exact where `exp(p log A)`
+            // rounds, and without the transcendentals every pass (McMullen's
+            // twin at depth paid three, 2026-11-13). 0 at the origin, as
+            // `uf_cpow`.
+            CPowW => "fn uf_cpoww(z: vec2<f32>, w: vec2<f32>) -> vec2<f32> {
+    if ((w.y == 0.0) && (w.x == round(w.x)) && (abs(w.x) <= 64.0) && !((z.x == 0.0) && (z.y == 0.0))) {
+        var b = z;
+        if (w.x < 0.0) {
+            b = uf_cdiv(vec2<f32>(1.0, 0.0), z);
+        }
+        let e = u32(abs(w.x));
+        var acc = vec2<f32>(1.0, 0.0);
+        acc = select(acc, uf_cmul(acc, b), (e & 1u) != 0u);
+        b = uf_cmul(b, b);
+        acc = select(acc, uf_cmul(acc, b), (e & 2u) != 0u);
+        b = uf_cmul(b, b);
+        acc = select(acc, uf_cmul(acc, b), (e & 4u) != 0u);
+        b = uf_cmul(b, b);
+        acc = select(acc, uf_cmul(acc, b), (e & 8u) != 0u);
+        b = uf_cmul(b, b);
+        acc = select(acc, uf_cmul(acc, b), (e & 16u) != 0u);
+        b = uf_cmul(b, b);
+        acc = select(acc, uf_cmul(acc, b), (e & 32u) != 0u);
+        b = uf_cmul(b, b);
+        return select(acc, uf_cmul(acc, b), (e & 64u) != 0u);
+    }
+    return uf_cpow(z, w);
 }",
             CPow => "fn uf_cpow(z: vec2<f32>, w: vec2<f32>) -> vec2<f32> {
     if (z.x == 0.0 && z.y == 0.0) {
@@ -5172,9 +5406,10 @@ pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
 /// [`validate_formula`] for a colouring.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn validate_coloring(c: &ColoringWgsl) -> Result<(), String> {
+    // A stateless colouring has no accumulator step (`needs_accum`).
+    let step = if c.needs_accum { "    st = coloring_accum(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), st);\n" } else { "" };
     validate_module(&format!(
-        "{HARNESS}{ENV_DECLS}{}\n@compute @workgroup_size(1)\nfn main() {{\n    var st = {};\n    \
-         st = coloring_accum(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), st);\n    \
+        "{HARNESS}{ENV_DECLS}{}\n@compute @workgroup_size(1)\nfn main() {{\n    var st = {};\n{step}    \
          let v = coloring_map(OrbitSummary(vec2<f32>(1.0, 1.0), 3u, true, false, 0u, vec2<f32>(1.0, 1.0)), st);\n}}\n",
         c.wgsl, c.accum_init.replace(COLORING_Z0, "vec2<f32>(0.0, 0.0)")
     ))
