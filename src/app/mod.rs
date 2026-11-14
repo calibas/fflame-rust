@@ -3575,8 +3575,6 @@ impl App {
                 if let Some(log) = self.frame_log.as_mut() {
                     log.flame(effective_workgroups, effective_ipt * repeats, samples_this_frame);
                 }
-                // The governor's measure for a flame's render scale (governor.rs).
-                self.governor.flame_samples = Some(samples_this_frame);
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
                 // The histogram holds every frame of the batch: count them
@@ -3988,7 +3986,6 @@ impl App {
         if self.governor.take_timings(&timings, self.frame_index, budget_ms) {
             self.window.request_redraw();
         }
-        self.govern_flame();
         self.egui_layer.set_governor_fps((1000.0 / self.governor.capped.unwrap_or(budget_ms)) as f32);
         if self.frame_log.is_some() {
             let mut state = self.frame_state(delta_time * 1000.0, render_start.elapsed().as_secs_f64() * 1000.0, ui_cpu_ms);

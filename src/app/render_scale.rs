@@ -64,8 +64,10 @@ impl super::App {
         render_size(
             viewport,
             self.egui_layer.ctx.pixels_per_point(),
-            // The governor's rung, under the setting (governor.rs).
-            self.user_render_scale().min(self.governor.scale).min(self.governor.flame_scale),
+            // The governor's rung, under the setting (governor.rs): an
+            // escape picture's or a terrain's. A flame's is the setting
+            // alone: the governor holds its frame rate by the dispatch.
+            self.user_render_scale().min(self.governor.scale),
             settings.render_physical_pixels,
             self.config_manager.active_config().render_mode == crate::scene::transforms::RenderMode::Simulation,
             self.gpu.device.limits().max_texture_dimension_2d,

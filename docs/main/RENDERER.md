@@ -664,10 +664,15 @@ three.
   `SystemSettings::manual_workgroups` (default 128) at the full length,
   still capped while a plan is made.
 
-The governor resets its timing when iteration stops. The same switch,
-the Rendering menu's Quality Governor, also sets a flame's render scale
-from the samples a frame plots, and governs escape-time, terrains and
-simulations (`src/app/governor.rs`;
+The governor resets its timing when iteration stops. It never touches
+a flame's resolution: the render scale is the Rendering menu's alone,
+and the frame rate is held by the dispatch (its length, then its
+workgroups, and the batch's pacing cap). Choosing a render scale from the
+samples a frame plotted (2026-10) was removed on 2026-11-14: with
+effects running, a smaller render freed the time for more samples, which
+asked for the larger render again, and the scale swung about once a
+second. The same switch, the Rendering menu's Quality Governor, governs
+escape-time, terrains and simulations (`src/app/governor.rs`;
 [quality-governor.md](../archive/projects/quality-governor.md)).
 
 ### Configuration to GPU
