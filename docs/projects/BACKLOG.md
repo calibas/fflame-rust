@@ -213,10 +213,12 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   orbits in the store, flatten references to in-place big floats,
   Newton's `z^p sin z - 1` at a basin boundary, the scaled rung's f32
   reference sums (Ducks). §"After phase 4" item 6.
-- **Retire the colouring built-ins**: examined later (user, 2026-11-13).
-  22 of 28 twins within 5% on the direct path; image_trap +23%,
-  itinerary +17%, stripe_average +12%, position_map +10%,
-  curvature_average +8% (`measure_colouring_twins_against_their_builtins`).
+- **Retire the colouring built-ins**: 25 of 28 retired 2026-11-14 on
+  branch `retire-escape-builtins` ([ESCAPE.md](../main/ESCAPE.md#retired-built-ins)).
+  Left: Stripe Average (+13% direct), Curvature Average (+12.5%),
+  Position Map (+8.6%) -- all pass on the perturbed path
+  (`measure_colouring_twins_against_their_builtins`, `_at_depth`). A
+  texture layer still draws its built-in.
 - **Held structural keyframes** (formula source and name as one target);
   a formula randomiser. §"Phase 4 … step 8".
 - **Formula library in the Fractal Browser**, and an API formula corpus.

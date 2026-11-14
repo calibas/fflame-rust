@@ -2139,24 +2139,31 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
         body.push('\n');
     }
     let mut g = Gen::new(p, Ctx::ColoringInit, "ufc_");
-    body.push_str("fn ufc_init(z_init: vec2<f32>) -> vec4<f32> {\n");
-    for &(v, _) in &offsets {
-        let _ = writeln!(body, "    {};", var_decl(v, &p.vars[v]));
-    }
-    locals(&mut body);
-    g.stmts(&p.init, 1, &mut body);
-    pack(&mut body);
-    body.push_str("}\n\n");
+    // The accumulator's start and step only for a colouring that keeps
+    // state (`needs_accum`): the template calls them for no other, and a
+    // stateless one's stubs collided with a texture layer's own
+    // `coloring_accum` once a retired colouring's twin was the base
+    // (2026-11-14: Smooth under an Itinerary layer).
+    if needs_accum {
+        body.push_str("fn ufc_init(z_init: vec2<f32>) -> vec4<f32> {\n");
+        for &(v, _) in &offsets {
+            let _ = writeln!(body, "    {};", var_decl(v, &p.vars[v]));
+        }
+        locals(&mut body);
+        g.stmts(&p.init, 1, &mut body);
+        pack(&mut body);
+        body.push_str("}\n\n");
 
-    g.ctx = Ctx::ColoringLoop;
-    body.push_str(
-        "fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {\n",
-    );
-    unpack(&mut body);
-    locals(&mut body);
-    g.stmts(&p.loop_body, 1, &mut body);
-    pack(&mut body);
-    body.push_str("}\n\n");
+        g.ctx = Ctx::ColoringLoop;
+        body.push_str(
+            "fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {\n",
+        );
+        unpack(&mut body);
+        locals(&mut body);
+        g.stmts(&p.loop_body, 1, &mut body);
+        pack(&mut body);
+        body.push_str("}\n\n");
+    }
 
     g.ctx = Ctx::ColoringFinal;
     body.push_str("fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {\n");
@@ -2200,7 +2207,8 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
     }
 
     let wgsl = g.finish(&format!("// custom colouring: {}\n", sanitize(&p.name)), body);
-    ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init: format!("ufc_init({COLORING_Z0})"), needs_accum, ext_vec4s }
+    let accum_init = if needs_accum { format!("ufc_init({COLORING_Z0})") } else { "vec4<f32>(0.0)".to_string() };
+    ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init, needs_accum, ext_vec4s }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -5268,9 +5276,10 @@ pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
 /// [`validate_formula`] for a colouring.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn validate_coloring(c: &ColoringWgsl) -> Result<(), String> {
+    // A stateless colouring has no accumulator step (`needs_accum`).
+    let step = if c.needs_accum { "    st = coloring_accum(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), st);\n" } else { "" };
     validate_module(&format!(
-        "{HARNESS}{ENV_DECLS}{}\n@compute @workgroup_size(1)\nfn main() {{\n    var st = {};\n    \
-         st = coloring_accum(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), st);\n    \
+        "{HARNESS}{ENV_DECLS}{}\n@compute @workgroup_size(1)\nfn main() {{\n    var st = {};\n{step}    \
          let v = coloring_map(OrbitSummary(vec2<f32>(1.0, 1.0), 3u, true, false, 0u, vec2<f32>(1.0, 1.0)), st);\n}}\n",
         c.wgsl, c.accum_init.replace(COLORING_Z0, "vec2<f32>(0.0, 0.0)")
     ))

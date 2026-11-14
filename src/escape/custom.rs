@@ -1229,6 +1229,32 @@ fn retired_twin(escape: &EscapeConfig) -> Option<EscapeConfig> {
     Some(twin)
 }
 
+/// [`retired_twin`] for a colouring (`twins::RETIRED_COLORINGS`).
+fn retired_coloring_twin(escape: &EscapeConfig) -> Option<EscapeConfig> {
+    if !super::twins::coloring_retired(&escape.coloring) || native_forced() {
+        return None;
+    }
+    static TWINS: OnceLock<HashMap<&'static str, (String, CustomSource)>> = OnceLock::new();
+    let twins = TWINS.get_or_init(|| {
+        super::twins::RETIRED_COLORINGS
+            .iter()
+            .filter_map(|&n| {
+                let src = super::twins::coloring_custom_source(n)?;
+                Some((n, (name_of(EntryKind::Coloring, &src), src)))
+            })
+            .collect()
+    });
+    let (name, src) = twins.get(escape.coloring.as_str())?;
+    let mut twin = escape.clone();
+    twin.coloring = name.clone();
+    twin.custom_coloring = Some(src.clone());
+    ensure(&twin);
+    if coloring(name).is_none() {
+        return None;
+    }
+    Some(twin)
+}
+
 #[cfg(test)]
 thread_local! {
     static NATIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -1265,11 +1291,15 @@ pub fn native_builtins<T>(f: impl FnOnce() -> T) -> T {
 /// The config itself for a built-in, or when neither is on, or a
 /// variant that does not compile (which renders as the formula did).
 ///
-/// A retired built-in (`twins::RETIRED`) resolves to its twin first,
-/// which then resolves as any custom formula.
+/// A retired built-in (`twins::RETIRED`, `twins::RETIRED_COLORINGS`)
+/// resolves to its twin first, which then resolves as any custom formula
+/// or colouring.
 pub fn resolve(escape: &EscapeConfig) -> std::borrow::Cow<'_, EscapeConfig> {
     use std::borrow::Cow;
     if let Some(twin) = retired_twin(escape) {
+        return Cow::Owned(resolve(&twin).into_owned());
+    }
+    if let Some(twin) = retired_coloring_twin(escape) {
         return Cow::Owned(resolve(&twin).into_owned());
     }
     let Some(sized) = resolve_coloring_sizes(escape) else {

@@ -2858,6 +2858,22 @@ pixels right against the truth where the native counted 373. The other
 formulas with a native tier pass on the direct path, Ducks and Feather
 aside, and wait on their deep views (the tables below).
 
+**Colourings** retire the same way (`twins::RETIRED_COLORINGS`,
+2026-11-14), by the same line on both paths, and resolve to their twins
+in the same step. Retired: 25 of the 28 -- all but **Stripe Average**
+(+13% on the direct path), **Curvature Average** (+12.5%) and **Position
+Map** (+8.6%). On the perturbed path every twin passes (the seahorse at
+zoom 30, 4000 iterations, medians of three: at most +3.6%; Direct Traps
+-33%, Orbit Trap -23%, Sphere Average -17%, Exponential Smoothing -14%,
+Image Trap -11%). On the direct path (the Mandelbrot at 4000 iterations,
+medians of three): Direct Traps -52%, Orbit Trap -33%, Sphere Average
+-31%, Exponential Smoothing -20%, VOC Traps -14%, Gaussian Integer -8%,
+Velocity -8%, Image Trap -5%; the rest within -3% to +5% (Itinerary
++5.0%, Smooth +4.9%). A texture layer stays the built-in, and a base
+colouring's twin under one keeps no accumulator it does not use: a
+stateless custom colouring emits no `ufc_init` or `coloring_accum`
+(`lang::wgsl`), whose stubs collided with an accumulating layer's.
+
 ### How fast the twins are
 
 On the **direct path**, each formula at its home view (its first

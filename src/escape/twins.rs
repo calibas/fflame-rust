@@ -193,6 +193,53 @@ pub fn retired(name: &str) -> bool {
     RETIRED.contains(&name)
 }
 
+/// The built-in colourings that are their twins, as [`RETIRED`] is for
+/// formulas: a config naming one renders the twin (`custom::resolve`)
+/// under the built-in's name and parameters, the built-in's WGSL kept as
+/// the reference (`builtin_colouring_twins_render_as_their_builtins`,
+/// through `custom::native_builtins`) and as the fallback. The same line:
+/// no more than 5% slower on either path, the median of several runs
+/// (`measure_colouring_twins_against_their_builtins`).
+///
+/// Retired 2026-11-14, compiled for their structural parameters
+/// (`lang::specialize`): every twin passes on the perturbed path (at most
+/// +3.6%, the seahorse at zoom 30), and these on the direct path (at most
+/// +5%, the Mandelbrot at 4000 iterations). Stripe Average (+13%),
+/// Curvature Average (+12.5%) and Position Map (+8.6%) wait.
+pub const RETIRED_COLORINGS: &[&str] = &[
+    "escape_count",
+    "orbit_trap",
+    "sphere_average",
+    "decomposition",
+    "basic",
+    "gaussian_integer",
+    "itinerary",
+    "smooth",
+    "orbit_average",
+    "magnitude_average",
+    "root_basin",
+    "triangle_inequality",
+    "period",
+    "position_average",
+    "velocity",
+    "threads",
+    "exponential_smoothing",
+    "external_rays",
+    "distance_estimate",
+    "normal_map",
+    "rainbow_fringe",
+    "infinite_waves",
+    "voc_traps",
+    "direct_traps",
+    "image_trap",
+];
+
+/// Whether the built-in colouring `name` renders as its twin
+/// ([`RETIRED_COLORINGS`]).
+pub fn coloring_retired(name: &str) -> bool {
+    RETIRED_COLORINGS.contains(&name)
+}
+
 /// The twin of the built-in formula `name`, when it has one.
 pub fn source(name: &str) -> Option<&'static str> {
     TWINS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)

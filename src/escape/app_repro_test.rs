@@ -3636,9 +3636,19 @@ mod tests {
                 for (k, v) in settings {
                     esc.coloring_params.insert(k.to_string(), *v);
                 }
-                let want = output_on(&device, &queue, &renderer, &esc, w, h, *perturbed);
-                let twin = twin_of(esc);
-                let got = output_on(&device, &queue, &renderer, &twin, w, h, *perturbed);
+                // The built-in's own WGSL, retired or not
+                // (`twins::RETIRED_COLORINGS`).
+                // Both natively, so a view's formula is the same on each
+                // side (the exponential is retired too).
+                let want = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &esc, w, h, *perturbed));
+                let twin = twin_of(esc.clone());
+                let got = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &twin, w, h, *perturbed));
+                // A retired built-in's name renders its twin.
+                if crate::escape::twins::coloring_retired(name) {
+                    let by_name = output_on(&device, &queue, &renderer, &esc, w, h, *perturbed);
+                    let live = output_on(&device, &queue, &renderer, &twin, w, h, *perturbed);
+                    assert!(differing(&by_name, &live) == 0.0, "{name} {settings:?} on {view}: the retired built-in's name renders its twin");
+                }
                 assert_eq!(crate::escape::get_coloring(&twin.coloring).name, twin.coloring, "{name} did not compile");
                 let covered = want.chunks(4).filter(|p| p[3] > 0.5).count();
                 assert!(covered > 100, "{name} {settings:?} on {view}: too little shows ({covered})");
@@ -3700,8 +3710,8 @@ mod tests {
             for (k, v) in settings {
                 esc.coloring_params.insert(k.to_string(), *v);
             }
-            let want = output_on(&device, &queue, &renderer, &esc, w, h, false);
-            let got = output_on(&device, &queue, &renderer, &twin_of(esc), w, h, false);
+            let want = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &esc, w, h, false));
+            let got = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &twin_of(esc), w, h, false));
             let covered = want.chunks(4).filter(|p| p[3] > 0.5).count();
             assert!(covered > 100, "{name} {settings:?} on {view}: too little shows ({covered})");
             // Shaded by a derivative, not the flat light of none.
@@ -3792,8 +3802,8 @@ mod tests {
                 twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
                 twin.custom_coloring = Some(src.clone());
                 let set = |r: &mut crate::escape::EscapeRenderer| assert!(r.set_texture(&device, &queue, &key, &tex));
-                let want = output_with(&device, &queue, &renderer, &esc, w, h, *perturbed, set);
-                let got = output_with(&device, &queue, &renderer, &twin, w, h, *perturbed, set);
+                let want = crate::escape::custom::native_builtins(|| output_with(&device, &queue, &renderer, &esc, w, h, *perturbed, set));
+                let got = crate::escape::custom::native_builtins(|| output_with(&device, &queue, &renderer, &twin, w, h, *perturbed, set));
                 assert_eq!(crate::escape::get_coloring(&twin.coloring).name, twin.coloring, "the twin did not compile");
                 // Deep, the long orbits multiply and darken to black: there
                 // the coverage shows, and the colour on the shallow views.
@@ -17684,13 +17694,76 @@ fn main() {
             let mut twin = esc.clone();
             twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
             twin.custom_coloring = Some(src);
+            // The built-in's own WGSL, retired or not.
+            use crate::escape::custom::native_builtins;
             for _ in 0..2 {
-                run(&esc);
+                native_builtins(|| run(&esc));
                 run(&twin);
             }
             let (mut b, mut t) = (f64::MAX, f64::MAX);
             for _ in 0..9 {
-                b = b.min(run(&esc));
+                b = b.min(native_builtins(|| run(&esc)));
+                t = t.min(run(&twin));
+            }
+            println!("{name:21} built-in {b:6.2}  twin {t:6.2}  ({:+.1}%)", (t / b - 1.0) * 100.0);
+        }
+        r.destroy();
+    }
+
+    /// MEASUREMENT (retiring the colourings, 2026-11-14): each colouring
+    /// twin against its built-in on the perturbed path, whose shader runs
+    /// the colouring too -- the Mandelbrot at the seahorse, zoom 30, 4000
+    /// iterations -- by the direct measurement's method: one warm
+    /// renderer, the best of nine, alternating.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn measure_colouring_twins_at_depth() {
+        let (device, queue) = repro_device();
+        let (w, h) = (1024u32, 768u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
+        let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+        r.force_perturbed = true;
+        let mut fresh = false;
+        let mut run = |esc: &crate::config::escape::EscapeConfig| -> f64 {
+            let mut esc = esc.clone();
+            fresh = !fresh;
+            if fresh {
+                esc.bailout *= 1.000001;
+            }
+            let start = std::time::Instant::now();
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
+                let settled = r.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+            }
+            start.elapsed().as_secs_f64() * 1000.0
+        };
+        println!("{w}x{h}, the Mandelbrot at the seahorse, zoom 30, 4000 iterations, perturbed; ms, the best of nine, pipelines warm");
+        for (name, _) in crate::escape::twins::COLORING_TWINS {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "mandelbrot".into();
+            esc.max_iter = 4000;
+            esc.center_re = "-0.7436438870371587047548108297799385780".into();
+            esc.center_im = "0.13182590420531251981651559677435626549".into();
+            esc.zoom_log2 = 30.0;
+            esc.coloring = name.to_string();
+            let src = crate::escape::twins::coloring_custom_source(name).unwrap();
+            let mut twin = esc.clone();
+            twin.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
+            twin.custom_coloring = Some(src);
+            use crate::escape::custom::native_builtins;
+            for _ in 0..2 {
+                native_builtins(|| run(&esc));
+                run(&twin);
+            }
+            let (mut b, mut t) = (f64::MAX, f64::MAX);
+            for _ in 0..9 {
+                b = b.min(native_builtins(|| run(&esc)));
                 t = t.min(run(&twin));
             }
             println!("{name:21} built-in {b:6.2}  twin {t:6.2}  ({:+.1}%)", (t / b - 1.0) * 100.0);
