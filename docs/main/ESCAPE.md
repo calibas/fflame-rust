@@ -2839,14 +2839,19 @@ it through `custom::native_builtins` and checks that the name renders
 the twin exactly), and what runs if the twin ever fails to compile.
 
 Retired (`twins::RETIRED`): **Spider, Cactus, Exponential, Tetration,
-Collatz, Lambda Sine, Lattès, Origami, Barnsley, Littlewood,
-Novaretti** -- none had native deep zoom, so all but Origami (whose twin
-has no perturbed tier either) gained it, and Collatz gained a derivative
-(distance estimation). The last three passed once interior detection
-compared only what a pass carries (below). The formulas with a native
-deep-zoom tier now pass on the direct path, Ducks and Feather aside,
-and wait on their deep views; Trig, with no native tier, reads 0 to +7%
-(the tables below).
+Collatz, Lambda Sine, Lattès, Origami, Barnsley, Littlewood, Novaretti,
+Trig, Manowar** -- all but Manowar without native deep zoom, so all but
+Origami (whose twin has no perturbed tier either) gained it, and Collatz
+gained a derivative (distance estimation). Barnsley onwards passed once
+interior detection compared only what a pass carries (below); where a
+view renders in a millisecond or two the median of several runs decides
+(Trig's nine: about +3%). Manowar, the first with a native tier, is
+faster as its twin at depth (123 ms against 148) and on the direct path
+at a view heavier than its 0.35 ms home (-6 to -10%); the suite's deep
+Manowar baseline was re-recorded, the twin counting 420 of 439 sampled
+pixels right against the truth where the native counted 373. The other
+formulas with a native tier pass on the direct path, Ducks and Feather
+aside, and wait on their deep views (the tables below).
 
 ### How fast the twins are
 
@@ -2900,6 +2905,10 @@ ms -- the whole render, then the GPU's part:
 | Manowar, zoom 26, floatexp | 146 | 125 | 139 | 120 |
 | Kaliset (both views), zoom 30, 60 | 4 | 6 | 4 | 5 |
 | Newton z^3 - 1 (both schemes), zoom 30, 400 | 5-6 | 28-29 | 4 | 27-29 |
+| Feather power 3, zoom 30, 600 | 10 | 11 | 7 | 10 |
+| McMullen n 2 m 3 (Julia), zoom 30, 400 | 6 | 18 | 6 | 17 |
+| Magnet I, zoom 30, 400 | 6 | 35-39 | 4 | 34-38 |
+| Nova power 3, zoom 30, 400 | 6 | 16 | 4 | 15 |
 
 Two rows had grown since October with the built-ins unchanged -- the
 Mandelbrot at zoom 30 (145 ms of GPU time) and the Tricorn's suite view
