@@ -2143,7 +2143,12 @@ mod tests {
             assert!(covered > 100, "{what}: the view shows too little ({covered})");
             let d = differing(&built_in, &got);
             println!("{what}: the twin differs on {:.3}% of pixels", d * 100.0);
-            assert!(d <= 0.005, "{what}: {:.3}%", d * 100.0);
+            // The Ship specialized on its variant (`lang::specialize`): its
+            // straight-line code contracts otherwise, and the folds amplify
+            // it -- against the big-float truth the twin counts 7991 of 8192
+            // right, the built-in 7984 (2026-11-13).
+            let allowed = if formula == "burning_ship" { 0.04 } else { 0.005 };
+            assert!(d <= allowed, "{what}: {:.3}%", d * 100.0);
         }
 
         // Perturbed, the variant's own equations: forced at the views above,
@@ -2441,9 +2446,13 @@ mod tests {
             ("ducks", &[("variant", 0.0)], ("0", "0"), -0.5, false, 0.02),
             ("ducks", &[("variant", 2.0)], ("0", "0"), -0.5, false, 0.0),
             ("ducks", &[("variant", 3.0)], ("0", "0"), -0.5, true, 0.0),
-            ("lattes", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.0),
-            ("lattes", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.0),
-            ("lattes", &[("variant", 2.0)], ("0", "0"), -1.0, false, 0.0),
+            // Specialized on its variant, the same counts on every pixel
+            // against the truth; its accumulated colour moves past 1e-4 on
+            // under 1% (the compiler's contraction of the straight-line
+            // code).
+            ("lattes", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.01),
+            ("lattes", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.01),
+            ("lattes", &[("variant", 2.0)], ("0", "0"), -1.0, false, 0.01),
             // Convergent: an orbit ends as it settles (batch 4); Newton by
             // every function, and every scheme at two.
             ("magnet", &[("variant", 0.0)], ("1", "0"), -0.8, false, 0.001),
@@ -2478,9 +2487,13 @@ mod tests {
             // Escaping on Re z or |Im z| (item 2, batch 1).
             ("exponential", &[], ("-1", "0"), -1.0, false, 0.0),
             ("exponential", &[], ("0", "0"), -1.0, true, 0.0),
-            ("trig", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.0),
-            ("trig", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.0),
-            ("trig", &[("variant", 0.0)], ("0", "0"), -1.0, true, 0.0),
+            // Specialized on its variant (`lang::specialize`): its sines of
+            // an escaping z amplify the straight-line code's contraction --
+            // against the big-float truth the twin counts 8134 of 8192
+            // right, the built-in 8136 (2026-11-13).
+            ("trig", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.03),
+            ("trig", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.03),
+            ("trig", &[("variant", 0.0)], ("0", "0"), -1.0, true, 0.03),
             ("lambda_sine", &[], ("0", "0"), -1.0, false, 0.0),
             ("lambda_sine", &[], ("0", "0"), -1.0, true, 0.0),
             ("collatz", &[], ("1", "0"), 1.5, false, 0.0),
@@ -3176,7 +3189,11 @@ mod tests {
         // wanders on (the plan's order of work, item 6).
         let cases: &[(&str, &[(&str, f32)], (&str, &str), u32, usize)] = &[
             ("newton", &[("func", 0.0)], ("0.6982638162659913", "-1.0990000000000002"), 300, 50),
-            ("newton", &[("func", 5.0)], ("-1.4976661726096265", "-2.0"), 300, 14),
+            // Specialized on its function and power (`lang::specialize`) the
+            // scaled rung counts 401 within one, 407 unspecialized, the
+            // floatexp rung 418, f64 437: this boundary's rounding moves
+            // with the compiler's contraction of the straight-line code.
+            ("newton", &[("func", 5.0)], ("-1.4976661726096265", "-2.0"), 300, 12),
             ("novaretti", &[], ("-1.1495849563492808", "-2.0"), 150, 50),
         ];
         for &(formula, params, (cre, cim), max_iter, slack) in cases {
@@ -3598,7 +3615,11 @@ mod tests {
             "stripe_average" => 0.01,
             "position_map" => 0.02,
             "normal_map" => 0.002,
-            _ => 0.0,
+            // Specialized on their structural parameters
+            // (`lang::specialize`), the colourings' straight-line code
+            // contracts otherwise than the general program's: their values
+            // move past 1e-4 on up to 0.2% of pixels (2026-11-13).
+            _ => 0.003,
         };
         let mut worst = 0.0f64;
         for (name, settings) in &cases {
@@ -6643,8 +6664,9 @@ final:
             // Every shipped (scheme, func) pair must actually perturb:
             // if one silently stopped selecting the tier this test
             // would pass by rendering the direct path.
+            // The native tier, Newton being its twin now (`twins::RETIRED`).
             assert_eq!(
-                crate::escape::EscapeRenderer::perturb_tier(&esc),
+                crate::escape::custom::native_builtins(|| crate::escape::EscapeRenderer::perturb_tier(&esc)),
                 Some(crate::escape::assembler::PerturbTier::Newton {
                     p: 3,
                     scheme,
@@ -6667,7 +6689,7 @@ final:
             });
             assert_three_basins(&format!("newton scheme {scheme}"), &truth);
             for deep in [false, true] {
-                let gpu = perturbed_records(&esc, w, h, deep);
+                let gpu = crate::escape::custom::native_builtins(|| perturbed_records(&esc, w, h, deep));
                 let frac = compare_convergent(
                     &format!("newton scheme {scheme} deep {deep}"),
                     &gpu,
@@ -17817,6 +17839,8 @@ fn main() {
             ("mcmullen", &[("n", 2.0), ("m", 3.0)], ("-0.12291872044575830", "-0.36795489251636515"), 30.0, 400, false),
             ("magnet", &[("variant", 0.0)], ("-0.17175811456405135", "0.09206142643187049"), 30.0, 400, false),
             ("nova", &[("power", 3.0)], ("-0.36039383324484020", "0.22577954314649112"), 30.0, 400, false),
+            // Ducks on its Julia plane: the never-escaping twins' deep view.
+            ("ducks", &[("variant", 0.0)], ("-0.08431922458112219", "1.53503858856856801"), 30.0, 80, false),
         ];
         println!("{w}x{h}, with BLA where the tier has it; times in ms: whole render, reference build, BLA table build, the rest (GPU)");
         for &(formula, params, (cx, cy), zoom, iters, floatexp) in views {
@@ -17831,8 +17855,11 @@ fn main() {
             esc.max_iter = iters;
             esc.bailout = 4.0;
             // One that never escapes draws by an orbit colouring.
-            if formula == "kaliset" {
+            if matches!(formula, "kaliset" | "ducks") {
                 esc.coloring = "magnitude_average".into();
+            }
+            if formula == "ducks" {
+                (esc.julia, esc.julia_re, esc.julia_im) = (true, 0.1, -0.62);
             }
             if formula == "mcmullen" {
                 (esc.julia, esc.julia_re, esc.julia_im) = (true, 0.05, 0.03);
@@ -17858,7 +17885,7 @@ fn main() {
                 let (t, orbit, bla, len) = (0..3).map(|_| run_as(cfg, who == "built-in")).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
                 let rest = t * 1000.0 - f64::from(orbit) - f64::from(bla);
                 println!(
-                    "{formula} {params:?} zoom {zoom}, {iters} it., {}: {who:8} {:7.0} | reference {:6.1} ({len} entries) | table {:6.1} | rest {:7.0}",
+                    "{formula} {params:?} zoom {zoom}, {iters} it., {}: {who:8} {:7.1} | reference {:6.1} ({len} entries) | table {:6.1} | rest {:7.1}",
                     if floatexp { "floatexp" } else { "scaled" },
                     t * 1000.0,
                     orbit,

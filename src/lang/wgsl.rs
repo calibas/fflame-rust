@@ -3082,6 +3082,32 @@ impl<'p> Gen<'p> {
                     (_, 0) => if a.ty == Ty::Complex { "vec2<f32>(1.0, 0.0)".to_string() } else { "1.0".to_string() },
                     (_, 1) => v,
                     (Ty::Complex, 2) => format!("{}({v})", self.use_(Helper::CSqr)),
+                    // Unrolled up to 12, in `uf_cpowi`'s order -- the
+                    // base squared each step, multiplied in at each set
+                    // bit from the lowest -- so the same values without
+                    // its loop, which a power's binomial (`lang::delta`)
+                    // ran once a term: a specialized Multibrot's twin
+                    // took half again the time (2026-11-13).
+                    (Ty::Complex, 3..=12) => {
+                        let (sqr, mul) = (self.use_(Helper::CSqr), self.use_(Helper::CMul));
+                        let mut base = v.clone();
+                        let mut acc: Option<String> = None;
+                        let mut e = *n;
+                        loop {
+                            if e & 1 == 1 {
+                                acc = Some(match acc {
+                                    None => base.clone(),
+                                    Some(a) => format!("{mul}({a}, {base})"),
+                                });
+                            }
+                            e >>= 1;
+                            if e == 0 {
+                                break;
+                            }
+                            base = format!("{sqr}({base})");
+                        }
+                        acc.unwrap_or(v)
+                    }
                     (Ty::Complex, _) => format!("{}({v}, {n}i)", self.use_(Helper::CPowI)),
                     (_, 2) => format!("{}({v})", self.use_(Helper::FSq)),
                     (_, _) => format!("{}({v}, {n}i)", self.use_(Helper::FPowI)),
@@ -3334,7 +3360,7 @@ impl<'p> Gen<'p> {
             // In the perturbation equations a whole exponent by squaring
             // (`Helper::CPowW`); the direct path keeps the polar form, as
             // the built-ins' `esc_cpow` has it.
-            Pow if ty == Ty::Complex && matches!(self.ctx, Ctx::Perturb | Ctx::PerturbBailout) => format!("{}({l}, {r})", self.use_(Helper::CPowW)),
+            Pow if ty == Ty::Complex && matches!(self.ctx, Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe) => format!("{}({l}, {r})", self.use_(Helper::CPowW)),
             Pow if ty == Ty::Complex => format!("{}({l}, {r})", self.use_(Helper::CPow)),
             Pow => format!("{}({l}, {r})", self.use_(Helper::FPow)),
             Mod if ty == Ty::Int => format!("{}({l}, {r})", self.use_(Helper::IMod)),
@@ -3543,6 +3569,10 @@ impl<'p> Gen<'p> {
                 match *n {
                     1 => (ca, Small),
                     2 => (format!("(s * {})", self.sq_code(&ca, a.ty)), Small),
+                    // `s^(n-1)` by products up to 12, not `pow`'s
+                    // transcendentals each pass (a specialized Multibrot's
+                    // twin, power 4: 12 ms of GPU time against 7, 2026-11-13).
+                    n if n <= 12 => (format!("({} * {})", vec!["s"; (n - 1) as usize].join(" * "), self.powi_code(&ca, a.ty, n)), Small),
                     n => (format!("(pow(s, {}.0) * {})", n - 1, self.powi_code(&ca, a.ty, n)), Small),
                 }
             }
@@ -3820,6 +3850,27 @@ impl<'p> Gen<'p> {
     }
 
     fn powi_code(&mut self, c: &str, t: Ty, n: i64) -> String {
+        if t == Ty::Complex && (3..=12).contains(&n) {
+            // Unrolled, in `uf_cpowi`'s order (see `Gen::expr`'s `PowInt`).
+            let (sqr, mul) = (self.use_(Helper::CSqr), self.use_(Helper::CMul));
+            let mut base = c.to_string();
+            let mut acc: Option<String> = None;
+            let mut e = n;
+            loop {
+                if e & 1 == 1 {
+                    acc = Some(match acc {
+                        None => base.clone(),
+                        Some(a) => format!("{mul}({a}, {base})"),
+                    });
+                }
+                e >>= 1;
+                if e == 0 {
+                    break;
+                }
+                base = format!("{sqr}({base})");
+            }
+            return acc.unwrap_or_else(|| c.to_string());
+        }
         if t == Ty::Complex {
             format!("{}({c}, {n}i)", self.use_(Helper::CPowI))
         } else {
