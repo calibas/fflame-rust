@@ -1005,7 +1005,7 @@ pub fn print_available_encoders() {
 
     println!("Encoder availability:");
     for encoder in encoders_to_check {
-        let status = if is_encoder_available(encoder) { "✓" } else { "✗" };
+        let status = if is_encoder_available(encoder) { "✔" } else { "✖" };
         println!("  {} {}", status, encoder);
     }
 }

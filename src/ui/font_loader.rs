@@ -3,49 +3,74 @@
 //! This module handles loading fonts dynamically based on the selected locale.
 //! Fonts are loaded from the assets/fonts/ directory on desktop builds.
 //! WASM builds fall back to default fonts to avoid embedding large font files.
+//!
+//! **The UI's symbols** are drawn the same on every platform -- Windows,
+//! macOS, Linux and the web: behind egui's own fonts in each family come
+//! `UISymbols` (embedded: the arrows' and the language names' few
+//! characters egui lacks, cut from the repository's Noto fonts by
+//! `scripts/build_ui_symbols_font.py`) and Hack, egui's monospace font, which
+//! every build already carries and which has the arrows, geometric shapes
+//! and mathematical symbols. `every_drawn_character_has_a_glyph` fails when
+//! a UI string uses a character none of them has: run the script, or pick
+//! a character egui's icon font has.
 
 use egui::Context;
 
 /// Path to Noto Sans Regular font (better Unicode coverage than Ubuntu-Light)
 const NOTO_SANS_PATH: &str = "assets/fonts/NotoSans-Regular.otf";
 
-/// Initialize fonts with Noto Sans as the default proportional font.
-/// This replaces Ubuntu-Light which has poor Unicode symbol coverage.
-/// Call this once during app initialization.
-pub fn initialize_default_fonts(ctx: &Context) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        if let Ok(font_data) = std::fs::read(crate::resources::resource_path(NOTO_SANS_PATH)) {
-            let mut fonts = egui::FontDefinitions::default();
+/// The UI's symbols egui's own fonts lack (the module's docs), embedded.
+const UI_SYMBOLS: &[u8] = include_bytes!("../../assets/fonts/UISymbols.ttf");
 
-            // Add Noto Sans
-            fonts.font_data.insert(
-                "NotoSans".to_owned(),
-                std::sync::Arc::new(egui::FontData::from_owned(font_data)),
-            );
-
-            // Insert Noto Sans at the front of the Proportional family
-            // This makes it the primary font, with egui's defaults as fallback
-            if let Some(family_fonts) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-                family_fonts.insert(0, "NotoSans".to_owned());
-            }
-
-            ctx.set_fonts(fonts);
-            log::info!("Loaded Noto Sans as default proportional font");
-        } else {
-            log::warn!(
-                "Could not load Noto Sans from '{}' - using egui defaults",
-                NOTO_SANS_PATH
-            );
+/// egui's fonts with the symbol fallbacks behind them in every family, and
+/// `primary` (Noto Sans, on the desktop) first in the proportional one.
+fn font_definitions(primary: Option<Vec<u8>>) -> egui::FontDefinitions {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert("UISymbols".to_owned(), std::sync::Arc::new(egui::FontData::from_static(UI_SYMBOLS)));
+    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+        family.push("UISymbols".to_owned());
+        // egui's monospace font, already embedded: arrows, shapes, maths.
+        if !family.iter().any(|f| f == "Hack") {
+            family.push("Hack".to_owned());
         }
     }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        // WASM: Use egui defaults to avoid embedding large font files
-        log::info!("WASM build: using egui default fonts");
-        let _ = ctx; // Silence unused warning
+    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+        family.push("UISymbols".to_owned());
     }
+    if let Some(data) = primary {
+        fonts.font_data.insert("NotoSans".to_owned(), std::sync::Arc::new(egui::FontData::from_owned(data)));
+        // The primary font, with egui's defaults as fallback.
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            family.insert(0, "NotoSans".to_owned());
+        }
+    }
+    fonts
+}
+
+/// Initialize fonts: the symbol fallbacks on every platform, and on the
+/// desktop Noto Sans as the default proportional font (it replaces
+/// Ubuntu-Light, which has poor Unicode symbol coverage). Call this once
+/// during app initialization.
+pub fn initialize_default_fonts(ctx: &Context) {
+    #[cfg(not(target_arch = "wasm32"))]
+    let primary = match std::fs::read(crate::resources::resource_path(NOTO_SANS_PATH)) {
+        Ok(data) => {
+            log::info!("Loaded Noto Sans as default proportional font");
+            Some(data)
+        }
+        Err(_) => {
+            log::warn!("Could not load Noto Sans from '{}' - using egui defaults", NOTO_SANS_PATH);
+            None
+        }
+    };
+    // WASM: egui's defaults, to avoid a large font in the download (the
+    // symbols embedded either way).
+    #[cfg(target_arch = "wasm32")]
+    let primary = {
+        let _ = NOTO_SANS_PATH;
+        None
+    };
+    ctx.set_fonts(font_definitions(primary));
 }
 
 /// Ensure the appropriate font is loaded for the given locale
@@ -236,5 +261,97 @@ mod tests {
     fn test_no_config_for_latin() {
         assert!(get_font_config("en").is_none());
         assert!(get_font_config("es").is_none());
+    }
+
+    /// Every non-ASCII character the UI may draw, and one place it is: the
+    /// string literals (with their `\u{..}` escapes) of `src/` -- test
+    /// modules, `src/bin` and comment lines left out -- and the values of
+    /// `locales/en.yml`. What `scripts/build_ui_symbols_font.py` reads.
+    fn drawn_characters() -> Vec<(char, String)> {
+        fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("src").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|n| n != "bin") {
+                        rust_files(&path, out);
+                    }
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        rust_files(&root.join("src"), &mut files);
+        let mut found: Vec<(char, String)> = Vec::new();
+        let mut note = |c: char, at: String| {
+            if !c.is_ascii() && !found.iter().any(|(k, _)| *k == c) {
+                found.push((c, at));
+            }
+        };
+        for path in files {
+            let text = std::fs::read_to_string(&path).expect("read");
+            let code = text.split("#[cfg(test)]").next().unwrap_or("");
+            for (n, line) in code.lines().enumerate() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                let mut chars = line.chars().peekable();
+                let mut in_string = false;
+                while let Some(c) = chars.next() {
+                    match (in_string, c) {
+                        (false, '"') | (true, '"') => in_string = !in_string,
+                        (true, '\\') => {
+                            if chars.next() == Some('u') && chars.peek() == Some(&'{') {
+                                chars.next();
+                                let hex: String = chars.by_ref().take_while(|h| *h != '}').collect();
+                                if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                                    note(ch, format!("{}:{}", path.display(), n + 1));
+                                }
+                            }
+                        }
+                        (true, c) => note(c, format!("{}:{}", path.display(), n + 1)),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let en = std::fs::read_to_string(root.join("locales/en.yml")).expect("en.yml");
+        for (n, line) in en.lines().enumerate() {
+            if !line.trim_start().starts_with('#') {
+                for c in line.chars() {
+                    note(c, format!("locales/en.yml:{}", n + 1));
+                }
+            }
+        }
+        found
+    }
+
+    /// No icon is a square: every character the UI may draw has a glyph in
+    /// the fonts every platform has (the web's: egui's, `UISymbols` and
+    /// Hack, with no Noto Sans from disk), proportional and monospace.
+    #[test]
+    fn every_drawn_character_has_a_glyph() {
+        use egui::epaint::text::{Fonts, TextOptions};
+        let mut fonts = Fonts::new(TextOptions::default(), font_definitions(None));
+        // Not drawn: variation selectors and the joiner (kept out of the
+        // translations by `no_invisible_emoji_modifiers_in_translations`).
+        let invisible = ['\u{FE0E}', '\u{FE0F}', '\u{200D}', '\u{200B}'];
+        let mut missing = Vec::new();
+        for (c, at) in drawn_characters() {
+            if invisible.contains(&c) || c.is_control() {
+                continue;
+            }
+            for id in [egui::FontId::proportional(14.0), egui::FontId::monospace(14.0)] {
+                if !fonts.has_glyph(&id, c) {
+                    missing.push(format!("U+{:04X} {c} ({:?}) at {at}", c as u32, id.family));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "characters drawn as a square -- run `python scripts/build_ui_symbols_font.py`, or use one egui's icon font has:\n  {}",
+            missing.join("\n  ")
+        );
     }
 }

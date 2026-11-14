@@ -121,7 +121,7 @@ pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut Co
                                 l.swap(i, i + 1);
                                 edit = Some((l, "history.action.escape_transform_move"));
                             }
-                            if ui.small_button("\u{2715}").on_hover_text(t!("escape_transforms.remove")).clicked() {
+                            if ui.small_button("\u{2716}").on_hover_text(t!("escape_transforms.remove")).clicked() {
                                 let mut l = list.clone();
                                 l.remove(i);
                                 edit = Some((l, "history.action.escape_transform_remove"));

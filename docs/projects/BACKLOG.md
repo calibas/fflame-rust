@@ -316,7 +316,7 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
   `Unbounded` flames need hand bounds; julian-disc's cover leaks 34% at
   256 discs; branch hover highlight in the word editor.
 - **Small**: Metal and Firefox never run; new strings English only;
-  a `→` glyph in the coupling row (`sim_panel.rs`); flaky timing tests
+  flaky timing tests
   `a_standby_plan_covers_a_move`, `the_web_plan_job_plans_a_slice_a_frame`;
   pie/pie3D rotation labelled degrees, shader uses radians (`shapes.rs`).
 
