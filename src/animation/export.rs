@@ -1357,9 +1357,9 @@ pub async fn export_animation(
 
     // The state that OUTLIVES the frame, and the reason a video is not
     // just a sequence of stills: the simulation's field continues its
-    // run rather than restarting from the seed each frame, and the
-    // escape renderer keeps its allocations and its warm reference
-    // orbit.
+    // run rather than restarting from the seed each frame, the escape
+    // renderer keeps its allocations and its warm reference orbit, and a
+    // temporal effect keeps its history.
     let mut engines = crate::renderer::RenderEngines::default();
 
     let mut cancelled = false;
@@ -1397,6 +1397,9 @@ pub async fn export_animation(
                 .with_iterations_per_thread(export_config.iterations_per_thread)
                 .with_engines(&mut engines)
                 .with_moments(&moments)
+                // A temporal effect's history carries frame to frame in
+                // `engines`' effect chain (docs/projects/multipass-effects.md).
+                .with_effect_clock(crate::renderer::effect_chain::EffectClock::video(frame as u64, export_config.fps))
                 .with_pixel_scale(render_h as f32 / height.max(1) as f32);
             match crate::renderer::render_with(&mut renderer, &device, &queue, job, &mut progress).await {
                 // Drawn up to the video's size (`ExportRung`).
@@ -1454,6 +1457,9 @@ pub async fn export_animation(
     }
 
     upscale.release();
+    if let Some(chain) = engines.effects.take() {
+        chain.destroy();
+    }
     // Closing the channel is what tells FFmpeg the stream ended, so it
     // must happen before the join -- on the cancel path too, where the
     // partial video is still finalized rather than left truncated.

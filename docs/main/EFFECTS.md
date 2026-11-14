@@ -32,13 +32,17 @@ Research survey of candidate effects:
   `EffectInfo`, `EffectInstance`, the built-in definitions, download
   checks
 - [src/renderer/effect_chain.rs](../../src/renderer/effect_chain.rs) —
-  `EffectChainRunner`: ping-pong textures, the parameter uniform, the
-  `distance_field` jump flood
-- [assets/effects/](../../assets/effects/) — the fifteen one-pass
-  built-ins, as the Rhai sources the app runs
+  `EffectChainRunner`: ping-pong textures, the parameter uniform,
+  `EffectClock`
+- [src/renderer/effect_passes.rs](../../src/renderer/effect_passes.rs) —
+  multi-pass effects: their pipelines, buffers and persistent history
+- [src/effects/passes.rs](../../src/effects/passes.rs) — a multi-pass
+  effect's plan (`INFO.passes`, `INFO.buffers`, `INFO.warmup`)
+- [assets/effects/](../../assets/effects/) — every built-in, as the Rhai
+  source the app runs
 - [shaders/effects/](../../shaders/effects/) — `density/`, `color/`, and
-  `common/blend_modes.wgsl`: `distance_field`, the blend library, and
-  the WGSL the Rhai built-ins replaced (the reference, below)
+  `common/blend_modes.wgsl`: the blend library, and the WGSL the Rhai
+  built-ins replaced (the reference, below)
 - [src/ui/effects_panel.rs](../../src/ui/effects_panel.rs) — the Effects panel
 - [src/app/effect_fetch.rs](../../src/app/effect_fetch.rs) — fetching an
   effect a flame names and this build lacks; the catalog
@@ -117,6 +121,7 @@ Add lists and the corpus exporter (sorted by name) read it.
 | `parameters` | `ParamDef`s, in slot order |
 | `provenance` | `Builtin`, `Api { version }` or `Local` (a Rhai effect the config carries, or a plug-in) |
 | `labels` | A Rhai effect's labels as written, strings or by locale (`scripted::Labels`); `None` otherwise |
+| `passes` | A multi-pass effect's passes and buffers (`effects::passes::Passes`); `None` for one pass, `fs_main` |
 
 `EffectInfo::translated_name` reads the locale first, then the labels'
 title in the current language, then the declared `display_name`, then
@@ -131,28 +136,28 @@ download updated. `remove_by_name` removes one.
 
 **A parameter** is a `params::ParamDef`, the definition every kind
 shares ([one-parameter-system.md](../archive/projects/one-parameter-system.md)):
-name, label, hint (the control's tooltip; only `distance_field`'s
-parameters have hints today), and its kind with its default and range
+name, label, hint (the control's tooltip), and its kind with its default and range
 -- `Spec::float(0.5, 0.0, 1.0)`, `Spec::int`, `Spec::bool`,
 `Spec::angle`, `Spec::choice` (a blend mode). The Effects panel draws
 them through `ui::params`, and the API corpus spells them as before
 (`params::api_json`). A downloaded effect's unranged float is drawn
 0..1, as the panel always drew one (`params::from_api`).
 
-**Shader source.** Fifteen of the sixteen built-ins are Rhai
-(rhai-plugins.md, D1; [Effects written in Rhai](#effects-written-in-rhai)):
-`assets/effects/<name>.rhai`, embedded with `include_str!`
-(`effects::custom::BUILTIN_TWINS`) and compiled when the registry is
-first used (about 25 ms for fifteen, native; a shipped one is not
-validated again at startup, the tests do that). On the desktop the copy
-beside the app is preferred when it differs and compiles, so a built-in
-can be edited and seen after a restart without a rebuild; one that does
-not compile is logged and the shipped copy runs. Their registry entries
-hold the compiled WGSL (`EffectSource::Owned`). `distance_field` is
-WGSL, embedded (`effects::embedded_shaders`) with the same on-disk
-preference under `shaders/` (`EffectSource::Builtin { embedded, path }`).
+**Shader source.** Every built-in is Rhai (rhai-plugins.md, D1;
+[Effects written in Rhai](#effects-written-in-rhai)):
+`assets/effects/<name>.rhai`, embedded with `include_str!` and compiled
+when the registry is first used (about 25 ms for fifteen, native; a
+shipped one is not validated again at startup, the tests do that). The
+sixteen that replaced a WGSL effect are its twins
+(`effects::custom::BUILTIN_TWINS`); `bloom` and `trails` were written in
+Rhai with no WGSL behind them (`custom::RHAI_BUILTINS`, registered after
+the WGSL list). On the desktop the copy beside the app is preferred when
+it differs and compiles, so a built-in can be edited and seen after a
+restart without a rebuild; one that does not compile is logged and the
+shipped copy runs (a twin's WGSL, where it has one). Their registry
+entries hold the compiled WGSL (`EffectSource::Owned`).
 
-The WGSL the fifteen replaced stays, as **the reference**
+The WGSL the sixteen replaced stays, as **the reference**
 (`effects::wgsl_builtins`, the definitions in registration order): what
 each Rhai built-in is held to pixel for pixel. An edit to one of those
 files reaches neither the app nor the twin, and each says so in its
@@ -163,8 +168,8 @@ header. A download carries its WGSL in `EffectSource::Owned`.
 ## The shipped effects
 
 From the registry, in registration order (`register_builtin_effects`,
-over `wgsl_builtins`). The label is the curated name from
-`locales/en.yml`. All but `distance_field` run as Rhai.
+over `wgsl_builtins`, then `custom::RHAI_BUILTINS`). The label is the
+curated name from `locales/en.yml`. Every one runs as Rhai.
 
 | Name | Label | Kind | Params | What it does |
 | --- | --- | --- | --- | --- |
@@ -183,16 +188,19 @@ over `wgsl_builtins`). The label is the curated name from
 | `simplex_noise` | Simplex Noise | colour | 7 | Noise as a colour overlay, a distortion or a mask (`mode`) |
 | `worley_noise` | Worley Noise | colour | 7 | Cellular patterns: cells, edges, organic or crystal |
 | `julia` | Julia/Mandelbrot | colour | 10 | A Mandelbrot or Julia set rendered as an overlay |
-| `distance_field` | Distance Field | colour | 5 | Jump-floods the bright pixels into a distance field and shades it: glow, contour bands, or nearest-colour fill |
+| `distance_field` | Distance Field | colour | 5 | Jump-floods the bright pixels into a distance field and shades it: glow, contour bands, or nearest-colour fill (multi-pass: seed, ~log2 floods, composite) |
+| `bloom` | Bloom | colour | 8 | The bright parts glow, near and wide: a thresholded down pyramid, an up pyramid summing each level with the wider ones (multi-pass, pyramids) |
+| `trails` | Trails | colour | 2 | What moves leaves a fading afterimage (temporal: a persistent buffer) |
 
-Three density effects, thirteen colour effects, 81 parameters. The
+Three density effects, fifteen colour effects, 91 parameters. The
 counts above are what `cargo run --release --bin export_effects_json`
 emits.
 
-**Animated effects have no clock.** `plasma`, `tunnel`, `domain_warp`,
-`simplex_noise` and `worley_noise` take a `time` parameter, and
-`film_grain` a `seed`; they move when an animation track or a script
-drives that parameter.
+**The animated built-ins take their time as a parameter.** `plasma`,
+`tunnel`, `domain_warp`, `simplex_noise` and `worley_noise` take a
+`time` parameter, and `film_grain` a `seed`; they move when an animation
+track or a script drives that parameter. An effect may read the clock
+instead (`ctx.time`, [Temporal effects](#temporal-effects-the-clock)).
 
 ---
 
@@ -202,7 +210,8 @@ drives that parameter.
 runs one chain at a time:
 
 1. Compiles each enabled effect's pipeline on first use, keyed by name
-   (`ensure_effect_compiled`). The WGSL is the source with its
+   (`ensure_effect_compiled`) -- a multi-pass effect's pipelines, one a
+   pass ([below](#multi-pass-effects)). The WGSL is the source with its
    includes spliced (below). An effect the registry does not know is
    recorded with `note_missing_effect` and skipped.
 2. Allocates a ping-pong texture pair for the chain on first use:
@@ -220,20 +229,35 @@ runs one chain at a time:
 bytes apart, one per pass, so effects in one submission keep separate
 parameters. It starts at `MAX_EFFECT_SLOTS` (32) and `reserve_slots`
 grows it to the next power of two when a frame's chains need more --
-each `distance_field` alone takes its flood count plus two (13 at
-1080p). (The 33rd slot used to be clamped to an offset equal to the
-buffer's size, a validation error that rejected the whole frame.)
-`reset_slots` is called once per frame or render. A slot holds:
+a multi-pass effect takes one a pass run: `distance_field` its flood
+count plus two (13 at 1080p), `bloom` its levels twice and one. (The
+33rd slot used to be clamped to an offset equal to the buffer's size, a
+validation error that rejected the whole frame.) `reset_slots` is called
+once per frame or render. A slot holds:
 
 ```wgsl
 struct EffectParams {
     params: array<vec4<f32>, 12>,   // MAX_EFFECT_PARAMS = 48 floats
-    width: u32,
+    width: u32,                     // the grid the pass writes (the image's, for one pass)
     height: u32,
     density_mean: f32,              // density effects: the frame's mean density
     pixel_scale: f32,               // render pixels per logical viewport point
+    pass_index: u32,                // a multi-pass effect's pass run (below)
+    passes: u32,
+    step: u32,
+    level: u32,
+    levels: u32,
+    buffer_levels: u32,             // each buffer's level to read, 4 bits a buffer
+    frame: u32,                     // the clock (below): 0 for a still
+    time: f32,
+    dt: f32,
+    _pad0: f32, _pad1: f32, _pad2: f32,
 }
 ```
+
+A shader may declare only the first fields: every WGSL effect written
+before the pass and clock fields declares the first 208 bytes, and
+binds the same layout.
 
 Parameter `i` of the effect's definition goes to
 `params[i / 4][i % 4]`, so the definition's order is the shader's slot
@@ -257,9 +281,9 @@ aberration's amount and the kaleidoscope's edge offset do; the rest
 declare the slot as padding. Film grain's per-pixel hash and the Sobel
 stencil are per render pixel by nature and turn coarser at a lower scale.
 
-**The 48-parameter cap is physical.** 48 floats plus the dimensions is
-208 bytes, inside the 256-byte slot stride; a compile-time assertion
-holds the struct to it. Going much past about 60 parameters would need
+**The 48-parameter cap is physical.** 48 floats plus the dimensions,
+the pass fields and the clock is 256 bytes, the slot stride exactly; a
+compile-time assertion holds the struct to it. Going much past about 60 parameters would need
 a storage buffer, not a bigger constant. `check_download` refuses an
 effect declaring more than `MAX_EFFECT_PARAMS`, and the corpus exporter
 exits non-zero if a built-in does. The API's publish-time check must
@@ -297,29 +321,72 @@ names the modes for every `blend_mode` dropdown, held to the shader's
 The library also defines colour-space helpers (`rgb_to_hsl`,
 `hsl_to_rgb`, `luminance`, `set_luminance`, `saturation`, ...).
 
-### `distance_field`: the jump flood
+### Multi-pass effects
 
-`distance_field` registers like any colour effect -- config, panel,
-animation and scripts treat it the same -- but has no `fs_main`. The
-runner special-cases it **by name**: `compile_effects` skips it, and
-`run_color_effects` builds its resources (`ensure_jfa`) and runs
-`run_jfa` in its place:
+An effect whose `EffectInfo::passes` is set (docs/projects/multipass-effects.md)
+runs through `renderer::effect_passes`, the same in both chains: each
+pass in order, each its own fragment entry point in the effect's one
+module, each repeat its own parameter slot. A pass writes one of the
+effect's buffers or, the last, the chain's output. `distance_field`,
+`bloom` and `trails` are multi-pass; how a Rhai effect declares its
+passes is [below](#multi-pass-effects-in-rhai).
 
-1. **Seed** (`fs_seed`): pixels whose luminance is above `threshold`
-   write their own coordinate into an `Rg32Float` texture; the rest a
-   sentinel.
-2. **Flood** (`fs_flood`), `ceil(log2(max(width, height)))` passes over
-   an `Rg32Float` ping-pong, the step halving each pass, `params[0]`
-   holding the step.
-3. **Composite** (`fs_composite`): the base image shaded by the
-   distance to the nearest seed, within `spread` (a fraction of the
-   larger dimension) -- `mode` 0 glow, 1 contour bands (`band_count`),
-   2 the nearest seed's colour.
+- **Buffers** are `Rgba32Float`, any four numbers (the jump flood's
+  coordinates). A plain buffer is a ping-pong pair: a pass that reads the
+  buffer it writes reads the version before. A pyramid is one texture
+  with a mip a level, bound a level at a time.
+- **A pass over a pyramid's levels** (`repeat: "levels"`) writes every
+  level -- down, finest first; up, coarsest first -- its target read at
+  the level it came from (a zero texel at the first), every other
+  pyramid at the level being written (`buffer_levels`). A level and its
+  neighbour are distinct subresources, so writing one while reading the
+  other is legal in WebGPU.
+- **Bindings**: `0` the image, `1` the sampler, `2` the slot, then
+  buffer `k` at `3 + k`, unfilterable (every read a `textureLoad`; the
+  filtered read is bilinear by hand, the same on every vendor).
+- **The state** of each multi-pass effect in a chain -- its buffers, for
+  one effect, revision and size -- is kept by its place among the
+  enabled effects (`EffectChainRunner::multipass_states`): made again
+  when a different effect sits there or the size changes, freed when
+  none does.
 
-It takes one parameter slot a pass: the flood count plus two. The
-coordinate textures are unfilterable, so every read is a `textureLoad`.
-`distance_field_shader_validates_all_entry_points` parses and validates
-the module with naga and runs the shader lints on it.
+`distance_field`'s WGSL reference describes its own passes
+(`effects::distance_field_passes`: `fs_seed`, `fs_flood` with the step
+from the uniform, `fs_composite`), so it runs through the same runner as
+its twin. `distance_field_shader_validates_all_entry_points` parses and
+validates it with naga.
+
+### Temporal effects: the clock
+
+A buffer with `persist: true` outlives the frame. What a run does with
+it is the chain's clock (`EffectClock`, set by `set_clock`) against the
+clock the effect last ran at:
+
+| The run | Its history |
+| --- | --- |
+| The same frame again (the viewport converging, an edit while paused) | Re-reads what the last run read |
+| The next frame (`frame + 1`, the same `epoch`) | The last write becomes the history |
+| Anything else: a jump, a new `epoch` (a reset), a still | Zero |
+
+- **A still** (`EffectClock::STILL`, the default: PNG, high-res and CLI
+  exports of a config, thumbnails) has no history: `ctx.frame` is 0
+  and a persistent buffer reads zero, so a still is reproducible with no
+  timeline.
+- **A video** renders each frame with `EffectClock::video(frame, fps)`
+  on engines carried from frame to frame (`RenderEngines::effects`, the
+  chain kept beside the simulation's field and the escape renderer;
+  `RenderJob::with_effect_clock`). Without engines a frame renders as a
+  still would.
+- **The viewport** (`app::effect_timeline`): playback moves the moment
+  on a little each frame -- the next frame, `dt` the real interval --
+  and a paused view holds the history while it is edited. A seek, a
+  loop's wrap or a jump of more than half a second starts a new history,
+  and so does the Effects panel's **Reset History** (shown when a
+  temporal effect is in the chain).
+- **A frame rendered alone** in a sequence -- Python's
+  `Session::frame`, out of order -- first renders, unseen, the frames
+  the effect remembers: from `frame - INFO.warmup`, or from frame 0
+  without one (`effects::warmup_frames`, `temporal_window`).
 
 ---
 
@@ -495,11 +562,56 @@ fn effect(c, p, ctx) {
   declaration order. Not complex numbers, not function parameters.
   Labels may be by locale (design rule 8).
 - **No** `rand()` (a picture is the same every frame: hash the position
-  and a seed parameter), no `prepare`, no state.
+  and a seed parameter), no `prepare`; state only in a persistent buffer
+  (below).
 - **`INFO`**: `title`; `id` -- a UUID for one of the user's (design rule
   7: `scripted::mint_id`; the Formula Editor writes one into the file on
   Use), a built-in's name for a shipped one; `category`, `"color"`
-  (after the tone map, the default) or `"density"`.
+  (after the tone map, the default) or `"density"`; a multi-pass
+  effect's `passes`, `buffers` and `warmup` (below).
+
+### Multi-pass effects in Rhai
+
+```rhai
+const INFO = #{
+    title: "Distance Field", id: "distance_field",
+    buffers: #{ coords: #{} },
+    passes: [
+        #{ run: "seed", to: "coords" },
+        #{ run: "flood", to: "coords", repeat: "log2" },
+        #{ run: "effect" },
+    ],
+};
+fn seed(c, p, ctx) { ... }
+fn flood(c, p, ctx) { ... buffer_at("coords", x, y) ... }
+fn effect(c, p, ctx) { ... }
+```
+
+- **A pass** names a function of `effect`'s shape with `run` (`fn` is a
+  Rhai keyword, so no map key). Each compiles as its own program
+  (`lang::rhai::effect_pass`), prefixed `fx<k>_`, into the effect's one
+  module (`custom::assemble_passes`), entry point `fs_pass<k>`. `to`
+  names the buffer it writes; the last pass is `effect` and writes the
+  output, and only it may blend. At most 16 passes (`passes::MAX_PASSES`).
+- **`repeat`**: 1 to 64, `"log2"` (the covering power of two of the
+  larger side: the jump flood's count), or `"levels"` over a pyramid
+  target, with `order: "down"` (the default) or `"up"`.
+- **`buffers`**: a map of name to `#{ scale, levels, persist }`, each
+  optional (`#{}`). `scale` sizes it against the frame (more than 0, at
+  most 4); `levels` 1 to 12 makes it a pyramid; `persist` keeps it from
+  one frame to the next (not a pyramid; written by one pass, once a
+  frame). Indices follow the names' sorted order. At most 8.
+- **`warmup`**: the frames a temporal effect forgets past (`trails`
+  declares 240), for a frame rendered alone.
+- **Reads**: `buffer(name, uv)`, filtered, and `buffer_at(name, x, y)`,
+  the texel, clamped -- the name a string literal the plan declares.
+  Each reads once into a slot, as a texture's read does (`Host::BufferLoad`).
+- **The context** gains `ctx.xy` (the pixel's position in the grid the
+  pass writes, exact: WGSL's `position.xy`), `ctx.pass`, `ctx.passes`,
+  `ctx.step` (`2^(passes - 1 - pass)`), `ctx.level`, `ctx.levels`,
+  `ctx.frame`, `ctx.time` and `ctx.dt`. In a pass into a buffer,
+  `ctx.width` and `ctx.height` are that grid's size; `input_at` clamps
+  to the image's own.
 
 **Keyed by id and version.** One of the user's effects registers as
 `scripted::key(id, source)`, `u<the id's 32 hex>_<the first 8 hex of its
@@ -531,15 +643,18 @@ adding an instance is structural). The panel's Add lists leave Rhai
 effects out: each version would list once.
 *Live* re-applies it by its id.
 
-**The built-ins are Rhai** (rhai-plugins.md, D1, P2 step 7): fifteen
+**The built-ins are Rhai** (rhai-plugins.md, D1, P2 step 7): sixteen
 are `assets/effects/<name>.rhai` (`custom::BUILTIN_TWINS`, compiled by
 `custom::builtin_twin` under the built-in's name, `Provenance::Builtin`),
-each replacing its WGSL once nothing was lost; `distance_field`'s three
-passes the language cannot write. A twin that has not passed waits in
+each replacing its WGSL once nothing was lost -- `distance_field` the
+last, once the language had passes (2026-11-14; within one 8-bit step of
+its WGSL at five settings, and its renders pixel-identical to the old
+runner's). A twin that has not passed waits in
 `custom::PENDING_TWINS` (none now), its WGSL running. The checks stay
 as tests against the WGSL (`wgsl_builtins`):
-- **Pixels**: `the_rhai_twins_match_their_wgsl` (the twelve colour
-  effects, within a step of 8-bit rounding, at four settings each) and
+- **Pixels**: `the_rhai_twins_match_their_wgsl` (the thirteen colour
+  effects, within a step of 8-bit rounding, at four or five settings
+  each) and
   `the_density_twins_match_their_wgsl` (the three density ones, to a
   part in a thousand).
 - **The values a config reads**: each parameter's name, type, default,
@@ -598,7 +713,10 @@ It writes every registered effect, sorted by name: its curated
 `display_name`, category, parameters, `version` 1, and its **raw** WGSL
 with the `// INCLUDE_BLEND_MODES` marker intact (the client splices at
 compile time, so a pre-spliced copy would duplicate the library), plus
-`requires_blend_modes`. For a built-in that is Rhai the WGSL is what its
+`requires_blend_modes`, and `multi_pass` and `temporal`: a multi-pass
+effect's module has an entry point a pass and no `fs_main`, so an app
+from before multi-pass effects cannot run one, and the API serves them
+only to readers that can. For a built-in that is Rhai the WGSL is what its
 source compiles to (the catalogs stay WGSL, D2); the Rhai source itself
 is not in the corpus yet (P6). `description`, `description_plain` and `authors`
 are emitted as null. Run it whenever an effect is added or edited, and
@@ -608,12 +726,11 @@ send the result to the API repository ([RELEASE.md](../RELEASE.md) §3).
 
 ## Adding a built-in effect
 
-A new one-pass built-in is a Rhai source: write
-`assets/effects/<name>.rhai` (`INFO.id` its name, `INFO.title` its
-English label), add it to `custom::BUILTIN_TWINS`, give it a WGSL
-fallback in `wgsl_builtins` for builds without the compiler (steps 1-3
-below) and a row in the pixel compares, and do steps 4-5. One the
-language cannot write is WGSL alone:
+A new built-in is a Rhai source: write `assets/effects/<name>.rhai`
+(`INFO.id` its name, `INFO.title` its English label), append it to
+`custom::RHAI_BUILTINS`, and do steps 4-5 below; the web-safety lint and
+the label test cover it. A WGSL effect (or the reference a twin is held
+to):
 
 1. Write `shaders/effects/{density,color}/<name>.wgsl` with the
    `EffectParams` struct above, bindings 0–2, `vs_main` and `fs_main`.

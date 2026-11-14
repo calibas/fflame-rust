@@ -8,7 +8,7 @@ use wgpu::{CommandEncoderDescriptor, Device, PollType, Queue, TextureFormat};
 
 use crate::config::FractalConfig;
 use crate::renderer::compute_kernel::FlameRenderer;
-use crate::renderer::effect_chain::EffectChainRunner;
+use crate::renderer::effect_chain::{EffectChainRunner, EffectClock};
 use crate::renderer::tail::{Picture, Tail};
 
 /// Engine state a caller keeps ALIVE across renders.
@@ -38,6 +38,10 @@ pub struct RenderEngines {
     /// A simulation's terrain, beside the simulation it is made from.
     #[cfg(feature = "terrain")]
     pub sim_terrain: Option<crate::sim::terrain::SimTerrain>,
+    /// The effect chain, kept so a multi-pass effect's persistent buffers
+    /// carry from one frame to the next (docs/projects/multipass-effects.md;
+    /// the frame is the job's `effect_clock`).
+    pub effects: Option<EffectChainRunner>,
 }
 
 /// Configuration for a render job
@@ -76,6 +80,12 @@ pub struct RenderJob<'a> {
     /// scale for one rendered smaller and drawn up after
     /// (docs/archive/projects/quality-governor.md, *Exports*).
     pub pixel_scale: f32,
+
+    /// Where the picture is in an animation, for the effects that read
+    /// it and a temporal effect's history (`EffectClock`; a still by
+    /// default). A history carries over only with `engines`, whose effect
+    /// chain keeps it.
+    pub effect_clock: EffectClock,
 
     /// The frame's motion-blur moments (docs/archive/projects/motion-blur.md):
     /// the config at each moment of the shutter, averaged before the
@@ -118,6 +128,7 @@ impl<'a> RenderJob<'a> {
             premultiplied: false,
             engines: None,
             pixel_scale: 1.0,
+            effect_clock: EffectClock::STILL,
             moments: &[],
             throwaway_renderer: false,
             #[cfg(test)]
@@ -159,6 +170,14 @@ impl<'a> RenderJob<'a> {
     /// export at a render scale).
     pub fn with_pixel_scale(mut self, s: f32) -> Self {
         self.pixel_scale = if s.is_finite() && s > 0.0 { s } else { 1.0 };
+        self
+    }
+
+    /// The frame in an animation (`EffectClock`): what the effects read
+    /// as `ctx.frame`, `ctx.time` and `ctx.dt`, and where a temporal
+    /// effect's history is.
+    pub fn with_effect_clock(mut self, clock: EffectClock) -> Self {
+        self.effect_clock = clock;
         self
     }
 
@@ -462,7 +481,7 @@ pub async fn render_with(
     renderer: &mut FlameRenderer,
     device: &Device,
     queue: &Queue,
-    job: RenderJob<'_>,
+    mut job: RenderJob<'_>,
     progress: &mut dyn RenderProgress,
 ) -> Result<RenderOutput, RenderError> {
     // Callers with their own renderer (video, the gallery) come in here.
@@ -757,6 +776,7 @@ pub async fn render_with(
         density_mean,
         job.throwaway_renderer,
         None,
+        (job.engines.as_deref_mut().map(|e| &mut e.effects), job.effect_clock),
     )
     .await?;
 
@@ -858,6 +878,8 @@ async fn render_sim(
     let mut terrain_owned: Option<crate::sim::terrain::SimTerrain> = None;
     #[cfg(feature = "terrain")]
     let mut terrain_slot: Option<&mut Option<crate::sim::terrain::SimTerrain>> = None;
+    let mut effects_slot: Option<&mut Option<EffectChainRunner>> = None;
+    let effect_clock = job.effect_clock;
     let sim: &mut crate::sim::SimRenderer = match job.engines {
         Some(ref mut engines) => {
             let engines = &mut **engines;
@@ -865,6 +887,7 @@ async fn render_sim(
             {
                 terrain_slot = Some(&mut engines.sim_terrain);
             }
+            effects_slot = Some(&mut engines.effects);
             engines.sim.get_or_insert_with(make)
         }
         None => owned.insert(make()),
@@ -1027,6 +1050,7 @@ async fn render_sim(
         1.0,
         false,
         Some(oom_scope),
+        (effects_slot, effect_clock),
     )
     .await;
 
@@ -1151,8 +1175,14 @@ async fn render_escape(
     let (config, width, height, transparent) = (job.config, job.width, job.height, job.transparent);
     let mut owned: Option<crate::escape::EscapeRenderer> = None;
     let make = || crate::escape::EscapeRenderer::new(device, job.width, job.height);
+    let mut effects_slot: Option<&mut Option<EffectChainRunner>> = None;
+    let effect_clock = job.effect_clock;
     let escape_renderer: &mut crate::escape::EscapeRenderer = match job.engines {
-        Some(ref mut engines) => engines.escape.get_or_insert_with(make),
+        Some(ref mut engines) => {
+            let engines = &mut **engines;
+            effects_slot = Some(&mut engines.effects);
+            engines.escape.get_or_insert_with(make)
+        }
         None => owned.insert(make()),
     };
     // A solid path traced (heightfield plan T3c) renders display
@@ -1318,7 +1348,7 @@ async fn render_escape(
     };
     // An escape image's alpha is not a hit count: density effects read
     // it as it is.
-    let pixels = finish(renderer, device, queue, config, (width, height, transparent), None, Picture::Image(escape_view), 1.0, false, Some(oom_scope)).await;
+    let pixels = finish(renderer, device, queue, config, (width, height, transparent), None, Picture::Image(escape_view), 1.0, false, Some(oom_scope), (effects_slot, effect_clock)).await;
     // Readback completion (or the memory error found before it) proves
     // every submission finished -- the safe destroy point.
     if !caller_owned {
@@ -1370,27 +1400,40 @@ async fn finish(
     density_mean: f32,
     throwaway: bool,
     oom_scope: Option<wgpu::ErrorScopeGuard>,
+    (carried, clock): (Option<&mut Option<EffectChainRunner>>, EffectClock),
 ) -> Result<(u32, u32, Vec<u8>), RenderError> {
     let tail = Tail::new(config, density_mean);
 
-    // The effect chain only exists when an effect is actually enabled,
-    // and it is destroyed after the pixel read below. It used to be
-    // constructed unconditionally per render and never destroyed — on
-    // WebGPU that leaked its params buffer every render (drop frees
-    // nothing there; see the gallery module's docs), measured as one of
-    // the two per-render buffers growing without bound in the client.
-    let mut effect_chain = tail.has_effects().then(|| EffectChainRunner::new(device, width, height));
-    if let Some(chain) = effect_chain.as_mut() {
+    // The effect chain only exists when an effect is actually enabled.
+    // One of this render's own is destroyed after the pixel read below:
+    // it used to be constructed unconditionally per render and never
+    // destroyed -- on WebGPU that leaked its params buffer every render
+    // (drop frees nothing there; see the gallery module's docs), measured
+    // as one of the two per-render buffers growing without bound in the
+    // client. One the caller carries (`RenderEngines::effects`, a video's
+    // frames) is kept, and with it a temporal effect's history.
+    let mut own: Option<EffectChainRunner> = None;
+    let mut effect_chain: Option<&mut EffectChainRunner> = if !tail.has_effects() {
+        None
+    } else if let Some(slot) = carried {
+        let chain = slot.get_or_insert_with(|| EffectChainRunner::new(device, width, height));
+        chain.resize(device, width, height);
+        Some(chain)
+    } else {
+        Some(own.insert(EffectChainRunner::new(device, width, height)))
+    };
+    if let Some(chain) = effect_chain.as_deref_mut() {
         // Reset effect slot counter (allows multiple effects with unique
         // params in same submit).
         chain.reset_slots();
         chain.set_pixel_scale(renderer.pixel_scale());
+        chain.set_clock(clock);
     }
 
     let mut encoder = encoder.unwrap_or_else(|| {
         device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Tail") })
     });
-    tail.tone_map(renderer, device, queue, &mut encoder, effect_chain.as_mut(), picture);
+    tail.tone_map(renderer, device, queue, &mut encoder, effect_chain.as_deref_mut(), picture);
     queue.submit(std::iter::once(encoder.finish()));
 
     // A throwaway renderer's iteration buffers -- several gigabytes at 8K
@@ -1413,7 +1456,7 @@ async fn finish(
         let mut color_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Color Effects"),
         });
-        let ran = tail.color(renderer, device, queue, &mut color_encoder, effect_chain.as_mut());
+        let ran = tail.color(renderer, device, queue, &mut color_encoder, effect_chain.as_deref_mut());
         queue.submit(std::iter::once(color_encoder.finish()));
         ran
     } else {
@@ -1426,7 +1469,7 @@ async fn finish(
     // passes included.
     if let Some(scope) = oom_scope {
         if let Some(err) = scope.pop().await {
-            if let Some(chain) = &effect_chain {
+            if let Some(chain) = &own {
                 chain.destroy();
             }
             return Err(RenderError::OutOfMemory(err.to_string()));
@@ -1435,7 +1478,7 @@ async fn finish(
 
     let pixels = if color_effects_ran {
         effect_chain
-            .as_ref()
+            .as_deref()
             .expect("color_effects_ran implies a chain")
             .read_color_output_pixels(device, queue)
             .await
@@ -1452,8 +1495,8 @@ async fn finish(
     // The completed readback proves every submission that used the
     // chain has finished, so this is the safe point to destroy it —
     // on the error path too, where nothing was read but nothing is
-    // owed either.
-    if let Some(chain) = &effect_chain {
+    // owed either. A carried one stays for the next frame.
+    if let Some(chain) = &own {
         chain.destroy();
     }
     pixels
@@ -1542,8 +1585,14 @@ async fn render_escape_terrain(
     // The still sizes the renderer itself: to the frame, or to its tiles.
     let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(job.width, job.height);
     let make = || EscapeTerrain::new(device, tile_w, tile_h);
+    let mut effects_slot: Option<&mut Option<EffectChainRunner>> = None;
+    let effect_clock = job.effect_clock;
     let terrain: &mut EscapeTerrain = match job.engines {
-        Some(ref mut engines) => engines.terrain.get_or_insert_with(make),
+        Some(ref mut engines) => {
+            let engines = &mut **engines;
+            effects_slot = Some(&mut engines.effects);
+            engines.terrain.get_or_insert_with(make)
+        }
         None => owned.insert(make()),
     };
     let config = job.config;
@@ -1630,7 +1679,7 @@ async fn render_escape_terrain(
         Some(v) if separate => v,
         _ => terrain.output_view(),
     };
-    let pixels = finish(renderer, device, queue, config, (job_w, job_h, transparent), None, Picture::Image(picture), 1.0, false, Some(oom_scope)).await;
+    let pixels = finish(renderer, device, queue, config, (job_w, job_h, transparent), None, Picture::Image(picture), 1.0, false, Some(oom_scope), (effects_slot, effect_clock)).await;
     if !caller_owned {
         terrain.destroy();
     }
@@ -1708,6 +1757,43 @@ mod motion_tests {
     fn draw(device: &Device, queue: &Queue, config: &FractalConfig, moments: &[FractalConfig]) -> Vec<u8> {
         let job = RenderJob::new(config, W, H).with_moments(moments);
         pollster::block_on(render(device, queue, job, &mut NoProgress)).expect("render").rgba_data
+    }
+
+    /// A temporal effect through `render_with` as the video export renders
+    /// (docs/projects/multipass-effects.md): with the engines carried and
+    /// each frame's clock, a frame darker than the one before keeps the
+    /// last one's trail; the same frame rendered as a still, or without
+    /// the engines, has none.
+    #[test]
+    fn a_videos_frames_carry_a_temporal_effects_history() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut bright = view("-0.7436447860");
+        bright.color_effects.push(crate::effects::EffectInstance::new("trails"));
+        let mut dark = bright.clone();
+        dark.exposure = 0.25;
+        let mut renderer = FlameRenderer::for_job(&device, &queue, TextureFormat::Rgba8Unorm, W, H, &bright);
+        let mut engines = RenderEngines::default();
+        let mut frame = |config: &FractalConfig, engines: Option<&mut RenderEngines>, clock: EffectClock| {
+            let mut job = RenderJob::new(config, W, H).with_effect_clock(clock);
+            if let Some(e) = engines {
+                job = job.with_engines(e);
+            }
+            pollster::block_on(render_with(&mut renderer, &device, &queue, job, &mut NoProgress)).expect("render").rgba_data
+        };
+        // The colour alone: alpha is 255 everywhere.
+        let sum = |px: &[u8]| px.chunks(4).map(|p| p[..3].iter().map(|&v| v as u64).sum::<u64>()).sum::<u64>();
+        frame(&bright, Some(&mut engines), EffectClock::video(0, 30));
+        let carried = frame(&dark, Some(&mut engines), EffectClock::video(1, 30));
+        let still = frame(&dark, None, EffectClock::STILL);
+        let unkept = frame(&dark, None, EffectClock::video(1, 30));
+        assert!(sum(&carried) > sum(&still) * 3 / 2, "the trail of the bright frame: {} against {}", sum(&carried), sum(&still));
+        assert_eq!(still, unkept, "without the engines a frame has no history");
+        if let Some(chain) = engines.effects.take() {
+            chain.destroy();
+        }
     }
 
     /// Moments that are all the frame blur it into itself.

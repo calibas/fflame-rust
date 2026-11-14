@@ -26,6 +26,63 @@ pub fn ensure_custom(config: &crate::config::FractalConfig) {
     custom::ensure(config);
 }
 
+/// How far back the temporal effects `config` runs remember
+/// (docs/projects/multipass-effects.md, T4): `None` when it runs none;
+/// `Some(Some(k))` when every one forgets past `k` frames (`INFO.warmup`,
+/// the largest); `Some(None)` when one remembers from the start.
+pub fn temporal_window(config: &crate::config::FractalConfig) -> Option<Option<u32>> {
+    let registry = global_effect_registry();
+    let mut window: Option<Option<u32>> = None;
+    for e in config.density_effects.iter().chain(&config.color_effects).filter(|e| e.enabled) {
+        let Some(plan) = registry.get(&e.effect_type).and_then(|i| i.passes.clone()).filter(|p| p.temporal()) else { continue };
+        window = Some(match (window, plan.warmup) {
+            (Some(None), _) | (_, None) => None,
+            (Some(Some(a)), Some(b)) => Some(a.max(b)),
+            (None, Some(b)) => Some(b),
+        });
+    }
+    window
+}
+
+/// The frames of an animation to render, unseen, before rendering `frame`
+/// alone -- out of order, after `last` -- so a temporal effect's history
+/// is what a run from the start would have left (T4): none when the
+/// config runs no temporal effect or `frame` follows or repeats `last`;
+/// else from `frame - warmup`, or from 0. Each at its own clock
+/// (`EffectClock::video`), on the engines the frame renders with.
+pub fn warmup_frames(config: &crate::config::FractalConfig, last: Option<u64>, frame: u64) -> std::ops::Range<u64> {
+    let Some(window) = temporal_window(config) else { return frame..frame };
+    if last.is_some_and(|l| l == frame || l + 1 == frame) {
+        return frame..frame;
+    }
+    let start = match window {
+        Some(k) => frame.saturating_sub(k as u64),
+        None => 0,
+    };
+    start..frame
+}
+
+#[cfg(test)]
+mod temporal_tests {
+    use super::*;
+
+    #[test]
+    fn a_frame_alone_warms_up_over_what_a_temporal_effect_remembers() {
+        let mut config = crate::config::FractalConfig::default();
+        assert_eq!(warmup_frames(&config, None, 500), 500..500, "no effects: nothing to warm");
+        config.color_effects.push(EffectInstance::new("bloom"));
+        assert_eq!(temporal_window(&config), None, "bloom remembers nothing");
+        config.color_effects.push(EffectInstance::new("trails"));
+        assert_eq!(temporal_window(&config), Some(Some(240)));
+        assert_eq!(warmup_frames(&config, None, 500), 260..500, "out of order: its window");
+        assert_eq!(warmup_frames(&config, Some(30), 100), 0..100, "within the window of the start");
+        assert_eq!(warmup_frames(&config, Some(499), 500), 500..500, "the next frame: carried on");
+        assert_eq!(warmup_frames(&config, Some(500), 500), 500..500, "the same again");
+        config.color_effects[1].enabled = false;
+        assert_eq!(warmup_frames(&config, None, 500), 500..500, "a disabled one does not count");
+    }
+}
+
 /// The blend modes a colour effect's `blend_mode` picks, in the order
 /// `apply_blend` (shaders/effects/common/blend_modes.wgsl) numbers them.
 pub const BLEND_MODE_NAMES: &[&str] = &[

@@ -299,12 +299,23 @@ pub fn render_effects_panel(
     open_formula_editor: &mut bool,
     effect_update_requested: &mut Vec<String>,
     clear_effect_cache_requested: &mut bool,
+    reset_effect_history: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
     // Edit as Rhai: (density, index, the built-in).
     let mut edit_as_rhai: Option<(bool, usize, String)> = None;
 
     ui.heading("Post-Processing Effects");
+    // A temporal effect remembers earlier frames (docs/projects/
+    // multipass-effects.md): its history held while paused, reset here.
+    if crate::effects::temporal_window(config_manager.active_config()).is_some()
+        && ui
+            .small_button(t!("effects_panel.reset_history"))
+            .on_hover_text(t!("effects_panel.reset_history_tip"))
+            .clicked()
+    {
+        *reset_effect_history = true;
+    }
     ui.add_space(8.0);
 
     // Color Effects section

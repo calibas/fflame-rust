@@ -14,6 +14,13 @@
 //! texture at the first), every other pyramid at the level it writes. A
 //! level and its neighbour are distinct subresources, so writing one while
 //! reading the other is legal in WebGPU.
+//!
+//! A persistent buffer outlives the frame. What a run does with it is the
+//! clock's ([`super::effect_chain::EffectClock`]) against the clock the
+//! state last ran at: the same frame again -- the viewport converging,
+//! an edit while paused -- re-reads the history it read before; the next
+//! frame makes the last write the history; anything else -- a seek, a
+//! rewind, a loop's wrap, a Reset, a still -- starts from zero.
 
 use std::sync::Arc;
 
@@ -25,7 +32,7 @@ use wgpu::{
     TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension, VertexState,
 };
 
-use super::effect_chain::EffectParams;
+use super::effect_chain::{EffectClock, EffectParams};
 use crate::effects::passes::{Order, Passes, Repeat};
 
 /// A buffer's texel format: four f32s, any numbers (a jump flood's
@@ -104,8 +111,10 @@ impl Compiled {
 
 /// One buffer's textures.
 enum Buf {
-    /// A ping-pong pair; `current` the version a read sees.
-    Plain { textures: [Texture; 2], views: [TextureView; 2], current: usize, size: (u32, u32) },
+    /// A ping-pong pair; `current` the version a read sees. A persistent
+    /// one's `held` is the version the last frame left, which a run of the
+    /// same frame again reads.
+    Plain { textures: [Texture; 2], views: [TextureView; 2], current: usize, size: (u32, u32), persist: bool, held: usize },
     /// One texture with a mip a level: a view of each level, and of all.
     Pyramid { texture: Texture, all: TextureView, levels: Vec<TextureView>, sizes: Vec<(u32, u32)> },
 }
@@ -129,6 +138,30 @@ pub(super) struct State {
     /// One zero texel: what a pyramid pass reads of its target where there
     /// is no level to come from.
     zero: (Texture, TextureView),
+    /// The clock's epoch and frame at the last run, `None` before one (or
+    /// after a still): what tells a run of the same frame from the next.
+    last: Option<(u64, u64)>,
+}
+
+/// What a run does with the persistent buffers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Tick {
+    /// The same frame again: read the history the last run read.
+    Repeat,
+    /// The next frame: the last write is the history.
+    Advance,
+    /// No history: zero.
+    Fresh,
+}
+
+/// What a run at `clock` does, after one at `last`.
+pub(super) fn tick(last: Option<(u64, u64)>, clock: &EffectClock) -> Tick {
+    match last {
+        _ if clock.still => Tick::Fresh,
+        Some((e, f)) if e == clock.epoch && f == clock.frame => Tick::Repeat,
+        Some((e, f)) if e == clock.epoch && clock.frame == f + 1 => Tick::Advance,
+        _ => Tick::Fresh,
+    }
 }
 
 impl State {
@@ -164,13 +197,34 @@ impl State {
                     let a = texture(&format!("{name} {} A", b.name), size, 1);
                     let bb = texture(&format!("{name} {} B", b.name), size, 1);
                     let views = [a.create_view(&TextureViewDescriptor::default()), bb.create_view(&TextureViewDescriptor::default())];
-                    Buf::Plain { textures: [a, bb], views, current: 0, size }
+                    Buf::Plain { textures: [a, bb], views, current: 0, size, persist: b.persist, held: 0 }
                 }
             })
             .collect();
         let zero = texture(&format!("{name} zero"), (1, 1), 1);
         let zero_view = zero.create_view(&TextureViewDescriptor::default());
-        Self { name: name.to_string(), revision: compiled.revision, size: (w, h), buffers, zero: (zero, zero_view) }
+        Self { name: name.to_string(), revision: compiled.revision, size: (w, h), buffers, zero: (zero, zero_view), last: None }
+    }
+
+    /// Move the persistent buffers to `clock`'s frame (the module's docs):
+    /// the version to read chosen, or both versions cleared to zero.
+    fn tick(&mut self, encoder: &mut CommandEncoder, clock: &EffectClock) {
+        let t = tick(self.last, clock);
+        for b in &mut self.buffers {
+            let Buf::Plain { views, current, persist: true, held, .. } = b else { continue };
+            match t {
+                Tick::Repeat => *current = *held,
+                Tick::Advance => *held = *current,
+                Tick::Fresh => {
+                    for v in views.iter() {
+                        clear(encoder, v);
+                    }
+                    *current = 0;
+                    *held = 0;
+                }
+            }
+        }
+        self.last = (!clock.still).then_some((clock.epoch, clock.frame));
     }
 
     /// Whether it holds buffers for this effect, revision and size.
@@ -197,8 +251,29 @@ pub(super) struct Inputs<'a> {
     pub base: EffectParams,
 }
 
-/// Run every pass of `compiled` on `inputs.input` into `inputs.output`.
-pub(super) fn run(device: &Device, queue: &Queue, encoder: &mut CommandEncoder, compiled: &Compiled, state: &mut State, inputs: &Inputs<'_>) {
+/// A texture cleared to zero: a render pass that only clears.
+fn clear(encoder: &mut CommandEncoder, view: &TextureView) {
+    encoder.begin_render_pass(&RenderPassDescriptor {
+        label: Some("effect buffer clear"),
+        color_attachments: &[Some(RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            ops: Operations { load: LoadOp::Clear(Color::TRANSPARENT), store: StoreOp::Store },
+            depth_slice: None,
+        })],
+        depth_stencil_attachment: None,
+        occlusion_query_set: None,
+        timestamp_writes: None,
+        multiview_mask: None,
+    });
+}
+
+/// Run every pass of `compiled` on `inputs.input` into `inputs.output`, at
+/// `clock`'s frame.
+pub(super) fn run(device: &Device, queue: &Queue, encoder: &mut CommandEncoder, compiled: &Compiled, state: &mut State, inputs: &Inputs<'_>, clock: &EffectClock) {
+    if compiled.plan.temporal() {
+        state.tick(encoder, clock);
+    }
     let plan = &compiled.plan;
     let (w, h) = state.size;
     let total = plan.runs(w, h);

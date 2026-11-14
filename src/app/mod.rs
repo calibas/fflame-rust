@@ -10,6 +10,7 @@ mod variation_fetch;
 mod texture_sync;
 mod aa_governor;
 mod motion_blur;
+mod effect_timeline;
 mod frame_log;
 mod governor;
 mod render_scale;
@@ -686,6 +687,9 @@ pub struct App {
 
     // Post-processing effect chain
     pub(super) effect_chain: crate::renderer::effect_chain::EffectChainRunner,
+    /// Where the shown picture is in the animation, for the effects
+    /// (`effect_timeline`; docs/projects/multipass-effects.md).
+    pub(super) effect_timeline: effect_timeline::EffectTimeline,
 
     // Fullscreen state (two-stage: window fullscreen, then hide UI)
     pub(super) window_fullscreen: bool,  // Window is in fullscreen mode
@@ -1012,6 +1016,7 @@ impl App {
             #[cfg(target_arch = "wasm32")]
             histogram_in_flight: false,
             effect_chain,
+            effect_timeline: Default::default(),
             needs_surface_recreate: false,
             // Whatever the config manager starts at, so a boot does
             // not fight the layout the user left the app in.
@@ -3638,6 +3643,10 @@ impl App {
 
             // Reset effect slot counter for this frame (allows multiple effects with unique params)
             self.effect_chain.reset_slots();
+            // The moment shown, for the effects that read the time and a
+            // temporal effect's history (T1-T2).
+            let clock = self.effect_timeline.tick(self.animation_controller.is_playing(), self.animation_controller.current_time);
+            self.effect_chain.set_clock(clock);
 
             // Solid brightness renormalization: measure the accepted
             // density every few frames while occlusion culls (async, EMA-

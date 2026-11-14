@@ -1609,6 +1609,7 @@ impl EguiLayer {
         let mut variation_update_requested: Vec<String> = Vec::new();
         let mut effect_update_requested: Vec<String> = Vec::new();
         let mut clear_effect_cache_requested = false;
+        let mut reset_effect_history = false;
         let mut script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest> = None;
 
         // The Paths panel's solo button, held this frame, and a path it
@@ -2017,6 +2018,7 @@ impl EguiLayer {
                         variation_update_requested: &mut variation_update_requested,
                         effect_update_requested: &mut effect_update_requested,
                         clear_effect_cache_requested: &mut clear_effect_cache_requested,
+                        reset_effect_history: &mut reset_effect_history,
                         script_cloud,
                         effect_catalog,
                         script_cloud_request: &mut script_cloud_request,
@@ -2709,6 +2711,7 @@ impl EguiLayer {
             variation_update_requested,
             effect_update_requested,
             clear_effect_cache_requested,
+            reset_effect_history,
             script_cloud_request,
         }
     }

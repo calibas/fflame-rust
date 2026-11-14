@@ -69,6 +69,11 @@ impl App {
     /// catalog, as the variations' does; a flame using one fetches it
     /// again.
     pub(super) fn handle_clear_effect_cache(&mut self, ui_response: &crate::ui::UiResponse) {
+        // The Effects panel's Reset: a temporal effect's history starts
+        // over at the next frame.
+        if ui_response.reset_effect_history {
+            self.effect_timeline.reset();
+        }
         if !ui_response.clear_effect_cache_requested {
             return;
         }

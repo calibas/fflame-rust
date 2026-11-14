@@ -154,6 +154,49 @@ const UNIFORM_BUFFER_OFFSET_ALIGNMENT: u64 = 256;
 /// read the accumulation itself.
 const DENSITY_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
 
+/// Where a picture is in an animation, for the effects that read it
+/// (`ctx.frame`, `ctx.time`, `ctx.dt`) and for a multi-pass effect's
+/// persistent buffers (docs/projects/multipass-effects.md, T1-T4;
+/// `renderer::effect_passes`).
+///
+/// A still -- the default -- has no history: frame 0, a persistent
+/// buffer zero. A frame of a sequence is `epoch` and `frame`: a run at the
+/// frame after the last carries the history on, one at the same frame
+/// re-reads it, any other starts a new history. A new `epoch` is a reset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectClock {
+    pub still: bool,
+    pub epoch: u64,
+    pub frame: u64,
+    /// The animation's time, seconds.
+    pub time: f32,
+    /// Seconds since the frame before: `1 / fps` in a video, the real
+    /// interval in the viewport's playback, 0 for a still.
+    pub dt: f32,
+}
+
+impl EffectClock {
+    pub const STILL: Self = Self { still: true, epoch: 0, frame: 0, time: 0.0, dt: 0.0 };
+
+    /// Frame `frame` of the sequence `epoch`, at `time`, `dt` after the
+    /// one before.
+    pub fn frame(epoch: u64, frame: u64, time: f32, dt: f32) -> Self {
+        Self { still: false, epoch, frame, time, dt }
+    }
+
+    /// Frame `frame` of a video at `fps`: one sequence, frames in order.
+    pub fn video(frame: u64, fps: u32) -> Self {
+        let fps = fps.max(1) as f32;
+        Self::frame(0, frame, frame as f32 / fps, 1.0 / fps)
+    }
+}
+
+impl Default for EffectClock {
+    fn default() -> Self {
+        Self::STILL
+    }
+}
+
 /// GPU uniform buffer for effect parameters
 ///
 /// `[[f32; 4]; 12]` to match WGSL `array<vec4<f32>, 12>` — vec4 groups
@@ -213,6 +256,14 @@ impl EffectParams {
     /// frame sets them.
     fn new(width: u32, height: u32, density_mean: f32, pixel_scale: f32) -> Self {
         Self { width, height, density_mean, pixel_scale, passes: 1, levels: 1, ..bytemuck::Zeroable::zeroed() }
+    }
+
+    /// The frame's fields from `clock`.
+    fn with_clock(mut self, clock: &EffectClock) -> Self {
+        self.frame = if clock.still { 0 } else { clock.frame.min(u32::MAX as u64) as u32 };
+        self.time = clock.time;
+        self.dt = clock.dt;
+        self
     }
 
     /// `effect`'s parameters by `name`'s registered definitions, packed
@@ -369,6 +420,8 @@ pub struct EffectChainRunner {
     /// Render pixels per logical viewport point (`set_pixel_scale`): the
     /// viewport's render scale. 1 for the exporters.
     pixel_scale: f32,
+    /// The frame the chain runs at (`set_clock`): a still until told.
+    clock: EffectClock,
 }
 
 impl EffectChainRunner {
@@ -399,6 +452,7 @@ impl EffectChainRunner {
             multipass: HashMap::new(),
             multipass_states: HashMap::new(),
             pixel_scale: 1.0,
+            clock: EffectClock::STILL,
         }
     }
 
@@ -470,6 +524,11 @@ impl EffectChainRunner {
     /// pixels are measured in (`EffectParams::pixel_scale`).
     pub fn set_pixel_scale(&mut self, s: f32) {
         self.pixel_scale = if s.is_finite() && s > 0.0 { s } else { 1.0 };
+    }
+
+    /// The frame the next runs are at ([`EffectClock`]).
+    pub fn set_clock(&mut self, clock: EffectClock) {
+        self.clock = clock;
     }
 
     pub fn resize(&mut self, _device: &Device, width: u32, height: u32) {
@@ -733,9 +792,9 @@ impl EffectChainRunner {
                         sampler: &self.sampler,
                         params_buffer: &self.params_buffer,
                         slots: &slot_offsets[i],
-                        base: EffectParams::new(width, height, density_mean, self.pixel_scale).with_parameters(&effect.effect_type, effect),
+                        base: EffectParams::new(width, height, density_mean, self.pixel_scale).with_clock(&self.clock).with_parameters(&effect.effect_type, effect),
                     };
-                    super::effect_passes::run(device, queue, encoder, compiled, state, &inputs);
+                    super::effect_passes::run(device, queue, encoder, compiled, state, &inputs, &self.clock);
                     textures.swap();
                     continue;
                 }
@@ -756,6 +815,7 @@ impl EffectChainRunner {
                     height,
                     density_mean,
                     self.pixel_scale,
+                    &self.clock,
                 );
 
                 // Swap ping-pong textures for next effect
@@ -865,9 +925,9 @@ impl EffectChainRunner {
                         sampler: &self.sampler,
                         params_buffer: &self.params_buffer,
                         slots: &slot_offsets[i],
-                        base: EffectParams::new(width, height, 0.0, self.pixel_scale).with_parameters(&effect.effect_type, effect),
+                        base: EffectParams::new(width, height, 0.0, self.pixel_scale).with_clock(&self.clock).with_parameters(&effect.effect_type, effect),
                     };
-                    super::effect_passes::run(device, queue, encoder, compiled, state, &inputs);
+                    super::effect_passes::run(device, queue, encoder, compiled, state, &inputs, &self.clock);
                     textures.swap();
                     continue;
                 }
@@ -888,6 +948,7 @@ impl EffectChainRunner {
                     height,
                     0.0, // colour effects have no density
                     self.pixel_scale,
+                    &self.clock,
                 );
 
                 // Swap ping-pong textures for next effect
@@ -958,6 +1019,7 @@ impl EffectChainRunner {
         height: u32,
         density_mean: f32,
         pixel_scale: f32,
+        clock: &EffectClock,
     ) {
         let compiled = match compiled_effects.get(effect_name) {
             Some(c) => c,
@@ -969,7 +1031,7 @@ impl EffectChainRunner {
         log::debug!("Executing effect: {} ({}x{}) at slot offset {}", effect_name, width, height, buffer_offset);
 
         // Update params buffer at the allocated slot offset
-        let params = EffectParams::new(width, height, density_mean, pixel_scale).with_parameters(effect_name, effect);
+        let params = EffectParams::new(width, height, density_mean, pixel_scale).with_clock(clock).with_parameters(effect_name, effect);
 
         // Write to this effect's slot in the shared buffer
         queue.write_buffer(params_buffer, buffer_offset, bytemuck::bytes_of(&params));
@@ -1583,6 +1645,106 @@ fn effect(c, p, ctx) { buffer("q", ctx.uv) }
         for px in out.chunks(4) {
             assert!(px.iter().zip(want).all(|(&a, b)| near(a, b)), "{px:?}, want {want:?} (x 255)");
         }
+    }
+
+    /// A persistent buffer (docs/projects/multipass-effects.md, T1-T3) on
+    /// one chain run at a sequence of clocks: the next frame carries the
+    /// history on, the same frame again re-reads it, a jump or a new epoch
+    /// starts over, a still has none; `ctx.frame`, `ctx.time`, `ctx.dt`
+    /// are the clock's.
+    #[test]
+    fn a_persistent_buffer_follows_the_clock() {
+        let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const W: u32 = 8;
+        const H: u32 = 4;
+        let (_input, view) = filled(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &[0, 0, 0, 255]);
+        let src = r#"
+const INFO = #{
+    id: "7b4e0c3d-6e5f-4c8a-9d0b-4e3f2a1b6c7d",
+    buffers: #{ acc: #{ persist: true } },
+    passes: [#{ run: "keep", to: "acc" }, #{ run: "effect" }],
+};
+// Each frame adds 0.1 to what the last left.
+fn keep(c, p, ctx) { buffer("acc", ctx.uv) + rgba(0.1, 0.0, 0.0, 0.0) }
+fn effect(c, p, ctx) {
+    let a = buffer("acc", ctx.uv);
+    rgba(a.r, to_float(ctx.frame) * 0.1, ctx.time, ctx.dt)
+}
+"#;
+        let name = crate::effects::custom::register(src, crate::provenance::Provenance::Local).unwrap_or_else(|e| panic!("{e}"));
+        let effects = [EffectInstance::new(&name)];
+        let mut chain = EffectChainRunner::new(&device, W, H);
+        let mut run = |clock: EffectClock| -> [u8; 4] {
+            chain.set_clock(clock);
+            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("temporal") });
+            chain.reset_slots();
+            assert!(chain.run_color_effects(&device, &queue, &mut encoder, &view, &effects));
+            queue.submit(Some(encoder.finish()));
+            assert!(pollster::block_on(scope.pop()).is_none(), "validation");
+            let px = pollster::block_on(chain.read_color_output_pixels(&device, &queue)).expect("read").2;
+            [px[0], px[1], px[2], px[3]]
+        };
+        let r = |v: f32| (v * 255.0).round() as u8;
+        let near = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 1;
+        let mut check = |clock: EffectClock, acc: f32, what: &str| {
+            let px = run(clock);
+            let want = [r(acc), r(if clock.still { 0.0 } else { clock.frame as f32 * 0.1 }), r(clock.time), r(clock.dt)];
+            assert!(px.iter().zip(want).all(|(a, b)| near(*a, b)), "{what}: {px:?}, want {want:?}");
+        };
+        check(EffectClock::frame(0, 0, 0.0, 0.0), 0.1, "the first frame");
+        check(EffectClock::frame(0, 0, 0.0, 0.0), 0.1, "the first frame again");
+        check(EffectClock::frame(0, 1, 0.25, 0.25), 0.2, "the next");
+        check(EffectClock::frame(0, 2, 0.5, 0.25), 0.3, "the next");
+        check(EffectClock::frame(0, 2, 0.5, 0.25), 0.3, "the same again");
+        check(EffectClock::frame(0, 3, 0.75, 0.25), 0.4, "on from the same");
+        check(EffectClock::frame(0, 6, 0.5, 0.25), 0.1, "a jump starts over");
+        check(EffectClock::frame(0, 7, 0.75, 0.25), 0.2, "and carries on");
+        check(EffectClock::frame(1, 8, 0.75, 0.25), 0.1, "a new epoch starts over");
+        check(EffectClock::STILL, 0.1, "a still has no history");
+        check(EffectClock::STILL, 0.1, "nor the next still");
+        chain.destroy();
+        crate::effects::global_effect_registry_mut().remove_by_name(&name);
+    }
+
+    /// The built-in Trails (a temporal effect), frame by frame in a video:
+    /// where the picture was bright and is now dark, the trail fades by
+    /// the persistence each thirtieth of a second; a still has none.
+    #[test]
+    fn trails_fade_frame_by_frame() {
+        let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const W: u32 = 8;
+        const H: u32 = 4;
+        let (_white, white) = filled(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &[255, 255, 255, 255]);
+        let (_black, black) = filled(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &[0, 0, 0, 255]);
+        let effects = [EffectInstance::new("trails")];
+        let mut chain = EffectChainRunner::new(&device, W, H);
+        let mut run = |clock: EffectClock, view: &TextureView| -> u8 {
+            chain.set_clock(clock);
+            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("trails") });
+            chain.reset_slots();
+            assert!(chain.run_color_effects(&device, &queue, &mut encoder, view, &effects));
+            queue.submit(Some(encoder.finish()));
+            pollster::block_on(chain.read_color_output_pixels(&device, &queue)).expect("read").2[0]
+        };
+        // At 30 frames a second, each frame fades the trail by 0.85.
+        assert_eq!(run(EffectClock::video(0, 30), &white), 255, "a bright frame");
+        let one = run(EffectClock::video(1, 30), &black);
+        let two = run(EffectClock::video(2, 30), &black);
+        assert!((one as f32 - 255.0 * 0.85).abs() <= 2.0, "one frame on: {one}");
+        assert!((two as f32 - 255.0 * 0.85 * 0.85).abs() <= 2.0, "two: {two}");
+        // At 60, half a thirtieth: the square root of the fade a frame.
+        run(EffectClock::frame(5, 0, 0.0, 0.0), &white);
+        let half = run(EffectClock::frame(5, 1, 1.0 / 60.0, 1.0 / 60.0), &black);
+        assert!((half as f32 - 255.0 * 0.85f32.sqrt()).abs() <= 2.0, "at 60 a second: {half}");
+        assert_eq!(run(EffectClock::STILL, &black), 0, "a still has no trail");
+        chain.destroy();
     }
 
     /// The built-in bloom (a pyramid effect): a white square on black

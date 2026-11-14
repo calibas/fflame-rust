@@ -199,10 +199,12 @@ append-only list and looked up by name. The shader for a frame is
 assembled from the entries it uses.
 
 More and more of the built-ins are Rhai in the GPU dialect
-([Scripting](#scripting)). The one-pass built-in effects are their Rhai
-sources (`assets/effects/*.rhai`, `effects::custom::BUILTIN_TWINS`),
-with the WGSL kept as the reference they are tested against
-(`effects::wgsl_builtins`; `distance_field` stays WGSL). Every
+([Scripting](#scripting)). Every built-in effect is its Rhai source
+(`assets/effects/*.rhai`: the twins in `effects::custom::BUILTIN_TWINS`,
+with the WGSL kept as the reference they are tested against,
+`effects::wgsl_builtins`; `bloom` and `trails` in `RHAI_BUILTINS`, Rhai
+alone). Effects may have passes, buffers, pyramids and a persistent
+history (`renderer::effect_passes`; [EFFECTS.md](main/EFFECTS.md)). Every
 simulation model and colouring (`assets/sim/`) and every escape formula
 (`assets/formulas/twins/`) has a Rhai twin held to its built-in by
 tests, which Edit as Rhai or Edit as Formula puts in the built-in's

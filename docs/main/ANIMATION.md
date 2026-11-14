@@ -473,6 +473,30 @@ Rendering, and a subflame viewed in isolation, are not blurred.
 
 ---
 
+## Temporal effects
+
+An effect may remember earlier frames: a persistent buffer, as the
+built-in **Trails** keeps its fading afterimage
+([EFFECTS.md](EFFECTS.md#temporal-effects-the-clock); the plan,
+[multipass-effects.md](../projects/multipass-effects.md)). History is
+counted in timeline frames, never in redraws of one:
+
+- **Video export**: each frame at its clock (`EffectClock::video`), on
+  the engines the export carries from frame to frame, so frame `n`
+  remembers frames `0..n`. Motion blur's moments are within a frame: the
+  tail, and the effect, run once on their average.
+- **In the app**: playback carries the history on, a frame a display
+  frame, `ctx.dt` the real interval (so an effect that fades by `dt`
+  looks the same at any frame rate). Paused, the history is held, and an
+  edit re-renders against it. A seek, a loop's wrap or the Effects
+  panel's Reset History starts it over.
+- **A still** has none: a PNG or high-res export of a moment shows the
+  picture as it is.
+- **A frame rendered alone** (Python's animation sessions, out of order)
+  warms up first over the frames the effect remembers (`INFO.warmup`).
+
+---
+
 ## The panels
 
 ### Animation panel

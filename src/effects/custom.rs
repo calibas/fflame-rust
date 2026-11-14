@@ -299,6 +299,8 @@ pub fn all_twins() -> impl Iterator<Item = &'static (&'static str, &'static str)
 pub const RHAI_BUILTINS: &[(&str, &str)] = &[
     // A multi-pass effect over pyramids (docs/projects/multipass-effects.md).
     ("bloom", include_str!("../../assets/effects/bloom.rhai")),
+    // A temporal effect: a persistent buffer.
+    ("trails", include_str!("../../assets/effects/trails.rhai")),
 ];
 
 /// Every built-in whose source is Rhai: the twins and [`RHAI_BUILTINS`] --

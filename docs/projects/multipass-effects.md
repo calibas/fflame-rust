@@ -155,13 +155,34 @@ Decisions taken as recommended (the user may amend before phase 4):
    chosen from renders (threshold 0.45, intensity 1.5, spread 0.7).
    Tests: `a_pyramid_pass_writes_and_reads_its_levels` (exact values),
    `bloom_glows_past_the_bright_parts_alone`.
-4. **Temporal.** Persist buffers, the clock (T1-T4), `ctx.frame`/
-   `time`/`dt`, warm-up; a built-in temporal effect (trails) as the
-   test case; the viewport's Reset.
-5. **Docs and the API.** EFFECTS.md (the dialect, the passes, the
-   clock), ANIMATION.md, the engine contract/catalog if they move, the
-   effects corpus; the API repository told that an effect source may
-   declare passes.
+4. **Temporal.** DONE 2026-11-14. `EffectClock` (still, or epoch and
+   frame, with time and dt) set on the chain; each multi-pass effect's
+   state remembers the clock it last ran at, so one rule gives T1-T3:
+   the same frame re-reads its history, the next carries it on,
+   anything else (a jump, a new epoch, a still) starts at zero
+   (`effect_passes::tick`). Headless: `RenderEngines::effects` keeps
+   the chain, `RenderJob::with_effect_clock`; the video export sets
+   `EffectClock::video(frame, fps)` and frees the chain at the end.
+   Viewport: `app::effect_timeline` (playback advances, a step over half
+   a second or a pause's scrub resets; the Effects panel's Reset History,
+   shown with a temporal effect in the chain). T4:
+   `effects::warmup_frames` / `temporal_window`, used by Python's
+   `Session::frame` for a frame out of order. Built-in **Trails**
+   (`assets/effects/trails.rhai`): the persistent trail is
+   `max(picture, last trail x persistence^(30 dt))`, frame-rate
+   independent; warm-up 240 (persistence at most 0.95, below an 8-bit
+   step by then at 60 fps). Tests: `a_persistent_buffer_follows_the_clock`,
+   `trails_fade_frame_by_frame`, `a_videos_frames_carry_a_temporal_effects_history`,
+   the timeline's and the warm-up's unit tests.
+   Not exercised in the running app yet: the viewport's playback and
+   Reset (the clock and its rules are tested without it).
+5. **Docs and the API.** DONE 2026-11-14. EFFECTS.md (the runner, the
+   uniform, multi-pass, the clock, the dialect, the shipped list),
+   ANIMATION.md (*Temporal effects*), ARCHITECTURE.md. The contract and
+   catalog did not move. The effects corpus marks `multi_pass` and
+   `temporal`: an app from before this cannot run a multi-pass module
+   (no `fs_main`), so the API must serve those only to readers that can
+   -- to tell the API repository, with the corpus regenerated.
 
 ## Not in this branch
 

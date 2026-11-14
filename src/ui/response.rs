@@ -193,6 +193,9 @@ pub struct UiResponse {
     pub effect_update_requested: Vec<String>,
     /// The Effects panel's Clear Cache.
     pub clear_effect_cache_requested: bool,
+    /// The Effects panel's Reset: a temporal effect's history starts over
+    /// (docs/projects/multipass-effects.md, T2).
+    pub reset_effect_history: bool,
 }
 
 /// API save action type (flame only — animation is separate)
@@ -299,6 +302,7 @@ impl Default for UiResponse {
             variation_update_requested: Vec::new(),
             effect_update_requested: Vec::new(),
             clear_effect_cache_requested: false,
+            reset_effect_history: false,
         }
     }
 }
