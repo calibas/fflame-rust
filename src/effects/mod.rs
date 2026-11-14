@@ -17,12 +17,70 @@ use crate::params::{ParamDef, Spec};
 
 /// Effects written in Rhai, compiled by the formula language (P2).
 pub mod custom;
+pub mod passes;
 
 /// Register the effects a config carries (`FractalConfig::custom_effects`)
 /// before its chains are built: every path that renders a config's effects
 /// calls this.
 pub fn ensure_custom(config: &crate::config::FractalConfig) {
     custom::ensure(config);
+}
+
+/// How far back the temporal effects `config` runs remember
+/// (docs/projects/multipass-effects.md, T4): `None` when it runs none;
+/// `Some(Some(k))` when every one forgets past `k` frames (`INFO.warmup`,
+/// the largest); `Some(None)` when one remembers from the start.
+pub fn temporal_window(config: &crate::config::FractalConfig) -> Option<Option<u32>> {
+    let registry = global_effect_registry();
+    let mut window: Option<Option<u32>> = None;
+    for e in config.density_effects.iter().chain(&config.color_effects).filter(|e| e.enabled) {
+        let Some(plan) = registry.get(&e.effect_type).and_then(|i| i.passes.clone()).filter(|p| p.temporal()) else { continue };
+        window = Some(match (window, plan.warmup) {
+            (Some(None), _) | (_, None) => None,
+            (Some(Some(a)), Some(b)) => Some(a.max(b)),
+            (None, Some(b)) => Some(b),
+        });
+    }
+    window
+}
+
+/// The frames of an animation to render, unseen, before rendering `frame`
+/// alone -- out of order, after `last` -- so a temporal effect's history
+/// is what a run from the start would have left (T4): none when the
+/// config runs no temporal effect or `frame` follows or repeats `last`;
+/// else from `frame - warmup`, or from 0. Each at its own clock
+/// (`EffectClock::video`), on the engines the frame renders with.
+pub fn warmup_frames(config: &crate::config::FractalConfig, last: Option<u64>, frame: u64) -> std::ops::Range<u64> {
+    let Some(window) = temporal_window(config) else { return frame..frame };
+    if last.is_some_and(|l| l == frame || l + 1 == frame) {
+        return frame..frame;
+    }
+    let start = match window {
+        Some(k) => frame.saturating_sub(k as u64),
+        None => 0,
+    };
+    start..frame
+}
+
+#[cfg(test)]
+mod temporal_tests {
+    use super::*;
+
+    #[test]
+    fn a_frame_alone_warms_up_over_what_a_temporal_effect_remembers() {
+        let mut config = crate::config::FractalConfig::default();
+        assert_eq!(warmup_frames(&config, None, 500), 500..500, "no effects: nothing to warm");
+        config.color_effects.push(EffectInstance::new("bloom"));
+        assert_eq!(temporal_window(&config), None, "bloom remembers nothing");
+        config.color_effects.push(EffectInstance::new("trails"));
+        assert_eq!(temporal_window(&config), Some(Some(240)));
+        assert_eq!(warmup_frames(&config, None, 500), 260..500, "out of order: its window");
+        assert_eq!(warmup_frames(&config, Some(30), 100), 0..100, "within the window of the start");
+        assert_eq!(warmup_frames(&config, Some(499), 500), 500..500, "the next frame: carried on");
+        assert_eq!(warmup_frames(&config, Some(500), 500), 500..500, "the same again");
+        config.color_effects[1].enabled = false;
+        assert_eq!(warmup_frames(&config, None, 500), 500..500, "a disabled one does not count");
+    }
 }
 
 /// The blend modes a colour effect's `blend_mode` picks, in the order
@@ -44,7 +102,7 @@ pub const BLEND_MODE_NAMES: &[&str] = &[
 ];
 
 /// Effect category determines when in the pipeline the effect runs
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum EffectCategory {
     /// Runs before tonemap, has access to density in alpha channel
     Density,
@@ -185,6 +243,10 @@ pub struct EffectInfo {
     /// ([`Self::translated_name`], [`Self::param_label`]). `None` for an
     /// effect labelled from the locale files or by plain strings.
     pub labels: Option<std::sync::Arc<crate::scripted::Labels>>,
+
+    /// A multi-pass effect's passes and buffers (`passes::Passes`;
+    /// docs/projects/multipass-effects.md); `None` for one pass, `fs_main`.
+    pub passes: Option<std::sync::Arc<passes::Passes>>,
 }
 
 impl EffectInfo {
@@ -613,6 +675,7 @@ pub fn check_download(dl: &crate::api::types::EffectDownload) -> Result<EffectIn
         parameters,
         provenance: crate::provenance::Provenance::Api { version: dl.version },
         labels: None,
+        passes: None,
     })
 }
 
@@ -644,9 +707,10 @@ impl EffectRegistry {
     }
 }
 
-/// Register the built-in effects: each one-pass effect as its Rhai twin
-/// (D1, docs/archive/projects/rhai-plugins.md P2 step 7: [`custom::builtin_twin`]);
-/// `distance_field`, three passes, as its WGSL.
+/// Register the built-in effects, each as its Rhai twin (D1,
+/// docs/archive/projects/rhai-plugins.md P2 step 7: [`custom::builtin_twin`];
+/// `distance_field` a multi-pass one, docs/projects/multipass-effects.md),
+/// its WGSL where a twin does not compile.
 fn register_builtin_effects(registry: &mut EffectRegistry) {
     for info in wgsl_builtins() {
         if let Some(twin) = custom::builtin_twin(&info.name) {
@@ -654,6 +718,12 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             continue;
         }
         registry.register(info);
+    }
+    // Those written in Rhai alone.
+    for (name, _) in custom::RHAI_BUILTINS {
+        if let Some(info) = custom::rhai_builtin(name) {
+            registry.register(info);
+        }
     }
 }
 
@@ -677,6 +747,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -718,6 +789,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -753,6 +825,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "amount",
@@ -794,6 +867,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "offset",
@@ -831,6 +905,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "radius",
@@ -866,6 +941,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "amount",
@@ -895,6 +971,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "radius",
@@ -932,6 +1009,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "segments",
@@ -991,6 +1069,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -1044,6 +1123,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "speed",
@@ -1097,6 +1177,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -1144,6 +1225,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -1197,6 +1279,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -1256,6 +1339,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -1315,6 +1399,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "mode",
@@ -1382,9 +1467,9 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
     // Distance Field - jump-flood the rendered attractor into an
     // exterior distance field, then shade it (glow / contour bands /
     // nearest fill). The escape-time plan's §7.3 bridge: DE-style
-    // looks for ARBITRARY flames, no invertibility required. The
-    // chain runner special-cases its execution into a multi-pass
-    // pipeline (seed + ~log2(max dim) floods + composite).
+    // looks for ARBITRARY flames, no invertibility required. Three
+    // entry points, run as any multi-pass effect is (seed, ~log2(max
+    // dim) floods, composite): `distance_field_passes`.
     out.push(EffectInfo {
         name: "distance_field".to_string(),
         // Empty on purpose: built-ins are labelled from
@@ -1397,6 +1482,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: Some(std::sync::Arc::new(distance_field_passes())),
         parameters: vec![
             ParamDef::new(
                 "threshold",
@@ -1433,6 +1519,29 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
     out
 }
 
+
+/// The WGSL `distance_field`'s passes: a seed into the coordinate buffer,
+/// the jump flood over it, the composite. Its entry points are its own
+/// (`shaders/effects/color/distance_field.wgsl`).
+pub fn distance_field_passes() -> passes::Passes {
+    use passes::{BufferDecl, Order, PassDecl, Passes, Repeat};
+    let pass = |function: &str, entry: &str, to: Option<usize>, repeat: Repeat| PassDecl {
+        function: function.to_string(),
+        entry: entry.to_string(),
+        to,
+        repeat,
+        order: Order::Down,
+    };
+    Passes {
+        buffers: vec![BufferDecl { name: "coords".to_string(), scale: 1.0, levels: 1, persist: false }],
+        passes: vec![
+            pass("seed", "fs_seed", Some(0), Repeat::Times(1)),
+            pass("flood", "fs_flood", Some(0), Repeat::Log2),
+            pass("effect", "fs_composite", None, Repeat::Times(1)),
+        ],
+        warmup: None,
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1777,7 +1886,7 @@ mod label_tests {
         assert_eq!(sobel.translated_name(), "Edge Glow");
         let wgsl = wgsl_builtins().into_iter().find(|i| i.name == "distance_field").expect("ships");
         assert!(wgsl.display_name.is_empty(), "a WGSL built-in carries no inline label");
-        for (name, source) in custom::all_twins() {
+        for (name, source) in custom::rhai_builtins() {
             let twin = custom::compile(source, crate::provenance::Provenance::Builtin).expect("compiles");
             let info = reg.get(name).expect("ships");
             assert_eq!(twin.display_name, info.translated_name(), "{name}: its title is the locale's");
@@ -1800,6 +1909,7 @@ mod label_tests {
             parameters: Vec::new(),
             provenance: crate::provenance::Provenance::Local,
             labels: None,
+            passes: None,
         };
         assert_eq!(info.translated_name(), "Plugin Example (Tint)");
         assert!(
@@ -1820,6 +1930,7 @@ mod label_tests {
             parameters: Vec::new(),
             provenance: crate::provenance::Provenance::Local,
             labels: None,
+            passes: None,
         };
         assert_eq!(info.translated_name(), "unnamed_thing");
     }

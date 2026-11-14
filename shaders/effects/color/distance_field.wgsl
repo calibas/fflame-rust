@@ -6,13 +6,13 @@
 // Every DE-style look (glow, contour bands, nearest-color fill)
 // applies to ARBITRARY flames — no invertibility required.
 //
-// Three entry points over one shared vertex shader; the chain runner
-// special-cases this effect into the multi-pass pipeline:
+// Three entry points over one shared vertex shader, run as any multi-pass
+// effect is (effects::distance_field_passes; renderer::effect_passes):
 //   fs_seed      image        -> coord texture (rg = own uv | -1 sentinel)
 //   fs_flood     coord ping   -> coord pong, step halves each pass (JFA)
 //   fs_composite image+coords -> final color
 //
-// The coordinate textures are rg32float (unfilterable): all reads go
+// The coordinate buffer is rgba32float (unfilterable): all reads go
 // through textureLoad, which is also the WASM-safe idiom.
 //
 // Parameters:
@@ -21,13 +21,17 @@
 //   params[2] = mode (0-2): 0 = glow, 1 = contour bands, 2 = nearest fill
 //   params[3] = intensity (0-2): effect strength over the base image
 //   params[4] = band_count (1-64): contour bands across the range (mode 1)
-//   (flood passes reuse the slot layout: params[0] = step size in px)
+//   (a flood pass's step size in px is the uniform's `step`)
 
 struct EffectParams {
     params: array<vec4<f32>, 12>,
     width: u32,
     height: u32,
-    _padding: vec2<f32>,
+    density_mean: f32,
+    pixel_scale: f32,
+    pass_index: u32,
+    passes: u32,
+    step: u32,
 }
 
 fn get_param(index: u32) -> f32 {
@@ -42,9 +46,8 @@ struct VertexOutput {
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
 @group(0) @binding(1) var input_sampler: sampler;
 @group(0) @binding(2) var<uniform> effect_params: EffectParams;
-// The coordinate field (absent in the seed pass's bind group is fine:
-// the layout always carries it; the seed pass binds the pong texture
-// it is about to overwrite).
+// The coordinate field, the effect's one buffer (the seed pass binds the
+// version before the one it writes, and reads none of it).
 @group(0) @binding(3) var coord_texture: texture_2d<f32>;
 
 @vertex
@@ -82,7 +85,7 @@ fn fs_seed(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_flood(input: VertexOutput) -> @location(0) vec4<f32> {
-    let step_px = i32(get_param(0u));
+    let step_px = i32(effect_params.step);
     let px = vec2<i32>(input.position.xy);
     let dims = vec2<i32>(i32(effect_params.width), i32(effect_params.height));
     var best = vec2<f32>(-1.0, -1.0);

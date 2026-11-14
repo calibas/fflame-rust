@@ -2357,6 +2357,21 @@ effects:
       intensity: "Intensity"
       band_count: "Band Count"
 
+  trails:
+    name: "Trails"
+    params:
+      persistence: "Persistence"
+      intensity: "Intensity"
+
+  bloom:
+    name: "Bloom"
+    params:
+      threshold: "Threshold"
+      softness: "Softness"
+      intensity: "Intensity"
+      spread: "Spread"
+      tint: "Tint"
+
 # Signal Panel
 signal:
   generators_section: "Signal Generators"
@@ -3071,6 +3086,8 @@ effects_panel:
   plugin_tip: "A plug-in from your formulas (%{file}), registered at every start"
   edit_as_rhai: "Rhai"
   edit_as_rhai_tip: "Edit this effect as a Rhai script of your own, in the Formula Editor: this instance runs your copy, with its settings kept, and Live shows each edit. The built-in is untouched."
+  reset_history: "Reset History"
+  reset_history_tip: "Start the temporal effects' memory of earlier frames over. It carries on while the animation plays, is held while it is paused, and starts over on a seek or a loop."
 
 formula_editor:
   example: "Example: %{file}"

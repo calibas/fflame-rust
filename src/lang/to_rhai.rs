@@ -1040,7 +1040,11 @@ impl<'p> Printer<'p> {
             | Predef::EffectBlend
             | Predef::EffectAmount
             | Predef::DensityMean
-            | Predef::PixelScale => return Err("an effect is written in Rhai".into()),
+            | Predef::PixelScale
+            | Predef::EffectXy
+            | Predef::EffectTime
+            | Predef::EffectDt
+            | Predef::EffectInt(_) => return Err("an effect is written in Rhai".into()),
             Predef::Pass => self.ctx_field("pass"),
             Predef::JuliaC => self.ctx_field("c"),
             Predef::CreaseDecay | Predef::CreasePattern | Predef::CreaseSign | Predef::CreaseReach | Predef::CreaseHeight | Predef::CreaseSlope => {

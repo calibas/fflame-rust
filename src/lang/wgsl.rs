@@ -110,12 +110,13 @@ pub struct VariationWgsl {
     pub init_count: usize,
 }
 
-/// An effect's WGSL (P2): its program as `fx_effect(uv)`, which gives the
-/// output colour and the blend it asks for (`FxOut`). The effect template
-/// around it (`effects::custom::assemble`) supplies the input image, the
-/// uniform `effect_params` and `get_param`.
+/// An effect's WGSL (P2): its program as `fx_effect(uv, xy)`, which gives
+/// the output colour and the blend it asks for (`FxOut`). The effect
+/// template around it (`effects::custom::assemble`) supplies `FxOut`, the
+/// input image, the uniform `effect_params`, `get_param` and a multi-pass
+/// effect's buffer reads (`fxb_read<k>`, `fxb_texel<k>`).
 pub struct EffectWgsl {
-    /// `FxOut`, the function and the helpers it uses.
+    /// The function and the helpers it uses.
     pub body: String,
     /// Whether it ever asks for a blend (`#{ color, blend }`): the
     /// template splices the blend library only then.
@@ -210,16 +211,37 @@ const COLOR4_RETURN: &str = "return vec4<f32>(effect_r, effect_g, effect_b, effe
 /// the vector of four, position, heading and state.
 const AGENT_RETURN: &str = "return SimAgent(vec2<f32>(effect_r, effect_g), effect_b, effect_a);";
 
-/// [`EffectWgsl`] for a checked effect.
+/// The struct every effect function returns: declared once by the
+/// template, for one pass or several.
+pub const FX_OUT: &str = "struct FxOut {\n    color: vec4<f32>,\n    blend: i32,\n    amount: f32,\n}\n\n";
+
+/// [`EffectWgsl`] for a checked effect: `fx_effect`, its helpers `fx_`.
 pub fn effect(p: &Program) -> Result<EffectWgsl, String> {
+    effect_as(p, "fx_")
+}
+
+/// The prefixes of a multi-pass effect's passes, `fx<k>_`
+/// (docs/projects/multipass-effects.md): as many as an effect may declare.
+pub const PASS_PREFIXES: [&str; 16] = [
+    "fx0_", "fx1_", "fx2_", "fx3_", "fx4_", "fx5_", "fx6_", "fx7_", "fx8_", "fx9_", "fx10_", "fx11_", "fx12_", "fx13_", "fx14_", "fx15_",
+];
+
+/// [`effect`], under another prefix: a multi-pass effect's pass `k` is
+/// `fx<k>_effect` ([`PASS_PREFIXES`]), so the passes' functions and
+/// helpers share one module.
+pub fn effect_as(p: &Program, prefix: &'static str) -> Result<EffectWgsl, String> {
     if !p.funcs.is_empty() {
         return Err("an effect's function parameters are a later step".into());
     }
-    let mut g = Gen::new(p, Ctx::Effect, "fx_");
+    let mut g = Gen::new(p, Ctx::Effect, prefix);
     g.ret = FX_RETURN;
-    let mut body = String::from(
-        "struct FxOut {\n    color: vec4<f32>,\n    blend: i32,\n    amount: f32,\n}\n\n\
-         fn uf_effect(uv: vec2<f32>) -> FxOut {\n    let pixel = uv;\n    var effect_r = 0.0;\n    var effect_g = 0.0;\n    \
+    let mut body = String::new();
+    // Each buffer read's texel, read once (a texture load's arrangement).
+    for k in 0..load_slots(p, |h| matches!(h, Host::BufferLoad | Host::BufferTexelLoad)) {
+        let _ = writeln!(body, "var<private> {prefix}buf{k}: vec4<f32>;");
+    }
+    body.push_str(
+        "fn uf_effect(uv: vec2<f32>, xy: vec2<f32>) -> FxOut {\n    let pixel = uv;\n    var effect_r = 0.0;\n    var effect_g = 0.0;\n    \
          var effect_b = 0.0;\n    var effect_a = 0.0;\n    var effect_blend = -1;\n    var effect_amount = 1.0;\n",
     );
     for (i, v) in p.vars.iter().enumerate() {
@@ -2767,6 +2789,27 @@ impl<'p> Gen<'p> {
             Host::Texture => format!("uf_texture(vec2<f32>({}, {})).{}", a[0], a[1], part(2)),
             Host::Texel => format!("uf_texel(vec2<i32>({}, {})).{}", a[0], a[1], part(2)),
             Host::TextureSize => format!("uf_texture_size().{}", part(0)),
+            // A multi-pass effect's buffer, through the template's reads
+            // (`effects::custom::assemble`), the buffer by its index.
+            Host::BufferLoad => format!(
+                "{}buf{} = fxb_read{}(vec2<f32>({}, {}))",
+                self.prefix,
+                args.get(2).and_then(cell_index).unwrap_or(0),
+                args.get(3).and_then(cell_index).unwrap_or(0),
+                a[0],
+                a[1]
+            ),
+            Host::BufferTexelLoad => format!(
+                "{}buf{} = fxb_texel{}(vec2<i32>({}, {}))",
+                self.prefix,
+                args.get(2).and_then(cell_index).unwrap_or(0),
+                args.get(3).and_then(cell_index).unwrap_or(0),
+                a[0],
+                a[1]
+            ),
+            Host::BufferPart => format!("{}buf{}.{}", self.prefix, args.first().and_then(cell_index).unwrap_or(0), part(1)),
+            Host::Buffer => format!("fxb_read{}(vec2<f32>({}, {})).{}", args.get(2).and_then(cell_index).unwrap_or(0), a[0], a[1], part(3)),
+            Host::BufferTexel => format!("fxb_texel{}(vec2<i32>({}, {})).{}", args.get(2).and_then(cell_index).unwrap_or(0), a[0], a[1], part(3)),
             // A variation's emissions, the flame shader's collector.
             Host::EmitPlot2 if self.emit_z => format!("emit_plot_weighted(vec3<f32>({}, {}, uf_emit_z), {})", a[0], a[1], a[2]),
             Host::EmitOffset2 if self.emit_z => format!("emit_plot_offset(vec3<f32>({}, {}, 0.0), {})", a[0], a[1], a[2]),
@@ -3185,6 +3228,18 @@ impl<'p> Gen<'p> {
             (Predef::EffectAmount, _) => "effect_amount".into(),
             (Predef::DensityMean, _) => "effect_params.density_mean".into(),
             (Predef::PixelScale, _) => "effect_params.pixel_scale".into(),
+            (Predef::EffectXy, _) => "xy".into(),
+            (Predef::EffectTime, _) => "effect_params.time".into(),
+            (Predef::EffectDt, _) => "effect_params.dt".into(),
+            (Predef::EffectInt(k), _) => match k {
+                0 => "i32(effect_params.pass_index)",
+                1 => "i32(effect_params.passes)",
+                2 => "i32(effect_params.step)",
+                3 => "i32(effect_params.level)",
+                4 => "i32(effect_params.levels)",
+                _ => "i32(effect_params.frame)",
+            }
+            .into(),
             (Predef::Width, Ctx::Effect) if self.sim || self.sim_model => "sim_grid().x".into(),
             (Predef::Height, Ctx::Effect) if self.sim || self.sim_model => "sim_grid().y".into(),
             (Predef::Width, Ctx::Effect) => "i32(effect_params.width)".into(),
@@ -3984,7 +4039,7 @@ impl<'p> Gen<'p> {
             return match f {
                 SampleR | SampleG | SampleB | SampleA => format!("textureSampleLevel(input_texture, input_sampler, {at}, 0.0).{ch}"),
                 _ => format!(
-                    "textureLoad(input_texture, clamp(vec2<i32>(floor({at})), vec2<i32>(0, 0), vec2<i32>(i32(effect_params.width) - 1, i32(effect_params.height) - 1)), 0).{ch}"
+                    "textureLoad(input_texture, clamp(vec2<i32>(floor({at})), vec2<i32>(0, 0), vec2<i32>(textureDimensions(input_texture)) - 1), 0).{ch}"
                 ),
             };
         }

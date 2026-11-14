@@ -517,6 +517,9 @@ impl BigMachine {
             Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {
                 BigValue::Float(BigFloat::zero(self.n))
             }
+            Predef::EffectTime | Predef::EffectDt => BigValue::Float(BigFloat::zero(self.n)),
+            Predef::EffectXy => BigValue::Complex(BigComplex::zero(self.n)),
+            Predef::EffectInt(_) => BigValue::Int(0),
             Predef::EffectBlend => BigValue::Int(0),
             Predef::Accum => BigValue::Complex(BigComplex::zero(self.n)),
             // A colouring's view of the loop: a reference orbit is a

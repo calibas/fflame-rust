@@ -90,6 +90,12 @@ fn main() {
             "parameters": parameters,
             "shader": shader,
             "requires_blend_modes": requires_blend_modes,
+            // A multi-pass effect's module has an entry point a pass and
+            // no `fs_main` (docs/projects/multipass-effects.md): an app
+            // without multi-pass effects cannot run it, so the API serves
+            // it only to readers that can. Temporal: it keeps a history.
+            "multi_pass": info.passes.is_some(),
+            "temporal": info.passes.as_ref().is_some_and(|p| p.temporal()),
             // For the Python/doc-comment pass, as with variations.
             "description": serde_json::Value::Null,
             "description_plain": serde_json::Value::Null,

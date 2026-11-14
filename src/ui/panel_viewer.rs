@@ -512,6 +512,8 @@ pub struct PanelContext<'a> {
     /// Clear Cache.
     pub effect_update_requested: &'a mut Vec<String>,
     pub clear_effect_cache_requested: &'a mut bool,
+    /// The Effects panel's Reset: a temporal effect's history starts over.
+    pub reset_effect_history: &'a mut bool,
     /// Online-library state the Scripts panel reads, and the slot it
     /// writes a request into. Owned by App.
     pub script_cloud: &'a crate::app::script_cloud::ScriptCloudState,
@@ -1967,6 +1969,7 @@ impl<'a> PanelViewer<'a> {
             self.context.open_formula_editor,
             self.context.effect_update_requested,
             self.context.clear_effect_cache_requested,
+            self.context.reset_effect_history,
         );
     }
 

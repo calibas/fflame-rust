@@ -509,6 +509,16 @@ fn constructed_examples() -> Vec<(String, crate::config::FractalConfig)> {
     out
 }
 
+/// Every string in `v` with its `\r\n`s as `\n`s.
+fn fold_line_endings(v: &mut Value) {
+    match v {
+        Value::String(s) if s.contains("\r\n") => *s = s.replace("\r\n", "\n"),
+        Value::Array(items) => items.iter_mut().for_each(fold_line_endings),
+        Value::Object(m) => m.values_mut().for_each(fold_line_endings),
+        _ => {}
+    }
+}
+
 /// The generated catalog: the tables and the examples.
 pub fn catalog() -> Value {
     let committed: Value = serde_json::from_str(COMMITTED).unwrap_or(Value::Null);
@@ -525,7 +535,12 @@ pub fn catalog() -> Value {
         .collect();
     configs.extend(constructed_examples());
     for (name, config) in configs {
-        let Ok(json) = config.to_json_value() else { continue };
+        let Ok(mut json) = config.to_json_value() else { continue };
+        // The sources a config carries as this checkout spells them, whose
+        // line endings are its platform's: folded, as their names are
+        // (`scripted::normalized`), so the catalog is the same file on
+        // every platform.
+        fold_line_endings(&mut json);
         let summary = summarize(&json, &tables);
         examples.push(json!({"name": name, "config": json, "summary": summary}));
     }

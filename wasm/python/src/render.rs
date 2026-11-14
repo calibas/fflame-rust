@@ -141,6 +141,28 @@ struct Session {
     options: Options,
     target: Option<Target>,
     engines: RenderEngines,
+    /// The frame rendered last, for a temporal effect's history: the next
+    /// frame carries it on, any other warms up first
+    /// (`effects::warmup_frames`).
+    last: Option<u32>,
+}
+
+impl Session {
+    /// Frame `frame` rendered on the session's engines, at its clock.
+    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: u32, fps: u32) -> Result<Frame, String> {
+        let (config, moments) = self.source.frame(frame);
+        let renderer = renderer_for(&mut self.target, device, queue, &config, self.width, self.height);
+        renderer.set_sticky_enabled(self.options.sticky);
+        let job = self
+            .options
+            .job(&config, self.width, self.height)
+            .with_engines(&mut self.engines)
+            .with_moments(&moments)
+            .with_effect_clock(fractal_flame_wgpu::renderer::effect_chain::EffectClock::video(frame as u64, fps));
+        let ipt = job.iterations_per_thread;
+        let out = block_on(render_with(renderer, device, queue, job, &mut NoProgress)).map_err(|e| e.to_string())?;
+        Ok(Frame { out, iterations_per_thread: ipt })
+    }
 }
 
 /// The GPU and everything kept on it between calls.
@@ -192,7 +214,7 @@ impl Gpu {
             "id": id, "frames": source.frames(), "fps": source.fps(),
             "duration": source.duration(), "warnings": source.warnings,
         });
-        self.sessions.insert(id, Session { source, width, height, options, target: None, engines: RenderEngines::default() });
+        self.sessions.insert(id, Session { source, width, height, options, target: None, engines: RenderEngines::default(), last: None });
         Ok((id, out))
     }
 
@@ -207,13 +229,17 @@ impl Gpu {
         if frame >= s.source.frames() {
             return Err(format!("frame {frame} is past the animation's {} frames", s.source.frames()));
         }
-        let (config, moments) = s.source.frame(frame);
-        let renderer = renderer_for(&mut s.target, device, queue, &config, s.width, s.height);
-        renderer.set_sticky_enabled(s.options.sticky);
-        let job = s.options.job(&config, s.width, s.height).with_engines(&mut s.engines).with_moments(&moments);
-        let ipt = job.iterations_per_thread;
-        let out = block_on(render_with(renderer, device, queue, job, &mut NoProgress)).map_err(|e| e.to_string())?;
-        Ok(Frame { out, iterations_per_thread: ipt })
+        // A frame out of order: the frames a temporal effect remembers,
+        // rendered unseen first, so its history is a video's
+        // (docs/projects/multipass-effects.md, T4).
+        let fps = s.source.fps();
+        let (config, _) = s.source.frame(frame);
+        for f in fractal_flame_wgpu::effects::warmup_frames(&config, s.last.map(u64::from), frame as u64) {
+            s.render(device, queue, f as u32, fps)?;
+        }
+        let out = s.render(device, queue, frame, fps);
+        s.last = out.is_ok().then_some(frame);
+        out
     }
 
     /// An animation's frame as a config, not rendered.

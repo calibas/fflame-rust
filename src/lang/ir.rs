@@ -236,6 +236,16 @@ pub enum Predef {
     /// for a colour effect) and how many pixels one picture pixel is.
     DensityMean,
     PixelScale,
+    /// A multi-pass effect's (docs/projects/multipass-effects.md): the
+    /// pixel's position in the grid the pass writes (WGSL's
+    /// `position.xy`); the animation's time and the seconds since the
+    /// last frame; and its whole numbers by index -- 0 the repeat's pass,
+    /// 1 the repeat's count, 2 the jump flood's step, 3 the pyramid level,
+    /// 4 the level count, 5 the frame.
+    EffectXy,
+    EffectTime,
+    EffectDt,
+    EffectInt(u8),
     /// A colouring's view of what the loop knows (P7 step 2, batch 2):
     /// the panel's squared bailout and the formula's degree at infinity,
     /// in any section; in its `finish`, whether the orbit escaped,
@@ -282,6 +292,9 @@ impl Predef {
             Predef::VarRgbR | Predef::VarRgbG | Predef::VarRgbB | Predef::Coef(_) | Predef::Camera(_) | Predef::PointW | Predef::WOut => Ty::Float,
             Predef::DrawU32 => Ty::UInt,
             Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => Ty::Float,
+            Predef::EffectTime | Predef::EffectDt => Ty::Float,
+            Predef::EffectXy => Ty::Complex,
+            Predef::EffectInt(_) => Ty::Int,
             Predef::EffectBlend => Ty::Int,
             Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height | Predef::Pass | Predef::CreasePattern => Ty::Int,
             Predef::Pi | Predef::E | Predef::Magn | Predef::Index | Predef::CreaseDecay | Predef::CreaseSign | Predef::CreaseReach | Predef::CreaseHeight => Ty::Float,

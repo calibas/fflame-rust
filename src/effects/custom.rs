@@ -25,40 +25,120 @@ use crate::lang::{self, EntryKind};
 use crate::provenance::Provenance;
 use crate::scripted::{self, Ledger};
 
-/// The effect template around a compiled effect's `fx_effect(uv)`.
-///
-/// The uniform is the runner's `EffectParams` (208 bytes:
-/// `effect_chain::EffectParams`), the same for colour and density
-/// effects; a parameter is `get_param(slot)`, in the order `PARAMS`
-/// declares them. When the effect asks for a blend (`#{ color, blend }`),
-/// its colour is blended over the input's by the blend library's
-/// `apply_blend`, the input's alpha kept.
-pub fn assemble(effect: &lang::wgsl::EffectWgsl) -> String {
-    let mut out = String::from(
-        "struct EffectParams {\n    params: array<vec4<f32>, 12>,\n    width: u32,\n    height: u32,\n    density_mean: f32,\n    pixel_scale: f32,\n}\n\n\
-         fn get_param(index: u32) -> f32 {\n    return effect_params.params[index / 4u][index % 4u];\n}\n\n\
-         struct VertexOutput {\n    @builtin(position) position: vec4<f32>,\n    @location(0) uv: vec2<f32>,\n}\n\n\
-         @group(0) @binding(0) var input_texture: texture_2d<f32>;\n\
-         @group(0) @binding(1) var input_sampler: sampler;\n\
-         @group(0) @binding(2) var<uniform> effect_params: EffectParams;\n\n",
-    );
-    if effect.blends {
-        out.push_str("// INCLUDE_BLEND_MODES\n\n");
-    }
-    out.push_str(&effect.body);
-    out.push_str(
-        "\n@vertex\nfn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {\n    var output: VertexOutput;\n    \
-         let x = f32((vertex_index & 1u) << 2u);\n    let y = f32((vertex_index & 2u) << 1u);\n    \
-         output.position = vec4<f32>(x - 1.0, 1.0 - y, 0.0, 1.0);\n    output.uv = vec2<f32>(x * 0.5, y * 0.5);\n    return output;\n}\n\n\
-         @fragment\nfn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {\n    let out = fx_effect(input.uv);\n",
-    );
-    if effect.blends {
+/// The uniform every effect reads: the runner's `EffectParams` (256
+/// bytes, `effect_chain::EffectParams`), the same for colour and density
+/// effects, for one pass or several. A parameter is `get_param(slot)`, in
+/// the order `PARAMS` declares them; the pass, pyramid and time fields are
+/// a multi-pass effect's (docs/projects/multipass-effects.md), and read
+/// as 0 by one that runs once outside an animation.
+const TEMPLATE_HEAD: &str = "struct EffectParams {\n    params: array<vec4<f32>, 12>,\n    width: u32,\n    height: u32,\n    density_mean: f32,\n    pixel_scale: f32,\n    \
+pass_index: u32,\n    passes: u32,\n    step: u32,\n    level: u32,\n    levels: u32,\n    buffer_levels: u32,\n    frame: u32,\n    time: f32,\n    dt: f32,\n    \
+_pad0: f32,\n    _pad1: f32,\n    _pad2: f32,\n}\n\n\
+fn get_param(index: u32) -> f32 {\n    return effect_params.params[index / 4u][index % 4u];\n}\n\n\
+struct VertexOutput {\n    @builtin(position) position: vec4<f32>,\n    @location(0) uv: vec2<f32>,\n}\n\n\
+@group(0) @binding(0) var input_texture: texture_2d<f32>;\n\
+@group(0) @binding(1) var input_sampler: sampler;\n\
+@group(0) @binding(2) var<uniform> effect_params: EffectParams;\n\n";
+
+const TEMPLATE_VERTEX: &str = "\n@vertex\nfn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {\n    var output: VertexOutput;\n    \
+let x = f32((vertex_index & 1u) << 2u);\n    let y = f32((vertex_index & 2u) << 1u);\n    \
+output.position = vec4<f32>(x - 1.0, 1.0 - y, 0.0, 1.0);\n    output.uv = vec2<f32>(x * 0.5, y * 0.5);\n    return output;\n}\n";
+
+/// A fragment entry point over a pass's function `f`: its colour, blended
+/// over the input's when it asks for a blend (`#{ color, blend }`, by the
+/// blend library's `apply_blend`, the input's alpha kept).
+fn entry_point(out: &mut String, entry: &str, f: &str, blends: bool) {
+    out.push_str(&format!("\n@fragment\nfn {entry}(input: VertexOutput) -> @location(0) vec4<f32> {{\n    let out = {f}(input.uv, input.position.xy);\n"));
+    if blends {
         out.push_str(
             "    if (out.blend >= 0) {\n        let base = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);\n        \
              return vec4<f32>(apply_blend(base.rgb, out.color.rgb, out.blend, out.amount), base.a);\n    }\n",
         );
     }
     out.push_str("    return out.color;\n}\n");
+}
+
+/// A multi-pass effect's buffer `k`: its binding (3 + k, `Rgba32Float`,
+/// unfilterable, so every read is a `textureLoad`) and its reads -- the
+/// texel, clamped, and the filtered read, bilinear between the texel
+/// centres and clamped at the edges, by hand in f32 as every kind's
+/// texture read is (`lang::wgsl::texture_wgsl`), so WebGPU, Metal and
+/// Vulkan read the same with no `FLOAT32_FILTERABLE`. A pyramid is read at
+/// the level the runner sets in `buffer_levels` (4 bits a buffer).
+fn buffer_wgsl(out: &mut String, k: usize) {
+    let binding = 3 + k;
+    let shift = 4 * k;
+    out.push_str(&format!(
+        "@group(0) @binding({binding}) var fx_buffer{k}: texture_2d<f32>;
+fn fxb_level{k}() -> i32 {{
+    return i32((effect_params.buffer_levels >> {shift}u) & 15u);
+}}
+fn fxb_texel{k}(xy: vec2<i32>) -> vec4<f32> {{
+    let l = fxb_level{k}();
+    let dims = vec2<i32>(textureDimensions(fx_buffer{k}, l));
+    return textureLoad(fx_buffer{k}, clamp(xy, vec2<i32>(0), dims - 1), l);
+}}
+fn fxb_read{k}(uv: vec2<f32>) -> vec4<f32> {{
+    let l = fxb_level{k}();
+    let dims = vec2<i32>(textureDimensions(fx_buffer{k}, l));
+    let size = vec2<f32>(dims);
+    var p = uv * size - 0.5;
+    p = select(vec2<f32>(-1.0), clamp(p, vec2<f32>(-1.0), size), abs(p) <= vec2<f32>(1e30));
+    let f = floor(p);
+    let t = p - f;
+    let i0 = clamp(vec2<i32>(f), vec2<i32>(0), dims - 1);
+    let i1 = clamp(vec2<i32>(f) + 1, vec2<i32>(0), dims - 1);
+    let a = textureLoad(fx_buffer{k}, i0, l);
+    let b = textureLoad(fx_buffer{k}, vec2<i32>(i1.x, i0.y), l);
+    let c = textureLoad(fx_buffer{k}, vec2<i32>(i0.x, i1.y), l);
+    let d = textureLoad(fx_buffer{k}, i1, l);
+    let top = a + (b - a) * t.x;
+    let bottom = c + (d - c) * t.x;
+    return top + (bottom - top) * t.y;
+}}
+
+"
+    ));
+}
+
+/// The effect template around a compiled effect's `fx_effect(uv, xy)`:
+/// the uniform and `get_param`, the input image and its sampler, the
+/// fullscreen triangle, `fs_main`, and the blend library when the effect
+/// asks for a blend.
+pub fn assemble(effect: &lang::wgsl::EffectWgsl) -> String {
+    let mut out = String::from(TEMPLATE_HEAD);
+    if effect.blends {
+        out.push_str("// INCLUDE_BLEND_MODES\n\n");
+    }
+    out.push_str(lang::wgsl::FX_OUT);
+    out.push_str(&effect.body);
+    out.push_str(TEMPLATE_VERTEX);
+    entry_point(&mut out, "fs_main", "fx_effect", effect.blends);
+    out
+}
+
+/// A multi-pass effect's module (docs/projects/multipass-effects.md): the
+/// template's head, each buffer's binding and reads, each pass's function
+/// (`fx<k>_effect`, `lang::wgsl::PASS_PREFIXES`) and its entry point
+/// (`plan.passes[k].entry`). Only the last pass may blend.
+pub fn assemble_passes(passes: &[lang::wgsl::EffectWgsl], plan: &super::passes::Passes) -> String {
+    let mut out = String::from(TEMPLATE_HEAD);
+    let blends = passes.last().is_some_and(|p| p.blends);
+    if blends {
+        out.push_str("// INCLUDE_BLEND_MODES\n\n");
+    }
+    for k in 0..plan.buffers.len() {
+        buffer_wgsl(&mut out, k);
+    }
+    out.push_str(lang::wgsl::FX_OUT);
+    for p in passes {
+        out.push_str(&p.body);
+        out.push('\n');
+    }
+    out.push_str(TEMPLATE_VERTEX);
+    for (k, (decl, p)) in plan.passes.iter().zip(passes).enumerate() {
+        entry_point(&mut out, &decl.entry, &format!("{}effect", lang::wgsl::PASS_PREFIXES[k]), p.blends);
+    }
     out
 }
 
@@ -97,7 +177,33 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
         return Err(format!("{} parameters: an effect has at most {MAX_EFFECT_PARAMS}", parameters.len()));
     }
 
-    let wgsl = assemble(&lang::wgsl::effect(&program)?);
+    let plan = super::passes::from_info(
+        lang::rhai::info_json(source, "passes").as_ref(),
+        lang::rhai::info_json(source, "buffers").as_ref(),
+        lang::rhai::info_json(source, "warmup").as_ref(),
+    )?;
+    let wgsl = match &plan {
+        None => assemble(&lang::wgsl::effect(&program)?),
+        // Each pass its own program, its function lowered as `effect` is
+        // (`lang::rhai::effect_pass`); the last is `effect` itself.
+        Some(plan) => {
+            let mut bodies = Vec::new();
+            for (k, pass) in plan.passes.iter().enumerate() {
+                let last = k + 1 == plan.passes.len();
+                let body = if last {
+                    lang::wgsl::effect_as(&program, lang::wgsl::PASS_PREFIXES[k])?
+                } else {
+                    let p = lang::rhai::effect_pass(source, &pass.function).map_err(|d| first(&d))?;
+                    lang::wgsl::effect_as(&p, lang::wgsl::PASS_PREFIXES[k])?
+                };
+                if body.blends && !last {
+                    return Err(format!("the pass `{}` asks for a blend: only the last pass, `effect`, blends over the image", pass.function));
+                }
+                bodies.push(body);
+            }
+            assemble_passes(&bodies, plan)
+        }
+    };
     // A shipped twin is validated by the tests (`every_built_in_effect_
     // validates`), not again at every start.
     #[cfg(not(target_arch = "wasm32"))]
@@ -117,6 +223,7 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
         parameters,
         provenance,
         labels: lang::rhai::source_labels(source).map(Arc::new),
+        passes: plan.map(Arc::new),
     })
 }
 
@@ -147,8 +254,9 @@ pub fn param_layout(name: &str) -> Option<Arc<crate::params::layout::ParamLayout
 }
 
 /// The built-ins that are their Rhai twins (D1; docs/projects/
-/// rhai-plugins.md, P2 step 7): each one-pass effect that passed the
-/// checks, by name, as `assets/effects/<name>.rhai`. Each is held to the
+/// rhai-plugins.md, P2 step 7): each effect that passed the checks, by
+/// name, as `assets/effects/<name>.rhai` -- every one since
+/// `distance_field` became a multi-pass effect. Each is held to the
 /// WGSL it replaced (`effects::wgsl_builtins`) by the pixel compares in
 /// `effect_chain`.
 pub const BUILTIN_TWINS: &[(&str, &str)] = &[
@@ -167,6 +275,8 @@ pub const BUILTIN_TWINS: &[(&str, &str)] = &[
     ("worley_noise", include_str!("../../assets/effects/worley_noise.rhai")),
     ("simplex_noise", include_str!("../../assets/effects/simplex_noise.rhai")),
     ("domain_warp", include_str!("../../assets/effects/domain_warp.rhai")),
+    // Multi-pass (docs/projects/multipass-effects.md).
+    ("distance_field", include_str!("../../assets/effects/distance_field.rhai")),
 ];
 
 /// Twins that have not passed every check: the built-in stays its WGSL
@@ -181,6 +291,34 @@ pub const PENDING_TWINS: &[(&str, &str)] = &[];
 /// Every twin, replaced or pending.
 pub fn all_twins() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
     BUILTIN_TWINS.iter().chain(PENDING_TWINS)
+}
+
+/// The built-ins written in Rhai with no WGSL behind them, by name, as
+/// `assets/effects/<name>.rhai`: registered after the WGSL list, in this
+/// order (append-only, as every registry is).
+pub const RHAI_BUILTINS: &[(&str, &str)] = &[
+    // A multi-pass effect over pyramids (docs/projects/multipass-effects.md).
+    ("bloom", include_str!("../../assets/effects/bloom.rhai")),
+    // A temporal effect: a persistent buffer.
+    ("trails", include_str!("../../assets/effects/trails.rhai")),
+];
+
+/// Every built-in whose source is Rhai: the twins and [`RHAI_BUILTINS`] --
+/// what Edit as Rhai offers.
+pub fn rhai_builtins() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
+    all_twins().chain(RHAI_BUILTINS)
+}
+
+/// The built-in `name` of [`RHAI_BUILTINS`], compiled ([`builtin_twin`]'s
+/// choice of copy); `None`, logged, when it does not compile.
+pub fn rhai_builtin(name: &str) -> Option<EffectInfo> {
+    match builtin_source(RHAI_BUILTINS, name)? {
+        (_, Ok(info)) => Some(info),
+        (_, Err(e)) => {
+            log::error!("the built-in effect `{name}` does not compile ({e})");
+            None
+        }
+    }
 }
 
 /// The built-in `name` as its Rhai twin, if it has one: on desktop the
@@ -204,6 +342,7 @@ pub fn builtin_twin(name: &str) -> Option<EffectInfo> {
 pub fn builtin_twin_source(name: &str) -> Option<String> {
     builtin_source(BUILTIN_TWINS, name)
         .or_else(|| builtin_source(PENDING_TWINS, name))
+        .or_else(|| builtin_source(RHAI_BUILTINS, name))
         .and_then(|(text, compiled)| compiled.is_ok().then_some(text))
 }
 
@@ -340,7 +479,7 @@ mod tests {
     #[test]
     fn the_builtin_twins_are_web_safe() {
         use crate::variations::shader_lint;
-        for (name, source) in all_twins() {
+        for (name, source) in rhai_builtins() {
             let info = compile(source, Provenance::Builtin).unwrap_or_else(|e| panic!("{name}: {e}"));
             let wgsl = splice_blend_library(&info.source.wgsl());
             let code = shader_lint::strip_wgsl_comments(&wgsl);
@@ -438,6 +577,71 @@ fn effect(c, p, ctx) {
         let EffectSource::Owned(wgsl) = &info.source else { panic!("owned") };
         assert!(!wgsl.contains("INCLUDE_BLEND_MODES"));
         assert!(wgsl.contains("textureLoad"));
+    }
+
+    /// A multi-pass effect of the user's (docs/projects/multipass-effects.md):
+    /// two passes into a buffer, then the output; a module naga accepts
+    /// (`compile` validates one of the user's), an entry point a pass.
+    pub(crate) const TWO_PASS: &str = r#"
+const PARAMS = #{ amount: #{ value: 0.5, min: 0.0, max: 1.0 } };
+const INFO = #{
+    id: "3b9d7c1e-2f4a-4e6b-8c0d-1a2b3c4d5e6f",
+    buffers: #{ half: #{ scale: 0.5 }, blur: #{} },
+    passes: [
+        #{ run: "shrink", to: "half" },
+        #{ run: "spread", to: "blur", repeat: 3 },
+        #{ run: "effect" },
+    ],
+};
+fn shrink(c, p, ctx) { input(ctx.uv) }
+fn spread(c, p, ctx) {
+    let k = to_float(ctx.pass + 1) / to_float(ctx.width);
+    let a = if ctx.pass == 0 { buffer("half", ctx.uv) } else { buffer("blur", ctx.uv) };
+    let b = buffer_at("blur", to_int(ctx.xy.re) + ctx.step, to_int(ctx.xy.im));
+    (a + b) * 0.5 + rgba(k, 0.0, 0.0, 0.0)
+}
+fn effect(c, p, ctx) {
+    #{ color: buffer("blur", ctx.uv).rgb, blend: 0, amount: p.amount }
+}
+"#;
+
+    #[test]
+    fn a_multi_pass_effect_compiles_to_a_module_naga_accepts() {
+        let info = compile(TWO_PASS, Provenance::Local).unwrap_or_else(|e| panic!("{e}"));
+        let plan = info.passes.as_ref().expect("its passes");
+        // Buffers by their names' order: blur 0, half 1.
+        assert_eq!(plan.buffers.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["blur", "half"]);
+        assert_eq!(plan.passes[1].to, Some(0));
+        let wgsl = info.source.wgsl();
+        for want in ["fn fs_pass0(", "fn fs_pass1(", "fn fs_pass2(", "fn fx1_effect(", "@binding(4) var fx_buffer1", "fxb_texel0(", "fxb_read1(", "effect_params.step"] {
+            assert!(wgsl.contains(want), "{want} in\n{wgsl}");
+        }
+        assert!(!wgsl.contains("fn fs_main("), "no single entry point");
+        // A one-pass effect is as it was: `fs_main`, no buffers.
+        let one = compile(TINT, Provenance::Local).unwrap().source.wgsl();
+        assert!(one.contains("fn fs_main(") && !one.contains("fx_buffer"));
+    }
+
+    #[test]
+    fn what_a_multi_pass_effect_cannot_be() {
+        let refused = |src: &str, why: &str| {
+            let e = compile(src, Provenance::Local).expect_err(src);
+            assert!(e.contains(why), "expected `{why}` in: {e}");
+        };
+        let id = "3b9d7c1e-2f4a-4e6b-8c0d-1a2b3c4d5e6f";
+        let with = |info: &str, body: &str| format!("const INFO = #{{ id: \"{id}\", {info} }};\n{body}");
+        let two = "buffers: #{ a: #{} }, passes: [#{ run: \"fill\", to: \"a\" }, #{ run: \"effect\" }]";
+        // A buffer it does not declare; a one-pass effect has none.
+        refused(&with(two, "fn fill(c, p, ctx) { c }\nfn effect(c, p, ctx) { buffer(\"b\", ctx.uv) }"), "not one of this effect's buffers");
+        refused(&with("category: \"color\"", "fn effect(c, p, ctx) { buffer(\"a\", ctx.uv) }"), "not one of this effect's buffers");
+        // A name, a string.
+        refused(&with(two, "fn fill(c, p, ctx) { c }\nfn effect(c, p, ctx) { let n = 0; buffer(n, ctx.uv) }"), "the buffer's name first");
+        // Only the last pass blends over the image.
+        refused(&with(two, "fn fill(c, p, ctx) { #{ color: c.rgb, blend: 1 } }\nfn effect(c, p, ctx) { c }"), "only the last pass");
+        // A pass's function, there.
+        refused(&with(two, "fn effect(c, p, ctx) { c }"), "fn fill");
+        // A plan's own rules (`effects::passes`).
+        refused(&with("buffers: #{ a: #{} }, passes: [#{ run: \"effect\" }]", "fn effect(c, p, ctx) { c }"), "no pass writes");
     }
 
     #[test]

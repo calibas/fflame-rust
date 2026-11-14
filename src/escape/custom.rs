@@ -174,11 +174,13 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
         CustomDialect::Rhai => b"rhai",
     });
     eat(src.entry.as_bytes());
-    eat(src.source.as_bytes());
+    // Line endings folded (`scripted::normalized`): a checkout's are its
+    // platform's, and the name is the same everywhere.
+    eat(crate::scripted::normalized(&src.source).as_bytes());
     // The variations it calls: a changed one is a changed entry.
     for v in &src.variations {
         eat(v.entry.as_bytes());
-        eat(v.source.as_bytes());
+        eat(crate::scripted::normalized(&v.source).as_bytes());
     }
     format!("{PREFIX}{h:016x}")
 }
@@ -2211,6 +2213,11 @@ fn escaped(s, p) {
         let mut b = a.clone();
         b.source.push(' ');
         assert_ne!(n, name_of(EntryKind::Formula, &b), "an edit is a new name");
+        // A platform's line endings are not an edit.
+        let mut crlf = a.clone();
+        crlf.source = a.source.replace('\n', "\r\n");
+        assert_ne!(crlf.source, a.source);
+        assert_eq!(n, name_of(EntryKind::Formula, &crlf), "CRLF names as LF");
         assert_ne!(n, name_of(EntryKind::Coloring, &a), "a formula and a colouring never share one");
         // Pinned: a saved file must keep resolving to its entry.
         assert_eq!(name_of(EntryKind::Formula, &src("x", "y")), "custom-22c22db4acbfd02f");
