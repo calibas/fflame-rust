@@ -2257,6 +2257,10 @@ struct Gen<'p> {
     /// Each packed global's first float in its block.
     global_slots: Vec<Option<usize>>,
     loops: usize,
+    /// The complex values an enclosing branch's test proves away from
+    /// zero (`nonzero_facts`), by their `Debug` form: their angle takes the
+    /// raw `atan2`, the zero pair Metal gets wrong being out of reach.
+    nonzero: Vec<String>,
     /// Inside a constant subexpression: its literals go through
     /// `uf_k`, so WGSL does not fold it ([`constant`]).
     opaque: bool,
@@ -2347,6 +2351,7 @@ impl<'p> Gen<'p> {
             func_slots,
             global_slots,
             loops: 0,
+            nonzero: Vec::new(),
             opaque: false,
             small_vars: Vec::new(),
             true_small: false,
@@ -2910,7 +2915,11 @@ impl<'p> Gen<'p> {
                     } else {
                         let _ = writeln!(out, "{pad}}} else if ({c}) {{");
                     }
+                    let facts = nonzero_facts(cond, body);
+                    let held = self.nonzero.len();
+                    self.nonzero.extend(facts);
                     self.stmts(body, depth + 1, out);
+                    self.nonzero.truncate(held);
                 }
                 if !otherwise.is_empty() {
                     let _ = writeln!(out, "{pad}}} else {{");
@@ -3998,6 +4007,10 @@ impl<'p> Gen<'p> {
                 Flip => format!("{v}.yx"),
                 Cabs => format!("length({v})"),
                 Abs => format!("abs({v})"),
+                // Of a value a branch holds away from zero, the raw atan2
+                // (as the built-in colourings guard theirs): the exact
+                // helper's selects cost Curvature Average's twin 12%.
+                Atan2 if self.nonzero.contains(&format!("{:?}", a.kind)) => format!("atan2(({v}).y, ({v}).x)"),
                 Atan2 => format!("{}({v})", self.use_(Helper::CArg)),
                 Fract => format!("fract({v})"),
                 // Component by component, halves to even.
@@ -4480,6 +4493,123 @@ fn zero_of(t: Ty) -> &'static str {
         Ty::Float => "0.0",
         Ty::Complex => "vec2<f32>(0.0, 0.0)",
     }
+}
+
+/// The complex values a branch's test proves away from zero, by their
+/// `Debug` form: each `w` of a test `!(|w|^2 < c)` -- `w.norm_sqr()` or
+/// `re w * re w + im w * im w`, `c` a positive literal -- or of several
+/// such joined by `||` under the `!`. A value the branch writes anything
+/// of is left out: the test no longer speaks for it.
+fn nonzero_facts(cond: &IExpr, body: &[IStmt]) -> Vec<String> {
+    fn square_of(e: &IExpr) -> Option<&IExpr> {
+        match &e.kind {
+            IExprKind::Modulus(w) if w.ty == Ty::Complex => Some(w),
+            IExprKind::Binary(BinOp::Add, a, b) => {
+                let part = |x: &IExpr, f: Builtin| -> Option<String> {
+                    match &x.kind {
+                        IExprKind::Binary(BinOp::Mul, l, r) => match (&l.kind, &r.kind) {
+                            (IExprKind::Call(fl, wl), IExprKind::Call(fr, wr)) if *fl == f && *fr == f && format!("{:?}", wl.kind) == format!("{:?}", wr.kind) => Some(format!("{:?}", wl.kind)),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                };
+                let (re, im) = (part(a, Builtin::Real)?, part(b, Builtin::Imag)?);
+                if re != im {
+                    return None;
+                }
+                match &a.kind {
+                    IExprKind::Binary(_, l, _) => match &l.kind {
+                        IExprKind::Call(_, w) => Some(w),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+    // `re w == 0 && im w == 0`: exactly the zero pair.
+    fn zero_pair(e: &IExpr) -> Option<&IExpr> {
+        let IExprKind::Binary(BinOp::And, a, b) = &e.kind else { return None };
+        fn part(x: &IExpr, f: Builtin) -> Option<&IExpr> {
+            match &x.kind {
+                IExprKind::Binary(BinOp::Eq, l, r) => match (&l.kind, &r.kind) {
+                    (IExprKind::Call(g, w), IExprKind::Float(z)) if *g == f && *z == 0.0 => Some(w),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        let (re, im) = (part(a, Builtin::Real)?, part(b, Builtin::Imag)?);
+        (format!("{:?}", re.kind) == format!("{:?}", im.kind)).then_some(re)
+    }
+    fn below(e: &IExpr, out: &mut Vec<IExpr>) -> bool {
+        if let Some(w) = zero_pair(e) {
+            out.push(w.clone());
+            return true;
+        }
+        match &e.kind {
+            IExprKind::Binary(BinOp::Or, a, b) => below(a, out) && below(b, out),
+            IExprKind::Binary(BinOp::Lt, x, c) => match (&c.kind, square_of(x)) {
+                (IExprKind::Float(c), Some(w)) if *c > 0.0 => {
+                    out.push(w.clone());
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+    let IExprKind::Unary(UnOp::Not, inner) = &cond.kind else { return Vec::new() };
+    let mut ws = Vec::new();
+    if !below(inner, &mut ws) {
+        return Vec::new();
+    }
+    // What the value reads that the branch might write.
+    fn reads(e: &IExpr, out: &mut Vec<String>) {
+        match &e.kind {
+            IExprKind::Var(v) => out.push(format!("v{v}")),
+            IExprKind::Predef(p) => out.push(format!("{p:?}")),
+            IExprKind::Elem(v, a) => {
+                out.push(format!("v{v}"));
+                reads(a, out);
+            }
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) => reads(a, out),
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => {
+                reads(a, out);
+                reads(b, out);
+            }
+            _ => out.push("?".into()),
+        }
+    }
+    fn writes(st: &[IStmt], out: &mut Vec<String>) {
+        for s in st {
+            match s {
+                IStmt::Assign(Place::Var(v), _) | IStmt::SetElem { var: v, .. } => out.push(format!("v{v}")),
+                IStmt::Assign(Place::Z, _) => out.push("Z".into()),
+                IStmt::Assign(..) => out.push("?".into()),
+                IStmt::If { arms, otherwise } => {
+                    arms.iter().for_each(|(_, b)| writes(b, out));
+                    writes(otherwise, out);
+                }
+                IStmt::While { body, .. } | IStmt::Repeat { body, .. } | IStmt::Scope(body) => writes(body, out),
+                IStmt::Map { out: o, .. } => o.iter().for_each(|v| out.push(format!("v{v}"))),
+                IStmt::Host(..) => out.push("?".into()),
+                IStmt::Break | IStmt::Continue | IStmt::Return => {}
+            }
+        }
+    }
+    let mut written = Vec::new();
+    writes(body, &mut written);
+    ws.into_iter()
+        .filter(|w| {
+            let mut r = Vec::new();
+            reads(w, &mut r);
+            !r.iter().any(|x| x == "?" || written.contains(x))
+        })
+        .map(|w| format!("{:?}", w.kind))
+        .collect()
 }
 
 /// An f32 literal WGSL accepts: finite, never subnormal (it would flush

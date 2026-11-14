@@ -2565,12 +2565,15 @@ mod tests {
             // The built-in's own WGSL, retired or not (`twins::RETIRED`).
             let built_in = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &esc, w, h, false));
             let twin = twin_of(&esc);
-            let got = output_on(&device, &queue, &renderer, &twin, w, h, false);
+            // Natively too, so a case's colouring is the same on each side
+            // (Origami's Position Map is retired).
+            let got = crate::escape::custom::native_builtins(|| output_on(&device, &queue, &renderer, &twin, w, h, false));
             assert!(crate::escape::get_formula(&twin.formula).has_feature(crate::escape::FormulaFeature::Program), "{what} did not compile");
             // A retired built-in's name renders its twin.
             if crate::escape::twins::retired(formula) {
                 let by_name = output_on(&device, &queue, &renderer, &esc, w, h, false);
-                assert!(differing(&by_name, &got) == 0.0, "{what}: the retired built-in's name renders its twin");
+                let live = output_on(&device, &queue, &renderer, &twin, w, h, false);
+                assert!(differing(&by_name, &live) == 0.0, "{what}: the retired built-in's name renders its twin");
             }
             let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
             assert!(covered > 100, "{what}: the view shows too little ({covered})");

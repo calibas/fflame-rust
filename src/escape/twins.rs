@@ -204,8 +204,10 @@ pub fn retired(name: &str) -> bool {
 /// Retired 2026-11-14, compiled for their structural parameters
 /// (`lang::specialize`): every twin passes on the perturbed path (at most
 /// +3.6%, the seahorse at zoom 30), and these on the direct path (at most
-/// +5%, the Mandelbrot at 4000 iterations). Stripe Average (+13%),
-/// Curvature Average (+12.5%) and Position Map (+8.6%) wait.
+/// +5%, the Mandelbrot at 4000 iterations). Stripe Average and Position
+/// Map joined once an angle of a value guarded away from zero took the
+/// raw atan2 (`lang::wgsl`, `nonzero_facts`; +4.4% and +2.5%, 2048x1536,
+/// the best of 31); Curvature Average, +5.7% so, waits.
 pub const RETIRED_COLORINGS: &[&str] = &[
     "escape_count",
     "orbit_trap",
@@ -232,6 +234,8 @@ pub const RETIRED_COLORINGS: &[&str] = &[
     "voc_traps",
     "direct_traps",
     "image_trap",
+    "stripe_average",
+    "position_map",
 ];
 
 /// Whether the built-in colouring `name` renders as its twin

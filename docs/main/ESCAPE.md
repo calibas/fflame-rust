@@ -2860,9 +2860,15 @@ aside, and wait on their deep views (the tables below).
 
 **Colourings** retire the same way (`twins::RETIRED_COLORINGS`,
 2026-11-14), by the same line on both paths, and resolve to their twins
-in the same step. Retired: 25 of the 28 -- all but **Stripe Average**
-(+13% on the direct path), **Curvature Average** (+12.5%) and **Position
-Map** (+8.6%). On the perturbed path every twin passes (the seahorse at
+in the same step. Retired: 27 of the 28 -- all but **Curvature
+Average** (+5.7% on the direct path, 2048x1536, the best of 31). Stripe
+Average and Position Map joined (+4.4%, +2.5%) once the angle of a
+value a branch holds away from zero took the raw `atan2`: the
+generator records what an arm's test proves nonzero -- `!(|w|^2 < c)`,
+`!(re w == 0 && im w == 0)`, or several joined by `||` -- and the exact
+helper's selects (the Metal zero pair) are kept for every other angle
+(`lang::wgsl::nonzero_facts`). Curvature Average's twin says its turn
+`q` is never the zero pair, which its guarded steps already ensure. On the perturbed path every twin passes (the seahorse at
 zoom 30, 4000 iterations, medians of three: at most +3.6%; Direct Traps
 -33%, Orbit Trap -23%, Sphere Average -17%, Exponential Smoothing -14%,
 Image Trap -11%). On the direct path (the Mandelbrot at 4000 iterations,
