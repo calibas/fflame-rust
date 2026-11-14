@@ -2840,7 +2840,12 @@ the twin exactly), and what runs if the twin ever fails to compile.
 
 Retired (`twins::RETIRED`): **Spider, Cactus, Exponential, Tetration,
 Collatz, Lambda Sine, Lattès, Origami, Barnsley, Littlewood, Novaretti,
-Trig, Manowar** -- all but Manowar without native deep zoom, so all but
+Trig, Manowar, Newton** -- Newton once compiled for its structural
+parameters (below: within 2-4% at depth, 11-20% faster direct; the
+suite's `escape-newton-sine-roots` re-recorded, the twin counting 846 of
+8192 right against the native's 386 at `sin z - 1`'s double roots,
+where no f32 path counts well) -- all but Manowar and Newton without
+native deep zoom, so all but
 Origami (whose twin has no perturbed tier either) gained it, and Collatz
 gained a derivative (distance estimation). Barnsley onwards passed once
 interior detection compared only what a pass carries (below); where a
@@ -3000,4 +3005,37 @@ its start, a minibrot's centre only where the start is the map's
 critical point, and damping moves that (to `(alpha - 1) / 2 alpha` for
 `z^2 + c`). The reference still relocates there, where it wraps
 exactly.
+
+### Structural parameters
+
+A custom formula or colouring (Rhai, UF, Fractint, a twin) is compiled
+for the values of its **structural parameters**, as a built-in's native
+tier is compiled for one case (`lang::specialize`, 2026-11-13). A
+parameter is structural when it picks a case -- read in a branch whose
+test is the same at every pixel (Newton's function and scheme, a
+variant, a trap's shape) -- or sets a power's exponent (the Multibrot's
+power, McMullen's `n` and `m`), directly or through a variable that
+holds only such values (`let k = p.power; z ** k`). Choices, ints and
+bools are specialized at any value; a float or complex only at a whole
+real value up to 64, so a slider moved through the values between keeps
+the general program.
+
+`custom::resolve` compiles the specialized program under its own name
+(beside the damped, biomorph and array-sized variants, `bake_of`): the
+values written in as literals, carried through the variables holding
+them and folded, and each branch on them replaced by the arm it takes,
+before the perturbation equations are derived. A literal whole power
+derives by degrees, unrolled, a negative one as the reciprocal's
+(`lang::delta`); a whole power in the equations is taken by squaring
+(`uf_cpoww`), and `PowInt` unrolls to 12. Newton's twin at its deep view
+went from 12 ms to the built-in's 5, Magnet's from 9 to 6.
+
+The cost is a compile per value: such a parameter is set, not animated
+-- a keyframed choice or whole power compiles a variant at each value it
+takes (cached once compiled; ANIMATION.md, *Not animatable*). The
+specialized code can round differently where the driver contracts the
+straight-line arithmetic, which a chaotic map amplifies: against the
+big-float truth it counts as many pixels right as the general program or
+more (the Ship with damping and the biomorph: 7991 of 8192 against the
+built-in's 7984).
 

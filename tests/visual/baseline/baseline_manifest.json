@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "4956d0d3",
+  "git_hash": "c11b147a",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -439,8 +439,8 @@
       "sha256": "43a051c4cf5363644e9c22a2045352fe0e9c2a5ee667f32167b92456151fd99a"
     },
     "escape-newton-sine-roots.png": {
-      "bytes": 9882,
-      "sha256": "7cb68cf8799f82c6c3308ba87c77b3b42f057f5d6b1d8bf2b19d5381de9272fc"
+      "bytes": 11975,
+      "sha256": "787e98e62440fd9e9f4217320e9bb8d0e6863205c2af927b69e0fe0bdb0aa513"
     },
     "escape-normal-map-relief.png": {
       "bytes": 14011,

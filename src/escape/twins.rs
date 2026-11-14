@@ -182,8 +182,11 @@ pub fn solid_custom_source(name: &str) -> Option<crate::config::escape::CustomSo
 /// Littlewood, Novaretti, Trig and Manowar joined once interior
 /// detection stopped comparing a pass's temporaries (2026-11-13);
 /// Manowar's twin is faster at depth too (123 ms against 148), and on
-/// the direct path at a view heavier than its home (6-10%).
-pub const RETIRED: &[&str] = &["spider", "cactus", "exponential", "tetration", "collatz", "lambda_sine", "lattes", "origami", "barnsley", "littlewood", "novaretti", "trig", "manowar"];
+/// the direct path at a view heavier than its home (6-10%). Newton's
+/// joined once a twin was compiled for its structural parameters
+/// (`lang::specialize`): at depth within 2-4% of the native tier, on the
+/// direct path 11-20% faster.
+pub const RETIRED: &[&str] = &["spider", "cactus", "exponential", "tetration", "collatz", "lambda_sine", "lattes", "origami", "barnsley", "littlewood", "novaretti", "trig", "manowar", "newton"];
 
 /// Whether the built-in formula `name` renders as its twin ([`RETIRED`]).
 pub fn retired(name: &str) -> bool {

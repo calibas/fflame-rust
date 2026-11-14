@@ -192,33 +192,24 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   KF `.kfr` hybrid import.
 - **Retire native formulas** where twins match (D7; the line: no more
   than 5% slower on every path the built-in has, the median of several
-  runs where a view is quick; user 2026-11-13). Thirteen retired on
+  runs where a view is quick; user 2026-11-13). Fourteen retired on
   branch `retire-escape-builtins` (Spider, Cactus, Exponential,
   Tetration, Collatz, Lambda Sine, Lattès, Origami, Barnsley,
-  Littlewood, Novaretti, Trig, Manowar;
+  Littlewood, Novaretti, Trig, Manowar, Newton;
   [ESCAPE.md](../main/ESCAPE.md#retired-built-ins)). The twins' GPU
   slowdowns since 2026-10-16 are fixed (bisected to the escape margin's
-  commit). Newton's, Magnet's and Nova's twins now take the scaled rung
-  (exact whole powers in the equations, `uf_cpoww`): 12, 9 and 7 ms
-  against the built-ins' 5-6 (were 28, 37, 16). Next: specialize a
-  twin's shader on its structural parameters (function choice, scheme,
-  whole exponents) as the native tiers compile one case each -- Newton's
-  twin hand-written for `z^3 - 1` ran at 5 ms -- at the cost of a
-  recompile when such a parameter changes (a user decision). Then the
-  gaps -- the deep Mandelbrot
-  (zoom 42: the reference and table builds), Multibrot, Tricorn
-  (interior: the reference, chiefly the nucleus search's interpreted
-  slope pass, 12 ms of 38; the Ship's 50 of 102), Lambda, Kaliset,
-  Burning Ship (2x), Phoenix (+15%), Feather (+10%), and at 2.5-6x
-  McMullen, Magnet and Nova (Magnet and Nova are convergent: Newton's
-  floatexp rung). McMullen's twin runs the scaled rung with one value;
-  its gap is the step's generated code -- `z ** (-p.m)` takes the
-  expm1/log1p form every pass (written `c / z ** p.m`: 18 to 15 ms), and
-  the reference's powers go through `uf_cpow`'s exp/log (a whole-power
-  `uf_cpowi` in the perturbation equations measured slower, 30 ms). On
-  the direct path only Ducks (the exact `atan2`, ~10%) and Feather
-  (+7%) remain ("How fast the twins are"). A custom BLA table's build (24 interpreted steps an entry)
-  could skip its ring check for exactly quadratic steps. Earlier prerequisites: compress custom
+  commit). Custom formulas and colourings are compiled for their
+  structural parameters (ESCAPE.md, *Structural parameters*). Left, at
+  depth (twin against built-in, ms): Magnet 6.2-6.6 against 5.8-7.1
+  (median +5%, on the line), Nova 6.3-6.5 against 5.3, McMullen 9-11
+  against 6-7, Ducks 9.3 against 6.0, Kaliset 5.9 against 4.4, Phoenix
+  15-16 against 12-13, Multibrot 9.5 against 7.5, Lambda, the deep
+  Mandelbrot (zoom 42: the reference and table builds), the Tricorn and
+  Ship interiors (the nucleus search's interpreted slope pass: 12 ms of
+  the Tricorn's 38, 50 of the Ship's 102) and the Ship at floatexp (2x).
+  On the direct path only Feather (+4 to +8%, median +6%) and McMullen
+  (+6%) remain. A custom BLA table's build (24 interpreted steps an
+  entry) could skip its ring check for exactly quadratic steps. Earlier prerequisites: compress custom
   orbits in the store, flatten references to in-place big floats,
   Newton's `z^p sin z - 1` at a basin boundary, the scaled rung's f32
   reference sums (Ducks). §"After phase 4" item 6.
