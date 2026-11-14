@@ -670,9 +670,13 @@ as tests against the WGSL (`wgsl_builtins`):
   rounds of a ~20 ms batch, the twin straight after the WGSL, and the
   median of the rounds' ratios (best-of-N moved with the GPU's clocks);
   a replaced twin more than 5% slower fails, and a pending one is
-  reported, ready once it is within 5%. On a GTX 1660 SUPER all fifteen
-  are within 3% of their WGSL or faster: julia 4% faster, `density_blur`
-  5% (its taps skipped as the shader skips them).
+  reported, ready once it is within 5%. On a GTX 1660 SUPER (2026-11-14)
+  all sixteen are within 3% of their WGSL or faster: julia and
+  `density_blur` 5% faster (the latter's taps skipped as the shader skips
+  them), kaleidoscope +2%, `distance_field` +3% at 1080p and +1% at 4K
+  (7.8 and 31.5 ms for the WGSL: its ~log2 flood passes are the cost
+  either way, not the language). Bloom and Trails have no WGSL to time
+  against.
 - **Why one is slower**: `time_effect_variants`, ignored, times the WGSL
   files in `output/effect-variants/<effect>/` against the built-in's
   WGSL and twin (both written there to start from), the median of
