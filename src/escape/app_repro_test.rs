@@ -2664,7 +2664,9 @@ mod tests {
             // A carrying twin runs the deep rung at every depth, as the
             // renderer has it (`deep_rung_always`); so does Manowar.
             let floatexp = zoom > 48.0 || matches!(formula, "manowar" | "phoenix" | "spider");
-            let (a, b) = (records_on(&esc, 64, 48, floatexp, true, false), records_on(&twin, 64, 48, floatexp, true, false));
+            // The built-in's own tier, retired or not (`twins::RETIRED`).
+            let a = crate::escape::custom::native_builtins(|| records_on(&esc, 64, 48, floatexp, true, false));
+            let b = records_on(&twin, 64, 48, floatexp, true, false);
             // The truth, in big floats, at every seventh pixel: the
             // twin's own program, its parameters as the GPU holds them.
             let src = twin.custom_formula.as_ref().unwrap();
@@ -17794,6 +17796,12 @@ fn main() {
             ("kaliset", &[("plus_c", 1.0)], ("-1.79112587335209006", "-0.87051608470578978"), 30.0, 60, false),
             ("newton", &[("power", 3.0), ("scheme", 0.0), ("func", 0.0)], ("-0.50000000000000000", "0.23019701107058421"), 30.0, 400, false),
             ("newton", &[("power", 3.0), ("scheme", 1.0), ("func", 0.0)], ("-0.50000000000000000", "0.00365726284994825"), 30.0, 400, false),
+            // The rest with a native tier (2026-11-13): the parity test's
+            // deep views. McMullen's native tier is the Julia plane's.
+            ("feather", &[("power", 3.0)], ("-0.77291940505873225", "-1.83786610577385723"), 30.0, 600, false),
+            ("mcmullen", &[("n", 2.0), ("m", 3.0)], ("-0.12291872044575830", "-0.36795489251636515"), 30.0, 400, false),
+            ("magnet", &[("variant", 0.0)], ("-0.17175811456405135", "0.09206142643187049"), 30.0, 400, false),
+            ("nova", &[("power", 3.0)], ("-0.36039383324484020", "0.22577954314649112"), 30.0, 400, false),
         ];
         println!("{w}x{h}, with BLA where the tier has it; times in ms: whole render, reference build, BLA table build, the rest (GPU)");
         for &(formula, params, (cx, cy), zoom, iters, floatexp) in views {
@@ -17810,6 +17818,9 @@ fn main() {
             // One that never escapes draws by an orbit colouring.
             if formula == "kaliset" {
                 esc.coloring = "magnitude_average".into();
+            }
+            if formula == "mcmullen" {
+                (esc.julia, esc.julia_re, esc.julia_im) = (true, 0.05, 0.03);
             }
             let src = crate::escape::twins::custom_source(formula).unwrap();
             let mut twin = esc.clone();

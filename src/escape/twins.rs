@@ -176,11 +176,14 @@ pub fn solid_custom_source(name: &str) -> Option<crate::config::escape::CustomSo
 /// A formula retires once its twin is no more than 5% slower than the
 /// built-in on every path the built-in has (the user's line, 2026-11-13;
 /// `measure_formula_twins_on_the_direct_path`, and for a native deep-zoom
-/// tier `measure_twins_against_their_builtins`). None of these has
-/// native deep zoom, so all gain it. Barnsley, Littlewood and Novaretti
-/// joined once interior detection stopped comparing a pass's temporaries
-/// (2026-11-13).
-pub const RETIRED: &[&str] = &["spider", "cactus", "exponential", "tetration", "collatz", "lambda_sine", "lattes", "origami", "barnsley", "littlewood", "novaretti"];
+/// tier `measure_twins_against_their_builtins`), by the median of
+/// several runs where a view renders in a millisecond or two. All but
+/// Manowar had no native deep zoom, so they gain it. Barnsley,
+/// Littlewood, Novaretti, Trig and Manowar joined once interior
+/// detection stopped comparing a pass's temporaries (2026-11-13);
+/// Manowar's twin is faster at depth too (123 ms against 148), and on
+/// the direct path at a view heavier than its home (6-10%).
+pub const RETIRED: &[&str] = &["spider", "cactus", "exponential", "tetration", "collatz", "lambda_sine", "lattes", "origami", "barnsley", "littlewood", "novaretti", "trig", "manowar"];
 
 /// Whether the built-in formula `name` renders as its twin ([`RETIRED`]).
 pub fn retired(name: &str) -> bool {
