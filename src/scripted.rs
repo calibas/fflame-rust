@@ -174,10 +174,24 @@ pub fn derived_id(name: &str) -> String {
     format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
 }
 
-/// A source's version: the SHA-256 of its text, lowercase hex.
+/// A source's text as its names are taken of: each `\r\n` a `\n`. A
+/// checkout's line endings are its platform's (`core.autocrlf`: CRLF on
+/// Windows, LF on macOS and Linux), and so is a file saved by an editor
+/// there; folded, the same script is the same name everywhere -- a
+/// built-in's twin, embedded from `assets/` by `include_str!`, among them.
+pub fn normalized(source: &str) -> std::borrow::Cow<'_, str> {
+    if source.contains("\r\n") {
+        std::borrow::Cow::Owned(source.replace("\r\n", "\n"))
+    } else {
+        std::borrow::Cow::Borrowed(source)
+    }
+}
+
+/// A source's version: the SHA-256 of its text, line endings folded
+/// ([`normalized`]), lowercase hex.
 pub fn version_of(source: &str) -> String {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(source.as_bytes());
+    let digest = Sha256::digest(normalized(source).as_bytes());
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -294,6 +308,9 @@ mod tests {
     fn a_version_is_the_sources_sha256() {
         assert_eq!(version_of(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
         assert_ne!(version_of("a"), version_of("b"));
+        // A platform's line endings are not a new version.
+        assert_eq!(version_of("fn f() {\r\n    1\r\n}\r\n"), version_of("fn f() {\n    1\n}\n"));
+        assert_ne!(version_of("a\rb"), version_of("a\nb"), "a lone CR is text");
     }
 
     #[test]
