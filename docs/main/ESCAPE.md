@@ -2904,11 +2904,21 @@ ms -- the whole render, then the GPU's part:
 | Phoenix, zoom 48, floatexp | 13 | 15 | 12 | 15 |
 | Manowar, zoom 26, floatexp | 146 | 125 | 139 | 120 |
 | Kaliset (both views), zoom 30, 60 | 4 | 6 | 4 | 5 |
-| Newton z^3 - 1 (both schemes), zoom 30, 400 | 5-6 | 28-29 | 4 | 27-29 |
+| Newton z^3 - 1 (both schemes), zoom 30, 400 | 5-6 | 12 (28) | 4 | 11 (27) |
 | Feather power 3, zoom 30, 600 | 10 | 11 | 7 | 10 |
 | McMullen n 2 m 3 (Julia), zoom 30, 400 | 6 | 18 | 6 | 17 |
-| Magnet I, zoom 30, 400 | 6 | 35-39 | 4 | 34-38 |
-| Nova power 3, zoom 30, 400 | 6 | 16 | 4 | 15 |
+| Magnet I, zoom 30, 400 | 6 | 9 (35-39) | 4 | 8 (34-38) |
+| Nova power 3, zoom 30, 400 | 6 | 7 (16) | 4 | 7 (15) |
+
+The convergent twins' rows moved on 2026-11-13 (the earlier figures in
+brackets), from the floatexp rung to the scaled: a carried value only a
+settle test reads no longer forces floatexp, once the perturbation
+equations took whole powers exactly (`uf_cpoww`; `renderer::deep_rung_always`).
+What remains is generality: a twin's shader keeps its function choice,
+scheme and exponent as parameters, branching on them and looping over
+degrees at run time, where the native tier compiles one case. Newton's
+twin written for `z^3 - 1` alone, Newton's scheme, ran at the built-in's
+5 ms.
 
 Two rows had grown since October with the built-ins unchanged -- the
 Mandelbrot at zoom 30 (145 ms of GPU time) and the Tricorn's suite view
