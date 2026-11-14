@@ -2357,6 +2357,15 @@ effects:
       intensity: "Intensity"
       band_count: "Band Count"
 
+  bloom:
+    name: "Bloom"
+    params:
+      threshold: "Threshold"
+      softness: "Softness"
+      intensity: "Intensity"
+      spread: "Spread"
+      tint: "Tint"
+
 # Signal Panel
 signal:
   generators_section: "Signal Generators"

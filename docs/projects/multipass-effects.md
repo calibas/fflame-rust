@@ -144,7 +144,17 @@ Decisions taken as recommended (the user may amend before phase 4):
    flame, the three modes, and a chain with vignette, chromatic
    aberration and density blur) rendered by `main`'s binary and this
    branch's: pixel-identical.
-3. **Pyramids** and the built-in **bloom**.
+3. **Pyramids** and the built-in **bloom**. DONE 2026-11-14. A pass
+   over levels writes every level (down: finest first; up: coarsest
+   first), its target read at the level it came from, zero at the
+   first. Bloom (`assets/effects/bloom.rhai`, the first built-in with
+   no WGSL: `effects::custom::RHAI_BUILTINS`): a thresholded, soft-kneed
+   dual-filter down pyramid, a tent-filtered up pyramid that sums each
+   level with the wider ones by the spread (a mix, energy-conserving,
+   read too faint in 8-bit colour), added over the picture; defaults
+   chosen from renders (threshold 0.45, intensity 1.5, spread 0.7).
+   Tests: `a_pyramid_pass_writes_and_reads_its_levels` (exact values),
+   `bloom_glows_past_the_bright_parts_alone`.
 4. **Temporal.** Persist buffers, the clock (T1-T4), `ctx.frame`/
    `time`/`dt`, warm-up; a built-in temporal effect (trails) as the
    test case; the viewport's Reset.

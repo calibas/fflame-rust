@@ -1536,6 +1536,90 @@ fn effect(c, p, ctx) {
         }
     }
 
+    /// Pyramids (docs/projects/multipass-effects.md): a pass over levels
+    /// writes each one, `ctx.level` and `ctx.levels` saying which, the
+    /// grid halving; its target reads the level it came from, zero at the
+    /// first; another pyramid reads at the level being written.
+    #[test]
+    fn a_pyramid_pass_writes_and_reads_its_levels() {
+        let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const W: u32 = 16;
+        const H: u32 = 8;
+        let (_input, view) = filled(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &[0, 0, 0, 255]);
+        let src = r#"
+const INFO = #{
+    id: "6a3f9b2c-5d4e-4b7f-8c9a-3d2e1f0a5b6c",
+    buffers: #{ p: #{ levels: 3 }, q: #{ levels: 3 } },
+    passes: [
+        #{ run: "down", to: "p", repeat: "levels" },
+        #{ run: "up", to: "q", repeat: "levels", order: "up" },
+        #{ run: "effect" },
+    ],
+};
+// Each level its own value, the level before it read (zero at level 0,
+// so the values do not stack): r 0.1 a level, b the grid's width / 64.
+fn down(c, p, ctx) {
+    let before = buffer("p", ctx.uv);
+    rgba(0.1 * to_float(ctx.level + 1) + before.r * 0.0, before.r, to_float(ctx.width) / 64.0, 1.0)
+}
+// Coarsest first: this level's `p`, and `q` one coarser (zero at the top).
+fn up(c, p, ctx) {
+    let here = buffer("p", ctx.uv);
+    let coarser = buffer("q", ctx.uv);
+    rgba(here.r + coarser.r, 0.1 * to_float(ctx.levels), here.b, 1.0)
+}
+fn effect(c, p, ctx) { buffer("q", ctx.uv) }
+"#;
+        let name = crate::effects::custom::register(src, crate::provenance::Provenance::Local).unwrap_or_else(|e| panic!("{e}"));
+        let out = run_colour(&device, &queue, &view, W, H, &[EffectInstance::new(&name)]);
+        crate::effects::global_effect_registry_mut().remove_by_name(&name);
+        let near = |a: u8, b: f32| (a as f32 - b * 255.0).abs() <= 1.0;
+        // q0 = p0 + p1 + p2 = 0.1 + 0.2 + 0.3; 3 levels; level 0's width
+        // 16 / 64.
+        let want = [0.6, 0.3, 0.25, 1.0];
+        for px in out.chunks(4) {
+            assert!(px.iter().zip(want).all(|(&a, b)| near(a, b)), "{px:?}, want {want:?} (x 255)");
+        }
+    }
+
+    /// The built-in bloom (a pyramid effect): a white square on black
+    /// glows into the black around it, the glow falling off with distance
+    /// and reaching well past where a few taps could; a picture darker
+    /// than the threshold is left as it was.
+    #[test]
+    fn bloom_glows_past_the_bright_parts_alone() {
+        let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const W: u32 = 128;
+        const H: u32 = 96;
+        let data: Vec<u8> = (0..W * H)
+            .flat_map(|i| {
+                let (x, y) = (i % W, i / W);
+                let on = (56..72).contains(&x) && (40..56).contains(&y);
+                if on { [255, 255, 255, 255] } else { [0, 0, 0, 255] }
+            })
+            .collect();
+        let (_input, view) = texture_of(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &data);
+        let out = run_colour(&device, &queue, &view, W, H, &[EffectInstance::new("bloom")]);
+        let at = |x: u32, y: u32| out[((y * W + x) * 4) as usize];
+        assert_eq!(at(64, 48), 255, "the square stays white");
+        // Along the row through the square's middle, rightwards from its edge.
+        let row: Vec<u8> = [73, 76, 80, 88, 100].iter().map(|&x| at(x, 48)).collect();
+        assert!(row[0] > 40, "beside the square it glows: {row:?}");
+        assert!(row.windows(2).all(|w| w[0] >= w[1]), "falling off with distance: {row:?}");
+        assert!(row[3] > 0, "24 pixels away, still lit: {row:?}");
+        assert!(at(2, 2) < row[4], "the far corner darker still");
+        // Below the threshold and its soft knee (0.45 less 30%): nothing glows.
+        let (_dim, dim_view) = filled(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &[30, 50, 70, 255]);
+        let out = run_colour(&device, &queue, &dim_view, W, H, &[EffectInstance::new("bloom")]);
+        assert!(out.chunks(4).all(|px| px == [30, 50, 70, 255]), "a dim picture unchanged: {:?}", &out[..4]);
+    }
+
     /// What a config reads of an effect: its parameters' definitions --
     /// name, kind, default, range, label and hint -- in order.
     fn values(i: &crate::effects::EffectInfo) -> &[crate::params::ParamDef] {

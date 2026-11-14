@@ -114,7 +114,7 @@ fn plugin_effects(ui: &mut Ui, config_manager: &mut ConfigManager, category: Eff
 /// clicked. The Formula Editor makes it one of the user's
 /// (`FormulaEditorPanel::edit_effect_as_rhai`).
 fn edit_as_rhai_button(ui: &mut Ui, effect_type: &str) -> bool {
-    let twin = crate::effects::custom::all_twins().any(|(n, _)| *n == effect_type);
+    let twin = crate::effects::custom::rhai_builtins().any(|(n, _)| *n == effect_type);
     twin && ui.small_button(t!("effects_panel.edit_as_rhai")).on_hover_text(t!("effects_panel.edit_as_rhai_tip")).clicked()
 }
 

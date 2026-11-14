@@ -293,6 +293,32 @@ pub fn all_twins() -> impl Iterator<Item = &'static (&'static str, &'static str)
     BUILTIN_TWINS.iter().chain(PENDING_TWINS)
 }
 
+/// The built-ins written in Rhai with no WGSL behind them, by name, as
+/// `assets/effects/<name>.rhai`: registered after the WGSL list, in this
+/// order (append-only, as every registry is).
+pub const RHAI_BUILTINS: &[(&str, &str)] = &[
+    // A multi-pass effect over pyramids (docs/projects/multipass-effects.md).
+    ("bloom", include_str!("../../assets/effects/bloom.rhai")),
+];
+
+/// Every built-in whose source is Rhai: the twins and [`RHAI_BUILTINS`] --
+/// what Edit as Rhai offers.
+pub fn rhai_builtins() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
+    all_twins().chain(RHAI_BUILTINS)
+}
+
+/// The built-in `name` of [`RHAI_BUILTINS`], compiled ([`builtin_twin`]'s
+/// choice of copy); `None`, logged, when it does not compile.
+pub fn rhai_builtin(name: &str) -> Option<EffectInfo> {
+    match builtin_source(RHAI_BUILTINS, name)? {
+        (_, Ok(info)) => Some(info),
+        (_, Err(e)) => {
+            log::error!("the built-in effect `{name}` does not compile ({e})");
+            None
+        }
+    }
+}
+
 /// The built-in `name` as its Rhai twin, if it has one: on desktop the
 /// working copy under `assets/effects/` when it differs and compiles --
 /// so a built-in is edited without a rebuild, as its WGSL was under
@@ -314,6 +340,7 @@ pub fn builtin_twin(name: &str) -> Option<EffectInfo> {
 pub fn builtin_twin_source(name: &str) -> Option<String> {
     builtin_source(BUILTIN_TWINS, name)
         .or_else(|| builtin_source(PENDING_TWINS, name))
+        .or_else(|| builtin_source(RHAI_BUILTINS, name))
         .and_then(|(text, compiled)| compiled.is_ok().then_some(text))
 }
 
@@ -450,7 +477,7 @@ mod tests {
     #[test]
     fn the_builtin_twins_are_web_safe() {
         use crate::variations::shader_lint;
-        for (name, source) in all_twins() {
+        for (name, source) in rhai_builtins() {
             let info = compile(source, Provenance::Builtin).unwrap_or_else(|e| panic!("{name}: {e}"));
             let wgsl = splice_blend_library(&info.source.wgsl());
             let code = shader_lint::strip_wgsl_comments(&wgsl);

@@ -662,6 +662,12 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
         }
         registry.register(info);
     }
+    // Those written in Rhai alone.
+    for (name, _) in custom::RHAI_BUILTINS {
+        if let Some(info) = custom::rhai_builtin(name) {
+            registry.register(info);
+        }
+    }
 }
 
 /// The built-in effects as their WGSL, in the order the lists show them:
@@ -1823,7 +1829,7 @@ mod label_tests {
         assert_eq!(sobel.translated_name(), "Edge Glow");
         let wgsl = wgsl_builtins().into_iter().find(|i| i.name == "distance_field").expect("ships");
         assert!(wgsl.display_name.is_empty(), "a WGSL built-in carries no inline label");
-        for (name, source) in custom::all_twins() {
+        for (name, source) in custom::rhai_builtins() {
             let twin = custom::compile(source, crate::provenance::Provenance::Builtin).expect("compiles");
             let info = reg.get(name).expect("ships");
             assert_eq!(twin.display_name, info.translated_name(), "{name}: its title is the locale's");
