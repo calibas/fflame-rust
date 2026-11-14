@@ -21,7 +21,7 @@ egui_dock = "0.19"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # The path of a value a config could not read, so it can be set aside and
-# the rest loaded (config::unread; docs/projects/api-updates.md, rule 5).
+# the rest loaded (config::unread; docs/archive/projects/api-updates.md, rule 5).
 serde_path_to_error = "0.1"
 log = "0.4"
 anyhow = "1.0"
