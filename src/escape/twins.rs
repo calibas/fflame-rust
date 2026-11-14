@@ -207,7 +207,8 @@ pub fn retired(name: &str) -> bool {
 /// +5%, the Mandelbrot at 4000 iterations). Stripe Average and Position
 /// Map joined once an angle of a value guarded away from zero took the
 /// raw atan2 (`lang::wgsl`, `nonzero_facts`; +4.4% and +2.5%, 2048x1536,
-/// the best of 31); Curvature Average, +5.7% so, waits.
+/// the best of 31); Curvature Average at +5.7% so, by the user's call --
+/// close enough -- the one past the line.
 pub const RETIRED_COLORINGS: &[&str] = &[
     "escape_count",
     "orbit_trap",
@@ -236,6 +237,7 @@ pub const RETIRED_COLORINGS: &[&str] = &[
     "image_trap",
     "stripe_average",
     "position_map",
+    "curvature_average",
 ];
 
 /// Whether the built-in colouring `name` renders as its twin

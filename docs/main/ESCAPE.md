@@ -2860,9 +2860,10 @@ aside, and wait on their deep views (the tables below).
 
 **Colourings** retire the same way (`twins::RETIRED_COLORINGS`,
 2026-11-14), by the same line on both paths, and resolve to their twins
-in the same step. Retired: 27 of the 28 -- all but **Curvature
-Average** (+5.7% on the direct path, 2048x1536, the best of 31). Stripe
-Average and Position Map joined (+4.4%, +2.5%) once the angle of a
+in the same step. Retired: all 28. **Curvature Average** is the one
+past the line, by decision (+5.7% on the direct path, 2048x1536, the
+best of 31: close enough). Stripe Average, Position Map and it joined
+last (+4.4%, +2.5%, from +13%, +8.6%, +12.5%) once the angle of a
 value a branch holds away from zero took the raw `atan2`: the
 generator records what an arm's test proves nonzero -- `!(|w|^2 < c)`,
 `!(re w == 0 && im w == 0)`, or several joined by `||` -- and the exact

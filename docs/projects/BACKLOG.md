@@ -213,11 +213,12 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   orbits in the store, flatten references to in-place big floats,
   Newton's `z^p sin z - 1` at a basin boundary, the scaled rung's f32
   reference sums (Ducks). §"After phase 4" item 6.
-- **Retire the colouring built-ins**: 27 of 28 retired 2026-11-14 on
-  branch `retire-escape-builtins` ([ESCAPE.md](../main/ESCAPE.md#retired-built-ins)).
-  Left: Curvature Average, +5.7% on the direct path (2048x1536, the best
-  of 31; the 1024x768 measurement swings by 10% there) -- it passes on
-  the perturbed path. A texture layer still draws its built-in.
+- **The colouring built-ins' code**: all 28 retired to their twins
+  2026-11-14 on branch `retire-escape-builtins`
+  ([ESCAPE.md](../main/ESCAPE.md#retired-built-ins); Curvature Average
+  at +5.7% on the direct path, accepted). A texture layer still draws
+  its built-in colouring, and the built-ins stay as the parity tests'
+  reference.
 - **Held structural keyframes** (formula source and name as one target);
   a formula randomiser. §"Phase 4 … step 8".
 - **Formula library in the Fractal Browser**, and an API formula corpus.
