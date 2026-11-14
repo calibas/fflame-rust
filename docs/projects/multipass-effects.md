@@ -174,8 +174,7 @@ Decisions taken as recommended (the user may amend before phase 4):
    step by then at 60 fps). Tests: `a_persistent_buffer_follows_the_clock`,
    `trails_fade_frame_by_frame`, `a_videos_frames_carry_a_temporal_effects_history`,
    the timeline's and the warm-up's unit tests.
-   Not exercised in the running app yet: the viewport's playback and
-   Reset (the clock and its rules are tested without it).
+   Tested by hand in the app (2026-11-14): all works.
 5. **Docs and the API.** DONE 2026-11-14. EFFECTS.md (the runner, the
    uniform, multi-pass, the clock, the dialect, the shipped list),
    ANIMATION.md (*Temporal effects*), ARCHITECTURE.md. The contract and
