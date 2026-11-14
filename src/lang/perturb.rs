@@ -153,6 +153,28 @@ fn done_parts(test: &IExpr) -> Vec<IExpr> {
     parts
 }
 
+/// Whether the formula's test reads the values its equations carry
+/// (`Program::carried`) only where it settles -- `|z - v|` under a fixed
+/// bound, a convergent formula's previous z -- and so to f32's
+/// resolution of an O(1) z. A test that weighs one against the view's
+/// size (`unity`'s `|r2 - 1| < 4 / (magn rows)`) needs it to the pixel,
+/// which the scaled rung does not hold: such a formula perturbs on the
+/// floatexp rung (`PerturbTier::Custom::deep`).
+pub fn reads_carried_only_to_settle(p: &Program) -> bool {
+    fn reads(e: &IExpr, vars: &[VarId]) -> bool {
+        match &e.kind {
+            IExprKind::Var(v) => vars.contains(v),
+            IExprKind::Elem(v, a) => vars.contains(v) || reads(a, vars),
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => reads(a, vars),
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => reads(a, vars) || reads(b, vars),
+            _ => false,
+        }
+    }
+    let Some(test) = p.bailout.as_ref() else { return true };
+    let vars: Vec<VarId> = p.carried.iter().map(|c| c.var).collect();
+    done_parts(test).iter().all(|d| is_settle(d) || !reads(d, &vars))
+}
+
 /// Whether a part of "done" is the iterate's settling: its distance from
 /// a variable under a bound the same at every pass.
 fn is_settle(d: &IExpr) -> bool {

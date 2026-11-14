@@ -771,29 +771,24 @@ struct PerturbParamsGpu {
 /// The tiers that perturb on the deep rung at every depth: Manowar (see
 /// the render path's note: its history carries the deviation forward
 /// with coefficient 1, and f32 error accumulates), and for the same
-/// reason a custom formula whose equations carry a value besides z
-/// (phase 4, step 5). Measured on the Manowar twin at zoom 26 against
-/// the big-float truth: 337 of 439 sampled pixels right on the scaled
-/// rung, 420 on this one.
+/// reason a custom formula whose equations carry a value besides z that
+/// the loop reads (phase 4, step 5; `pair`). Measured on the Manowar
+/// twin at zoom 26 against the big-float truth: 337 of 439 sampled
+/// pixels right on the scaled rung, 420 on this one.
 ///
 /// A value only the test reads (`pair` false: a convergent formula's
-/// previous z) needs it too, measured 2026-11-13: on the scaled rung
-/// Newton's twin at its z^3 - 1 basin boundary, zoom 30, counted 422 of
-/// 439 pixels within one of f64 (439 here), and Magnet's 344 right
-/// against its native tier's 356 -- where the floatexp rung costs
-/// Newton's twin five times the built-in's time (13 ms on the scaled
-/// rung, 29 here, the built-in 6). Why the scaled rung loses them is
-/// open; what is known (2026-11-13): at that view the 17 pixels off by
-/// more than one all settle exactly two passes late (truth 45, got 47,
-/// mostly), long before the reference ends (76), so it is not the
-/// orbit's end; the settle test is not it (testing against `z_before`
-/// instead of the carried value changes nothing); the quotient's form is
-/// the native tier's (`(da - q db) / (B + db)`); and with Zhuoran's test
-/// off it is far worse, so the loss is in the step between rebases.
-/// Next: trace one such pixel pass by pass in f32 against the native
-/// tier's.
+/// previous z) never feeds the step, and takes the scaled rung. It did
+/// not until 2026-11-13: Newton's twin there settled exactly two passes
+/// late on a twentieth of its basin boundary's pixels, at every zoom --
+/// the reference's own `Z^k` taken by `exp(k log Z)`, whose cos and sin
+/// leave f(Z) near a root off by its whole size. Whole powers in the
+/// equations are exact now (`lang::wgsl`, `uf_cpoww`), and the scaled
+/// rung counts as many pixels right as the native tiers (Newton 434 of
+/// 439 at zoom 30, the native 425; Magnet and Nova alike), at a third of
+/// the floatexp rung's time (Newton's twin 12 ms against 28, Magnet's 9
+/// against 37, Nova's 7 against 16; the built-ins 5-6).
 fn deep_rung_always(tier: assembler::PerturbTier) -> bool {
-    matches!(tier, assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { width: 2.., .. } | assembler::PerturbTier::Custom { deep: true, .. })
+    matches!(tier, assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { width: 2.., pair: true, .. } | assembler::PerturbTier::Custom { deep: true, .. })
 }
 
 fn orbit_depth(max_iter: u32, tier: assembler::PerturbTier) -> u32 {

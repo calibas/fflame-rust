@@ -3331,6 +3331,10 @@ impl<'p> Gen<'p> {
             Add | Sub => format!("({l} {} {r})", op.symbol()),
             Mul if ty == Ty::Complex => format!("{}({l}, {r})", self.use_(Helper::CMul)),
             Div if ty == Ty::Complex => format!("{}({l}, {r})", self.use_(Helper::CDiv)),
+            // In the perturbation equations a whole exponent by squaring
+            // (`Helper::CPowW`); the direct path keeps the polar form, as
+            // the built-ins' `esc_cpow` has it.
+            Pow if ty == Ty::Complex && matches!(self.ctx, Ctx::Perturb | Ctx::PerturbBailout) => format!("{}({l}, {r})", self.use_(Helper::CPowW)),
             Pow if ty == Ty::Complex => format!("{}({l}, {r})", self.use_(Helper::CPow)),
             Pow => format!("{}({l}, {r})", self.use_(Helper::FPow)),
             Mod if ty == Ty::Int => format!("{}({l}, {r})", self.use_(Helper::IMod)),
@@ -4528,6 +4532,9 @@ enum Helper {
     CLog1p,
     CSinSmall,
     CSinhSmall,
+    /// A power in the perturbation equations: a whole exponent by
+    /// squaring (`uf_cpowi`), any other by `uf_cpow`.
+    CPowW,
 }
 
 impl Helper {
@@ -4562,6 +4569,7 @@ impl Helper {
             CSqr => "uf_csqr",
             CPowI => "uf_cpowi",
             CPow => "uf_cpow",
+            CPowW => "uf_cpoww",
             CRecip => "uf_crecip",
             CConj => "uf_cconj",
             CFlip => "uf_cflip",
@@ -4611,6 +4619,7 @@ impl Helper {
             FPow => &[],
             CSqr | CPowI => &[CMul, CDiv],
             CPow => &[CMul, CLog, CExp],
+            CPowW => &[CMul, CDiv, CPow],
             CRecip => &[CDiv],
             CArg | CArgC => &[Atan2],
             CLog => &[Atan2],
@@ -4847,6 +4856,36 @@ fn uf_draw() -> f32 {
         e = e >> 1u;
     }
     return acc;
+}",
+            // The reference's powers in the perturbation equations, `A^p`
+            // for an exponent a parameter sets: a whole one (Multibrot's,
+            // McMullen's n and m) by squaring, exact where `exp(p log A)`
+            // rounds, and without the transcendentals every pass (McMullen's
+            // twin at depth paid three, 2026-11-13). 0 at the origin, as
+            // `uf_cpow`.
+            CPowW => "fn uf_cpoww(z: vec2<f32>, w: vec2<f32>) -> vec2<f32> {
+    if ((w.y == 0.0) && (w.x == round(w.x)) && (abs(w.x) <= 64.0) && !((z.x == 0.0) && (z.y == 0.0))) {
+        var b = z;
+        if (w.x < 0.0) {
+            b = uf_cdiv(vec2<f32>(1.0, 0.0), z);
+        }
+        let e = u32(abs(w.x));
+        var acc = vec2<f32>(1.0, 0.0);
+        acc = select(acc, uf_cmul(acc, b), (e & 1u) != 0u);
+        b = uf_cmul(b, b);
+        acc = select(acc, uf_cmul(acc, b), (e & 2u) != 0u);
+        b = uf_cmul(b, b);
+        acc = select(acc, uf_cmul(acc, b), (e & 4u) != 0u);
+        b = uf_cmul(b, b);
+        acc = select(acc, uf_cmul(acc, b), (e & 8u) != 0u);
+        b = uf_cmul(b, b);
+        acc = select(acc, uf_cmul(acc, b), (e & 16u) != 0u);
+        b = uf_cmul(b, b);
+        acc = select(acc, uf_cmul(acc, b), (e & 32u) != 0u);
+        b = uf_cmul(b, b);
+        return select(acc, uf_cmul(acc, b), (e & 64u) != 0u);
+    }
+    return uf_cpow(z, w);
 }",
             CPow => "fn uf_cpow(z: vec2<f32>, w: vec2<f32>) -> vec2<f32> {
     if (z.x == 0.0 && z.y == 0.0) {

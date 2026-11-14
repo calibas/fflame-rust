@@ -797,8 +797,11 @@ pub fn perturb_tier(escape: &EscapeConfig) -> Option<super::assembler::PerturbTi
         return None;
     }
     let hash = slot_hash(&escape.formula);
-    let deep = lang::perturb::grows_past_f32(&prog, &inputs.params, &inputs.env);
     let (stride, width) = (how.references() as u8, (1 + prog.carried.len()) as u8);
+    // A carried value only the test reads takes the scaled rung where the
+    // test only settles on it (`renderer::deep_rung_always`); one it weighs
+    // otherwise needs the floatexp rung's precision.
+    let deep = lang::perturb::grows_past_f32(&prog, &inputs.params, &inputs.env) || (width > 1 && !how.pair && !lang::perturb::reads_carried_only_to_settle(&prog));
     // The built-ins' margin test needs the reference's |Z|^2 at the
     // pixel's index: one reference, nothing carried.
     let margin = stride == 1 && width == 1 && lang::perturb::perturb_test(&prog).as_ref().and_then(lang::perturb::modulus_bound).is_some();
