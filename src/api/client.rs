@@ -11,7 +11,7 @@ use serde::Serialize;
 /// Build the full URL from base URL and path.
 ///
 /// Every request says what this build reads: `reader=N`, N the highest
-/// config version it reads (docs/projects/api-updates.md, rule 2). The
+/// config version it reads (docs/archive/projects/api-updates.md, rule 2). The
 /// server answers in that version's vocabulary -- lists without what this
 /// build cannot open, no value it has never seen. A request without it is
 /// answered in the original vocabulary (0.5's).

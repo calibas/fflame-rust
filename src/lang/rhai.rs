@@ -166,7 +166,7 @@ pub fn effect(source: &str) -> Result<Program, Vec<Diag>> {
 
 thread_local! {
     /// The function a multi-pass effect's pass lowers in place of
-    /// `effect` (docs/projects/multipass-effects.md).
+    /// `effect` (docs/archive/projects/multipass-effects.md).
     static EFFECT_FN: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
@@ -1067,7 +1067,7 @@ struct Lowerer<'s> {
     texture_reads: i64,
     /// The function an effect's lowering takes -- `effect`, or a
     /// multi-pass effect's pass -- and the effect's buffers by name, their
-    /// index their place (docs/projects/multipass-effects.md).
+    /// index their place (docs/archive/projects/multipass-effects.md).
     effect_fn: String,
     effect_buffers: Vec<String>,
     /// Lowering a simulation's model (P4), and which of its functions.
@@ -4336,7 +4336,7 @@ impl<'s> Lowerer<'s> {
                     Base::Ctx if self.effect => match name {
                         "uv" => Ok(mk(ExprKind::Predef("pixel".into()), span)),
                         "width" | "height" | "density_mean" | "pixel_scale" => Ok(mk(ExprKind::Predef(name.into()), span)),
-                        // A multi-pass effect's (docs/projects/multipass-effects.md).
+                        // A multi-pass effect's (docs/archive/projects/multipass-effects.md).
                         "xy" | "time" | "dt" | "pass" | "passes" | "step" | "level" | "levels" | "frame" => Ok(mk(ExprKind::Predef(format!("effect_{name}")), span)),
                         o => self.err(
                             *p,

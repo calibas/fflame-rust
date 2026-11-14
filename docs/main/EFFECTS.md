@@ -323,7 +323,7 @@ The library also defines colour-space helpers (`rgb_to_hsl`,
 
 ### Multi-pass effects
 
-An effect whose `EffectInfo::passes` is set (docs/projects/multipass-effects.md)
+An effect whose `EffectInfo::passes` is set (docs/archive/projects/multipass-effects.md)
 runs through `renderer::effect_passes`, the same in both chains: each
 pass in order, each its own fragment entry point in the effect's one
 module, each repeat its own parameter slot. A pass writes one of the

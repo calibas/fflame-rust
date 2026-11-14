@@ -1,4 +1,4 @@
-//! The viewport's effect clock (docs/projects/multipass-effects.md, T1-T2):
+//! The viewport's effect clock (docs/archive/projects/multipass-effects.md, T1-T2):
 //! where the shown picture is in the animation, for the effects that read
 //! the time and a temporal effect's history.
 //!

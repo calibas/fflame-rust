@@ -1,6 +1,6 @@
 //! The Scripts panel's and the Formula Editor's half of the online
 //! library: one scripts resource for every kind
-//! (docs/projects/rhai-scripts-online.md). A request names its local
+//! (docs/archive/projects/rhai-scripts-online.md). A request names its local
 //! file as a [`Local`]: a CPU script of the script store, or an entry of
 //! the formula store, published under its own `INFO.id`
 //! ([`crate::api::entries`]).

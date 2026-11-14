@@ -39,7 +39,7 @@ pub struct RenderEngines {
     #[cfg(feature = "terrain")]
     pub sim_terrain: Option<crate::sim::terrain::SimTerrain>,
     /// The effect chain, kept so a multi-pass effect's persistent buffers
-    /// carry from one frame to the next (docs/projects/multipass-effects.md;
+    /// carry from one frame to the next (docs/archive/projects/multipass-effects.md;
     /// the frame is the job's `effect_clock`).
     pub effects: Option<EffectChainRunner>,
 }
@@ -1760,7 +1760,7 @@ mod motion_tests {
     }
 
     /// A temporal effect through `render_with` as the video export renders
-    /// (docs/projects/multipass-effects.md): with the engines carried and
+    /// (docs/archive/projects/multipass-effects.md): with the engines carried and
     /// each frame's clock, a frame darker than the one before keeps the
     /// last one's trail; the same frame rendered as a still, or without
     /// the engines, has none.

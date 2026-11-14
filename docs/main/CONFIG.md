@@ -203,7 +203,7 @@ plain-derive JSON; see *Versioning*.
 ### Reading a newer config
 
 A config carries the version that wrote it and the lowest version that
-reads it (`min_reader`; [api-updates.md](../projects/api-updates.md),
+reads it (`min_reader`; [api-updates.md](../archive/projects/api-updates.md),
 rule 5). A build at least `min_reader` but older than `version` loads it.
 What it cannot read goes into `FractalConfig::unread`
 ([src/config/unread.rs](../../src/config/unread.rs)), by JSON pointer:

@@ -478,7 +478,7 @@ Rendering, and a subflame viewed in isolation, are not blurred.
 An effect may remember earlier frames: a persistent buffer, as the
 built-in **Trails** keeps its fading afterimage
 ([EFFECTS.md](EFFECTS.md#temporal-effects-the-clock); the plan,
-[multipass-effects.md](../projects/multipass-effects.md)). History is
+[multipass-effects.md](../archive/projects/multipass-effects.md)). History is
 counted in timeline frames, never in redraws of one:
 
 - **Video export**: each frame at its clock (`EffectClock::video`), on

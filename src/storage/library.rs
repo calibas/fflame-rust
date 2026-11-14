@@ -55,7 +55,7 @@ impl Kind {
 
 impl Kind {
     /// What the server's scripts resource calls it (ffapi's `script_kind`,
-    /// the app's spellings: docs/projects/rhai-scripts-online.md, decision
+    /// the app's spellings: docs/archive/projects/rhai-scripts-online.md, decision
     /// 1). `None` for what is not published: a UF or Fractint file, one
     /// whose kind could not be read.
     pub fn wire(self) -> Option<&'static str> {

@@ -1,5 +1,5 @@
 //! The API integration test: the client's own calls against a real `ffapi`
-//! on this machine (docs/projects/api-updates.md, decision 7).
+//! on this machine (docs/archive/projects/api-updates.md, decision 7).
 //!
 //! Run by `python scripts/api_integration.py`, which starts the server on a
 //! free port with a scratch-safe environment (email off) and runs these with
@@ -203,7 +203,7 @@ fn the_server_catalogs_what_the_app_saves() {
     assert_eq!((app.engine.as_str(), app.scene.as_str()), ("escape", "terrain"));
 }
 
-/// A Rhai formula on the scripts resource (docs/projects/rhai-scripts-online.md):
+/// A Rhai formula on the scripts resource (docs/archive/projects/rhai-scripts-online.md):
 /// published under its own `INFO.id` and updated by its author; another
 /// account cannot take the id, finds it by kind, and adopts it into the
 /// formula library as somebody else's, the id kept.

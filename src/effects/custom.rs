@@ -29,7 +29,7 @@ use crate::scripted::{self, Ledger};
 /// bytes, `effect_chain::EffectParams`), the same for colour and density
 /// effects, for one pass or several. A parameter is `get_param(slot)`, in
 /// the order `PARAMS` declares them; the pass, pyramid and time fields are
-/// a multi-pass effect's (docs/projects/multipass-effects.md), and read
+/// a multi-pass effect's (docs/archive/projects/multipass-effects.md), and read
 /// as 0 by one that runs once outside an animation.
 const TEMPLATE_HEAD: &str = "struct EffectParams {\n    params: array<vec4<f32>, 12>,\n    width: u32,\n    height: u32,\n    density_mean: f32,\n    pixel_scale: f32,\n    \
 pass_index: u32,\n    passes: u32,\n    step: u32,\n    level: u32,\n    levels: u32,\n    buffer_levels: u32,\n    frame: u32,\n    time: f32,\n    dt: f32,\n    \
@@ -117,7 +117,7 @@ pub fn assemble(effect: &lang::wgsl::EffectWgsl) -> String {
     out
 }
 
-/// A multi-pass effect's module (docs/projects/multipass-effects.md): the
+/// A multi-pass effect's module (docs/archive/projects/multipass-effects.md): the
 /// template's head, each buffer's binding and reads, each pass's function
 /// (`fx<k>_effect`, `lang::wgsl::PASS_PREFIXES`) and its entry point
 /// (`plan.passes[k].entry`). Only the last pass may blend.
@@ -275,7 +275,7 @@ pub const BUILTIN_TWINS: &[(&str, &str)] = &[
     ("worley_noise", include_str!("../../assets/effects/worley_noise.rhai")),
     ("simplex_noise", include_str!("../../assets/effects/simplex_noise.rhai")),
     ("domain_warp", include_str!("../../assets/effects/domain_warp.rhai")),
-    // Multi-pass (docs/projects/multipass-effects.md).
+    // Multi-pass (docs/archive/projects/multipass-effects.md).
     ("distance_field", include_str!("../../assets/effects/distance_field.rhai")),
 ];
 
@@ -297,7 +297,7 @@ pub fn all_twins() -> impl Iterator<Item = &'static (&'static str, &'static str)
 /// `assets/effects/<name>.rhai`: registered after the WGSL list, in this
 /// order (append-only, as every registry is).
 pub const RHAI_BUILTINS: &[(&str, &str)] = &[
-    // A multi-pass effect over pyramids (docs/projects/multipass-effects.md).
+    // A multi-pass effect over pyramids (docs/archive/projects/multipass-effects.md).
     ("bloom", include_str!("../../assets/effects/bloom.rhai")),
     // A temporal effect: a persistent buffer.
     ("trails", include_str!("../../assets/effects/trails.rhai")),
@@ -579,7 +579,7 @@ fn effect(c, p, ctx) {
         assert!(wgsl.contains("textureLoad"));
     }
 
-    /// A multi-pass effect of the user's (docs/projects/multipass-effects.md):
+    /// A multi-pass effect of the user's (docs/archive/projects/multipass-effects.md):
     /// two passes into a buffer, then the output; a module naga accepts
     /// (`compile` validates one of the user's), an entry point a pass.
     pub(crate) const TWO_PASS: &str = r#"

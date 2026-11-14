@@ -194,7 +194,7 @@ pub struct UiResponse {
     /// The Effects panel's Clear Cache.
     pub clear_effect_cache_requested: bool,
     /// The Effects panel's Reset: a temporal effect's history starts over
-    /// (docs/projects/multipass-effects.md, T2).
+    /// (docs/archive/projects/multipass-effects.md, T2).
     pub reset_effect_history: bool,
 }
 

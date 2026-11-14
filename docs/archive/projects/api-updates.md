@@ -1,11 +1,13 @@
 # API updates without breaking older apps
 
+> **Archived 2026-11-14** -- finished: steps 1-5 built and merged in both repositories (client PRs #160-#163, ffapi through migration 108; multi-pass effects added migrations 109-110). What is left is the release's: deploying the server before the app, the script import, the browser app, in [v0.6.0-release.md](../../projects/v0.6.0-release.md). The catalog as built: [api-catalog-spec.md](../../projects/api-catalog-spec.md).
+
 Status: **step 1 merged** (PR #160); **step 2 built** (ffapi `reader-vocabulary`, migration 100); **step 3 mostly built 2026-11-11** (ffapi `catch-up`, migrations 101-105, stacked; client `api-catch-up`); the catalog facets and the API integration test still to come; steps 4-5 after. Sources: a
 survey of the client (`src/api/`), the config, and the server repository
 (`c:\projects\ffapi`, axum + Postgres, latest migration 099), checked
 against the code where it mattered. This plan absorbs the API half of
-[v0.6.0-release.md](v0.6.0-release.md) and P6 of
-[rhai-plugins.md](../archive/projects/rhai-plugins.md).
+[v0.6.0-release.md](../../projects/v0.6.0-release.md) and P6 of
+[rhai-plugins.md](rhai-plugins.md).
 
 The goal, in the user's words: "do all the API updates in a way that
 won't break older versions of the app. There's numerous API updates
@@ -214,11 +216,11 @@ blur; `openapi.json` refreshed from a local server. Variation names were
 already unvalidated (Rhai keys pass). Every real config measured fits the
 limits (largest blob ~11 KB of 256 KB). The abandoned branch is gone
 (its corpora committed as 79eb91f). The API integration test (decision 7)
-and **the catalog facets** ([api-catalog-spec.md](api-catalog-spec.md))
+and **the catalog facets** ([api-catalog-spec.md](../../projects/api-catalog-spec.md))
 are built too: client branch `catalog`, ffapi branch `catalog` (migration
 106), stacked.
 
-- **The catalog's facets** ([api-catalog-spec.md](api-catalog-spec.md)):
+- **The catalog's facets** ([api-catalog-spec.md](../../projects/api-catalog-spec.md)):
   each saved config's engine, scene (2D, 3D, solid, terrain), versions and
   components (formula, model, variations: a twin unedited counts as its
   built-in), so configs can be browsed by fractal type and searched by

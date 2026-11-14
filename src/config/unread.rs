@@ -1,5 +1,5 @@
 //! What a config held that this build could not read, kept so that a save
-//! gives it back (docs/projects/api-updates.md, rule 5).
+//! gives it back (docs/archive/projects/api-updates.md, rule 5).
 //!
 //! Two kinds of thing, both found at load and both put back by
 //! [`Unread::restore`] when the config is written:

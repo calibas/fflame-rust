@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// A wire enum spelled as a string, which reads a value this build does
 /// not know as `Unknown(value)` instead of failing the whole response,
-/// and writes it back as read (docs/projects/api-updates.md, step 1). A
+/// and writes it back as read (docs/archive/projects/api-updates.md, step 1). A
 /// newer server's new value -- a render mode, a phase, a loop mode --
 /// then costs an old client that one item, not the page it was on.
 macro_rules! wire_enum {
@@ -65,7 +65,7 @@ macro_rules! wire_enum {
 /// A list from the API, read item by item: an item this build cannot
 /// read -- a newer server's shape -- is skipped and logged, and the rest
 /// of the list is kept. Before this, one such item failed the whole page
-/// (an escape flame in a 0.5 client's list: docs/projects/api-updates.md,
+/// (an escape flame in a 0.5 client's list: docs/archive/projects/api-updates.md,
 /// hazard 2).
 #[derive(Debug, Clone)]
 pub struct Lenient<T>(pub Vec<T>);

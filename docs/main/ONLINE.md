@@ -89,7 +89,7 @@ repositories. The client implements a subset of it.
 `reader=<CURRENT_CONFIG_VERSION>`, so the server can answer in that
 version's vocabulary (lists without what this build cannot open, no
 value it has never seen). A request without it gets the original
-vocabulary, 0.5's ([api-updates.md](../projects/api-updates.md), rule 2;
+vocabulary, 0.5's ([api-updates.md](../archive/projects/api-updates.md), rule 2;
 the server side is step 2). The desktop sends `User-Agent:
 FractalArtEditor/<version>`, for the server's logs only: what a client
 is sent never depends on it.
@@ -320,7 +320,7 @@ See [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md).
 ## The online script library
 
 One scripts resource holds every Rhai kind
-([rhai-scripts-online.md](../projects/rhai-scripts-online.md)): the CPU
+([rhai-scripts-online.md](../archive/projects/rhai-scripts-online.md)): the CPU
 scripts (`generator`, `modifier`, `library`) and the formula library's
 entries (`formula`, `coloring`, `solid`, `field`, `field_coloring`,
 `variation`, `effect`, `sim_model`, `sim_coloring`, `track`; the app's

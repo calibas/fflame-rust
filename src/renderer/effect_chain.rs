@@ -156,7 +156,7 @@ const DENSITY_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
 
 /// Where a picture is in an animation, for the effects that read it
 /// (`ctx.frame`, `ctx.time`, `ctx.dt`) and for a multi-pass effect's
-/// persistent buffers (docs/projects/multipass-effects.md, T1-T4;
+/// persistent buffers (docs/archive/projects/multipass-effects.md, T1-T4;
 /// `renderer::effect_passes`).
 ///
 /// A still -- the default -- has no history: frame 0, a persistent
@@ -208,7 +208,7 @@ impl Default for EffectClock {
 /// Total size: 256 bytes, the slot stride exactly: params=192, then
 /// width, height, density_mean, pixel_scale (16), then a multi-pass
 /// effect's pass fields and the frame's time fields
-/// (docs/projects/multipass-effects.md; 48 with padding). A shader that
+/// (docs/archive/projects/multipass-effects.md; 48 with padding). A shader that
 /// declares the first 208 bytes alone -- every WGSL effect written before
 /// them, `density_mean` where an 8-byte padding was -- binds the same
 /// layout and ignores the rest.
@@ -413,7 +413,7 @@ pub struct EffectChainRunner {
     width: u32,
     height: u32,
     /// Multi-pass effects compiled, by name (`renderer::effect_passes`;
-    /// docs/projects/multipass-effects.md), and the buffers of each one in
+    /// docs/archive/projects/multipass-effects.md), and the buffers of each one in
     /// a chain, by its chain and its place among the enabled effects.
     multipass: HashMap<String, super::effect_passes::Compiled>,
     multipass_states: HashMap<(EffectCategory, usize), super::effect_passes::State>,
@@ -1546,7 +1546,7 @@ mod gpu_tests {
         registry.remove_by_name(&multiply);
     }
 
-    /// A multi-pass effect (docs/projects/multipass-effects.md) runs as its
+    /// A multi-pass effect (docs/archive/projects/multipass-effects.md) runs as its
     /// plan says: a pass writes a buffer, a repeated pass reads the
     /// version before (the ping-pong), `ctx.pass` counts, `ctx.step`
     /// halves, a half-size buffer reads back filtered, and the last pass
@@ -1598,7 +1598,7 @@ fn effect(c, p, ctx) {
         }
     }
 
-    /// Pyramids (docs/projects/multipass-effects.md): a pass over levels
+    /// Pyramids (docs/archive/projects/multipass-effects.md): a pass over levels
     /// writes each one, `ctx.level` and `ctx.levels` saying which, the
     /// grid halving; its target reads the level it came from, zero at the
     /// first; another pyramid reads at the level being written.
@@ -1647,7 +1647,7 @@ fn effect(c, p, ctx) { buffer("q", ctx.uv) }
         }
     }
 
-    /// A persistent buffer (docs/projects/multipass-effects.md, T1-T3) on
+    /// A persistent buffer (docs/archive/projects/multipass-effects.md, T1-T3) on
     /// one chain run at a sequence of clocks: the next frame carries the
     /// history on, the same frame again re-reads it, a jump or a new epoch
     /// starts over, a still has none; `ctx.frame`, `ctx.time`, `ctx.dt`

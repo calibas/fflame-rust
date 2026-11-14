@@ -18,7 +18,7 @@ uses), and this script sets, for that run only:
     written into the API's working tree.
 
 The server's log is output/api_integration/server.log.
-See docs/projects/api-updates.md, decision 7.
+See docs/archive/projects/api-updates.md, decision 7.
 """
 
 import argparse

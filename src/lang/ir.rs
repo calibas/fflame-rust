@@ -236,7 +236,7 @@ pub enum Predef {
     /// for a colour effect) and how many pixels one picture pixel is.
     DensityMean,
     PixelScale,
-    /// A multi-pass effect's (docs/projects/multipass-effects.md): the
+    /// A multi-pass effect's (docs/archive/projects/multipass-effects.md): the
     /// pixel's position in the grid the pass writes (WGSL's
     /// `position.xy`); the animation's time and the seconds since the
     /// last frame; and its whole numbers by index -- 0 the repeat's pass,

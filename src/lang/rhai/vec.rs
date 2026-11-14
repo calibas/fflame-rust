@@ -526,7 +526,7 @@ impl Lowerer<'_> {
 
     /// A multi-pass effect's buffer read's arguments: the buffer, named by
     /// a string its `INFO` declares, as its index -- a literal -- then the
-    /// rest lowered (docs/projects/multipass-effects.md).
+    /// rest lowered (docs/archive/projects/multipass-effects.md).
     pub(super) fn buffer_args(&mut self, name: &str, args: &[Expr], scope: &mut Scope, p: Position) -> R<Vec<Val>> {
         let Some(Expr::StringConstant(b, _)) = args.first() else {
             return self.err(p, format!("`{name}` takes the buffer's name first, a string: `{name}(\"coords\", ..)`"));

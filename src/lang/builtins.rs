@@ -217,7 +217,7 @@ pub enum Host {
     EmitOffset3,
     EmitSuppress,
     /// A multi-pass effect's read of one of its buffers
-    /// (docs/projects/multipass-effects.md): filtered at `(u, v)` in 0..1,
+    /// (docs/archive/projects/multipass-effects.md): filtered at `(u, v)` in 0..1,
     /// or the texel at whole `(x, y)`, clamped, each into the call site's
     /// slot -- the third argument, as a texture load's -- the buffer by its
     /// index the fourth; its parts read from there; the same one a part

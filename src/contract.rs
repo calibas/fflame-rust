@@ -336,7 +336,7 @@ pub fn generate() -> serde_json::Value {
                          eliminate. `kinds`: the CPU scripts (generator, \
                          modifier, library), then the formula library's \
                          entries, each published under its own `INFO.id` \
-                         (docs/projects/rhai-scripts-online.md).",
+                         (docs/archive/projects/rhai-scripts-online.md).",
             "builtin_scripts": builtin_scripts,
             "kinds": crate::storage::library::ALL_PUBLISHED.iter().filter_map(|k| k.wire()).collect::<Vec<_>>(),
             "flags": {

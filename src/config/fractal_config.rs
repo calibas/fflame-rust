@@ -100,7 +100,7 @@ pub const CURRENT_CONFIG_VERSION: u32 = 7;
 
 /// The lowest config version whose readers read what this build writes
 /// correctly: written as every config's `min_reader`
-/// (docs/projects/api-updates.md, rule 5). A reader refuses a config whose
+/// (docs/archive/projects/api-updates.md, rule 5). A reader refuses a config whose
 /// `min_reader` is above its own version, and reads, with a warning, one
 /// merely written by a newer version, keeping what it cannot read
 /// ([`crate::config::unread`]).
@@ -117,7 +117,7 @@ pub const MIN_READER_VERSION: u32 = 7;
 /// config. They replaced a hand-kept list that repeated the field list
 /// (`remove_default_fields`), so every field now says it on its own line --
 /// and a field whose default changes is made always-written by deleting its
-/// test (docs/projects/api-updates.md, rule 5).
+/// test (docs/archive/projects/api-updates.md, rule 5).
 mod skip {
     use super::*;
 

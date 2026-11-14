@@ -688,7 +688,7 @@ pub struct App {
     // Post-processing effect chain
     pub(super) effect_chain: crate::renderer::effect_chain::EffectChainRunner,
     /// Where the shown picture is in the animation, for the effects
-    /// (`effect_timeline`; docs/projects/multipass-effects.md).
+    /// (`effect_timeline`; docs/archive/projects/multipass-effects.md).
     pub(super) effect_timeline: effect_timeline::EffectTimeline,
 
     // Fullscreen state (two-stage: window fullscreen, then hide UI)

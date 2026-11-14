@@ -1429,11 +1429,11 @@ impl App {
 
     /// Poll for completed health check results and trigger periodic checks.
     /// Ask the server once for the newest release, and say so when this
-    /// build is behind (docs/projects/api-updates.md, rule 7). Only with
+    /// build is behind (docs/archive/projects/api-updates.md, rule 7). Only with
     /// online features on; silent on any failure.
     pub(super) fn poll_update_check(&mut self) {
         // A config just loaded from a newer version: say what happens to
-        // what this build cannot read (docs/projects/api-updates.md, rule 5).
+        // what this build cannot read (docs/archive/projects/api-updates.md, rule 5).
         if self.config_manager.take_newer_config_notice() {
             self.egui_layer.show_api_notification(&t!("api.newer_config"), false);
         }

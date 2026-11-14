@@ -394,7 +394,7 @@ config newer than v3: its gate is compiled in.
 **The update check** (0.6 on): with online features on, the app asks
 `GET /api/app/latest` once at startup and shows a notice when it is
 behind (`poll_update_check`). The server endpoint is still to be built
-(docs/projects/api-updates.md, step 2); until then the check fails
+(docs/archive/projects/api-updates.md, step 2); until then the check fails
 silently. No auto-update.
 
 ---

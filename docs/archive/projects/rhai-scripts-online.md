@@ -1,12 +1,14 @@
 # Rhai scripts online: one scripts resource for every kind
 
+> **Archived 2026-11-14** -- finished: built and merged (client PR #163, ffapi PR #3, migration 108). Reference: [ONLINE.md](../../main/ONLINE.md). Not built (section 4): a browsable script version history, in [BACKLOG.md](../../projects/BACKLOG.md).
+
 **Status 2026-11-12:** **built** on ffapi branch `rhai-scripts` (stacked
 on `flame-catalog-fields`; migration 108) and client branch
 `rhai-scripts-online`, not merged. All six decisions in §5 taken as recommended by the user the same day (the first publisher owns an id; the Formula Editor and one online library; configs keep carrying sources; the app's spellings; the catalog link; UF/Fractint left out). Where the build settled
 details the plan left open, §6 says. This is the API plan's
 step 4 ([api-updates.md](api-updates.md)), taken up by the user on
 2026-11-12 after first deferring it. The original intent is P6 of
-[rhai-plugins.md](../archive/projects/rhai-plugins.md): "a variation,
+[rhai-plugins.md](rhai-plugins.md): "a variation,
 effect, formula, colouring, solid, simulation rule, track or generator is
 published, found and adopted the same way."
 

@@ -1108,7 +1108,7 @@ impl FormulaEditorPanel {
             self.name = format!("{stem}.rhai");
         }
         // An edit of somebody else's published entry, saved over it, is a
-        // script of the user's own (docs/projects/rhai-scripts-online.md):
+        // script of the user's own (docs/archive/projects/rhai-scripts-online.md):
         // an id of its own, and no claim to be theirs or the server's.
         let target = formula_store::file_name_for(&self.name);
         let adopted = target.as_deref().and_then(formula_store::link_of).filter(|l| l.from_others && l.cloud_id.is_some());
@@ -1188,7 +1188,7 @@ impl FormulaEditorPanel {
     }
 
     /// Publish, update and unpublish the open entry
-    /// (docs/projects/rhai-scripts-online.md): a saved Rhai file of the
+    /// (docs/archive/projects/rhai-scripts-online.md): a saved Rhai file of the
     /// user's own, under its `INFO.id` -- given one first if it has none
     /// of its own, written into the file. What the server answers lands
     /// in the shared online status, shown here too.

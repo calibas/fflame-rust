@@ -1,6 +1,6 @@
 //! Payloads from the future: what a newer server or a newer app may send
 //! an older client, each read as specified and written back unchanged
-//! (docs/projects/api-updates.md, step 1). Every value here is one no
+//! (docs/archive/projects/api-updates.md, step 1). Every value here is one no
 //! build knows -- `hologram`, `sideways`, `Teleport` -- so these keep
 //! testing what an older client does with a newer one's data after the
 //! real new values arrive.

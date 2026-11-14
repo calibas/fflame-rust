@@ -1398,7 +1398,7 @@ pub async fn export_animation(
                 .with_engines(&mut engines)
                 .with_moments(&moments)
                 // A temporal effect's history carries frame to frame in
-                // `engines`' effect chain (docs/projects/multipass-effects.md).
+                // `engines`' effect chain (docs/archive/projects/multipass-effects.md).
                 .with_effect_clock(crate::renderer::effect_chain::EffectClock::video(frame as u64, export_config.fps))
                 .with_pixel_scale(render_h as f32 / height.max(1) as f32);
             match crate::renderer::render_with(&mut renderer, &device, &queue, job, &mut progress).await {

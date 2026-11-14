@@ -1,4 +1,4 @@
-//! A multi-pass effect's passes and buffers (docs/projects/multipass-effects.md).
+//! A multi-pass effect's passes and buffers (docs/archive/projects/multipass-effects.md).
 //!
 //! An effect without `INFO.passes` is one pass, `fn effect`, as every
 //! effect was. One with them runs each pass in order -- each its own

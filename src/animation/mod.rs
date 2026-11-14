@@ -289,7 +289,7 @@ pub struct TrackBinding {
 /// is written back exactly so. It plays nothing. Before this, one such
 /// track made the whole list unreadable, and the animation loaded with no
 /// tracks at all -- and a save then erased them on the server
-/// (docs/projects/api-updates.md, hazard 3).
+/// (docs/archive/projects/api-updates.md, hazard 3).
 #[derive(Debug, Clone)]
 pub struct Track {
     /// Target parameter path (ConfigPath string key)

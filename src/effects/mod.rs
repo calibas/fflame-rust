@@ -27,7 +27,7 @@ pub fn ensure_custom(config: &crate::config::FractalConfig) {
 }
 
 /// How far back the temporal effects `config` runs remember
-/// (docs/projects/multipass-effects.md, T4): `None` when it runs none;
+/// (docs/archive/projects/multipass-effects.md, T4): `None` when it runs none;
 /// `Some(Some(k))` when every one forgets past `k` frames (`INFO.warmup`,
 /// the largest); `Some(None)` when one remembers from the start.
 pub fn temporal_window(config: &crate::config::FractalConfig) -> Option<Option<u32>> {
@@ -245,7 +245,7 @@ pub struct EffectInfo {
     pub labels: Option<std::sync::Arc<crate::scripted::Labels>>,
 
     /// A multi-pass effect's passes and buffers (`passes::Passes`;
-    /// docs/projects/multipass-effects.md); `None` for one pass, `fs_main`.
+    /// docs/archive/projects/multipass-effects.md); `None` for one pass, `fs_main`.
     pub passes: Option<std::sync::Arc<passes::Passes>>,
 }
 
@@ -709,7 +709,7 @@ impl EffectRegistry {
 
 /// Register the built-in effects, each as its Rhai twin (D1,
 /// docs/archive/projects/rhai-plugins.md P2 step 7: [`custom::builtin_twin`];
-/// `distance_field` a multi-pass one, docs/projects/multipass-effects.md),
+/// `distance_field` a multi-pass one, docs/archive/projects/multipass-effects.md),
 /// its WGSL where a twin does not compile.
 fn register_builtin_effects(registry: &mut EffectRegistry) {
     for info in wgsl_builtins() {

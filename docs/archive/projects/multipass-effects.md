@@ -1,5 +1,7 @@
 # Multi-pass and temporal effects
 
+> **Archived 2026-11-14** -- finished: phases 1-5 built, merged (client PR #165; the API side, ffapi `multipass-effects`, merged). Reference: [EFFECTS.md](../../main/EFFECTS.md), *Multi-pass effects* and *Temporal effects: the clock*; [ANIMATION.md](../../main/ANIMATION.md), *Temporal effects*. Frame interpolation is parked in [frame-interpolation.md](../../experimental/frame-interpolation.md). Open items are in [BACKLOG.md](../../projects/BACKLOG.md).
+
 Branch `multipass-effects`, started 2026-11-14. The user chose the larger
 scope -- passes, buffers, pyramids -- and temporal effects in the same
 branch. This is the plan being followed; it is updated as the work goes.
@@ -187,6 +189,6 @@ Decisions taken as recommended (the user may amend before phase 4):
 
 - **Frame interpolation** (frames that were never rendered): a video
   export stage, not an effect. Parked in
-  [docs/experimental/frame-interpolation.md](../experimental/frame-interpolation.md).
+  [docs/experimental/frame-interpolation.md](../../experimental/frame-interpolation.md).
 - Named history rings (`past(i, uv)`): a persist buffer covers what
   they would.

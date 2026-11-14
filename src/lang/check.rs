@@ -1080,7 +1080,7 @@ impl Checker {
                     _ => Predef::PixelScale,
                 }
             }
-            // A multi-pass effect's context (docs/projects/multipass-effects.md).
+            // A multi-pass effect's context (docs/archive/projects/multipass-effects.md).
             "effect_xy" | "effect_time" | "effect_dt" | "effect_pass" | "effect_passes" | "effect_step" | "effect_level" | "effect_levels" | "effect_frame" if self.internal => {
                 if self.kind != EntryKind::Effect {
                     self.error(span, format!("`{name}` is an effect's"));

@@ -3,7 +3,7 @@
 Status: **built 2026-11-11**: client branch `catalog` (`src/catalog.rs`,
 `docs/generated/engine-catalog.json`), ffapi branch `catalog` (migration
 106, `src/catalog.rs`, `catalog_query`, `routes/types`). Part of
-[api-updates.md](api-updates.md) (step 3, and step 4's scripts). The
+[api-updates.md](../archive/projects/api-updates.md) (step 3, and step 4's scripts). The
 server is `c:\projects\ffapi` (Postgres; migration 099).
 
 What the user asked for, 2026-11-11:

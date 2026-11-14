@@ -231,7 +231,7 @@ impl Gpu {
         }
         // A frame out of order: the frames a temporal effect remembers,
         // rendered unseen first, so its history is a video's
-        // (docs/projects/multipass-effects.md, T4).
+        // (docs/archive/projects/multipass-effects.md, T4).
         let fps = s.source.fps();
         let (config, _) = s.source.frame(frame);
         for f in fractal_flame_wgpu::effects::warmup_frames(&config, s.last.map(u64::from), frame as u64) {

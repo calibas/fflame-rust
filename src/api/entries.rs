@@ -1,5 +1,5 @@
 //! A formula-library entry on the scripts resource
-//! (docs/projects/rhai-scripts-online.md): one GPU Rhai script -- a
+//! (docs/archive/projects/rhai-scripts-online.md): one GPU Rhai script -- a
 //! formula, colouring, solid, field, field colouring, simulation model or
 //! colouring, variation, effect or track -- published under its own
 //! `INFO.id`, so the catalog's `script:<uuid>` type and the stored script

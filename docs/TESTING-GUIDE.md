@@ -156,7 +156,7 @@ INSPECT="a.fflame=a.png;b.fflame=b.png" INSPECT_SIZE=1280x720 \
 ## 1b. The API integration test — `scripts/api_integration.py`
 
 The client's own API calls against a real `ffapi` on this machine
-([api-updates.md](projects/api-updates.md), decision 7). The script builds
+([api-updates.md](archive/projects/api-updates.md), decision 7). The script builds
 the API (debug) from `../ffapi` (`--ffapi` to point elsewhere,
 `--skip-build` to reuse its binary), starts it on a free loopback port, runs
 the ignored `api::integration_tests` with `FFLAME_API_URL` set, and stops

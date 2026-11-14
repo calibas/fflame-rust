@@ -1,7 +1,7 @@
 # Frame interpolation for the video export
 
 Parked 2026-11-14, while planning multi-pass effects
-([multipass-effects.md](../projects/multipass-effects.md)).
+([multipass-effects.md](../archive/projects/multipass-effects.md)).
 
 Interpolation makes frames that were never rendered. That is a stage of
 the video export (`animation::export`), not an effect: it changes how

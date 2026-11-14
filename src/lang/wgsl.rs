@@ -221,7 +221,7 @@ pub fn effect(p: &Program) -> Result<EffectWgsl, String> {
 }
 
 /// The prefixes of a multi-pass effect's passes, `fx<k>_`
-/// (docs/projects/multipass-effects.md): as many as an effect may declare.
+/// (docs/archive/projects/multipass-effects.md): as many as an effect may declare.
 pub const PASS_PREFIXES: [&str; 16] = [
     "fx0_", "fx1_", "fx2_", "fx3_", "fx4_", "fx5_", "fx6_", "fx7_", "fx8_", "fx9_", "fx10_", "fx11_", "fx12_", "fx13_", "fx14_", "fx15_",
 ];

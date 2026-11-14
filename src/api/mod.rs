@@ -682,7 +682,7 @@ impl ApiState {
 }
 
 /// The newest app release, as `GET /api/app/latest` gives it
-/// (docs/projects/api-updates.md, rule 7).
+/// (docs/archive/projects/api-updates.md, rule 7).
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct AppLatest {
     pub version: String,

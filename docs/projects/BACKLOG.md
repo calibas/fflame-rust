@@ -13,8 +13,8 @@ take it off this list. When one is done or dropped, delete its line.
 **Active elsewhere:** the v0.6.0 release checklist
 ([v0.6.0-release.md](v0.6.0-release.md)), the release streamlining plan
 ([release-streamlining.md](release-streamlining.md), six decisions), the
-API update plan ([api-updates.md](api-updates.md); step 4 built on
-branches, [rhai-scripts-online.md](rhai-scripts-online.md)) and
+API update plan ([api-updates.md](../archive/projects/api-updates.md); step 4 built on
+branches, [rhai-scripts-online.md](../archive/projects/rhai-scripts-online.md)) and
 the size study ([size-study.md](size-study.md)).
 
 ---
@@ -28,9 +28,11 @@ Each blocks the items it names; most carry a recommendation in their doc.
    post_bumpmap_wf, text_wf, svg_wf, plane_wf's colormap) and textures
    in other kinds. [variation-port-blockers.md](../archive/projects/variation-port-blockers.md)
    §"Texture / image sampling (#2)".
-2. **D7, per kind**: whether the Rhai twins replace their built-ins
-   (escape formulas, colourings, variations, simulations, solids,
-   fields). Input from the size study. [rhai-plugins.md](../archive/projects/rhai-plugins.md) §"Decisions".
+2. **D7, per kind**: whether the Rhai twins replace their built-ins.
+   Decided: effects (all sixteen), escape colourings (all 28) and escape
+   formulas (fourteen, by the 5% line; the rest paused, under *Rhai and
+   the formula language*). Open: variations, simulations, solids,
+   fields. Input from the size study. [rhai-plugins.md](../archive/projects/rhai-plugins.md) §"Decisions".
 3. **Float-threshold parameters**: keep as Float, or add a
    `legacy_import` shim (hypercrop.zero, tile_reverse.reversal,
    cpow3_wf.discrete_spread, waves2b.pwx/pwy, hexaplay3D/hexnix3D.majp).
@@ -68,8 +70,9 @@ Each blocks the items it names; most carry a recommendation in their doc.
     and audio worth 1.7 of 6.5 MB gzip, or are variations-as-data
     enough; serve built-in variation files from `pkg/assets/` or the
     API. Input from the size study. [wasm-modules.md](../experimental/wasm-modules.md) §"4", §"5".
-16. **Effect twins in a browser**: run them by hand.
-    [rhai-plugins.md](../archive/projects/rhai-plugins.md) §"P2".
+16. **Effect twins in a browser**: run them by hand -- now with the
+    multi-pass ones (`distance_field`, Bloom's pyramids, Trails' history)
+    on WebGPU. [rhai-plugins.md](../archive/projects/rhai-plugins.md) §"P2".
 17. **The volume emitters** (polyhedron_volume, sphere_volume) as Rhai
     twins: possible later work. [rhai-plugins.md](../archive/projects/rhai-plugins.md) §"P7".
 18. **pyfflame's copied code**: the review the user will detail
@@ -152,7 +155,10 @@ and [v0.6.0-release.md](v0.6.0-release.md).
 
 ## Rhai and the formula language
 
-- **P6, the API** for Rhai kinds: the API plan.
+- **Script version history**: the server keeps a script's current source
+  and an optimistic version counter (and snapshots for the museum's
+  published ones); a browsable history of every version is not built.
+  [rhai-scripts-online.md](../archive/projects/rhai-scripts-online.md) §"4".
 - **Per-kind registries**: registry, failure memory and provenance are
   still per kind; a track naming a variation key a later Use replaced;
   subflame transforms not re-keyed by Use.
@@ -162,8 +168,11 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   (`LayoutSpec::without_cpu`); a layout for CPU scripts
   (`param_show_if`). §"What is left, as branches".
 - **Effect downloads' WGSL is not parsed before registration**;
-  `ApiVariation` / `ApiEffectStage` unused. §"Review".
-- **`distance_field`** stays WGSL unless the dialect gets passes. §"P2".
+  `ApiVariation` / `ApiEffectStage` unused. §"Review". A downloaded
+  effect is one pass: a multi-pass module (no `fs_main`) the API serves to
+  reader 7 would register and fail to compile, harmless while every
+  multi-pass effect is a built-in the app has
+  ([multipass-effects.md](../archive/projects/multipass-effects.md)).
 - **KIFS leftovers**: a formula's Live re-apply after an edit to a
   variation it calls; a hybrid member carrying its variation; a Rhai
   variation's state inside a formula; C4 transformation gaps (none in

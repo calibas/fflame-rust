@@ -1,4 +1,4 @@
-//! The effect chain's multi-pass effects (docs/projects/multipass-effects.md).
+//! The effect chain's multi-pass effects (docs/archive/projects/multipass-effects.md).
 //!
 //! An effect whose `EffectInfo::passes` is set runs each of its passes in
 //! order, each repeat with its own parameter slot (the pass fields of
