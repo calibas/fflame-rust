@@ -24,6 +24,7 @@ by area, each linking the doc with the detail (finished and paused docs in
 | [size-study.md](size-study.md) | Measured 2026-11-11: build time, binary size, repository. The profile (fat LTO, one codegen unit) is the build-time lever, not the content; 547 variations as downloads would save ~10% of the web download; the repository's weight is binary history. Seven decisions. |
 | [v0.6.0-release.md](v0.6.0-release.md) | The v0.6.0 release's checklist (rewritten 2026-11-12): the testing pass, what is left of the API, the modules, the release itself. |
 | [rhai-scripts-online.md](rhai-scripts-online.md) | Planned 2026-11-12 (the API plan's step 4): every Rhai kind published, browsed and adopted through one scripts resource, under the script's own UUID; linked to the catalog. Decisions taken. |
+| [multipass-effects.md](multipass-effects.md) | Branch `multipass-effects`, started 2026-11-14: effects with passes, buffers, pyramids and temporal (persistent) buffers. Phases 1-2 done (the core; `distance_field` a Rhai twin); next pyramids and bloom, then temporal. |
 | [release-streamlining.md](release-streamlining.md) | Planned 2026-11-12, to build last before 0.6 and test with it: `release.py` stages (preflight, sync-api, deploy-api, deploy-web, publish, ship) for smaller, more frequent releases. Six decisions. |
 
 ## Standing references

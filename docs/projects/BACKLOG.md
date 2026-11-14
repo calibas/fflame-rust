@@ -74,6 +74,15 @@ Each blocks the items it names; most carry a recommendation in their doc.
     twins: possible later work. [rhai-plugins.md](../archive/projects/rhai-plugins.md) §"P7".
 18. **pyfflame's copied code**: the review the user will detail
     (six copies). [pyfflame.md](../archive/projects/pyfflame.md) §"4".
+19. **Twin names hash line endings** (found 2026-11-14): a twin's name
+    (`escape::custom::name_of`) hashes the source `include_str!`
+    embedded, whose line endings are the checkout's (`core.autocrlf`:
+    CRLF on Windows, LF on macOS/Linux). So a build on another platform
+    names every twin differently from the catalog made here, and an edit
+    script that writes LF renames a twin (Curvature Average's has three
+    names in the catalog). Fix: hash with `\r\n` folded to `\n`, or pin
+    `*.rhai` to LF in `.gitattributes`; either renames every twin once
+    (the catalog keeps the old names, so saved configs still resolve).
 
 The API's own decisions (variation slot cap, `simulation` in
 `render_modes`, which effect WGSL the API holds) belong to the API plan
