@@ -162,20 +162,22 @@ const DENSITY_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
 /// the struct declared in every `shaders/effects/**/*.wgsl`; a mismatch
 /// is a binding-size validation error at pipeline creation.
 ///
-/// Total size: 208 bytes (params=192 + width=4 + height=4 +
-/// density_mean=4 + padding=4 for 16-byte alignment), inside the
-/// 256-byte slot stride. `density_mean` sits where an 8-byte padding
-/// was, so a shader that still declares `_padding: vec2<f32>` binds the
-/// same layout and ignores it.
+/// Total size: 256 bytes, the slot stride exactly: params=192, then
+/// width, height, density_mean, pixel_scale (16), then a multi-pass
+/// effect's pass fields and the frame's time fields
+/// (docs/projects/multipass-effects.md; 48 with padding). A shader that
+/// declares the first 208 bytes alone -- every WGSL effect written before
+/// them, `density_mean` where an 8-byte padding was -- binds the same
+/// layout and ignores the rest.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct EffectParams {
+pub(super) struct EffectParams {
     /// Effect parameters (`MAX_EFFECT_PARAMS` floats, packed as vec4s
     /// for alignment)
     params: [[f32; 4]; MAX_EFFECT_PARAMS / 4],
-    /// Texture dimensions
-    width: u32,
-    height: u32,
+    /// The size of the grid the pass writes (the image's, for one pass)
+    pub(super) width: u32,
+    pub(super) height: u32,
     /// For a density effect, the frame's mean density, the unit Levels
     /// measures in (`FlameRenderer::mean_density`): divide a pixel's `a`
     /// by it to get a density that does not grow with the iteration
@@ -187,6 +189,42 @@ struct EffectParams {
     /// in pixels read it (the density blurs, sharpen, chromatic aberration,
     /// the kaleidoscope's edge offset); the rest declare it as padding.
     pixel_scale: f32,
+    /// A multi-pass effect's pass run (`renderer::effect_passes`): the
+    /// repeat's index and count, the jump flood's step `2^(passes - 1 -
+    /// pass_index)`, the pyramid level a pass over levels writes and the
+    /// level count of its target, and each buffer's level to read, 4 bits
+    /// a buffer. 0 (one run) for a one-pass effect.
+    pub(super) pass_index: u32,
+    pub(super) passes: u32,
+    pub(super) step: u32,
+    pub(super) level: u32,
+    pub(super) levels: u32,
+    pub(super) buffer_levels: u32,
+    /// The frame's place in an animation (`ctx.frame`, `ctx.time`,
+    /// `ctx.dt`): 0 for a still.
+    pub(super) frame: u32,
+    pub(super) time: f32,
+    pub(super) dt: f32,
+    _pad: [f32; 3],
+}
+
+impl EffectParams {
+    /// The fields every effect reads, the rest 0 until a pass run or a
+    /// frame sets them.
+    fn new(width: u32, height: u32, density_mean: f32, pixel_scale: f32) -> Self {
+        Self { width, height, density_mean, pixel_scale, passes: 1, levels: 1, ..bytemuck::Zeroable::zeroed() }
+    }
+
+    /// `effect`'s parameters by `name`'s registered definitions, packed
+    /// into the vec4 groups.
+    fn with_parameters(mut self, name: &str, effect: &EffectInstance) -> Self {
+        if let Some(info) = global_effect_registry().get(name) {
+            for (i, param_def) in info.parameters.iter().enumerate().take(MAX_EFFECT_PARAMS) {
+                self.params[i / 4][i % 4] = effect.get_param(&param_def.name);
+            }
+        }
+        self
+    }
 }
 
 // The uniform packs parameters in vec4 groups, so the count must divide
@@ -323,37 +361,14 @@ pub struct EffectChainRunner {
     /// Current texture dimensions
     width: u32,
     height: u32,
-    /// Jump-flood resources for the `distance_field` effect (the
-    /// escape-time plan's §7.3 bridge): an rg32float coordinate
-    /// ping-pong plus the seed/flood/composite pipelines. Lazily
-    /// created, absent unless the effect is in the chain.
-    jfa: Option<JfaResources>,
+    /// Multi-pass effects compiled, by name (`renderer::effect_passes`;
+    /// docs/projects/multipass-effects.md), and the buffers of each one in
+    /// a chain, by its chain and its place among the enabled effects.
+    multipass: HashMap<String, super::effect_passes::Compiled>,
+    multipass_states: HashMap<(EffectCategory, usize), super::effect_passes::State>,
     /// Render pixels per logical viewport point (`set_pixel_scale`): the
     /// viewport's render scale. 1 for the exporters.
     pixel_scale: f32,
-}
-
-/// Multi-pass state for the `distance_field` effect. The effect
-/// registers like any other color effect (config, UI, animation all
-/// free) but the runner special-cases its execution: one seed pass,
-/// ~log2(max dim) jump-flood passes over the coordinate ping-pong,
-/// one composite pass into the chain's output.
-struct JfaResources {
-    coord_a: Texture,
-    coord_b: Texture,
-    coord_view_a: TextureView,
-    coord_view_b: TextureView,
-    seed_pipeline: RenderPipeline,
-    flood_pipeline: RenderPipeline,
-    composite_pipeline: RenderPipeline,
-    bind_group_layout: BindGroupLayout,
-}
-
-impl JfaResources {
-    fn destroy(&self) {
-        self.coord_a.destroy();
-        self.coord_b.destroy();
-    }
 }
 
 impl EffectChainRunner {
@@ -381,7 +396,8 @@ impl EffectChainRunner {
             sampler,
             width,
             height,
-            jfa: None,
+            multipass: HashMap::new(),
+            multipass_states: HashMap::new(),
             pixel_scale: 1.0,
         }
     }
@@ -400,7 +416,7 @@ impl EffectChainRunner {
     pub fn destroy(&self) {
         if let Some(t) = &self.density_textures { t.destroy(); }
         if let Some(t) = &self.color_textures { t.destroy(); }
-        if let Some(j) = &self.jfa { j.destroy(); }
+        self.multipass_states.values().for_each(|s| s.destroy());
         self.params_buffer.destroy();
     }
 
@@ -463,8 +479,8 @@ impl EffectChainRunner {
             // Textures will be recreated on next use
             self.density_textures = None;
             self.color_textures = None;
-            if let Some(j) = self.jfa.take() {
-                j.destroy();
+            for (_, state) in self.multipass_states.drain() {
+                state.destroy();
             }
         }
     }
@@ -497,280 +513,15 @@ impl EffectChainRunner {
         }
     }
 
-    /// Number of jump-flood passes for the current dimensions:
-    /// steps n/2, n/4, ..., 1 with n the covering power of two.
-    fn jfa_pass_count(width: u32, height: u32) -> u32 {
-        let max_dim = width.max(height).max(2);
-        32 - (max_dim - 1).leading_zeros()
-    }
-
-    /// Create the distance-field resources if absent: the coordinate
-    /// ping-pong and the three pipelines, compiled from the effect's
-    /// registered WGSL (so the on-disk-override arrangement applies).
-    fn ensure_jfa(&mut self, device: &Device) {
-        if self.jfa.is_some() {
-            return;
-        }
-        let registry = global_effect_registry();
-        let Some(info) = registry.get("distance_field") else {
-            return;
-        };
-        let shader_source = effect_wgsl(&info.source);
-        let module = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("distance_field Shader"),
-            source: ShaderSource::Wgsl(shader_source.into()),
-        });
-        // One layout for all three passes: image (filterable),
-        // sampler, params slot, coordinate field (rg32float is
-        // UNFILTERABLE-float; every read is a textureLoad).
-        let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("distance_field Bind Group Layout"),
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: false },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("distance_field Pipeline Layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-        let make_pipeline = |entry: &str, format: TextureFormat| {
-            device.create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some(&format!("distance_field {entry} Pipeline")),
-                layout: Some(&pipeline_layout),
-                vertex: VertexState {
-                    module: &module,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(FragmentState {
-                    module: &module,
-                    entry_point: Some(entry),
-                    targets: &[Some(ColorTargetState {
-                        format,
-                        // rg32float is not blendable; no pass blends.
-                        blend: None,
-                        write_mask: ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let seed_pipeline = make_pipeline("fs_seed", TextureFormat::Rg32Float);
-        let flood_pipeline = make_pipeline("fs_flood", TextureFormat::Rg32Float);
-        let composite_pipeline = make_pipeline("fs_composite", TextureFormat::Rgba8Unorm);
-        let make_texture = |suffix: &str| {
-            device.create_texture(&TextureDescriptor {
-                label: Some(&format!("JFA Coord {suffix}")),
-                size: Extent3d {
-                    width: self.width,
-                    height: self.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::Rg32Float,
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            })
-        };
-        let coord_a = make_texture("A");
-        let coord_b = make_texture("B");
-        let coord_view_a = coord_a.create_view(&TextureViewDescriptor::default());
-        let coord_view_b = coord_b.create_view(&TextureViewDescriptor::default());
-        self.jfa = Some(JfaResources {
-            coord_a,
-            coord_b,
-            coord_view_a,
-            coord_view_b,
-            seed_pipeline,
-            flood_pipeline,
-            composite_pipeline,
-            bind_group_layout,
-        });
-    }
-
-    /// Execute the distance-field effect: seed, jump-flood, composite.
-    /// `slots` holds one params-buffer offset per pass (seed, floods,
-    /// composite) — each pass needs its own uniform contents in the
-    /// same submit.
-    #[allow(clippy::too_many_arguments)]
-    fn run_jfa(
-        device: &Device,
-        queue: &Queue,
-        encoder: &mut CommandEncoder,
-        effect: &EffectInstance,
-        jfa: &JfaResources,
-        input_view: &TextureView,
-        output_view: &TextureView,
-        params_buffer: &Buffer,
-        slots: &[u64],
-        sampler: &Sampler,
-        width: u32,
-        height: u32,
-        pixel_scale: f32,
-    ) {
-        let n_floods = Self::jfa_pass_count(width, height) as usize;
-        if slots.len() < n_floods + 2 {
-            log::warn!("distance_field: not enough param slots ({} < {})", slots.len(), n_floods + 2);
-            return;
-        }
-        let mut effect_slot = EffectParams {
-            params: [[0.0; 4]; MAX_EFFECT_PARAMS / 4],
-            width,
-            height,
-            density_mean: 0.0,
-            pixel_scale,
-        };
-        let registry = global_effect_registry();
-        if let Some(info) = registry.get("distance_field") {
-            for (i, param_def) in info.parameters.iter().enumerate() {
-                if i < MAX_EFFECT_PARAMS {
-                    effect_slot.params[i / 4][i % 4] = effect.get_param(&param_def.name);
-                }
-            }
-        }
-        // Seed + composite share the effect's own parameters; each
-        // flood pass gets its step size in params[0].
-        queue.write_buffer(params_buffer, slots[0], bytemuck::bytes_of(&effect_slot));
-        queue.write_buffer(
-            params_buffer,
-            slots[n_floods + 1],
-            bytemuck::bytes_of(&effect_slot),
-        );
-        let mut flood = effect_slot;
-        for i in 0..n_floods {
-            let step = 1u32 << (n_floods - 1 - i);
-            flood.params[0][0] = step as f32;
-            queue.write_buffer(params_buffer, slots[1 + i], bytemuck::bytes_of(&flood));
-        }
-
-        use wgpu::BufferBinding;
-        let params_size =
-            std::num::NonZeroU64::new(std::mem::size_of::<EffectParams>() as u64).unwrap();
-        let bind = |slot: u64, coord_view: &TextureView| {
-            device.create_bind_group(&BindGroupDescriptor {
-                label: Some("distance_field Bind Group"),
-                layout: &jfa.bind_group_layout,
-                entries: &[
-                    BindGroupEntry {
-                        binding: 0,
-                        resource: BindingResource::TextureView(input_view),
-                    },
-                    BindGroupEntry {
-                        binding: 1,
-                        resource: BindingResource::Sampler(sampler),
-                    },
-                    BindGroupEntry {
-                        binding: 2,
-                        resource: BindingResource::Buffer(BufferBinding {
-                            buffer: params_buffer,
-                            offset: slot,
-                            size: Some(params_size),
-                        }),
-                    },
-                    BindGroupEntry {
-                        binding: 3,
-                        resource: BindingResource::TextureView(coord_view),
-                    },
-                ],
-            })
-        };
-        let run_pass = |encoder: &mut CommandEncoder,
-                        pipeline: &RenderPipeline,
-                        bind_group: &wgpu::BindGroup,
-                        target: &TextureView,
-                        label: &str| {
-            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some(label),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(Color::BLACK),
-                        store: StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        };
-
-        // Seed into A (binding B at slot 3 — never the render target).
-        let bg = bind(slots[0], &jfa.coord_view_b);
-        run_pass(encoder, &jfa.seed_pipeline, &bg, &jfa.coord_view_a, "JFA Seed");
-        // Flood ping-pong: read A write B, then swap.
-        let mut read_a = true;
-        for i in 0..n_floods {
-            let (read, write) = if read_a {
-                (&jfa.coord_view_a, &jfa.coord_view_b)
-            } else {
-                (&jfa.coord_view_b, &jfa.coord_view_a)
-            };
-            let bg = bind(slots[1 + i], read);
-            run_pass(encoder, &jfa.flood_pipeline, &bg, write, "JFA Flood");
-            read_a = !read_a;
-        }
-        let final_coord = if read_a { &jfa.coord_view_a } else { &jfa.coord_view_b };
-        let bg = bind(slots[n_floods + 1], final_coord);
-        run_pass(encoder, &jfa.composite_pipeline, &bg, output_view, "JFA Composite");
-    }
-
     /// Compile an effect shader if not already compiled
     fn ensure_effect_compiled(&mut self, device: &Device, effect_name: &str, category: EffectCategory) {
         let registry = global_effect_registry();
         // Built from the current registration: an effect registered again
         // (a Rhai effect edited, a download updated) is built again.
         let revision = registry.revision(effect_name);
-        if self.compiled_effects.get(effect_name).is_some_and(|c| c.revision == revision) {
+        if self.compiled_effects.get(effect_name).is_some_and(|c| c.revision == revision)
+            || self.multipass.get(effect_name).is_some_and(|c| c.revision == revision)
+        {
             log::debug!("Effect {} already compiled", effect_name);
             return;
         }
@@ -793,6 +544,18 @@ impl EffectChainRunner {
 
         // Load shader source (embedded for WASM, filesystem for desktop)
         let shader_source = effect_wgsl(&effect_info.source);
+
+        // A multi-pass effect: a pipeline a pass (`effect_passes`).
+        if let Some(plan) = effect_info.passes.clone() {
+            let (format, blend) = match category {
+                EffectCategory::Density => (DENSITY_FORMAT, None),
+                EffectCategory::Color => (TextureFormat::Rgba8Unorm, Some(BlendState::REPLACE)),
+            };
+            let compiled = super::effect_passes::Compiled::new(device, effect_name, &shader_source, plan, revision, format, blend);
+            self.multipass.insert(effect_name.to_string(), compiled);
+            log::info!("Compiled multi-pass effect: {}", effect_name);
+            return;
+        }
 
         // Create shader module
         let shader_module = device.create_shader_module(ShaderModuleDescriptor {
@@ -904,11 +667,6 @@ impl EffectChainRunner {
     /// Ensure all effects in the list are compiled
     pub fn compile_effects(&mut self, device: &Device, effects: &[EffectInstance], category: EffectCategory) {
         for effect in effects.iter().filter(|e| e.enabled) {
-            // distance_field has no fs_main — the runner builds its
-            // multi-pass pipelines in ensure_jfa instead.
-            if effect.effect_type == "distance_field" {
-                continue;
-            }
             self.ensure_effect_compiled(device, &effect.effect_type, category);
         }
     }
@@ -946,9 +704,10 @@ impl EffectChainRunner {
         self.compile_effects(device, effects, EffectCategory::Density);
         self.ensure_textures(device, EffectCategory::Density);
 
-        // Pre-allocate slots for all effects (before borrowing textures)
-        self.reserve_slots(device, enabled_effects.len());
-        let slot_offsets: Vec<u64> = enabled_effects.iter().map(|_| self.allocate_slot()).collect();
+        // Pre-allocate slots for all effects (before borrowing textures):
+        // a multi-pass effect takes one a pass run.
+        let slot_offsets = self.allocate_effect_slots(device, &enabled_effects);
+        self.ensure_multipass_states(device, &enabled_effects, EffectCategory::Density);
 
         // Extract data needed for effect execution
         let width = self.width;
@@ -967,6 +726,20 @@ impl EffectChainRunner {
                     textures.read_view()
                 };
 
+                if let (Some(compiled), Some(state)) = (self.multipass.get(&effect.effect_type), self.multipass_states.get_mut(&(EffectCategory::Density, i))) {
+                    let inputs = super::effect_passes::Inputs {
+                        input: read_view,
+                        output: textures.write_view(),
+                        sampler: &self.sampler,
+                        params_buffer: &self.params_buffer,
+                        slots: &slot_offsets[i],
+                        base: EffectParams::new(width, height, density_mean, self.pixel_scale).with_parameters(&effect.effect_type, effect),
+                    };
+                    super::effect_passes::run(device, queue, encoder, compiled, state, &inputs);
+                    textures.swap();
+                    continue;
+                }
+
                 Self::run_single_effect_with_input(
                     device,
                     queue,
@@ -977,7 +750,7 @@ impl EffectChainRunner {
                     textures.write_view(),
                     &self.compiled_effects,
                     &self.params_buffer,
-                    slot_offsets[i],
+                    slot_offsets[i][0],
                     &self.sampler,
                     width,
                     height,
@@ -1055,33 +828,18 @@ impl EffectChainRunner {
         // First, ensure all effects are compiled (before taking texture borrow)
         self.compile_effects(device, effects, EffectCategory::Color);
         self.ensure_textures(device, EffectCategory::Color);
-        if enabled_effects.iter().any(|e| e.effect_type == "distance_field") {
-            self.ensure_jfa(device);
-        }
 
         // Verify all enabled effects are actually compiled (diagnostic)
         for effect in &enabled_effects {
-            if effect.effect_type == "distance_field" {
-                continue; // multi-pass special case, not in compiled_effects
-            }
-            if !self.compiled_effects.contains_key(&effect.effect_type) {
+            if !self.compiled_effects.contains_key(&effect.effect_type) && !self.multipass.contains_key(&effect.effect_type) {
                 log::warn!("Effect '{}' is enabled but NOT compiled — likely unknown to registry", effect.effect_type);
             }
         }
 
-        // Pre-allocate slots for all effects (before borrowing textures).
-        // The distance-field effect runs one pass per slot: seed +
-        // jump floods + composite.
-        let jfa_slots = Self::jfa_pass_count(self.width, self.height) as usize + 2;
-        let slots_of = |e: &EffectInstance| if e.effect_type == "distance_field" { jfa_slots } else { 1 };
-        self.reserve_slots(device, enabled_effects.iter().map(|e| slots_of(e)).sum());
-        let slot_offsets: Vec<Vec<u64>> = enabled_effects
-            .iter()
-            .map(|e| (0..slots_of(e)).map(|_| self.allocate_slot()).collect())
-            .collect();
-        // The JFA resources leave `self` for the loop below (the
-        // color ping-pong holds the &mut borrow).
-        let jfa = self.jfa.take();
+        // Pre-allocate slots for all effects (before borrowing textures):
+        // a multi-pass effect takes one a pass run.
+        let slot_offsets = self.allocate_effect_slots(device, &enabled_effects);
+        self.ensure_multipass_states(device, &enabled_effects, EffectCategory::Color);
 
         // Extract data needed for effect execution
         let width = self.width;
@@ -1100,25 +858,17 @@ impl EffectChainRunner {
                     textures.read_view()
                 };
 
-                if effect.effect_type == "distance_field" {
-                    if let Some(j) = jfa.as_ref() {
-                        Self::run_jfa(
-                            device,
-                            queue,
-                            encoder,
-                            effect,
-                            j,
-                            read_view,
-                            textures.write_view(),
-                            &self.params_buffer,
-                            &slot_offsets[i],
-                            &self.sampler,
-                            width,
-                            height,
-                            self.pixel_scale,
-                        );
-                        textures.swap();
-                    }
+                if let (Some(compiled), Some(state)) = (self.multipass.get(&effect.effect_type), self.multipass_states.get_mut(&(EffectCategory::Color, i))) {
+                    let inputs = super::effect_passes::Inputs {
+                        input: read_view,
+                        output: textures.write_view(),
+                        sampler: &self.sampler,
+                        params_buffer: &self.params_buffer,
+                        slots: &slot_offsets[i],
+                        base: EffectParams::new(width, height, 0.0, self.pixel_scale).with_parameters(&effect.effect_type, effect),
+                    };
+                    super::effect_passes::run(device, queue, encoder, compiled, state, &inputs);
+                    textures.swap();
                     continue;
                 }
 
@@ -1143,11 +893,44 @@ impl EffectChainRunner {
                 // Swap ping-pong textures for next effect
                 textures.swap();
             }
-            self.jfa = jfa;
             return true;
         }
-        self.jfa = jfa;
         false
+    }
+
+    /// Parameter slots for this frame's `effects`, before any texture is
+    /// borrowed: one each, a multi-pass effect one a pass run.
+    fn allocate_effect_slots(&mut self, device: &Device, effects: &[&EffectInstance]) -> Vec<Vec<u64>> {
+        let (w, h) = (self.width, self.height);
+        let counts: Vec<usize> = effects.iter().map(|e| self.multipass.get(&e.effect_type).map_or(1, |c| c.plan.runs(w, h))).collect();
+        self.reserve_slots(device, counts.iter().sum());
+        counts.iter().map(|&n| (0..n).map(|_| self.allocate_slot()).collect()).collect()
+    }
+
+    /// Buffers for each multi-pass effect in a chain, by its place: kept
+    /// while the same effect, revision and size sit there, else made
+    /// again; those of places with no multi-pass effect now freed.
+    fn ensure_multipass_states(&mut self, device: &Device, effects: &[&EffectInstance], category: EffectCategory) {
+        let size = (self.width, self.height);
+        let stale: Vec<(EffectCategory, usize)> = self
+            .multipass_states
+            .iter()
+            .filter(|(&(c, i), state)| {
+                c == category
+                    && !effects.get(i).and_then(|e| self.multipass.get(&e.effect_type).map(|comp| state.fits(&e.effect_type, comp, size))).unwrap_or(false)
+            })
+            .map(|(k, _)| *k)
+            .collect();
+        for k in stale {
+            if let Some(state) = self.multipass_states.remove(&k) {
+                state.destroy();
+            }
+        }
+        for (i, e) in effects.iter().enumerate() {
+            if let Some(compiled) = self.multipass.get(&e.effect_type) {
+                self.multipass_states.entry((category, i)).or_insert_with(|| super::effect_passes::State::new(device, &e.effect_type, compiled, size));
+            }
+        }
     }
 
     /// Get the output texture view from color effects (if any were run)
@@ -1186,23 +969,7 @@ impl EffectChainRunner {
         log::debug!("Executing effect: {} ({}x{}) at slot offset {}", effect_name, width, height, buffer_offset);
 
         // Update params buffer at the allocated slot offset
-        let mut params = EffectParams {
-            params: [[0.0; 4]; MAX_EFFECT_PARAMS / 4],
-            width,
-            height,
-            density_mean,
-            pixel_scale,
-        };
-
-        // Fill in effect parameters (packed into vec4s)
-        let registry = global_effect_registry();
-        if let Some(info) = registry.get(effect_name) {
-            for (i, param_def) in info.parameters.iter().enumerate() {
-                if i < MAX_EFFECT_PARAMS {
-                    params.params[i / 4][i % 4] = effect.get_param(&param_def.name);
-                }
-            }
-        }
+        let params = EffectParams::new(width, height, density_mean, pixel_scale).with_parameters(effect_name, effect);
 
         // Write to this effect's slot in the shared buffer
         queue.write_buffer(params_buffer, buffer_offset, bytemuck::bytes_of(&params));
@@ -1717,6 +1484,58 @@ mod gpu_tests {
         registry.remove_by_name(&multiply);
     }
 
+    /// A multi-pass effect (docs/projects/multipass-effects.md) runs as its
+    /// plan says: a pass writes a buffer, a repeated pass reads the
+    /// version before (the ping-pong), `ctx.pass` counts, `ctx.step`
+    /// halves, a half-size buffer reads back filtered, and the last pass
+    /// reads it all into the output.
+    #[test]
+    fn a_multi_pass_effect_runs_its_passes() {
+        let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const W: u32 = 16;
+        const H: u32 = 8;
+        let (_input, view) = filled(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &[200, 100, 40, 255]);
+        let src = r#"
+const INFO = #{
+    id: "5e2d8a1b-4c3f-4a6e-9b7d-2c1e0f3a4b5d",
+    buffers: #{ acc: #{}, small: #{ scale: 0.5 } },
+    passes: [
+        #{ run: "start", to: "acc" },
+        #{ run: "add", to: "acc", repeat: 3 },
+        #{ run: "shrink", to: "small" },
+        #{ run: "effect" },
+    ],
+};
+// The input inverted, and 0 in green.
+fn start(c, p, ctx) { rgba(1.0 - c.r, 0.0, 0.0, 1.0) }
+// Each run adds 0.1 to green, and records its step in blue: 4, 2, 1.
+fn add(c, p, ctx) {
+    let before = buffer_at("acc", to_int(ctx.xy.re), to_int(ctx.xy.im));
+    rgba(before.r, before.g + 0.1, to_float(ctx.step) * 0.1, to_float(ctx.passes) * 0.1)
+}
+// Half the size: its grid is 8 x 4.
+fn shrink(c, p, ctx) { rgba(to_float(ctx.width) / 16.0, to_float(ctx.height) / 16.0, 0.0, 1.0) }
+fn effect(c, p, ctx) {
+    let a = buffer("acc", ctx.uv);
+    let s = buffer("small", ctx.uv);
+    rgba(a.r, a.g + s.r, a.b + s.g, a.a)
+}
+"#;
+        let name = crate::effects::custom::register(src, crate::provenance::Provenance::Local).unwrap_or_else(|e| panic!("{e}"));
+        let out = run_colour(&device, &queue, &view, W, H, &[EffectInstance::new(&name)]);
+        crate::effects::global_effect_registry_mut().remove_by_name(&name);
+        let near = |a: u8, b: f32| (a as f32 - b * 255.0).abs() <= 1.0;
+        for px in out.chunks(4) {
+            // r: 1 - 200/255; g: three runs of 0.1, then the small grid's
+            // width 8/16; b: the last step, 1, by 0.1, then 4/16; a: 3 runs.
+            let want = [1.0 - 200.0 / 255.0, 0.3 + 0.5, 0.1 + 0.25, 0.3];
+            assert!(px.iter().zip(want).all(|(&a, b)| near(a, b)), "{px:?}, want {want:?} (x 255)");
+        }
+    }
+
     /// What a config reads of an effect: its parameters' definitions --
     /// name, kind, default, range, label and hint -- in order.
     fn values(i: &crate::effects::EffectInfo) -> &[crate::params::ParamDef] {
@@ -1840,6 +1659,18 @@ mod gpu_tests {
             "domain_warp",
             include_str!("../../assets/effects/domain_warp.rhai"),
             &[&[], &[("time", 5.0), ("octaves", 2.0)], &[("intensity", 0.4), ("scale", 6.0)], &[("octaves", 6.0), ("direction", 90.0), ("time", 2.0), ("blend_mode", 4.0)]],
+        ),
+        (
+            "distance_field",
+            include_str!("../../assets/effects/distance_field.rhai"),
+            &[
+                &[],
+                &[("threshold", 0.6), ("mode", 1.0), ("band_count", 5.0)],
+                &[("threshold", 0.5), ("mode", 2.0), ("intensity", 0.7), ("spread", 0.1)],
+                &[("threshold", 0.7), ("spread", 0.6), ("intensity", 2.0)],
+                // Nothing seeds: the image left alone.
+                &[("threshold", 1.0)],
+            ],
         ),
     ];
 
@@ -2210,7 +2041,7 @@ mod gpu_tests {
             .map(EffectInstance::new)
             .collect();
         let mut chain = EffectChainRunner::new(&device, W, H);
-        let needed = 3 * (EffectChainRunner::jfa_pass_count(W, H) as usize + 2) + 1;
+        let needed = 3 * (crate::effects::passes::log2_passes(W, H) as usize + 2) + 1;
         assert!(needed > MAX_EFFECT_SLOTS, "the fixture needs {needed} slots, not more than the initial {MAX_EFFECT_SLOTS}");
         // Two frames: the first grows the buffer, the second reuses it.
         for frame in 0..2 {

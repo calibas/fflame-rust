@@ -17,6 +17,7 @@ use crate::params::{ParamDef, Spec};
 
 /// Effects written in Rhai, compiled by the formula language (P2).
 pub mod custom;
+pub mod passes;
 
 /// Register the effects a config carries (`FractalConfig::custom_effects`)
 /// before its chains are built: every path that renders a config's effects
@@ -44,7 +45,7 @@ pub const BLEND_MODE_NAMES: &[&str] = &[
 ];
 
 /// Effect category determines when in the pipeline the effect runs
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum EffectCategory {
     /// Runs before tonemap, has access to density in alpha channel
     Density,
@@ -185,6 +186,10 @@ pub struct EffectInfo {
     /// ([`Self::translated_name`], [`Self::param_label`]). `None` for an
     /// effect labelled from the locale files or by plain strings.
     pub labels: Option<std::sync::Arc<crate::scripted::Labels>>,
+
+    /// A multi-pass effect's passes and buffers (`passes::Passes`;
+    /// docs/projects/multipass-effects.md); `None` for one pass, `fs_main`.
+    pub passes: Option<std::sync::Arc<passes::Passes>>,
 }
 
 impl EffectInfo {
@@ -613,6 +618,7 @@ pub fn check_download(dl: &crate::api::types::EffectDownload) -> Result<EffectIn
         parameters,
         provenance: crate::provenance::Provenance::Api { version: dl.version },
         labels: None,
+        passes: None,
     })
 }
 
@@ -644,9 +650,10 @@ impl EffectRegistry {
     }
 }
 
-/// Register the built-in effects: each one-pass effect as its Rhai twin
-/// (D1, docs/archive/projects/rhai-plugins.md P2 step 7: [`custom::builtin_twin`]);
-/// `distance_field`, three passes, as its WGSL.
+/// Register the built-in effects, each as its Rhai twin (D1,
+/// docs/archive/projects/rhai-plugins.md P2 step 7: [`custom::builtin_twin`];
+/// `distance_field` a multi-pass one, docs/projects/multipass-effects.md),
+/// its WGSL where a twin does not compile.
 fn register_builtin_effects(registry: &mut EffectRegistry) {
     for info in wgsl_builtins() {
         if let Some(twin) = custom::builtin_twin(&info.name) {
@@ -677,6 +684,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -718,6 +726,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -753,6 +762,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "amount",
@@ -794,6 +804,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "offset",
@@ -831,6 +842,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "radius",
@@ -866,6 +878,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "amount",
@@ -895,6 +908,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "radius",
@@ -932,6 +946,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "segments",
@@ -991,6 +1006,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -1044,6 +1060,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "speed",
@@ -1097,6 +1114,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -1144,6 +1162,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -1197,6 +1216,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -1256,6 +1276,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "intensity",
@@ -1315,6 +1336,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: None,
         parameters: vec![
             ParamDef::new(
                 "mode",
@@ -1382,9 +1404,9 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
     // Distance Field - jump-flood the rendered attractor into an
     // exterior distance field, then shade it (glow / contour bands /
     // nearest fill). The escape-time plan's §7.3 bridge: DE-style
-    // looks for ARBITRARY flames, no invertibility required. The
-    // chain runner special-cases its execution into a multi-pass
-    // pipeline (seed + ~log2(max dim) floods + composite).
+    // looks for ARBITRARY flames, no invertibility required. Three
+    // entry points, run as any multi-pass effect is (seed, ~log2(max
+    // dim) floods, composite): `distance_field_passes`.
     out.push(EffectInfo {
         name: "distance_field".to_string(),
         // Empty on purpose: built-ins are labelled from
@@ -1397,6 +1419,7 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
         },
         provenance: crate::provenance::Provenance::Builtin,
         labels: None,
+        passes: Some(std::sync::Arc::new(distance_field_passes())),
         parameters: vec![
             ParamDef::new(
                 "threshold",
@@ -1433,6 +1456,29 @@ pub fn wgsl_builtins() -> Vec<EffectInfo> {
     out
 }
 
+
+/// The WGSL `distance_field`'s passes: a seed into the coordinate buffer,
+/// the jump flood over it, the composite. Its entry points are its own
+/// (`shaders/effects/color/distance_field.wgsl`).
+pub fn distance_field_passes() -> passes::Passes {
+    use passes::{BufferDecl, Order, PassDecl, Passes, Repeat};
+    let pass = |function: &str, entry: &str, to: Option<usize>, repeat: Repeat| PassDecl {
+        function: function.to_string(),
+        entry: entry.to_string(),
+        to,
+        repeat,
+        order: Order::Down,
+    };
+    Passes {
+        buffers: vec![BufferDecl { name: "coords".to_string(), scale: 1.0, levels: 1, persist: false }],
+        passes: vec![
+            pass("seed", "fs_seed", Some(0), Repeat::Times(1)),
+            pass("flood", "fs_flood", Some(0), Repeat::Log2),
+            pass("effect", "fs_composite", None, Repeat::Times(1)),
+        ],
+        warmup: None,
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1800,6 +1846,7 @@ mod label_tests {
             parameters: Vec::new(),
             provenance: crate::provenance::Provenance::Local,
             labels: None,
+            passes: None,
         };
         assert_eq!(info.translated_name(), "Plugin Example (Tint)");
         assert!(
@@ -1820,6 +1867,7 @@ mod label_tests {
             parameters: Vec::new(),
             provenance: crate::provenance::Provenance::Local,
             labels: None,
+            passes: None,
         };
         assert_eq!(info.translated_name(), "unnamed_thing");
     }

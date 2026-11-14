@@ -1080,6 +1080,24 @@ impl Checker {
                     _ => Predef::PixelScale,
                 }
             }
+            // A multi-pass effect's context (docs/projects/multipass-effects.md).
+            "effect_xy" | "effect_time" | "effect_dt" | "effect_pass" | "effect_passes" | "effect_step" | "effect_level" | "effect_levels" | "effect_frame" if self.internal => {
+                if self.kind != EntryKind::Effect {
+                    self.error(span, format!("`{name}` is an effect's"));
+                    return None;
+                }
+                match name {
+                    "effect_xy" => Predef::EffectXy,
+                    "effect_time" => Predef::EffectTime,
+                    "effect_dt" => Predef::EffectDt,
+                    "effect_pass" => Predef::EffectInt(0),
+                    "effect_passes" => Predef::EffectInt(1),
+                    "effect_step" => Predef::EffectInt(2),
+                    "effect_level" => Predef::EffectInt(3),
+                    "effect_levels" => Predef::EffectInt(4),
+                    _ => Predef::EffectInt(5),
+                }
+            }
             "juliac" if self.internal => Predef::JuliaC,
             // A field colouring's inputs.
             "field_sum" | "field_grad" | "field_terms" if self.internal => {
@@ -1196,7 +1214,20 @@ impl Checker {
         // An effect sees its pixel's position, the image's size and its
         // own context; its colour comes through its reads of the image.
         if self.kind == EntryKind::Effect
-            && !matches!(p, Predef::Pixel | Predef::Width | Predef::Height | Predef::Pi | Predef::E | Predef::DensityMean | Predef::PixelScale)
+            && !matches!(
+                p,
+                Predef::Pixel
+                    | Predef::Width
+                    | Predef::Height
+                    | Predef::Pi
+                    | Predef::E
+                    | Predef::DensityMean
+                    | Predef::PixelScale
+                    | Predef::EffectXy
+                    | Predef::EffectTime
+                    | Predef::EffectDt
+                    | Predef::EffectInt(_)
+            )
             && !matches!(p, Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectBlend | Predef::EffectAmount)
         {
             self.error(span, format!("an effect reads its pixel's position, the image's size, `#pi` and `#e`, not `#{name}`"));
@@ -1975,6 +2006,11 @@ impl Checker {
         } else if h.escape() {
             if self.kind != EntryKind::Coloring {
                 self.error(span, "the escape palette is an escape colouring's");
+                return None;
+            }
+        } else if h.buffer() {
+            if self.kind != EntryKind::Effect {
+                self.error(span, "a buffer is a multi-pass effect's");
                 return None;
             }
         } else if self.kind != EntryKind::SimModel {

@@ -164,6 +164,34 @@ pub fn effect(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Effect)
 }
 
+thread_local! {
+    /// The function a multi-pass effect's pass lowers in place of
+    /// `effect` (docs/projects/multipass-effects.md).
+    static EFFECT_FN: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// A multi-pass effect's pass: its function `name`, of `effect`'s shape
+/// (`fn seed(c, p, ctx)`), lowered as an effect.
+pub fn effect_pass(source: &str, name: &str) -> Result<Program, Vec<Diag>> {
+    let previous = EFFECT_FN.with(|c| c.replace(Some(name.to_string())));
+    let r = compile(source, EntryKind::Effect);
+    EFFECT_FN.with(|c| *c.borrow_mut() = previous);
+    r
+}
+
+/// A multi-pass effect's buffers by name (`INFO.buffers`'s keys), in the
+/// order of their indices: sorted, whatever order the map was written in.
+pub fn effect_buffer_names(source: &str) -> Vec<String> {
+    match info_json(source, "buffers") {
+        Some(serde_json::Value::Object(m)) => {
+            let mut names: Vec<String> = m.keys().cloned().collect();
+            names.sort();
+            names
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Which function of a simulation model a lowering takes (P4): its seed,
 /// or pass `n` of its step (0 for `cell_step`, 1 for `cell_step2` ...);
 /// an agent's seed, or pass `n` of its move (P4 step 9d: `agent_seed`,
@@ -748,6 +776,8 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         inverse: INVERSE.with(|c| c.get()),
         solid: kind == EntryKind::Solid,
         effect: kind == EntryKind::Effect,
+        effect_fn: EFFECT_FN.with(|c| c.borrow().clone()).unwrap_or_else(|| "effect".to_string()),
+        effect_buffers: if kind == EntryKind::Effect { effect_buffer_names(source) } else { Vec::new() },
         sim_coloring: kind == EntryKind::SimColoring,
         palette_reads: 0,
         state_this: false,
@@ -1035,6 +1065,11 @@ struct Lowerer<'s> {
     stmt_call: bool,
     /// Texture reads made so far (batch 6), likewise.
     texture_reads: i64,
+    /// The function an effect's lowering takes -- `effect`, or a
+    /// multi-pass effect's pass -- and the effect's buffers by name, their
+    /// index their place (docs/projects/multipass-effects.md).
+    effect_fn: String,
+    effect_buffers: Vec<String>,
     /// Lowering a simulation's model (P4), and which of its functions.
     sim_model: bool,
     sim_fn: SimFn,
@@ -1633,7 +1668,12 @@ impl<'s> Lowerer<'s> {
                     Expr::StringConstant(s, _) if matches!(s.as_str(), "color" | "density") => {}
                     _ => return self.err(*p, "`category` is \"color\" (after the tone map) or \"density\" (before it)"),
                 },
-                o if self.effect => return self.err(*p, format!("an effect's `INFO` has `title`, `id`, `description`, `author` and `category`, not `{o}`")),
+                // A multi-pass effect's passes and buffers, and how many
+                // frames it remembers; read apart (`effects::passes`).
+                "passes" | "buffers" | "warmup" if self.effect => {}
+                o if self.effect => {
+                    return self.err(*p, format!("an effect's `INFO` has `title`, `id`, `description`, `author`, `category`, `passes`, `buffers` and `warmup`, not `{o}`"))
+                }
                 o if self.sim_coloring => return self.err(*p, format!("a simulation colouring's `INFO` has `title`, `id`, `description` and `author`, not `{o}`")),
                 // A model's working values (`sim::custom` reads them apart):
                 // its dt and the largest it is stable at, a still's step
@@ -1965,11 +2005,12 @@ impl<'s> Lowerer<'s> {
     /// input with the blend library's mode `blend` (an int, the order of
     /// `effects::BLEND_MODE_NAMES`) at `amount` (1 when absent).
     fn effect_section(&mut self, span: Span) -> R<Section> {
-        let Some(f) = self.fns.get("effect").cloned() else {
-            return self.err(Position::NONE, "an effect has `fn effect(c, p)`");
+        let name = self.effect_fn.clone();
+        let Some(f) = self.fns.get(&name).cloned() else {
+            return self.err(Position::NONE, format!("an effect has `fn {name}(c, p)`"));
         };
         if f.params.is_empty() || f.params.len() > 3 {
-            return self.err(f.body.position(), "`effect(c)`, `effect(c, p)` or `effect(c, p, ctx)`");
+            return self.err(f.body.position(), format!("`{name}(c)`, `{name}(c, p)` or `{name}(c, p, ctx)`"));
         }
         let mut scope = Scope::new(Fn3::Effect, Vec::new());
         let input = self.vec_local(vec::Kind::Rgba, &f.params[0]);
@@ -4295,7 +4336,14 @@ impl<'s> Lowerer<'s> {
                     Base::Ctx if self.effect => match name {
                         "uv" => Ok(mk(ExprKind::Predef("pixel".into()), span)),
                         "width" | "height" | "density_mean" | "pixel_scale" => Ok(mk(ExprKind::Predef(name.into()), span)),
-                        o => self.err(*p, format!("an effect's context has `uv`, `width`, `height`, `density_mean` and `pixel_scale`; not `{o}`")),
+                        // A multi-pass effect's (docs/projects/multipass-effects.md).
+                        "xy" | "time" | "dt" | "pass" | "passes" | "step" | "level" | "levels" | "frame" => Ok(mk(ExprKind::Predef(format!("effect_{name}")), span)),
+                        o => self.err(
+                            *p,
+                            format!(
+                                "an effect's context has `uv`, `xy`, `width`, `height`, `density_mean`, `pixel_scale`, `pass`, `passes`, `step`, `level`, `levels`, `frame`, `time` and `dt`; not `{o}`"
+                            ),
+                        ),
                     },
                     // A variation's (C2b): what the flame hands it.
                     Base::Ctx if self.transform => match name {
@@ -4561,6 +4609,15 @@ impl<'s> Lowerer<'s> {
         }
         // Numbers of vectors (`dot`, `length`), and the functions that came
         // with them (`min`, `max`, `clamp` of numbers) (B1).
+        if matches!(name, "buffer" | "buffer_at") {
+            // A multi-pass effect's buffer, named by a string its `INFO`
+            // declares: its index, a literal, in the name's place.
+            let vals = self.buffer_args(name, &f.args, scope, p)?;
+            return match self.vfunc(name, vals, p)? {
+                Val::S(s) => Ok(s),
+                Val::V(_) => self.err(p, vec::NUMBER_WANTED),
+            };
+        }
         if matches!(name, "vec3" | "vec4" | "quat" | "rgba" | "input" | "input_at" | "palette" | "palette_srgb" | "palette_table" | "texture" | "texel" | "read" | "read_at" | "drive" | "scratch" | "memory" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
             || f.args.iter().any(|a| self.is_vec(a, scope))
         {
@@ -4953,6 +5010,8 @@ impl<'s> Lowerer<'s> {
                 | "coef_e" | "coef_f" | "pointw" | "wout" | "cam_x" | "cam_y" | "cam_z" | "cam_pitch" | "cam_yaw" | "cam_bank" | "cam_persp" => TypeName::Float,
                 // An effect's (P2).
                 "density_mean" | "pixel_scale" | "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_amount" => TypeName::Float,
+                "effect_time" | "effect_dt" => TypeName::Float,
+                "effect_pass" | "effect_passes" | "effect_step" | "effect_level" | "effect_levels" | "effect_frame" => TypeName::Int,
                 _ => TypeName::Complex,
             },
             ExprKind::Param(n) => self.param_tys.get(n).copied().unwrap_or(TypeName::Complex),

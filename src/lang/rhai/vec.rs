@@ -339,7 +339,7 @@ impl Lowerer<'_> {
         match n {
             "vec3" | "cross" => Some(Kind::Vec3),
             "quat" => Some(Kind::Quat),
-            "rgba" | "vec4" | "input" | "input_at" | "read" | "read_at" | "drive" | "scratch" | "memory" => Some(Kind::Rgba),
+            "rgba" | "vec4" | "input" | "input_at" | "read" | "read_at" | "drive" | "scratch" | "memory" | "buffer" | "buffer_at" => Some(Kind::Rgba),
             "palette" | "palette_srgb" | "palette_table" => Some(Kind::Vec3),
             "texture" | "texel" => Some(Kind::Rgba),
             "normalize" | "abs" | "floor" | "min" | "max" | "clamp" | "mix" => first(),
@@ -509,14 +509,36 @@ impl Lowerer<'_> {
             self.depth -= 1;
             return r;
         }
-        let mut args = Vec::new();
-        for a in f.args.iter() {
-            args.push(self.arg(a, scope)?);
-        }
+        let args = if matches!(n, "buffer" | "buffer_at") {
+            self.buffer_args(n, &f.args, scope, p)?
+        } else {
+            let mut args = Vec::new();
+            for a in f.args.iter() {
+                args.push(self.arg(a, scope)?);
+            }
+            args
+        };
         match self.vfunc(n, args, p)? {
             Val::V(v) => Ok(v),
             Val::S(_) => self.err(p, VECTOR_WANTED),
         }
+    }
+
+    /// A multi-pass effect's buffer read's arguments: the buffer, named by
+    /// a string its `INFO` declares, as its index -- a literal -- then the
+    /// rest lowered (docs/projects/multipass-effects.md).
+    pub(super) fn buffer_args(&mut self, name: &str, args: &[Expr], scope: &mut Scope, p: Position) -> R<Vec<Val>> {
+        let Some(Expr::StringConstant(b, _)) = args.first() else {
+            return self.err(p, format!("`{name}` takes the buffer's name first, a string: `{name}(\"coords\", ..)`"));
+        };
+        let Some(k) = self.effect_buffers.iter().position(|n| n == b.as_str()) else {
+            return self.err(p, format!("`{b}` is not one of this effect's buffers (`INFO.buffers`)"));
+        };
+        let mut vals = vec![Val::S(mk(ExprKind::Int(k as i64), self.pos.span(p)))];
+        for a in args.iter().skip(1) {
+            vals.push(self.arg(a, scope)?);
+        }
+        Ok(vals)
     }
 
     /// The kind of vector the helper `name`, called with `args`, gives:
@@ -1017,6 +1039,36 @@ impl Lowerer<'_> {
                 }
                 V(_) => return self.err(p, "`palette(t)` takes a number, from 0 to 1"),
             },
+            // A multi-pass effect's reads of its buffers (the buffer an
+            // index already, `Lowerer::call`): read once into the call
+            // site's slot, the texture loads' arrangement.
+            ("buffer", 2) | ("buffer_at", 3) if !self.effect => {
+                return self.err(p, format!("`{name}` reads a multi-pass effect's buffer"));
+            }
+            ("buffer", 2) | ("buffer_at", 3) => {
+                let call = |name: &str, args: Vec<ast::Expr>| mk(ExprKind::Call { name: name.into(), args, user: false }, span);
+                let S(k) = args.remove(0) else { return self.err(p, "a buffer's index") };
+                let (a, b) = if name == "buffer" {
+                    let S(uv) = args.remove(0) else { return self.err(p, "`buffer(name, uv)` takes a position, `complex(u, v)`, from 0 to 1") };
+                    let uv = self.hold(uv, "uv");
+                    (call1("real", uv.clone(), span), call1("imag", uv, span))
+                } else {
+                    let (S(x), S(y)) = (args.remove(0), args.remove(0)) else { return self.err(p, "`buffer_at(name, x, y)` takes a texel's column and row, whole numbers") };
+                    (self.hold(call1("to_int", x, span), "x"), self.hold(call1("to_int", y, span), "y"))
+                };
+                if self.pure {
+                    let host = if name == "buffer" { "__buffer" } else { "__buffer_texel" };
+                    let part = |c: i64| call(host, vec![a.clone(), b.clone(), k.clone(), mk(ExprKind::Int(c), span)]);
+                    V(Vector::new(Kind::Rgba, (0..4).map(part).collect()))
+                } else {
+                    let slot = self.texture_reads;
+                    self.texture_reads += 1;
+                    let host = if name == "buffer" { "__buffer_load" } else { "__buffer_texel_load" };
+                    self.pending.push(ast::Stmt::Expr(call(host, vec![a, b, mk(ExprKind::Int(slot), span), k])));
+                    let part = |c: i64| call("__buffer_part", vec![mk(ExprKind::Int(slot), span), mk(ExprKind::Int(c), span)]);
+                    V(Vector::new(Kind::Rgba, (0..4).map(part).collect()))
+                }
+            }
             // An effect's reads of its image: four channels of one read.
             ("input", 1) | ("input_at", 2) if !self.effect => {
                 return self.err(p, format!("`{name}` reads an effect's image: in `fn effect` alone"));

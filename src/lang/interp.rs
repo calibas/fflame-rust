@@ -1225,6 +1225,9 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {
             Value::Float(0.0)
         }
+        Predef::EffectTime | Predef::EffectDt => Value::Float(0.0),
+        Predef::EffectXy => Value::Complex(C64::ZERO),
+        Predef::EffectInt(_) => Value::Int(0),
         Predef::EffectBlend => Value::Int(0),
         Predef::Center => Value::Complex(env.center),
         Predef::Magn => Value::Float(env.magn),

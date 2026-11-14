@@ -2,6 +2,7 @@ pub mod average;
 pub mod coat;
 pub mod compute_kernel;
 pub mod effect_chain;
+mod effect_passes;
 pub mod histogram;
 pub mod render;
 pub mod shade_pass;

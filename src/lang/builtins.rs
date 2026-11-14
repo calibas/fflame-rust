@@ -216,6 +216,18 @@ pub enum Host {
     EmitOffset2,
     EmitOffset3,
     EmitSuppress,
+    /// A multi-pass effect's read of one of its buffers
+    /// (docs/projects/multipass-effects.md): filtered at `(u, v)` in 0..1,
+    /// or the texel at whole `(x, y)`, clamped, each into the call site's
+    /// slot -- the third argument, as a texture load's -- the buffer by its
+    /// index the fourth; its parts read from there; the same one a part
+    /// where no statement may go (the buffer the third argument, the part
+    /// the last).
+    BufferLoad,
+    BufferTexelLoad,
+    BufferPart,
+    Buffer,
+    BufferTexel,
 }
 
 /// Every host call by its lowered name.
@@ -251,6 +263,11 @@ pub const HOSTS: &[(&str, Host)] = &[
     ("__emit_offset2", Host::EmitOffset2),
     ("__emit_offset3", Host::EmitOffset3),
     ("__emit_suppress", Host::EmitSuppress),
+    ("__buffer_load", Host::BufferLoad),
+    ("__buffer_texel_load", Host::BufferTexelLoad),
+    ("__buffer_part", Host::BufferPart),
+    ("__buffer", Host::Buffer),
+    ("__buffer_texel", Host::BufferTexel),
 ];
 
 impl Host {
@@ -283,6 +300,9 @@ impl Host {
             EmitPlot3 | EmitOffset3 => &[F, F, F, F],
             AgentDeposit => &[I, I, F],
             ReadAt => &[I, I, I],
+            BufferLoad | Buffer => &[F, F, I, I],
+            BufferTexelLoad | BufferTexel => &[I, I, I, I],
+            BufferPart => &[I, I],
         }
     }
 
@@ -290,7 +310,7 @@ impl Host {
     pub fn result(self) -> Option<Ty> {
         use Host::*;
         match self {
-            ScratchWrite | MemWrite | AgentClaim | AgentDeposit | PyrPrepare | EscPaletteLoad | TextureLoad | TexelLoad => None,
+            ScratchWrite | MemWrite | AgentClaim | AgentDeposit | PyrPrepare | EscPaletteLoad | TextureLoad | TexelLoad | BufferLoad | BufferTexelLoad => None,
             EmitPlot2 | EmitPlot3 | EmitOffset2 | EmitOffset3 | EmitSuppress => None,
             Outside | AgentClaimCheck => Some(Ty::Bool),
             _ => Some(Ty::Float),
@@ -301,7 +321,18 @@ impl Host {
     pub fn parts(self) -> bool {
         matches!(
             self,
-            Host::ScratchRead | Host::MemRead | Host::ReadAt | Host::EscPalette | Host::EscPalettePart | Host::TexturePart | Host::Texture | Host::Texel | Host::TextureSize
+            Host::ScratchRead
+                | Host::MemRead
+                | Host::ReadAt
+                | Host::EscPalette
+                | Host::EscPalettePart
+                | Host::TexturePart
+                | Host::Texture
+                | Host::Texel
+                | Host::TextureSize
+                | Host::BufferPart
+                | Host::Buffer
+                | Host::BufferTexel
         )
     }
 
@@ -320,10 +351,15 @@ impl Host {
         matches!(self, Host::TextureLoad | Host::TexelLoad | Host::TexturePart | Host::Texture | Host::Texel | Host::TextureSize)
     }
 
-    /// A read of what the GPU alone holds -- the palette, a texture --
-    /// which the evaluators read as 0.
+    /// Whether a multi-pass effect's read of its buffers.
+    pub fn buffer(self) -> bool {
+        matches!(self, Host::BufferLoad | Host::BufferTexelLoad | Host::BufferPart | Host::Buffer | Host::BufferTexel)
+    }
+
+    /// A read of what the GPU alone holds -- the palette, a texture, an
+    /// effect's buffer -- which the evaluators read as 0.
     pub fn gpu_read(self) -> bool {
-        self.escape() || self.texture()
+        self.escape() || self.texture() || self.buffer()
     }
 
     /// Whether an agent function's (else a model step's).

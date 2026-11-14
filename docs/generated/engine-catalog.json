@@ -15361,6 +15361,10 @@
         "builtin": "brusselator2",
         "kind": "sim_model"
       },
+      "custom-3721b0a593641c7b": {
+        "builtin": "curvature_average",
+        "kind": "coloring"
+      },
       "custom-37fb1bcd5a62a1f5": {
         "builtin": "basic",
         "kind": "coloring"
