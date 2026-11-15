@@ -77,6 +77,7 @@ struct EscapeParams {
     // Render pixels per output pixel: the supersample factor times the
     // viewport's render scale (`esc_supersample`).
     px_scale: f32,
+    depth_fade: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -365,6 +366,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(rgb, coverage));
     slope = esc_overlay_field(escaped, z, n, slope);
+    let depth_rs = esc_depth_into(escaped, z, n, relief, slope);
+    relief = depth_rs.x;
+    slope = depth_rs.yz;
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(py)), vec4<f32>(height, relief, slope));
 }
 "#;
@@ -679,6 +683,29 @@ fn colour_wgsl(coloring: &ColoringDef) -> &'static str {
 /// to the relief's own source. Clear, the height texture is written
 /// exactly as before.
 const OVERLAY_FIELD_WGSL: &str = r#"
+// The relief's depth fade (EscapeShading::depth_fade): the pixel's
+// smooth escape count, as the overlay's field takes it, for the shade
+// pass to weigh the relief by against the view's earliest escape. Stored
+// where the 2D relief does not read: alpha, for a slope the shade pass
+// takes or Embossed's response; green, for a stored slope (Analytic 3,
+// Offset 4, Creases 6), whose relief reads blue and alpha. Off (and
+// under a terrain, whose height is green), or inside, the record is
+// written as before: a count of 0 is no fade. Returned as the green and
+// the blue-alpha pair to store.
+fn esc_depth_into(escaped: bool, z: vec2<f32>, n: u32, relief: f32, slope: vec2<f32>) -> vec3<f32> {
+    if (!(params.depth_fade > 0.0) || !escaped) {
+        return vec3<f32>(relief, slope);
+    }
+    let r2 = max(dot(z, z), 1.0000001);
+    let ll = log2(0.5 * log2(r2));
+    let frac = select(ll / log2(params.degree), ll, params.degree == 2.0);
+    let count = max(f32(n) + 1.0 - frac, 0.001);
+    if (params.shade_flags == 3u || params.shade_flags == 4u || params.shade_flags == 6u) {
+        return vec3<f32>(count, slope);
+    }
+    return vec3<f32>(relief, slope.x, count);
+}
+
 fn esc_overlay_field(escaped: bool, z: vec2<f32>, n: u32, slope: vec2<f32>) -> vec2<f32> {
     if ((params.flags & 256u) == 0u) {
         return slope;
@@ -1793,6 +1820,7 @@ struct EscapeParams {
     // Render pixels per output pixel: the supersample factor times the
     // viewport's render scale (`esc_supersample`).
     px_scale: f32,
+    depth_fade: f32,
 }
 
 struct PerturbParams {
@@ -2294,6 +2322,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (escaped || perturb.iter_end >= params.max_iter) {
         textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
         slope = esc_overlay_field(escaped, z, n, slope);
+        let depth_rs = esc_depth_into(escaped, z, n, relief, slope);
+        relief = depth_rs.x;
+        slope = depth_rs.yz;
         textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
     }
 }
@@ -2343,6 +2374,7 @@ struct EscapeParams {
     // Render pixels per output pixel: the supersample factor times the
     // viewport's render scale (`esc_supersample`).
     px_scale: f32,
+    depth_fade: f32,
 }
 
 struct PerturbParams {
@@ -3239,6 +3271,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (escaped || perturb.iter_end >= params.max_iter) {
         textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
         slope = esc_overlay_field(escaped, z, n, slope);
+        let depth_rs = esc_depth_into(escaped, z, n, relief, slope);
+        relief = depth_rs.x;
+        slope = depth_rs.yz;
         textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(height, relief, slope));
     }
 }
@@ -6129,6 +6164,7 @@ struct EscapeParams {
     // Render pixels per output pixel: the supersample factor times the
     // viewport's render scale (`esc_supersample`).
     px_scale: f32,
+    depth_fade: f32,
 }
 
 struct IterResult {
@@ -6304,6 +6340,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, coverage));
     slope = esc_overlay_field(escaped, r.z, r.n, slope);
+    let depth_rs = esc_depth_into(escaped, r.z, r.n, relief, slope);
+    relief = depth_rs.x;
+    slope = depth_rs.yz;
     // Flags bit 9: the relief's slopes came from orbits the iterate pass
     // ran beside each pixel's own (offset relief, Embossed), which a
     // recolour of the records cannot run. Keep the height texture as
@@ -6458,6 +6497,7 @@ struct EscapeParams {
     // Render pixels per output pixel: the supersample factor times the
     // viewport's render scale (`esc_supersample`).
     px_scale: f32,
+    depth_fade: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -6608,6 +6648,7 @@ struct EscapeParams {
     // Render pixels per output pixel: the supersample factor times the
     // viewport's render scale (`esc_supersample`).
     px_scale: f32,
+    depth_fade: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -7432,6 +7473,7 @@ struct EscapeParams {
     // Render pixels per output pixel: the supersample factor times the
     // viewport's render scale (`esc_supersample`).
     px_scale: f32,
+    depth_fade: f32,
 }
 
 struct IfsRecord {
@@ -7618,6 +7660,7 @@ struct EscapeParams {
     // Render pixels per output pixel: the supersample factor times the
     // viewport's render scale (`esc_supersample`).
     px_scale: f32,
+    depth_fade: f32,
 }
 
 struct IfsRecord {
@@ -7844,6 +7887,7 @@ struct EscapeParams {
     // Render pixels per output pixel: the supersample factor times the
     // viewport's render scale (`esc_supersample`).
     px_scale: f32,
+    depth_fade: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;

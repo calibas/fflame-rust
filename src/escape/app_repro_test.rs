@@ -11325,6 +11325,72 @@ fn main() {
         assert!(t < n, "shininess 256 glinted on {t} pixels, 16 on {n}");
     }
 
+    /// The relief's depth fade, as the picture shows it: at 0 the relief
+    /// is exactly as without it; a fade lights fewer pixels than the
+    /// relief alone, yet keeps the relief of the shallow parts; and what
+    /// it keeps holds at twice the output size -- anchored on the view's
+    /// earliest escape, which a finer grid does not move, where the
+    /// deepest counts it reaches do. (The stored count is `terrain`'s
+    /// `the_depth_fade_stores_each_pixels_escape_count`.)
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_relief_depth_fade_lights_the_deep_parts_less() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.escape.center_re = "-0.7453".to_string();
+        config.escape.center_im = "0.1127".to_string();
+        config.escape.zoom_log2 = 7.0;
+        config.escape.max_iter = 600;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let plain = render(&config);
+        let moved = |a: &[u8]| a.chunks(4).zip(plain.chunks(4)).filter(|(x, y)| (0..3).any(|k| x[k].abs_diff(y[k]) > 2)).count();
+        let mut lit = config.clone();
+        lit.escape.shading.enabled = true;
+        lit.escape.shading.height = 10.0;
+        let relief = render(&lit);
+        let mut none = lit.clone();
+        none.escape.shading.depth_fade = 0.0;
+        assert_eq!(render(&none), relief, "a depth fade of 0 changed the picture");
+        let full = moved(&relief);
+        let mut faded = lit.clone();
+        faded.escape.shading.depth_fade = 1.0;
+        let half = moved(&render(&faded));
+        println!("depth fade: the relief moves {full} pixels, {half} at fade 1");
+        assert!(half < full * 9 / 10, "a full depth fade lit nearly as many pixels ({half}) as none ({full})");
+        assert!(half > full / 20, "a full depth fade left almost no relief ({half} of {full})");
+
+        // At twice the size: the share of the relief the fade keeps holds.
+        let share = |w: u32, h: u32| -> f64 {
+            let at = |c: &crate::config::FractalConfig| {
+                let job = crate::renderer::RenderJob::new(c, w, h);
+                pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                    .expect("render")
+                    .rgba_data
+            };
+            let base = at(&config);
+            let moved = |a: &[u8]| a.chunks(4).zip(base.chunks(4)).filter(|(x, y)| (0..3).any(|k| x[k].abs_diff(y[k]) > 2)).count() as f64;
+            let mut half_fade = lit.clone();
+            half_fade.escape.shading.depth_fade = 0.5;
+            moved(&at(&half_fade)) / moved(&at(&lit))
+        };
+        let (small, big) = (share(160, 120), share(320, 240));
+        println!("depth fade: keeps {small:.3} of the relief at 160x120, {big:.3} at 320x240");
+        assert!((big / small - 1.0).abs() < 0.1, "the fade's share moved with the output size: {small:.3} -> {big:.3}");
+    }
+
     /// The relief's source cannot change what auto contrast fits.
     ///
     /// The probe and the relief once shared one height channel, so

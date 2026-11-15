@@ -7226,6 +7226,89 @@ pub(crate) mod gpu_tests {
         None
     }
 
+    /// The relief's depth fade (`EscapeShading::depth_fade`): the iterate
+    /// pass leaves, in the height field's alpha, each escaped pixel's
+    /// smooth count -- against the f64 Mandelbrot at the same pixels --
+    /// for the shade pass to weigh the relief by against the view's
+    /// earliest escape; with the fade at 0 it writes nothing there.
+    #[test]
+    fn the_depth_fade_stores_each_pixels_escape_count() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let n = 96u32;
+        let render = |fade: f32| -> (crate::config::escape::EscapeConfig, Vec<[f32; 4]>) {
+            let mut config = crate::config::FractalConfig::default();
+            config.escape.center_re = "-0.75".into();
+            config.escape.center_im = "0.1".into();
+            config.escape.zoom_log2 = 3.0;
+            config.escape.max_iter = 300;
+            config.escape.supersample = 1;
+            config.escape.shading.enabled = true;
+            config.escape.shading.depth_fade = fade;
+            let mut flame = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+                &device,
+                &queue,
+                TextureFormat::Rgba8Unorm,
+                n,
+                n,
+                &config.flame,
+                config.palette_size,
+            );
+            flame.update_palette(
+                &device,
+                &queue,
+                &config.palette,
+                config.palette_rotation,
+                config.palette_squeeze,
+                config.palette_squeeze_mode,
+                config.palette_squeeze_falloff,
+                config.palette_log_strength,
+                config.palette_reverse,
+            );
+            let mut escape = crate::escape::EscapeRenderer::new(&device, n, n);
+            for guard in 0.. {
+                let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("depth fade") });
+                let settled = escape.render(&device, &queue, &mut enc, &config.escape, flame.palette_view(), flame.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                assert!(guard < 10_000, "the render did not settle");
+            }
+            let hf: Vec<[f32; 4]> = bytemuck::cast_slice(&read_texture(&device, &queue, escape.height_texture_for_test(), 0, n, n, 16)).to_vec();
+            (config.escape, hf)
+        };
+        let (_, off) = render(0.0);
+        assert!(off.iter().all(|t| t[3] == 0.0), "with no fade, alpha was written");
+        let (esc, hf) = render(0.8);
+        let (mut checked, mut off_by) = (0usize, 0usize);
+        let (mut lo, mut hi) = (f64::MAX, 0.0f64);
+        for py in 0..n {
+            for px in 0..n {
+                let Some((_, mu)) = mandelbrot_px(&esc, n, px, py) else { continue };
+                let got = hf[(py * n + px) as usize][3] as f64;
+                // The template's smooth count takes log2(log2 |z|) where
+                // this reference takes log2(ln |z|): a constant apart,
+                // log2(ln 2). And f32 iteration against f64: a pixel near
+                // the boundary can escape a step apart, or not at all.
+                let want = mu + std::f64::consts::LN_2.log2();
+                if (got - want).abs() > 0.05f64.max(0.01 * want) {
+                    off_by += 1;
+                }
+                lo = lo.min(got);
+                hi = hi.max(got);
+                checked += 1;
+            }
+        }
+        println!("depth fade: {checked} escaped pixels, {off_by} counts off; counts {lo:.2}..{hi:.2}");
+        assert!(checked > (n * n / 10) as usize, "too few escaped pixels: {checked}");
+        assert!(off_by * 20 < checked, "{off_by} of {checked} pixels' counts are off");
+        assert!(hi > 2.0 * lo, "the stored counts did not span the view's: {lo:.2}..{hi:.2}");
+    }
+
     /// A terrain footprint writes its height source into the height
     /// field's green channel: the distance estimate in pixels, the smooth
     /// escape count, and the interior's sentinel -- against the f64

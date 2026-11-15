@@ -1147,6 +1147,10 @@ pub fn apply(config: &mut FractalConfig, target: EditingTarget, path: &ConfigPat
                 let v: f32 = value.try_into()?;
                 config.escape.shading.ambient = v.clamp(0.0, 1.0);
             }
+            ConfigPath::EscapeShadingDepthFade => {
+                let v: f32 = value.try_into()?;
+                config.escape.shading.depth_fade = v.clamp(0.0, 1.0);
+            }
             ConfigPath::EscapeShadingSpecularStrength => {
                 let v: f32 = value.try_into()?;
                 config.escape.shading.specular_strength = v.clamp(0.0, 1.0);

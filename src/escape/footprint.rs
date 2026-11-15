@@ -154,6 +154,7 @@ fn picture_key(escape: &EscapeConfig) -> EscapeConfig {
     k.shading.highlight_color = d.shading.highlight_color;
     k.shading.highlight_strength = d.shading.highlight_strength;
     k.shading.highlight_blend = d.shading.highlight_blend;
+    k.shading.depth_fade = d.shading.depth_fade;
     k.shading.specular_strength = d.shading.specular_strength;
     k.shading.specular_shininess = d.shading.specular_shininess;
     k.shading.specular_color = d.shading.specular_color;
@@ -1639,6 +1640,7 @@ mod tests {
         b.shading.highlight_strength = 0.9;
         // The relief's faked specular is a light, not a height: a
         // terrain's heightmap is rendered without it.
+        b.shading.depth_fade = 0.7;
         b.shading.specular_strength = 0.8;
         b.shading.specular_shininess = 100.0;
         b.shading.specular_color = [0.9, 0.8, 1.0];

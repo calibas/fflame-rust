@@ -594,6 +594,15 @@ fn perturb_chunk_ceiling(seed: u32) -> u32 {
 /// the wrong cost regime cannot produce an unbounded dispatch.
 const CHUNK_SEED_HEADROOM: u32 = 64;
 
+/// The depth fade's exponent at full slider (`EscapeShading::depth_fade`
+/// 1): a pixel at twice the view's earliest escape count keeps a
+/// sixteenth of its relief.
+const DEPTH_FADE_POWER: f32 = 4.0;
+
+/// The grid the view's earliest escape is measured on (`run_depth_min`):
+/// fractions of the view, the same at every output size.
+const DEPTH_MIN_GRID: (u32, u32) = (64, 48);
+
 /// Uniform block — must match `EscapeParams` in the WGSL template
 /// (std140: vec2 pairs pack the head, the vec4s start at a 16-byte
 /// boundary, total 1728 bytes).
@@ -649,7 +658,10 @@ struct EscapeParamsGpu {
     /// size; a fraction of it at a render scale, which the 4-bit factor in
     /// `flags` (still read by mode D's march) cannot hold.
     px_scale: f32,
-    _px_pad: [f32; 3],
+    /// The relief's depth fade (`EscapeShading::depth_fade`), 0 with the
+    /// relief off or under a terrain, which it must not touch.
+    depth_fade: f32,
+    _px_pad: [f32; 2],
 }
 
 /// 64 vec4s = 256 floats — Origami's 64 fold lines exactly.
@@ -726,7 +738,9 @@ struct ShadeParamsGpu {
     specular_r: f32,
     specular_g: f32,
     specular_b: f32,
-    _pad: [u32; 1],
+    /// The depth fade's exponent: a pixel keeps (earliest escape / its
+    /// escape count)^power of its relief; 0 off.
+    depth_power: f32,
 }
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
@@ -1264,6 +1278,11 @@ pub struct EscapeRenderer {
     /// Whether `height_texture` is full-size (shading on) or the dummy.
     height_full: bool,
     shade_params_buffer: Buffer,
+    /// The view's earliest escape, measured by `run_depth_min` for the
+    /// shade pass's depth fade (one f32; 3e38 when nothing escaped), and
+    /// the measuring pipeline, made on first use.
+    depth_min_buffer: Buffer,
+    depth_min_pipeline: Option<wgpu::ComputePipeline>,
     /// The simulation texture (`EscapeConfig::texture`) on the GPU, with
     /// the cache key of the recipe it was generated from; a 1x1 stand-in
     /// is bound when there is none. Rgba8Unorm, not sRGB: the overlay
@@ -1806,6 +1825,12 @@ impl EscapeRenderer {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let depth_min_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Escape Earliest Escape"),
+            size: 16,
+            usage: BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
 
         let contrast_params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Escape Contrast Params"),
@@ -2034,6 +2059,8 @@ impl EscapeRenderer {
             height_view,
             height_full: false,
             shade_params_buffer,
+            depth_min_buffer,
+            depth_min_pipeline: None,
             texture_image: None,
             texture_dummy: Self::create_texture_image(device, 1, 1),
             texture_sampler: device.create_sampler(&SamplerDescriptor {
@@ -7161,6 +7188,93 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         Some(vb)
     }
 
+    /// The view's earliest escape, for the relief's depth fade: the least
+    /// smooth escape count among a fixed grid of the view's points (the
+    /// iterate pass's count, green beside a stored slope, else alpha),
+    /// written to `depth_min_buffer` in `encoder` ahead of the resolve.
+    /// A grid of fractions of the view, not of pixels: every output size
+    /// and supersample factor reads nearly the same points, and the
+    /// earliest escape lies where the field is smooth, far from the set,
+    /// so it does not move with the resolution as the deepest counts do.
+    fn run_depth_min(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder, green: bool) {
+        if self.depth_min_pipeline.is_none() {
+            let src = format!(
+                r#"
+struct DepthMin {{ dims: vec2<u32>, green: u32, _pad: u32 }}
+@group(0) @binding(0) var height_tex: texture_2d<f32>;
+@group(0) @binding(1) var<storage, read_write> out_min: array<f32>;
+@group(0) @binding(2) var<uniform> dm: DepthMin;
+var<workgroup> wmin: array<f32, 256>;
+
+@compute @workgroup_size(256, 1, 1)
+fn depth_min_main(@builtin(local_invocation_index) li: u32) {{
+    var m = 3.0e38;
+    for (var i = li; i < {cells}u; i = i + 256u) {{
+        let fx = (f32(i % {gw}u) + 0.5) / {gw}.0;
+        let fy = (f32(i / {gw}u) + 0.5) / {gh}.0;
+        let p = vec2<i32>(
+            clamp(i32(fx * f32(dm.dims.x)), 0, i32(dm.dims.x) - 1),
+            clamp(i32(fy * f32(dm.dims.y)), 0, i32(dm.dims.y) - 1),
+        );
+        let t = textureLoad(height_tex, p, 0);
+        let c = select(t.a, t.g, dm.green == 1u);
+        if (c > 0.0) {{
+            m = min(m, c);
+        }}
+    }}
+    wmin[li] = m;
+    workgroupBarrier();
+    for (var s = 128u; s > 0u; s = s / 2u) {{
+        if (li < s) {{
+            wmin[li] = min(wmin[li], wmin[li + s]);
+        }}
+        workgroupBarrier();
+    }}
+    if (li == 0u) {{
+        out_min[0] = wmin[0];
+    }}
+}}
+"#,
+                cells = DEPTH_MIN_GRID.0 * DEPTH_MIN_GRID.1,
+                gw = DEPTH_MIN_GRID.0,
+                gh = DEPTH_MIN_GRID.1,
+            );
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some("Escape Earliest Escape"),
+                source: ShaderSource::Wgsl(src.into()),
+            });
+            self.depth_min_pipeline = Some(device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some("Escape Earliest Escape"),
+                layout: None,
+                module: &module,
+                entry_point: Some("depth_min_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            }));
+        }
+        let pipeline = self.depth_min_pipeline.as_ref().expect("made above");
+        let params = device.create_buffer(&BufferDescriptor {
+            label: Some("Escape Earliest Escape Params"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&params, 0, bytemuck::cast_slice(&[self.width, self.height, u32::from(green), 0]));
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Escape Earliest Escape"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&self.height_view) },
+                BindGroupEntry { binding: 1, resource: self.depth_min_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 2, resource: params.as_entire_binding() },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor { label: Some("Escape Earliest Escape"), timestamp_writes: None });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bg, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+    }
+
     fn run_resolve(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder, escape: &EscapeConfig) {
         let shading = &escape.shading;
         let mode = escape.downsample;
@@ -7264,7 +7378,7 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             specular_r: shading.specular_color[0],
             specular_g: shading.specular_color[1],
             specular_b: shading.specular_color[2],
-            _pad: [0; 1],
+            depth_power: shading.depth_fade.clamp(0.0, 1.0) * DEPTH_FADE_POWER,
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -7278,6 +7392,11 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             None
         };
         let height_src = softened.unwrap_or_else(|| self.height_view.clone());
+        // The view's earliest escape, for the depth fade: measured from
+        // the unsoftened counts, in this encoder ahead of the resolve.
+        if shade_on && params.depth_power > 0.0 {
+            self.run_depth_min(device, queue, encoder, params.stored == 1);
+        }
 
         let rebuild = match &self.downsample {
             Some((f, _, _)) => *f != factor,
@@ -7327,6 +7446,7 @@ struct ShadeParams {{
     specular_r: f32,
     specular_g: f32,
     specular_b: f32,
+    depth_power: f32,
 }}
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -7335,6 +7455,8 @@ struct ShadeParams {{
 @group(0) @binding(3) var<uniform> shade: ShadeParams;
 @group(0) @binding(4) var tex_image: texture_2d<f32>;
 @group(0) @binding(5) var tex_sampler: sampler;
+// The view's earliest escape (`run_depth_min`), for the depth fade.
+@group(0) @binding(6) var<storage, read> depth_min: array<f32>;
 
 // ---- The texture overlay (TextureOverlay; survey R10) ----
 // Kalles Fraktaler's KF_TextureWarp and the texture block after its
@@ -7621,10 +7743,26 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // pixel times `u`: per unit of the view, lit by its own height
     // (`height_view`, not scaled by the supersample factor, which `u`
     // already counts).
-    var g = vec2<f32>(-dx, dy) * (u * shade.height_view);
     let stored_at = textureLoad(height_tex, clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1)), 0);
+    // The depth fade (EscapeShading::depth_fade): the pixel keeps
+    // (earliest escape / its escape count)^power of its relief. The count
+    // is the iterate pass's -- alpha, or green beside a stored slope --
+    // and the earliest escape the view's own, measured on a fixed grid of
+    // its points (`run_depth_min`), so neither moves with the output size
+    // or the supersample factor. A count of 0 -- inside, or any path that
+    // does not write one -- keeps the relief whole, and so does a pixel
+    // shallower than the grid's earliest.
+    var keep = 1.0;
+    if (shade.depth_power > 0.0) {{
+        let count = select(stored_at.a, stored_at.g, shade.stored == 1u);
+        let earliest = depth_min[0];
+        if (count > 0.0 && earliest < 1.0e37) {{
+            keep = pow(clamp(earliest / count, 0.0, 1.0), shade.depth_power);
+        }}
+    }}
+    var g = vec2<f32>(-dx, dy) * (u * shade.height_view * keep);
     if (shade.stored == 1u) {{
-        g = stored_at.ba * shade.height;
+        g = stored_at.ba * (shade.height * keep);
     }}
     // Embossed has no slope: its response is stored whole, below. Only
     // the surface texture tilts it.
@@ -7708,7 +7846,7 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // screening white at 0.6 is Hard Light with 0.8, and 0.5 is Hard
     // Light's identity, as 0 is here.
     if (shade.stored == 2u) {{
-        response = clamp(response + stored_at.b, -1.0, 1.0);
+        response = clamp(response + stored_at.b * keep, -1.0, 1.0);
     }}
     let hi = clamp(response, 0.0, 1.0);
     // The ambient floor keeps that much of the base on the dark side.
@@ -7887,6 +8025,16 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         ty: BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
             let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -7934,6 +8082,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 BindGroupEntry {
                     binding: 5,
                     resource: BindingResource::Sampler(&self.texture_sampler),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: self.depth_min_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -8473,7 +8625,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 escape.terrain_active() && escape.terrain.source == crate::config::escape::TerrainSource::Creases,
             ),
             px_scale: self.display_factor(),
-            _px_pad: [0.0; 3],
+            depth_fade: if escape.shading.enabled && !escape.terrain_active() {
+                escape.shading.depth_fade.clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
+            _px_pad: [0.0; 2],
         }
     }
 

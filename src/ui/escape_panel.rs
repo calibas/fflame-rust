@@ -1011,6 +1011,19 @@ pub fn render_escape_content(
                             config_manager.update_param(ConfigPath::EscapeShadingHeight, h.into());
                     }
                 });
+                // The depth fade: less relief where the escape count is
+                // high, the detailed parts near the set that turn noisy.
+                ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.shading_depth_fade"));
+                    let mut v = sh.depth_fade;
+                    if ui
+                        .add(egui::Slider::new(&mut v, 0.0..=1.0))
+                        .on_hover_text(t!("escape_panel.tooltip_shading_depth_fade"))
+                        .changed()
+                    {
+                        let _ = config_manager.update_param(ConfigPath::EscapeShadingDepthFade, v.into());
+                    }
+                });
                 ui.horizontal(|ui| {
                     ui.label(t!("escape_panel.shading_softness"));
                     let mut sf = sh.softness;

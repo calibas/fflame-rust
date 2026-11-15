@@ -2515,6 +2515,32 @@ field: what the relief lights, and a terrain reads as its height, is
 unchanged, and the terrain's footprint ignores it (`picture_key`).
 Embossed has no slope and takes none. Tested by
 `the_relief_specular_glints_where_slopes_face_the_light`.
+
+**Depth fade** (`EscapeShading::depth_fade`, the panel's Depth Fade under
+Height; 2026-11-15): less relief where the escape count is high, where
+the detail near the set turns the slopes to noise. A pixel keeps
+`(earliest / count)^(4 x depth_fade)` of its relief -- the slope it is lit
+by, Embossed's response, and so the specular -- where `count` is its
+smooth escape count and `earliest` the view's earliest escape. The
+iterate templates (direct, perturbed, floatexp, recolour) store the
+count where the 2D relief does not read (`esc_depth_into`): alpha beside
+a slope the shade pass takes or Embossed's response, green beside a
+stored slope (Analytic, Offset, Creases, whose relief reads blue and
+alpha). `run_depth_min` reduces a fixed 64x48 grid of the view's points
+to the least count, on the GPU ahead of the resolve, into the buffer the
+shade pass reads. **Anchored on the earliest escape, not the deepest**:
+the earliest lies where the field is smooth, far from the set, and the
+grid is fractions of the view, so the viewport, a 1080p and a 4K export
+at any antialiasing read the same anchor -- where the deepest counts
+grow with every finer grid. Measured, a half fade keeps 0.683 of the
+relief at 160x120 and 0.697 at 320x240
+(`the_relief_depth_fade_lights_the_deep_parts_less`). (A first build
+divided the count by `max_iter`, which barely faded a view whose counts
+sit far below it.) Off, under a terrain (its height is green), and on
+paths without an escape count (fields, mode D), nothing is stored and
+the relief is whole. With a stored-slope field and the texture overlay,
+the overlay's fallback field (green) is the count while the fade is on --
+the smooth count Kalles Fraktaler warps by.
 Mode D's march steps by the integer factor in `flags` bits 4-7.
 
 ### The recolour cache

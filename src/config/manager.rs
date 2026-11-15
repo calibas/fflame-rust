@@ -2171,6 +2171,7 @@ impl ConfigManager {
             )),
             ConfigPath::EscapeShadingElevation => Ok(config.escape.shading.elevation.into()),
             ConfigPath::EscapeShadingAmbient => Ok(config.escape.shading.ambient.into()),
+            ConfigPath::EscapeShadingDepthFade => Ok(config.escape.shading.depth_fade.into()),
             ConfigPath::EscapeShadingSpecularStrength => Ok(config.escape.shading.specular_strength.into()),
             ConfigPath::EscapeShadingSpecularShininess => Ok(config.escape.shading.specular_shininess.into()),
             ConfigPath::EscapeShadingSpecularColor => Ok(ConfigValue::ColorRgb(config.escape.shading.specular_color)),

@@ -1608,6 +1608,20 @@ pub struct EscapeShading {
     /// the side facing away from the light.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub ambient: f32,
+    /// How much of the relief the deeper parts lose, 0..1 (0, the
+    /// default, keeps it everywhere): each pixel keeps
+    /// (earliest escape / its smooth escape count)^(4 x depth_fade) of its
+    /// relief, the earliest escape the view's own -- so the highly
+    /// detailed parts near the set, where the slopes turn to noise, are
+    /// lit less than the open areas. Anchored on the earliest escape,
+    /// which lies where the field is smooth and is measured on a fixed
+    /// grid of the view's points, so it does not move with the output
+    /// size or the supersample factor (the deepest counts do). A weight
+    /// on the relief's light, not on its field: what the relief lights,
+    /// and a terrain reads as its height, is unchanged (and a terrain is
+    /// not faded).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub depth_fade: f32,
     /// Faked specular reflection, 0..1 (0, the default, is off): a glint
     /// where a slope turns the light, raised `elevation` above the
     /// horizon, toward a viewer looking straight down (Blinn-Phong's half
@@ -1761,6 +1775,7 @@ impl Default for EscapeShading {
             model: ReliefModel::default(),
             elevation: default_relief_elevation(),
             ambient: 0.0,
+            depth_fade: 0.0,
             specular_strength: 0.0,
             specular_shininess: default_specular_shininess(),
             specular_color: default_specular_color(),
@@ -2991,6 +3006,7 @@ mod shading_tests {
             model: ReliefModel::Lambert,
             elevation: 55.0,
             ambient: 0.3,
+            depth_fade: 0.5,
             specular_strength: 0.4,
             specular_shininess: 64.0,
             specular_color: [0.9, 0.95, 1.0],
