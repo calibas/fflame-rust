@@ -1055,13 +1055,19 @@ fn esc_analytic_slope(sum: OrbitSummary) -> vec2<f32> {
     }
     // dz is per render pixel, so this is the distance in render pixels.
     let d_px = r * log(r) / dzl;
+    // The relief's unit is 1/1024 of the view's height, not a pixel, so
+    // the relief is the same at every output size (the numeric slope's
+    // stencil steps the same unit): the distance in that unit is
+    // d_px / unit. The shade pass multiplies a stored slope by the
+    // supersample factor, divided here so it cancels.
+    let unit = f32(params.height) / 1024.0;
     // conj(dz/z) as a direction is conj(dz) * z.
     let g = vec2<f32>(sum.dz.x * sum.z.x + sum.dz.y * sum.z.y, sum.dz.x * sum.z.y - sum.dz.y * sum.z.x);
     let gl = length(g);
     if (!(gl > 1e-30)) {
         return vec2<f32>(0.0);
     }
-    let u = g / (gl * max(d_px, 1e-6));
+    let u = g * unit / (gl * max(d_px, 1e-6) * esc_supersample());
     let rot = params.rot_cs;
     return vec2<f32>(u.x * rot.x + u.y * rot.y, -u.x * rot.y + u.y * rot.x);
 }

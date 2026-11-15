@@ -2471,13 +2471,29 @@ several settled frames come a refresh late, a step up after a run with
 none, a failed step up waiting twice as long the next time; editing is
 not governed there.
 
-**An output pixel** is what the relief (its height, softness and texture
-scale), the distance-estimate colourings and the relief's slope
-cancellations measure in: `esc_supersample()`, which reads
-`EscapeParams.px_scale`, render pixels per output pixel. That is the
-supersample factor, times the viewport's render scale
-(`EscapeRenderer::set_pixel_scale`, 1 for every export), so neither
-antialiasing nor a lower render scale moves the colours or the relief.
+**An output pixel** is what the relief's texture scale, the
+distance-estimate colourings and the relief's slope cancellations
+measure in: `esc_supersample()`, which reads `EscapeParams.px_scale`,
+render pixels per output pixel. That is the supersample factor, times
+the viewport's render scale (`EscapeRenderer::set_pixel_scale`, 1 for
+every export), so neither antialiasing nor a lower render scale moves
+the colours.
+
+**1/1024 of the view's height** is what the relief's slope and its
+softness measure in, on every field: the numeric slope's stencil steps
+that unit (its taps read bilinearly between texels, `height_off` in the
+shade pass), the analytic slope takes its distance in it, and Offset
+relief and Embossed step it already. So the relief is the same at every
+output size: a 4K export is lit as the viewport and a 1080p export are.
+At a 1024-pixel-tall render the unit is one pixel. Until 2026-11-14 the
+numeric and analytic slopes were per output pixel, and a smooth field's
+relief faded at a larger export (half the slope at twice the size); the
+survey's objection to a fix (R9: scaling a per-pixel slope by the size
+overshoots on a field that steepens toward the set, as a finer grid finds
+steeper slopes) does not apply to a stencil a fixed fraction of the view
+wide. Below about 1024 pixels tall a grid cannot resolve the field's
+finest structure, so a thumbnail shades somewhat less than the viewport
+(`dbg_relief_strength_against_output_size`).
 Mode D's march steps by the integer factor in `flags` bits 4-7.
 
 ### The recolour cache

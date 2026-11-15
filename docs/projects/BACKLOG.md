@@ -237,8 +237,7 @@ and [v0.6.0-release.md](v0.6.0-release.md).
 
 - **Colouring pipeline candidates**: P8 separate inside colouring, P9
   phase add, P10 OKLab palette interpolation and a finer table; O1
-  ordered dither on 8-bit export; R9 relief independent of resolution
-  (needs a better model); a deeper itinerary that survives zoom; Sphere
+  ordered dither on 8-bit export; a deeper itinerary that survives zoom; Sphere
   average debanding; full coloured layers with UF merge modes.
   [escape-coloring-survey.md](../archive/projects/escape-coloring-survey.md).
 - **Splits' deep zoom** (`fn image_gap`); series approximation

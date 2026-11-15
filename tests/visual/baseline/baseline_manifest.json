@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "c11b147a",
+  "git_hash": "2310990b",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -487,20 +487,20 @@
       "sha256": "720c06172e4a36d09a4ce9881b1026fe50ffe8ffcf028049fa4b612c8539cf40"
     },
     "escape-origami-relief-paper.png": {
-      "bytes": 49653,
-      "sha256": "7420367ac397e62b9a964742e9ff56c7b12883ad93ce0151d07d4b23e0db0d4d"
+      "bytes": 49037,
+      "sha256": "cb693667f51e957a99896bc8bf2c8df02e40f249f942db85b80ea478c9db703c"
     },
     "escape-origami-relief-rock.png": {
-      "bytes": 46595,
-      "sha256": "9b85c6f2cdc60686015668692f2b3a6deabbd57231258008435960aaa6c51f64"
+      "bytes": 45911,
+      "sha256": "db78dbd65c2d7bb4bc86a4f6fb179dff42cf399272f50e6c66cd9c6b7a491644"
     },
     "escape-origami-relief-soft.png": {
-      "bytes": 47324,
-      "sha256": "4467063157fef912a0e0f2f809397568ab4088d223636d5fe7b26a8240a3a146"
+      "bytes": 48063,
+      "sha256": "2f2df2bfc8e87774493de0f2e6ded610349c55b56385994ccfc15b9fde732c3c"
     },
     "escape-origami-relief.png": {
-      "bytes": 47953,
-      "sha256": "297d585224f7f1acff843ee3c6e87c8b7d5290f2fbe1c3144fd27c24fd18531b"
+      "bytes": 47502,
+      "sha256": "b73a628f32b6002e043c508eb849fd2be690843299d9fc1f397db118721a371b"
     },
     "escape-phoenix-classic.png": {
       "bytes": 4187,

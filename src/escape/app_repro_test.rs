@@ -11629,9 +11629,10 @@ fn main() {
     /// Direction, as for analytic relief: lit from one side, the pixels
     /// both move, they move the same way, on the smooth exterior. Size:
     /// the offset is a fixed fraction of the view, so at twice the
-    /// resolution the share of pixels the relief moves holds, where the
-    /// numeric relief's per-pixel difference gets shallower (survey
-    /// 6.7) and its share falls.
+    /// resolution the share of pixels the relief moves holds -- and so,
+    /// since 2026-11-14, does the numeric relief's, whose stencil steps
+    /// the same unit (it used to step a pixel, and at twice the size read
+    /// half the slope: survey 6.7, R9).
     #[test]
     #[ignore = "needs a GPU"]
     fn offset_relief_belongs_to_the_fractal_not_the_pixels() {
@@ -11679,13 +11680,9 @@ fn main() {
                 let numeric = moved(&render(&c, w, h), &plain);
                 c.escape.shading.field = ShadingField::Offset;
                 let offset = moved(&render(&c, w, h), &plain);
-                // Direction at a matched magnitude: the offset slope is
-                // per 1/1024 of the view, the numeric one per render
-                // pixel, so scale the height by the ratio of the two.
-                let mut matched = c.clone();
-                matched.escape.shading.height *= 1024.0 / h as f32;
-                let matched = moved(&render(&matched, w, h), &plain);
-                let both: Vec<(i32, i32)> = numeric.iter().zip(&matched).filter(|(a, b)| **a != 0 && **b != 0).map(|(a, b)| (*a, *b)).collect();
+                // Direction at the same height: both slopes are per
+                // 1/1024 of the view.
+                let both: Vec<(i32, i32)> = numeric.iter().zip(&offset).filter(|(a, b)| **a != 0 && **b != 0).map(|(a, b)| (*a, *b)).collect();
                 let agree = both.iter().filter(|(a, b)| a == b).count() as f64 / both.len().max(1) as f64;
                 let px = (w * h) as f64;
                 let s_num = numeric.iter().filter(|m| **m != 0).count() as f64 / px;
@@ -11704,7 +11701,7 @@ fn main() {
         let num_ratio = num_big / num_small;
         println!("moved share at twice the size: offset x{off_ratio:.3}, numeric x{num_ratio:.3}");
         assert!((off_ratio - 1.0).abs() < 0.05, "offset relief changed with the output size: x{off_ratio:.3}");
-        assert!((off_ratio - 1.0).abs() < (num_ratio - 1.0).abs(), "offset relief is no steadier than the numeric relief");
+        assert!((num_ratio - 1.0).abs() < 0.05, "numeric relief changed with the output size: x{num_ratio:.3}");
 
         // Perturbation runs no offset orbits: flat, as the panel says.
         let mut deep = config.clone();
