@@ -11630,9 +11630,9 @@ fn main() {
     /// both move, they move the same way, on the smooth exterior. Size:
     /// the offset is a fixed fraction of the view, so at twice the
     /// resolution the share of pixels the relief moves holds -- and so,
-    /// since 2026-11-14, does the numeric relief's, whose stencil steps
-    /// the same unit (it used to step a pixel, and at twice the size read
-    /// half the slope: survey 6.7, R9).
+    /// since 2026-11-14, does the numeric relief's on this smooth
+    /// exterior, its slope put in the same unit (per pixel it read half
+    /// the slope at twice the size: survey 6.7, R9).
     #[test]
     #[ignore = "needs a GPU"]
     fn offset_relief_belongs_to_the_fractal_not_the_pixels() {

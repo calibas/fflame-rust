@@ -715,8 +715,9 @@ struct ShadeParamsGpu {
     /// std140 rounds the struct up to a multiple of its largest member
     /// alignment (vec3 -> 16): WGSL sees 160 bytes.
     /// The relief's height for a slope the pass differences (`stored` 0):
-    /// per 1/1024 of the view's height, which the stencil steps
-    /// (`shade_pixel`), so the relief is the same at every output size.
+    /// per 1/1024 of the view's height (`shade_pixel` converts its
+    /// one-render-pixel difference to that unit), so the relief's
+    /// strength is the same at every output size.
     height_view: f32,
     _pad: [u32; 2],
 }
@@ -7160,10 +7161,10 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Render pixels per output pixel: the factor at full size, a
         // fraction of it at a render scale (`set_pixel_scale`).
         let display = self.display_factor();
-        // Render pixels per 1/1024 of the view's height: the relief's
-        // unit for the sizes it measures -- the numeric slope's step and
-        // softness -- so a 4K export is lit as the viewport is (Offset
-        // relief and Embossed measure their steps so already).
+        // Render pixels per 1/1024 of the view's height: the unit the
+        // relief's softness is measured in, as its slope is
+        // (`shade_pixel`), so a 4K export is lit as the viewport is
+        // (Offset relief and Embossed measure their steps so already).
         let view_unit = self.height.max(1) as f32 / 1024.0;
         // A terrain's footprint is lit in 3D, not by the 2D relief.
         let shade_on = shading.enabled && !escape.terrain_active();
@@ -7419,21 +7420,6 @@ fn height_at(p: vec2<i32>, dims: vec2<i32>) -> f32 {{
     return relief_height_curve(textureLoad(height_tex, q, 0).g);
 }}
 
-// The height `off` render pixels from texel `p`, bilinear between the
-// texels (by hand from textureLoad, the same on every vendor): the
-// numeric slope's taps sit a fixed fraction of the view apart, not a
-// whole pixel.
-fn height_off(p: vec2<i32>, off: vec2<f32>, dims: vec2<i32>) -> f32 {{
-    let f = floor(off);
-    let t = off - f;
-    let q = p + vec2<i32>(f);
-    let a = height_at(q, dims);
-    let b = height_at(q + vec2<i32>(1, 0), dims);
-    let c = height_at(q + vec2<i32>(0, 1), dims);
-    let d = height_at(q + vec2<i32>(1, 1), dims);
-    return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
-}}
-
 // 0 multiply, 1 screen, 2 overlay, 3 mix. `amt` is how far to travel
 // from the base toward the blended result, so strength 0 is always
 // exactly the untouched image.
@@ -7555,64 +7541,67 @@ fn shade_texture(q: vec2<f32>) -> f32 {{
 fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     let dims = vec2<i32>(textureDimensions(height_tex));
     // Central differences: the slope of the coloring's own value
-    // field, in value units per 1/1024 of the view's height -- the taps
-    // `u` render pixels apart, read between texels -- so a field lights
-    // the same at every output size. (Per pixel, a 4K export read half
-    // the slope of a 1080p one, and a smooth field's relief faded.
-    // Measured per pixel, a field that steepens toward the set also
-    // found steeper slopes the finer the grid, which is why scaling the
-    // per-pixel slope by the size, as KF2 does, overshoots; a stencil a
-    // fixed fraction of the view wide does neither.) At a 1024-pixel-tall
-    // render `u` is one pixel, the stencil as it was.
-    // A plain central difference. SOFTENING IS NOT DONE HERE: an
-    // earlier version widened this stencil to a ring of radius r, which
-    // does not blur anything -- every tap stays a single sharp sample,
-    // and estimating the slope at p from the height at p+-r simply
-    // DISPLACES the structure, printing ghost copies either side of
-    // every edge (reported as "it mirrors into 3 equally sharp parts").
-    // Softness low-passes the height field itself, in `run_height_blur`,
-    // and this reads whatever it produced. The step here is one unit of
-    // the view, an edge's response that unit wide at every size.
+    // field. The taps are one RENDER pixel apart, the finest the grid
+    // holds, so antialiasing and a larger output both sharpen the
+    // relief's detail. The slope is then put in value units per 1/1024
+    // of the view's height (times `u`, the render pixels in that unit),
+    // so a field lights with the same strength at every output size and
+    // supersample factor: per pixel, a 4K export read half the slope of
+    // a 1080p one, and a smooth field's relief faded. (A field that
+    // steepens toward the set finds steeper slopes the finer the grid,
+    // so there a larger render's relief is somewhat stronger -- the
+    // detail it resolves, as antialiasing always did. A stencil a fixed
+    // fraction of the view wide, tried on 2026-11-14, held that steady
+    // but lost the fine detail 8x AA had shown.) At a 1024-pixel-tall
+    // render without antialiasing `u` is 1, the slope as it was.
+    // A plain +-1 central difference, always. SOFTENING IS NOT DONE
+    // HERE: an earlier version widened this stencil to a ring of
+    // radius r, which does not blur anything -- every tap stays a
+    // single sharp sample, and estimating the slope at p from the
+    // height at p+-r simply DISPLACES the structure, printing ghost
+    // copies either side of every edge (reported as "it mirrors into
+    // 3 equally sharp parts"). Softness now low-passes the height
+    // field itself, in `run_height_blur`, and this reads whatever it
+    // produced.
     let u = f32(dims.y) / 1024.0;
     var dx = 0.0;
     var dy = 0.0;
     if (shade.stored == 0u) {{
-        dx = (height_off(p, vec2<f32>(u, 0.0), dims) - height_off(p, vec2<f32>(-u, 0.0), dims)) * 0.5;
-        dy = (height_off(p, vec2<f32>(0.0, u), dims) - height_off(p, vec2<f32>(0.0, -u), dims)) * 0.5;
+        dx = (height_at(p + vec2<i32>(1, 0), dims) - height_at(p - vec2<i32>(1, 0), dims)) * 0.5;
+        dy = (height_at(p + vec2<i32>(0, 1), dims) - height_at(p - vec2<i32>(0, 1), dims)) * 0.5;
     }}
-    // The other stencils (SlopeStencil), in the same unit. Forward: half
-    // a unit off centre. Roberts: the two diagonals of the unit square,
-    // turned back onto the axes. Least squares: the plane fitted to the
-    // 3x3 block of taps a unit apart.
+    // The other stencils (SlopeStencil). Forward: half a pixel off
+    // centre. Roberts: the two diagonals of the 2x2 block, turned back
+    // onto the axes. Least squares: the plane fitted to the 3x3 block.
     if (shade.stored != 0u) {{
         // The iterate pass stored -grad h itself (blue, alpha), or
         // Embossed's response (blue): no stencil, no height curve.
     }} else if (shade.stencil == 1u) {{
         let h0 = height_at(p, dims);
-        dx = height_off(p, vec2<f32>(u, 0.0), dims) - h0;
-        dy = height_off(p, vec2<f32>(0.0, u), dims) - h0;
+        dx = height_at(p + vec2<i32>(1, 0), dims) - h0;
+        dy = height_at(p + vec2<i32>(0, 1), dims) - h0;
     }} else if (shade.stencil == 2u) {{
-        let d1 = height_off(p, vec2<f32>(u, u), dims) - height_at(p, dims);
-        let d2 = height_off(p, vec2<f32>(u, 0.0), dims) - height_off(p, vec2<f32>(0.0, u), dims);
+        let d1 = height_at(p + vec2<i32>(1, 1), dims) - height_at(p, dims);
+        let d2 = height_at(p + vec2<i32>(1, 0), dims) - height_at(p + vec2<i32>(0, 1), dims);
         dx = (d1 + d2) * 0.5;
         dy = (d1 - d2) * 0.5;
     }} else if (shade.stencil == 3u) {{
         var sx = 0.0;
         var sy = 0.0;
         for (var j = -1; j <= 1; j = j + 1) {{
-            let o = f32(j) * u;
-            sx = sx + height_off(p, vec2<f32>(u, o), dims) - height_off(p, vec2<f32>(-u, o), dims);
-            sy = sy + height_off(p, vec2<f32>(o, u), dims) - height_off(p, vec2<f32>(o, -u), dims);
+            sx = sx + height_at(p + vec2<i32>(1, j), dims) - height_at(p + vec2<i32>(-1, j), dims);
+            sy = sy + height_at(p + vec2<i32>(j, 1), dims) - height_at(p + vec2<i32>(j, -1), dims);
         }}
         dx = sx / 6.0;
         dy = sy / 6.0;
     }}
 
     // Exaggerated gradient. +y is DOWN in pixel space, so dy is
-    // negated to put the light where the azimuth says it is. Per unit
-    // of the view, its own height (`height_view`, not scaled by the
-    // supersample factor: the unit is the view's, not the grid's).
-    var g = vec2<f32>(-dx, dy) * shade.height_view;
+    // negated to put the light where the azimuth says it is. Per render
+    // pixel times `u`: per unit of the view, lit by its own height
+    // (`height_view`, not scaled by the supersample factor, which `u`
+    // already counts).
+    var g = vec2<f32>(-dx, dy) * (u * shade.height_view);
     let stored_at = textureLoad(height_tex, clamp(p, vec2<i32>(0, 0), dims - vec2<i32>(1, 1)), 0);
     if (shade.stored == 1u) {{
         g = stored_at.ba * shade.height;

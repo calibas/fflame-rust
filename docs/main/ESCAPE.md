@@ -2480,19 +2480,24 @@ every export), so neither antialiasing nor a lower render scale moves
 the colours.
 
 **1/1024 of the view's height** is what the relief's slope and its
-softness measure in, on every field: the numeric slope's stencil steps
-that unit (its taps read bilinearly between texels, `height_off` in the
-shade pass), the analytic slope takes its distance in it, and Offset
-relief and Embossed step it already. So the relief is the same at every
-output size: a 4K export is lit as the viewport and a 1080p export are.
-At a 1024-pixel-tall render the unit is one pixel. Until 2026-11-14 the
-numeric and analytic slopes were per output pixel, and a smooth field's
-relief faded at a larger export (half the slope at twice the size); the
-survey's objection to a fix (R9: scaling a per-pixel slope by the size
-overshoots on a field that steepens toward the set, as a finer grid finds
-steeper slopes) does not apply to a stencil a fixed fraction of the view
-wide. Below about 1024 pixels tall a grid cannot resolve the field's
-finest structure, so a thumbnail shades somewhat less than the viewport
+softness measure in, on every field. The numeric slope's taps stay one
+render pixel apart -- the finest the grid holds, so antialiasing and a
+larger export sharpen the relief's detail -- and its difference is
+multiplied by the render pixels in that unit; the analytic slope takes
+its distance in it; Offset relief and Embossed step it. So a field's
+relief has the same strength at every output size and supersample
+factor: a 4K export is lit as the viewport and a 1080p export are. At a
+1024-pixel-tall render without antialiasing the unit is one pixel.
+Until 2026-11-14 the numeric and analytic slopes were per output pixel,
+and a smooth field's relief faded at a larger export (half the slope at
+twice the size). The survey's caveat (R9) holds: a field that steepens
+toward the set finds steeper slopes the finer the grid, so there a
+larger render's relief is somewhat stronger -- the detail it resolves,
+as antialiasing always did. (A stencil a fixed fraction of the view
+wide held even that steady, but lost the fine detail 8x antialiasing
+shows; it was tried and dropped the same day.) Below about 1024 pixels
+tall a grid cannot resolve the field's finest structure, so a thumbnail
+shades somewhat less than the viewport
 (`dbg_relief_strength_against_output_size`).
 Mode D's march steps by the integer factor in `flags` bits 4-7.
 
