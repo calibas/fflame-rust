@@ -719,7 +719,14 @@ struct ShadeParamsGpu {
     /// one-render-pixel difference to that unit), so the relief's
     /// strength is the same at every output size.
     height_view: f32,
-    _pad: [u32; 2],
+    /// The faked specular (`EscapeShading::specular_*`): its strength (0
+    /// off), Blinn-Phong's exponent, and its colour.
+    specular_strength: f32,
+    specular_power: f32,
+    specular_r: f32,
+    specular_g: f32,
+    specular_b: f32,
+    _pad: [u32; 1],
 }
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
@@ -7249,7 +7256,15 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             texture_angle: shading.texture_angle.to_radians(),
             texture_soft: shading.texture_angle_soft.to_radians(),
             height_view: shading.height,
-            _pad: [0; 2],
+            specular_strength: shading.specular_strength.clamp(0.0, 1.0),
+            specular_power: shading.specular_shininess.clamp(
+                crate::config::escape::SPECULAR_SHININESS_RANGE.0,
+                crate::config::escape::SPECULAR_SHININESS_RANGE.1,
+            ),
+            specular_r: shading.specular_color[0],
+            specular_g: shading.specular_color[1],
+            specular_b: shading.specular_color[2],
+            _pad: [0; 1],
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -7307,6 +7322,11 @@ struct ShadeParams {{
     texture_angle: f32,
     texture_soft: f32,
     height_view: f32,
+    specular_strength: f32,
+    specular_power: f32,
+    specular_r: f32,
+    specular_g: f32,
+    specular_b: f32,
 }}
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -7696,6 +7716,26 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     var out = rgb;
     out = shade_blend(out, shade.shadow_color, shade.shadow_blend, lo * shade.shadow_strength);
     out = shade_blend(out, shade.highlight_color, shade.highlight_blend, hi * shade.highlight_strength);
+    // FAKED SPECULAR (EscapeShading::specular_*): Blinn-Phong against the
+    // relief's normal (g, 1) -- the slope Lambert lights, the surface
+    // texture's tilt included -- the light raised `elevation` above the
+    // horizon, the viewer straight above. A glint where a slope turns the
+    // light toward the eye, screened over the shaded colour. Measured from
+    // what flat ground reflects, as Lambert is, so flat ground stays as it
+    // was: below 90 degrees of elevation the half vector leans off the
+    // vertical, and flat ground would otherwise take a sheen everywhere
+    // (a tenth of the light at 30 degrees and shininess 16) that no light
+    // direction moves. A light on the slope, not a height: what the
+    // relief lights is unchanged. Embossed has no slope to reflect.
+    if (shade.specular_strength > 0.0 && shade.stored != 2u) {{
+        let l = vec3<f32>(shade.light * cos(shade.elevation), sin(shade.elevation));
+        let half_v = normalize(l + vec3<f32>(0.0, 0.0, 1.0));
+        let n = vec3<f32>(g, 1.0) * inverseSqrt(1.0 + dot(g, g));
+        let flat_ground = pow(half_v.z, shade.specular_power);
+        let spec = pow(max(dot(n, half_v), 0.0), shade.specular_power);
+        let glint = max(spec - flat_ground, 0.0) / max(1.0 - flat_ground, 1e-4);
+        out = shade_blend(out, vec3<f32>(shade.specular_r, shade.specular_g, shade.specular_b), 1u, glint * shade.specular_strength);
+    }}
     return out;
 }}
 

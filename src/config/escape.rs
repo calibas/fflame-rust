@@ -1608,6 +1608,21 @@ pub struct EscapeShading {
     /// the side facing away from the light.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub ambient: f32,
+    /// Faked specular reflection, 0..1 (0, the default, is off): a glint
+    /// where a slope turns the light, raised `elevation` above the
+    /// horizon, toward a viewer looking straight down (Blinn-Phong's half
+    /// vector against the relief's normal). A light on the relief's
+    /// slope, not a field of its own: what the relief lights -- and a
+    /// terrain reads as its height -- is unchanged.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub specular_strength: f32,
+    /// How tight the glint is: Blinn-Phong's exponent, 1 (a broad sheen)
+    /// to 512 (a pinpoint).
+    #[serde(default = "default_specular_shininess", skip_serializing_if = "is_default_specular_shininess")]
+    pub specular_shininess: f32,
+    /// The glint's colour, screened over the shaded colour.
+    #[serde(default = "default_specular_color", skip_serializing_if = "is_default_specular_color")]
+    pub specular_color: [f32; 3],
     /// How the slope is estimated from neighbouring heights.
     #[serde(default, skip_serializing_if = "SlopeStencil::is_default")]
     pub stencil: SlopeStencil,
@@ -1655,6 +1670,20 @@ pub const RELIEF_OFFSET_RANGE: (f32, f32) = (1.0e-5, 0.05);
 fn default_relief_elevation() -> f32 {
     30.0
 }
+fn default_specular_shininess() -> f32 {
+    32.0
+}
+fn is_default_specular_shininess(v: &f32) -> bool {
+    *v == default_specular_shininess()
+}
+fn default_specular_color() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
+}
+fn is_default_specular_color(v: &[f32; 3]) -> bool {
+    *v == default_specular_color()
+}
+/// The specular exponent's range.
+pub const SPECULAR_SHININESS_RANGE: (f32, f32) = (1.0, 512.0);
 fn is_default_relief_elevation(v: &f32) -> bool {
     *v == default_relief_elevation()
 }
@@ -1732,6 +1761,9 @@ impl Default for EscapeShading {
             model: ReliefModel::default(),
             elevation: default_relief_elevation(),
             ambient: 0.0,
+            specular_strength: 0.0,
+            specular_shininess: default_specular_shininess(),
+            specular_color: default_specular_color(),
             stencil: SlopeStencil::default(),
             height_curve: HeightTransfer::default(),
             height_pre: 1.0,
@@ -2959,6 +2991,9 @@ mod shading_tests {
             model: ReliefModel::Lambert,
             elevation: 55.0,
             ambient: 0.3,
+            specular_strength: 0.4,
+            specular_shininess: 64.0,
+            specular_color: [0.9, 0.95, 1.0],
             stencil: SlopeStencil::Roberts,
             height_curve: HeightTransfer::Cos,
             height_pre: 4.0,

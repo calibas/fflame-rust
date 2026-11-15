@@ -2499,6 +2499,22 @@ shows; it was tried and dropped the same day.) Below about 1024 pixels
 tall a grid cannot resolve the field's finest structure, so a thumbnail
 shades somewhat less than the viewport
 (`dbg_relief_strength_against_output_size`).
+
+**Faked specular** (`EscapeShading::specular_strength`, `_shininess`,
+`_color`; the panel's Specular, Shininess and colour, beside Ambient;
+2026-11-15): a Blinn-Phong glint against the relief's normal -- the
+slope Lambert lights, the surface texture's tilt included -- with the
+light at the relief's Elevation (the slider is live for Lambert or a
+specular) and the viewer straight above, screened over the shaded
+colour. Measured from what flat ground reflects, so flat ground is
+unchanged and only slopes tilted toward the light glint: without that,
+flat ground took a sheen everywhere (a tenth of the light at 30 degrees
+and shininess 16) that no light direction moved. Strength 0, the
+default, draws nothing. It is a light on the relief's slope, not a
+field: what the relief lights, and a terrain reads as its height, is
+unchanged, and the terrain's footprint ignores it (`picture_key`).
+Embossed has no slope and takes none. Tested by
+`the_relief_specular_glints_where_slopes_face_the_light`.
 Mode D's march steps by the integer factor in `flags` bits 4-7.
 
 ### The recolour cache

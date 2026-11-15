@@ -11248,6 +11248,83 @@ fn main() {
         }
     }
 
+    /// The relief's faked specular (`EscapeShading::specular_*`): at
+    /// strength 0 it draws nothing, whatever its other settings; it only
+    /// brightens (white screened over the colour); it lights some slopes,
+    /// and they are the ones facing the light -- turned half round, the
+    /// glints move; and a higher exponent draws a tighter glint. (That it
+    /// leaves the relief's field -- a terrain's heightmap -- alone is
+    /// `footprint`'s `the_picture_key_ignores_the_view`.)
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_relief_specular_glints_where_slopes_face_the_light() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.escape.center_re = "-0.7453".to_string();
+        config.escape.center_im = "0.1127".to_string();
+        config.escape.zoom_log2 = 7.0;
+        config.escape.max_iter = 600;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        config.escape.shading.enabled = true;
+        config.escape.shading.height = 10.0;
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render")
+                .rgba_data
+        };
+        let relief = render(&config);
+
+        // Strength 0: nothing, its other settings whatever they are.
+        let mut off = config.clone();
+        off.escape.shading.specular_shininess = 7.0;
+        off.escape.shading.specular_color = [1.0, 0.0, 0.0];
+        assert_eq!(render(&off), relief, "a specular at strength 0 drew");
+
+        // Which pixels a specular brightens against the same relief
+        // without it, and that none it darkens.
+        let up = |a: &[u8], b: &[u8]| (0..3).any(|k| a[k] as u16 > b[k] as u16 + 1);
+        let glints = |c: &crate::config::FractalConfig| -> Vec<bool> {
+            let shone = render(c);
+            let mut plain = c.clone();
+            plain.escape.shading.specular_strength = 0.0;
+            let plain = render(&plain);
+            let darker = shone.chunks(4).zip(plain.chunks(4)).filter(|(s, r)| up(r, s)).count();
+            assert_eq!(darker, 0, "a white specular darkened {darker} pixels");
+            shone.chunks(4).zip(plain.chunks(4)).map(|(s, r)| up(s, r)).collect()
+        };
+        let mut lit = config.clone();
+        lit.escape.shading.specular_strength = 1.0;
+        lit.escape.shading.specular_shininess = 16.0;
+        let base = glints(&lit);
+        let n = base.iter().filter(|g| **g).count();
+        println!("specular: {n} of {} pixels glint", w * h);
+        assert!(n > (w * h / 100) as usize, "the specular glinted on only {n} pixels");
+        assert!(n < (w * h * 9 / 10) as usize, "the specular lit nearly everything ({n}): no slope picked out");
+
+        // Turned half round, the glints are on the other slopes.
+        let mut turned = lit.clone();
+        turned.escape.shading.light_angle = (lit.escape.shading.light_angle + 180.0) % 360.0;
+        let other = glints(&turned);
+        let both = base.iter().zip(&other).filter(|(a, b)| **a && **b).count();
+        println!("specular: {both} glint under both lights");
+        assert!(both * 2 < n, "the glints did not move with the light: {both} of {n} stayed");
+
+        // A higher exponent, a tighter glint.
+        let mut tight = lit.clone();
+        tight.escape.shading.specular_shininess = 256.0;
+        let t = glints(&tight).iter().filter(|g| **g).count();
+        println!("specular: {t} glint at shininess 256");
+        assert!(t < n, "shininess 256 glinted on {t} pixels, 16 on {n}");
+    }
+
     /// The relief's source cannot change what auto contrast fits.
     ///
     /// The probe and the relief once shared one height channel, so

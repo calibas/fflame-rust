@@ -1147,6 +1147,18 @@ pub fn apply(config: &mut FractalConfig, target: EditingTarget, path: &ConfigPat
                 let v: f32 = value.try_into()?;
                 config.escape.shading.ambient = v.clamp(0.0, 1.0);
             }
+            ConfigPath::EscapeShadingSpecularStrength => {
+                let v: f32 = value.try_into()?;
+                config.escape.shading.specular_strength = v.clamp(0.0, 1.0);
+            }
+            ConfigPath::EscapeShadingSpecularShininess => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::SPECULAR_SHININESS_RANGE;
+                config.escape.shading.specular_shininess = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeShadingSpecularColor => {
+                config.escape.shading.specular_color = value.try_into()?;
+            }
             ConfigPath::EscapeShadingStencil => {
                 let v: String = value.try_into()?;
                 config.escape.shading.stencil = crate::config::escape::SlopeStencil::from_name(&v);

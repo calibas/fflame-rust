@@ -668,6 +668,10 @@ pub enum ConfigPath {
     EscapeShadingModel,
     EscapeShadingElevation,
     EscapeShadingAmbient,
+    /// The relief's faked specular: its strength, exponent and colour.
+    EscapeShadingSpecularStrength,
+    EscapeShadingSpecularShininess,
+    EscapeShadingSpecularColor,
     EscapeShadingStencil,
     EscapeShadingHeightCurve,
     EscapeShadingHeightPre,
@@ -1394,6 +1398,9 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingModel => write!(f, "Relief Lighting Model"),
             ConfigPath::EscapeShadingElevation => write!(f, "Relief Light Elevation"),
             ConfigPath::EscapeShadingAmbient => write!(f, "Relief Ambient"),
+            ConfigPath::EscapeShadingSpecularStrength => write!(f, "Relief Specular"),
+            ConfigPath::EscapeShadingSpecularShininess => write!(f, "Relief Specular Shininess"),
+            ConfigPath::EscapeShadingSpecularColor => write!(f, "Relief Specular Colour"),
             ConfigPath::EscapeShadingStencil => write!(f, "Relief Slope Stencil"),
             ConfigPath::EscapeShadingHeightCurve => write!(f, "Relief Height Curve"),
             ConfigPath::EscapeShadingHeightPre => write!(f, "Relief Height Pre-scale"),
@@ -1874,6 +1881,9 @@ impl ConfigPath {
             ConfigPath::EscapeShadingModel => I18nKey::simple("history.param.escape_shading_model"),
             ConfigPath::EscapeShadingElevation => I18nKey::simple("history.param.escape_shading_elevation"),
             ConfigPath::EscapeShadingAmbient => I18nKey::simple("history.param.escape_shading_ambient"),
+            ConfigPath::EscapeShadingSpecularStrength => I18nKey::simple("history.param.escape_shading_specular_strength"),
+            ConfigPath::EscapeShadingSpecularShininess => I18nKey::simple("history.param.escape_shading_specular_shininess"),
+            ConfigPath::EscapeShadingSpecularColor => I18nKey::simple("history.param.escape_shading_specular_color"),
             ConfigPath::EscapeShadingStencil => I18nKey::simple("history.param.escape_shading_stencil"),
             ConfigPath::EscapeShadingHeightCurve => I18nKey::simple("history.param.escape_shading_height_curve"),
             ConfigPath::EscapeShadingHeightPre => I18nKey::simple("history.param.escape_shading_height_pre"),
@@ -3365,6 +3375,9 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingModel
             | ConfigPath::EscapeShadingElevation
             | ConfigPath::EscapeShadingAmbient
+            | ConfigPath::EscapeShadingSpecularStrength
+            | ConfigPath::EscapeShadingSpecularShininess
+            | ConfigPath::EscapeShadingSpecularColor
             | ConfigPath::EscapeShadingStencil
             | ConfigPath::EscapeShadingHeightCurve
             | ConfigPath::EscapeShadingHeightPre
@@ -3953,6 +3966,9 @@ impl ConfigPath {
             ConfigPath::EscapeShadingModel => "Escape.Shading.Model".to_string(),
             ConfigPath::EscapeShadingElevation => "Escape.Shading.Elevation".to_string(),
             ConfigPath::EscapeShadingAmbient => "Escape.Shading.Ambient".to_string(),
+            ConfigPath::EscapeShadingSpecularStrength => "Escape.Shading.SpecularStrength".to_string(),
+            ConfigPath::EscapeShadingSpecularShininess => "Escape.Shading.SpecularShininess".to_string(),
+            ConfigPath::EscapeShadingSpecularColor => "Escape.Shading.SpecularColor".to_string(),
             ConfigPath::EscapeShadingStencil => "Escape.Shading.Stencil".to_string(),
             ConfigPath::EscapeShadingHeightCurve => "Escape.Shading.HeightCurve".to_string(),
             ConfigPath::EscapeShadingHeightPre => "Escape.Shading.HeightPre".to_string(),
@@ -4306,6 +4322,9 @@ impl ConfigPath {
                 ["Shading", "Model"] => return Some(ConfigPath::EscapeShadingModel),
                 ["Shading", "Elevation"] => return Some(ConfigPath::EscapeShadingElevation),
                 ["Shading", "Ambient"] => return Some(ConfigPath::EscapeShadingAmbient),
+                ["Shading", "SpecularStrength"] => return Some(ConfigPath::EscapeShadingSpecularStrength),
+                ["Shading", "SpecularShininess"] => return Some(ConfigPath::EscapeShadingSpecularShininess),
+                ["Shading", "SpecularColor"] => return Some(ConfigPath::EscapeShadingSpecularColor),
                 ["Shading", "Stencil"] => return Some(ConfigPath::EscapeShadingStencil),
                 ["Shading", "HeightCurve"] => return Some(ConfigPath::EscapeShadingHeightCurve),
                 ["Shading", "HeightPre"] => return Some(ConfigPath::EscapeShadingHeightPre),
@@ -5251,6 +5270,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeShadingTextureAngleSoft
         | ConfigPath::EscapeShadingElevation
         | ConfigPath::EscapeShadingAmbient
+        | ConfigPath::EscapeShadingSpecularStrength
+        | ConfigPath::EscapeShadingSpecularShininess
         | ConfigPath::EscapeShadingHeightPre
         | ConfigPath::EscapeShadingHeightPost
         | ConfigPath::EscapeShadingOffset
@@ -5265,6 +5286,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         }
         ConfigPath::EscapeShadingShadowColor
         | ConfigPath::EscapeShadingHighlightColor
+        | ConfigPath::EscapeShadingSpecularColor
         | ConfigPath::EscapeTerrainLakeTint
         | ConfigPath::EscapePathZenith => {
             let a = json.as_array()?;

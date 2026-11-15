@@ -154,6 +154,9 @@ fn picture_key(escape: &EscapeConfig) -> EscapeConfig {
     k.shading.highlight_color = d.shading.highlight_color;
     k.shading.highlight_strength = d.shading.highlight_strength;
     k.shading.highlight_blend = d.shading.highlight_blend;
+    k.shading.specular_strength = d.shading.specular_strength;
+    k.shading.specular_shininess = d.shading.specular_shininess;
+    k.shading.specular_color = d.shading.specular_color;
     // The surface texture lights the terrain's surface; a section is
     // rendered with the 2D relief off and never carries it.
     k.shading.texture_kind = d.shading.texture_kind;
@@ -1634,6 +1637,11 @@ mod tests {
         b.solid_tier = crate::config::escape::RenderTier::PathTraced;
         b.shading.light_angle = 10.0;
         b.shading.highlight_strength = 0.9;
+        // The relief's faked specular is a light, not a height: a
+        // terrain's heightmap is rendered without it.
+        b.shading.specular_strength = 0.8;
+        b.shading.specular_shininess = 100.0;
+        b.shading.specular_color = [0.9, 0.8, 1.0];
         assert_eq!(picture_key(&a), picture_key(&b));
         for edit in [
             |c: &mut EscapeConfig| c.max_iter += 1,

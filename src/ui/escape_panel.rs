@@ -3723,7 +3723,8 @@ fn relief_lighting_controls(
             .response
             .on_hover_text(t!("escape_panel.tooltip_shading_model"));
     });
-    ui.add_enabled_ui(sh.model == ReliefModel::Lambert, |ui| {
+    // The light's height: Lambert's, and the specular's.
+    ui.add_enabled_ui(sh.model == ReliefModel::Lambert || sh.specular_strength > 0.0, |ui| {
         ui.horizontal(|ui| {
             ui.label(t!("escape_panel.shading_elevation"));
             let mut v = sh.elevation;
@@ -3746,6 +3747,37 @@ fn relief_lighting_controls(
         {
             let _ = config_manager.update_param(ConfigPath::EscapeShadingAmbient, v.into());
         }
+    });
+    // The faked specular: a glint on the slopes facing the light, its own
+    // light on the relief's slope (the relief's field is unchanged).
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.shading_specular"));
+        let mut v = sh.specular_strength;
+        if ui
+            .add(egui::Slider::new(&mut v, 0.0..=1.0))
+            .on_hover_text(t!("escape_panel.tooltip_shading_specular"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingSpecularStrength, v.into());
+        }
+        let mut c = sh.specular_color;
+        if ui.color_edit_button_rgb(&mut c).on_hover_text(t!("escape_panel.tooltip_shading_specular_color")).changed() {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingSpecularColor, ConfigValue::ColorRgb(c));
+        }
+    });
+    ui.add_enabled_ui(sh.specular_strength > 0.0, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.shading_specular_shininess"));
+            let (lo, hi) = crate::config::escape::SPECULAR_SHININESS_RANGE;
+            let mut v = sh.specular_shininess;
+            if ui
+                .add(egui::Slider::new(&mut v, lo..=hi).logarithmic(true))
+                .on_hover_text(t!("escape_panel.tooltip_shading_specular_shininess"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeShadingSpecularShininess, v.into());
+            }
+        });
     });
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.shading_stencil"));

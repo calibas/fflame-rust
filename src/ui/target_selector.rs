@@ -502,6 +502,8 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             TargetItem::new(ConfigPath::EscapeShadingCreaseDecay, "Relief: Crease decay"),
             TargetItem::new(ConfigPath::EscapeShadingSoftness, "Relief: Softness"),
             TargetItem::new(ConfigPath::EscapeShadingAmbient, "Relief: Ambient"),
+            TargetItem::new(ConfigPath::EscapeShadingSpecularStrength, "Relief: Specular"),
+            TargetItem::new(ConfigPath::EscapeShadingSpecularShininess, "Relief: Specular shininess"),
             TargetItem::new(ConfigPath::EscapeShadingShadowStrength, "Relief: Shadow strength"),
             TargetItem::new(ConfigPath::EscapeShadingHighlightStrength, "Relief: Highlight strength"),
             TargetItem::new(ConfigPath::EscapeShadingTextureStrength, "Relief: Texture strength"),
