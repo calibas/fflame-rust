@@ -2536,11 +2536,15 @@ grow with every finer grid. Measured, a half fade keeps 0.683 of the
 relief at 160x120 and 0.697 at 320x240
 (`the_relief_depth_fade_lights_the_deep_parts_less`). (A first build
 divided the count by `max_iter`, which barely faded a view whose counts
-sit far below it.) Off, under a terrain (its height is green), and on
-paths without an escape count (fields, mode D), nothing is stored and
-the relief is whole. With a stored-slope field and the texture overlay,
-the overlay's fallback field (green) is the count while the fade is on --
-the smooth count Kalles Fraktaler warps by.
+sit far below it.) Off, and on paths without an escape count (fields,
+mode D), nothing is stored and the relief is whole; inside, the count is
+0, which fades nothing. With a stored-slope field and the texture
+overlay, the overlay's fallback field (green) is the count while the
+fade is on -- the smooth count Kalles Fraktaler warps by. Under a
+terrain the 2D slider does nothing; a relief-field terrain has a depth
+fade of its own for its height ([TERRAIN.md](TERRAIN.md), *Height
+from*), which stores the count in alpha beside the height (`flags`
+bit 10).
 Mode D's march steps by the integer factor in `flags` bits 4-7.
 
 ### The recolour cache

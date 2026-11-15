@@ -597,7 +597,7 @@ const CHUNK_SEED_HEADROOM: u32 = 64;
 /// The depth fade's exponent at full slider (`EscapeShading::depth_fade`
 /// 1): a pixel at twice the view's earliest escape count keeps a
 /// sixteenth of its relief.
-const DEPTH_FADE_POWER: f32 = 4.0;
+pub(crate) const DEPTH_FADE_POWER: f32 = 4.0;
 
 /// The grid the view's earliest escape is measured on (`run_depth_min`):
 /// fractions of the view, the same at every output size.
@@ -1279,7 +1279,8 @@ pub struct EscapeRenderer {
     height_full: bool,
     shade_params_buffer: Buffer,
     /// The view's earliest escape, measured by `run_depth_min` for the
-    /// shade pass's depth fade (one f32; 3e38 when nothing escaped), and
+    /// shade pass's depth fade (one f32; 3e38 when nothing escaped) --
+    /// and for a terrain's, the level its faded heights settle at -- and
     /// the measuring pipeline, made on first use.
     depth_min_buffer: Buffer,
     depth_min_pipeline: Option<wgpu::ComputePipeline>,
@@ -1828,7 +1829,8 @@ impl EscapeRenderer {
         let depth_min_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Escape Earliest Escape"),
             size: 16,
-            usage: BufferUsages::STORAGE,
+            // Copied out for a terrain's ingest (`terrain_depth`).
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -7190,34 +7192,46 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     /// The view's earliest escape, for the relief's depth fade: the least
     /// smooth escape count among a fixed grid of the view's points (the
-    /// iterate pass's count, green beside a stored slope, else alpha),
-    /// written to `depth_min_buffer` in `encoder` ahead of the resolve.
-    /// A grid of fractions of the view, not of pixels: every output size
-    /// and supersample factor reads nearly the same points, and the
-    /// earliest escape lies where the field is smooth, far from the set,
-    /// so it does not move with the resolution as the deepest counts do.
-    fn run_depth_min(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder, green: bool) {
+    /// iterate pass's count: `mode` 1 green beside a stored slope, else
+    /// alpha), written to `depth_min_buffer[0]` in `encoder` ahead of the
+    /// resolve. A grid of fractions of the view, not of pixels: every
+    /// output size and supersample factor reads nearly the same points,
+    /// and the earliest escape lies where the field is smooth, far from
+    /// the set, so it does not move with the resolution as the deepest
+    /// counts do.
+    ///
+    /// Mode 2, a terrain footprint's (count alpha, height green): also
+    /// the level its faded heights settle at, in `depth_min_buffer[1]` --
+    /// the grid's heights weighted by how much of each the fade at `power`
+    /// takes, so the deep parts flatten to their own mean height (the
+    /// plain mean where nothing fades, 0 where nothing escaped).
+    fn run_depth_min(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder, mode: u32, power: f32) {
         if self.depth_min_pipeline.is_none() {
             let src = format!(
                 r#"
-struct DepthMin {{ dims: vec2<u32>, green: u32, _pad: u32 }}
+struct DepthMin {{ dims: vec2<u32>, mode: u32, power: f32 }}
 @group(0) @binding(0) var height_tex: texture_2d<f32>;
 @group(0) @binding(1) var<storage, read_write> out_min: array<f32>;
 @group(0) @binding(2) var<uniform> dm: DepthMin;
 var<workgroup> wmin: array<f32, 256>;
+var<workgroup> wsum: array<vec4<f32>, 256>;
+
+fn grid_texel(i: u32) -> vec4<f32> {{
+    let fx = (f32(i % {gw}u) + 0.5) / {gw}.0;
+    let fy = (f32(i / {gw}u) + 0.5) / {gh}.0;
+    let p = vec2<i32>(
+        clamp(i32(fx * f32(dm.dims.x)), 0, i32(dm.dims.x) - 1),
+        clamp(i32(fy * f32(dm.dims.y)), 0, i32(dm.dims.y) - 1),
+    );
+    return textureLoad(height_tex, p, 0);
+}}
 
 @compute @workgroup_size(256, 1, 1)
 fn depth_min_main(@builtin(local_invocation_index) li: u32) {{
     var m = 3.0e38;
     for (var i = li; i < {cells}u; i = i + 256u) {{
-        let fx = (f32(i % {gw}u) + 0.5) / {gw}.0;
-        let fy = (f32(i / {gw}u) + 0.5) / {gh}.0;
-        let p = vec2<i32>(
-            clamp(i32(fx * f32(dm.dims.x)), 0, i32(dm.dims.x) - 1),
-            clamp(i32(fy * f32(dm.dims.y)), 0, i32(dm.dims.y) - 1),
-        );
-        let t = textureLoad(height_tex, p, 0);
-        let c = select(t.a, t.g, dm.green == 1u);
+        let t = grid_texel(i);
+        let c = select(t.a, t.g, dm.mode == 1u);
         if (c > 0.0) {{
             m = min(m, c);
         }}
@@ -7230,8 +7244,31 @@ fn depth_min_main(@builtin(local_invocation_index) li: u32) {{
         }}
         workgroupBarrier();
     }}
+    // A terrain's level: the heights (green) of the escaped points,
+    // weighted by what the fade takes of each, and unweighted.
+    let earliest = wmin[0];
+    var acc = vec4<f32>(0.0);
+    if (dm.mode == 2u) {{
+        for (var i = li; i < {cells}u; i = i + 256u) {{
+            let t = grid_texel(i);
+            if (t.a > 0.0 && abs(t.g) < 1.0e29) {{
+                let w = 1.0 - pow(clamp(earliest / t.a, 0.0, 1.0), dm.power);
+                acc += vec4<f32>(w * t.g, w, t.g, 1.0);
+            }}
+        }}
+    }}
+    wsum[li] = acc;
+    workgroupBarrier();
+    for (var s = 128u; s > 0u; s = s / 2u) {{
+        if (li < s) {{
+            wsum[li] = wsum[li] + wsum[li + s];
+        }}
+        workgroupBarrier();
+    }}
     if (li == 0u) {{
-        out_min[0] = wmin[0];
+        out_min[0] = earliest;
+        let a = wsum[0];
+        out_min[1] = select(select(0.0, a.z / max(a.w, 1.0), a.w > 0.0), a.x / a.y, a.y > 1.0e-6);
     }}
 }}
 "#,
@@ -7259,7 +7296,7 @@ fn depth_min_main(@builtin(local_invocation_index) li: u32) {{
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&params, 0, bytemuck::cast_slice(&[self.width, self.height, u32::from(green), 0]));
+        queue.write_buffer(&params, 0, bytemuck::cast_slice(&[self.width, self.height, mode, power.to_bits()]));
         let bg = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Escape Earliest Escape"),
             layout: &pipeline.get_bind_group_layout(0),
@@ -7273,6 +7310,18 @@ fn depth_min_main(@builtin(local_invocation_index) li: u32) {{
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bg, &[]);
         pass.dispatch_workgroups(1, 1, 1);
+    }
+
+    /// A terrain's depth fade (`TerrainConfig::depth_fade`), measured on
+    /// the footprint just rendered -- the terrain's probe of the 2D view
+    /// -- at `power`: the earliest escape and the level the faded heights
+    /// settle at, in the buffer returned, for the terrain's ingest to copy
+    /// and hold while its sections last.
+    pub fn terrain_depth(&mut self, device: &Device, queue: &Queue, power: f32) -> &Buffer {
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Terrain Depth Fade") });
+        self.run_depth_min(device, queue, &mut enc, 2, power);
+        queue.submit(std::iter::once(enc.finish()));
+        &self.depth_min_buffer
     }
 
     fn run_resolve(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder, escape: &EscapeConfig) {
@@ -7395,7 +7444,7 @@ fn depth_min_main(@builtin(local_invocation_index) li: u32) {{
         // The view's earliest escape, for the depth fade: measured from
         // the unsoftened counts, in this encoder ahead of the resolve.
         if shade_on && params.depth_power > 0.0 {
-            self.run_depth_min(device, queue, encoder, params.stored == 1);
+            self.run_depth_min(device, queue, encoder, u32::from(params.stored == 1), 0.0);
         }
 
         let rebuild = match &self.downsample {
@@ -8581,6 +8630,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     | (self.supersample.clamp(1, 15) << 4)
                     | (u32::from(self.overlay_owns_blue(escape)) << 8)
                     | (u32::from(escape.shading.wants_offset_orbits()) << 9)
+                    // Bit 10: a terrain footprint's depth fade, whose count
+                    // goes to alpha beside the height (`esc_depth_into`).
+                    | (u32::from(escape.terrain_depth_fade() > 0.0) << 10)
             },
             bailout: escape.bailout.max(1e-6),
             tile_y0: 0,
@@ -8625,7 +8677,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 escape.terrain_active() && escape.terrain.source == crate::config::escape::TerrainSource::Creases,
             ),
             px_scale: self.display_factor(),
-            depth_fade: if escape.shading.enabled && !escape.terrain_active() {
+            // The 2D relief's, or under a terrain the terrain's own, which
+            // its ingest applies to the height.
+            depth_fade: if escape.terrain_active() {
+                escape.terrain_depth_fade()
+            } else if escape.shading.enabled {
                 escape.shading.depth_fade.clamp(0.0, 1.0)
             } else {
                 0.0

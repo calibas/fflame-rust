@@ -683,24 +683,31 @@ fn colour_wgsl(coloring: &ColoringDef) -> &'static str {
 /// to the relief's own source. Clear, the height texture is written
 /// exactly as before.
 const OVERLAY_FIELD_WGSL: &str = r#"
-// The relief's depth fade (EscapeShading::depth_fade): the pixel's
-// smooth escape count, as the overlay's field takes it, for the shade
-// pass to weigh the relief by against the view's earliest escape. Stored
-// where the 2D relief does not read: alpha, for a slope the shade pass
-// takes or Embossed's response; green, for a stored slope (Analytic 3,
-// Offset 4, Creases 6), whose relief reads blue and alpha. Off (and
-// under a terrain, whose height is green), or inside, the record is
-// written as before: a count of 0 is no fade. Returned as the green and
-// the blue-alpha pair to store.
+// The relief's depth fade (EscapeShading::depth_fade, and a terrain's,
+// TerrainConfig::depth_fade): the pixel's smooth escape count, as the
+// overlay's field takes it, for the shade pass to weigh the relief by --
+// or a terrain's ingest its height -- against the view's earliest
+// escape. Stored where the relief does not read: alpha, for a slope the
+// shade pass takes, Embossed's response, or a terrain footprint (flags
+// bit 10), whose height is green and whose ingest reads nothing else;
+// green, for a 2D stored slope (Analytic 3, Offset 4, Creases 6), whose
+// relief reads blue and alpha. Inside, a count of 0: no fade. Off, the
+// record is written as before. Returned as the green and the blue-alpha
+// pair to store.
 fn esc_depth_into(escaped: bool, z: vec2<f32>, n: u32, relief: f32, slope: vec2<f32>) -> vec3<f32> {
-    if (!(params.depth_fade > 0.0) || !escaped) {
+    if (!(params.depth_fade > 0.0)) {
         return vec3<f32>(relief, slope);
     }
-    let r2 = max(dot(z, z), 1.0000001);
-    let ll = log2(0.5 * log2(r2));
-    let frac = select(ll / log2(params.degree), ll, params.degree == 2.0);
-    let count = max(f32(n) + 1.0 - frac, 0.001);
-    if (params.shade_flags == 3u || params.shade_flags == 4u || params.shade_flags == 6u) {
+    let stored = (params.flags & 1024u) == 0u
+        && (params.shade_flags == 3u || params.shade_flags == 4u || params.shade_flags == 6u);
+    var count = 0.0;
+    if (escaped) {
+        let r2 = max(dot(z, z), 1.0000001);
+        let ll = log2(0.5 * log2(r2));
+        let frac = select(ll / log2(params.degree), ll, params.degree == 2.0);
+        count = max(f32(n) + 1.0 - frac, 0.001);
+    }
+    if (stored) {
         return vec3<f32>(count, slope);
     }
     return vec3<f32>(relief, slope.x, count);

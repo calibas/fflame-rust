@@ -293,6 +293,10 @@ struct IngestParamsGpu {
     background: [f32; 4],
     /// A lake's tint.
     tint: [f32; 4],
+    /// The relief height's depth fade (`TerrainIngest::depth_power`), 0
+    /// for none.
+    depth_power: f32,
+    depth_pad: [f32; 3],
 }
 
 /// The ingest (heightfield plan, section 5): a REGION of a footprint
@@ -311,6 +315,13 @@ struct IngestParamsGpu {
 /// a lake still bounds its block.
 /// The range pass measures a count's or a relief's range over every
 /// region (the distance needs none).
+///
+/// A relief's height with a depth fade (`depth_power` > 0) is faded per
+/// sample before anything else sees it: a sample keeps (earliest / its
+/// count)^power of its departure from the level the faded parts settle
+/// at -- the count the footprint left in alpha, the earliest escape and
+/// the level the probe measured (`EscapeRenderer::terrain_depth`), held
+/// in `depth`. Unmeasured (an earliest of 0), nothing fades.
 const INGEST_WGSL: &str = r#"
 struct IngestParams {
     n: u32,
@@ -329,6 +340,7 @@ struct IngestParams {
     sigma: f32,
     background: vec4<f32>,
     tint: vec4<f32>,
+    depth_power: f32,
 };
 @group(0) @binding(0) var<uniform> ip: IngestParams;
 // The region's render, border and all, at k samples a texel each way:
@@ -342,6 +354,8 @@ struct IngestParams {
 // reads.
 @group(0) @binding(6) var raw_in: texture_2d<f32>;
 @group(0) @binding(7) var raw_out: texture_storage_2d<r32float, write>;
+// The depth fade's earliest escape and level (`EscapeRenderer::terrain_depth`).
+@group(0) @binding(8) var<storage, read> depth: array<f32>;
 
 // A float's order as an integer, so atomics can take its min and max.
 fn ordered(f: f32) -> u32 {
@@ -372,6 +386,17 @@ fn interior_raw() -> f32 {
     return select(1.0e30, -1.0e30, distance);
 }
 
+// A relief's height with the depth fade: what it keeps of its departure
+// from the faded parts' level, by its escape count against the earliest.
+fn depth_faded(h: f32, count: f32) -> f32 {
+    let earliest = depth[0];
+    if (!(ip.depth_power > 0.0) || !(count > 0.0) || !(earliest > 0.0) || !(earliest < 1.0e37)) {
+        return h;
+    }
+    let keep = pow(clamp(earliest / count, 0.0, 1.0), ip.depth_power);
+    return depth[1] + (h - depth[1]) * keep;
+}
+
 // A texel's raw value: the mean over its k x k samples of those that
 // escaped -- a distance in texels, from the render's pixels -- or the
 // interior's where most did not. `p` is the texel in the region's
@@ -384,9 +409,10 @@ fn texel_raw(p: vec2<i32>) -> f32 {
     for (var sy = 0; sy < k; sy++) {
         for (var sx = 0; sx < k; sx++) {
             let q = p * k + vec2<i32>(sx, sy);
-            let g = textureLoad(hsrc, q, 0).g;
+            let t = textureLoad(hsrc, q, 0);
+            let g = t.g;
             if (!interior(textureLoad(colour, q, 0), g)) {
-                sum += select(g, max(g, 0.0), distance);
+                sum += select(depth_faded(g, t.a), max(g, 0.0), distance);
                 land += 1;
             }
         }
@@ -646,6 +672,10 @@ pub struct TerrainIngest {
     pub background: [f32; 3],
     /// A lake's colour under its surface.
     pub tint: [f32; 3],
+    /// A relief height's depth fade (`TerrainConfig::depth_fade`) as its
+    /// exponent, 0 for none: applied with the earliest escape and level
+    /// `set_depth_fade` holds.
+    pub depth_power: f32,
 }
 
 /// How a section's texels are made from its render (terrain-height.md,
@@ -2518,6 +2548,10 @@ pub struct TerrainRenderer {
     /// or, once `reduce_range` has run, over the ground's sections --
     /// then each atlas layer's own.
     range: Buffer,
+    /// A relief height's depth fade: the earliest escape and the level
+    /// the faded heights settle at, measured on the probe and held while
+    /// the sections last (`set_depth_fade`); zero, nothing fades.
+    depth: Buffer,
     range_reduce_layout: BindGroupLayout,
     range_reduce_pipeline: ComputePipeline,
     /// The ground's range, read back for a lock to pin (H3).
@@ -2746,6 +2780,7 @@ impl TerrainRenderer {
                 storage_tex(5, TextureFormat::Rgba16Float),
                 tex(6),
                 storage_tex(7, TextureFormat::R32Float),
+                storage(8, true),
             ],
         });
         let range_reduce_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -2840,7 +2875,14 @@ impl TerrainRenderer {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
+        let depth = device.create_buffer(&BufferDescriptor {
+            label: Some("Terrain Depth Fade"),
+            size: 16,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         TerrainRenderer {
+            depth,
             build_layout,
             walk_layout,
             relight_layout,
@@ -3363,6 +3405,15 @@ impl TerrainRenderer {
         &self.range
     }
 
+    /// Hold a relief height's depth fade -- the earliest escape and the
+    /// level, from `EscapeRenderer::terrain_depth` -- for the sections
+    /// ingested from now on.
+    pub fn set_depth_fade(&mut self, device: &Device, queue: &Queue, measured: &Buffer) {
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Depth Fade") });
+        enc.copy_buffer_to_buffer(measured, 0, &self.depth, 0, 16);
+        queue.submit(std::iter::once(enc.finish()));
+    }
+
     /// Empty the count's and the relief's range: a new picture.
     pub fn reset_range(&mut self, queue: &Queue) {
         queue.write_buffer(&self.range, 0, bytemuck::cast_slice(&[u32::MAX, 0u32]));
@@ -3658,6 +3709,8 @@ impl TerrainRenderer {
             sigma: filter.softness.max(0.0),
             background: [ingest.background[0], ingest.background[1], ingest.background[2], 1.0],
             tint: [ingest.tint[0], ingest.tint[1], ingest.tint[2], 1.0],
+            depth_power: ingest.depth_power.max(0.0),
+            depth_pad: [0.0; 3],
         };
         self.building = Some((layer, params));
     }
@@ -3740,6 +3793,7 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&av) },
                     BindGroupEntry { binding: 6, resource: BindingResource::TextureView(&pair[read].1) },
                     BindGroupEntry { binding: 7, resource: BindingResource::TextureView(&pair[1 - read].1) },
+                    BindGroupEntry { binding: 8, resource: self.depth.as_entire_binding() },
                 ],
             })
         };
@@ -3770,7 +3824,8 @@ impl TerrainRenderer {
     /// `inverted`: bounded for the land turned upside down.
     pub fn finish_section(&mut self, device: &Device, queue: &Queue, smooth: bool, inverted: bool) {
         let (layer, base) = self.building.take().expect("begin_section first");
-        let mode = TerrainIngest { source: base.source, interior: base.interior, background: [0.0; 3], tint: [0.0; 3] }.mode();
+        let mode =
+            TerrainIngest { source: base.source, interior: base.interior, background: [0.0; 3], tint: [0.0; 3], depth_power: 0.0 }.mode();
         self.build_layer_shaped(device, queue, layer, escape_build_order(mode, inverted), (if smooth { 2 } else { 0 }, false));
     }
 
@@ -5954,7 +6009,7 @@ pub(crate) mod gpu_tests {
                 );
             }
         }
-        let relief = TerrainIngest { source: 0, interior: 0, background: [0.0; 3], tint: [0.0; 3] };
+        let relief = TerrainIngest { source: 0, interior: 0, background: [0.0; 3], tint: [0.0; 3], depth_power: 0.0 };
         let albedo = r.atlas.as_ref().unwrap().albedo.clone();
         for s in 0..2 {
             r.reshape_section(&device, &queue, s, &relief, true, false);
@@ -7161,6 +7216,18 @@ pub(crate) mod gpu_tests {
         n: u32,
         source: crate::config::escape::TerrainSource,
     ) -> (crate::config::escape::EscapeConfig, crate::escape::EscapeRenderer, crate::renderer::compute_kernel::FlameRenderer) {
+        let (config, escape, flame) = footprint_with(device, queue, n, source, |_| {});
+        (config.escape, escape, flame)
+    }
+
+    /// `footprint`, with the config edited first; returns the whole config.
+    fn footprint_with(
+        device: &Device,
+        queue: &Queue,
+        n: u32,
+        source: crate::config::escape::TerrainSource,
+        edit: impl Fn(&mut crate::config::FractalConfig),
+    ) -> (crate::config::FractalConfig, crate::escape::EscapeRenderer, crate::renderer::compute_kernel::FlameRenderer) {
         let mut config = crate::config::FractalConfig::default();
         config.escape.center_re = "-0.75".into();
         config.escape.center_im = "0.1".into();
@@ -7168,6 +7235,7 @@ pub(crate) mod gpu_tests {
         config.escape.max_iter = 2000;
         config.escape.terrain.enabled = true;
         config.escape.terrain.source = source;
+        edit(&mut config);
         let mut flame = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
             device,
             queue,
@@ -7201,7 +7269,7 @@ pub(crate) mod gpu_tests {
             guard += 1;
             assert!(guard < 10_000, "the footprint did not settle");
         }
-        (config.escape, escape, flame)
+        (config, escape, flame)
     }
 
     /// The f64 Mandelbrot at a footprint pixel, as the escape template
@@ -7372,6 +7440,140 @@ pub(crate) mod gpu_tests {
         }
     }
 
+    /// A relief terrain's depth fade (`TerrainConfig::depth_fade`), piece
+    /// by piece. The footprint keeps its height (green) exactly and leaves
+    /// each escaped pixel's smooth count in alpha -- against the f64
+    /// Mandelbrot -- and 0 inside. The probe's measurement is the grid's
+    /// earliest count and the fade-weighted mean height, as the CPU takes
+    /// them from the same texels. And the ingest fades every sample's
+    /// height toward that level by (earliest / count)^power, which a power
+    /// of 0 leaves as it was.
+    #[test]
+    fn a_relief_terrain_fades_its_height_by_the_escape_count() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let n = 96u32;
+        use crate::config::escape::TerrainSource;
+        let read = |escape: &crate::escape::EscapeRenderer| -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
+            (
+                bytemuck::cast_slice(&read_texture(&device, &queue, escape.height_texture_for_test(), 0, n, n, 16)).to_vec(),
+                bytemuck::cast_slice(&read_texture(&device, &queue, escape.output_texture_for_test(), 0, n, n, 16)).to_vec(),
+            )
+        };
+        let (_, plain, _f0) = footprint_with(&device, &queue, n, TerrainSource::Relief, |_| {});
+        let (config, mut faded, _f1) =
+            footprint_with(&device, &queue, n, TerrainSource::Relief, |c| c.escape.terrain.depth_fade = 1.0);
+        let ((hp, _), (hf, colour)) = (read(&plain), read(&faded));
+        let (mut escaped, mut early, mut off, mut inside_counted) = (0usize, 0usize, 0usize, 0usize);
+        for k in 0..(n * n) as usize {
+            assert_eq!(hp[k][1].to_bits(), hf[k][1].to_bits(), "texel {k}: the fade moved the footprint's height");
+            let (px, py) = (k as u32 % n, k as u32 / n);
+            match mandelbrot_px(&config.escape, n, px, py) {
+                Some((de, mu)) => {
+                    escaped += 1;
+                    // Where the f32 orbit is still the f64 one (as
+                    // `a_footprint_writes_the_terrain_height_source`).
+                    if mu < 200.0 && de > 0.01 {
+                        early += 1;
+                        // The iterate pass's count is log2(0.5 log2 |z|^2),
+                        // this reference's log2(ln |z|): log2(ln 2) apart.
+                        if (hf[k][3] as f64 - (mu + std::f64::consts::LN_2.log2())).abs() > 1e-3 * mu.max(1.0) {
+                            off += 1;
+                        }
+                    }
+                }
+                None => {
+                    if colour[k][3] > 0.0 && hf[k][3] != 0.0 && hf[k][1] > -1.0e29 {
+                        inside_counted += 1;
+                    }
+                }
+            }
+        }
+        println!(
+            "relief depth fade: {escaped} escaped, {early} early and clear, {off} of those counts off by 0.1%, \
+             {inside_counted} interior pixels with a count"
+        );
+        assert!(early > 1000, "{early}");
+        assert!(off * 100 < early, "{off} of {early} counts off");
+        assert!(inside_counted * 100 < (n * n) as usize, "{inside_counted} interior pixels carry a count");
+
+        // The probe's measurement, against the CPU's over the same grid.
+        let power = 4.0f32;
+        let measured = faded.terrain_depth(&device, &queue, power);
+        let got: Vec<f32> = bytemuck::cast_slice(&read_buffer(&device, &queue, measured, 16)).to_vec();
+        let (gw, gh) = (64u32, 48u32);
+        let at = |i: u32| {
+            let fx = ((i % gw) as f32 + 0.5) / gw as f32;
+            let fy = ((i / gw) as f32 + 0.5) / gh as f32;
+            let x = ((fx * n as f32) as i32).clamp(0, n as i32 - 1) as u32;
+            let y = ((fy * n as f32) as i32).clamp(0, n as i32 - 1) as u32;
+            hf[(y * n + x) as usize]
+        };
+        let earliest = (0..gw * gh).map(at).filter(|t| t[3] > 0.0).map(|t| t[3]).fold(f32::MAX, f32::min);
+        let (mut wh, mut w) = (0.0f64, 0.0f64);
+        for t in (0..gw * gh).map(at).filter(|t| t[3] > 0.0 && t[1].abs() < 1.0e29) {
+            let k = 1.0 - ((earliest / t[3]).clamp(0.0, 1.0) as f64).powf(power as f64);
+            wh += k * t[1] as f64;
+            w += k;
+        }
+        let level = (wh / w) as f32;
+        println!("probe: earliest {} (CPU {earliest}), level {} (CPU {level})", got[0], got[1]);
+        assert_eq!(got[0], earliest, "the earliest escape");
+        assert!((got[1] - level).abs() <= 1e-4 * level.abs().max(1.0), "the level: {} against {level}", got[1]);
+
+        // The ingest: every land sample faded toward the level.
+        let ingest = crate::escape::footprint::terrain_ingest(&config, true);
+        assert_eq!(ingest.depth_power, power, "a full fade is the fade's power");
+        for (power, name) in [(power, "faded"), (0.0, "unfaded")] {
+            let mut r = TerrainRenderer::new(&device, 8, 8);
+            r.set_depth_fade(&device, &queue, faded.terrain_depth(&device, &queue, 4.0));
+            r.set_tile_from_escape(
+                &device,
+                &queue,
+                faded.output_view(),
+                faded.height_view(),
+                n,
+                n,
+                &TerrainIngest { depth_power: power, ..ingest },
+                1.0,
+            );
+            let (ht, _) = r.tile_textures_for_test().unwrap();
+            let raw: Vec<f32> = bytemuck::cast_slice(&read_texture(&device, &queue, ht, 0, n, n, 4)).to_vec();
+            let (mut land, mut worst, mut moved) = (0usize, 0.0f32, 0usize);
+            for j in 0..n {
+                for i in 0..n {
+                    let src = ((n - 1 - j) * n + i) as usize;
+                    let (c, t) = (colour[src], hf[src]);
+                    if !(c[3] > 0.0) || t[1] <= -1.0e29 {
+                        continue;
+                    }
+                    land += 1;
+                    let want = if power > 0.0 && t[3] > 0.0 {
+                        let keep = (got[0] / t[3]).clamp(0.0, 1.0).powf(power);
+                        got[1] + (t[1] - got[1]) * keep
+                    } else {
+                        t[1]
+                    };
+                    let g = raw[(j * n + i) as usize];
+                    worst = worst.max((g - want).abs() / want.abs().max(1.0));
+                    if (g - t[1]).abs() > 1e-3 * t[1].abs().max(1.0) {
+                        moved += 1;
+                    }
+                }
+            }
+            println!("ingest ({name}): {land} land samples, worst error {worst:.2e}, {moved} moved");
+            assert!(land > 1000, "{land}");
+            assert!(worst < 1e-4, "{name}: worst {worst}");
+            if power > 0.0 {
+                assert!(moved * 4 > land, "the fade moved only {moved} of {land} heights");
+            } else {
+                assert_eq!(moved, 0, "with no fade, heights moved");
+            }
+        }
+    }
+
     /// The ingest turns a footprint into the tile: the raw height source
     /// (the distance, never below 0), the interior a plateau -- its raw
     /// 0, the distance the map takes to the top -- in the background
@@ -7392,7 +7594,7 @@ pub(crate) mod gpu_tests {
             bytemuck::cast_slice(&read_texture(&device, &queue, escape.height_texture_for_test(), 0, n, n, 16)).to_vec();
         for interior in [0u32, 1, 2] {
             let hole = interior == 1;
-            let ingest = TerrainIngest { source: 8, interior, background: [0.1, 0.2, 0.3], tint: [0.4, 0.5, 0.6] };
+            let ingest = TerrainIngest { source: 8, interior, background: [0.1, 0.2, 0.3], tint: [0.4, 0.5, 0.6], depth_power: 0.0 };
             let mut r = TerrainRenderer::new(&device, 8, 8);
             r.set_tile_from_escape(&device, &queue, escape.output_view(), escape.height_view(), n, n, &ingest, 1.0);
             assert_eq!(r.tile_shape_for_test(), Some((n, n, 1)), "a distance tile maps by the distance");

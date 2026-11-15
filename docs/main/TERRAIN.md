@@ -1257,13 +1257,16 @@ before. `read_range_back` copies the result out without waiting, and
 
 **Auto contrast**, when on, is measured once from the anchor's own 2D
 view (`contrast_probe_config`) and pinned for every section. Fitted each
-its own way, every section was a palette turn of its own.
+its own way, every section was a palette turn of its own. A relief
+field's depth fade is measured on the same probe and held alike
+(*Height from*).
 
 **What the sections depend on** (`picture_key`, `palette_key`): the
 config with everything the 3D view alone reads set to its defaults. That
 is the view's centre, zoom and rotation, the camera, the path tracer, the
 solid tier, the downsample and the relief's light. The terrain's source,
-interior, lake tint, prefilter and softness stay in. The palette, the
+interior, lake tint, prefilter, softness and (for a relief field) depth
+fade stay in. The palette, the
 background and (for a 2D IFS) the flame are keyed by content. So a
 camera, light or path-tracer edit re-renders no section.
 
@@ -1372,7 +1375,26 @@ A terrain needs at least 64 texture array layers on the device
 - **Escape count:** the smooth count, on a log curve by default; spiky
   toward the set.
 - **Relief field:** the 2D relief's own height source, the field chosen
-  in the Escape panel's relief settings; linear by default.
+  in the Escape panel's relief settings; linear by default. Its **Depth
+  Fade** (`TerrainConfig::depth_fade`; 2026-11-15) flattens the deep,
+  noisy parts near the set: a sample keeps `(earliest / count)^(4 x
+  depth_fade)` of its height's departure from a level, as the 2D
+  relief's Depth Fade keeps its slope ([ESCAPE.md](ESCAPE.md)). The
+  section render stores each pixel's smooth count in alpha beside the
+  height (`esc_depth_into`, `flags` bit 10). The probe that measures
+  auto contrast (`contrast_probe_config`: the 2D view, 257x257) also
+  measures the earliest escape on the 2D path's 64x48 grid, and the
+  level: the grid's heights weighted by how much the fade takes of each
+  (`run_depth_min` mode 2, `EscapeRenderer::terrain_depth`). So the
+  faded parts settle at their own mean height, and the gradient of the
+  fade itself adds no slope that leans one way. The terrain renderer
+  holds both (`set_depth_fade`) while the sections last, and the ingest
+  fades every sample before the prefilter, the softness and the range
+  see it (`depth_faded`). A slider change re-renders the sections; the
+  panel commits it on release. Tested by
+  `a_relief_terrain_fades_its_height_by_the_escape_count` (the count, the
+  probe's measurement and the ingest against the CPU) and
+  `a_relief_terrains_depth_fade_is_measured_once_and_held`.
 - **Paper creases:** a folding formula's paper (Origami's; see
   [ESCAPE.md](ESCAPE.md), relief shading), whatever the 2D relief draws,
   linear by default. A crease's slope runs out to one paper size (the

@@ -170,8 +170,9 @@ fn picture_key(escape: &EscapeConfig) -> EscapeConfig {
     // and a lake's tint how a section encodes it (the tint is its albedo);
     // the rest is the walk's and the view's.
     let (source, interior, tint) = (k.terrain.source, k.terrain.interior, k.terrain.lake_tint);
-    // And the filter makes them (H4).
+    // And the filter makes them (H4), and a relief's depth fade.
     let (prefilter, softness) = (k.terrain.prefilter, k.terrain.softness);
+    let depth_fade = escape.terrain_depth_fade();
     k.terrain = d.terrain.clone();
     k.terrain.enabled = true;
     k.terrain.source = source;
@@ -179,6 +180,7 @@ fn picture_key(escape: &EscapeConfig) -> EscapeConfig {
     k.terrain.lake_tint = tint;
     k.terrain.prefilter = prefilter;
     k.terrain.softness = softness;
+    k.terrain.depth_fade = depth_fade;
     k
 }
 
@@ -503,7 +505,13 @@ pub fn terrain_ingest(config: &FractalConfig, derivative: bool) -> TerrainIngest
         TerrainInterior::Hole => 1,
         TerrainInterior::Lake => 2,
     };
-    TerrainIngest { source, interior, background: config.background_color, tint: t.lake_tint }
+    TerrainIngest {
+        source,
+        interior,
+        background: config.background_color,
+        tint: t.lake_tint,
+        depth_power: config.escape.terrain_depth_fade() * super::renderer::DEPTH_FADE_POWER,
+    }
 }
 
 /// The plane's frame for the sections: a point in exact decimals and a
@@ -873,6 +881,9 @@ pub struct EscapeTerrain {
     /// Auto contrast's one fit for every section is measured and pinned
     /// (`contrast_probe_config`).
     contrast_pinned: bool,
+    /// A relief height's depth fade measured on the probe and held by the
+    /// terrain renderer (`set_depth_fade`), as auto contrast's fit is.
+    depth_pinned: bool,
     /// A deep picture's hidden roots' samples a side ([`COARSE_SAMPLES`];
     /// a test sets a section's to compare).
     pub(crate) coarse_samples: u32,
@@ -926,6 +937,7 @@ impl EscapeTerrain {
             section_ms: None,
             tiers: TerrainTiers::default(),
             contrast_pinned: false,
+            depth_pinned: false,
             coarse_samples: COARSE_SAMPLES,
             max_sections: MAX_SECTIONS,
             sections_fitted: false,
@@ -1038,6 +1050,7 @@ impl EscapeTerrain {
             self.clear();
             self.terrain.reset_range(queue);
             self.unpin_contrast();
+            self.depth_pinned = false;
         }
         // Out of the anchor's band or lattice cell: the sections start
         // over on the new one.
@@ -1046,6 +1059,7 @@ impl EscapeTerrain {
             self.anchor = Some(canonical);
             self.clear();
             self.unpin_contrast();
+            self.depth_pinned = false;
         }
         let anchor = self.anchor.clone().expect("set above");
         let (eye, z) = eye_in_anchor(escape, &anchor);
@@ -1111,8 +1125,14 @@ impl EscapeTerrain {
         }
         let mut landed = false;
         // Auto contrast: one fit for every section, measured first from a
-        // view of the anchor's own (`contrast_probe_config`) and held.
-        if escape.contrast.is_active() && !self.contrast_pinned {
+        // view of the anchor's own (`contrast_probe_config`) and held. A
+        // relief height's depth fade is measured on the same probe -- the
+        // 2D view's earliest escape, as the 2D relief's is, and the level
+        // the deep parts settle at -- and held alike.
+        let depth_fade = escape.terrain_depth_fade();
+        let need_contrast = escape.contrast.is_active() && !self.contrast_pinned;
+        let need_depth = depth_fade > 0.0 && !self.depth_pinned;
+        if need_contrast || need_depth {
             let probe = contrast_probe_config(&fp);
             self.footprint.resize(device, COARSE_SAMPLES, COARSE_SAMPLES, 1);
             let mut settled = false;
@@ -1129,9 +1149,17 @@ impl EscapeTerrain {
                 self.set_ground(device, queue, config, &wanted, eye, z, false, &ingest);
                 return true;
             }
-            self.footprint.pin_contrast();
-            self.contrast_pinned = true;
-        } else if !escape.contrast.is_active() && self.contrast_pinned {
+            if need_contrast {
+                self.footprint.pin_contrast();
+                self.contrast_pinned = true;
+            }
+            if need_depth {
+                let measured = self.footprint.terrain_depth(device, queue, ingest.depth_power);
+                self.terrain.set_depth_fade(device, queue, measured);
+                self.depth_pinned = true;
+            }
+        }
+        if !escape.contrast.is_active() && self.contrast_pinned {
             self.unpin_contrast();
         }
         let current = self.building.as_ref().map(|b| b.key);
@@ -3372,6 +3400,61 @@ mod tests {
             .count();
         println!("2^60: {ground} of {} pixels ground", w * h);
         assert!(ground > (w * h / 3) as usize, "{ground}");
+    }
+
+    /// A relief terrain's depth fade changes the ground, and is measured
+    /// once, on the probe, and held; a terrain of another source ignores
+    /// it, byte for byte.
+    #[test]
+    fn a_relief_terrains_depth_fade_is_measured_once_and_held() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let mut c = terrain_config();
+        c.escape.center_re = "-0.7453".into();
+        c.escape.center_im = "0.1127".into();
+        c.escape.zoom_log2 = 6.0;
+        c.escape.terrain.source = TerrainSource::Relief;
+        let mut faded = c.clone();
+        faded.escape.terrain.depth_fade = 1.0;
+        let (plain_px, faded_px) = (render(&device, &queue, &c, w, h), render(&device, &queue, &faded, w, h));
+        let moved = plain_px.chunks(4).zip(faded_px.chunks(4)).filter(|(a, b)| (0..3).any(|k| a[k].abs_diff(b[k]) > 2)).count();
+        println!("relief terrain depth fade: {moved} of {} pixels changed", w * h);
+        assert!(moved > (w * h / 20) as usize, "the fade changed only {moved} pixels");
+        let mut distance = c.clone();
+        distance.escape.terrain.source = TerrainSource::Distance;
+        let mut distance_faded = distance.clone();
+        distance_faded.escape.terrain.depth_fade = 1.0;
+        assert_eq!(
+            render(&device, &queue, &distance, w, h),
+            render(&device, &queue, &distance_faded, w, h),
+            "a distance terrain took the relief's depth fade"
+        );
+
+        let palette = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let palette_view = palette.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut t = EscapeTerrain::new(&device, w, h);
+        let mut guard = 0;
+        while t.update(&device, &queue, &faded, w, h, &palette_view, 1, 1) && guard < 100_000 {
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            guard += 1;
+        }
+        assert!(t.depth_pinned, "the fade was measured and held");
+        assert!(!t.contrast_pinned, "no contrast fit was asked for");
+        // Turned off, nothing is held; on again, measured again.
+        let _ = t.update(&device, &queue, &c, w, h, &palette_view, 1, 1);
+        assert!(!t.depth_pinned, "a picture without the fade holds none");
     }
 
     /// Auto contrast is one fit for the whole ground: the anchor's probe

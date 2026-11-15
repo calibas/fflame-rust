@@ -1088,6 +1088,10 @@ pub fn apply(config: &mut FractalConfig, target: EditingTarget, path: &ConfigPat
                 let v: f32 = value.try_into()?;
                 config.escape.terrain.softness = if v.is_finite() { v.clamp(0.0, crate::config::escape::MAX_TERRAIN_SOFTNESS) } else { 0.0 };
             }
+            ConfigPath::EscapeTerrainDepthFade => {
+                let v: f32 = value.try_into()?;
+                config.escape.terrain.depth_fade = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+            }
             ConfigPath::EscapeTerrainShadow => {
                 let v: f32 = value.try_into()?;
                 config.escape.terrain.shadow = v.clamp(0.0, 1.0);

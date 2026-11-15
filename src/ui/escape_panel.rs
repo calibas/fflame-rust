@@ -1837,6 +1837,20 @@ fn show_terrain_section(
                     t!("escape_panel.terrain_de_width_tip").to_string(),
                 );
             }
+            // The relief's height, faded where the count is deep: every
+            // change renders the sections again, so held to the release.
+            if t.source == TerrainSource::Relief {
+                ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.terrain_depth_fade"));
+                    let mut v = t.depth_fade;
+                    let slider = |ui: &mut egui::Ui, v: &mut f32| {
+                        ui.add(egui::Slider::new(v, 0.0..=1.0)).on_hover_text(t!("escape_panel.terrain_depth_fade_tip"))
+                    };
+                    if super::slow_controls::on_release(ui, ui.id().with("terrain_depth_fade"), &mut v, slider).1 {
+                        let _ = config_manager.update_param(ConfigPath::EscapeTerrainDepthFade, v.into());
+                    }
+                });
+            }
             // The relief fixed at a zoom (terrain-height.md, H3): locked
             // here, the lengths above are this zoom's, and a count's or a
             // relief's range is pinned as the view measures it now -- so

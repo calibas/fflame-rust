@@ -2536,6 +2536,16 @@ pub struct TerrainConfig {
     /// without a seam.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub softness: f32,
+    /// Less height where the escape count is high, for a terrain of the
+    /// relief's height (`TerrainSource::Relief`): the 2D relief's depth
+    /// fade (`EscapeShading::depth_fade`) for a height. Measured from the
+    /// view's earliest escape, a sample keeps (earliest / its count)^(4 x
+    /// depth_fade) of its height's departure from the level the faded
+    /// parts settle at -- their own mean height -- so the deep, noisy
+    /// parts near the set flatten to a plain and the open parts keep their
+    /// relief. 0 keeps every height; other sources ignore it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub depth_fade: f32,
     /// The ground a smooth surface through its samples -- a cubic
     /// B-spline, continuous to its curvature -- rather than a bilinear
     /// patch a texel, whose creases at every grid line show as stepped
@@ -2707,6 +2717,7 @@ impl Default for TerrainConfig {
             detail: default_terrain_detail(),
             prefilter: default_terrain_prefilter(),
             softness: 0.0,
+            depth_fade: 0.0,
             smooth: false,
             far: default_terrain_far(),
             haze: default_terrain_haze(),
@@ -2780,6 +2791,16 @@ impl EscapeConfig {
         #[cfg(not(feature = "terrain"))]
         {
             false
+        }
+    }
+
+    /// The terrain's depth fade where it acts -- a terrain of the
+    /// relief's height (`TerrainConfig::depth_fade`) -- else 0.
+    pub fn terrain_depth_fade(&self) -> f32 {
+        if self.terrain_active() && self.terrain.source == TerrainSource::Relief && self.terrain.depth_fade > 0.0 {
+            self.terrain.depth_fade.min(1.0)
+        } else {
+            0.0
         }
     }
 }
