@@ -267,8 +267,9 @@ Principles to agree before the ffapi branch (compatibility: *Decided after the s
 ## Phases
 
 0. **The API review** (ffapi), in parallel with phase 1: the principles
-   above turned into a route table, agreed, then built on an ffapi branch
-   with the permission matrix and tests updated.
+   above turned into a route table ([catalog-api.md](catalog-api.md)),
+   agreed, then built on an ffapi branch with the permission matrix and
+   tests updated.
 1. **The model and the panel, local only**: `inventory` over every local
    source, the prose the app ships, the panel (search, filters, groups,
    info pane, selection, Use), palettes by pack. **Retires the Palette
