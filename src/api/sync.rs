@@ -227,6 +227,93 @@ fn encode_palette_data(palette: &Palette) -> (Option<serde_json::Value>, Option<
     }
 }
 
+/// A palette's id: the content hash the API keys it by, computed as the
+/// server computes it (ffapi's `palette_content_hash`, migration 26) over
+/// what this client sends for it ([`encode_palette_data`]) -- SHA-256 of
+/// `c` and the colour bytes (or `C` without them), then `s` and the stops
+/// as Postgres prints them as `jsonb` (or `S` without them). Lower-case
+/// hex. The same palette in two packs is one palette.
+pub fn palette_content_hash(palette: &Palette) -> String {
+    use sha2::{Digest, Sha256};
+    let (stops, color_data) = encode_palette_data(palette);
+    let mut h = Sha256::new();
+    match &color_data {
+        Some(bytes) => {
+            h.update(b"c");
+            // The server holds them as bytes (`Vec<u8>`): each is 0-255.
+            h.update(bytes.iter().map(|&v| v.min(255) as u8).collect::<Vec<u8>>());
+        }
+        None => h.update(b"C"),
+    }
+    match &stops {
+        Some(v) => {
+            h.update(b"s");
+            h.update(jsonb_text(v).as_bytes());
+        }
+        None => h.update(b"S"),
+    }
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A JSON value as Postgres prints it once stored as `jsonb`: an object's
+/// keys by length, then bytewise; `": "` and `", "` between; numbers as
+/// `numeric` prints them (never an exponent).
+fn jsonb_text(v: &serde_json::Value) -> String {
+    use serde_json::Value;
+    match v {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => pg_numeric_text(&n.to_string()),
+        Value::String(s) => serde_json::to_string(s).unwrap_or_default(),
+        Value::Array(a) => format!("[{}]", a.iter().map(jsonb_text).collect::<Vec<_>>().join(", ")),
+        Value::Object(o) => {
+            let mut keys: Vec<&String> = o.keys().collect();
+            keys.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.as_bytes().cmp(b.as_bytes())));
+            let parts: Vec<String> = keys
+                .iter()
+                .map(|k| format!("{}: {}", serde_json::to_string(k).unwrap_or_default(), jsonb_text(&o[k.as_str()])))
+                .collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+    }
+}
+
+/// A JSON number's text as Postgres `numeric` prints it: the exponent
+/// expanded, the digits after the point kept (`1.0` stays `1.0`; `1e-7`
+/// is `0.0000001`, `1.5e-7` is `0.00000015`, `1.25e1` is `12.5`).
+fn pg_numeric_text(s: &str) -> String {
+    let Some((mantissa, exp)) = s.split_once(['e', 'E']) else {
+        return s.to_string();
+    };
+    let exp: i64 = exp.trim_start_matches('+').parse().unwrap_or(0);
+    let (neg, mantissa) = match mantissa.strip_prefix('-') {
+        Some(m) => (true, m),
+        None => (false, mantissa),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = format!("{int}{frac}");
+    // The point sits after `point` digits of `digits`.
+    let point = int.len() as i64 + exp;
+    let scale = (frac.len() as i64 - exp).max(0) as usize;
+    let (whole, fraction) = if point <= 0 {
+        ("0".to_string(), format!("{}{digits}", "0".repeat((-point) as usize)))
+    } else if point as usize >= digits.len() {
+        (format!("{digits}{}", "0".repeat(point as usize - digits.len())), String::new())
+    } else {
+        (digits[..point as usize].to_string(), digits[point as usize..].to_string())
+    };
+    // (`fraction` is `scale` digits long: the mantissa's after the point,
+    // less the exponent.)
+    let whole = whole.trim_start_matches('0');
+    let whole = if whole.is_empty() { "0" } else { whole };
+    let sign = if neg { "-" } else { "" };
+    if scale == 0 {
+        format!("{sign}{whole}")
+    } else {
+        format!("{sign}{whole}.{fraction}")
+    }
+}
+
 /// Build an inline `ApiPalette` payload from a local `Palette`. The
 /// server computes the content hash and assigns it on the response, so
 /// the client never sends `hash`. The local palette name travels as the
@@ -338,6 +425,79 @@ pub fn flame_response_to_config(resp: &FlameResponse) -> Result<FractalConfig, s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The palettes the content-hash vectors are of: a two-stop gradient,
+    /// an indexed palette of 256 evenly spaced stops (colour bytes), and a
+    /// gradient whose numbers print with fractions, many digits and an
+    /// exponent.
+    fn hash_vector_palettes() -> Vec<Palette> {
+        let indexed = Palette {
+            name: "Indexed".into(),
+            stops: (0..256)
+                .map(|i| ColorStop {
+                    position: i as f32 / 255.0,
+                    color: [i as f32 / 255.0, ((i * 7) % 256) as f32 / 255.0, (255 - i) as f32 / 255.0],
+                })
+                .collect(),
+            locked: true,
+            built_in: false,
+        };
+        let odd = Palette {
+            name: "Odd numbers".into(),
+            stops: vec![
+                ColorStop { position: 0.0, color: [0.1, 0.25, 1.0] },
+                ColorStop { position: 1.0e-7, color: [0.333_333_34, 0.5, 0.0] },
+                ColorStop { position: 0.6, color: [1.5e-5, 0.987_654_3, 0.2] },
+                ColorStop { position: 1.0, color: [1.0, 1.0, 1.0] },
+            ],
+            locked: false,
+            built_in: false,
+        };
+        vec![Palette::grayscale(), indexed, odd]
+    }
+
+    /// A palette's id is the server's: each vector's hash as ffapi's
+    /// `palette_content_hash` computed it (Postgres 18, 2026-11-16) from
+    /// what this client sends -- the stops path with fractions, many digits
+    /// and an exponent (`1.0000000116860974e-7`, which `jsonb` prints
+    /// without one), and the colour-bytes path. The inputs are printed by
+    /// `print_palette_hash_inputs`, to check against a server again.
+    #[test]
+    fn a_palettes_id_is_the_servers_content_hash() {
+        let want = [
+            ("Grayscale", "fbf3850857f50dd8bda094d2ce3a11ac6581930b9fc2642d0d427e852b61cc67"),
+            ("Indexed", "54ff156761502c12ae9626cd5ebe603fa192354c0464f15ae06cc861e41b1225"),
+            ("Odd numbers", "600649435e07f89e9dcb0cfdbf953f0473b87e51de4ce96bf1936bc110daa07e"),
+        ];
+        for (p, (name, hash)) in hash_vector_palettes().iter().zip(want) {
+            assert_eq!(p.name, name);
+            assert_eq!(palette_content_hash(p), hash, "{name}");
+        }
+        // The name is not content: renamed, it is the same palette.
+        let mut renamed = Palette::grayscale();
+        renamed.name = "Another name".into();
+        assert_eq!(palette_content_hash(&renamed), want[0].1);
+        assert_eq!(pg_numeric_text("1.5e-7"), "0.00000015");
+        assert_eq!(pg_numeric_text("1.25e1"), "12.5");
+        assert_eq!(pg_numeric_text("1e5"), "100000");
+        assert_eq!(pg_numeric_text("-2.5e-3"), "-0.0025");
+        assert_eq!(pg_numeric_text("0.5"), "0.5");
+    }
+
+    /// Prints what the server's `palette_content_hash` takes for each
+    /// vector palette (name, colour bytes as hex, stops as sent, the app's
+    /// hash), to run against a server:
+    /// `SELECT palette_content_hash(decode('<hex>','hex'), '<stops>'::jsonb)`.
+    #[test]
+    #[ignore = "prints the hash vectors' inputs"]
+    fn print_palette_hash_inputs() {
+        for p in hash_vector_palettes() {
+            let (stops, color_data) = encode_palette_data(&p);
+            let bytes = color_data.map(|c| c.iter().map(|&v| format!("{:02x}", v as u8)).collect::<String>());
+            let stops = stops.map(|s| serde_json::to_string(&s).unwrap());
+            println!("{}\t{}\t{}\t{}", p.name, bytes.unwrap_or_default(), stops.unwrap_or_default(), palette_content_hash(&p));
+        }
+    }
 
     #[test]
     fn test_render_mode_roundtrip() {

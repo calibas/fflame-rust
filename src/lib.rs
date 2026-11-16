@@ -42,6 +42,7 @@ pub mod i18n;
 pub mod animation;
 pub mod signal;
 pub mod storage;
+pub mod inventory;
 pub mod textures;
 pub mod export;
 pub mod resources;
