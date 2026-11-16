@@ -19,7 +19,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Stripe Average", description: "The mean of 0.5 + 0.5 sin(density arg z) over the orbit: stripes that follow the set's structure.", bailout: 1.0e4, pick: #{ deband: 1 } };
+const INFO = #{ title: "Stripe Average", description: "The mean of `0.5 + 0.5 sin(density arg z)` over the orbit: stripes that follow the set's structure.", bailout: 1.0e4, pick: #{ deband: 1 } };
 
 // The mean of the terms, or with Deband the template's debanded mean:
 // the mean without the last term and with it, blended by how far through

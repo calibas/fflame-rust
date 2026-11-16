@@ -55,7 +55,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Quaternion Julia (Solid)", description: "A quaternion Julia set, q -> q^n + c, a 3D slice of four dimensions, ray-marched by its distance estimate.", coloring: "ifs_level", slow: ["levels", "beam", "steps"] };
+const INFO = #{ title: "Quaternion Julia (Solid)", description: "A quaternion Julia set, `q -> q^n + c`, a 3D slice of four dimensions, ray-marched by its distance estimate.", coloring: "ifs_level", slow: ["levels", "beam", "steps"] };
 
 // The ball the camera frames: the bailout's radius.
 fn prepare(p) {

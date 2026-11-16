@@ -13161,9 +13161,9 @@
           "custom_formula": {
             "dialect": "rhai",
             "entry": "Mandelbrot",
-            "source": "// The built-in Mandelbrot, as a formula of your own. The Escape panel's\n// Edit as Formula opens it here with the picture as it was; change\n// anything, and with Live on the picture follows. The panel's Bailout\n// and Julia toggle still drive it.\n\nconst PARAMS = #{\n    bailout: #{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" },\n};\n\nconst INFO = #{ title: \"Mandelbrot\", description: \"The classic: z -> z^2 + c, the points c whose orbit from 0 stays bounded. On the Julia plane the pixel starts the orbit and c is held.\", center: complex(0.0, 0.0), maxiter: 512 };\n\nfn start(pixel, p, ctx) {\n    // On the Julia plane the pixel starts the orbit and c is the\n    // panel's constant; on the parameter plane z starts at 0.\n    if ctx.julia {\n        #{ z: pixel, c: ctx.c }\n    } else {\n        #{ z: complex(0.0, 0.0), c: pixel }\n    }\n}\n\nfn step(s, p) {\n    s.z = s.z * s.z + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    s.z.norm_sqr() > p.bailout\n}\n\n// How fast it grows past the bailout, |z| to the power 2: what the\n// smooth colourings divide by.\nfn degree(p) {\n    2.0\n}\n"
+            "source": "// The built-in Mandelbrot, as a formula of your own. The Escape panel's\n// Edit as Formula opens it here with the picture as it was; change\n// anything, and with Live on the picture follows. The panel's Bailout\n// and Julia toggle still drive it.\n\nconst PARAMS = #{\n    bailout: #{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" },\n};\n\nconst INFO = #{ title: \"Mandelbrot\", description: \"The classic: `z -> z^2 + c`, the points c whose orbit from 0 stays bounded. On the Julia plane the pixel starts the orbit and c is held.\", center: complex(0.0, 0.0), maxiter: 512 };\n\nfn start(pixel, p, ctx) {\n    // On the Julia plane the pixel starts the orbit and c is the\n    // panel's constant; on the parameter plane z starts at 0.\n    if ctx.julia {\n        #{ z: pixel, c: ctx.c }\n    } else {\n        #{ z: complex(0.0, 0.0), c: pixel }\n    }\n}\n\nfn step(s, p) {\n    s.z = s.z * s.z + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    s.z.norm_sqr() > p.bailout\n}\n\n// How fast it grows past the bailout, |z| to the power 2: what the\n// smooth colourings divide by.\nfn degree(p) {\n    2.0\n}\n"
           },
-          "formula": "custom-43027864c8660aed",
+          "formula": "custom-cfeae056d5e2cd27",
           "max_iter": 256
         },
         "flame": {
@@ -13259,9 +13259,9 @@
           "custom_formula": {
             "dialect": "rhai",
             "entry": "Mandelbrot",
-            "source": "// The built-in Mandelbrot, as a formula of your own. The Escape panel's\n// Edit as Formula opens it here with the picture as it was; change\n// anything, and with Live on the picture follows. The panel's Bailout\n// and Julia toggle still drive it.\n\nconst PARAMS = #{\n    bailout: #{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" },\n};\n\nconst INFO = #{ title: \"Mandelbrot\", description: \"The classic: z -> z^2 + c, the points c whose orbit from 0 stays bounded. On the Julia plane the pixel starts the orbit and c is held.\", center: complex(0.0, 0.0), maxiter: 512 };\n\nfn start(pixel, p, ctx) {\n    // On the Julia plane the pixel starts the orbit and c is the\n    // panel's constant; on the parameter plane z starts at 0.\n    if ctx.julia {\n        #{ z: pixel, c: ctx.c }\n    } else {\n        #{ z: complex(0.0, 0.0), c: pixel }\n    }\n}\n\nfn step(s, p) {\n    s.z = s.z * s.z + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    s.z.norm_sqr() > p.bailout\n}\n\n// How fast it grows past the bailout, |z| to the power 2: what the\n// smooth colourings divide by.\nfn degree(p) {\n    2.0\n}\n\n// an edit\n"
+            "source": "// The built-in Mandelbrot, as a formula of your own. The Escape panel's\n// Edit as Formula opens it here with the picture as it was; change\n// anything, and with Live on the picture follows. The panel's Bailout\n// and Julia toggle still drive it.\n\nconst PARAMS = #{\n    bailout: #{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" },\n};\n\nconst INFO = #{ title: \"Mandelbrot\", description: \"The classic: `z -> z^2 + c`, the points c whose orbit from 0 stays bounded. On the Julia plane the pixel starts the orbit and c is held.\", center: complex(0.0, 0.0), maxiter: 512 };\n\nfn start(pixel, p, ctx) {\n    // On the Julia plane the pixel starts the orbit and c is the\n    // panel's constant; on the parameter plane z starts at 0.\n    if ctx.julia {\n        #{ z: pixel, c: ctx.c }\n    } else {\n        #{ z: complex(0.0, 0.0), c: pixel }\n    }\n}\n\nfn step(s, p) {\n    s.z = s.z * s.z + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    s.z.norm_sqr() > p.bailout\n}\n\n// How fast it grows past the bailout, |z| to the power 2: what the\n// smooth colourings divide by.\nfn degree(p) {\n    2.0\n}\n\n// an edit\n"
           },
-          "formula": "custom-14a1ffd7157e0476",
+          "formula": "custom-5c6bac2766573974",
           "max_iter": 256
         },
         "flame": {
@@ -13331,7 +13331,7 @@
             "role": "coloring"
           },
           {
-            "key": "14a1ffd7157e0476",
+            "key": "5c6bac2766573974",
             "kind": "formula",
             "origin": "source",
             "primary": true,
@@ -13356,9 +13356,9 @@
           "custom_formula": {
             "dialect": "rhai",
             "entry": "Mandelbrot",
-            "source": "// The built-in Mandelbrot, as a formula of your own. The Escape panel's\n// Edit as Formula opens it here with the picture as it was; change\n// anything, and with Live on the picture follows. The panel's Bailout\n// and Julia toggle still drive it.\n\nconst PARAMS = #{\n    bailout: #{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" },\n};\n\nconst INFO = #{ id: \"0f8fad5b-d9cb-469f-a165-70867728950e\", title: \"Mandelbrot\", description: \"The classic: z -> z^2 + c, the points c whose orbit from 0 stays bounded. On the Julia plane the pixel starts the orbit and c is held.\", center: complex(0.0, 0.0), maxiter: 512 };\n\nfn start(pixel, p, ctx) {\n    // On the Julia plane the pixel starts the orbit and c is the\n    // panel's constant; on the parameter plane z starts at 0.\n    if ctx.julia {\n        #{ z: pixel, c: ctx.c }\n    } else {\n        #{ z: complex(0.0, 0.0), c: pixel }\n    }\n}\n\nfn step(s, p) {\n    s.z = s.z * s.z + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    s.z.norm_sqr() > p.bailout\n}\n\n// How fast it grows past the bailout, |z| to the power 2: what the\n// smooth colourings divide by.\nfn degree(p) {\n    2.0\n}\n"
+            "source": "// The built-in Mandelbrot, as a formula of your own. The Escape panel's\n// Edit as Formula opens it here with the picture as it was; change\n// anything, and with Live on the picture follows. The panel's Bailout\n// and Julia toggle still drive it.\n\nconst PARAMS = #{\n    bailout: #{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" },\n};\n\nconst INFO = #{ id: \"0f8fad5b-d9cb-469f-a165-70867728950e\", title: \"Mandelbrot\", description: \"The classic: `z -> z^2 + c`, the points c whose orbit from 0 stays bounded. On the Julia plane the pixel starts the orbit and c is held.\", center: complex(0.0, 0.0), maxiter: 512 };\n\nfn start(pixel, p, ctx) {\n    // On the Julia plane the pixel starts the orbit and c is the\n    // panel's constant; on the parameter plane z starts at 0.\n    if ctx.julia {\n        #{ z: pixel, c: ctx.c }\n    } else {\n        #{ z: complex(0.0, 0.0), c: pixel }\n    }\n}\n\nfn step(s, p) {\n    s.z = s.z * s.z + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    s.z.norm_sqr() > p.bailout\n}\n\n// How fast it grows past the bailout, |z| to the power 2: what the\n// smooth colourings divide by.\nfn degree(p) {\n    2.0\n}\n"
           },
-          "formula": "custom-u0f8fad5bd9cb469fa16570867728950e_19df6483",
+          "formula": "custom-u0f8fad5bd9cb469fa16570867728950e_55b7f45f",
           "max_iter": 256
         },
         "flame": {
@@ -13433,7 +13433,7 @@
             "origin": "script",
             "primary": true,
             "role": "formula",
-            "version": "19df6483"
+            "version": "55b7f45f"
           }
         ],
         "config_version": 7,
@@ -13454,9 +13454,9 @@
           "custom_formula": {
             "dialect": "rhai",
             "entry": "Mandelbox (Solid)",
-            "source": "// The built-in Mandelbox (Solid) as a solid of your own (the Escape\n// panel's Edit as Rhai): Tom Lowe's box and sphere folds, z <- s fold(z)\n// + c, with Syntopia's distance estimate at 0.95 of itself. Each step is\n// the built-in's arithmetic, in its order, so the two draw alike.\n//\n// The colourings read the start of the orbit: the running scale `dr`\n// (Escape Level), the closest approach of `z` (Orbit Trap), and the\n// `address` -- each iteration's digit in base 12, how many axes the box\n// fold reflected (0 to 3) times 3 plus which of the sphere fold's three\n// cases applied, the first iteration in the first place.\n\nconst PARAMS = #{\n    scale: #{\n        value: 2.0, min: -4.0, max: 4.0,\n        caption: \"Scale\",\n        hint: \"How much each iteration enlarges space after the folds. 2 is Lowe's box; negative scales (-1.5 is the classic) turn it inside out. Between -1 and 1 nothing escapes, so the magnitude is held to 1.05 at least.\",\n    },\n    min_radius: #{\n        value: 0.5, min: 0.0, max: 2.0,\n        caption: \"Minimum Radius\",\n        hint: \"Inside this radius the sphere fold scales linearly; between it and the fixed radius, it inverts.\",\n    },\n    fixed_radius: #{\n        value: 1.0, min: 0.1, max: 3.0,\n        caption: \"Fixed Radius\",\n        hint: \"The radius the sphere fold inverts in.\",\n    },\n    fold_limit: #{\n        value: 1.0, min: 0.1, max: 3.0,\n        caption: \"Folding Limit\",\n        hint: \"Where the box fold reflects each axis.\",\n    },\n    mode: #{\n        value: 0,\n        caption: \"Mode\",\n        hint: \"The Mandelbox adds the point itself each iteration; its Julia adds the constant below, the same for every point.\",\n        choices: [\"Mandelbox\", \"Julia\"],\n    },\n    cx: #{ value: 0.0, min: -4.0, max: 4.0, caption: \"Julia X\", hint: \"The Julia constant's x.\" },\n    cy: #{ value: 0.0, min: -4.0, max: 4.0, caption: \"Julia Y\", hint: \"The Julia constant's y.\" },\n    cz: #{ value: 0.0, min: -4.0, max: 4.0, caption: \"Julia Z\", hint: \"The Julia constant's z.\" },\n    // The template's Colour Depth, declared to keep the built-in's hint.\n    colour_depth: #{\n        value: 3.0, min: 1.0, max: 12.0,\n        caption: \"Colour Depth\",\n        hint: \"How many of the first iterations the colourings read: the orbit trap's closest approach, the level's stretch and the address. The surface is drawn a pixel from the set, and past a few iterations that pixel decides the orbit, so deeper colours change with the camera. Raise it when zoomed in.\",\n    },\n};\n\nconst INFO = #{ title: \"Mandelbox (Solid)\", description: \"Tom Lowe's Mandelbox: box and sphere folds, z -> s fold(z) + c, ray-marched by its distance estimate.\" };\n\n// The ball the set lies in, as the built-in's (`mandelbox_radius`): the\n// cube a point past which escapes, reached at its corners.\nfn prepare(p) {\n    let s = max(abs(p.scale), 1.05);\n    let l = max(p.fold_limit, 0.1);\n    let cube = if p.mode > 0 {\n        let c = max(max(abs(p.cx), abs(p.cy)), abs(p.cz));\n        (2.0 * l * s + c) / (s - 1.0)\n    } else {\n        2.0 * l * (s + 1.0) / (s - 1.0)\n    };\n    #{ ball: min(cube * sqrt(3.0), 256.0) }\n}\n\nfn start(pos, p) {\n    let c = if p.mode > 0 { vec3(p.cx, p.cy, p.cz) } else { pos };\n    #{ z: pos, c: c, dr: 1.0, address: 0.0, place: 1.0 / 12.0 }\n}\n\nfn step(s, p) {\n    // |s| at least 1.05, its sign kept.\n    let s_in = p.scale;\n    let sc = if s_in < 0.0 { min(s_in, -1.05) } else { max(s_in, 1.05) };\n    let min_r = max(p.min_radius, 0.0);\n    let fixed_r = max(p.fixed_radius, 0.1);\n    let min_r2 = max(min(min_r * min_r, fixed_r * fixed_r), 1.0e-6);\n    let fixed_r2 = fixed_r * fixed_r;\n    let limit = max(p.fold_limit, 0.1);\n    let z = s.z;\n    // How many axes the box fold reflects.\n    let axes = 0;\n    if abs(z.x) > limit { axes += 1; }\n    if abs(z.y) > limit { axes += 1; }\n    if abs(z.z) > limit { axes += 1; }\n    z = clamp(z, -limit, limit) * 2.0 - z;\n    let r2 = dot(z, z);\n    let fold_case = 0;\n    if r2 < min_r2 {\n        let t = fixed_r2 / min_r2;\n        z = z * t;\n        s.dr = s.dr * t;\n        fold_case = 2;\n    } else if r2 < fixed_r2 {\n        let t = fixed_r2 / r2;\n        z = z * t;\n        s.dr = s.dr * t;\n        fold_case = 1;\n    }\n    s.z = z * sc + s.c;\n    s.dr = s.dr * abs(sc) + (if p.mode > 0 { 0.0 } else { 1.0 });\n    s.address = s.address + to_float(axes * 3 + fold_case) * s.place;\n    s.place = s.place / 12.0;\n    s\n}\n\nfn escaped(s, p) {\n    length(s.z) > 100.0\n}\n\nfn distance(s, p) {\n    0.95 * length(s.z) / max(abs(s.dr), 1.0e-30)\n}\n"
+            "source": "// The built-in Mandelbox (Solid) as a solid of your own (the Escape\n// panel's Edit as Rhai): Tom Lowe's box and sphere folds, z <- s fold(z)\n// + c, with Syntopia's distance estimate at 0.95 of itself. Each step is\n// the built-in's arithmetic, in its order, so the two draw alike.\n//\n// The colourings read the start of the orbit: the running scale `dr`\n// (Escape Level), the closest approach of `z` (Orbit Trap), and the\n// `address` -- each iteration's digit in base 12, how many axes the box\n// fold reflected (0 to 3) times 3 plus which of the sphere fold's three\n// cases applied, the first iteration in the first place.\n\nconst PARAMS = #{\n    scale: #{\n        value: 2.0, min: -4.0, max: 4.0,\n        caption: \"Scale\",\n        hint: \"How much each iteration enlarges space after the folds. 2 is Lowe's box; negative scales (-1.5 is the classic) turn it inside out. Between -1 and 1 nothing escapes, so the magnitude is held to 1.05 at least.\",\n    },\n    min_radius: #{\n        value: 0.5, min: 0.0, max: 2.0,\n        caption: \"Minimum Radius\",\n        hint: \"Inside this radius the sphere fold scales linearly; between it and the fixed radius, it inverts.\",\n    },\n    fixed_radius: #{\n        value: 1.0, min: 0.1, max: 3.0,\n        caption: \"Fixed Radius\",\n        hint: \"The radius the sphere fold inverts in.\",\n    },\n    fold_limit: #{\n        value: 1.0, min: 0.1, max: 3.0,\n        caption: \"Folding Limit\",\n        hint: \"Where the box fold reflects each axis.\",\n    },\n    mode: #{\n        value: 0,\n        caption: \"Mode\",\n        hint: \"The Mandelbox adds the point itself each iteration; its Julia adds the constant below, the same for every point.\",\n        choices: [\"Mandelbox\", \"Julia\"],\n    },\n    cx: #{ value: 0.0, min: -4.0, max: 4.0, caption: \"Julia X\", hint: \"The Julia constant's x.\" },\n    cy: #{ value: 0.0, min: -4.0, max: 4.0, caption: \"Julia Y\", hint: \"The Julia constant's y.\" },\n    cz: #{ value: 0.0, min: -4.0, max: 4.0, caption: \"Julia Z\", hint: \"The Julia constant's z.\" },\n    // The template's Colour Depth, declared to keep the built-in's hint.\n    colour_depth: #{\n        value: 3.0, min: 1.0, max: 12.0,\n        caption: \"Colour Depth\",\n        hint: \"How many of the first iterations the colourings read: the orbit trap's closest approach, the level's stretch and the address. The surface is drawn a pixel from the set, and past a few iterations that pixel decides the orbit, so deeper colours change with the camera. Raise it when zoomed in.\",\n    },\n};\n\nconst INFO = #{ title: \"Mandelbox (Solid)\", description: \"Tom Lowe's Mandelbox: box and sphere folds, `z -> s fold(z) + c`, ray-marched by its distance estimate.\" };\n\n// The ball the set lies in, as the built-in's (`mandelbox_radius`): the\n// cube a point past which escapes, reached at its corners.\nfn prepare(p) {\n    let s = max(abs(p.scale), 1.05);\n    let l = max(p.fold_limit, 0.1);\n    let cube = if p.mode > 0 {\n        let c = max(max(abs(p.cx), abs(p.cy)), abs(p.cz));\n        (2.0 * l * s + c) / (s - 1.0)\n    } else {\n        2.0 * l * (s + 1.0) / (s - 1.0)\n    };\n    #{ ball: min(cube * sqrt(3.0), 256.0) }\n}\n\nfn start(pos, p) {\n    let c = if p.mode > 0 { vec3(p.cx, p.cy, p.cz) } else { pos };\n    #{ z: pos, c: c, dr: 1.0, address: 0.0, place: 1.0 / 12.0 }\n}\n\nfn step(s, p) {\n    // |s| at least 1.05, its sign kept.\n    let s_in = p.scale;\n    let sc = if s_in < 0.0 { min(s_in, -1.05) } else { max(s_in, 1.05) };\n    let min_r = max(p.min_radius, 0.0);\n    let fixed_r = max(p.fixed_radius, 0.1);\n    let min_r2 = max(min(min_r * min_r, fixed_r * fixed_r), 1.0e-6);\n    let fixed_r2 = fixed_r * fixed_r;\n    let limit = max(p.fold_limit, 0.1);\n    let z = s.z;\n    // How many axes the box fold reflects.\n    let axes = 0;\n    if abs(z.x) > limit { axes += 1; }\n    if abs(z.y) > limit { axes += 1; }\n    if abs(z.z) > limit { axes += 1; }\n    z = clamp(z, -limit, limit) * 2.0 - z;\n    let r2 = dot(z, z);\n    let fold_case = 0;\n    if r2 < min_r2 {\n        let t = fixed_r2 / min_r2;\n        z = z * t;\n        s.dr = s.dr * t;\n        fold_case = 2;\n    } else if r2 < fixed_r2 {\n        let t = fixed_r2 / r2;\n        z = z * t;\n        s.dr = s.dr * t;\n        fold_case = 1;\n    }\n    s.z = z * sc + s.c;\n    s.dr = s.dr * abs(sc) + (if p.mode > 0 { 0.0 } else { 1.0 });\n    s.address = s.address + to_float(axes * 3 + fold_case) * s.place;\n    s.place = s.place / 12.0;\n    s\n}\n\nfn escaped(s, p) {\n    length(s.z) > 100.0\n}\n\nfn distance(s, p) {\n    0.95 * length(s.z) / max(abs(s.dr), 1.0e-30)\n}\n"
           },
-          "formula": "custom-d9cb51c78e0a1f75",
+          "formula": "custom-84dd3cf1d452317d",
           "max_iter": 256
         },
         "flame": {
@@ -15353,6 +15353,10 @@
         "builtin": "quaternion_julia_solid",
         "kind": "solid"
       },
+      "custom-11d18dcf5d23cf92": {
+        "builtin": "exponential_smoothing",
+        "kind": "coloring"
+      },
       "custom-12cdb0a2fccaca51": {
         "builtin": "lambda_sine",
         "kind": "formula"
@@ -15369,6 +15373,14 @@
         "builtin": "stripe_average",
         "kind": "coloring"
       },
+      "custom-1881d5fa06d004d9": {
+        "builtin": "lambda_sine",
+        "kind": "formula"
+      },
+      "custom-18a41d021939c84c": {
+        "builtin": "lambda",
+        "kind": "formula"
+      },
       "custom-18a4becb1238891b": {
         "builtin": "triangle_inequality",
         "kind": "coloring"
@@ -15383,6 +15395,10 @@
       },
       "custom-1b1ecdd5af6788c0": {
         "builtin": "tricorn",
+        "kind": "formula"
+      },
+      "custom-1c0a2cde033d296d": {
+        "builtin": "trig",
         "kind": "formula"
       },
       "custom-1c46a71531ec50f5": {
@@ -15409,6 +15425,10 @@
         "builtin": "mandelbox_solid",
         "kind": "solid"
       },
+      "custom-1f12650547c494b6": {
+        "builtin": "mandelbulb_solid",
+        "kind": "solid"
+      },
       "custom-1f693c093d16699d": {
         "builtin": "field_value",
         "kind": "field_coloring"
@@ -15424,6 +15444,10 @@
       "custom-2126992e8007b014": {
         "builtin": "orbit_average",
         "kind": "coloring"
+      },
+      "custom-22060d6f2942faef": {
+        "builtin": "spider",
+        "kind": "formula"
       },
       "custom-22eabd83e14c227a": {
         "builtin": "gaussian_integer",
@@ -15469,6 +15493,10 @@
         "builtin": "dla",
         "kind": "sim_model"
       },
+      "custom-2b4b23e1b63b8c59": {
+        "builtin": "threads",
+        "kind": "coloring"
+      },
       "custom-2c0d52d81f4b90ee": {
         "builtin": "snowfake",
         "kind": "sim_model"
@@ -15481,9 +15509,17 @@
         "builtin": "standard_map_ftle",
         "kind": "field"
       },
+      "custom-2cf263c5fe18ec5b": {
+        "builtin": "feather",
+        "kind": "formula"
+      },
       "custom-3002c49a1073a368": {
         "builtin": "stripe_average",
         "kind": "coloring"
+      },
+      "custom-30ad75137344a33f": {
+        "builtin": "littlewood",
+        "kind": "formula"
       },
       "custom-30d488e15f304092": {
         "builtin": "mandelbulb_solid",
@@ -15513,16 +15549,32 @@
         "builtin": "threads",
         "kind": "coloring"
       },
+      "custom-32a2aad3f072f596": {
+        "builtin": "barnsley",
+        "kind": "formula"
+      },
       "custom-33ea33940750a084": {
         "builtin": "brusselator2",
         "kind": "sim_model"
+      },
+      "custom-34a526e5b389ced3": {
+        "builtin": "magnitude_average",
+        "kind": "coloring"
       },
       "custom-356ea077c43d652d": {
         "builtin": "multibrot",
         "kind": "formula"
       },
+      "custom-371f5e18299fc6d0": {
+        "builtin": "origami",
+        "kind": "formula"
+      },
       "custom-3721b0a593641c7b": {
         "builtin": "curvature_average",
+        "kind": "coloring"
+      },
+      "custom-37d0c6aa9e315ee8": {
+        "builtin": "stripe_average",
         "kind": "coloring"
       },
       "custom-37fb1bcd5a62a1f5": {
@@ -15531,6 +15583,10 @@
       },
       "custom-3848356f15a0430c": {
         "builtin": "cactus",
+        "kind": "formula"
+      },
+      "custom-386430bdb8985b4e": {
+        "builtin": "mcmullen",
         "kind": "formula"
       },
       "custom-392c8289eaac5c4d": {
@@ -15561,9 +15617,17 @@
         "builtin": "itinerary",
         "kind": "coloring"
       },
+      "custom-44b9f96b72b15818": {
+        "builtin": "gaussian_integer",
+        "kind": "coloring"
+      },
       "custom-456536a7ed2d590c": {
         "builtin": "mccabe",
         "kind": "sim_model"
+      },
+      "custom-457a3bfa4810d722": {
+        "builtin": "distance_estimate",
+        "kind": "coloring"
       },
       "custom-45a938b2c8f8a77b": {
         "builtin": "spider",
@@ -15681,6 +15745,10 @@
         "builtin": "lattes",
         "kind": "formula"
       },
+      "custom-5959ada1334b9493": {
+        "builtin": "quaternion_julia_solid",
+        "kind": "solid"
+      },
       "custom-59848bc0063f42d0": {
         "builtin": "image_trap",
         "kind": "coloring"
@@ -15797,6 +15865,14 @@
         "builtin": "rossler",
         "kind": "sim_model"
       },
+      "custom-71c0289f83d266b3": {
+        "builtin": "kaliset",
+        "kind": "formula"
+      },
+      "custom-72535d1fe5bf9e54": {
+        "builtin": "multibrot",
+        "kind": "formula"
+      },
       "custom-745f2fbe84c23574": {
         "builtin": "gray_scott",
         "kind": "sim_model"
@@ -15837,6 +15913,10 @@
         "builtin": "gaussian_integer",
         "kind": "coloring"
       },
+      "custom-7f0c5374e540da2d": {
+        "builtin": "root_basin",
+        "kind": "coloring"
+      },
       "custom-7f96667ce59e2f11": {
         "builtin": "field_hillshade",
         "kind": "field_coloring"
@@ -15860,6 +15940,10 @@
       "custom-84487eabe0388546": {
         "builtin": "triangle_inequality",
         "kind": "coloring"
+      },
+      "custom-84dd3cf1d452317d": {
+        "builtin": "mandelbox_solid",
+        "kind": "solid"
       },
       "custom-865b6724a5330356": {
         "builtin": "voc_traps",
@@ -15921,6 +16005,10 @@
         "builtin": "rainbow_fringe",
         "kind": "coloring"
       },
+      "custom-96d81ac5fee4758a": {
+        "builtin": "cactus",
+        "kind": "formula"
+      },
       "custom-971bf56ee2bac1f1": {
         "builtin": "littlewood",
         "kind": "formula"
@@ -15973,9 +16061,21 @@
         "builtin": "label",
         "kind": "sim_coloring"
       },
+      "custom-a0119f4ed78b106d": {
+        "builtin": "burning_ship",
+        "kind": "formula"
+      },
+      "custom-a033190885c61c3d": {
+        "builtin": "collatz",
+        "kind": "formula"
+      },
       "custom-a197ed23471aecab": {
         "builtin": "feather",
         "kind": "formula"
+      },
+      "custom-a34f40d1a1104bdb": {
+        "builtin": "velocity",
+        "kind": "coloring"
       },
       "custom-a6369cb0ba0dc442": {
         "builtin": "tetration",
@@ -15984,6 +16084,10 @@
       "custom-a67d506a97860e75": {
         "builtin": "weierstrass",
         "kind": "field"
+      },
+      "custom-a708da146364dad5": {
+        "builtin": "nova",
+        "kind": "formula"
       },
       "custom-a727824497a77ed9": {
         "builtin": "channel",
@@ -16003,6 +16107,14 @@
       },
       "custom-aa485c5833dc70c0": {
         "builtin": "trig",
+        "kind": "formula"
+      },
+      "custom-aa5b70440a92b456": {
+        "builtin": "novaretti",
+        "kind": "formula"
+      },
+      "custom-aa7fd1202b49c2f6": {
+        "builtin": "tricorn",
         "kind": "formula"
       },
       "custom-ab3cf1659a715428": {
@@ -16045,6 +16157,10 @@
         "builtin": "position_map",
         "kind": "coloring"
       },
+      "custom-b357e022e9785a46": {
+        "builtin": "phoenix",
+        "kind": "formula"
+      },
       "custom-b415d253774a7267": {
         "builtin": "velocity",
         "kind": "coloring"
@@ -16052,6 +16168,10 @@
       "custom-b46a5d99e090259b": {
         "builtin": "lic",
         "kind": "sim_coloring"
+      },
+      "custom-b5d9fe406e37ba79": {
+        "builtin": "triangle_inequality",
+        "kind": "coloring"
       },
       "custom-b76c34ce9e2c92d0": {
         "builtin": "scale_mix",
@@ -16157,6 +16277,10 @@
         "builtin": "gradient",
         "kind": "sim_coloring"
       },
+      "custom-cfeae056d5e2cd27": {
+        "builtin": "mandelbrot",
+        "kind": "formula"
+      },
       "custom-d15aa0a5a2d7a200": {
         "builtin": "decomposition",
         "kind": "coloring"
@@ -16220,6 +16344,10 @@
       "custom-da169f693d06b154": {
         "builtin": "period",
         "kind": "coloring"
+      },
+      "custom-da67c6915442ccb2": {
+        "builtin": "tetration",
+        "kind": "formula"
       },
       "custom-dba8daaeddcc609d": {
         "builtin": "position_average",
@@ -16329,6 +16457,10 @@
         "builtin": "hodgepodge",
         "kind": "sim_model"
       },
+      "custom-f690e6913b794bfc": {
+        "builtin": "exponential",
+        "kind": "formula"
+      },
       "custom-f6b5b0fe1d419aed": {
         "builtin": "field_hillshade",
         "kind": "field_coloring"
@@ -16389,9 +16521,17 @@
         "builtin": "rainbow_fringe",
         "kind": "coloring"
       },
+      "custom-fedc03d51ccb0803": {
+        "builtin": "smooth",
+        "kind": "coloring"
+      },
       "custom-fee04b92b39b097d": {
         "builtin": "oregonator",
         "kind": "sim_model"
+      },
+      "custom-ffb4ed2c1df0ca53": {
+        "builtin": "manowar",
+        "kind": "formula"
       },
       "custom-ffe105b123bece0e": {
         "builtin": "lenia",

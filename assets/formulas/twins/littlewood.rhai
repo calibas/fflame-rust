@@ -13,7 +13,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Littlewood", description: "The pixel is a lambda; each step w -> lambda w + d adds whichever digit d of the chosen set leaves w smallest, and lambda belongs to the root cloud when w stays bounded.", center: complex(0.0, 0.0), maxiter: 48 };
+const INFO = #{ title: "Littlewood", description: "The pixel is a lambda; each step `w -> lambda w + d` adds whichever digit d of the chosen set leaves w smallest, and lambda belongs to the root cloud when w stays bounded.", center: complex(0.0, 0.0), maxiter: 48 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

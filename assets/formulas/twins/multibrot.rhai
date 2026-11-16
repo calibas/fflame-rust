@@ -6,7 +6,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Multibrot", description: "z -> z^p + c at any power p: the Mandelbrot set's family, with (p - 1)-fold symmetry at whole powers.", center: complex(0.0, 0.0), maxiter: 256 };
+const INFO = #{ title: "Multibrot", description: "`z -> z^p + c` at any power p: the Mandelbrot set's family, with (p - 1)-fold symmetry at whole powers.", center: complex(0.0, 0.0), maxiter: 256 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

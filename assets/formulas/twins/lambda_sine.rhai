@@ -7,7 +7,7 @@ const PARAMS = #{
     bailout: #{ value: 50.0, min: 1.0, caption: "Bailout", hint: "The imaginary part's size past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Lambda Sine (λ·sin z)", description: "z -> lambda sin z, the pixel the lambda. On the parameter plane the orbit starts at sine's critical point, pi/2.", center: complex(0.0, 0.0), maxiter: 300 };
+const INFO = #{ title: "Lambda Sine (λ·sin z)", description: "`z -> lambda sin z`, the pixel the lambda. On the parameter plane the orbit starts at sine's critical point, pi/2.", center: complex(0.0, 0.0), maxiter: 300 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

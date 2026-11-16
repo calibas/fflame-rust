@@ -20,7 +20,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Threads", description: "Thin bright filaments where orbits graze the axes: the mean of exp(-D^2 / w^2), D the distance to the nearer axis.", bailout: 1.0e4, pick: #{ deband: 1 } };
+const INFO = #{ title: "Threads", description: "Thin bright filaments where orbits graze the axes: the mean of `exp(-D^2 / w^2)`, D the distance to the nearer axis.", bailout: 1.0e4, pick: #{ deband: 1 } };
 
 // The mean of the terms, or with Deband the template's debanded mean:
 // the mean without the last term and with it, blended by how far through

@@ -10,7 +10,7 @@ const PARAMS = #{
     bailout: #{ value: 10000.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Nova", description: "Newton's step for z^p - 1, plus c, with a complex relaxation. On the parameter plane the orbit starts at the critical point 1; an orbit ends as it escapes or settles.", center: complex(-0.3, 0.0), maxiter: 128 };
+const INFO = #{ title: "Nova", description: "Newton's step for `z^p - 1`, plus c, with a complex relaxation. On the parameter plane the orbit starts at the critical point 1; an orbit ends as it escapes or settles.", center: complex(-0.3, 0.0), maxiter: 128 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

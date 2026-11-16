@@ -262,7 +262,7 @@ impl InventoryPanel {
                     for &i in &shown[start..end] {
                         let e = &self.entries[i];
                         let r = ui.selectable_label(self.selected.as_ref() == Some(&e.key), row_label(e));
-                        let r = if e.description.is_empty() { r } else { r.on_hover_text(first_line(&e.description)) };
+                        let r = if e.description.is_empty() { r } else { r.on_hover_text(crate::markdown::first_paragraph(&e.description)) };
                         if r.clicked() {
                             clicked = Some(e.key.clone());
                         }
@@ -425,7 +425,7 @@ impl InventoryPanel {
         if e.description.is_empty() {
             ui.weak(t!("catalog.no_description"));
         } else {
-            ui.label(&e.description);
+            super::markdown::show(ui, &e.description);
         }
         ui.separator();
         ui.horizontal_wrapped(|ui| {
@@ -497,10 +497,6 @@ fn palette_row(ui: &mut egui::Ui, hash: &str, title: &str, palette: &crate::scen
 /// A row's text: the title, the origin's mark, a plug-in's.
 fn row_label(e: &Entry) -> String {
     format!("{}{}", e.title, crate::storage::library::marks(e.origin, e.plugin))
-}
-
-fn first_line(s: &str) -> &str {
-    s.lines().find(|l| !l.trim().is_empty()).unwrap_or("")
 }
 
 /// Where an entry came from, as a sentence.

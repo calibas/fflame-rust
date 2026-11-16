@@ -43,6 +43,7 @@ pub mod animation;
 pub mod signal;
 pub mod storage;
 pub mod inventory;
+pub mod markdown;
 pub mod textures;
 pub mod export;
 pub mod resources;

@@ -11,7 +11,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Kaliset", description: "z -> |z| / |z|^2 + c (or - c), each part of z made positive first. It never escapes: the colourings that read the orbit draw it.", center: complex(0.0, 0.0), maxiter: 24 };
+const INFO = #{ title: "Kaliset", description: "`z -> |z| / |z|^2 + c` (or `- c`), each part of z made positive first. It never escapes: the colourings that read the orbit draw it.", center: complex(0.0, 0.0), maxiter: 24 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

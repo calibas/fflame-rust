@@ -7,7 +7,7 @@ const PARAMS = #{
     bailout: #{ value: 10.0, min: 1.0, caption: "Bailout", hint: "The imaginary part's size past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Collatz", description: "The analytic Collatz map, z -> (2 + 7z - (2 + 5z) cos(pi z)) / 4, which takes the Collatz step on the integers. It has no c: the pixel is the start, on either plane.", center: complex(1.0, 0.0), maxiter: 64 };
+const INFO = #{ title: "Collatz", description: "The analytic Collatz map, `z -> (2 + 7z - (2 + 5z) cos(pi z)) / 4`, which takes the Collatz step on the integers. It has no c: the pixel is the start, on either plane.", center: complex(1.0, 0.0), maxiter: 64 };
 
 fn start(pixel, p) {
     #{ z: pixel }

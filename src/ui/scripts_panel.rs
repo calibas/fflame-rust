@@ -989,14 +989,12 @@ impl ScriptsPanel {
         if doc.is_empty() {
             return;
         }
-        // Descriptions are markdown on the wire (§5.4) and this app has
-        // no markdown renderer. Scripts strip client-side rather than
-        // carrying a `description_plain` the way variations do: the
-        // description is DERIVED from the source, which is authoritative
-        // and always present, so a stored plain copy would be a
-        // derivation of a derivation with its own way to go stale.
+        // Descriptions are markdown (§5.4), drawn by `ui::markdown`. The
+        // body below keeps its own layout -- its indented lines are the
+        // shipped scripts' symbol tables, line by line -- until the one
+        // Rhai editor (docs/projects/catalog.md, phase 4).
         if !doc.summary.is_empty() {
-            ui.label(crate::script::strip_markdown(&doc.summary));
+            super::markdown::show(ui, &doc.summary);
         }
         if doc.body.is_empty() {
             return;

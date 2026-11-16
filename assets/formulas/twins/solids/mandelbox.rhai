@@ -47,7 +47,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Mandelbox (Solid)", description: "Tom Lowe's Mandelbox: box and sphere folds, z -> s fold(z) + c, ray-marched by its distance estimate." };
+const INFO = #{ title: "Mandelbox (Solid)", description: "Tom Lowe's Mandelbox: box and sphere folds, `z -> s fold(z) + c`, ray-marched by its distance estimate." };
 
 // The ball the set lies in, as the built-in's (`mandelbox_radius`): the
 // cube a point past which escapes, reached at its corners.

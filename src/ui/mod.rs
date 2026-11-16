@@ -9,6 +9,7 @@ mod font_loader;
 mod formatting;
 pub mod fractal_browser;
 pub mod inventory;
+pub mod markdown;
 pub mod fractal_gallery;
 mod help;
 pub mod login_dialog;

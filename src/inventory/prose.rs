@@ -1,6 +1,8 @@
 //! What the app ships to say about its built-ins, read once from where
 //! it is written:
 //!
+//! Every description is markdown (`crate::markdown`).
+//!
 //! - **Variations**: each twin opens with its built-in's doc block
 //!   (`variations::twins::every_variation_twin_keeps_its_builtins_doc`),
 //!   so the prose and authors of 640 of the 647 are in the app. The rest,
@@ -30,7 +32,7 @@ pub(super) fn variation(name: &str) -> Option<&'static Prose> {
             .iter()
             .filter_map(|(name, src)| {
                 let doc = crate::variations::docs::leading_block(src)?;
-                Some((*name, Prose { description: doc.description_plain, authors: doc.authors }))
+                Some((*name, Prose { description: doc.description, authors: doc.authors }))
             })
             .collect()
     })
@@ -89,7 +91,7 @@ pub(super) fn variation_catalog() -> HashMap<String, Prose> {
         .map(|c| {
             c.items
                 .into_iter()
-                .map(|i| (i.name, Prose { description: i.description_plain.unwrap_or_default(), authors: i.authors }))
+                .map(|i| (i.name, Prose { description: i.description.or(i.description_plain).unwrap_or_default(), authors: i.authors }))
                 .collect()
         })
         .unwrap_or_default()
@@ -101,7 +103,7 @@ pub(super) fn effect_catalog() -> HashMap<String, Prose> {
         .map(|c| {
             c.items
                 .into_iter()
-                .map(|i| (i.name, Prose { description: i.description_plain.unwrap_or_default(), authors: i.authors }))
+                .map(|i| (i.name, Prose { description: i.description.or(i.description_plain).unwrap_or_default(), authors: i.authors }))
                 .collect()
         })
         .unwrap_or_default()

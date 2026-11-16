@@ -182,7 +182,7 @@ pub struct Entry {
     pub kind: Kind,
     pub key: EntryKey,
     pub title: String,
-    /// Plain text; empty when its source says nothing.
+    /// Markdown (`crate::markdown`); empty when its source says nothing.
     pub description: String,
     /// In the order its source lists them; empty when it names none.
     pub authors: Vec<String>,
