@@ -134,6 +134,12 @@ impl ScriptsPanel {
     /// Keyed on the ID rather than the declared name: nothing stops two
     /// scripts declaring the same name, and matching on it made the
     /// selection jump to whichever happened to be found first.
+    /// Select a script from outside the panel (the Catalog), by its id
+    /// (its stem): rescanned and selected when the panel next draws.
+    pub fn select_script(&mut self, id: &str) {
+        self.pending_fork = Some((id.to_string(), String::new()));
+    }
+
     fn reload(&mut self, base: &FractalConfig) {
         let previous = self.entries.get(self.selected).map(|e| e.id.clone());
         let (entries, conflicts) = library::discover_with_conflicts(base);
@@ -371,7 +377,7 @@ impl ScriptsPanel {
                 self.selected = i;
                 self.load_selected();
             }
-            self.status = Some(message);
+            self.status = (!message.is_empty()).then_some(message);
         }
 
         response

@@ -1489,15 +1489,7 @@ fn render_pool_member_block(
                     }
                 }
                 if let Some(var_name) = var_to_add {
-                    let path = xref.variation_path(var_name.clone());
-                    // A variation of the user's the flame does not carry
-                    // yet comes with its source, in the same step.
-                    let carry = crate::variations::custom::carry_change(config_manager.active_config(), [var_name.as_str()]);
-                    let result = match carry {
-                        Some(carry) => config_manager.update_batch(vec![(path, 1.0f32.into()), carry], "history.action.add_custom_variation".to_string()),
-                        None => config_manager.update_param(path, 1.0f32.into()),
-                    };
-                    if let Ok(u) = result {
+                    if let Ok(u) = add_variation(config_manager, xref, &var_name) {
                         update = update.max(u);
                     }
                 }
@@ -1610,4 +1602,35 @@ fn render_attachment_subsection(
                 });
             }
         });
+}
+
+/// Add the variation `name` to a transform at weight 1, one undo step: a
+/// variation of the user's the flame does not carry yet comes with its
+/// source, in the same step.
+pub(crate) fn add_variation(
+    config_manager: &mut ConfigManager,
+    xref: crate::config::TransformRef,
+    name: &str,
+) -> Result<crate::config::UpdateType, crate::config::ConfigError> {
+    let path = xref.variation_path(name.to_string());
+    match crate::variations::custom::carry_change(config_manager.active_config(), [name]) {
+        Some(carry) => config_manager.update_batch(vec![(path, 1.0f32.into()), carry], "history.action.add_custom_variation".to_string()),
+        None => config_manager.update_param(path, 1.0f32.into()),
+    }
+}
+
+/// The transform the editors are on: the Triangle Editor's selection when
+/// it names one the flame has, else the first transform of any pool;
+/// `None` for a flame with none.
+pub(crate) fn editing_transform(ctx: &egui::Context, flame: &crate::scene::transforms::Flame) -> Option<crate::config::TransformRef> {
+    use crate::config::TransformRef;
+    let selected = ctx.data_mut(|d| d.get_persisted::<TransformRef>(egui::Id::new("triangle_editor_selected_transform")));
+    let valid = |x: TransformRef| match x {
+        TransformRef::Normal(i) => i < flame.transforms.len(),
+        TransformRef::Linked(i) => i < flame.linked_transforms.len(),
+        TransformRef::Final(i) => i < flame.final_transforms.len(),
+    };
+    selected.filter(|x| valid(*x)).or_else(|| {
+        [TransformRef::Normal(0), TransformRef::Linked(0), TransformRef::Final(0)].into_iter().find(|x| valid(*x))
+    })
 }

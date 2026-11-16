@@ -1,15 +1,18 @@
 # Fractal Browser
 
-The Fractal Browser panel browses whole configs — the built-in presets,
-a generated batch, the configs in a file, and the flames saved online —
-as thumbnails or as a list. Clicking one loads it as a single undo
-entry ("Load Preset" in the History panel).
+The Fractal Browser panel browses whole configs this session made or
+opened -- a generated batch, the configs in a file -- and the flames
+saved online, as thumbnails or as a list. Clicking one loads it as a
+single undo entry ("Load Preset" in the History panel). **The presets
+are the Catalog's** since 2026-11-16 ([CATALOG.md](CATALOG.md)): its
+Fractals family draws them with this panel's gallery widget, a gallery a
+category.
 
 - Panel: `PanelType::FractalBrowser`, drawn by `FractalBrowserPanel`
   ([src/ui/fractal_browser.rs](../../src/ui/fractal_browser.rs)).
 - Gallery widget: `FractalConfigGallery`
   ([src/ui/fractal_gallery.rs](../../src/ui/fractal_gallery.rs)), one per
-  local tab, and one per preset category.
+  local tab (and in the Catalog one per preset category).
 - Thumbnail cache: `ThumbnailCache`
   ([src/storage/thumbnail_cache.rs](../../src/storage/thumbnail_cache.rs)).
 - Thumbnail render: [src/renderer/thumbnail.rs](../../src/renderer/thumbnail.rs).
@@ -25,7 +28,8 @@ Design record: [fractal-browser.md](../archive/projects/fractal-browser.md).
 
 ## Opening it
 
-- **File ▸ From Preset Library** opens it on the Presets tab.
+- **File ▸ From Preset Library** opens the Catalog on Fractals, not this
+  panel.
 - **Window ▸ Fractal Browser**.
 - The **Scripting** workspace docks it on the right.
 - It opens by itself, on the right tab, when the Random Generator or the
@@ -178,11 +182,10 @@ complete configs. `global_preset_library()` loads it once per run:
   that is present but malformed lands here too; it does not fall back to
   the embedded copy.
 
-**The Presets tab has a tab per category** (`PresetCategory`), each with
-its count and its own gallery, so opening the browser makes one
-category's thumbnails, not all 84.
-A category with no presets has no tab, and the browser opens on the first
-that has any. `PresetCategory::of` sorts by the camera a config's picture
+**The Catalog's Fractals have a tab per category** (`PresetCategory`,
+`scene::presets`), each with its count and its own gallery, so opening it
+makes one category's thumbnails, not all 84. A category with no presets
+has no tab, and it opens on the first that has any. `PresetCategory::of` sorts by the camera a config's picture
 is seen through (`camera::gesture::view_kind`): a flame by its render
 mode; an escape-time config 3D when its formula is a solid -- a
 built-in, or its own Rhai solid, told from the source because nothing

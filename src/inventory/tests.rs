@@ -1,5 +1,9 @@
 use super::*;
 
+fn lib() -> crate::scene::palette::PaletteLibrary {
+    crate::scene::palette::global_palette_library().read().unwrap().clone()
+}
+
 fn of_kind(entries: &[Entry], kind: Kind) -> Vec<&Entry> {
     entries.iter().filter(|e| e.kind == kind).collect()
 }
@@ -9,7 +13,7 @@ fn of_kind(entries: &[Entry], kind: Kind) -> Vec<&Entry> {
 /// are not the user's, and every preset.
 #[test]
 fn every_registered_resource_is_listed_once() {
-    let all = scan();
+    let all = scan(&lib());
     let names = |kind: Kind| -> Vec<String> {
         of_kind(&all, kind)
             .iter()
@@ -56,7 +60,7 @@ fn every_registered_resource_is_listed_once() {
 /// listed in each -- and the list comes out in the same order every time.
 #[test]
 fn keys_are_unique_and_the_order_is_stable() {
-    let a = scan();
+    let a = scan(&lib());
     let mut seen = std::collections::HashSet::new();
     for e in a.iter().filter(|e| e.kind != Kind::Palette) {
         assert!(seen.insert(e.key.clone()), "{:?} listed twice", e.key);
@@ -64,7 +68,7 @@ fn keys_are_unique_and_the_order_is_stable() {
     // The same order every time -- compared over the kinds whose sources
     // are static, since tests running beside this one load palette packs
     // and register variations into the global libraries.
-    let b = scan();
+    let b = scan(&lib());
     let fixed = |l: &[Entry]| -> Vec<EntryKey> {
         l.iter()
             .filter(|e| match &e.key {
@@ -86,10 +90,10 @@ fn keys_are_unique_and_the_order_is_stable() {
 /// their sources hold.
 #[test]
 fn a_key_finds_its_resource_again() {
-    let all = scan();
+    let all = scan(&lib());
     let p = of_kind(&all, Kind::Palette).into_iter().next().expect("a palette");
     let EntryKey::Palette(hash) = &p.key else { panic!("{:?}", p.key) };
-    let found = palette(hash).expect("found by its hash");
+    let found = palette(&lib(), hash).expect("found by its hash");
     assert_eq!(found.name, p.title);
     assert_eq!(&crate::api::sync::palette_content_hash(&found), hash);
     let f = of_kind(&all, Kind::Fractal).into_iter().next().expect("a preset");
@@ -102,7 +106,7 @@ fn a_key_finds_its_resource_again() {
 /// colouring's line, and no author a source does not name.
 #[test]
 fn the_built_ins_carry_their_prose() {
-    let all = scan();
+    let all = scan(&lib());
     // The registered built-ins; the seven variations without a twin
     // (`analytic_blur`, `mondrianomies`, the volumes, the subflames) take
     // the server catalog's prose when it is cached. (shipped example files are files).

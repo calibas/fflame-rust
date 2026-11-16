@@ -1,8 +1,7 @@
-//! Fractal Browser panel - unified browser for presets, batch results, files, and online flames
+//! Fractal Browser panel - this session's results: batches, files, and online flames
 //!
-//! A tabbed panel that provides views:
-//! - Presets: Built-in presets from assets/presets.fflame, a gallery per
-//!   category ([`PresetCategory`])
+//! A tabbed panel that provides views (the presets are the Catalog's,
+//! `ui::inventory`, docs/projects/catalog.md):
 //! - Batch: Random batch generation results (persists until next batch)
 //! - Files: Loaded .fflame files
 //! - Online: Flames fetched from the API (feature-gated behind `api`)
@@ -11,8 +10,6 @@ use egui;
 
 use super::fractal_gallery::{FractalConfigGallery, GalleryResponse};
 use crate::config::FractalConfig;
-use crate::scene::presets::global_preset_library;
-pub use crate::scene::presets::PresetCategory;
 
 use std::sync::{Arc, Mutex};
 
@@ -20,7 +17,6 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BrowserTab {
     #[default]
-    Presets,
     Batch,
     Files,
     Online,
@@ -91,10 +87,6 @@ pub struct FractalBrowserPanel {
     current_tab: BrowserTab,
 
     // --- Presets tab ---
-    /// A gallery a category, in [`PresetCategory::ALL`] order.
-    preset_galleries: Vec<FractalConfigGallery>,
-    /// The category shown.
-    preset_category: PresetCategory,
 
     // --- Batch tab ---
     /// Gallery for batch generation results
@@ -153,21 +145,8 @@ impl Default for FractalBrowserPanel {
 impl FractalBrowserPanel {
     /// Create a new fractal browser panel
     pub fn new() -> Self {
-        // The presets from the global library, sorted into their
-        // categories in the library's order.
-        let preset_library = global_preset_library();
-        let mut by_category: Vec<Vec<FractalConfig>> = vec![Vec::new(); PresetCategory::ALL.len()];
-        for preset in preset_library.presets() {
-            by_category[PresetCategory::of(preset).index()].push(preset.clone());
-        }
-        // Open on the first category that has any.
-        let preset_category = PresetCategory::ALL.into_iter().find(|c| !by_category[c.index()].is_empty()).unwrap_or_default();
-
         Self {
-            current_tab: BrowserTab::Presets,
-
-            preset_galleries: by_category.into_iter().map(FractalConfigGallery::new).collect(),
-            preset_category,
+            current_tab: BrowserTab::Batch,
 
             batch_gallery: FractalConfigGallery::default(),
 
@@ -197,11 +176,6 @@ impl FractalBrowserPanel {
     #[cfg(test)]
     pub fn current_tab(&self) -> BrowserTab {
         self.current_tab
-    }
-
-    /// Switch to a specific tab
-    pub fn switch_to_tab(&mut self, tab: BrowserTab) {
-        self.current_tab = tab;
     }
 
     // ========== Batch tab methods ==========
@@ -316,7 +290,7 @@ impl FractalBrowserPanel {
     /// a closed panel or another tab makes none.
     fn shown_gallery(&mut self) -> Option<&mut FractalConfigGallery> {
         let mut shown = None;
-        let galleries = self.preset_galleries.iter_mut().chain([&mut self.batch_gallery, &mut self.files_gallery]);
+        let galleries = [&mut self.batch_gallery, &mut self.files_gallery];
         for g in galleries {
             if g.take_shown() {
                 shown = Some(g);
@@ -360,13 +334,6 @@ impl FractalBrowserPanel {
         // Tab bar. Wrapped: four tabs with counts exceed a phone-width
         // panel, and an unwrappable row sets the panel's minimum width.
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .selectable_label(self.current_tab == BrowserTab::Presets, t!("browser.tab_presets"))
-                .clicked()
-            {
-                self.current_tab = BrowserTab::Presets;
-            }
-
             // Show batch count if any
             let batch_label = if self.batch_gallery.len() > 0 {
                 format!("{} ({})", t!("browser.tab_batch"), self.batch_gallery.len())
@@ -413,30 +380,10 @@ impl FractalBrowserPanel {
 
         // Render current tab content
         match self.current_tab {
-            BrowserTab::Presets => self.render_presets_tab(ui),
             BrowserTab::Batch => self.render_batch_tab(ui),
             BrowserTab::Files => self.render_files_tab(ui),
             BrowserTab::Online => self.render_online_tab(ui),
         }
-    }
-
-    fn render_presets_tab(&mut self, ui: &mut egui::Ui) -> GalleryResponse {
-        // A tab a category that has presets, with its count. Wrapped, as
-        // the browser's own tabs are, for a phone-width panel.
-        ui.horizontal_wrapped(|ui| {
-            for category in PresetCategory::ALL {
-                let count = self.preset_galleries[category.index()].len();
-                if count == 0 {
-                    continue;
-                }
-                let label = format!("{} ({count})", t!(category.label_key()));
-                if ui.selectable_label(self.preset_category == category, label).clicked() {
-                    self.preset_category = category;
-                }
-            }
-        });
-        ui.separator();
-        self.preset_galleries[self.preset_category.index()].render(ui)
     }
 
     fn render_batch_tab(&mut self, ui: &mut egui::Ui) -> GalleryResponse {
@@ -1009,7 +956,7 @@ mod tests {
     /// compiled when the browser sorts them -- and every category has some.
     #[test]
     fn the_bundled_presets_fall_in_their_categories() {
-        use super::PresetCategory as C;
+        use crate::scene::presets::PresetCategory as C;
         for (name, want) in [
             ("Julian Disc", C::Flame2d),
             ("Cup (3D)", C::Flame3d),
@@ -1034,7 +981,7 @@ mod tests {
     /// over a plane is 3D.
     #[test]
     fn a_kept_solid_is_not_3d_and_a_terrain_is() {
-        use super::PresetCategory as C;
+        use crate::scene::presets::PresetCategory as C;
         let mut kept = preset("Halayka: sin Z + C sin Z");
         assert!(kept.escape.custom_formula.is_some());
         kept.escape.formula = "mandelbrot".to_string();
@@ -1043,20 +990,6 @@ mod tests {
         terrain.escape.formula = "mandelbrot".to_string();
         terrain.escape.terrain.enabled = true;
         assert_eq!(C::of(&terrain), C::Escape3d);
-    }
-
-    /// The browser holds every preset, each in its category's gallery, and
-    /// opens on the first category.
-    #[test]
-    fn the_browser_sorts_the_presets_into_their_galleries() {
-        use super::PresetCategory as C;
-        let presets = crate::resources::load_presets_with_fallback();
-        let panel = FractalBrowserPanel::new();
-        assert_eq!(panel.preset_category, C::Flame2d);
-        for category in C::ALL {
-            let want = presets.iter().filter(|p| C::of(p) == category).count();
-            assert_eq!(panel.preset_galleries[category.index()].len(), want, "{category:?}");
-        }
     }
 
     #[test]

@@ -1290,6 +1290,71 @@ enum LayerSlot {
     At(usize),
 }
 
+/// Choosing a built-in model for a layer. A model starts from its first
+/// preset's initial field: the last model's could be one it does nothing
+/// with (Ising from Gray-Scott's blobs). The field is the whole
+/// simulation's, so a layer switch leaves it.
+fn choose_model(config_manager: &mut ConfigManager, sim: &SimConfig, slot: LayerSlot, m: &crate::sim::ModelDef) {
+    let mut changes = vec![(slot.model_path(), m.name.to_string().into())];
+    // A built-in carries no source: the Rhai one goes with the name it was
+    // carried for.
+    if slot.carries(sim) {
+        changes.push((slot.custom_path(), String::new().into()));
+    }
+    if slot == LayerSlot::Flat {
+        if let Some(first) = m.presets.first() {
+            if let Some(init) = first.init {
+                changes.extend(init_changes(init));
+            }
+            changes.push((ConfigPath::SimBoundary, first.boundary.name().to_string().into()));
+        }
+    }
+    let _ = super::render_mode::choose(config_manager, changes, "history.action.sim_model", RenderMode::Simulation);
+}
+
+/// Choosing a plug-in model for a layer: its source carried beside the
+/// name, as Use carries it.
+fn choose_plugin_model(config_manager: &mut ConfigManager, slot: LayerSlot, p: &crate::storage::library::Plugin) {
+    let source = crate::config::manager::custom_source_json(&Some(p.carried.clone()));
+    let changes = vec![(slot.custom_path(), source.into()), (slot.model_path(), p.key.clone().into())];
+    let _ = super::render_mode::choose(config_manager, changes, "history.action.use_sim_model", RenderMode::Simulation);
+}
+
+/// The first layer's slot: the flat fields, or `layers[0]`.
+fn first_layer(sim: &SimConfig) -> LayerSlot {
+    if sim.layers.is_empty() {
+        LayerSlot::Flat
+    } else {
+        LayerSlot::At(0)
+    }
+}
+
+/// Choosing a model from outside the panel (the Catalog): the first
+/// layer's, a built-in by its def or a plug-in by its record.
+pub(crate) fn choose_first_layer_model(config_manager: &mut ConfigManager, m: &crate::sim::ModelDef) {
+    let sim = config_manager.active_config().sim.clone();
+    choose_model(config_manager, &sim, first_layer(&sim), m);
+}
+
+pub(crate) fn choose_first_layer_plugin_model(config_manager: &mut ConfigManager, p: &crate::storage::library::Plugin) {
+    let sim = config_manager.active_config().sim.clone();
+    choose_plugin_model(config_manager, first_layer(&sim), p);
+}
+
+/// Choosing the base colouring from outside the panel (the Catalog): a
+/// built-in by name, which drops a carried Rhai source, or a plug-in with
+/// its source carried -- in the simulation, entered in the same step.
+pub(crate) fn choose_base_coloring(config_manager: &mut ConfigManager, name: &str, plugin: Option<&crate::storage::library::Plugin>) {
+    let changes = match plugin {
+        Some(p) => vec![
+            (ConfigPath::SimCustomColoring, crate::config::manager::custom_source_json(&Some(p.carried.clone())).into()),
+            (ConfigPath::SimColoring, p.key.clone().into()),
+        ],
+        None => vec![(ConfigPath::SimColoring, name.to_string().into()), (ConfigPath::SimCustomColoring, String::new().into())],
+    };
+    let _ = super::render_mode::choose(config_manager, changes, "history.action.sim_coloring", RenderMode::Simulation);
+}
+
 impl LayerSlot {
     fn model_path(self) -> ConfigPath {
         match self {
@@ -1503,26 +1568,7 @@ fn render_model_section(
                             .clicked()
                             && m.name != model.name
                         {
-                            // A model starts from its first preset's initial
-                            // field: the last model's could be one it does
-                            // nothing with (Ising from Gray-Scott's blobs).
-                            // The field is the whole simulation's, so a layer
-                            // switch leaves it.
-                            let mut changes = vec![(slot.model_path(), m.name.to_string().into())];
-                            // A built-in carries no source: the Rhai one
-                            // goes with the name it was carried for.
-                            if slot.carries(sim) {
-                                changes.push((slot.custom_path(), String::new().into()));
-                            }
-                            if slot == LayerSlot::Flat {
-                                if let Some(first) = m.presets.first() {
-                                    if let Some(init) = first.init {
-                                        changes.extend(init_changes(init));
-                                    }
-                                    changes.push((ConfigPath::SimBoundary, first.boundary.name().to_string().into()));
-                                }
-                            }
-                            let _ = super::render_mode::choose(config_manager, changes, "history.action.sim_model", RenderMode::Simulation);
+                            choose_model(config_manager, sim, slot, m);
                         }
                     }
                     // The user's plug-in models (P3, P4), in every layer:
@@ -1535,9 +1581,7 @@ fn render_model_section(
                     }
                     for p in plugins {
                         if ui.selectable_label(model.name == p.key, &p.title).on_hover_text(t!("sim_panel.plugin_tip", file = p.file)).clicked() && model.name != p.key {
-                            let source = crate::config::manager::custom_source_json(&Some(p.carried.clone()));
-                            let changes = vec![(slot.custom_path(), source.into()), (slot.model_path(), p.key.clone().into())];
-                            let _ = super::render_mode::choose(config_manager, changes, "history.action.use_sim_model", RenderMode::Simulation);
+                            choose_plugin_model(config_manager, slot, &p);
                         }
                     }
                 });

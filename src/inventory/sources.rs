@@ -39,8 +39,7 @@ fn version_of(p: &Provenance) -> Option<String> {
 /// The palettes of every loaded pack, in the library's pack order, each
 /// pack a group. The user's packs (Custom, and the loose files of Local
 /// Files) are theirs; the rest ship.
-pub(super) fn palettes(out: &mut Vec<Entry>) {
-    let Ok(lib) = crate::scene::palette::global_palette_library().read() else { return };
+pub(super) fn palettes(lib: &crate::scene::palette::PaletteLibrary, out: &mut Vec<Entry>) {
     let custom = lib.custom_pack_index();
     for i in 0..lib.pack_count() {
         let Some(pack) = lib.get_pack(i) else { continue };
@@ -53,9 +52,9 @@ pub(super) fn palettes(out: &mut Vec<Entry>) {
     }
 }
 
-/// The palette `hash` names, from the first loaded pack holding it.
-pub fn palette(hash: &str) -> Option<Palette> {
-    let lib = crate::scene::palette::global_palette_library().read().ok()?;
+/// The palette `hash` names, from the first loaded pack of `lib` holding
+/// it.
+pub fn palette(lib: &crate::scene::palette::PaletteLibrary, hash: &str) -> Option<Palette> {
     (0..lib.pack_count())
         .filter_map(|i| lib.get_pack(i))
         .flat_map(|pack| pack.palettes.iter())

@@ -218,10 +218,11 @@ impl Entry {
 }
 
 /// Every entry of every kind: by kind, then group, then each source's own
-/// order -- never a map's.
-pub fn scan() -> Vec<Entry> {
+/// order -- never a map's. `palettes` is the library the app shows (its
+/// packs enabled and loaded as the app has them).
+pub fn scan(palettes: &crate::scene::palette::PaletteLibrary) -> Vec<Entry> {
     let mut out = Vec::new();
-    sources::palettes(&mut out);
+    sources::palettes(palettes, &mut out);
     sources::presets(&mut out);
     sources::variations(&mut out);
     sources::effects(&mut out);
@@ -237,15 +238,13 @@ pub fn scan() -> Vec<Entry> {
 /// change means the list is to be made again. The stores' files are not
 /// read here (that is the scan's cost); `files` is the caller's count of
 /// their changes (the app's library generation).
-pub fn revision(files: u64) -> u64 {
+pub fn revision(palettes: &crate::scene::palette::PaletteLibrary, files: u64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     files.hash(&mut h);
-    if let Ok(lib) = crate::scene::palette::global_palette_library().read() {
-        lib.generation().hash(&mut h);
-        for i in 0..lib.pack_count() {
-            lib.get_pack_info(i).map(|p| (p.pack.is_some(), p.enabled)).hash(&mut h);
-        }
+    palettes.generation().hash(&mut h);
+    for i in 0..palettes.pack_count() {
+        palettes.get_pack_info(i).map(|p| (p.pack.is_some(), p.enabled)).hash(&mut h);
     }
     {
         let reg = crate::variations::global_registry();

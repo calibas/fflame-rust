@@ -238,6 +238,19 @@ impl FormulaEditorPanel {
         self.status = None;
     }
 
+    /// Open a file from outside the panel (the Catalog): one of the
+    /// user's by its name in the store, or a shipped example by its name.
+    pub fn open_file(&mut self, file: &str, shipped: bool) {
+        if shipped {
+            if let Some(i) = formula_store::EXAMPLES.iter().position(|(name, _)| *name == file) {
+                self.open_example(i);
+            }
+        } else {
+            self.files = formula_store::list();
+            self.open_stored(file);
+        }
+    }
+
     fn open_stored(&mut self, file: &str) {
         match formula_store::load(file) {
             Some(text) => self.adopt(Some(file.to_string()), file.to_string(), text),

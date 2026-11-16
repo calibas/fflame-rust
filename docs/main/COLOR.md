@@ -14,7 +14,7 @@ from the accumulator on, but colour their pixels directly; see
 - [TONE-MAPPING.md](TONE-MAPPING.md) — everything after the accumulator
 - [RENDERER.md](RENDERER.md) — the passes, overwrite mode, persistent orbits
 - [BUFFERS.md](BUFFERS.md) — the structs and bindings named here
-- [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) — packs, the Palette Library
+- [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) — packs, the Catalog's palettes
   panel, custom palettes
 - [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md) — the planner PathMap
   colours through
@@ -535,14 +535,14 @@ The *Color & Appearance* section of the Colors panel
 | control | shown |
 | --- | --- |
 | Color Mode | flame modes |
-| Palette picker, Edit Palette, Palette Library, preview strip, the palette transforms, Palette Size | always: Palette, Speed and PathMap all look colours up in the transformed palette, and so do the non-flame engines |
+| Palette picker, Edit Palette, Browse Palettes, preview strip, the palette transforms, Palette Size | always: Palette, Speed and PathMap all look colours up in the transformed palette, and so do the non-flame engines |
 | Speed Blend Factor | Speed mode |
 | Path Style, Path level, the Focused Rendering notice | PathMap mode |
 | Background Color | always (used by the tone map) |
 
 The palette picker lists the palettes of enabled packs. The Palette
-Editor and Palette Library panels are covered in
-[PALETTE_LIBRARY.md](PALETTE_LIBRARY.md).
+Editor is covered in [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md), the
+Catalog's palettes in [CATALOG.md](CATALOG.md).
 
 ---
 

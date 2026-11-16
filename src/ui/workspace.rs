@@ -19,8 +19,11 @@ pub enum PanelType {
     Colors,
     /// Palette editing (existing Palette Editor window)
     PaletteEditor,
-    /// Palette library (browse and manage palette packs)
-    PaletteLibrary,
+    /// The Catalog: every resource, to browse, read about and use
+    /// (docs/projects/catalog.md). It replaced the Palette Library, whose
+    /// saved layouts open it.
+    #[serde(alias = "PaletteLibrary")]
+    Inventory,
     /// Unified fractal browser (presets + batch + files in tabs)
     FractalBrowser,
     /// Camera/navigation (zoom, pan, rotation, 3D camera)
@@ -86,7 +89,7 @@ impl std::fmt::Display for PanelType {
             PanelType::TriangleEditor => t!("panels.triangle_editor"),
             PanelType::Colors => t!("panels.colors"),
             PanelType::PaletteEditor => t!("panels.palette_editor"),
-            PanelType::PaletteLibrary => t!("panels.palette_library"),
+            PanelType::Inventory => t!("panels.catalog"),
             PanelType::FractalBrowser => t!("browser.title"),
             PanelType::View => t!("panels.view"),
             PanelType::Rendering => t!("panels.rendering"),
@@ -250,7 +253,7 @@ impl Workspace {
             PanelType::TriangleEditor => egui::vec2(450.0, 450.0),
             PanelType::Colors => egui::vec2(350.0, 400.0),
             PanelType::PaletteEditor => egui::vec2(350.0, 450.0),
-            PanelType::PaletteLibrary => egui::vec2(500.0, 500.0),
+            PanelType::Inventory => egui::vec2(760.0, 560.0),
             PanelType::FractalBrowser => egui::vec2(600.0, 500.0),
             PanelType::View => egui::vec2(350.0, 350.0),
             PanelType::Rendering => egui::vec2(350.0, 350.0),

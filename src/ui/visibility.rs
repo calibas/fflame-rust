@@ -186,7 +186,7 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> PanelUse {
         | P::View
         | P::Colors
         | P::PaletteEditor
-        | P::PaletteLibrary
+        | P::Inventory
         | P::Effects
         | P::FractalBrowser
         | P::History
@@ -502,6 +502,24 @@ pub fn fly_mode(kind: crate::camera::gesture::ViewKind) -> Vis {
     }
 }
 
+/// Whether the Catalog's Use acts on an entry of `kind` in this mode
+/// (docs/projects/catalog.md). Choosing a formula, a model or a fractal
+/// enters its engine's mode, so those always act; a variation is added
+/// to a flame's transform, which only the flame modes render, and a 3D
+/// Only one means nothing to a 2D flame.
+pub fn catalog_use(kind: crate::inventory::Kind, only_3d: bool, m: RenderMode) -> Vis {
+    use crate::inventory::Kind;
+    match kind {
+        Kind::Variation => match m {
+            RenderMode::ThreeD => Vis::Show,
+            RenderMode::TwoD if !only_3d => Vis::Show,
+            RenderMode::TwoD => Vis::Grey("visibility.catalog_only_3d"),
+            RenderMode::Escape | RenderMode::Simulation => Vis::Grey(FLAME_ONLY),
+        },
+        _ => Vis::Show,
+    }
+}
+
 /// Draw `body` under a control's policy: normally, disabled with a
 /// hover that explains itself, or not at all.
 ///
@@ -557,7 +575,7 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::TriangleEditor, "menu.window_triangle_editor"),
     row(PanelType::Colors, "menu.window_colors"),
     row(PanelType::PaletteEditor, "menu.window_palette_editor"),
-    row(PanelType::PaletteLibrary, "menu.window_palette_library"),
+    row(PanelType::Inventory, "menu.window_catalog"),
     row(PanelType::FractalBrowser, "menu.window_fractal_browser"),
     row(PanelType::History, "menu.window_history"),
     row(PanelType::Animation, "menu.window_animation"),
@@ -577,10 +595,10 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
 ];
 
 /// The compact Window submenu keeps its own ORDER -- touch priority,
-/// transforms first -- but not its own labels. Palette Editor and
-/// Palette Library are deliberately absent: both are reachable from
-/// the Colors panel, and on a phone this menu was scrolling off the
-/// bottom. Paths, Random Generator and Account are absent too.
+/// transforms first -- but not its own labels. The Palette Editor is
+/// deliberately absent: it is reachable from the Colors panel, and on a
+/// phone this menu was scrolling off the bottom. Paths, Random Generator
+/// and Account are absent too.
 pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::Transforms,
     PanelType::TriangleEditor,
@@ -589,6 +607,7 @@ pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::SolidLighting,
     PanelType::Rendering,
     PanelType::FractalBrowser,
+    PanelType::Inventory,
     PanelType::Variations,
     PanelType::Subflames,
     PanelType::Scripts,
@@ -643,7 +662,7 @@ mod tests {
         PanelType::TriangleEditor,
         PanelType::Colors,
         PanelType::PaletteEditor,
-        PanelType::PaletteLibrary,
+        PanelType::Inventory,
         PanelType::FractalBrowser,
         PanelType::View,
         PanelType::Rendering,

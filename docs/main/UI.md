@@ -11,7 +11,8 @@ bar with a single menu button (see [Compact (mobile) UI](#compact-mobile-ui)).
 - [CONFIG.md](CONFIG.md) - ConfigManager, undo/redo, `UpdateType`
 - [I18N.md](I18N.md) - translations, the language picker, fonts
 - [FRACTAL-BROWSER.md](FRACTAL-BROWSER.md) - the Fractal Browser panel
-- [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) - the Palette Library panel
+- [CATALOG.md](CATALOG.md) - the Catalog: every resource, to browse and use
+- [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) - palette packs
 - [ESCAPE.md](ESCAPE.md), [SIMULATION.md](SIMULATION.md), [TERRAIN.md](TERRAIN.md) - the two non-flame engines and the 3D terrain view
 - [ANIMATION.md](ANIMATION.md) - the Animation and Signals panels
 - [EFFECTS.md](EFFECTS.md), [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md), [ONLINE.md](ONLINE.md), [EXPORT.md](EXPORT.md), [SCRIPTING-GUIDE.md](SCRIPTING-GUIDE.md)
@@ -36,9 +37,9 @@ the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uir
 | The camera, every mode's | View (see [The View panel](#the-view-panel)) |
 | The flame | Transforms, Triangle Editor, Variations, Xaos Editor, Subflames, Paths |
 | The other engines | Escape, Formula Editor, Hybrid Designer, Simulation, Textures |
-| Appearance, shared by every engine | Colors, Palette Editor, Palette Library, Effects |
+| Appearance, shared by every engine | Colors, Palette Editor, Effects |
 | Light, every 3D view's | Lighting (see [The Lighting panel](#the-lighting-panel)) |
-| Workflow | Fractal Browser, History, Animation, Signals, Scripts, Random Generator, Export, Config Import/Export, Rendering, Performance, Help, Keyboard Shortcuts, Account, Save Online |
+| Workflow | Catalog, Fractal Browser, History, Animation, Signals, Scripts, Random Generator, Export, Config Import/Export, Rendering, Performance, Help, Keyboard Shortcuts, Account, Save Online |
 
 **Every panel is drawn in every render mode**; one the mode does not
 use says so at its top — see
@@ -421,7 +422,7 @@ contract.
 | Textures | [textures_panel.rs](../../src/ui/textures_panel.rs) | below |
 | Colors / Tone Mapping | [tone_mapping.rs](../../src/ui/tone_mapping.rs) | below; see [TONE-MAPPING.md](TONE-MAPPING.md), [COLOR.md](COLOR.md) |
 | Palette Editor | [palette_editor.rs](../../src/ui/palette_editor.rs), [palette_generate.rs](../../src/ui/palette_generate.rs) | see [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) |
-| Palette Library | [palette_library.rs](../../src/ui/palette_library.rs) | see [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) |
+| Catalog | [inventory.rs](../../src/ui/inventory.rs), [palette_library.rs](../../src/ui/palette_library.rs) | see [CATALOG.md](CATALOG.md) |
 | Effects | [effects_panel.rs](../../src/ui/effects_panel.rs) | see [EFFECTS.md](EFFECTS.md) |
 | Rendering | [settings.rs](../../src/ui/settings.rs) | below |
 | Performance | [performance.rs](../../src/ui/performance.rs) | |

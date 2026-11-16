@@ -127,7 +127,7 @@ settings file that says so reads as a guest.)
 | File → **Save Online** | loading a web deep link (`?flame=`, `?animation=`) |
 | Window → **Account**, the startup auto-login | the variation catalog, fetched once per session |
 | the Fractal Browser's **Online** tab (your flames, flame search) | fetching a variation a loaded flame names but the app lacks, and updating stale downloads |
-| Palette Library → **Cloud Palettes** (your palette library) | the effect catalog, fetching a missing effect, updating downloaded effects |
+| Catalog → Palettes → **Cloud Palettes** (your palette library) | the effect catalog, fetching a missing effect, updating downloaded effects |
 | the menu bar's connection and account indicator | the Scripts panel's **Public scripts**: searching and opening one |
 | the periodic health check | |
 | the Scripts panel's publishing and **Published by you**; the Formula Editor's **Online** section | |
@@ -309,7 +309,7 @@ user out; "Access denied" (403) is shown as an error and leaves the
 session alone (`only_a_401_signs_the_user_out`). A delete asks for
 confirmation first.
 
-**Cloud Palettes** in the Palette Library lists your palette library
+**Cloud Palettes** in the Catalog's palettes lists your palette library
 (`GET /api/users/me/palettes`, first 100); a click sets the config's
 palette (undoable), and **X** removes the library entry
 (`DELETE /api/users/me/palettes/{hash}`) without deleting the palette.
