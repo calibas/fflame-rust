@@ -52,7 +52,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Visions of Chaos Traps" };
+const INFO = #{ title: "Visions of Chaos Traps", description: "Visions of Chaos orbit traps: the orbit stops at the first iterate a trap catches, grey by how close it came; one that escapes uncaught takes a smooth palette colour." };
 
 // caught (1) or not, the grey at the catch, the loop index of this step
 // (0 for z1).

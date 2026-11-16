@@ -9,7 +9,7 @@
 //!
 //! Each test signs up a fresh account, so they share a database safely.
 
-use super::client::{api_get, api_post_unauth, build_url};
+use super::client::{api_get, api_post, api_post_unauth, build_url};
 use super::types::*;
 use super::*;
 use crate::config::FractalConfig;
@@ -29,7 +29,7 @@ fn signed_in() -> ApiState {
         email: format!("it-{nonce}@example.test"),
         password: "integration test password, long enough".into(),
     };
-    let url = build_url(API_BASE_URL, "/api/auth/register");
+    let url = build_url(API_BASE_URL, "/api/v1/auth/register");
     let resp: AuthResponse = pollster::block_on(api_post_unauth(&url, &req)).unwrap_or_else(|e| panic!("register: {e}"));
     let mut api = ApiState::default();
     api.set_token(&resp.token);
@@ -96,8 +96,8 @@ fn every_kind_of_config_round_trips_and_lists_by_reader() {
     // Without a reader: the original vocabulary, 2D/3D at config version 3
     // and below. A current flame is version 7, so not even it is listed.
     let token = api.auth.get_token().unwrap().to_string();
-    let bare: serde_json::Value = block(api_get(&format!("{base}/api/flames?per_page=100"), &token)).unwrap();
-    let bare: Vec<&str> = bare.as_array().unwrap().iter().filter_map(|f| f["id"].as_str()).collect();
+    let bare: serde_json::Value = block(api_get(&format!("{base}/api/v1/users/me/flames?per_page=100"), &token)).unwrap();
+    let bare: Vec<&str> = bare["items"].as_array().unwrap().iter().filter_map(|f| f["id"].as_str()).collect();
     for id in &ids {
         assert!(!bare.contains(&id.as_str()), "no reader: {id} is newer than the original vocabulary");
     }
@@ -194,8 +194,8 @@ fn the_server_catalogs_what_the_app_saves() {
     config.escape.terrain.enabled = true;
     let id = block(api.save_flame(&config, Some("it twin"), Some(ApiVisibility::Private), None)).unwrap();
     let token = api.auth.get_token().unwrap().to_string();
-    let list: serde_json::Value = block(api_get(&format!("{base}/api/flames?per_page=100&reader=7&type=mandelbrot&role=primary"), &token)).unwrap();
-    let item = list.as_array().unwrap().iter().find(|f| f["id"] == id.as_str()).unwrap_or_else(|| panic!("not found by type: {list}"));
+    let list: serde_json::Value = block(api_get(&format!("{base}/api/v1/users/me/flames?per_page=100&reader=7&type=mandelbrot&role=primary"), &token)).unwrap();
+    let item = list["items"].as_array().unwrap().iter().find(|f| f["id"] == id.as_str()).unwrap_or_else(|| panic!("not found by type: {list}"));
     assert_eq!((item["engine"].as_str(), item["scene"].as_str(), item["dimension"].as_i64()), (Some("escape"), Some("terrain"), Some(3)));
     assert_eq!(item["primary_type"]["display_name"], "Mandelbrot");
     // The server's summary is the app's.
@@ -255,4 +255,46 @@ fn a_rhai_formula_is_published_under_its_id_and_adopted_by_another_account() {
     assert_eq!(crate::lang::rhai::info_string(&text, "id").as_deref(), Some(id.as_str()), "the copy is that script: its id kept");
 
     block(author.delete_script(&id)).unwrap_or_else(|e| panic!("unpublish: {e}"));
+}
+
+/// The caller's palettes are items (the catalog API's step 6): listed with
+/// their colours, renamed by id, deleted by id. A stale script write is the
+/// contract's 409, recovered as a conflict naming the current revision.
+#[test]
+#[ignore = "needs a local ffapi: python scripts/api_integration.py"]
+fn palettes_are_items_and_a_stale_write_is_a_conflict() {
+    if server().is_none() {
+        return;
+    }
+    let api = signed_in();
+    let token = api.auth.get_token().unwrap().to_string();
+    let made: serde_json::Value = block(api_post(
+        &build_url(API_BASE_URL, "/api/v1/palettes"),
+        &json!({"name": "it palette", "color_data": [1, 2, 3, 4]}),
+        &token,
+    ))
+    .unwrap_or_else(|e| panic!("create a palette: {e}"));
+    let id = made["id"].as_str().unwrap().to_string();
+
+    let mine = block(api.list_my_palettes(1, 100)).unwrap();
+    let listed = mine.iter().find(|p| p.id == id).expect("listed");
+    assert_eq!(listed.name, "it palette");
+    assert_eq!(listed.content.hash.as_deref(), Some(listed.content_hash.as_str()));
+    let renamed = block(api.rename_palette(&id, "renamed")).unwrap();
+    assert_eq!(renamed.name, "renamed");
+    let data = block(api.get_palette_data(&listed.content_hash)).unwrap();
+    assert_eq!(data.hash.as_deref(), Some(listed.content_hash.as_str()));
+    block(api.delete_palette(&id)).unwrap();
+    assert!(block(api.list_my_palettes(1, 100)).unwrap().iter().all(|p| p.id != id));
+
+    let source = "// It conflict\nscript(\"It conflict\", \"generator\", []);\n";
+    let name = format!("it_conflict_{}", &crate::scripted::mint_id()[..8]);
+    let create = crate::api::sync::script_to_create_request(&name, source, None, None).unwrap();
+    let created = block(api.create_script(&create)).unwrap_or_else(|e| panic!("create: {e}"));
+    let update = crate::api::sync::script_to_create_request(&name, source, None, Some(created.version)).unwrap();
+    let updated = block(api.update_script(&created.id, &update)).unwrap_or_else(|e| panic!("update: {e}"));
+    let stale = block(api.update_script(&created.id, &update)).expect_err("the revision it sent is stale now");
+    let conflict = ScriptConflict::from_error(&stale, &created.id).unwrap_or_else(|| panic!("a conflict: {stale}"));
+    assert_eq!((conflict.id.as_str(), conflict.current_version), (created.id.as_str(), updated.version));
+    block(api.delete_script(&created.id)).unwrap();
 }

@@ -35,7 +35,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Sphere Average" };
+const INFO = #{ title: "Sphere Average", description: "The mean distance on the Riemann sphere from the orbit to a target point: bounded, and honest where orbits run far out, as on maps whose Julia set is the whole sphere." };
 
 // The sum of the accepted distances, and the count of CALLS: with a
 // stride the two counts differ, and the accepted one is derived at the

@@ -54,7 +54,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Orbit Trap" };
+const INFO = #{ title: "Orbit Trap", description: "How close the orbit comes to a trap -- a point, the axes, the unit circle, a spiral, or a ring, box, line or diamond -- by its closest approach, its farthest, its mean or another reduction over the orbit." };
 
 // The closest, the farthest, the sum, and the first within the
 // threshold (-1 until one comes).

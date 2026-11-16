@@ -7,7 +7,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Mandelbrot", center: complex(0.0, 0.0), maxiter: 512 };
+const INFO = #{ title: "Mandelbrot", description: "The classic: `z -> z^2 + c`, the points c whose orbit from 0 stays bounded. On the Julia plane the pixel starts the orbit and c is held.", center: complex(0.0, 0.0), maxiter: 512 };
 
 fn start(pixel, p, ctx) {
     // On the Julia plane the pixel starts the orbit and c is the

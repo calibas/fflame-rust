@@ -49,7 +49,7 @@ const PARAMS = #{
 };
 
 // techmatt's escape radius, 2^16, squared.
-const INFO = #{ title: "Direct Orbit Traps", bailout: 4294967296.0 };
+const INFO = #{ title: "Direct Orbit Traps", description: "Every iterate that comes within the threshold of a shape samples the palette and is composited into the pixel, in the orbit's order: the stack of every near miss.", bailout: 4294967296.0 };
 
 // The distance from an iterate to the shape, at the origin.
 fn distance(shape, z, radius) {

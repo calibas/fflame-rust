@@ -12,7 +12,7 @@ const PARAMS = #{
     sigma_spatial: #{ value: 3.0, min: 1.0, max: 10.0, caption: "Spatial Sigma" },
     sigma_range: #{ value: 0.1, min: 0.05, max: 0.5, caption: "Range Sigma" },
 };
-const INFO = #{ title: "Bilateral Blur", id: "bilateral_blur", category: "density" };
+const INFO = #{ title: "Bilateral Blur", description: "A blur that keeps edges, each tap weighed by its distance and by how far its luminance is from the centre's.", id: "bilateral_blur", category: "density" };
 
 fn gaussian(x, sigma) {
     exp(-(x * x) / (2.0 * sigma * sigma))

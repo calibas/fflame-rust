@@ -11,7 +11,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Smooth Iteration", region: "outside", bailout: 1.0e4 };
+const INFO = #{ title: "Smooth Iteration", description: "The continuous escape count, `n + 1 - log_p(log2 |z|)`: the escape count with its bands smoothed away.", region: "outside", bailout: 1.0e4 };
 
 fn finish(s, z, p, ctx) {
     // |z|^2 past a bailout below 1 is the corner the max guards.

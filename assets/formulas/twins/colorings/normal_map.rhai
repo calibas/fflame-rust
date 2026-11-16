@@ -21,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Normal Map (3D relief)", region: "outside", bounded: true, bailout: 1.0e4 };
+const INFO = #{ title: "Normal Map (3D relief)", description: "A fake 3D relief: the derivative's surface normal lit by a light at an angle and a height.", region: "outside", bounded: true, bailout: 1.0e4 };
 
 // Without a derivative `ctx.dz` is its seed, z / dz is z, and the
 // shading a smooth function of arg z that encodes nothing about the

@@ -15,7 +15,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Period" };
+const INFO = #{ title: "Period", description: "A pixel whose orbit settles into a cycle, by the cycle's length; an escaped one by its escape count." };
 
 fn finish(s, z, p, ctx) {
     if ctx.period > 0 {

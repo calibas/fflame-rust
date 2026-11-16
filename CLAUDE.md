@@ -14,7 +14,7 @@ source when something looks off.
 - [docs/main/](docs/main/) - the reference docs:
   - Flame engine: [RENDERER.md](docs/main/RENDERER.md) (pipeline, persistent orbits, governor, solid rendering), [SHADERS.md](docs/main/SHADERS.md) (shader assembly, sticky shaders, lints, cross-platform rules), [BUFFERS.md](docs/main/BUFFERS.md) (bindings, GPU structs), [TRANSFORMS.md](docs/main/TRANSFORMS.md) (the flame model, xaos, linked/final transforms), [VARIATIONS.md](docs/main/VARIATIONS.md) (registry, defs, features, plugins), [FOCUSED-RENDERING.md](docs/main/FOCUSED-RENDERING.md) (flame deep zoom)
   - Other engines: [ESCAPE.md](docs/main/ESCAPE.md) (escape-time), [SIMULATION.md](docs/main/SIMULATION.md) + [SIMULATION-CATALOG.md](docs/main/SIMULATION-CATALOG.md), [TERRAIN.md](docs/main/TERRAIN.md) (3D terrains, render tiers, path tracer, materials), [CAMERA.md](docs/main/CAMERA.md) (every camera)
-  - Shared: [COLOR.md](docs/main/COLOR.md), [TONE-MAPPING.md](docs/main/TONE-MAPPING.md), [EFFECTS.md](docs/main/EFFECTS.md), [EXPORT.md](docs/main/EXPORT.md), [ANIMATION.md](docs/main/ANIMATION.md), [CONFIG.md](docs/main/CONFIG.md), [UI.md](docs/main/UI.md), [ONLINE.md](docs/main/ONLINE.md), [SCRIPTING.md](docs/main/SCRIPTING.md) (Rhai API reference, kept honest by a staleness test) + [SCRIPTING-GUIDE.md](docs/main/SCRIPTING-GUIDE.md), [PALETTE_LIBRARY.md](docs/main/PALETTE_LIBRARY.md), [FRACTAL-BROWSER.md](docs/main/FRACTAL-BROWSER.md) (the Fractal Browser), [I18N.md](docs/main/I18N.md)
+  - Shared: [CATALOG.md](docs/main/CATALOG.md) (the Catalog panel: every resource, `src/inventory/`; the plan in [catalog.md](docs/projects/catalog.md)), [COLOR.md](docs/main/COLOR.md), [TONE-MAPPING.md](docs/main/TONE-MAPPING.md), [EFFECTS.md](docs/main/EFFECTS.md), [EXPORT.md](docs/main/EXPORT.md), [ANIMATION.md](docs/main/ANIMATION.md), [CONFIG.md](docs/main/CONFIG.md), [UI.md](docs/main/UI.md), [ONLINE.md](docs/main/ONLINE.md), [SCRIPTING.md](docs/main/SCRIPTING.md) (Rhai API reference, kept honest by a staleness test) + [SCRIPTING-GUIDE.md](docs/main/SCRIPTING-GUIDE.md), [PALETTE_LIBRARY.md](docs/main/PALETTE_LIBRARY.md), [FRACTAL-BROWSER.md](docs/main/FRACTAL-BROWSER.md) (the Fractal Browser), [I18N.md](docs/main/I18N.md)
 - [docs/RELEASE.md](docs/RELEASE.md) (procedures, gates), [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md), [docs/WASM.md](docs/WASM.md)
 - [docs/projects/](docs/projects/) - work in progress, and [BACKLOG.md](docs/projects/BACKLOG.md): every open item and pending user decision in one list ([README](docs/projects/README.md)); [docs/experimental/](docs/experimental/) - ideas; [docs/archive/](docs/archive/) - finished plans and history ([README](docs/archive/README.md)). Finished project docs go to `docs/archive/projects/` -- move them with `scripts/move_docs.py`, which rewrites references in code comments too.
 
@@ -50,6 +50,7 @@ Project history is in git: `git log --oneline`.
 - `src/export/` - high-res export (tiled GPU, CPU fallback), 2x AA (supersample.rs)
 - `src/ui/` - dockable panels (egui_dock); `src/animation/`, `src/signal/`, `src/audio/`; `src/effects/`
 - `src/script/` - Rhai scripting (api.rs registers every function; cli.rs; headless.rs: the script calls the gallery module and Python share; assets/scripts/)
+- `src/inventory/` - every resource as one list (palettes by content hash, presets, registries, Rhai files), behind the Catalog panel (`ui/inventory.rs`)
 - `src/api/` (online client), `src/storage/` (settings, backend, caches, catalogs, plugins, credentials), `src/resources/` (HTTP/filesystem fetching, lazy palette packs)
 - `src/probe/`, `src/census/` - the variation math probe and reachability census; `src/contract.rs` (engine contract), `src/provenance.rs`, `src/shader_dumps.rs`
 - `src/flame_xml.rs` (.flame import/export), `src/png_metadata.rs`, `src/wasm_api.rs`, `src/i18n.rs`
@@ -159,7 +160,7 @@ if response.changed() {
 // 2. Batch update (one undo point, e.g. triangle editor, color pickers)
 config_manager.update_batch(changes, "description".to_string())?;
 ```
-Structural actions (transform add/delete, config import/export, preset loading) are intentionally outside ConfigManager. A brief overwrite window after parameter changes keeps real-time updates smooth before the accumulation resets.
+Structural actions -- adding or deleting a transform, loading a config (preset, file, random, online: `App::load_config_with_undo` → `ConfigManager::load_config`) -- go through ConfigManager as one undoable snapshot each (`apply_structural_change`, `apply_config_edit`, `load_config`), not through `update_param`. A brief overwrite window after parameter changes keeps real-time updates smooth before the accumulation resets.
 
 ## Common Tasks
 

@@ -11,7 +11,7 @@ const PARAMS = #{
     spread: #{ value: 2.0, min: 0.05, max: 4.0, caption: "Line spread", hint: "Half-size of the square the fold endpoints are drawn from, before being folded onto the wad. 2.0 matches the default view." },
 };
 
-const INFO = #{ title: "Origami (Butterfly)", center: complex(0.0, 0.0), maxiter: 32 };
+const INFO = #{ title: "Origami (Butterfly)", description: "McCabe's folded paper, after McDonald's `foldPoint`: each pass folds the point about one of 64 lines laid on the paper as it is folded. Nothing escapes; the creases draw the Creases relief and terrain.", center: complex(0.0, 0.0), maxiter: 32 };
 
 // The built-in's integer hash, on 32-bit patterns.
 fn hash(x) {

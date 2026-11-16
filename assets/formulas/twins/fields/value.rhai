@@ -7,7 +7,7 @@ const PARAMS = #{
     offset: #{ value: 0.0, min: 0.0, max: 1.0, caption: "Offset", hint: "Palette phase offset." },
 };
 
-const INFO = #{ title: "Field Value" };
+const INFO = #{ title: "Field Value", description: "The field's value, straight as the palette position." };
 
 fn shade(sum, grad, n, p) {
     sum * p.scale + p.offset

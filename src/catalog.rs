@@ -360,6 +360,39 @@ fn build_tables(earlier_twins: Option<&Value>) -> Value {
         }
     }
 
+    // What each built-in is, for the API's `/types`: the Catalog's prose,
+    // keyed as the display names are. The catalog's `coloring` is three of
+    // the Catalog's kinds, and an IFS formula is a solid's def.
+    let mut prose = Map::new();
+    for (kind, names) in &display {
+        use crate::inventory::Kind as K;
+        let tried: &[K] = match kind.as_str() {
+            "formula" => &[K::Formula, K::Solid],
+            "solid" => &[K::Solid],
+            "field" => &[K::Field],
+            "coloring" => &[K::Coloring, K::FieldColoring, K::SolidColoring],
+            "sim_model" => &[K::SimModel],
+            "sim_coloring" => &[K::SimColoring],
+            "variation" => &[K::Variation],
+            "effect" => &[K::Effect],
+            _ => &[],
+        };
+        let mut of_kind = Map::new();
+        for name in names.as_object().into_iter().flat_map(|m| m.keys()) {
+            if let Some((description, authors)) = tried.iter().find_map(|k| crate::inventory::builtin_prose(*k, name)) {
+                let mut p = Map::new();
+                if !description.is_empty() {
+                    p.insert("description".into(), json!(description.replace("\r\n", "\n")));
+                }
+                if !authors.is_empty() {
+                    p.insert("authors".into(), json!(authors));
+                }
+                of_kind.insert(name.clone(), Value::Object(p));
+            }
+        }
+        prose.insert(kind.clone(), Value::Object(of_kind));
+    }
+
     // Every twin, by the name it registers under when put in its built-in's
     // place, and every name an earlier build published (append-only).
     let mut twins: Map<String, Value> = earlier_twins.and_then(Value::as_object).cloned().unwrap_or_default();
@@ -421,6 +454,7 @@ fn build_tables(earlier_twins: Option<&Value>) -> Value {
             ["escaped", "formula"], ["step", "formula"],
         ],
         "display_names": display,
+        "prose": prose,
         "twins": twins,
     })
 }

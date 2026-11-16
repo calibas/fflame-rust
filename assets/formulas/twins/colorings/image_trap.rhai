@@ -75,7 +75,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Image Trap", skips_escaping: true };
+const INFO = #{ title: "Image Trap", description: "Each iterate, moved through the trap's position, reads the config's texture, and every hit is merged into the pixel's colour.", skips_escaping: true };
 
 // TrapTransform: (z - centre) * rotation / scale, then the aspect on the
 // imaginary part, then the skew on the real part.

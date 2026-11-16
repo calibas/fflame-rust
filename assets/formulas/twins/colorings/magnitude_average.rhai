@@ -19,7 +19,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Magnitude Average", pick: #{ deband: 1 } };
+const INFO = #{ title: "Magnitude Average", description: "The mean of `|z|` over the orbit, less an offset: the Ducks colouring.", pick: #{ deband: 1 } };
 
 // The mean of the terms, or with Deband the template's debanded mean:
 // the mean without the last term and with it, blended by how far through

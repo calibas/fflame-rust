@@ -125,8 +125,11 @@ shared crate):
 - The client generates `docs/generated/engine-catalog.json`
   (`UPDATE_CATALOG=1 cargo test --lib catalog_is_current`). It holds the
   **tables** only the engine knows (formula kinds, `needs_flame`, the
-  source-kind rules, display names, and every twin's registered name with
-  its built-in, append-only), and **examples**: every preset and made-up
+  source-kind rules, display names, every built-in's **prose** -- its
+  markdown description and authors, as the Catalog shows them, from
+  compiled-in sources only (`inventory::builtin_prose`), for the API's
+  `/types` -- and every twin's registered name with its built-in,
+  append-only), and **examples**: every preset and made-up
   cases (twins, an edit, a script, solids, terrains, a lens, layers,
   effects), each with the summary the client computes.
 - `summarize` (`src/catalog.rs` in both repositories) reads only the

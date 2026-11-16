@@ -18,7 +18,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "External Rays", region: "outside", bounded: true, bailout: 1.0e4 };
+const INFO = #{ title: "External Rays", description: "Lines along the external rays: where the escaped z's angle lies within a band of a whole number of turns, continuous across the escape bands.", region: "outside", bounded: true, bailout: 1.0e4 };
 
 fn finish(s, z, p, ctx) {
     let m = max(round_even(p.count), 1.0);

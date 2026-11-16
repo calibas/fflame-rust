@@ -22,7 +22,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Markus–Lyapunov", coloring: "field_diverging" };
+const INFO = #{ title: "Markus–Lyapunov", description: "The Lyapunov exponent of the logistic map with r switching between A (the point's x) and B (its y) along a letter sequence: below zero stable, above it chaotic.", coloring: "field_diverging" };
 
 fn start(pos, p) {
     #{ pos: pos, x: 0.5, n: 0, value: 0.0 }

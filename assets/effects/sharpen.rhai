@@ -11,7 +11,7 @@ const PARAMS = #{
     amount: #{ value: 1.0, min: 0.0, max: 2.0, caption: "Amount" },
     radius: #{ value: 1.0, min: 0.5, max: 5.0, caption: "Radius" },
 };
-const INFO = #{ title: "Sharpen", id: "sharpen", category: "density" };
+const INFO = #{ title: "Sharpen", description: "An unsharp mask on the accumulation -- the colour pushed away from a Gaussian blur of itself.", id: "sharpen", category: "density" };
 
 fn effect(c, p, ctx) {
     let radius = p.radius * ctx.pixel_scale;

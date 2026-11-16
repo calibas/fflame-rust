@@ -316,12 +316,12 @@ impl App {
                     Ok(Local::Script(stem)) => self.script_cloud.adopted(format!(
                         "Saved `{stem}` from {} — it runs with the restrictions \
                          downloaded scripts get",
-                        resp.owner_display_name
+                        resp.owner_name()
                     )),
                     Ok(Local::Entry(file)) => self.script_cloud.adopted(format!(
                         "Saved `{file}` from {} to the formula library — open it in the \
                          Formula Editor to use it, or to make it a plug-in",
-                        resp.owner_display_name
+                        resp.owner_name()
                     )),
                     Err(e) => self.script_cloud.fail(e),
                 },
@@ -372,7 +372,7 @@ fn linked(resp: &ScriptResponse) -> Link {
     Link {
         cloud_id: Some(resp.id.clone()),
         version: Some(resp.version),
-        owner: Some(format!("{}/{}", resp.owner_display_name, resp.name)),
+        owner: Some(format!("{}/{}", resp.owner_name(), resp.name)),
         ..Default::default()
     }
 }
@@ -435,7 +435,7 @@ fn adopt_script(resp: &ScriptResponse) -> Result<String, String> {
         store::ScriptLink {
             cloud_id: Some(resp.id.clone()),
             version: Some(resp.version),
-            owner: Some(format!("{}/{}", resp.owner_display_name, resp.name)),
+            owner: Some(format!("{}/{}", resp.owner_name(), resp.name)),
             // The whole point: this survives the save, so the script
             // keeps running under the cross-call restriction.
             from_others: true,
@@ -471,7 +471,7 @@ async fn run_request(
         }
         ScriptCloudRequest::Update { local, cloud_id, source, version } => {
             let r = match local.request(&source, None, Some(version)) {
-                Ok(req) => api.update_script(&cloud_id, &req).await.map_err(|e| match ScriptConflict::from_error(&e) {
+                Ok(req) => api.update_script(&cloud_id, &req).await.map_err(|e| match ScriptConflict::from_error(&e, &cloud_id) {
                     Some(c) => ScriptCloudError::Conflict(c),
                     None => ScriptCloudError::Other(e.to_string()),
                 }),

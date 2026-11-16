@@ -16,7 +16,7 @@ const PARAMS = #{
                   "Color Dodge", "Color Burn", "Hue", "Saturation", "Color", "Luminosity"],
     },
 };
-const INFO = #{ title: "Film Grain", id: "film_grain" };
+const INFO = #{ title: "Film Grain", description: "A per-pixel grain, the same every frame for a seed.", id: "film_grain" };
 
 fn effect(c, p, ctx) {
     // The pixel's coordinates, the seed's offset, then the noise hash's

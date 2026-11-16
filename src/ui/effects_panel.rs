@@ -56,6 +56,47 @@ impl EffectTarget {
     }
 }
 
+/// Add the registered effect `name` at the end of its chain, one undo
+/// step; a plug-in's source is put in the config first, which carries
+/// what its chains run (as the Formula Editor's Use does). Whether it was
+/// added.
+pub(crate) fn add_effect(config_manager: &mut ConfigManager, name: &str) -> bool {
+    let (category, title) = {
+        let registry = global_effect_registry();
+        let Some(info) = registry.get(name) else { return false };
+        (info.category, info.translated_name())
+    };
+    if let Some(plugin) = crate::storage::library::plugins_of(crate::storage::library::Kind::Effect).into_iter().find(|p| p.key == name) {
+        let config = config_manager.active_config();
+        if !config.custom_effects.iter().any(|s| s.entry == plugin.key) {
+            let mut list = config.custom_effects.clone();
+            list.push(plugin.carried.clone());
+            let json = serde_json::to_string(&list).unwrap_or_default();
+            if let Err(e) = config_manager.update_batch(vec![(ConfigPath::CustomEffects, crate::config::ConfigValue::String(json))], "history.action.add_plugin_effect".to_string()) {
+                log::error!("Failed to carry the effect `{}`: {e}", plugin.key);
+                return false;
+            }
+        }
+    }
+    let effect = EffectInstance::new(name);
+    let description = format!("Add Effect: {title}");
+    let change = match category {
+        EffectCategory::Density => {
+            let index = config_manager.active_config().density_effects.len();
+            ConfigChange::add_density_effect_snapshot(index, effect, description)
+        }
+        EffectCategory::Color => {
+            let index = config_manager.active_config().color_effects.len();
+            ConfigChange::add_color_effect_snapshot(index, effect, description)
+        }
+    };
+    if let Err(e) = config_manager.apply_structural_change(change) {
+        log::error!("Failed to add effect: {}", e);
+        return false;
+    }
+    true
+}
+
 /// The user's plug-in effects of `category` in an Add list (P3), after a
 /// separator: whether one was added. Adding one puts its source in the
 /// config first, which carries what its chains run (as the Formula
@@ -80,32 +121,7 @@ fn plugin_effects(ui: &mut Ui, config_manager: &mut ConfigManager, category: Eff
         if !ui.selectable_label(false, &title).on_hover_text(t!("effects_panel.plugin_tip", file = plugin.file)).clicked() {
             continue;
         }
-        let config = config_manager.active_config();
-        if !config.custom_effects.iter().any(|s| s.entry == plugin.key) {
-            let mut list = config.custom_effects.clone();
-            list.push(plugin.carried.clone());
-            let json = serde_json::to_string(&list).unwrap_or_default();
-            if let Err(e) = config_manager.update_batch(vec![(ConfigPath::CustomEffects, crate::config::ConfigValue::String(json))], "history.action.add_plugin_effect".to_string()) {
-                log::error!("Failed to carry the effect `{}`: {e}", plugin.key);
-                continue;
-            }
-        }
-        let effect = EffectInstance::new(&plugin.key);
-        let description = format!("Add Effect: {title}");
-        let change = match category {
-            EffectCategory::Density => {
-                let index = config_manager.active_config().density_effects.len();
-                ConfigChange::add_density_effect_snapshot(index, effect, description)
-            }
-            EffectCategory::Color => {
-                let index = config_manager.active_config().color_effects.len();
-                ConfigChange::add_color_effect_snapshot(index, effect, description)
-            }
-        };
-        if let Err(e) = config_manager.apply_structural_change(change) {
-            log::error!("Failed to add effect: {}", e);
-        }
-        added = true;
+        added |= add_effect(config_manager, &plugin.key);
     }
     added
 }
@@ -448,17 +464,7 @@ pub fn render_effects_panel(
                     .show_ui(ui, |ui| {
                         for info in available {
                             let translated = info.translated_name();
-                            if ui.selectable_label(false, &translated).clicked() {
-                                let effect = EffectInstance::new(&info.name);
-                                let index = config_manager.active_config().color_effects.len();
-                                let change = ConfigChange::add_color_effect_snapshot(
-                                    index,
-                                    effect,
-                                    format!("Add Effect: {}", translated),
-                                );
-                                if let Err(e) = config_manager.apply_structural_change(change) {
-                                    log::error!("Failed to add effect: {}", e);
-                                }
+                            if ui.selectable_label(false, &translated).clicked() && add_effect(config_manager, &info.name) {
                                 max_update = max_update.max(UpdateType::ToneMappingOnly);
                             }
                         }
@@ -605,17 +611,7 @@ pub fn render_effects_panel(
                     .selected_text("Select...")
                     .show_ui(ui, |ui| {
                         for (name, translated) in &density_effects_available {
-                            if ui.selectable_label(false, translated).clicked() {
-                                let effect = EffectInstance::new(name);
-                                let index = config_manager.active_config().density_effects.len();
-                                let change = ConfigChange::add_density_effect_snapshot(
-                                    index,
-                                    effect,
-                                    format!("Add Effect: {}", translated),
-                                );
-                                if let Err(e) = config_manager.apply_structural_change(change) {
-                                    log::error!("Failed to add effect: {}", e);
-                                }
+                            if ui.selectable_label(false, translated).clicked() && add_effect(config_manager, name) {
                                 max_update = max_update.max(UpdateType::ToneMappingOnly);
                             }
                         }

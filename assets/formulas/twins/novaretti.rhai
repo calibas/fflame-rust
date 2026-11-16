@@ -4,7 +4,7 @@
 // it settles. The parameter plane starts at a critical point,
 // z^3 = c (-7 + 3 sqrt 5) / 4.
 
-const INFO = #{ title: "Novaretti", center: complex(0.0, 0.0), maxiter: 128 };
+const INFO = #{ title: "Novaretti", description: "Elena Novaretti's map from ZoneXplorer, `z -> -6z(z^3 + c) / (2z^3 - c)^2`. Infinity maps to 0, so nothing escapes: an orbit ends only as it settles.", center: complex(0.0, 0.0), maxiter: 128 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

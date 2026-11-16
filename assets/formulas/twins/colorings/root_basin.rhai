@@ -26,7 +26,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Root Basin" };
+const INFO = #{ title: "Root Basin", description: "For a formula that converges on the roots of `z^p - 1`: which root the orbit landed on, shaded by how fast it got there." };
 
 // The shading by convergence time is added in one expression, as the
 // built-in's `t + n * speed`, which the GPU may fuse: written apart it

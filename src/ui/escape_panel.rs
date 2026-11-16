@@ -126,22 +126,94 @@ fn plugin_entries(ui: &mut egui::Ui, config_manager: &mut ConfigManager, current
     ui.weak(t!("escape_panel.plugins"));
     for p in list {
         if ui.selectable_label(current == p.key, &p.title).on_hover_text(t!("escape_panel.plugin_tip", file = p.file)).clicked() && current != p.key {
-            let source = ConfigValue::String(crate::config::manager::custom_source_json(&Some(p.carried.clone())));
-            let (changes, description) = if formulas {
-                (vec![(ConfigPath::EscapeCustomFormula, source), (ConfigPath::EscapeFormula, ConfigValue::String(p.key.clone()))], "history.action.use_custom_formula")
-            } else {
-                let mut changes = vec![(ConfigPath::EscapeCustomColoring, source), (ConfigPath::EscapeColoring, ConfigValue::String(p.key.clone()))];
-                if slot == PluginSlot::Coloring {
-                    if let Ok(def) = crate::escape::custom::compile_coloring(&p.carried, &p.key) {
-                    let esc = &config_manager.active_config().escape;
-                        changes.extend(pick_changes(crate::escape::get_formula(&esc.formula), esc, def));
-                    }
-                }
-                (changes, "history.action.use_custom_coloring")
-            };
-            let _ = super::render_mode::choose(config_manager, changes, description, RenderMode::Escape);
+            choose_plugin(config_manager, &p, !formulas);
         }
     }
+}
+
+/// Choosing a plug-in, as the Formula Editor's Use: its source carried
+/// in the config, its slot named, and Escape entered in the same undo
+/// step -- an escape colouring (`coloring`, of `Kind::Coloring`) with what
+/// a fresh pick of it sets, as a built-in's.
+pub(crate) fn choose_plugin(config_manager: &mut ConfigManager, p: &crate::storage::library::Plugin, coloring: bool) {
+    let source = ConfigValue::String(crate::config::manager::custom_source_json(&Some(p.carried.clone())));
+    let (changes, description) = if !coloring {
+        (vec![(ConfigPath::EscapeCustomFormula, source), (ConfigPath::EscapeFormula, ConfigValue::String(p.key.clone()))], "history.action.use_custom_formula")
+    } else {
+        let mut changes = vec![(ConfigPath::EscapeCustomColoring, source), (ConfigPath::EscapeColoring, ConfigValue::String(p.key.clone()))];
+        if p.kind == crate::storage::library::Kind::Coloring {
+            if let Ok(def) = crate::escape::custom::compile_coloring(&p.carried, &p.key) {
+                let esc = &config_manager.active_config().escape;
+                changes.extend(pick_changes(crate::escape::get_formula(&esc.formula), esc, def));
+            }
+        }
+        (changes, "history.action.use_custom_coloring")
+    };
+    let _ = super::render_mode::choose(config_manager, changes, description, RenderMode::Escape);
+}
+
+/// Choosing a mode A formula: it lands on its own starting point rather
+/// than inheriting the last one's view -- a centre and zoom chosen for the
+/// Mandelbrot mean nothing over Origami, and the colouring may not even be
+/// able to draw it.
+pub(crate) fn choose_formula(config_manager: &mut ConfigManager, f: &'static crate::escape::FormulaDef) {
+    match crate::escape::formula_default_preset(f) {
+        Some(p) => {
+            let _ = apply_preset(config_manager, f, p);
+        }
+        None => {
+            let _ = super::render_mode::choose(
+                config_manager,
+                vec![(ConfigPath::EscapeFormula, ConfigValue::String(f.name.to_string()))],
+                "history.param.escape_formula",
+                RenderMode::Escape,
+            );
+        }
+    }
+}
+
+/// Choosing a mode B field: as a formula, its natural view and term
+/// count are its own.
+pub(crate) fn choose_field(config_manager: &mut ConfigManager, f: &'static crate::escape::fields::FieldDef) {
+    match crate::escape::field_default_preset(f) {
+        Some(p) => {
+            let _ = apply_field_preset(config_manager, f, p);
+        }
+        None => {
+            let _ = super::render_mode::choose(
+                config_manager,
+                vec![(ConfigPath::EscapeFormula, ConfigValue::String(f.name.to_string()))],
+                "history.param.escape_formula",
+                RenderMode::Escape,
+            );
+        }
+    }
+}
+
+/// Choosing a mode D solid: a solid from a plane, the 3D look with it,
+/// and its own colouring. `ifs_flame` reads the loaded flame, so there is
+/// no default view to land on.
+pub(crate) fn choose_solid(config_manager: &mut ConfigManager, d: &'static crate::escape::ifs::IfsDef) {
+    let _ = super::render_mode::choose(
+        config_manager,
+        vec![
+            (ConfigPath::EscapeFormula, ConfigValue::String(d.name.to_string())),
+            (ConfigPath::EscapeColoring, ConfigValue::String(d.default_coloring.to_string())),
+        ],
+        "history.param.escape_formula",
+        RenderMode::Escape,
+    );
+}
+
+/// Choosing a field's or a solid's colouring by name: nothing else moves
+/// with it.
+pub(crate) fn choose_named_coloring(config_manager: &mut ConfigManager, name: &str) {
+    let _ = super::render_mode::choose(
+        config_manager,
+        vec![(ConfigPath::EscapeColoring, ConfigValue::String(name.to_string()))],
+        "history.param.escape_coloring",
+        RenderMode::Escape,
+    );
 }
 
 /// Render the Escape panel.
@@ -218,24 +290,7 @@ pub fn render_escape_content(
                         .clicked()
                         && esc.formula != f.name
                     {
-                        // Land on the formula's own starting point
-                        // rather than inheriting the last one's view.
-                        // A centre and zoom chosen for the Mandelbrot
-                        // mean nothing over Origami, and the coloring
-                        // may not even be able to draw it.
-                        match crate::escape::formula_default_preset(f) {
-                            Some(p) => {
-                                let _ = apply_preset(config_manager, f, p);
-                            }
-                            None => {
-                                let _ = super::render_mode::choose(
-                                    config_manager,
-                                    vec![(ConfigPath::EscapeFormula, ConfigValue::String(f.name.to_string()))],
-                                    "history.param.escape_formula",
-                                    RenderMode::Escape,
-                                );
-                            }
-                        }
+                        choose_formula(config_manager, f);
                     }
                 }
                 ui.separator();
@@ -248,21 +303,7 @@ pub fn render_escape_content(
                         .clicked()
                         && esc.formula != f.name
                     {
-                        // Same reasoning as mode A: a field's natural
-                        // view and TERM COUNT are its own.
-                        match crate::escape::field_default_preset(f) {
-                            Some(p) => {
-                                let _ = apply_field_preset(config_manager, f, p);
-                            }
-                            None => {
-                                let _ = super::render_mode::choose(
-                                    config_manager,
-                                    vec![(ConfigPath::EscapeFormula, ConfigValue::String(f.name.to_string()))],
-                                    "history.param.escape_formula",
-                                    RenderMode::Escape,
-                                );
-                            }
-                        }
+                        choose_field(config_manager, f);
                     }
                 }
                 // Mode D: distance functions. `ifs_flame` reads the
@@ -280,22 +321,7 @@ pub fn render_escape_content(
                         .clicked()
                         && esc.formula != d.name
                     {
-                        // A solid from a plane: the 3D look with it.
-                        let _ = super::render_mode::choose(
-                            config_manager,
-                            vec![
-                                (
-                                    ConfigPath::EscapeFormula,
-                                    ConfigValue::String(d.name.to_string()),
-                                ),
-                                (
-                                    ConfigPath::EscapeColoring,
-                                    ConfigValue::String(d.default_coloring.to_string()),
-                                ),
-                            ],
-                            "history.param.escape_formula",
-                            RenderMode::Escape,
-                        );
+                        choose_solid(config_manager, d);
                     }
                 }
                 plugin_entries(ui, config_manager, &esc.formula, PluginSlot::Formula);
@@ -1388,7 +1414,7 @@ fn polar_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, formula_para
 
 /// Pick `coloring`, and with it what a fresh pick sets ([`pick_changes`])
 /// -- one undo step.
-fn pick_coloring(
+pub(crate) fn pick_coloring(
     config_manager: &mut ConfigManager,
     formula: &crate::escape::FormulaDef,
     esc: &crate::config::escape::EscapeConfig,
@@ -2490,12 +2516,7 @@ fn show_coloring_section(
                             .clicked()
                             && c.name != coloring.name
                         {
-                            let _ = super::render_mode::choose(
-                                config_manager,
-                                vec![(ConfigPath::EscapeColoring, ConfigValue::String(c.name.to_string()))],
-                                "history.param.escape_coloring",
-                                RenderMode::Escape,
-                            );
+                            choose_named_coloring(config_manager, c.name);
                         }
                     }
                 });
@@ -2516,12 +2537,7 @@ fn show_coloring_section(
                             .clicked()
                             && c.name != coloring.name
                         {
-                            let _ = super::render_mode::choose(
-                                config_manager,
-                                vec![(ConfigPath::EscapeColoring, ConfigValue::String(c.name.to_string()))],
-                                "history.param.escape_coloring",
-                                RenderMode::Escape,
-                            );
+                            choose_named_coloring(config_manager, c.name);
                         }
                     }
                     plugin_entries(ui, config_manager, &esc.coloring, PluginSlot::FieldColoring);

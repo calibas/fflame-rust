@@ -21,7 +21,7 @@ const PARAMS = #{
     },
     direction: #{ value: 225.0, min: 0.0, max: 360.0, type: "angle", caption: "Direction" },
 };
-const INFO = #{ title: "Simplex Noise", id: "simplex_noise" };
+const INFO = #{ title: "Simplex Noise", description: "Fractal simplex noise, as colour, as a distortion of the image, or as a mask.", id: "simplex_noise" };
 
 fn smooth(a, b, x) {
     let t = clamp((x - a) / (b - a), 0.0, 1.0);

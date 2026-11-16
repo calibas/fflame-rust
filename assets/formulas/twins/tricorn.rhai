@@ -7,7 +7,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Tricorn", center: complex(-0.3, 0.0), maxiter: 256 };
+const INFO = #{ title: "Tricorn", description: "`z -> conj(z)^p + c`: the Mandelbrot step on the complex conjugate, three-cornered at power 2.", center: complex(-0.3, 0.0), maxiter: 256 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

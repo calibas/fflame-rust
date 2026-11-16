@@ -134,6 +134,12 @@ impl ScriptsPanel {
     /// Keyed on the ID rather than the declared name: nothing stops two
     /// scripts declaring the same name, and matching on it made the
     /// selection jump to whichever happened to be found first.
+    /// Select a script from outside the panel (the Catalog), by its id
+    /// (its stem): rescanned and selected when the panel next draws.
+    pub fn select_script(&mut self, id: &str) {
+        self.pending_fork = Some((id.to_string(), String::new()));
+    }
+
     fn reload(&mut self, base: &FractalConfig) {
         let previous = self.entries.get(self.selected).map(|e| e.id.clone());
         let (entries, conflicts) = library::discover_with_conflicts(base);
@@ -371,7 +377,7 @@ impl ScriptsPanel {
                 self.selected = i;
                 self.load_selected();
             }
-            self.status = Some(message);
+            self.status = (!message.is_empty()).then_some(message);
         }
 
         response
@@ -936,11 +942,11 @@ impl ScriptsPanel {
 
         ui.horizontal(|ui| {
             ui.label(&item.display_name);
-            if show_owner && !item.owner_display_name.is_empty() {
+            if show_owner && !item.owner_name().is_empty() {
                 // The globally unique key — `owner/name` — rather than a
                 // UUID fragment, which is what the server's unique
                 // display names are for.
-                ui.weak(format!("by {}", item.owner_display_name));
+                ui.weak(format!("by {}", item.owner_name()));
             }
             if let Some(k) = &item.kind {
                 ui.weak(format!("· {}", kind_label(k)));
@@ -983,14 +989,12 @@ impl ScriptsPanel {
         if doc.is_empty() {
             return;
         }
-        // Descriptions are markdown on the wire (§5.4) and this app has
-        // no markdown renderer. Scripts strip client-side rather than
-        // carrying a `description_plain` the way variations do: the
-        // description is DERIVED from the source, which is authoritative
-        // and always present, so a stored plain copy would be a
-        // derivation of a derivation with its own way to go stale.
+        // Descriptions are markdown (§5.4), drawn by `ui::markdown`. The
+        // body below keeps its own layout -- its indented lines are the
+        // shipped scripts' symbol tables, line by line -- until the one
+        // Rhai editor (docs/projects/catalog.md, phase 4).
         if !doc.summary.is_empty() {
-            ui.label(crate::script::strip_markdown(&doc.summary));
+            super::markdown::show(ui, &doc.summary);
         }
         if doc.body.is_empty() {
             return;

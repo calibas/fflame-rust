@@ -13,7 +13,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Burning Ship", center: complex(-0.5, 0.5), maxiter: 256 };
+const INFO = #{ title: "Burning Ship", description: "The quadratic step with absolute values taken around it, `z -> (|Re z| + i |Im z|)^2 + c`, and a family of variants that place the absolute values differently.", center: complex(-0.5, 0.5), maxiter: 256 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

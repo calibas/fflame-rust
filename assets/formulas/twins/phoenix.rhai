@@ -8,7 +8,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Phoenix", center: complex(0.0, 0.0), maxiter: 256 };
+const INFO = #{ title: "Phoenix", description: "`z -> z^2 + c + p z'`, z' the previous z: the step remembers where the orbit was, weighted by the complex parameter p.", center: complex(0.0, 0.0), maxiter: 256 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

@@ -1117,7 +1117,9 @@ impl App {
         }
         if ui_response.open_palette_library {
             use crate::ui::workspace::PanelType;
-            let ctx = &self.egui_layer.ctx; self.workspace.open_panel(PanelType::PaletteLibrary, ctx);
+            self.egui_layer.open_catalog_on(crate::inventory::Family::Palettes);
+            let ctx = &self.egui_layer.ctx;
+            self.workspace.open_panel(PanelType::Inventory, ctx);
         }
         if ui_response.open_config_dialog {
             use crate::ui::workspace::PanelType;
@@ -1129,10 +1131,10 @@ impl App {
         }
         if ui_response.open_preset_library {
             use crate::ui::workspace::PanelType;
-            use crate::ui::fractal_browser::BrowserTab;
-            self.egui_layer.switch_fractal_browser_tab(BrowserTab::Presets);
+            // The presets are the Catalog's fractals.
+            self.egui_layer.open_catalog_on(crate::inventory::Family::Fractals);
             let ctx = &self.egui_layer.ctx;
-            self.workspace.open_panel(PanelType::FractalBrowser, ctx);
+            self.workspace.open_panel(PanelType::Inventory, ctx);
         }
         if ui_response.open_random_generator {
             use crate::ui::workspace::PanelType;
@@ -1143,6 +1145,11 @@ impl App {
             use crate::ui::workspace::PanelType;
             let ctx = &self.egui_layer.ctx;
             self.workspace.open_panel(PanelType::FormulaEditor, ctx);
+        }
+        if ui_response.open_scripts_panel {
+            use crate::ui::workspace::PanelType;
+            let ctx = &self.egui_layer.ctx;
+            self.workspace.open_panel(PanelType::Scripts, ctx);
         }
         if ui_response.open_lighting_panel {
             use crate::ui::workspace::PanelType;

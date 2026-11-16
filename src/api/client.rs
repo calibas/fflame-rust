@@ -549,6 +549,16 @@ pub async fn api_put<T: DeserializeOwned, B: Serialize>(
     api_request("PUT", url, Some(json), Some(token)).await
 }
 
+/// PATCH request with JSON body and auth token.
+pub async fn api_patch<T: DeserializeOwned, B: Serialize>(
+    url: &str,
+    body: &B,
+    token: &str,
+) -> FetchResult<T> {
+    let json = serde_json::to_string(body).map_err(|e| FetchError::Parse(e.to_string()))?;
+    api_request("PATCH", url, Some(json), Some(token)).await
+}
+
 /// GET request without auth (for public endpoints).
 pub async fn api_get_unauth<T: DeserializeOwned>(url: &str) -> FetchResult<T> {
     api_request("GET", url, None, None).await
@@ -572,7 +582,7 @@ pub async fn api_put_binary(
 
 /// POST logout (clears server session/cookie). Expects 204 No Content.
 pub async fn api_post_logout(base_url: &str) -> FetchResult<()> {
-    let url = build_url(base_url, "/api/auth/logout");
+    let url = build_url(base_url, "/api/v1/auth/logout");
     api_request_raw("POST", &url, None, None).await?;
     Ok(())
 }

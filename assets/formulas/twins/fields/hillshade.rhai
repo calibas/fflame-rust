@@ -13,7 +13,7 @@ const PARAMS = #{
     scale: #{ value: 1.0, min: 0.01, max: 20.0, caption: "Palette Scale", hint: "Palette cycles per unit of field value." },
 };
 
-const INFO = #{ title: "Hillshade" };
+const INFO = #{ title: "Hillshade", description: "The field's value for the palette, its gradient a surface lit by a directional light." };
 
 fn shade(sum, grad, n, p) {
     let az = p.azimuth * 0.01745329;

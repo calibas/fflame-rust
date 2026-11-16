@@ -40,7 +40,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Mandelbulb (Solid)", slow: ["levels", "steps"] };
+const INFO = #{ title: "Mandelbulb (Solid)", description: "White and Nylander's Mandelbulb: the power `z -> z^n + c` in spherical coordinates, ray-marched by its distance estimate.", slow: ["levels", "steps"] };
 
 // The ball, as the built-in's (`mandelbulb_radius`): past 2^(1/(n-1)) an
 // orbit grows, and for a Julia also past 1 + |c|.

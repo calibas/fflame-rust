@@ -1,6 +1,6 @@
 # Palette Library System
 
-Palettes come in **packs**. The Palette Library panel browses them, the
+Palettes come in **packs**. The Catalog browses them ([CATALOG.md](CATALOG.md)), the
 Colors panel's palette dropdown lists the enabled ones, and the Palette
 Editor saves your own palettes into a **Custom** pack.
 
@@ -147,33 +147,34 @@ at the top when it belongs to none of them.
 
 ---
 
-## The Palette Library panel
+## In the Catalog
 
-Window ▸ Palette Library, or the Colors panel's **Palette Library**
-button, or the Palette Editor's **Open Palette Library**. The compact
-Window menu leaves it out; it is reachable from the Colors panel there.
+The Palette Library panel was retired into the Catalog on 2026-11-16
+([CATALOG.md](CATALOG.md)): **Window ▸ Catalog** on Palettes, the Colors
+panel's **Browse Palettes**, or the Palette Editor's **Browse Palettes
+in the Catalog**.
 
-- An **Open Palette Editor** button at the top.
-- Per pack: a checkbox that enables or disables it, and a collapsible
-  header (open by default) with its name and palette count. Enabled and
-  loaded packs list their palettes as rows: the name and a 200 × 20
-  gradient preview. Previews are generated once and kept as egui
-  textures, keyed by pack and palette index; the Custom pack's key also
-  carries a counter that changes on every save and delete, so its
-  previews refresh.
+- Per pack: a checkbox that enables or disables it -- on the web,
+  fetching it -- and a collapsing header (open by default) with its name
+  and palette count or load state, a failed load with a Retry
+  (`ui::palette_library::pack_section`). An enabled, loaded pack lists
+  its palettes as rows: the name and a gradient. A preview is made once
+  its row is on screen and kept as an egui texture keyed by the
+  palette's content hash, so an edited Custom palette is a new preview.
+- A search over the names leaves out the packs without a match.
 - **Pack state is not saved.** Every launch starts from each pack's
   `enabled_by_default`.
 
-**Selecting a palette** (a click on its name or its preview) sets
-`ConfigPath::Palette` to a clone of it with `built_in` cleared: the same
-name, stops and `locked` flag. It is one undo entry. No copy is added to
-the library, and the library's palette is not changed: editing
-afterwards changes only the config's palette, until you save it to the
-library.
+**Selecting a palette** (a click on its row) sets `ConfigPath::Palette`
+to a clone of it with `built_in` cleared: the same name, stops and
+`locked` flag. It is one undo entry. No copy is added to the library,
+and the library's palette is not changed: editing afterwards changes
+only the config's palette, until you save it to the library. The info
+pane shows the palette's pack, origin and a wider gradient.
 
 ### Cloud palettes
 
-With the online account on, the panel ends with a **Cloud Palettes** section,
+With the online account on, the Catalog's palettes end with a **Cloud Palettes** section,
 collapsed by default. On first expanding it fetches your palette
 library from the API (up to 100 entries, each a nickname and a content
 hash) and lists them with previews. A click loads one exactly as a pack
@@ -245,7 +246,7 @@ never change the palette itself. See [COLOR.md](COLOR.md).
 ## Adding a pack
 
 1. Put a JSON file in `assets/palettes/packs/` (the format above).
-2. Restart the desktop app; it appears in the Palette Library.
+2. Restart the desktop app; it appears in the Catalog's palettes.
 
 On the web, rebuild: `build.rs` regenerates the manifest from the same
 folder, and the build scripts copy the pack JSONs next to `pkg/`. A

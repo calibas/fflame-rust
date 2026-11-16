@@ -21,7 +21,7 @@ const PARAMS = #{
     },
     direction: #{ value: 225.0, min: 0.0, max: 360.0, type: "angle", caption: "Direction" },
 };
-const INFO = #{ title: "Worley Noise", id: "worley_noise" };
+const INFO = #{ title: "Worley Noise", description: "Cellular noise, the distances to the nearest of a scattering of moving points.", id: "worley_noise" };
 
 fn smooth(a, b, x) {
     let t = clamp((x - a) / (b - a), 0.0, 1.0);

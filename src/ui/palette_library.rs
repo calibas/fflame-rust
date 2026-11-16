@@ -63,277 +63,126 @@ pub fn poll_palette_packs(ctx: &egui::Context, library: &mut PaletteLibrary) {
     }
 }
 
-/// Render the Palette Library panel
-/// When a palette is selected, it's set directly via ConfigManager
-pub fn render_palette_library(
+/// A pack's place in a list of packs (the Catalog's palettes): a checkbox
+/// that enables it -- on the web, fetching it -- and a collapsing header
+/// with its name and load state; open, the body shows its loading, its
+/// failure with a Retry, or, enabled and loaded, `palettes`.
+pub fn pack_section(
     ui: &mut egui::Ui,
     library: &mut PaletteLibrary,
-    config_manager: &mut ConfigManager,
-    open_palette_editor: &mut bool,
+    pack_idx: usize,
+    palettes: impl FnOnce(&mut egui::Ui, &mut PaletteLibrary),
 ) {
-    // Pack fetches and the sync from the global library run every frame
-    // from `poll_palette_packs`, not here.
-
-    // Quick access to palette editor
-    if ui.button(t!("palette_library.open_editor")).clicked() {
-        *open_palette_editor = true;
-    }
-    ui.separator();
-
-    // Note: ScrollArea is managed by the panel viewer (render_palette_library_panel)
-    // so cloud palettes section can share the same scroll area.
-    {
-        // Iterate through all packs
-        for pack_idx in 0..library.pack_count() {
-            // Get pack info (includes load state)
-            let (pack_name, palette_count, is_enabled, load_state) = {
-                if let Some(info) = library.get_pack_info(pack_idx) {
-                    let name = info.name().to_string();
-                    let count = info.palette_count();
-                    let enabled = info.enabled;
-                    let state = info.load_state.clone();
-                    (name, count, enabled, state)
-                } else {
-                    continue;
-                }
-            };
-
-            // Pack header with checkbox and collapsing control
-            let header_id = ui.make_persistent_id(format!("pack_header_{}", pack_idx));
-
-            // Checkbox for enabling/disabling pack
+    let Some(info) = library.get_pack_info(pack_idx) else { return };
+    let (pack_name, palette_count, is_enabled, load_state) = (info.name().to_string(), info.palette_count(), info.enabled, info.load_state.clone());
+    let header_id = ui.make_persistent_id(format!("pack_header_{}", pack_idx));
+    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), header_id, true)
+        .show_header(ui, |ui| {
             let mut enabled = is_enabled;
-            ui.horizontal(|ui| {
-                if ui.checkbox(&mut enabled, "")
-                    .on_hover_text(t!("palette_library.tooltip_enable_pack"))
-                    .changed()
-                {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        library.set_pack_enabled(pack_idx, enabled);
-                    }
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        if let Some(file_path) = library.set_pack_enabled(pack_idx, enabled) {
-                            spawn_pack_fetch(ui.ctx().clone(), pack_idx, file_path);
-                        }
-                    }
+            if ui.checkbox(&mut enabled, "").on_hover_text(t!("palette_library.tooltip_enable_pack")).changed() {
+                enable_pack(ui.ctx(), library, pack_idx, enabled);
+            }
+            ui.strong(&pack_name);
+            match &load_state {
+                LoadState::NotLoaded => {
+                    ui.weak(format!("({} palettes)", palette_count));
                 }
-            });
-
-            // Collapsing header for expand/collapse
-            egui::collapsing_header::CollapsingState::load_with_default_open(
-                ui.ctx(),
-                header_id,
-                true // Default to open
-            )
-            .show_header(ui, |ui| {
-                ui.strong(&pack_name);
-
-                // Show load state indicator
-                match &load_state {
-                    LoadState::NotLoaded => {
-                        ui.weak(format!("({} palettes)", palette_count));
-                    }
-                    LoadState::Loading => {
-                        ui.spinner();
-                        ui.weak(t!("palette_library.loading"));
-                    }
-                    LoadState::Loaded => {
-                        ui.label(t!("palette_library.palettes_count", count = palette_count));
-                    }
-                    LoadState::Failed(error) => {
-                        ui.colored_label(egui::Color32::RED, "⚠");
-                        ui.weak(error);
-                    }
+                LoadState::Loading => {
+                    ui.spinner();
+                    ui.weak(t!("palette_library.loading"));
                 }
-            })
-            .body(|ui| {
-                // Handle different load states
-                match &load_state {
-                    LoadState::NotLoaded => {
-                        // Nothing to show - pack will load when enabled
-                    }
-                    LoadState::Loading => {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label(t!("palette_library.loading"));
-                        });
-                    }
-                    LoadState::Failed(error) => {
-                        ui.colored_label(egui::Color32::RED, error);
-                        if ui.button(t!("palette_library.retry"))
-                            .on_hover_text(t!("palette_library.tooltip_retry"))
-                            .clicked()
-                        {
-                            // Reset state and retry by toggling enabled
-                            if let Some(info) = library.packs_mut().get_mut(pack_idx) {
-                                info.load_state = LoadState::NotLoaded;
-                            }
-                            #[cfg(not(target_arch = "wasm32"))]
-                            {
-                                library.set_pack_enabled(pack_idx, true);
-                            }
-                            #[cfg(target_arch = "wasm32")]
-                            {
-                                if let Some(file_path) = library.set_pack_enabled(pack_idx, true) {
-                                    spawn_pack_fetch(ui.ctx().clone(), pack_idx, file_path);
-                                }
-                            }
-                        }
-                    }
-                    LoadState::Loaded => {
-                        // Show palettes only if pack is enabled and loaded
-                        if is_enabled {
-                            if let Some(pack) = library.get_pack(pack_idx) {
-                                // Calculate max name width for this pack
-                                let max_name_width = pack.palettes.iter()
-                                    .map(|p| p.name.len() as f32 * 8.0) // Rough estimate: 8px per character
-                                    .fold(0.0f32, f32::max)
-                                    .max(100.0) // Minimum
-                                    .min(200.0); // Maximum to prevent excessive width
-
-                                // Use grid for automatic alignment
-                                egui::Grid::new(format!("palette_grid_{}", pack_idx))
-                                    .num_columns(2)
-                                    .spacing([10.0, 4.0])
-                                    .striped(false)
-                                    .show(ui, |ui| {
-                                        for (palette_idx, palette) in pack.palettes.iter().enumerate() {
-                                            let preview_height = 20.0;
-                                            let preview_width = 200.0;
-
-                                            // Check if this is the Custom pack
-                                            let is_custom_pack = library.custom_pack_index() == Some(pack_idx);
-
-                                            // Generate texture ID based on pack and palette index
-                                            // For Custom pack: include generation counter to invalidate cache on save/delete
-                                            let texture_id = if is_custom_pack {
-                                                egui::Id::new(("palette_preview", pack_idx, palette_idx, library.generation()))
-                                            } else {
-                                                egui::Id::new(("palette_preview", pack_idx, palette_idx))
-                                            };
-
-                                            // Load or get cached texture using egui's memory system
-                                            let texture = ui.ctx().data_mut(|data| {
-                                                data.get_temp::<egui::TextureHandle>(texture_id)
-                                            }).unwrap_or_else(|| {
-                                                // Generate preview image
-                                                let preview_image = PaletteLibrary::generate_preview(
-                                                    palette,
-                                                    preview_width as usize,
-                                                    preview_height as usize,
-                                                );
-
-                                                // Load and cache texture
-                                                let tex = ui.ctx().load_texture(
-                                                    format!("palette_{}_{}", pack_idx, palette_idx),
-                                                    preview_image,
-                                                    egui::TextureOptions::LINEAR,
-                                                );
-
-                                                // Store in egui memory
-                                                ui.ctx().data_mut(|data| {
-                                                    data.insert_temp(texture_id, tex.clone());
-                                                });
-
-                                                tex
-                                            });
-
-                                            // Allocate space for the row first to get rect for background
-                                            // Use calculated max width for first column (all rows will align)
-                                            let (name_rect, name_response) = ui.allocate_exact_size(
-                                                egui::vec2(max_name_width, preview_height),
-                                                egui::Sense::click()
-                                            );
-
-                                            // Move to next column
-                                            let (img_rect, img_response) = ui.allocate_exact_size(
-                                                egui::vec2(preview_width, preview_height),
-                                                egui::Sense::click()
-                                            );
-
-                                            // Draw highlight FIRST (behind everything)
-                                            if name_response.hovered() || img_response.hovered() {
-                                                let row_rect = name_rect.union(img_rect);
-                                                ui.painter().rect_filled(
-                                                    row_rect.expand(2.0),
-                                                    2.0,
-                                                    ui.visuals().widgets.hovered.bg_fill,
-                                                );
-                                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                            }
-
-                                            // Draw text label on top of background
-                                            ui.painter().text(
-                                                name_rect.left_center() + egui::vec2(5.0, 0.0),
-                                                egui::Align2::LEFT_CENTER,
-                                                &palette.name,
-                                                egui::FontId::default(),
-                                                ui.visuals().text_color(),
-                                            );
-
-                                            // Draw image on top of background
-                                            let image = egui::Image::new(&texture)
-                                                .fit_to_exact_size(egui::vec2(preview_width, preview_height));
-
-                                            ui.put(img_rect, image);
-
-                                            // Handle clicks on either element
-                                            if name_response.clicked() || img_response.clicked() {
-                                                // Set palette directly - create an editable copy
-                                                let mut palette_copy = palette.clone();
-                                                palette_copy.built_in = false;
-
-                                                let _ = config_manager.update_param(
-                                                    ConfigPath::Palette,
-                                                    palette_copy.into()
-                                                );
-                                            }
-
-                                            ui.end_row();
-                                        }
-                                    });
-                            }
-                        }
-                    }
+                LoadState::Loaded => {
+                    ui.weak(t!("palette_library.palettes_count", count = palette_count));
                 }
-            });
+                LoadState::Failed(error) => {
+                    ui.colored_label(egui::Color32::RED, "⚠");
+                    ui.weak(error);
+                }
+            }
+        })
+        .body(|ui| match &load_state {
+            LoadState::NotLoaded => {
+                if !is_enabled {
+                    ui.weak(t!("palette_library.pack_disabled"));
+                }
+            }
+            LoadState::Loading => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(t!("palette_library.loading"));
+                });
+            }
+            LoadState::Failed(error) => {
+                ui.colored_label(egui::Color32::RED, error);
+                if ui.button(t!("palette_library.retry")).on_hover_text(t!("palette_library.tooltip_retry")).clicked() {
+                    if let Some(info) = library.packs_mut().get_mut(pack_idx) {
+                        info.load_state = LoadState::NotLoaded;
+                    }
+                    enable_pack(ui.ctx(), library, pack_idx, true);
+                }
+            }
+            LoadState::Loaded => {
+                if is_enabled {
+                    palettes(ui, library);
+                } else {
+                    ui.weak(t!("palette_library.pack_disabled"));
+                }
+            }
+        });
+}
 
-            ui.separator();
-        }
-
-        // If no packs loaded, show message
-        if library.pack_count() == 0 {
-            ui.label(t!("palette_library.no_packs"));
-            ui.label(t!("palette_library.no_packs_hint"));
+/// Enable or disable a pack; enabling one not loaded loads it (on the
+/// web, a fetch).
+fn enable_pack(ctx: &egui::Context, library: &mut PaletteLibrary, pack_idx: usize, enabled: bool) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = ctx;
+        library.set_pack_enabled(pack_idx, enabled);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(file_path) = library.set_pack_enabled(pack_idx, enabled) {
+            spawn_pack_fetch(ctx.clone(), pack_idx, file_path);
         }
     }
+}
+
+/// A palette's gradient as a texture, made once and kept in egui's
+/// memory under `key` (a content hash names a palette exactly).
+pub fn palette_preview(ctx: &egui::Context, key: &str, palette: &crate::scene::palette::Palette, size: [usize; 2]) -> egui::TextureHandle {
+    let id = egui::Id::new(("palette_preview", key, size));
+    if let Some(t) = ctx.data_mut(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
+    }
+    let image = PaletteLibrary::generate_preview(palette, size[0], size[1]);
+    let t = ctx.load_texture(format!("palette_{key}"), image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
 }
 
 // --- Cloud Palettes Section (API feature) ---
 
-/// Fetch the caller's library palette entries from the API.
+/// Fetch the caller's palettes from the API.
 async fn fetch_cloud_palettes(
     base_url: &str,
     token: &str,
-) -> Result<Vec<crate::api::types::LibraryPaletteEntry>, String> {
+) -> Result<Vec<crate::api::types::PaletteItem>, String> {
     let mut api = crate::api::ApiState::new(base_url);
     api.set_token(token);
-    api.list_library_palettes(1, 100)
+    api.list_my_palettes(1, 100)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Remove the caller's library entry for a palette (by content hash).
-/// Doesn't delete the underlying palette content.
-async fn delete_cloud_palette(base_url: &str, token: &str, hash: &str) -> Result<String, String> {
+/// Delete one of the caller's palettes (by its id). Its content stays:
+/// fractals may use it.
+async fn delete_cloud_palette(base_url: &str, token: &str, id: &str) -> Result<String, String> {
     let mut api = crate::api::ApiState::new(base_url);
     api.set_token(token);
-    let h = hash.to_string();
-    api.remove_library_palette(&h)
+    let id = id.to_string();
+    api.delete_palette(&id)
         .await
-        .map(|_| h)
+        .map(|_| id)
         .map_err(|e| e.to_string())
 }
 
@@ -414,8 +263,7 @@ pub fn render_cloud_palettes_section(
             let preview_width = 200.0;
             let max_name_width = cloud_state.palettes.iter()
                 .map(|p| {
-                    let name = p.nickname.as_deref().unwrap_or("Untitled");
-                    name.len() as f32 * 8.0
+                    p.name.len() as f32 * 8.0
                 })
                 .fold(0.0f32, f32::max)
                 .max(100.0)
@@ -427,13 +275,11 @@ pub fn render_cloud_palettes_section(
                 .striped(false)
                 .show(ui, |ui| {
                     // Collect palette data first to avoid borrow conflicts.
-                    // Library entries are keyed by content hash; the
-                    // nickname is the caller's personal label.
+                    // A palette is keyed by its id (its colours' hash
+                    // changes when they do).
                     let palette_data: Vec<_> = cloud_state.palettes.iter().map(|p| {
-                        let name = p.nickname.clone().unwrap_or_else(|| "Untitled".to_string());
-                        let hash = p.hash.clone();
-                        let palette = crate::api::sync::palette_from_library_entry(p);
-                        (hash, name, palette)
+                        let palette = crate::api::sync::palette_from_item(p);
+                        (p.id.clone(), p.name.clone(), palette)
                     }).collect();
 
                     for (hash, name, palette) in &palette_data {
@@ -639,7 +485,7 @@ fn poll_cloud_palette_results(
                 Ok(palettes) => {
                     // Clear texture cache when palette list changes
                     for p in &cloud_state.palettes {
-                        let texture_id = egui::Id::new(("cloud_palette_preview", &p.hash));
+                        let texture_id = egui::Id::new(("cloud_palette_preview", &p.id));
                         ui.ctx().data_mut(|data| {
                             data.remove::<egui::TextureHandle>(texture_id);
                         });
@@ -667,10 +513,10 @@ fn poll_cloud_palette_results(
                         data.remove::<egui::TextureHandle>(texture_id);
                     });
                     let name = cloud_state.palettes.iter()
-                        .find(|p| p.hash == deleted_hash)
-                        .and_then(|p| p.nickname.clone())
+                        .find(|p| p.id == deleted_hash)
+                        .map(|p| p.name.clone())
                         .unwrap_or_else(|| "palette".to_string());
-                    cloud_state.palettes.retain(|p| p.hash != deleted_hash);
+                    cloud_state.palettes.retain(|p| p.id != deleted_hash);
                     cloud_state.notification = Some((
                         t!("palette_library.cloud_delete_success", name = name).to_string(),
                         false,

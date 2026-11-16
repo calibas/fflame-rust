@@ -13,7 +13,7 @@ const PARAMS = #{
     bailout: #{ value: 10000.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Magnet", center: complex(1.0, 0.0), maxiter: 128 };
+const INFO = #{ title: "Magnet", description: "Magnet I and II, rational maps from statistical mechanics. An orbit ends as it escapes or as it settles on the fixed point 1, which the root colourings tell apart.", center: complex(1.0, 0.0), maxiter: 128 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

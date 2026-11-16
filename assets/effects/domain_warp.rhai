@@ -20,7 +20,7 @@ const PARAMS = #{
     },
     direction: #{ value: 225.0, min: 0.0, max: 360.0, type: "angle", caption: "Direction" },
 };
-const INFO = #{ title: "Domain Warp", id: "domain_warp" };
+const INFO = #{ title: "Domain Warp", description: "The image pushed along a field of noise warped by noise, as Inigo Quilez describes it.", id: "domain_warp" };
 
 // The gradient (the hash, from -1 to 1) at a lattice point, along an
 // offset from it.

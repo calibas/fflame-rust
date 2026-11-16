@@ -14,7 +14,7 @@ const PARAMS = #{
     a_im: #{ value: 0.8660254, min: -4.0, max: 4.0, caption: "a (im)", hint: "Imaginary part of the modulus." },
 };
 
-const INFO = #{ title: "Lattès", center: complex(0.0, 0.0), maxiter: 5 };
+const INFO = #{ title: "Lattès", description: "Lattes maps: rational maps chaotic on the whole Riemann sphere. They have no c -- the pixel is the start -- and nothing escapes, so the colourings that read the orbit draw them.", center: complex(0.0, 0.0), maxiter: 5 };
 
 fn start(pixel, p) {
     #{ z: pixel }

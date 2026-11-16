@@ -20,6 +20,7 @@ const PARAMS = #{
 };
 const INFO = #{
     title: "Bloom",
+    description: "The bright parts of the picture glow, near and wide, as light does through a lens.",
     id: "bloom",
     buffers: #{ down: #{ scale: 0.5, levels: 7 }, up: #{ scale: 0.5, levels: 7 } },
     passes: [

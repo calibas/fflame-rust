@@ -6,7 +6,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Cactus", center: complex(0.0, 0.0), maxiter: 128 };
+const INFO = #{ title: "Cactus", description: "The cubic `z -> z^3 + (c - 1) z - c`. On the parameter plane the orbit starts at the pixel.", center: complex(0.0, 0.0), maxiter: 128 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

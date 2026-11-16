@@ -7,7 +7,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Feather", center: complex(-0.35, 0.0), maxiter: 256 };
+const INFO = #{ title: "Feather", description: "`z -> z^p / (1 + x^2 - i y^2) + c`, x and y the parts of z; the denominator's real part is never below 1.", center: complex(-0.35, 0.0), maxiter: 256 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

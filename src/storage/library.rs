@@ -9,7 +9,7 @@
 use crate::storage::links::Link;
 
 /// Which store an entry is in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Store {
     /// The CPU scripts: generators, modifiers, libraries.
     Scripts,
@@ -228,7 +228,9 @@ fn script_entry(file: &str, source: &str, origin: Origin, link: Link) -> Entry {
         file: file.to_string(),
         kind,
         title: if name.is_empty() { stem(file) } else { name },
-        description: String::new(),
+        // The header comment's first paragraph, as the Scripts panel
+        // shows it (`script::parse_doc`).
+        description: crate::script::parse_doc(source).summary,
         author: String::new(),
         id: None,
         version: version(source),

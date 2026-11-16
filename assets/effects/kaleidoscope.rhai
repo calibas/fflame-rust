@@ -20,7 +20,7 @@ const PARAMS = #{
     square_mode: #{ value: 1, caption: "Square Mode", choices: ["Screen ratio (stretched)", "Square"] },
     edge_offset: #{ value: 0, min: 0, max: 2000, caption: "Edge Offset" },
 };
-const INFO = #{ title: "Kaleidoscope", id: "kaleidoscope" };
+const INFO = #{ title: "Kaleidoscope", description: "One slice of the image folded into mirrored segments.", id: "kaleidoscope" };
 
 fn effect(c, p, ctx) {
     let pi = 3.14159265359;

@@ -12,7 +12,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Barnsley", center: complex(0.3, 0.0), maxiter: 128 };
+const INFO = #{ title: "Barnsley", description: "Barnsley's three maps, each choosing its step -- `(z - 1) c` or `(z + 1) c`, or a squaring -- by a test on the iterate.", center: complex(0.3, 0.0), maxiter: 128 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

@@ -483,7 +483,7 @@ cached entry the current build would refuse is dropped with a warning.
 **On demand.** When compiling finds an unknown name it records it
 (`effects::note_missing_effect`). The app drains that set each frame
 (`App::handle_effect_fetches`) and, if someone is signed in, fetches
-each name once a session (`GET /api/effects/{name}`). A fetched effect
+each name once a session (`GET /api/v1/effects/{name}`). A fetched effect
 is registered first and cached second (`effect_cache::save`), so a
 payload this build refuses is never cached. The next frame compiles it;
 nothing has to be invalidated. Unlike a missing variation, a missing
@@ -491,7 +491,7 @@ effect does not pause rendering: the picture renders without it
 meanwhile. Signed out, the fetch is skipped with an info log. Headless
 renders do not fetch: the effect is skipped with a warning.
 
-**The catalog** (`App::refresh_effect_catalog`, `GET /api/effects`) is
+**The catalog** (`App::refresh_effect_catalog`, `GET /api/v1/effects`) is
 fetched once a session in the background and cached
 (`storage::effect_catalog`). It is panel metadata; no frame depends on
 it, and being offline is not an error. Each row says whether it is

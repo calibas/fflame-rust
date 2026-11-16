@@ -8,6 +8,8 @@ pub mod export_status;
 mod font_loader;
 mod formatting;
 pub mod fractal_browser;
+pub mod inventory;
+pub mod markdown;
 pub mod fractal_gallery;
 mod help;
 pub mod login_dialog;
@@ -781,11 +783,11 @@ impl ApiNotification {
 /// State for cloud palette browsing in Palette Library (the caller's
 /// bookmarked entries from `/api/users/me/palettes`).
 pub struct CloudPaletteState {
-    pub palettes: Vec<crate::api::types::LibraryPaletteEntry>,
+    pub palettes: Vec<crate::api::types::PaletteItem>,
     pub fetched: bool,
     pub loading: bool,
     pub error: Option<String>,
-    pub list_result: std::sync::Arc<std::sync::Mutex<Option<Result<Vec<crate::api::types::LibraryPaletteEntry>, String>>>>,
+    pub list_result: std::sync::Arc<std::sync::Mutex<Option<Result<Vec<crate::api::types::PaletteItem>, String>>>>,
     pub deleting: bool,
     /// On success, carries the content hash of the removed entry.
     pub delete_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
@@ -946,6 +948,8 @@ pub struct EguiLayer {
 
     // Fractal browser panel state
     fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
+    /// The Catalog's state (docs/projects/catalog.md).
+    inventory_panel: inventory::InventoryPanel,
     /// The Texture panel's state, created when the panel is first shown.
     textures_panel: Option<textures_panel::TexturesPanel>,
     formula_editor: Option<formula_editor::FormulaEditorPanel>,
@@ -1130,6 +1134,7 @@ impl EguiLayer {
             script_generated: None,
             script_animation: None,
             fractal_browser_panel: None,
+            inventory_panel: inventory::InventoryPanel::new(),
             textures_panel: None,
             formula_editor: None,
             hybrid_designer: None,
@@ -1571,6 +1576,7 @@ impl EguiLayer {
         let mut open_preset_library = false;
         let mut open_random_generator = false;
         let mut open_formula_editor = false;
+        let mut open_scripts_panel = false;
         let mut open_lighting_panel = false;
 
         // Fractal viewport size tracking
@@ -1861,6 +1867,7 @@ impl EguiLayer {
                         open_preset_library: &mut open_preset_library,
                         open_random_generator: &mut open_random_generator,
                         open_formula_editor: &mut open_formula_editor,
+                        open_scripts_panel: &mut open_scripts_panel,
                         open_lighting_panel: &mut open_lighting_panel,
 
                         // UI state
@@ -1975,6 +1982,7 @@ impl EguiLayer {
 
                         // Fractal browser panel state
                         fractal_browser_panel: &mut self.fractal_browser_panel,
+                        inventory_panel: &mut self.inventory_panel,
                         textures_panel: &mut self.textures_panel,
                         formula_editor: &mut self.formula_editor,
                         hybrid_designer: &mut self.hybrid_designer,
@@ -2672,6 +2680,7 @@ impl EguiLayer {
             open_preset_library,
             open_random_generator,
             open_formula_editor,
+            open_scripts_panel,
             open_lighting_panel,
             fractal_viewport_size,
             fly_mouse_drag,
@@ -2726,9 +2735,12 @@ impl EguiLayer {
         queue: &egui_wgpu::wgpu::Queue,
     ) -> bool {
         let ctx = self.ctx.clone();
-        self.fractal_browser_panel.as_mut().is_some_and(|panel| {
+        let browser = self.fractal_browser_panel.as_mut().is_some_and(|panel| {
             panel.generate_one_preview(&ctx, |config| crate::renderer::render_preview(device, queue, config))
-        })
+        });
+        // The Catalog's presets, when its gallery is the one shown.
+        let catalog = self.inventory_panel.generate_one_preview(&ctx, |config| crate::renderer::render_preview(device, queue, config));
+        browser || catalog
     }
 
     /// Desktop: whether the Texture panel still owes a preview.
@@ -2765,6 +2777,7 @@ impl EguiLayer {
         if let Some(ref mut panel) = self.fractal_browser_panel {
             panel.start_next_preview(device, queue, &ctx);
         }
+        self.inventory_panel.start_next_preview(device, queue, &ctx);
     }
 
     /// Load batch results into the unified Fractal Browser panel
@@ -2825,15 +2838,9 @@ impl EguiLayer {
     }
 
     /// Switch Fractal Browser to a specific tab
-    pub fn switch_fractal_browser_tab(&mut self, tab: fractal_browser::BrowserTab) {
-        // Initialize panel if not already created
-        if self.fractal_browser_panel.is_none() {
-            self.fractal_browser_panel = Some(fractal_browser::FractalBrowserPanel::new());
-        }
-
-        if let Some(ref mut panel) = self.fractal_browser_panel {
-            panel.switch_to_tab(tab);
-        }
+    /// Show the Catalog on a family (its panel is opened by the caller).
+    pub fn open_catalog_on(&mut self, family: crate::inventory::Family) {
+        self.inventory_panel.open_on(family);
     }
 
     /// Tell the UI what deep zoom is doing this frame.

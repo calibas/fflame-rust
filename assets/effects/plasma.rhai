@@ -19,7 +19,7 @@ const PARAMS = #{
     },
     direction: #{ value: 225.0, min: 0.0, max: 360.0, type: "angle", caption: "Direction" },
 };
-const INFO = #{ title: "Plasma", id: "plasma" };
+const INFO = #{ title: "Plasma", description: "The demoscene's plasma, a sum of sines, travelling in a direction.", id: "plasma" };
 
 fn effect(c, p, ctx) {
     let pi = 3.14159265359;

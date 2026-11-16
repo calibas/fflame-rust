@@ -78,7 +78,16 @@ impl<T> Lenient<T> {
 
 impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lenient<T> {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let items = Vec::<serde_json::Value>::deserialize(d)?;
+        // A page's `items` (the catalog API's envelope, `{items, next}`),
+        // or a bare array (a bounded sub-list such as a fractal's tags).
+        let items = match serde_json::Value::deserialize(d)? {
+            serde_json::Value::Array(items) => items,
+            serde_json::Value::Object(mut page) => match page.remove("items") {
+                Some(serde_json::Value::Array(items)) => items,
+                _ => return Err(serde::de::Error::custom("a page without items")),
+            },
+            _ => return Err(serde::de::Error::custom("not a list")),
+        };
         let mut out = Vec::with_capacity(items.len());
         for item in items {
             match serde_json::from_value(item) {
@@ -88,6 +97,36 @@ impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lenient<T> {
         }
         Ok(Lenient(out))
     }
+}
+
+/// One page of a list (the catalog API's envelope): its items, read as
+/// [`Lenient`] reads them, and the cursor of the next page, `None` at the
+/// end. `deleted`: asked with `updated_since`, the ids deleted since.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
+pub struct Page<T> {
+    pub items: Lenient<T>,
+    #[serde(default)]
+    pub next: Option<String>,
+    #[serde(default)]
+    pub deleted: Option<Vec<String>>,
+}
+
+/// An item's owner (absent on built-ins).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Owner {
+    pub id: String,
+    pub display_name: String,
+}
+
+/// A JSON null read as the type's default: a field the server may send as
+/// null (a variation's `category`) where this client keeps a value.
+fn null_as_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
 // ============================================================================
@@ -346,8 +385,12 @@ pub struct CreateFlameRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct FlameResponse {
     pub id: String,
-    pub user_id: String,
+    #[serde(default)]
+    pub owner: Option<Owner>,
     pub name: String,
+    /// The write token: send it back on PUT/PATCH; a stale one is a 409.
+    #[serde(default)]
+    pub revision: Option<i64>,
     #[serde(default)]
     pub visibility: Option<ApiVisibility>,
     /// Inline palette payload (server-computed hash + content + derived
@@ -401,7 +444,9 @@ pub struct FlameListItem {
 // Search
 // ============================================================================
 
-/// Parameters for searching flames via GET /api/search/flames
+/// A fractal list's words (`GET /users/me/flames`, `GET /flames`): the
+/// name searched as `q`, a variation as the catalog filter
+/// `type=variation:<name>`.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SearchFlamesParams {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -441,7 +486,7 @@ impl SearchFlamesParams {
             parts.push(format!("has_3d={}", has_3d));
         }
         if let Some(ref variation) = self.variation {
-            parts.push(format!("variation={}", super::urlencode(variation)));
+            parts.push(format!("type={}", super::urlencode(&format!("variation:{variation}"))));
         }
         if let Some(min) = self.min_transforms {
             parts.push(format!("min_transforms={}", min));
@@ -450,7 +495,7 @@ impl SearchFlamesParams {
             parts.push(format!("max_transforms={}", max));
         }
         if let Some(ref name) = self.name {
-            parts.push(format!("name={}", super::urlencode(name)));
+            parts.push(format!("q={}", super::urlencode(name)));
         }
         if let Some(page) = self.page {
             parts.push(format!("page={}", page));
@@ -511,38 +556,32 @@ pub struct ApiPalette {
     pub color_count: Option<i32>,
 }
 
-/// Entry from `GET /api/users/me/palettes` — the caller's bookmarked
-/// library. Carries the palette content alongside the caller's personal
-/// `nickname` and `added_at` timestamp.
+/// A palette (`GET /users/me/palettes`, `GET /palettes/{id}`): an item
+/// with its own id that points at content by hash, so new colours keep
+/// its name and id. The colours are `content`, as `/palette-data/{hash}`
+/// serves them.
 #[derive(Debug, Clone, Deserialize)]
-pub struct LibraryPaletteEntry {
-    pub hash: String,
-    /// Caller's personal label. `None` when no nickname was set.
+pub struct PaletteItem {
+    pub id: String,
+    pub name: String,
     #[serde(default)]
-    pub nickname: Option<String>,
-    pub added_at: String,
+    pub description: Option<String>,
     #[serde(default)]
-    pub color_data: Option<Vec<u32>>,
+    pub visibility: Option<ApiVisibility>,
+    pub content_hash: String,
     #[serde(default)]
-    pub stops: Option<serde_json::Value>,
+    pub content: ApiPalette,
     #[serde(default)]
-    pub avg_color_r: Option<f32>,
+    pub revision: Option<i64>,
     #[serde(default)]
-    pub avg_color_g: Option<f32>,
-    #[serde(default)]
-    pub avg_color_b: Option<f32>,
-    #[serde(default)]
-    pub dominant_hue: Option<f32>,
-    #[serde(default)]
-    pub color_count: Option<i32>,
+    pub updated_at: Option<String>,
 }
 
-/// Body for `PUT /api/users/me/palettes/{hash}`. Omitted `nickname`
-/// leaves the existing label unchanged.
+/// `PATCH /palettes/{id}`: what is present replaces what is stored.
 #[derive(Debug, Clone, Default, Serialize)]
-pub struct UpdateLibraryNicknameRequest {
+pub struct PatchPaletteRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub nickname: Option<String>,
+    pub name: Option<String>,
 }
 
 // ============================================================================
@@ -606,7 +645,10 @@ pub struct CreateAnimationRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AnimationResponse {
     pub id: String,
-    pub user_id: String,
+    #[serde(default)]
+    pub owner: Option<Owner>,
+    #[serde(default)]
+    pub revision: Option<i64>,
     pub name: String,
     pub duration: f64,
     pub loop_mode: ApiLoopMode,
@@ -628,7 +670,8 @@ pub struct AnimationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnimationListItem {
     pub id: String,
-    pub user_id: String,
+    #[serde(default)]
+    pub owner: Option<Owner>,
     pub name: String,
     pub duration: f64,
     pub loop_mode: ApiLoopMode,
@@ -657,18 +700,16 @@ pub struct AnimationListItem {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScriptResponse {
     pub id: String,
-    /// Owner. Distinct from `authors`, which is credit.
-    pub user_id: String,
-    /// The owner's display name — case-insensitively unique server-side,
-    /// which makes `owner_display_name/name` a stable human-readable key
-    /// and means an import never has to invent a disambiguator or show a
-    /// UUID fragment.
+    /// Owner (absent on a built-in). Distinct from `authors`, which is
+    /// credit. Its display name is case-insensitively unique server-side,
+    /// which makes `owner/name` a stable human-readable key and means an
+    /// import never has to invent a disambiguator or show a UUID fragment.
     #[serde(default)]
-    pub owner_display_name: String,
+    pub owner: Option<Owner>,
     /// Stem-like key, unique per user.
     pub name: String,
     /// The SCRIPT's declared name, from `script("…")`. Not the owner's —
-    /// that is `owner_display_name`.
+    /// that is `owner`.
     #[serde(default)]
     pub display_name: String,
     #[serde(default)]
@@ -685,8 +726,9 @@ pub struct ScriptResponse {
     /// variations and effects, which deliberately does not bump for
     /// prose edits so cached copies stay valid. One field serves both
     /// purposes here only because the source IS the content: no edit
-    /// leaves a cached copy valid.
-    #[serde(default)]
+    /// leaves a cached copy valid. The wire calls it `revision`, as every
+    /// item's write token.
+    #[serde(default, alias = "revision")]
     pub version: u32,
     #[serde(default)]
     pub visibility: Option<ApiVisibility>,
@@ -702,9 +744,8 @@ pub struct ScriptResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScriptListItem {
     pub id: String,
-    pub user_id: String,
     #[serde(default)]
-    pub owner_display_name: String,
+    pub owner: Option<Owner>,
     pub name: String,
     #[serde(default)]
     pub display_name: String,
@@ -714,7 +755,7 @@ pub struct ScriptListItem {
     pub authors: Vec<String>,
     #[serde(default)]
     pub description: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "revision")]
     pub version: u32,
     #[serde(default)]
     pub visibility: Option<ApiVisibility>,
@@ -722,6 +763,20 @@ pub struct ScriptListItem {
     pub flags: Vec<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
+}
+
+impl ScriptResponse {
+    /// The owner's display name, empty for a built-in.
+    pub fn owner_name(&self) -> &str {
+        self.owner.as_ref().map_or("", |o| o.display_name.as_str())
+    }
+}
+
+impl ScriptListItem {
+    /// The owner's display name, empty for a built-in.
+    pub fn owner_name(&self) -> &str {
+        self.owner.as_ref().map_or("", |o| o.display_name.as_str())
+    }
 }
 
 /// Create / update payload.
@@ -752,8 +807,8 @@ pub struct ScriptCreateRequest {
     /// Travels in the body rather than an `If-Match` header: the API is
     /// JSON end to end with no ETag machinery, so a header would be the
     /// only one of its kind, and there is no intermediary cache to gain
-    /// from the idiom.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// from the idiom. The wire calls it `revision`.
+    #[serde(rename = "revision", skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
     /// A formula-library entry's `INFO.id`, the id the server stores it
     /// under (`api::entries`); absent for a CPU script, which the server
@@ -771,8 +826,13 @@ pub struct ScriptCreateRequest {
 /// wrong".
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScriptConflict {
+    /// The script's id: not in the body (the contract's 409 names only the
+    /// revision); [`ScriptConflict::from_error`] fills it in.
+    #[serde(default)]
     pub id: String,
-    /// The version currently stored. Yours was older.
+    /// The version currently stored (the wire's `current_revision`).
+    /// Yours was older.
+    #[serde(alias = "current_revision")]
     pub current_version: u32,
     #[serde(default)]
     pub updated_at: Option<String>,
@@ -786,10 +846,12 @@ impl ScriptConflict {
     /// but 403 and 404 are converted to their own variants *before* the
     /// body is read, and only the fall-through path keeps it. A 409 is
     /// on the fall-through path, which is the only reason this works.
-    pub fn from_error(e: &crate::resources::FetchError) -> Option<Self> {
+    pub fn from_error(e: &crate::resources::FetchError, id: &str) -> Option<Self> {
         match e {
             crate::resources::FetchError::Http { status: 409, message } => {
-                serde_json::from_str(message).ok()
+                let mut conflict: Self = serde_json::from_str(message).ok()?;
+                conflict.id = id.to_string();
+                Some(conflict)
             }
             _ => None,
         }
@@ -994,6 +1056,7 @@ pub struct VariationListItem {
     pub id: String,
     pub name: String,
     pub display_name: String,
+    #[serde(default, deserialize_with = "null_as_default")]
     pub category: String,
     pub version: u32,
     #[serde(default)]
@@ -1041,12 +1104,90 @@ mod tests {
         };
         assert_eq!(
             params.to_query_string(),
-            "?render_mode=escape&name=a%26b+%23c%2B&per_page=100"
+            "?render_mode=escape&q=a%26b+%23c%2B&per_page=100"
         );
     }
 
     #[test]
     fn no_filters_is_an_empty_query() {
         assert_eq!(SearchFlamesParams::default().to_query_string(), "");
+    }
+
+    /// A variation searched for is the catalog filter `type=variation:x`.
+    #[test]
+    fn a_variation_is_the_type_filter() {
+        let params = SearchFlamesParams { variation: Some("julian".into()), ..Default::default() };
+        assert_eq!(params.to_query_string(), "?type=variation%3Ajulian");
+    }
+
+    /// A list is the catalog API's page; a bare array still reads (a
+    /// bounded sub-list), and an item this build cannot read is skipped.
+    #[test]
+    fn a_list_is_a_page() {
+        let page = serde_json::json!({"items": [{"id": "a", "name": "A"}, {"id": 5}], "next": "bzoy"});
+        let read: Lenient<AnimationSummary> = serde_json::from_value(page.clone()).unwrap();
+        assert_eq!(read.0.len(), 1, "the unreadable one skipped");
+        let paged: Page<AnimationSummary> = serde_json::from_value(page).unwrap();
+        assert_eq!(paged.next.as_deref(), Some("bzoy"));
+        let bare: Lenient<AnimationSummary> = serde_json::from_value(serde_json::json!([{"id": "a", "name": "A"}])).unwrap();
+        assert_eq!(bare.0.len(), 1);
+        assert!(serde_json::from_value::<Lenient<AnimationSummary>>(serde_json::json!({"error": "x"})).is_err());
+    }
+
+    /// The contract's 409 names the revision, not the script: the caller's
+    /// id is filled in.
+    #[test]
+    fn a_script_conflict_from_the_contracts_409() {
+        let body = r#"{"error":"conflict","message":"Changed since you read it","current_revision":7,"updated_at":"2026-11-16T00:00:00Z"}"#;
+        let e = crate::resources::FetchError::Http { status: 409, message: body.into() };
+        let c = ScriptConflict::from_error(&e, "abc").expect("a conflict");
+        assert_eq!((c.id.as_str(), c.current_version), ("abc", 7));
+        let other = crate::resources::FetchError::Http { status: 400, message: body.into() };
+        assert!(ScriptConflict::from_error(&other, "abc").is_none());
+    }
+
+    /// Items name their owner as an object; a script's write token is
+    /// `revision` on the wire, both ways.
+    #[test]
+    fn owners_and_revisions() {
+        let script: ScriptListItem = serde_json::from_value(serde_json::json!({
+            "id": "s", "name": "n", "owner": {"id": "u", "display_name": "Ann"}, "revision": 4
+        }))
+        .unwrap();
+        assert_eq!((script.owner_name(), script.version), ("Ann", 4));
+        let builtin: ScriptListItem = serde_json::from_value(serde_json::json!({"id": "s", "name": "n", "origin": "builtin"})).unwrap();
+        assert_eq!(builtin.owner_name(), "");
+        let req = ScriptCreateRequest {
+            name: "n".into(),
+            display_name: "N".into(),
+            kind: "generator".into(),
+            authors: Vec::new(),
+            description: None,
+            source: "fn main() {}".into(),
+            flags: Vec::new(),
+            visibility: None,
+            version: Some(4),
+            id: None,
+        };
+        let sent = serde_json::to_value(&req).unwrap();
+        assert_eq!(sent["revision"], 4);
+        assert!(sent.get("version").is_none());
+    }
+
+    /// A palette is an item pointing at content; a variation's category
+    /// may come as null.
+    #[test]
+    fn palettes_and_null_categories() {
+        let p: PaletteItem = serde_json::from_value(serde_json::json!({
+            "id": "p1", "name": "Sunset", "content_hash": "h", "revision": 2, "visibility": "private",
+            "content": {"hash": "h", "color_data": [1, 2, 3], "stops": null}
+        }))
+        .unwrap();
+        assert_eq!((p.name.as_str(), p.content.hash.as_deref()), ("Sunset", Some("h")));
+        let v: VariationListItem = serde_json::from_value(serde_json::json!({
+            "id": "linear", "name": "linear", "display_name": "Linear", "category": null, "version": 1
+        }))
+        .unwrap();
+        assert_eq!(v.category, "");
     }
 }

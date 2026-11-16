@@ -19,7 +19,7 @@ const PARAMS = #{
                   "Color Dodge", "Color Burn", "Hue", "Saturation", "Color", "Luminosity"],
     },
 };
-const INFO = #{ title: "Edge Glow", id: "sobel_edges" };
+const INFO = #{ title: "Edge Glow", description: "The image's edges, found by the Sobel operator on its luminance, drawn glowing over it.", id: "sobel_edges" };
 
 // The blend library's luminance (Rec. 709).
 fn lum(uv) {

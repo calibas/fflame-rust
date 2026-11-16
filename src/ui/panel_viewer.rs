@@ -310,6 +310,8 @@ pub struct PanelContext<'a> {
     /// A panel put a formula in the Formula Editor (the Escape panel's
     /// Edit as Formula): the app opens it.
     pub open_formula_editor: &'a mut bool,
+    /// The Catalog selected a script in the Scripts panel: the app opens it.
+    pub open_scripts_panel: &'a mut bool,
     /// The View panel's Lighting button.
     pub open_lighting_panel: &'a mut bool,
 
@@ -443,6 +445,8 @@ pub struct PanelContext<'a> {
 
     // Fractal browser panel state (unified presets/batch/files)
     pub fractal_browser_panel: &'a mut Option<super::fractal_browser::FractalBrowserPanel>,
+    /// The Catalog (docs/projects/catalog.md).
+    pub inventory_panel: &'a mut super::inventory::InventoryPanel,
     pub textures_panel: &'a mut Option<super::textures_panel::TexturesPanel>,
     pub formula_editor: &'a mut Option<super::formula_editor::FormulaEditorPanel>,
     pub hybrid_designer: &'a mut Option<super::hybrid_designer::HybridDesignerPanel>,
@@ -728,8 +732,8 @@ impl<'a> PanelViewer<'a> {
             PanelType::PaletteEditor => {
                 self.render_palette_editor_panel(ui);
             }
-            PanelType::PaletteLibrary => {
-                self.render_palette_library_panel(ui);
+            PanelType::Inventory => {
+                self.render_inventory_panel(ui);
             }
             PanelType::View => {
                 self.render_view_panel(ui);
@@ -947,15 +951,9 @@ impl<'a> PanelViewer<'a> {
         );
     }
 
-    /// Render Palette Library panel (browse and manage palette packs)
-    fn render_palette_library_panel(&mut self, ui: &mut egui::Ui) {
-        super::palette_library::render_palette_library(
-            ui,
-            self.context.palette_library,
-            self.context.config_manager,
-            self.context.open_palette_editor,
-        );
-
+    /// The Catalog: every resource, to browse, read about and use. With
+    /// the online account on, the palettes end with Cloud Palettes.
+    fn render_inventory_panel(&mut self, ui: &mut egui::Ui) {
         let (online_account, auth_pair) = {
             let settings = self.context.config_manager.system_settings();
             let online = settings.online_account;
@@ -967,14 +965,33 @@ impl<'a> PanelViewer<'a> {
             };
             (online, auth)
         };
-        if online_account {
-            let auth = auth_pair.as_ref().map(|(b, t)| (b.as_str(), t.as_str()));
-            super::palette_library::render_cloud_palettes_section(
-                ui,
-                self.context.cloud_palette_state,
-                self.context.config_manager,
-                auth,
-            );
+        let auth = auth_pair.as_ref().map(|(b, t)| (b.as_str(), t.as_str()));
+        let mut cx = super::inventory::InventoryContext {
+            config_manager: self.context.config_manager,
+            palette_library: self.context.palette_library,
+            library_generation: self.context.script_cloud.library_generation,
+            cloud_palettes: online_account.then_some(super::inventory::CloudPalettes { state: self.context.cloud_palette_state, auth }),
+        };
+        let response = self.context.inventory_panel.render(ui, &mut cx);
+        if let Some(config) = response.load_preset {
+            *self.context.selected_preset_config = Some(config);
+            // A preset is nobody's online flame.
+            *self.context.loaded_api_flame_id = None;
+            *self.context.loaded_api_flame_is_public = None;
+            *self.context.loaded_api_flame_user_id = None;
+            *self.context.loaded_api_flame_animation_count = 0;
+            self.context.loaded_api_flame_animations.clear();
+        }
+        if response.open_palette_editor {
+            *self.context.open_palette_editor = true;
+        }
+        if let Some((file, shipped)) = response.open_formula_file {
+            self.context.formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_file(&file, shipped);
+            *self.context.open_formula_editor = true;
+        }
+        if let Some(id) = response.open_script {
+            self.context.scripts_panel.get_or_insert_with(super::scripts_panel::ScriptsPanel::new).select_script(&id);
+            *self.context.open_scripts_panel = true;
         }
     }
 

@@ -6,7 +6,7 @@ const PARAMS = #{
     bailout: #{ value: 50.0, min: 1.0, caption: "Bailout", hint: "The real part past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Exponential", center: complex(-1.0, 0.0), maxiter: 128 };
+const INFO = #{ title: "Exponential", description: "`z -> e^z + c`. It escapes when Re z passes the bailout, since `|e^z| = e^(Re z)`, so the bailout is near 50 rather than 4.", center: complex(-1.0, 0.0), maxiter: 128 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {
