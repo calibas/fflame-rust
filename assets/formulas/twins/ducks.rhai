@@ -12,7 +12,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Ducks (Kali-log)", center: complex(0.0, 0.0), maxiter: 80 };
+const INFO = #{ title: "Ducks (Kali-log)", description: "The logarithm of the iterate with its imaginary part folded positive (Kali-log), in five variants. It never escapes: the colourings that read the orbit draw it.", center: complex(0.0, 0.0), maxiter: 80 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

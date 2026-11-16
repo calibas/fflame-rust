@@ -75,8 +75,19 @@ changes.
   simulation kinds; a simulation def's line; a file's `INFO`; a CPU
   script's header summary (`script::parse_doc`). The cached server catalog
   covers downloads and the seven variations without a twin. Nothing is
-  attributed that its source does not say. Escape built-ins have no
-  description yet.
+  attributed that its source does not say.
+- **Every escape-time built-in and every built-in effect has a
+  description** (2026-11-16): in its twin's `INFO.description` -- the 26
+  formulas, 28 colourings, 3 fields and their 3 colourings, 4 solids
+  (`assets/formulas/twins/`) and 18 effects (`assets/effects/`) -- so it
+  travels with the twin when it is opened or published; written in ASCII
+  (`z -> z^2 + c`), as the fonts draw no superscripts or arrows. The
+  seven with no twin -- the two flame attractors and the solids' five
+  colourings -- take theirs from the locale
+  (`inventory.descriptions.<kind>.<name>`, `prose::untwinned`). A
+  twin's text is part of its registered name, so the engine catalog's
+  twin table gained the new names (append-only) and its examples were
+  regenerated.
 
 ## The panel
 

@@ -19,6 +19,7 @@ const PARAMS = #{
 };
 const INFO = #{
     title: "Distance Field",
+    description: "The rendered picture as a seed mask, jump-flooded into the distance to its nearest bright pixel, then shaded -- a glow, contour bands, or each pixel filled with its nearest seed's colour. Every distance-estimator look, for any flame, no invertibility required.",
     id: "distance_field",
     buffers: #{ coords: #{} },
     passes: [

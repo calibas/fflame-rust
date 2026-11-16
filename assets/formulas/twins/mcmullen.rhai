@@ -9,7 +9,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "McMullen", center: complex(0.0, 0.0), maxiter: 128 };
+const INFO = #{ title: "McMullen", description: "z -> z^n + c / z^m. At n = 2, m = 3 it is the classic Sierpinski-carpet family; on the parameter plane the orbit starts at the pixel.", center: complex(0.0, 0.0), maxiter: 128 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

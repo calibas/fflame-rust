@@ -12,7 +12,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Standard Map FTLE", coloring: "field_diverging" };
+const INFO = #{ title: "Standard Map FTLE", description: "The finite-time Lyapunov exponent of the Chirikov standard map: near 0 on the stable islands, positive in the chaotic sea.", coloring: "field_diverging" };
 
 // The point, and the tangent matrix, the identity.
 fn start(pos, p) {

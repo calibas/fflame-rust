@@ -125,7 +125,9 @@ fn the_built_ins_carry_their_prose() {
     assert!(described + 10 >= vars.len(), "{described} of {} variations described", vars.len());
     let linear = vars.iter().find(|e| e.key == EntryKey::Registered(Kind::Variation, "linear".into())).expect("linear");
     assert!(!linear.description.is_empty());
-    for kind in [Kind::SimModel, Kind::SimColoring] {
+    // Every escape-time built-in and every effect: its twin's
+    // INFO.description, or the locale's for those without a twin.
+    for kind in [Kind::SimModel, Kind::SimColoring, Kind::Formula, Kind::Coloring, Kind::Field, Kind::FieldColoring, Kind::Solid, Kind::SolidColoring, Kind::Effect] {
         for e in builtin(kind) {
             assert!(!e.description.is_empty(), "{kind:?} {:?}", e.key);
         }

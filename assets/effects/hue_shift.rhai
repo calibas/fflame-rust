@@ -16,7 +16,7 @@ const PARAMS = #{
                   "Color Dodge", "Color Burn", "Hue", "Saturation", "Color", "Luminosity"],
     },
 };
-const INFO = #{ title: "Hue Shift", id: "hue_shift" };
+const INFO = #{ title: "Hue Shift", description: "Every colour's hue turned by an angle.", id: "hue_shift" };
 
 // Hue, saturation and value, each 0 to 1.
 fn rgb_to_hsv(rgb) {

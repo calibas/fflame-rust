@@ -22,7 +22,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Position Map", bounded: true };
+const INFO = #{ title: "Position Map", description: "McCabe's origami colouring: a colour source projected onto the folded paper -- a plasma at the orbit's final position -- shifted by which folds moved the point.", bounded: true };
 
 fn start(z, p) { #{ address: 0.0 } }
 

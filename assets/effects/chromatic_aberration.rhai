@@ -18,7 +18,7 @@ const PARAMS = #{
                   "Color Dodge", "Color Burn", "Hue", "Saturation", "Color", "Luminosity"],
     },
 };
-const INFO = #{ title: "Chromatic Aberration", id: "chromatic_aberration" };
+const INFO = #{ title: "Chromatic Aberration", description: "The red and blue channels drawn apart, as a lens that does not bring every colour to one focus.", id: "chromatic_aberration" };
 
 fn effect(c, p, ctx) {
     // In logical points: the same look at any render scale.

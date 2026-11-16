@@ -14,7 +14,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Basic", region: "outside", bailout: 4.0 };
+const INFO = #{ title: "Basic", description: "Where the orbit escaped -- its real part, its imaginary part or their sum -- as Ultra Fractal's Basic colouring has it.", region: "outside", bailout: 4.0 };
 
 fn finish(s, z, p) {
     let v = if p.part == 1 {

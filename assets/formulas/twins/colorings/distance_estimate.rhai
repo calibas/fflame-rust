@@ -21,7 +21,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Distance Estimate", region: "outside", bailout: 1.0e4 };
+const INFO = #{ title: "Distance Estimate", description: "The distance to the set's boundary from the derivative orbit, d = |z| ln|z| / |dz|, mapped so equal palette steps are equal depths of distance.", region: "outside", bailout: 1.0e4 };
 
 // Without a derivative `ctx.dz` is its seed, and d a smooth function of
 // the escape radius that looks like a distance estimate and is not one:

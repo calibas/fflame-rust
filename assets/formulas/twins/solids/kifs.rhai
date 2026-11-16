@@ -62,7 +62,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "KIFS (Solid)", coloring: "ifs_level", slow: ["levels", "beam", "steps"] };
+const INFO = #{ title: "KIFS (Solid)", description: "Knighty's kaleidoscopic IFS: each iteration a turn, a fold into one piece of space, a turn and a scaling, ray-marched by the distance its scaling bounds.", coloring: "ifs_level", slow: ["levels", "beam", "steps"] };
 
 // A turn by Euler angles in degrees, x first, then y, then z, as the
 // built-in's `kifs_rotation` (rz ry rx), a row at a time: rx = [1 0 0;

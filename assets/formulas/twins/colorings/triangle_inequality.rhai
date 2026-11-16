@@ -15,7 +15,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Triangle Inequality", bailout: 1.0e4, pick: #{ deband: 1 } };
+const INFO = #{ title: "Triangle Inequality", description: "Where |z| falls at each step between the bounds the triangle inequality sets from |z - c| and |c|, averaged over the orbit.", bailout: 1.0e4, pick: #{ deband: 1 } };
 
 // The mean of the terms, or with Deband the template's debanded mean:
 // the mean without the last term and with it, blended by how far through

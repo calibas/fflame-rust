@@ -22,7 +22,7 @@ const PARAMS = #{
     bailout: #{ value: 10000.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Newton", center: complex(0.0, 0.0), maxiter: 64 };
+const INFO = #{ title: "Newton", description: "A root finder on the dynamical plane: one of six functions, solved by Newton's, Halley's or Chebyshev's scheme with a complex relaxation. An orbit ends as it settles on a root or escapes.", center: complex(0.0, 0.0), maxiter: 64 };
 
 fn start(pixel, p, ctx) {
     #{ z: pixel, prev: pixel }

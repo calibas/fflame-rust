@@ -24,7 +24,7 @@ const PARAMS = #{
     phase: #{ value: 0.0, min: 0.0, max: 6.28318, caption: "Phase", hint: "Phase offset added inside every octave's generator." },
 };
 
-const INFO = #{ title: "Weierstrass Field", gradient: true, coloring: "field_hillshade" };
+const INFO = #{ title: "Weierstrass Field", description: "A lacunary surface: a sum of octaves of a wave in x and y, each finer and fainter than the last, with its gradient for Hillshade's light.", gradient: true, coloring: "field_hillshade" };
 
 // The generator at an angle already reduced to [-pi, pi], and its slope.
 fn g(t, gen) {

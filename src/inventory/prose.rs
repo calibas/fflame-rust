@@ -69,6 +69,19 @@ pub(super) fn twin(kind: Kind, name: &str) -> Option<&'static Prose> {
     .get(name)
 }
 
+/// The prose of a built-in with no twin to carry it (the flame attractors
+/// and the solids' colourings): the locale's, by kind and name.
+pub(super) fn untwinned(kind: Kind, name: &str) -> Option<Prose> {
+    let kind = match kind {
+        Kind::Solid => "solid",
+        Kind::SolidColoring => "solid_coloring",
+        _ => return None,
+    };
+    let key = format!("inventory.descriptions.{kind}.{name}");
+    let text = t!(&key).to_string();
+    (text != key).then(|| Prose { description: text, authors: Vec::new() })
+}
+
 /// A server catalog's prose for a variation: what a download, and a
 /// built-in without a twin, have.
 pub(super) fn variation_catalog() -> HashMap<String, Prose> {

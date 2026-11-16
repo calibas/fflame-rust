@@ -17,7 +17,7 @@ const PARAMS = #{
                   "Color Dodge", "Color Burn", "Hue", "Saturation", "Color", "Luminosity"],
     },
 };
-const INFO = #{ title: "Vignette", id: "vignette" };
+const INFO = #{ title: "Vignette", description: "Darkens the edges of the image with a smooth radial falloff.", id: "vignette" };
 
 // WGSL's `smoothstep`, as its definition writes it.
 fn smooth(a, b, x) {

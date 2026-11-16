@@ -13,7 +13,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Rainbow Fringe", region: "outside", bailout: 1.0e4 };
+const INFO = #{ title: "Rainbow Fringe", description: "Black on white with a rainbow at the boundary: the hue from the direction of the distance estimate on the screen, the saturation and brightness from its length.", region: "outside", bailout: 1.0e4 };
 
 // The distance estimate's length, |z| ln|z| / |dz|, in output pixels.
 fn distance(z, dz, supersample) {

@@ -87,7 +87,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Infinite Waves", region: "outside" };
+const INFO = #{ title: "Infinite Waves", description: "No palette: sine waves of the iteration value drive the hue, the saturation and the brightness, as Kalles Fraktaler's multi-wave colouring does.", region: "outside" };
 
 // A wave at the iteration value: sin(pi iter / period), its argument
 // reduced to a turn first so a large count keeps its phase in f32.

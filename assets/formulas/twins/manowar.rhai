@@ -7,7 +7,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Manowar", center: complex(-0.4, 0.0), maxiter: 256 };
+const INFO = #{ title: "Manowar", description: "Fractint's Manowar: z -> z^2 + m + c, with m the previous z; both start at the pixel.", center: complex(-0.4, 0.0), maxiter: 256 };
 
 fn start(pixel, p, ctx) {
     let c = if ctx.julia { ctx.c } else { pixel };

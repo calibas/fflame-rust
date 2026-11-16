@@ -6,7 +6,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Lambda (Logistic)", center: complex(0.5, 0.0), maxiter: 256 };
+const INFO = #{ title: "Lambda (Logistic)", description: "The logistic map, z -> c z (1 - z). On the parameter plane the orbit starts at its critical point, 1/2.", center: complex(0.5, 0.0), maxiter: 256 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

@@ -23,7 +23,7 @@ const PARAMS = #{
                   "Color Dodge", "Color Burn", "Hue", "Saturation", "Color", "Luminosity"],
     },
 };
-const INFO = #{ title: "Julia/Mandelbrot", id: "julia" };
+const INFO = #{ title: "Julia/Mandelbrot", description: "A Mandelbrot or Julia set drawn over the image.", id: "julia" };
 
 // The shader's `hsv_to_rgb`: hue by sextant, its `%` a remainder.
 fn hsv_to_rgb(h, s, v) {

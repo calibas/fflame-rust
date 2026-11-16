@@ -16,7 +16,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Gaussian Integer" };
+const INFO = #{ title: "Gaussian Integer", description: "The distance from each iterate to the nearest Gaussian integer (the lattice point round(z)), reduced over the orbit. It colours the interior too." };
 
 // The smallest distance, their sum, the largest, the angle at the
 // smallest.

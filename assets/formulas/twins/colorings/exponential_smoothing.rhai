@@ -16,7 +16,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Exponential Smoothing" };
+const INFO = #{ title: "Exponential Smoothing", description: "A sum that fades as the orbit runs away or settles -- exp(-|z|) for a diverging orbit, exp(-1/|z - z'|) for a converging one -- continuous, with no bands." };
 
 fn start(z, p) {
     #{ total: 0.0 }

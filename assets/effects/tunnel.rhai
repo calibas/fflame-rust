@@ -19,7 +19,7 @@ const PARAMS = #{
                   "Color Dodge", "Color Burn", "Hue", "Saturation", "Color", "Luminosity"],
     },
 };
-const INFO = #{ title: "Tunnel", id: "tunnel" };
+const INFO = #{ title: "Tunnel", description: "The image wrapped on the inside of a tunnel, flown through.", id: "tunnel" };
 
 fn smooth(a, b, x) {
     let t = clamp((x - a) / (b - a), 0.0, 1.0);

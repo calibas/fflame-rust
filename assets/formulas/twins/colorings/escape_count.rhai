@@ -9,7 +9,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Escape Count", region: "outside" };
+const INFO = #{ title: "Escape Count", description: "The number of steps the orbit took to escape, times a scale: the classic banded look.", region: "outside" };
 
 fn finish(s, z, p, ctx) {
     to_float(ctx.numiter) * p.scale

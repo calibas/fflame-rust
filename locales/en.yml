@@ -3304,6 +3304,18 @@ inventory:
     examples: "Examples"
     yours: "Yours"
     adopted: "Adopted"
+  # The built-ins with no Rhai twin to carry a description (the rest
+  # carry theirs in their twin's INFO.description).
+  descriptions:
+    solid:
+      ifs_flame: "The loaded flame's attractor drawn as a shape, by inverse iteration: the distance to it rather than the chaos game's density."
+      ifs_flame_3d: "The loaded flame's attractor in three dimensions, sphere-traced as a solid."
+    solid_coloring:
+      ifs_distance: "The set as a shape, with an exact antialiased edge and optional contour bands outside it."
+      ifs_level: "Escape-time bands: nested shells of constant inverse-orbit depth around the set."
+      ifs_address: "The branch taken at each level, as a base-N fraction: the symbolic colouring, which keeps its contrast in a deep zoom."
+      ifs_trap: "An orbit trap on the point after the last inversion, the same size at every zoom depth."
+      ifs_measure: "The flame's own density and colour, read through the inverse walk instead of sampled by the chaos game, so it does not starve at depth."
 
 catalog:
   search: "Search"

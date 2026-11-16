@@ -11,7 +11,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Diverging" };
+const INFO = #{ title: "Diverging", description: "A signed field on a diverging palette: zero at the middle, the sign picking the half." };
 
 fn shade(sum, grad, n, p) {
     // (-inf, inf) to (0, 1), 0 at exactly 0.5; the 0.999 keeps the

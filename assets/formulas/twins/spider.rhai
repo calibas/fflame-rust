@@ -6,7 +6,7 @@ const PARAMS = #{
     bailout: #{ value: 4.0, min: 1.0, caption: "Bailout", hint: "The squared radius past which a pixel has escaped" },
 };
 
-const INFO = #{ title: "Spider", center: complex(-0.4, 0.0), maxiter: 256 };
+const INFO = #{ title: "Spider", description: "Fractint's Spider: z -> z^2 + c, then c becomes half itself plus the new z, so the constant travels with the orbit.", center: complex(-0.4, 0.0), maxiter: 256 };
 
 fn start(pixel, p, ctx) {
     if ctx.julia {

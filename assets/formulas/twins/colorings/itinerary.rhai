@@ -28,7 +28,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Itinerary" };
+const INFO = #{ title: "Itinerary", description: "The orbit's angular address: each iterate lands in one of several equal sectors, and the sectors are the digits of one fraction, read from the orbit's head or its tail." };
 
 // The address, the symbols spelled so far, the weight the next head
 // symbol carries, and the tail's bottom place k^-depth. The two place

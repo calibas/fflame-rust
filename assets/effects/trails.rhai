@@ -25,6 +25,7 @@ const PARAMS = #{
 // up over that many.
 const INFO = #{
     title: "Trails",
+    description: "What moves leaves an afterimage that fades -- the picture's light remembered from frame to frame, as a long exposure or a slow phosphor would.",
     id: "trails",
     buffers: #{ trail: #{ persist: true } },
     passes: [#{ run: "keep", to: "trail" }, #{ run: "effect" }],

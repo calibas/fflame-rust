@@ -159,7 +159,8 @@ pub(super) fn escape(out: &mut Vec<Entry>) {
     let mut push = |kind: Kind, name: &str, title: &str| {
         let group = Group { order: 0, label: t!(kind.label_key()).to_string() };
         let e = entry(kind, EntryKey::Registered(kind, name.to_string()), title, group, Origin::Builtin);
-        out.push(with_prose(e, prose::twin(kind, name)));
+        let untwinned = prose::untwinned(kind, name);
+        out.push(with_prose(e, prose::twin(kind, name).or(untwinned.as_ref())));
     };
     for f in crate::escape::FORMULAS {
         push(Kind::Formula, f.name, f.display_name);

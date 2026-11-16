@@ -18,7 +18,7 @@ const PARAMS = #{
         hint: "How far above the threshold, in multiples of the mean density, the blur fades out to none.",
     },
 };
-const INFO = #{ title: "Density Blur", id: "density_blur", category: "density" };
+const INFO = #{ title: "Density Blur", description: "Sparse regions blurred, dense ones kept sharp -- the density estimation flam3 does, on the accumulation, before the tone map.", id: "density_blur", category: "density" };
 
 fn smooth(a, b, x) {
     let t = clamp((x - a) / (b - a), 0.0, 1.0);

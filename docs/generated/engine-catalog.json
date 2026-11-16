@@ -13161,9 +13161,9 @@
           "custom_formula": {
             "dialect": "rhai",
             "entry": "Mandelbrot",
-            "source": "// The built-in Mandelbrot, as a formula of your own. The Escape panel's\n// Edit as Formula opens it here with the picture as it was; change\n// anything, and with Live on the picture follows. The panel's Bailout\n// and Julia toggle still drive it.\n\nconst PARAMS = #{\n    bailout: #{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" },\n};\n\nconst INFO = #{ title: \"Mandelbrot\", center: complex(0.0, 0.0), maxiter: 512 };\n\nfn start(pixel, p, ctx) {\n    // On the Julia plane the pixel starts the orbit and c is the\n    // panel's constant; on the parameter plane z starts at 0.\n    if ctx.julia {\n        #{ z: pixel, c: ctx.c }\n    } else {\n        #{ z: complex(0.0, 0.0), c: pixel }\n    }\n}\n\nfn step(s, p) {\n    s.z = s.z * s.z + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    s.z.norm_sqr() > p.bailout\n}\n\n// How fast it grows past the bailout, |z| to the power 2: what the\n// smooth colourings divide by.\nfn degree(p) {\n    2.0\n}\n"
+            "source": "// The built-in Mandelbrot, as a formula of your own. The Escape panel's\n// Edit as Formula opens it here with the picture as it was; change\n// anything, and with Live on the picture follows. The panel's Bailout\n// and Julia toggle still drive it.\n\nconst PARAMS = #{\n    bailout: #{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" },\n};\n\nconst INFO = #{ title: \"Mandelbrot\", description: \"The classic: z -> z^2 + c, the points c whose orbit from 0 stays bounded. On the Julia plane the pixel starts the orbit and c is held.\", center: complex(0.0, 0.0), maxiter: 512 };\n\nfn start(pixel, p, ctx) {\n    // On the Julia plane the pixel starts the orbit and c is the\n    // panel's constant; on the parameter plane z starts at 0.\n    if ctx.julia {\n        #{ z: pixel, c: ctx.c }\n    } else {\n        #{ z: complex(0.0, 0.0), c: pixel }\n    }\n}\n\nfn step(s, p) {\n    s.z = s.z * s.z + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    s.z.norm_sqr() > p.bailout\n}\n\n// How fast it grows past the bailout, |z| to the power 2: what the\n// smooth colourings divide by.\nfn degree(p) {\n    2.0\n}\n"
           },
-          "formula": "custom-fde07d10e218dc34",
+          "formula": "custom-43027864c8660aed",
           "max_iter": 256
         },
         "flame": {
@@ -13259,9 +13259,9 @@
           "custom_formula": {
             "dialect": "rhai",
             "entry": "Mandelbrot",
-            "source": "// The built-in Mandelbrot, as a formula of your own. The Escape panel's\n// Edit as Formula opens it here with the picture as it was; change\n// anything, and with Live on the picture follows. The panel's Bailout\n// and Julia toggle still drive it.\n\nconst PARAMS = #{\n    bailout: #{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" },\n};\n\nconst INFO = #{ title: \"Mandelbrot\", center: complex(0.0, 0.0), maxiter: 512 };\n\nfn start(pixel, p, ctx) {\n    // On the Julia plane the pixel starts the orbit and c is the\n    // panel's constant; on the parameter plane z starts at 0.\n    if ctx.julia {\n        #{ z: pixel, c: ctx.c }\n    } else {\n        #{ z: complex(0.0, 0.0), c: pixel }\n    }\n}\n\nfn step(s, p) {\n    s.z = s.z * s.z + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    s.z.norm_sqr() > p.bailout\n}\n\n// How fast it grows past the bailout, |z| to the power 2: what the\n// smooth colourings divide by.\nfn degree(p) {\n    2.0\n}\n\n// an edit\n"
+            "source": "// The built-in Mandelbrot, as a formula of your own. The Escape panel's\n// Edit as Formula opens it here with the picture as it was; change\n// anything, and with Live on the picture follows. The panel's Bailout\n// and Julia toggle still drive it.\n\nconst PARAMS = #{\n    bailout: #{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" },\n};\n\nconst INFO = #{ title: \"Mandelbrot\", description: \"The classic: z -> z^2 + c, the points c whose orbit from 0 stays bounded. On the Julia plane the pixel starts the orbit and c is held.\", center: complex(0.0, 0.0), maxiter: 512 };\n\nfn start(pixel, p, ctx) {\n    // On the Julia plane the pixel starts the orbit and c is the\n    // panel's constant; on the parameter plane z starts at 0.\n    if ctx.julia {\n        #{ z: pixel, c: ctx.c }\n    } else {\n        #{ z: complex(0.0, 0.0), c: pixel }\n    }\n}\n\nfn step(s, p) {\n    s.z = s.z * s.z + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    s.z.norm_sqr() > p.bailout\n}\n\n// How fast it grows past the bailout, |z| to the power 2: what the\n// smooth colourings divide by.\nfn degree(p) {\n    2.0\n}\n\n// an edit\n"
           },
-          "formula": "custom-62b3e7f76c01caaf",
+          "formula": "custom-14a1ffd7157e0476",
           "max_iter": 256
         },
         "flame": {
@@ -13331,7 +13331,7 @@
             "role": "coloring"
           },
           {
-            "key": "62b3e7f76c01caaf",
+            "key": "14a1ffd7157e0476",
             "kind": "formula",
             "origin": "source",
             "primary": true,
@@ -13356,9 +13356,9 @@
           "custom_formula": {
             "dialect": "rhai",
             "entry": "Mandelbrot",
-            "source": "// The built-in Mandelbrot, as a formula of your own. The Escape panel's\n// Edit as Formula opens it here with the picture as it was; change\n// anything, and with Live on the picture follows. The panel's Bailout\n// and Julia toggle still drive it.\n\nconst PARAMS = #{\n    bailout: #{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" },\n};\n\nconst INFO = #{ id: \"0f8fad5b-d9cb-469f-a165-70867728950e\", title: \"Mandelbrot\", center: complex(0.0, 0.0), maxiter: 512 };\n\nfn start(pixel, p, ctx) {\n    // On the Julia plane the pixel starts the orbit and c is the\n    // panel's constant; on the parameter plane z starts at 0.\n    if ctx.julia {\n        #{ z: pixel, c: ctx.c }\n    } else {\n        #{ z: complex(0.0, 0.0), c: pixel }\n    }\n}\n\nfn step(s, p) {\n    s.z = s.z * s.z + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    s.z.norm_sqr() > p.bailout\n}\n\n// How fast it grows past the bailout, |z| to the power 2: what the\n// smooth colourings divide by.\nfn degree(p) {\n    2.0\n}\n"
+            "source": "// The built-in Mandelbrot, as a formula of your own. The Escape panel's\n// Edit as Formula opens it here with the picture as it was; change\n// anything, and with Live on the picture follows. The panel's Bailout\n// and Julia toggle still drive it.\n\nconst PARAMS = #{\n    bailout: #{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" },\n};\n\nconst INFO = #{ id: \"0f8fad5b-d9cb-469f-a165-70867728950e\", title: \"Mandelbrot\", description: \"The classic: z -> z^2 + c, the points c whose orbit from 0 stays bounded. On the Julia plane the pixel starts the orbit and c is held.\", center: complex(0.0, 0.0), maxiter: 512 };\n\nfn start(pixel, p, ctx) {\n    // On the Julia plane the pixel starts the orbit and c is the\n    // panel's constant; on the parameter plane z starts at 0.\n    if ctx.julia {\n        #{ z: pixel, c: ctx.c }\n    } else {\n        #{ z: complex(0.0, 0.0), c: pixel }\n    }\n}\n\nfn step(s, p) {\n    s.z = s.z * s.z + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    s.z.norm_sqr() > p.bailout\n}\n\n// How fast it grows past the bailout, |z| to the power 2: what the\n// smooth colourings divide by.\nfn degree(p) {\n    2.0\n}\n"
           },
-          "formula": "custom-u0f8fad5bd9cb469fa16570867728950e_a369fc03",
+          "formula": "custom-u0f8fad5bd9cb469fa16570867728950e_19df6483",
           "max_iter": 256
         },
         "flame": {
@@ -13433,7 +13433,7 @@
             "origin": "script",
             "primary": true,
             "role": "formula",
-            "version": "a369fc03"
+            "version": "19df6483"
           }
         ],
         "config_version": 7,
@@ -13454,9 +13454,9 @@
           "custom_formula": {
             "dialect": "rhai",
             "entry": "Mandelbox (Solid)",
-            "source": "// The built-in Mandelbox (Solid) as a solid of your own (the Escape\n// panel's Edit as Rhai): Tom Lowe's box and sphere folds, z <- s fold(z)\n// + c, with Syntopia's distance estimate at 0.95 of itself. Each step is\n// the built-in's arithmetic, in its order, so the two draw alike.\n//\n// The colourings read the start of the orbit: the running scale `dr`\n// (Escape Level), the closest approach of `z` (Orbit Trap), and the\n// `address` -- each iteration's digit in base 12, how many axes the box\n// fold reflected (0 to 3) times 3 plus which of the sphere fold's three\n// cases applied, the first iteration in the first place.\n\nconst PARAMS = #{\n    scale: #{\n        value: 2.0, min: -4.0, max: 4.0,\n        caption: \"Scale\",\n        hint: \"How much each iteration enlarges space after the folds. 2 is Lowe's box; negative scales (-1.5 is the classic) turn it inside out. Between -1 and 1 nothing escapes, so the magnitude is held to 1.05 at least.\",\n    },\n    min_radius: #{\n        value: 0.5, min: 0.0, max: 2.0,\n        caption: \"Minimum Radius\",\n        hint: \"Inside this radius the sphere fold scales linearly; between it and the fixed radius, it inverts.\",\n    },\n    fixed_radius: #{\n        value: 1.0, min: 0.1, max: 3.0,\n        caption: \"Fixed Radius\",\n        hint: \"The radius the sphere fold inverts in.\",\n    },\n    fold_limit: #{\n        value: 1.0, min: 0.1, max: 3.0,\n        caption: \"Folding Limit\",\n        hint: \"Where the box fold reflects each axis.\",\n    },\n    mode: #{\n        value: 0,\n        caption: \"Mode\",\n        hint: \"The Mandelbox adds the point itself each iteration; its Julia adds the constant below, the same for every point.\",\n        choices: [\"Mandelbox\", \"Julia\"],\n    },\n    cx: #{ value: 0.0, min: -4.0, max: 4.0, caption: \"Julia X\", hint: \"The Julia constant's x.\" },\n    cy: #{ value: 0.0, min: -4.0, max: 4.0, caption: \"Julia Y\", hint: \"The Julia constant's y.\" },\n    cz: #{ value: 0.0, min: -4.0, max: 4.0, caption: \"Julia Z\", hint: \"The Julia constant's z.\" },\n    // The template's Colour Depth, declared to keep the built-in's hint.\n    colour_depth: #{\n        value: 3.0, min: 1.0, max: 12.0,\n        caption: \"Colour Depth\",\n        hint: \"How many of the first iterations the colourings read: the orbit trap's closest approach, the level's stretch and the address. The surface is drawn a pixel from the set, and past a few iterations that pixel decides the orbit, so deeper colours change with the camera. Raise it when zoomed in.\",\n    },\n};\n\nconst INFO = #{ title: \"Mandelbox (Solid)\" };\n\n// The ball the set lies in, as the built-in's (`mandelbox_radius`): the\n// cube a point past which escapes, reached at its corners.\nfn prepare(p) {\n    let s = max(abs(p.scale), 1.05);\n    let l = max(p.fold_limit, 0.1);\n    let cube = if p.mode > 0 {\n        let c = max(max(abs(p.cx), abs(p.cy)), abs(p.cz));\n        (2.0 * l * s + c) / (s - 1.0)\n    } else {\n        2.0 * l * (s + 1.0) / (s - 1.0)\n    };\n    #{ ball: min(cube * sqrt(3.0), 256.0) }\n}\n\nfn start(pos, p) {\n    let c = if p.mode > 0 { vec3(p.cx, p.cy, p.cz) } else { pos };\n    #{ z: pos, c: c, dr: 1.0, address: 0.0, place: 1.0 / 12.0 }\n}\n\nfn step(s, p) {\n    // |s| at least 1.05, its sign kept.\n    let s_in = p.scale;\n    let sc = if s_in < 0.0 { min(s_in, -1.05) } else { max(s_in, 1.05) };\n    let min_r = max(p.min_radius, 0.0);\n    let fixed_r = max(p.fixed_radius, 0.1);\n    let min_r2 = max(min(min_r * min_r, fixed_r * fixed_r), 1.0e-6);\n    let fixed_r2 = fixed_r * fixed_r;\n    let limit = max(p.fold_limit, 0.1);\n    let z = s.z;\n    // How many axes the box fold reflects.\n    let axes = 0;\n    if abs(z.x) > limit { axes += 1; }\n    if abs(z.y) > limit { axes += 1; }\n    if abs(z.z) > limit { axes += 1; }\n    z = clamp(z, -limit, limit) * 2.0 - z;\n    let r2 = dot(z, z);\n    let fold_case = 0;\n    if r2 < min_r2 {\n        let t = fixed_r2 / min_r2;\n        z = z * t;\n        s.dr = s.dr * t;\n        fold_case = 2;\n    } else if r2 < fixed_r2 {\n        let t = fixed_r2 / r2;\n        z = z * t;\n        s.dr = s.dr * t;\n        fold_case = 1;\n    }\n    s.z = z * sc + s.c;\n    s.dr = s.dr * abs(sc) + (if p.mode > 0 { 0.0 } else { 1.0 });\n    s.address = s.address + to_float(axes * 3 + fold_case) * s.place;\n    s.place = s.place / 12.0;\n    s\n}\n\nfn escaped(s, p) {\n    length(s.z) > 100.0\n}\n\nfn distance(s, p) {\n    0.95 * length(s.z) / max(abs(s.dr), 1.0e-30)\n}\n"
+            "source": "// The built-in Mandelbox (Solid) as a solid of your own (the Escape\n// panel's Edit as Rhai): Tom Lowe's box and sphere folds, z <- s fold(z)\n// + c, with Syntopia's distance estimate at 0.95 of itself. Each step is\n// the built-in's arithmetic, in its order, so the two draw alike.\n//\n// The colourings read the start of the orbit: the running scale `dr`\n// (Escape Level), the closest approach of `z` (Orbit Trap), and the\n// `address` -- each iteration's digit in base 12, how many axes the box\n// fold reflected (0 to 3) times 3 plus which of the sphere fold's three\n// cases applied, the first iteration in the first place.\n\nconst PARAMS = #{\n    scale: #{\n        value: 2.0, min: -4.0, max: 4.0,\n        caption: \"Scale\",\n        hint: \"How much each iteration enlarges space after the folds. 2 is Lowe's box; negative scales (-1.5 is the classic) turn it inside out. Between -1 and 1 nothing escapes, so the magnitude is held to 1.05 at least.\",\n    },\n    min_radius: #{\n        value: 0.5, min: 0.0, max: 2.0,\n        caption: \"Minimum Radius\",\n        hint: \"Inside this radius the sphere fold scales linearly; between it and the fixed radius, it inverts.\",\n    },\n    fixed_radius: #{\n        value: 1.0, min: 0.1, max: 3.0,\n        caption: \"Fixed Radius\",\n        hint: \"The radius the sphere fold inverts in.\",\n    },\n    fold_limit: #{\n        value: 1.0, min: 0.1, max: 3.0,\n        caption: \"Folding Limit\",\n        hint: \"Where the box fold reflects each axis.\",\n    },\n    mode: #{\n        value: 0,\n        caption: \"Mode\",\n        hint: \"The Mandelbox adds the point itself each iteration; its Julia adds the constant below, the same for every point.\",\n        choices: [\"Mandelbox\", \"Julia\"],\n    },\n    cx: #{ value: 0.0, min: -4.0, max: 4.0, caption: \"Julia X\", hint: \"The Julia constant's x.\" },\n    cy: #{ value: 0.0, min: -4.0, max: 4.0, caption: \"Julia Y\", hint: \"The Julia constant's y.\" },\n    cz: #{ value: 0.0, min: -4.0, max: 4.0, caption: \"Julia Z\", hint: \"The Julia constant's z.\" },\n    // The template's Colour Depth, declared to keep the built-in's hint.\n    colour_depth: #{\n        value: 3.0, min: 1.0, max: 12.0,\n        caption: \"Colour Depth\",\n        hint: \"How many of the first iterations the colourings read: the orbit trap's closest approach, the level's stretch and the address. The surface is drawn a pixel from the set, and past a few iterations that pixel decides the orbit, so deeper colours change with the camera. Raise it when zoomed in.\",\n    },\n};\n\nconst INFO = #{ title: \"Mandelbox (Solid)\", description: \"Tom Lowe's Mandelbox: box and sphere folds, z -> s fold(z) + c, ray-marched by its distance estimate.\" };\n\n// The ball the set lies in, as the built-in's (`mandelbox_radius`): the\n// cube a point past which escapes, reached at its corners.\nfn prepare(p) {\n    let s = max(abs(p.scale), 1.05);\n    let l = max(p.fold_limit, 0.1);\n    let cube = if p.mode > 0 {\n        let c = max(max(abs(p.cx), abs(p.cy)), abs(p.cz));\n        (2.0 * l * s + c) / (s - 1.0)\n    } else {\n        2.0 * l * (s + 1.0) / (s - 1.0)\n    };\n    #{ ball: min(cube * sqrt(3.0), 256.0) }\n}\n\nfn start(pos, p) {\n    let c = if p.mode > 0 { vec3(p.cx, p.cy, p.cz) } else { pos };\n    #{ z: pos, c: c, dr: 1.0, address: 0.0, place: 1.0 / 12.0 }\n}\n\nfn step(s, p) {\n    // |s| at least 1.05, its sign kept.\n    let s_in = p.scale;\n    let sc = if s_in < 0.0 { min(s_in, -1.05) } else { max(s_in, 1.05) };\n    let min_r = max(p.min_radius, 0.0);\n    let fixed_r = max(p.fixed_radius, 0.1);\n    let min_r2 = max(min(min_r * min_r, fixed_r * fixed_r), 1.0e-6);\n    let fixed_r2 = fixed_r * fixed_r;\n    let limit = max(p.fold_limit, 0.1);\n    let z = s.z;\n    // How many axes the box fold reflects.\n    let axes = 0;\n    if abs(z.x) > limit { axes += 1; }\n    if abs(z.y) > limit { axes += 1; }\n    if abs(z.z) > limit { axes += 1; }\n    z = clamp(z, -limit, limit) * 2.0 - z;\n    let r2 = dot(z, z);\n    let fold_case = 0;\n    if r2 < min_r2 {\n        let t = fixed_r2 / min_r2;\n        z = z * t;\n        s.dr = s.dr * t;\n        fold_case = 2;\n    } else if r2 < fixed_r2 {\n        let t = fixed_r2 / r2;\n        z = z * t;\n        s.dr = s.dr * t;\n        fold_case = 1;\n    }\n    s.z = z * sc + s.c;\n    s.dr = s.dr * abs(sc) + (if p.mode > 0 { 0.0 } else { 1.0 });\n    s.address = s.address + to_float(axes * 3 + fold_case) * s.place;\n    s.place = s.place / 12.0;\n    s\n}\n\nfn escaped(s, p) {\n    length(s.z) > 100.0\n}\n\nfn distance(s, p) {\n    0.95 * length(s.z) / max(abs(s.dr), 1.0e-30)\n}\n"
           },
-          "formula": "custom-98afbe3ca2bfd07a",
+          "formula": "custom-d9cb51c78e0a1f75",
           "max_iter": 256
         },
         "flame": {
@@ -13552,9 +13552,9 @@
           "custom_formula": {
             "dialect": "rhai",
             "entry": "Weierstrass Field",
-            "source": "// The built-in Weierstrass Field as a field of your own (the Escape\n// panel's Edit as Rhai): the Besicovitch-Ursell lacunary surface\n// F(x, y) = sum a^n g(b^n x + phase) g(b^n y + phase), a term an octave,\n// with the gradient term by term for Hillshade's light. Each term is the\n// built-in's arithmetic, in its order.\n\nconst PARAMS = #{\n    a: #{\n        value: 0.55, min: 0.05, max: 0.95,\n        caption: \"Amplitude Ratio\",\n        hint: \"Per-octave amplitude factor a. Roughness rises toward 1 (the sum stays convergent below 1).\",\n    },\n    b: #{\n        value: 2.0, min: 1.2, max: 8.0,\n        caption: \"Frequency Ratio\",\n        hint: \"Per-octave frequency factor b (the lacunary sequence bⁿ). Classic Weierstrass needs ab ≥ 1 for nowhere-differentiability.\",\n    },\n    generator: #{\n        value: 0,\n        caption: \"Generator\",\n        hint: \"0 = cosine, 1 = sine, 2 = triangle wave (Takagi/blancmange).\",\n        choices: [\"Cosine\", \"Sine\", \"Triangle (Takagi)\"],\n    },\n    phase: #{ value: 0.0, min: 0.0, max: 6.28318, caption: \"Phase\", hint: \"Phase offset added inside every octave's generator.\" },\n};\n\nconst INFO = #{ title: \"Weierstrass Field\", gradient: true, coloring: \"field_hillshade\" };\n\n// The generator at an angle already reduced to [-pi, pi], and its slope.\nfn g(t, gen) {\n    if gen == 0 {\n        cos(t)\n    } else if gen == 1 {\n        sin(t)\n    } else {\n        // A triangle wave, period 2 pi, range [-1, 1].\n        let f = fract(t * 0.15915494);\n        1.0 - 4.0 * abs(f - 0.5)\n    }\n}\n\nfn dg(t, gen) {\n    if gen == 0 {\n        -sin(t)\n    } else if gen == 1 {\n        cos(t)\n    } else {\n        // The triangle wave's slope: +-4 / 2 pi, by its half-period.\n        let f = fract(t * 0.15915494);\n        if f > 0.5 { -0.63661977 } else { 0.63661977 }\n    }\n}\n\n// The running octave scales, a^n and b^n.\nfn start(pos, p) {\n    #{ pos: pos, an: 1.0, bn: 1.0, value: 0.0, grad: complex(0.0, 0.0) }\n}\n\nfn term(s, p) {\n    let gen = p.generator;\n    let tx = reduce(s.bn * s.pos.re + p.phase);\n    let ty = reduce(s.bn * s.pos.im + p.phase);\n    let gx = g(tx, gen);\n    let gy = g(ty, gen);\n    s.value = s.an * gx * gy;\n    s.grad = complex(s.an * s.bn * dg(tx, gen) * gy, s.an * s.bn * gx * dg(ty, gen));\n    s.an = s.an * p.a;\n    s.bn = s.bn * p.b;\n    s\n}\n"
+            "source": "// The built-in Weierstrass Field as a field of your own (the Escape\n// panel's Edit as Rhai): the Besicovitch-Ursell lacunary surface\n// F(x, y) = sum a^n g(b^n x + phase) g(b^n y + phase), a term an octave,\n// with the gradient term by term for Hillshade's light. Each term is the\n// built-in's arithmetic, in its order.\n\nconst PARAMS = #{\n    a: #{\n        value: 0.55, min: 0.05, max: 0.95,\n        caption: \"Amplitude Ratio\",\n        hint: \"Per-octave amplitude factor a. Roughness rises toward 1 (the sum stays convergent below 1).\",\n    },\n    b: #{\n        value: 2.0, min: 1.2, max: 8.0,\n        caption: \"Frequency Ratio\",\n        hint: \"Per-octave frequency factor b (the lacunary sequence bⁿ). Classic Weierstrass needs ab ≥ 1 for nowhere-differentiability.\",\n    },\n    generator: #{\n        value: 0,\n        caption: \"Generator\",\n        hint: \"0 = cosine, 1 = sine, 2 = triangle wave (Takagi/blancmange).\",\n        choices: [\"Cosine\", \"Sine\", \"Triangle (Takagi)\"],\n    },\n    phase: #{ value: 0.0, min: 0.0, max: 6.28318, caption: \"Phase\", hint: \"Phase offset added inside every octave's generator.\" },\n};\n\nconst INFO = #{ title: \"Weierstrass Field\", description: \"A lacunary surface: a sum of octaves of a wave in x and y, each finer and fainter than the last, with its gradient for Hillshade's light.\", gradient: true, coloring: \"field_hillshade\" };\n\n// The generator at an angle already reduced to [-pi, pi], and its slope.\nfn g(t, gen) {\n    if gen == 0 {\n        cos(t)\n    } else if gen == 1 {\n        sin(t)\n    } else {\n        // A triangle wave, period 2 pi, range [-1, 1].\n        let f = fract(t * 0.15915494);\n        1.0 - 4.0 * abs(f - 0.5)\n    }\n}\n\nfn dg(t, gen) {\n    if gen == 0 {\n        -sin(t)\n    } else if gen == 1 {\n        cos(t)\n    } else {\n        // The triangle wave's slope: +-4 / 2 pi, by its half-period.\n        let f = fract(t * 0.15915494);\n        if f > 0.5 { -0.63661977 } else { 0.63661977 }\n    }\n}\n\n// The running octave scales, a^n and b^n.\nfn start(pos, p) {\n    #{ pos: pos, an: 1.0, bn: 1.0, value: 0.0, grad: complex(0.0, 0.0) }\n}\n\nfn term(s, p) {\n    let gen = p.generator;\n    let tx = reduce(s.bn * s.pos.re + p.phase);\n    let ty = reduce(s.bn * s.pos.im + p.phase);\n    let gx = g(tx, gen);\n    let gy = g(ty, gen);\n    s.value = s.an * gx * gy;\n    s.grad = complex(s.an * s.bn * dg(tx, gen) * gy, s.an * s.bn * gx * dg(ty, gen));\n    s.an = s.an * p.a;\n    s.bn = s.bn * p.b;\n    s\n}\n"
           },
-          "formula": "custom-585bdbc92d34c34a",
+          "formula": "custom-a67d506a97860e75",
           "max_iter": 256
         },
         "flame": {
@@ -15273,9 +15273,17 @@
       ]
     ],
     "twins": {
+      "custom-0009912c3094c859": {
+        "builtin": "smooth",
+        "kind": "coloring"
+      },
       "custom-009308b3fc82a988": {
         "builtin": "brusselator2",
         "kind": "sim_model"
+      },
+      "custom-028c1a436f69c113": {
+        "builtin": "magnitude_average",
+        "kind": "coloring"
       },
       "custom-046b9a81030f6b63": {
         "builtin": "invasion_percolation",
@@ -15345,6 +15353,10 @@
         "builtin": "quaternion_julia_solid",
         "kind": "solid"
       },
+      "custom-12cdb0a2fccaca51": {
+        "builtin": "lambda_sine",
+        "kind": "formula"
+      },
       "custom-1383eb54325e1156": {
         "builtin": "littlewood",
         "kind": "formula"
@@ -15355,6 +15367,10 @@
       },
       "custom-157c836a7c80a319": {
         "builtin": "stripe_average",
+        "kind": "coloring"
+      },
+      "custom-18a4becb1238891b": {
+        "builtin": "triangle_inequality",
         "kind": "coloring"
       },
       "custom-19ae73a111a5afc8": {
@@ -15397,9 +15413,21 @@
         "builtin": "field_value",
         "kind": "field_coloring"
       },
+      "custom-1f6b0b3c6e064f11": {
+        "builtin": "manowar",
+        "kind": "formula"
+      },
       "custom-211d95b42d30837e": {
         "builtin": "field_diverging",
         "kind": "field_coloring"
+      },
+      "custom-2126992e8007b014": {
+        "builtin": "orbit_average",
+        "kind": "coloring"
+      },
+      "custom-22eabd83e14c227a": {
+        "builtin": "gaussian_integer",
+        "kind": "coloring"
       },
       "custom-23eeb0658a4befd0": {
         "builtin": "cyclic_ca",
@@ -15417,9 +15445,17 @@
         "builtin": "threads",
         "kind": "coloring"
       },
+      "custom-26a41ff28a7cc80b": {
+        "builtin": "magnet",
+        "kind": "formula"
+      },
       "custom-27cba93375b31589": {
         "builtin": "structure",
         "kind": "sim_coloring"
+      },
+      "custom-282e6a0e817dfa5d": {
+        "builtin": "field_diverging",
+        "kind": "field_coloring"
       },
       "custom-289802dd1f66dd31": {
         "builtin": "barnsley",
@@ -15445,6 +15481,10 @@
         "builtin": "standard_map_ftle",
         "kind": "field"
       },
+      "custom-3002c49a1073a368": {
+        "builtin": "stripe_average",
+        "kind": "coloring"
+      },
       "custom-30d488e15f304092": {
         "builtin": "mandelbulb_solid",
         "kind": "solid"
@@ -15469,6 +15509,10 @@
         "builtin": "cyclic_ca",
         "kind": "sim_model"
       },
+      "custom-3279a522b4ff0a9f": {
+        "builtin": "threads",
+        "kind": "coloring"
+      },
       "custom-33ea33940750a084": {
         "builtin": "brusselator2",
         "kind": "sim_model"
@@ -15485,6 +15529,10 @@
         "builtin": "basic",
         "kind": "coloring"
       },
+      "custom-3848356f15a0430c": {
+        "builtin": "cactus",
+        "kind": "formula"
+      },
       "custom-392c8289eaac5c4d": {
         "builtin": "novaretti",
         "kind": "formula"
@@ -15497,6 +15545,10 @@
         "builtin": "ballistic_deposition",
         "kind": "sim_model"
       },
+      "custom-43027864c8660aed": {
+        "builtin": "mandelbrot",
+        "kind": "formula"
+      },
       "custom-443b0d57cf119b7d": {
         "builtin": "ducks",
         "kind": "formula"
@@ -15504,6 +15556,10 @@
       "custom-4473dfa9eb823823": {
         "builtin": "collatz",
         "kind": "formula"
+      },
+      "custom-449287ebfbe7f804": {
+        "builtin": "itinerary",
+        "kind": "coloring"
       },
       "custom-456536a7ed2d590c": {
         "builtin": "mccabe",
@@ -15533,9 +15589,17 @@
         "builtin": "threads",
         "kind": "coloring"
       },
+      "custom-4bb006e071cc0a0e": {
+        "builtin": "exponential_smoothing",
+        "kind": "coloring"
+      },
       "custom-4bfb225afa87472f": {
         "builtin": "image_trap",
         "kind": "coloring"
+      },
+      "custom-4c0d75e6c91405e4": {
+        "builtin": "mcmullen",
+        "kind": "formula"
       },
       "custom-4f00a4c80179fe73": {
         "builtin": "lambda",
@@ -15581,6 +15645,10 @@
         "builtin": "turing",
         "kind": "sim_model"
       },
+      "custom-54eaf262454dd938": {
+        "builtin": "novaretti",
+        "kind": "formula"
+      },
       "custom-55d242ed4a0b7102": {
         "builtin": "age",
         "kind": "sim_coloring"
@@ -15588,6 +15656,14 @@
       "custom-566d20c689bd25e8": {
         "builtin": "species",
         "kind": "sim_coloring"
+      },
+      "custom-568df19c9893a39d": {
+        "builtin": "nova",
+        "kind": "formula"
+      },
+      "custom-56b5c69f4e1823b5": {
+        "builtin": "root_basin",
+        "kind": "coloring"
       },
       "custom-57966b409e769483": {
         "builtin": "distance_estimate",
@@ -15601,6 +15677,18 @@
         "builtin": "position_map",
         "kind": "coloring"
       },
+      "custom-593050c19f95c772": {
+        "builtin": "lattes",
+        "kind": "formula"
+      },
+      "custom-59848bc0063f42d0": {
+        "builtin": "image_trap",
+        "kind": "coloring"
+      },
+      "custom-59b5827c7da42c29": {
+        "builtin": "collatz",
+        "kind": "formula"
+      },
       "custom-5a2a2a1aa114210d": {
         "builtin": "mccabe",
         "kind": "sim_model"
@@ -15613,9 +15701,17 @@
         "builtin": "standard_map_ftle",
         "kind": "field"
       },
+      "custom-5b3d43b3c7c9017e": {
+        "builtin": "newton",
+        "kind": "formula"
+      },
       "custom-5bebd445aa48be31": {
         "builtin": "field_value",
         "kind": "field_coloring"
+      },
+      "custom-5c6a886585cede40": {
+        "builtin": "standard_map_ftle",
+        "kind": "field"
       },
       "custom-5db3d50f539c5f15": {
         "builtin": "barnsley",
@@ -15624,6 +15720,10 @@
       "custom-5e1e5b92ceb542d1": {
         "builtin": "cahn_hilliard",
         "kind": "sim_model"
+      },
+      "custom-5f4d3a72acbc3f62": {
+        "builtin": "lambda",
+        "kind": "formula"
       },
       "custom-5f6b5c77a901bcf0": {
         "builtin": "weierstrass",
@@ -15641,6 +15741,10 @@
         "builtin": "snowfake",
         "kind": "sim_model"
       },
+      "custom-618168c739a4d125": {
+        "builtin": "external_rays",
+        "kind": "coloring"
+      },
       "custom-64b1aad881d3f490": {
         "builtin": "swift_hohenberg",
         "kind": "sim_model"
@@ -15649,13 +15753,25 @@
         "builtin": "lattice4",
         "kind": "sim_model"
       },
+      "custom-66cd29e47a84a4c6": {
+        "builtin": "distance_estimate",
+        "kind": "coloring"
+      },
       "custom-689a5dff20d6d201": {
         "builtin": "spatial_rps",
         "kind": "sim_model"
       },
+      "custom-68ad8a2a9d065bf2": {
+        "builtin": "position_map",
+        "kind": "coloring"
+      },
       "custom-6989619d9011b8d1": {
         "builtin": "mandelbrot",
         "kind": "formula"
+      },
+      "custom-6a72d661e04677fe": {
+        "builtin": "position_average",
+        "kind": "coloring"
       },
       "custom-6a95006e749ed2fd": {
         "builtin": "ballistic_deposition",
@@ -15709,6 +15825,10 @@
         "builtin": "kifs_solid",
         "kind": "solid"
       },
+      "custom-7d4902a8e99e3fa3": {
+        "builtin": "kaliset",
+        "kind": "formula"
+      },
       "custom-7d7a245771c4b639": {
         "builtin": "smoothlife",
         "kind": "sim_model"
@@ -15741,6 +15861,14 @@
         "builtin": "triangle_inequality",
         "kind": "coloring"
       },
+      "custom-865b6724a5330356": {
+        "builtin": "voc_traps",
+        "kind": "coloring"
+      },
+      "custom-87623b9f9ed133ae": {
+        "builtin": "curvature_average",
+        "kind": "coloring"
+      },
       "custom-88348f991ac88470": {
         "builtin": "lattes",
         "kind": "formula"
@@ -15752,6 +15880,10 @@
       "custom-8b6cff337c117b48": {
         "builtin": "brusselator",
         "kind": "sim_model"
+      },
+      "custom-8bf18b1dccb4cfa6": {
+        "builtin": "markus_lyapunov",
+        "kind": "field"
       },
       "custom-8bfc9b10af40832f": {
         "builtin": "lenia",
@@ -15789,6 +15921,10 @@
         "builtin": "rainbow_fringe",
         "kind": "coloring"
       },
+      "custom-971bf56ee2bac1f1": {
+        "builtin": "littlewood",
+        "kind": "formula"
+      },
       "custom-97ba565ec4780ea6": {
         "builtin": "percolation",
         "kind": "sim_model"
@@ -15800,6 +15936,10 @@
       "custom-98afbe3ca2bfd07a": {
         "builtin": "mandelbox_solid",
         "kind": "solid"
+      },
+      "custom-993e4f15dfc66f00": {
+        "builtin": "tetration",
+        "kind": "formula"
       },
       "custom-99accfc482f349d1": {
         "builtin": "decomposition",
@@ -15833,13 +15973,25 @@
         "builtin": "label",
         "kind": "sim_coloring"
       },
+      "custom-a197ed23471aecab": {
+        "builtin": "feather",
+        "kind": "formula"
+      },
       "custom-a6369cb0ba0dc442": {
         "builtin": "tetration",
         "kind": "formula"
       },
+      "custom-a67d506a97860e75": {
+        "builtin": "weierstrass",
+        "kind": "field"
+      },
       "custom-a727824497a77ed9": {
         "builtin": "channel",
         "kind": "sim_coloring"
+      },
+      "custom-a76752ef9182bde9": {
+        "builtin": "spider",
+        "kind": "formula"
       },
       "custom-a7974a57f6a8a66c": {
         "builtin": "distance",
@@ -15865,6 +16017,10 @@
         "builtin": "decomposition",
         "kind": "coloring"
       },
+      "custom-add0d34159ec0892": {
+        "builtin": "origami",
+        "kind": "formula"
+      },
       "custom-add630f2b00688f6": {
         "builtin": "dbm",
         "kind": "sim_model"
@@ -15872,6 +16028,10 @@
       "custom-af98884bf422a361": {
         "builtin": "orbit_trap",
         "kind": "coloring"
+      },
+      "custom-b024fc2c00f6e907": {
+        "builtin": "burning_ship",
+        "kind": "formula"
       },
       "custom-b1787ab65bc35c84": {
         "builtin": "fitzhugh_nagumo",
@@ -15897,12 +16057,28 @@
         "builtin": "scale_mix",
         "kind": "sim_coloring"
       },
+      "custom-b7acea134fbd0959": {
+        "builtin": "trig",
+        "kind": "formula"
+      },
+      "custom-b9bbe40142dbd672": {
+        "builtin": "multibrot",
+        "kind": "formula"
+      },
+      "custom-ba2bc4464c583f89": {
+        "builtin": "direct_traps",
+        "kind": "coloring"
+      },
       "custom-ba38bf26fb96e21e": {
         "builtin": "orbit_average",
         "kind": "coloring"
       },
       "custom-ba63508551c7ecd2": {
         "builtin": "basic",
+        "kind": "coloring"
+      },
+      "custom-bb69759c1bd0f9f6": {
+        "builtin": "normal_map",
         "kind": "coloring"
       },
       "custom-bbbafe6d30d213f9": {
@@ -15925,9 +16101,17 @@
         "builtin": "cactus",
         "kind": "formula"
       },
+      "custom-bf0835a735d72046": {
+        "builtin": "basic",
+        "kind": "coloring"
+      },
       "custom-bf3f49d6afb70816": {
         "builtin": "species",
         "kind": "sim_coloring"
+      },
+      "custom-c2a947b24259684b": {
+        "builtin": "infinite_waves",
+        "kind": "coloring"
       },
       "custom-c359ac9041a12c53": {
         "builtin": "escape_count",
@@ -15941,6 +16125,10 @@
         "builtin": "tricorn",
         "kind": "formula"
       },
+      "custom-c538163c813e260d": {
+        "builtin": "quaternion_julia_solid",
+        "kind": "solid"
+      },
       "custom-c563c4b23eb5a9c3": {
         "builtin": "cactus",
         "kind": "formula"
@@ -15952,6 +16140,10 @@
       "custom-c7bc82d6056a0e81": {
         "builtin": "hodgepodge",
         "kind": "sim_model"
+      },
+      "custom-c8cab2826cbebf5e": {
+        "builtin": "tricorn",
+        "kind": "formula"
       },
       "custom-cab5877f338a045f": {
         "builtin": "magnet",
@@ -15965,6 +16157,14 @@
         "builtin": "gradient",
         "kind": "sim_coloring"
       },
+      "custom-d15aa0a5a2d7a200": {
+        "builtin": "decomposition",
+        "kind": "coloring"
+      },
+      "custom-d17efaada2b256d2": {
+        "builtin": "escape_count",
+        "kind": "coloring"
+      },
       "custom-d1bb6afbefd20532": {
         "builtin": "sandpile",
         "kind": "sim_model"
@@ -15976,6 +16176,10 @@
       "custom-d3f40dac2027e896": {
         "builtin": "schnakenberg",
         "kind": "sim_model"
+      },
+      "custom-d4ab491b0481322a": {
+        "builtin": "kifs_solid",
+        "kind": "solid"
       },
       "custom-d596e5a5cfdf26ca": {
         "builtin": "itinerary",
@@ -15989,13 +16193,33 @@
         "builtin": "two_channel",
         "kind": "sim_coloring"
       },
+      "custom-d5f644f43435f25e": {
+        "builtin": "barnsley",
+        "kind": "formula"
+      },
+      "custom-d607c1aca46ca9c4": {
+        "builtin": "mandelbulb_solid",
+        "kind": "solid"
+      },
+      "custom-d6d601f6558a7c9e": {
+        "builtin": "sphere_average",
+        "kind": "coloring"
+      },
       "custom-d99963b41fefcc40": {
         "builtin": "exponential_smoothing",
         "kind": "coloring"
       },
+      "custom-d9cb51c78e0a1f75": {
+        "builtin": "mandelbox_solid",
+        "kind": "solid"
+      },
       "custom-d9cee70e180b5fd5": {
         "builtin": "fingering",
         "kind": "sim_model"
+      },
+      "custom-da169f693d06b154": {
+        "builtin": "period",
+        "kind": "coloring"
       },
       "custom-dba8daaeddcc609d": {
         "builtin": "position_average",
@@ -16013,6 +16237,14 @@
         "builtin": "fingering",
         "kind": "sim_model"
       },
+      "custom-e07414fd7f2fe431": {
+        "builtin": "ducks",
+        "kind": "formula"
+      },
+      "custom-e158062daeadf83c": {
+        "builtin": "phoenix",
+        "kind": "formula"
+      },
       "custom-e22c4e0397555945": {
         "builtin": "escape_count",
         "kind": "coloring"
@@ -16023,6 +16255,10 @@
       },
       "custom-e49bc1c06c4f2832": {
         "builtin": "period",
+        "kind": "coloring"
+      },
+      "custom-e4a6f5ca3aaba037": {
+        "builtin": "velocity",
         "kind": "coloring"
       },
       "custom-e4c9840d85059472": {
@@ -16037,9 +16273,17 @@
         "builtin": "spatial_rps",
         "kind": "sim_model"
       },
+      "custom-e89372de5f007aa5": {
+        "builtin": "field_hillshade",
+        "kind": "field_coloring"
+      },
       "custom-e8f384922406587c": {
         "builtin": "period",
         "kind": "coloring"
+      },
+      "custom-e92d4507ea2b22bc": {
+        "builtin": "field_value",
+        "kind": "field_coloring"
       },
       "custom-ecbe43b3cbbd32e2": {
         "builtin": "packard_snowflake",
@@ -16069,6 +16313,10 @@
         "builtin": "scale_mix",
         "kind": "sim_coloring"
       },
+      "custom-f2a4002ac2d7ceb6": {
+        "builtin": "orbit_trap",
+        "kind": "coloring"
+      },
       "custom-f32b2f7a87fd143f": {
         "builtin": "nova",
         "kind": "formula"
@@ -16088,6 +16336,10 @@
       "custom-f6c3b1d2cbd65d49": {
         "builtin": "voc_traps",
         "kind": "coloring"
+      },
+      "custom-f7d9089f443a3866": {
+        "builtin": "exponential",
+        "kind": "formula"
       },
       "custom-f89b70ba167596cc": {
         "builtin": "root_basin",
@@ -16132,6 +16384,10 @@
       "custom-fe09ddefca4777da": {
         "builtin": "gradient",
         "kind": "sim_coloring"
+      },
+      "custom-fe0bf28299f6d64d": {
+        "builtin": "rainbow_fringe",
+        "kind": "coloring"
       },
       "custom-fee04b92b39b097d": {
         "builtin": "oregonator",

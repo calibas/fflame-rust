@@ -14,7 +14,7 @@ const PARAMS = #{
     },
 };
 
-const INFO = #{ title: "Orbit Average", pick: #{ deband: 1 } };
+const INFO = #{ title: "Orbit Average", description: "The Kali glow: the mean over the orbit of the distance to the nearer axis.", pick: #{ deband: 1 } };
 
 // The mean of the terms, or with Deband the template's debanded mean:
 // the mean without the last term and with it, blended by how far through
