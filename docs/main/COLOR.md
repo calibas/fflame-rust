@@ -540,7 +540,9 @@ The *Color & Appearance* section of the Colors panel
 | Path Style, Path level, the Focused Rendering notice | PathMap mode |
 | Background Color | always (used by the tone map) |
 
-The palette picker lists the palettes of enabled packs. The Palette
+The palette picker lists the palettes of enabled packs, with the
+Catalog's search and its packs as groups ([CATALOG.md](CATALOG.md), *The
+picker*). The Palette
 Editor is covered in [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md), the
 Catalog's palettes in [CATALOG.md](CATALOG.md).
 

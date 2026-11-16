@@ -3033,6 +3033,7 @@ escape_panel:
   lens_none: "None"
   lens_tip: "A variation applied to the screen offset, so it bends the VIEW and leaves the fractal alone. The list is the variations measured to work as lenses, the most camera-like first; tick Show all to reach the rest. Eyefish is the clean fisheye — fisheye itself carries Apophysis's x/y transposition and mirrors the picture across the diagonal."
   lens_filter: "Search variations…"
+  lens_recommended: "Recommended"
   lens_show_all: "Show all"
   lens_show_all_tip: "Offer every variation, including the ones measured not to work as lenses at their default parameters."
   lens_amount: "Amount"
@@ -3096,6 +3097,7 @@ library:
   plugin: "(plug-in)"
 
 effects_panel:
+  add_effect: "Add effect…"
   update: "Update"
   update_all: "Update all (%{count})"
   clear_cache: "Clear downloaded effects (%{count})"
@@ -3304,6 +3306,7 @@ inventory:
     examples: "Examples"
     yours: "Yours"
     adopted: "Adopted"
+    available: "Available to download"
   # The built-ins with no Rhai twin to carry a description (the rest
   # carry theirs in their twin's INFO.description).
   descriptions:
@@ -3343,6 +3346,10 @@ catalog:
   use_fractal: "Load"
   use_variation: "Add to Transform"
   use_effect: "Add Effect"
+  download: "Download"
+  downloading: "Downloading…"
+  download_tip: "Download it from the online library; it can be used once it is installed"
+  not_installed: "Not installed: download it to use it"
   use_script: "Open in Scripts Panel"
   open_palette_editor: "Open Palette Editor"
   open_in_formula_editor: "Open in Formula Editor"

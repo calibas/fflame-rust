@@ -97,33 +97,33 @@ pub(crate) fn add_effect(config_manager: &mut ConfigManager, name: &str) -> bool
     true
 }
 
-/// The user's plug-in effects of `category` in an Add list (P3), after a
-/// separator: whether one was added. Adding one puts its source in the
-/// config first, which carries what its chains run (as the Formula
-/// Editor's Use does), then an instance at the end of the chain.
-fn plugin_effects(ui: &mut Ui, config_manager: &mut ConfigManager, category: EffectCategory) -> bool {
-    let registry = global_effect_registry();
-    let plugins: Vec<(crate::storage::library::Plugin, String)> = crate::storage::library::plugins_of(crate::storage::library::Kind::Effect)
-        .into_iter()
-        .filter_map(|p| {
-            let info = registry.get(&p.key)?;
-            (info.category == category).then(|| (p.clone(), info.translated_name()))
-        })
-        .collect();
-    drop(registry);
-    if plugins.is_empty() {
-        return false;
-    }
-    ui.separator();
-    ui.weak(t!("effects_panel.plugins"));
-    let mut added = false;
-    for (plugin, title) in plugins {
-        if !ui.selectable_label(false, &title).on_hover_text(t!("effects_panel.plugin_tip", file = plugin.file)).clicked() {
-            continue;
+/// Add, for one stage: the Catalog's picker (`ui::picker`) of its effects
+/// -- built-ins, downloads, the user's plug-ins (P3; adding one puts its
+/// source in the config first, which carries what its chains run), and
+/// Download for what the server offers -- each one's description its
+/// tooltip. Whether one was added. A Rhai effect that is not a plug-in is
+/// put to use from the Formula Editor (every version of one is registered
+/// under its own key, and would list once each).
+fn add_effect_picker(ui: &mut Ui, config_manager: &mut ConfigManager, category: EffectCategory) -> bool {
+    let stage = match category {
+        EffectCategory::Color => "color",
+        EffectCategory::Density => "density",
+    };
+    let admit = |e: &crate::inventory::Entry| -> bool {
+        if e.kind != crate::inventory::Kind::Effect {
+            return false;
         }
-        added |= add_effect(config_manager, &plugin.key);
+        if !e.installed {
+            return e.category.as_deref() == Some(stage);
+        }
+        let Some(name) = super::inventory::applied_name(e) else { return false };
+        global_effect_registry().get(&name).is_some_and(|info| info.category == category)
+    };
+    let button = ui.button(t!("effects_panel.add_effect"));
+    match super::picker::Picker::new(("add_effect", stage), &admit).popup(ui, &button) {
+        Some(e) => super::inventory::applied_name(&e).is_some_and(|name| add_effect(config_manager, &name)),
+        None => false,
     }
-    added
 }
 
 /// Edit as Rhai, on a built-in that is its Rhai twin: whether it was
@@ -458,20 +458,11 @@ pub fn render_effects_panel(
                         .color(egui::Color32::GRAY),
                 );
             } else {
-                // Dropdown for adding effects
-                egui::ComboBox::from_label("Add effect")
-                    .selected_text("Select...")
-                    .show_ui(ui, |ui| {
-                        for info in available {
-                            let translated = info.translated_name();
-                            if ui.selectable_label(false, &translated).clicked() && add_effect(config_manager, &info.name) {
-                                max_update = max_update.max(UpdateType::ToneMappingOnly);
-                            }
-                        }
-                        if plugin_effects(ui, config_manager, EffectCategory::Color) {
-                            max_update = max_update.max(UpdateType::ToneMappingOnly);
-                        }
-                    });
+                drop(available);
+                drop(registry);
+                if add_effect_picker(ui, config_manager, EffectCategory::Color) {
+                    max_update = max_update.max(UpdateType::ToneMappingOnly);
+                }
             }
         });
     });
@@ -607,18 +598,9 @@ pub fn render_effects_panel(
             // Add density effect dropdown
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                egui::ComboBox::from_label("Add effect")
-                    .selected_text("Select...")
-                    .show_ui(ui, |ui| {
-                        for (name, translated) in &density_effects_available {
-                            if ui.selectable_label(false, translated).clicked() && add_effect(config_manager, name) {
-                                max_update = max_update.max(UpdateType::ToneMappingOnly);
-                            }
-                        }
-                        if plugin_effects(ui, config_manager, EffectCategory::Density) {
-                            max_update = max_update.max(UpdateType::ToneMappingOnly);
-                        }
-                    });
+                if add_effect_picker(ui, config_manager, EffectCategory::Density) {
+                    max_update = max_update.max(UpdateType::ToneMappingOnly);
+                }
             });
         }
     });

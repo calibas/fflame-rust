@@ -18,6 +18,8 @@ fn entry(kind: Kind, key: EntryKey, title: &str, group: Group, origin: Origin) -
         plugin: false,
         group,
         link: None,
+        installed: true,
+        category: None,
     }
 }
 
@@ -148,6 +150,38 @@ pub(super) fn effects(out: &mut Vec<Entry>) {
         entry.version = version_of(&e.provenance);
         let p = if e.provenance.is_builtin() { prose::twin(Kind::Effect, &e.name) } else { None };
         out.push(with_prose(entry, p.or_else(|| catalog.get(&e.name))));
+    }
+}
+
+// --------------------------------------------------------------- available
+
+/// What the server's catalogs offer and this app has not downloaded: a
+/// group of its own after a kind's installed ones, a row each, its prose
+/// the catalog's. Only what may be downloaded (`downloadable`), and never
+/// a name the registry holds (a built-in, a download, the user's own).
+pub(super) fn available(online: super::Online, out: &mut Vec<Entry>) {
+    let group = || Group { order: 1000, label: t!("inventory.group.available").to_string() };
+    let reg = crate::variations::global_registry();
+    for v in online.variations.iter().filter(|v| v.downloadable && reg.get(&v.name).is_none()) {
+        let mut e = entry(Kind::Variation, EntryKey::Registered(Kind::Variation, v.name.clone()), &v.display_name, group(), Origin::Api);
+        e.description = v.description.clone().or_else(|| v.description_plain.clone()).unwrap_or_default();
+        e.authors = v.authors.clone();
+        e.version = Some(format!("v{}", v.version));
+        e.installed = false;
+        e.category = Some(v.category.clone());
+        out.push(e);
+    }
+    drop(reg);
+    let reg = crate::effects::global_effect_registry();
+    for x in online.effects.iter().filter(|x| x.downloadable && reg.get(&x.name).is_none()) {
+        let title = if x.display_name.is_empty() { &x.name } else { &x.display_name };
+        let mut e = entry(Kind::Effect, EntryKey::Registered(Kind::Effect, x.name.clone()), title, group(), Origin::Api);
+        e.description = x.description.clone().or_else(|| x.description_plain.clone()).unwrap_or_default();
+        e.authors = x.authors.clone();
+        e.version = Some(format!("v{}", x.version));
+        e.installed = false;
+        e.category = x.category.clone();
+        out.push(e);
     }
 }
 

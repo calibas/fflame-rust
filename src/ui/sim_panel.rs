@@ -920,90 +920,75 @@ fn render_coloring_section(
                     }));
                 }
             }
-            egui::ComboBox::from_id_salt(format!("{}_pick", slot.salt()))
-                .selected_text(coloring.display_name)
-                .show_ui(ui, |ui| {
-                    for c in COLORINGS {
-                        if ui
-                            .selectable_label(c.name == coloring.name, c.display_name)
-                            .on_hover_text(c.description)
-                            .clicked()
-                            && c.name != coloring.name
-                        {
-                            match slot {
-                                // A built-in carries no source: the Rhai
-                                // one goes with the name it was carried for.
-                                ColorSlot::Flat if sim.custom_coloring.is_some() => {
-                                    let _ = config_manager.update_batch(
-                                        vec![(ConfigPath::SimColoring, c.name.to_string().into()), (ConfigPath::SimCustomColoring, String::new().into())],
-                                        "history.action.sim_coloring".to_string(),
-                                    );
-                                }
-                                ColorSlot::Flat => {
-                                    let _ = config_manager.update_param(
-                                        ConfigPath::SimColoring,
-                                        c.name.to_string().into(),
-                                    );
-                                }
-                                ColorSlot::At(i) => {
-                                    let name = c.name.to_string();
-                                    let relief = c.has(crate::sim::ColoringFeature::NeedsRelief);
-                                    action = Some(Box::new(move |s: &mut SimConfig| {
-                                        if let Some(l) = s.color_layers.get_mut(i) {
-                                            l.coloring = name.clone();
-                                            l.custom_coloring = None;
-                                            // Parameters are keyed by
-                                            // name for whichever
-                                            // colouring is current, so
-                                            // keeping them would feed
-                                            // one colouring's numbers
-                                            // to another.
-                                            l.coloring_params.clear();
-                                            // Relief is a grey shade
-                                            // centred on mid-grey: under
-                                            // Normal it would hide what
-                                            // it is meant to light.
-                                            if relief && l.blend == SimBlend::Normal {
-                                                l.blend = SimBlend::HardLight;
-                                            }
-                                        }
-                                    }));
+            // The Catalog's colourings: the built-ins and the user's
+            // plug-ins (P3, P4), in every slot, a plug-in's source carried
+            // beside its name, as Use carries it.
+            let admit = |e: &crate::inventory::Entry| {
+                e.kind == crate::inventory::Kind::SimColoring && e.installed && (e.plugin || matches!(e.key, crate::inventory::EntryKey::Registered(..)))
+            };
+            let btn = super::picker::button(ui, coloring.display_name);
+            let picked = super::picker::Picker::new(format!("{}_pick", slot.salt()), &admit).current(Some(coloring.name)).popup(ui, &btn);
+            let (builtin, plugin) = match &picked {
+                Some(e) if e.plugin => (None, super::inventory::plugin_of(e).filter(|p| p.key != coloring.name)),
+                Some(e) => (super::picker::key_name(e).and_then(|n| COLORINGS.iter().find(|c| c.name == n)).filter(|c| c.name != coloring.name), None),
+                None => (None, None),
+            };
+            if let Some(c) = builtin {
+                match slot {
+                    // A built-in carries no source: the Rhai one goes with
+                    // the name it was carried for.
+                    ColorSlot::Flat if sim.custom_coloring.is_some() => {
+                        let _ = config_manager.update_batch(
+                            vec![(ConfigPath::SimColoring, c.name.to_string().into()), (ConfigPath::SimCustomColoring, String::new().into())],
+                            "history.action.sim_coloring".to_string(),
+                        );
+                    }
+                    ColorSlot::Flat => {
+                        let _ = config_manager.update_param(ConfigPath::SimColoring, c.name.to_string().into());
+                    }
+                    ColorSlot::At(i) => {
+                        let name = c.name.to_string();
+                        let relief = c.has(crate::sim::ColoringFeature::NeedsRelief);
+                        action = Some(Box::new(move |s: &mut SimConfig| {
+                            if let Some(l) = s.color_layers.get_mut(i) {
+                                l.coloring = name.clone();
+                                l.custom_coloring = None;
+                                // Parameters are keyed by name for whichever
+                                // colouring is current, so keeping them would
+                                // feed one colouring's numbers to another.
+                                l.coloring_params.clear();
+                                // Relief is a grey shade centred on mid-grey:
+                                // under Normal it would hide what it is meant
+                                // to light.
+                                if relief && l.blend == SimBlend::Normal {
+                                    l.blend = SimBlend::HardLight;
                                 }
                             }
-                        }
+                        }));
                     }
-                    // The user's plug-in colourings (P3, P4), in every
-                    // slot: their source carried beside the name, as Use
-                    // carries it.
-                    let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::SimColoring);
-                    if !plugins.is_empty() {
-                        ui.separator();
-                        ui.weak(t!("sim_panel.plugins"));
+                }
+            }
+            if let Some(p) = plugin {
+                match slot {
+                    ColorSlot::Flat => {
+                        let source = crate::config::manager::custom_source_json(&Some(p.carried.clone()));
+                        let _ = config_manager.update_batch(
+                            vec![(ConfigPath::SimCustomColoring, source.into()), (ConfigPath::SimColoring, p.key.clone().into())],
+                            "history.action.use_sim_coloring".to_string(),
+                        );
                     }
-                    for p in plugins {
-                        if ui.selectable_label(coloring.name == p.key, &p.title).on_hover_text(t!("sim_panel.plugin_tip", file = p.file)).clicked() && coloring.name != p.key {
-                            match slot {
-                                ColorSlot::Flat => {
-                                    let source = crate::config::manager::custom_source_json(&Some(p.carried.clone()));
-                                    let _ = config_manager.update_batch(
-                                        vec![(ConfigPath::SimCustomColoring, source.into()), (ConfigPath::SimColoring, p.key.clone().into())],
-                                        "history.action.use_sim_coloring".to_string(),
-                                    );
-                                }
-                                ColorSlot::At(i) => {
-                                    let (name, carried) = (p.key.clone(), p.carried.clone());
-                                    action = Some(Box::new(move |s: &mut SimConfig| {
-                                        if let Some(l) = s.color_layers.get_mut(i) {
-                                            l.coloring_params.clear();
-                                            l.coloring = name.clone();
-                                            l.custom_coloring = Some(carried.clone());
-                                        }
-                                    }));
-                                }
+                    ColorSlot::At(i) => {
+                        let (name, carried) = (p.key.clone(), p.carried.clone());
+                        action = Some(Box::new(move |s: &mut SimConfig| {
+                            if let Some(l) = s.color_layers.get_mut(i) {
+                                l.coloring_params.clear();
+                                l.coloring = name.clone();
+                                l.custom_coloring = Some(carried.clone());
                             }
-                        }
+                        }));
                     }
-                });
+                }
+            }
             if edit_as_rhai_button(ui, coloring.name, false) {
                 *edit_as_rhai = Some(EditAsRhai { model: false, layer: layered.then_some(k), builtin: coloring.name.to_string() });
             }
@@ -1558,33 +1543,25 @@ fn render_model_section(
                 t!("sim_panel.model")
             };
             ui.label(label.as_ref());
-            egui::ComboBox::from_id_salt(format!("{}_model", slot.salt()))
-                .selected_text(model.display_name)
-                .show_ui(ui, |ui| {
-                    for m in MODELS {
-                        if ui
-                            .selectable_label(m.name == model.name, m.display_name)
-                            .on_hover_text(m.description)
-                            .clicked()
-                            && m.name != model.name
-                        {
-                            choose_model(config_manager, sim, slot, m);
-                        }
+            // The Catalog's models (docs/projects/catalog.md, *The
+            // picker*): the built-ins and the user's plug-ins (P3, P4), in
+            // every layer, a plug-in's source carried beside its name, as
+            // Use carries it; each one's description its tooltip.
+            let admit = |e: &crate::inventory::Entry| {
+                e.kind == crate::inventory::Kind::SimModel && e.installed && (e.plugin || matches!(e.key, crate::inventory::EntryKey::Registered(..)))
+            };
+            let btn = super::picker::button(ui, model.display_name);
+            if let Some(e) = super::picker::Picker::new(format!("{}_model", slot.salt()), &admit).current(Some(model.name)).popup(ui, &btn) {
+                if e.plugin {
+                    if let Some(p) = super::inventory::plugin_of(&e).filter(|p| p.key != model.name) {
+                        choose_plugin_model(config_manager, slot, &p);
                     }
-                    // The user's plug-in models (P3, P4), in every layer:
-                    // their source carried beside the name, as Use
-                    // carries it.
-                    let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::SimModel);
-                    if !plugins.is_empty() {
-                        ui.separator();
-                        ui.weak(t!("sim_panel.plugins"));
+                } else if let Some(m) = super::picker::key_name(&e).and_then(|n| MODELS.iter().find(|m| m.name == n)) {
+                    if m.name != model.name {
+                        choose_model(config_manager, sim, slot, m);
                     }
-                    for p in plugins {
-                        if ui.selectable_label(model.name == p.key, &p.title).on_hover_text(t!("sim_panel.plugin_tip", file = p.file)).clicked() && model.name != p.key {
-                            choose_plugin_model(config_manager, slot, &p);
-                        }
-                    }
-                });
+                }
+            }
             // Edit as Rhai (P7 step 5): a built-in's twin, put in its
             // place and opened as the user's own.
             if edit_as_rhai_button(ui, model.name, true) {

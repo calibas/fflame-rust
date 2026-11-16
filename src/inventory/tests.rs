@@ -13,7 +13,7 @@ fn of_kind(entries: &[Entry], kind: Kind) -> Vec<&Entry> {
 /// are not the user's, and every preset.
 #[test]
 fn every_registered_resource_is_listed_once() {
-    let all = scan(&lib());
+    let all = scan(&lib(), Online::default());
     let names = |kind: Kind| -> Vec<String> {
         of_kind(&all, kind)
             .iter()
@@ -60,7 +60,7 @@ fn every_registered_resource_is_listed_once() {
 /// listed in each -- and the list comes out in the same order every time.
 #[test]
 fn keys_are_unique_and_the_order_is_stable() {
-    let a = scan(&lib());
+    let a = scan(&lib(), Online::default());
     let mut seen = std::collections::HashSet::new();
     for e in a.iter().filter(|e| e.kind != Kind::Palette) {
         assert!(seen.insert(e.key.clone()), "{:?} listed twice", e.key);
@@ -68,7 +68,7 @@ fn keys_are_unique_and_the_order_is_stable() {
     // The same order every time -- compared over the kinds whose sources
     // are static, since tests running beside this one load palette packs
     // and register variations into the global libraries.
-    let b = scan(&lib());
+    let b = scan(&lib(), Online::default());
     let fixed = |l: &[Entry]| -> Vec<EntryKey> {
         l.iter()
             .filter(|e| match &e.key {
@@ -90,7 +90,7 @@ fn keys_are_unique_and_the_order_is_stable() {
 /// their sources hold.
 #[test]
 fn a_key_finds_its_resource_again() {
-    let all = scan(&lib());
+    let all = scan(&lib(), Online::default());
     let p = of_kind(&all, Kind::Palette).into_iter().next().expect("a palette");
     let EntryKey::Palette(hash) = &p.key else { panic!("{:?}", p.key) };
     let found = palette(&lib(), hash).expect("found by its hash");
@@ -106,7 +106,7 @@ fn a_key_finds_its_resource_again() {
 /// colouring's line, and no author a source does not name.
 #[test]
 fn the_built_ins_carry_their_prose() {
-    let all = scan(&lib());
+    let all = scan(&lib(), Online::default());
     // The registered built-ins; the seven variations without a twin
     // (`analytic_blur`, `mondrianomies`, the volumes, the subflames) take
     // the server catalog's prose when it is cached. (shipped example files are files).
@@ -157,9 +157,54 @@ fn a_search_reads_names_prose_and_authors() {
         plugin: false,
         group: Group { order: 0, label: String::new() },
         link: None,
+        installed: true,
+        category: None,
     };
     for q in ["", "JULIAN", "arms", "someone", "  julian  "] {
         assert!(e.matches(q), "{q:?}");
     }
     assert!(!e.matches("spherical"));
+}
+
+/// What the server offers and the app lacks is listed, not installed, with
+/// the catalog's prose and category, once; what the registry holds (a
+/// built-in of the same name) and what may not be downloaded are not.
+#[test]
+fn what_the_server_offers_is_listed_to_download() {
+    use crate::api::types::{EffectListItem, VariationListItem};
+    let variation = |name: &str, downloadable: bool| VariationListItem {
+        id: name.into(),
+        name: name.into(),
+        display_name: format!("{name} display"),
+        category: "Plugin".into(),
+        version: 3,
+        description: Some("From **afar**".into()),
+        description_plain: None,
+        authors: vec!["Someone".into()],
+        downloadable,
+        has_shader_3d: true,
+    };
+    let variations = [variation("it_offered_only", true), variation("it_not_downloadable", false), variation("linear", true)];
+    let effect: EffectListItem = serde_json::from_value(serde_json::json!({
+        "id": "it_offered_effect", "name": "it_offered_effect", "category": "density", "downloadable": true, "version": 2
+    }))
+    .unwrap();
+    let effects = [effect];
+    let all = scan(&lib(), Online { variations: &variations, effects: &effects });
+    let named = |name: &str| all.iter().filter(|e| matches!(&e.key, EntryKey::Registered(_, n) if n == name)).collect::<Vec<_>>();
+
+    let offered = named("it_offered_only");
+    assert_eq!(offered.len(), 1);
+    let e = offered[0];
+    assert!(!e.installed && e.origin == Origin::Api && e.kind == Kind::Variation);
+    assert_eq!((e.description.as_str(), e.version.as_deref(), e.category.as_deref()), ("From **afar**", Some("v3"), Some("Plugin")));
+    assert!(named("it_not_downloadable").is_empty(), "not downloadable: not offered");
+    let linear = named("linear");
+    assert_eq!(linear.len(), 1, "a built-in is listed once");
+    assert!(linear[0].installed);
+    let fx = named("it_offered_effect");
+    assert_eq!((fx.len(), fx[0].installed, fx[0].category.as_deref()), (1, false, Some("density")));
+
+    // The list is read again when the catalog changes.
+    assert_ne!(revision(&lib(), 0, Online::default()), revision(&lib(), 0, Online { variations: &variations, effects: &effects }));
 }

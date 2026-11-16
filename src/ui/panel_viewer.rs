@@ -969,7 +969,6 @@ impl<'a> PanelViewer<'a> {
         let mut cx = super::inventory::InventoryContext {
             config_manager: self.context.config_manager,
             palette_library: self.context.palette_library,
-            library_generation: self.context.script_cloud.library_generation,
             cloud_palettes: online_account.then_some(super::inventory::CloudPalettes { state: self.context.cloud_palette_state, auth }),
         };
         let response = self.context.inventory_panel.render(ui, &mut cx);

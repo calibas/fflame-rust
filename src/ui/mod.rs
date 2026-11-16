@@ -10,6 +10,7 @@ mod formatting;
 pub mod fractal_browser;
 pub mod inventory;
 pub mod markdown;
+pub mod picker;
 pub mod fractal_gallery;
 mod help;
 pub mod login_dialog;
@@ -1830,6 +1831,17 @@ impl EguiLayer {
             // (no-op on every later frame).
             workspace.apply_startup_dock_minimums(ctx.screen_rect().width());
 
+            // The Catalog's list, read before any panel draws: the panel
+            // and every picker show the same one this frame.
+            self.inventory_panel.refresh(
+                palette_library,
+                script_cloud.library_generation,
+                crate::inventory::Online {
+                    variations: variation_catalog.map_or(&[][..], |c| c.items.as_slice()),
+                    effects: effect_catalog.map_or(&[][..], |c| c.items.as_slice()),
+                },
+            );
+
             egui_dock::DockArea::new(&mut workspace.dock_state)
                 .id(egui::Id::new("main_dock_area"))
                 .show(ctx, &mut panel_viewer::PanelViewer {
@@ -2035,6 +2047,16 @@ impl EguiLayer {
                     },
                     touch_tracker: &mut self.touch_tracker,
                 });
+
+            // Downloads the Catalog and its pickers asked for: through the
+            // fetches that install (and update) variations and effects.
+            for (kind, name) in inventory::take_downloads() {
+                match kind {
+                    crate::inventory::Kind::Variation => variation_update_requested.push(name),
+                    crate::inventory::Kind::Effect => effect_update_requested.push(name),
+                    _ => {}
+                }
+            }
 
             // Hide the FractalViewport's tab bar seamlessly.
             // The GPU renders the fractal texture taller (body + tab bar height). The body

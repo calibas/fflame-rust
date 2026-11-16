@@ -615,51 +615,30 @@ pub fn render_colors_content(
             // changed the picture. The non-flame engines read the
             // palette too.
             {
-                let current_palette_name = config_manager.active_config().palette.name.clone();
-
-                // Build list of palettes from enabled packs
-                let mut available_palettes: Vec<&crate::scene::palette::Palette> = Vec::new();
-                for pack_idx in 0..palette_library.pack_count() {
-                    if palette_library.is_pack_enabled(pack_idx) {
-                        if let Some(pack) = palette_library.get_pack(pack_idx) {
-                            for palette in &pack.palettes {
-                                available_palettes.push(palette);
-                            }
-                        }
-                    }
-                }
-
-                egui::ComboBox::from_label(t!("tonemap.palette"))
-                    .selected_text(&current_palette_name)
-                    .show_ui(ui, |ui| {
-                        ui.label(t!("tonemap.palette"));
-
-                        // Always show current palette first (may not be in any pack)
-                        let current_in_packs = available_palettes.iter().any(|p| p.name == current_palette_name);
-                        if !current_in_packs {
-                            if ui.selectable_label(true, &current_palette_name).clicked() {
-                                // Already selected, nothing to do
-                            }
-                            ui.separator();
-                        }
-
-                        // Show palettes from enabled packs
-                        for palette in available_palettes.iter() {
-                            let is_selected = current_palette_name == palette.name;
-                            if ui.selectable_label(is_selected, &palette.name).clicked() {
-                                // Set palette directly - create an editable copy
-                                let mut palette_copy = (*palette).clone();
-                                palette_copy.built_in = false;
-
-                                if let Ok(update) = config_manager.update_param(
-                                    ConfigPath::Palette,
-                                    palette_copy.into()
-                                ) {
+                // The Catalog's palettes of the enabled packs
+                // (docs/projects/catalog.md, *The picker*): its search and
+                // its packs as groups; a pick applies an editable copy,
+                // undoable, as a click in the Catalog does. The current one
+                // is found by its content (its name may be any).
+                let current = config_manager.active_config().palette.clone();
+                let current_hash = crate::api::sync::palette_content_hash(&current);
+                let admit = |e: &crate::inventory::Entry| {
+                    e.kind == crate::inventory::Kind::Palette && palette_library.is_pack_enabled(e.group.order as usize)
+                };
+                ui.horizontal(|ui| {
+                    ui.label(t!("tonemap.palette"));
+                    let btn = super::picker::button(ui, &current.name);
+                    if let Some(e) = super::picker::Picker::new("colors_palette", &admit).current(Some(current_hash.as_str())).popup(ui, &btn) {
+                        if let crate::inventory::EntryKey::Palette(hash) = &e.key {
+                            if let Some(mut palette) = crate::inventory::palette(palette_library, hash) {
+                                palette.built_in = false;
+                                if let Ok(update) = config_manager.update_param(ConfigPath::Palette, palette.into()) {
                                     max_update = max_update.max(update);
                                 }
                             }
                         }
-                    });
+                    }
+                });
 
                 ui.horizontal(|ui| {
                     if ui.button(t!("tonemap.edit_palette")).clicked() {
