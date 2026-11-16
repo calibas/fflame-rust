@@ -162,27 +162,27 @@ pub fn palette_preview(ctx: &egui::Context, key: &str, palette: &crate::scene::p
 
 // --- Cloud Palettes Section (API feature) ---
 
-/// Fetch the caller's library palette entries from the API.
+/// Fetch the caller's palettes from the API.
 async fn fetch_cloud_palettes(
     base_url: &str,
     token: &str,
-) -> Result<Vec<crate::api::types::LibraryPaletteEntry>, String> {
+) -> Result<Vec<crate::api::types::PaletteItem>, String> {
     let mut api = crate::api::ApiState::new(base_url);
     api.set_token(token);
-    api.list_library_palettes(1, 100)
+    api.list_my_palettes(1, 100)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Remove the caller's library entry for a palette (by content hash).
-/// Doesn't delete the underlying palette content.
-async fn delete_cloud_palette(base_url: &str, token: &str, hash: &str) -> Result<String, String> {
+/// Delete one of the caller's palettes (by its id). Its content stays:
+/// fractals may use it.
+async fn delete_cloud_palette(base_url: &str, token: &str, id: &str) -> Result<String, String> {
     let mut api = crate::api::ApiState::new(base_url);
     api.set_token(token);
-    let h = hash.to_string();
-    api.remove_library_palette(&h)
+    let id = id.to_string();
+    api.delete_palette(&id)
         .await
-        .map(|_| h)
+        .map(|_| id)
         .map_err(|e| e.to_string())
 }
 
@@ -263,8 +263,7 @@ pub fn render_cloud_palettes_section(
             let preview_width = 200.0;
             let max_name_width = cloud_state.palettes.iter()
                 .map(|p| {
-                    let name = p.nickname.as_deref().unwrap_or("Untitled");
-                    name.len() as f32 * 8.0
+                    p.name.len() as f32 * 8.0
                 })
                 .fold(0.0f32, f32::max)
                 .max(100.0)
@@ -276,13 +275,11 @@ pub fn render_cloud_palettes_section(
                 .striped(false)
                 .show(ui, |ui| {
                     // Collect palette data first to avoid borrow conflicts.
-                    // Library entries are keyed by content hash; the
-                    // nickname is the caller's personal label.
+                    // A palette is keyed by its id (its colours' hash
+                    // changes when they do).
                     let palette_data: Vec<_> = cloud_state.palettes.iter().map(|p| {
-                        let name = p.nickname.clone().unwrap_or_else(|| "Untitled".to_string());
-                        let hash = p.hash.clone();
-                        let palette = crate::api::sync::palette_from_library_entry(p);
-                        (hash, name, palette)
+                        let palette = crate::api::sync::palette_from_item(p);
+                        (p.id.clone(), p.name.clone(), palette)
                     }).collect();
 
                     for (hash, name, palette) in &palette_data {
@@ -488,7 +485,7 @@ fn poll_cloud_palette_results(
                 Ok(palettes) => {
                     // Clear texture cache when palette list changes
                     for p in &cloud_state.palettes {
-                        let texture_id = egui::Id::new(("cloud_palette_preview", &p.hash));
+                        let texture_id = egui::Id::new(("cloud_palette_preview", &p.id));
                         ui.ctx().data_mut(|data| {
                             data.remove::<egui::TextureHandle>(texture_id);
                         });
@@ -516,10 +513,10 @@ fn poll_cloud_palette_results(
                         data.remove::<egui::TextureHandle>(texture_id);
                     });
                     let name = cloud_state.palettes.iter()
-                        .find(|p| p.hash == deleted_hash)
-                        .and_then(|p| p.nickname.clone())
+                        .find(|p| p.id == deleted_hash)
+                        .map(|p| p.name.clone())
                         .unwrap_or_else(|| "palette".to_string());
-                    cloud_state.palettes.retain(|p| p.hash != deleted_hash);
+                    cloud_state.palettes.retain(|p| p.id != deleted_hash);
                     cloud_state.notification = Some((
                         t!("palette_library.cloud_delete_success", name = name).to_string(),
                         false,

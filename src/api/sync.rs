@@ -116,11 +116,10 @@ pub fn palette_from_api(api: &ApiPalette) -> Palette {
     palette_from_parts(name, api.stops.as_ref(), api.color_data.as_ref())
 }
 
-/// Reconstruct a `Palette` from a library entry. Uses the caller's
-/// personal `nickname` as the display name, or "Untitled" when none.
-pub fn palette_from_library_entry(entry: &LibraryPaletteEntry) -> Palette {
-    let name = entry.nickname.clone().unwrap_or_else(|| "Untitled".to_string());
-    palette_from_parts(name, entry.stops.as_ref(), entry.color_data.as_ref())
+/// Reconstruct a `Palette` from one of the caller's palettes, named as
+/// the palette is.
+pub fn palette_from_item(item: &PaletteItem) -> Palette {
+    palette_from_parts(item.name.clone(), item.content.stops.as_ref(), item.content.color_data.as_ref())
 }
 
 // ============================================================================
@@ -573,7 +572,8 @@ mod tests {
     fn mirror_as_response(req: CreateFlameRequest) -> FlameResponse {
         FlameResponse {
             id: "test-id".to_string(),
-            user_id: "test-user".to_string(),
+            owner: Some(Owner { id: "test-user".into(), display_name: "Test".into() }),
+            revision: None,
             name: req.name,
             visibility: req.visibility,
             palette: req.palette,
@@ -657,7 +657,8 @@ mod tests {
         t.variations.insert("linear".to_string(), 1.0);
         let resp = FlameResponse {
             id: "x".into(),
-            user_id: "x".into(),
+            owner: None,
+            revision: None,
             name: "Old".into(),
             visibility: None,
             palette: None,
@@ -698,7 +699,8 @@ mod tests {
         t.variations.insert("linear".to_string(), 1.0);
         let resp = FlameResponse {
             id: "x".into(),
-            user_id: "x".into(),
+            owner: None,
+            revision: None,
             name: "Snake".into(),
             visibility: None,
             palette: None,
@@ -757,7 +759,8 @@ mod tests {
         t.variations.insert("linear".to_string(), 1.0);
         let resp = FlameResponse {
             id: "x".into(),
-            user_id: "x".into(),
+            owner: None,
+            revision: None,
             name: "Recovered".into(),
             visibility: None,
             palette: None,
@@ -1041,19 +1044,20 @@ mod script_payload_tests {
         );
     }
 
-    /// The version rides in the body on update, and only on update.
+    /// The version rides in the body on update, and only on update, as
+    /// the wire's `revision`.
     #[test]
     fn update_carries_the_version_it_read() {
         let req = script_to_create_request("x", GOOD, None, Some(7)).unwrap();
         assert_eq!(req.version, Some(7));
         let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("\"version\":7"), "{json}");
+        assert!(json.contains("\"revision\":7"), "{json}");
 
         // Create omits it entirely rather than sending 0, which the
         // server would read as a stale version rather than as absence.
         let create = script_to_create_request("x", GOOD, None, None).unwrap();
         let json = serde_json::to_string(&create).unwrap();
-        assert!(!json.contains("version"), "{json}");
+        assert!(!json.contains("revision") && !json.contains("version"), "{json}");
     }
 
     /// A 409 body is recoverable from the error, because both transports
@@ -1065,27 +1069,27 @@ mod script_payload_tests {
     /// this works at all.
     #[test]
     fn a_conflict_is_recoverable_from_the_error() {
-        let body = r#"{"id":"abc","current_version":9,"updated_at":"2026-08-01T00:00:00Z"}"#;
+        let body = r#"{"error":"conflict","message":"Changed","current_revision":9,"updated_at":"2026-08-01T00:00:00Z"}"#;
         let e = crate::resources::FetchError::Http {
             status: 409,
             message: body.to_string(),
         };
-        let c = ScriptConflict::from_error(&e).expect("a 409 body parses");
+        let c = ScriptConflict::from_error(&e, "abc").expect("a 409 body parses");
         assert_eq!(c.current_version, 9);
         assert_eq!(c.id, "abc");
 
         // Anything else is not a conflict, including a 409 whose body is
         // not JSON — better no answer than a fabricated version number.
-        assert!(ScriptConflict::from_error(&crate::resources::FetchError::Forbidden).is_none());
+        assert!(ScriptConflict::from_error(&crate::resources::FetchError::Forbidden, "abc").is_none());
         assert!(ScriptConflict::from_error(&crate::resources::FetchError::Http {
             status: 409,
             message: "Conflict".to_string(),
-        })
+        }, "abc")
         .is_none());
         assert!(ScriptConflict::from_error(&crate::resources::FetchError::Http {
             status: 500,
             message: body.to_string(),
-        })
+        }, "abc")
         .is_none());
     }
 

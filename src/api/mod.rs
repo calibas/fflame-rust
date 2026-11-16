@@ -88,7 +88,7 @@ pub enum ApiConnectivity {
     Unreachable,
 }
 
-/// Result of a health check call to GET /api/users/me.
+/// Result of a health check call to GET /api/v1/users/me.
 #[derive(Debug, Clone)]
 pub enum HealthCheckOutcome {
     /// 200 — token/cookie valid, user authenticated (carries email and user id)
@@ -121,7 +121,7 @@ pub(crate) fn urlencode(value: &str) -> String {
     out
 }
 
-/// Perform an API health check by calling GET /api/users/me.
+/// Perform an API health check by calling GET /api/v1/users/me.
 ///
 /// One failed attempt is retried once, whether it failed as a 401 or
 /// as a transport error — see the comment at the retry. What a single
@@ -129,7 +129,7 @@ pub(crate) fn urlencode(value: &str) -> String {
 /// [`health::HealthPolicy`], which needs two network errors in a row
 /// before it calls the server unreachable.
 pub async fn check_api_health(base_url: &str, token: &str) -> HealthCheckOutcome {
-    let url = build_url(base_url, "/api/users/me");
+    let url = build_url(base_url, "/api/v1/users/me");
     let classify =|r: Result<ApiUser, FetchError>| match r {
         Ok(user) => HealthCheckOutcome::Authenticated { email: user.email, user_id: user.id },
         Err(FetchError::Unauthorized) => HealthCheckOutcome::TokenExpired,
@@ -200,12 +200,12 @@ impl ApiState {
         self.flames_load_state = LoadState::NotLoaded;
     }
 
-    /// Validate auth by fetching user info from /api/users/me.
+    /// Validate auth by fetching user info from /api/v1/users/me.
     /// On desktop, uses the stored Bearer token. On WASM, uses cookies.
     pub async fn validate_token(&mut self) -> FetchResult<()> {
         let token = self.require_token()?;
 
-        let url = build_url(API_BASE_URL, "/api/users/me");
+        let url = build_url(API_BASE_URL, "/api/v1/users/me");
         match client::api_get::<ApiUser>(&url, &token).await {
             Ok(user) => {
                 self.auth.set_user(user);
@@ -227,7 +227,7 @@ impl ApiState {
         let token = self.require_token()?;
         let url = build_url(
             API_BASE_URL,
-            &format!("/api/flames?page={}&per_page={}", page, per_page),
+            &format!("/api/v1/users/me/flames?page={}&per_page={}", page, per_page),
         );
 
         self.flames_load_state = LoadState::Loading;
@@ -261,7 +261,7 @@ impl ApiState {
 
         let mut flame_req = sync::config_to_create_request(config, name)?;
         flame_req.visibility = visibility;
-        let flame_url = build_url(API_BASE_URL, "/api/flames");
+        let flame_url = build_url(API_BASE_URL, "/api/v1/flames");
         let flame_resp: FlameResponse =
             client::api_post(&flame_url, &flame_req, &token).await?;
         let flame_id = flame_resp.id;
@@ -275,7 +275,7 @@ impl ApiState {
 
     /// Upload a JPEG thumbnail for a flame.
     ///
-    /// PUT /api/flames/{id}/thumbnail?width={w}&height={h}
+    /// PUT /api/v1/flames/{id}/thumbnail?width={w}&height={h}
     /// Body: raw JPEG bytes, Content-Type: image/jpeg
     /// Returns 204 No Content on success.
     pub async fn upload_thumbnail(
@@ -289,7 +289,7 @@ impl ApiState {
         let url = build_url(
             API_BASE_URL,
             &format!(
-                "/api/flames/{}/thumbnail?width={}&height={}",
+                "/api/v1/flames/{}/thumbnail?width={}&height={}",
                 flame_id, width, height
             ),
         );
@@ -318,7 +318,7 @@ impl ApiState {
         let effective_visibility = match visibility {
             Some(v) => Some(v),
             None => {
-                let current_url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
+                let current_url = build_url(API_BASE_URL, &format!("/api/v1/flames/{}", flame_id));
                 let current: FlameResponse = client::api_get(&current_url, &token).await?;
                 current.visibility
             }
@@ -327,7 +327,7 @@ impl ApiState {
         let mut req = sync::config_to_create_request(config, name)?;
         req.visibility = effective_visibility;
 
-        let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/flames/{}", flame_id));
         let resp: FlameResponse = client::api_put(&url, &req, &token).await?;
 
         if let Some(jpg_data) = thumbnail_jpg {
@@ -346,11 +346,11 @@ impl ApiState {
     /// Load a flame and also return its visibility (true = public).
     pub async fn load_flame_with_visibility(&self, flame_id: &str) -> FetchResult<FlameLoadResult> {
         let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/flames/{}", flame_id));
         let resp: FlameResponse = client::api_get(&url, &token).await?;
 
         let is_public = resp.visibility.as_ref().map(|v| matches!(v, ApiVisibility::Public));
-        let user_id = resp.user_id.clone();
+        let user_id = resp.owner.as_ref().map(|o| o.id.clone()).unwrap_or_default();
         let animation_count = resp.animation_count;
         let animations = resp.animations.clone();
         let config = sync::flame_response_to_config(&resp)?;
@@ -360,11 +360,11 @@ impl ApiState {
     /// Delete a flame from the API.
     pub async fn delete_flame(&self, flame_id: &str) -> FetchResult<()> {
         let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/flames/{}", flame_id));
         client::api_delete(&url, &token).await
     }
 
-    /// Search flames with filters.
+    /// Your own flames, filtered (`GET /users/me/flames` with its words).
     pub async fn search_flames(
         &self,
         params: &SearchFlamesParams,
@@ -372,75 +372,52 @@ impl ApiState {
         let token = self.require_token()?;
         let url = build_url(
             API_BASE_URL,
-            &format!("/api/search/flames{}", params.to_query_string()),
+            &format!("/api/v1/users/me/flames{}", params.to_query_string()),
         );
         client::api_get::<types::Lenient<FlameListItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
 
-    /// Search public flames without auth (for gallery browsing).
+    /// The public flames, filtered, without auth (gallery browsing).
     pub async fn search_public_flames(
         &self,
         params: &SearchFlamesParams,
     ) -> FetchResult<Vec<FlameListItem>> {
         let url = build_url(
             API_BASE_URL,
-            &format!("/api/search/flames{}", params.to_query_string()),
+            &format!("/api/v1/flames{}", params.to_query_string()),
         );
         client::api_get_unauth::<types::Lenient<FlameListItem>>(&url).await.map(types::Lenient::into_inner)
     }
 
-    // --- Palette library operations ---
+    // --- Palettes ---
 
-    /// List the caller's bookmarked palette library entries (the
-    /// `/api/users/me/palettes` endpoint). Each entry includes the
-    /// content hash, optional nickname, and full palette content.
-    pub async fn list_library_palettes(
-        &self,
-        page: u32,
-        per_page: u32,
-    ) -> FetchResult<Vec<LibraryPaletteEntry>> {
+    /// The caller's palettes, every visibility (`GET /users/me/palettes`),
+    /// each with its colours.
+    pub async fn list_my_palettes(&self, page: u32, per_page: u32) -> FetchResult<Vec<PaletteItem>> {
         let token = self.require_token()?;
-        let url = build_url(
-            API_BASE_URL,
-            &format!("/api/users/me/palettes?page={}&per_page={}", page, per_page),
-        );
-        client::api_get::<types::Lenient<LibraryPaletteEntry>>(&url, &token).await.map(types::Lenient::into_inner)
+        let url = build_url(API_BASE_URL, &format!("/api/v1/users/me/palettes?page={page}&per_page={per_page}"));
+        client::api_get::<types::Lenient<PaletteItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
 
-    /// Fetch a single palette by content hash. Public — no auth required.
-    pub async fn get_palette(&self, hash: &str) -> FetchResult<ApiPalette> {
-        let url = build_url(API_BASE_URL, &format!("/api/palettes/{}", hash));
+    /// A palette's content by hash. Public: no auth required.
+    pub async fn get_palette_data(&self, hash: &str) -> FetchResult<ApiPalette> {
+        let url = build_url(API_BASE_URL, &format!("/api/v1/palette-data/{hash}"));
         client::api_get_unauth(&url).await
     }
 
-    /// Set or update the caller's personal nickname for a library entry.
-    /// 404 if the content hash isn't yet in `palette_data`.
-    pub async fn set_library_nickname(
-        &self,
-        hash: &str,
-        nickname: Option<&str>,
-    ) -> FetchResult<()> {
+    /// Rename one of the caller's palettes.
+    pub async fn rename_palette(&self, id: &str, name: &str) -> FetchResult<PaletteItem> {
         let token = self.require_token()?;
-        let url = build_url(
-            API_BASE_URL,
-            &format!("/api/users/me/palettes/{}", hash),
-        );
-        let req = UpdateLibraryNicknameRequest {
-            nickname: nickname.map(|s| s.to_string()),
-        };
-        let _: serde_json::Value = client::api_put(&url, &req, &token).await?;
-        Ok(())
+        let url = build_url(API_BASE_URL, &format!("/api/v1/palettes/{id}"));
+        let req = PatchPaletteRequest { name: Some(name.to_string()) };
+        client::api_patch(&url, &req, &token).await
     }
 
-    /// Remove the caller's library entry for the given content hash.
-    /// Never deletes the underlying palette content (palettes are shared
-    /// and reference-counted by flames).
-    pub async fn remove_library_palette(&self, hash: &str) -> FetchResult<()> {
+    /// Delete one of the caller's palettes. Its content stays: fractals
+    /// may use it.
+    pub async fn delete_palette(&self, id: &str) -> FetchResult<()> {
         let token = self.require_token()?;
-        let url = build_url(
-            API_BASE_URL,
-            &format!("/api/users/me/palettes/{}", hash),
-        );
+        let url = build_url(API_BASE_URL, &format!("/api/v1/palettes/{id}"));
         client::api_delete(&url, &token).await
     }
 
@@ -457,7 +434,7 @@ impl ApiState {
     ) -> FetchResult<String> {
         let token = self.require_token()?;
         let req = sync::animation_to_create_request(animation, name, flame_id, visibility);
-        let url = build_url(API_BASE_URL, "/api/animations");
+        let url = build_url(API_BASE_URL, "/api/v1/animations");
         let resp: AnimationResponse = client::api_post(&url, &req, &token).await?;
         Ok(resp.id)
     }
@@ -473,7 +450,7 @@ impl ApiState {
     ) -> FetchResult<AnimationResponse> {
         let token = self.require_token()?;
         let req = sync::animation_to_create_request(animation, name, flame_id, visibility);
-        let url = build_url(API_BASE_URL, &format!("/api/animations/{}", animation_id));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/animations/{}", animation_id));
         client::api_put(&url, &req, &token).await
     }
 
@@ -487,7 +464,7 @@ impl ApiState {
         animation_id: &str,
     ) -> FetchResult<(crate::animation::Animation, Option<FractalConfig>, Option<String>)> {
         let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/animations/{}", animation_id));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/animations/{}", animation_id));
         let resp: AnimationResponse = client::api_get(&url, &token).await?;
         let flame_id = resp.flame_id.clone();
 
@@ -507,7 +484,7 @@ impl ApiState {
     /// Delete an animation from the API.
     pub async fn delete_animation(&self, animation_id: &str) -> FetchResult<()> {
         let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/animations/{}", animation_id));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/animations/{}", animation_id));
         client::api_delete(&url, &token).await
     }
 
@@ -519,7 +496,7 @@ impl ApiState {
         let token = self.require_token()?;
         let url = build_url(
             API_BASE_URL,
-            &format!("/api/flames/{}/animations", flame_id),
+            &format!("/api/v1/flames/{}/animations?per_page=100", flame_id),
         );
         client::api_get::<types::Lenient<AnimationListItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
@@ -571,7 +548,7 @@ impl ApiState {
         let token = self.require_token()?;
         let url = build_url(
             API_BASE_URL,
-            &format!("/api/scripts?page={page}&per_page={per_page}{}", kind_param(kind)),
+            &format!("/api/v1/users/me/scripts?page={page}&per_page={per_page}{}", kind_param(kind)),
         );
         client::api_get::<types::Lenient<types::ScriptListItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
@@ -584,13 +561,13 @@ impl ApiState {
     /// id: a 409 when that id is published already).
     pub async fn create_script(&self, req: &types::ScriptCreateRequest) -> FetchResult<types::ScriptResponse> {
         let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, "/api/scripts");
+        let url = build_url(API_BASE_URL, "/api/v1/scripts");
         client::api_post(&url, req, &token).await
     }
 
     /// Fetch one script, source included.
     pub async fn load_script(&self, id: &str) -> FetchResult<types::ScriptResponse> {
-        let url = build_url(API_BASE_URL, &format!("/api/scripts/{id}"));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/scripts/{id}"));
         self.public_get(&url).await
     }
 
@@ -610,13 +587,13 @@ impl ApiState {
     /// with `Some(version)`).
     pub async fn update_script(&self, id: &str, req: &types::ScriptCreateRequest) -> FetchResult<types::ScriptResponse> {
         let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/scripts/{id}"));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/scripts/{id}"));
         client::api_put(&url, req, &token).await
     }
 
     pub async fn delete_script(&self, id: &str) -> FetchResult<()> {
         let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/scripts/{id}"));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/scripts/{id}"));
         client::api_delete(&url, &token).await
     }
 
@@ -639,7 +616,7 @@ impl ApiState {
         let url = build_url(
             API_BASE_URL,
             &format!(
-                "/api/search/scripts?q={}&page={page}&per_page={per_page}{}",
+                "/api/v1/scripts?q={}&page={page}&per_page={per_page}{}",
                 urlencode(query),
                 kind_param(kind)
             ),
@@ -653,8 +630,30 @@ impl ApiState {
 
     /// The effect catalog — everything the server knows, without shaders.
     pub async fn list_effects(&self) -> FetchResult<Vec<types::EffectListItem>> {
-        let url = build_url(API_BASE_URL, "/api/effects");
-        self.public_get::<types::Lenient<types::EffectListItem>>(&url).await.map(types::Lenient::into_inner)
+        self.every_page("/api/v1/effects").await
+    }
+
+    /// Every page of a public list, following `next` (100 to a page, the
+    /// most the server serves).
+    async fn every_page<T: serde::de::DeserializeOwned>(&self, path: &str) -> FetchResult<Vec<T>> {
+        let mut out = Vec::new();
+        let mut cursor: Option<String> = None;
+        // A bound well past any catalog: a server that never says the end
+        // must not keep a client asking for ever.
+        for _ in 0..100 {
+            let query = match &cursor {
+                Some(c) => format!("?per_page=100&cursor={}", urlencode(c)),
+                None => "?per_page=100".to_string(),
+            };
+            let url = build_url(API_BASE_URL, &format!("{path}{query}"));
+            let page: types::Page<T> = self.public_get(&url).await?;
+            out.extend(page.items.into_inner());
+            match page.next {
+                Some(next) => cursor = Some(next),
+                None => return Ok(out),
+            }
+        }
+        Ok(out)
     }
 
     /// One effect, with its WGSL.
@@ -664,24 +663,23 @@ impl ApiState {
     /// refuses a null one rather than adding an effect that renders
     /// nothing.
     pub async fn fetch_effect(&self, name: &str) -> FetchResult<types::EffectDownload> {
-        let url = build_url(API_BASE_URL, &format!("/api/effects/{name}"));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/effects/{name}"));
         self.public_get(&url).await
     }
 
     pub async fn fetch_variation(&self, name: &str) -> FetchResult<types::VariationDownload> {
-        let url = build_url(API_BASE_URL, &format!("/api/variations/{}", name));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/variations/{}", name));
         // Use empty token — variations are publicly readable
         client::api_get::<types::VariationDownload>(&url, "").await
     }
 
     /// List all available variations on the server (summary form, no shader code).
     pub async fn list_variations(&self) -> FetchResult<Vec<types::VariationListItem>> {
-        let url = build_url(API_BASE_URL, "/api/variations");
-        client::api_get::<types::Lenient<types::VariationListItem>>(&url, "").await.map(types::Lenient::into_inner)
+        self.every_page("/api/v1/variations").await
     }
 }
 
-/// The newest app release, as `GET /api/app/latest` gives it
+/// The newest app release, as `GET /api/v1/app/latest` gives it
 /// (docs/archive/projects/api-updates.md, rule 7).
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct AppLatest {
@@ -694,7 +692,7 @@ pub struct AppLatest {
 /// endpoint is newer than this client, and an update notice is never worth
 /// an error.
 pub async fn latest_app_version(base_url: &str) -> Option<AppLatest> {
-    let url = build_url(base_url, "/api/app/latest");
+    let url = build_url(base_url, "/api/v1/app/latest");
     client::api_get_unauth::<AppLatest>(&url).await.ok()
 }
 

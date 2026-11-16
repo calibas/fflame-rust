@@ -783,11 +783,11 @@ impl ApiNotification {
 /// State for cloud palette browsing in Palette Library (the caller's
 /// bookmarked entries from `/api/users/me/palettes`).
 pub struct CloudPaletteState {
-    pub palettes: Vec<crate::api::types::LibraryPaletteEntry>,
+    pub palettes: Vec<crate::api::types::PaletteItem>,
     pub fetched: bool,
     pub loading: bool,
     pub error: Option<String>,
-    pub list_result: std::sync::Arc<std::sync::Mutex<Option<Result<Vec<crate::api::types::LibraryPaletteEntry>, String>>>>,
+    pub list_result: std::sync::Arc<std::sync::Mutex<Option<Result<Vec<crate::api::types::PaletteItem>, String>>>>,
     pub deleting: bool,
     /// On success, carries the content hash of the removed entry.
     pub delete_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,

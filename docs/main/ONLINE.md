@@ -72,8 +72,11 @@ compiled in. `SystemSettings::api_base_url` is a deprecated field that
 is still read from old settings files and never written.
 
 **The spec.** [openapi.json](openapi.json) is the API's own OpenAPI
-document (83 paths; refreshed 2026-11-11 from a local server), committed here as the wire authority for both
-repositories. The client implements a subset of it.
+document (91 paths; refreshed 2026-11-16 from a local server on ffapi's
+`catalog-api` branch), committed here as the wire authority for both
+repositories. The client implements a subset of it. Every route is
+under `/api/v1`, and lists are pages (`{items, next}`): the
+conventions are [catalog-api.md](../projects/catalog-api.md)'s.
 
 **Transport** ([client.rs](../../src/api/client.rs)). Every call is an
 `async fn` with the same signature on both platforms:
@@ -142,8 +145,8 @@ catalogs, the downloads and published scripts.
 ## Signing in
 
 The **Account** panel ([login_dialog.rs](../../src/ui/login_dialog.rs))
-has Sign In and Register tabs, posting to `/api/auth/login` and
-`/api/auth/register`; both answer with a token.
+has Sign In and Register tabs, posting to `/api/v1/auth/login` and
+`/api/v1/auth/register`; both answer with a token.
 
 **Desktop.** The token is kept as `auth_token` in the settings file
 (`settings.json` in the app data directory), with `auth_email` for
@@ -158,7 +161,7 @@ credentials.
 `auth_email` is held in memory only. Because a cookie may already be
 valid, the web app always runs one health check at startup, and that is
 how it discovers an existing session. Signing out also posts
-`/api/auth/logout` to clear the cookie.
+`/api/v1/auth/logout` to clear the cookie.
 
 `api::auth::AuthState` is the token holder inside an `ApiState`; the
 app builds a fresh `ApiState` per request and keeps its own sign-in
@@ -168,7 +171,7 @@ state in `SystemSettings`.
 
 ## Connectivity and session health
 
-`check_api_health` calls `GET /api/users/me`. A 401 or a network error
+`check_api_health` calls `GET /api/v1/users/me`. A 401 or a network error
 is retried once, because the first request after an idle spell can land
 on a pooled connection the server already closed.
 
@@ -197,7 +200,7 @@ startup check runs whether or not a sign-in is known.
 ### The wire format
 
 `config_to_create_request` ([sync.rs](../../src/api/sync.rs)) builds a
-`CreateFlameRequest` for `POST /api/flames` and `PUT /api/flames/{id}`:
+`CreateFlameRequest` for `POST /api/v1/flames` and `PUT /api/v1/flames/{id}`:
 
 | field | contents |
 | --- | --- |
@@ -249,7 +252,7 @@ Online dialog ([save_online_dialog.rs](../../src/ui/save_online_dialog.rs)).
 Signed out, the menu item opens the Account panel instead.
 
 - **Name**, **Upload thumbnail** (a 512×512 render of the config, JPEG
-  quality 90, `PUT /api/flames/{id}/thumbnail`) and **Make public**.
+  quality 90, `PUT /api/v1/flames/{id}/thumbnail`) and **Make public**.
 - **Flame:** **Save** for a flame not yet online; for one that is,
   **Update** (only if you own it) and **Save as Copy**. A warning shows
   when animations depend on the flame.
@@ -272,15 +275,15 @@ it on an update makes the flame private (`flame_update_visibility`).
 
 ## Animations online
 
-`animation_to_create_request` sends `POST /api/animations` or
-`PUT /api/animations/{id}`: the name, the flame's id, `duration`,
+`animation_to_create_request` sends `POST /api/v1/animations` or
+`PUT /api/v1/animations/{id}`: the name, the flame's id, `duration`,
 `loop_mode` (`once`, `loop`, `ping_pong`), and `tracks`, `generators`
 and `base_config` as opaque JSON. Online, an animation is tied to its
 flame by `flame_id`; `base_config` is sent only if the animation already
 carries one (the local `.anim` save embeds the config, the online save
 does not add it).
 
-**Loading** (`load_animation_full`, `GET /api/animations/{id}`) returns
+**Loading** (`load_animation_full`, `GET /api/v1/animations/{id}`) returns
 the animation with the server's copy of its flame embedded. That flame
 is authoritative: it becomes the animation's `base_config`, replacing
 any stored one (`adopt_server_flame`), since the flame may have been
@@ -300,19 +303,21 @@ URL load either at startup, with a 30 s timeout.
 ## The Fractal Browser and cloud palettes
 
 The Fractal Browser's **Online** tab lists your flames
-(`GET /api/flames`, first 100) or a search (`GET /api/search/flames`),
-loads one (`GET /api/flames/{id}`) and deletes one
-(`DELETE /api/flames/{id}`); see
+(`GET /api/v1/users/me/flames`, first 100) or a search (the same list's
+words: `q` for the name, `type=variation:<name>`, the render mode),
+loads one (`GET /api/v1/flames/{id}`) and deletes one
+(`DELETE /api/v1/flames/{id}`); see
 [FRACTAL-BROWSER.md](FRACTAL-BROWSER.md). Its error check treats
 "Authentication required" (401) as an expired session and signs the
 user out; "Access denied" (403) is shown as an error and leaves the
 session alone (`only_a_401_signs_the_user_out`). A delete asks for
 confirmation first.
 
-**Cloud Palettes** in the Catalog's palettes lists your palette library
-(`GET /api/users/me/palettes`, first 100); a click sets the config's
-palette (undoable), and **X** removes the library entry
-(`DELETE /api/users/me/palettes/{hash}`) without deleting the palette.
+**Cloud Palettes** in the Catalog's palettes lists your palettes
+(`GET /api/v1/users/me/palettes`, first 100: each an item with its own id,
+pointing at its colours by hash); a click sets the config's palette
+(undoable), and **X** deletes the palette (`DELETE /api/v1/palettes/{id}`);
+its colours stay, since fractals may use them.
 See [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md).
 
 ---
@@ -338,8 +343,8 @@ time.
 
 | request | does |
 | --- | --- |
-| `ListMine(kind)` | your scripts, of one kind or every kind (`GET /api/scripts?kind=`, first 100) |
-| `Search(q, kind)` | public search, of one kind or every kind (`GET /api/search/scripts`, query percent-encoded, first 50) |
+| `ListMine(kind)` | your scripts, of one kind or every kind (`GET /api/v1/users/me/scripts?kind=`, first 100) |
+| `Search(q, kind)` | public search, of one kind or every kind (`GET /api/v1/scripts?q=`, query percent-encoded, first 50) |
 | `Publish` | create; records the returned id and version against the local file |
 | `Update` | update with the version last read; a 409 is a **conflict** the user resolves (`ScriptConflict`): the Scripts panel for a script, the Formula Editor for an entry |
 | `Adopt` | fetch someone's script and save it locally under a free name, marked as somebody else's: a CPU script in the script store (it runs under the restrictions downloaded scripts get), an entry in the formula library. A kind this build does not know is refused |
@@ -354,7 +359,7 @@ does not compile cannot be published. It can still be saved locally.
 **An entry is published under its own `INFO.id`** (`api::entries`), so
 the catalog's `script:<uuid>` type and the stored script are one id
 (the server links them: `script_id` on a config's components and on
-`/api/types`, `used_by` on the script). The first to publish an id owns
+`/api/v1/types`, `used_by` on the script). The first to publish an id owns
 it: a create under a taken id is a 409, shown as "its id is published
 already". The Formula Editor's **Online** section publishes the entry it
 has open, once it is saved and the user's own:
@@ -376,8 +381,8 @@ somebody else's: it is then a script of the user's own. A config keeps
 carrying the source of every entry it uses, published or not.
 
 --- | --- |
-| `ListMine` | your scripts (`GET /api/scripts`, first 100) |
-| `Search(q)` | public search (`GET /api/search/scripts`, query percent-encoded, first 50) |
+| `ListMine` | your scripts (`GET /api/v1/users/me/scripts`, first 100) |
+| `Search(q)` | public search (`GET /api/v1/scripts?q=`, query percent-encoded, first 50) |
 | `Publish` | create; records the returned id and version against the local script |
 | `Update` | update with the version last read; a 409 is a **conflict** the user resolves (`ScriptConflict`) |
 | `Adopt` | fetch someone's script and save it locally under a free name, marked as somebody else's, so it runs under the restrictions downloaded scripts get |
@@ -436,7 +441,8 @@ stderr.
 
 ### Catalogs
 
-The app fetches `GET /api/variations` and `GET /api/effects` once per
+The app fetches every page of `GET /api/v1/variations` and
+`GET /api/v1/effects` (100 to a page, following `next`) once per
 session in the background, caches them, and starts from the cached copy,
 so the panels work offline. A failed fetch is logged at info level and
 nothing else. The catalog is the only route by which the server's
@@ -474,7 +480,7 @@ names with non-zero weight that the registry lacks, and
 | listed, not downloadable | `KnownButNotFetchable` | notifies that a plugin is needed |
 | not listed | `NotInCatalog` | notifies that a plugin is needed |
 
-Fetches (`GET /api/variations/{name}`, no authentication) run in
+Fetches (`GET /api/v1/variations/{name}`, no authentication) run in
 parallel and **pause rendering** until they all finish or 30 s pass.
 Each download is cached, then registered as `Api { version }`; then the
 renderer reloads the config so the shader includes them. Failures and
@@ -486,7 +492,7 @@ out first.
 
 A missing effect is found where the effect chain compiles and has no
 registry entry (`effects::take_missing_effects`). If signed in, the app
-fetches it (`GET /api/effects/{name}`); each name is tried once per
+fetches it (`GET /api/v1/effects/{name}`); each name is tried once per
 session. A download is **registered first and cached second**, so a
 payload this build refuses is never cached; a refusal is notified.
 Rendering is not paused: the picture simply lacks the effect until it

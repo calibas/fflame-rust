@@ -942,11 +942,11 @@ impl ScriptsPanel {
 
         ui.horizontal(|ui| {
             ui.label(&item.display_name);
-            if show_owner && !item.owner_display_name.is_empty() {
+            if show_owner && !item.owner_name().is_empty() {
                 // The globally unique key — `owner/name` — rather than a
                 // UUID fragment, which is what the server's unique
                 // display names are for.
-                ui.weak(format!("by {}", item.owner_display_name));
+                ui.weak(format!("by {}", item.owner_name()));
             }
             if let Some(k) = &item.kind {
                 ui.weak(format!("· {}", kind_label(k)));

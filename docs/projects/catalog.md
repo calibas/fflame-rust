@@ -1,7 +1,12 @@
 # The Catalog: one place for every resource
 
-> **Status 2026-11-16: phases 0 and 1 started** (branch `catalog-panel`;
-> the API's on an ffapi branch). Every decision is made (*Decided*). The
+> **Status 2026-11-16: phase 0 built, phase 1 started** (branch
+> `catalog-panel`). The API's reshape is done on ffapi's branch
+> `catalog-api` (steps 1-10, its `docs/catalog-api-build.md`), unmerged;
+> this app's client already speaks it (`/api/v1`, pages, `owner`,
+> `revision`, palettes as items; `python scripts/api_integration.py`
+> passes against it), so the two merge and deploy together. Every
+> decision is made (*Decided*). The
 > two surveys this plan stands on (the app's sources, the API's routes)
 > were taken 2026-11-16 and are summarised under *What exists*.
 

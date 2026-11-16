@@ -208,7 +208,7 @@ async fn fetch_profile(token: &str) -> Result<crate::api::types::ApiUser, String
     use crate::api::client::{build_url, api_get};
     use crate::api::API_BASE_URL;
 
-    let url = build_url(API_BASE_URL, "/api/users/me");
+    let url = build_url(API_BASE_URL, "/api/v1/users/me");
     api_get(&url, token).await.map_err(|e| e.to_string())
 }
 
@@ -567,7 +567,7 @@ async fn do_login(base_url: &str, email: &str, password: &str) -> Result<LoginSu
     use crate::api::client::{build_url, api_post_unauth};
     use crate::api::types::{LoginRequest, AuthResponse};
 
-    let url = build_url(base_url, "/api/auth/login");
+    let url = build_url(base_url, "/api/v1/auth/login");
     let req = LoginRequest {
         email: email.to_string(),
         password: password.to_string(),
@@ -634,7 +634,7 @@ async fn do_register(base_url: &str, display_name: &str, email: &str, password: 
     use crate::api::client::{build_url, api_post_unauth};
     use crate::api::types::{RegisterRequest, AuthResponse};
 
-    let url = build_url(base_url, "/api/auth/register");
+    let url = build_url(base_url, "/api/v1/auth/register");
     let req = RegisterRequest {
         display_name: display_name.to_string(),
         email: email.to_string(),
