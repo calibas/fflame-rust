@@ -1,7 +1,7 @@
 # The Catalog's API: the route table (phase 0)
 
-> **Status 2026-11-16: second draft, for the user to agree.** Nothing is
-> built. Phase 0 of [catalog.md](catalog.md). The first draft put new
+> **Status 2026-11-16: agreed; building** on ffapi branch
+> `catalog-api`. Phase 0 of [catalog.md](catalog.md). The first draft put new
 > routes under `/api/v2/` beside the current ones; the user then said
 > the API has **not launched** -- `?reader=N` exists so it never needs a
 > `/v2` for content changes -- so this draft reshapes the routes **in
@@ -140,7 +140,8 @@ Every item has:
 | `revision` | a mutable item's revision, for writes (below) |
 | `thumbnail_url` | a URL, or null; it changes when the image does, so it can be cached forever |
 
-and, where a resource has them: `kind`, `authors`, `version` (a built-in
+and, where a resource has them: `kind`, `authors`, `license` (a user
+item's, below), `version` (a built-in
 catalog item's content version, a different thing from `revision`),
 `visibility`, `published_at`, `forked_from`, `tags`, and -- in the
 owner's own view only -- `moderation_state` (own lists include moderated
@@ -329,18 +330,32 @@ launch. Reports gain palettes (and every kind with public text).
   (`client.ts`, `PublishPanel.tsx` strips `"Validation error:"`), and
   `display_name`/`owner_display_name` in about 85 places.
 
-## Decisions for the user
+## Decided (2026-11-16)
 
-A. **`/api/v1/` from launch.** Recommended.
+A-E as recommended ("You can continue on the other items"):
+
+A. **`/api/v1/` from launch.**
 B. **Published palettes as their own items** (a UUID, moderation,
-   favourites), reversing the first round's decision 4. Recommended.
+   favourites), reversing the first round's decision 4.
 C. **The browser's resources reshaped in this pass**, `/api/admin`
-   outside the promise. Recommended.
-D. **Paging by `next`**, `total` optional. Recommended.
+   outside the promise.
+D. **Paging by `next`**, `total` optional.
 E. **A `revision` on every mutable item**, optional on writes.
-   Recommended.
-F. **The terms of publishing** -- what licence a published item carries
-   by default, and whether an author may choose another. Nothing in the
-   API says today; it applies to everything published from launch, so it
-   is decided before. The user's call (not a recommendation of mine to
-   make).
+F. **The terms of publishing**, the user's: "the options to be
+   Copyright, CC-BY, CC-BY-NC, and CC0. v3.0 for all the Creative
+   Commons licenses." CC0 has only a 1.0 (Creative Commons published no
+   3.0 of it), so the four are:
+
+   | `license` | Meaning |
+   |---|---|
+   | `copyright` | all rights reserved (the default, until the user says otherwise: it grants nothing the author did not choose) |
+   | `cc-by-3.0` | Creative Commons Attribution 3.0 |
+   | `cc-by-nc-3.0` | Creative Commons Attribution-NonCommercial 3.0 |
+   | `cc0-1.0` | Creative Commons CC0 1.0 (public domain dedication) |
+
+   Every user item that can be made public carries `license` (fractals,
+   animations, palettes, scripts, collections, rooms, gallery items); the
+   author chooses it, and may change it. Built-ins carry none: many are
+   ports whose terms are their sources' own, which the API does not
+   assert. A new licence would be a new value, behind a reader (the
+   contract's rule 3).
