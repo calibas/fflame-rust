@@ -159,7 +159,7 @@ if response.changed() {
 // 2. Batch update (one undo point, e.g. triangle editor, color pickers)
 config_manager.update_batch(changes, "description".to_string())?;
 ```
-Structural actions (transform add/delete, config import/export, preset loading) are intentionally outside ConfigManager. A brief overwrite window after parameter changes keeps real-time updates smooth before the accumulation resets.
+Structural actions -- adding or deleting a transform, loading a config (preset, file, random, online: `App::load_config_with_undo` → `ConfigManager::load_config`) -- go through ConfigManager as one undoable snapshot each (`apply_structural_change`, `apply_config_edit`, `load_config`), not through `update_param`. A brief overwrite window after parameter changes keeps real-time updates smooth before the accumulation resets.
 
 ## Common Tasks
 
