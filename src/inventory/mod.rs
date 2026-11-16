@@ -234,6 +234,30 @@ pub fn scan(palettes: &crate::scene::palette::PaletteLibrary) -> Vec<Entry> {
     out
 }
 
+/// A built-in's description (markdown) and authors, from what the app
+/// compiles in alone -- never the cached server catalogs [`scan`] falls
+/// back on -- so it is the same on every machine: what the engine catalog
+/// publishes (`catalog`'s `prose` table) and the API serves at `/types`.
+/// `None` for a name with nothing written.
+pub fn builtin_prose(kind: Kind, name: &str) -> Option<(String, Vec<String>)> {
+    let p = match kind {
+        Kind::Variation => prose::variation(name).cloned(),
+        Kind::SimModel | Kind::SimColoring => {
+            let line = if kind == Kind::SimModel {
+                crate::sim::MODELS.iter().find(|m| m.name == name).map(|m| m.description)
+            } else {
+                crate::sim::COLORINGS.iter().find(|c| c.name == name).map(|c| c.description)
+            };
+            match prose::twin(kind, name) {
+                Some(p) if !p.description.is_empty() => Some(p.clone()),
+                _ => line.map(|l| prose::Prose { description: l.to_string(), authors: Vec::new() }),
+            }
+        }
+        _ => prose::twin(kind, name).cloned().or_else(|| prose::untwinned(kind, name)),
+    }?;
+    (!p.description.is_empty() || !p.authors.is_empty()).then_some((p.description, p.authors))
+}
+
 /// What [`scan`] reads that changes while the app runs, cheaply: a
 /// change means the list is to be made again. The stores' files are not
 /// read here (that is the scan's cost); `files` is the caller's count of
