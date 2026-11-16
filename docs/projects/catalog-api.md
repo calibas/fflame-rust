@@ -257,6 +257,8 @@ moderation path.
 | `POST /palettes`, `PUT`, `PATCH`, `DELETE /palettes/{id}` | `POST /palettes`, `PUT`/`DELETE /users/me/palettes/{hash}` | a `PUT` of new colours keeps the id |
 | `GET /palette-data/{hash}` | `GET /palettes/{hash}` | the content alone |
 | favourites | none | keeping someone else's palette is a favourite, as for fractals |
+| `POST /palettes/{id}/fork` | none | a private copy of your own, `forked_from` the original (built in step 6) |
+| `GET /users/me/favorite-palettes` | none | as for every favourited kind (built in step 6) |
 
 A palette has a UUID, owner, name, description, visibility,
 `moderation_state`, `content_hash`, `forked_from`, timestamps and a
