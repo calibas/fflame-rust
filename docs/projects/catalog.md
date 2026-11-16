@@ -307,8 +307,11 @@ which run side by side.
    a generator's or modifier's parameters (`ui::params`), seed, Run and
    Batch -- since running is a script's Use; the editor is for editing,
    with a Run of its own for the file being written.
-3. **API compatibility.** **New shapes behind reader 8**, the current
-   routes kept for released apps (aliased where the shape is the same).
+3. **API compatibility.** First agreed as new shapes behind reader 8;
+   superseded the same day: the API has not launched, so the routes are
+   reshaped in place and both clients move with the server, under a
+   written stability contract ([catalog-api.md](catalog-api.md), second
+   draft).
 4. **Public palettes.** A published palette is a named, authored,
    visible item (principle 6); packs online later.
 5. **A fractal click** **loads it**, as the Fractal Browser does today --
