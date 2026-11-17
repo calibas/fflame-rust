@@ -347,7 +347,7 @@ entry's version, so an update or an edit makes a new one:
 
 | Kind | Its preview |
 |---|---|
-| Variation | its image of the plane: four transforms filling the square [-1, 1]^2 evenly, coloured by quarter, the variation alone as the final transform (through `add_variation`, so a Rhai one carries its source); framed so the square fills half the picture, in Fire without its black end |
+| Variation | its image of the plane: four transforms filling the square [-1, 1]^2 evenly, coloured by quarter, the variation alone as the final transform (through `add_variation`, so a Rhai one carries its source); framed so the square fills half the picture; a variation that colours (direct colour, the GLSL generators) runs in the four transforms instead, as a final's colour writes are discarded; a pre or post one passes the point through linear |
 | Effect | a reference fractal (the first 2D preset) before and after |
 | Formula, field, solid | its default view |
 | Colouring (escape, field, solid) | the default formula drawn with it |
@@ -356,8 +356,13 @@ entry's version, so an update or an edit makes a new one:
 | A plug-in file | as its kind |
 | Palette, fractal | their gradient, the gallery, the server's thumbnail, as before |
 
-A library, a track, an unreadable file and a file of yours that is not a
-plug-in have none. The info pane shows the selected entry's preview above
+A Rhai file of a kind that can be a plug-in -- an example, a file of
+yours -- previews through what registering it makes
+(`library::prepare_plugin`, not listed as a plug-in; the pickers do not
+offer it). A library, a track and an unreadable file have none. Previews
+that take the default palette use Fire without its black end, which on
+the black background hid whatever was drawn at index 0; a colouring
+starts from its own parameters, not the formula preset's. The info pane shows the selected entry's preview above
 its description (a spinner while it is made). A family with previews can
 be a **Grid** (beside the origin filter): each cell its entry's preview,
 asked for as it comes on screen -- the first look at 647 variations fills
