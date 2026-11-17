@@ -10,6 +10,7 @@ mod formatting;
 pub mod fractal_browser;
 pub mod inventory;
 pub mod markdown;
+mod inventory_online;
 pub mod picker;
 pub mod fractal_gallery;
 mod help;
@@ -2519,6 +2520,10 @@ impl EguiLayer {
             let _ = settings.save();
         }
 
+        // A request that carried the session's credentials came back 401
+        // (`api::job`): the session expired, whoever asked.
+        sign_out_requested |= crate::api::job::take_session_expired();
+
         // Handle sign out action (from menu bar or account panel)
         if menu_actions.file.sign_out || sign_out_requested {
             // Clear auth from SystemSettings
@@ -2545,6 +2550,8 @@ impl EguiLayer {
 
             // Clear cloud palette state
             self.cloud_palette_state = CloudPaletteState::default();
+            // The Catalog's own online lists
+            self.inventory_panel.signed_out();
 
             // Clear online tab in fractal browser
             if let Some(ref mut panel) = self.fractal_browser_panel {

@@ -20,6 +20,10 @@
 //! (`ui::picker`), so every list of a kind is the same list. What the
 //! server offers and the app lacks is listed too, its Use a **Download**
 //! ([`request_download`], drained into the app's fetches once a frame).
+//!
+//! Two places, chosen at the top: **On this device**, the list above, and
+//! **Online**, what the server holds for the family, public or your own,
+//! page by page (`ui::inventory_online`).
 
 use super::fractal_gallery::FractalConfigGallery;
 use crate::config::{ConfigManager, ConfigPath, FractalConfig};
@@ -101,6 +105,33 @@ impl OriginFilter {
     }
 }
 
+/// Where the list comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Place {
+    #[default]
+    Local,
+    Online,
+}
+
+/// The online account as a request needs it: whether the session is
+/// signed in, and its token (desktop; the web's cookie needs none).
+#[derive(Debug, Clone, Default)]
+pub struct CloudAccount {
+    pub signed_in: bool,
+    pub token: Option<String>,
+}
+
+impl CloudAccount {
+    /// An API client for one request.
+    pub fn api(&self) -> crate::api::ApiState {
+        let mut api = crate::api::ApiState::new(crate::api::API_BASE_URL);
+        if let Some(t) = self.token.as_deref().filter(|t| !t.is_empty()) {
+            api.set_token(t);
+        }
+        api
+    }
+}
+
 /// What the panel asks of the app this frame.
 #[derive(Default)]
 pub struct InventoryResponse {
@@ -112,6 +143,11 @@ pub struct InventoryResponse {
     pub open_formula_file: Option<(String, bool)>,
     /// A CPU script to select in the Scripts panel, by its stem.
     pub open_script: Option<String>,
+    /// An online fractal loaded, by its id, to load as the Fractal
+    /// Browser's Online tab did (one undo step; Save Online updates it).
+    pub load_api_flame: Option<(String, crate::api::FlameLoadResult)>,
+    /// An online script to open (adopt into your files).
+    pub script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest>,
 }
 
 /// What the panel needs from the app to draw.
@@ -122,6 +158,12 @@ pub struct InventoryContext<'a> {
     /// With the online account on: the user's cloud palettes, after the
     /// packs (the Palette Library's Cloud Palettes).
     pub cloud_palettes: Option<CloudPalettes<'a>>,
+    /// The online account, for the Online place's requests.
+    pub account: CloudAccount,
+    /// The script cloud is busy (opening a script waits for it), and its
+    /// last word.
+    pub script_cloud_busy: bool,
+    pub script_cloud_status: Option<&'a str>,
 }
 
 /// The cloud palettes' state, and the credentials when signed in.
@@ -139,6 +181,8 @@ pub struct InventoryPanel {
     origin: OriginFilter,
     query: String,
     selected: Option<EntryKey>,
+    place: Place,
+    online: super::inventory_online::OnlinePlace,
     /// The presets, a gallery a category, made when first shown.
     preset_galleries: Option<Vec<FractalConfigGallery>>,
     preset_category: PresetCategory,
@@ -160,6 +204,8 @@ impl InventoryPanel {
             origin: OriginFilter::All,
             query: String::new(),
             selected: None,
+            place: Place::Local,
+            online: super::inventory_online::OnlinePlace::new(),
             preset_galleries: None,
             preset_category: PresetCategory::default(),
         }
@@ -174,10 +220,19 @@ impl InventoryPanel {
         }
     }
 
-    /// The entry selected, as the list last read it.
+    /// The entry selected, as the list last read it (an online one, as
+    /// its page did).
     pub fn selected(&self) -> Option<&Entry> {
         let key = self.selected.as_ref()?;
+        if matches!(key, EntryKey::Online(..)) {
+            return self.online.find(key).map(|(e, _)| e);
+        }
         self.entries.iter().find(|e| &e.key == key)
+    }
+
+    /// The session signed out: the Online place forgets your own lists.
+    pub fn signed_out(&mut self) {
+        self.online.signed_out();
     }
 
     /// Read the sources again when what they hold has changed, and share
@@ -194,12 +249,19 @@ impl InventoryPanel {
     }
 
     fn visible(&self, e: &Entry) -> bool {
-        e.kind.family() == self.family && self.kind.is_none_or(|k| k == e.kind) && self.origin.admits(e) && e.matches(&self.query)
+        let place = match self.place {
+            Place::Local => self.origin.admits(e),
+            // Online, of this device's list: what the server's catalog
+            // offers, downloaded or not.
+            Place::Online => e.origin == Origin::Api || !e.installed,
+        };
+        e.kind.family() == self.family && self.kind.is_none_or(|k| k == e.kind) && place && e.matches(&self.query)
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext) -> InventoryResponse {
         let mut out = InventoryResponse::default();
-        self.render_top(ui);
+        self.online.update(ui.ctx(), &self.query, &self.entries, &mut out);
+        self.render_top(ui, cx);
         ui.separator();
         if ui.available_width() >= 560.0 {
             egui::Panel::right("catalog_info").resizable(true).default_size(280.0).min_size(200.0).show_inside(ui, |ui| {
@@ -219,11 +281,20 @@ impl InventoryPanel {
 
     // ------------------------------------------------------------------ top
 
-    fn render_top(&mut self, ui: &mut egui::Ui) {
+    fn render_top(&mut self, ui: &mut egui::Ui, cx: &InventoryContext) {
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut self.place, Place::Local, t!("catalog.place_local"));
+            ui.selectable_value(&mut self.place, Place::Online, t!("catalog.place_online")).on_hover_text(t!("catalog.place_online_tip"));
+        });
         ui.horizontal_wrapped(|ui| {
             for family in Family::ALL {
-                let count = self.entries.iter().filter(|e| e.kind.family() == family).count();
-                let label = format!("{} ({count})", t!(family.label_key()));
+                let label = match self.place {
+                    Place::Local => {
+                        let count = self.entries.iter().filter(|e| e.kind.family() == family).count();
+                        format!("{} ({count})", t!(family.label_key()))
+                    }
+                    Place::Online => t!(family.label_key()).to_string(),
+                };
                 if ui.selectable_label(self.family == family, label).clicked() {
                     self.open_on(family);
                 }
@@ -234,14 +305,22 @@ impl InventoryPanel {
             if !self.query.is_empty() && ui.small_button("×").on_hover_text(t!("catalog.clear_search")).clicked() {
                 self.query.clear();
             }
-            egui::ComboBox::from_id_salt("catalog_origin").selected_text(t!(self.origin.label_key())).show_ui(ui, |ui| {
-                for o in OriginFilter::ALL {
-                    ui.selectable_value(&mut self.origin, o, t!(o.label_key()));
-                }
-            });
+            if self.place == Place::Local {
+                egui::ComboBox::from_id_salt("catalog_origin").selected_text(t!(self.origin.label_key())).show_ui(ui, |ui| {
+                    for o in OriginFilter::ALL {
+                        ui.selectable_value(&mut self.origin, o, t!(o.label_key()));
+                    }
+                });
+            }
         });
+        if self.place == Place::Online {
+            self.online.render_top(ui, self.family, &cx.account);
+        }
         // A family of several kinds: a chip each that has entries.
-        let mut kinds: Vec<Kind> = self.entries.iter().filter(|e| e.kind.family() == self.family).map(|e| e.kind).collect();
+        let mut kinds: Vec<Kind> = match self.place {
+            Place::Local => self.entries.iter().filter(|e| e.kind.family() == self.family).map(|e| e.kind).collect(),
+            Place::Online => super::inventory_online::kinds(self.family),
+        };
         kinds.dedup();
         if kinds.len() > 1 {
             ui.horizontal_wrapped(|ui| {
@@ -260,6 +339,18 @@ impl InventoryPanel {
     // ----------------------------------------------------------------- list
 
     fn render_list(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext, out: &mut InventoryResponse) {
+        if self.place == Place::Online {
+            egui::ScrollArea::vertical().id_salt("catalog_online_list").auto_shrink([false, false]).show(ui, |ui| {
+                // Variations and effects: the cached catalog first (it is
+                // the server's whole list), then the Rhai ones people
+                // published.
+                if matches!(self.family, Family::Variations | Family::Effects) {
+                    self.render_grouped(ui, cx, out);
+                }
+                self.online.render_list(ui, self.family, self.kind, &mut self.selected, cx);
+            });
+            return;
+        }
         // The presets as galleries, unless a search or a filter asks for
         // rows.
         if self.family == Family::Fractals && self.query.trim().is_empty() && self.origin == OriginFilter::All {
@@ -446,6 +537,23 @@ impl InventoryPanel {
     // ----------------------------------------------------------------- info
 
     fn render_info(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext, out: &mut InventoryResponse) {
+        if let Some(key @ EntryKey::Online(..)) = self.selected.clone() {
+            match self.online.render_info(ui, &key, cx, out) {
+                Some(super::inventory_online::InfoAction::ShowLocal(local)) => {
+                    if let Some(e) = self.entries.iter().find(|e| e.key == local) {
+                        self.family = e.kind.family();
+                        self.kind = None;
+                    }
+                    self.place = Place::Local;
+                    self.selected = Some(local);
+                }
+                None if self.online.find(&key).is_none() => {
+                    ui.weak(t!("catalog.select_hint"));
+                }
+                None => {}
+            }
+            return;
+        }
         let Some(e) = self.selected().cloned() else {
             ui.weak(t!("catalog.select_hint"));
             return;
@@ -496,7 +604,7 @@ fn preset_galleries() -> Vec<FractalConfigGallery> {
 
 /// A palette row: its name, and its gradient at the right; the texture is
 /// made only once the row is on screen.
-fn palette_row(ui: &mut egui::Ui, hash: &str, title: &str, palette: &crate::scene::palette::Palette, selected: bool) -> egui::Response {
+pub(super) fn palette_row(ui: &mut egui::Ui, hash: &str, title: &str, palette: &crate::scene::palette::Palette, selected: bool) -> egui::Response {
     let h = 20.0;
     let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h + 4.0), egui::Sense::click());
     if !ui.is_rect_visible(rect) {
@@ -669,7 +777,7 @@ fn editing_flame_is_empty(config: &FractalConfig) -> bool {
     f.transforms.is_empty() && f.linked_transforms.is_empty() && f.final_transforms.is_empty()
 }
 
-fn apply_palette(config_manager: &mut ConfigManager, palette: crate::scene::palette::Palette) {
+pub(super) fn apply_palette(config_manager: &mut ConfigManager, palette: crate::scene::palette::Palette) {
     // An editable copy: editing it changes only the config's palette,
     // until it is saved to the library.
     let mut copy = palette;

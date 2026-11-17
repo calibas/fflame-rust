@@ -476,12 +476,23 @@ impl ApiState {
 
     /// A thumbnail's bytes, by the `thumbnail_url` an item gave (a path
     /// on the API, used as given: it changes when the image does).
+    ///
+    /// A path is the API's (the local server's too, `build_url`), asked
+    /// with the token -- a private fractal's thumbnail is its owner's; a
+    /// whole URL elsewhere (a CDN, one day) is asked without it: the
+    /// sign-in goes to the API alone.
     pub async fn fetch_thumbnail(&self, thumbnail_url: &str) -> FetchResult<Vec<u8>> {
-        let url = if thumbnail_url.starts_with("http") { thumbnail_url.to_string() } else { format!("{API_BASE_URL}{thumbnail_url}") };
+        if thumbnail_url.starts_with('/') {
+            let url = build_url(API_BASE_URL, thumbnail_url);
+            #[cfg(not(target_arch = "wasm32"))]
+            return client::api_get_bytes_with(&url, self.auth.get_token()).await;
+            #[cfg(target_arch = "wasm32")]
+            return client::api_get_bytes(&url).await;
+        }
         #[cfg(not(target_arch = "wasm32"))]
-        return client::api_get_bytes_with(&url, self.auth.get_token()).await;
+        return client::api_get_bytes_with(thumbnail_url, None).await;
         #[cfg(target_arch = "wasm32")]
-        return client::api_get_bytes(&url).await;
+        return client::api_get_bytes(thumbnail_url).await;
     }
 
     // --- Palettes ---

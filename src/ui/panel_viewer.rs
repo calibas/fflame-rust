@@ -966,12 +966,29 @@ impl<'a> PanelViewer<'a> {
             (online, auth)
         };
         let auth = auth_pair.as_ref().map(|(b, t)| (b.as_str(), t.as_str()));
+        let account = super::inventory::CloudAccount { signed_in: auth_pair.is_some(), token: auth_pair.as_ref().map(|(_, t)| t.clone()) };
         let mut cx = super::inventory::InventoryContext {
             config_manager: self.context.config_manager,
             palette_library: self.context.palette_library,
             cloud_palettes: online_account.then_some(super::inventory::CloudPalettes { state: self.context.cloud_palette_state, auth }),
+            account,
+            script_cloud_busy: self.context.script_cloud.busy,
+            script_cloud_status: self.context.script_cloud.status.as_deref(),
         };
         let response = self.context.inventory_panel.render(ui, &mut cx);
+        if let Some((id, loaded)) = response.load_api_flame {
+            // As the Fractal Browser's Online tab loaded one: whose it is
+            // rides along, so Save Online updates it.
+            *self.context.selected_preset_config = Some(loaded.config);
+            *self.context.loaded_api_flame_id = Some(id);
+            *self.context.loaded_api_flame_is_public = loaded.is_public;
+            *self.context.loaded_api_flame_user_id = Some(loaded.user_id);
+            *self.context.loaded_api_flame_animation_count = loaded.animation_count;
+            *self.context.loaded_api_flame_animations = loaded.animations;
+        }
+        if let Some(req) = response.script_cloud_request {
+            *self.context.script_cloud_request = Some(req);
+        }
         if let Some(config) = response.load_preset {
             *self.context.selected_preset_config = Some(config);
             // A preset is nobody's online flame.
