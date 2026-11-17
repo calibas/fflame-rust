@@ -628,7 +628,7 @@ pub fn render_colors_content(
                 ui.horizontal(|ui| {
                     ui.label(t!("tonemap.palette"));
                     let btn = super::picker::button(ui, &current.name);
-                    if let Some(e) = super::picker::Picker::new("colors_palette", &admit).current(Some(current_hash.as_str())).popup(ui, &btn) {
+                    if let Some(e) = super::picker::Picker::new("colors_palette", &admit).palettes(palette_library).current(Some(current_hash.as_str())).popup(ui, &btn) {
                         if let crate::inventory::EntryKey::Palette(hash) = &e.key {
                             if let Some(mut palette) = crate::inventory::palette(palette_library, hash) {
                                 palette.built_in = false;

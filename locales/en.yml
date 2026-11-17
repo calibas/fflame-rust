@@ -3331,6 +3331,7 @@ catalog:
   origin_plugins: "Plug-ins"
   nothing_matches: "Nothing here matches."
   select_hint: "Select something in the list to read about it."
+  hover_hint: "Point at something in the list to read about it."
   version: "Version %{version}"
   by: "By %{names}"
   no_description: "No description."

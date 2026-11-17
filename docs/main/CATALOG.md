@@ -162,9 +162,13 @@ field's colouring needs a field, a solid's a solid that takes it,
 
 Every hand-written picker became the Catalog's list given a filter
 (`ui::picker::Picker`): a button showing the current choice opens a popup
-with a search (focused on opening), the Catalog's groups, each entry's
-description as its tooltip, **Download** for an entry not installed, and
-greyed rows with their reason where the caller refuses one. A popup, not a
+with a search (focused on opening), the Catalog's groups, **Download** for
+an entry not installed, and greyed rows where the caller refuses one.
+Beside the list, an info pane says what the entry under the pointer is --
+the Catalog's own summary (`inventory::entry_summary`), a refused entry's
+reason, Download -- keeping the last one pointed at while the pointer
+crosses to it, and the current choice on opening. A screen too narrow for
+both (a phone) shows the list alone, descriptions as tooltips. A popup, not a
 ComboBox: a combo closes on any click inside it, its search box included
 (`the_picker_stays_open_while_it_is_used`). The list is read once a frame
 before any panel draws (`InventoryPanel::refresh`, from the UI's frame) and

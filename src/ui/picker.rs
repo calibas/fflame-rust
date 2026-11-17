@@ -1,8 +1,8 @@
 //! The Catalog's list as a picker (docs/projects/catalog.md, *The picker*),
 //! in a popup under a button:
 //! the entries of [`super::inventory::shared`] a filter admits, in the
-//! Catalog's groups, with a search, each entry's description as its
-//! tooltip, and **Download** for what the server offers and the app lacks
+//! Catalog's groups, with a search, an info pane beside the list saying
+//! what the entry under the pointer is, and **Download** for what the server offers and the app lacks
 //! (pickable once installed). It replaces the hand-written pickers, which
 //! each sorted, grouped and searched their own way and none of which could
 //! download.
@@ -37,9 +37,14 @@ pub struct Picker<'a> {
     unusable: Option<&'a dyn Fn(&Entry) -> Option<String>>,
     /// Group headings name the kind too (a picker of several kinds).
     kind_headings: bool,
+    /// The palette library, for a palette's gradient in the info pane.
+    palettes: Option<&'a crate::scene::palette::PaletteLibrary>,
     min_width: f32,
     max_height: f32,
 }
+
+/// The info pane's width, beside the list.
+const PANE_WIDTH: f32 = 280.0;
 
 impl<'a> Picker<'a> {
     pub fn new(id_salt: impl std::hash::Hash, admit: &'a dyn Fn(&Entry) -> bool) -> Self {
@@ -51,6 +56,7 @@ impl<'a> Picker<'a> {
             current: None,
             unusable: None,
             kind_headings: false,
+            palettes: None,
             min_width: 260.0,
             max_height: 320.0,
         }
@@ -81,6 +87,11 @@ impl<'a> Picker<'a> {
         self
     }
 
+    pub fn palettes(mut self, library: &'a crate::scene::palette::PaletteLibrary) -> Self {
+        self.palettes = Some(library);
+        self
+    }
+
     pub fn max_height(mut self, h: f32) -> Self {
         self.max_height = h;
         self
@@ -108,7 +119,6 @@ impl<'a> Picker<'a> {
             .open_memory(None)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                ui.set_min_width(self.min_width);
                 let focus = ui.data_mut(|d| d.remove_temp::<bool>(focus_id).unwrap_or(false));
                 picked = self.body(ui, focus);
                 if picked.is_some() {
@@ -118,7 +128,79 @@ impl<'a> Picker<'a> {
         picked
     }
 
+    /// The list, and beside it the info pane: what the entry under the
+    /// pointer is (the last one pointed at stays while the pointer crosses
+    /// to the pane; on opening, the current choice). A screen too narrow
+    /// for both (a phone) keeps the list alone, with descriptions as
+    /// tooltips.
     fn body(self, ui: &mut egui::Ui, focus: bool) -> Option<Entry> {
+        let pane = ui.ctx().content_rect().width() >= self.min_width + PANE_WIDTH + 64.0;
+        let shown_id = self.id.with("shown");
+        if focus {
+            ui.data_mut(|d| d.remove::<Entry>(shown_id));
+        }
+        let mut picked = None;
+        let mut hovered = None;
+        let mut current = None;
+        ui.horizontal_top(|ui| {
+            let list = ui
+                .vertical(|ui| {
+                    ui.set_width(self.min_width);
+                    picked = self.list(ui, focus, !pane, &mut hovered, &mut current);
+                })
+                .response
+                .rect;
+            if !pane {
+                return;
+            }
+            ui.add_space(12.0);
+            if let Some(e) = &hovered {
+                ui.data_mut(|d| d.insert_temp(shown_id, e.clone()));
+            }
+            let shown = hovered.or_else(|| ui.data(|d| d.get_temp::<Entry>(shown_id))).or(current);
+            let info = ui
+                .vertical(|ui| {
+                    ui.set_width(PANE_WIDTH);
+                    egui::ScrollArea::vertical().id_salt(self.id.with("info")).max_height(self.max_height + 32.0).show(ui, |ui| self.info(ui, shown.as_ref()));
+                })
+                .response
+                .rect;
+            let x = list.max.x + 6.0;
+            let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+            ui.painter().vline(x, list.min.y..=list.max.y.max(info.max.y), stroke);
+        });
+        picked
+    }
+
+    /// What `e` is, in the pane: the Catalog's own summary (a row made for
+    /// this picker -- a shortlist's -- reads the Catalog's entry of the
+    /// same name), why it cannot be picked here, Download.
+    fn info(&self, ui: &mut egui::Ui, e: Option<&Entry>) {
+        let Some(e) = e else {
+            ui.weak(t!("catalog.hover_hint"));
+            return;
+        };
+        let shared = super::inventory::shared();
+        let e = match e.description.is_empty() {
+            true => shared.iter().find(|s| s.key == e.key && !s.description.is_empty()).unwrap_or(e),
+            false => e,
+        };
+        if key_name(e) == Some("") {
+            // A "None": nothing to say.
+            ui.heading(&e.title);
+            return;
+        }
+        super::inventory::entry_summary(ui, e, self.palettes);
+        if !e.installed {
+            ui.separator();
+            super::inventory::download_button(ui, e);
+        } else if let Some(reason) = self.unusable.and_then(|why| why(e)) {
+            ui.separator();
+            ui.colored_label(ui.visuals().warn_fg_color, reason);
+        }
+    }
+
+    fn list(&self, ui: &mut egui::Ui, focus: bool, tips: bool, hovered: &mut Option<Entry>, current: &mut Option<Entry>) -> Option<Entry> {
         let search_id = self.id.with("search");
         let mut query = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
         ui.horizontal(|ui| {
@@ -160,8 +242,15 @@ impl<'a> Picker<'a> {
                     ui.label(egui::RichText::new(heading).strong());
                 }
                 for e in &rows[start..end] {
-                    if let Some(p) = self.row(ui, e) {
-                        picked = Some(p);
+                    let (p, rect, is_current) = self.row(ui, e, tips);
+                    if p.is_some() {
+                        picked = p;
+                    }
+                    if ui.rect_contains_pointer(rect) {
+                        *hovered = Some((*e).clone());
+                    }
+                    if is_current && current.is_none() {
+                        *current = Some((*e).clone());
                     }
                 }
                 ui.add_space(4.0);
@@ -171,31 +260,40 @@ impl<'a> Picker<'a> {
         picked
     }
 
-    /// One entry: selectable when it can be picked; greyed with the reason
-    /// when not; Download when it is not installed.
-    fn row(&self, ui: &mut egui::Ui, e: &Entry) -> Option<Entry> {
-        let tip = (!e.description.is_empty()).then(|| crate::markdown::first_paragraph(&e.description));
+    /// One entry: selectable when it can be picked; greyed (with the reason
+    /// as a tooltip, without the pane) when not; Download when it is not
+    /// installed. Gives the pick, the row's rect and whether it is the
+    /// current choice.
+    fn row(&self, ui: &mut egui::Ui, e: &Entry, tips: bool) -> (Option<Entry>, egui::Rect, bool) {
+        let tip = (tips && !e.description.is_empty()).then(|| crate::markdown::first_paragraph(&e.description));
         if !e.installed {
-            ui.horizontal(|ui| {
-                let r = ui.weak(super::inventory::row_label(e));
-                if let Some(t) = &tip {
-                    r.on_hover_text(t);
-                }
-                super::inventory::download_button(ui, e);
-            });
-            return None;
+            let rect = ui
+                .horizontal(|ui| {
+                    let r = ui.weak(super::inventory::row_label(e));
+                    if let Some(t) = &tip {
+                        r.on_hover_text(t);
+                    }
+                    super::inventory::download_button(ui, e);
+                })
+                .response
+                .rect;
+            return (None, rect, false);
         }
         let current = self.current.is_some_and(|c| super::inventory::applied_name(e).as_deref() == Some(c) || key_name(e) == Some(c));
         if let Some(reason) = self.unusable.and_then(|why| why(e)) {
-            ui.add_enabled(false, egui::Button::selectable(current, super::inventory::row_label(e))).on_disabled_hover_text(reason);
-            return None;
+            let r = ui.add_enabled(false, egui::Button::selectable(current, super::inventory::row_label(e)));
+            let rect = r.rect;
+            if tips {
+                r.on_disabled_hover_text(reason);
+            }
+            return (None, rect, current);
         }
         let r = ui.selectable_label(current, super::inventory::row_label(e));
         let r = match &tip {
             Some(t) => r.on_hover_text(t),
             None => r,
         };
-        r.clicked().then(|| e.clone())
+        (r.clicked().then(|| e.clone()), r.rect, current)
     }
 }
 
@@ -273,6 +371,20 @@ mod tests {
         assert!(body.contains("Popup::close_id"), "a pick must close it explicitly");
     }
 
+    /// What the tests' server offers, shared: the list the pickers read is
+    /// one static, so every test that fills it must fill it alike.
+    fn offer() {
+        let item = |name: &str, title: &str| -> crate::api::types::VariationListItem {
+            serde_json::from_value(serde_json::json!({
+                "id": name, "name": name, "display_name": title, "category": "Plugin", "version": 1, "downloadable": true
+            }))
+            .unwrap()
+        };
+        let offered = [item("it_picker_offered", "Offered Afar"), item("it_pane_offered", "Pane Faraway")];
+        let lib = crate::scene::palette::global_palette_library().read().unwrap().clone();
+        super::super::inventory::InventoryPanel::new().refresh(&lib, 0, crate::inventory::Online { variations: &offered, effects: &[] });
+    }
+
     /// Every piece of text a frame drew.
     fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
         fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
@@ -295,15 +407,7 @@ mod tests {
     #[test]
     fn the_picker_shows_groups_searches_and_offers_downloads() {
         use super::*;
-        use crate::inventory::Online;
-        let offered: crate::api::types::VariationListItem = serde_json::from_value(serde_json::json!({
-            "id": "it_picker_offered", "name": "it_picker_offered", "display_name": "Offered Afar",
-            "category": "Plugin", "version": 1, "downloadable": true
-        }))
-        .unwrap();
-        let offered = [offered];
-        let lib = crate::scene::palette::global_palette_library().read().unwrap().clone();
-        super::super::inventory::InventoryPanel::new().refresh(&lib, 0, Online { variations: &offered, effects: &[] });
+        offer();
 
         let ctx = egui::Context::default();
         let admit = |e: &Entry| e.kind == Kind::Variation;
@@ -338,5 +442,67 @@ mod tests {
         let searched = frame(&ctx, Some("julian"));
         assert!(searched.iter().any(|t| t == "JuliaN"), "the search keeps a match: {searched:?}");
         assert!(!searched.iter().any(|t| t == "Linear"), "and narrows the list: {searched:?}");
+    }
+
+    /// Where each piece of text a frame drew sits.
+    fn placed(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Pos2)> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+            match shape {
+                egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos)),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for s in shapes {
+            walk(&s.shape, &mut out);
+        }
+        out
+    }
+
+    /// The info pane beside the list: on opening it says what the current
+    /// choice is; pointing at a row shows that row instead (an offered
+    /// one with its Download), and it stays while the pointer leaves.
+    #[test]
+    fn the_picker_shows_what_the_pointer_is_on() {
+        use super::*;
+        offer();
+
+        let ctx = egui::Context::default();
+        // A short list, so every row is on the headless screen.
+        let admit = |e: &Entry| e.kind == Kind::Variation && key_name(e).is_some_and(|n| ["julian", "linear", "it_pane_offered"].contains(&n));
+        let frame = |pointer: Option<egui::Pos2>| -> Vec<(String, egui::Pos2)> {
+            let mut drawn = Vec::new();
+            for _ in 0..2 {
+                let mut input = egui::RawInput::default();
+                if let Some(p) = pointer {
+                    input.events.push(egui::Event::PointerMoved(p));
+                }
+                let out = ctx.run_ui(input, |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        let picker = Picker::new("pane_test", &admit).max_height(100_000.0).current(Some("julian"));
+                        let btn = ui.button("open");
+                        egui::Popup::open_id(ui.ctx(), picker.popup_id());
+                        let _ = picker.popup(ui, &btn);
+                    });
+                });
+                drawn = placed(&out.shapes);
+            }
+            drawn
+        };
+        let count = |drawn: &[(String, egui::Pos2)], text: &str| drawn.iter().filter(|(t, _)| t == text).count();
+
+        let opened = frame(None);
+        assert_eq!(count(&opened, "JuliaN"), 2, "the current choice's row, and its name heading the pane");
+
+        let row = opened.iter().find(|(t, _)| t.starts_with("Pane Faraway")).expect("the offered row").1;
+        let pointed = frame(Some(row + egui::vec2(4.0, 4.0)));
+        let heading = pointed.iter().filter(|(t, _)| t == "Pane Faraway").count();
+        assert_eq!(heading, 1, "the pane names the row pointed at: {pointed:?}");
+        assert_eq!(count(&pointed, &t!("catalog.download")), 2, "with its Download beside the row's");
+        assert_eq!(count(&pointed, "JuliaN"), 1, "in place of the current choice");
+
+        let away = frame(Some(egui::pos2(5000.0, 5000.0)));
+        assert_eq!(count(&away, "Pane Faraway"), 1, "and keeps it when the pointer leaves the list");
     }
 }

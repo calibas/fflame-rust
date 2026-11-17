@@ -450,29 +450,7 @@ impl InventoryPanel {
             ui.weak(t!("catalog.select_hint"));
             return;
         };
-        ui.heading(&e.title);
-        ui.label(egui::RichText::new(format!("{} · {}", t!(e.kind.label_key()), e.group.label)).weak());
-        ui.label(origin_text(&e));
-        if let Some(v) = &e.version {
-            ui.label(egui::RichText::new(t!("catalog.version", version = v)).weak());
-        }
-        if !e.authors.is_empty() {
-            ui.label(t!("catalog.by", names = e.authors.join(", ")));
-        }
-        ui.separator();
-        if let EntryKey::Palette(hash) = &e.key {
-            if let Some(p) = inventory::palette(cx.palette_library, hash) {
-                let w = ui.available_width().clamp(120.0, 360.0);
-                let tex = super::palette_library::palette_preview(ui.ctx(), hash, &p, [360, 24]);
-                ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(w, 24.0)));
-                ui.add_space(4.0);
-            }
-        }
-        if e.description.is_empty() {
-            ui.weak(t!("catalog.no_description"));
-        } else {
-            super::markdown::show(ui, &e.description);
-        }
+        entry_summary(ui, &e, Some(cx.palette_library));
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             if !e.installed {
@@ -542,6 +520,35 @@ fn palette_row(ui: &mut egui::Ui, hash: &str, title: &str, palette: &crate::scen
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     r
+}
+
+/// What an entry is, as the info pane and the picker's show it: its title,
+/// kind and group, where it came from, version, authors, a palette's
+/// gradient (given the library) and its description.
+pub(crate) fn entry_summary(ui: &mut egui::Ui, e: &Entry, palettes: Option<&PaletteLibrary>) {
+    ui.heading(&e.title);
+    ui.label(egui::RichText::new(format!("{} · {}", t!(e.kind.label_key()), e.group.label)).weak());
+    ui.label(origin_text(e));
+    if let Some(v) = &e.version {
+        ui.label(egui::RichText::new(t!("catalog.version", version = v)).weak());
+    }
+    if !e.authors.is_empty() {
+        ui.label(t!("catalog.by", names = e.authors.join(", ")));
+    }
+    ui.separator();
+    if let (EntryKey::Palette(hash), Some(lib)) = (&e.key, palettes) {
+        if let Some(p) = inventory::palette(lib, hash) {
+            let w = ui.available_width().clamp(120.0, 360.0);
+            let tex = super::palette_library::palette_preview(ui.ctx(), hash, &p, [360, 24]);
+            ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(w, 24.0)));
+            ui.add_space(4.0);
+        }
+    }
+    if e.description.is_empty() {
+        ui.weak(t!("catalog.no_description"));
+    } else {
+        super::markdown::show(ui, &e.description);
+    }
 }
 
 /// A row's text: the title, the origin's mark, a plug-in's; a download
