@@ -200,6 +200,8 @@ pub struct InventoryResponse {
     pub load_api_flame: Option<(String, crate::api::FlameLoadResult)>,
     /// An online script to open (adopt into your files).
     pub script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest>,
+    /// What running a script produced (a flame, a batch, an animation).
+    pub run: super::script_run::RunResult,
     /// Clear Cache: the downloaded variations, or effects.
     pub clear_variation_cache: bool,
     pub clear_effect_cache: bool,
@@ -231,6 +233,8 @@ pub struct InventoryPanel {
     place: Place,
     online: super::inventory_online::OnlinePlace,
     manage: super::inventory_manage::Manage,
+    /// A CPU script's run controls, for the script selected.
+    run: super::script_run::ScriptRun,
     /// The presets, a gallery a category, made when first shown.
     preset_galleries: Option<Vec<FractalConfigGallery>>,
     preset_category: PresetCategory,
@@ -256,6 +260,7 @@ impl InventoryPanel {
             place: Place::Local,
             online: super::inventory_online::OnlinePlace::new(),
             manage: super::inventory_manage::Manage::default(),
+            run: super::script_run::ScriptRun::default(),
             preset_galleries: None,
             preset_category: PresetCategory::default(),
         }
@@ -684,9 +689,22 @@ impl InventoryPanel {
             ui.colored_label(ui.visuals().error_fg_color, t!("catalog.download_failed", error = why));
         }
         ui.separator();
+        // A CPU script: running it is its Use (decision 2 of the survey).
+        let script = matches!(&e.key, EntryKey::File { store: Store::Scripts, .. }) && matches!(e.kind, Kind::Generator | Kind::Modifier | Kind::ScriptLibrary);
+        if let (true, EntryKey::File { file, .. }) = (script, &e.key) {
+            let id = file.strip_suffix(".rhai").unwrap_or(file).to_string();
+            let current = cx.config_manager.active_config().clone();
+            let palettes: Vec<crate::scene::palette::Palette> = cx.palette_library.iter().cloned().collect();
+            let generation = super::script_run::files_generation(cx.script_cloud);
+            out.run = self.run.render_stored(ui, &id, &current, &palettes, generation);
+            ui.separator();
+        }
         ui.horizontal_wrapped(|ui| {
             if !e.installed {
                 download_button(ui, &e);
+                return;
+            }
+            if script {
                 return;
             }
             if e.update.is_some() {

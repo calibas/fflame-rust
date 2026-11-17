@@ -11,6 +11,7 @@ pub mod fractal_browser;
 pub mod inventory;
 pub mod markdown;
 mod inventory_manage;
+pub mod script_run;
 mod inventory_online;
 pub mod picker;
 pub mod fractal_gallery;
