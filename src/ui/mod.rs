@@ -34,7 +34,6 @@ mod panel_viewer;
 mod paths_panel;
 mod performance;
 mod random_generator;
-mod scripts_panel;
 pub mod response;
 mod settings;
 mod lighting_panel;
@@ -913,7 +912,6 @@ pub struct EguiLayer {
 
     // Random generator panel state
     random_generator_panel: Option<random_generator::RandomGeneratorPanel>,
-    scripts_panel: Option<scripts_panel::ScriptsPanel>,
     generated_flame: Option<crate::scene::randomize::RandomFlame>,
     generated_batch: Option<Vec<crate::config::FractalConfig>>,
     /// Config produced by the Scripts panel, applied as one undo step.
@@ -1101,7 +1099,6 @@ impl EguiLayer {
             close_path_overlay: false,
             random_generator_panel: None,
             allocated_textures: std::collections::HashSet::new(),
-            scripts_panel: None,
             generated_flame: None,
             generated_batch: None,
             script_generated: None,
@@ -1356,7 +1353,6 @@ impl EguiLayer {
         variation_catalog: Option<&crate::storage::variation_catalog::CachedCatalog>,
         script_cloud: &crate::app::script_cloud::ScriptCloudState,
         effect_catalog: Option<&crate::storage::effect_catalog::CachedEffectCatalog>,
-        signed_in: bool,
         // Simulation transport and readout from the App: whether Run
         // is engaged, how many steps the live run has taken, and the
         // grid actually in use (which a viewport-bound grid makes
@@ -1544,7 +1540,6 @@ impl EguiLayer {
         let mut open_preset_library = false;
         let mut open_random_generator = false;
         let mut open_rhai_editor = false;
-        let mut open_scripts_panel = false;
         let mut open_lighting_panel = false;
 
         // Fractal viewport size tracking
@@ -1846,7 +1841,6 @@ impl EguiLayer {
                         open_preset_library: &mut open_preset_library,
                         open_random_generator: &mut open_random_generator,
                         open_rhai_editor: &mut open_rhai_editor,
-                        open_scripts_panel: &mut open_scripts_panel,
                         open_lighting_panel: &mut open_lighting_panel,
 
                         // UI state
@@ -1952,7 +1946,6 @@ impl EguiLayer {
 
                         // Random generator panel state
                         random_generator_panel: &mut self.random_generator_panel,
-                        scripts_panel: &mut self.scripts_panel,
                         script_generated: &mut self.script_generated,
                         script_animation: &mut self.script_animation,
                         generated_flame: &mut self.generated_flame,
@@ -2005,7 +1998,6 @@ impl EguiLayer {
                         reset_effect_history: &mut reset_effect_history,
                         script_cloud,
                         script_cloud_request: &mut script_cloud_request,
-                        signed_in,
                         compact_mode: self.compact_mode,
                     },
                     touch_tracker: &mut self.touch_tracker,
@@ -2672,7 +2664,6 @@ impl EguiLayer {
             open_preset_library,
             open_random_generator,
             open_rhai_editor,
-            open_scripts_panel,
             open_lighting_panel,
             fractal_viewport_size,
             fly_mouse_drag,

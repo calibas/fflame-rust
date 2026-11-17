@@ -1834,9 +1834,6 @@ impl App {
         // Pass current connectivity state to UI layer
         self.egui_layer.api_connectivity = self.api_connectivity;
 
-        // Read before the call: `config_manager` goes in mutably, so the
-        // sign-in check cannot be an argument expression.
-        let signed_in = self.config_manager.system_settings().is_signed_in();
         // Being HELD: the timeline is playing and asking for a step
         // count BELOW the grid, which would restart the run on every
         // frame. The panel says so, because a deliberately-held
@@ -1891,7 +1888,6 @@ impl App {
             self.variation_catalog.as_ref(),
             &self.script_cloud,
             self.effect_catalog.as_ref(),
-            signed_in,
             self.sim_running,
             self.sim_renderer.as_ref().map_or(0, |s| s.step_index()),
             self.sim_renderer.as_ref().map_or((0, 0), |s| s.grid_size()),

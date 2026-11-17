@@ -49,8 +49,6 @@ pub enum PanelType {
     Export,
     /// Random generator panel (generate random flames with settings)
     RandomGenerator,
-    /// Flame scripting panel (run generator / modifier scripts)
-    Scripts,
     /// Post-processing effects panel (color and density effects)
     Effects,
     /// Xaos editor panel (chaos-weighted transform transitions)
@@ -77,7 +75,9 @@ pub enum PanelType {
     /// The Rhai Editor: every Rhai kind, and Ultra Fractal and Fractint
     /// files (docs/projects/catalog.md, phase 4). Saved layouts that name
     /// the Formula Editor open it.
-    #[serde(alias = "FormulaEditor")]
+    /// So does one naming the Scripts panel: scripts run from the
+    /// Catalog, and are written here.
+    #[serde(alias = "FormulaEditor", alias = "Scripts")]
     RhaiEditor,
     /// Kalles Fraktaler-style hybrid formulas (escape::lang::hybrid)
     HybridDesigner,
@@ -112,7 +112,6 @@ impl std::fmt::Display for PanelType {
             PanelType::SaveOnlineDialog => t!("api.save_dialog_title"),
             PanelType::Variations => t!("panels.variations"),
             PanelType::Subflames => t!("panels.subflames"),
-            PanelType::Scripts => t!("panels.scripts"),
             PanelType::Escape => t!("panels.escape"),
             PanelType::Simulation => t!("panels.simulation"),
             PanelType::Textures => t!("panels.textures"),
@@ -276,7 +275,6 @@ impl Workspace {
             PanelType::SaveOnlineDialog => egui::vec2(400.0, 370.0),
             PanelType::Variations => egui::vec2(450.0, 500.0),
             PanelType::Subflames => egui::vec2(320.0, 360.0),
-            PanelType::Scripts => egui::vec2(420.0, 560.0),
             PanelType::Escape => egui::vec2(350.0, 520.0),
             // Taller than escape's: the transport row and the init
             // controls sit above the parameters.
@@ -623,26 +621,27 @@ impl Workspace {
         state
     }
 
-    /// Create Scripting layout: Scripts panel in the left dock, Fractal
-    /// Browser in the right — the write-run-browse loop side by side
-    /// with the viewport showing the current result.
+    /// Create Scripting layout: the Rhai Editor in the left dock, the
+    /// Catalog (where scripts are chosen and run) and the Fractal Browser
+    /// in the right -- the write-run-browse loop side by side with the
+    /// viewport showing the current result.
     fn create_scripting_layout(preserve_help: bool) -> DockState<PanelType> {
         let mut state = DockState::new(vec![PanelType::FractalViewport]);
 
-        // Scripts panel wants real width (parameter sliders + source
-        // editor) — 30% rather than Standard's 25%.
+        // The editor wants real width (the source, a script's settings)
+        // -- 30% rather than Standard's 25%.
         let [_fractal_node, _left_node] = state.main_surface_mut().split_left(
             egui_dock::NodeIndex::root(),
             0.30,
-            vec![PanelType::Scripts],
+            vec![PanelType::RhaiEditor],
         );
 
-        // Fractal Browser right: generated flames land where the eye
-        // goes after pressing Run.
+        // The Catalog right, to choose and run; the Fractal Browser beside
+        // it, where a batch lands.
         let [_center_node, _right_node] = state.main_surface_mut().split_right(
             egui_dock::NodeIndex::root(),
             0.70,
-            vec![PanelType::FractalBrowser],
+            vec![PanelType::Inventory, PanelType::FractalBrowser],
         );
 
         if preserve_help {
@@ -680,7 +679,7 @@ mod layout_tests {
             ),
             (
                 WorkspaceLayout::Scripting,
-                &[PanelType::FractalViewport, PanelType::Scripts, PanelType::FractalBrowser],
+                &[PanelType::FractalViewport, PanelType::RhaiEditor, PanelType::Inventory, PanelType::FractalBrowser],
             ),
             (WorkspaceLayout::Flames, &[PanelType::FractalViewport, PanelType::Transforms, PanelType::TriangleEditor]),
             (WorkspaceLayout::EscapeTime, &[PanelType::FractalViewport, PanelType::Escape, PanelType::SolidLighting]),

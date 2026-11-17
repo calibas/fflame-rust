@@ -192,7 +192,6 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> PanelUse {
         | P::History
         | P::Animation
         | P::Signal
-        | P::Scripts
         | P::Performance
         | P::Help
         | P::KeyboardShortcuts
@@ -583,7 +582,6 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::RandomGenerator, "menu.window_random_generator"),
     row(PanelType::Effects, "menu.window_effects"),
     row(PanelType::Variations, "menu.window_variations"),
-    row(PanelType::Scripts, "menu.window_scripts"),
     row(PanelType::Subflames, "menu.window_subflames"),
     row(PanelType::XaosEditor, "menu.window_xaos_editor"),
     row(PanelType::Signal, "menu.window_signal"),
@@ -610,7 +608,7 @@ pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::Inventory,
     PanelType::Variations,
     PanelType::Subflames,
-    PanelType::Scripts,
+    PanelType::RhaiEditor,
     PanelType::Escape,
     PanelType::Simulation,
     PanelType::Textures,
@@ -675,7 +673,6 @@ mod tests {
         PanelType::Paths,
         PanelType::Export,
         PanelType::RandomGenerator,
-        PanelType::Scripts,
         PanelType::Effects,
         PanelType::XaosEditor,
         PanelType::SolidLighting,
@@ -748,7 +745,7 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), ALL_PANELS.len(), "duplicate entry in ALL_PANELS");
-        assert_eq!(ALL_PANELS.len(), 32, "a panel was added; decide what it means per mode");
+        assert_eq!(ALL_PANELS.len(), 31, "a panel was added or retired; decide what it means per mode");
     }
 
     /// Every control this build knows about.

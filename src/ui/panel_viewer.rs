@@ -310,8 +310,6 @@ pub struct PanelContext<'a> {
     /// A panel put a formula in the Formula Editor (the Escape panel's
     /// Edit as Formula): the app opens it.
     pub open_rhai_editor: &'a mut bool,
-    /// The Catalog selected a script in the Scripts panel: the app opens it.
-    pub open_scripts_panel: &'a mut bool,
     /// The View panel's Lighting button.
     pub open_lighting_panel: &'a mut bool,
 
@@ -436,7 +434,6 @@ pub struct PanelContext<'a> {
     pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
     pub generated_flame: &'a mut Option<crate::scene::randomize::RandomFlame>,
     pub generated_batch: &'a mut Option<Vec<crate::config::FractalConfig>>,
-    pub scripts_panel: &'a mut Option<super::scripts_panel::ScriptsPanel>,
     pub script_generated: &'a mut Option<crate::config::FractalConfig>,
     pub script_animation: &'a mut Option<crate::animation::Animation>,
 
@@ -514,9 +511,6 @@ pub struct PanelContext<'a> {
     /// writes a request into. Owned by App.
     pub script_cloud: &'a crate::app::script_cloud::ScriptCloudState,
     pub script_cloud_request: &'a mut Option<crate::app::script_cloud::ScriptCloudRequest>,
-    /// Whether anyone is signed in — the panel shows its online section
-    /// only then, rather than offering actions that cannot work.
-    pub signed_in: bool,
 
     // Compact mode (cached from system settings)
     pub compact_mode: bool,
@@ -784,9 +778,6 @@ impl<'a> PanelViewer<'a> {
                     self.context.flame,
                     self.context.variation_catalog,
                 );
-            }
-            PanelType::Scripts => {
-                self.render_scripts_panel(ui);
             }
             PanelType::Escape => {
                 super::escape_panel::render_escape_content(
@@ -1905,37 +1896,6 @@ impl<'a> PanelViewer<'a> {
     }
 
     /// Render the Scripts panel (generator / modifier flame scripts)
-    fn render_scripts_panel(&mut self, ui: &mut egui::Ui) {
-        if self.context.scripts_panel.is_none() {
-            *self.context.scripts_panel = Some(super::scripts_panel::ScriptsPanel::new());
-        }
-        // Scripts read the live config: modifiers start from it, and
-        // generators inherit its palette.
-        let current = self.context.config_manager.active_config().clone();
-        let palettes: Vec<crate::scene::palette::Palette> =
-            self.context.palette_library.iter().cloned().collect();
-        if let Some(panel) = self.context.scripts_panel.as_mut() {
-            let response = panel.render(
-                ui,
-                &current,
-                palettes,
-                self.context.script_cloud,
-                self.context.signed_in,
-                self.context.script_cloud_request,
-                self.context.window,
-            );
-            if let Some(config) = response.generated {
-                *self.context.script_generated = Some(config);
-            }
-            if let Some(animation) = response.animation {
-                *self.context.script_animation = Some(animation);
-            }
-            if let Some(batch) = response.batch {
-                *self.context.generated_batch = Some(batch);
-            }
-        }
-    }
-
     /// Render Fractal Browser panel (unified presets/batch/files)
     fn render_fractal_browser_panel(&mut self, ui: &mut egui::Ui) {
         // Initialize panel if not already created

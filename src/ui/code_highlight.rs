@@ -376,13 +376,9 @@ fn key(src: &str, font_id: &FontId) -> u64 {
     h.finish()
 }
 
-/// The `LayoutJob` for Rhai `src`, memoized. Wrap width is the caller's
-/// to set — it changes with panel width and must not invalidate the memo.
-pub fn highlight(src: &str, font_id: FontId) -> LayoutJob {
-    highlight_lang(src, font_id, Lang::Rhai)
-}
-
-/// [`highlight`] in `lang`.
+/// The `LayoutJob` for `src` in `lang`, memoized. Wrap width is the
+/// caller's to set -- it changes with panel width and must not invalidate
+/// the memo.
 pub fn highlight_lang(src: &str, font_id: FontId, lang: Lang) -> LayoutJob {
     let k = key(src, &font_id);
     let slot = lang as usize;
@@ -576,8 +572,8 @@ flame.add_transform();
     fn memo_returns_an_equal_job() {
         let src = "let x = 1; // hi";
         let f = FontId::monospace(12.0);
-        let a = highlight(src, f.clone());
-        let b = highlight(src, f);
+        let a = highlight_lang(src, f.clone(), Lang::Rhai);
+        let b = highlight_lang(src, f, Lang::Rhai);
         assert_eq!(a.text, b.text);
         assert_eq!(a.sections.len(), b.sections.len());
     }
