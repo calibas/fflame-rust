@@ -42,6 +42,29 @@ static SHARED: RwLock<Option<Arc<Vec<Entry>>>> = RwLock::new(None);
 /// again).
 static DOWNLOADS: Mutex<(Vec<(Kind, String)>, Vec<(Kind, String)>)> = Mutex::new((Vec::new(), Vec::new()));
 
+/// Downloads that failed this session, with the reason: their rows say so
+/// and offer Download again.
+static FAILED: Mutex<Vec<((Kind, String), String)>> = Mutex::new(Vec::new());
+
+/// The app's fetch could not install `name` (`app::variation_fetch`,
+/// `app::effect_fetch`): it is asked for no more, and its row says why.
+pub fn download_failed(kind: Kind, name: &str, why: &str) {
+    let item = (kind, name.to_string());
+    if let Ok(mut d) = DOWNLOADS.lock() {
+        d.1.retain(|i| *i != item);
+    }
+    if let Ok(mut f) = FAILED.lock() {
+        f.retain(|(i, _)| *i != item);
+        f.push((item, why.to_string()));
+    }
+}
+
+/// Why the last download of the entry failed, if it did.
+pub fn download_failure(e: &Entry) -> Option<String> {
+    let EntryKey::Registered(kind, name) = &e.key else { return None };
+    FAILED.lock().ok()?.iter().find(|((k, n), _)| k == kind && n == name).map(|(_, why)| why.clone())
+}
+
 /// The list every picker reads: the Catalog's, as last refreshed.
 pub fn shared() -> Arc<Vec<Entry>> {
     SHARED.read().ok().and_then(|g| g.clone()).unwrap_or_default()
@@ -50,6 +73,9 @@ pub fn shared() -> Arc<Vec<Entry>> {
 /// Ask for an entry the app lacks (`!installed`) to be downloaded.
 pub fn request_download(e: &Entry) {
     let EntryKey::Registered(kind, name) = &e.key else { return };
+    if let Ok(mut f) = FAILED.lock() {
+        f.retain(|((k, n), _)| !(k == kind && n == name));
+    }
     if let Ok(mut d) = DOWNLOADS.lock() {
         let item = (*kind, name.clone());
         if !d.1.contains(&item) {
@@ -148,6 +174,9 @@ pub struct InventoryResponse {
     pub load_api_flame: Option<(String, crate::api::FlameLoadResult)>,
     /// An online script to open (adopt into your files).
     pub script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest>,
+    /// Clear Cache: the downloaded variations, or effects.
+    pub clear_variation_cache: bool,
+    pub clear_effect_cache: bool,
 }
 
 /// What the panel needs from the app to draw.
@@ -181,6 +210,8 @@ pub struct InventoryPanel {
     origin: OriginFilter,
     query: String,
     selected: Option<EntryKey>,
+    /// Only the downloads the server has a newer version of.
+    updates_only: bool,
     place: Place,
     online: super::inventory_online::OnlinePlace,
     /// The presets, a gallery a category, made when first shown.
@@ -204,6 +235,7 @@ impl InventoryPanel {
             origin: OriginFilter::All,
             query: String::new(),
             selected: None,
+            updates_only: false,
             place: Place::Local,
             online: super::inventory_online::OnlinePlace::new(),
             preset_galleries: None,
@@ -242,6 +274,14 @@ impl InventoryPanel {
         if self.revision != Some(rev) {
             self.entries = Arc::new(inventory::scan(library, online));
             self.revision = Some(rev);
+            // What was asked for and is now in, current, is asked for no
+            // more (a later update may ask again).
+            if let Ok(mut d) = DOWNLOADS.lock() {
+                let entries = &self.entries;
+                d.1.retain(|(k, n)| {
+                    !entries.iter().any(|e| e.key == EntryKey::Registered(*k, n.clone()) && e.installed && e.update.is_none())
+                });
+            }
             if let Ok(mut s) = SHARED.write() {
                 *s = Some(self.entries.clone());
             }
@@ -250,7 +290,7 @@ impl InventoryPanel {
 
     fn visible(&self, e: &Entry) -> bool {
         let place = match self.place {
-            Place::Local => self.origin.admits(e),
+            Place::Local => self.origin.admits(e) && (!self.updates_only || e.update.is_some()),
             // Online, of this device's list: what the server's catalog
             // offers, downloaded or not.
             Place::Online => e.origin == Origin::Api || !e.installed,
@@ -261,7 +301,7 @@ impl InventoryPanel {
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext) -> InventoryResponse {
         let mut out = InventoryResponse::default();
         self.online.update(ui.ctx(), &self.query, &self.entries, &mut out);
-        self.render_top(ui, cx);
+        self.render_top(ui, cx, &mut out);
         ui.separator();
         if ui.available_width() >= 560.0 {
             egui::Panel::right("catalog_info").resizable(true).default_size(280.0).min_size(200.0).show_inside(ui, |ui| {
@@ -281,7 +321,7 @@ impl InventoryPanel {
 
     // ------------------------------------------------------------------ top
 
-    fn render_top(&mut self, ui: &mut egui::Ui, cx: &InventoryContext) {
+    fn render_top(&mut self, ui: &mut egui::Ui, cx: &InventoryContext, out: &mut InventoryResponse) {
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.place, Place::Local, t!("catalog.place_local"));
             ui.selectable_value(&mut self.place, Place::Online, t!("catalog.place_online")).on_hover_text(t!("catalog.place_online_tip"));
@@ -316,6 +356,9 @@ impl InventoryPanel {
         if self.place == Place::Online {
             self.online.render_top(ui, self.family, &cx.account);
         }
+        if self.place == Place::Local && matches!(self.family, Family::Variations | Family::Effects) {
+            self.render_downloads_bar(ui, out);
+        }
         // A family of several kinds: a chip each that has entries.
         let mut kinds: Vec<Kind> = match self.place {
             Place::Local => self.entries.iter().filter(|e| e.kind.family() == self.family).map(|e| e.kind).collect(),
@@ -334,6 +377,40 @@ impl InventoryPanel {
                 }
             });
         }
+    }
+
+    /// Variations and effects on this device: the downloads the server
+    /// has a newer version of (a chip, and Update all), and Clear Cache
+    /// (the Variations and Effects panels' catalog sections, moved here).
+    fn render_downloads_bar(&mut self, ui: &mut egui::Ui, out: &mut InventoryResponse) {
+        let family = self.family;
+        let stale: Vec<Entry> = self.entries.iter().filter(|e| e.kind.family() == family && e.update.is_some()).cloned().collect();
+        let downloads = self.entries.iter().any(|e| e.kind.family() == family && e.origin == Origin::Api && e.installed);
+        if stale.is_empty() {
+            self.updates_only = false;
+        }
+        if stale.is_empty() && !downloads {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            if !stale.is_empty() {
+                let label = t!("catalog.updates", count = stale.len());
+                if ui.selectable_label(self.updates_only, label).on_hover_text(t!("catalog.updates_tip")).clicked() {
+                    self.updates_only = !self.updates_only;
+                }
+                if ui.button(t!("catalog.update_all")).clicked() {
+                    for e in &stale {
+                        request_download(e);
+                    }
+                }
+            }
+            if downloads && ui.button(t!("catalog.clear_cache")).on_hover_text(t!("catalog.clear_cache_tip")).clicked() {
+                match family {
+                    Family::Variations => out.clear_variation_cache = true,
+                    _ => out.clear_effect_cache = true,
+                }
+            }
+        });
     }
 
     // ----------------------------------------------------------------- list
@@ -559,11 +636,24 @@ impl InventoryPanel {
             return;
         };
         entry_summary(ui, &e, Some(cx.palette_library));
+        if let Some(v) = &e.update {
+            ui.label(egui::RichText::new(t!("catalog.update_available", version = v.clone())).strong());
+        }
+        if let Some(why) = download_failure(&e) {
+            ui.colored_label(ui.visuals().error_fg_color, t!("catalog.download_failed", error = why));
+        }
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             if !e.installed {
                 download_button(ui, &e);
                 return;
+            }
+            if e.update.is_some() {
+                if download_requested(&e) {
+                    ui.add_enabled(false, egui::Button::new(t!("catalog.updating")));
+                } else if ui.button(t!("catalog.update")).clicked() {
+                    request_download(&e);
+                }
             }
             match usable(&e, cx.config_manager.active_config()) {
                 Ok(()) => {
@@ -662,7 +752,13 @@ pub(crate) fn entry_summary(ui: &mut egui::Ui, e: &Entry, palettes: Option<&Pale
 /// A row's text: the title, the origin's mark, a plug-in's; a download
 /// arrow for what is not installed.
 pub(crate) fn row_label(e: &Entry) -> String {
-    let available = if e.installed { "" } else { "  \u{2193}" };
+    let available = if !e.installed {
+        "  \u{2193}"
+    } else if e.update.is_some() {
+        "  \u{2191}"
+    } else {
+        ""
+    };
     format!("{}{}{available}", e.title, crate::storage::library::marks(e.origin, e.plugin))
 }
 
@@ -900,6 +996,27 @@ mod tests {
         e.plugin = true;
         assert!(OriginFilter::Yours.admits(&e) && OriginFilter::Plugins.admits(&e) && !OriginFilter::FromOthers.admits(&e));
         assert!(OriginFilter::ALL.iter().any(|o| *o == OriginFilter::All && o.admits(&e)));
+    }
+
+    /// A failed download is asked for no more and says why; asking again
+    /// clears the failure. (Before, its row said *Downloading…* until
+    /// the app restarted.)
+    #[test]
+    fn a_failed_download_can_be_asked_again() {
+        let mut e = crate::ui::picker::row(Kind::Variation, "it_failing_download", "Failing", inventory::Group { order: 1000, label: String::new() });
+        e.installed = false;
+        request_download(&e);
+        assert!(download_requested(&e));
+        assert!(take_downloads().iter().any(|(_, n)| n == "it_failing_download"));
+        download_failed(Kind::Variation, "it_failing_download", "HTTP 500");
+        assert!(!download_requested(&e), "no longer coming");
+        assert_eq!(download_failure(&e).as_deref(), Some("HTTP 500"));
+        request_download(&e);
+        assert!(download_requested(&e) && download_failure(&e).is_none(), "asked again");
+        assert!(row_label(&e).ends_with("  \u{2193}"), "the download mark");
+        e.installed = true;
+        e.update = Some("v4".into());
+        assert!(row_label(&e).ends_with("  \u{2191}"), "an update's mark");
     }
 
     /// Use's rules: a variation needs a flame mode (and 3D for a 3D-only

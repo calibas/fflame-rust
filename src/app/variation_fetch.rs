@@ -134,6 +134,9 @@ impl App {
                 // Tell the user. `finalize` used to take a `had_failures`
                 // flag and ignore it, so a timeout resumed rendering in
                 // silence and the flame just drew wrong.
+                for name in &self.variation_fetch_names {
+                    crate::ui::inventory::download_failed(crate::inventory::Kind::Variation, name, &t!("catalog.download_timed_out"));
+                }
                 let names = std::mem::take(&mut self.variation_fetch_names).join(", ");
                 self.egui_layer.show_api_notification(
                     &t!("api.variation_fetch_timeout", names = names),
@@ -193,6 +196,7 @@ impl App {
                 }
                 Err(e) => {
                     log::warn!("Failed to fetch variation '{}': {}", name, e);
+                    crate::ui::inventory::download_failed(crate::inventory::Kind::Variation, &name, &e);
                     failed.push(name);
                 }
             }

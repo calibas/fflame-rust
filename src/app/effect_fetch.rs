@@ -240,6 +240,7 @@ impl App {
                         }
                         Err(e) => {
                             log::error!("Refusing effect `{name}`: {e}");
+                            crate::ui::inventory::download_failed(crate::inventory::Kind::Effect, &name, &e.to_string());
                             self.egui_layer.show_api_notification(
                                 &format!("Cannot use effect `{name}`: {e}"),
                                 true,
@@ -247,7 +248,10 @@ impl App {
                         }
                     }
                 }
-                Err(e) => log::warn!("Could not fetch effect `{name}`: {e}"),
+                Err(e) => {
+                    log::warn!("Could not fetch effect `{name}`: {e}");
+                    crate::ui::inventory::download_failed(crate::inventory::Kind::Effect, &name, &e);
+                }
             }
         }
 

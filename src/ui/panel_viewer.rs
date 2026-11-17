@@ -989,6 +989,12 @@ impl<'a> PanelViewer<'a> {
         if let Some(req) = response.script_cloud_request {
             *self.context.script_cloud_request = Some(req);
         }
+        if response.clear_variation_cache {
+            *self.context.clear_variation_cache_requested = true;
+        }
+        if response.clear_effect_cache {
+            *self.context.clear_effect_cache_requested = true;
+        }
         if let Some(config) = response.load_preset {
             *self.context.selected_preset_config = Some(config);
             // A preset is nobody's online flame.
