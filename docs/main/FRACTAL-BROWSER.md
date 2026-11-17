@@ -1,8 +1,9 @@
 # Fractal Browser
 
 The Fractal Browser panel browses whole configs this session made or
-opened -- a generated batch, the configs in a file -- and the flames
-saved online, as thumbnails or as a list. Clicking one loads it as a
+opened -- a generated batch, the configs in a file -- as thumbnails or
+as a list. **The online fractals are the Catalog's** too (its Online
+place, [CATALOG.md](CATALOG.md); the tab bar's **Online...** shows them). Clicking one loads it as a
 single undo entry ("Load Preset" in the History panel). **The presets
 are the Catalog's** since 2026-11-16 ([CATALOG.md](CATALOG.md)): its
 Fractals family draws them with this panel's gallery widget, a gallery a
@@ -21,7 +22,7 @@ category.
   [src/resources/presets.rs](../../src/resources/presets.rs).
 
 **See also:** [UI.md](UI.md) (panels and layouts), [ONLINE.md](ONLINE.md)
-(the online tab's API), [CONFIG.md](CONFIG.md) (the `.fflame` format).
+(the online API), [CONFIG.md](CONFIG.md) (the `.fflame` format).
 Design record: [fractal-browser.md](../archive/projects/fractal-browser.md).
 
 ---
@@ -43,10 +44,8 @@ It is available in every render mode.
 
 | Tab label | `BrowserTab` | What it holds |
 |---|---|---|
-| Presets | `Presets` | The built-in presets, a tab per category (see [Presets](#presets)) |
 | Random | `Batch` | The last batch from the Random Generator or a Scripts batch, until the next one replaces it. The label shows the count |
 | Files | `Files` | The configs from one file: **Open File...** on the tab, a multi-config `.fflame` or multi-flame `.flame` opened with File ▸ Open, or a multi-flame `.flame` from Import Apophysis. The label shows the count |
-| Online | `Online` | The signed-in user's flames from the API. Shown only with the online account on (a guest has none) |
 
 The code calls the second tab `Batch`; its label (`browser.tab_batch`)
 is "Random".
@@ -57,30 +56,6 @@ is "Random".
 web: the browser's file picker, which hands back the text). A file may
 hold one config or a JSON array of them; `FractalConfig::from_json_multi`
 reads either. A failed read or parse is shown in red above the gallery.
-
-### Online
-
-The tab lists flames saved through Save Online
-([ONLINE.md](ONLINE.md)):
-
-- It fetches on the first visit when signed in, and again on
-  **Refresh**. With no filter it lists the user's own flames (the first
-  100); a name search or a render-mode filter (All / 2D / 3D / Escape
-  Time) uses the search endpoint instead (also 100). The name is
-  percent-encoded into the query. There is no Simulation filter: the
-  server's `render_mode` enum does not know that value yet.
-- Each row is a button reading `name — mode | NT | variations`, where
-  `N` is the transform count and the variations are the first two
-  names plus a count; an escape-time or simulation row, which has no
-  transforms, reads `name — mode` (`online_row_label`). Clicking
-  loads the full config together with its online metadata (id,
-  visibility, owner, linked animations). The red **X** asks for
-  confirmation, then deletes the online flame and refreshes the list.
-- An authentication error (401) starts the sign-out flow; a 403 is
-  shown as an error and does not sign you out.
-
-The online tab does not use the gallery widget: no thumbnails, no grid,
-no list toggle.
 
 ---
 

@@ -172,15 +172,16 @@ and the library's palette is not changed: editing afterwards changes
 only the config's palette, until you save it to the library. The info
 pane shows the palette's pack, origin and a wider gradient.
 
-### Cloud palettes
+### Online palettes
 
-With the online account on, the Catalog's palettes end with a **Cloud Palettes** section,
-collapsed by default. On first expanding it fetches your palette
-library from the API (up to 100 entries, each a nickname and a content
-hash) and lists them with previews. A click loads one exactly as a pack
-palette loads; **X** removes the entry from your library without
-deleting the palette itself. Palettes reach that library with the
-flames you save online. See [ONLINE.md](ONLINE.md).
+The palettes in the online library -- everyone's public ones, and yours
+signed in -- are the Catalog's **Online** place, Palettes
+([CATALOG.md](CATALOG.md), *Online*): searched by the server, a click
+applies one exactly as a pack palette applies, and your own can be
+deleted (its colours stay: fractals may use them). Signed in, the
+palettes on this device end with a line that shows yours there.
+Palettes reach your online library with the flames you save online.
+See [ONLINE.md](ONLINE.md).
 
 ---
 

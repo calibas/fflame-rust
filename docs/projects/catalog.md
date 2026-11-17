@@ -3,8 +3,8 @@
 > **Status 2026-11-16: phases 0-2 merged** (the API reshaped in place on
 > ffapi, its `docs/catalog-api-build.md`, and this app's client moved to
 > it; the model and the panel; the picker, PR #167). **Phase 3, online,
-> designed and decided** (*Phase 3: online*, below), being built on branch
-> `catalog-online`. The two surveys this plan stands on (the app's
+> built** on branch `catalog-online`, unmerged (*Phase 3: online*, below;
+> as built: [CATALOG.md](../main/CATALOG.md), *Online*). The two surveys this plan stands on (the app's
 > sources, the API's routes) were taken 2026-11-16 and are summarised
 > under *What exists*; the online survey under *Phase 3*.
 
