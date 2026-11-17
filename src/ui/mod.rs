@@ -1218,19 +1218,14 @@ impl EguiLayer {
         });
     }
 
-    /// Request the Online tab to refresh its flame list
+    /// A fractal was saved online: the Catalog's online fractals ask again.
     pub fn request_online_refresh(&mut self) {
-        if let Some(ref mut panel) = self.fractal_browser_panel {
-            panel.request_online_refresh();
-        }
+        self.inventory_panel.forget_online();
     }
 
     /// Clear cloud-related state (called on sign-out or session expiry)
     pub fn clear_cloud_state(&mut self) {
         self.inventory_panel.signed_out();
-        if let Some(ref mut panel) = self.fractal_browser_panel {
-            panel.clear_online_data();
-        }
     }
 
     /// Render API notification toast overlay (bottom-center)
@@ -2522,11 +2517,6 @@ impl EguiLayer {
 
             // The Catalog's own online lists
             self.inventory_panel.signed_out();
-
-            // Clear online tab in fractal browser
-            if let Some(ref mut panel) = self.fractal_browser_panel {
-                panel.clear_online_data();
-            }
 
             // Show notification (different message for session expiry vs user sign-out)
             let is_session_expired = sign_out_requested && !menu_actions.file.sign_out;

@@ -1606,6 +1606,8 @@ file_browser:
 
 # Fractal Browser Panel (unified presets/batch/files browser)
 browser:
+  online_in_catalog: "Online…"
+  online_in_catalog_tip: "The online fractals, yours and everyone's, are in the Catalog"
   title: "Fractal Browser"
   rhai_variation: "a Rhai variation"
   tab_presets: "Presets"

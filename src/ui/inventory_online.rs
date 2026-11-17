@@ -33,6 +33,52 @@ struct ListKey {
     scope: Scope,
     q: String,
     sort: &'static str,
+    /// A fractal's render mode (`2d`, `3d`, `escape`, `simulation`).
+    mode: Option<&'static str>,
+}
+
+/// The fractals' render-mode filter: the server's word, and the label.
+const MODES: &[(Option<&str>, &str)] = &[
+    (None, "browser.search_all"),
+    (Some("2d"), "browser.search_2d"),
+    (Some("3d"), "browser.search_3d"),
+    (Some("escape"), "mode.escape"),
+    (Some("simulation"), "mode.simulation"),
+];
+
+/// A fractal's kind as a line: its mode, and for a flame its transform
+/// count and variations (an escape-time or simulation config has neither:
+/// the formula or the model is the fractal, and "0T" would read as a
+/// broken flame).
+pub fn fractal_line(flame: &crate::api::types::FlameListItem) -> String {
+    use crate::api::types::ApiRenderMode as M;
+    let mode = t!(match flame.render_mode {
+        M::TwoD => "fractal_gallery.render_mode_2d",
+        M::ThreeD => "fractal_gallery.render_mode_3d",
+        M::Escape => "fractal_gallery.render_mode_escape",
+        M::Simulation => "fractal_gallery.render_mode_simulation",
+        M::Unknown(_) => "fractal_gallery.render_mode_newer",
+    })
+    .to_string();
+    match flame.render_mode {
+        M::Escape | M::Simulation | M::Unknown(_) => mode,
+        M::TwoD | M::ThreeD => {
+            let names: Vec<String> = {
+                let registry = crate::variations::global_registry();
+                flame
+                    .variation_names
+                    .iter()
+                    .map(|n| match registry.get(n) {
+                        Some(v) => v.display_name.clone(),
+                        None if crate::scripted::is_key(n) => t!("browser.rhai_variation").to_string(),
+                        None => n.clone(),
+                    })
+                    .collect()
+            };
+            let variations = if names.len() <= 3 { names.join(", ") } else { format!("{}, +{}", names[..2].join(", "), names.len() - 2) };
+            format!("{mode} | {}T | {variations}", flame.transform_count)
+        }
+    }
 }
 
 #[derive(Default)]
@@ -74,6 +120,8 @@ pub fn kinds(family: Family) -> Vec<Kind> {
 
 pub struct OnlinePlace {
     pub scope: Scope,
+    /// The fractals' render-mode filter.
+    mode: Option<&'static str>,
     /// Each kind's sort, by the server's word.
     sorts: HashMap<Kind, &'static str>,
     /// The search as typed, and when it last changed; `settled` is what
@@ -102,6 +150,7 @@ impl OnlinePlace {
     pub fn new() -> Self {
         OnlinePlace {
             scope: Scope::Public,
+            mode: None,
             sorts: HashMap::new(),
             typed: String::new(),
             typed_at: 0.0,
@@ -135,7 +184,8 @@ impl OnlinePlace {
     }
 
     fn key(&self, kind: Kind) -> ListKey {
-        ListKey { kind, scope: self.scope, q: self.settled.trim().to_string(), sort: self.sort(kind) }
+        let mode = if kind == Kind::Fractal { self.mode } else { None };
+        ListKey { kind, scope: self.scope, q: self.settled.trim().to_string(), sort: self.sort(kind), mode }
     }
 
     /// An online entry and its item, by key, from any list kept.
@@ -227,7 +277,7 @@ impl OnlinePlace {
             kind: online::script_wire(key.kind).map(str::to_string),
             cursor: list.next.clone(),
             per_page: 50,
-            filters: Vec::new(),
+            filters: key.mode.map(|m| vec![("render_mode".to_string(), m.to_string())]).unwrap_or_default(),
         };
         let (kind, scope) = (key.kind, key.scope);
         let wake = ctx.clone();
@@ -278,6 +328,15 @@ impl OnlinePlace {
                 self.forget();
             }
         });
+        if family == Family::Fractals {
+            ui.horizontal_wrapped(|ui| {
+                for (mode, label) in MODES {
+                    if ui.selectable_label(self.mode == *mode, t!(*label)).clicked() {
+                        self.mode = *mode;
+                    }
+                }
+            });
+        }
         if let Some((text, is_error)) = &self.status {
             if *is_error {
                 ui.colored_label(ui.visuals().error_fg_color, text);
@@ -422,6 +481,9 @@ impl OnlinePlace {
             line = format!("{line} · {}", t!("catalog.by_owner", owner = info.owner.clone()));
         }
         ui.label(egui::RichText::new(line).weak());
+        if let Item::Flame(f) = &item {
+            ui.label(egui::RichText::new(fractal_line(f)).weak());
+        }
         ui.label(t!("catalog.from_online"));
         if !info.updated.is_empty() {
             let mut when = t!("catalog.updated", date = info.updated.chars().take(10).collect::<String>()).to_string();
@@ -756,7 +818,7 @@ mod tests {
         let ctx = egui::Context::default();
         frame(&ctx, 0.0);
         let mut place = OnlinePlace::new();
-        let key = ListKey { kind: Kind::Coloring, scope: Scope::Public, q: String::new(), sort: "recent" };
+        let key = ListKey { kind: Kind::Coloring, scope: Scope::Public, q: String::new(), sort: "recent", mode: None };
         let page = (vec![script("s1"), script("s1"), script("s2")], Some("c2".to_string()));
         place.lists.insert(key.clone(), List { job: Some(job::spawn(async move { Ok(page) }, || {})), ..Default::default() });
         let none = Arc::new(Vec::new());
@@ -792,6 +854,47 @@ mod tests {
         frame(&ctx, 10.5);
         place.update(&ctx, "fire", &local, &mut InventoryResponse::default());
         assert_eq!(place.key(Kind::Fractal).q, "fire");
+    }
+
+    fn flame(render_mode: crate::api::types::ApiRenderMode, transform_count: i32, variations: &[&str]) -> crate::api::types::FlameListItem {
+        serde_json::from_value(serde_json::json!({
+            "id": "id", "name": "Reef", "render_mode": render_mode, "transform_count": transform_count,
+            "variation_names": variations, "has_3d": false, "created_at": "", "updated_at": ""
+        }))
+        .unwrap()
+    }
+
+    /// A simulation or an escape-time config has no transforms and no
+    /// variations, legitimately: its line says what it is, not "0T".
+    #[test]
+    fn a_simulation_line_has_no_transform_columns() {
+        use crate::api::types::ApiRenderMode as M;
+        for mode in [M::Simulation, M::Escape] {
+            let line = fractal_line(&flame(mode, 0, &[]));
+            assert!(!line.contains("0T") && !line.contains('|'), "{line}");
+        }
+    }
+
+    /// A flame's line keeps its transform count and its variations, by
+    /// their display names, the rest counted.
+    #[test]
+    fn a_flame_line_keeps_its_transform_count_and_variations() {
+        use crate::api::types::ApiRenderMode as M;
+        assert!(fractal_line(&flame(M::TwoD, 3, &["linear", "swirl"])).ends_with("| 3T | Linear, Swirl"));
+        assert!(fractal_line(&flame(M::ThreeD, 2, &["a", "b", "c", "d"])).ends_with("| 2T | a, b, +2"));
+    }
+
+    /// The mode filter asks the server by its word, for fractals only;
+    /// simulations are searchable (the server's render_mode knows them
+    /// since its migration 102).
+    #[test]
+    fn the_mode_filter_is_the_servers_word() {
+        let mut place = OnlinePlace::new();
+        place.mode = Some("simulation");
+        assert_eq!(place.key(Kind::Fractal).mode, Some("simulation"));
+        assert_eq!(place.key(Kind::Palette).mode, None, "palettes have no mode");
+        let words: Vec<_> = MODES.iter().filter_map(|(m, _)| *m).collect();
+        assert_eq!(words, ["2d", "3d", "escape", "simulation"]);
     }
 
     /// Each family lists online what the server stores of its kinds.
