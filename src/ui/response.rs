@@ -96,7 +96,7 @@ pub struct UiResponse {
     pub open_preset_library: bool,
     pub open_random_generator: bool,
     /// Open the Formula Editor, which a panel just gave a formula to.
-    pub open_formula_editor: bool,
+    pub open_rhai_editor: bool,
     /// Open the Scripts panel, which the Catalog just gave a script to.
     pub open_scripts_panel: bool,
     /// Open the Lighting panel (the View panel's button).
@@ -273,7 +273,7 @@ impl Default for UiResponse {
             open_triangle_editor: false,
             open_preset_library: false,
             open_random_generator: false,
-            open_formula_editor: false,
+            open_rhai_editor: false,
             open_scripts_panel: false,
             open_lighting_panel: false,
             fractal_viewport_size: None,

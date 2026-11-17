@@ -216,7 +216,7 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> PanelUse {
         | P::RandomGenerator
         // Formulas, colourings and solids for Escape (using one enters
         // it), variations for the flame: something for every mode.
-        | P::FormulaEditor => PanelUse::Active,
+        | P::RhaiEditor => PanelUse::Active,
 
         // Flame-only editing surfaces.
         P::XaosEditor | P::Subflames | P::Paths => match m {
@@ -569,7 +569,7 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::Escape, "menu.window_escape"),
     row(PanelType::Simulation, "menu.window_simulation"),
     row(PanelType::Textures, "menu.window_textures"),
-    row(PanelType::FormulaEditor, "menu.window_formula_editor"),
+    row(PanelType::RhaiEditor, "menu.window_formula_editor"),
     row(PanelType::HybridDesigner, "menu.window_hybrid_designer"),
     row(PanelType::Transforms, "menu.window_transforms"),
     row(PanelType::TriangleEditor, "menu.window_triangle_editor"),
@@ -687,7 +687,7 @@ mod tests {
         PanelType::Escape,
         PanelType::Simulation,
         PanelType::Textures,
-        PanelType::FormulaEditor,
+        PanelType::RhaiEditor,
         PanelType::HybridDesigner,
     ];
 

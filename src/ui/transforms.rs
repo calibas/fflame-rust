@@ -920,8 +920,8 @@ pub fn render_transforms_content(
     flame: &mut Flame,
     pool_actions: PoolActions,
     open_triangle_editor: &mut bool,
-    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
-    open_formula_editor: &mut bool,
+    rhai_editor: &mut Option<super::rhai_editor::RhaiEditorPanel>,
+    open_rhai_editor: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
     // Edit as Rhai on a variation, from any pool member's row.
@@ -1149,8 +1149,8 @@ pub fn render_transforms_content(
     }
     if let Some(idx) = final_delete { *delete_final = Some(idx); }
     if let Some((xref, name)) = edit_as_rhai {
-        formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).edit_variation_as_rhai(config_manager, xref, &name);
-        *open_formula_editor = true;
+        rhai_editor.get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new).edit_variation_as_rhai(config_manager, xref, &name);
+        *open_rhai_editor = true;
     }
     if let Some(idx) = final_clone { *clone_final = Some(idx); }
 

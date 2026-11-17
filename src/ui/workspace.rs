@@ -74,9 +74,11 @@ pub enum PanelType {
     /// Simulation textures an escape-time fractal can use
     /// (docs/archive/projects/sim-textures.md)
     Textures,
-    /// Escape-time formulas and colourings written in Ultra Fractal's or
-    /// Fractint's language (docs/archive/projects/escape-formula-language.md)
-    FormulaEditor,
+    /// The Rhai Editor: every Rhai kind, and Ultra Fractal and Fractint
+    /// files (docs/projects/catalog.md, phase 4). Saved layouts that name
+    /// the Formula Editor open it.
+    #[serde(alias = "FormulaEditor")]
+    RhaiEditor,
     /// Kalles Fraktaler-style hybrid formulas (escape::lang::hybrid)
     HybridDesigner,
 }
@@ -114,7 +116,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Escape => t!("panels.escape"),
             PanelType::Simulation => t!("panels.simulation"),
             PanelType::Textures => t!("panels.textures"),
-            PanelType::FormulaEditor => t!("panels.formula_editor"),
+            PanelType::RhaiEditor => t!("panels.rhai_editor"),
             PanelType::HybridDesigner => t!("panels.hybrid_designer"),
         };
         write!(f, "{}", title)
@@ -280,7 +282,7 @@ impl Workspace {
             // controls sit above the parameters.
             PanelType::Simulation => egui::vec2(350.0, 560.0),
             PanelType::Textures => egui::vec2(300.0, 480.0),
-            PanelType::FormulaEditor => egui::vec2(440.0, 600.0),
+            PanelType::RhaiEditor => egui::vec2(440.0, 600.0),
             PanelType::HybridDesigner => egui::vec2(520.0, 420.0),
         }
     }
@@ -761,10 +763,10 @@ mod layout_tests {
             ws.dock_state[s][n].get_leaf().is_some_and(|l| l.active == t)
         };
         let mut ws = Workspace::new();
-        ws.open_floating_panel(PanelType::FormulaEditor, &ctx);
+        ws.open_floating_panel(PanelType::RhaiEditor, &ctx);
         ws.show_main_panel(PanelType::Escape, &ctx);
         assert!(active(&ws, PanelType::Escape) && !active(&ws, PanelType::Transforms));
-        assert!(ws.panel_exists(PanelType::FormulaEditor) && ws.panel_exists(PanelType::Transforms), "nothing closed");
+        assert!(ws.panel_exists(PanelType::RhaiEditor) && ws.panel_exists(PanelType::Transforms), "nothing closed");
 
         // Closed, it comes back beside the others.
         let (s, n, t) = ws.find_tab(PanelType::Simulation).unwrap();

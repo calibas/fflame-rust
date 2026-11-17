@@ -22,10 +22,10 @@ fn edit_as_formula(
     config_manager: &mut ConfigManager,
     builtin: &str,
     src: crate::config::escape::CustomSource,
-    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
-    open_formula_editor: &mut bool,
+    rhai_editor: &mut Option<super::rhai_editor::RhaiEditorPanel>,
+    open_rhai_editor: &mut bool,
 ) {
-    edit_formula_twin(config_manager, builtin, src, crate::lang::EntryKind::Formula, formula_editor, open_formula_editor);
+    edit_formula_twin(config_manager, builtin, src, crate::lang::EntryKind::Formula, rhai_editor, open_rhai_editor);
 }
 
 /// Edit as Formula, for an escape formula (`EntryKind::Formula`) or a mode
@@ -38,8 +38,8 @@ fn edit_formula_twin(
     builtin: &str,
     src: crate::config::escape::CustomSource,
     kind: crate::lang::EntryKind,
-    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
-    open_formula_editor: &mut bool,
+    rhai_editor: &mut Option<super::rhai_editor::RhaiEditorPanel>,
+    open_rhai_editor: &mut bool,
 ) {
     let name = crate::escape::custom::name_of(kind, &src);
     let changes = vec![
@@ -50,8 +50,8 @@ fn edit_formula_twin(
         return;
     }
     let file = crate::storage::formula_store::file_name_for(&format!("{builtin}.rhai")).unwrap_or_else(|| "formula.rhai".into());
-    formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_in_use(kind, file, &src);
-    *open_formula_editor = true;
+    rhai_editor.get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new).open_in_use(kind, file, &src);
+    *open_rhai_editor = true;
 }
 
 /// The colouring's Edit as Rhai (P7 step 2): the built-in colouring
@@ -62,10 +62,10 @@ fn edit_coloring_as_rhai(
     config_manager: &mut ConfigManager,
     builtin: &str,
     src: crate::config::escape::CustomSource,
-    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
-    open_formula_editor: &mut bool,
+    rhai_editor: &mut Option<super::rhai_editor::RhaiEditorPanel>,
+    open_rhai_editor: &mut bool,
 ) {
-    edit_coloring_twin(config_manager, builtin, src, crate::lang::EntryKind::Coloring, formula_editor, open_formula_editor);
+    edit_coloring_twin(config_manager, builtin, src, crate::lang::EntryKind::Coloring, rhai_editor, open_rhai_editor);
 }
 
 /// Edit as Rhai for a colouring: an escape colouring (`EntryKind::Coloring`)
@@ -76,8 +76,8 @@ fn edit_coloring_twin(
     builtin: &str,
     src: crate::config::escape::CustomSource,
     kind: crate::lang::EntryKind,
-    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
-    open_formula_editor: &mut bool,
+    rhai_editor: &mut Option<super::rhai_editor::RhaiEditorPanel>,
+    open_rhai_editor: &mut bool,
 ) {
     let name = crate::escape::custom::name_of(kind, &src);
     let changes = vec![
@@ -88,8 +88,8 @@ fn edit_coloring_twin(
         return;
     }
     let file = crate::storage::formula_store::file_name_for(&format!("{builtin}-coloring.rhai")).unwrap_or_else(|| "coloring.rhai".into());
-    formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_in_use(kind, file, &src);
-    *open_formula_editor = true;
+    rhai_editor.get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new).open_in_use(kind, file, &src);
+    *open_rhai_editor = true;
 }
 
 /// Choosing a plug-in, as the Formula Editor's Use: its source carried
@@ -182,8 +182,8 @@ pub fn render_escape_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     terrain_range: Option<[f32; 2]>,
-    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
-    open_formula_editor: &mut bool,
+    rhai_editor: &mut Option<super::rhai_editor::RhaiEditorPanel>,
+    open_rhai_editor: &mut bool,
 ) {
     let config = config_manager.active_config().clone();
     let esc = config.escape.clone();
@@ -260,7 +260,7 @@ pub fn render_escape_content(
         if field.is_none() && ifs_def.is_none() {
             if let Some(src) = crate::escape::twins::custom_source(&esc.formula) {
                 if ui.button(t!("escape_panel.edit_as_formula")).on_hover_text(t!("escape_panel.edit_as_formula_tip")).clicked() {
-                    edit_as_formula(config_manager, &esc.formula, src, formula_editor, open_formula_editor);
+                    edit_as_formula(config_manager, &esc.formula, src, rhai_editor, open_rhai_editor);
                 }
             }
         }
@@ -269,7 +269,7 @@ pub fn render_escape_content(
         if let Some(f) = field {
             if let Some(src) = crate::escape::twins::field_custom_source(f.name) {
                 if ui.button(t!("escape_panel.edit_field_as_rhai")).on_hover_text(t!("escape_panel.edit_field_as_rhai_tip")).clicked() {
-                    edit_formula_twin(config_manager, f.name, src, crate::lang::EntryKind::Field, formula_editor, open_formula_editor);
+                    edit_formula_twin(config_manager, f.name, src, crate::lang::EntryKind::Field, rhai_editor, open_rhai_editor);
                 }
             }
         }
@@ -278,7 +278,7 @@ pub fn render_escape_content(
         if ifs_def.is_some_and(|d| d.solid) {
             if let Some(src) = crate::escape::twins::solid_custom_source(&esc.formula) {
                 if ui.button(t!("escape_panel.edit_solid_as_rhai")).on_hover_text(t!("escape_panel.edit_solid_as_rhai_tip")).clicked() {
-                    edit_formula_twin(config_manager, &esc.formula, src, crate::lang::EntryKind::Solid, formula_editor, open_formula_editor);
+                    edit_formula_twin(config_manager, &esc.formula, src, crate::lang::EntryKind::Solid, rhai_editor, open_rhai_editor);
                 }
             }
         }
@@ -1279,7 +1279,7 @@ pub fn render_escape_content(
     ui.separator();
 
     // ---- Coloring ----
-    show_coloring_section(ui, config_manager, &esc, field, ifs_def, formula_editor, open_formula_editor);
+    show_coloring_section(ui, config_manager, &esc, field, ifs_def, rhai_editor, open_rhai_editor);
 
     // ---- Transformations (the KIFS plan, C4): mode A's formulas, and a
     // solid's Orbit stage (3d-look-and-tools P5) ----
@@ -2346,8 +2346,8 @@ fn show_coloring_section(
     esc: &crate::config::escape::EscapeConfig,
     field: Option<&'static crate::escape::fields::FieldDef>,
     ifs_def: Option<&'static crate::escape::ifs::IfsDef>,
-    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
-    open_formula_editor: &mut bool,
+    rhai_editor: &mut Option<super::rhai_editor::RhaiEditorPanel>,
+    open_rhai_editor: &mut bool,
 ) {
     if let Some(d) = ifs_def {
         let coloring = crate::escape::ifs::get_ifs_coloring(&esc.coloring, d);
@@ -2383,7 +2383,7 @@ fn show_coloring_section(
             // A built-in with a twin (`escape::twins::FIELD_COLORING_TWINS`).
             if let Some(src) = crate::escape::twins::field_coloring_custom_source(coloring.name) {
                 if ui.button(t!("escape_panel.edit_as_rhai")).on_hover_text(t!("escape_panel.edit_coloring_as_rhai_tip")).clicked() {
-                    edit_coloring_twin(config_manager, coloring.name, src, crate::lang::EntryKind::FieldColoring, formula_editor, open_formula_editor);
+                    edit_coloring_twin(config_manager, coloring.name, src, crate::lang::EntryKind::FieldColoring, rhai_editor, open_rhai_editor);
                 }
             }
         });
@@ -2447,7 +2447,7 @@ fn show_coloring_section(
         // the Formula Editor as the user's own to change.
         if let Some(src) = crate::escape::twins::coloring_custom_source(&esc.coloring) {
             if ui.button(t!("escape_panel.edit_as_rhai")).on_hover_text(t!("escape_panel.edit_coloring_as_rhai_tip")).clicked() {
-                edit_coloring_as_rhai(config_manager, &esc.coloring, src, formula_editor, open_formula_editor);
+                edit_coloring_as_rhai(config_manager, &esc.coloring, src, rhai_editor, open_rhai_editor);
             }
         }
     });

@@ -121,7 +121,7 @@ fn entry_ident(src: &CustomSource) -> String {
     }
 }
 
-pub struct FormulaEditorPanel {
+pub struct RhaiEditorPanel {
     /// The user's files.
     files: Vec<String>,
     /// The stored file being edited; `None` for an unsaved one (a new
@@ -153,15 +153,15 @@ pub struct FormulaEditorPanel {
     seen_library_generation: u64,
 }
 
-impl Default for FormulaEditorPanel {
+impl Default for RhaiEditorPanel {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl FormulaEditorPanel {
+impl RhaiEditorPanel {
     pub fn new() -> Self {
-        let mut p = FormulaEditorPanel {
+        let mut p = RhaiEditorPanel {
             files: formula_store::list(),
             file: None,
             name: String::new(),
@@ -1724,7 +1724,7 @@ mod tests {
         let mut cm = ConfigManager::new(crate::config::FractalConfig::default());
         assert_eq!(cm.config().render_mode, RenderMode::TwoD, "fixture assumption");
         let formula = cm.config().escape.formula.clone();
-        let mut panel = FormulaEditorPanel::new();
+        let mut panel = RhaiEditorPanel::new();
         panel.adopt(None, "frothy-basin-coloring.rhai".into(), include_str!("../../assets/formulas/frothy-basin-coloring.rhai").into());
         panel.recheck();
         let before = cm.history_len();
@@ -1759,7 +1759,7 @@ mod tests {
         config.escape.formula = "mandelbrot".into();
         config.escape.bailout = 4.0;
         let mut cm = ConfigManager::new(config);
-        let mut panel = FormulaEditorPanel::new();
+        let mut panel = RhaiEditorPanel::new();
         panel.adopt(None, "stripe.rhai".into(), crate::escape::twins::coloring_source("stripe_average").unwrap().into());
         panel.recheck();
         panel.use_entry(&mut cm, EntryKind::Coloring, 0);
@@ -1783,7 +1783,7 @@ mod tests {
     #[test]
     fn an_effect_with_a_hand_written_id_gets_its_own_on_use() {
         let mut cm = ConfigManager::new(crate::config::FractalConfig::default());
-        let mut panel = FormulaEditorPanel::new();
+        let mut panel = RhaiEditorPanel::new();
         let copied = include_str!("../../assets/effects/vignette.rhai").replace("id: \"vignette\"", "id: \"my_vignette\"");
         panel.adopt(None, "my-vignette.rhai".into(), copied);
         panel.recheck();
@@ -1833,7 +1833,7 @@ mod tests {
         vignette.set_param("intensity", 0.8);
         config.color_effects = vec![vignette];
         let mut cm = ConfigManager::new(config);
-        let mut panel = FormulaEditorPanel::new();
+        let mut panel = RhaiEditorPanel::new();
         let before = cm.history_len();
         panel.edit_effect_as_rhai(&mut cm, false, 0, "vignette");
         let c = cm.config();
@@ -1907,7 +1907,7 @@ mod tests {
             crate::config::sim::SimColorLayer { coloring: "scale_memory".into(), ..Default::default() },
         ];
         let mut cm = ConfigManager::new(config);
-        let mut panel = FormulaEditorPanel::new();
+        let mut panel = RhaiEditorPanel::new();
         let before = cm.history_len();
         panel.edit_sim_as_rhai(&mut cm, true, None, "mccabe");
         let s = &cm.config().sim;
@@ -1942,7 +1942,7 @@ mod tests {
     #[ignore = "writes the global variation registry (VARIATIONS.md, Testing): run alone"]
     fn a_new_version_of_a_variation_moves_its_transforms() {
         let mut cm = ConfigManager::new(crate::config::FractalConfig::default());
-        let mut panel = FormulaEditorPanel::new();
+        let mut panel = RhaiEditorPanel::new();
         let text = "const INFO = #{ title: \"Rekey\", name: \"rhai_use_rekey_test\" };\nconst PARAMS = #{ k: 0.5 };\nfn variation(z, p) {\n    z * p.k\n}\n";
         panel.adopt(None, "rekey.rhai".into(), text.into());
         panel.recheck();
@@ -2000,7 +2000,7 @@ mod tests {
         let mut cm = ConfigManager::new(crate::config::FractalConfig::default());
         let mut animation = AnimationController::new();
         animation.load(crate::animation::Animation::new("a".into(), 4.0));
-        let mut panel = FormulaEditorPanel::new();
+        let mut panel = RhaiEditorPanel::new();
         let source = "const PARAMS = #{ amount: #{ value: 0.5, min: 0.0, max: 2.0 } };\nconst TARGETS = #{ rotation: \"set\" };\nfn value(t, p, ctx) { #{ rotation: p.amount } }\n";
         panel.adopt(None, "turn.rhai".into(), source.into());
         panel.recheck();

@@ -62,7 +62,7 @@ mod escape_transforms;
 mod sim_panel;
 pub mod slow_controls;
 mod textures_panel;
-mod formula_editor;
+mod rhai_editor;
 mod hybrid_designer;
 pub mod workspace;
 mod palette_generate;
@@ -926,7 +926,7 @@ pub struct EguiLayer {
     inventory_panel: inventory::InventoryPanel,
     /// The Texture panel's state, created when the panel is first shown.
     textures_panel: Option<textures_panel::TexturesPanel>,
-    formula_editor: Option<formula_editor::FormulaEditorPanel>,
+    rhai_editor: Option<rhai_editor::RhaiEditorPanel>,
     hybrid_designer: Option<hybrid_designer::HybridDesignerPanel>,
 
     // API: flame metadata loaded from Online tab (passed through to UiResponse)
@@ -1109,7 +1109,7 @@ impl EguiLayer {
             fractal_browser_panel: None,
             inventory_panel: inventory::InventoryPanel::new(),
             textures_panel: None,
-            formula_editor: None,
+            rhai_editor: None,
             hybrid_designer: None,
             loaded_api_flame_id: None,
             loaded_api_flame_is_public: None,
@@ -1543,7 +1543,7 @@ impl EguiLayer {
         let mut open_triangle_editor = false;
         let mut open_preset_library = false;
         let mut open_random_generator = false;
-        let mut open_formula_editor = false;
+        let mut open_rhai_editor = false;
         let mut open_scripts_panel = false;
         let mut open_lighting_panel = false;
 
@@ -1845,7 +1845,7 @@ impl EguiLayer {
                         open_triangle_editor: &mut open_triangle_editor,
                         open_preset_library: &mut open_preset_library,
                         open_random_generator: &mut open_random_generator,
-                        open_formula_editor: &mut open_formula_editor,
+                        open_rhai_editor: &mut open_rhai_editor,
                         open_scripts_panel: &mut open_scripts_panel,
                         open_lighting_panel: &mut open_lighting_panel,
 
@@ -1962,7 +1962,7 @@ impl EguiLayer {
                         fractal_browser_panel: &mut self.fractal_browser_panel,
                         inventory_panel: &mut self.inventory_panel,
                         textures_panel: &mut self.textures_panel,
-                        formula_editor: &mut self.formula_editor,
+                        rhai_editor: &mut self.rhai_editor,
                         hybrid_designer: &mut self.hybrid_designer,
 
                         // Histogram for density visualization (levels now in ConfigManager)
@@ -2225,8 +2225,8 @@ impl EguiLayer {
             // A script track's window, and its Edit in the Formula Editor.
             track_editor::render_script_track_panel(ctx, animation_controller, &mut self.track_editor_state);
             if let Some(source) = self.track_editor_state.open_in_formula_editor.take() {
-                self.formula_editor.get_or_insert_with(formula_editor::FormulaEditorPanel::new).open_track(&source);
-                open_formula_editor = true;
+                self.rhai_editor.get_or_insert_with(rhai_editor::RhaiEditorPanel::new).open_track(&source);
+                open_rhai_editor = true;
             }
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
@@ -2671,7 +2671,7 @@ impl EguiLayer {
             open_triangle_editor,
             open_preset_library,
             open_random_generator,
-            open_formula_editor,
+            open_rhai_editor,
             open_scripts_panel,
             open_lighting_panel,
             fractal_viewport_size,

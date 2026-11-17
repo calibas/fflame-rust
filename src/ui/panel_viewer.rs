@@ -309,7 +309,7 @@ pub struct PanelContext<'a> {
     pub open_random_generator: &'a mut bool,
     /// A panel put a formula in the Formula Editor (the Escape panel's
     /// Edit as Formula): the app opens it.
-    pub open_formula_editor: &'a mut bool,
+    pub open_rhai_editor: &'a mut bool,
     /// The Catalog selected a script in the Scripts panel: the app opens it.
     pub open_scripts_panel: &'a mut bool,
     /// The View panel's Lighting button.
@@ -445,7 +445,7 @@ pub struct PanelContext<'a> {
     /// The Catalog (docs/projects/catalog.md).
     pub inventory_panel: &'a mut super::inventory::InventoryPanel,
     pub textures_panel: &'a mut Option<super::textures_panel::TexturesPanel>,
-    pub formula_editor: &'a mut Option<super::formula_editor::FormulaEditorPanel>,
+    pub rhai_editor: &'a mut Option<super::rhai_editor::RhaiEditorPanel>,
     pub hybrid_designer: &'a mut Option<super::hybrid_designer::HybridDesignerPanel>,
 
     // Histogram for density visualization (levels now in ConfigManager)
@@ -793,8 +793,8 @@ impl<'a> PanelViewer<'a> {
                     ui,
                     self.context.config_manager,
                     self.context.terrain_range,
-                    self.context.formula_editor,
-                    self.context.open_formula_editor,
+                    self.context.rhai_editor,
+                    self.context.open_rhai_editor,
                 );
             }
             PanelType::Textures => {
@@ -803,10 +803,10 @@ impl<'a> PanelViewer<'a> {
                     .get_or_insert_with(super::textures_panel::TexturesPanel::new)
                     .render(ui, self.context.config_manager);
             }
-            PanelType::FormulaEditor => {
+            PanelType::RhaiEditor => {
                 self.context
-                    .formula_editor
-                    .get_or_insert_with(super::formula_editor::FormulaEditorPanel::new)
+                    .rhai_editor
+                    .get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new)
                     .render(
                         ui,
                         self.context.config_manager,
@@ -838,8 +838,8 @@ impl<'a> PanelViewer<'a> {
                         timeline_holding: self.context.sim_timeline_holding,
                         timeline_driven: self.context.sim_timeline_driven,
                         governor: self.context.sim_governor,
-                        formula_editor: self.context.formula_editor,
-                        open_formula_editor: self.context.open_formula_editor,
+                        rhai_editor: self.context.rhai_editor,
+                        open_rhai_editor: self.context.open_rhai_editor,
                     },
                 );
             }
@@ -880,8 +880,8 @@ impl<'a> PanelViewer<'a> {
                 attachment_edit: self.context.attachment_edit,
             },
             self.context.open_triangle_editor,
-            self.context.formula_editor,
-            self.context.open_formula_editor,
+            self.context.rhai_editor,
+            self.context.open_rhai_editor,
         );
     }
 
@@ -993,8 +993,8 @@ impl<'a> PanelViewer<'a> {
             *self.context.open_palette_editor = true;
         }
         if let Some((file, shipped)) = response.open_formula_file {
-            self.context.formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_file(&file, shipped);
-            *self.context.open_formula_editor = true;
+            self.context.rhai_editor.get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new).open_file(&file, shipped);
+            *self.context.open_rhai_editor = true;
         }
         if let Some(id) = response.open_script {
             self.context.scripts_panel.get_or_insert_with(super::scripts_panel::ScriptsPanel::new).select_script(&id);
@@ -1980,8 +1980,8 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.config_manager,
             self.context.animation_controller,
-            self.context.formula_editor,
-            self.context.open_formula_editor,
+            self.context.rhai_editor,
+            self.context.open_rhai_editor,
             self.context.reset_effect_history,
         );
     }
