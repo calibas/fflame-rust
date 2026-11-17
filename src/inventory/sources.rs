@@ -20,6 +20,18 @@ fn entry(kind: Kind, key: EntryKey, title: &str, group: Group, origin: Origin) -
         link: None,
         installed: true,
         category: None,
+        update: None,
+        online: None,
+    }
+}
+
+/// The newer version the cached catalog offers of a download, if any
+/// (`storage::catalog::merge_state`: never a built-in's, never the
+/// user's own).
+fn update_of<T: crate::storage::catalog::CatalogItem>(item: Option<&T>, p: &Provenance) -> Option<String> {
+    match crate::storage::catalog::merge_state(item?, Some(p)) {
+        crate::storage::catalog::CatalogState::UpdateAvailable { available, .. } => Some(format!("v{available}")),
+        _ => None,
     }
 }
 
@@ -114,8 +126,9 @@ fn variation_category_key(c: crate::variations::VariationCategory) -> &'static s
 /// The registry's variations, each category a group, in registration
 /// order: built-ins and downloads. The user's own (plug-ins, and those a
 /// config carries) are files or the config's, not listed here.
-pub(super) fn variations(out: &mut Vec<Entry>) {
+pub(super) fn variations(online: super::Online, out: &mut Vec<Entry>) {
     let catalog = prose::variation_catalog();
+    let offered: std::collections::HashMap<&str, &crate::api::types::VariationListItem> = online.variations.iter().map(|v| (v.name.as_str(), v)).collect();
     let reg = crate::variations::global_registry();
     for v in reg.all() {
         if v.provenance == Provenance::Local {
@@ -125,6 +138,7 @@ pub(super) fn variations(out: &mut Vec<Entry>) {
         let group = Group { order, label: t!(variation_category_key(v.category)).to_string() };
         let mut e = entry(Kind::Variation, EntryKey::Registered(Kind::Variation, v.name.clone()), &v.display_name, group, v.provenance.origin());
         e.version = version_of(&v.provenance);
+        e.update = update_of(offered.get(v.name.as_str()).copied(), &v.provenance);
         let p = if v.provenance.is_builtin() { prose::variation(&v.name) } else { None };
         out.push(with_prose(e, p.or_else(|| catalog.get(&v.name))));
     }
@@ -133,9 +147,10 @@ pub(super) fn variations(out: &mut Vec<Entry>) {
 // ----------------------------------------------------------------- effects
 
 /// The registry's effects, colour then density, built-ins and downloads.
-pub(super) fn effects(out: &mut Vec<Entry>) {
+pub(super) fn effects(online: super::Online, out: &mut Vec<Entry>) {
     use crate::effects::EffectCategory;
     let catalog = prose::effect_catalog();
+    let offered: std::collections::HashMap<&str, &crate::api::types::EffectListItem> = online.effects.iter().map(|x| (x.name.as_str(), x)).collect();
     let reg = crate::effects::global_effect_registry();
     for e in reg.all() {
         if e.provenance == Provenance::Local {
@@ -148,6 +163,7 @@ pub(super) fn effects(out: &mut Vec<Entry>) {
         let group = Group { order, label: t!(key).to_string() };
         let mut entry = entry(Kind::Effect, EntryKey::Registered(Kind::Effect, e.name.clone()), &e.translated_name(), group, e.provenance.origin());
         entry.version = version_of(&e.provenance);
+        entry.update = update_of(offered.get(e.name.as_str()).copied(), &e.provenance);
         let p = if e.provenance.is_builtin() { prose::twin(Kind::Effect, &e.name) } else { None };
         out.push(with_prose(entry, p.or_else(|| catalog.get(&e.name))));
     }

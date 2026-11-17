@@ -929,11 +929,16 @@ mod tests {
     fn item(render_mode: ApiRenderMode, transform_count: i32, variations: &[&str]) -> FlameListItem {
         FlameListItem {
             id: "id".to_string(),
+            owner: None,
             name: "Reef".to_string(),
+            description: None,
+            visibility: None,
+            thumbnail_url: None,
             render_mode,
             transform_count,
             variation_names: variations.iter().map(|s| s.to_string()).collect(),
             has_3d: false,
+            favorite_count: 0,
             created_at: String::new(),
             updated_at: String::new(),
         }

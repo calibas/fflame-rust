@@ -325,10 +325,39 @@ mod wasm {
             message: error_body,
         })
     }
+
+    /// GET a binary body (a thumbnail), with the session's cookie.
+    pub async fn api_get_bytes(url: &str) -> FetchResult<Vec<u8>> {
+        let mut opts = RequestInit::new();
+        opts.method("GET");
+        opts.mode(RequestMode::Cors);
+        opts.credentials(RequestCredentials::Include);
+        let deadline = Deadline::arm(&mut opts, REQUEST_TIMEOUT_MS)?;
+        let request = Request::new_with_str_and_init(url, &opts)
+            .map_err(|e| FetchError::Network(format!("Failed to create request: {:?}", e)))?;
+        let window = web_sys::window().ok_or_else(|| FetchError::Network("No window object".to_string()))?;
+        let fetched = JsFuture::from(window.fetch_with_request(&request)).await;
+        deadline.disarm();
+        let resp: Response = fetched
+            .map_err(|e| deadline.explain(e))?
+            .dyn_into()
+            .map_err(|_| FetchError::Network("Response is not a Response object".to_string()))?;
+        match resp.status() {
+            401 => return Err(FetchError::Unauthorized),
+            403 => return Err(FetchError::Forbidden),
+            404 => return Err(FetchError::NotFound(url.to_string())),
+            s if !(200..300).contains(&s) => return Err(FetchError::Http { status: s, message: resp.status_text() }),
+            _ => {}
+        }
+        let buf = JsFuture::from(resp.array_buffer().map_err(|e| FetchError::Network(format!("Failed to read body: {e:?}")))?)
+            .await
+            .map_err(|e| FetchError::Network(format!("Failed to read body: {e:?}")))?;
+        Ok(js_sys::Uint8Array::new(&buf).to_vec())
+    }
 }
 
 #[cfg(browser)]
-pub use wasm::{api_put_binary_raw, api_request, api_request_raw};
+pub use wasm::{api_get_bytes, api_put_binary_raw, api_request, api_request_raw};
 
 // ============================================================================
 // WASI (wasm/python): no network
@@ -368,10 +397,14 @@ mod wasi {
     ) -> FetchResult<()> {
         Err(unavailable(url))
     }
+
+    pub async fn api_get_bytes(url: &str) -> FetchResult<Vec<u8>> {
+        Err(unavailable(url))
+    }
 }
 
 #[cfg(target_os = "wasi")]
-pub use wasi::{api_put_binary_raw, api_request, api_request_raw};
+pub use wasi::{api_get_bytes, api_put_binary_raw, api_request, api_request_raw};
 
 // ============================================================================
 // Desktop stub (to be implemented)
@@ -390,6 +423,37 @@ mod native {
             .timeout(std::time::Duration::from_secs(30))
             .build()
     });
+
+    /// GET a binary body (a thumbnail), with the token when there is one
+    /// (a private fractal's thumbnail is its owner's). At most 16 MiB.
+    pub async fn api_get_bytes_with(url: &str, token: Option<&str>) -> FetchResult<Vec<u8>> {
+        use std::io::Read;
+        let mut req = AGENT.get(url);
+        if let Some(token) = token {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+        match req.call() {
+            Ok(resp) => {
+                let mut out = Vec::new();
+                resp.into_reader()
+                    .take(16 << 20)
+                    .read_to_end(&mut out)
+                    .map_err(|e| FetchError::Network(format!("Failed to read response: {e}")))?;
+                Ok(out)
+            }
+            Err(ureq::Error::Status(401, _)) => Err(FetchError::Unauthorized),
+            Err(ureq::Error::Status(403, _)) => Err(FetchError::Forbidden),
+            Err(ureq::Error::Status(404, _)) => Err(FetchError::NotFound(url.to_string())),
+            Err(ureq::Error::Status(status, resp)) => {
+                Err(FetchError::Http { status, message: resp.into_string().unwrap_or_else(|_| format!("HTTP error {status}")) })
+            }
+            Err(ureq::Error::Transport(e)) => Err(FetchError::Network(format!("Network error: {e}"))),
+        }
+    }
+
+    pub async fn api_get_bytes(url: &str) -> FetchResult<Vec<u8>> {
+        api_get_bytes_with(url, None).await
+    }
 
     /// Make an authenticated API request (desktop via ureq).
     ///
@@ -509,7 +573,7 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{api_put_binary_raw, api_request, api_request_raw};
+pub use native::{api_get_bytes, api_get_bytes_with, api_put_binary_raw, api_request, api_request_raw};
 
 // ============================================================================
 // Convenience wrappers

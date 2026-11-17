@@ -327,6 +327,8 @@ pub fn row(kind: Kind, name: &str, title: &str, group: Group) -> Entry {
         link: None,
         installed: true,
         category: None,
+        update: None,
+        online: None,
     }
 }
 

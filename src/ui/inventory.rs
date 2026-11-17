@@ -784,6 +784,8 @@ mod tests {
             link: None,
             installed: true,
             category: None,
+            update: None,
+            online: None,
         };
         assert!(OriginFilter::Builtin.admits(&e) && !OriginFilter::Yours.admits(&e) && !OriginFilter::Plugins.admits(&e));
         e.origin = Origin::Local;
@@ -810,6 +812,8 @@ mod tests {
             link: None,
             installed: true,
             category: None,
+            update: None,
+            online: None,
         };
         // A flame with transforms to add to.
         let mut config = crate::scene::presets::global_preset_library().presets()[0].clone();

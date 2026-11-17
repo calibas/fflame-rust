@@ -159,6 +159,8 @@ fn a_search_reads_names_prose_and_authors() {
         link: None,
         installed: true,
         category: None,
+        update: None,
+        online: None,
     };
     for q in ["", "JULIAN", "arms", "someone", "  julian  "] {
         assert!(e.matches(q), "{q:?}");

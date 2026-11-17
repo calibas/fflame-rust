@@ -21,6 +21,7 @@
 //! models), a simulation def's description, a file's `INFO`. Nothing is
 //! attributed that its source does not say.
 
+pub mod online;
 mod prose;
 mod sources;
 
@@ -166,6 +167,9 @@ pub enum EntryKey {
     Registered(Kind, String),
     /// A file of a store, a shipped one (`shipped`) or the user's.
     File { store: Store, file: String, shipped: bool },
+    /// An item on the server, of `kind`, by its id (the Catalog's Online
+    /// place: [`online`]).
+    Online(Kind, String),
 }
 
 /// The heading an entry is listed under, and where that heading sorts.
@@ -202,6 +206,11 @@ pub struct Entry {
     /// What the server's catalog says of something not installed: an
     /// effect's stage (`color`, `density`), a variation's category.
     pub category: Option<String>,
+    /// A download the server has a newer version of (`v4`): its Update.
+    pub update: Option<String>,
+    /// An item on the server ([`online`]): who owns it, when it changed,
+    /// what the app already holds of it.
+    pub online: Option<online::OnlineInfo>,
 }
 
 /// What the server offers, as the app last cached its catalogs: the
@@ -224,7 +233,7 @@ impl Entry {
         let name = match &self.key {
             EntryKey::Registered(_, n) | EntryKey::Preset(n) => n.as_str(),
             EntryKey::File { file, .. } => file.as_str(),
-            EntryKey::Palette(_) => "",
+            EntryKey::Palette(_) | EntryKey::Online(..) => "",
         };
         self.title.to_lowercase().contains(&q)
             || name.to_lowercase().contains(&q)
@@ -241,8 +250,8 @@ pub fn scan(palettes: &crate::scene::palette::PaletteLibrary, online: Online) ->
     let mut out = Vec::new();
     sources::palettes(palettes, &mut out);
     sources::presets(&mut out);
-    sources::variations(&mut out);
-    sources::effects(&mut out);
+    sources::variations(online, &mut out);
+    sources::effects(online, &mut out);
     sources::available(online, &mut out);
     sources::escape(&mut out);
     sources::simulation(&mut out);
