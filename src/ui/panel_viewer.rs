@@ -398,9 +398,6 @@ pub struct PanelContext<'a> {
     // Sign out requested (from account panel or 401 detection)
     pub sign_out_requested: &'a mut bool,
 
-    // Cloud palette state (for Palette Library cloud section)
-    pub cloud_palette_state: &'a mut super::CloudPaletteState,
-
     // File browser open request (shared by FractalBrowser)
     pub file_browser_open_requested: &'a mut bool,
 
@@ -937,26 +934,20 @@ impl<'a> PanelViewer<'a> {
         );
     }
 
-    /// The Catalog: every resource, to browse, read about and use. With
-    /// the online account on, the palettes end with Cloud Palettes.
+    /// The Catalog: every resource, to browse, read about and use, on this
+    /// device or online.
     fn render_inventory_panel(&mut self, ui: &mut egui::Ui) {
-        let (online_account, auth_pair) = {
+        let account = {
             let settings = self.context.config_manager.system_settings();
-            let online = settings.online_account;
-            let auth = if settings.is_signed_in() {
-                let token = settings.auth_token.clone().unwrap_or_default();
-                Some((crate::api::API_BASE_URL.to_string(), token))
-            } else {
-                None
-            };
-            (online, auth)
+            // A guest (`online_account` off) is never signed in.
+            match settings.is_signed_in() {
+                true => super::inventory::CloudAccount { signed_in: true, token: settings.auth_token.clone() },
+                false => super::inventory::CloudAccount::default(),
+            }
         };
-        let auth = auth_pair.as_ref().map(|(b, t)| (b.as_str(), t.as_str()));
-        let account = super::inventory::CloudAccount { signed_in: auth_pair.is_some(), token: auth_pair.as_ref().map(|(_, t)| t.clone()) };
         let mut cx = super::inventory::InventoryContext {
             config_manager: self.context.config_manager,
             palette_library: self.context.palette_library,
-            cloud_palettes: online_account.then_some(super::inventory::CloudPalettes { state: self.context.cloud_palette_state, auth }),
             account,
             script_cloud_busy: self.context.script_cloud.busy,
             script_cloud_status: self.context.script_cloud.status.as_deref(),

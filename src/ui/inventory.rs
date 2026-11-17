@@ -210,21 +210,12 @@ pub struct InventoryContext<'a> {
     pub config_manager: &'a mut ConfigManager,
     /// The palette library the app shows: its packs, as enabled and loaded.
     pub palette_library: &'a mut PaletteLibrary,
-    /// With the online account on: the user's cloud palettes, after the
-    /// packs (the Palette Library's Cloud Palettes).
-    pub cloud_palettes: Option<CloudPalettes<'a>>,
     /// The online account, for the Online place's requests.
     pub account: CloudAccount,
     /// The script cloud is busy (opening a script waits for it), and its
     /// last word.
     pub script_cloud_busy: bool,
     pub script_cloud_status: Option<&'a str>,
-}
-
-/// The cloud palettes' state, and the credentials when signed in.
-pub struct CloudPalettes<'a> {
-    pub state: &'a mut super::CloudPaletteState,
-    pub auth: Option<(&'a str, &'a str)>,
 }
 
 pub struct InventoryPanel {
@@ -575,9 +566,16 @@ impl InventoryPanel {
             ui.label(t!("palette_library.no_packs"));
             ui.label(t!("palette_library.no_packs_hint"));
         }
-        if let Some(cloud) = cx.cloud_palettes.as_mut() {
+        if cx.account.signed_in {
+            // Cloud Palettes became the Online place's own palettes.
             ui.separator();
-            super::palette_library::render_cloud_palettes_section(ui, cloud.state, cx.config_manager, cloud.auth);
+            ui.horizontal_wrapped(|ui| {
+                ui.weak(t!("catalog.your_online_palettes"));
+                if ui.button(t!("catalog.show_mine")).clicked() {
+                    self.place = Place::Online;
+                    self.online.scope = crate::api::Scope::Mine;
+                }
+            });
         }
         if let Some((hash, palette)) = clicked {
             self.selected = Some(EntryKey::Palette(hash));

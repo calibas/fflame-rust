@@ -782,36 +782,6 @@ impl ApiNotification {
     const FADE_START_SECS: f32 = 3.0;
 }
 
-/// State for cloud palette browsing in Palette Library (the caller's
-/// bookmarked entries from `/api/users/me/palettes`).
-pub struct CloudPaletteState {
-    pub palettes: Vec<crate::api::types::PaletteItem>,
-    pub fetched: bool,
-    pub loading: bool,
-    pub error: Option<String>,
-    pub list_result: std::sync::Arc<std::sync::Mutex<Option<Result<Vec<crate::api::types::PaletteItem>, String>>>>,
-    pub deleting: bool,
-    /// On success, carries the content hash of the removed entry.
-    pub delete_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
-    /// Notification from palette operations (message, is_error)
-    pub notification: Option<(String, bool)>,
-}
-
-impl Default for CloudPaletteState {
-    fn default() -> Self {
-        Self {
-            palettes: Vec::new(),
-            fetched: false,
-            loading: false,
-            error: None,
-            list_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            deleting: false,
-            delete_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            notification: None,
-        }
-    }
-}
-
 use egui_wgpu::wgpu::*;
 use egui_wgpu::{Renderer as EguiRenderer, RendererOptions};
 use egui_winit::State as EguiWinitState;
@@ -977,7 +947,6 @@ pub struct EguiLayer {
     login_dialog_state: login_dialog::LoginDialogState,
 
     // Cloud palette state (for Palette Library panel)
-    cloud_palette_state: CloudPaletteState,
 
     // API connectivity state (set by App each frame before render_ui)
     pub(crate) api_connectivity: crate::api::ApiConnectivity,
@@ -1149,7 +1118,6 @@ impl EguiLayer {
             save_online_dialog_state: save_online_dialog::SaveOnlineDialogState::default(),
             api_browser_notification: None,
             login_dialog_state: login_dialog::LoginDialogState::default(),
-            cloud_palette_state: CloudPaletteState::default(),
             api_connectivity: crate::api::ApiConnectivity::Unknown,
             density_histogram: crate::renderer::DensityHistogram::default(),
             deep_zoom: DeepZoom::default(),
@@ -1259,7 +1227,7 @@ impl EguiLayer {
 
     /// Clear cloud-related state (called on sign-out or session expiry)
     pub fn clear_cloud_state(&mut self) {
-        self.cloud_palette_state = CloudPaletteState::default();
+        self.inventory_panel.signed_out();
         if let Some(ref mut panel) = self.fractal_browser_panel {
             panel.clear_online_data();
         }
@@ -1952,7 +1920,6 @@ impl EguiLayer {
                         sign_out_requested: &mut sign_out_requested,
 
                         // Cloud palette state
-                        cloud_palette_state: &mut self.cloud_palette_state,
 
                         // File browser open request (shared by FractalBrowser)
                         file_browser_open_requested: &mut file_browser_open_requested,
@@ -2553,8 +2520,6 @@ impl EguiLayer {
                 });
             }
 
-            // Clear cloud palette state
-            self.cloud_palette_state = CloudPaletteState::default();
             // The Catalog's own online lists
             self.inventory_panel.signed_out();
 
