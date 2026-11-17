@@ -565,15 +565,13 @@ impl InventoryPanel {
                                 let e = &self.entries[i];
                                 let selected = self.selected.as_ref() == Some(&e.key);
                                 // Only a cell on screen asks for its picture.
-                                let size = egui::vec2(super::inventory_online::CELL, super::inventory_online::CELL + 18.0);
-                                let visible = ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, size));
-                                let shown = if visible { self.previews.want(e, ui.ctx(), &palettes) } else { super::inventory_preview::Shown::Pending };
-                                let (texture, has) = match &shown {
+                                let previews = &mut self.previews;
+                                let ctx = ui.ctx().clone();
+                                let r = super::inventory_online::grid_cell_lazy(ui, e, selected, || match previews.want(e, &ctx, &palettes) {
                                     super::inventory_preview::Shown::Ready(t) => (t.last().cloned(), true),
                                     super::inventory_preview::Shown::Pending => (None, true),
                                     super::inventory_preview::Shown::None => (None, false),
-                                };
-                                let r = super::inventory_online::grid_cell(ui, e, texture.as_ref(), selected, has);
+                                });
                                 if r.clicked() {
                                     clicked = Some(e.key.clone());
                                 }
@@ -1090,7 +1088,13 @@ fn apply(e: &Entry, ctx: &egui::Context, cx: &mut InventoryContext, out: &mut In
 /// `ui::picker`).
 pub(crate) fn use_entry(e: &Entry, ctx: &egui::Context, cm: &mut ConfigManager) {
     let plugin = if e.plugin { plugin_of(e) } else { None };
-    let name = applied_name(e).unwrap_or_default();
+    use_entry_with(e, plugin, ctx, cm);
+}
+
+/// [`use_entry`] with the entry's plug-in record given (a preview's, of a
+/// file that is not a plug-in): it applies by the record's key.
+pub(crate) fn use_entry_with(e: &Entry, plugin: Option<crate::storage::library::Plugin>, ctx: &egui::Context, cm: &mut ConfigManager) {
+    let name = plugin.as_ref().map(|p| p.key.clone()).or_else(|| applied_name(e)).unwrap_or_default();
     match (&e.key, e.kind) {
         (_, Kind::Variation) => {
             let flame = cm.active_config().flame.clone();
@@ -1340,8 +1344,9 @@ mod phone_tests {
             drawn = placed(&out.shapes);
         }
         assert!(drawn.iter().any(|(t, _)| t == "Linear"), "a cell names its entry");
-        let waiting = panel.previews.waiting();
+        // Asked for (made, cached or waiting): the cells on screen alone.
+        let asked = panel.previews.asked();
         let variations = panel.entries.iter().filter(|e| e.kind == Kind::Variation).count();
-        assert!(waiting > 0 && waiting < variations / 4, "the cells on screen ask, not all {variations}: {waiting}");
+        assert!(asked > 0 && asked < variations / 4, "the cells on screen ask, not all {variations}: {asked}");
     }
 }

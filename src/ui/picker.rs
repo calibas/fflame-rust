@@ -349,6 +349,9 @@ pub fn own_variations(flame: &crate::scene::transforms::Flame) -> Vec<Entry> {
         .all()
         .into_iter()
         .filter(|v| v.provenance == crate::provenance::Provenance::Local && !plugin_keys.contains(&v.name) && !superseded.contains(&v.name))
+        // Registered only to draw a Catalog preview, unless the fractal
+        // carries it.
+        .filter(|v| !super::inventory_preview::preview_only(&v.name) || flame.custom_variations.iter().any(|c| c.entry == v.name))
         .map(|v| row(Kind::Variation, &v.name, &v.display_name, group.clone()))
         .collect()
 }

@@ -25,6 +25,40 @@
 use crate::config::{ConfigManager, FractalConfig};
 use crate::inventory::{Entry, EntryKey, Family, Kind};
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
+
+/// The registry names registered only to draw a preview (a file of the
+/// user's or an example, not a plug-in): the pickers do not offer them.
+static PREVIEW_ONLY: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Whether `key` was registered only for a preview.
+pub fn preview_only(key: &str) -> bool {
+    PREVIEW_ONLY.lock().is_ok_and(|k| k.iter().any(|x| x == key))
+}
+
+/// The plug-in record an entry applies by: a plug-in's own; for a Rhai
+/// file of a kind that can be one -- an example, a file of the user's --
+/// what registering it makes, not listed (`library::prepare_plugin`).
+fn plugin_for(e: &Entry) -> Option<crate::storage::library::Plugin> {
+    if e.plugin {
+        return super::inventory::plugin_of(e);
+    }
+    let EntryKey::File { store: crate::storage::library::Store::Formulas, file, shipped } = &e.key else { return None };
+    if !crate::storage::formula_store::is_rhai(file) {
+        return None;
+    }
+    let text = match shipped {
+        true => crate::storage::formula_store::EXAMPLES.iter().find(|(n, _)| n == file).map(|(_, s)| s.to_string()),
+        false => crate::storage::manage::load(crate::storage::library::Store::Formulas, file),
+    }?;
+    let plugin = crate::storage::library::prepare_plugin(file, &text).ok()?;
+    if let Ok(mut keys) = PREVIEW_ONLY.lock() {
+        if !keys.contains(&plugin.key) {
+            keys.push(plugin.key.clone());
+        }
+    }
+    Some(plugin)
+}
 
 /// What a preview renders, and the key its pictures are kept under.
 #[derive(Clone)]
@@ -40,6 +74,10 @@ const SIM_STEPS: u32 = 400;
 /// square it starts from fills half of it and most variations land within
 /// it (the far-flung ones show their core).
 const VARIATION_ZOOM: f32 = 0.9;
+/// A colouring variation's zoom, closer: what it draws is often a unit
+/// square of its own (the GLSL generators), whose pattern the wider frame
+/// averages away.
+const COLOUR_ZOOM: f32 = 1.8;
 
 /// The families whose entries have previews (the grid's toggle).
 pub fn has_previews(family: Family) -> bool {
@@ -62,6 +100,12 @@ fn reference() -> FractalConfig {
 /// square evenly; the variation alone as the final transform.
 fn plane(name: &str, three_d: bool, ctx: &egui::Context) -> Option<FractalConfig> {
     use crate::scene::transforms::{RenderMode, Transform};
+    use crate::variations::{definition::Feature, VariationPhase};
+    let (pre_post, colours) = {
+        let reg = crate::variations::global_registry();
+        let v = reg.get(name)?;
+        (matches!(v.phase, VariationPhase::Pre | VariationPhase::Post), v.has_feature(Feature::WritesColor) || v.has_feature(Feature::WritesRgb))
+    };
     let mut config = FractalConfig::default();
     config.render_mode = if three_d { RenderMode::ThreeD } else { RenderMode::TwoD };
     config.flame.transforms.clear();
@@ -76,17 +120,43 @@ fn plane(name: &str, three_d: bool, ctx: &egui::Context) -> Option<FractalConfig
         t.weight = 1.0;
         t.color = i as f32 / 3.0;
         t.color_speed = 0.0;
-        t.set_variation("linear", 1.0);
-        // The final applies to the transforms that attach it.
-        t.final_attachments = vec![0];
+        if !colours {
+            t.set_variation("linear", 1.0);
+            // The final applies to the transforms that attach it.
+            t.final_attachments = vec![0];
+        }
         config.flame.transforms.push(t);
     }
-    config.flame.final_transforms = vec![Transform::new()];
+    if !colours {
+        let mut fin = Transform::new();
+        // A pre or post variation moves the point around the normal ones:
+        // alone, nothing would carry it through.
+        if pre_post {
+            fin.set_variation("linear", 1.0);
+        }
+        config.flame.final_transforms = vec![fin];
+    }
     config.zoom = VARIATION_ZOOM;
     config.palette = plane_palette();
+    if colours {
+        // A variation's own colours, dense on its square: their hue kept
+        // where they are bright, not clipped to white.
+        config.highlight_mode = crate::scene::tonemap::HighlightMode::MaxNorm;
+        config.zoom = COLOUR_ZOOM;
+    }
     let _ = ctx;
     let mut cm = ConfigManager::new(config);
-    super::transforms::add_variation(&mut cm, crate::config::TransformRef::Final(0), name).ok()?;
+    if colours {
+        // A final's colour writes are discarded (colour is settled before
+        // the final chain), so a variation that colours -- direct colour,
+        // the GLSL generators -- runs in the quarters themselves: the
+        // square, filled and coloured by it.
+        for i in 0..4 {
+            super::transforms::add_variation(&mut cm, crate::config::TransformRef::Normal(i), name).ok()?;
+        }
+    } else {
+        super::transforms::add_variation(&mut cm, crate::config::TransformRef::Final(0), name).ok()?;
+    }
     Some(cm.active_config().clone())
 }
 
@@ -108,23 +178,61 @@ fn plane_palette() -> crate::scene::palette::Palette {
 /// The config that shows `e`, through what Use does; `None` for a kind
 /// with no picture of its own.
 fn configs(e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Palette]) -> Option<Vec<FractalConfig>> {
-    let usable = e.installed && (matches!(e.key, EntryKey::Registered(..)) || e.plugin);
+    let gpu = matches!(e.kind, Kind::Variation | Kind::Effect | Kind::Formula | Kind::Coloring | Kind::Field | Kind::FieldColoring | Kind::Solid | Kind::SolidColoring | Kind::SimModel | Kind::SimColoring);
+    let plugin = if gpu { plugin_for(e) } else { None };
+    let usable = e.installed && (matches!(e.key, EntryKey::Registered(..)) || plugin.is_some());
     match e.kind {
         Kind::Variation if usable => {
-            let name = super::inventory::applied_name(e)?;
+            let name = plugin.as_ref().map(|p| p.key.clone()).or_else(|| super::inventory::applied_name(e))?;
             let three_d = crate::variations::global_registry().get(&name).is_some_and(|v| v.category == crate::variations::VariationCategory::Only3D);
             Some(vec![plane(&name, three_d, ctx)?])
         }
         Kind::Effect if usable => {
             let before = reference();
             let mut cm = ConfigManager::new(before.clone());
-            super::inventory::use_entry(e, ctx, &mut cm);
+            super::inventory::use_entry_with(e, plugin, ctx, &mut cm);
             let after = cm.active_config().clone();
             (after.color_effects.len() != before.color_effects.len() || after.density_effects.len() != before.density_effects.len()).then(|| vec![before, after])
         }
         Kind::Formula | Kind::Coloring | Kind::Field | Kind::FieldColoring | Kind::Solid | Kind::SolidColoring | Kind::SimModel | Kind::SimColoring if usable => {
             let mut cm = ConfigManager::new(FractalConfig::default());
-            super::inventory::use_entry(e, ctx, &mut cm);
+            // A colouring draws something: the default formula, field or
+            // solid first (a built-in's pick does this itself; a file's
+            // plug-in path takes what the config has).
+            match e.kind {
+                Kind::Coloring => {
+                    if let Some(f) = crate::escape::FORMULAS.first() {
+                        super::escape_panel::choose_formula(&mut cm, f);
+                    }
+                    // The colouring's own defaults: the formula's preset
+                    // tuned its colouring's parameters (`scale` 0.03 for
+                    // the Mandelbrot's), which another colouring with a
+                    // parameter of that name would read.
+                    let mut config = cm.active_config().clone();
+                    config.escape.coloring_params.clear();
+                    cm = ConfigManager::new(config);
+                }
+                Kind::FieldColoring => {
+                    if let Some(f) = crate::escape::fields::FIELDS.first() {
+                        super::escape_panel::choose_field(&mut cm, f);
+                    }
+                }
+                Kind::SolidColoring => {
+                    // A solid it draws -- not the flame attractor, which a
+                    // default config has no flame for.
+                    let name = super::inventory::applied_name(e).unwrap_or_default();
+                    let coloring = crate::escape::ifs::IFS_COLORINGS.iter().find(|c| c.name == name);
+                    let solid = crate::escape::ifs::IFS_DEFS
+                        .iter()
+                        .filter(|d| !d.name.starts_with("ifs_flame"))
+                        .find(|d| coloring.is_none_or(|c| crate::escape::ifs::coloring_applies(d, c)));
+                    if let Some(d) = solid {
+                        super::escape_panel::choose_solid(&mut cm, d);
+                    }
+                }
+                _ => {}
+            }
+            super::inventory::use_entry_with(e, plugin, ctx, &mut cm);
             let mut config = cm.active_config().clone();
             if config.render_mode == crate::scene::transforms::RenderMode::Simulation {
                 config.sim.steps = config.sim.steps.min(SIM_STEPS);
@@ -195,6 +303,8 @@ pub struct Previews {
     /// Asked for this frame and not made: rendered first-asked first.
     wanted: Vec<Preview>,
     failed: HashSet<String>,
+    /// How many previews were asked for this frame (made or not).
+    asked: usize,
     #[cfg(target_arch = "wasm32")]
     in_flight: Option<String>,
     #[cfg(target_arch = "wasm32")]
@@ -217,6 +327,7 @@ impl Previews {
     /// is still on screen.
     pub fn begin_frame(&mut self, ctx: &egui::Context) {
         self.wanted.clear();
+        self.asked = 0;
         #[cfg(target_arch = "wasm32")]
         {
             let landed: Vec<_> = self.landed.borrow_mut().drain(..).collect();
@@ -231,13 +342,15 @@ impl Previews {
         let _ = ctx;
     }
 
-    /// How many previews were asked for this frame and are not made.
-    pub fn waiting(&self) -> usize {
-        self.wanted.len()
+    /// How many previews were asked for this frame, made or not.
+    #[cfg(test)]
+    pub fn asked(&self) -> usize {
+        self.asked
     }
 
     /// The preview of `e` as it stands, asking for it when it is not made.
     pub fn want(&mut self, e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Palette]) -> Shown {
+        self.asked += 1;
         let id = (e.key.clone(), e.version.clone());
         if !self.built.contains_key(&id) {
             let p = preview(e, ctx, palettes);
@@ -392,6 +505,7 @@ mod inspection {
     #[ignore = "inspection; needs a GPU"]
     fn render_previews_for_inspection() {
         let (device, queue) = crate::escape::terrain::gpu_tests::device().expect("gpu");
+        device.on_uncaptured_error(std::sync::Arc::new(|e| println!("wgpu error: {e}")));
         let ctx = egui::Context::default();
         let library = crate::scene::palette::global_palette_library().read().unwrap().clone();
         let entries = crate::inventory::scan(&library, crate::inventory::Online::default());
@@ -409,6 +523,8 @@ mod inspection {
             "solid" => Some(Kind::Solid),
             "sim_model" => Some(Kind::SimModel),
             "sim_coloring" => Some(Kind::SimColoring),
+            "field_coloring" => Some(Kind::FieldColoring),
+            "solid_coloring" => Some(Kind::SolidColoring),
             "generator" => Some(Kind::Generator),
             "modifier" => Some(Kind::Modifier),
             _ => None,
@@ -432,6 +548,7 @@ mod inspection {
                 let img = crate::renderer::render_preview(&device, &queue, c);
                 println!("{item}[{i}] in {} ms", t.elapsed().as_millis());
                 img.save(dir.join(format!("{k}-{name}-{i}.png"))).unwrap();
+                std::fs::write(dir.join(format!("{k}-{name}-{i}.fflame")), c.to_json().unwrap_or_default()).unwrap();
                 sheet.push(img);
             }
         }

@@ -741,8 +741,19 @@ fn palette_row(ui: &mut egui::Ui, e: &Entry, p: &crate::api::types::PaletteItem,
 /// A fractal's cell: its thumbnail (a placeholder until it is in) and its
 /// name under it.
 pub(super) fn grid_cell(ui: &mut egui::Ui, e: &Entry, texture: Option<&egui::TextureHandle>, selected: bool, has_thumb: bool) -> egui::Response {
+    grid_cell_lazy(ui, e, selected, || (texture.cloned(), has_thumb))
+}
+
+/// A cell whose picture is asked for only once it is laid out and on
+/// screen (`picture` gives the texture, if it is in, and whether one is
+/// coming): its own rect decides, not a guess from the cursor -- in a
+/// wrapped row the cursor is not where the cell lands, and a cell
+/// scrolled half out of view was taken for one off screen.
+pub(super) fn grid_cell_lazy(ui: &mut egui::Ui, e: &Entry, selected: bool, picture: impl FnOnce() -> (Option<egui::TextureHandle>, bool)) -> egui::Response {
     let (rect, r) = ui.allocate_exact_size(egui::vec2(CELL, CELL + 18.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
+        let (texture, has_thumb) = picture();
+        let texture = texture.as_ref();
         let visuals = ui.visuals();
         let img = egui::Rect::from_min_size(rect.min, egui::vec2(CELL, CELL));
         match texture {
