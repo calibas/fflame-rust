@@ -491,7 +491,7 @@ it from the API, caches it, and registers it (`Provenance::Api`).
 `storage::load_installed_resources` loads the cache at startup. (Local
 WGSL plug-in files under `plugins/variations/` were retired 2026-11-01 ([rhai-plugins.md](../archive/projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them.)
 
-**Rhai plug-ins** ([rhai-plugins.md](../archive/projects/rhai-plugins.md), P3): a Rhai variation, effect, formula, colouring, solid or simulation colouring in the user's formulas with **Load at start** set in the Formula Editor (`formulas/_links.json`, `storage::links::Link::plugin`) is registered at every start, after the downloads (`storage::library::load_plugins`, from `load_installed_resources`: desktop, web and headless), under its key in the user's namespace (`Provenance::Local`). It is then in the lists without a config carrying it -- the variation pickers, the Effects panel's Add lists and the escape panel's formula and colouring pickers, each under "Your plug-ins" -- and choosing it carries its source into the config, as Use does. Saving the file registers the new version; turning it off unlists it; deleting it forgets the flag. One that does not register is named at start (a notice; stderr headless: `storage::library::plugin_failures`).
+**Rhai plug-ins** ([rhai-plugins.md](../archive/projects/rhai-plugins.md), P3): a Rhai variation, effect, formula, colouring, solid or simulation colouring in the user's formulas with **Load at start** set in the Catalog's info pane ([CATALOG.md](CATALOG.md); `formulas/_links.json`, `storage::links::Link::plugin`) is registered at every start, after the downloads (`storage::library::load_plugins`, from `load_installed_resources`: desktop, web and headless), under its key in the user's namespace (`Provenance::Local`). It is then in the lists without a config carrying it -- the variation pickers, the Effects panel's Add lists and the escape panel's formula and colouring pickers, each under "Your plug-ins" -- and choosing it carries its source into the config, as Use does. Saving the file registers the new version; turning it off unlists it; deleting it forgets the flag. One that does not register is named at start (a notice; stderr headless: `storage::library::plugin_failures`).
 
 The registry's rules:
 - A built-in can never be replaced.
@@ -504,7 +504,7 @@ The registry's rules:
 ### Variations written in Rhai
 
 A **custom variation** (`Provenance::Local`, `variations::custom`) is
-a Rhai transformation from the Formula Editor -- `fn variation(z, p)`,
+a Rhai transformation from the Rhai Editor -- `fn variation(z, p)`,
 a point to a point ([ESCAPE.md](ESCAPE.md#the-formula-language)) --
 compiled to the same `VariationDownload` a download is: its parameters
 (a complex one as two, `name_re` and `name_im`), category `plugin`,
@@ -545,7 +545,7 @@ function takes the point, and the ids when it has parameters (as
   `vary("name", z)` calls it by. Configs from before (v6) carried it
   under its name; the v7 migration renames it to its key wherever the
   config names it (`migrate_custom_variation_keys`).
-- **Use** (the Formula Editor) writes a UUID into a source that has
+- **Use** (the Rhai Editor) writes a UUID into a source that has
   neither an id nor a name, or a hand-written id (`custom::needs_id`).
   Using a new version moves the config to it in one undo step
   (`custom::rekey`: every transform's weight, parameters, order and
@@ -802,8 +802,8 @@ function takes the point, and the ids when it has parameters (as
   - **Edit as Rhai**: a built-in variation with a twin has it in its
     row's settings menu, putting the twin under a UUID of its own in the
     built-in's place in that transform (weight, parameters, order,
-    phase), the flame carrying its source, and opening it in the Formula
-    Editor in use (`formula_editor::variation_as_twin`).
+    phase), the flame carrying its source, and opening it in the Rhai
+    Editor in use (`rhai_editor::variation_as_twin`).
   - **Without a twin** (7; `translate_variation_twins.py --report`
     names each one's reason): the analytic blurs (`analytic_blur`,
     `analytic_gaussian_blur`) and the subflames (`subflame_wf`,
@@ -861,7 +861,7 @@ function takes the point, and the ids when it has parameters (as
     summary, Undo History, animation targets and the track editor, the
     Reset Orbits tooltip, the Variations panel, the Random Generator (one
     version of each), the gallery, the browser (a key it does not know
-    as "a Rhai variation"), the Formula Editor's status, and the Flame
+    as "a Rhai variation"), the Rhai Editor's status, and the Flame
     Attractor's and Focused Rendering's refusals
     (`Disqualification::describe`, `NoBall::describe`: transforms from
     1, "has no inverse", and for a Rhai variation "bounds are worked out

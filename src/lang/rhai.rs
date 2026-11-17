@@ -5963,3 +5963,54 @@ fn escaped(s, p) { false }";
         assert!(msgs.iter().all(|m| !m.contains("l1_") && !m.contains("l2_")), "{msgs:?}");
     }
 }
+
+/// What New starts from in a flame mode: a variation, a point to a point
+/// (the KIFS plan, C1).
+pub const NEW_VARIATION: &str = "\
+// A new variation. `variation` takes a point `z` and the parameters `p`
+// and gives the point it maps to; the transform's weight scales it.
+// `INFO.name` is its name in the variation list.
+//
+// Also at hand: `rand()`, a draw in [0, 1); a third argument `ctx` with
+// `ctx.accum` (the transform's earlier variations, summed) and
+// `ctx.weight`; `fn init(p)` returning a state each thread keeps, read
+// and set as `this.name`; and ending with `#{ z: point, color: index }`
+// to colour the point.
+
+const PARAMS = #{
+    twist: #{ value: 1.0, min: -4.0, max: 4.0, caption: \"Twist\" },
+};
+
+const INFO = #{ title: \"My Variation\", name: \"my_variation\" };
+
+fn variation(z, p) {
+    let r2 = z.norm_sqr();
+    let a = r2 * p.twist;
+    complex(z.re * cos(a) - z.im * sin(a), z.re * sin(a) + z.im * cos(a))
+}
+";
+
+/// What New starts a formula from: a formula in Rhai, the language's own.
+pub const NEW_FORMULA: &str = "\
+// A new formula. `start` gives each pixel its state, `step` moves it
+// one pass on, `escaped` says when it has left.
+
+const PARAMS = #{
+    bailout: #{ value: 10000.0, min: 1.0, caption: \"Bailout\" },
+};
+
+const INFO = #{ title: \"My Formula\" };
+
+fn start(pixel, p) {
+    #{ z: complex(0.0, 0.0), c: pixel }
+}
+
+fn step(s, p) {
+    s.z = s.z.sqr() + s.c;
+    s
+}
+
+fn escaped(s, p) {
+    s.z.norm_sqr() > p.bailout
+}
+";

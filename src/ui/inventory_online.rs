@@ -135,6 +135,11 @@ pub struct OnlinePlace {
     thumbs: Thumbnails,
     flame_job: Option<(String, Job<crate::api::FlameLoadResult>)>,
     delete_job: Option<(ListKey, String, String, Job<()>)>,
+    /// A rename or a visibility of yours on its way: the list, the id,
+    /// what it changes.
+    patch_job: Option<(ListKey, String, crate::api::types::ItemPatch, Job<serde_json::Value>)>,
+    /// A rename of yours being typed: the id, the name.
+    renaming: Option<(String, String)>,
     /// Asked to delete, awaiting the confirmation: the list, id, name.
     confirm_delete: Option<(ListKey, String, String)>,
     status: Option<(String, bool)>,
@@ -160,6 +165,8 @@ impl OnlinePlace {
             thumbs: Thumbnails::default(),
             flame_job: None,
             delete_job: None,
+            patch_job: None,
+            renaming: None,
             confirm_delete: None,
             status: None,
         }
@@ -246,6 +253,34 @@ impl OnlinePlace {
                     Err(e) => self.status = Some((t!("catalog.load_failed", error = e.to_string()).to_string(), true)),
                 }
                 self.flame_job = None;
+            }
+        }
+        if let Some((key, id, patch, job)) = &self.patch_job {
+            if let Some(result) = job.take() {
+                match result {
+                    Ok(_) => {
+                        // The row says it at once; the server's list says
+                        // it on the next Refresh.
+                        if let Some(list) = self.lists.get_mut(key) {
+                            for (e, item) in list.rows.iter_mut().filter(|(_, i)| i.id() == id) {
+                                if let Some(name) = &patch.name {
+                                    e.title = name.clone();
+                                    match item {
+                                        Item::Flame(f) => f.name = name.clone(),
+                                        Item::Palette(p) => p.name = name.clone(),
+                                        Item::Script(s) => s.display_name = name.clone(),
+                                    }
+                                }
+                                if let (Some(v), Some(info)) = (&patch.visibility, e.online.as_mut()) {
+                                    info.visibility = serde_json::to_value(v).ok().and_then(|v| v.as_str().map(str::to_string));
+                                }
+                            }
+                        }
+                        self.status = Some((t!("catalog.changed").to_string(), false));
+                    }
+                    Err(e) => self.status = Some((t!("catalog.change_failed", error = e.to_string()).to_string(), true)),
+                }
+                self.patch_job = None;
             }
         }
         if let Some((key, id, name, job)) = &self.delete_job {
@@ -557,7 +592,7 @@ impl OnlinePlace {
                     }
                 }
                 None => {
-                    let busy = cx.script_cloud_busy;
+                    let busy = cx.script_cloud.busy;
                     if ui.add_enabled(!busy, egui::Button::new(t!("catalog.open_script"))).on_hover_text(t!("catalog.open_script_tip")).clicked() {
                         out.script_cloud_request = Some(crate::app::script_cloud::ScriptCloudRequest::Adopt { id: info.id.clone() });
                     }
@@ -570,16 +605,58 @@ impl OnlinePlace {
         if matches!(item, Item::Script(_)) && info.held.is_none() {
             ui.weak(t!("catalog.open_script_tip"));
         }
-        if let Some(status) = cx.script_cloud_status.filter(|_| matches!(item, Item::Script(_))) {
+        if let Some(status) = cx.script_cloud.status.as_deref().filter(|_| matches!(item, Item::Script(_))) {
             ui.weak(status);
         }
         if mine && matches!(item, Item::Flame(_) | Item::Palette(_)) {
             ui.separator();
-            let deleting = self.delete_job.as_ref().is_some_and(|(_, id, _, _)| *id == info.id);
-            if ui.add_enabled(!deleting, egui::Button::new(t!("catalog.delete"))).clicked() {
-                if let Some(k) = list_key {
-                    self.confirm_delete = Some((k, info.id.clone(), e.title.clone()));
+            let resource = if matches!(item, Item::Flame(_)) { "flames" } else { "palettes" };
+            let busy = self.patch_job.is_some() || self.delete_job.as_ref().is_some_and(|(_, id, _, _)| *id == info.id);
+            let mut patch: Option<crate::api::types::ItemPatch> = None;
+            ui.horizontal_wrapped(|ui| {
+                if let Some((id, name)) = self.renaming.as_mut().filter(|(id, _)| *id == info.id) {
+                    let _ = id;
+                    let r = ui.add(egui::TextEdit::singleline(name).desired_width(160.0));
+                    super::vkb_sync(ui, &r, name);
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if ui.button(t!("manage.rename")).clicked() || enter {
+                        let name = name.trim().to_string();
+                        if !name.is_empty() {
+                            patch = Some(crate::api::types::ItemPatch { name: Some(name), visibility: None });
+                        }
+                        self.renaming = None;
+                    } else if ui.button(t!("manage.cancel")).clicked() {
+                        self.renaming = None;
+                    }
+                    return;
                 }
+                if ui.add_enabled(!busy, egui::Button::new(t!("manage.rename_dots"))).clicked() {
+                    self.renaming = Some((info.id.clone(), e.title.clone()));
+                }
+                let public = info.visibility.as_deref() == Some("public");
+                let (label, to) = if public {
+                    (t!("manage.make_private"), crate::api::types::ApiVisibility::Private)
+                } else {
+                    (t!("manage.make_public"), crate::api::types::ApiVisibility::Public)
+                };
+                if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
+                    patch = Some(crate::api::types::ItemPatch { name: None, visibility: Some(to) });
+                }
+                if ui.add_enabled(!busy, egui::Button::new(t!("catalog.delete"))).clicked() {
+                    if let Some(k) = list_key.clone() {
+                        self.confirm_delete = Some((k, info.id.clone(), e.title.clone()));
+                    }
+                }
+                if busy {
+                    ui.spinner();
+                }
+            });
+            if let (Some(patch), Some(key)) = (patch, list_key) {
+                let api = cx.account.api();
+                let (id, body) = (info.id.clone(), patch.clone());
+                let wake = ui.ctx().clone();
+                let job = job::spawn(async move { api.patch_item(resource, &id, &body).await }, move || wake.request_repaint()).authed(cx.account.signed_in);
+                self.patch_job = Some((key, info.id.clone(), patch, job));
             }
         }
         action
@@ -690,7 +767,8 @@ enum Thumb {
 
 /// The server's thumbnails, by URL (it changes when the image does, so a
 /// URL's image never goes stale): downloaded a few at a time, decoded off
-/// the frame, and on desktop kept on disk.
+/// the frame, and kept in the shared thumbnail cache (on disk on desktop,
+/// within its limit).
 #[derive(Default)]
 struct Thumbnails {
     map: HashMap<String, Thumb>,
@@ -725,15 +803,21 @@ impl Thumbnails {
         let wake = ctx.clone();
         let job = job::spawn(
             async move {
-                let bytes = match disk::read(&u) {
-                    Some(b) => b,
+                // The app's one thumbnail cache (its size limit, its
+                // eviction), keyed by the URL's hash.
+                let key = cache_key(&u);
+                let cached = crate::storage::thumbnail_cache::shared_thumbnail_cache().load(&key);
+                let image = match cached {
+                    Some(image) => image,
                     None => {
-                        let b = api.fetch_thumbnail(&u).await?;
-                        disk::write(&u, &b);
-                        b
+                        let bytes = api.fetch_thumbnail(&u).await?;
+                        let image = image::load_from_memory(&bytes).map_err(|e| crate::resources::FetchError::Parse(e.to_string()))?.to_rgba8();
+                        if let Err(e) = crate::storage::thumbnail_cache::shared_thumbnail_cache().save(&key, &image) {
+                            log::info!("thumbnail {u} not cached: {e}");
+                        }
+                        image
                     }
                 };
-                let image = image::load_from_memory(&bytes).map_err(|e| crate::resources::FetchError::Parse(e.to_string()))?.to_rgba8();
                 Ok(egui::ColorImage::from_rgba_unmultiplied([image.width() as usize, image.height() as usize], image.as_raw()))
             },
             move || wake.request_repaint(),
@@ -743,40 +827,16 @@ impl Thumbnails {
     }
 }
 
-/// The desktop's disk cache of the server's thumbnails, a file a URL; the
-/// web keeps them in memory only.
-mod disk {
-    #[cfg(not(target_arch = "wasm32"))]
-    fn path(url: &str) -> std::path::PathBuf {
-        let mut h: u64 = 0xcbf29ce484222325;
-        for b in url.bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        crate::storage::thumbnail_cache::cache_dir().join("online").join(format!("{h:016x}.jpg"))
+/// A thumbnail URL's key in the shared thumbnail cache: 16 hex digits,
+/// the cache's own form (FNV-1a, as a config's key is; a URL and a config
+/// do not meet in a 64-bit space).
+fn cache_key(url: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in url.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
     }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn read(url: &str) -> Option<Vec<u8>> {
-        std::fs::read(path(url)).ok()
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn write(url: &str, bytes: &[u8]) {
-        let p = path(url);
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(p, bytes);
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn read(_url: &str) -> Option<Vec<u8>> {
-        None
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn write(_url: &str, _bytes: &[u8]) {}
+    format!("{h:016x}")
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

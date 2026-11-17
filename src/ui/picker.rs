@@ -364,7 +364,8 @@ mod tests {
     /// deliver.
     #[test]
     fn the_picker_stays_open_while_it_is_used() {
-        let src = include_str!("picker.rs");
+        // Whatever line ends the checkout gave it.
+        let src = include_str!("picker.rs").replace("\r\n", "\n");
         let start = src.find("pub fn popup(").expect("the popup moved");
         let end = start + src[start..].find("\n    }\n").expect("its end");
         let body: String = src[start..end].lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");

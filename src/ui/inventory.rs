@@ -65,19 +65,28 @@ pub fn download_failure(e: &Entry) -> Option<String> {
     FAILED.lock().ok()?.iter().find(|((k, n), _)| k == kind && n == name).map(|(_, why)| why.clone())
 }
 
-/// A panel asked to show the Catalog at a family and place.
-static OPEN: Mutex<Option<(Family, Place)>> = Mutex::new(None);
+/// A panel asked to show the Catalog at a family and place, with an
+/// entry selected.
+static OPEN: Mutex<Option<(Family, Place, Option<EntryKey>)>> = Mutex::new(None);
 
 /// Show the Catalog at `family` in `place` (opening its panel): what a
 /// panel whose online section moved into the Catalog offers instead.
 pub fn request_open(family: Family, place: Place) {
     if let Ok(mut o) = OPEN.lock() {
-        *o = Some((family, place));
+        *o = Some((family, place, None));
+    }
+}
+
+/// Show an entry in the Catalog, selected (the Rhai Editor's Show in
+/// Catalog).
+pub fn request_open_select(family: Family, key: EntryKey) {
+    if let Ok(mut o) = OPEN.lock() {
+        *o = Some((family, Place::Local, Some(key)));
     }
 }
 
 /// The open asked for since the last call.
-pub fn take_open() -> Option<(Family, Place)> {
+pub fn take_open() -> Option<(Family, Place, Option<EntryKey>)> {
     OPEN.lock().ok()?.take()
 }
 
@@ -190,16 +199,16 @@ pub struct InventoryResponse {
     /// A fractal to load (`App::load_config_with_undo`).
     pub load_preset: Option<FractalConfig>,
     pub open_palette_editor: bool,
-    /// A formula store file to open in the Formula Editor: its name, and
-    /// whether it is a shipped example.
-    pub open_formula_file: Option<(String, bool)>,
-    /// A CPU script to select in the Scripts panel, by its stem.
-    pub open_script: Option<String>,
+    /// A file to open in the Rhai Editor: its store, its name, and
+    /// whether it is a shipped one.
+    pub open_file: Option<(Store, String, bool)>,
     /// An online fractal loaded, by its id, to load as the Fractal
     /// Browser's Online tab did (one undo step; Save Online updates it).
     pub load_api_flame: Option<(String, crate::api::FlameLoadResult)>,
     /// An online script to open (adopt into your files).
     pub script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest>,
+    /// What running a script produced (a flame, a batch, an animation).
+    pub run: super::script_run::RunResult,
     /// Clear Cache: the downloaded variations, or effects.
     pub clear_variation_cache: bool,
     pub clear_effect_cache: bool,
@@ -212,10 +221,9 @@ pub struct InventoryContext<'a> {
     pub palette_library: &'a mut PaletteLibrary,
     /// The online account, for the Online place's requests.
     pub account: CloudAccount,
-    /// The script cloud is busy (opening a script waits for it), and its
-    /// last word.
-    pub script_cloud_busy: bool,
-    pub script_cloud_status: Option<&'a str>,
+    /// The script cloud: busy (a request waits for it), its last word,
+    /// a conflict to resolve.
+    pub script_cloud: &'a crate::app::script_cloud::ScriptCloudState,
 }
 
 pub struct InventoryPanel {
@@ -231,6 +239,9 @@ pub struct InventoryPanel {
     updates_only: bool,
     place: Place,
     online: super::inventory_online::OnlinePlace,
+    manage: super::inventory_manage::Manage,
+    /// A CPU script's run controls, for the script selected.
+    run: super::script_run::ScriptRun,
     /// The presets, a gallery a category, made when first shown.
     preset_galleries: Option<Vec<FractalConfigGallery>>,
     preset_category: PresetCategory,
@@ -255,6 +266,8 @@ impl InventoryPanel {
             updates_only: false,
             place: Place::Local,
             online: super::inventory_online::OnlinePlace::new(),
+            manage: super::inventory_manage::Manage::default(),
+            run: super::script_run::ScriptRun::default(),
             preset_galleries: None,
             preset_category: PresetCategory::default(),
         }
@@ -279,10 +292,13 @@ impl InventoryPanel {
         self.entries.iter().find(|e| &e.key == key)
     }
 
-    /// Show `family` in `place`.
-    pub fn open_at(&mut self, family: Family, place: Place) {
+    /// Show `family` in `place`, with `select` selected.
+    pub fn open_at(&mut self, family: Family, place: Place, select: Option<EntryKey>) {
         self.open_on(family);
         self.place = place;
+        if select.is_some() {
+            self.selected = select;
+        }
     }
 
     /// Your own online lists changed (a fractal saved online): ask again.
@@ -386,6 +402,11 @@ impl InventoryPanel {
         }
         if self.place == Place::Local && matches!(self.family, Family::Variations | Family::Effects) {
             self.render_downloads_bar(ui, out);
+        }
+        if self.place == Place::Local {
+            if let Some(super::inventory_manage::Act::Select(key)) = self.manage.render_top(ui, self.family, out) {
+                self.selected = Some(key);
+            }
         }
         // A family of several kinds: a chip each that has entries.
         let mut kinds: Vec<Kind> = match self.place {
@@ -678,9 +699,22 @@ impl InventoryPanel {
             ui.colored_label(ui.visuals().error_fg_color, t!("catalog.download_failed", error = why));
         }
         ui.separator();
+        // A CPU script: running it is its Use (decision 2 of the survey).
+        let script = matches!(&e.key, EntryKey::File { store: Store::Scripts, .. }) && matches!(e.kind, Kind::Generator | Kind::Modifier | Kind::ScriptLibrary);
+        if let (true, EntryKey::File { file, .. }) = (script, &e.key) {
+            let id = file.strip_suffix(".rhai").unwrap_or(file).to_string();
+            let current = cx.config_manager.active_config().clone();
+            let palettes: Vec<crate::scene::palette::Palette> = cx.palette_library.iter().cloned().collect();
+            let generation = super::script_run::files_generation(cx.script_cloud);
+            out.run = self.run.render_stored(ui, &id, &current, &palettes, generation);
+            ui.separator();
+        }
         ui.horizontal_wrapped(|ui| {
             if !e.installed {
                 download_button(ui, &e);
+                return;
+            }
+            if script {
                 return;
             }
             if e.update.is_some() {
@@ -706,14 +740,20 @@ impl InventoryPanel {
                         out.open_palette_editor = true;
                     }
                 }
-                EntryKey::File { store: Store::Formulas, file, shipped } => {
-                    if ui.button(t!("catalog.open_in_formula_editor")).clicked() {
-                        out.open_formula_file = Some((file.clone(), *shipped));
+                // A shipped file, to read: yours are edited below.
+                EntryKey::File { store, file, shipped: true } => {
+                    if ui.button(t!("catalog.open_in_editor")).clicked() {
+                        super::inventory_manage::edit(*store, file, true, out);
                     }
                 }
                 _ => {}
             }
         });
+        // Your own: edit, rename, duplicate, delete, the plug-in flag,
+        // publishing; a shipped file or a built-in: a copy of yours.
+        if let Some(super::inventory_manage::Act::Select(key)) = self.manage.render_actions(ui, &e, cx, out) {
+            self.selected = Some(key);
+        }
     }
 }
 
@@ -919,8 +959,8 @@ pub(super) fn apply_palette(config_manager: &mut ConfigManager, palette: crate::
 /// Use: what each kind's own picker does when it is chosen there.
 fn apply(e: &Entry, ctx: &egui::Context, cx: &mut InventoryContext, out: &mut InventoryResponse) {
     let cm = &mut *cx.config_manager;
-    if let EntryKey::File { store: Store::Scripts, file, .. } = &e.key {
-        out.open_script = Some(file.rsplit_once('.').map_or(file.as_str(), |(s, _)| s).to_string());
+    if let EntryKey::File { store: Store::Scripts, file, shipped } = &e.key {
+        out.open_file = Some((Store::Scripts, file.clone(), *shipped));
         return;
     }
     match &e.key {

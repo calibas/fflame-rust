@@ -772,7 +772,7 @@ impl super::params::ParamStore for TrackParams<'_> {
 
 /// A script track's window: its title, its targets and how it writes
 /// each, a warning for a target another track writes too (the later track
-/// wins) and for an error, its parameters, and Edit in the Formula Editor.
+/// wins) and for an error, its parameters, and Edit in the Rhai Editor.
 pub fn render_script_track_panel(ctx: &egui::Context, controller: &mut AnimationController, state: &mut TrackEditorState) {
     let Some(index) = state.script_panel else { return };
     let Some(animation) = controller.animation.as_mut() else {
@@ -1483,7 +1483,7 @@ pub fn open_add_track_panel(state: &mut TrackEditorState) {
 /// Open the track editor panel to edit an existing track by index
 pub fn open_edit_track_panel(state: &mut TrackEditorState, track_index: usize, track: &Track) {
     // A script track has a window of its own: its parameters, targets
-    // and errors, and Edit in the Formula Editor.
+    // and errors, and Edit in the Rhai Editor.
     if matches!(track.source, TrackSource::Script { .. }) {
         state.script_panel = Some(track_index);
         return;

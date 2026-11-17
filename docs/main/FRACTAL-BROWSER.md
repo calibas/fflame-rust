@@ -33,8 +33,9 @@ Design record: [fractal-browser.md](../archive/projects/fractal-browser.md).
   panel.
 - **Window ▸ Fractal Browser**.
 - The **Scripting** workspace docks it on the right.
-- It opens by itself, on the right tab, when the Random Generator or the
-  Scripts panel produces a batch, or when File ▸ Open reads a file that
+- It opens by itself, on the right tab, when the Random Generator or a
+  script's Batch or Mutate (the Catalog's info pane or the Rhai Editor's
+  Run) produces a batch, or when File ▸ Open reads a file that
   holds more than one config (the first is loaded, the rest wait in the
   browser).
 
@@ -44,7 +45,7 @@ It is available in every render mode.
 
 | Tab label | `BrowserTab` | What it holds |
 |---|---|---|
-| Random | `Batch` | The last batch from the Random Generator or a Scripts batch, until the next one replaces it. The label shows the count |
+| Random | `Batch` | The last batch from the Random Generator or a script's batch, until the next one replaces it. The label shows the count |
 | Files | `Files` | The configs from one file: **Open File...** on the tab, a multi-config `.fflame` or multi-flame `.flame` opened with File ▸ Open, or a multi-flame `.flame` from Import Apophysis. The label shows the count |
 
 The code calls the second tab `Batch`; its label (`browser.tab_batch`)

@@ -204,7 +204,7 @@ pub fn config_to_create_request(
 /// Encode a palette as either compact color_data (for 256-stop indexed palettes)
 /// or as JSON stops (for gradient palettes with arbitrary positions).
 /// Returns (stops, color_data).
-fn encode_palette_data(palette: &Palette) -> (Option<serde_json::Value>, Option<Vec<u32>>) {
+pub(crate) fn encode_palette_data(palette: &Palette) -> (Option<serde_json::Value>, Option<Vec<u32>>) {
     if palette.stops.len() == 256 && palette.stops.iter().enumerate().all(|(i, s)| {
         (s.position - i as f32 / 255.0).abs() < 0.001
     }) {

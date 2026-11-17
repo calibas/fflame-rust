@@ -128,7 +128,7 @@ terrain -- the engine was not showing sets **the 3D look**
 gamma 1.0, saturation 1.0, no hue shift, and, when the lighting rig is
 untouched, shading strength 1.0 and ambient 0.0. The mode switch, the
 Escape panel's formula picker and terrain switch, the Simulation panel's
-terrain switch and the Formula Editor's Use go through it
+terrain switch and the Rhai Editor's Use go through it
 (`ConfigManager::choose`).
 
 **Changing a default changes old files.** Serialization omits values

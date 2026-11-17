@@ -192,7 +192,6 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> PanelUse {
         | P::History
         | P::Animation
         | P::Signal
-        | P::Scripts
         | P::Performance
         | P::Help
         | P::KeyboardShortcuts
@@ -216,7 +215,7 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> PanelUse {
         | P::RandomGenerator
         // Formulas, colourings and solids for Escape (using one enters
         // it), variations for the flame: something for every mode.
-        | P::FormulaEditor => PanelUse::Active,
+        | P::RhaiEditor => PanelUse::Active,
 
         // Flame-only editing surfaces.
         P::XaosEditor | P::Subflames | P::Paths => match m {
@@ -569,7 +568,7 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::Escape, "menu.window_escape"),
     row(PanelType::Simulation, "menu.window_simulation"),
     row(PanelType::Textures, "menu.window_textures"),
-    row(PanelType::FormulaEditor, "menu.window_formula_editor"),
+    row(PanelType::RhaiEditor, "menu.window_formula_editor"),
     row(PanelType::HybridDesigner, "menu.window_hybrid_designer"),
     row(PanelType::Transforms, "menu.window_transforms"),
     row(PanelType::TriangleEditor, "menu.window_triangle_editor"),
@@ -583,7 +582,6 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::RandomGenerator, "menu.window_random_generator"),
     row(PanelType::Effects, "menu.window_effects"),
     row(PanelType::Variations, "menu.window_variations"),
-    row(PanelType::Scripts, "menu.window_scripts"),
     row(PanelType::Subflames, "menu.window_subflames"),
     row(PanelType::XaosEditor, "menu.window_xaos_editor"),
     row(PanelType::Signal, "menu.window_signal"),
@@ -610,7 +608,7 @@ pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::Inventory,
     PanelType::Variations,
     PanelType::Subflames,
-    PanelType::Scripts,
+    PanelType::RhaiEditor,
     PanelType::Escape,
     PanelType::Simulation,
     PanelType::Textures,
@@ -675,7 +673,6 @@ mod tests {
         PanelType::Paths,
         PanelType::Export,
         PanelType::RandomGenerator,
-        PanelType::Scripts,
         PanelType::Effects,
         PanelType::XaosEditor,
         PanelType::SolidLighting,
@@ -687,7 +684,7 @@ mod tests {
         PanelType::Escape,
         PanelType::Simulation,
         PanelType::Textures,
-        PanelType::FormulaEditor,
+        PanelType::RhaiEditor,
         PanelType::HybridDesigner,
     ];
 
@@ -748,7 +745,7 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), ALL_PANELS.len(), "duplicate entry in ALL_PANELS");
-        assert_eq!(ALL_PANELS.len(), 32, "a panel was added; decide what it means per mode");
+        assert_eq!(ALL_PANELS.len(), 31, "a panel was added or retired; decide what it means per mode");
     }
 
     /// Every control this build knows about.

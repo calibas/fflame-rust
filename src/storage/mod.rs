@@ -25,6 +25,7 @@ pub mod effect_catalog;
 pub mod formula_store;
 pub mod links;
 pub mod library;
+pub mod manage;
 pub mod variation_cache;
 pub mod variation_catalog;
 

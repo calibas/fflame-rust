@@ -54,8 +54,8 @@ pub struct SimUiState<'a> {
     pub governor: super::SimGovernorUi,
     /// The Formula Editor, which Edit as Rhai gives a model or a colouring
     /// to (P7 step 5), and whether the app should open it.
-    pub formula_editor: &'a mut Option<super::formula_editor::FormulaEditorPanel>,
-    pub open_formula_editor: &'a mut bool,
+    pub rhai_editor: &'a mut Option<super::rhai_editor::RhaiEditorPanel>,
+    pub open_rhai_editor: &'a mut bool,
 }
 
 /// "Save as texture" (`docs/archive/projects/sim-textures.md`): this simulation,
@@ -628,8 +628,8 @@ pub fn render_sim_content(
 
     });
     if let Some(e) = edit_as_rhai {
-        state.formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).edit_sim_as_rhai(config_manager, e.model, e.layer, &e.builtin);
-        *state.open_formula_editor = true;
+        state.rhai_editor.get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new).edit_sim_as_rhai(config_manager, e.model, e.layer, &e.builtin);
+        *state.open_rhai_editor = true;
     }
 }
 

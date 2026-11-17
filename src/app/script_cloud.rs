@@ -104,6 +104,8 @@ pub enum ScriptCloudRequest {
     /// Remove a script from the server. The local copy is untouched —
     /// unpublishing and deleting are different intentions.
     Unpublish { local: Local, cloud_id: String },
+    /// Who sees a published script: public or private (`PATCH`).
+    SetVisibility { local: Local, cloud_id: String, visibility: ApiVisibility },
 }
 
 impl ScriptCloudRequest {
@@ -114,7 +116,7 @@ impl ScriptCloudRequest {
     pub fn needs_account(&self) -> bool {
         match self {
             Self::Adopt { .. } | Self::Refetch { .. } => false,
-            Self::Publish { .. } | Self::Update { .. } | Self::Unpublish { .. } => true,
+            Self::Publish { .. } | Self::Update { .. } | Self::Unpublish { .. } | Self::SetVisibility { .. } => true,
         }
     }
 }
@@ -168,6 +170,7 @@ pub(super) enum ScriptCloudResult {
     /// `(local, response)` — the local file to overwrite.
     Refetched(Local, Result<ScriptResponse, String>),
     Unpublished(Local, Result<(), String>),
+    Visibility(Local, ApiVisibility, Result<(), String>),
 }
 
 /// An update can fail in a way the user can act on.
@@ -330,6 +333,14 @@ impl App {
                 ScriptCloudResult::Unpublished(_, Err(e)) => {
                     self.script_cloud.fail(format!("Could not unpublish: {e}"))
                 }
+                ScriptCloudResult::Visibility(local, visibility, Ok(())) => {
+                    let msg = match visibility {
+                        ApiVisibility::Public => t!("manage.now_public", name = local.name()),
+                        _ => t!("manage.now_private", name = local.name()),
+                    };
+                    self.script_cloud.ok(msg.to_string());
+                }
+                ScriptCloudResult::Visibility(_, _, Err(e)) => self.script_cloud.fail(t!("manage.visibility_failed", error = e).to_string()),
             }
         }
     }
@@ -451,6 +462,11 @@ async fn run_request(
         ScriptCloudRequest::Unpublish { local, cloud_id } => {
             let r = api.delete_script(&cloud_id).await.map_err(|e| e.to_string());
             ScriptCloudResult::Unpublished(local, r)
+        }
+        ScriptCloudRequest::SetVisibility { local, cloud_id, visibility } => {
+            let patch = crate::api::types::ItemPatch { name: None, visibility: Some(visibility.clone()) };
+            let r = api.patch_item("scripts", &cloud_id, &patch).await.map(|_| ()).map_err(|e| e.to_string());
+            ScriptCloudResult::Visibility(local, visibility, r)
         }
     }
 }

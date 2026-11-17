@@ -88,9 +88,15 @@ pub fn get(store: &str, key: &str) -> Option<Link> {
     load(store).get(key).cloned()
 }
 
+/// One read-modify-write of a links file at a time: two writers each
+/// reading the file and writing it back would lose one's change (the test
+/// suite's threads did; a background adoption could).
+static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Record (or replace) a file's link. An empty one is removed instead,
 /// so the sidecar holds only what says something.
 pub fn set(store: &str, key: &str, link: Link) -> Result<(), String> {
+    let _held = WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let mut links = load(store);
     if link == Link::default() {
         if links.remove(key).is_none() {
@@ -106,6 +112,7 @@ pub fn set(store: &str, key: &str, link: Link) -> Result<(), String> {
 /// later does not inherit the previous file's cloud identity -- or its
 /// provenance, which would mark the user's own file as somebody else's.
 pub fn clear(store: &str, key: &str) -> Result<(), String> {
+    let _held = WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let mut links = load(store);
     if links.remove(key).is_none() {
         return Ok(());

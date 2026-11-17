@@ -60,6 +60,9 @@ pub enum Kind {
     Track,
     /// An Ultra Fractal or Fractint file: many entries, of its kind.
     FormulaFile,
+    /// A Rhai file of the user's that does not parse: listed so it can be
+    /// opened and fixed (its kind is read from what it defines).
+    Unreadable,
 }
 
 /// The Catalog's top-level groups of kinds, in the order it offers them.
@@ -103,7 +106,7 @@ impl Kind {
                 Family::Escape
             }
             Kind::SimModel | Kind::SimColoring => Family::Simulation,
-            Kind::Generator | Kind::Modifier | Kind::ScriptLibrary | Kind::Track => Family::Scripts,
+            Kind::Generator | Kind::Modifier | Kind::ScriptLibrary | Kind::Track | Kind::Unreadable => Family::Scripts,
         }
     }
 
@@ -127,6 +130,7 @@ impl Kind {
             Kind::ScriptLibrary => "inventory.kind.script_library",
             Kind::Track => "inventory.kind.track",
             Kind::FormulaFile => "inventory.kind.formula_file",
+            Kind::Unreadable => "inventory.kind.unreadable",
         }
     }
 
@@ -149,7 +153,7 @@ impl Kind {
             L::FieldColoring => Kind::FieldColoring,
             L::Track => Kind::Track,
             L::UfFormulas | L::UfColorings | L::Fractint => Kind::FormulaFile,
-            L::Unknown => return None,
+            L::Unknown => Kind::Unreadable,
         })
     }
 }
@@ -285,6 +289,84 @@ pub fn builtin_prose(kind: Kind, name: &str) -> Option<(String, Vec<String>)> {
     (!p.description.is_empty() || !p.authors.is_empty()).then_some((p.description, p.authors))
 }
 
+/// A built-in's Rhai twin's source (or a Rhai built-in's own): what Edit
+/// as Rhai copies into the user's files.
+pub fn twin_source(kind: Kind, name: &str) -> Option<&'static str> {
+    let find = |table: &[(&'static str, &'static str)]| table.iter().find(|(n, _)| *n == name).map(|(_, s)| *s);
+    match kind {
+        Kind::Variation => crate::variations::twins::source(name),
+        Kind::Formula => find(crate::escape::twins::TWINS),
+        Kind::Coloring => find(crate::escape::twins::COLORING_TWINS),
+        Kind::Solid => find(crate::escape::twins::SOLID_TWINS),
+        Kind::Field => find(crate::escape::twins::FIELD_TWINS),
+        Kind::FieldColoring => find(crate::escape::twins::FIELD_COLORING_TWINS),
+        Kind::Effect => find(crate::effects::custom::BUILTIN_TWINS).or_else(|| find(crate::effects::custom::RHAI_BUILTINS)),
+        Kind::SimColoring => find(crate::sim::custom::SHIPPED),
+        Kind::SimModel => find(crate::sim::custom::SHIPPED_MODELS),
+        _ => None,
+    }
+}
+
+/// The kinds New offers, in the Catalog's order: a Rhai file of each.
+pub const NEW_KINDS: &[Kind] = &[
+    Kind::Variation,
+    Kind::Effect,
+    Kind::Formula,
+    Kind::Coloring,
+    Kind::Field,
+    Kind::FieldColoring,
+    Kind::Solid,
+    Kind::SimModel,
+    Kind::SimColoring,
+    Kind::Generator,
+    Kind::Modifier,
+    Kind::ScriptLibrary,
+    Kind::Track,
+];
+
+/// What New starts a file of `kind` from: the language's own starting
+/// points for a formula and a variation, else the first shipped example
+/// of the kind (a twin, a shipped script, a track example).
+pub fn template(kind: Kind) -> Option<String> {
+    let first = |table: &[(&'static str, &'static str)]| table.first().map(|(_, s)| s.to_string());
+    let script = |want: crate::script::ScriptKind| {
+        crate::script::library::EMBEDDED
+            .iter()
+            .find(|(_, s)| crate::script::library::declared(s).is_some_and(|(_, k)| k == want))
+            .map(|(_, s)| s.to_string())
+    };
+    match kind {
+        Kind::Formula => Some(crate::lang::rhai::NEW_FORMULA.to_string()),
+        Kind::Variation => Some(crate::lang::rhai::NEW_VARIATION.to_string()),
+        Kind::Coloring => first(crate::escape::twins::COLORING_TWINS),
+        Kind::Solid => first(crate::escape::twins::SOLID_TWINS),
+        Kind::Field => first(crate::escape::twins::FIELD_TWINS),
+        Kind::FieldColoring => first(crate::escape::twins::FIELD_COLORING_TWINS),
+        Kind::Effect => first(crate::effects::custom::BUILTIN_TWINS),
+        Kind::SimColoring => first(crate::sim::custom::SHIPPED),
+        Kind::SimModel => first(crate::sim::custom::SHIPPED_MODELS),
+        Kind::Generator => script(crate::script::ScriptKind::Generator),
+        Kind::Modifier => script(crate::script::ScriptKind::Modifier),
+        Kind::ScriptLibrary => script(crate::script::ScriptKind::Library).or_else(|| Some(NEW_LIBRARY.to_string())),
+        Kind::Track => crate::storage::formula_store::EXAMPLES
+            .iter()
+            .find(|(_, s)| crate::animation::script::looks_like_track(s))
+            .map(|(_, s)| s.to_string()),
+        _ => None,
+    }
+}
+
+/// What New starts a script library from when none ships.
+const NEW_LIBRARY: &str = "\
+// A library: functions other scripts call, after
+// `import \"<its id>\" as lib;`.
+script(\"My Library\", \"library\", []);
+
+fn twice(x) {
+    x * 2.0
+}
+";
+
 /// What [`scan`] reads that changes while the app runs, cheaply: a
 /// change means the list is to be made again. The stores' files are not
 /// read here (that is the scan's cost); `files` is the caller's count of
@@ -293,6 +375,7 @@ pub fn revision(palettes: &crate::scene::palette::PaletteLibrary, files: u64, on
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     files.hash(&mut h);
+    crate::storage::manage::generation().hash(&mut h);
     for v in online.variations {
         (v.name.as_str(), v.version, v.downloadable).hash(&mut h);
     }

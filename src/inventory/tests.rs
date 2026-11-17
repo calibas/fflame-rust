@@ -210,3 +210,43 @@ fn what_the_server_offers_is_listed_to_download() {
     // The list is read again when the catalog changes.
     assert_ne!(revision(&lib(), 0, Online::default()), revision(&lib(), 0, Online { variations: &variations, effects: &effects }));
 }
+
+/// A saved Rhai file that does not parse stays listed (as an unreadable
+/// file, among the scripts) so it can be opened and fixed; it used to
+/// leave the Catalog, unreachable once the Catalog chooses files.
+#[test]
+fn a_file_that_does_not_parse_stays_listed() {
+    let name = format!("it_broken_{}.rhai", &crate::scripted::mint_id()[..8]);
+    let file = crate::storage::formula_store::save(&name, "fn step(s, p) { s.z = ").unwrap();
+    let entries = scan(&lib(), Online::default());
+    let e = entries.iter().find(|e| matches!(&e.key, EntryKey::File { file: f, .. } if *f == file)).map(|e| (e.kind, e.kind.family()));
+    crate::storage::manage::delete(crate::storage::library::Store::Formulas, &file).unwrap();
+    assert_eq!(e, Some((Kind::Unreadable, Family::Scripts)));
+}
+
+/// New's starting text for every kind it offers is that kind: the store
+/// it lands in reads it so.
+#[test]
+fn every_new_template_is_its_kind() {
+    use crate::storage::library::{rhai_kind, Kind as L};
+    for kind in NEW_KINDS {
+        let text = template(*kind).unwrap_or_else(|| panic!("no template for {kind:?}"));
+        let read = match crate::script::library::declared(&text) {
+            Some((_, crate::script::ScriptKind::Generator)) => L::Generator,
+            Some((_, crate::script::ScriptKind::Modifier)) => L::Modifier,
+            Some((_, crate::script::ScriptKind::Library)) => L::ScriptLibrary,
+            None => rhai_kind(&text),
+        };
+        assert_eq!(Kind::of_file(read), Some(*kind), "the {kind:?} template reads as {read:?}");
+    }
+}
+
+/// Edit as Rhai finds a built-in's twin for every kind that has them.
+#[test]
+fn built_ins_have_twins_to_copy() {
+    assert!(twin_source(Kind::Variation, "julia").is_some());
+    assert!(twin_source(Kind::Formula, "mandelbrot").is_some());
+    assert!(twin_source(Kind::Effect, crate::effects::custom::BUILTIN_TWINS[0].0).is_some());
+    assert!(twin_source(Kind::SimModel, crate::sim::custom::SHIPPED_MODELS[0].0).is_some());
+    assert!(twin_source(Kind::Palette, "anything").is_none());
+}

@@ -258,8 +258,8 @@ Each def's doc comment cites its source and the convention it pins.
 **Fractint's Frothy Basin, Volterra–Lotka and Unity** are formulas in
 Rhai, not built-ins (`assets/formulas/frothy-basin.rhai` with its
 colouring `frothy-basin-coloring.rhai`, `volterra-lotka.rhai`,
-`unity.rhai`; 2026-10-21): Formula Editor examples, and presets of their
-own, which carry the sources. Each is ported from Xfractint 20.04p16's
+`unity.rhai`; 2026-10-21): shipped examples in the Catalog, and presets
+of their own, which carry the sources. Each is ported from Xfractint 20.04p16's
 source and runs as its loop does, pixel for pixel in f64
 (`escape::legacy`, against the loops written out):
 - **Frothy Basin** (`calcfroth`): `z² + conj((−1 + a i) z)` in Fractint's
@@ -291,7 +291,7 @@ so deep views settle wrong. Frothy Basin 318 scaled, 347 floatexp (f64
 351): its basins are riddled.
 
 **Iterated Dynamics' escape-time types** (the GPL Fractint successor) are
-Rhai formulas too, Formula Editor examples without presets (2026-10-31):
+Rhai formulas too, shipped examples without presets (2026-10-31):
 `halley.rhai` (Halley's method on `z(z^a − 1)`, stopping when |z|²
 settles), `mandelbrot-mix4.rhai` (Jim Muth's mix of two powers, from
 the setup's one start; the program leaves that start's base a negative
@@ -569,7 +569,7 @@ fn escaped(s, p) {
   serves both languages unchanged; messages carry the script's names
   and positions.
 - Examples: `assets/formulas/mandelbrot.rhai`, `burning-ship.rhai`,
-  `phoenix.rhai` (the editor's New starts a Rhai formula); Fractint's
+  `phoenix.rhai` (the Catalog's New starts a Rhai formula); Fractint's
   `frothy-basin.rhai`, `volterra-lotka.rhai` and `unity.rhai`, and
   Iterated Dynamics' escape-time types (*The formulas*, above). Tests:
   `tests/formulas/rhai/` (every construct, the function names, the
@@ -634,7 +634,7 @@ fn escaped(s, p) {
     `bailout` (the squared bailout it is best drawn at, as a built-in's
     `recommended_bailout`) and `pick` (`#{ deband: 1 }`, the values a
     fresh pick takes, `pick_params`). The panel's colouring picker, its
-    plug-ins and the Formula Editor's first Use of a colouring apply
+    plug-ins and the Rhai Editor's first Use of a colouring apply
     them as they do a built-in's (`escape_panel::pick_changes`); Edit as
     Rhai does not, keeping the settings in use.
   - **A colour, not a palette position** (batch 5): beside `finish`,
@@ -1157,7 +1157,7 @@ fn escaped(s, p) {
   - The Escape panel's **Edit as Formula** puts the twin in the
     built-in's place, one undo step: the parameters carry over by name,
     and the view and the colouring stay. It opens the twin in the
-    Formula Editor in use, so with Live on an edit re-renders.
+    Rhai Editor in use, so with Live on an edit re-renders.
   - Through the renderer, with the smooth colouring, each matches its
     built-in on every pixel, on both planes and every Ship variant.
     The exceptions are Multibrot and the multicorns (under 0.4%),
@@ -1365,7 +1365,7 @@ fn escaped(s, p) {
   Mandelbox, the Mandelbulb, the Quaternion Julia and the KIFS, each a
   Rhai solid that renders as its built-in. The Escape panel's **Edit
   Solid as Rhai** puts the twin in place, one undo step, its settings
-  and the camera kept, and opens it in the Formula Editor as a solid.
+  and the camera kept, and opens it in the Rhai Editor as a solid.
   What a solid needed for them:
   - **Template parameters it declares** (`custom::solid_layout`): a
     solid's `PARAMS` may name any of the template's first seven
@@ -1402,7 +1402,7 @@ fn escaped(s, p) {
   `reduce(t)` (a field's alone) reduces an angle to [-pi, pi] as the
   built-ins' `esc_reduce` does, for a phase that grows term by term; the
   language's `sin` and `cos` reduce their own arguments. A field has no
-  `prepare`. Used from the Formula Editor ("Use as field") or the
+  `prepare`. Used from the Rhai Editor ("Use as field") or the
   formula picker's plug-ins (`library::Kind::Field`).
 - **A Rhai field colouring** (`EntryKind::FieldColoring`, a file with
   `fn shade`): `fn shade(sum, grad, n[, p])` -- the field's sum, its
@@ -1427,7 +1427,7 @@ fn escaped(s, p) {
   wraps; median time 1.01x the built-in's, worst 1.09x. The twins carry
   no presets: Edit as Rhai keeps the view.
 - **UF and Fractint formulas and colourings convert** (`lang/to_rhai.rs`;
-  the Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
+  the Rhai Editor's Edit as Rhai, `custom::convert_to_rhai`): the
   checked program is printed in these shapes, the file opened left as
   it is.
   - The state is `z`, what a pass reads before it writes it, and what
@@ -1942,22 +1942,24 @@ name, so a saved file, a PNG or an upload renders anywhere.
   untagged colouring colours inside and outside; `(OUTSIDE)` and
   `(INSIDE)` one side. `#solid` leaves the pixel to the background.
 
-**The Formula Editor** (Window menu, Escape mode; `src/ui/formula_editor.rs`)
-lists a file's entries above its source, checks each as a formula and as
+**The Rhai Editor** (Window menu; `src/ui/rhai_editor.rs`) edits the one
+file the Catalog opens ([CATALOG.md](CATALOG.md)). It
+lists the file's entries above its source, checks each as a formula and as
 a colouring on a pause in typing, and offers it as what it compiles as
 (a colouring only if it sets `#index` or `#solid`). Using one puts it in
 the config, one undo step; a formula's `center` and `maxiter` come with
 it the first time (its `magn` does not yet: what span UF's magnification
 1 shows is unverified). **Live** re-applies the entry in use whenever an
 edit to it compiles again. Files live in a `formulas/` folder in the app's
-data directory (localStorage on the web, `storage::formula_store`); Open
-reads a `.ufm`, `.ucl` or `.frm` from disk, Export writes one; the example
+data directory (localStorage on the web, `storage::formula_store`). The
+Catalog manages them: Import reads a `.rhai`, `.ufm`, `.ucl` or `.frm`
+from disk, Export writes one, and Rename, Duplicate and Delete; the example
 files ship (`assets/formulas/`), each entry compiled by
-`every_example_entry_compiles`, and the built-in effects' sources after
-them (opened unsaved: a copy to Save and Use as one's own). The file list
-marks each file as the Scripts panel marks a script (`storage::library::
-marks`: ` *` the user's, ` ↓` somebody else's, and "(plug-in)"), and a
-stored Rhai file has **Load at start**: a plug-in, registered at every
+`every_example_entry_compiles`, and the Catalog's Edit as Rhai copies one,
+or a built-in's twin, among the user's files and opens it here. The
+Catalog marks each file (`storage::library::marks`: ` *` the user's,
+` ↓` somebody else's, and "(plug-in)"), and a stored Rhai file has
+**Load at start** in its info pane: a plug-in, registered at every
 start and offered in the lists ([VARIATIONS.md](VARIATIONS.md#downloaded-variations)).
 Scripts: `escape.custom_formula` and `escape.custom_coloring`
 ([SCRIPTING.md](SCRIPTING.md)).
@@ -2359,7 +2361,7 @@ a view that is not one (`ui::render_mode::look_3d`, 2026-10-19): Linear,
 exposure 2.0, gamma 1.0, saturation 1.0 and no hue shift whatever the
 tone map was, and an untouched lighting rig set to strength 1.0 and
 ambient 0.0. The mode switch, the formula picker, the terrain switches
-and the Formula Editor's Use apply it with their change, one undo step
+and the Rhai Editor's Use apply it with their change, one undo step
 (`apply_with_look`); a view already 3D, or a touched rig, keeps its own.
 The solid presets carry the same look.
 

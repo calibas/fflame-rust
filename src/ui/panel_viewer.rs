@@ -309,9 +309,7 @@ pub struct PanelContext<'a> {
     pub open_random_generator: &'a mut bool,
     /// A panel put a formula in the Formula Editor (the Escape panel's
     /// Edit as Formula): the app opens it.
-    pub open_formula_editor: &'a mut bool,
-    /// The Catalog selected a script in the Scripts panel: the app opens it.
-    pub open_scripts_panel: &'a mut bool,
+    pub open_rhai_editor: &'a mut bool,
     /// The View panel's Lighting button.
     pub open_lighting_panel: &'a mut bool,
 
@@ -436,7 +434,6 @@ pub struct PanelContext<'a> {
     pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
     pub generated_flame: &'a mut Option<crate::scene::randomize::RandomFlame>,
     pub generated_batch: &'a mut Option<Vec<crate::config::FractalConfig>>,
-    pub scripts_panel: &'a mut Option<super::scripts_panel::ScriptsPanel>,
     pub script_generated: &'a mut Option<crate::config::FractalConfig>,
     pub script_animation: &'a mut Option<crate::animation::Animation>,
 
@@ -445,7 +442,7 @@ pub struct PanelContext<'a> {
     /// The Catalog (docs/projects/catalog.md).
     pub inventory_panel: &'a mut super::inventory::InventoryPanel,
     pub textures_panel: &'a mut Option<super::textures_panel::TexturesPanel>,
-    pub formula_editor: &'a mut Option<super::formula_editor::FormulaEditorPanel>,
+    pub rhai_editor: &'a mut Option<super::rhai_editor::RhaiEditorPanel>,
     pub hybrid_designer: &'a mut Option<super::hybrid_designer::HybridDesignerPanel>,
 
     // Histogram for density visualization (levels now in ConfigManager)
@@ -514,9 +511,6 @@ pub struct PanelContext<'a> {
     /// writes a request into. Owned by App.
     pub script_cloud: &'a crate::app::script_cloud::ScriptCloudState,
     pub script_cloud_request: &'a mut Option<crate::app::script_cloud::ScriptCloudRequest>,
-    /// Whether anyone is signed in — the panel shows its online section
-    /// only then, rather than offering actions that cannot work.
-    pub signed_in: bool,
 
     // Compact mode (cached from system settings)
     pub compact_mode: bool,
@@ -785,16 +779,13 @@ impl<'a> PanelViewer<'a> {
                     self.context.variation_catalog,
                 );
             }
-            PanelType::Scripts => {
-                self.render_scripts_panel(ui);
-            }
             PanelType::Escape => {
                 super::escape_panel::render_escape_content(
                     ui,
                     self.context.config_manager,
                     self.context.terrain_range,
-                    self.context.formula_editor,
-                    self.context.open_formula_editor,
+                    self.context.rhai_editor,
+                    self.context.open_rhai_editor,
                 );
             }
             PanelType::Textures => {
@@ -803,19 +794,24 @@ impl<'a> PanelViewer<'a> {
                     .get_or_insert_with(super::textures_panel::TexturesPanel::new)
                     .render(ui, self.context.config_manager);
             }
-            PanelType::FormulaEditor => {
-                self.context
-                    .formula_editor
-                    .get_or_insert_with(super::formula_editor::FormulaEditorPanel::new)
-                    .render(
-                        ui,
-                        self.context.config_manager,
-                        self.context.animation_controller,
-                        self.context.script_cloud,
-                        self.context.signed_in,
-                        self.context.script_cloud_request,
-                        self.context.window,
-                    );
+            PanelType::RhaiEditor => {
+                let palettes: Vec<crate::scene::palette::Palette> = self.context.palette_library.iter().cloned().collect();
+                let run = self.context.rhai_editor.get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new).render(
+                    ui,
+                    self.context.config_manager,
+                    self.context.animation_controller,
+                    self.context.script_cloud,
+                    &palettes,
+                );
+                if let Some(config) = run.generated {
+                    *self.context.script_generated = Some(config);
+                }
+                if let Some(animation) = run.animation {
+                    *self.context.script_animation = Some(animation);
+                }
+                if let Some(batch) = run.batch {
+                    *self.context.generated_batch = Some(batch);
+                }
             }
             PanelType::HybridDesigner => {
                 self.context
@@ -838,8 +834,8 @@ impl<'a> PanelViewer<'a> {
                         timeline_holding: self.context.sim_timeline_holding,
                         timeline_driven: self.context.sim_timeline_driven,
                         governor: self.context.sim_governor,
-                        formula_editor: self.context.formula_editor,
-                        open_formula_editor: self.context.open_formula_editor,
+                        rhai_editor: self.context.rhai_editor,
+                        open_rhai_editor: self.context.open_rhai_editor,
                     },
                 );
             }
@@ -880,8 +876,8 @@ impl<'a> PanelViewer<'a> {
                 attachment_edit: self.context.attachment_edit,
             },
             self.context.open_triangle_editor,
-            self.context.formula_editor,
-            self.context.open_formula_editor,
+            self.context.rhai_editor,
+            self.context.open_rhai_editor,
         );
     }
 
@@ -949,8 +945,7 @@ impl<'a> PanelViewer<'a> {
             config_manager: self.context.config_manager,
             palette_library: self.context.palette_library,
             account,
-            script_cloud_busy: self.context.script_cloud.busy,
-            script_cloud_status: self.context.script_cloud.status.as_deref(),
+            script_cloud: self.context.script_cloud,
         };
         let response = self.context.inventory_panel.render(ui, &mut cx);
         if let Some((id, loaded)) = response.load_api_flame {
@@ -965,6 +960,15 @@ impl<'a> PanelViewer<'a> {
         }
         if let Some(req) = response.script_cloud_request {
             *self.context.script_cloud_request = Some(req);
+        }
+        if let Some(config) = response.run.generated {
+            *self.context.script_generated = Some(config);
+        }
+        if let Some(animation) = response.run.animation {
+            *self.context.script_animation = Some(animation);
+        }
+        if let Some(batch) = response.run.batch {
+            *self.context.generated_batch = Some(batch);
         }
         if response.clear_variation_cache {
             *self.context.clear_variation_cache_requested = true;
@@ -984,13 +988,9 @@ impl<'a> PanelViewer<'a> {
         if response.open_palette_editor {
             *self.context.open_palette_editor = true;
         }
-        if let Some((file, shipped)) = response.open_formula_file {
-            self.context.formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_file(&file, shipped);
-            *self.context.open_formula_editor = true;
-        }
-        if let Some(id) = response.open_script {
-            self.context.scripts_panel.get_or_insert_with(super::scripts_panel::ScriptsPanel::new).select_script(&id);
-            *self.context.open_scripts_panel = true;
+        if let Some((store, file, shipped)) = response.open_file {
+            self.context.rhai_editor.get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new).open_file(store, &file, shipped);
+            *self.context.open_rhai_editor = true;
         }
     }
 
@@ -1896,37 +1896,6 @@ impl<'a> PanelViewer<'a> {
     }
 
     /// Render the Scripts panel (generator / modifier flame scripts)
-    fn render_scripts_panel(&mut self, ui: &mut egui::Ui) {
-        if self.context.scripts_panel.is_none() {
-            *self.context.scripts_panel = Some(super::scripts_panel::ScriptsPanel::new());
-        }
-        // Scripts read the live config: modifiers start from it, and
-        // generators inherit its palette.
-        let current = self.context.config_manager.active_config().clone();
-        let palettes: Vec<crate::scene::palette::Palette> =
-            self.context.palette_library.iter().cloned().collect();
-        if let Some(panel) = self.context.scripts_panel.as_mut() {
-            let response = panel.render(
-                ui,
-                &current,
-                palettes,
-                self.context.script_cloud,
-                self.context.signed_in,
-                self.context.script_cloud_request,
-                self.context.window,
-            );
-            if let Some(config) = response.generated {
-                *self.context.script_generated = Some(config);
-            }
-            if let Some(animation) = response.animation {
-                *self.context.script_animation = Some(animation);
-            }
-            if let Some(batch) = response.batch {
-                *self.context.generated_batch = Some(batch);
-            }
-        }
-    }
-
     /// Render Fractal Browser panel (unified presets/batch/files)
     fn render_fractal_browser_panel(&mut self, ui: &mut egui::Ui) {
         // Initialize panel if not already created
@@ -1972,8 +1941,8 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.config_manager,
             self.context.animation_controller,
-            self.context.formula_editor,
-            self.context.open_formula_editor,
+            self.context.rhai_editor,
+            self.context.open_rhai_editor,
             self.context.reset_effect_history,
         );
     }

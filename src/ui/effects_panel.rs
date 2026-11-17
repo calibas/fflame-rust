@@ -128,7 +128,7 @@ fn add_effect_picker(ui: &mut Ui, config_manager: &mut ConfigManager, category: 
 
 /// Edit as Rhai, on a built-in that is its Rhai twin: whether it was
 /// clicked. The Formula Editor makes it one of the user's
-/// (`FormulaEditorPanel::edit_effect_as_rhai`).
+/// (`RhaiEditorPanel::edit_effect_as_rhai`).
 fn edit_as_rhai_button(ui: &mut Ui, effect_type: &str) -> bool {
     let twin = crate::effects::custom::rhai_builtins().any(|(n, _)| *n == effect_type);
     twin && ui.small_button(t!("effects_panel.edit_as_rhai")).on_hover_text(t!("effects_panel.edit_as_rhai_tip")).clicked()
@@ -210,8 +210,8 @@ pub fn render_effects_panel(
     // used this is now handled by the structural_changed rebind hook
     // in `app::gpu_updates`.
     _animation_controller: &mut AnimationController,
-    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
-    open_formula_editor: &mut bool,
+    rhai_editor: &mut Option<super::rhai_editor::RhaiEditorPanel>,
+    open_rhai_editor: &mut bool,
     reset_effect_history: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
@@ -508,8 +508,8 @@ pub fn render_effects_panel(
     super::inventory::moved_here(ui, &t!("effects_panel.moved_to_catalog"), crate::inventory::Family::Effects, super::inventory::Place::Online);
 
     if let Some((density, index, builtin)) = edit_as_rhai {
-        formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).edit_effect_as_rhai(config_manager, density, index, &builtin);
-        *open_formula_editor = true;
+        rhai_editor.get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new).edit_effect_as_rhai(config_manager, density, index, &builtin);
+        *open_rhai_editor = true;
         max_update = max_update.max(UpdateType::ToneMappingOnly);
     }
 

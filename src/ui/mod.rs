@@ -10,6 +10,8 @@ mod formatting;
 pub mod fractal_browser;
 pub mod inventory;
 pub mod markdown;
+mod inventory_manage;
+pub mod script_run;
 mod inventory_online;
 pub mod picker;
 pub mod fractal_gallery;
@@ -32,7 +34,6 @@ mod panel_viewer;
 mod paths_panel;
 mod performance;
 mod random_generator;
-mod scripts_panel;
 pub mod response;
 mod settings;
 mod lighting_panel;
@@ -60,7 +61,7 @@ mod escape_transforms;
 mod sim_panel;
 pub mod slow_controls;
 mod textures_panel;
-mod formula_editor;
+mod rhai_editor;
 mod hybrid_designer;
 pub mod workspace;
 mod palette_generate;
@@ -911,7 +912,6 @@ pub struct EguiLayer {
 
     // Random generator panel state
     random_generator_panel: Option<random_generator::RandomGeneratorPanel>,
-    scripts_panel: Option<scripts_panel::ScriptsPanel>,
     generated_flame: Option<crate::scene::randomize::RandomFlame>,
     generated_batch: Option<Vec<crate::config::FractalConfig>>,
     /// Config produced by the Scripts panel, applied as one undo step.
@@ -924,7 +924,7 @@ pub struct EguiLayer {
     inventory_panel: inventory::InventoryPanel,
     /// The Texture panel's state, created when the panel is first shown.
     textures_panel: Option<textures_panel::TexturesPanel>,
-    formula_editor: Option<formula_editor::FormulaEditorPanel>,
+    rhai_editor: Option<rhai_editor::RhaiEditorPanel>,
     hybrid_designer: Option<hybrid_designer::HybridDesignerPanel>,
 
     // API: flame metadata loaded from Online tab (passed through to UiResponse)
@@ -1099,7 +1099,6 @@ impl EguiLayer {
             close_path_overlay: false,
             random_generator_panel: None,
             allocated_textures: std::collections::HashSet::new(),
-            scripts_panel: None,
             generated_flame: None,
             generated_batch: None,
             script_generated: None,
@@ -1107,7 +1106,7 @@ impl EguiLayer {
             fractal_browser_panel: None,
             inventory_panel: inventory::InventoryPanel::new(),
             textures_panel: None,
-            formula_editor: None,
+            rhai_editor: None,
             hybrid_designer: None,
             loaded_api_flame_id: None,
             loaded_api_flame_is_public: None,
@@ -1354,7 +1353,6 @@ impl EguiLayer {
         variation_catalog: Option<&crate::storage::variation_catalog::CachedCatalog>,
         script_cloud: &crate::app::script_cloud::ScriptCloudState,
         effect_catalog: Option<&crate::storage::effect_catalog::CachedEffectCatalog>,
-        signed_in: bool,
         // Simulation transport and readout from the App: whether Run
         // is engaged, how many steps the live run has taken, and the
         // grid actually in use (which a viewport-bound grid makes
@@ -1541,8 +1539,7 @@ impl EguiLayer {
         let mut open_triangle_editor = false;
         let mut open_preset_library = false;
         let mut open_random_generator = false;
-        let mut open_formula_editor = false;
-        let mut open_scripts_panel = false;
+        let mut open_rhai_editor = false;
         let mut open_lighting_panel = false;
 
         // Fractal viewport size tracking
@@ -1843,8 +1840,7 @@ impl EguiLayer {
                         open_triangle_editor: &mut open_triangle_editor,
                         open_preset_library: &mut open_preset_library,
                         open_random_generator: &mut open_random_generator,
-                        open_formula_editor: &mut open_formula_editor,
-                        open_scripts_panel: &mut open_scripts_panel,
+                        open_rhai_editor: &mut open_rhai_editor,
                         open_lighting_panel: &mut open_lighting_panel,
 
                         // UI state
@@ -1950,7 +1946,6 @@ impl EguiLayer {
 
                         // Random generator panel state
                         random_generator_panel: &mut self.random_generator_panel,
-                        scripts_panel: &mut self.scripts_panel,
                         script_generated: &mut self.script_generated,
                         script_animation: &mut self.script_animation,
                         generated_flame: &mut self.generated_flame,
@@ -1960,7 +1955,7 @@ impl EguiLayer {
                         fractal_browser_panel: &mut self.fractal_browser_panel,
                         inventory_panel: &mut self.inventory_panel,
                         textures_panel: &mut self.textures_panel,
-                        formula_editor: &mut self.formula_editor,
+                        rhai_editor: &mut self.rhai_editor,
                         hybrid_designer: &mut self.hybrid_designer,
 
                         // Histogram for density visualization (levels now in ConfigManager)
@@ -2003,7 +1998,6 @@ impl EguiLayer {
                         reset_effect_history: &mut reset_effect_history,
                         script_cloud,
                         script_cloud_request: &mut script_cloud_request,
-                        signed_in,
                         compact_mode: self.compact_mode,
                     },
                     touch_tracker: &mut self.touch_tracker,
@@ -2013,8 +2007,8 @@ impl EguiLayer {
             // fetches that install (and update) variations and effects.
             // A panel asked to show the Catalog somewhere (its online
             // section moved there).
-            if let Some((family, place)) = inventory::take_open() {
-                self.inventory_panel.open_at(family, place);
+            if let Some((family, place, select)) = inventory::take_open() {
+                self.inventory_panel.open_at(family, place, select);
                 open_catalog = true;
             }
 
@@ -2223,8 +2217,8 @@ impl EguiLayer {
             // A script track's window, and its Edit in the Formula Editor.
             track_editor::render_script_track_panel(ctx, animation_controller, &mut self.track_editor_state);
             if let Some(source) = self.track_editor_state.open_in_formula_editor.take() {
-                self.formula_editor.get_or_insert_with(formula_editor::FormulaEditorPanel::new).open_track(&source);
-                open_formula_editor = true;
+                self.rhai_editor.get_or_insert_with(rhai_editor::RhaiEditorPanel::new).open_track(&source);
+                open_rhai_editor = true;
             }
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
@@ -2669,8 +2663,7 @@ impl EguiLayer {
             open_triangle_editor,
             open_preset_library,
             open_random_generator,
-            open_formula_editor,
-            open_scripts_panel,
+            open_rhai_editor,
             open_lighting_panel,
             fractal_viewport_size,
             fly_mouse_drag,

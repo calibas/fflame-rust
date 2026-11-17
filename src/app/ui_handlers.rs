@@ -1145,15 +1145,10 @@ impl App {
             let ctx = &self.egui_layer.ctx;
             self.workspace.open_panel(PanelType::RandomGenerator, ctx);
         }
-        if ui_response.open_formula_editor {
+        if ui_response.open_rhai_editor {
             use crate::ui::workspace::PanelType;
             let ctx = &self.egui_layer.ctx;
-            self.workspace.open_panel(PanelType::FormulaEditor, ctx);
-        }
-        if ui_response.open_scripts_panel {
-            use crate::ui::workspace::PanelType;
-            let ctx = &self.egui_layer.ctx;
-            self.workspace.open_panel(PanelType::Scripts, ctx);
+            self.workspace.open_panel(PanelType::RhaiEditor, ctx);
         }
         if ui_response.open_lighting_panel {
             use crate::ui::workspace::PanelType;

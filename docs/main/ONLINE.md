@@ -129,10 +129,10 @@ settings file that says so reads as a guest.)
 | --- | --- |
 | File → **Save Online** | loading a web deep link (`?flame=`, `?animation=`) |
 | Window → **Account**, the startup auto-login | the variation catalog, fetched once per session |
-| the Catalog's Online place, **Mine** (your fractals, palettes and scripts; deleting your fractals and palettes) | fetching a variation a loaded flame names but the app lacks, and updating stale downloads |
+| the Catalog's Online place, **Mine** (your fractals, palettes and scripts; renaming, making public or private and deleting your fractals and palettes) | fetching a variation a loaded flame names but the app lacks, and updating stale downloads |
 | the menu bar's connection and account indicator | the effect catalog, fetching a missing effect, updating downloaded effects |
 | the periodic health check | the Catalog's Online place, **Public**: browsing and searching every resource, loading a public fractal, applying a palette, opening a script |
-| the Scripts panel's publishing; the Formula Editor's **Online** section | |
+| publishing your Rhai files and custom palettes (the Catalog's info pane) | |
 
 A guest's request goes unauthenticated (`ApiState::public_get`); signed
 in, the same request carries the token, so the server can also answer
@@ -335,10 +335,12 @@ entries (`formula`, `coloring`, `solid`, `field`, `field_coloring`,
 spellings, `storage::library::Kind::wire`). The server shows the entry
 kinds only to reader 7 or more.
 
-The Scripts panel, the Formula Editor and the Catalog (Open) raise a `ScriptCloudRequest`;
-the app performs it in the background
+The Catalog raises a `ScriptCloudRequest`: its info pane for a file of
+yours (publish, update, visibility, unpublish, a conflict's choice;
+[CATALOG.md](CATALOG.md)), its Online place to open someone's script.
+The app performs it in the background
 ([script_cloud.rs](../../src/app/script_cloud.rs)) and folds the answer
-into `ScriptCloudState`, which both panels draw. A request names its
+into `ScriptCloudState`, which the info pane draws. A request names its
 local file as a `Local`: `Script(stem)` in the script store, or
 `Entry(file)` in the formula store. Opening a public script needs no
 account; the rest needs sign-in. One request runs at a time. Browsing
@@ -347,10 +349,11 @@ and searching are the Catalog's (above).
 | request | does |
 | --- | --- |
 | `Publish` | create; records the returned id and version against the local file |
-| `Update` | update with the version last read; a 409 is a **conflict** the user resolves (`ScriptConflict`): the Scripts panel for a script, the Formula Editor for an entry |
+| `Update` | update with the version last read; a 409 is a **conflict** the user resolves (`ScriptConflict`) in the info pane of the file it names: overwrite the server's copy, or load theirs (`Refetch`) |
 | `Adopt` | fetch someone's script and save it locally under a free name, marked as somebody else's: a CPU script in the script store (it runs under the restrictions downloaded scripts get), an entry in the formula library. A kind this build does not know is refused |
 | `Refetch` | replace a local file's content with the server's in place, keeping its provenance and plug-in flag |
 | `Unpublish` | delete it from the server; the local copy stays (and stays a plug-in) |
+| `SetVisibility` | make a published file public or private |
 
 A CPU script's payload (`script_to_create_request`) is derived from the
 source by the script's own declaration pass — display name, kind,
@@ -362,8 +365,8 @@ the catalog's `script:<uuid>` type and the stored script are one id
 (the server links them: `script_id` on a config's components and on
 `/api/v1/types`, `used_by` on the script). The first to publish an id owns
 it: a create under a taken id is a 409, shown as "its id is published
-already". The Formula Editor's **Online** section publishes the entry it
-has open, once it is saved and the user's own:
+already". The Catalog's info pane publishes a stored file of the
+user's own (Publish private or public):
 
 - one without an id of its own (none, or not a UUID) is given one first,
   written into the file;
@@ -375,23 +378,16 @@ has open, once it is saved and the user's own:
   description and author from `INFO` and the header (the plain or English
   text of each label), the source.
 
-An adopted entry keeps its id: the copy is that script, and the editor
-refuses to republish it. Saving an edit of it gives it an id of its own
-(`entries::with_new_id`) and drops its cloud link and its mark as
-somebody else's: it is then a script of the user's own. A config keeps
-carrying the source of every entry it uses, published or not.
-
---- | --- |
-| `Publish` | create; records the returned id and version against the local script |
-| `Update` | update with the version last read; a 409 is a **conflict** the user resolves (`ScriptConflict`) |
-| `Adopt` | fetch someone's script and save it locally under a free name, marked as somebody else's, so it runs under the restrictions downloaded scripts get |
-| `Refetch` | replace a local script's content with the server's in place, keeping its provenance |
-| `Unpublish` | delete it from the server; the local copy stays |
-
-A publish payload (`script_to_create_request`) is derived from the
-source by the script's own declaration pass — display name, kind,
-flags, and the header comment as the description — so a script that
-does not compile cannot be published. It can still be saved locally.
+An adopted file keeps its link: the copy is that script, and the
+Catalog refuses to republish it (`manage::publish_refusal`). Saving an
+edit of it in the Rhai Editor frees it of that online script
+(decision 3 of [catalog.md](../projects/catalog.md), phase 4): an entry
+gets an id of its own (`entries::with_new_id`) and loses its cloud link
+and its mark as somebody else's, so it is the user's own; a CPU script
+loses its cloud link, so it can be published as the user's, but keeps
+the mark and runs restricted -- editing a line is not reading the rest.
+A config keeps carrying the source of every entry it uses, published or
+not.
 
 ---
 
