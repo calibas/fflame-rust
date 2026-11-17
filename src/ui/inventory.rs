@@ -65,6 +65,32 @@ pub fn download_failure(e: &Entry) -> Option<String> {
     FAILED.lock().ok()?.iter().find(|((k, n), _)| k == kind && n == name).map(|(_, why)| why.clone())
 }
 
+/// A panel asked to show the Catalog at a family and place.
+static OPEN: Mutex<Option<(Family, Place)>> = Mutex::new(None);
+
+/// Show the Catalog at `family` in `place` (opening its panel): what a
+/// panel whose online section moved into the Catalog offers instead.
+pub fn request_open(family: Family, place: Place) {
+    if let Ok(mut o) = OPEN.lock() {
+        *o = Some((family, place));
+    }
+}
+
+/// The open asked for since the last call.
+pub fn take_open() -> Option<(Family, Place)> {
+    OPEN.lock().ok()?.take()
+}
+
+/// A line saying where something moved, and a button that shows it there.
+pub fn moved_here(ui: &mut egui::Ui, what: &str, family: Family, place: Place) {
+    ui.horizontal_wrapped(|ui| {
+        ui.weak(what);
+        if ui.button(t!("catalog.open_in_catalog")).clicked() {
+            request_open(family, place);
+        }
+    });
+}
+
 /// The list every picker reads: the Catalog's, as last refreshed.
 pub fn shared() -> Arc<Vec<Entry>> {
     SHARED.read().ok().and_then(|g| g.clone()).unwrap_or_default()
@@ -260,6 +286,17 @@ impl InventoryPanel {
             return self.online.find(key).map(|(e, _)| e);
         }
         self.entries.iter().find(|e| &e.key == key)
+    }
+
+    /// Show `family` in `place`.
+    pub fn open_at(&mut self, family: Family, place: Place) {
+        self.open_on(family);
+        self.place = place;
+    }
+
+    /// Your own online lists changed (a fractal saved online): ask again.
+    pub fn forget_online(&mut self) {
+        self.online.forget();
     }
 
     /// The session signed out: the Online place forgets your own lists.

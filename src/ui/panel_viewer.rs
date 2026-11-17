@@ -509,21 +509,13 @@ pub struct PanelContext<'a> {
     /// The escape terrain's measured count or relief range, for the
     /// Escape panel's lock to pin (terrain-height.md, H3).
     pub terrain_range: Option<[f32; 2]>,
-    /// Downloaded variations the Variations panel asked to re-fetch at
-    /// the catalog's version. Consumed by App.
-    pub variation_update_requested: &'a mut Vec<String>,
-    /// The same for downloaded effects (the Effects panel), and its
-    /// Clear Cache.
-    pub effect_update_requested: &'a mut Vec<String>,
+    /// The Catalog's Clear Cache of the downloaded effects.
     pub clear_effect_cache_requested: &'a mut bool,
     /// The Effects panel's Reset: a temporal effect's history starts over.
     pub reset_effect_history: &'a mut bool,
     /// Online-library state the Scripts panel reads, and the slot it
     /// writes a request into. Owned by App.
     pub script_cloud: &'a crate::app::script_cloud::ScriptCloudState,
-    /// Last-fetched effect catalog, if there is one. `None` offline and
-    /// never-fetched; the panel simply omits its catalog section.
-    pub effect_catalog: Option<&'a crate::storage::effect_catalog::CachedEffectCatalog>,
     pub script_cloud_request: &'a mut Option<crate::app::script_cloud::ScriptCloudRequest>,
     /// Whether anyone is signed in — the panel shows its online section
     /// only then, rather than offering actions that cannot work.
@@ -790,17 +782,11 @@ impl<'a> PanelViewer<'a> {
                 self.render_save_online_dialog(ui);
             }
             PanelType::Variations => {
-                let response = super::variations::render_variations_panel(
+                super::variations::render_variations_panel(
                     ui,
                     self.context.flame,
                     self.context.variation_catalog,
                 );
-                if response.clear_cache_requested {
-                    *self.context.clear_variation_cache_requested = true;
-                }
-                if !response.update_requested.is_empty() {
-                    *self.context.variation_update_requested = response.update_requested;
-                }
             }
             PanelType::Scripts => {
                 self.render_scripts_panel(ui);
@@ -2003,11 +1989,8 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.config_manager,
             self.context.animation_controller,
-            self.context.effect_catalog,
             self.context.formula_editor,
             self.context.open_formula_editor,
-            self.context.effect_update_requested,
-            self.context.clear_effect_cache_requested,
             self.context.reset_effect_history,
         );
     }

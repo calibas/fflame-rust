@@ -1573,6 +1573,7 @@ impl EguiLayer {
         // Panel open requests
         let mut open_palette_editor = false;
         let mut open_palette_library = false;
+        let mut open_catalog = false;
         let open_config_dialog = false;
         let mut open_triangle_editor = false;
         let mut open_preset_library = false;
@@ -2036,12 +2037,9 @@ impl EguiLayer {
                         sim_timeline_holding,
                         sim_timeline_driven,
                         terrain_range,
-                        variation_update_requested: &mut variation_update_requested,
-                        effect_update_requested: &mut effect_update_requested,
                         clear_effect_cache_requested: &mut clear_effect_cache_requested,
                         reset_effect_history: &mut reset_effect_history,
                         script_cloud,
-                        effect_catalog,
                         script_cloud_request: &mut script_cloud_request,
                         signed_in,
                         compact_mode: self.compact_mode,
@@ -2051,6 +2049,13 @@ impl EguiLayer {
 
             // Downloads the Catalog and its pickers asked for: through the
             // fetches that install (and update) variations and effects.
+            // A panel asked to show the Catalog somewhere (its online
+            // section moved there).
+            if let Some((family, place)) = inventory::take_open() {
+                self.inventory_panel.open_at(family, place);
+                open_catalog = true;
+            }
+
             for (kind, name) in inventory::take_downloads() {
                 match kind {
                     crate::inventory::Kind::Variation => variation_update_requested.push(name),
@@ -2704,6 +2709,7 @@ impl EguiLayer {
             attachment_edit,
             open_palette_editor,
             open_palette_library,
+            open_catalog,
             open_config_dialog,
             open_triangle_editor,
             open_preset_library,

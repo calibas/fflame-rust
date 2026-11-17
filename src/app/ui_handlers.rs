@@ -1121,6 +1121,10 @@ impl App {
             let ctx = &self.egui_layer.ctx;
             self.workspace.open_panel(PanelType::Inventory, ctx);
         }
+        if ui_response.open_catalog {
+            let ctx = &self.egui_layer.ctx;
+            self.workspace.open_panel(crate::ui::workspace::PanelType::Inventory, ctx);
+        }
         if ui_response.open_config_dialog {
             use crate::ui::workspace::PanelType;
             let ctx = &self.egui_layer.ctx; self.workspace.open_panel(PanelType::ConfigDialog, ctx);

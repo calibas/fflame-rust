@@ -287,6 +287,7 @@ panels:
   simulation: "Simulation"
 
 variations_panel:
+  moved_to_catalog: "The online library's variations, updates and Clear Cache are in the Catalog."
   total: "%{count} total"
   category_basic_2d: "Basic 2D"
   category_advanced_2d: "Advanced 2D"
@@ -3097,6 +3098,7 @@ library:
   plugin: "(plug-in)"
 
 effects_panel:
+  moved_to_catalog: "The online library's effects, updates and Clear Cache are in the Catalog."
   add_effect: "Add effect…"
   update: "Update"
   update_all: "Update all (%{count})"
@@ -3366,6 +3368,7 @@ catalog:
   delete_no: "Keep it"
   deleted: "Deleted \"%{name}\"."
   delete_failed: "Could not delete it: %{error}"
+  open_in_catalog: "Open in Catalog"
   updates: "Updates (%{count})"
   updates_tip: "Downloads the online library has a newer version of"
   update_all: "Update All"
