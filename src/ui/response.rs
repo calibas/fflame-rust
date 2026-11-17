@@ -89,6 +89,8 @@ pub struct UiResponse {
     // Panel open requests
     pub open_palette_editor: bool,
     pub open_palette_library: bool,
+    /// Open the Catalog's panel (where `inventory::take_open` set it).
+    pub open_catalog: bool,
     pub open_config_dialog: bool,
     pub open_triangle_editor: bool,
     pub open_preset_library: bool,
@@ -266,6 +268,7 @@ impl Default for UiResponse {
             attachment_edit: None,
             open_palette_editor: false,
             open_palette_library: false,
+            open_catalog: false,
             open_config_dialog: false,
             open_triangle_editor: false,
             open_preset_library: false,

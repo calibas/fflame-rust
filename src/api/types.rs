@@ -431,11 +431,23 @@ pub struct AnimationSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlameListItem {
     pub id: String,
+    #[serde(default)]
+    pub owner: Option<Owner>,
     pub name: String,
+    /// Markdown.
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub visibility: Option<ApiVisibility>,
+    /// Its thumbnail, a path on the API, or none: used as given.
+    #[serde(default)]
+    pub thumbnail_url: Option<String>,
     pub render_mode: ApiRenderMode,
     pub transform_count: i32,
     pub variation_names: Vec<String>,
     pub has_3d: bool,
+    #[serde(default)]
+    pub favorite_count: i32,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -563,6 +575,8 @@ pub struct ApiPalette {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PaletteItem {
     pub id: String,
+    #[serde(default)]
+    pub owner: Option<Owner>,
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,

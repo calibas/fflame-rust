@@ -20,6 +20,10 @@
 //! (`ui::picker`), so every list of a kind is the same list. What the
 //! server offers and the app lacks is listed too, its Use a **Download**
 //! ([`request_download`], drained into the app's fetches once a frame).
+//!
+//! Two places, chosen at the top: **On this device**, the list above, and
+//! **Online**, what the server holds for the family, public or your own,
+//! page by page (`ui::inventory_online`).
 
 use super::fractal_gallery::FractalConfigGallery;
 use crate::config::{ConfigManager, ConfigPath, FractalConfig};
@@ -38,6 +42,55 @@ static SHARED: RwLock<Option<Arc<Vec<Entry>>>> = RwLock::new(None);
 /// again).
 static DOWNLOADS: Mutex<(Vec<(Kind, String)>, Vec<(Kind, String)>)> = Mutex::new((Vec::new(), Vec::new()));
 
+/// Downloads that failed this session, with the reason: their rows say so
+/// and offer Download again.
+static FAILED: Mutex<Vec<((Kind, String), String)>> = Mutex::new(Vec::new());
+
+/// The app's fetch could not install `name` (`app::variation_fetch`,
+/// `app::effect_fetch`): it is asked for no more, and its row says why.
+pub fn download_failed(kind: Kind, name: &str, why: &str) {
+    let item = (kind, name.to_string());
+    if let Ok(mut d) = DOWNLOADS.lock() {
+        d.1.retain(|i| *i != item);
+    }
+    if let Ok(mut f) = FAILED.lock() {
+        f.retain(|(i, _)| *i != item);
+        f.push((item, why.to_string()));
+    }
+}
+
+/// Why the last download of the entry failed, if it did.
+pub fn download_failure(e: &Entry) -> Option<String> {
+    let EntryKey::Registered(kind, name) = &e.key else { return None };
+    FAILED.lock().ok()?.iter().find(|((k, n), _)| k == kind && n == name).map(|(_, why)| why.clone())
+}
+
+/// A panel asked to show the Catalog at a family and place.
+static OPEN: Mutex<Option<(Family, Place)>> = Mutex::new(None);
+
+/// Show the Catalog at `family` in `place` (opening its panel): what a
+/// panel whose online section moved into the Catalog offers instead.
+pub fn request_open(family: Family, place: Place) {
+    if let Ok(mut o) = OPEN.lock() {
+        *o = Some((family, place));
+    }
+}
+
+/// The open asked for since the last call.
+pub fn take_open() -> Option<(Family, Place)> {
+    OPEN.lock().ok()?.take()
+}
+
+/// A line saying where something moved, and a button that shows it there.
+pub fn moved_here(ui: &mut egui::Ui, what: &str, family: Family, place: Place) {
+    ui.horizontal_wrapped(|ui| {
+        ui.weak(what);
+        if ui.button(t!("catalog.open_in_catalog")).clicked() {
+            request_open(family, place);
+        }
+    });
+}
+
 /// The list every picker reads: the Catalog's, as last refreshed.
 pub fn shared() -> Arc<Vec<Entry>> {
     SHARED.read().ok().and_then(|g| g.clone()).unwrap_or_default()
@@ -46,6 +99,9 @@ pub fn shared() -> Arc<Vec<Entry>> {
 /// Ask for an entry the app lacks (`!installed`) to be downloaded.
 pub fn request_download(e: &Entry) {
     let EntryKey::Registered(kind, name) = &e.key else { return };
+    if let Ok(mut f) = FAILED.lock() {
+        f.retain(|((k, n), _)| !(k == kind && n == name));
+    }
     if let Ok(mut d) = DOWNLOADS.lock() {
         let item = (*kind, name.clone());
         if !d.1.contains(&item) {
@@ -101,6 +157,33 @@ impl OriginFilter {
     }
 }
 
+/// Where the list comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Place {
+    #[default]
+    Local,
+    Online,
+}
+
+/// The online account as a request needs it: whether the session is
+/// signed in, and its token (desktop; the web's cookie needs none).
+#[derive(Debug, Clone, Default)]
+pub struct CloudAccount {
+    pub signed_in: bool,
+    pub token: Option<String>,
+}
+
+impl CloudAccount {
+    /// An API client for one request.
+    pub fn api(&self) -> crate::api::ApiState {
+        let mut api = crate::api::ApiState::new(crate::api::API_BASE_URL);
+        if let Some(t) = self.token.as_deref().filter(|t| !t.is_empty()) {
+            api.set_token(t);
+        }
+        api
+    }
+}
+
 /// What the panel asks of the app this frame.
 #[derive(Default)]
 pub struct InventoryResponse {
@@ -112,6 +195,14 @@ pub struct InventoryResponse {
     pub open_formula_file: Option<(String, bool)>,
     /// A CPU script to select in the Scripts panel, by its stem.
     pub open_script: Option<String>,
+    /// An online fractal loaded, by its id, to load as the Fractal
+    /// Browser's Online tab did (one undo step; Save Online updates it).
+    pub load_api_flame: Option<(String, crate::api::FlameLoadResult)>,
+    /// An online script to open (adopt into your files).
+    pub script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest>,
+    /// Clear Cache: the downloaded variations, or effects.
+    pub clear_variation_cache: bool,
+    pub clear_effect_cache: bool,
 }
 
 /// What the panel needs from the app to draw.
@@ -119,15 +210,12 @@ pub struct InventoryContext<'a> {
     pub config_manager: &'a mut ConfigManager,
     /// The palette library the app shows: its packs, as enabled and loaded.
     pub palette_library: &'a mut PaletteLibrary,
-    /// With the online account on: the user's cloud palettes, after the
-    /// packs (the Palette Library's Cloud Palettes).
-    pub cloud_palettes: Option<CloudPalettes<'a>>,
-}
-
-/// The cloud palettes' state, and the credentials when signed in.
-pub struct CloudPalettes<'a> {
-    pub state: &'a mut super::CloudPaletteState,
-    pub auth: Option<(&'a str, &'a str)>,
+    /// The online account, for the Online place's requests.
+    pub account: CloudAccount,
+    /// The script cloud is busy (opening a script waits for it), and its
+    /// last word.
+    pub script_cloud_busy: bool,
+    pub script_cloud_status: Option<&'a str>,
 }
 
 pub struct InventoryPanel {
@@ -139,6 +227,10 @@ pub struct InventoryPanel {
     origin: OriginFilter,
     query: String,
     selected: Option<EntryKey>,
+    /// Only the downloads the server has a newer version of.
+    updates_only: bool,
+    place: Place,
+    online: super::inventory_online::OnlinePlace,
     /// The presets, a gallery a category, made when first shown.
     preset_galleries: Option<Vec<FractalConfigGallery>>,
     preset_category: PresetCategory,
@@ -160,6 +252,9 @@ impl InventoryPanel {
             origin: OriginFilter::All,
             query: String::new(),
             selected: None,
+            updates_only: false,
+            place: Place::Local,
+            online: super::inventory_online::OnlinePlace::new(),
             preset_galleries: None,
             preset_category: PresetCategory::default(),
         }
@@ -174,10 +269,30 @@ impl InventoryPanel {
         }
     }
 
-    /// The entry selected, as the list last read it.
+    /// The entry selected, as the list last read it (an online one, as
+    /// its page did).
     pub fn selected(&self) -> Option<&Entry> {
         let key = self.selected.as_ref()?;
+        if matches!(key, EntryKey::Online(..)) {
+            return self.online.find(key).map(|(e, _)| e);
+        }
         self.entries.iter().find(|e| &e.key == key)
+    }
+
+    /// Show `family` in `place`.
+    pub fn open_at(&mut self, family: Family, place: Place) {
+        self.open_on(family);
+        self.place = place;
+    }
+
+    /// Your own online lists changed (a fractal saved online): ask again.
+    pub fn forget_online(&mut self) {
+        self.online.forget();
+    }
+
+    /// The session signed out: the Online place forgets your own lists.
+    pub fn signed_out(&mut self) {
+        self.online.signed_out();
     }
 
     /// Read the sources again when what they hold has changed, and share
@@ -187,6 +302,14 @@ impl InventoryPanel {
         if self.revision != Some(rev) {
             self.entries = Arc::new(inventory::scan(library, online));
             self.revision = Some(rev);
+            // What was asked for and is now in, current, is asked for no
+            // more (a later update may ask again).
+            if let Ok(mut d) = DOWNLOADS.lock() {
+                let entries = &self.entries;
+                d.1.retain(|(k, n)| {
+                    !entries.iter().any(|e| e.key == EntryKey::Registered(*k, n.clone()) && e.installed && e.update.is_none())
+                });
+            }
             if let Ok(mut s) = SHARED.write() {
                 *s = Some(self.entries.clone());
             }
@@ -194,12 +317,19 @@ impl InventoryPanel {
     }
 
     fn visible(&self, e: &Entry) -> bool {
-        e.kind.family() == self.family && self.kind.is_none_or(|k| k == e.kind) && self.origin.admits(e) && e.matches(&self.query)
+        let place = match self.place {
+            Place::Local => self.origin.admits(e) && (!self.updates_only || e.update.is_some()),
+            // Online, of this device's list: what the server's catalog
+            // offers, downloaded or not.
+            Place::Online => e.origin == Origin::Api || !e.installed,
+        };
+        e.kind.family() == self.family && self.kind.is_none_or(|k| k == e.kind) && place && e.matches(&self.query)
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext) -> InventoryResponse {
         let mut out = InventoryResponse::default();
-        self.render_top(ui);
+        self.online.update(ui.ctx(), &self.query, &self.entries, &mut out);
+        self.render_top(ui, cx, &mut out);
         ui.separator();
         if ui.available_width() >= 560.0 {
             egui::Panel::right("catalog_info").resizable(true).default_size(280.0).min_size(200.0).show_inside(ui, |ui| {
@@ -219,11 +349,20 @@ impl InventoryPanel {
 
     // ------------------------------------------------------------------ top
 
-    fn render_top(&mut self, ui: &mut egui::Ui) {
+    fn render_top(&mut self, ui: &mut egui::Ui, cx: &InventoryContext, out: &mut InventoryResponse) {
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut self.place, Place::Local, t!("catalog.place_local"));
+            ui.selectable_value(&mut self.place, Place::Online, t!("catalog.place_online")).on_hover_text(t!("catalog.place_online_tip"));
+        });
         ui.horizontal_wrapped(|ui| {
             for family in Family::ALL {
-                let count = self.entries.iter().filter(|e| e.kind.family() == family).count();
-                let label = format!("{} ({count})", t!(family.label_key()));
+                let label = match self.place {
+                    Place::Local => {
+                        let count = self.entries.iter().filter(|e| e.kind.family() == family).count();
+                        format!("{} ({count})", t!(family.label_key()))
+                    }
+                    Place::Online => t!(family.label_key()).to_string(),
+                };
                 if ui.selectable_label(self.family == family, label).clicked() {
                     self.open_on(family);
                 }
@@ -234,14 +373,25 @@ impl InventoryPanel {
             if !self.query.is_empty() && ui.small_button("×").on_hover_text(t!("catalog.clear_search")).clicked() {
                 self.query.clear();
             }
-            egui::ComboBox::from_id_salt("catalog_origin").selected_text(t!(self.origin.label_key())).show_ui(ui, |ui| {
-                for o in OriginFilter::ALL {
-                    ui.selectable_value(&mut self.origin, o, t!(o.label_key()));
-                }
-            });
+            if self.place == Place::Local {
+                egui::ComboBox::from_id_salt("catalog_origin").selected_text(t!(self.origin.label_key())).show_ui(ui, |ui| {
+                    for o in OriginFilter::ALL {
+                        ui.selectable_value(&mut self.origin, o, t!(o.label_key()));
+                    }
+                });
+            }
         });
+        if self.place == Place::Online {
+            self.online.render_top(ui, self.family, &cx.account);
+        }
+        if self.place == Place::Local && matches!(self.family, Family::Variations | Family::Effects) {
+            self.render_downloads_bar(ui, out);
+        }
         // A family of several kinds: a chip each that has entries.
-        let mut kinds: Vec<Kind> = self.entries.iter().filter(|e| e.kind.family() == self.family).map(|e| e.kind).collect();
+        let mut kinds: Vec<Kind> = match self.place {
+            Place::Local => self.entries.iter().filter(|e| e.kind.family() == self.family).map(|e| e.kind).collect(),
+            Place::Online => super::inventory_online::kinds(self.family),
+        };
         kinds.dedup();
         if kinds.len() > 1 {
             ui.horizontal_wrapped(|ui| {
@@ -257,9 +407,55 @@ impl InventoryPanel {
         }
     }
 
+    /// Variations and effects on this device: the downloads the server
+    /// has a newer version of (a chip, and Update all), and Clear Cache
+    /// (the Variations and Effects panels' catalog sections, moved here).
+    fn render_downloads_bar(&mut self, ui: &mut egui::Ui, out: &mut InventoryResponse) {
+        let family = self.family;
+        let stale: Vec<Entry> = self.entries.iter().filter(|e| e.kind.family() == family && e.update.is_some()).cloned().collect();
+        let downloads = self.entries.iter().any(|e| e.kind.family() == family && e.origin == Origin::Api && e.installed);
+        if stale.is_empty() {
+            self.updates_only = false;
+        }
+        if stale.is_empty() && !downloads {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            if !stale.is_empty() {
+                let label = t!("catalog.updates", count = stale.len());
+                if ui.selectable_label(self.updates_only, label).on_hover_text(t!("catalog.updates_tip")).clicked() {
+                    self.updates_only = !self.updates_only;
+                }
+                if ui.button(t!("catalog.update_all")).clicked() {
+                    for e in &stale {
+                        request_download(e);
+                    }
+                }
+            }
+            if downloads && ui.button(t!("catalog.clear_cache")).on_hover_text(t!("catalog.clear_cache_tip")).clicked() {
+                match family {
+                    Family::Variations => out.clear_variation_cache = true,
+                    _ => out.clear_effect_cache = true,
+                }
+            }
+        });
+    }
+
     // ----------------------------------------------------------------- list
 
     fn render_list(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext, out: &mut InventoryResponse) {
+        if self.place == Place::Online {
+            egui::ScrollArea::vertical().id_salt("catalog_online_list").auto_shrink([false, false]).show(ui, |ui| {
+                // Variations and effects: the cached catalog first (it is
+                // the server's whole list), then the Rhai ones people
+                // published.
+                if matches!(self.family, Family::Variations | Family::Effects) {
+                    self.render_grouped(ui, cx, out);
+                }
+                self.online.render_list(ui, self.family, self.kind, &mut self.selected, cx);
+            });
+            return;
+        }
         // The presets as galleries, unless a search or a filter asks for
         // rows.
         if self.family == Family::Fractals && self.query.trim().is_empty() && self.origin == OriginFilter::All {
@@ -370,9 +566,16 @@ impl InventoryPanel {
             ui.label(t!("palette_library.no_packs"));
             ui.label(t!("palette_library.no_packs_hint"));
         }
-        if let Some(cloud) = cx.cloud_palettes.as_mut() {
+        if cx.account.signed_in {
+            // Cloud Palettes became the Online place's own palettes.
             ui.separator();
-            super::palette_library::render_cloud_palettes_section(ui, cloud.state, cx.config_manager, cloud.auth);
+            ui.horizontal_wrapped(|ui| {
+                ui.weak(t!("catalog.your_online_palettes"));
+                if ui.button(t!("catalog.show_mine")).clicked() {
+                    self.place = Place::Online;
+                    self.online.scope = crate::api::Scope::Mine;
+                }
+            });
         }
         if let Some((hash, palette)) = clicked {
             self.selected = Some(EntryKey::Palette(hash));
@@ -446,16 +649,46 @@ impl InventoryPanel {
     // ----------------------------------------------------------------- info
 
     fn render_info(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext, out: &mut InventoryResponse) {
+        if let Some(key @ EntryKey::Online(..)) = self.selected.clone() {
+            match self.online.render_info(ui, &key, cx, out) {
+                Some(super::inventory_online::InfoAction::ShowLocal(local)) => {
+                    if let Some(e) = self.entries.iter().find(|e| e.key == local) {
+                        self.family = e.kind.family();
+                        self.kind = None;
+                    }
+                    self.place = Place::Local;
+                    self.selected = Some(local);
+                }
+                None if self.online.find(&key).is_none() => {
+                    ui.weak(t!("catalog.select_hint"));
+                }
+                None => {}
+            }
+            return;
+        }
         let Some(e) = self.selected().cloned() else {
             ui.weak(t!("catalog.select_hint"));
             return;
         };
         entry_summary(ui, &e, Some(cx.palette_library));
+        if let Some(v) = &e.update {
+            ui.label(egui::RichText::new(t!("catalog.update_available", version = v.clone())).strong());
+        }
+        if let Some(why) = download_failure(&e) {
+            ui.colored_label(ui.visuals().error_fg_color, t!("catalog.download_failed", error = why));
+        }
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             if !e.installed {
                 download_button(ui, &e);
                 return;
+            }
+            if e.update.is_some() {
+                if download_requested(&e) {
+                    ui.add_enabled(false, egui::Button::new(t!("catalog.updating")));
+                } else if ui.button(t!("catalog.update")).clicked() {
+                    request_download(&e);
+                }
             }
             match usable(&e, cx.config_manager.active_config()) {
                 Ok(()) => {
@@ -496,7 +729,7 @@ fn preset_galleries() -> Vec<FractalConfigGallery> {
 
 /// A palette row: its name, and its gradient at the right; the texture is
 /// made only once the row is on screen.
-fn palette_row(ui: &mut egui::Ui, hash: &str, title: &str, palette: &crate::scene::palette::Palette, selected: bool) -> egui::Response {
+pub(super) fn palette_row(ui: &mut egui::Ui, hash: &str, title: &str, palette: &crate::scene::palette::Palette, selected: bool) -> egui::Response {
     let h = 20.0;
     let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h + 4.0), egui::Sense::click());
     if !ui.is_rect_visible(rect) {
@@ -554,7 +787,13 @@ pub(crate) fn entry_summary(ui: &mut egui::Ui, e: &Entry, palettes: Option<&Pale
 /// A row's text: the title, the origin's mark, a plug-in's; a download
 /// arrow for what is not installed.
 pub(crate) fn row_label(e: &Entry) -> String {
-    let available = if e.installed { "" } else { "  \u{2193}" };
+    let available = if !e.installed {
+        "  \u{2193}"
+    } else if e.update.is_some() {
+        "  \u{2191}"
+    } else {
+        ""
+    };
     format!("{}{}{available}", e.title, crate::storage::library::marks(e.origin, e.plugin))
 }
 
@@ -669,7 +908,7 @@ fn editing_flame_is_empty(config: &FractalConfig) -> bool {
     f.transforms.is_empty() && f.linked_transforms.is_empty() && f.final_transforms.is_empty()
 }
 
-fn apply_palette(config_manager: &mut ConfigManager, palette: crate::scene::palette::Palette) {
+pub(super) fn apply_palette(config_manager: &mut ConfigManager, palette: crate::scene::palette::Palette) {
     // An editable copy: editing it changes only the config's palette,
     // until it is saved to the library.
     let mut copy = palette;
@@ -784,12 +1023,35 @@ mod tests {
             link: None,
             installed: true,
             category: None,
+            update: None,
+            online: None,
         };
         assert!(OriginFilter::Builtin.admits(&e) && !OriginFilter::Yours.admits(&e) && !OriginFilter::Plugins.admits(&e));
         e.origin = Origin::Local;
         e.plugin = true;
         assert!(OriginFilter::Yours.admits(&e) && OriginFilter::Plugins.admits(&e) && !OriginFilter::FromOthers.admits(&e));
         assert!(OriginFilter::ALL.iter().any(|o| *o == OriginFilter::All && o.admits(&e)));
+    }
+
+    /// A failed download is asked for no more and says why; asking again
+    /// clears the failure. (Before, its row said *Downloading…* until
+    /// the app restarted.)
+    #[test]
+    fn a_failed_download_can_be_asked_again() {
+        let mut e = crate::ui::picker::row(Kind::Variation, "it_failing_download", "Failing", inventory::Group { order: 1000, label: String::new() });
+        e.installed = false;
+        request_download(&e);
+        assert!(download_requested(&e));
+        assert!(take_downloads().iter().any(|(_, n)| n == "it_failing_download"));
+        download_failed(Kind::Variation, "it_failing_download", "HTTP 500");
+        assert!(!download_requested(&e), "no longer coming");
+        assert_eq!(download_failure(&e).as_deref(), Some("HTTP 500"));
+        request_download(&e);
+        assert!(download_requested(&e) && download_failure(&e).is_none(), "asked again");
+        assert!(row_label(&e).ends_with("  \u{2193}"), "the download mark");
+        e.installed = true;
+        e.update = Some("v4".into());
+        assert!(row_label(&e).ends_with("  \u{2191}"), "an update's mark");
     }
 
     /// Use's rules: a variation needs a flame mode (and 3D for a 3D-only
@@ -810,6 +1072,8 @@ mod tests {
             link: None,
             installed: true,
             category: None,
+            update: None,
+            online: None,
         };
         // A flame with transforms to add to.
         let mut config = crate::scene::presets::global_preset_library().presets()[0].clone();

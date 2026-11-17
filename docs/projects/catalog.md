@@ -1,12 +1,12 @@
 # The Catalog: one place for every resource
 
-> **Status 2026-11-16: phases 0 and 1 merged** (the API reshaped in place
-> on ffapi, its `docs/catalog-api-build.md`, and this app's client moved to
-> it; the model and the panel). **Phase 2, the picker, built** on branch
-> `catalog-picker`, unmerged ([CATALOG.md](../main/CATALOG.md), *The
-> picker*). Every decision is made (*Decided*). The two surveys this plan
-> stands on (the app's sources, the API's routes) were taken 2026-11-16
-> and are summarised under *What exists*.
+> **Status 2026-11-16: phases 0-2 merged** (the API reshaped in place on
+> ffapi, its `docs/catalog-api-build.md`, and this app's client moved to
+> it; the model and the panel; the picker, PR #167). **Phase 3, online,
+> built** on branch `catalog-online`, unmerged (*Phase 3: online*, below;
+> as built: [CATALOG.md](../main/CATALOG.md), *Online*). The two surveys this plan stands on (the app's
+> sources, the API's routes) were taken 2026-11-16 and are summarised
+> under *What exists*; the online survey under *Phase 3*.
 
 ## The goal
 
@@ -294,6 +294,111 @@ Principles to agree before the ffapi branch (compatibility: *Decided after the s
 
 Each phase is a branch, merged before the next starts, except 0 and 1,
 which run side by side.
+
+## Phase 3: online
+
+### What the app does online today (surveyed 2026-11-16)
+
+Five sections, each written its own way:
+
+| Section | Shows, offers | State, requests | Account |
+|---|---|---|---|
+| Variations panel, catalog (`render_catalog_summary`) | counts; stale downloads with Update / Update all; the first 40 available names, no buttons; Clear Cache | `App.variation_catalog` (cached on disk, fetched once a session, every page by cursor); `variation_update_requested` → `trigger_variation_fetches`, **pausing rendering** until done or 30 s | guest |
+| Effects panel, catalog (`render_effect_catalog`) | the same for effects (strings untranslated) | `App.effect_catalog`; `effect_update_requested`; no pause | guest |
+| Cloud Palettes (`render_cloud_palettes_section`, in the Catalog's palettes) | your library: name, gradient, click applies, a delete without confirmation | `CloudPaletteState` on the UI layer; its own thread and slot; page 1 of 100 | account |
+| Fractal Browser, Online tab | **your** flames as text rows (no thumbnails), name search, mode filter, load, delete | panel fields, three slots; page 1 of 100; the only section that signs out on a 401 | account |
+| Scripts panel, online (`render_cloud`) | Public scripts: search, Open (adopt); Published by you; publish, update, unpublish, conflicts. The Formula Editor: publish the open file | `App.script_cloud`, `ScriptCloudRequest` → `run_request`; first page only | search, open: guest; the rest: account |
+
+Found along the way:
+- **No shared request helper.** Every section writes the same
+  thread-or-`spawn_local`, slot and per-frame poll (32 `spawn_local` sites
+  in 14 files); panel-owned threads never ask for a redraw.
+- **An expired sign-in** signs out only from the Fractal Browser; Cloud
+  Palettes and the script cloud show the 401 as a status line.
+- **Never wired**: public flames (`search_public_flames` has no caller),
+  public palettes (no client function), `/types`, `/meta`, someone's
+  public items, thumbnails (`thumbnail_url` is not read; nothing
+  downloads one). `FlameListItem` lacks the owner, visibility,
+  description and `thumbnail_url` the API sends.
+- **A signed-out desktop cannot load a public flame**:
+  `load_flame_with_visibility` requires a token.
+- **A failed Catalog download** says *Downloading…* until restart (the
+  session's asked list is never cleared).
+
+### Decided (2026-11-16)
+
+The user's picks, all as recommended:
+1. **Online is a place in the top bar** (*On this device* | *Online*), not
+   an origin in the filter: a server query pages and searches unlike a
+   local filter.
+2. **Online fractals as a thumbnail grid**: the server's thumbnails
+   (`thumbnail_url`), downloaded as they scroll into view and cached on
+   disk by URL -- the app's first thumbnail download.
+3. **Publishing waits for phase 4**: publish, update, unpublish and
+   conflicts stay in the Scripts panel and the Formula Editor until the
+   Rhai Editor moves them, so they move once.
+
+### The design
+
+**Two places in the Catalog's top bar: *On this device* and *Online*.**
+On this device is the list as built in phases 1 and 2 (the cached
+variation and effect catalogs' downloads stay in it, as now). Online
+lists what the server holds for the family, asked of it page by page:
+
+| Family | Online asks | Use |
+|---|---|---|
+| Palettes | `GET /palettes`; Mine: `GET /users/me/palettes` | applies a copy (as a click on a library palette); Mine: delete (confirmed) |
+| Fractals | `GET /flames`; Mine: `GET /users/me/flames` (with the mode filter); a grid of the server's thumbnails (decision 2) | loads it, one undo step; Mine: delete (confirmed) |
+| Variations, effects | the cached catalog (it is the whole list) | Download, Update |
+| Escape, simulation, scripts | `GET /scripts?kind=` for each of the family's kinds, a group each with its own paging; Mine: `GET /users/me/scripts` | Open: adopt into your files (as the Scripts panel's Open; the warning about running someone's code kept) |
+
+- **Public for everyone, Mine signed in.** A guest browses and opens
+  public items, as a guest already searches public scripts; Mine, and
+  deleting, need the account (ONLINE.md's table gains the rows).
+- **Search is the server's** (`q`, sent 400 ms after the typing stops);
+  the sort is each resource's (`recent`, `popular`, `name`, ...);
+  **paging is lazy**: reaching the end of a group asks for its `next`.
+- **Rows are entries** (`EntryKey::Online(Kind, id)`, `Origin::Api`),
+  with the owner and the time, drawn and selected as every row, so the
+  info pane, the search box and the phone layout to come are the list's;
+  an online row that the app already holds (a variation by name, a
+  palette by content hash, a script by its link) says so and offers its
+  local entry.
+- **Updates on this device**: `Entry` gains the newer version the cached
+  catalog offers; an *Updates (n)* chip shows them, each with Update, and
+  Update all. **Clear Cache** moves to the Variations and Effects
+  families' top bar.
+
+**One request helper** (`api::job`): spawn (a thread on desktop,
+`spawn_local` on the web), a slot, a repaint when done, and a 401 that
+signs out the session whoever asked. The Catalog's requests use it, and
+the sections that move in are rewritten on it; the rest move to it when
+next touched.
+
+**What moves out**, each leaving a button that opens the Catalog there:
+the Variations panel's catalog summary and Clear Cache; the Effects
+panel's catalog section and Clear Cache; Cloud Palettes; the Fractal
+Browser's Online tab (it keeps Random and Files); the Scripts panel's
+Public scripts and Published by you.
+
+**Fixed on the way**: loading a public flame signed out; a failed
+download says why and offers Download again; every 401 signs out.
+
+### Order of work
+
+1. `api::job`, and the client: one browse call per resource (`q`,
+   `sort`, `cursor`, `kind`, the scope), public palettes, the item types'
+   new fields, `load_flame` without a token for a public flame.
+2. The online list model: entries from pages, per (family, scope, kind,
+   query, sort), with paging, loading and error state, matched to the
+   local entries.
+3. The panel's Online place: the scope, the sort, the lazy groups, the
+   info pane's online actions; the fractal grid and its thumbnail
+   downloads and disk cache.
+4. Updates and Clear Cache on this device; failed downloads.
+5. The move-outs, one section at a time, each with its replacement in
+   place first.
+6. Docs (CATALOG.md, ONLINE.md, UI.md), the plan's status, tests.
 
 ## Decided after the survey (2026-11-16)
 

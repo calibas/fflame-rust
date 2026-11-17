@@ -74,12 +74,6 @@ pub struct ScriptsPanel {
     /// The script in the editor was opened from the online library and
     /// has not been stored yet, so no link record exists to say so.
     opened_untrusted: bool,
-    /// The public-search box. Lives here rather than in app state
-    /// because it is editor furniture, not a result.
-    browse_query: String,
-    /// The online library's kind filter (a wire name); `None` for every
-    /// kind.
-    browse_kind: Option<&'static str>,
     /// The `library_generation` this panel last re-scanned for. An
     /// adoption writes to the store from a background task, and without
     /// this the new script would not appear until something else
@@ -110,8 +104,6 @@ impl Default for ScriptsPanel {
             initialized: false,
             palettes: Vec::new(),
             opened_untrusted: false,
-            browse_query: String::new(),
-            browse_kind: None,
             seen_library_generation: 0,
         }
     }
@@ -661,13 +653,11 @@ impl ScriptsPanel {
         }
     }
 
-    /// The online library: what you have published, and what other
-    /// people have.
-    ///
-    /// Public scripts are anybody's to search and open, a guest's
-    /// (`online_account` off) included. What you have published, and
-    /// Publish, are drawn only when signed in: offering Publish to
-    /// somebody who cannot use it is worse than not showing it.
+    /// The online library: the script in the editor's Publish, and its
+    /// conflicts. Browsing, opening and what you published are the
+    /// Catalog's Online place. Publish is drawn only when signed in:
+    /// offering it to somebody who cannot use it is worse than not
+    /// showing it.
     fn render_cloud(
         &mut self,
         ui: &mut egui::Ui,
@@ -675,8 +665,6 @@ impl ScriptsPanel {
         signed_in: bool,
         request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
     ) {
-        use crate::app::script_cloud::ScriptCloudRequest as Req;
-
         ui.separator();
         egui::CollapsingHeader::new("Online library")
             .default_open(false)
@@ -697,92 +685,16 @@ impl ScriptsPanel {
                     self.render_conflict(ui, stem, c, cloud.busy, request);
                 }
 
-                // One library for every kind: the CPU scripts, and the
-                // formula library's entries (adopting one saves it there).
-                ui.horizontal(|ui| {
-                    ui.label("Kind");
-                    let label = |k: Option<&'static str>| k.map_or_else(|| "Every kind".to_string(), kind_label);
-                    egui::ComboBox::from_id_salt("scripts_cloud_kind")
-                        .selected_text(label(self.browse_kind))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.browse_kind, None, label(None));
-                            for k in crate::storage::library::ALL_PUBLISHED {
-                                let w = k.wire();
-                                ui.selectable_value(&mut self.browse_kind, w, label(w));
-                            }
-                        });
-                });
-                let kind = self.browse_kind.map(str::to_string);
-
                 if signed_in {
                     ui.add_space(4.0);
                     self.render_publish_controls(ui, cloud, request);
-
-                    ui.add_space(6.0);
-                    ui.separator();
-
-                    // ---- mine ---------------------------------------
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Published by you").strong());
-                        if ui
-                            .add_enabled(!cloud.busy, egui::Button::new("Refresh").small())
-                            .clicked()
-                        {
-                            *request = Some(Req::ListMine(kind.clone()));
-                        }
-                    });
-                    if !cloud.mine_loaded {
-                        ui.weak("Not loaded — press Refresh.");
-                    } else if cloud.mine.is_empty() {
-                        ui.weak("You have not published any scripts.");
-                    } else {
-                        for item in &cloud.mine {
-                            Self::render_cloud_row(ui, item, false, cloud.busy, request);
-                        }
-                    }
-
-                    ui.add_space(6.0);
-                    ui.separator();
                 }
 
-                // ---- browse -----------------------------------------
-                ui.label(egui::RichText::new("Public scripts").strong());
-                ui.horizontal(|ui| {
-                    let entry = ui.add(
-                        egui::TextEdit::singleline(&mut self.browse_query)
-                            .hint_text("search…")
-                            .desired_width(160.0),
-                    );
-                    super::vkb_sync(ui, &entry, &self.browse_query);
-                    let go = ui.add_enabled(!cloud.busy, egui::Button::new("Search")).clicked();
-                    if go || (entry.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                    {
-                        *request = Some(Req::Search(self.browse_query.clone(), kind.clone()));
-                    }
-                });
-
-                // Running a stranger's script is the thing this section
-                // makes possible, so say what that means once, here,
-                // rather than leaving it to be inferred from a download
-                // button.
-                ui.weak(
-                    "Opening one saves a copy locally: a script here, a formula, colouring, \
-                     variation, effect, simulation or track in the formula library. Scripts \
-                     from other people run with restrictions: they may only call scripts that \
-                     ship with the app.",
-                );
-
-                if cloud.browse.is_empty() {
-                    ui.weak(if cloud.browse_query.is_empty() {
-                        "No results yet."
-                    } else {
-                        "Nothing matched."
-                    });
-                } else {
-                    for item in &cloud.browse {
-                        Self::render_cloud_row(ui, item, true, cloud.busy, request);
-                    }
-                }
+                // Browsing, opening and your published scripts are the
+                // Catalog's (docs/projects/catalog.md, *Phase 3*);
+                // publishing moves there with phase 4.
+                ui.add_space(4.0);
+                super::inventory::moved_here(ui, &t!("catalog.scripts_moved"), crate::inventory::Family::Scripts, super::inventory::Place::Online);
             });
     }
 
@@ -928,52 +840,6 @@ impl ScriptsPanel {
                     }
                 });
             });
-    }
-
-    /// One row of a cloud listing.
-    fn render_cloud_row(
-        ui: &mut egui::Ui,
-        item: &crate::api::types::ScriptListItem,
-        show_owner: bool,
-        busy: bool,
-        request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
-    ) {
-        use crate::app::script_cloud::ScriptCloudRequest as Req;
-
-        ui.horizontal(|ui| {
-            ui.label(&item.display_name);
-            if show_owner && !item.owner_name().is_empty() {
-                // The globally unique key — `owner/name` — rather than a
-                // UUID fragment, which is what the server's unique
-                // display names are for.
-                ui.weak(format!("by {}", item.owner_name()));
-            }
-            if let Some(k) = &item.kind {
-                ui.weak(format!("· {}", kind_label(k)));
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled(!busy, egui::Button::new("Open").small()).clicked() {
-                    *request = Some(Req::Adopt { id: item.id.clone() });
-                }
-            });
-        });
-        if let Some(d) = item.description.as_ref().filter(|d| !d.is_empty()) {
-            ui.indent(("cloud_desc", &item.id), |ui| {
-                // The wire carries markdown; this app renders none, so
-                // strip locally. Scripts deliberately have no
-                // `description_plain` — see `script::strip_markdown`.
-                let plain = crate::script::strip_markdown(d);
-                let first = plain.lines().next().unwrap_or_default();
-                ui.weak(first);
-            });
-        }
-        if !item.authors.is_empty() {
-            ui.indent(("cloud_authors", &item.id), |ui| {
-                // Credit, not ownership: `owner_display_name` is who
-                // uploaded it, `authors` is who wrote it.
-                ui.weak(format!("credit: {}", item.authors.join(", ")));
-            });
-        }
     }
 
     /// The script's own header comment, as its description.
@@ -1329,25 +1195,3 @@ impl ScriptsPanel {
     }
 }
 
-/// A script kind as the online library names it: the app's word for its
-/// wire name, the wire name itself for one this build does not know.
-fn kind_label(wire: &str) -> String {
-    use crate::storage::library::Kind;
-    match Kind::from_wire(wire) {
-        Some(Kind::Generator) => "Generator",
-        Some(Kind::Modifier) => "Modifier",
-        Some(Kind::ScriptLibrary) => "Library",
-        Some(Kind::Formula) => "Formula",
-        Some(Kind::Coloring) => "Colouring",
-        Some(Kind::Solid) => "Solid",
-        Some(Kind::Field) => "Field",
-        Some(Kind::FieldColoring) => "Field colouring",
-        Some(Kind::Variation) => "Variation",
-        Some(Kind::Effect) => "Effect",
-        Some(Kind::SimModel) => "Simulation model",
-        Some(Kind::SimColoring) => "Simulation colouring",
-        Some(Kind::Track) => "Track",
-        _ => return wire.to_string(),
-    }
-    .to_string()
-}

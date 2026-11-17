@@ -5,10 +5,13 @@ fractals, variations, effects, escape-time formulas and colourings,
 simulation models and colourings, and Rhai scripts -- to browse, read
 about and use. It replaced the Palette Library and holds the presets the
 Fractal Browser's Presets tab held; its list is also every picker's
-(*The picker*, below). Built in phases 1 and 2 of
+(*The picker*, below), and its **Online** place is what the server holds
+(*Online*, below): the Fractal Browser's Online tab, Cloud Palettes, the
+Scripts panel's public scripts and the Variations and Effects panels'
+catalog sections moved there. Built in phases 1 to 3 of
 [docs/projects/catalog.md](../projects/catalog.md), the plan, which also
-says what comes next (online browsing, your own resources, one Rhai
-editor, the phone layout, previews).
+says what comes next (your own resources, one Rhai editor, the phone
+layout, previews).
 
 - Model: [src/inventory/](../../src/inventory/) (`inventory::scan`,
   `Entry`, `EntryKey`). The code says `inventory` because `catalog` is the
@@ -104,8 +107,8 @@ changes.
 - **Palettes**: pack by pack, each with its enable checkbox, its load
   state and a Retry (`palette_library::pack_section`), a row each: the name
   and a gradient (`palette_preview`, made once a row is on screen, kept
-  under its hash). Searching leaves out packs with no match. With the
-  online account on, **Cloud Palettes** follows the packs.
+  under its hash). Searching leaves out packs with no match. Signed in,
+  a line after the packs shows your online palettes (Online, Mine).
 - **Fractals**: the presets as `FractalConfigGallery` grids, a tab a
   category, previews made for the gallery shown (the app's preview loop
   drives the Catalog's galleries beside the Fractal Browser's). A search
@@ -189,3 +192,58 @@ shared (`inventory::shared`), so every list of a kind is the same list.
 
 A plug-in file is picked by its registered key (`inventory::applied_name`);
 the Random Generator's variation multi-select stays as it is.
+
+---
+
+## Online
+
+The top's first row chooses the place: **On this device** (everything
+above) or **Online** (`Place`), what the server holds for the family
+([src/ui/inventory_online.rs](../../src/ui/inventory_online.rs), its
+entries made by `inventory::online`):
+
+| Family | Online lists | Use |
+|---|---|---|
+| Palettes | `GET /palettes`; Mine: `GET /users/me/palettes` -- each a row with its gradient | a click applies a copy; Mine: Delete... (confirmed) |
+| Fractals | `GET /flames`; Mine: `GET /users/me/flames` -- a grid of the server's thumbnails, a render-mode filter (All, 2D, 3D, Escape Time, Simulation) | a click loads it, one undo step, its online id kept so Save Online updates it; Mine: Delete... (confirmed) |
+| Variations, Effects | the cached catalog first (downloaded, offered), then people's Rhai ones (`GET /scripts?kind=variation`, `effect`) | Download, Update; a Rhai one: Open |
+| Escape, Simulation, Scripts | `GET /scripts?kind=` for each of the family's kinds, a group each (the kind chips narrow it to one) | Open: adopt into your files (`ScriptCloudRequest::Adopt`), under the restrictions somebody else's code runs with |
+
+- **Public or Mine.** Public is a guest's too; Mine needs the account
+  (the button says so when signed out).
+- **Search** is the server's: the panel's search box, asked
+  (`q`) once the typing has stopped for 0.4 s. **Sort**: the resource's
+  (Newest, Most liked, Most viewed, Recently changed, Name; each
+  resource takes some). **Refresh** forgets every list.
+- **Paging** is lazy, by the server's cursor: reaching a list's end asks
+  for its next page. Lists are kept per (kind, scope, search, sort,
+  mode), so going back to an earlier search shows what it found; a
+  repeated id is shown once.
+- **What the app holds**: an online script you opened (its file's link
+  names the id) or a palette of the same colours says so and offers
+  **Show it on this device**.
+- **Thumbnails** (a fractal's `thumbnail_url`, used as given: it changes
+  when the image does) download four at a time, decode off the frame,
+  and on desktop stay on disk (the cache directory's `thumbnails/online`,
+  a file a URL). A path is fetched from the API with the token (a
+  private fractal's is its owner's); a whole URL elsewhere is fetched
+  without it.
+- Every request is an `api::job` (a thread on desktop, `spawn_local` on
+  the web); a 401 to one asked signed in signs the session out.
+  Signing out forgets your own lists; Save Online forgets them all.
+
+**Updates and Clear Cache** (on this device, Variations and Effects): a
+download the cached catalog has a newer version of carries
+`Entry::update` and the mark ` ↑`; the **Updates (n)** chip lists them,
+**Update All** asks for each, and the info pane's **Update** for one --
+through the fetches that install. **Clear Cache** removes the downloads
+and the cached catalog. A download that fails (an HTTP error, a refused
+effect, the fetch's timeout) is asked for no more: its info pane says why
+(`inventory::download_failure`) and offers Download again.
+
+**Where the old sections went**: each panel says so and shows the
+Catalog there (`inventory::request_open`, drained once a frame): the
+Variations and Effects panels (their online sections), the Fractal
+Browser (**Online...**), the Scripts panel (its public scripts and
+Published by you; its Publish, Update, Unpublish and conflicts stay
+until phase 4).

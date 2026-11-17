@@ -398,9 +398,6 @@ pub struct PanelContext<'a> {
     // Sign out requested (from account panel or 401 detection)
     pub sign_out_requested: &'a mut bool,
 
-    // Cloud palette state (for Palette Library cloud section)
-    pub cloud_palette_state: &'a mut super::CloudPaletteState,
-
     // File browser open request (shared by FractalBrowser)
     pub file_browser_open_requested: &'a mut bool,
 
@@ -509,21 +506,13 @@ pub struct PanelContext<'a> {
     /// The escape terrain's measured count or relief range, for the
     /// Escape panel's lock to pin (terrain-height.md, H3).
     pub terrain_range: Option<[f32; 2]>,
-    /// Downloaded variations the Variations panel asked to re-fetch at
-    /// the catalog's version. Consumed by App.
-    pub variation_update_requested: &'a mut Vec<String>,
-    /// The same for downloaded effects (the Effects panel), and its
-    /// Clear Cache.
-    pub effect_update_requested: &'a mut Vec<String>,
+    /// The Catalog's Clear Cache of the downloaded effects.
     pub clear_effect_cache_requested: &'a mut bool,
     /// The Effects panel's Reset: a temporal effect's history starts over.
     pub reset_effect_history: &'a mut bool,
     /// Online-library state the Scripts panel reads, and the slot it
     /// writes a request into. Owned by App.
     pub script_cloud: &'a crate::app::script_cloud::ScriptCloudState,
-    /// Last-fetched effect catalog, if there is one. `None` offline and
-    /// never-fetched; the panel simply omits its catalog section.
-    pub effect_catalog: Option<&'a crate::storage::effect_catalog::CachedEffectCatalog>,
     pub script_cloud_request: &'a mut Option<crate::app::script_cloud::ScriptCloudRequest>,
     /// Whether anyone is signed in — the panel shows its online section
     /// only then, rather than offering actions that cannot work.
@@ -790,17 +779,11 @@ impl<'a> PanelViewer<'a> {
                 self.render_save_online_dialog(ui);
             }
             PanelType::Variations => {
-                let response = super::variations::render_variations_panel(
+                super::variations::render_variations_panel(
                     ui,
                     self.context.flame,
                     self.context.variation_catalog,
                 );
-                if response.clear_cache_requested {
-                    *self.context.clear_variation_cache_requested = true;
-                }
-                if !response.update_requested.is_empty() {
-                    *self.context.variation_update_requested = response.update_requested;
-                }
             }
             PanelType::Scripts => {
                 self.render_scripts_panel(ui);
@@ -951,27 +934,44 @@ impl<'a> PanelViewer<'a> {
         );
     }
 
-    /// The Catalog: every resource, to browse, read about and use. With
-    /// the online account on, the palettes end with Cloud Palettes.
+    /// The Catalog: every resource, to browse, read about and use, on this
+    /// device or online.
     fn render_inventory_panel(&mut self, ui: &mut egui::Ui) {
-        let (online_account, auth_pair) = {
+        let account = {
             let settings = self.context.config_manager.system_settings();
-            let online = settings.online_account;
-            let auth = if settings.is_signed_in() {
-                let token = settings.auth_token.clone().unwrap_or_default();
-                Some((crate::api::API_BASE_URL.to_string(), token))
-            } else {
-                None
-            };
-            (online, auth)
+            // A guest (`online_account` off) is never signed in.
+            match settings.is_signed_in() {
+                true => super::inventory::CloudAccount { signed_in: true, token: settings.auth_token.clone() },
+                false => super::inventory::CloudAccount::default(),
+            }
         };
-        let auth = auth_pair.as_ref().map(|(b, t)| (b.as_str(), t.as_str()));
         let mut cx = super::inventory::InventoryContext {
             config_manager: self.context.config_manager,
             palette_library: self.context.palette_library,
-            cloud_palettes: online_account.then_some(super::inventory::CloudPalettes { state: self.context.cloud_palette_state, auth }),
+            account,
+            script_cloud_busy: self.context.script_cloud.busy,
+            script_cloud_status: self.context.script_cloud.status.as_deref(),
         };
         let response = self.context.inventory_panel.render(ui, &mut cx);
+        if let Some((id, loaded)) = response.load_api_flame {
+            // As the Fractal Browser's Online tab loaded one: whose it is
+            // rides along, so Save Online updates it.
+            *self.context.selected_preset_config = Some(loaded.config);
+            *self.context.loaded_api_flame_id = Some(id);
+            *self.context.loaded_api_flame_is_public = loaded.is_public;
+            *self.context.loaded_api_flame_user_id = Some(loaded.user_id);
+            *self.context.loaded_api_flame_animation_count = loaded.animation_count;
+            *self.context.loaded_api_flame_animations = loaded.animations;
+        }
+        if let Some(req) = response.script_cloud_request {
+            *self.context.script_cloud_request = Some(req);
+        }
+        if response.clear_variation_cache {
+            *self.context.clear_variation_cache_requested = true;
+        }
+        if response.clear_effect_cache {
+            *self.context.clear_effect_cache_requested = true;
+        }
         if let Some(config) = response.load_preset {
             *self.context.selected_preset_config = Some(config);
             // A preset is nobody's online flame.
@@ -1935,15 +1935,7 @@ impl<'a> PanelViewer<'a> {
         }
 
         if let Some(panel) = self.context.fractal_browser_panel.as_mut() {
-            let settings = self.context.config_manager.system_settings();
-            let online_account = settings.online_account;
-            let auth: Option<(&str, &str)> = if settings.is_signed_in() {
-                let token = settings.auth_token.as_deref().unwrap_or("");
-                Some((crate::api::API_BASE_URL, token))
-            } else {
-                None
-            };
-            let response = panel.render(ui, online_account, auth);
+            let response = panel.render(ui);
 
             // Handle file open request from Files tab
             if panel.take_open_file_request() {
@@ -1980,11 +1972,8 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.config_manager,
             self.context.animation_controller,
-            self.context.effect_catalog,
             self.context.formula_editor,
             self.context.open_formula_editor,
-            self.context.effect_update_requested,
-            self.context.clear_effect_cache_requested,
             self.context.reset_effect_history,
         );
     }

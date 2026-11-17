@@ -298,3 +298,70 @@ fn palettes_are_items_and_a_stale_write_is_a_conflict() {
     assert_eq!((conflict.id.as_str(), conflict.current_version), (created.id.as_str(), updated.version));
     block(api.delete_script(&created.id)).unwrap();
 }
+
+/// The Catalog's Online place (docs/projects/catalog.md, *Phase 3*): a
+/// guest finds a public fractal by search, with its owner and thumbnail,
+/// downloads the thumbnail and loads the fractal without signing in; the
+/// owner pages through their own by cursor; a public palette is browsed
+/// with its colours; the built-in scripts browse by kind.
+#[test]
+#[ignore = "needs a local ffapi: python scripts/api_integration.py"]
+fn the_online_place_browses_every_resource() {
+    if server().is_none() {
+        return;
+    }
+    let author = signed_in();
+    let tag = &crate::scripted::mint_id()[..8];
+    let mut jpeg = Vec::new();
+    image::RgbImage::from_pixel(8, 8, image::Rgb([200, 40, 10]))
+        .write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
+        .unwrap();
+    let names = [format!("it browse {tag} one"), format!("it browse {tag} two")];
+    let mut ids = Vec::new();
+    for name in &names {
+        let id = block(author.save_flame(&flame_config(), Some(name), Some(ApiVisibility::Public), Some(&jpeg))).unwrap_or_else(|e| panic!("save: {e}"));
+        ids.push(id);
+    }
+
+    let guest = ApiState::default();
+    let found = block(guest.browse_flames(Scope::Public, &Browse { q: format!("it browse {tag}"), ..Default::default() })).unwrap_or_else(|e| panic!("browse: {e}"));
+    let items = found.items.into_inner();
+    assert_eq!(items.len(), 2, "both, found by the search: {items:?}");
+    let one = items.iter().find(|f| f.id == ids[0]).unwrap();
+    assert!(one.owner.as_ref().is_some_and(|o| !o.display_name.is_empty()), "with its owner");
+    let thumb = one.thumbnail_url.clone().expect("a thumbnail");
+    let bytes = block(guest.fetch_thumbnail(&thumb)).unwrap_or_else(|e| panic!("thumbnail: {e}"));
+    assert!(image::load_from_memory(&bytes).is_ok(), "a picture");
+    let loaded = block(guest.load_flame_with_visibility(&ids[0])).unwrap_or_else(|e| panic!("a guest loads a public fractal: {e}"));
+    assert_eq!(loaded.is_public, Some(true));
+
+    let first = block(author.browse_flames(Scope::Mine, &Browse { per_page: 1, sort: Some("name".into()), ..Default::default() })).unwrap();
+    let cursor = first.next.clone().expect("a second page");
+    let second = block(author.browse_flames(Scope::Mine, &Browse { per_page: 1, sort: Some("name".into()), cursor: Some(cursor), ..Default::default() })).unwrap();
+    let paged: Vec<String> = first.items.into_inner().into_iter().chain(second.items.into_inner()).map(|f| f.id).collect();
+    assert_eq!(paged.len(), 2);
+    assert_ne!(paged[0], paged[1], "the cursor moves on");
+    assert!(block(guest.browse_flames(Scope::Mine, &Browse::default())).is_err(), "your own is the account's");
+
+    let token = author.auth.get_token().unwrap().to_string();
+    let palette_name = format!("it browse palette {tag}");
+    let colors: Vec<u8> = (0..768).map(|i| (i % 256) as u8).collect();
+    let _: serde_json::Value = block(api_post(
+        &build_url(API_BASE_URL, "/api/v1/palettes"),
+        &json!({"name": palette_name, "visibility": "public", "color_data": colors}),
+        &token,
+    ))
+    .unwrap_or_else(|e| panic!("create a palette: {e}"));
+    let palettes = block(guest.browse_palettes(Scope::Public, &Browse { q: palette_name.clone(), ..Default::default() })).unwrap().items.into_inner();
+    let p = palettes.iter().find(|p| p.name == palette_name).expect("the public palette");
+    assert!(p.owner.is_some());
+    assert_eq!(crate::api::sync::palette_from_item(p).stops.len(), 256, "with its colours");
+
+    let generators = block(guest.browse_scripts(Scope::Public, &Browse { kind: Some("generator".into()), per_page: 5, ..Default::default() })).unwrap();
+    let generators = generators.items.into_inner();
+    assert!(!generators.is_empty() && generators.iter().all(|s| s.kind.as_deref() == Some("generator")), "{generators:?}");
+
+    for id in &ids {
+        block(author.delete_flame(id)).unwrap();
+    }
+}

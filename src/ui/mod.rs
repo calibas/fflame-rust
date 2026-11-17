@@ -10,6 +10,7 @@ mod formatting;
 pub mod fractal_browser;
 pub mod inventory;
 pub mod markdown;
+mod inventory_online;
 pub mod picker;
 pub mod fractal_gallery;
 mod help;
@@ -781,36 +782,6 @@ impl ApiNotification {
     const FADE_START_SECS: f32 = 3.0;
 }
 
-/// State for cloud palette browsing in Palette Library (the caller's
-/// bookmarked entries from `/api/users/me/palettes`).
-pub struct CloudPaletteState {
-    pub palettes: Vec<crate::api::types::PaletteItem>,
-    pub fetched: bool,
-    pub loading: bool,
-    pub error: Option<String>,
-    pub list_result: std::sync::Arc<std::sync::Mutex<Option<Result<Vec<crate::api::types::PaletteItem>, String>>>>,
-    pub deleting: bool,
-    /// On success, carries the content hash of the removed entry.
-    pub delete_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
-    /// Notification from palette operations (message, is_error)
-    pub notification: Option<(String, bool)>,
-}
-
-impl Default for CloudPaletteState {
-    fn default() -> Self {
-        Self {
-            palettes: Vec::new(),
-            fetched: false,
-            loading: false,
-            error: None,
-            list_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            deleting: false,
-            delete_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            notification: None,
-        }
-    }
-}
-
 use egui_wgpu::wgpu::*;
 use egui_wgpu::{Renderer as EguiRenderer, RendererOptions};
 use egui_winit::State as EguiWinitState;
@@ -976,7 +947,6 @@ pub struct EguiLayer {
     login_dialog_state: login_dialog::LoginDialogState,
 
     // Cloud palette state (for Palette Library panel)
-    cloud_palette_state: CloudPaletteState,
 
     // API connectivity state (set by App each frame before render_ui)
     pub(crate) api_connectivity: crate::api::ApiConnectivity,
@@ -1148,7 +1118,6 @@ impl EguiLayer {
             save_online_dialog_state: save_online_dialog::SaveOnlineDialogState::default(),
             api_browser_notification: None,
             login_dialog_state: login_dialog::LoginDialogState::default(),
-            cloud_palette_state: CloudPaletteState::default(),
             api_connectivity: crate::api::ApiConnectivity::Unknown,
             density_histogram: crate::renderer::DensityHistogram::default(),
             deep_zoom: DeepZoom::default(),
@@ -1249,19 +1218,14 @@ impl EguiLayer {
         });
     }
 
-    /// Request the Online tab to refresh its flame list
+    /// A fractal was saved online: the Catalog's online fractals ask again.
     pub fn request_online_refresh(&mut self) {
-        if let Some(ref mut panel) = self.fractal_browser_panel {
-            panel.request_online_refresh();
-        }
+        self.inventory_panel.forget_online();
     }
 
     /// Clear cloud-related state (called on sign-out or session expiry)
     pub fn clear_cloud_state(&mut self) {
-        self.cloud_palette_state = CloudPaletteState::default();
-        if let Some(ref mut panel) = self.fractal_browser_panel {
-            panel.clear_online_data();
-        }
+        self.inventory_panel.signed_out();
     }
 
     /// Render API notification toast overlay (bottom-center)
@@ -1572,6 +1536,7 @@ impl EguiLayer {
         // Panel open requests
         let mut open_palette_editor = false;
         let mut open_palette_library = false;
+        let mut open_catalog = false;
         let open_config_dialog = false;
         let mut open_triangle_editor = false;
         let mut open_preset_library = false;
@@ -1950,7 +1915,6 @@ impl EguiLayer {
                         sign_out_requested: &mut sign_out_requested,
 
                         // Cloud palette state
-                        cloud_palette_state: &mut self.cloud_palette_state,
 
                         // File browser open request (shared by FractalBrowser)
                         file_browser_open_requested: &mut file_browser_open_requested,
@@ -2035,12 +1999,9 @@ impl EguiLayer {
                         sim_timeline_holding,
                         sim_timeline_driven,
                         terrain_range,
-                        variation_update_requested: &mut variation_update_requested,
-                        effect_update_requested: &mut effect_update_requested,
                         clear_effect_cache_requested: &mut clear_effect_cache_requested,
                         reset_effect_history: &mut reset_effect_history,
                         script_cloud,
-                        effect_catalog,
                         script_cloud_request: &mut script_cloud_request,
                         signed_in,
                         compact_mode: self.compact_mode,
@@ -2050,6 +2011,13 @@ impl EguiLayer {
 
             // Downloads the Catalog and its pickers asked for: through the
             // fetches that install (and update) variations and effects.
+            // A panel asked to show the Catalog somewhere (its online
+            // section moved there).
+            if let Some((family, place)) = inventory::take_open() {
+                self.inventory_panel.open_at(family, place);
+                open_catalog = true;
+            }
+
             for (kind, name) in inventory::take_downloads() {
                 match kind {
                     crate::inventory::Kind::Variation => variation_update_requested.push(name),
@@ -2519,6 +2487,10 @@ impl EguiLayer {
             let _ = settings.save();
         }
 
+        // A request that carried the session's credentials came back 401
+        // (`api::job`): the session expired, whoever asked.
+        sign_out_requested |= crate::api::job::take_session_expired();
+
         // Handle sign out action (from menu bar or account panel)
         if menu_actions.file.sign_out || sign_out_requested {
             // Clear auth from SystemSettings
@@ -2543,13 +2515,8 @@ impl EguiLayer {
                 });
             }
 
-            // Clear cloud palette state
-            self.cloud_palette_state = CloudPaletteState::default();
-
-            // Clear online tab in fractal browser
-            if let Some(ref mut panel) = self.fractal_browser_panel {
-                panel.clear_online_data();
-            }
+            // The Catalog's own online lists
+            self.inventory_panel.signed_out();
 
             // Show notification (different message for session expiry vs user sign-out)
             let is_session_expired = sign_out_requested && !menu_actions.file.sign_out;
@@ -2697,6 +2664,7 @@ impl EguiLayer {
             attachment_edit,
             open_palette_editor,
             open_palette_library,
+            open_catalog,
             open_config_dialog,
             open_triangle_editor,
             open_preset_library,

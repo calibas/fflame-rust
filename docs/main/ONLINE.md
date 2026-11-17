@@ -17,7 +17,7 @@ feature fails to a status line, not to a broken panel.
 - [ANIMATION.md](ANIMATION.md) — what an animation carries
 - [FRACTAL-BROWSER.md](FRACTAL-BROWSER.md) — the Fractal Browser's Online
   tab
-- [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) — Cloud Palettes
+- [CATALOG.md](CATALOG.md) — the Catalog's Online place: browsing every resource
 - [SCRIPTING.md](SCRIPTING.md) — the scripts the online library holds
 - [RELEASE.md](../RELEASE.md) — §3 *Syncing with the API*, §8 *Adding
   things that affect the API*
@@ -129,11 +129,10 @@ settings file that says so reads as a guest.)
 | --- | --- |
 | File → **Save Online** | loading a web deep link (`?flame=`, `?animation=`) |
 | Window → **Account**, the startup auto-login | the variation catalog, fetched once per session |
-| the Fractal Browser's **Online** tab (your flames, flame search) | fetching a variation a loaded flame names but the app lacks, and updating stale downloads |
-| Catalog → Palettes → **Cloud Palettes** (your palette library) | the effect catalog, fetching a missing effect, updating downloaded effects |
-| the menu bar's connection and account indicator | the Scripts panel's **Public scripts**: searching and opening one |
-| the periodic health check | |
-| the Scripts panel's publishing and **Published by you**; the Formula Editor's **Online** section | |
+| the Catalog's Online place, **Mine** (your fractals, palettes and scripts; deleting your fractals and palettes) | fetching a variation a loaded flame names but the app lacks, and updating stale downloads |
+| the menu bar's connection and account indicator | the effect catalog, fetching a missing effect, updating downloaded effects |
+| the periodic health check | the Catalog's Online place, **Public**: browsing and searching every resource, loading a public fractal, applying a palette, opening a script |
+| the Scripts panel's publishing; the Formula Editor's **Online** section | |
 
 A guest's request goes unauthenticated (`ApiState::public_get`); signed
 in, the same request carries the token, so the server can also answer
@@ -300,25 +299,29 @@ URL load either at startup, with a 30 s timeout.
 
 ---
 
-## The Fractal Browser and cloud palettes
+## Browsing: the Catalog's Online place
 
-The Fractal Browser's **Online** tab lists your flames
-(`GET /api/v1/users/me/flames`, first 100) or a search (the same list's
-words: `q` for the name, `type=variation:<name>`, the render mode),
-loads one (`GET /api/v1/flames/{id}`) and deletes one
-(`DELETE /api/v1/flames/{id}`); see
-[FRACTAL-BROWSER.md](FRACTAL-BROWSER.md). Its error check treats
-"Authentication required" (401) as an expired session and signs the
-user out; "Access denied" (403) is shown as an error and leaves the
-session alone (`only_a_401_signs_the_user_out`). A delete asks for
-confirmation first.
+Fractals, palettes and scripts are browsed in the Catalog
+([CATALOG.md](CATALOG.md), *Online*): `ApiState::browse_flames`,
+`browse_palettes` and `browse_scripts` ask one page of a resource
+(`Scope::Public`, `GET /api/v1/R`, or `Scope::Mine`,
+`GET /api/v1/users/me/R`) with `Browse`'s words (`q`, `sort`, `kind`, the
+resource's filters such as `render_mode`, `per_page`, `cursor`) and
+page by the reply's `next`. A public fractal loads without a sign-in
+(`load_flame_with_visibility` asks as a guest when signed out); deleting
+your fractal (`DELETE /api/v1/flames/{id}`) or palette
+(`DELETE /api/v1/palettes/{id}`; its colours stay, since fractals may use
+them) asks for confirmation first. `fetch_thumbnail` reads a
+`thumbnail_url`: a path on the API with the token, any other URL
+without it.
 
-**Cloud Palettes** in the Catalog's palettes lists your palettes
-(`GET /api/v1/users/me/palettes`, first 100: each an item with its own id,
-pointing at its colours by hash); a click sets the config's palette
-(undoable), and **X** deletes the palette (`DELETE /api/v1/palettes/{id}`);
-its colours stay, since fractals may use them.
-See [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md).
+**Background requests** go through `api::job`: a thread on desktop, a
+`spawn_local` on the web, the result taken once, a repaint when it
+lands. A job asked signed in (`Job::authed`) that comes back 401 marks
+the session expired (`take_session_expired`), and the UI signs out once
+-- whichever request it was. A 403 is the server refusing that request
+and leaves the session alone. (The older sections each had their own
+loop, and only the Fractal Browser's signed out on a 401.)
 
 ---
 
@@ -332,19 +335,17 @@ entries (`formula`, `coloring`, `solid`, `field`, `field_coloring`,
 spellings, `storage::library::Kind::wire`). The server shows the entry
 kinds only to reader 7 or more.
 
-The Scripts panel and the Formula Editor raise a `ScriptCloudRequest`;
+The Scripts panel, the Formula Editor and the Catalog (Open) raise a `ScriptCloudRequest`;
 the app performs it in the background
 ([script_cloud.rs](../../src/app/script_cloud.rs)) and folds the answer
 into `ScriptCloudState`, which both panels draw. A request names its
 local file as a `Local`: `Script(stem)` in the script store, or
-`Entry(file)` in the formula store. Searching and opening a public
-script need no account; the rest needs sign-in. One request runs at a
-time.
+`Entry(file)` in the formula store. Opening a public script needs no
+account; the rest needs sign-in. One request runs at a time. Browsing
+and searching are the Catalog's (above).
 
 | request | does |
 | --- | --- |
-| `ListMine(kind)` | your scripts, of one kind or every kind (`GET /api/v1/users/me/scripts?kind=`, first 100) |
-| `Search(q, kind)` | public search, of one kind or every kind (`GET /api/v1/scripts?q=`, query percent-encoded, first 50) |
 | `Publish` | create; records the returned id and version against the local file |
 | `Update` | update with the version last read; a 409 is a **conflict** the user resolves (`ScriptConflict`): the Scripts panel for a script, the Formula Editor for an entry |
 | `Adopt` | fetch someone's script and save it locally under a free name, marked as somebody else's: a CPU script in the script store (it runs under the restrictions downloaded scripts get), an entry in the formula library. A kind this build does not know is refused |
@@ -381,8 +382,6 @@ somebody else's: it is then a script of the user's own. A config keeps
 carrying the source of every entry it uses, published or not.
 
 --- | --- |
-| `ListMine` | your scripts (`GET /api/v1/users/me/scripts`, first 100) |
-| `Search(q)` | public search (`GET /api/v1/scripts?q=`, query percent-encoded, first 50) |
 | `Publish` | create; records the returned id and version against the local script |
 | `Update` | update with the version last read; a 409 is a **conflict** the user resolves (`ScriptConflict`) |
 | `Adopt` | fetch someone's script and save it locally under a free name, marked as somebody else's, so it runs under the restrictions downloaded scripts get |
@@ -459,13 +458,13 @@ prose — `description_plain`, `authors` — reaches the app.
 | nothing | `downloadable` | `Available` |
 | nothing | not downloadable | `BuiltInOnlyElsewhere` — counted, no fetch offered |
 
-The Variations panel shows the catalog: update buttons for stale
-downloads, the available list (fetched on demand, not downloadable from
-the list), the not-fetchable count, and **Clear Variation Cache**, which
-removes downloads and the cached catalog and refetches the catalog;
-plugins are untouched. The Effects panel shows the effect catalog, with
-updates for stale downloads and **Clear downloaded effects (N)**
-(`EffectRegistry::clear_api`; [EFFECTS.md](EFFECTS.md)).
+The Catalog shows the catalogs ([CATALOG.md](CATALOG.md)): on this
+device, what is offered and not installed (**Download**), stale
+downloads (`Entry::update`, **Update**, **Update All**) and **Clear
+Cache**, which removes downloads and the cached catalog and refetches
+the catalog (plugins are untouched; for effects `EffectRegistry::clear_api`,
+[EFFECTS.md](EFFECTS.md)). A failed download says why and can be asked
+again (`inventory::download_failed`).
 
 ### Missing variations
 
@@ -628,9 +627,11 @@ in [WASM.md](../WASM.md) and [RELEASE.md](../RELEASE.md) §5.
   the web deep-link loader** (`trigger_url_load`). It passes the
   signed-in token (empty when signed out, and ignored on the web, where
   the cookie authenticates).
-- **Several client methods have no caller:** `search_public_flames`,
-  `get_palette`, `set_library_nickname`, `list_flame_animations`,
-  `delete_animation`. (`validate_token` is called by the web app's
+- **Several client methods have no app caller:** `get_palette_data`,
+  `rename_palette`, `list_flame_animations`, `delete_animation`; and
+  `list_my_scripts`, `search_public_scripts`, `list_my_palettes` and
+  `search_flames` (first page only) only the integration tests and
+  `WasmApi` call. (`validate_token` is called by the web app's
   `WasmApi::api_validate_token`.)
 
 ---

@@ -11,6 +11,7 @@ pub mod auth;
 pub mod client;
 pub mod entries;
 pub mod health;
+pub mod job;
 pub mod sync;
 pub mod types;
 #[cfg(test)]
@@ -20,6 +21,72 @@ mod integration_tests;
 
 use crate::config::FractalConfig;
 use crate::resources::{FetchError, FetchResult, LoadState};
+
+/// Whose items a list asks for: the public ones, or the caller's own
+/// (every visibility; signed in).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Scope {
+    #[default]
+    Public,
+    Mine,
+}
+
+impl Scope {
+    /// The list's path for resource `r` (`flames`, `palettes`, `scripts`).
+    fn path(self, r: &str) -> String {
+        match self {
+            Scope::Public => format!("/api/v1/{r}"),
+            Scope::Mine => format!("/api/v1/users/me/{r}"),
+        }
+    }
+}
+
+/// One page's query words (docs/projects/catalog-api.md, *Query words*):
+/// a search, a sort, a kind, the cursor of the page to read, and any of a
+/// resource's own filters (`render_mode`, ...).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct Browse {
+    pub q: String,
+    /// One of the resource's sorts; `None` for its default.
+    pub sort: Option<String>,
+    pub kind: Option<String>,
+    /// The `next` of the page before; `None` for the first.
+    pub cursor: Option<String>,
+    /// 1-100; 0 for the server's default (50).
+    pub per_page: u32,
+    pub filters: Vec<(String, String)>,
+}
+
+impl Browse {
+    /// `?q=...&sort=...`, the empty words left out.
+    pub fn query(&self) -> String {
+        let mut parts = Vec::new();
+        let q = self.q.trim();
+        if !q.is_empty() {
+            parts.push(format!("q={}", urlencode(q)));
+        }
+        if let Some(s) = &self.sort {
+            parts.push(format!("sort={}", urlencode(s)));
+        }
+        if let Some(k) = &self.kind {
+            parts.push(format!("kind={}", urlencode(k)));
+        }
+        for (k, v) in &self.filters {
+            parts.push(format!("{}={}", urlencode(k), urlencode(v)));
+        }
+        if self.per_page > 0 {
+            parts.push(format!("per_page={}", self.per_page.min(100)));
+        }
+        if let Some(c) = &self.cursor {
+            parts.push(format!("cursor={}", urlencode(c)));
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", parts.join("&"))
+        }
+    }
+}
 
 /// Result of loading a flame from the API, including metadata for ownership tracking.
 pub struct FlameLoadResult {
@@ -344,10 +411,12 @@ impl ApiState {
     }
 
     /// Load a flame and also return its visibility (true = public).
+    ///
+    /// A public flame needs no sign-in; a private one is its owner's (the
+    /// token, when there is one, says who asks).
     pub async fn load_flame_with_visibility(&self, flame_id: &str) -> FetchResult<FlameLoadResult> {
-        let token = self.require_token()?;
         let url = build_url(API_BASE_URL, &format!("/api/v1/flames/{}", flame_id));
-        let resp: FlameResponse = client::api_get(&url, &token).await?;
+        let resp: FlameResponse = self.public_get(&url).await?;
 
         let is_public = resp.visibility.as_ref().map(|v| matches!(v, ApiVisibility::Public));
         let user_id = resp.owner.as_ref().map(|o| o.id.clone()).unwrap_or_default();
@@ -377,16 +446,53 @@ impl ApiState {
         client::api_get::<types::Lenient<FlameListItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
 
-    /// The public flames, filtered, without auth (gallery browsing).
-    pub async fn search_public_flames(
-        &self,
-        params: &SearchFlamesParams,
-    ) -> FetchResult<Vec<FlameListItem>> {
-        let url = build_url(
-            API_BASE_URL,
-            &format!("/api/v1/flames{}", params.to_query_string()),
-        );
-        client::api_get_unauth::<types::Lenient<FlameListItem>>(&url).await.map(types::Lenient::into_inner)
+    /// One page of fractals: the public ones, or yours (`sort` =
+    /// `recent`, `updated`, `name`, `popular`, `views`; `render_mode` and
+    /// the catalog filters as `filters`).
+    pub async fn browse_flames(&self, scope: Scope, words: &Browse) -> FetchResult<types::Page<FlameListItem>> {
+        self.browse(scope, "flames", words).await
+    }
+
+    /// One page of palettes, each with its colours (`sort` = `recent`,
+    /// `updated`, `name`, `popular`).
+    pub async fn browse_palettes(&self, scope: Scope, words: &Browse) -> FetchResult<types::Page<PaletteItem>> {
+        self.browse(scope, "palettes", words).await
+    }
+
+    /// One page of Rhai scripts of a kind (`sort` = `recent`, `updated`,
+    /// `name`). Running one is running somebody's code: see
+    /// [`Self::search_public_scripts`].
+    pub async fn browse_scripts(&self, scope: Scope, words: &Browse) -> FetchResult<types::Page<types::ScriptListItem>> {
+        self.browse(scope, "scripts", words).await
+    }
+
+    async fn browse<T: serde::de::DeserializeOwned>(&self, scope: Scope, resource: &str, words: &Browse) -> FetchResult<types::Page<T>> {
+        let url = build_url(API_BASE_URL, &format!("{}{}", scope.path(resource), words.query()));
+        match scope {
+            Scope::Public => self.public_get(&url).await,
+            Scope::Mine => client::api_get(&url, &self.require_token()?).await,
+        }
+    }
+
+    /// A thumbnail's bytes, by the `thumbnail_url` an item gave (a path
+    /// on the API, used as given: it changes when the image does).
+    ///
+    /// A path is the API's (the local server's too, `build_url`), asked
+    /// with the token -- a private fractal's thumbnail is its owner's; a
+    /// whole URL elsewhere (a CDN, one day) is asked without it: the
+    /// sign-in goes to the API alone.
+    pub async fn fetch_thumbnail(&self, thumbnail_url: &str) -> FetchResult<Vec<u8>> {
+        if thumbnail_url.starts_with('/') {
+            let url = build_url(API_BASE_URL, thumbnail_url);
+            #[cfg(not(target_arch = "wasm32"))]
+            return client::api_get_bytes_with(&url, self.auth.get_token()).await;
+            #[cfg(target_arch = "wasm32")]
+            return client::api_get_bytes(&url).await;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        return client::api_get_bytes_with(thumbnail_url, None).await;
+        #[cfg(target_arch = "wasm32")]
+        return client::api_get_bytes(thumbnail_url).await;
     }
 
     // --- Palettes ---
@@ -733,6 +839,24 @@ mod tests {
         assert!(!is_newer_release("0.6.0-beta", "0.6.0"));
         assert!(!is_newer_release("0.5.9", "0.6.0"));
         assert!(!is_newer_release("soon", "0.6.0"));
+    }
+
+    /// A page's words: the empty ones left out, the free text encoded,
+    /// the cursor last; your own list under `users/me`.
+    #[test]
+    fn browse_words_make_the_query() {
+        assert_eq!(Browse::default().query(), "");
+        let words = Browse {
+            q: " fire & ice ".into(),
+            sort: Some("popular".into()),
+            kind: Some("formula".into()),
+            cursor: Some("abc=".into()),
+            per_page: 500,
+            filters: vec![("render_mode".into(), "2d".into())],
+        };
+        assert_eq!(words.query(), "?q=fire+%26+ice&sort=popular&kind=formula&render_mode=2d&per_page=100&cursor=abc%3D");
+        assert_eq!(Scope::Public.path("flames"), "/api/v1/flames");
+        assert_eq!(Scope::Mine.path("palettes"), "/api/v1/users/me/palettes");
     }
     use crate::scene::transforms::RenderMode;
 

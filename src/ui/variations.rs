@@ -1,5 +1,6 @@
 //! Variations panel — lists every variation in the global registry,
-//! grouped by category, with a "Clear Variation Cache" action.
+//! grouped by category. What the online library offers, updates and
+//! Clear Cache are the Catalog's (docs/projects/catalog.md, *Phase 3*).
 //!
 //! Two provenance signals, answering different questions:
 //!
@@ -39,127 +40,6 @@ pub fn downloaded_variations_in_use(
         .collect()
 }
 
-/// The catalog section: what exists server-side versus what is here.
-///
-/// Silent when there is no catalog. An app that renders fractals
-/// perfectly well offline should not grow an error panel because a
-/// metadata endpoint was unreachable — and a user who has never signed
-/// in has no reason to see one at all.
-///
-/// Returns the names the user asked to re-download.
-fn render_catalog_summary(
-    ui: &mut egui::Ui,
-    catalog: Option<&crate::storage::variation_catalog::CachedCatalog>,
-    registry: &crate::variations::VariationRegistry,
-) -> Vec<String> {
-    use crate::storage::variation_catalog::summarize;
-
-    let mut update_requested = Vec::new();
-
-    let Some(catalog) = catalog else { return update_requested };
-    if catalog.items.is_empty() {
-        return update_requested;
-    }
-
-    let crate::storage::variation_catalog::CatalogSummary {
-        available,
-        updatable,
-        builtin_only_elsewhere,
-        local_overrides,
-    } = summarize(&catalog.items, |name| registry.get(name).map(|v| v.provenance.clone()));
-
-    egui::CollapsingHeader::new(t!(
-        "variations_panel.catalog_header",
-        total = catalog.items.len(),
-        available = available.len()
-    ))
-    .default_open(!updatable.is_empty())
-    .show(ui, |ui| {
-        if !updatable.is_empty() {
-            ui.label(
-                egui::RichText::new(t!(
-                    "variations_panel.catalog_updates",
-                    count = updatable.len()
-                ))
-                .strong(),
-            );
-            for (item, have, avail) in &updatable {
-                ui.horizontal(|ui| {
-                    ui.weak(format!("{} — have v{have}, v{avail} available", item.display_name));
-                    // Re-fetching by name overwrites the cached copy:
-                    // `register_from_api` replaces a non-core entry, so
-                    // the same path that installs also updates.
-                    if ui.small_button(t!("variations_panel.update_btn")).clicked() {
-                        update_requested.push(item.name.clone());
-                    }
-                });
-            }
-            if updatable.len() > 1
-                && ui
-                    .button(t!("variations_panel.update_all_btn", count = updatable.len()))
-                    .clicked()
-            {
-                update_requested.extend(updatable.iter().map(|(i, _, _)| i.name.clone()));
-            }
-            ui.add_space(4.0);
-        }
-
-        if available.is_empty() {
-            ui.weak(t!("variations_panel.catalog_all_present"));
-        } else {
-            // Fetched on demand when a flame references one, so this is
-            // a listing rather than a set of buttons — a download-all
-            // control would pull shader code the user has no use for.
-            ui.weak(t!("variations_panel.catalog_on_demand"));
-            for item in available.iter().take(40) {
-                ui.horizontal(|ui| {
-                    ui.weak(&item.display_name);
-                    if !item.has_shader_3d {
-                        ui.weak("· 2D only");
-                    }
-                });
-                if let Some(d) = item.description_plain.as_ref().filter(|d| !d.is_empty()) {
-                    ui.indent(format!("cat_desc_{}", item.name), |ui| {
-                        ui.weak(d);
-                    });
-                }
-            }
-            if available.len() > 40 {
-                ui.weak(format!("… and {} more", available.len() - 40));
-            }
-        }
-
-        // A local plugin standing in front of a catalog entry. Worth
-        // naming rather than counting: the user chose that name, and it
-        // now means something different from what the catalog means by
-        // it — so a flame of theirs using it will not render elsewhere.
-        if !local_overrides.is_empty() {
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new(t!(
-                    "variations_panel.catalog_local_override",
-                    count = local_overrides.len()
-                ))
-                .color(ui.visuals().warn_fg_color),
-            );
-            for item in &local_overrides {
-                ui.weak(&item.name);
-            }
-        }
-
-        if builtin_only_elsewhere > 0 {
-            ui.add_space(4.0);
-            ui.weak(t!(
-                "variations_panel.catalog_builtin_only",
-                count = builtin_only_elsewhere
-            ))
-            .on_hover_text(t!("variations_panel.catalog_builtin_only_hint"));
-        }
-    });
-
-    update_requested
-}
-
 /// Render the Variations panel.
 ///
 /// `flame` is the current flame, used only to answer "does this run any
@@ -169,18 +49,10 @@ pub fn render_variations_panel(
     ui: &mut egui::Ui,
     flame: &crate::scene::transforms::Flame,
     catalog: Option<&crate::storage::variation_catalog::CachedCatalog>,
-) -> VariationsPanelResponse {
-    let mut response = VariationsPanelResponse::default();
+) {
 
     let registry = global_registry();
     let total = registry.all().iter().count();
-    // Only downloads are cache. Clearing must not offer to remove the
-    // user's own plugins, and counting them here would say it does.
-    let api_count = registry
-        .all()
-        .iter()
-        .filter(|v| v.provenance.is_cached_download())
-        .count();
 
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(t!("variations_panel.total", count = total)).strong());
@@ -215,11 +87,9 @@ pub fn render_variations_panel(
 
     ui.add_space(4.0);
 
-    // What the server has that this client does not — the half of the
-    // picture the registry cannot show. Absent when offline, which is a
-    // normal state: the listing below is still the truth about what is
-    // installed, just not about what exists.
-    response.update_requested = render_catalog_summary(ui, catalog, &registry);
+    // What the server has that this client does not, its updates and
+    // Clear Cache: the Catalog's.
+    super::inventory::moved_here(ui, &t!("variations_panel.moved_to_catalog"), crate::inventory::Family::Variations, super::inventory::Place::Online);
 
     ui.add_space(4.0);
 
@@ -321,26 +191,6 @@ pub fn render_variations_panel(
         }
     }
 
-    ui.add_space(8.0);
-    ui.separator();
-    ui.add_space(4.0);
-
-    ui.horizontal(|ui| {
-        let label = t!("variations_panel.clear_cache_btn", count = api_count);
-        if ui.add_enabled(api_count > 0, egui::Button::new(label.as_ref())).clicked() {
-            response.clear_cache_requested = true;
-        }
-    });
-
-    response
-}
-
-#[derive(Default)]
-pub struct VariationsPanelResponse {
-    pub clear_cache_requested: bool,
-    /// Downloaded variations the user asked to re-fetch at the catalog's
-    /// version. Re-uses the install path, which overwrites.
-    pub update_requested: Vec<String>,
 }
 
 #[cfg(test)]

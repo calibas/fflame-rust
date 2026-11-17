@@ -202,106 +202,6 @@ enum ReorderAction {
 }
 
 /// Render the Effects panel
-/// What the online library holds versus what is installed.
-///
-/// Mirrors the Variations panel's section, sharing its state machine
-/// through `storage::catalog`. Silent when there is no catalog: an app
-/// that renders perfectly well offline should not grow an error panel
-/// because a metadata endpoint was unreachable.
-/// The online library's section; gives the downloaded effects the user
-/// asked to update to the catalog's version.
-fn render_effect_catalog(
-    ui: &mut Ui,
-    catalog: Option<&crate::storage::effect_catalog::CachedEffectCatalog>,
-) -> Vec<String> {
-    use crate::storage::catalog::summarize;
-
-    let mut update = Vec::new();
-    let Some(catalog) = catalog else { return update };
-    if catalog.items.is_empty() {
-        return update;
-    }
-
-    let registry = global_effect_registry();
-    let summary = summarize(&catalog.items, |name| {
-        registry.get(name).map(|e| e.provenance.clone())
-    });
-    let installed = catalog
-        .items
-        .iter()
-        .filter(|i| registry.contains(&i.name))
-        .count();
-    drop(registry);
-
-    ui.add_space(8.0);
-    egui::CollapsingHeader::new(format!(
-        "Online library — {} catalogued, {} here",
-        catalog.items.len(),
-        installed
-    ))
-    .default_open(false)
-    .show(ui, |ui| {
-        if !summary.updatable.is_empty() {
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} downloaded effect(s) have a newer version",
-                    summary.updatable.len()
-                ))
-                .strong(),
-            );
-            for (item, have, avail) in &summary.updatable {
-                ui.horizontal(|ui| {
-                    ui.weak(format!(
-                        "{} — have v{have}, v{avail} available",
-                        item.display_name
-                    ));
-                    // The path that installs also updates.
-                    if ui.small_button(t!("effects_panel.update")).clicked() {
-                        update.push(item.name.clone());
-                    }
-                });
-            }
-            if summary.updatable.len() > 1 && ui.button(t!("effects_panel.update_all", count = summary.updatable.len())).clicked() {
-                update.extend(summary.updatable.iter().map(|(i, _, _)| i.name.clone()));
-            }
-            ui.add_space(4.0);
-        }
-
-        if !summary.available.is_empty() {
-            // Fetched on demand when a flame uses one, so this is a
-            // listing rather than a set of buttons — a download-all
-            // control would pull shader code nobody has a use for.
-            ui.weak("Fetched automatically when a flame uses one:");
-            for item in summary.available.iter().take(40) {
-                ui.weak(&item.display_name);
-                if let Some(d) = item.description_plain.as_ref().filter(|d| !d.is_empty()) {
-                    ui.indent(("eff_cat_desc", &item.name), |ui| {
-                        ui.weak(d);
-                    });
-                }
-            }
-            if summary.available.len() > 40 {
-                ui.weak(format!("… and {} more", summary.available.len() - 40));
-            }
-        }
-
-        if summary.builtin_only_elsewhere > 0 {
-            ui.add_space(4.0);
-            ui.weak(format!(
-                "{} not available to download yet",
-                summary.builtin_only_elsewhere
-            ))
-            .on_hover_text(
-                "The server lists these but is not serving their shader code yet, so there \
-                 is nothing to fetch. They are shown so the catalog is not silently short.",
-            );
-        } else if summary.available.is_empty() && summary.updatable.is_empty() {
-            ui.weak("Everything in the catalog is already here.");
-        }
-    });
-    update
-}
-
 pub fn render_effects_panel(
     ui: &mut Ui,
     config_manager: &mut ConfigManager,
@@ -310,11 +210,8 @@ pub fn render_effects_panel(
     // used this is now handled by the structural_changed rebind hook
     // in `app::gpu_updates`.
     _animation_controller: &mut AnimationController,
-    catalog: Option<&crate::storage::effect_catalog::CachedEffectCatalog>,
     formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
     open_formula_editor: &mut bool,
-    effect_update_requested: &mut Vec<String>,
-    clear_effect_cache_requested: &mut bool,
     reset_effect_history: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
@@ -605,15 +502,10 @@ pub fn render_effects_panel(
         }
     });
 
-    *effect_update_requested = render_effect_catalog(ui, catalog);
-    // Downloads only: the built-ins and the user's own are not cache.
-    let downloaded = global_effect_registry().all().filter(|i| i.provenance.is_cached_download()).count();
-    if downloaded > 0 {
-        ui.add_space(4.0);
-        if ui.button(t!("effects_panel.clear_cache", count = downloaded)).on_hover_text(t!("effects_panel.clear_cache_tip")).clicked() {
-            *clear_effect_cache_requested = true;
-        }
-    }
+    // What the online library offers, its updates and Clear Cache: the
+    // Catalog's (docs/projects/catalog.md, *Phase 3*).
+    ui.add_space(4.0);
+    super::inventory::moved_here(ui, &t!("effects_panel.moved_to_catalog"), crate::inventory::Family::Effects, super::inventory::Place::Online);
 
     if let Some((density, index, builtin)) = edit_as_rhai {
         formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).edit_effect_as_rhai(config_manager, density, index, &builtin);
