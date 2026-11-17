@@ -3371,6 +3371,7 @@ catalog:
   deleted: "Deleted \"%{name}\"."
   delete_failed: "Could not delete it: %{error}"
   open_in_catalog: "Open in Catalog"
+  scripts_moved: "Public scripts, opening one, and what you published are in the Catalog's Online place."
   your_online_palettes: "Your palettes in the online library are in the Online place."
   show_mine: "Show Mine"
   updates: "Updates (%{count})"

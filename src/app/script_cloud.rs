@@ -19,7 +19,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::api::types::{ApiVisibility, ScriptConflict, ScriptCreateRequest, ScriptListItem, ScriptResponse};
+use crate::api::types::{ApiVisibility, ScriptConflict, ScriptCreateRequest, ScriptResponse};
 use crate::app::App;
 use crate::script::store;
 use crate::storage::formula_store;
@@ -84,12 +84,6 @@ impl Local {
 /// Something the panel wants done against the online library.
 #[derive(Debug, Clone)]
 pub enum ScriptCloudRequest {
-    /// Refresh the caller's own scripts, of one kind (its wire name) or
-    /// every kind.
-    ListMine(Option<String>),
-    /// Public search, of one kind or every kind. An empty query lists
-    /// whatever the server offers.
-    Search(String, Option<String>),
     /// Publish a local script that has no cloud id yet. An entry goes
     /// under its own `INFO.id`, which the caller has written in.
     Publish { local: Local, source: String, visibility: ApiVisibility },
@@ -113,13 +107,14 @@ pub enum ScriptCloudRequest {
 }
 
 impl ScriptCloudRequest {
-    /// Whether it needs a signed-in account. Searching and opening a
-    /// public script do not: the server serves them to anyone, so a
-    /// guest (`online_account` off) and a signed-out user can browse.
+    /// Whether it needs a signed-in account. Opening a public script
+    /// does not: the server serves them to anyone, so a guest
+    /// (`online_account` off) and a signed-out user can open one (found
+    /// in the Catalog's Online place).
     pub fn needs_account(&self) -> bool {
         match self {
-            Self::Search(..) | Self::Adopt { .. } | Self::Refetch { .. } => false,
-            Self::ListMine(_) | Self::Publish { .. } | Self::Update { .. } | Self::Unpublish { .. } => true,
+            Self::Adopt { .. } | Self::Refetch { .. } => false,
+            Self::Publish { .. } | Self::Update { .. } | Self::Unpublish { .. } => true,
         }
     }
 }
@@ -127,11 +122,6 @@ impl ScriptCloudRequest {
 /// What the panel renders.
 #[derive(Default)]
 pub struct ScriptCloudState {
-    pub mine: Vec<ScriptListItem>,
-    pub browse: Vec<ScriptListItem>,
-    /// The query `browse` answers, so the panel can say what it is
-    /// showing rather than implying the results are everything.
-    pub browse_query: String,
     /// A request is in flight. The panel disables its buttons rather
     /// than letting a second click race the first.
     pub busy: bool,
@@ -143,9 +133,6 @@ pub struct ScriptCloudState {
     /// the choice — discard mine, or keep editing — is theirs and a
     /// dismissed banner would silently mean "keep editing".
     pub conflict: Option<(Local, ScriptConflict)>,
-    /// Whether `ListMine` has ever succeeded, so the panel can tell
-    /// "nothing published" from "not looked yet".
-    pub mine_loaded: bool,
     /// Bumped whenever a LOCAL store changed behind a panel's back — an
     /// adoption, or a refetch (the Scripts panel and the Formula Editor
     /// each re-scan).
@@ -174,8 +161,6 @@ impl ScriptCloudState {
 
 /// What a background request produced.
 pub(super) enum ScriptCloudResult {
-    Mine(Result<Vec<ScriptListItem>, String>),
-    Browse(String, Result<Vec<ScriptListItem>, String>),
     /// A publish or update. Carries the local file so the link can be
     /// written against the right one.
     Saved(Local, Result<ScriptResponse, ScriptCloudError>),
@@ -267,20 +252,6 @@ impl App {
 
         for result in drained {
             match result {
-                ScriptCloudResult::Mine(Ok(items)) => {
-                    self.script_cloud.mine = items;
-                    self.script_cloud.mine_loaded = true;
-                }
-                ScriptCloudResult::Mine(Err(e)) => {
-                    self.script_cloud.fail(format!("Could not list your online scripts: {e}"))
-                }
-                ScriptCloudResult::Browse(q, Ok(items)) => {
-                    self.script_cloud.browse_query = q;
-                    self.script_cloud.browse = items;
-                }
-                ScriptCloudResult::Browse(_, Err(e)) => {
-                    self.script_cloud.fail(format!("Search failed: {e}"))
-                }
                 ScriptCloudResult::Saved(local, Ok(resp)) => {
                     // Record the id and version, or the next update has
                     // nothing to send and optimistic concurrency has
@@ -294,7 +265,6 @@ impl App {
                     }
                     self.script_cloud.conflict = None;
                     self.script_cloud.ok(format!("Published `{}` (v{})", local.name(), resp.version));
-                    self.script_cloud.mine_loaded = false;
                 }
                 ScriptCloudResult::Saved(local, Err(ScriptCloudError::Conflict(c))) => {
                     self.script_cloud.conflict = Some((local, c));
@@ -356,7 +326,6 @@ impl App {
                         log::warn!("Could not clear the cloud link for `{}`: {e}", local.name());
                     }
                     self.script_cloud.ok(format!("`{}` is no longer published", local.name()));
-                    self.script_cloud.mine_loaded = false;
                 }
                 ScriptCloudResult::Unpublished(_, Err(e)) => {
                     self.script_cloud.fail(format!("Could not unpublish: {e}"))
@@ -450,13 +419,6 @@ async fn run_request(
     req: ScriptCloudRequest,
 ) -> ScriptCloudResult {
     match req {
-        ScriptCloudRequest::ListMine(kind) => {
-            ScriptCloudResult::Mine(api.list_my_scripts(kind.as_deref(), 1, 100).await.map_err(|e| e.to_string()))
-        }
-        ScriptCloudRequest::Search(q, kind) => {
-            let r = api.search_public_scripts(&q, kind.as_deref(), 1, 50).await.map_err(|e| e.to_string());
-            ScriptCloudResult::Browse(q, r)
-        }
         ScriptCloudRequest::Publish { local, source, visibility } => {
             let r = match local.request(&source, Some(visibility), None) {
                 Ok(req) => api.create_script(&req).await.map_err(|e| match &e {
