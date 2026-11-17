@@ -3324,6 +3324,10 @@ inventory:
       ifs_trap: "An orbit trap on the point after the last inversion, the same size at every zoom depth."
       ifs_measure: "The flame's own density and colour, read through the inverse walk instead of sampled by the chaos game, so it does not starve at depth."
 
+manage:
+  bad_name: "That name has nothing usable in it, or is a shipped script's."
+  name_taken: "%{name} is taken: choose another name."
+  missing: "%{name} is not in your files any more."
 catalog:
   search: "Search"
   clear_search: "Clear the search"
