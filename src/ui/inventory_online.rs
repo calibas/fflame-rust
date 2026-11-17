@@ -25,7 +25,7 @@ const SEARCH_SETTLE_SECONDS: f64 = 0.4;
 /// Thumbnails downloading at once.
 const THUMBNAIL_JOBS: usize = 4;
 /// A grid cell's thumbnail side.
-const CELL: f32 = 120.0;
+pub(super) const CELL: f32 = 120.0;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ListKey {
@@ -740,7 +740,7 @@ fn palette_row(ui: &mut egui::Ui, e: &Entry, p: &crate::api::types::PaletteItem,
 
 /// A fractal's cell: its thumbnail (a placeholder until it is in) and its
 /// name under it.
-fn grid_cell(ui: &mut egui::Ui, e: &Entry, texture: Option<&egui::TextureHandle>, selected: bool, has_thumb: bool) -> egui::Response {
+pub(super) fn grid_cell(ui: &mut egui::Ui, e: &Entry, texture: Option<&egui::TextureHandle>, selected: bool, has_thumb: bool) -> egui::Response {
     let (rect, r) = ui.allocate_exact_size(egui::vec2(CELL, CELL + 18.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let visuals = ui.visuals();

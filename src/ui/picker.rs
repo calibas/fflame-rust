@@ -190,7 +190,7 @@ impl<'a> Picker<'a> {
             ui.heading(&e.title);
             return;
         }
-        super::inventory::entry_summary(ui, e, self.palettes);
+        super::inventory::entry_summary(ui, e, self.palettes, None);
         if !e.installed {
             ui.separator();
             super::inventory::download_button(ui, e);

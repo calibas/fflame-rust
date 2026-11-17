@@ -13,6 +13,7 @@ pub mod markdown;
 mod inventory_manage;
 pub mod script_run;
 mod inventory_online;
+mod inventory_preview;
 pub mod picker;
 pub mod fractal_gallery;
 mod help;

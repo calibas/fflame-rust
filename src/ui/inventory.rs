@@ -246,6 +246,10 @@ pub struct InventoryPanel {
     details: bool,
     /// Whether the panel was narrow when last drawn.
     narrow: bool,
+    /// The entries' previews (phase 6), and whether the list is a grid of
+    /// them (decision 1).
+    previews: super::inventory_preview::Previews,
+    grid: bool,
     online: super::inventory_online::OnlinePlace,
     manage: super::inventory_manage::Manage,
     /// A CPU script's run controls, for the script selected.
@@ -275,6 +279,8 @@ impl InventoryPanel {
             place: Place::Local,
             details: false,
             narrow: false,
+            previews: super::inventory_preview::Previews::default(),
+            grid: false,
             online: super::inventory_online::OnlinePlace::new(),
             manage: super::inventory_manage::Manage::default(),
             run: super::script_run::ScriptRun::default(),
@@ -354,6 +360,7 @@ impl InventoryPanel {
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext) -> InventoryResponse {
         let mut out = InventoryResponse::default();
+        self.previews.begin_frame(ui.ctx());
         self.online.update(ui.ctx(), &self.query, &self.entries, &mut out);
         self.render_top(ui, cx, &mut out);
         ui.separator();
@@ -417,6 +424,10 @@ impl InventoryPanel {
                         ui.selectable_value(&mut self.origin, o, t!(o.label_key()));
                     }
                 });
+                if super::inventory_preview::has_previews(self.family) {
+                    ui.selectable_value(&mut self.grid, false, t!("catalog.view_list"));
+                    ui.selectable_value(&mut self.grid, true, t!("catalog.view_grid")).on_hover_text(t!("catalog.view_grid_tip"));
+                }
             }
         });
         if self.place == Place::Online {
@@ -526,6 +537,8 @@ impl InventoryPanel {
         let several = matches!(self.family, Family::Escape | Family::Simulation | Family::Scripts) && self.kind.is_none();
         let (mut clicked, mut used) = (None, None);
         let mut details = false;
+        let grid = self.grid && self.place == Place::Local && super::inventory_preview::has_previews(self.family);
+        let palettes: Vec<crate::scene::palette::Palette> = if grid { cx.palette_library.iter().cloned().collect() } else { Vec::new() };
         let mut start = 0;
         while start < shown.len() {
             let first = &self.entries[shown[start]];
@@ -545,6 +558,32 @@ impl InventoryPanel {
                     ui.strong(heading);
                 })
                 .body(|ui| {
+                    if grid {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                            for &i in &shown[start..end] {
+                                let e = &self.entries[i];
+                                let selected = self.selected.as_ref() == Some(&e.key);
+                                // Only a cell on screen asks for its picture.
+                                let size = egui::vec2(super::inventory_online::CELL, super::inventory_online::CELL + 18.0);
+                                let visible = ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, size));
+                                let shown = if visible { self.previews.want(e, ui.ctx(), &palettes) } else { super::inventory_preview::Shown::Pending };
+                                let (texture, has) = match &shown {
+                                    super::inventory_preview::Shown::Ready(t) => (t.last().cloned(), true),
+                                    super::inventory_preview::Shown::Pending => (None, true),
+                                    super::inventory_preview::Shown::None => (None, false),
+                                };
+                                let r = super::inventory_online::grid_cell(ui, e, texture.as_ref(), selected, has);
+                                if r.clicked() {
+                                    clicked = Some(e.key.clone());
+                                }
+                                if r.double_clicked() {
+                                    used = Some(i);
+                                }
+                            }
+                        });
+                        return;
+                    }
                     for &i in &shown[start..end] {
                         let e = &self.entries[i];
                         let selected = self.selected.as_ref() == Some(&e.key);
@@ -703,9 +742,13 @@ impl InventoryPanel {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn generate_one_preview<F>(&mut self, ctx: &egui::Context, render_fn: F) -> bool
     where
-        F: FnOnce(&FractalConfig) -> image::RgbaImage,
+        F: Fn(&FractalConfig) -> image::RgbaImage,
     {
-        self.shown_gallery().is_some_and(|g| g.generate_one_preview(ctx, render_fn))
+        // The presets' gallery first, then the entries' previews.
+        if self.shown_gallery().is_some_and(|g| g.generate_one_preview(ctx, &render_fn)) {
+            return true;
+        }
+        self.previews.generate_one(ctx, render_fn)
     }
 
     /// WASM: spawn the next preset preview of the gallery drawn this frame.
@@ -714,6 +757,7 @@ impl InventoryPanel {
         if let Some(g) = self.shown_gallery() {
             g.start_next_preview(device, queue, ctx);
         }
+        self.previews.start_next(device, queue, ctx);
     }
 
     /// The gallery drawn this frame, every gallery's flag taken: only it
@@ -752,7 +796,9 @@ impl InventoryPanel {
             ui.weak(t!("catalog.select_hint"));
             return;
         };
-        entry_summary(ui, &e, Some(cx.palette_library));
+        let palettes: Vec<crate::scene::palette::Palette> = cx.palette_library.iter().cloned().collect();
+        let preview = self.previews.want(&e, ui.ctx(), &palettes);
+        entry_summary(ui, &e, Some(cx.palette_library), Some(&preview));
         if let Some(v) = &e.update {
             ui.label(egui::RichText::new(t!("catalog.update_available", version = v.clone())).strong());
         }
@@ -859,7 +905,7 @@ pub(super) fn palette_row(ui: &mut egui::Ui, hash: &str, title: &str, palette: &
 /// What an entry is, as the info pane and the picker's show it: its title,
 /// kind and group, where it came from, version, authors, a palette's
 /// gradient (given the library) and its description.
-pub(crate) fn entry_summary(ui: &mut egui::Ui, e: &Entry, palettes: Option<&PaletteLibrary>) {
+pub(crate) fn entry_summary(ui: &mut egui::Ui, e: &Entry, palettes: Option<&PaletteLibrary>, preview: Option<&super::inventory_preview::Shown>) {
     ui.heading(&e.title);
     ui.label(egui::RichText::new(format!("{} · {}", t!(e.kind.label_key()), e.group.label)).weak());
     ui.label(origin_text(e));
@@ -877,6 +923,10 @@ pub(crate) fn entry_summary(ui: &mut egui::Ui, e: &Entry, palettes: Option<&Pale
             ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(w, 24.0)));
             ui.add_space(4.0);
         }
+    }
+    if let Some(p) = preview {
+        super::inventory_preview::show(ui, p);
+        ui.add_space(4.0);
     }
     if e.description.is_empty() {
         ui.weak(t!("catalog.no_description"));
@@ -1223,7 +1273,9 @@ mod phone_tests {
         let mut cm = ConfigManager::new(FractalConfig::default());
         let cloud = crate::app::script_cloud::ScriptCloudState::default();
         let mut panel = InventoryPanel::new();
-        panel.refresh(&library, 0, inventory::Online::default());
+        // Its own list, not the shared one the pickers' tests fill.
+        panel.entries = Arc::new(inventory::scan(&library, inventory::Online::default()));
+        panel.revision = Some(inventory::revision(&library, 0, inventory::Online::default()));
         panel.open_on(Family::Variations);
         let linear = panel.entries.iter().find(|e| e.key == EntryKey::Registered(Kind::Variation, "linear".into())).unwrap().key.clone();
         panel.selected = Some(linear);
@@ -1262,5 +1314,34 @@ mod phone_tests {
 
         frame(&mut panel, Some(back + egui::vec2(4.0, 6.0)));
         assert!(!panel.details, "Back returns to the list");
+    }
+
+    /// The grid (decision 1): a family with previews drawn as cells, each
+    /// on screen asking for its preview, those off screen not.
+    #[test]
+    fn the_grid_asks_for_the_previews_on_screen() {
+        let mut library = crate::scene::palette::global_palette_library().read().unwrap().clone();
+        let mut cm = ConfigManager::new(FractalConfig::default());
+        let cloud = crate::app::script_cloud::ScriptCloudState::default();
+        let mut panel = InventoryPanel::new();
+        panel.entries = Arc::new(inventory::scan(&library, inventory::Online::default()));
+        panel.open_on(Family::Variations);
+        panel.grid = true;
+        let ctx = egui::Context::default();
+        let mut drawn = Vec::new();
+        for _ in 0..2 {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0))), ..Default::default() };
+            let out = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    let mut cx = InventoryContext { config_manager: &mut cm, palette_library: &mut library, account: CloudAccount::default(), script_cloud: &cloud };
+                    let _ = panel.render(ui, &mut cx);
+                });
+            });
+            drawn = placed(&out.shapes);
+        }
+        assert!(drawn.iter().any(|(t, _)| t == "Linear"), "a cell names its entry");
+        let waiting = panel.previews.waiting();
+        let variations = panel.entries.iter().filter(|e| e.kind == Kind::Variation).count();
+        assert!(waiting > 0 && waiting < variations / 4, "the cells on screen ask, not all {variations}: {waiting}");
     }
 }
