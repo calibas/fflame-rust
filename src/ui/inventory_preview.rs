@@ -160,9 +160,9 @@ fn plane(name: &str, three_d: bool, ctx: &egui::Context) -> Option<FractalConfig
     Some(cm.active_config().clone())
 }
 
-/// A variation preview's palette: Fire without its black end, which on
-/// the black background hid part of the shape -- dark red, orange,
-/// yellow, cream, evenly spaced.
+/// The previews' palette (where the entry does not choose its own): Fire
+/// without its black end, which on the black background hid whatever was
+/// drawn at that end -- dark red, orange, yellow, cream, evenly spaced.
 fn plane_palette() -> crate::scene::palette::Palette {
     let mut fire = crate::scene::palette::Palette::fire();
     fire.stops.retain(|s| s.color.iter().any(|c| *c > 0.05));
@@ -237,6 +237,10 @@ fn configs(e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Pa
             if config.render_mode == crate::scene::transforms::RenderMode::Simulation {
                 config.sim.steps = config.sim.steps.min(SIM_STEPS);
             }
+            // The default palette's black end on the black background hid
+            // whatever an entry draws at index 0 (an orbit trap near the
+            // origin, a formula's first bands).
+            config.palette = plane_palette();
             Some(vec![config])
         }
         Kind::Generator | Kind::Modifier => {
