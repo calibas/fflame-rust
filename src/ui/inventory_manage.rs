@@ -38,12 +38,9 @@ fn stem(file: &str) -> String {
     file.strip_suffix(".rhai").unwrap_or(file).to_string()
 }
 
-/// Open a file in its editor.
+/// Open a file in the Rhai Editor.
 pub fn edit(store: Store, file: &str, shipped: bool, out: &mut InventoryResponse) {
-    match store {
-        Store::Formulas => out.open_formula_file = Some((file.to_string(), shipped)),
-        Store::Scripts => out.open_script = Some(stem(file)),
-    }
+    out.open_file = Some((store, file.to_string(), shipped));
 }
 
 impl Manage {

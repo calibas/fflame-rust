@@ -804,18 +804,23 @@ impl<'a> PanelViewer<'a> {
                     .render(ui, self.context.config_manager);
             }
             PanelType::RhaiEditor => {
-                self.context
-                    .rhai_editor
-                    .get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new)
-                    .render(
-                        ui,
-                        self.context.config_manager,
-                        self.context.animation_controller,
-                        self.context.script_cloud,
-                        self.context.signed_in,
-                        self.context.script_cloud_request,
-                        self.context.window,
-                    );
+                let palettes: Vec<crate::scene::palette::Palette> = self.context.palette_library.iter().cloned().collect();
+                let run = self.context.rhai_editor.get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new).render(
+                    ui,
+                    self.context.config_manager,
+                    self.context.animation_controller,
+                    self.context.script_cloud,
+                    &palettes,
+                );
+                if let Some(config) = run.generated {
+                    *self.context.script_generated = Some(config);
+                }
+                if let Some(animation) = run.animation {
+                    *self.context.script_animation = Some(animation);
+                }
+                if let Some(batch) = run.batch {
+                    *self.context.generated_batch = Some(batch);
+                }
             }
             PanelType::HybridDesigner => {
                 self.context
@@ -992,13 +997,9 @@ impl<'a> PanelViewer<'a> {
         if response.open_palette_editor {
             *self.context.open_palette_editor = true;
         }
-        if let Some((file, shipped)) = response.open_formula_file {
-            self.context.rhai_editor.get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new).open_file(&file, shipped);
+        if let Some((store, file, shipped)) = response.open_file {
+            self.context.rhai_editor.get_or_insert_with(super::rhai_editor::RhaiEditorPanel::new).open_file(store, &file, shipped);
             *self.context.open_rhai_editor = true;
-        }
-        if let Some(id) = response.open_script {
-            self.context.scripts_panel.get_or_insert_with(super::scripts_panel::ScriptsPanel::new).select_script(&id);
-            *self.context.open_scripts_panel = true;
         }
     }
 

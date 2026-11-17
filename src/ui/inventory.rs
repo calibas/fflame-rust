@@ -65,19 +65,28 @@ pub fn download_failure(e: &Entry) -> Option<String> {
     FAILED.lock().ok()?.iter().find(|((k, n), _)| k == kind && n == name).map(|(_, why)| why.clone())
 }
 
-/// A panel asked to show the Catalog at a family and place.
-static OPEN: Mutex<Option<(Family, Place)>> = Mutex::new(None);
+/// A panel asked to show the Catalog at a family and place, with an
+/// entry selected.
+static OPEN: Mutex<Option<(Family, Place, Option<EntryKey>)>> = Mutex::new(None);
 
 /// Show the Catalog at `family` in `place` (opening its panel): what a
 /// panel whose online section moved into the Catalog offers instead.
 pub fn request_open(family: Family, place: Place) {
     if let Ok(mut o) = OPEN.lock() {
-        *o = Some((family, place));
+        *o = Some((family, place, None));
+    }
+}
+
+/// Show an entry in the Catalog, selected (the Rhai Editor's Show in
+/// Catalog).
+pub fn request_open_select(family: Family, key: EntryKey) {
+    if let Ok(mut o) = OPEN.lock() {
+        *o = Some((family, Place::Local, Some(key)));
     }
 }
 
 /// The open asked for since the last call.
-pub fn take_open() -> Option<(Family, Place)> {
+pub fn take_open() -> Option<(Family, Place, Option<EntryKey>)> {
     OPEN.lock().ok()?.take()
 }
 
@@ -190,11 +199,9 @@ pub struct InventoryResponse {
     /// A fractal to load (`App::load_config_with_undo`).
     pub load_preset: Option<FractalConfig>,
     pub open_palette_editor: bool,
-    /// A formula store file to open in the Formula Editor: its name, and
-    /// whether it is a shipped example.
-    pub open_formula_file: Option<(String, bool)>,
-    /// A CPU script to select in the Scripts panel, by its stem.
-    pub open_script: Option<String>,
+    /// A file to open in the Rhai Editor: its store, its name, and
+    /// whether it is a shipped one.
+    pub open_file: Option<(Store, String, bool)>,
     /// An online fractal loaded, by its id, to load as the Fractal
     /// Browser's Online tab did (one undo step; Save Online updates it).
     pub load_api_flame: Option<(String, crate::api::FlameLoadResult)>,
@@ -285,10 +292,13 @@ impl InventoryPanel {
         self.entries.iter().find(|e| &e.key == key)
     }
 
-    /// Show `family` in `place`.
-    pub fn open_at(&mut self, family: Family, place: Place) {
+    /// Show `family` in `place`, with `select` selected.
+    pub fn open_at(&mut self, family: Family, place: Place, select: Option<EntryKey>) {
         self.open_on(family);
         self.place = place;
+        if select.is_some() {
+            self.selected = select;
+        }
     }
 
     /// Your own online lists changed (a fractal saved online): ask again.
@@ -949,8 +959,8 @@ pub(super) fn apply_palette(config_manager: &mut ConfigManager, palette: crate::
 /// Use: what each kind's own picker does when it is chosen there.
 fn apply(e: &Entry, ctx: &egui::Context, cx: &mut InventoryContext, out: &mut InventoryResponse) {
     let cm = &mut *cx.config_manager;
-    if let EntryKey::File { store: Store::Scripts, file, .. } = &e.key {
-        out.open_script = Some(file.rsplit_once('.').map_or(file.as_str(), |(s, _)| s).to_string());
+    if let EntryKey::File { store: Store::Scripts, file, shipped } = &e.key {
+        out.open_file = Some((Store::Scripts, file.clone(), *shipped));
         return;
     }
     match &e.key {

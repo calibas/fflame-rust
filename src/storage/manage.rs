@@ -62,7 +62,8 @@ pub fn link_of(store: Store, file: &str) -> Option<Link> {
     }
 }
 
-fn set_link(store: Store, file: &str, link: Link) -> Result<(), String> {
+/// Record (or replace) a stored file's link.
+pub fn set_link(store: Store, file: &str, link: Link) -> Result<(), String> {
     changed();
     match store {
         Store::Formulas => formulas::set_link(file, link),

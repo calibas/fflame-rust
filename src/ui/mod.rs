@@ -2015,8 +2015,8 @@ impl EguiLayer {
             // fetches that install (and update) variations and effects.
             // A panel asked to show the Catalog somewhere (its online
             // section moved there).
-            if let Some((family, place)) = inventory::take_open() {
-                self.inventory_panel.open_at(family, place);
+            if let Some((family, place, select)) = inventory::take_open() {
+                self.inventory_panel.open_at(family, place, select);
                 open_catalog = true;
             }
 

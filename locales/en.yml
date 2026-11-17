@@ -3326,6 +3326,14 @@ inventory:
       ifs_trap: "An orbit trap on the point after the last inversion, the same size at every zoom depth."
       ifs_measure: "The flame's own density and colour, read through the inverse walk instead of sampled by the chaos game, so it does not starve at depth."
 
+rhai_editor:
+  nothing_open: "Nothing is open. Choose a file in the Catalog and Edit it, or make a New one there."
+  open_catalog: "Open the Catalog"
+  unsaved: "(not saved yet)"
+  save_tip: "Write it to your files (an unsaved one becomes a new file of yours)"
+  revert: "Revert"
+  revert_tip: "Back to the text as last saved"
+  show_in_catalog: "Show in Catalog"
 script_run:
   not_in_library: "This script is not in the library: refresh, or open it in the editor."
   import_tip: "Other scripts use this library with this line, then call its functions as lib::name(...)"

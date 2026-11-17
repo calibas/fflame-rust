@@ -1,5 +1,12 @@
-//! The Formula Editor: Rhai formulas, and Ultra Fractal and Fractint
-//! formula files, checked as they are typed and used as the escape
+//! The Rhai Editor (docs/projects/catalog.md, phase 4): the one editor of
+//! every Rhai kind -- formulas, colourings, solids, fields, variations,
+//! effects, simulations, tracks, and the CPU scripts -- and of Ultra
+//! Fractal and Fractint formula files. The Catalog chooses and manages
+//! files (New, Rename, Delete, the plug-in flag, publishing); this edits
+//! the one open: Save, Revert, its checks as it is typed, Use and Live
+//! for what renders, Run for a CPU script.
+//!
+//! GPU entries are checked as they are typed and used as the escape
 //! formula or colouring (`docs/archive/projects/escape-formula-language.md`; the
 //! language is in `docs/main/ESCAPE.md`, "The formula language"), and
 //! Rhai transformations used as flame variations (the KIFS plan, C1:
@@ -23,10 +30,8 @@ use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::escape::custom;
 use crate::lang::{self, EntryKind, Severity};
 use crate::storage::formula_store;
-
-/// Where the browser's file picker leaves the opened file's text.
-#[cfg(target_arch = "wasm32")]
-const PENDING_FORMULA_LOAD: &str = "pending_formula_load_raw";
+use crate::storage::library::Store;
+use crate::storage::manage;
 
 /// How long typing must pause before the file is checked again.
 const RECHECK_AFTER: Duration = Duration::from_millis(400);
@@ -122,10 +127,11 @@ fn entry_ident(src: &CustomSource) -> String {
 }
 
 pub struct RhaiEditorPanel {
-    /// The user's files.
-    files: Vec<String>,
-    /// The stored file being edited; `None` for an unsaved one (a new
-    /// file, an example, an opened file).
+    /// The store the open file is in.
+    store: Store,
+    /// The stored file being edited; `None` for an unsaved one (a
+    /// built-in's twin opened to edit, a converted entry, a shipped
+    /// example).
     file: Option<String>,
     /// The name Save stores it under.
     name: String,
@@ -151,6 +157,8 @@ pub struct RhaiEditorPanel {
     /// The cloud state's `library_generation` this panel last re-scanned
     /// for: an adoption or a refetch writes the formula store.
     seen_library_generation: u64,
+    /// A CPU script's Run.
+    run: super::script_run::ScriptRun,
 }
 
 impl Default for RhaiEditorPanel {
@@ -161,8 +169,8 @@ impl Default for RhaiEditorPanel {
 
 impl RhaiEditorPanel {
     pub fn new() -> Self {
-        let mut p = RhaiEditorPanel {
-            files: formula_store::list(),
+        RhaiEditorPanel {
+            store: Store::Formulas,
             file: None,
             name: String::new(),
             text: String::new(),
@@ -178,12 +186,8 @@ impl RhaiEditorPanel {
             track: None,
             track_in_use: None,
             seen_library_generation: 0,
-        };
-        match p.files.first().cloned() {
-            Some(f) => p.open_stored(&f),
-            None => p.open_example(0),
+            run: super::script_run::ScriptRun::default(),
         }
-        p
     }
 
     fn adopt(&mut self, file: Option<String>, name: String, text: String) {
@@ -194,12 +198,22 @@ impl RhaiEditorPanel {
         } else {
             CustomDialect::UltraFractal
         };
+        self.store = Store::Formulas;
         self.file = file;
         self.name = name;
         self.saved = text.clone();
         self.text = text;
         self.checked = None;
         self.status = None;
+    }
+
+    /// A CPU script (a generator, a modifier, a library): it runs, rather
+    /// than renders; its checks are its Run's.
+    fn is_script(&self) -> bool {
+        match &self.file {
+            Some(_) => self.store == Store::Scripts,
+            None => crate::script::library::declared(&self.text).is_some(),
+        }
     }
 
     /// Open a formula or colouring the config now uses (the Escape
@@ -239,28 +253,26 @@ impl RhaiEditorPanel {
     }
 
     /// Open a file from outside the panel (the Catalog): one of the
-    /// user's by its name in the store, or a shipped example by its name.
-    pub fn open_file(&mut self, file: &str, shipped: bool) {
+    /// user's by its name in its store, or a shipped one -- an example, a
+    /// shipped script -- unsaved (Save makes it a file of the user's).
+    pub fn open_file(&mut self, store: Store, file: &str, shipped: bool) {
         if shipped {
-            if let Some(i) = formula_store::EXAMPLES.iter().position(|(name, _)| *name == file) {
-                self.open_example(i);
+            let text = match store {
+                Store::Formulas => formula_store::EXAMPLES.iter().find(|(n, _)| *n == file).map(|(_, t)| *t),
+                Store::Scripts => crate::script::library::EMBEDDED.iter().find(|(n, _)| *n == file).map(|(_, t)| *t),
+            };
+            match text {
+                Some(text) => self.adopt(None, file.to_string(), text.to_string()),
+                None => self.status = Some(t!("formula_editor.cannot_open", file = file).to_string()),
             }
-        } else {
-            self.files = formula_store::list();
-            self.open_stored(file);
+            return;
         }
-    }
-
-    fn open_stored(&mut self, file: &str) {
-        match formula_store::load(file) {
-            Some(text) => self.adopt(Some(file.to_string()), file.to_string(), text),
+        match manage::load(store, file) {
+            Some(text) => {
+                self.adopt(Some(file.to_string()), file.to_string(), text);
+                self.store = store;
+            }
             None => self.status = Some(t!("formula_editor.cannot_open", file = file).to_string()),
-        }
-    }
-
-    fn open_example(&mut self, i: usize) {
-        if let Some((name, text)) = formula_store::EXAMPLES.get(i) {
-            self.adopt(None, (*name).to_string(), (*text).to_string());
         }
     }
 
@@ -1114,177 +1126,64 @@ impl RhaiEditorPanel {
         }
     }
 
+    /// Write the open file. An unsaved one becomes a new file of the
+    /// user's (never over one that is there). An edit of somebody else's
+    /// adopted file is the user's own: a GPU entry gets an id of its own
+    /// and loses its claim to be theirs; a CPU script gets free of that
+    /// online script too but still runs restricted (decision 3).
     fn save(&mut self) {
-        // A Rhai file keeps its extension under any name it is given.
-        if self.dialect == CustomDialect::Rhai && !formula_store::is_rhai(&self.name) {
-            let stem = self.name.rsplit_once('.').map_or(self.name.as_str(), |(s, _)| s).to_string();
-            self.name = format!("{stem}.rhai");
-        }
-        // An edit of somebody else's published entry, saved over it, is a
-        // script of the user's own (docs/archive/projects/rhai-scripts-online.md):
-        // an id of its own, and no claim to be theirs or the server's.
-        let target = formula_store::file_name_for(&self.name);
-        let adopted = target.as_deref().and_then(formula_store::link_of).filter(|l| l.from_others && l.cloud_id.is_some());
-        let made_own = adopted.is_some() && self.text != self.saved && self.dialect == CustomDialect::Rhai;
-        if made_own {
+        let Some(file) = self.file.clone() else {
+            let made = if self.dialect == CustomDialect::Rhai {
+                let stem = self.name.rsplit_once('.').map_or(self.name.as_str(), |(s, _)| s);
+                manage::create(if stem.is_empty() { "untitled" } else { stem }, &self.text)
+            } else {
+                manage::import(&self.name, &self.text)
+            };
+            match made {
+                Ok((store, file)) => {
+                    let text = manage::load(store, &file).unwrap_or_else(|| self.text.clone());
+                    let dialect = self.dialect;
+                    self.adopt(Some(file.clone()), file.clone(), text);
+                    self.store = store;
+                    self.dialect = dialect;
+                    self.status = Some(t!("formula_editor.saved", file = file).to_string());
+                }
+                Err(e) => self.status = Some(e),
+            }
+            return;
+        };
+        let store = self.store;
+        let adopted = manage::link_of(store, &file).filter(|l| l.from_others && l.cloud_id.is_some());
+        let made_own = adopted.is_some() && self.text != self.saved;
+        if made_own && store == Store::Formulas && self.dialect == CustomDialect::Rhai {
             self.text = crate::api::entries::with_new_id(&self.text, &crate::scripted::mint_id());
         }
-        match formula_store::save(&self.name, &self.text) {
+        match manage::write(store, &file, &self.text) {
             Ok(file) => {
                 self.saved = self.text.clone();
                 self.status = Some(t!("formula_editor.saved", file = file).to_string());
                 if made_own {
-                    let plugin = adopted.is_some_and(|l| l.plugin);
-                    if let Err(e) = formula_store::set_link(&file, crate::storage::links::Link { plugin, ..Default::default() }) {
+                    let was = adopted.unwrap_or_default();
+                    let link = match store {
+                        Store::Formulas => crate::storage::links::Link { plugin: was.plugin, ..Default::default() },
+                        Store::Scripts => crate::storage::links::Link { from_others: true, ..Default::default() },
+                    };
+                    if let Err(e) = manage::set_link(store, &file, link) {
                         log::warn!("Could not clear the link of `{file}`: {e}");
                     }
                     self.status = Some(t!("formula_editor.own_id", file = file).to_string());
                 }
                 // A plug-in's lists offer what was saved: its new version.
-                if formula_store::link_of(&file).is_some_and(|l| l.plugin) {
+                if store == Store::Formulas && formula_store::link_of(&file).is_some_and(|l| l.plugin) {
                     if let Err(e) = crate::storage::library::register_plugin(&file, &self.text) {
                         self.status = Some(t!("formula_editor.plugin_failed", file = file, error = e).to_string());
                     }
                 }
                 self.name = file.clone();
                 self.file = Some(file);
-                self.files = formula_store::list();
             }
             Err(e) => self.status = Some(e),
         }
-    }
-
-    /// Whether the open text could be a plug-in: a Rhai variation,
-    /// effect, formula, colouring or solid (P3).
-    fn could_be_plugin(&self) -> bool {
-        self.dialect == CustomDialect::Rhai && lang::rhai::kind_of(&self.text).is_some()
-    }
-
-    /// Make a stored file a plug-in, registered at every start (P3), or
-    /// stop. It is saved first: what loads at start is the file. One
-    /// that needs an id of its own (a variation without a name, an
-    /// effect) gets one, written into the file.
-    fn set_plugin(&mut self, file: &str, on: bool) {
-        let mut link = formula_store::link_of(file).unwrap_or_default();
-        if !on {
-            link.plugin = false;
-            crate::storage::library::unlist_plugin(file);
-            self.status = Some(match formula_store::set_link(file, link) {
-                Ok(()) => t!("formula_editor.plugin_off", file = file).to_string(),
-                Err(e) => e,
-            });
-            return;
-        }
-        if self.text != self.saved {
-            self.status = Some(t!("formula_editor.plugin_save_first").to_string());
-            return;
-        }
-        let needs_id = match lang::rhai::kind_of(&self.text) {
-            Some(EntryKind::Transform) => crate::variations::custom::needs_id(&self.text),
-            Some(EntryKind::Effect) => !lang::rhai::info_string(&self.text, "id").is_some_and(|id| crate::scripted::is_uuid(&id)),
-            _ => false,
-        };
-        if needs_id {
-            self.text = lang::rhai::with_own_id(&self.text, &crate::scripted::mint_id());
-            self.save();
-        }
-        match crate::storage::library::register_plugin(file, &self.text) {
-            Ok(p) => {
-                link.plugin = true;
-                self.status = Some(match formula_store::set_link(file, link) {
-                    Ok(()) => t!("formula_editor.plugin_on", title = p.title).to_string(),
-                    Err(e) => e,
-                });
-            }
-            Err(e) => self.status = Some(t!("formula_editor.plugin_failed", file = file, error = e).to_string()),
-        }
-    }
-
-    /// Publish, update and unpublish the open entry
-    /// (docs/archive/projects/rhai-scripts-online.md): a saved Rhai file of the
-    /// user's own, under its `INFO.id` -- given one first if it has none
-    /// of its own, written into the file. What the server answers lands
-    /// in the shared online status, shown here too.
-    fn render_online(
-        &mut self,
-        ui: &mut egui::Ui,
-        cloud: &crate::app::script_cloud::ScriptCloudState,
-        signed_in: bool,
-        request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
-    ) {
-        use crate::app::script_cloud::{Local, ScriptCloudRequest as Req};
-        use crate::api::types::ApiVisibility;
-        egui::CollapsingHeader::new(t!("formula_editor.online")).id_salt("formula_editor_online").default_open(false).show(ui, |ui| {
-            if let Some(status) = &cloud.status {
-                let colour = if cloud.status_is_error { egui::Color32::from_rgb(240, 120, 120) } else { egui::Color32::from_rgb(140, 200, 140) };
-                ui.colored_label(colour, status);
-            }
-            if !signed_in {
-                ui.weak(t!("formula_editor.online_sign_in"));
-                return;
-            }
-            let Some(file) = self.file.clone().filter(|_| self.text == self.saved) else {
-                ui.weak(t!("formula_editor.online_save_first"));
-                return;
-            };
-            let local = Local::Entry(file.clone());
-            if let Some((Local::Entry(f), c)) = &cloud.conflict {
-                if *f == file {
-                    ui.weak(t!("formula_editor.online_conflict", file = file, version = c.current_version));
-                    ui.horizontal(|ui| {
-                        if ui.add_enabled(!cloud.busy, egui::Button::new(t!("formula_editor.online_overwrite"))).clicked() {
-                            *request = Some(Req::Update { local: local.clone(), cloud_id: c.id.clone(), source: self.text.clone(), version: c.current_version });
-                        }
-                        if ui.add_enabled(!cloud.busy, egui::Button::new(t!("formula_editor.online_load_theirs"))).clicked() {
-                            *request = Some(Req::Refetch { local: local.clone(), id: c.id.clone() });
-                        }
-                    });
-                }
-            }
-            let link = formula_store::link_of(&file).unwrap_or_default();
-            if link.from_others {
-                let owner = link.owner.clone().unwrap_or_default();
-                ui.weak(t!("formula_editor.online_from_others", owner = owner));
-                return;
-            }
-            if let Some(why) = crate::api::entries::refusal(&file, &self.text) {
-                ui.weak(t!("formula_editor.online_cannot", why = why));
-                return;
-            }
-            ui.horizontal_wrapped(|ui| match (link.cloud_id.clone(), link.version) {
-                (Some(cloud_id), Some(version)) => {
-                    if ui
-                        .add_enabled(!cloud.busy, egui::Button::new(t!("formula_editor.online_update")))
-                        .on_hover_text(t!("formula_editor.online_update_tip", next = version + 1))
-                        .clicked()
-                    {
-                        *request = Some(Req::Update { local: local.clone(), cloud_id: cloud_id.clone(), source: self.text.clone(), version });
-                    }
-                    if ui.add_enabled(!cloud.busy, egui::Button::new(t!("formula_editor.online_unpublish"))).on_hover_text(t!("formula_editor.online_unpublish_tip")).clicked() {
-                        *request = Some(Req::Unpublish { local: local.clone(), cloud_id });
-                    }
-                    ui.weak(format!("v{version}"));
-                }
-                _ => {
-                    let mut publish = |visibility: ApiVisibility, this: &mut Self| {
-                        // An id of its own first, written into the file:
-                        // what the server stores it under, and what a
-                        // config using it is catalogued by.
-                        if crate::api::entries::needs_id(&this.text) {
-                            this.text = lang::rhai::with_own_id(&this.text, &crate::scripted::mint_id());
-                            this.save();
-                        }
-                        *request = Some(Req::Publish { local: Local::Entry(this.file.clone().unwrap_or_else(|| file.clone())), source: this.text.clone(), visibility });
-                    };
-                    if ui.add_enabled(!cloud.busy, egui::Button::new(t!("formula_editor.online_publish_private"))).on_hover_text(t!("formula_editor.online_publish_private_tip")).clicked() {
-                        publish(ApiVisibility::Private, self);
-                    }
-                    if ui.add_enabled(!cloud.busy, egui::Button::new(t!("formula_editor.online_publish_public"))).on_hover_text(t!("formula_editor.online_publish_public_tip")).clicked() {
-                        publish(ApiVisibility::Public, self);
-                    }
-                }
-            });
-        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1294,32 +1193,32 @@ impl RhaiEditorPanel {
         cm: &mut ConfigManager,
         animation: &mut crate::animation::AnimationController,
         cloud: &crate::app::script_cloud::ScriptCloudState,
-        signed_in: bool,
-        cloud_request: &mut Option<crate::app::script_cloud::ScriptCloudRequest>,
-        #[allow(unused_variables)] window: &winit::window::Window,
-    ) {
+        palettes: &[crate::scene::palette::Palette],
+    ) -> super::script_run::RunResult {
+        let mut run = super::script_run::RunResult::default();
         // An adoption or a refetch wrote the store: re-list it, and
         // reload the open file if it was written and not being edited.
         // An adoption, or the Catalog renaming, copying or deleting a file.
         let generation = cloud.library_generation.wrapping_add(crate::storage::manage::generation());
         if generation != self.seen_library_generation {
             self.seen_library_generation = generation;
-            self.files = formula_store::list();
             if let Some(file) = self.file.clone() {
-                if self.text == self.saved {
-                    if let Some(text) = formula_store::load(&file).filter(|t| *t != self.saved) {
+                let store = self.store;
+                match manage::load(store, &file) {
+                    // Written behind the editor (a refetch) and not being
+                    // edited: the new text.
+                    Some(text) if self.text == self.saved && text != self.saved => {
                         self.adopt(Some(file.clone()), file, text);
+                        self.store = store;
+                    }
+                    Some(_) => {}
+                    // Renamed or deleted in the Catalog: unsaved now.
+                    None => {
+                        self.file = None;
+                        self.saved.clear();
                     }
                 }
             }
-        }
-        // The browser's picker leaves the opened text in egui's temp store.
-        #[cfg(target_arch = "wasm32")]
-        if let Some(text) = ui.ctx().data_mut(|d| d.remove_temp::<String>(egui::Id::new(PENDING_FORMULA_LOAD))) {
-            // The picker gives the text alone: a Rhai formula declares
-            // its functions.
-            let name = if text.contains("fn step") { "opened.rhai" } else { "opened.ufm" };
-            self.adopt(None, name.to_string(), text);
         }
 
         // Every Use in every mode (one-workspace plan): a formula, a
@@ -1328,138 +1227,60 @@ impl RhaiEditorPanel {
         // Escape the camera lens.
         let escape_mode = cm.config().render_mode == crate::scene::transforms::RenderMode::Escape;
 
-        // ---- Files ----
+        // ---- The open file ----
+        if self.file.is_none() && self.text.is_empty() {
+            ui.weak(t!("rhai_editor.nothing_open"));
+            if ui.button(t!("rhai_editor.open_catalog")).clicked() {
+                super::inventory::request_open(crate::inventory::Family::Scripts, super::inventory::Place::Local);
+            }
+            return run;
+        }
+        let script = self.is_script();
         ui.horizontal_wrapped(|ui| {
-            let dirty = self.text != self.saved;
-            let current = format!("{}{}", self.name, if dirty { " *" } else { "" });
-            let mut open: Option<String> = None;
-            let mut example: Option<usize> = None;
-            let mut shipped_effect: Option<(String, String)> = None;
-            egui::ComboBox::from_id_salt("formula_editor_file")
-                .selected_text(current)
-                .width(180.0)
-                .show_ui(ui, |ui| {
-                    // The library's marks: whose it is, and a plug-in.
-                    let links = formula_store::links();
-                    for f in &self.files {
-                        let link = links.get(f).cloned().unwrap_or_default();
-                        let label = format!("{f}{}", crate::storage::library::marks(crate::storage::library::origin_of_link(&link), link.plugin));
-                        if ui.selectable_label(self.file.as_deref() == Some(f.as_str()), label).clicked() {
-                            open = Some(f.clone());
-                        }
-                    }
-                    if !self.files.is_empty() {
-                        ui.separator();
-                    }
-                    for (i, (name, _)) in formula_store::EXAMPLES.iter().enumerate() {
-                        if ui.selectable_label(false, t!("formula_editor.example", file = name)).clicked() {
-                            example = Some(i);
-                        }
-                    }
-                    // The built-in effects' sources, which the app runs:
-                    // opened unsaved, a copy to Save and Use as one's own.
-                    ui.separator();
-                    for (name, source) in crate::effects::custom::BUILTIN_TWINS {
-                        let title = crate::effects::global_effect_registry().get(name).map(|i| i.translated_name()).unwrap_or_else(|| name.to_string());
-                        if ui.selectable_label(false, t!("formula_editor.example_effect", name = title)).clicked() {
-                            shipped_effect = Some((format!("{name}.rhai"), source.to_string()));
-                        }
-                    }
-                    // The simulation colourings and models that ship as Rhai
-                    // (P4).
-                    for (name, source) in crate::sim::custom::SHIPPED.iter().chain(crate::sim::custom::SHIPPED_MODELS) {
-                        let title = lang::rhai::title(source).unwrap_or_else(|| name.to_string());
-                        if ui.selectable_label(false, t!("formula_editor.example_sim", name = title)).clicked() {
-                            shipped_effect = Some((format!("sim-{name}.rhai"), source.to_string()));
-                        }
-                    }
-                });
-            if let Some((file, text)) = shipped_effect {
-                self.adopt(None, file, text);
+            let dirty = self.text != self.saved || self.file.is_none();
+            ui.strong(format!("{}{}", self.name, if dirty { " \u{2022}" } else { "" }));
+            let kind = if script {
+                crate::script::library::declared(&self.text).map(|(_, k)| match k {
+                    crate::script::ScriptKind::Generator => crate::storage::library::Kind::Generator,
+                    crate::script::ScriptKind::Modifier => crate::storage::library::Kind::Modifier,
+                    crate::script::ScriptKind::Library => crate::storage::library::Kind::ScriptLibrary,
+                })
+            } else if self.dialect == CustomDialect::Rhai {
+                Some(crate::storage::library::rhai_kind(&self.text))
+            } else {
+                None
+            };
+            let kind = kind.and_then(crate::inventory::Kind::of_file);
+            if let Some(k) = kind {
+                ui.weak(t!(k.label_key()));
             }
-            if let Some(f) = open {
-                self.open_stored(&f);
+            if self.file.is_none() {
+                ui.weak(t!("rhai_editor.unsaved"));
             }
-            if let Some(i) = example {
-                self.open_example(i);
-            }
-            if ui.button(t!("formula_editor.new")).on_hover_text(t!("formula_editor.new_tip")).clicked() {
-                // Outside Escape a new file is a variation.
-                let text = if escape_mode { lang::rhai::NEW_FORMULA } else { lang::rhai::NEW_VARIATION };
-                self.adopt(None, "untitled.rhai".to_string(), text.to_string());
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            ui.label(t!("formula_editor.name"));
-            ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(140.0));
-            if ui.button(t!("formula_editor.save")).on_hover_text(t!("formula_editor.save_tip")).clicked() {
+            if ui.add_enabled(dirty, egui::Button::new(t!("formula_editor.save"))).on_hover_text(t!("rhai_editor.save_tip")).clicked() {
                 self.save();
             }
+            if ui.add_enabled(self.file.is_some() && self.text != self.saved, egui::Button::new(t!("rhai_editor.revert"))).on_hover_text(t!("rhai_editor.revert_tip")).clicked() {
+                self.text = self.saved.clone();
+                self.checked = None;
+            }
             if let Some(file) = self.file.clone() {
-                if ui.button(t!("formula_editor.delete")).clicked() {
-                    crate::storage::library::unlist_plugin(&file);
-                    self.status = Some(match formula_store::delete(&file) {
-                        Ok(()) => t!("formula_editor.deleted", file = file).to_string(),
-                        Err(e) => e,
-                    });
-                    self.files = formula_store::list();
-                    self.file = None;
-                }
-                // A plug-in: registered at every start, so it is in the
-                // lists without a config carrying it (P3).
-                if self.could_be_plugin() {
-                    let mut on = formula_store::link_of(&file).is_some_and(|l| l.plugin);
-                    if ui.checkbox(&mut on, t!("formula_editor.plugin")).on_hover_text(t!("formula_editor.plugin_tip")).changed() {
-                        self.set_plugin(&file, on);
-                    }
-                }
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                if ui.button(t!("formula_editor.open")).on_hover_text(t!("formula_editor.open_tip")).clicked() {
-                    let picked = rfd::FileDialog::new()
-                        .set_parent(window)
-                        .add_filter("Formula file", formula_store::EXTENSIONS)
-                        .pick_file();
-                    if let Some(path) = picked {
-                        match std::fs::read(&path) {
-                            // Old formula files are often Latin-1, not UTF-8.
-                            Ok(bytes) => {
-                                let text = String::from_utf8(bytes.clone()).unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect());
-                                let name = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                                self.adopt(None, name, text);
-                            }
-                            Err(e) => self.status = Some(format!("{e}")),
-                        }
-                    }
-                }
-                if ui.button(t!("formula_editor.export")).on_hover_text(t!("formula_editor.export_tip")).clicked() {
-                    let picked = rfd::FileDialog::new()
-                        .set_parent(window)
-                        .add_filter("Formula file", formula_store::EXTENSIONS)
-                        .set_file_name(&self.name)
-                        .save_file();
-                    if let Some(path) = picked {
-                        self.status = Some(match std::fs::write(&path, &self.text) {
-                            Ok(()) => t!("formula_editor.exported", file = path.display().to_string()).to_string(),
-                            Err(e) => format!("{e}"),
-                        });
-                    }
-                }
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                if ui.button(t!("formula_editor.open")).on_hover_text(t!("formula_editor.open_tip")).clicked() {
-                    crate::app::trigger_browser_file_picker(".rhai,.ufm,.ucl,.frm", ui.ctx().clone(), PENDING_FORMULA_LOAD);
-                }
-                if ui.button(t!("formula_editor.export")).on_hover_text(t!("formula_editor.export_tip")).clicked() {
-                    self.status = Some(match crate::app::trigger_browser_download(self.text.as_bytes(), &self.name, "text/plain") {
-                        Ok(()) => t!("formula_editor.exported", file = self.name.clone()).to_string(),
-                        Err(e) => e,
-                    });
+                if ui.button(t!("rhai_editor.show_in_catalog")).clicked() {
+                    let family = kind.map_or(crate::inventory::Family::Scripts, crate::inventory::Kind::family);
+                    super::inventory::request_open_select(family, super::inventory_manage::file_key(self.store, &file));
                 }
             }
         });
+        if script {
+            // A CPU script runs: its parameters, seed, Generate, Batch.
+            let id = self.file.as_deref().map_or_else(|| self.name.trim_end_matches(".rhai").to_string(), |f| f.trim_end_matches(".rhai").to_string());
+            let untrusted = self.file.as_deref().is_some_and(|f| manage::link_of(Store::Scripts, f).is_some_and(|l| l.from_others));
+            let current = cm.active_config().clone();
+            run = self.run.render_text(ui, &id, &self.text, untrusted, &current, palettes, super::script_run::files_generation(cloud));
+            ui.separator();
+            self.render_source(ui);
+            return run;
+        }
         ui.horizontal_wrapped(|ui| {
             ui.label(t!("formula_editor.language"));
             let before = self.dialect;
@@ -1471,7 +1292,6 @@ impl RhaiEditorPanel {
             }
             ui.checkbox(&mut self.live, t!("formula_editor.live")).on_hover_text(t!("formula_editor.live_tip"));
         });
-        self.render_online(ui, cloud, signed_in, cloud_request);
 
         // Check on a pause in typing, not on every keystroke.
         if self.checked.as_deref() != Some(self.text.as_str()) {
@@ -1590,6 +1410,12 @@ impl RhaiEditorPanel {
             self.edit_as_rhai(i);
         }
         ui.separator();
+        self.render_source(ui);
+        run
+    }
+
+    /// The source, highlighted in its language, and the status line.
+    fn render_source(&mut self, ui: &mut egui::Ui) {
         // ---- The source ----
         //
         // In a scroll area of its own: a long file would otherwise make
