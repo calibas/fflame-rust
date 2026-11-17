@@ -131,6 +131,9 @@ pub fn take_downloads() -> Vec<(Kind, String)> {
     DOWNLOADS.lock().map(|mut d| std::mem::take(&mut d.0)).unwrap_or_default()
 }
 
+/// Below this width the list and the info are two screens (phase 5).
+const NARROW: f32 = 560.0;
+
 /// Which origins the list shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OriginFilter {
@@ -238,6 +241,11 @@ pub struct InventoryPanel {
     /// Only the downloads the server has a newer version of.
     updates_only: bool,
     place: Place,
+    /// Narrow (a phone, a narrow dock): the list and the info are two
+    /// screens, and this is the info's (phase 5).
+    details: bool,
+    /// Whether the panel was narrow when last drawn.
+    narrow: bool,
     online: super::inventory_online::OnlinePlace,
     manage: super::inventory_manage::Manage,
     /// A CPU script's run controls, for the script selected.
@@ -265,6 +273,8 @@ impl InventoryPanel {
             selected: None,
             updates_only: false,
             place: Place::Local,
+            details: false,
+            narrow: false,
             online: super::inventory_online::OnlinePlace::new(),
             manage: super::inventory_manage::Manage::default(),
             run: super::script_run::ScriptRun::default(),
@@ -347,20 +357,32 @@ impl InventoryPanel {
         self.online.update(ui.ctx(), &self.query, &self.entries, &mut out);
         self.render_top(ui, cx, &mut out);
         ui.separator();
-        if ui.available_width() >= 560.0 {
+        self.narrow = ui.available_width() < NARROW;
+        if !self.narrow {
+            self.details = false;
             egui::Panel::right("catalog_info").resizable(true).default_size(280.0).min_size(200.0).show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().id_salt("catalog_info_scroll").show(ui, |ui| self.render_info(ui, cx, &mut out));
             });
             egui::CentralPanel::default().show_inside(ui, |ui| self.render_list(ui, cx, &mut out));
-        } else {
-            // Narrow (a docked strip; the phone layout is its own phase):
-            // the list, then what is selected under it.
-            let height = (ui.available_height() * 0.6).max(160.0);
-            ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| self.render_list(ui, cx, &mut out));
+        } else if self.details && self.selected.is_some() {
+            // Narrow (a phone, a narrow dock): the info is a screen of its
+            // own, Back to the list.
+            if ui.button(t!("catalog.back")).clicked() {
+                self.details = false;
+            }
             ui.separator();
             egui::ScrollArea::vertical().id_salt("catalog_info_scroll").show(ui, |ui| self.render_info(ui, cx, &mut out));
+        } else {
+            self.details = false;
+            self.render_list(ui, cx, &mut out);
         }
         out
+    }
+
+    /// The selected row's way to its info, on a narrow panel: a › beside
+    /// it. Gives whether it was pressed.
+    fn details_button(ui: &mut egui::Ui) -> bool {
+        ui.small_button("\u{203a}").on_hover_text(t!("catalog.details")).clicked()
     }
 
     // ------------------------------------------------------------------ top
@@ -473,7 +495,9 @@ impl InventoryPanel {
                 if matches!(self.family, Family::Variations | Family::Effects) {
                     self.render_grouped(ui, cx, out);
                 }
-                self.online.render_list(ui, self.family, self.kind, &mut self.selected, cx);
+                if self.online.render_list(ui, self.family, self.kind, &mut self.selected, self.narrow, cx) {
+                    self.details = true;
+                }
             });
             return;
         }
@@ -501,6 +525,7 @@ impl InventoryPanel {
         }
         let several = matches!(self.family, Family::Escape | Family::Simulation | Family::Scripts) && self.kind.is_none();
         let (mut clicked, mut used) = (None, None);
+        let mut details = false;
         let mut start = 0;
         while start < shown.len() {
             let first = &self.entries[shown[start]];
@@ -522,20 +547,29 @@ impl InventoryPanel {
                 .body(|ui| {
                     for &i in &shown[start..end] {
                         let e = &self.entries[i];
-                        let r = ui.selectable_label(self.selected.as_ref() == Some(&e.key), row_label(e));
-                        let r = if e.description.is_empty() { r } else { r.on_hover_text(crate::markdown::first_paragraph(&e.description)) };
-                        if r.clicked() {
-                            clicked = Some(e.key.clone());
-                        }
-                        if r.double_clicked() {
-                            used = Some(i);
-                        }
+                        let selected = self.selected.as_ref() == Some(&e.key);
+                        ui.horizontal(|ui| {
+                            let r = ui.selectable_label(selected, row_label(e));
+                            let r = if e.description.is_empty() { r } else { r.on_hover_text(crate::markdown::first_paragraph(&e.description)) };
+                            if r.clicked() {
+                                clicked = Some(e.key.clone());
+                            }
+                            if r.double_clicked() {
+                                used = Some(i);
+                            }
+                            if selected && self.narrow && Self::details_button(ui) {
+                                details = true;
+                            }
+                        });
                     }
                 });
             start = end;
         }
         if let Some(k) = clicked {
             self.selected = Some(k);
+        }
+        if details {
+            self.details = true;
         }
         if let Some(i) = used {
             let e = self.entries[i].clone();
@@ -554,6 +588,7 @@ impl InventoryPanel {
     fn render_palettes(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext) {
         let searching = !self.query.trim().is_empty() || self.origin != OriginFilter::All;
         let mut clicked: Option<(String, crate::scene::palette::Palette)> = None;
+        let (narrow, mut details) = (self.narrow, false);
         for pack in 0..cx.palette_library.pack_count() {
             // This pack's entries, in its order (the scan keeps it), with
             // their index in the pack, those the search admits.
@@ -577,7 +612,18 @@ impl InventoryPanel {
                 for (j, hash, title) in &rows {
                     let Some(palette) = p.palettes.get(*j) else { continue };
                     let is_selected = selected.as_ref().is_some_and(|k| *k == EntryKey::Palette(hash.clone()));
-                    if palette_row(ui, hash, title, palette, is_selected).clicked() {
+                    let row = if is_selected && narrow {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if Self::details_button(ui) {
+                                details = true;
+                            }
+                            palette_row(ui, hash, title, palette, is_selected)
+                        })
+                        .inner
+                    } else {
+                        palette_row(ui, hash, title, palette, is_selected)
+                    };
+                    if row.clicked() {
                         clicked = Some((hash.clone(), palette.clone()));
                     }
                 }
@@ -601,6 +647,9 @@ impl InventoryPanel {
         if let Some((hash, palette)) = clicked {
             self.selected = Some(EntryKey::Palette(hash));
             apply_palette(cx.config_manager, palette);
+        }
+        if details {
+            self.details = true;
         }
     }
 
@@ -626,7 +675,19 @@ impl InventoryPanel {
                 }
             }
         });
+        // Narrow: the selection's way to its info, above the gallery.
+        if self.narrow {
+            if let Some(title) = self.selected.as_ref().and_then(|k| self.entries.iter().find(|e| &e.key == k)).filter(|e| e.kind == Kind::Fractal).map(|e| e.title.clone()) {
+                ui.horizontal(|ui| {
+                    ui.strong(title);
+                    if Self::details_button(ui) {
+                        self.details = true;
+                    }
+                });
+            }
+        }
         ui.separator();
+        let galleries = self.preset_galleries.get_or_insert_with(preset_galleries);
         let response = galleries[self.preset_category.index()].render(ui);
         if let Some(config) = response.selected {
             // Its entry: the first preset of that name (the inventory's
@@ -1131,5 +1192,75 @@ mod tests {
         assert!(usable(&entry(Kind::Coloring, "smooth"), &config).is_err(), "an escape colouring over a field");
         assert!(usable(&entry(Kind::FieldColoring, crate::escape::fields::FIELD_COLORINGS[0].name), &config).is_ok());
         assert!(usable(&entry(Kind::SolidColoring, crate::escape::ifs::IFS_COLORINGS[0].name), &config).is_err(), "no solid");
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod phone_tests {
+    use super::*;
+
+    /// Every piece of text a frame drew, and where.
+    fn placed(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Pos2)> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+            match shape {
+                egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos)),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for s in shapes {
+            walk(&s.shape, &mut out);
+        }
+        out
+    }
+
+    /// Narrow (a phone): the list fills the panel; the selected row's ›
+    /// opens its info as a screen of its own, Back returns to the list.
+    #[test]
+    fn a_narrow_catalog_is_two_screens() {
+        let mut library = crate::scene::palette::global_palette_library().read().unwrap().clone();
+        let mut cm = ConfigManager::new(FractalConfig::default());
+        let cloud = crate::app::script_cloud::ScriptCloudState::default();
+        let mut panel = InventoryPanel::new();
+        panel.refresh(&library, 0, inventory::Online::default());
+        panel.open_on(Family::Variations);
+        let linear = panel.entries.iter().find(|e| e.key == EntryKey::Registered(Kind::Variation, "linear".into())).unwrap().key.clone();
+        panel.selected = Some(linear);
+        let ctx = egui::Context::default();
+        let mut frame = |panel: &mut InventoryPanel, click: Option<egui::Pos2>| {
+            let mut drawn = Vec::new();
+            for step in 0..3 {
+                let mut input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 800.0))),
+                    ..Default::default()
+                };
+                if let (Some(p), 1) = (click, step) {
+                    input.events.push(egui::Event::PointerMoved(p));
+                    input.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+                    input.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+                }
+                let out = ctx.run_ui(input, |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        let mut cx = InventoryContext { config_manager: &mut cm, palette_library: &mut library, account: CloudAccount::default(), script_cloud: &cloud };
+                        let _ = panel.render(ui, &mut cx);
+                    });
+                });
+                drawn = placed(&out.shapes);
+            }
+            drawn
+        };
+        let list = frame(&mut panel, None);
+        assert!(panel.narrow, "400 points is narrow");
+        let chevron = list.iter().find(|(t, _)| t == "\u{203a}").map(|(_, p)| *p).expect("the selected row's ›");
+        assert!(!list.iter().any(|(t, _)| t == &t!("catalog.back").to_string()), "the list alone");
+
+        let info = frame(&mut panel, Some(chevron + egui::vec2(3.0, 6.0)));
+        assert!(panel.details, "the › opens the info");
+        let back = info.iter().find(|(t, _)| t == &t!("catalog.back").to_string()).map(|(_, p)| *p).expect("Back");
+        assert!(info.iter().any(|(t, _)| t == "Linear"), "the info names it: {info:?}");
+
+        frame(&mut panel, Some(back + egui::vec2(4.0, 6.0)));
+        assert!(!panel.details, "Back returns to the list");
     }
 }

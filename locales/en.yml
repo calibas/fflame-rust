@@ -3402,6 +3402,8 @@ catalog:
   select_hint: "Select something in the list to read about it."
   hover_hint: "Point at something in the list to read about it."
   place_local: "On this device"
+  back: "\u2039 Back"
+  details: "Read about it"
   place_online: "Online"
   place_online_tip: "What the online library holds: browse, search and open what other people published, or your own"
   scope_public: "Public"
