@@ -3,9 +3,9 @@
 > **Status 2026-11-16: phases 0-3 merged** (the API reshaped in place on
 > ffapi, its `docs/catalog-api-build.md`, and this app's client moved to
 > it; the model and the panel; the picker, PR #167; online, PR #168).
-> **Phase 4, your own resources and the Rhai Editor, designed**
-> (*Phase 4*, below), its open questions with the user; branch
-> `catalog-own`. The surveys this plan stands on are summarised under
+> **Phase 4, your own resources and the Rhai Editor, designed and
+> decided** (*Phase 4*, below), being built on branch `catalog-own`;
+> phases 5 and 6 follow on one branch. The surveys this plan stands on are summarised under
 > *What exists*, *Phase 3* and *Phase 4*.
 
 ## The goal
@@ -427,6 +427,19 @@ Found along the way:
   Editor's combo, variation and escape twins only from their panels).
 - Two online blocks, two Open/Export blocks, two library watchers, two
   code editors with opposite scrolling; one conflict slot shared.
+
+### Decided (2026-11-16)
+
+The user's picks, all as recommended:
+1. **Phase 4 is a branch of its own**; phases 5 and 6 share the next.
+2. **Your own resources include palettes and online fractals**, not
+   only Rhai files: the custom palettes (rename, delete, publish) and
+   your online fractals and palettes (rename, visibility, delete).
+3. **An edited adopted CPU script stays restricted**: saving an edit
+   gives it an id of its own (yours to publish) but keeps it running
+   with the restrictions somebody else's code gets -- editing a line is
+   not reading the rest. A GPU kind (a sandboxed shader) becomes the
+   user's on edit, as the Formula Editor does today.
 
 ### The design
 
