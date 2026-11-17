@@ -10,9 +10,10 @@ Fractal Browser's Presets tab held; its list is also every picker's
 Scripts panel's public scripts and the Variations and Effects panels'
 catalog sections moved there. It manages your own resources -- Rhai
 files, palettes, online fractals -- and runs scripts (*Your own
-resources*, below); the Rhai Editor edits the file it opens. Built in
-phases 1 to 4 of [docs/projects/catalog.md](../projects/catalog.md), the
-plan, which also says what comes next (the phone layout, previews).
+resources*, below); the Rhai Editor edits the file it opens. On a phone
+its list and info are two screens (*The phone layout*), and its entries
+show previews (*Previews*). Built in phases 1 to 6 of
+[docs/projects/catalog.md](../projects/catalog.md), the plan.
 
 - Model: [src/inventory/](../../src/inventory/) (`inventory::scan`,
   `Entry`, `EntryKey`). The code says `inventory` because `catalog` is the
@@ -26,6 +27,7 @@ plan, which also says what comes next (the phone layout, previews).
   the operations [src/storage/manage.rs](../../src/storage/manage.rs);
   running a script [src/ui/script_run.rs](../../src/ui/script_run.rs);
   the editor [src/ui/rhai_editor.rs](../../src/ui/rhai_editor.rs).
+- Previews: [src/ui/inventory_preview.rs](../../src/ui/inventory_preview.rs).
 
 **See also:** [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) (packs),
 [FRACTAL-BROWSER.md](FRACTAL-BROWSER.md) (the presets file, the gallery
@@ -317,3 +319,48 @@ unsaved.
 own and is the user's; a CPU script gets free of that online script --
 it can be published as the user's -- but keeps running restricted:
 editing a line is not reading the rest.
+
+---
+
+## The phone layout
+
+Under 560 points wide (a phone's compact layout, a narrow dock) the list
+and the info are two screens. The list fills the panel; the selected row
+carries a **›** that opens its info full height, with **‹ Back** at its
+top. A tap still selects -- a palette still applies, a fractal still
+loads -- so auditioning palettes stays a tap each. Where the list is a
+gallery or a grid (the presets, online fractals) the selection and its
+› sit above it. The Online place, the picker (its info pane gives way to
+tooltips there) and the management actions work unchanged inside the two
+screens.
+
+---
+
+## Previews
+
+An entry's preview is the config that shows it, built through what Use
+does (a scratch `ConfigManager` and `use_entry`) and rendered by the
+gallery's machinery -- `renderer::render_preview`, at 256 points, one a
+frame on desktop, one in flight on the web -- then kept in the shared
+`ThumbnailCache` (its limit, its eviction) under the configs' hash and the
+entry's version, so an update or an edit makes a new one:
+
+| Kind | Its preview |
+|---|---|
+| Variation | its image of the plane: four transforms filling the square [-1, 1]^2 evenly, coloured by quarter, the variation alone as the final transform (through `add_variation`, so a Rhai one carries its source); framed so the square fills half the picture, in Fire without its black end |
+| Effect | a reference fractal (the first 2D preset) before and after |
+| Formula, field, solid | its default view |
+| Colouring (escape, field, solid) | the default formula drawn with it |
+| Simulation model, colouring | its first layer or base colouring, run 400 steps at most |
+| Generator | its run at seed 1; a modifier: the reference fractal, modified at seed 1 |
+| A plug-in file | as its kind |
+| Palette, fractal | their gradient, the gallery, the server's thumbnail, as before |
+
+A library, a track, an unreadable file and a file of yours that is not a
+plug-in have none. The info pane shows the selected entry's preview above
+its description (a spinner while it is made). A family with previews can
+be a **Grid** (beside the origin filter): each cell its entry's preview,
+asked for as it comes on screen -- the first look at 647 variations fills
+in as they scroll by, later looks come from the cache.
+`render_previews_for_inspection` (ignored) renders a sample through the
+preview path into `output/previews/` for a look.

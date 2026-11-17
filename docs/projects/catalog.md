@@ -4,8 +4,10 @@
 > ffapi, its `docs/catalog-api-build.md`, and this app's client moved to
 > it; the model and the panel; the picker, PR #167; online, PR #168; your
 > own resources and the Rhai Editor, PR #169). **Phases 5 and 6, the
-> phone layout and previews, designed and decided** (*Phases 5 and 6*,
-> below), being built on branch `catalog-phone-previews`. The
+> phone layout and previews, built** on branch `catalog-phone-previews`,
+> unmerged (*Phases 5 and 6*, below; as built:
+> [CATALOG.md](../main/CATALOG.md), *The phone layout*, *Previews*). The
+> last phases: once merged the plan is done and goes to the archive. The
 > surveys this plan stands on are summarised under *What exists*,
 > *Phase 3* and *Phase 4*.
 
