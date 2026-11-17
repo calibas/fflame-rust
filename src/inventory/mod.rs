@@ -195,6 +195,22 @@ pub struct Entry {
     pub group: Group,
     /// A file's link record: its online id, owner, visibility.
     pub link: Option<Link>,
+    /// False for what the server offers and this app has not downloaded
+    /// (a variation or an effect in its cached catalog): it is listed to
+    /// be downloaded, and used once it is.
+    pub installed: bool,
+    /// What the server's catalog says of something not installed: an
+    /// effect's stage (`color`, `density`), a variation's category.
+    pub category: Option<String>,
+}
+
+/// What the server offers, as the app last cached its catalogs: the
+/// entries [`scan`] lists as not installed. Empty offline, or before the
+/// first fetch.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Online<'a> {
+    pub variations: &'a [crate::api::types::VariationListItem],
+    pub effects: &'a [crate::api::types::EffectListItem],
 }
 
 impl Entry {
@@ -219,13 +235,15 @@ impl Entry {
 
 /// Every entry of every kind: by kind, then group, then each source's own
 /// order -- never a map's. `palettes` is the library the app shows (its
-/// packs enabled and loaded as the app has them).
-pub fn scan(palettes: &crate::scene::palette::PaletteLibrary) -> Vec<Entry> {
+/// packs enabled and loaded as the app has them); `online`, what the
+/// server offers that is not installed.
+pub fn scan(palettes: &crate::scene::palette::PaletteLibrary, online: Online) -> Vec<Entry> {
     let mut out = Vec::new();
     sources::palettes(palettes, &mut out);
     sources::presets(&mut out);
     sources::variations(&mut out);
     sources::effects(&mut out);
+    sources::available(online, &mut out);
     sources::escape(&mut out);
     sources::simulation(&mut out);
     sources::files(&mut out);
@@ -262,10 +280,16 @@ pub fn builtin_prose(kind: Kind, name: &str) -> Option<(String, Vec<String>)> {
 /// change means the list is to be made again. The stores' files are not
 /// read here (that is the scan's cost); `files` is the caller's count of
 /// their changes (the app's library generation).
-pub fn revision(palettes: &crate::scene::palette::PaletteLibrary, files: u64) -> u64 {
+pub fn revision(palettes: &crate::scene::palette::PaletteLibrary, files: u64, online: Online) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     files.hash(&mut h);
+    for v in online.variations {
+        (v.name.as_str(), v.version, v.downloadable).hash(&mut h);
+    }
+    for e in online.effects {
+        (e.name.as_str(), e.version, e.downloadable).hash(&mut h);
+    }
     palettes.generation().hash(&mut h);
     for i in 0..palettes.pack_count() {
         palettes.get_pack_info(i).map(|p| (p.pack.is_some(), p.enabled)).hash(&mut h);

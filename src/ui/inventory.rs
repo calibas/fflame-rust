@@ -14,6 +14,12 @@
 //! [`InventoryPanel::selected`]. Whether Use acts in the current mode is
 //! `visibility::catalog_use`'s answer; whether a colouring suits the
 //! current formula is the escape engine's own rule.
+//!
+//! The list is read once a frame, before any panel draws
+//! ([`InventoryPanel::refresh`]), and [`shared`] with the pickers
+//! (`ui::picker`), so every list of a kind is the same list. What the
+//! server offers and the app lacks is listed too, its Use a **Download**
+//! ([`request_download`], drained into the app's fetches once a frame).
 
 use super::fractal_gallery::FractalConfigGallery;
 use crate::config::{ConfigManager, ConfigPath, FractalConfig};
@@ -22,6 +28,43 @@ use crate::provenance::Origin;
 use crate::scene::palette::PaletteLibrary;
 use crate::scene::presets::PresetCategory;
 use crate::storage::library::Store;
+use std::sync::{Arc, Mutex, RwLock};
+
+/// The list as last read, for the pickers.
+static SHARED: RwLock<Option<Arc<Vec<Entry>>>> = RwLock::new(None);
+
+/// Downloads asked for since the frame's last drain, and every name asked
+/// for this session (its row says it is coming rather than offering it
+/// again).
+static DOWNLOADS: Mutex<(Vec<(Kind, String)>, Vec<(Kind, String)>)> = Mutex::new((Vec::new(), Vec::new()));
+
+/// The list every picker reads: the Catalog's, as last refreshed.
+pub fn shared() -> Arc<Vec<Entry>> {
+    SHARED.read().ok().and_then(|g| g.clone()).unwrap_or_default()
+}
+
+/// Ask for an entry the app lacks (`!installed`) to be downloaded.
+pub fn request_download(e: &Entry) {
+    let EntryKey::Registered(kind, name) = &e.key else { return };
+    if let Ok(mut d) = DOWNLOADS.lock() {
+        let item = (*kind, name.clone());
+        if !d.1.contains(&item) {
+            d.0.push(item.clone());
+            d.1.push(item);
+        }
+    }
+}
+
+/// Whether a download of the entry was asked for this session.
+pub fn download_requested(e: &Entry) -> bool {
+    let EntryKey::Registered(kind, name) = &e.key else { return false };
+    DOWNLOADS.lock().is_ok_and(|d| d.1.iter().any(|(k, n)| k == kind && n == name))
+}
+
+/// The downloads asked for since the last call, for the app to fetch.
+pub fn take_downloads() -> Vec<(Kind, String)> {
+    DOWNLOADS.lock().map(|mut d| std::mem::take(&mut d.0)).unwrap_or_default()
+}
 
 /// Which origins the list shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -76,8 +119,6 @@ pub struct InventoryContext<'a> {
     pub config_manager: &'a mut ConfigManager,
     /// The palette library the app shows: its packs, as enabled and loaded.
     pub palette_library: &'a mut PaletteLibrary,
-    /// The stores' change count (the online library's adoptions, saves).
-    pub library_generation: u64,
     /// With the online account on: the user's cloud palettes, after the
     /// packs (the Palette Library's Cloud Palettes).
     pub cloud_palettes: Option<CloudPalettes<'a>>,
@@ -90,7 +131,7 @@ pub struct CloudPalettes<'a> {
 }
 
 pub struct InventoryPanel {
-    entries: Vec<Entry>,
+    entries: Arc<Vec<Entry>>,
     revision: Option<u64>,
     family: Family,
     /// Within a family of several kinds; `None` for all of them.
@@ -112,7 +153,7 @@ impl Default for InventoryPanel {
 impl InventoryPanel {
     pub fn new() -> Self {
         InventoryPanel {
-            entries: Vec::new(),
+            entries: Arc::new(Vec::new()),
             revision: None,
             family: Family::Palettes,
             kind: None,
@@ -139,12 +180,16 @@ impl InventoryPanel {
         self.entries.iter().find(|e| &e.key == key)
     }
 
-    /// Read the sources again when what they hold has changed.
-    fn refresh(&mut self, library: &PaletteLibrary, files: u64) {
-        let rev = inventory::revision(library, files);
+    /// Read the sources again when what they hold has changed, and share
+    /// the list with the pickers. Once a frame, before any panel draws.
+    pub fn refresh(&mut self, library: &PaletteLibrary, files: u64, online: inventory::Online) {
+        let rev = inventory::revision(library, files, online);
         if self.revision != Some(rev) {
-            self.entries = inventory::scan(library);
+            self.entries = Arc::new(inventory::scan(library, online));
             self.revision = Some(rev);
+            if let Ok(mut s) = SHARED.write() {
+                *s = Some(self.entries.clone());
+            }
         }
     }
 
@@ -154,7 +199,6 @@ impl InventoryPanel {
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext) -> InventoryResponse {
         let mut out = InventoryResponse::default();
-        self.refresh(cx.palette_library, cx.library_generation);
         self.render_top(ui);
         ui.separator();
         if ui.available_width() >= 560.0 {
@@ -278,7 +322,9 @@ impl InventoryPanel {
         }
         if let Some(i) = used {
             let e = self.entries[i].clone();
-            if usable(&e, cx.config_manager.active_config()).is_ok() {
+            if !e.installed {
+                request_download(&e);
+            } else if usable(&e, cx.config_manager.active_config()).is_ok() {
                 apply(&e, ui.ctx(), cx, out);
             }
         }
@@ -404,31 +450,13 @@ impl InventoryPanel {
             ui.weak(t!("catalog.select_hint"));
             return;
         };
-        ui.heading(&e.title);
-        ui.label(egui::RichText::new(format!("{} · {}", t!(e.kind.label_key()), e.group.label)).weak());
-        ui.label(origin_text(&e));
-        if let Some(v) = &e.version {
-            ui.label(egui::RichText::new(t!("catalog.version", version = v)).weak());
-        }
-        if !e.authors.is_empty() {
-            ui.label(t!("catalog.by", names = e.authors.join(", ")));
-        }
-        ui.separator();
-        if let EntryKey::Palette(hash) = &e.key {
-            if let Some(p) = inventory::palette(cx.palette_library, hash) {
-                let w = ui.available_width().clamp(120.0, 360.0);
-                let tex = super::palette_library::palette_preview(ui.ctx(), hash, &p, [360, 24]);
-                ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(w, 24.0)));
-                ui.add_space(4.0);
-            }
-        }
-        if e.description.is_empty() {
-            ui.weak(t!("catalog.no_description"));
-        } else {
-            super::markdown::show(ui, &e.description);
-        }
+        entry_summary(ui, &e, Some(cx.palette_library));
         ui.separator();
         ui.horizontal_wrapped(|ui| {
+            if !e.installed {
+                download_button(ui, &e);
+                return;
+            }
             match usable(&e, cx.config_manager.active_config()) {
                 Ok(()) => {
                     if ui.button(t!(use_label_key(&e))).clicked() {
@@ -494,9 +522,49 @@ fn palette_row(ui: &mut egui::Ui, hash: &str, title: &str, palette: &crate::scen
     r
 }
 
-/// A row's text: the title, the origin's mark, a plug-in's.
-fn row_label(e: &Entry) -> String {
-    format!("{}{}", e.title, crate::storage::library::marks(e.origin, e.plugin))
+/// What an entry is, as the info pane and the picker's show it: its title,
+/// kind and group, where it came from, version, authors, a palette's
+/// gradient (given the library) and its description.
+pub(crate) fn entry_summary(ui: &mut egui::Ui, e: &Entry, palettes: Option<&PaletteLibrary>) {
+    ui.heading(&e.title);
+    ui.label(egui::RichText::new(format!("{} · {}", t!(e.kind.label_key()), e.group.label)).weak());
+    ui.label(origin_text(e));
+    if let Some(v) = &e.version {
+        ui.label(egui::RichText::new(t!("catalog.version", version = v)).weak());
+    }
+    if !e.authors.is_empty() {
+        ui.label(t!("catalog.by", names = e.authors.join(", ")));
+    }
+    ui.separator();
+    if let (EntryKey::Palette(hash), Some(lib)) = (&e.key, palettes) {
+        if let Some(p) = inventory::palette(lib, hash) {
+            let w = ui.available_width().clamp(120.0, 360.0);
+            let tex = super::palette_library::palette_preview(ui.ctx(), hash, &p, [360, 24]);
+            ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(w, 24.0)));
+            ui.add_space(4.0);
+        }
+    }
+    if e.description.is_empty() {
+        ui.weak(t!("catalog.no_description"));
+    } else {
+        super::markdown::show(ui, &e.description);
+    }
+}
+
+/// A row's text: the title, the origin's mark, a plug-in's; a download
+/// arrow for what is not installed.
+pub(crate) fn row_label(e: &Entry) -> String {
+    let available = if e.installed { "" } else { "  \u{2193}" };
+    format!("{}{}{available}", e.title, crate::storage::library::marks(e.origin, e.plugin))
+}
+
+/// Download, for an entry the app lacks: greyed once asked for.
+pub(crate) fn download_button(ui: &mut egui::Ui, e: &Entry) {
+    if download_requested(e) {
+        ui.add_enabled(false, egui::Button::new(t!("catalog.downloading")));
+    } else if ui.button(t!("catalog.download")).on_hover_text(t!("catalog.download_tip")).clicked() {
+        request_download(e);
+    }
 }
 
 /// Where an entry came from, as a sentence.
@@ -531,13 +599,13 @@ fn use_label_key(e: &Entry) -> &'static str {
 }
 
 /// A registered plug-in's record, by its file.
-fn plugin_of(e: &Entry) -> Option<crate::storage::library::Plugin> {
+pub(crate) fn plugin_of(e: &Entry) -> Option<crate::storage::library::Plugin> {
     let EntryKey::File { store: Store::Formulas, file, shipped: false } = &e.key else { return None };
     crate::storage::library::plugins().into_iter().find(|p| &p.file == file)
 }
 
 /// The registry name an entry applies by: its own, or a plug-in's key.
-fn applied_name(e: &Entry) -> Option<String> {
+pub(crate) fn applied_name(e: &Entry) -> Option<String> {
     match &e.key {
         EntryKey::Registered(_, n) => Some(n.clone()),
         EntryKey::File { .. } if e.plugin => plugin_of(e).map(|p| p.key),
@@ -546,7 +614,10 @@ fn applied_name(e: &Entry) -> Option<String> {
 }
 
 /// Whether Use can apply the entry to this config, or why not.
-fn usable(e: &Entry, config: &FractalConfig) -> Result<(), String> {
+pub(crate) fn usable(e: &Entry, config: &FractalConfig) -> Result<(), String> {
+    if !e.installed {
+        return Err(t!("catalog.not_installed").to_string());
+    }
     let only_3d = e.kind == Kind::Variation
         && applied_name(e).is_some_and(|n| {
             crate::variations::global_registry().get(&n).is_some_and(|v| v.category == crate::variations::VariationCategory::Only3D)
@@ -613,15 +684,24 @@ fn apply(e: &Entry, ctx: &egui::Context, cx: &mut InventoryContext, out: &mut In
         out.open_script = Some(file.rsplit_once('.').map_or(file.as_str(), |(s, _)| s).to_string());
         return;
     }
-    let plugin = if e.plugin { plugin_of(e) } else { None };
-    let name = applied_name(e).unwrap_or_default();
-    match (&e.key, e.kind) {
-        (EntryKey::Palette(hash), _) => {
+    match &e.key {
+        EntryKey::Palette(hash) => {
             if let Some(p) = inventory::palette(cx.palette_library, hash) {
                 apply_palette(cm, p);
             }
         }
-        (EntryKey::Preset(name), _) => out.load_preset = inventory::preset(name),
+        EntryKey::Preset(name) => out.load_preset = inventory::preset(name),
+        _ => use_entry(e, ctx, cm),
+    }
+}
+
+/// Use, for a registered resource or a plug-in file: what each kind's own
+/// picker does with a choice (the Catalog's Use, and every picker's pick,
+/// `ui::picker`).
+pub(crate) fn use_entry(e: &Entry, ctx: &egui::Context, cm: &mut ConfigManager) {
+    let plugin = if e.plugin { plugin_of(e) } else { None };
+    let name = applied_name(e).unwrap_or_default();
+    match (&e.key, e.kind) {
         (_, Kind::Variation) => {
             let flame = cm.active_config().flame.clone();
             if let Some(xref) = super::transforms::editing_transform(ctx, &flame) {
@@ -702,6 +782,8 @@ mod tests {
             plugin: false,
             group: inventory::Group { order: 0, label: String::new() },
             link: None,
+            installed: true,
+            category: None,
         };
         assert!(OriginFilter::Builtin.admits(&e) && !OriginFilter::Yours.admits(&e) && !OriginFilter::Plugins.admits(&e));
         e.origin = Origin::Local;
@@ -726,6 +808,8 @@ mod tests {
             plugin: false,
             group: inventory::Group { order: 0, label: String::new() },
             link: None,
+            installed: true,
+            category: None,
         };
         // A flame with transforms to add to.
         let mut config = crate::scene::presets::global_preset_library().presets()[0].clone();

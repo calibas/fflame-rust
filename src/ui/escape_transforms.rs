@@ -80,6 +80,7 @@ fn entry(stage: TransformStage, variation: &str, amount: f32) -> EscapeTransform
 pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager, solid: bool) {
     let list = config_manager.active_config().escape.transforms.clone();
     let superseded = crate::variations::global_registry().superseded(&config_manager.active_config().flame.custom_variations);
+    let own = super::picker::own_variations(&config_manager.active_config().flame);
     egui::CollapsingHeader::new(t!("escape_transforms.title"))
         .id_salt("escape_transforms")
         .default_open(!list.is_empty())
@@ -102,7 +103,7 @@ pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut Co
                                 }
                             });
                             // The variation.
-                            if let Some(name) = variation_picker(ui, i, &t.variation, solid, &superseded) {
+                            if let Some(name) = variation_picker(ui, i, &t.variation, solid, &superseded, &own) {
                                 let mut l = list.clone();
                                 // The same transformation, as a flame
                                 // transform keeps its id through a
@@ -174,53 +175,22 @@ pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut Co
 }
 
 /// A variation picker for entry `i`: a button showing the current one and
-/// a popup with a filter and every variation with a 2D body -- in a
-/// solid, with a 3D body -- a popup, not a combo, so a click in the
-/// filter does not close it (the lens picker's reason). The chosen name,
-/// when one is chosen.
-/// `superseded`: the versions of the user's variations not offered
-/// (`VariationRegistry::superseded`).
-fn variation_picker(ui: &mut egui::Ui, i: usize, current: &str, solid: bool, superseded: &std::collections::HashSet<String>) -> Option<String> {
-    let registry = crate::variations::global_registry();
-    let label = registry.label(current);
-    let popup_id = egui::Id::new(("escape_transform_popup", i));
-    let filter_id = popup_id.with("filter");
+/// the Catalog's picker (`ui::picker`) of the variations with a 2D body --
+/// in a solid, with a 3D body -- and the fractal's own (`own`). The chosen
+/// name, when one is chosen. `superseded`: the versions of the user's
+/// variations not offered (`VariationRegistry::superseded`).
+fn variation_picker(ui: &mut egui::Ui, i: usize, current: &str, solid: bool, superseded: &std::collections::HashSet<String>, own: &[crate::inventory::Entry]) -> Option<String> {
+    let label = crate::variations::global_registry().label(current);
     let btn = ui.add(egui::Button::new(format!("{label}  \u{25be}")).min_size(egui::vec2(160.0, 0.0)));
-    if btn.clicked() {
-        egui::Popup::toggle_id(ui.ctx(), popup_id);
-    }
-    let mut pick = None;
-    egui::Popup::from_response(&btn)
-        .id(popup_id)
-        .open_memory(None)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show(|ui| {
-            ui.set_min_width(240.0);
-            let mut filter = ui.data_mut(|d| d.get_temp::<String>(filter_id).unwrap_or_default());
-            let edit = ui.add(egui::TextEdit::singleline(&mut filter).hint_text(t!("escape_transforms.filter")).desired_width(220.0));
-            super::vkb_sync(ui, &edit, &filter);
-            if edit.changed() {
-                ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
-            }
-            let needle = filter.trim().to_lowercase();
-            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                for name in registry.names() {
-                    let Some(info) = registry.get(name) else { continue };
-                    if if solid { info.wgsl_source_3d.is_none() } else { info.category == VariationCategory::Only3D } {
-                        continue;
-                    }
-                    if superseded.contains(name) && name != current {
-                        continue;
-                    }
-                    if !needle.is_empty() && !name.to_lowercase().contains(&needle) && !info.display_name.to_lowercase().contains(&needle) {
-                        continue;
-                    }
-                    if ui.selectable_label(name == current, &info.display_name).clicked() {
-                        pick = Some(name.clone());
-                        egui::Popup::close_id(ui.ctx(), popup_id);
-                    }
-                }
-            });
-        });
-    pick
+    let fits = |name: &str| {
+        let registry = crate::variations::global_registry();
+        registry.get(name).is_some_and(|info| if solid { info.wgsl_source_3d.is_some() } else { info.category != VariationCategory::Only3D })
+            && (name == current || !superseded.contains(name))
+    };
+    let admit = |e: &crate::inventory::Entry| -> bool {
+        e.kind == crate::inventory::Kind::Variation && (!e.installed || super::inventory::applied_name(e).is_some_and(|n| fits(&n)))
+    };
+    let own: Vec<crate::inventory::Entry> = own.iter().filter(|e| super::picker::key_name(e).is_some_and(|n| fits(n))).cloned().collect();
+    let picked = super::picker::Picker::new(("escape_transform", i), &admit).extra(own).current(Some(current)).popup(ui, &btn)?;
+    super::inventory::applied_name(&picked)
 }

@@ -4,10 +4,11 @@ The Catalog panel lists every resource the app knows -- palettes,
 fractals, variations, effects, escape-time formulas and colourings,
 simulation models and colourings, and Rhai scripts -- to browse, read
 about and use. It replaced the Palette Library and holds the presets the
-Fractal Browser's Presets tab held. Built in phase 1 of
+Fractal Browser's Presets tab held; its list is also every picker's
+(*The picker*, below). Built in phases 1 and 2 of
 [docs/projects/catalog.md](../projects/catalog.md), the plan, which also
-says what comes next (online browsing, the picker, your own resources,
-one Rhai editor, the phone layout, previews).
+says what comes next (online browsing, your own resources, one Rhai
+editor, the phone layout, previews).
 
 - Model: [src/inventory/](../../src/inventory/) (`inventory::scan`,
   `Entry`, `EntryKey`). The code says `inventory` because `catalog` is the
@@ -16,6 +17,7 @@ one Rhai editor, the phone layout, previews).
 - Panel: `PanelType::Inventory`, drawn by `InventoryPanel`
   ([src/ui/inventory.rs](../../src/ui/inventory.rs)). Saved layouts that
   named `PaletteLibrary` open it (a serde alias).
+- Picker: `ui::picker::Picker` ([src/ui/picker.rs](../../src/ui/picker.rs)).
 
 **See also:** [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) (packs),
 [FRACTAL-BROWSER.md](FRACTAL-BROWSER.md) (the presets file, the gallery
@@ -138,9 +140,52 @@ functions:
 | A CPU script | selects it in the Scripts panel, which opens |
 | Another Rhai file, a UF or Fractint file, a track | **Open in Formula Editor** (`FormulaEditorPanel::open_file`) |
 
+**Not installed.** What the server offers and the app lacks -- a
+variation or an effect in the cached catalog (`inventory::Online`, the
+catalogs the app last fetched), downloadable, under a name the registry
+does not hold -- is listed under **Available to download**, marked with
+an arrow, `Entry::installed` false. Its Use is **Download**
+(`inventory::request_download`, drained once a frame into the fetches
+that install and update variations and effects); once installed it is an
+ordinary entry. A row asked for says **Downloading…**.
+
 Use is disabled, with the reason on hover, when it cannot apply:
 `visibility::catalog_use` answers for the mode (a variation needs a flame
 mode, a 3D-only one 3D); the engines' own rules for the rest (an escape
 colouring must draw the current formula, `coloring_suits_formula`; a
 field's colouring needs a field, a solid's a solid that takes it,
 `coloring_applies`; a variation needs a transform).
+
+---
+
+## The picker
+
+Every hand-written picker became the Catalog's list given a filter
+(`ui::picker::Picker`): a button showing the current choice opens a popup
+with a search (focused on opening), the Catalog's groups, **Download** for
+an entry not installed, and greyed rows where the caller refuses one.
+Beside the list, an info pane says what the entry under the pointer is --
+the Catalog's own summary (`inventory::entry_summary`), a refused entry's
+reason, Download -- keeping the last one pointed at while the pointer
+crosses to it, and the current choice on opening. A screen too narrow for
+both (a phone) shows the list alone, descriptions as tooltips. A popup, not a
+ComboBox: a combo closes on any click inside it, its search box included
+(`the_picker_stays_open_while_it_is_used`). The list is read once a frame
+before any panel draws (`InventoryPanel::refresh`, from the UI's frame) and
+shared (`inventory::shared`), so every list of a kind is the same list.
+
+| Picker | Filter | A pick |
+|---|---|---|
+| Transforms: Add variation | variations; Only3D only in 3D; not already on the transform nor superseded; the fractal's own Rhai variations after (`picker::own_variations`) | `add_variation` |
+| Escape lens | None, the recommended lenses, then the measured set (Show all: every variation, downloads too) | `lens_choice` |
+| Escape transformations | variations with a 2D body (a solid: a 3D body) | the entry's variation |
+| Effects: Add effect… | effects of the stage (an uninstalled one by its catalog `category`) | `add_effect` |
+| Escape formula | formulas, fields, solids, plug-ins of those kinds | `inventory::use_entry` |
+| Escape colouring | the colourings that draw the formula (`coloring_suits_formula`), plug-ins | `use_entry` (`pick_coloring`) |
+| A field's or a solid's colouring | its registry's (a solid: `coloring_applies`), plug-ins | `use_entry` |
+| Texture layer | None, the colourings that draw the formula; one the base refuses greyed (`layer_refusal`) | `pick_layer` |
+| Simulation model, colourings | models, colourings, plug-ins, in every layer and slot | the slot's own choice |
+| Colors: palette | the palettes of enabled packs | the config's palette, an editable copy |
+
+A plug-in file is picked by its registered key (`inventory::applied_name`);
+the Random Generator's variation multi-select stays as it is.

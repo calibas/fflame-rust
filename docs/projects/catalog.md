@@ -1,14 +1,12 @@
 # The Catalog: one place for every resource
 
-> **Status 2026-11-16: phase 0 built, phase 1 started** (branch
-> `catalog-panel`). The API's reshape is done on ffapi's branch
-> `catalog-api` (steps 1-10, its `docs/catalog-api-build.md`), unmerged;
-> this app's client already speaks it (`/api/v1`, pages, `owner`,
-> `revision`, palettes as items; `python scripts/api_integration.py`
-> passes against it), so the two merge and deploy together. Every
-> decision is made (*Decided*). The
-> two surveys this plan stands on (the app's sources, the API's routes)
-> were taken 2026-11-16 and are summarised under *What exists*.
+> **Status 2026-11-16: phases 0 and 1 merged** (the API reshaped in place
+> on ffapi, its `docs/catalog-api-build.md`, and this app's client moved to
+> it; the model and the panel). **Phase 2, the picker, built** on branch
+> `catalog-picker`, unmerged ([CATALOG.md](../main/CATALOG.md), *The
+> picker*). Every decision is made (*Decided*). The two surveys this plan
+> stands on (the app's sources, the API's routes) were taken 2026-11-16
+> and are summarised under *What exists*.
 
 ## The goal
 

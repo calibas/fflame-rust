@@ -858,113 +858,41 @@ fn render_variations_section(
     let add_btn = ui.add(
         egui::Button::new(t!("variations.add")).fill(Color32::from_rgb(0, 68, 0)),
     );
-    let focus_search_id = add_variation_popup_id.with("focus_search");
-    if add_btn.clicked() {
-        egui::Popup::toggle_id(ui.ctx(), add_variation_popup_id);
-        // Focus the search box when the popup opens so typing filters
-        // immediately (consumed once inside the popup below).
-        ui.data_mut(|d| d.insert_temp(focus_search_id, true));
+    // The Catalog's variations (docs/projects/catalog.md, *The picker*):
+    // its groups and search, each one's description as its tooltip, and
+    // Download for those the server offers that are not installed. The
+    // rule is the shader's: every category, except that 2D drops Only3D
+    // (the sole category with no 2D reading). Not those already on the
+    // transform, nor a superseded version of one of the user's Rhai
+    // variations; the fractal's own Rhai variations, which the Catalog
+    // lists as files only when they are plug-ins, follow the list.
+    let picker_entries = super::picker::own_variations(&config_manager.active_config().flame);
+    let superseded = global_registry().superseded(&config_manager.active_config().flame.custom_variations);
+    let admit = |e: &crate::inventory::Entry| -> bool {
+        if e.kind != crate::inventory::Kind::Variation {
+            return false;
+        }
+        let Some(name) = super::inventory::applied_name(e).or_else(|| (!e.installed).then(|| entry_name(e))) else {
+            return false;
+        };
+        let registry = global_registry();
+        let only_3d = registry.get(&name).is_some_and(|v| v.category == VariationCategory::Only3D);
+        (render_mode == RenderMode::ThreeD || !only_3d) && !transform.variations.contains_key(&name) && !superseded.contains(&name)
+    };
+    let picker = super::picker::Picker::new(add_variation_popup_id, &admit).extra(picker_entries);
+    if let Some(e) = picker.popup(ui, &add_btn) {
+        variation_to_add = super::inventory::applied_name(&e);
     }
 
-    // Variation picker popup. `from_response` defaults to "always
-    // open"; switch to memory-backed open state so the toggle/close
-    // calls above actually control visibility.
-    egui::Popup::from_response(&add_btn)
-        .id(add_variation_popup_id)
-        .open_memory(None)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show(|ui| {
-        ui.set_min_width(250.0);
-        ui.set_max_height(300.0);
-
-        // Search filter
-        let search_id = ui.id().with("search");
-        let mut search_text = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
-        // One-shot focus request set when the Add button opened the popup.
-        let focus_search = ui.data_mut(|d| {
-            let v = d.get_temp::<bool>(focus_search_id).unwrap_or(false);
-            if v { d.remove::<bool>(focus_search_id); }
-            v
-        });
-        ui.horizontal(|ui| {
-            ui.label(t!("variations.search"));
-            let r = ui.text_edit_singleline(&mut search_text);
-            super::vkb_sync(ui, &r, &search_text);
-            if focus_search {
-                r.request_focus();
-            }
-        });
-        ui.data_mut(|d| d.insert_temp(search_id, search_text.clone()));
-
-        ui.separator();
-
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            let registry = global_registry();
-            let search_lower = search_text.to_lowercase();
-            // One version of each of the user's Rhai variations.
-            let superseded = registry.superseded(&config_manager.active_config().flame.custom_variations);
-
-            // Categories offered, by render mode. The picker mirrors the
-            // shader's rule exactly: everything is available, except that
-            // 2D drops Only3D (the sole category with no meaningful 2D
-            // reading — currently empty).
-            //
-            // Depth3D and Rotation3D belong in the 2D list even though
-            // most of their members act only on z: `tangent3D` is a real
-            // xy tangent map, and `pre_spin_z` / `post_spin_z` are planar
-            // rotations. Category names describe a variation's character,
-            // not whether it does something in 2D — the ones that truly
-            // are z-only simply contribute nothing, which is correct.
-            let categories: Vec<VariationCategory> = if matches!(render_mode, RenderMode::ThreeD) {
-                vec![
-                    VariationCategory::Basic2D,
-                    VariationCategory::Advanced2D,
-                    VariationCategory::Depth3D,
-                    VariationCategory::Rotation3D,
-                    VariationCategory::Full3D,
-                    VariationCategory::Only3D,
-                    VariationCategory::Plugin,
-                ]
-            } else {
-                vec![
-                    VariationCategory::Basic2D,
-                    VariationCategory::Advanced2D,
-                    VariationCategory::Depth3D,
-                    VariationCategory::Rotation3D,
-                    VariationCategory::Full3D,
-                    VariationCategory::Plugin,
-                ]
-            };
-
-            for category in categories {
-                let variations = registry.by_category(category);
-                let filtered: Vec<_> = variations
-                    .iter()
-                    .filter(|v| {
-                        // Filter by search and exclude already-enabled variations
-                        let matches_search = search_text.is_empty()
-                            || v.name.to_lowercase().contains(&search_lower)
-                            || v.display_name.to_lowercase().contains(&search_lower);
-                        let not_enabled = !transform.variations.contains_key(&v.name);
-                        matches_search && not_enabled && !superseded.contains(&v.name)
-                    })
-                    .collect();
-
-                if !filtered.is_empty() {
-                    ui.label(egui::RichText::new(format!("{:?}", category)).strong());
-                    for var_info in filtered {
-                        if ui.selectable_label(false, &var_info.display_name).clicked() {
-                            variation_to_add = Some(var_info.name.clone());
-                            egui::Popup::close_id(ui.ctx(), add_variation_popup_id);
-                        }
-                    }
-                    ui.add_space(4.0);
-                }
-            }
-        });
-    });
-
     (max_update, variation_to_delete, variation_to_add, variation_to_edit)
+}
+
+/// A registered entry's name, installed or not.
+fn entry_name(e: &crate::inventory::Entry) -> String {
+    match &e.key {
+        crate::inventory::EntryKey::Registered(_, n) => n.clone(),
+        _ => String::new(),
+    }
 }
 
 /// Bundled mutable references for the transform pool actions used by the

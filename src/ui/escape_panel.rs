@@ -92,45 +92,6 @@ fn edit_coloring_twin(
     *open_formula_editor = true;
 }
 
-/// Which picker [`plugin_entries`] fills.
-#[derive(Clone, Copy, PartialEq)]
-enum PluginSlot {
-    /// The formula picker: formulas, solids and fields.
-    Formula,
-    /// The escape-time colouring picker.
-    Coloring,
-    /// A mode B field's colouring picker.
-    FieldColoring,
-}
-
-/// The user's plug-ins in the formula picker (formulas, solids and fields)
-/// or a colouring picker (P3), after a separator. Choosing one is the
-/// Formula Editor's Use: its source carried in the config, its slot named,
-/// and Escape entered in the same undo step -- an escape colouring with
-/// what a fresh pick of it sets, as a built-in's.
-fn plugin_entries(ui: &mut egui::Ui, config_manager: &mut ConfigManager, current: &str, slot: PluginSlot) {
-    use crate::storage::library::{plugins, Kind};
-    let formulas = slot == PluginSlot::Formula;
-    let list: Vec<_> = plugins()
-        .into_iter()
-        .filter(|p| match slot {
-            PluginSlot::Formula => matches!(p.kind, Kind::Formula | Kind::Solid | Kind::Field),
-            PluginSlot::Coloring => p.kind == Kind::Coloring,
-            PluginSlot::FieldColoring => p.kind == Kind::FieldColoring,
-        })
-        .collect();
-    if list.is_empty() {
-        return;
-    }
-    ui.separator();
-    ui.weak(t!("escape_panel.plugins"));
-    for p in list {
-        if ui.selectable_label(current == p.key, &p.title).on_hover_text(t!("escape_panel.plugin_tip", file = p.file)).clicked() && current != p.key {
-            choose_plugin(config_manager, &p, !formulas);
-        }
-    }
-}
-
 /// Choosing a plug-in, as the Formula Editor's Use: its source carried
 /// in the config, its slot named, and Escape entered in the same undo
 /// step -- an escape colouring (`coloring`, of `Kind::Coloring`) with what
@@ -278,54 +239,21 @@ pub fn render_escape_content(
     let selected_label = formula_display_name(&esc.formula);
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.formula"));
-        egui::ComboBox::from_id_salt("escape_formula")
-            .selected_text(selected_label)
-            .show_ui(ui, |ui| {
-                for f in crate::escape::FORMULAS {
-                    if ui
-                        .selectable_label(
-                            formula.is_some_and(|m| m.name == f.name),
-                            f.display_name,
-                        )
-                        .clicked()
-                        && esc.formula != f.name
-                    {
-                        choose_formula(config_manager, f);
-                    }
-                }
-                ui.separator();
-                for f in crate::escape::fields::FIELDS {
-                    if ui
-                        .selectable_label(
-                            field.is_some_and(|sel| sel.name == f.name),
-                            f.display_name,
-                        )
-                        .clicked()
-                        && esc.formula != f.name
-                    {
-                        choose_field(config_manager, f);
-                    }
-                }
-                // Mode D: distance functions. `ifs_flame` reads the
-                // LOADED FLAME rather than a formula of its own, so
-                // there is no default view to land on — the flame's
-                // own extent decides where to stand, and the panel
-                // offers a Frame button for it below.
-                ui.separator();
-                for d in crate::escape::ifs::IFS_DEFS {
-                    if ui
-                        .selectable_label(
-                            ifs_def.is_some_and(|sel| sel.name == d.name),
-                            d.display_name,
-                        )
-                        .clicked()
-                        && esc.formula != d.name
-                    {
-                        choose_solid(config_manager, d);
-                    }
-                }
-                plugin_entries(ui, config_manager, &esc.formula, PluginSlot::Formula);
-            });
+        // The Catalog's escape kinds (docs/projects/catalog.md, *The
+        // picker*): the iterated formulas, the fields, the solids (mode D:
+        // `ifs_flame` reads the LOADED FLAME, so the flame's own extent
+        // decides where to stand), and the user's plug-ins of those kinds.
+        let admit = |e: &crate::inventory::Entry| {
+            use crate::inventory::Kind as K;
+            matches!(e.kind, K::Formula | K::Field | K::Solid) && e.installed && (e.plugin || matches!(e.key, crate::inventory::EntryKey::Registered(..)))
+        };
+        let btn = super::picker::button(ui, selected_label);
+        let picker = super::picker::Picker::new("escape_formula", &admit).kind_headings().current(Some(esc.formula.as_str()));
+        if let Some(e) = picker.popup(ui, &btn) {
+            if super::inventory::applied_name(&e).as_deref() != Some(esc.formula.as_str()) {
+                super::inventory::use_entry(&e, ui.ctx(), config_manager);
+            }
+        }
         // A built-in with a twin in Rhai (`escape::twins`): put the twin
         // in its place, the picture unchanged, and open it in the Formula
         // Editor as the user's own to change.
@@ -2130,133 +2058,51 @@ pub(super) fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigMa
                     .weak(),
             );
 
+            // The Catalog's variations as the lens takes them
+            // (docs/projects/catalog.md, *The picker*): None, the
+            // recommended lenses in their own order, then the measured
+            // set -- everything usable on request: the classification
+            // describes a variation's DEFAULT parameters, which are
+            // editable, so it is a starting point rather than a verdict,
+            // but a picker whose entries mostly do nothing is worse than a
+            // short one. One version of each of the user's Rhai variations.
+            let all_id = egui::Id::new("escape_lens_show_all");
+            let mut show_all = ui.data_mut(|d| d.get_temp::<bool>(all_id).unwrap_or(false));
             let mut pick: Option<String> = None;
-            let filter_id = egui::Id::new("escape_lens_filter");
-            // A Popup, not a ComboBox. A combo closes on ANY click
-            // inside it, so clicking the search box or the Show-all
-            // tick shut the list instead of using it -- reported from
-            // use. The Add Variation picker in the transforms panel
-            // already had this problem and solved it the same way:
-            // a button, a memory-backed popup, and
-            // `CloseOnClickOutside` so only a real choice or a click
-            // away dismisses it.
-            let popup_id = egui::Id::new("escape_lens_popup");
-            let focus_id = popup_id.with("focus_search");
-            let btn = ui.add(
-                egui::Button::new(format!("{label}  \u{25be}")).min_size(egui::vec2(220.0, 0.0)),
-            );
-            if btn.clicked() {
-                egui::Popup::toggle_id(ui.ctx(), popup_id);
-                // Focus the filter when it opens, so typing narrows
-                // the list straight away (consumed once, below).
-                ui.data_mut(|d| d.insert_temp(focus_id, true));
-            }
-            egui::Popup::from_response(&btn)
-                .id(popup_id)
-                .open_memory(None)
-                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                .show(|ui| {
-                    ui.set_min_width(250.0);
-                    ui.set_max_height(380.0);
-                    // 647 entries is a scroll, not a list. The filter
-                    // lives in egui memory rather than the config: it
-                    // is a way of finding a lens, not part of one, and
-                    // putting it in the config would make typing here
-                    // an undo step.
-                    let mut filter =
-                        ui.data_mut(|d| d.get_temp::<String>(filter_id).unwrap_or_default());
-                    let focus_search = ui.data_mut(|d| {
-                        let v = d.get_temp::<bool>(focus_id).unwrap_or(false);
-                        if v {
-                            d.remove::<bool>(focus_id);
-                        }
-                        v
-                    });
-                    let edit = ui.add(
-                        egui::TextEdit::singleline(&mut filter)
-                            .hint_text(t!("escape_panel.lens_filter"))
-                            .desired_width(230.0),
-                    );
-                    super::vkb_sync(ui, &edit, &filter);
-                    if focus_search {
-                        edit.request_focus();
+            ui.horizontal(|ui| {
+                let btn = ui.add(egui::Button::new(format!("{label}  \u{25be}")).min_size(egui::vec2(220.0, 0.0)));
+                if ui.checkbox(&mut show_all, t!("escape_panel.lens_show_all")).on_hover_text(t!("escape_panel.lens_show_all_tip")).changed() {
+                    ui.data_mut(|d| d.insert_temp(all_id, show_all));
+                }
+                let menu: std::collections::HashSet<String> =
+                    if show_all { registry.names().iter().cloned().collect() } else { crate::escape::lens::lens_menu(&registry).into_iter().collect() };
+                let superseded = registry.superseded(&config_manager.active_config().flame.custom_variations);
+                let recommended: Vec<&str> =
+                    crate::escape::lens::LENS_RECOMMENDED.iter().copied().filter(|n| registry.get(n).is_some() && !superseded.contains(*n)).collect();
+                let none_group = crate::inventory::Group { order: 0, label: String::new() };
+                let rec_group = crate::inventory::Group { order: 1, label: t!("escape_panel.lens_recommended").to_string() };
+                let mut lead = vec![super::picker::row(crate::inventory::Kind::Variation, "", &t!("escape_panel.lens_none"), none_group)];
+                lead.extend(recommended.iter().map(|n| super::picker::row(crate::inventory::Kind::Variation, n, &registry.label(n), rec_group.clone())));
+                let admit = |e: &crate::inventory::Entry| -> bool {
+                    if e.kind != crate::inventory::Kind::Variation {
+                        return false;
                     }
-                    if edit.changed() {
-                        ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
+                    if !e.installed {
+                        return show_all;
                     }
-                    let needle = filter.trim().to_lowercase();
-
-                    // The measured set by default, everything on
-                    // request. The classification describes a
-                    // variation's DEFAULT parameters and those are
-                    // editable, so it is a starting point rather than
-                    // a verdict -- but a picker whose entries mostly
-                    // do nothing is worse than a short one.
-                    let all_id = egui::Id::new("escape_lens_show_all");
-                    let mut show_all = ui.data_mut(|d| d.get_temp::<bool>(all_id).unwrap_or(false));
-                    if ui
-                        .checkbox(&mut show_all, t!("escape_panel.lens_show_all"))
-                        .on_hover_text(t!("escape_panel.lens_show_all_tip"))
-                        .changed()
-                    {
-                        ui.data_mut(|d| d.insert_temp(all_id, show_all));
-                    }
-
-                    if ui
-                        .selectable_label(current.is_empty(), t!("escape_panel.lens_none"))
-                        .clicked()
-                    {
-                        pick = Some(String::new());
-                        egui::Popup::close_id(ui.ctx(), popup_id);
-                    }
-                    ui.separator();
-
-                    // The recommended lenses first in their own
-                    // order, then everything else usable in the
-                    // registry's order -- the same order the
-                    // variations browser uses, so a lens is found
-                    // where a variation is found.
-                    let menu: Vec<String> = if show_all {
-                        registry.names().to_vec()
-                    } else {
-                        crate::escape::lens::lens_menu(&registry)
-                    };
-                    // One version of each of the user's Rhai variations.
-                    let superseded = registry.superseded(&config_manager.active_config().flame.custom_variations);
-                    let menu: Vec<String> = menu.into_iter().filter(|n| *n == current || !superseded.contains(n)).collect();
-                    let head = if show_all {
-                        0
-                    } else {
-                        crate::escape::lens::LENS_RECOMMENDED
-                            .iter()
-                            .filter(|n| registry.get(n).is_some())
-                            .count()
-                    };
-                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                        for (i, name) in menu.iter().enumerate() {
-                            let Some(info) = registry.get(name) else { continue };
-                            if !needle.is_empty()
-                                && !name.to_lowercase().contains(&needle)
-                                && !info.display_name.to_lowercase().contains(&needle)
-                            {
-                                continue;
-                            }
-                            // A rule under the recommended ones, so
-                            // the head reads as a shortlist rather
-                            // than as an arbitrary reordering.
-                            if i == head && head > 0 && needle.is_empty() {
-                                ui.separator();
-                            }
-                            if ui
-                                .selectable_label(&current == name, &info.display_name)
-                                .clicked()
-                            {
-                                pick = Some(name.clone());
-                                egui::Popup::close_id(ui.ctx(), popup_id);
-                            }
-                        }
-                    });
-                });
+                    super::inventory::applied_name(e).is_some_and(|n| {
+                        menu.contains(&n) && !recommended.contains(&n.as_str()) && (n == current || !superseded.contains(&n))
+                    })
+                };
+                let own: Vec<crate::inventory::Entry> = super::picker::own_variations(&config_manager.active_config().flame)
+                    .into_iter()
+                    .filter(|e| super::picker::key_name(e).is_some_and(|n| menu.contains(n) && !recommended.contains(&n)))
+                    .collect();
+                let picker = super::picker::Picker::new("escape_lens", &admit).lead(lead).extra(own).current(Some(current.as_str())).max_height(340.0);
+                if let Some(e) = picker.popup(ui, &btn) {
+                    pick = super::picker::key_name(&e).map(str::to_string).or_else(|| super::inventory::applied_name(&e));
+                }
+            });
             if let Some(name) = pick {
                 let mut changes = lens_choice(&name);
                 // A variation of the user's: the flame carries its source.
@@ -2507,19 +2353,16 @@ fn show_coloring_section(
         let coloring = crate::escape::ifs::get_ifs_coloring(&esc.coloring, d);
         ui.horizontal(|ui| {
             ui.label(t!("escape_panel.coloring"));
-            egui::ComboBox::from_id_salt("escape_coloring")
-                .selected_text(coloring.display_name)
-                .show_ui(ui, |ui| {
-                    for c in crate::escape::ifs::IFS_COLORINGS.iter().filter(|c| crate::escape::ifs::coloring_applies(d, c)) {
-                        if ui
-                            .selectable_label(c.name == coloring.name, c.display_name)
-                            .clicked()
-                            && c.name != coloring.name
-                        {
-                            choose_named_coloring(config_manager, c.name);
-                        }
-                    }
-                });
+            let admit = |e: &crate::inventory::Entry| {
+                e.kind == crate::inventory::Kind::SolidColoring
+                    && super::picker::key_name(e).is_some_and(|n| crate::escape::ifs::IFS_COLORINGS.iter().any(|c| c.name == n && crate::escape::ifs::coloring_applies(d, c)))
+            };
+            let btn = super::picker::button(ui, coloring.display_name);
+            if let Some(e) = super::picker::Picker::new("escape_solid_coloring", &admit).current(Some(coloring.name)).popup(ui, &btn) {
+                if super::picker::key_name(&e) != Some(coloring.name) {
+                    super::inventory::use_entry(&e, ui.ctx(), config_manager);
+                }
+            }
         });
         param_list(ui, config_manager, coloring.name, coloring.parameters, "coloring", &esc.coloring_params, |n| ConfigPath::EscapeColoringParam { param: n.to_string() });
         return;
@@ -2528,20 +2371,15 @@ fn show_coloring_section(
         let coloring = crate::escape::fields::get_field_coloring(&esc.coloring, f);
         ui.horizontal(|ui| {
             ui.label(t!("escape_panel.coloring"));
-            egui::ComboBox::from_id_salt("escape_coloring")
-                .selected_text(coloring.display_name)
-                .show_ui(ui, |ui| {
-                    for c in crate::escape::fields::FIELD_COLORINGS {
-                        if ui
-                            .selectable_label(c.name == coloring.name, c.display_name)
-                            .clicked()
-                            && c.name != coloring.name
-                        {
-                            choose_named_coloring(config_manager, c.name);
-                        }
-                    }
-                    plugin_entries(ui, config_manager, &esc.coloring, PluginSlot::FieldColoring);
-                });
+            let admit = |e: &crate::inventory::Entry| {
+                e.kind == crate::inventory::Kind::FieldColoring && e.installed && (e.plugin || matches!(e.key, crate::inventory::EntryKey::Registered(..)))
+            };
+            let btn = super::picker::button(ui, coloring.display_name);
+            if let Some(e) = super::picker::Picker::new("escape_field_coloring", &admit).current(Some(esc.coloring.as_str())).popup(ui, &btn) {
+                if super::inventory::applied_name(&e).as_deref() != Some(esc.coloring.as_str()) {
+                    super::inventory::use_entry(&e, ui.ctx(), config_manager);
+                }
+            }
             // A built-in with a twin (`escape::twins::FIELD_COLORING_TWINS`).
             if let Some(src) = crate::escape::twins::field_coloring_custom_source(coloring.name) {
                 if ui.button(t!("escape_panel.edit_as_rhai")).on_hover_text(t!("escape_panel.edit_coloring_as_rhai_tip")).clicked() {
@@ -2589,23 +2427,21 @@ fn show_coloring_section(
     // this panel hard to approach.
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.coloring"));
-        egui::ComboBox::from_id_salt("escape_coloring")
-            .selected_text(coloring.display_name)
-            .show_ui(ui, |ui| {
-                for c in crate::escape::COLORINGS {
-                    if !crate::escape::coloring_suits_formula(formula_def, c) {
-                        continue;
-                    }
-                    if ui
-                        .selectable_label(c.name == coloring.name, c.display_name)
-                        .clicked()
-                        && c.name != coloring.name
-                    {
-                        pick_coloring(config_manager, formula_def, esc, c);
-                    }
-                }
-                plugin_entries(ui, config_manager, &esc.coloring, PluginSlot::Coloring);
-            });
+        let admit = |e: &crate::inventory::Entry| {
+            e.kind == crate::inventory::Kind::Coloring
+                && e.installed
+                && (e.plugin
+                    || super::picker::key_name(e)
+                        .and_then(crate::escape::find_coloring)
+                        .is_some_and(|c| crate::escape::coloring_suits_formula(formula_def, c)))
+        };
+        let btn = super::picker::button(ui, coloring.display_name);
+        let current = if esc.coloring == coloring.name { coloring.name } else { esc.coloring.as_str() };
+        if let Some(e) = super::picker::Picker::new("escape_coloring", &admit).current(Some(current)).popup(ui, &btn) {
+            if super::inventory::applied_name(&e).as_deref() != Some(current) {
+                super::inventory::use_entry(&e, ui.ctx(), config_manager);
+            }
+        }
         // A built-in with a twin in Rhai (`escape::twins::COLORING_TWINS`):
         // put the twin in its place, the picture unchanged, and open it in
         // the Formula Editor as the user's own to change.
@@ -2721,39 +2557,29 @@ fn texture_layer_controls(
             || t!("escape_panel.layer_none").to_string(),
             |c| c.display_name.to_string(),
         );
-        egui::ComboBox::from_id_salt("escape_layer_coloring")
-            .selected_text(label)
-            .show_ui(ui, |ui| {
-                if ui.selectable_label(current.is_none(), t!("escape_panel.layer_none")).clicked()
-                    && current.is_some()
-                {
-                    let _ = config_manager.update_param(
-                        ConfigPath::EscapeLayerColoring,
-                        ConfigValue::String(String::new()),
-                    );
-                }
-                for c in crate::escape::COLORINGS {
-                    if !crate::escape::coloring_suits_formula(formula, c) {
-                        continue;
-                    }
-                    let refusal = crate::escape::layer_refusal(base, c);
-                    let selected = current.is_some_and(|x| x.name == c.name);
-                    let resp = ui
-                        .add_enabled_ui(refusal.is_none(), |ui| ui.selectable_label(selected, c.display_name))
-                        .inner
-                        .on_disabled_hover_text(match refusal {
-                            Some(crate::escape::LayerRefusal::DirectColor) => {
-                                t!("escape_panel.layer_direct_colour")
-                            }
-                            _ => t!("escape_panel.layer_needs_accumulator"),
-                        });
-                    if resp.clicked() && !selected {
-                        pick_layer(config_manager, c);
-                    }
-                }
+        let admit = |e: &crate::inventory::Entry| {
+            e.kind == crate::inventory::Kind::Coloring
+                && super::picker::key_name(e).and_then(crate::escape::find_coloring).is_some_and(|c| crate::escape::coloring_suits_formula(formula, c))
+        };
+        let refused = |e: &crate::inventory::Entry| -> Option<String> {
+            let c = super::picker::key_name(e).and_then(crate::escape::find_coloring)?;
+            crate::escape::layer_refusal(base, c).map(|r| match r {
+                crate::escape::LayerRefusal::DirectColor => t!("escape_panel.layer_direct_colour").to_string(),
+                _ => t!("escape_panel.layer_needs_accumulator").to_string(),
             })
-            .response
-            .on_hover_text(t!("escape_panel.tooltip_layer"));
+        };
+        let none = super::picker::row(crate::inventory::Kind::Coloring, "", &t!("escape_panel.layer_none"), crate::inventory::Group { order: 0, label: String::new() });
+        let btn = super::picker::button(ui, &label).on_hover_text(t!("escape_panel.tooltip_layer"));
+        let picker = super::picker::Picker::new("escape_layer_coloring", &admit).lead(vec![none]).unusable(&refused).current(Some(layer.coloring.as_str()));
+        if let Some(e) = picker.popup(ui, &btn) {
+            match super::picker::key_name(&e).filter(|n| !n.is_empty()).and_then(crate::escape::find_coloring) {
+                Some(c) if current.is_none_or(|x| x.name != c.name) => pick_layer(config_manager, c),
+                None if current.is_some() => {
+                    let _ = config_manager.update_param(ConfigPath::EscapeLayerColoring, ConfigValue::String(String::new()));
+                }
+                _ => {}
+            }
+        }
     });
     let Some(l) = current else {
         return;
@@ -3982,50 +3808,16 @@ mod criterion_tests {
     /// reading of that variation at all. `pack_flame` had had the
     /// same mistake (plan 8.11 step 2) and was fixed there; this is
     /// the panel's half, and the two now answer alike.
-    /// The lens picker must not be a `ComboBox`.
-    ///
-    /// A combo closes on ANY click inside it, so its search box and
-    /// its Show-all tick were unusable -- clicking either dismissed
-    /// the list instead of filtering it. Reported from use. The
-    /// transforms panel's Add Variation picker had already solved
-    /// this with a memory-backed `Popup` and `CloseOnClickOutside`,
-    /// and the lens picker now matches it.
-    ///
-    /// Source-scanning because the fault is a WIDGET CHOICE, and the
-    /// difference only shows up under a click that a headless UI test
-    /// does not deliver. The same technique guards the render-mode
-    /// writer (`src/ui/render_mode.rs`).
+    /// The lens is chosen with the Catalog's picker, which stays open
+    /// while it is used (`ui::picker`'s test), never a `ComboBox`.
     #[test]
-    fn the_lens_picker_stays_open_while_it_is_used() {
+    fn the_lens_uses_the_catalog_picker() {
         let src = include_str!("escape_panel.rs");
-        let start = src
-            .find("fn show_lens_section")
-            .expect("the lens section moved");
-        let end = src[start..]
-            .find("\nfn ")
-            .map(|i| start + i)
-            .unwrap_or(src.len());
-        // Code only: the comment above the popup explains what a
-        // ComboBox would do wrong, and must not trip the scan.
-        let body: String = src[start..end]
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert!(
-            !body.contains("ComboBox"),
-            "the lens picker is a ComboBox again: a click on its search box or \
-             its Show-all tick will close it instead of using it"
-        );
-        assert!(
-            body.contains("PopupCloseBehavior::CloseOnClickOutside"),
-            "the lens picker must close only on a click outside"
-        );
-        assert!(
-            body.contains("Popup::close_id"),
-            "choosing a lens must close the picker explicitly"
-        );
+        let start = src.find("fn show_lens_section").expect("the lens section moved");
+        let end = src[start..].find("\nfn ").map(|i| start + i).unwrap_or(src.len());
+        let body: String = src[start..end].lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        assert!(!body.contains("ComboBox"), "the lens picker is a ComboBox again");
+        assert!(body.contains("picker::Picker::new"), "the lens is chosen with the Catalog's picker");
     }
 
     /// Picking a lens seeds every parameter at its registry default,
