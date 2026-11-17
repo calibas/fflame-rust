@@ -212,10 +212,9 @@ pub struct InventoryContext<'a> {
     pub palette_library: &'a mut PaletteLibrary,
     /// The online account, for the Online place's requests.
     pub account: CloudAccount,
-    /// The script cloud is busy (opening a script waits for it), and its
-    /// last word.
-    pub script_cloud_busy: bool,
-    pub script_cloud_status: Option<&'a str>,
+    /// The script cloud: busy (a request waits for it), its last word,
+    /// a conflict to resolve.
+    pub script_cloud: &'a crate::app::script_cloud::ScriptCloudState,
 }
 
 pub struct InventoryPanel {
@@ -231,6 +230,7 @@ pub struct InventoryPanel {
     updates_only: bool,
     place: Place,
     online: super::inventory_online::OnlinePlace,
+    manage: super::inventory_manage::Manage,
     /// The presets, a gallery a category, made when first shown.
     preset_galleries: Option<Vec<FractalConfigGallery>>,
     preset_category: PresetCategory,
@@ -255,6 +255,7 @@ impl InventoryPanel {
             updates_only: false,
             place: Place::Local,
             online: super::inventory_online::OnlinePlace::new(),
+            manage: super::inventory_manage::Manage::default(),
             preset_galleries: None,
             preset_category: PresetCategory::default(),
         }
@@ -386,6 +387,11 @@ impl InventoryPanel {
         }
         if self.place == Place::Local && matches!(self.family, Family::Variations | Family::Effects) {
             self.render_downloads_bar(ui, out);
+        }
+        if self.place == Place::Local {
+            if let Some(super::inventory_manage::Act::Select(key)) = self.manage.render_top(ui, self.family, out) {
+                self.selected = Some(key);
+            }
         }
         // A family of several kinds: a chip each that has entries.
         let mut kinds: Vec<Kind> = match self.place {
@@ -706,14 +712,20 @@ impl InventoryPanel {
                         out.open_palette_editor = true;
                     }
                 }
-                EntryKey::File { store: Store::Formulas, file, shipped } => {
-                    if ui.button(t!("catalog.open_in_formula_editor")).clicked() {
-                        out.open_formula_file = Some((file.clone(), *shipped));
+                // A shipped file, to read: yours are edited below.
+                EntryKey::File { store, file, shipped: true } => {
+                    if ui.button(t!("catalog.open_in_editor")).clicked() {
+                        super::inventory_manage::edit(*store, file, true, out);
                     }
                 }
                 _ => {}
             }
         });
+        // Your own: edit, rename, duplicate, delete, the plug-in flag,
+        // publishing; a shipped file or a built-in: a copy of yours.
+        if let Some(super::inventory_manage::Act::Select(key)) = self.manage.render_actions(ui, &e, cx, out) {
+            self.selected = Some(key);
+        }
     }
 }
 

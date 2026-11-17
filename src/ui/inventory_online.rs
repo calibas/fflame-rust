@@ -557,7 +557,7 @@ impl OnlinePlace {
                     }
                 }
                 None => {
-                    let busy = cx.script_cloud_busy;
+                    let busy = cx.script_cloud.busy;
                     if ui.add_enabled(!busy, egui::Button::new(t!("catalog.open_script"))).on_hover_text(t!("catalog.open_script_tip")).clicked() {
                         out.script_cloud_request = Some(crate::app::script_cloud::ScriptCloudRequest::Adopt { id: info.id.clone() });
                     }
@@ -570,7 +570,7 @@ impl OnlinePlace {
         if matches!(item, Item::Script(_)) && info.held.is_none() {
             ui.weak(t!("catalog.open_script_tip"));
         }
-        if let Some(status) = cx.script_cloud_status.filter(|_| matches!(item, Item::Script(_))) {
+        if let Some(status) = cx.script_cloud.status.as_deref().filter(|_| matches!(item, Item::Script(_))) {
             ui.weak(status);
         }
         if mine && matches!(item, Item::Flame(_) | Item::Palette(_)) {

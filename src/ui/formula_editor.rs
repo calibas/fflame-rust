@@ -1300,8 +1300,10 @@ impl FormulaEditorPanel {
     ) {
         // An adoption or a refetch wrote the store: re-list it, and
         // reload the open file if it was written and not being edited.
-        if cloud.library_generation != self.seen_library_generation {
-            self.seen_library_generation = cloud.library_generation;
+        // An adoption, or the Catalog renaming, copying or deleting a file.
+        let generation = cloud.library_generation.wrapping_add(crate::storage::manage::generation());
+        if generation != self.seen_library_generation {
+            self.seen_library_generation = generation;
             self.files = formula_store::list();
             if let Some(file) = self.file.clone() {
                 if self.text == self.saved {
@@ -1383,7 +1385,7 @@ impl FormulaEditorPanel {
             }
             if ui.button(t!("formula_editor.new")).on_hover_text(t!("formula_editor.new_tip")).clicked() {
                 // Outside Escape a new file is a variation.
-                let text = if escape_mode { NEW_FILE } else { NEW_VARIATION };
+                let text = if escape_mode { lang::rhai::NEW_FORMULA } else { lang::rhai::NEW_VARIATION };
                 self.adopt(None, "untitled.rhai".to_string(), text.to_string());
             }
         });
@@ -1627,56 +1629,6 @@ impl FormulaEditorPanel {
     }
 }
 
-/// What New starts from in a flame mode: a variation, a point to a point
-/// (the KIFS plan, C1).
-const NEW_VARIATION: &str = "\
-// A new variation. `variation` takes a point `z` and the parameters `p`
-// and gives the point it maps to; the transform's weight scales it.
-// `INFO.name` is its name in the variation list.
-//
-// Also at hand: `rand()`, a draw in [0, 1); a third argument `ctx` with
-// `ctx.accum` (the transform's earlier variations, summed) and
-// `ctx.weight`; `fn init(p)` returning a state each thread keeps, read
-// and set as `this.name`; and ending with `#{ z: point, color: index }`
-// to colour the point.
-
-const PARAMS = #{
-    twist: #{ value: 1.0, min: -4.0, max: 4.0, caption: \"Twist\" },
-};
-
-const INFO = #{ title: \"My Variation\", name: \"my_variation\" };
-
-fn variation(z, p) {
-    let r2 = z.norm_sqr();
-    let a = r2 * p.twist;
-    complex(z.re * cos(a) - z.im * sin(a), z.re * sin(a) + z.im * cos(a))
-}
-";
-
-/// What New starts from: a formula in Rhai, the language's own.
-const NEW_FILE: &str = "\
-// A new formula. `start` gives each pixel its state, `step` moves it
-// one pass on, `escaped` says when it has left.
-
-const PARAMS = #{
-    bailout: #{ value: 10000.0, min: 1.0, caption: \"Bailout\" },
-};
-
-const INFO = #{ title: \"My Formula\" };
-
-fn start(pixel, p) {
-    #{ z: complex(0.0, 0.0), c: pixel }
-}
-
-fn step(s, p) {
-    s.z = s.z.sqr() + s.c;
-    s
-}
-
-fn escaped(s, p) {
-    s.z.norm_sqr() > p.bailout
-}
-";
 
 /// The config with the built-in variation `builtin` in the transform
 /// `xref` of the flame `target` names replaced by the variation `src`

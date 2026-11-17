@@ -598,6 +598,30 @@ pub struct PatchPaletteRequest {
     pub name: Option<String>,
 }
 
+/// `PATCH /R/{id}` for a fractal, a palette or a script: the name or the
+/// visibility, what is present replacing what is stored.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ItemPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<ApiVisibility>,
+}
+
+/// `POST /palettes`: a palette of the user's, published (its colours as
+/// `encode_palette_data` writes them).
+#[derive(Debug, Clone, Serialize)]
+pub struct CreatePaletteRequest {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub visibility: ApiVisibility,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_data: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stops: Option<serde_json::Value>,
+}
+
 // ============================================================================
 // Animations
 // ============================================================================

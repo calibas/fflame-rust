@@ -330,8 +330,10 @@ impl ScriptsPanel {
         self.refresh_meta(current);
 
         // A background adoption wrote to the store; pick it up.
-        if cloud.library_generation != self.seen_library_generation {
-            self.seen_library_generation = cloud.library_generation;
+        // An adoption, or the Catalog renaming, copying or deleting a file.
+        let generation = cloud.library_generation.wrapping_add(crate::storage::manage::generation());
+        if generation != self.seen_library_generation {
+            self.seen_library_generation = generation;
             self.reload(current);
         }
 

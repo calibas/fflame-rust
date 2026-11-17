@@ -10,6 +10,7 @@ mod formatting;
 pub mod fractal_browser;
 pub mod inventory;
 pub mod markdown;
+mod inventory_manage;
 mod inventory_online;
 pub mod picker;
 pub mod fractal_gallery;

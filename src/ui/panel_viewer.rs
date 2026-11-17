@@ -949,8 +949,7 @@ impl<'a> PanelViewer<'a> {
             config_manager: self.context.config_manager,
             palette_library: self.context.palette_library,
             account,
-            script_cloud_busy: self.context.script_cloud.busy,
-            script_cloud_status: self.context.script_cloud.status.as_deref(),
+            script_cloud: self.context.script_cloud,
         };
         let response = self.context.inventory_panel.render(ui, &mut cx);
         if let Some((id, loaded)) = response.load_api_flame {

@@ -25,6 +25,21 @@ use crate::script::store as scripts;
 use crate::storage::formula_store as formulas;
 use crate::storage::library::Store;
 use crate::storage::links::Link;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Bumped by every change this module makes to a store: what the lists
+/// that show the files (the Catalog, the editors) watch, beside the
+/// script cloud's adoptions (`ScriptCloudState::library_generation`).
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// How many changes this module has made to the stores.
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::Relaxed)
+}
+
+fn changed() {
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+}
 
 /// A script file's stem (`orbit.rhai` -> `orbit`).
 fn stem(file: &str) -> &str {
@@ -48,6 +63,7 @@ pub fn link_of(store: Store, file: &str) -> Option<Link> {
 }
 
 fn set_link(store: Store, file: &str, link: Link) -> Result<(), String> {
+    changed();
     match store {
         Store::Formulas => formulas::set_link(file, link),
         Store::Scripts => scripts::set_link(stem(file), link),
@@ -85,7 +101,9 @@ pub fn free_name(store: Store, name: &str, ext: &str) -> Option<String> {
         .find(|f| load(store, f).is_none())
 }
 
-fn write(store: Store, file: &str, text: &str) -> Result<String, String> {
+/// Write `text` as `file` (over it, when it is there): what Save does.
+pub fn write(store: Store, file: &str, text: &str) -> Result<String, String> {
+    changed();
     match store {
         Store::Formulas => formulas::save(file, text),
         Store::Scripts => scripts::save(stem(file), text).map(|s| format!("{s}.rhai")),
@@ -93,6 +111,7 @@ fn write(store: Store, file: &str, text: &str) -> Result<String, String> {
 }
 
 fn remove(store: Store, file: &str) -> Result<(), String> {
+    changed();
     match store {
         Store::Formulas => formulas::delete(file),
         Store::Scripts => scripts::delete(stem(file)),
@@ -158,6 +177,70 @@ pub fn delete(store: Store, file: &str) -> Result<(), String> {
         crate::storage::library::unlist_plugin(file);
     }
     remove(store, file)
+}
+
+/// Whether a stored file can be a plug-in: a Rhai entry of the formula
+/// store of a kind registered at start ([`crate::storage::library::Kind::can_be_plugin`]).
+pub fn can_be_plugin(store: Store, file: &str, text: &str) -> bool {
+    store == Store::Formulas && formulas::is_rhai(file) && crate::storage::library::rhai_kind(text).can_be_plugin()
+}
+
+/// Make a stored file a plug-in, registered at every start, or stop;
+/// gives what it registered as (its title), or the file. One that needs
+/// an id of its own to register (a variation without a name, an effect)
+/// gets one, written into the file.
+pub fn set_plugin(file: &str, on: bool) -> Result<String, String> {
+    let mut link = formulas::link_of(file).unwrap_or_default();
+    if !on {
+        link.plugin = false;
+        crate::storage::library::unlist_plugin(file);
+        set_link(Store::Formulas, file, link)?;
+        return Ok(file.to_string());
+    }
+    let mut text = load(Store::Formulas, file).ok_or_else(|| t!("manage.missing", name = file).to_string())?;
+    let needs_id = match crate::storage::library::rhai_kind(&text) {
+        crate::storage::library::Kind::Variation => crate::variations::custom::needs_id(&text),
+        crate::storage::library::Kind::Effect => crate::api::entries::needs_id(&text),
+        _ => false,
+    };
+    if needs_id {
+        text = crate::lang::rhai::with_own_id(&text, &crate::scripted::mint_id());
+        write(Store::Formulas, file, &text)?;
+    }
+    let plugin = crate::storage::library::register_plugin(file, &text)?;
+    link.plugin = true;
+    set_link(Store::Formulas, file, link)?;
+    Ok(plugin.title)
+}
+
+/// Why a stored file cannot be published, if it cannot: somebody else's
+/// as adopted, still that online script (theirs to publish -- an edit or
+/// a copy is the user's own, decision 3), and for the formula store what
+/// the server refuses
+/// (`api::entries::refusal`: a UF or Fractint file, a kind with no
+/// online form, one that does not compile, a built-in unedited).
+pub fn publish_refusal(store: Store, file: &str, text: &str) -> Option<String> {
+    let link = link_of(store, file).unwrap_or_default();
+    if link.from_others && link.cloud_id.is_some() {
+        return Some(t!("manage.not_yours", owner = link.owner.unwrap_or_default()).to_string());
+    }
+    match store {
+        Store::Formulas => crate::api::entries::refusal(file, text),
+        Store::Scripts => None,
+    }
+}
+
+/// A stored file's text ready to publish: a formula store entry is given
+/// an id of its own first, written into the file -- what the server
+/// stores it under, and what a config using it is catalogued by.
+pub fn prepare_publish(store: Store, file: &str) -> Result<String, String> {
+    let text = load(store, file).ok_or_else(|| t!("manage.missing", name = file).to_string())?;
+    if store == Store::Formulas && crate::api::entries::needs_id(&text) {
+        let text = crate::lang::rhai::with_own_id(&text, &crate::scripted::mint_id());
+        write(store, file, &text)?;
+        return Ok(text);
+    }
+    Ok(text)
 }
 
 /// The store a Rhai text belongs in: a CPU script declares itself

@@ -519,6 +519,24 @@ impl ApiState {
         client::api_patch(&url, &req, &token).await
     }
 
+    /// Publish a palette of the user's (`POST /palettes`), private or
+    /// public: a palette item of its own, its colours by hash.
+    pub async fn create_palette(&self, palette: &crate::scene::palette::Palette, visibility: ApiVisibility) -> FetchResult<PaletteItem> {
+        let token = self.require_token()?;
+        let (stops, color_data) = sync::encode_palette_data(palette);
+        let req = types::CreatePaletteRequest { name: palette.name.clone(), description: None, visibility, color_data, stops };
+        let url = build_url(API_BASE_URL, "/api/v1/palettes");
+        client::api_post(&url, &req, &token).await
+    }
+
+    /// Rename an item of the caller's, or change who sees it: `resource`
+    /// is `flames`, `palettes` or `scripts`.
+    pub async fn patch_item(&self, resource: &str, id: &str, patch: &types::ItemPatch) -> FetchResult<serde_json::Value> {
+        let token = self.require_token()?;
+        let url = build_url(API_BASE_URL, &format!("/api/v1/{resource}/{id}"));
+        client::api_patch(&url, patch, &token).await
+    }
+
     /// Delete one of the caller's palettes. Its content stays: fractals
     /// may use it.
     pub async fn delete_palette(&self, id: &str) -> FetchResult<()> {
