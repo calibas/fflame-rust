@@ -141,8 +141,8 @@ pub enum WorkspaceLayout {
     Simulation,
     /// Animation: Standard layout with Animation panel at bottom
     Animation,
-    /// Scripting: Scripts panel left, Fractal Browser right — write a
-    /// script, run it, browse what it generated.
+    /// Scripting: the Rhai Editor left, the Catalog and the Fractal
+    /// Browser right — write a script, run it, browse what it generated.
     Scripting,
     /// Compact: Full-screen viewport only (mobile / small screens)
     Compact,

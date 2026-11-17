@@ -37,7 +37,7 @@ pub fn file_key(store: Store, file: &str) -> EntryKey {
     EntryKey::File { store, file: file.to_string(), shipped: false }
 }
 
-/// A script's stem, for the Scripts panel.
+/// A script's stem: what its store and the script cloud key it by.
 fn stem(file: &str) -> String {
     file.strip_suffix(".rhai").unwrap_or(file).to_string()
 }

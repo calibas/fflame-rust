@@ -20,7 +20,7 @@ general shape, **Mandala** for symmetry, **Gnarl** for parameter feel,
 An **animation track** written in Rhai is another thing: a script the
 animation runs every frame, declaring the settings it writes and
 returning their values at a time -- with a state stepped at a fixed rate
-when it needs one. It is written in the Formula Editor, not here; see
+when it needs one. It is written in the Rhai Editor, not here; see
 [ANIMATION.md](ANIMATION.md), *Script tracks*.
 
 ## The shape of a script
@@ -28,7 +28,7 @@ when it needs one. It is written in the Formula Editor, not here; see
 ```rhai
 // Orbit Ring
 //
-// The header comment is the script's description — the panel shows it,
+// The header comment is the script's description — the Catalog shows it,
 // and the first line becomes its title.
 script("Orbit Ring", "generator");          // ← always first
 
@@ -43,11 +43,11 @@ let spread = param("spread", 1.0, 0.2, 3.0); //   become sliders
   `"modifier"` (starts from the flame currently open) or `"library"`
   (functions other scripts `import`; see *Composition*). An optional
   third argument lists flags: `script("T", "modifier", ["norng"])`.
-- **Parameters make sliders.** The panel discovers them by running the
+- **Parameters make sliders.** The app discovers them by running the
   script once in a *collect* pass before the real run, so declare them
   unconditionally at the top — a `param()` hidden behind an `if` only
   appears once that branch has been taken.
-- A `"norng"` flag tells the panel the script ignores the seed (hides
+- A `"norng"` flag tells the app the script ignores the seed (hides
   the reroll controls); `"palette"` offers it in the Palette Editor.
 
 ## Rhai in ten minutes (for programmers)
@@ -169,9 +169,13 @@ seed + 1. Consequences worth designing for:
 
 ## Running scripts
 
-**In the app:** Scripts panel (the Scripting layout arranges it beside
-the viewport and browser). Parameters appear as sliders; `print(...)`
-output and errors appear in the panel; errors carry line numbers.
+**In the app:** select a script in the Catalog ([CATALOG.md](CATALOG.md));
+its info pane runs it -- parameters as sliders, the seed, Generate or
+Apply, Batch or Mutate (the batch opens in the Fractal Browser). The
+Rhai Editor writes one and has the same controls under **Run**, for the
+text being written; the Scripting layout puts the editor beside the
+viewport, the Catalog and the browser. `print(...)` output and errors
+appear below the controls; errors carry line numbers.
 
 **From the command line** — how the examples below were verified:
 

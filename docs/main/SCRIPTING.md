@@ -28,9 +28,9 @@ and fails if one is missing from this page or the guide.
 | call | returns | what it does |
 |---|---|---|
 | `script(name, kind)` | — | Declares the script. Must be the first call. `kind` is `"generator"` (starts from a default config), `"modifier"` (starts from the current flame) or `"library"` (functions for other scripts to `import`; see below). |
-| `script(name, kind, flags)` | — | Same, with a flag array: `"norng"` (ignores the seed → panel hides reroll), `"palette"` (offered in the Palette Editor). Unknown flags warn and are dropped. |
+| `script(name, kind, flags)` | — | Same, with a flag array: `"norng"` (ignores the seed → the run controls hide Reroll), `"palette"` (offered in the Palette Editor). Unknown flags warn and are dropped. |
 
-## Parameters (become sliders in the panel)
+## Parameters (become sliders in the run controls)
 
 Declared before other work; the collect pass discovers them by running
 the script, so keep them unconditional. Labels are auto-generated from
@@ -528,7 +528,7 @@ Each returns one row of weights; apply with
 
 | call | returns | what it does |
 |---|---|---|
-| `print(text)` | — | Shows in the Scripts panel (and the CLI). `debug(...)` is captured the same way. |
+| `print(text)` | — | Shows below the run controls (the Catalog's info pane, the Rhai Editor's Run) and in the CLI. `debug(...)` is captured the same way. |
 
 ## Limits
 

@@ -712,7 +712,7 @@ to the `sim_color` the colour template calls.
   stack move it with entry 0; choosing a built-in drops it.
   `sim::custom::ensure` registers every one before anything resolves the
   names (every `SimRenderer` entry point that takes a config, the render
-  path's resource check, the panel). The Formula Editor's **Use as
+  path's resource check, the panel). The Rhai Editor's **Use as
   Simulation Colouring** puts it in the config -- in a stack, in the
   colour layer picked from its menu -- entering Simulation in the same
   step, and Live updates every entry carrying a version, by its id; a
@@ -880,7 +880,7 @@ any model the built-ins are, each of the 31 with a twin.
   SimLayerCustomModel`) with its `model`, ensured with the colourings. A
   new version of a model keeps its parameters, and the flat one its `dt`
   and `steps` (`config::sim::same_script` compares the names' ids). The
-  Formula Editor's **Use as Simulation Model** (in a layered config, in
+  Rhai Editor's **Use as Simulation Model** (in a layered config, in
   the layer picked from its menu), Live in every layer carrying a
   version, and a plug-in group in every layer's picker. A layer's model
   is its own step module, so a Rhai one layers and couples as a built-in
@@ -890,8 +890,8 @@ any model the built-ins are, each of the 31 with a twin.
   a built-in model, in each layer, and beside a built-in colouring, in
   each colour layer, puts its twin in the slot under an id of its own
   -- the slot's parameters, and a model's dt and steps, kept: the same
-  picture -- and opens it in the Formula Editor, unsaved and in use, so
-  Live re-applies each edit (`FormulaEditorPanel::edit_sim_as_rhai`).
+  picture -- and opens it in the Rhai Editor, unsaved and in use, so
+  Live re-applies each edit (`RhaiEditorPanel::edit_sim_as_rhai`).
   One undo step, entering Simulation from another mode; the built-in is
   untouched, and Save keeps the copy in the library.
 - **Twins**: `sim::custom::SHIPPED_MODELS`, every built-in -- all 31

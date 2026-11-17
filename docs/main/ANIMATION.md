@@ -789,7 +789,7 @@ in [EXPORT.md](EXPORT.md) (*Video Export*). What belongs to animation:
 A **script track** (`TrackSource::Script`; plan and record in
 [rhai-tracks.md](../archive/projects/rhai-tracks.md)) is a Rhai script that
 writes the targets it declares, every frame. It is written in the
-Formula Editor (**Use as track**), or added from the track editor's
+Rhai Editor (**Use as track**), or added from the track editor's
 **Add Script Track** menu: the shipped examples (Breathing, Springy
 Zoom, Smoothed Jitter, in `assets/formulas/track-*.rhai`), the user's
 track plug-ins (`library::Kind::Track`), or a new one begun in the
@@ -866,7 +866,7 @@ fn value(t, p, ctx) { #{ zoom: p.depth * sin(t) } }
 - **The track editor**: a script track's row shows its title, in a
   colour of its own, with a warning for an error or a shared target and
   its targets on hover. **Edit** opens its window: its targets and
-  modes, its error, its parameters, and **Edit in the Formula Editor**,
+  modes, its error, its parameters, and **Edit in the Rhai Editor**,
   where Live replaces the track on each edit that runs.
 
 ---

@@ -189,7 +189,7 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   `import` in tracks; computed/pattern targets (`transform.*.weight`);
   signal-track smoothing onto fixed steps (scrub differs from play today).
   [rhai-tracks.md](../archive/projects/rhai-tracks.md).
-- **Formula Editor**: compiles on the UI thread (giant UF entries freeze
+- **Rhai Editor** (was the Formula Editor): compiles on the UI thread (giant UF entries freeze
   it 6-8 s); error spans not underlined.
   [escape-formula-language.md](../archive/projects/escape-formula-language.md) §"After phase 4".
 - **Formula language internals**: derivative temporaries as

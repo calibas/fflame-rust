@@ -27,7 +27,7 @@ bar with a single menu button (see [Compact (mobile) UI](#compact-mobile-ui)).
 ## Panels
 
 `PanelType` in [src/ui/workspace.rs](../../src/ui/workspace.rs) defines
-**32 panels**. Each renders from its own `src/ui/*.rs` file;
+**31 panels**. Each renders from its own `src/ui/*.rs` file;
 `src/ui/mod.rs` coordinates docking and returns cross-panel results to
 the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uiresponse)).
 
@@ -36,10 +36,11 @@ the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uir
 | The picture | Fractal Viewport (effectively always present) |
 | The camera, every mode's | View (see [The View panel](#the-view-panel)) |
 | The flame | Transforms, Triangle Editor, Variations, Xaos Editor, Subflames, Paths |
-| The other engines | Escape, Formula Editor, Hybrid Designer, Simulation, Textures |
+| The other engines | Escape, Hybrid Designer, Simulation, Textures |
 | Appearance, shared by every engine | Colors, Palette Editor, Effects |
 | Light, every 3D view's | Lighting (see [The Lighting panel](#the-lighting-panel)) |
-| Workflow | Catalog, Fractal Browser, History, Animation, Signals, Scripts, Random Generator, Export, Config Import/Export, Rendering, Performance, Help, Keyboard Shortcuts, Account, Save Online |
+| Rhai, every kind's | Rhai Editor (see [The Rhai Editor](#the-rhai-editor)) |
+| Workflow | Catalog, Fractal Browser, History, Animation, Signals, Random Generator, Export, Config Import/Export, Rendering, Performance, Help, Keyboard Shortcuts, Account, Save Online |
 
 **Every panel is drawn in every render mode**; one the mode does not
 use says so at its top — see
@@ -60,7 +61,7 @@ One workspace serves every mode
 | Escape Time | Escape | Colors, View, Lighting, History | |
 | Simulation | Simulation | Colors, View, Lighting, History | |
 | Animation | Transforms, Escape, Simulation | Colors, View, Triangle Editor, Rendering, History | Animation docked below the viewport |
-| Scripting | Scripts | Fractal Browser | |
+| Scripting | Rhai Editor | Catalog, Fractal Browser | |
 | Compact | — | — | the viewport alone |
 
 **No layout belongs to a mode.** Flames, Escape Time and Simulation are
@@ -234,7 +235,7 @@ in the same step (`seed_flame`; [CONFIG.md](CONFIG.md)). The choices:
 |---|---|
 | Escape | the formula picker and the preset it lands on, Preset, the colouring pickers, Edit as Formula |
 | Simulation | the model picker, its presets, Layered Presets, Rhai (Edit as Rhai, a model's or a colouring's) |
-| Formula Editor | Use as Formula, Use as Coloring, Use as Solid (Escape; a colouring is drawn over the escape formula the config has) |
+| Rhai Editor | Use as Formula, Use as Coloring, Use as Solid (Escape; a colouring is drawn over the escape formula the config has) |
 | Hybrid Designer | Use, Use Preset (a structural edit of the hybrid in use re-applies it without entering) |
 | Textures | picking a texture (Clear does not) |
 | Random Generator | a generated flame loads with its own mode |
@@ -298,11 +299,12 @@ Panels the modes do not use (every other panel acts in every mode):
   flame's transforms as its per-layer warps when `sim.use_transforms` is
   on, so in both, editing a transform edits the picture. Elsewhere the
   panels prepare a flame before switching.
-- **The Formula Editor** (escape-time formulas, colourings and solids,
-  Rhai and Ultra Fractal's and Fractint's languages, and Rhai variations;
-  [ESCAPE.md](ESCAPE.md#the-formula-language)) acts in every mode: Use as
-  Formula, Coloring or Solid enters Escape, and Use as Variation adds to
-  the flame (in Escape, Use as Lens).
+- **The Rhai Editor** (every Rhai kind -- escape-time formulas,
+  colourings, solids and fields, variations, effects, simulation models
+  and colourings, tracks, CPU scripts -- and Ultra Fractal's and
+  Fractint's languages; [ESCAPE.md](ESCAPE.md#the-formula-language))
+  acts in every mode: Use as Formula, Coloring or Solid enters Escape,
+  and Use as Variation adds to the flame (in Escape, Use as Lens).
 - **The Random Generator** acts in every mode: what it generates loads
   with its own flame mode.
 - **Textures** go into an escape-time fractal and are made in Simulation
@@ -429,7 +431,7 @@ contract.
 | History | [undo_history.rs](../../src/ui/undo_history.rs) | the undo/redo history |
 | Animation | [animation_panel.rs](../../src/ui/animation_panel.rs), [track_editor.rs](../../src/ui/track_editor.rs) | see [ANIMATION.md](ANIMATION.md) |
 | Signals | [signal_panel.rs](../../src/ui/signal_panel.rs) | audio files, live capture, generators, signal files; see [ANIMATION.md](ANIMATION.md) |
-| Scripts | [scripts_panel.rs](../../src/ui/scripts_panel.rs) | below |
+| Rhai Editor | [rhai_editor.rs](../../src/ui/rhai_editor.rs), [script_run.rs](../../src/ui/script_run.rs) | below |
 | Fractal Browser | [fractal_browser.rs](../../src/ui/fractal_browser.rs) | see [FRACTAL-BROWSER.md](FRACTAL-BROWSER.md) |
 | Random Generator | [random_generator.rs](../../src/ui/random_generator.rs) | batches land in the Fractal Browser |
 | Export | [export_panel.rs](../../src/ui/export_panel.rs) | below |
@@ -515,13 +517,31 @@ draws through), with trim, remove, solo and restore, plus the Focused
 Rendering switch, which the View panel's Deep Zoom section shows too.
 See [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md).
 
-### Scripts
+### The Rhai Editor
 
-Runs generator and modifier scripts. Declared parameters appear as
-sliders above Run, and the seed makes a result reproducible. The panel
-only produces a config (or a batch, which lands in the Fractal
-Browser's Random tab); the app applies it as one undo step. See
-[SCRIPTING-GUIDE.md](SCRIPTING-GUIDE.md) and [SCRIPTING.md](SCRIPTING.md).
+The one editor of every Rhai kind and of Ultra Fractal and Fractint
+formula files ([catalog.md](../projects/catalog.md), phase 4). It edits
+one open file, of either store (the formulas' `formulas/`, the scripts'
+`scripts/`): its name, kind and an unsaved mark, the source with its
+checks as it is typed, **Save**, **Revert** and **Show in Catalog**;
+**Use** per kind and **Live** for what renders; **Run** for a CPU script.
+Save writes the open file; an unsaved buffer (a built-in's twin, a
+converted entry, a shipped example) becomes a new file of the user's,
+never over one that is there. Choosing, creating, renaming, deleting,
+importing, exporting, the plug-in flag and publishing are the Catalog's
+([CATALOG.md](CATALOG.md)), whose **Edit** opens a file here; every
+panel's Edit as Rhai (Escape, Transforms, Effects, Simulation, the
+track editor) opens its copy here too. Saved layouts that name the old
+Formula Editor or Scripts panel open it (serde aliases).
+
+**Scripts run** in the Catalog's info pane, for the script selected, and
+under the editor's Run, for the text being written -- one piece,
+`script_run.rs`: declared parameters as sliders, the seed (which makes a
+result reproducible), Generate or Apply, Batch or Mutate. A run only
+produces a config (or a batch, which lands in the Fractal Browser's
+Random tab); the app applies it as one undo step. Somebody else's script
+runs restricted. See [SCRIPTING-GUIDE.md](SCRIPTING-GUIDE.md) and
+[SCRIPTING.md](SCRIPTING.md).
 
 ### Export
 

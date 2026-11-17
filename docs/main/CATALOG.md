@@ -8,10 +8,11 @@ Fractal Browser's Presets tab held; its list is also every picker's
 (*The picker*, below), and its **Online** place is what the server holds
 (*Online*, below): the Fractal Browser's Online tab, Cloud Palettes, the
 Scripts panel's public scripts and the Variations and Effects panels'
-catalog sections moved there. Built in phases 1 to 3 of
-[docs/projects/catalog.md](../projects/catalog.md), the plan, which also
-says what comes next (your own resources, one Rhai editor, the phone
-layout, previews).
+catalog sections moved there. It manages your own resources -- Rhai
+files, palettes, online fractals -- and runs scripts (*Your own
+resources*, below); the Rhai Editor edits the file it opens. Built in
+phases 1 to 4 of [docs/projects/catalog.md](../projects/catalog.md), the
+plan, which also says what comes next (the phone layout, previews).
 
 - Model: [src/inventory/](../../src/inventory/) (`inventory::scan`,
   `Entry`, `EntryKey`). The code says `inventory` because `catalog` is the
@@ -21,6 +22,10 @@ layout, previews).
   ([src/ui/inventory.rs](../../src/ui/inventory.rs)). Saved layouts that
   named `PaletteLibrary` open it (a serde alias).
 - Picker: `ui::picker::Picker` ([src/ui/picker.rs](../../src/ui/picker.rs)).
+- Your own resources: [src/ui/inventory_manage.rs](../../src/ui/inventory_manage.rs),
+  the operations [src/storage/manage.rs](../../src/storage/manage.rs);
+  running a script [src/ui/script_run.rs](../../src/ui/script_run.rs);
+  the editor [src/ui/rhai_editor.rs](../../src/ui/rhai_editor.rs).
 
 **See also:** [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) (packs),
 [FRACTAL-BROWSER.md](FRACTAL-BROWSER.md) (the presets file, the gallery
@@ -140,8 +145,8 @@ functions:
 | Simulation Model | the first layer's (`sim_panel::choose_first_layer_model`) |
 | Simulation Coloring | the base colouring (`sim_panel::choose_base_coloring`) |
 | A plug-in file | as its kind, by its registered key (`escape_panel::choose_plugin`, ...) |
-| A CPU script | selects it in the Scripts panel, which opens |
-| Another Rhai file, a UF or Fractint file, a track | **Open in Formula Editor** (`FormulaEditorPanel::open_file`) |
+| A CPU script | runs it: the info pane's parameters, seed, Generate / Apply, Batch / Mutate (`ui::script_run`) |
+| Another Rhai file, a UF or Fractint file, a track | **Edit** opens it in the Rhai Editor (`RhaiEditorPanel::open_file`); a plug-in is used as its kind |
 
 **Not installed.** What the server offers and the app lacks -- a
 variation or an effect in the cached catalog (`inventory::Online`, the
@@ -247,3 +252,68 @@ Variations and Effects panels (their online sections), the Fractal
 Browser (**Online...**), the Scripts panel (its public scripts and
 Published by you; its Publish, Update, Unpublish and conflicts stay
 until phase 4).
+
+---
+
+## Your own resources
+
+The Catalog manages; the Rhai Editor edits (the plan's decision 8). The
+info pane offers, for
+
+| Entry | Actions |
+|---|---|
+| A Rhai file of yours (either store) | **Edit**, **Rename...**, **Duplicate**, **Delete...** (confirmed), **Export...**, the **plug-in** flag (a GPU entry), and **Online**: Publish (private, public), Update, Make Public / Make Private, Unpublish; a conflict's Overwrite / Load theirs, shown with the file it names |
+| A shipped file, a built-in with a Rhai twin | **Edit as Rhai**: a copy among your files (`inventory::twin_source`), opened in the editor |
+| A palette of yours (the Custom pack) | **Rename...**, **Delete...**, Publish (private, public): a palette item of its own online |
+| Online, a fractal or palette of yours | **Rename...**, Make Public / Make Private, **Delete...** |
+
+and the top of a family that holds Rhai files offers **New** (a kind,
+from `inventory::template`: the language's starting text for a formula
+and a variation, else the kind's first shipped example) and **Import...**
+(a Rhai, UF or Fractint file, into the store its text belongs in).
+
+The operations are `storage::manage`'s, over both stores' rules (a
+formula file keyed by its name and extension, a script by its stem; a
+shipped stem reserved):
+
+- **Rename** keeps the file's link (cloud id, origin) and its plug-in,
+  registered again under the new name; a taken name is refused.
+- **Duplicate** is a new file of the user's: no cloud id, no plug-in,
+  an entry's `INFO.id` replaced (two files with one id would be one
+  script online and to the plug-in lists).
+- **Delete** unlists a plug-in and drops the link with the file; a
+  published copy stays online.
+- **Import** and **New** never overwrite: a taken name gains `-2`, `-3`.
+- Somebody else's file, as adopted, is not the user's to publish
+  (`manage::publish_refusal`); an edit or a copy of it is (decision 3,
+  below).
+- Every change bumps `manage::generation`, which the Catalog's list, the
+  editor and `script_run`'s library watch beside the script cloud's
+  adoptions.
+
+A saved Rhai file that does not parse stays listed, as an **Unreadable
+File** among the scripts, so it can be opened and fixed.
+
+**Running a script** is its Use (the plan's survey decision 2): the
+info pane of a generator, modifier or library draws `ui::script_run` --
+its parameters, the seed and Reroll, Generate / Apply, Batch / Mutate
+(the original first), a library's import line, errors with their line --
+on the host every script shares (the whole library, so one script calls
+or imports another; somebody else's restricted). A flame, a batch or an
+animation loads as the Scripts panel's did.
+
+**The Rhai Editor** (`PanelType::RhaiEditor`; saved layouts naming
+`FormulaEditor` or `Scripts` open it) edits the one file open, of either
+store: its name, kind and an unsaved mark, **Save**, **Revert**, **Show
+in Catalog**; for a GPU kind its checks as it is typed, **Use** per kind
+and **Live**; for a CPU script **Run** (`script_run` again, on the text
+being written); for a UF or Fractint file its dialect and Edit as Rhai.
+An unsaved buffer -- a built-in's twin opened by a panel's Edit as Rhai,
+a converted entry, a shipped example -- becomes a new file of yours on
+Save. A file renamed or deleted in the Catalog leaves the editor's text
+unsaved.
+
+**An edited adopted file** (decision 3): a GPU entry gets an id of its
+own and is the user's; a CPU script gets free of that online script --
+it can be published as the user's -- but keeps running restricted:
+editing a line is not reading the rest.

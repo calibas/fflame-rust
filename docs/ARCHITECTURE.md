@@ -107,7 +107,7 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | path | what it is | read |
 | --- | --- | --- |
 | `src/app/` | The running editor. `mod.rs` (about 4,800 lines) holds `App`, the winit event loop, the frame (`App::render`) and the frame governor (`Batch`, `Knee`, `adjust_iter_scale`). Beside it: `ui_handlers.rs` (acting on `UiResponse`), `gpu_updates.rs` (applying `UpdateAction` to the GPU, the overwrite window, `freeze_viewport`), `config.rs` (load/import/export, undo/redo glue, background export launch), `export.rs` (headless export and `ExportEngine`), `input.rs` (keyboard, fullscreen), `fly_camera.rs`, `animation_update.rs`, `governor.rs` (the quality governor: escape-time's, terrains', simulations' rungs and a flame batch's pacing cap), `aa_governor.rs` (its fallback without a GPU timer), `render_mode.rs` (the Normal/Animating/Overwrite state machine; not the render-mode policy), `render_progress.rs`, `texture_sync.rs`, `variation_fetch.rs`, `effect_fetch.rs`, `script_cloud.rs` | [UI.md](main/UI.md), [RENDERER.md](main/RENDERER.md) |
-| `src/ui/` | 56 files: the egui_dock workspace and every panel. Coordination: `mod.rs`, `workspace.rs` (`PanelType`, 32 panels; `WorkspaceLayout`), `panel_viewer.rs`, `menu_bar.rs`, `compact_menu.rs`, `response.rs` (`UiResponse`). Policy: `render_mode.rs`, `visibility.rs`. Panels include `transforms`, `triangle_editor`, `view` and `view_controls`, `tone_mapping`, `palette_editor`, `palette_library`, `fractal_browser` (with `fractal_gallery`), `escape_panel`, `sim_panel`, `textures_panel`, `lighting_panel` (Lighting), `effects_panel`, `animation_panel`, `track_editor`, `signal_panel`, `scripts_panel`, `paths_panel`, `xaos_editor`, `subflames`, `variations`, `random_generator`, `undo_history`, `export_panel` | [UI.md](main/UI.md), [FRACTAL-BROWSER.md](main/FRACTAL-BROWSER.md) |
+| `src/ui/` | 61 files: the egui_dock workspace and every panel. Coordination: `mod.rs`, `workspace.rs` (`PanelType`, 31 panels; `WorkspaceLayout`), `panel_viewer.rs`, `menu_bar.rs`, `compact_menu.rs`, `response.rs` (`UiResponse`). Policy: `render_mode.rs`, `visibility.rs`. Panels include `transforms`, `triangle_editor`, `view` and `view_controls`, `tone_mapping`, `palette_editor`, `palette_library`, `inventory` (the Catalog, with `inventory_manage`, `inventory_online`), `fractal_browser` (with `fractal_gallery`), `escape_panel`, `sim_panel`, `textures_panel`, `lighting_panel` (Lighting), `effects_panel`, `animation_panel`, `track_editor`, `signal_panel`, `rhai_editor` (with `script_run`), `paths_panel`, `xaos_editor`, `subflames`, `variations`, `random_generator`, `undo_history`, `export_panel` | [UI.md](main/UI.md), [FRACTAL-BROWSER.md](main/FRACTAL-BROWSER.md) |
 | `src/i18n.rs` | `t!`'s lookup (a table `build.rs` makes from `locales/*.yml`) and locale switching | [I18N.md](main/I18N.md) |
 
 ### Model and state
@@ -156,7 +156,7 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | `src/storage/` | `SystemSettings`, the storage backend (files on desktop, localStorage in the browser), custom palettes, the thumbnail cache, caches and catalogs of API-loaded variations and effects, encrypted credentials (desktop) | [CONFIG.md](main/CONFIG.md), [ONLINE.md](main/ONLINE.md) |
 | `src/resources/` | Fetching shipped and remote resources on both platforms: palette packs (`palettes.rs`), presets, where `assets/` lives at runtime (`bundled.rs`) | [PALETTE_LIBRARY.md](main/PALETTE_LIBRARY.md) |
 | `src/api/` | The online API client: auth, HTTP client, health, `FractalConfig` to API conversion (`sync.rs`), wire types | [ONLINE.md](main/ONLINE.md) |
-| `src/provenance.rs` | Where a thing came from, one model for every kind: `Origin` (`Builtin`, `Local`, `Api`), which the library's lists, the Scripts and Textures panels read; a registry entry's `Provenance` (`Builtin`, `Api { version }`, `Local`) adds the server's version to a download | [ONLINE.md](main/ONLINE.md) |
+| `src/provenance.rs` | Where a thing came from, one model for every kind: `Origin` (`Builtin`, `Local`, `Api`), which the library's lists, the Catalog and the Textures panel read; a registry entry's `Provenance` (`Builtin`, `Api { version }`, `Local`) adds the server's version to a download | [ONLINE.md](main/ONLINE.md) |
 | `src/contract.rs` | Generates the client/API contract, `docs/generated/engine-contract.json` | [RELEASE.md](RELEASE.md) |
 | `src/script/` | Sandboxed Rhai scripting: the host and seeded RNG (`host.rs`), the registered API (`api.rs`, `builtins.rs`, `color.rs`, `anim.rs`), the script library and store, the `generate` CLI (`cli.rs`), the calls every surface without the editor makes -- list, source, parameters, run stages -- shared by `wasm/script` and `wasm/python` (`headless.rs`) | [SCRIPTING.md](main/SCRIPTING.md), [SCRIPTING-GUIDE.md](main/SCRIPTING-GUIDE.md) |
 | `src/lang/` | The formula language, the GPU dialect: Rhai, Ultra Fractal's and Fractint's compiled to WGSL, for escape formulas, colourings and solids, flame variations, effects, and simulation models and colourings. Rhai is only parsed, never run: its syntax tree is lowered to the language's IR (lexer, parser, checker, `ir.rs`, `wgsl.rs`; the CPU interpreter `interp.rs` and the deep-zoom passes beside them) | [ESCAPE.md](main/ESCAPE.md#the-formula-language), [rhai-plugins.md](archive/projects/rhai-plugins.md) |
@@ -273,7 +273,7 @@ Detail: [UI.md](main/UI.md).
 ### UI organisation
 
 - All UI is dockable panels (egui_dock). `PanelType` in
-  `src/ui/workspace.rs` defines 32 panels; `WorkspaceLayout` holds the
+  `src/ui/workspace.rs` defines 31 panels; `WorkspaceLayout` holds the
   presets (Standard, Flames, Escape Time, Simulation, Animation,
   Scripting, Compact), none applied by a mode change. One workspace
   serves every mode: in Standard, Transforms, Escape and Simulation are
@@ -361,7 +361,8 @@ configs are stored as flames, distinguished by `render_mode`),
 animations, palettes, scripts, and the variation and effect catalogs.
 A flame that names a variation or effect this build lacks triggers a
 fetch (`app/variation_fetch.rs`, `app/effect_fetch.rs`); the downloads
-are cached in `src/storage/`. The Scripts panel's cloud library is
+are cached in `src/storage/`. The online script library -- publishing
+from the Catalog ([CATALOG.md](main/CATALOG.md)) -- is
 `app/script_cloud.rs`. `src/contract.rs` keeps the generated contract
 the API checks against. Detail: [ONLINE.md](main/ONLINE.md); release
 procedure in [RELEASE.md](RELEASE.md).
@@ -372,7 +373,7 @@ Rhai is used in two separate ways. **The GPU dialect** (`src/lang/`,
 feature `lang`) is a typed subset of Rhai that is parsed, lowered and
 compiled to WGSL, never run: it is how variations, escape formulas,
 colourings and solids, effects and simulation models and colourings are
-written, built-in twins and the user's own alike, edited in the Formula
+written, built-in twins and the user's own alike, edited in the Rhai
 Editor. **The scripting API** (`src/script/`) is full Rhai on the CPU,
 sandboxed: generators, modifiers and libraries, below.
 The direction, every kind written in Rhai, is
@@ -381,8 +382,9 @@ The direction, every kind written in Rhai, is
 Rhai scripts generate a config (generators) or change a copy of the
 current one (modifiers), under execution budgets and with a pinned PRNG,
 so script plus seed reproduces a flame byte for byte on desktop, web and
-Python. Scripts may declare animation. They run from the Scripts panel,
-the `generate` subcommand, `wasm/script` and `pyfflame.run_script`.
+Python. Scripts may declare animation. They run from the Catalog's info
+pane and the Rhai Editor's Run ([CATALOG.md](main/CATALOG.md)), the
+`generate` subcommand, `wasm/script` and `pyfflame.run_script`.
 Reference: [SCRIPTING.md](main/SCRIPTING.md); language guide:
 [SCRIPTING-GUIDE.md](main/SCRIPTING-GUIDE.md).
 
