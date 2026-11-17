@@ -224,8 +224,8 @@ entries made by `inventory::online`):
   **Show it on this device**.
 - **Thumbnails** (a fractal's `thumbnail_url`, used as given: it changes
   when the image does) download four at a time, decode off the frame,
-  and on desktop stay on disk (the cache directory's `thumbnails/online`,
-  a file a URL). A path is fetched from the API with the token (a
+  and are kept in the app's one thumbnail cache (`ThumbnailCache`, keyed
+  by the URL's hash; on disk on desktop, within its limit). A path is fetched from the API with the token (a
   private fractal's is its owner's); a whole URL elsewhere is fetched
   without it.
 - Every request is an `api::job` (a thread on desktop, `spawn_local` on

@@ -345,12 +345,6 @@ impl Default for ThumbnailCache {
     }
 }
 
-/// The app's cache directory (desktop), where the thumbnail caches live.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn cache_dir() -> PathBuf {
-    get_cache_dir()
-}
-
 /// Get the cache directory path
 #[cfg(not(target_arch = "wasm32"))]
 fn get_cache_dir() -> PathBuf {

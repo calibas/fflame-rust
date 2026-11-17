@@ -690,7 +690,8 @@ enum Thumb {
 
 /// The server's thumbnails, by URL (it changes when the image does, so a
 /// URL's image never goes stale): downloaded a few at a time, decoded off
-/// the frame, and on desktop kept on disk.
+/// the frame, and kept in the shared thumbnail cache (on disk on desktop,
+/// within its limit).
 #[derive(Default)]
 struct Thumbnails {
     map: HashMap<String, Thumb>,
@@ -725,15 +726,21 @@ impl Thumbnails {
         let wake = ctx.clone();
         let job = job::spawn(
             async move {
-                let bytes = match disk::read(&u) {
-                    Some(b) => b,
+                // The app's one thumbnail cache (its size limit, its
+                // eviction), keyed by the URL's hash.
+                let key = cache_key(&u);
+                let cached = crate::storage::thumbnail_cache::shared_thumbnail_cache().load(&key);
+                let image = match cached {
+                    Some(image) => image,
                     None => {
-                        let b = api.fetch_thumbnail(&u).await?;
-                        disk::write(&u, &b);
-                        b
+                        let bytes = api.fetch_thumbnail(&u).await?;
+                        let image = image::load_from_memory(&bytes).map_err(|e| crate::resources::FetchError::Parse(e.to_string()))?.to_rgba8();
+                        if let Err(e) = crate::storage::thumbnail_cache::shared_thumbnail_cache().save(&key, &image) {
+                            log::info!("thumbnail {u} not cached: {e}");
+                        }
+                        image
                     }
                 };
-                let image = image::load_from_memory(&bytes).map_err(|e| crate::resources::FetchError::Parse(e.to_string()))?.to_rgba8();
                 Ok(egui::ColorImage::from_rgba_unmultiplied([image.width() as usize, image.height() as usize], image.as_raw()))
             },
             move || wake.request_repaint(),
@@ -743,40 +750,16 @@ impl Thumbnails {
     }
 }
 
-/// The desktop's disk cache of the server's thumbnails, a file a URL; the
-/// web keeps them in memory only.
-mod disk {
-    #[cfg(not(target_arch = "wasm32"))]
-    fn path(url: &str) -> std::path::PathBuf {
-        let mut h: u64 = 0xcbf29ce484222325;
-        for b in url.bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        crate::storage::thumbnail_cache::cache_dir().join("online").join(format!("{h:016x}.jpg"))
+/// A thumbnail URL's key in the shared thumbnail cache: 16 hex digits,
+/// the cache's own form (FNV-1a, as a config's key is; a URL and a config
+/// do not meet in a 64-bit space).
+fn cache_key(url: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in url.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
     }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn read(url: &str) -> Option<Vec<u8>> {
-        std::fs::read(path(url)).ok()
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn write(url: &str, bytes: &[u8]) {
-        let p = path(url);
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(p, bytes);
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn read(_url: &str) -> Option<Vec<u8>> {
-        None
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn write(_url: &str, _bytes: &[u8]) {}
+    format!("{h:016x}")
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
