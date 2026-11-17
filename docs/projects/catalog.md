@@ -1,12 +1,12 @@
 # The Catalog: one place for every resource
 
-> **Status 2026-11-16: phases 0-2 merged** (the API reshaped in place on
+> **Status 2026-11-16: phases 0-3 merged** (the API reshaped in place on
 > ffapi, its `docs/catalog-api-build.md`, and this app's client moved to
-> it; the model and the panel; the picker, PR #167). **Phase 3, online,
-> built** on branch `catalog-online`, unmerged (*Phase 3: online*, below;
-> as built: [CATALOG.md](../main/CATALOG.md), *Online*). The two surveys this plan stands on (the app's
-> sources, the API's routes) were taken 2026-11-16 and are summarised
-> under *What exists*; the online survey under *Phase 3*.
+> it; the model and the panel; the picker, PR #167; online, PR #168).
+> **Phase 4, your own resources and the Rhai Editor, designed**
+> (*Phase 4*, below), its open questions with the user; branch
+> `catalog-own`. The surveys this plan stands on are summarised under
+> *What exists*, *Phase 3* and *Phase 4*.
 
 ## The goal
 
@@ -399,6 +399,80 @@ download says why and offers Download again; every 401 signs out.
 5. The move-outs, one section at a time, each with its replacement in
    place first.
 6. Docs (CATALOG.md, ONLINE.md, UI.md), the plan's status, tests.
+
+## Phase 4: your own resources and the Rhai Editor
+
+### What the two editors are today (surveyed 2026-11-16)
+
+| | Formula Editor (`ui/formula_editor.rs`, ~1,760 lines) | Scripts panel (`ui/scripts_panel.rs`, ~1,200) |
+|---|---|---|
+| Edits | every GPU kind (formula, colouring, solid, field and its colouring, variation, effect, sim model and colouring), tracks, whole UF/Fractint files | CPU scripts: generator, modifier, library |
+| Store | `formula_store` (`formulas/`, keyed by file name) | `script::store` (`scripts/`, keyed by stem; shipped stems reserved) |
+| Chooses | a combo: your files, examples, effect and sim twins | a combo of `script::library::discover` |
+| Manages | New (two templates), Save under a Name field (no rename: the old file and its link stay), Delete (no confirmation), Open, Export, plug-in flag, publish | Save (a shipped one forks), Delete (confirmed), Open, Save As, publish |
+| Checks | debounced 400 ms, per kind (WGSL compiles), UF entries both ways | every frame the text changes |
+| Applies | a Use per kind that compiles, Live re-apply, the panels' Edit as Rhai (escape, transforms, effects, sim, track editor) | runs: parameters, seed, Generate/Apply, Batch/Mutate |
+| Strings | translated | English only |
+
+Found along the way:
+- **The Scripts panel saves under the declared name**, not the
+  selected file's stem: a script whose name and file differ is saved
+  as a new file, its link left on the old one.
+- **Save differs on an adopted file**: the Formula Editor makes an
+  edited one the user's (a new id, the link dropped); the Scripts panel
+  keeps it somebody else's, so it still runs restricted.
+- **A saved Rhai file that does not parse leaves the Catalog**
+  (`Kind::of_file` drops `Unknown`), and a built-in's twin cannot be
+  opened from it (effect and sim twins open only from the Formula
+  Editor's combo, variation and escape twins only from their panels).
+- Two online blocks, two Open/Export blocks, two library watchers, two
+  code editors with opposite scrolling; one conflict slot shared.
+
+### The design
+
+**The Catalog manages; the Rhai Editor edits** (decision 8):
+
+- **In the Catalog**, for a Rhai file of yours: **Edit** (opens it in
+  the editor), **Rename**, **Duplicate**, **Delete** (confirmed),
+  **Export**, the **plug-in** flag, and online **Publish** (private or
+  public), **Update**, **Unpublish**, **Visibility**, with a conflict's
+  choice in the info pane. For a shipped one or a built-in with a twin:
+  **Edit as Rhai** (a copy of yours). The family's top gains **New**
+  (a kind, from its template) and **Import**. A file that does not
+  parse stays listed, under its store, so it can be opened and fixed.
+- **Running moves to the Catalog's info pane** (decision 2): a
+  generator's or modifier's parameters, seed, Generate/Apply,
+  Batch/Mutate; a library's import line.
+- **The Rhai Editor** (`PanelType::RhaiEditor`; saved layouts that name
+  `FormulaEditor` or `Scripts` open it, serde aliases): the open
+  file's name and kind, the code editor (one widget, debounced checks
+  for every kind, its diagnostics), **Save**, **Revert**, a dirty mark,
+  **Use** per kind and **Live** for GPU kinds, **Run** for a CPU
+  script, UF/Fractint's dialect and Convert to Rhai, **Show in
+  Catalog**. Every panel's Edit as Rhai opens it, as today.
+- **Your own palettes and fractals**: the custom palettes (Rename,
+  Delete, Publish to the online library) and, online, your fractals
+  and palettes (Rename, Visibility, Delete), in the info pane.
+- **Fixes**: the Scripts panel's save-under-the-declared-name; Save
+  writes the open file; one conflict owner (the info pane of the file it
+  names); the Scripting layout rebuilt on the Rhai Editor and the
+  Catalog.
+
+### Order of work
+
+1. The management model: a file's actions from its store, kind,
+   origin and link (`inventory`), and the operations (rename keeps the
+   link and the plug-in record, duplicate drops them, delete
+   unregisters), tested on scratch stores.
+2. The Catalog's management: the info pane's actions, New, Import, the
+   unparseable files, Edit as Rhai for built-ins; publishing and
+   conflicts in the info pane.
+3. Running in the info pane (the Scripts panel's run, moved).
+4. The Rhai Editor, from the Formula Editor's editing and Use/Live and
+   the Scripts panel's Run; every Edit as Rhai pointed at it; the two
+   old panels retired (aliases, layouts, Window menu, visibility).
+5. Your palettes and online fractals' actions.
+6. Docs, tests.
 
 ## Decided after the survey (2026-11-16)
 
