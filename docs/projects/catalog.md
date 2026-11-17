@@ -1,13 +1,13 @@
 # The Catalog: one place for every resource
 
-> **Status 2026-11-16: phases 0-3 merged** (the API reshaped in place on
+> **Status 2026-11-17: phases 0-4 merged** (the API reshaped in place on
 > ffapi, its `docs/catalog-api-build.md`, and this app's client moved to
-> it; the model and the panel; the picker, PR #167; online, PR #168).
-> **Phase 4, your own resources and the Rhai Editor, built** on branch
-> `catalog-own`, unmerged (*Phase 4*, below; as built:
-> [CATALOG.md](../main/CATALOG.md), *Your own resources*); phases 5 and
-> 6 follow on one branch. The surveys this plan stands on are summarised under
-> *What exists*, *Phase 3* and *Phase 4*.
+> it; the model and the panel; the picker, PR #167; online, PR #168; your
+> own resources and the Rhai Editor, PR #169). **Phases 5 and 6, the
+> phone layout and previews, designed and decided** (*Phases 5 and 6*,
+> below), being built on branch `catalog-phone-previews`. The
+> surveys this plan stands on are summarised under *What exists*,
+> *Phase 3* and *Phase 4*.
 
 ## The goal
 
@@ -487,6 +487,79 @@ The user's picks, all as recommended:
    old panels retired (aliases, layouts, Window menu, visibility).
 5. Your palettes and online fractals' actions.
 6. Docs, tests.
+
+## Phases 5 and 6: the phone layout and previews
+
+### What exists (surveyed 2026-11-17)
+
+- **Narrow**: below 560 points the panel stacks the list (60% of the
+  height) over the info pane; the compact layout (`Workspace::is_compact`,
+  the phone's) shows one panel at a time, full screen.
+- **Previews**: `renderer::render_preview` (desktop, synchronous) and
+  `render_preview_async` (the web) render any `FractalConfig` at 256
+  points in the Lit tier; `ThumbnailCache` keeps them (its size limit, LRU
+  eviction), keyed by a 16-hex hash; the app's frame calls the Fractal
+  Browser's and the Catalog's `generate_one_preview` (desktop: one a
+  frame) or `start_next_preview` (the web: one in flight). The Catalog's
+  presets already use it; palettes draw their gradient; online fractals
+  show the server's thumbnails.
+- **A config per kind** comes from what Use does: a scratch
+  `ConfigManager::new(reference)` and the Catalog's `use_entry` give a
+  formula its default view, a colouring the default formula, a model its
+  first layer, an effect its chain -- the same functions as every picker.
+
+### Decided (2026-11-17)
+
+The user's picks, all as recommended:
+1. **Previews in the info pane and as a grid**: a Grid/List toggle on
+   the families with previews, the grid's cells rendered as they scroll
+   into view and cached, as the preset gallery's are.
+2. **A variation's preview is its image of the plane**: transforms
+   filling a square evenly, the variation as the final transform.
+3. **On a phone, a › on the selected row opens its info**; a tap still
+   selects (a palette applies, a fractal loads), so auditioning palettes
+   stays a tap each.
+
+### The design
+
+**Phase 5, the phone layout.** Where the panel is narrow (the compact
+layout, a narrow dock), the list and the info pane are two screens: the
+list fills the panel; the selected row carries a **›** that opens its
+info, full height, with **‹ Back** at its top. A tap still selects --
+and a palette's still applies, a fractal's still loads, as everywhere.
+The Online place, the picker (its pane already gives way to tooltips)
+and the management actions work unchanged inside the two screens.
+
+**Phase 6, previews, one kind at a time** (`ui::inventory_preview`): a
+preview is a `FractalConfig` built for the entry and rendered by the
+gallery's machinery, lazily, cached in `ThumbnailCache` under the hash of
+the config and the entry's version (a download's update, a file's edit,
+a new preview):
+
+| Kind | Its preview |
+|---|---|
+| Variation | a reference flame whose final transform is the variation alone, over transforms that fill a square evenly: the variation's image of the plane (3D-only ones in 3D; a Rhai one carries its source) |
+| Effect | a reference fractal before and after (`add_effect`), side by side |
+| Formula, field, solid | its default view (`choose_formula`, `choose_field`, `choose_solid`) |
+| Colouring (escape, field, solid) | the default formula drawn with it |
+| Simulation model, colouring | its first layer or base colouring, run to a capped step count |
+| Generator | its run at seed 1; a modifier applied to the reference flame at seed 1 |
+| A plug-in file | as its kind |
+| Palette, fractal | as now (the gradient, the gallery, the server's thumbnail) |
+| Library, track, unreadable file | none |
+
+Shown in the info pane, above the description (a spinner until it is
+in), for the entry selected; and, on a family with previews, as a grid
+the list can switch to (decision 1), its cells rendered as they come
+into view, the visible ones first.
+
+### Order of work
+
+1. Phase 5: the two screens where narrow.
+2. Phase 6: the preview model (a config per kind, its key), its
+   scheduling beside the gallery's, the info pane's preview; each kind
+   checked by rendering its previews and looking.
+3. Docs, tests.
 
 ## Decided after the survey (2026-11-16)
 
