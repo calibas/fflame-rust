@@ -135,6 +135,11 @@ pub struct OnlinePlace {
     thumbs: Thumbnails,
     flame_job: Option<(String, Job<crate::api::FlameLoadResult>)>,
     delete_job: Option<(ListKey, String, String, Job<()>)>,
+    /// A rename or a visibility of yours on its way: the list, the id,
+    /// what it changes.
+    patch_job: Option<(ListKey, String, crate::api::types::ItemPatch, Job<serde_json::Value>)>,
+    /// A rename of yours being typed: the id, the name.
+    renaming: Option<(String, String)>,
     /// Asked to delete, awaiting the confirmation: the list, id, name.
     confirm_delete: Option<(ListKey, String, String)>,
     status: Option<(String, bool)>,
@@ -160,6 +165,8 @@ impl OnlinePlace {
             thumbs: Thumbnails::default(),
             flame_job: None,
             delete_job: None,
+            patch_job: None,
+            renaming: None,
             confirm_delete: None,
             status: None,
         }
@@ -246,6 +253,34 @@ impl OnlinePlace {
                     Err(e) => self.status = Some((t!("catalog.load_failed", error = e.to_string()).to_string(), true)),
                 }
                 self.flame_job = None;
+            }
+        }
+        if let Some((key, id, patch, job)) = &self.patch_job {
+            if let Some(result) = job.take() {
+                match result {
+                    Ok(_) => {
+                        // The row says it at once; the server's list says
+                        // it on the next Refresh.
+                        if let Some(list) = self.lists.get_mut(key) {
+                            for (e, item) in list.rows.iter_mut().filter(|(_, i)| i.id() == id) {
+                                if let Some(name) = &patch.name {
+                                    e.title = name.clone();
+                                    match item {
+                                        Item::Flame(f) => f.name = name.clone(),
+                                        Item::Palette(p) => p.name = name.clone(),
+                                        Item::Script(s) => s.display_name = name.clone(),
+                                    }
+                                }
+                                if let (Some(v), Some(info)) = (&patch.visibility, e.online.as_mut()) {
+                                    info.visibility = serde_json::to_value(v).ok().and_then(|v| v.as_str().map(str::to_string));
+                                }
+                            }
+                        }
+                        self.status = Some((t!("catalog.changed").to_string(), false));
+                    }
+                    Err(e) => self.status = Some((t!("catalog.change_failed", error = e.to_string()).to_string(), true)),
+                }
+                self.patch_job = None;
             }
         }
         if let Some((key, id, name, job)) = &self.delete_job {
@@ -575,11 +610,53 @@ impl OnlinePlace {
         }
         if mine && matches!(item, Item::Flame(_) | Item::Palette(_)) {
             ui.separator();
-            let deleting = self.delete_job.as_ref().is_some_and(|(_, id, _, _)| *id == info.id);
-            if ui.add_enabled(!deleting, egui::Button::new(t!("catalog.delete"))).clicked() {
-                if let Some(k) = list_key {
-                    self.confirm_delete = Some((k, info.id.clone(), e.title.clone()));
+            let resource = if matches!(item, Item::Flame(_)) { "flames" } else { "palettes" };
+            let busy = self.patch_job.is_some() || self.delete_job.as_ref().is_some_and(|(_, id, _, _)| *id == info.id);
+            let mut patch: Option<crate::api::types::ItemPatch> = None;
+            ui.horizontal_wrapped(|ui| {
+                if let Some((id, name)) = self.renaming.as_mut().filter(|(id, _)| *id == info.id) {
+                    let _ = id;
+                    let r = ui.add(egui::TextEdit::singleline(name).desired_width(160.0));
+                    super::vkb_sync(ui, &r, name);
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if ui.button(t!("manage.rename")).clicked() || enter {
+                        let name = name.trim().to_string();
+                        if !name.is_empty() {
+                            patch = Some(crate::api::types::ItemPatch { name: Some(name), visibility: None });
+                        }
+                        self.renaming = None;
+                    } else if ui.button(t!("manage.cancel")).clicked() {
+                        self.renaming = None;
+                    }
+                    return;
                 }
+                if ui.add_enabled(!busy, egui::Button::new(t!("manage.rename_dots"))).clicked() {
+                    self.renaming = Some((info.id.clone(), e.title.clone()));
+                }
+                let public = info.visibility.as_deref() == Some("public");
+                let (label, to) = if public {
+                    (t!("manage.make_private"), crate::api::types::ApiVisibility::Private)
+                } else {
+                    (t!("manage.make_public"), crate::api::types::ApiVisibility::Public)
+                };
+                if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
+                    patch = Some(crate::api::types::ItemPatch { name: None, visibility: Some(to) });
+                }
+                if ui.add_enabled(!busy, egui::Button::new(t!("catalog.delete"))).clicked() {
+                    if let Some(k) = list_key.clone() {
+                        self.confirm_delete = Some((k, info.id.clone(), e.title.clone()));
+                    }
+                }
+                if busy {
+                    ui.spinner();
+                }
+            });
+            if let (Some(patch), Some(key)) = (patch, list_key) {
+                let api = cx.account.api();
+                let (id, body) = (info.id.clone(), patch.clone());
+                let wake = ui.ctx().clone();
+                let job = job::spawn(async move { api.patch_item(resource, &id, &body).await }, move || wake.request_repaint()).authed(cx.account.signed_in);
+                self.patch_job = Some((key, info.id.clone(), patch, job));
             }
         }
         action

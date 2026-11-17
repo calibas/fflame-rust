@@ -365,3 +365,39 @@ fn the_online_place_browses_every_resource() {
         block(author.delete_flame(id)).unwrap();
     }
 }
+
+/// Your own resources (docs/projects/catalog.md, *Phase 4*): a palette of
+/// yours published as an item, then renamed and made public; a fractal of
+/// yours renamed and made public -- each as the Catalog's info pane asks.
+#[test]
+#[ignore = "needs a local ffapi: python scripts/api_integration.py"]
+fn your_own_items_publish_rename_and_change_visibility() {
+    if server().is_none() {
+        return;
+    }
+    let author = signed_in();
+    let tag = &crate::scripted::mint_id()[..8];
+    let mut palette = crate::scene::palette::Palette::fire();
+    palette.name = format!("it own palette {tag}");
+    let made = block(author.create_palette(&palette, ApiVisibility::Private)).unwrap_or_else(|e| panic!("publish a palette: {e}"));
+    assert_eq!(made.name, palette.name);
+    let guest = ApiState::default();
+    let hidden = block(guest.browse_palettes(Scope::Public, &Browse { q: palette.name.clone(), ..Default::default() })).unwrap().items.into_inner();
+    assert!(hidden.iter().all(|p| p.id != made.id), "private: not listed to others");
+
+    let renamed = format!("it renamed palette {tag}");
+    block(author.patch_item("palettes", &made.id, &types::ItemPatch { name: Some(renamed.clone()), visibility: Some(ApiVisibility::Public) }))
+        .unwrap_or_else(|e| panic!("rename a palette: {e}"));
+    let shown = block(guest.browse_palettes(Scope::Public, &Browse { q: renamed.clone(), ..Default::default() })).unwrap().items.into_inner();
+    assert!(shown.iter().any(|p| p.id == made.id && p.name == renamed), "public under its new name");
+
+    let id = block(author.save_flame(&flame_config(), Some(&format!("it own flame {tag}")), Some(ApiVisibility::Private), None)).unwrap();
+    let new_name = format!("it renamed flame {tag}");
+    block(author.patch_item("flames", &id, &types::ItemPatch { name: Some(new_name.clone()), visibility: Some(ApiVisibility::Public) }))
+        .unwrap_or_else(|e| panic!("rename a fractal: {e}"));
+    let found = block(guest.browse_flames(Scope::Public, &Browse { q: new_name.clone(), ..Default::default() })).unwrap().items.into_inner();
+    assert!(found.iter().any(|f| f.id == id), "public under its new name");
+
+    block(author.delete_flame(&id)).unwrap();
+    block(author.delete_palette(&made.id)).unwrap();
+}

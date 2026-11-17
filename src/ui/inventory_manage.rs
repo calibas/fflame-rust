@@ -19,6 +19,10 @@ use crate::storage::manage;
 pub struct Manage {
     renaming: Option<(EntryKey, String)>,
     confirm_delete: Option<(Store, String, String)>,
+    /// A palette of yours awaiting its delete's confirmation, by name.
+    confirm_delete_palette: Option<String>,
+    /// A palette being published, by name.
+    publishing: Option<(String, crate::api::job::Job<crate::api::types::PaletteItem>)>,
     status: Option<(String, bool)>,
 }
 
@@ -66,8 +70,22 @@ impl Manage {
     /// The actions for an entry the Catalog lists: a file of yours, a
     /// shipped file, a built-in with a twin. Drawn below the summary.
     pub fn render_actions(&mut self, ui: &mut egui::Ui, e: &Entry, cx: &mut InventoryContext, out: &mut InventoryResponse) -> Option<Act> {
+        // A palette's publish, landed (whatever is selected now).
+        if let Some((name, job)) = &self.publishing {
+            if let Some(result) = job.take() {
+                let name = name.clone();
+                self.publishing = None;
+                match result {
+                    Ok(_) => self.ok(t!("manage.palette_published", name = name)),
+                    Err(err) => self.fail(t!("manage.palette_publish_failed", error = err.to_string())),
+                }
+            }
+        }
         let mut act = None;
         match &e.key {
+            EntryKey::Palette(hash) if Some(e.group.order as usize) == cx.palette_library.custom_pack_index() => {
+                act = self.render_own_palette(ui, e, hash, cx);
+            }
             EntryKey::File { store, file, shipped: false } => act = self.render_own(ui, e, *store, file, cx, out),
             EntryKey::File { store, file, shipped: true } => {
                 ui.horizontal_wrapped(|ui| {
@@ -89,6 +107,101 @@ impl Manage {
             _ => {}
         }
         self.render_status(ui);
+        act
+    }
+
+    /// A palette of yours (the Custom pack): Rename, Delete, and Publish
+    /// to the online library, private or public (a palette item of its
+    /// own there, listed under Online, Mine).
+    fn render_own_palette(&mut self, ui: &mut egui::Ui, e: &Entry, hash: &str, cx: &mut InventoryContext) -> Option<Act> {
+        let mut act = None;
+        let Some(palette) = inventory::palette(cx.palette_library, hash) else { return None };
+        let renaming = self.renaming.as_ref().is_some_and(|(k, _)| *k == e.key);
+        ui.horizontal_wrapped(|ui| {
+            if renaming {
+                let mut done = None;
+                if let Some((_, name)) = self.renaming.as_mut() {
+                    let r = ui.add(egui::TextEdit::singleline(name).desired_width(160.0));
+                    super::vkb_sync(ui, &r, name);
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        done = Some(true);
+                    }
+                }
+                if ui.button(t!("manage.rename")).clicked() {
+                    done = Some(true);
+                }
+                if ui.button(t!("manage.cancel")).clicked() {
+                    done = Some(false);
+                }
+                if let Some(go) = done {
+                    let name = self.renaming.take().map(|(_, n)| n.trim().to_string()).unwrap_or_default();
+                    if go && !name.is_empty() && name != palette.name {
+                        if cx.palette_library.has_custom_palette_named(&name) {
+                            self.fail(t!("manage.name_taken", name = name));
+                        } else {
+                            let mut renamed = palette.clone();
+                            renamed.name = name.clone();
+                            let result = cx.palette_library.save_to_custom_library(renamed).and_then(|_| cx.palette_library.delete_from_custom_library(&palette.name).map(|_| ()));
+                            match result {
+                                Ok(()) => self.ok(t!("manage.renamed", name = name)),
+                                Err(err) => self.fail(err),
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+            if ui.button(t!("manage.rename_dots")).clicked() {
+                self.renaming = Some((e.key.clone(), palette.name.clone()));
+            }
+            if ui.button(t!("manage.delete_dots")).clicked() {
+                self.confirm_delete_palette = Some(palette.name.clone());
+            }
+        });
+        if cx.account.signed_in {
+            ui.horizontal_wrapped(|ui| {
+                let busy = self.publishing.is_some();
+                for (visibility, key) in [(ApiVisibility::Private, "formula_editor.online_publish_private"), (ApiVisibility::Public, "formula_editor.online_publish_public")] {
+                    if ui.add_enabled(!busy, egui::Button::new(t!(key))).on_hover_text(t!("manage.palette_publish_tip")).clicked() {
+                        let api = cx.account.api();
+                        let p = palette.clone();
+                        let wake = ui.ctx().clone();
+                        let job = crate::api::job::spawn(async move { api.create_palette(&p, visibility).await }, move || wake.request_repaint()).authed(true);
+                        self.publishing = Some((palette.name.clone(), job));
+                    }
+                }
+                if busy {
+                    ui.spinner();
+                }
+            });
+        }
+        if let Some(name) = self.confirm_delete_palette.clone() {
+            let mut open = true;
+            let mut decided = None;
+            egui::Window::new(t!("manage.delete_palette_title")).collapsible(false).resizable(false).open(&mut open).show(ui.ctx(), |ui| {
+                ui.label(t!("manage.delete_palette_confirm", name = name.clone()));
+                ui.horizontal(|ui| {
+                    if ui.button(t!("catalog.delete_yes")).clicked() {
+                        decided = Some(true);
+                    }
+                    if ui.button(t!("catalog.delete_no")).clicked() {
+                        decided = Some(false);
+                    }
+                });
+            });
+            if !open || decided.is_some() {
+                self.confirm_delete_palette = None;
+            }
+            if decided == Some(true) {
+                match cx.palette_library.delete_from_custom_library(&name) {
+                    Ok(_) => {
+                        self.ok(t!("manage.deleted", name = name));
+                        act = None;
+                    }
+                    Err(err) => self.fail(err),
+                }
+            }
+        }
         act
     }
 
