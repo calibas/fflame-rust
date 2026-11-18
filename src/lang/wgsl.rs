@@ -5432,7 +5432,7 @@ pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
     const GET_PARAM: &str = "fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {\n    return f32(xform_id + variation_id + param_slot);\n}\n\
          fn get_state(xform_id: u32, variation_id: u32, slot: u32) -> f32 {\n    return f32(xform_id + variation_id + slot);\n}\n\
          fn set_state(xform_id: u32, variation_id: u32, slot: u32, value: f32) {}\n\
-         struct RngState {\n    state: u32,\n}\n\
+         struct RngState {\n    state: u32,\n    inc: u32,\n}\n\
          fn rng_nextf(rng: ptr<function, RngState>) -> f32 {\n    return f32((*rng).state);\n}\n\
          fn rng_next(rng: ptr<function, RngState>) -> u32 {\n    return (*rng).state;\n}\n\
          var<private> point_w: f32;\n\
