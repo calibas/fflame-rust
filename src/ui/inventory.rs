@@ -295,7 +295,7 @@ impl InventoryPanel {
         InventoryPanel {
             entries: Arc::new(Vec::new()),
             revision: None,
-            family: Family::Palettes,
+            family: Family::Fractals,
             kind: None,
             origin: OriginFilter::All,
             query: String::new(),

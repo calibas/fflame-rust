@@ -105,10 +105,11 @@ changes.
 
 ## The panel
 
-- **The top**: a tab a family (Palettes, Fractals, Variations, Effects,
-  Escape-Time, Simulation, Scripts) with its count; a search over the
+- **The top**: a tab a family (Fractals, Palettes, Variations,
+  Escape-Time, Simulation, Effects, Scripts; it opens on Fractals) with
+  its count; a search over the
   title, the name, the description and the authors; an origin filter
-  (every origin, built-in, yours, from others, plug-ins); and, in a family
+  (every origin, built-in, custom, from others, plug-ins); and, in a family
   of several kinds, a chip a kind.
 - **The list**: the family's entries in collapsing groups with counts;
   a row is the title and its origin's mark (` *` yours, ` ↓` somebody
