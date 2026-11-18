@@ -363,17 +363,24 @@ pub fn plugin_failures() -> Vec<String> {
 /// Local`, the user's namespace); a formula, colouring or solid in the
 /// escape engine's under its slot name.
 pub fn register_plugin(file: &str, source: &str) -> Result<Plugin, String> {
-    let entry = formula_entry(file, source, Origin::Local, Link::default());
-    if !entry.kind.can_be_plugin() {
-        return Err("a plug-in is a Rhai variation, effect, formula, colouring or solid".to_string());
-    }
-    let (key, carried) = register_kind(entry.kind, &entry.title, source)?;
-    let plugin = Plugin { kind: entry.kind, file: file.to_string(), title: entry.title, key, carried };
+    let plugin = prepare_plugin(file, source)?;
     if let Ok(mut all) = registered().write() {
         all.retain(|p| p.file != file);
         all.push(plugin.clone());
     }
     Ok(plugin)
+}
+
+/// What [`register_plugin`] makes of a file -- registered in its kind's
+/// registry, its source as a config carries it -- without listing it as
+/// a plug-in: the Catalog's preview of a file of the user's or an example.
+pub fn prepare_plugin(file: &str, source: &str) -> Result<Plugin, String> {
+    let entry = formula_entry(file, source, Origin::Local, Link::default());
+    if !entry.kind.can_be_plugin() {
+        return Err("a plug-in is a Rhai variation, effect, formula, colouring or solid".to_string());
+    }
+    let (key, carried) = register_kind(entry.kind, &entry.title, source)?;
+    Ok(Plugin { kind: entry.kind, file: file.to_string(), title: entry.title, key, carried })
 }
 
 /// Stop offering a file's plug-in. What it registered stays registered

@@ -337,6 +337,13 @@ pub fn render_menu_bar(
                 });
             });
 
+            // The Catalog: a family each, its own menu (it was a Window
+            // row), opening the Catalog there.
+            ui.menu_button(t!("menu.catalog"), |ui| {
+                rows_do_not_wrap(ui);
+                super::inventory::catalog_menu_rows(ui);
+            });
+
             // Windows Menu
             ui.menu_button(t!("menu.window"), |ui| {
                 rows_do_not_wrap(ui);

@@ -25,7 +25,7 @@ const SEARCH_SETTLE_SECONDS: f64 = 0.4;
 /// Thumbnails downloading at once.
 const THUMBNAIL_JOBS: usize = 4;
 /// A grid cell's thumbnail side.
-const CELL: f32 = 120.0;
+pub(super) const CELL: f32 = 120.0;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ListKey {
@@ -387,10 +387,24 @@ impl OnlinePlace {
     /// chips chose one): rows, or a fractal grid; the next page asked for
     /// as the end of a list comes into view. A click selects (a palette
     /// applies, a fractal loads, as on this device).
-    pub fn render_list(&mut self, ui: &mut egui::Ui, family: Family, only: Option<Kind>, selected: &mut Option<EntryKey>, cx: &mut InventoryContext) {
+    /// Gives whether a narrow panel's selected row asked for its info.
+    pub fn render_list(&mut self, ui: &mut egui::Ui, family: Family, only: Option<Kind>, selected: &mut Option<EntryKey>, narrow: bool, cx: &mut InventoryContext) -> bool {
         if self.scope == Scope::Mine && !cx.account.signed_in {
             ui.weak(t!("catalog.sign_in_for_mine"));
-            return;
+            return false;
+        }
+        let mut details = false;
+        // Narrow: the selection's way to its info, above the lists.
+        if narrow {
+            if let Some(title) = selected.as_ref().and_then(|k| self.find(k)).map(|(e, _)| e.title.clone()) {
+                ui.horizontal(|ui| {
+                    ui.strong(title);
+                    if ui.small_button("\u{203a}").on_hover_text(t!("catalog.details")).clicked() {
+                        details = true;
+                    }
+                });
+                ui.separator();
+            }
         }
         let shown: Vec<Kind> = kinds(family).into_iter().filter(|k| only.is_none_or(|o| o == *k)).collect();
         let several = shown.len() > 1;
@@ -428,6 +442,7 @@ impl OnlinePlace {
             ui.add_space(6.0);
         }
         self.render_confirm_delete(&ctx, &cx.account);
+        details
     }
 
     /// A list's rows; whether its last row is on screen.
@@ -725,9 +740,20 @@ fn palette_row(ui: &mut egui::Ui, e: &Entry, p: &crate::api::types::PaletteItem,
 
 /// A fractal's cell: its thumbnail (a placeholder until it is in) and its
 /// name under it.
-fn grid_cell(ui: &mut egui::Ui, e: &Entry, texture: Option<&egui::TextureHandle>, selected: bool, has_thumb: bool) -> egui::Response {
+pub(super) fn grid_cell(ui: &mut egui::Ui, e: &Entry, texture: Option<&egui::TextureHandle>, selected: bool, has_thumb: bool) -> egui::Response {
+    grid_cell_lazy(ui, e, selected, || (texture.cloned(), has_thumb))
+}
+
+/// A cell whose picture is asked for only once it is laid out and on
+/// screen (`picture` gives the texture, if it is in, and whether one is
+/// coming): its own rect decides, not a guess from the cursor -- in a
+/// wrapped row the cursor is not where the cell lands, and a cell
+/// scrolled half out of view was taken for one off screen.
+pub(super) fn grid_cell_lazy(ui: &mut egui::Ui, e: &Entry, selected: bool, picture: impl FnOnce() -> (Option<egui::TextureHandle>, bool)) -> egui::Response {
     let (rect, r) = ui.allocate_exact_size(egui::vec2(CELL, CELL + 18.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
+        let (texture, has_thumb) = picture();
+        let texture = texture.as_ref();
         let visuals = ui.visuals();
         let img = egui::Rect::from_min_size(rect.min, egui::vec2(CELL, CELL));
         match texture {

@@ -10,9 +10,10 @@ Fractal Browser's Presets tab held; its list is also every picker's
 Scripts panel's public scripts and the Variations and Effects panels'
 catalog sections moved there. It manages your own resources -- Rhai
 files, palettes, online fractals -- and runs scripts (*Your own
-resources*, below); the Rhai Editor edits the file it opens. Built in
-phases 1 to 4 of [docs/projects/catalog.md](../projects/catalog.md), the
-plan, which also says what comes next (the phone layout, previews).
+resources*, below); the Rhai Editor edits the file it opens. On a phone
+its list and info are two screens (*The phone layout*), and its entries
+show previews (*Previews*). Built in phases 1 to 6 of
+[docs/projects/catalog.md](../projects/catalog.md), the plan.
 
 - Model: [src/inventory/](../../src/inventory/) (`inventory::scan`,
   `Entry`, `EntryKey`). The code says `inventory` because `catalog` is the
@@ -26,6 +27,7 @@ plan, which also says what comes next (the phone layout, previews).
   the operations [src/storage/manage.rs](../../src/storage/manage.rs);
   running a script [src/ui/script_run.rs](../../src/ui/script_run.rs);
   the editor [src/ui/rhai_editor.rs](../../src/ui/rhai_editor.rs).
+- Previews: [src/ui/inventory_preview.rs](../../src/ui/inventory_preview.rs).
 
 **See also:** [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) (packs),
 [FRACTAL-BROWSER.md](FRACTAL-BROWSER.md) (the presets file, the gallery
@@ -36,7 +38,9 @@ widget), [VARIATIONS.md](VARIATIONS.md), [ESCAPE.md](ESCAPE.md),
 
 ## Opening it
 
-- **Window ▸ Catalog** (also in the compact Window menu).
+- **The Catalog menu**, in the menu bar after Rendering (and the compact
+  menu's Catalog submenu): a row a family opens it there; **Online...**
+  opens its Online place at the family it was on.
 - The Colors panel's **Browse Palettes** and the Palette Editor's
   **Browse Palettes in the Catalog** open it on Palettes.
 - **File ▸ From Preset Library** opens it on Fractals.
@@ -63,7 +67,7 @@ changes.
 | Effect | `EffectRegistry`: built-ins, downloads | registry name | colour, density |
 | Formula, Coloring, Field, Field Coloring, Solid, Solid Coloring | `escape::FORMULAS`, `COLORINGS`, `fields::FIELDS`, `FIELD_COLORINGS`, `ifs::IFS_DEFS`, `IFS_COLORINGS` | registry name | the kind |
 | Simulation Model, Coloring | `sim::MODELS`, `sim::COLORINGS` | registry name | the kind |
-| Rhai entries and scripts | `storage::library::scan`: the shipped examples and starter scripts, the user's files, what they adopted | store, file, shipped | Examples, Yours, Adopted |
+| Rhai entries and scripts | `storage::library::scan`: the shipped examples and starter scripts, the user's files, what they adopted | store, file, shipped | Examples, Custom, Adopted |
 
 - **A palette's key is its content hash**, the API's id for it.
   `api::sync::palette_content_hash` reproduces ffapi's
@@ -101,10 +105,11 @@ changes.
 
 ## The panel
 
-- **The top**: a tab a family (Palettes, Fractals, Variations, Effects,
-  Escape-Time, Simulation, Scripts) with its count; a search over the
+- **The top**: a tab a family (Fractals, Palettes, Variations,
+  Escape-Time, Simulation, Effects, Scripts; it opens on Fractals) with
+  its count; a search over the
   title, the name, the description and the authors; an origin filter
-  (every origin, built-in, yours, from others, plug-ins); and, in a family
+  (every origin, built-in, custom, from others, plug-ins); and, in a family
   of several kinds, a chip a kind.
 - **The list**: the family's entries in collapsing groups with counts;
   a row is the title and its origin's mark (` *` yours, ` ↓` somebody
@@ -113,7 +118,8 @@ changes.
   state and a Retry (`palette_library::pack_section`), a row each: the name
   and a gradient (`palette_preview`, made once a row is on screen, kept
   under its hash). Searching leaves out packs with no match. Signed in,
-  a line after the packs shows your online palettes (Online, Mine).
+  a line after the packs shows the account's online palettes (Online,
+  Account).
 - **Fractals**: the presets as `FractalConfigGallery` grids, a tab a
   category, previews made for the gallery shown (the app's preview loop
   drives the Catalog's galleries beside the Fractal Browser's). A search
@@ -209,12 +215,13 @@ entries made by `inventory::online`):
 
 | Family | Online lists | Use |
 |---|---|---|
-| Palettes | `GET /palettes`; Mine: `GET /users/me/palettes` -- each a row with its gradient | a click applies a copy; Mine: Delete... (confirmed) |
-| Fractals | `GET /flames`; Mine: `GET /users/me/flames` -- a grid of the server's thumbnails, a render-mode filter (All, 2D, 3D, Escape Time, Simulation) | a click loads it, one undo step, its online id kept so Save Online updates it; Mine: Delete... (confirmed) |
+| Palettes | `GET /palettes`; Account: `GET /users/me/palettes` -- each a row with its gradient | a click applies a copy; Account: Delete... (confirmed) |
+| Fractals | `GET /flames`; Account: `GET /users/me/flames` -- a grid of the server's thumbnails, a render-mode filter (All, 2D, 3D, Escape Time, Simulation) | a click loads it, one undo step, its online id kept so Save Online updates it; Account: Delete... (confirmed) |
 | Variations, Effects | the cached catalog first (downloaded, offered), then people's Rhai ones (`GET /scripts?kind=variation`, `effect`) | Download, Update; a Rhai one: Open |
 | Escape, Simulation, Scripts | `GET /scripts?kind=` for each of the family's kinds, a group each (the kind chips narrow it to one) | Open: adopt into your files (`ScriptCloudRequest::Adopt`), under the restrictions somebody else's code runs with |
 
-- **Public or Mine.** Public is a guest's too; Mine needs the account
+- **Public or Account.** Public is a guest's too; Account (the signed-in
+  account's own items, every visibility) needs the account
   (the button says so when signed out).
 - **Search** is the server's: the panel's search box, asked
   (`q`) once the typing has stopped for 0.4 s. **Sort**: the resource's
@@ -317,3 +324,53 @@ unsaved.
 own and is the user's; a CPU script gets free of that online script --
 it can be published as the user's -- but keeps running restricted:
 editing a line is not reading the rest.
+
+---
+
+## The phone layout
+
+Under 560 points wide (a phone's compact layout, a narrow dock) the list
+and the info are two screens. The list fills the panel; the selected row
+carries a **›** that opens its info full height, with **‹ Back** at its
+top. A tap still selects -- a palette still applies, a fractal still
+loads -- so auditioning palettes stays a tap each. Where the list is a
+gallery or a grid (the presets, online fractals) the selection and its
+› sit above it. The Online place, the picker (its info pane gives way to
+tooltips there) and the management actions work unchanged inside the two
+screens.
+
+---
+
+## Previews
+
+An entry's preview is the config that shows it, built through what Use
+does (a scratch `ConfigManager` and `use_entry`) and rendered by the
+gallery's machinery -- `renderer::render_preview`, at 256 points, one a
+frame on desktop, one in flight on the web -- then kept in the shared
+`ThumbnailCache` (its limit, its eviction) under the configs' hash and the
+entry's version, so an update or an edit makes a new one:
+
+| Kind | Its preview |
+|---|---|
+| Variation | its image of the plane: four transforms filling the square [-1, 1]^2 evenly, coloured by quarter, the variation alone as the final transform (through `add_variation`, so a Rhai one carries its source); framed so the square fills half the picture; a variation that colours (direct colour, the GLSL generators) runs in the four transforms instead, as a final's colour writes are discarded; a pre or post one passes the point through linear |
+| Effect | a reference fractal (the first 2D preset) before and after |
+| Formula, field, solid | its default view |
+| Colouring (escape, field, solid) | the default formula drawn with it |
+| Simulation model, colouring | its first layer or base colouring, run 400 steps at most |
+| Generator | its run at seed 1; a modifier: the reference fractal, modified at seed 1 |
+| A plug-in file | as its kind |
+| Palette, fractal | their gradient, the gallery, the server's thumbnail, as before |
+
+A Rhai file of a kind that can be a plug-in -- an example, a file of
+yours -- previews through what registering it makes
+(`library::prepare_plugin`, not listed as a plug-in; the pickers do not
+offer it). A library, a track and an unreadable file have none. Previews
+that take the default palette use Fire without its black end, which on
+the black background hid whatever was drawn at index 0; a colouring
+starts from its own parameters, not the formula preset's. The info pane shows the selected entry's preview above
+its description (a spinner while it is made). A family with previews can
+be a **Grid** (beside the origin filter): each cell its entry's preview,
+asked for as it comes on screen -- the first look at 647 variations fills
+in as they scroll by, later looks come from the cache.
+`render_previews_for_inspection` (ignored) renders a sample through the
+preview path into `output/previews/` for a look.

@@ -190,7 +190,7 @@ impl<'a> Picker<'a> {
             ui.heading(&e.title);
             return;
         }
-        super::inventory::entry_summary(ui, e, self.palettes);
+        super::inventory::entry_summary(ui, e, self.palettes, None);
         if !e.installed {
             ui.separator();
             super::inventory::download_button(ui, e);
@@ -334,7 +334,7 @@ pub fn row(kind: Kind, name: &str, title: &str, group: Group) -> Entry {
 
 /// The fractal's own Rhai variations as rows: those the registry holds as
 /// the user's (`Provenance::Local`) that no plug-in file stands for (the
-/// Catalog lists those), one version each, under "Yours".
+/// Catalog lists those), one version each, under "Custom".
 pub fn own_variations(flame: &crate::scene::transforms::Flame) -> Vec<Entry> {
     let shared = super::inventory::shared();
     let plugin_keys: std::collections::HashSet<String> = shared
@@ -349,6 +349,9 @@ pub fn own_variations(flame: &crate::scene::transforms::Flame) -> Vec<Entry> {
         .all()
         .into_iter()
         .filter(|v| v.provenance == crate::provenance::Provenance::Local && !plugin_keys.contains(&v.name) && !superseded.contains(&v.name))
+        // Registered only to draw a Catalog preview, unless the fractal
+        // carries it.
+        .filter(|v| !super::inventory_preview::preview_only(&v.name) || flame.custom_variations.iter().any(|c| c.entry == v.name))
         .map(|v| row(Kind::Variation, &v.name, &v.display_name, group.clone()))
         .collect()
 }

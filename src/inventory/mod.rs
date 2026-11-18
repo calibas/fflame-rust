@@ -68,28 +68,28 @@ pub enum Kind {
 /// The Catalog's top-level groups of kinds, in the order it offers them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Family {
-    Palettes,
     Fractals,
+    Palettes,
     Variations,
-    Effects,
     Escape,
     Simulation,
+    Effects,
     Scripts,
 }
 
 impl Family {
     pub const ALL: [Family; 7] =
-        [Family::Palettes, Family::Fractals, Family::Variations, Family::Effects, Family::Escape, Family::Simulation, Family::Scripts];
+        [Family::Fractals, Family::Palettes, Family::Variations, Family::Escape, Family::Simulation, Family::Effects, Family::Scripts];
 
     /// Its label's locale key.
     pub fn label_key(self) -> &'static str {
         match self {
-            Family::Palettes => "inventory.family.palettes",
             Family::Fractals => "inventory.family.fractals",
+            Family::Palettes => "inventory.family.palettes",
             Family::Variations => "inventory.family.variations",
-            Family::Effects => "inventory.family.effects",
             Family::Escape => "inventory.family.escape",
             Family::Simulation => "inventory.family.simulation",
+            Family::Effects => "inventory.family.effects",
             Family::Scripts => "inventory.family.scripts",
         }
     }

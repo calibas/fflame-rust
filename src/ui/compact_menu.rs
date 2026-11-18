@@ -105,6 +105,12 @@ fn render_compact_menu_items(
     });
     ui.separator();
 
+    // --- Catalog submenu: a family each, as the desktop bar's ---
+    ui.menu_button(t!("menu.catalog"), |ui| {
+        rows_do_not_wrap(ui);
+        super::inventory::catalog_menu_rows(ui);
+    });
+
     // --- Window submenu ---
     ui.menu_button(t!("menu.window"), |ui| {
         rows_do_not_wrap(ui);
