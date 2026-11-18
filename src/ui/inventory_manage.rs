@@ -1,4 +1,4 @@
-//! Your own resources in the Catalog's info pane (docs/projects/catalog.md,
+//! Your own resources in the Catalog's info pane (docs/archive/projects/catalog.md,
 //! *Phase 4*): a Rhai file of yours is edited, renamed, duplicated,
 //! deleted, exported, made a plug-in and published from here; a shipped
 //! file or a built-in with a twin is copied into your files to edit (Edit

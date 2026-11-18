@@ -1,4 +1,4 @@
-//! What the server holds, as entries (docs/projects/catalog.md, *Phase 3*):
+//! What the server holds, as entries (docs/archive/projects/catalog.md, *Phase 3*):
 //! the Catalog's **Online** place lists a family's public items -- or the
 //! caller's own -- page by page, and each item read from a page becomes an
 //! [`Entry`] keyed [`EntryKey::Online`], drawn and selected as every row.

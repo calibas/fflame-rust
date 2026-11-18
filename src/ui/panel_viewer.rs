@@ -439,7 +439,7 @@ pub struct PanelContext<'a> {
 
     // Fractal browser panel state (unified presets/batch/files)
     pub fractal_browser_panel: &'a mut Option<super::fractal_browser::FractalBrowserPanel>,
-    /// The Catalog (docs/projects/catalog.md).
+    /// The Catalog (docs/archive/projects/catalog.md).
     pub inventory_panel: &'a mut super::inventory::InventoryPanel,
     pub textures_panel: &'a mut Option<super::textures_panel::TexturesPanel>,
     pub rhai_editor: &'a mut Option<super::rhai_editor::RhaiEditorPanel>,

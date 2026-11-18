@@ -521,7 +521,7 @@ See [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md).
 ### The Rhai Editor
 
 The one editor of every Rhai kind and of Ultra Fractal and Fractint
-formula files ([catalog.md](../projects/catalog.md), phase 4). It edits
+formula files ([catalog.md](../archive/projects/catalog.md), phase 4). It edits
 one open file, of either store (the formulas' `formulas/`, the scripts'
 `scripts/`): its name, kind and an unsaved mark, the source with its
 checks as it is typed, **Save**, **Revert** and **Show in Catalog**;

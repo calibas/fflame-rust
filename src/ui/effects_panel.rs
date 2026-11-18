@@ -503,7 +503,7 @@ pub fn render_effects_panel(
     });
 
     // What the online library offers, its updates and Clear Cache: the
-    // Catalog's (docs/projects/catalog.md, *Phase 3*).
+    // Catalog's (docs/archive/projects/catalog.md, *Phase 3*).
     ui.add_space(4.0);
     super::inventory::moved_here(ui, &t!("effects_panel.moved_to_catalog"), crate::inventory::Family::Effects, super::inventory::Place::Online);
 

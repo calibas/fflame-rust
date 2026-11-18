@@ -299,7 +299,7 @@ fn palettes_are_items_and_a_stale_write_is_a_conflict() {
     block(api.delete_script(&created.id)).unwrap();
 }
 
-/// The Catalog's Online place (docs/projects/catalog.md, *Phase 3*): a
+/// The Catalog's Online place (docs/archive/projects/catalog.md, *Phase 3*): a
 /// guest finds a public fractal by search, with its owner and thumbnail,
 /// downloads the thumbnail and loads the fractal without signing in; the
 /// owner pages through their own by cursor; a public palette is browsed
@@ -366,7 +366,7 @@ fn the_online_place_browses_every_resource() {
     }
 }
 
-/// Your own resources (docs/projects/catalog.md, *Phase 4*): a palette of
+/// Your own resources (docs/archive/projects/catalog.md, *Phase 4*): a palette of
 /// yours published as an item, then renamed and made public; a fractal of
 /// yours renamed and made public -- each as the Catalog's info pane asks.
 #[test]

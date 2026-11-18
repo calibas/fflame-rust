@@ -1,4 +1,4 @@
-//! Managing the user's own Rhai files (docs/projects/catalog.md, *Phase
+//! Managing the user's own Rhai files (docs/archive/projects/catalog.md, *Phase
 //! 4*): what the Catalog's Rename, Duplicate, Delete, Import and New do,
 //! over the two stores ([`crate::storage::library::Store`]) and their
 //! rules -- a formula file is keyed by its name with its extension, a

@@ -921,7 +921,7 @@ pub struct EguiLayer {
 
     // Fractal browser panel state
     fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
-    /// The Catalog's state (docs/projects/catalog.md).
+    /// The Catalog's state (docs/archive/projects/catalog.md).
     inventory_panel: inventory::InventoryPanel,
     /// The Texture panel's state, created when the panel is first shown.
     textures_panel: Option<textures_panel::TexturesPanel>,

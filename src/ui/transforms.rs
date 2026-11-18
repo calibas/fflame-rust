@@ -858,7 +858,7 @@ fn render_variations_section(
     let add_btn = ui.add(
         egui::Button::new(t!("variations.add")).fill(Color32::from_rgb(0, 68, 0)),
     );
-    // The Catalog's variations (docs/projects/catalog.md, *The picker*):
+    // The Catalog's variations (docs/archive/projects/catalog.md, *The picker*):
     // its groups and search, each one's description as its tooltip, and
     // Download for those the server offers that are not installed. The
     // rule is the shader's: every category, except that 2D drops Only3D

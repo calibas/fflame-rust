@@ -1,4 +1,4 @@
-//! The Catalog panel (docs/projects/catalog.md): every resource the app
+//! The Catalog panel (docs/archive/projects/catalog.md): every resource the app
 //! knows, from [`crate::inventory`], to browse, read about and use.
 //!
 //! The top chooses a family (palettes, fractals, variations, ...), a

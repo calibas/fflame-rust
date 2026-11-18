@@ -1,5 +1,5 @@
 //! Every resource the app knows, as one list: the model behind the
-//! Catalog panel (docs/projects/catalog.md). The panel's name is the
+//! Catalog panel (docs/archive/projects/catalog.md). The panel's name is the
 //! user's ("Catalog"); the code's is `inventory`, because `catalog` is
 //! the engine catalog in both repositories (`crate::catalog`,
 //! `engine-catalog.json`), `library` the Rhai file scan

@@ -163,7 +163,6 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   still per kind; a track naming a variation key a later Use replaced;
   subflame transforms not re-keyed by Use.
   [rhai-plugins.md](../archive/projects/rhai-plugins.md) §"P1".
-- **A combined library panel**, if wanted. §"P3". Planned as the Catalog: [catalog.md](catalog.md).
 - **Layouts outside simulations**: a grid's fill and warning
   (`LayoutSpec::without_cpu`); a layout for CPU scripts
   (`param_show_if`). §"What is left, as branches".
@@ -230,7 +229,9 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   reference.
 - **Held structural keyframes** (formula source and name as one target);
   a formula randomiser. §"Phase 4 … step 8".
-- **Formula library in the Fractal Browser**, and an API formula corpus (the Catalog takes the formula library: [catalog.md](catalog.md)).
+- **An API formula corpus**: curated formulas online, now part of
+  [curated-content.md](curated-content.md). (The formula library itself
+  is in the Catalog: [catalog.md](../archive/projects/catalog.md).)
   §"Phase 5: distribution".
 
 ## Escape-time

@@ -1,7 +1,7 @@
 # The Catalog's API: the route table (phase 0)
 
 > **Status 2026-11-16: agreed; building** on ffapi branch
-> `catalog-api`. Phase 0 of [catalog.md](catalog.md). The first draft put new
+> `catalog-api`. Phase 0 of [catalog.md](../archive/projects/catalog.md). The first draft put new
 > routes under `/api/v2/` beside the current ones; the user then said
 > the API has **not launched** -- `?reader=N` exists so it never needs a
 > `/v2` for content changes -- so this draft reshapes the routes **in

@@ -1,12 +1,14 @@
 # The Catalog: one place for every resource
 
+> **Archived 2026-11-18** -- finished: phases 0-6 built and merged (PRs #167, #168, #169, #171), with the user's UX pass (Custom and Account, the Catalog menu, the family order). Reference: [CATALOG.md](../../main/CATALOG.md). The online follow-up is [curated-content.md](../../projects/curated-content.md); open items are in [BACKLOG.md](../../projects/BACKLOG.md).
+
 > **Status 2026-11-17: phases 0-4 merged** (the API reshaped in place on
 > ffapi, its `docs/catalog-api-build.md`, and this app's client moved to
 > it; the model and the panel; the picker, PR #167; online, PR #168; your
 > own resources and the Rhai Editor, PR #169). **Phases 5 and 6, the
 > phone layout and previews, built** on branch `catalog-phone-previews`,
 > unmerged (*Phases 5 and 6*, below; as built:
-> [CATALOG.md](../main/CATALOG.md), *The phone layout*, *Previews*). The
+> [CATALOG.md](../../main/CATALOG.md), *The phone layout*, *Previews*). The
 > last phases: once merged the plan is done and goes to the archive. The
 > surveys this plan stands on are summarised under *What exists*,
 > *Phase 3* and *Phase 4*.
@@ -273,7 +275,7 @@ Principles to agree before the ffapi branch (compatibility: *Decided after the s
 ## Phases
 
 0. **The API review** (ffapi), in parallel with phase 1: the principles
-   above turned into a route table ([catalog-api.md](catalog-api.md)),
+   above turned into a route table ([catalog-api.md](../../projects/catalog-api.md)),
    agreed, then built on an ffapi branch with the permission matrix and
    tests updated.
 1. **The model and the panel, local only**: `inventory` over every local
@@ -581,7 +583,7 @@ into view, the visible ones first.
 3. **API compatibility.** First agreed as new shapes behind reader 8;
    superseded the same day: the API has not launched, so the routes are
    reshaped in place and both clients move with the server, under a
-   written stability contract ([catalog-api.md](catalog-api.md), second
+   written stability contract ([catalog-api.md](../../projects/catalog-api.md), second
    draft).
 4. **Public palettes.** A published palette is a named, authored,
    visible item (principle 6); packs online later.

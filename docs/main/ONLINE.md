@@ -381,7 +381,7 @@ user's own (Publish private or public):
 An adopted file keeps its link: the copy is that script, and the
 Catalog refuses to republish it (`manage::publish_refusal`). Saving an
 edit of it in the Rhai Editor frees it of that online script
-(decision 3 of [catalog.md](../projects/catalog.md), phase 4): an entry
+(decision 3 of [catalog.md](../archive/projects/catalog.md), phase 4): an entry
 gets an id of its own (`entries::with_new_id`) and loses its cloud link
 and its mark as somebody else's, so it is the user's own; a CPU script
 loses its cloud link, so it can be published as the user's, but keeps

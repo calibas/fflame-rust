@@ -1,7 +1,7 @@
 //! Fractal Browser panel - this session's results: batches and files
 //!
 //! A tabbed panel that provides views (the presets and the online
-//! fractals are the Catalog's, `ui::inventory`, docs/projects/catalog.md):
+//! fractals are the Catalog's, `ui::inventory`, docs/archive/projects/catalog.md):
 //! - Batch: Random batch generation results (persists until next batch)
 //! - Files: Loaded .fflame files
 

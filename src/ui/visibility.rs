@@ -502,7 +502,7 @@ pub fn fly_mode(kind: crate::camera::gesture::ViewKind) -> Vis {
 }
 
 /// Whether the Catalog's Use acts on an entry of `kind` in this mode
-/// (docs/projects/catalog.md). Choosing a formula, a model or a fractal
+/// (docs/archive/projects/catalog.md). Choosing a formula, a model or a fractal
 /// enters its engine's mode, so those always act; a variation is added
 /// to a flame's transform, which only the flame modes render, and a 3D
 /// Only one means nothing to a 2D flame.

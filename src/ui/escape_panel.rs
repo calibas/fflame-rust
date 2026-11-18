@@ -239,7 +239,7 @@ pub fn render_escape_content(
     let selected_label = formula_display_name(&esc.formula);
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.formula"));
-        // The Catalog's escape kinds (docs/projects/catalog.md, *The
+        // The Catalog's escape kinds (docs/archive/projects/catalog.md, *The
         // picker*): the iterated formulas, the fields, the solids (mode D:
         // `ifs_flame` reads the LOADED FLAME, so the flame's own extent
         // decides where to stand), and the user's plug-ins of those kinds.
@@ -2059,7 +2059,7 @@ pub(super) fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigMa
             );
 
             // The Catalog's variations as the lens takes them
-            // (docs/projects/catalog.md, *The picker*): None, the
+            // (docs/archive/projects/catalog.md, *The picker*): None, the
             // recommended lenses in their own order, then the measured
             // set -- everything usable on request: the classification
             // describes a variation's DEFAULT parameters, which are

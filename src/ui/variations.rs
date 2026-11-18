@@ -1,6 +1,6 @@
 //! Variations panel — lists every variation in the global registry,
 //! grouped by category. What the online library offers, updates and
-//! Clear Cache are the Catalog's (docs/projects/catalog.md, *Phase 3*).
+//! Clear Cache are the Catalog's (docs/archive/projects/catalog.md, *Phase 3*).
 //!
 //! Two provenance signals, answering different questions:
 //!

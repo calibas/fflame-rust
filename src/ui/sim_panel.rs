@@ -1543,7 +1543,7 @@ fn render_model_section(
                 t!("sim_panel.model")
             };
             ui.label(label.as_ref());
-            // The Catalog's models (docs/projects/catalog.md, *The
+            // The Catalog's models (docs/archive/projects/catalog.md, *The
             // picker*): the built-ins and the user's plug-ins (P3, P4), in
             // every layer, a plug-in's source carried beside its name, as
             // Use carries it; each one's description its tooltip.

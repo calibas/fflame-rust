@@ -20,7 +20,7 @@ pub enum PanelType {
     /// Palette editing (existing Palette Editor window)
     PaletteEditor,
     /// The Catalog: every resource, to browse, read about and use
-    /// (docs/projects/catalog.md). It replaced the Palette Library, whose
+    /// (docs/archive/projects/catalog.md). It replaced the Palette Library, whose
     /// saved layouts open it.
     #[serde(alias = "PaletteLibrary")]
     Inventory,
@@ -73,7 +73,7 @@ pub enum PanelType {
     /// (docs/archive/projects/sim-textures.md)
     Textures,
     /// The Rhai Editor: every Rhai kind, and Ultra Fractal and Fractint
-    /// files (docs/projects/catalog.md, phase 4). Saved layouts that name
+    /// files (docs/archive/projects/catalog.md, phase 4). Saved layouts that name
     /// the Formula Editor open it.
     /// So does one naming the Scripts panel: scripts run from the
     /// Catalog, and are written here.

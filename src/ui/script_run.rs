@@ -1,4 +1,4 @@
-//! Running a CPU script (docs/projects/catalog.md, *Phase 4*, decision 2
+//! Running a CPU script (docs/archive/projects/catalog.md, *Phase 4*, decision 2
 //! of the survey): a generator's or modifier's parameters, seed,
 //! Generate / Apply and Batch / Mutate, and a library's import line -- what
 //! the Scripts panel did, as one piece the Catalog's info pane draws for

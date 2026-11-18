@@ -1,4 +1,4 @@
-//! The Catalog's list as a picker (docs/projects/catalog.md, *The picker*),
+//! The Catalog's list as a picker (docs/archive/projects/catalog.md, *The picker*),
 //! in a popup under a button:
 //! the entries of [`super::inventory::shared`] a filter admits, in the
 //! Catalog's groups, with a search, an info pane beside the list saying

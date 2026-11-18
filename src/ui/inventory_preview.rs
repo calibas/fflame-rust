@@ -1,4 +1,4 @@
-//! The Catalog's previews (docs/projects/catalog.md, *Phase 6*): a picture
+//! The Catalog's previews (docs/archive/projects/catalog.md, *Phase 6*): a picture
 //! of what an entry is, made by building the config that shows it and
 //! rendering it with the gallery's machinery (`renderer::render_preview`),
 //! lazily -- what the info pane and the grid ask for this frame, one a

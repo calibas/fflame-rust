@@ -1,4 +1,4 @@
-//! The Catalog's **Online** place (docs/projects/catalog.md, *Phase 3*):
+//! The Catalog's **Online** place (docs/archive/projects/catalog.md, *Phase 3*):
 //! what the server holds for a family -- its public items, or the
 //! caller's own -- asked for page by page, searched by the server, and
 //! drawn as the Catalog's rows ([`crate::inventory::online`]); fractals

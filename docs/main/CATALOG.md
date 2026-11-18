@@ -13,7 +13,7 @@ files, palettes, online fractals -- and runs scripts (*Your own
 resources*, below); the Rhai Editor edits the file it opens. On a phone
 its list and info are two screens (*The phone layout*), and its entries
 show previews (*Previews*). Built in phases 1 to 6 of
-[docs/projects/catalog.md](../projects/catalog.md), the plan.
+[docs/archive/projects/catalog.md](../archive/projects/catalog.md), the plan.
 
 - Model: [src/inventory/](../../src/inventory/) (`inventory::scan`,
   `Entry`, `EntryKey`). The code says `inventory` because `catalog` is the

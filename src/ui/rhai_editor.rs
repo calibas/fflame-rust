@@ -1,4 +1,4 @@
-//! The Rhai Editor (docs/projects/catalog.md, phase 4): the one editor of
+//! The Rhai Editor (docs/archive/projects/catalog.md, phase 4): the one editor of
 //! every Rhai kind -- formulas, colourings, solids, fields, variations,
 //! effects, simulations, tracks, and the CPU scripts -- and of Ultra
 //! Fractal and Fractint formula files. The Catalog chooses and manages

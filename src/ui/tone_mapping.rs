@@ -616,7 +616,7 @@ pub fn render_colors_content(
             // palette too.
             {
                 // The Catalog's palettes of the enabled packs
-                // (docs/projects/catalog.md, *The picker*): its search and
+                // (docs/archive/projects/catalog.md, *The picker*): its search and
                 // its packs as groups; a pick applies an editable copy,
                 // undoable, as a click in the Catalog does. The current one
                 // is found by its content (its name may be any).

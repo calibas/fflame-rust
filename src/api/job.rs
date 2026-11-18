@@ -1,4 +1,4 @@
-//! One background request (docs/projects/catalog.md, *Phase 3*): a future
+//! One background request (docs/archive/projects/catalog.md, *Phase 3*): a future
 //! run off the frame -- a thread on desktop (the client is blocking
 //! `ureq`), `spawn_local` on the web -- whose result the UI takes when it
 //! is in, with a wake-up (a repaint) when it lands.
