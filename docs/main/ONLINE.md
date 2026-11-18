@@ -129,7 +129,7 @@ settings file that says so reads as a guest.)
 | --- | --- |
 | File → **Save Online** | loading a web deep link (`?flame=`, `?animation=`) |
 | Window → **Account**, the startup auto-login | the variation catalog, fetched once per session |
-| the Catalog's Online place, **Mine** (your fractals, palettes and scripts; renaming, making public or private and deleting your fractals and palettes) | fetching a variation a loaded flame names but the app lacks, and updating stale downloads |
+| the Catalog's Online place, **Account** (your fractals, palettes and scripts; renaming, making public or private and deleting your fractals and palettes) | fetching a variation a loaded flame names but the app lacks, and updating stale downloads |
 | the menu bar's connection and account indicator | the effect catalog, fetching a missing effect, updating downloaded effects |
 | the periodic health check | the Catalog's Online place, **Public**: browsing and searching every resource, loading a public fractal, applying a palette, opening a script |
 | publishing your Rhai files and custom palettes (the Catalog's info pane) | |

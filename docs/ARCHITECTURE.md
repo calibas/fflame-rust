@@ -281,7 +281,7 @@ Detail: [UI.md](main/UI.md).
   drawn in every mode, one the mode does not use saying so at its top
   (`docs/archive/projects/one-workspace.md`). Nothing about the dock tree is
   written to disk.
-- Menu bar: File, Edit, View, Rendering, Window, Help, then the mode
+- Menu bar: File, Edit, View, Rendering, Catalog, Window, Help, then the mode
   button (named by the current mode; its menu built from
   `RenderMode::ALL`), plus a language selector.
   `src/ui/compact_menu.rs` is the small-screen equivalent.

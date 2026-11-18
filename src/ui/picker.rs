@@ -334,7 +334,7 @@ pub fn row(kind: Kind, name: &str, title: &str, group: Group) -> Entry {
 
 /// The fractal's own Rhai variations as rows: those the registry holds as
 /// the user's (`Provenance::Local`) that no plug-in file stands for (the
-/// Catalog lists those), one version each, under "Yours".
+/// Catalog lists those), one version each, under "Custom".
 pub fn own_variations(flame: &crate::scene::transforms::Flame) -> Vec<Entry> {
     let shared = super::inventory::shared();
     let plugin_keys: std::collections::HashSet<String> = shared

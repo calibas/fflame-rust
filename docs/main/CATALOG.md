@@ -38,7 +38,9 @@ widget), [VARIATIONS.md](VARIATIONS.md), [ESCAPE.md](ESCAPE.md),
 
 ## Opening it
 
-- **Window ▸ Catalog** (also in the compact Window menu).
+- **The Catalog menu**, in the menu bar after Rendering (and the compact
+  menu's Catalog submenu): a row a family opens it there; **Online...**
+  opens its Online place at the family it was on.
 - The Colors panel's **Browse Palettes** and the Palette Editor's
   **Browse Palettes in the Catalog** open it on Palettes.
 - **File ▸ From Preset Library** opens it on Fractals.
@@ -65,7 +67,7 @@ changes.
 | Effect | `EffectRegistry`: built-ins, downloads | registry name | colour, density |
 | Formula, Coloring, Field, Field Coloring, Solid, Solid Coloring | `escape::FORMULAS`, `COLORINGS`, `fields::FIELDS`, `FIELD_COLORINGS`, `ifs::IFS_DEFS`, `IFS_COLORINGS` | registry name | the kind |
 | Simulation Model, Coloring | `sim::MODELS`, `sim::COLORINGS` | registry name | the kind |
-| Rhai entries and scripts | `storage::library::scan`: the shipped examples and starter scripts, the user's files, what they adopted | store, file, shipped | Examples, Yours, Adopted |
+| Rhai entries and scripts | `storage::library::scan`: the shipped examples and starter scripts, the user's files, what they adopted | store, file, shipped | Examples, Custom, Adopted |
 
 - **A palette's key is its content hash**, the API's id for it.
   `api::sync::palette_content_hash` reproduces ffapi's
@@ -115,7 +117,8 @@ changes.
   state and a Retry (`palette_library::pack_section`), a row each: the name
   and a gradient (`palette_preview`, made once a row is on screen, kept
   under its hash). Searching leaves out packs with no match. Signed in,
-  a line after the packs shows your online palettes (Online, Mine).
+  a line after the packs shows the account's online palettes (Online,
+  Account).
 - **Fractals**: the presets as `FractalConfigGallery` grids, a tab a
   category, previews made for the gallery shown (the app's preview loop
   drives the Catalog's galleries beside the Fractal Browser's). A search
@@ -211,12 +214,13 @@ entries made by `inventory::online`):
 
 | Family | Online lists | Use |
 |---|---|---|
-| Palettes | `GET /palettes`; Mine: `GET /users/me/palettes` -- each a row with its gradient | a click applies a copy; Mine: Delete... (confirmed) |
-| Fractals | `GET /flames`; Mine: `GET /users/me/flames` -- a grid of the server's thumbnails, a render-mode filter (All, 2D, 3D, Escape Time, Simulation) | a click loads it, one undo step, its online id kept so Save Online updates it; Mine: Delete... (confirmed) |
+| Palettes | `GET /palettes`; Account: `GET /users/me/palettes` -- each a row with its gradient | a click applies a copy; Account: Delete... (confirmed) |
+| Fractals | `GET /flames`; Account: `GET /users/me/flames` -- a grid of the server's thumbnails, a render-mode filter (All, 2D, 3D, Escape Time, Simulation) | a click loads it, one undo step, its online id kept so Save Online updates it; Account: Delete... (confirmed) |
 | Variations, Effects | the cached catalog first (downloaded, offered), then people's Rhai ones (`GET /scripts?kind=variation`, `effect`) | Download, Update; a Rhai one: Open |
 | Escape, Simulation, Scripts | `GET /scripts?kind=` for each of the family's kinds, a group each (the kind chips narrow it to one) | Open: adopt into your files (`ScriptCloudRequest::Adopt`), under the restrictions somebody else's code runs with |
 
-- **Public or Mine.** Public is a guest's too; Mine needs the account
+- **Public or Account.** Public is a guest's too; Account (the signed-in
+  account's own items, every visibility) needs the account
   (the button says so when signed out).
 - **Search** is the server's: the panel's search box, asked
   (`q`) once the typing has stopped for 0.4 s. **Sort**: the resource's

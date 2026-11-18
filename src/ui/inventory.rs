@@ -67,13 +67,22 @@ pub fn download_failure(e: &Entry) -> Option<String> {
 
 /// A panel asked to show the Catalog at a family and place, with an
 /// entry selected.
-static OPEN: Mutex<Option<(Family, Place, Option<EntryKey>)>> = Mutex::new(None);
+static OPEN: Mutex<Option<(Option<Family>, Place, Option<EntryKey>)>> = Mutex::new(None);
 
-/// Show the Catalog at `family` in `place` (opening its panel): what a
-/// panel whose online section moved into the Catalog offers instead.
+/// Show the Catalog at `family` in `place` (opening its panel): the
+/// Catalog menu's rows, and what a panel whose online section moved into
+/// the Catalog offers instead.
 pub fn request_open(family: Family, place: Place) {
     if let Ok(mut o) = OPEN.lock() {
-        *o = Some((family, place, None));
+        *o = Some((Some(family), place, None));
+    }
+}
+
+/// Show the Catalog in `place`, at the family it was last on (the Catalog
+/// menu's Online...).
+pub fn request_open_place(place: Place) {
+    if let Ok(mut o) = OPEN.lock() {
+        *o = Some((None, place, None));
     }
 }
 
@@ -81,13 +90,29 @@ pub fn request_open(family: Family, place: Place) {
 /// Catalog).
 pub fn request_open_select(family: Family, key: EntryKey) {
     if let Ok(mut o) = OPEN.lock() {
-        *o = Some((family, Place::Local, Some(key)));
+        *o = Some((Some(family), Place::Local, Some(key)));
     }
 }
 
 /// The open asked for since the last call.
-pub fn take_open() -> Option<(Family, Place, Option<EntryKey>)> {
+pub fn take_open() -> Option<(Option<Family>, Place, Option<EntryKey>)> {
     OPEN.lock().ok()?.take()
+}
+
+/// The Catalog menu's rows: a family each, then Online... (the desktop
+/// bar's menu and the compact menu's submenu draw the same rows).
+pub fn catalog_menu_rows(ui: &mut egui::Ui) {
+    for family in Family::ALL {
+        if ui.button(t!(family.label_key())).clicked() {
+            request_open(family, Place::Local);
+            ui.close();
+        }
+    }
+    ui.separator();
+    if ui.button(t!("menu.catalog_online")).on_hover_text(t!("catalog.place_online_tip")).clicked() {
+        request_open_place(Place::Online);
+        ui.close();
+    }
 }
 
 /// A line saying where something moved, and a button that shows it there.
@@ -309,8 +334,10 @@ impl InventoryPanel {
     }
 
     /// Show `family` in `place`, with `select` selected.
-    pub fn open_at(&mut self, family: Family, place: Place, select: Option<EntryKey>) {
-        self.open_on(family);
+    pub fn open_at(&mut self, family: Option<Family>, place: Place, select: Option<EntryKey>) {
+        if let Some(family) = family {
+            self.open_on(family);
+        }
         self.place = place;
         if select.is_some() {
             self.selected = select;
@@ -725,7 +752,15 @@ impl InventoryPanel {
         }
         ui.separator();
         let galleries = self.preset_galleries.get_or_insert_with(preset_galleries);
-        let response = galleries[self.preset_category.index()].render(ui);
+        // The gallery scrolls on its own, under the category tabs, as every
+        // other list here does: drawn bare it stretched the panel, and the
+        // dock's scroll bar moved the whole Catalog instead.
+        let category = self.preset_category.index();
+        let response = egui::ScrollArea::vertical()
+            .id_salt("catalog_presets")
+            .auto_shrink([false, false])
+            .show(ui, |ui| galleries[category].render(ui))
+            .inner;
         if let Some(config) = response.selected {
             // Its entry: the first preset of that name (the inventory's
             // key for it).
