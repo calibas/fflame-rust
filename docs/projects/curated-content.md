@@ -1,6 +1,6 @@
 # Curated content
 
-**Status: planned 2026-11-18, not started; every decision made (D1-D11).** Both repositories: the
+**Status: step 1 built 2026-11-18** on ffapi branch `curated-content` (migration 119; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
 client (this one) and the API server (`c:/projects/ffapi`). Built from a
 survey of both on 2026-11-18. The survey's findings are summarised in
 *What exists*, with file references where they matter.
@@ -235,7 +235,9 @@ not bump the version.
 - A unique index on `(kind, canonical_name)` for current rows, and a
   name-history table for older versions.
 - The static trigger.
-- The three "featured" mechanisms fold into this:
+- The three "featured" mechanisms fold into this (**deferred** at step 1:
+  `featured_at` and the `featured` word stay as they were, since the
+  browser app may use them; folding waits until it moves to `curated`):
   - flames' `featured_at` is migrated;
   - the scripts museum keeps its owner pin (`published_*`), but the
     admin feature becomes curate;
@@ -451,7 +453,13 @@ So, with what exists:
    - The columns, `origin` on every table, `content_hash` and the static
      trigger.
    - `POST /admin/.../curate` and `?curated=1` on the lists.
-   - Fold flames' `featured_at` into it.
+   - Fold flames' `featured_at` into it (deferred: see *API changes*).
+   - **Built 2026-11-18**, ffapi branch `curated-content`. Decided while
+     building: a curated animation freezes its fractal with it (an
+     unnamed static copy); a curated script's copy takes the canonical
+     name as its stem, an older version's stem moving aside to
+     `<name>~<hash8>`; thumbnails and tags of a curated fractal are
+     static too; `q` searches canonical names.
    - Reserve built-in names.
 2. **API resolve and import.**
    - `/curated/{kind}/{name}` and `POST /curated/resolve`, with aliases
