@@ -510,77 +510,6 @@ pub struct FlameListItem {
 }
 
 // ============================================================================
-// Search
-// ============================================================================
-
-/// A fractal list's words (`GET /users/me/flames`, `GET /flames`): the
-/// name searched as `q`, a variation as the catalog filter
-/// `type=variation:<name>`.
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct SearchFlamesParams {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub render_mode: Option<ApiRenderMode>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_3d: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub variation: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub min_transforms: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_transforms: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub page: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub per_page: Option<u32>,
-}
-
-impl SearchFlamesParams {
-    /// Build query string from non-None fields.
-    ///
-    /// The free-text values are percent-encoded: a flame name holding
-    /// `&`, `#` or `+` otherwise split the query, cut it off as a
-    /// fragment, or arrived as a space.
-    pub fn to_query_string(&self) -> String {
-        let mut parts = Vec::new();
-        if let Some(ref mode) = self.render_mode {
-            let s = serde_json::to_value(mode)
-                .ok()
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_default();
-            parts.push(format!("render_mode={}", s));
-        }
-        if let Some(has_3d) = self.has_3d {
-            parts.push(format!("has_3d={}", has_3d));
-        }
-        if let Some(ref variation) = self.variation {
-            parts.push(format!("type={}", super::urlencode(&format!("variation:{variation}"))));
-        }
-        if let Some(min) = self.min_transforms {
-            parts.push(format!("min_transforms={}", min));
-        }
-        if let Some(max) = self.max_transforms {
-            parts.push(format!("max_transforms={}", max));
-        }
-        if let Some(ref name) = self.name {
-            parts.push(format!("q={}", super::urlencode(name)));
-        }
-        if let Some(page) = self.page {
-            parts.push(format!("page={}", page));
-        }
-        if let Some(per_page) = self.per_page {
-            parts.push(format!("per_page={}", per_page));
-        }
-        if parts.is_empty() {
-            String::new()
-        } else {
-            format!("?{}", parts.join("&"))
-        }
-    }
-}
-
-// ============================================================================
 // Palettes
 // ============================================================================
 
@@ -654,13 +583,6 @@ pub struct PaletteItem {
     pub revision: Option<i64>,
     #[serde(default)]
     pub updated_at: Option<String>,
-}
-
-/// `PATCH /palettes/{id}`: what is present replaces what is stored.
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct PatchPaletteRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
 }
 
 /// `PATCH /R/{id}` for a fractal, a palette or a script: the name or the
@@ -1216,34 +1138,6 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The name went into the URL raw: `&` started a new parameter,
-    /// `#` cut the rest off as a fragment, and `+` arrived as a space.
-    #[test]
-    fn a_searched_name_is_percent_encoded() {
-        let params = SearchFlamesParams {
-            name: Some("a&b #c+".to_string()),
-            render_mode: Some(ApiRenderMode::Escape),
-            per_page: Some(100),
-            ..Default::default()
-        };
-        assert_eq!(
-            params.to_query_string(),
-            "?render_mode=escape&q=a%26b+%23c%2B&per_page=100"
-        );
-    }
-
-    #[test]
-    fn no_filters_is_an_empty_query() {
-        assert_eq!(SearchFlamesParams::default().to_query_string(), "");
-    }
-
-    /// A variation searched for is the catalog filter `type=variation:x`.
-    #[test]
-    fn a_variation_is_the_type_filter() {
-        let params = SearchFlamesParams { variation: Some("julian".into()), ..Default::default() };
-        assert_eq!(params.to_query_string(), "?type=variation%3Ajulian");
-    }
 
     /// A list is the catalog API's page; a bare array still reads (a
     /// bounded sub-list), and an item this build cannot read is skipped.

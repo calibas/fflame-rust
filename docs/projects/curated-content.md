@@ -1,6 +1,6 @@
 # Curated content
 
-**Status: steps 1-5 built 2026-11-18** (ffapi branch `curated-content`, migrations 119-121, and this repo's branch `curated-content`; the production dry run waits on the ffapi deploy; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
+**Status: steps 1-6 built 2026-11-18** (ffapi branch `curated-content`, migrations 119-121, and this repo's branch `curated-content`; the production dry run waits on the ffapi deploy; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
 client (this one) and the API server (`c:/projects/ffapi`). Built from a
 survey of both on 2026-11-18. The survey's findings are summarised in
 *What exists*, with file references where they matter.
@@ -527,6 +527,24 @@ So, with what exists:
    named already; a palette is carried as colours); the CLI does not
    resolve references yet.
 6. **Client fetch unification, the cache by hash, and cleanups.**
+   **Built 2026-11-18.** Both fetches are `api::job`s through one helper
+   (`app::downloads`); one rule set -- registered first, cached once
+   accepted, never under a built-in's or a custom item's name (effects
+   gained that refusal), names encoded, no empty `Bearer`. Six uncalled
+   API methods deleted (`search_flames`, `list_my_scripts`,
+   `search_public_scripts`, `list_my_palettes`, `get_palette_data`,
+   `rename_palette`; `list_my_flames` stays: the JS API's
+   `api_list_flames` uses it) with `SearchFlamesParams` and
+   `PatchPaletteRequest`; the integration tests use the browse calls.
+   The server's `GET /variations/{name}` resolves aliases. Decided while
+   building: **the cache keeps comparing versions** -- the sync moves a
+   variation's or effect's `version` whenever its hash changes, so a
+   hash compare would find nothing more; a missing effect still does not
+   pause rendering (the un-effected picture is a fine thing to see
+   meanwhile); curated Rhai variations and effects are fetched by name
+   through the config's references (step 5), not this path; an edited
+   adopted copy needs no mark dropped -- its hash changes, so it is the
+   user's own from then on.
 7. **Later:**
    - the submission process (D3);
    - browsing another user's items (D2);

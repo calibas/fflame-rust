@@ -245,7 +245,7 @@ pub(crate) fn register_into(registry: &mut crate::variations::VariationRegistry,
             return Err(format!("`{}` is taken by a {} variation", dl.name, existing.provenance.label()));
         }
     }
-    registry.register_from_api(dl, Provenance::Local);
+    registry.register_from_api(dl, Provenance::Local)?;
     // `any`, which the wire cannot say, from the source.
     if phase_of(source) == crate::variations::VariationPhase::Any {
         registry.set_phase(&dl.name, crate::variations::VariationPhase::Any);
@@ -559,7 +559,7 @@ mod tests {
         let mut registry = crate::variations::VariationRegistry::new();
         let (d1, d2, d3) = (compile(v1).unwrap(), compile(&v2).unwrap(), compile(other).unwrap());
         for d in [&d1, &d2, &d3] {
-            registry.register_from_api(d, Provenance::Local);
+            let _ = registry.register_from_api(d, Provenance::Local);
         }
         let hidden = registry.superseded(&[]);
         assert_eq!(hidden.into_iter().collect::<Vec<_>>(), [d1.name.clone()], "the last registered");
@@ -901,7 +901,7 @@ mod tests {
         assert!(compile("const INFO = #{ name: \"rhai_x\", resets_orbits: 1 };\nfn variation(z, p) { z }\n").unwrap_err().contains("true or false"));
 
         let mut registry = crate::variations::VariationRegistry::new();
-        registry.register_from_api(&dl, Provenance::Local);
+        let _ = registry.register_from_api(&dl, Provenance::Local);
         let mut flame = crate::scene::transforms::Flame::default();
         flame.transforms = vec![crate::scene::transforms::Transform::default()];
         flame.transforms[0].variations.clear();
@@ -1340,8 +1340,8 @@ mod tests {
         }
         let plain = compile("const INFO = #{ name: \"rhai_palette_plain\" };\nfn variation(z, p) { z * 0.5 }\n").unwrap();
         let mut registry = crate::variations::VariationRegistry::new();
-        registry.register_from_api(&dl, Provenance::Local);
-        registry.register_from_api(&plain, Provenance::Local);
+        let _ = registry.register_from_api(&dl, Provenance::Local);
+        let _ = registry.register_from_api(&plain, Provenance::Local);
         let menu = crate::escape::lens::lens_menu(&registry);
         assert!(menu.contains(&plain.name) && !menu.contains(&dl.name), "{menu:?}");
     }

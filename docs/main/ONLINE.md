@@ -519,23 +519,34 @@ names with non-zero weight that the registry lacks, and
 | listed, not downloadable | `KnownButNotFetchable` | notifies that a plugin is needed |
 | not listed | `NotInCatalog` | notifies that a plugin is needed |
 
-Fetches (`GET /api/v1/variations/{name}`, no authentication) run in
-parallel and **pause rendering** until they all finish or 30 s pass.
-Each download is cached, then registered as `Api { version }`; then the
-renderer reloads the config so the shader includes them. Failures and
-timeouts are notified. Updating from the Variations panel is the same
-fetch again; names held by a built-in or the user's own are filtered
-out first.
+Fetches (`GET /api/v1/variations/{name}`; a name or an alias, encoded;
+a guest's unsigned, a signed-in one with the token) run in parallel and
+**pause rendering** until they all finish or 30 s pass. Each download
+is **registered first and cached second** (`register_from_api` answers
+whether it took it), so a payload this build refuses -- a built-in's
+name, a custom variation's, a missing shader -- is never cached; then
+the renderer reloads the config so the shader includes them. Failures
+and timeouts are notified. Updating from the Variations panel is the
+same fetch again; names held by a built-in or the user's own are
+filtered out first. A newer version is told by `version`, which the
+API's sync moves whenever a variation's content hash does
+([curated-content.md](../projects/curated-content.md), step 2); the
+hash itself is served (`content_hash`) for a client that wants it.
 
 ### Missing effects
 
 A missing effect is found where the effect chain compiles and has no
-registry entry (`effects::take_missing_effects`). If signed in, the app
-fetches it (`GET /api/v1/effects/{name}`); each name is tried once per
-session. A download is **registered first and cached second**, so a
-payload this build refuses is never cached; a refusal is notified.
-Rendering is not paused: the picture simply lacks the effect until it
-arrives. The registration checks are in [EFFECTS.md](EFFECTS.md).
+registry entry (`effects::take_missing_effects`). The app fetches it
+(`GET /api/v1/effects/{name}`, a guest's too); each name is tried once
+per session. As a variation's, a download is **registered first and
+cached second** -- never under a built-in's or a custom effect's name --
+and a refusal is notified. Rendering is not paused: the picture simply
+lacks the effect until it arrives. The registration checks are in
+[EFFECTS.md](EFFECTS.md).
+
+Both fetches are `api::job`s, kept by one helper (`app::downloads`): a
+new variation batch drops an earlier batch's stragglers with their
+jobs, so none is counted against it.
 
 ---
 

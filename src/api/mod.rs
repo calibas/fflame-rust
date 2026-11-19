@@ -175,8 +175,7 @@ pub enum HealthCheckOutcome {
 /// Percent-encode a query-string value.
 ///
 /// Written rather than pulled in: the need is a few free-text query
-/// values (this endpoint's, and `SearchFlamesParams::to_query_string`'s
-/// name and variation), and the unreserved set from RFC 3986 is short
+/// values (the list words', a name in a path), and the unreserved set from RFC 3986 is short
 /// enough to state.
 pub(crate) fn urlencode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -437,19 +436,6 @@ impl ApiState {
         client::api_delete(&url, &token).await
     }
 
-    /// Your own flames, filtered (`GET /users/me/flames` with its words).
-    pub async fn search_flames(
-        &self,
-        params: &SearchFlamesParams,
-    ) -> FetchResult<Vec<FlameListItem>> {
-        let token = self.require_token()?;
-        let url = build_url(
-            API_BASE_URL,
-            &format!("/api/v1/users/me/flames{}", params.to_query_string()),
-        );
-        client::api_get::<types::Lenient<FlameListItem>>(&url, &token).await.map(types::Lenient::into_inner)
-    }
-
     /// One page of fractals: the public ones, or yours (`sort` =
     /// `recent`, `updated`, `name`, `popular`, `views`; `render_mode` and
     /// the catalog filters as `filters`).
@@ -547,28 +533,6 @@ impl ApiState {
     }
 
     // --- Palettes ---
-
-    /// The caller's palettes, every visibility (`GET /users/me/palettes`),
-    /// each with its colours.
-    pub async fn list_my_palettes(&self, page: u32, per_page: u32) -> FetchResult<Vec<PaletteItem>> {
-        let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/v1/users/me/palettes?page={page}&per_page={per_page}"));
-        client::api_get::<types::Lenient<PaletteItem>>(&url, &token).await.map(types::Lenient::into_inner)
-    }
-
-    /// A palette's content by hash. Public: no auth required.
-    pub async fn get_palette_data(&self, hash: &str) -> FetchResult<ApiPalette> {
-        let url = build_url(API_BASE_URL, &format!("/api/v1/palette-data/{hash}"));
-        client::api_get_unauth(&url).await
-    }
-
-    /// Rename one of the caller's palettes.
-    pub async fn rename_palette(&self, id: &str, name: &str) -> FetchResult<PaletteItem> {
-        let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/v1/palettes/{id}"));
-        let req = PatchPaletteRequest { name: Some(name.to_string()) };
-        client::api_patch(&url, &req, &token).await
-    }
 
     /// Publish a palette of the user's (`POST /palettes`), private or
     /// public: a palette item of its own, its colours by hash.
@@ -714,22 +678,6 @@ impl ApiState {
     // Scripts
     // ========================================================================
 
-    /// The caller's own scripts, of one kind (its wire name,
-    /// `storage::library::Kind::wire`) or every kind.
-    pub async fn list_my_scripts(
-        &self,
-        kind: Option<&str>,
-        page: u32,
-        per_page: u32,
-    ) -> FetchResult<Vec<types::ScriptListItem>> {
-        let token = self.require_token()?;
-        let url = build_url(
-            API_BASE_URL,
-            &format!("/api/v1/users/me/scripts?page={page}&per_page={per_page}{}", kind_param(kind)),
-        );
-        client::api_get::<types::Lenient<types::ScriptListItem>>(&url, &token).await.map(types::Lenient::into_inner)
-    }
-
     /// Create a script. Returns the server's copy — including the id,
     /// and the version to hold for the next update.
     ///
@@ -774,33 +722,6 @@ impl ApiState {
         client::api_delete(&url, &token).await
     }
 
-    /// Public script search.
-    ///
-    /// This is the point where a user can run code somebody else wrote.
-    /// Whatever surfaces these results owes them visible provenance, and
-    /// anything loaded from here must be run through
-    /// `ScriptHost::with_untrusted` — which is what makes running one
-    /// survivable rather than merely allowed.
-    ///
-    /// `kind` narrows it to one kind (its wire name).
-    pub async fn search_public_scripts(
-        &self,
-        query: &str,
-        kind: Option<&str>,
-        page: u32,
-        per_page: u32,
-    ) -> FetchResult<Vec<types::ScriptListItem>> {
-        let url = build_url(
-            API_BASE_URL,
-            &format!(
-                "/api/v1/scripts?q={}&page={page}&per_page={per_page}{}",
-                urlencode(query),
-                kind_param(kind)
-            ),
-        );
-        self.public_get::<types::Lenient<types::ScriptListItem>>(&url).await.map(types::Lenient::into_inner)
-    }
-
     // ========================================================================
     // Effects
     // ========================================================================
@@ -840,14 +761,15 @@ impl ApiState {
     /// refuses a null one rather than adding an effect that renders
     /// nothing.
     pub async fn fetch_effect(&self, name: &str) -> FetchResult<types::EffectDownload> {
-        let url = build_url(API_BASE_URL, &format!("/api/v1/effects/{name}"));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/effects/{}", urlencode(name)));
         self.public_get(&url).await
     }
 
     pub async fn fetch_variation(&self, name: &str) -> FetchResult<types::VariationDownload> {
-        let url = build_url(API_BASE_URL, &format!("/api/v1/variations/{}", name));
-        // Use empty token — variations are publicly readable
-        client::api_get::<types::VariationDownload>(&url, "").await
+        // Publicly readable: a guest's request goes unsigned (never an
+        // empty `Bearer`), a signed-in one carries the token.
+        let url = build_url(API_BASE_URL, &format!("/api/v1/variations/{}", urlencode(name)));
+        self.public_get(&url).await
     }
 
     /// List all available variations on the server (summary form, no shader code).
@@ -890,11 +812,6 @@ pub fn is_newer_release(latest: &str, current: &str) -> bool {
         }
         _ => false,
     }
-}
-
-/// `&kind=<wire name>`, or nothing for every kind.
-fn kind_param(kind: Option<&str>) -> String {
-    kind.map(|k| format!("&kind={}", urlencode(k))).unwrap_or_default()
 }
 
 #[cfg(test)]

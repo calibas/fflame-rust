@@ -699,6 +699,12 @@ impl EffectRegistry {
                     dl.name
                 ));
             }
+            // Nor one the user wrote, as a variation's download may not:
+            // something they did not write never silently replaces
+            // something they did.
+            if existing.provenance == crate::provenance::Provenance::Local && provenance != crate::provenance::Provenance::Local {
+                return Err(format!("a custom effect is named `{}`; the download would replace it", dl.name));
+            }
         }
         let mut info = check_download(dl)?;
         info.provenance = provenance;

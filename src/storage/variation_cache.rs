@@ -87,7 +87,9 @@ pub fn load_all_into_registry() {
     let mut registry = crate::variations::global_registry_mut();
     for download in cached {
         let provenance = Provenance::Api { version: download.version };
-        registry.register_from_api(&download, provenance);
+        if let Err(e) = registry.register_from_api(&download, provenance) {
+            log::warn!("cached variation not registered: {e}");
+        }
     }
 }
 

@@ -233,15 +233,16 @@ fn a_rhai_formula_is_published_under_its_id_and_adopted_by_another_account() {
     let update = entries::create_request(&file, &edited, None, Some(created.version)).unwrap();
     let updated = block(author.update_script(&id, &update)).unwrap_or_else(|e| panic!("update: {e}"));
     assert!(updated.version > created.version);
-    let mine = block(author.list_my_scripts(Some("formula"), 1, 100)).unwrap();
+    let mine = block(author.browse_scripts(Scope::Mine, &Browse { kind: Some("formula".into()), per_page: 100, ..Default::default() })).unwrap().items.into_inner();
     assert!(mine.iter().any(|s| s.id == id), "listed as the author's formula");
 
     let other = signed_in();
     let taken = block(other.create_script(&req)).expect_err("the first to publish an id owns it");
     assert!(matches!(taken, crate::resources::FetchError::Http { status: 409, .. }), "{taken}");
-    let found = block(other.search_public_scripts(&name, Some("formula"), 1, 50)).unwrap();
+    let search = |kind: &str| Browse { q: name.clone(), kind: Some(kind.into()), per_page: 50, ..Default::default() };
+    let found = block(other.browse_scripts(Scope::Public, &search("formula"))).unwrap().items.into_inner();
     assert!(found.iter().any(|s| s.id == id), "found by kind");
-    let generators = block(other.search_public_scripts(&name, Some("generator"), 1, 50)).unwrap();
+    let generators = block(other.browse_scripts(Scope::Public, &search("generator"))).unwrap().items.into_inner();
     assert!(!generators.iter().any(|s| s.id == id));
 
     let resp = block(other.load_script(&id)).unwrap();
@@ -276,16 +277,16 @@ fn palettes_are_items_and_a_stale_write_is_a_conflict() {
     .unwrap_or_else(|e| panic!("create a palette: {e}"));
     let id = made["id"].as_str().unwrap().to_string();
 
-    let mine = block(api.list_my_palettes(1, 100)).unwrap();
+    let my_palettes = || block(api.browse_palettes(Scope::Mine, &Browse { per_page: 100, ..Default::default() })).unwrap().items.into_inner();
+    let mine = my_palettes();
     let listed = mine.iter().find(|p| p.id == id).expect("listed");
     assert_eq!(listed.name, "it palette");
     assert_eq!(listed.content.hash.as_deref(), Some(listed.content_hash.as_str()));
-    let renamed = block(api.rename_palette(&id, "renamed")).unwrap();
-    assert_eq!(renamed.name, "renamed");
-    let data = block(api.get_palette_data(&listed.content_hash)).unwrap();
-    assert_eq!(data.hash.as_deref(), Some(listed.content_hash.as_str()));
+    let patch = crate::api::types::ItemPatch { name: Some("renamed".into()), visibility: None };
+    block(api.patch_item("palettes", &id, &patch)).unwrap();
+    assert_eq!(block(api.get_palette(&id)).unwrap().name, "renamed");
     block(api.delete_palette(&id)).unwrap();
-    assert!(block(api.list_my_palettes(1, 100)).unwrap().iter().all(|p| p.id != id));
+    assert!(my_palettes().iter().all(|p| p.id != id));
 
     let source = "// It conflict\nscript(\"It conflict\", \"generator\", []);\n";
     let name = format!("it_conflict_{}", &crate::scripted::mint_id()[..8]);
