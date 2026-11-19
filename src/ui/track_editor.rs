@@ -681,16 +681,22 @@ fn script_row(animation: &Animation, index: usize) -> Option<ScriptRow> {
 }
 
 /// The menu adding a script track: one of the shipped examples, one of
-/// the user's track plug-ins, or a new one begun in the Formula Editor.
+/// the user's or adopted track files (compiled as the lists compile every
+/// file: docs/projects/one-list.md), or a new one begun in the Formula
+/// Editor.
 ///
 /// Drawn every frame the panel shows, so it does nothing until opened: the
 /// examples are found once (compiling every shipped formula to find the
 /// tracks cost 34 ms a frame, a tenth of the flame's frame rate), and the
-/// plug-ins are listed only while the menu is open.
+/// files are listed only while the menu is open.
 fn script_track_menu(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditorState) {
     ui.menu_button(t!("track_editor.add_script_track"), |ui| {
         let examples = track_examples();
-        let plugins = crate::storage::library::plugins_of(crate::storage::library::Kind::Track);
+        let plugins: Vec<crate::storage::library::Plugin> = super::inventory::shared()
+            .iter()
+            .filter(|e| e.kind == crate::inventory::Kind::Track && matches!(e.key, crate::inventory::EntryKey::File { shipped: false, .. }))
+            .filter_map(super::inventory::plugin_of)
+            .collect();
         let mut add: Option<String> = None;
         for (title, source) in examples {
             if ui.button(title.as_str()).clicked() {

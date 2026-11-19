@@ -149,7 +149,6 @@ pub fn entry(item: &Item, group: Group, local: &[Entry]) -> Option<Entry> {
         authors,
         version: None,
         origin: Origin::Api,
-        plugin: false,
         group,
         link: None,
         installed: true,

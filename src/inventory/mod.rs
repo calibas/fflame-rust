@@ -202,8 +202,6 @@ pub struct Entry {
     /// hex); `None` for a built-in.
     pub version: Option<String>,
     pub origin: Origin,
-    /// A Rhai entry the app registers at start (`Link::plugin`).
-    pub plugin: bool,
     pub group: Group,
     /// A file's link record: its online id, owner, visibility.
     pub link: Option<Link>,
@@ -228,6 +226,9 @@ pub struct Entry {
 pub struct Online<'a> {
     pub variations: &'a [crate::api::types::VariationListItem],
     pub effects: &'a [crate::api::types::EffectListItem],
+    /// The curated online scripts of the kinds a picker uses
+    /// (docs/projects/one-list.md, L3), offered until adopted.
+    pub scripts: &'a [crate::api::types::ScriptListItem],
 }
 
 impl Entry {
@@ -264,6 +265,7 @@ pub fn scan(palettes: &crate::scene::palette::PaletteLibrary, online: Online) ->
     sources::escape(&mut out);
     sources::simulation(&mut out);
     sources::files(&mut out);
+    sources::curated_scripts(online, &mut out);
     // Stable: within a kind and group, each source's order stands.
     out.sort_by_key(|e| (e.kind, e.group.order));
     out
@@ -386,6 +388,9 @@ pub fn revision(palettes: &crate::scene::palette::PaletteLibrary, files: u64, on
     for e in online.effects {
         (e.name.as_str(), e.version, e.downloadable).hash(&mut h);
     }
+    for s in online.scripts {
+        (s.id.as_str(), s.version).hash(&mut h);
+    }
     palettes.generation().hash(&mut h);
     for i in 0..palettes.pack_count() {
         palettes.get_pack_info(i).map(|p| (p.pack.is_some(), p.enabled)).hash(&mut h);
@@ -402,7 +407,6 @@ pub fn revision(palettes: &crate::scene::palette::PaletteLibrary, files: u64, on
             (e.name.as_str(), e.provenance.version()).hash(&mut h);
         }
     }
-    crate::storage::library::plugins().len().hash(&mut h);
     h.finish()
 }
 

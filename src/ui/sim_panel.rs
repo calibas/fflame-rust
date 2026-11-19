@@ -924,12 +924,12 @@ fn render_coloring_section(
             // plug-ins (P3, P4), in every slot, a plug-in's source carried
             // beside its name, as Use carries it.
             let admit = |e: &crate::inventory::Entry| {
-                e.kind == crate::inventory::Kind::SimColoring && e.installed && (e.plugin || matches!(e.key, crate::inventory::EntryKey::Registered(..)))
+                e.kind == crate::inventory::Kind::SimColoring && super::inventory::pickable(e)
             };
             let btn = super::picker::button(ui, coloring.display_name);
             let picked = super::picker::Picker::new(format!("{}_pick", slot.salt()), &admit).current(Some(coloring.name)).popup(ui, &btn);
             let (builtin, plugin) = match &picked {
-                Some(e) if e.plugin => (None, super::inventory::plugin_of(e).filter(|p| p.key != coloring.name)),
+                Some(e) if matches!(e.key, crate::inventory::EntryKey::File { .. }) => (None, super::inventory::plugin_of(e).filter(|p| p.key != coloring.name)),
                 Some(e) => (super::picker::key_name(e).and_then(|n| COLORINGS.iter().find(|c| c.name == n)).filter(|c| c.name != coloring.name), None),
                 None => (None, None),
             };
@@ -1548,11 +1548,11 @@ fn render_model_section(
             // every layer, a plug-in's source carried beside its name, as
             // Use carries it; each one's description its tooltip.
             let admit = |e: &crate::inventory::Entry| {
-                e.kind == crate::inventory::Kind::SimModel && e.installed && (e.plugin || matches!(e.key, crate::inventory::EntryKey::Registered(..)))
+                e.kind == crate::inventory::Kind::SimModel && super::inventory::pickable(e)
             };
             let btn = super::picker::button(ui, model.display_name);
             if let Some(e) = super::picker::Picker::new(format!("{}_model", slot.salt()), &admit).current(Some(model.name)).popup(ui, &btn) {
-                if e.plugin {
+                if matches!(e.key, crate::inventory::EntryKey::File { .. }) {
                     if let Some(p) = super::inventory::plugin_of(&e).filter(|p| p.key != model.name) {
                         choose_plugin_model(config_manager, slot, &p);
                     }

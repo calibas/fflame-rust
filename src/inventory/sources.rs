@@ -15,7 +15,6 @@ fn entry(kind: Kind, key: EntryKey, title: &str, group: Group, origin: Origin) -
         authors: Vec::new(),
         version: None,
         origin,
-        plugin: false,
         group,
         link: None,
         installed: true,
@@ -201,6 +200,30 @@ pub(super) fn available(online: super::Online, out: &mut Vec<Entry>) {
     }
 }
 
+/// The curated online scripts (L3): a row each, not installed, in an
+/// *Available online* group after a kind's own; one already adopted (a
+/// file whose link names it) is not offered again, nor the app's own
+/// shipped content the server holds too (`origin` "builtin": installed
+/// here as the built-ins and examples). Its Download adopts it
+/// (`ScriptCloudRequest::Adopt`), and as a file it can be picked.
+pub(super) fn curated_scripts(online: super::Online, out: &mut Vec<Entry>) {
+    let held: std::collections::HashSet<String> =
+        out.iter().filter_map(|e| e.link.as_ref().and_then(|l| l.cloud_id.clone())).collect();
+    let group = || Group { order: 1000, label: t!("inventory.group.available").to_string() };
+    for s in online.scripts.iter().filter(|s| !held.contains(&s.id) && s.origin.as_deref() != Some("builtin")) {
+        let Some(kind) = s.kind.as_deref().and_then(super::online::script_kind) else { continue };
+        let title = if s.display_name.is_empty() { &s.name } else { &s.display_name };
+        let mut e = entry(kind, EntryKey::Online(kind, s.id.clone()), title, group(), Origin::Api);
+        e.description = s.description.clone().unwrap_or_default();
+        e.authors = match s.curated.as_ref().and_then(|c| c.credit.clone()) {
+            Some(credit) if s.authors.is_empty() => vec![credit],
+            _ => s.authors.clone(),
+        };
+        e.installed = false;
+        out.push(e);
+    }
+}
+
 // ------------------------------------------------------------ escape kinds
 
 /// The escape registries' built-ins: formulas, colourings, fields and
@@ -283,7 +306,6 @@ pub(super) fn files(out: &mut Vec<Entry>) {
         e.description = f.description;
         e.authors = prose::authors(&f.author);
         e.version = Some(f.version);
-        e.plugin = f.link.plugin;
         if !shipped {
             e.link = Some(f.link);
         }

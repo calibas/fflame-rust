@@ -1477,7 +1477,10 @@ Not given a branch, for the user to place:
   WGSL.
 - **D3. The old plug-in system is deprecated**: "it's not really being
   used, and I'm not sure it even works correctly still." Retired at the
-  start of P1; Rhai plug-ins replace it in P3.
+  start of P1; Rhai plug-ins replace it in P3. **Superseded 2026-11-19**
+  ([one-list.md](../../projects/one-list.md), L1): the Rhai plug-in flag
+  (*Load at start*) is retired too; every Rhai file of a list's kind is
+  in the lists, compiled on demand.
 - **D4. Script tracks are a function of time** (P5).
 - **D5. Simulations before tracks**: the order is P0, P1, P2, P3, P4
   simulations, P5 tracks, P6 the API.

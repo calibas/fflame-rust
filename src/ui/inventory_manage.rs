@@ -278,16 +278,6 @@ impl Manage {
             });
         }
         let text = manage::load(store, file).unwrap_or_default();
-        if manage::can_be_plugin(store, file, &text) {
-            let mut on = e.plugin;
-            if ui.checkbox(&mut on, t!("formula_editor.plugin")).on_hover_text(t!("formula_editor.plugin_tip")).changed() {
-                match manage::set_plugin(file, on) {
-                    Ok(title) if on => self.ok(t!("formula_editor.plugin_on", title = title)),
-                    Ok(_) => self.ok(t!("formula_editor.plugin_off", file = file)),
-                    Err(err) => self.fail(t!("formula_editor.plugin_failed", file = file, error = err)),
-                }
-            }
-        }
         if e.kind != Kind::Unreadable {
             self.render_online(ui, store, file, &text, cx, out);
         }

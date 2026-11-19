@@ -4,15 +4,15 @@
 `fractalsforall.com`: signing in, saving and loading flames and
 animations, the cloud palette library and the script library, and the
 **shared resources** — variations and effects the app downloads,
-caches and registers at run time, next to the user's own local
-plugins. Also what this repository publishes **for** the service: the
+caches and registers at run time, next to the user's own Rhai
+files. Also what this repository publishes **for** the service: the
 generated engine contract, the corpora, and the OpenAPI spec both
 repositories work to. The app renders fully offline; every online
 feature fails to a status line, not to a broken panel.
 
 **See also:**
 - [VARIATIONS.md](VARIATIONS.md) — the registry rules downloads and
-  plugins register under
+  the user's Rhai files register under
 - [EFFECTS.md](EFFECTS.md) — the effect registry and its download checks
 - [ANIMATION.md](ANIMATION.md) — what an animation carries
 - [FRACTAL-BROWSER.md](FRACTAL-BROWSER.md) — the Fractal Browser's Online
@@ -405,8 +405,8 @@ and searching are the Catalog's (above).
 | `Publish` | create; records the returned id and version against the local file |
 | `Update` | update with the version last read; a 409 is a **conflict** the user resolves (`ScriptConflict`) in the info pane of the file it names: overwrite the server's copy, or load theirs (`Refetch`) |
 | `Adopt` | fetch someone's script and save it locally under a free name, marked as somebody else's: a CPU script in the script store (it runs under the restrictions downloaded scripts get), an entry in the formula library. A kind this build does not know is refused |
-| `Refetch` | replace a local file's content with the server's in place, keeping its provenance and plug-in flag |
-| `Unpublish` | delete it from the server; the local copy stays (and stays a plug-in) |
+| `Refetch` | replace a local file's content with the server's in place, keeping its provenance |
+| `Unpublish` | delete it from the server; the local copy stays, now only the user's |
 | `SetVisibility` | make a published file public or private |
 
 A CPU script's payload (`script_to_create_request`) is derived from the
@@ -452,8 +452,8 @@ not.
 Every registered variation and effect has a `Provenance`
 ([provenance.rs](../../src/provenance.rs)), the registry's form of the
 one origin model every kind shares (`Origin`: `Builtin`, `Local`,
-`Api`), with the server's version on a download. A plug-in is `Local`
-in the registry whoever wrote it (the user keeps it: Clear Cache leaves
+`Api`), with the server's version on a download. A compiled Rhai file
+is `Local` in the registry whoever wrote it (the user keeps it: Clear Cache leaves
 it); the library's mark on its file says who wrote it.
 
 | | `Builtin` | `Api { version }` | `Local` (the user's own Rhai) |
@@ -564,11 +564,12 @@ jobs, so none is counted against it.
 
 Local WGSL plug-in files -- a variation or effect in the download's
 JSON under `<app data>/plugins/variations/` or `plugins/effects/` --
-were retired 2026-11-01 ([rhai-plugins.md](../archive/projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them. A start that finds such files names them in a
+were retired 2026-11-01 ([rhai-plugins.md](../archive/projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai files replace them. A start that finds such files names them in a
 notice (stderr headless) for one release and leaves them in place
-(`storage::retired_plugin_files`). Their replacement is local: Rhai
-plug-ins, a flag on a file of the user's formulas
-([VARIATIONS.md](VARIATIONS.md#downloaded-variations)).
+(`storage::retired_plugin_files`). Their replacement is local: a Rhai
+file of the user's formulas, in the lists as it is in the Catalog
+([VARIATIONS.md](VARIATIONS.md#downloaded-variations)); the later *Load
+at start* flag is retired too ([one-list.md](../projects/one-list.md)).
 
 ---
 

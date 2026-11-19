@@ -212,9 +212,10 @@ place.
 
 The registries also change at runtime, which is why
 `global_registry()` and `global_effect_registry()` return lock guards:
-- Downloaded variations and effects, cached from the online API, and
-  the user's Rhai plug-ins (Load at start, `storage::library::load_plugins`)
-  register through `storage::load_installed_resources`. The app calls
+- Downloaded variations and effects, cached from the online API,
+  register through `storage::load_installed_resources`; a Rhai file of a
+  list's kind registers when a list first compiles it
+  (`storage::library::compile_file`). The app calls
   it at start, and so do the CLI's `export` and `export-animation`
   (`report_installed_resources` in `src/lib.rs`); `generate`, the
   gallery modules and the Python module have no store and do not.

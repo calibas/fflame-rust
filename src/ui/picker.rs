@@ -218,7 +218,9 @@ impl<'a> Picker<'a> {
             .lead
             .iter()
             .filter(|e| e.matches(&query))
-            .chain(shared.iter().chain(self.extra.iter()).filter(|e| (self.admit)(e) && e.matches(&query)))
+            // What can be downloaded only when the user's setting offers
+            // it (docs/projects/one-list.md, L3).
+            .chain(shared.iter().chain(self.extra.iter()).filter(|e| (e.installed || super::inventory::picker_downloads()) && (self.admit)(e) && e.matches(&query)))
             .collect();
         let mut picked = None;
         egui::ScrollArea::vertical().id_salt(self.id.with("scroll")).max_height(self.max_height).show(ui, |ui| {
@@ -322,7 +324,6 @@ pub fn row(kind: Kind, name: &str, title: &str, group: Group) -> Entry {
         authors: Vec::new(),
         version: None,
         origin: Origin::Local,
-        plugin: false,
         group,
         link: None,
         installed: true,
@@ -336,22 +337,14 @@ pub fn row(kind: Kind, name: &str, title: &str, group: Group) -> Entry {
 /// the user's (`Provenance::Local`) that no plug-in file stands for (the
 /// Catalog lists those), one version each, under "Custom".
 pub fn own_variations(flame: &crate::scene::transforms::Flame) -> Vec<Entry> {
-    let shared = super::inventory::shared();
-    let plugin_keys: std::collections::HashSet<String> = shared
-        .iter()
-        .filter(|e| e.plugin && e.kind == Kind::Variation)
-        .filter_map(super::inventory::applied_name)
-        .collect();
     let registry = crate::variations::global_registry();
     let superseded = registry.superseded(&flame.custom_variations);
     let group = Group { order: 2000, label: t!("inventory.group.yours").to_string() };
     registry
         .all()
         .into_iter()
-        .filter(|v| v.provenance == crate::provenance::Provenance::Local && !plugin_keys.contains(&v.name) && !superseded.contains(&v.name))
-        // Registered only to draw a Catalog preview, unless the fractal
-        // carries it.
-        .filter(|v| !super::inventory_preview::preview_only(&v.name) || flame.custom_variations.iter().any(|c| c.entry == v.name))
+        // Not a file's: the list offers that as its file (L1).
+        .filter(|v| v.provenance == crate::provenance::Provenance::Local && !crate::storage::library::is_file_key(&v.name) && !superseded.contains(&v.name))
         .map(|v| row(Kind::Variation, &v.name, &v.display_name, group.clone()))
         .collect()
 }
@@ -388,7 +381,7 @@ mod tests {
         };
         let offered = [item("it_picker_offered", "Offered Afar"), item("it_pane_offered", "Pane Faraway")];
         let lib = crate::scene::palette::global_palette_library().read().unwrap().clone();
-        super::super::inventory::InventoryPanel::new().refresh(&lib, 0, crate::inventory::Online { variations: &offered, effects: &[] });
+        super::super::inventory::InventoryPanel::new().refresh(&lib, 0, crate::inventory::Online { variations: &offered, effects: &[], scripts: &[] });
     }
 
     /// Every piece of text a frame drew.

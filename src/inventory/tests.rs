@@ -154,7 +154,6 @@ fn a_search_reads_names_prose_and_authors() {
         authors: vec!["Someone Else".into()],
         version: None,
         origin: Origin::Builtin,
-        plugin: false,
         group: Group { order: 0, label: String::new() },
         link: None,
         installed: true,
@@ -192,7 +191,7 @@ fn what_the_server_offers_is_listed_to_download() {
     }))
     .unwrap();
     let effects = [effect];
-    let all = scan(&lib(), Online { variations: &variations, effects: &effects });
+    let all = scan(&lib(), Online { variations: &variations, effects: &effects, scripts: &[] });
     let named = |name: &str| all.iter().filter(|e| matches!(&e.key, EntryKey::Registered(_, n) if n == name)).collect::<Vec<_>>();
 
     let offered = named("it_offered_only");
@@ -208,7 +207,35 @@ fn what_the_server_offers_is_listed_to_download() {
     assert_eq!((fx.len(), fx[0].installed, fx[0].category.as_deref()), (1, false, Some("density")));
 
     // The list is read again when the catalog changes.
-    assert_ne!(revision(&lib(), 0, Online::default()), revision(&lib(), 0, Online { variations: &variations, effects: &effects }));
+    assert_ne!(revision(&lib(), 0, Online::default()), revision(&lib(), 0, Online { variations: &variations, effects: &effects, scripts: &[] }));
+}
+
+/// The curated online scripts are offered to download (L3), unless the
+/// server's copy is the app's own shipped content or a kind this build does
+/// not know; a script already adopted is offered no more.
+#[test]
+fn curated_scripts_are_offered_until_adopted() {
+    use crate::api::types::ScriptListItem;
+    let script = |id: &str, kind: &str, origin: &str| -> ScriptListItem {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": id, "display_name": format!("{id} shown"), "kind": kind, "origin": origin, "version": 2,
+            "description": "Curated **prose**",
+            "curated": { "name": format!("{id}-canonical"), "current": true, "content_hash": "h", "credit": "Credited" }
+        }))
+        .unwrap()
+    };
+    let scripts = [script("it-curated-formula", "formula", "user"), script("it-shipped", "coloring", "builtin"), script("it-newer-kind", "hologram", "user")];
+    let all = scan(&lib(), Online { scripts: &scripts, ..Online::default() });
+    let online = |id: &str| all.iter().filter(|e| matches!(&e.key, EntryKey::Online(_, i) if i == id)).collect::<Vec<_>>();
+    let offered = online("it-curated-formula");
+    assert_eq!(offered.len(), 1);
+    let e = offered[0];
+    assert!(!e.installed && e.origin == Origin::Api && e.kind == Kind::Formula);
+    assert_eq!((e.title.as_str(), e.description.as_str()), ("it-curated-formula shown", "Curated **prose**"));
+    assert_eq!(e.authors, vec!["Credited".to_string()], "the curation's credit, when no authors");
+    assert!(online("it-shipped").is_empty(), "the app's own content is installed as such");
+    assert!(online("it-newer-kind").is_empty(), "a kind this build does not know is not offered");
+    assert_ne!(revision(&lib(), 0, Online::default()), revision(&lib(), 0, Online { scripts: &scripts, ..Online::default() }));
 }
 
 /// A saved Rhai file that does not parse stays listed (as an unreadable

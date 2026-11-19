@@ -51,13 +51,13 @@ It is drawn in every mode.
 
 `inventory::scan(palettes)` reads every source into one list of
 `Entry`s: kind, key, title, description, authors, version, origin
-(`provenance::Origin`), plug-in flag, group and link record. The list is
+(`provenance::Origin`), group and link record. The list is
 sorted by kind, then group, then each source's own order -- never a
 map's. `inventory::revision(palettes, files)` hashes what changes while
 the app runs (the palette library's generation and packs, the variation
-and effect registries, the plug-ins, and the stores' change count, the
-online library's `library_generation`); the panel scans again when it
-changes.
+and effect registries, the stores' change count, the online library's
+`library_generation`, the curated scripts fetched); the panel scans again
+when it changes.
 
 | Kind | Source | Key | Group |
 |---|---|---|---|
@@ -78,10 +78,19 @@ changes.
   them, never with an exponent. Checked against vectors the server's
   function produced (`a_palettes_id_is_the_servers_content_hash`). The same
   palette in two packs is one palette, listed in each.
-- **The user's own registry entries are not listed twice**: a plug-in is
-  its file (marked a plug-in), and a source a config carries is the
-  config's. A built-in's Rhai twin is the built-in's own source, not an
-  entry of its own.
+- **The user's own registry entries are not listed twice**: a compiled
+  file is its file, and a source a config carries is the config's. A
+  built-in's Rhai twin is the built-in's own source, not an entry of its
+  own.
+- **One list, no plug-ins** ([one-list.md](../projects/one-list.md)): a
+  Rhai file of a kind a list uses -- a shipped example, a file of the
+  user's, an adopted one -- is in the pickers as it is in the Catalog,
+  compiled the first time a list or a preview asks
+  (`ui::inventory::compiled` -> `library::compile_file`, once per file and
+  version, a file with no `INFO.id` under one derived from its name).
+  Where a thing came from is its origin and link, nothing else: the
+  *Load at start* flag (`Link::plugin`) is retired and ignored in old
+  `_links.json` files.
 - **Prose comes from where it is written** (`inventory::prose`): a
   variation's twin opens with its built-in's doc block, so 640 of the 647
   have their description and authors offline; a built-in's Rhai twin's
@@ -109,11 +118,11 @@ changes.
   Escape-Time, Simulation, Effects, Scripts; it opens on Fractals) with
   its count; a search over the
   title, the name, the description and the authors; an origin filter
-  (every origin, built-in, custom, from others, plug-ins); and, in a family
+  (every origin, built-in, custom, from others); and, in a family
   of several kinds, a chip a kind.
 - **The list**: the family's entries in collapsing groups with counts;
   a row is the title and its origin's mark (` *` yours, ` ↓` somebody
-  else's, `(plug-in)`), its description's first line as the tooltip.
+  else's), its description's first line as the tooltip.
 - **Palettes**: pack by pack, each with its enable checkbox, its load
   state and a Retry (`palette_library::pack_section`), a row each: the name
   and a gradient (`palette_preview`, made once a row is on screen, kept
@@ -144,15 +153,15 @@ functions:
 | Palette | the config's palette, an editable copy (`ConfigPath::Palette`) |
 | Fractal | loads it (`load_config_with_undo`, as the Fractal Browser did) |
 | Variation | adds it at weight 1 to the transform the editors are on (`transforms::editing_transform`: the Triangle Editor's selection, else the first), its source carried for a Rhai one (`transforms::add_variation`) |
-| Effect | adds it at the end of its chain, a plug-in's source carried (`effects_panel::add_effect`) |
+| Effect | adds it at the end of its chain, a file's source carried (`effects_panel::add_effect`) |
 | Formula, Field, Solid | `escape_panel::choose_formula` / `choose_field` / `choose_solid`: the default view, entering Escape |
 | Coloring | `escape_panel::pick_coloring`: what a fresh pick sets |
 | Field or Solid Coloring | `escape_panel::choose_named_coloring` |
 | Simulation Model | the first layer's (`sim_panel::choose_first_layer_model`) |
 | Simulation Coloring | the base colouring (`sim_panel::choose_base_coloring`) |
-| A plug-in file | as its kind, by its registered key (`escape_panel::choose_plugin`, ...) |
+| A Rhai file that compiles | as its kind, by its compiled key (`escape_panel::choose_plugin`, ...) |
 | A CPU script | runs it: the info pane's parameters, seed, Generate / Apply, Batch / Mutate (`ui::script_run`) |
-| Another Rhai file, a UF or Fractint file, a track | **Edit** opens it in the Rhai Editor (`RhaiEditorPanel::open_file`); a plug-in is used as its kind |
+| Another Rhai file (one that does not compile), a UF or Fractint file, a track | **Edit** opens it in the Rhai Editor (`RhaiEditorPanel::open_file`); Use says why it cannot apply |
 
 **Not installed.** What the server offers and the app lacks -- a
 variation or an effect in the cached catalog (`inventory::Online`, the
@@ -194,15 +203,31 @@ shared (`inventory::shared`), so every list of a kind is the same list.
 | Escape lens | None, the recommended lenses, then the measured set (Show all: every variation, downloads too) | `lens_choice` |
 | Escape transformations | variations with a 2D body (a solid: a 3D body) | the entry's variation |
 | Effects: Add effect… | effects of the stage (an uninstalled one by its catalog `category`) | `add_effect` |
-| Escape formula | formulas, fields, solids, plug-ins of those kinds | `inventory::use_entry` |
-| Escape colouring | the colourings that draw the formula (`coloring_suits_formula`), plug-ins | `use_entry` (`pick_coloring`) |
-| A field's or a solid's colouring | its registry's (a solid: `coloring_applies`), plug-ins | `use_entry` |
+| Escape formula | formulas, fields, solids, Rhai files of those kinds that compile | `inventory::use_entry` |
+| Escape colouring | the colourings that draw the formula (`coloring_suits_formula`), Rhai colouring files | `use_entry` (`pick_coloring`) |
+| A field's or a solid's colouring | its registry's (a solid: `coloring_applies`), Rhai files of the kind | `use_entry` |
 | Texture layer | None, the colourings that draw the formula; one the base refuses greyed (`layer_refusal`) | `pick_layer` |
-| Simulation model, colourings | models, colourings, plug-ins, in every layer and slot | the slot's own choice |
+| Simulation model, colourings | models, colourings, Rhai files of the kind, in every layer and slot | the slot's own choice |
 | Colors: palette | the palettes of enabled packs | the config's palette, an editable copy |
 
-A plug-in file is picked by its registered key (`inventory::applied_name`);
-the Random Generator's variation multi-select stays as it is.
+A picker admits what it can use (`inventory::pickable`): an installed
+built-in or download, a file that compiles; a UF or Fractint file, a file
+that does not compile, is not offered (L2). A file is picked by its
+compiled key (`inventory::applied_name`); the Random Generator's variation
+multi-select stays as it is.
+
+**Downloads in pickers** (L3): the pickers also offer what is not
+installed -- the server's variations and effects (as the Catalog's
+*Available to download*), and the **curated online scripts** of the kinds
+the pickers use (`sources::curated_scripts`; fetched once a session by
+the panel, `Scope::Curated`; the app's own shipped content the server
+holds, `origin` "builtin", left out; one already adopted left out). A
+curated row's Download adopts it (`ScriptCloudRequest::Adopt`, one at a
+time, as the Online place adopts); once adopted it is a file and is
+picked. The Catalog's own list leaves those rows to its Online place.
+**Offer downloads in pickers** in the Catalog menu
+(`SystemSettings::picker_downloads`, on unless turned off) offers only
+what is installed when off.
 
 ---
 
@@ -287,7 +312,7 @@ info pane offers, for
 
 | Entry | Actions |
 |---|---|
-| A Rhai file of yours (either store) | **Edit**, **Rename...**, **Duplicate**, **Delete...** (confirmed), **Export...**, the **plug-in** flag (a GPU entry), and **Online**: Publish (private, public), Update, Make Public / Make Private, Unpublish; a conflict's Overwrite / Load theirs, shown with the file it names |
+| A Rhai file of yours (either store) | **Edit**, **Rename...**, **Duplicate**, **Delete...** (confirmed), **Export...**, and **Online**: Publish (private, public), Update, Make Public / Make Private, Unpublish; a conflict's Overwrite / Load theirs, shown with the file it names |
 | A shipped file, a built-in with a Rhai twin | **Edit as Rhai**: a copy among your files (`inventory::twin_source`), opened in the editor |
 | A palette of yours (the Custom pack) | **Rename...**, **Delete...**, Publish (private, public): a palette item of its own online |
 | Online, a fractal or palette of yours | **Rename...**, Make Public / Make Private, **Delete...** |
@@ -301,13 +326,13 @@ The operations are `storage::manage`'s, over both stores' rules (a
 formula file keyed by its name and extension, a script by its stem; a
 shipped stem reserved):
 
-- **Rename** keeps the file's link (cloud id, origin) and its plug-in,
-  registered again under the new name; a taken name is refused.
-- **Duplicate** is a new file of the user's: no cloud id, no plug-in,
-  an entry's `INFO.id` replaced (two files with one id would be one
-  script online and to the plug-in lists).
-- **Delete** unlists a plug-in and drops the link with the file; a
-  published copy stays online.
+- **Rename** keeps the file's link (cloud id, origin); it compiles again
+  under the new name; a taken name is refused.
+- **Duplicate** is a new file of the user's: no cloud id, an entry's
+  `INFO.id` replaced (two files with one id would be one script online
+  and in the lists).
+- **Delete** forgets its compiled record and drops the link with the
+  file; a published copy stays online.
 - **Import** and **New** never overwrite: a taken name gains `-2`, `-3`.
 - Somebody else's file, as adopted, is not the user's to publish
   (`manage::publish_refusal`); an edit or a copy of it is (decision 3,
@@ -376,13 +401,13 @@ entry's version, so an update or an edit makes a new one:
 | Colouring (escape, field, solid) | the default formula drawn with it |
 | Simulation model, colouring | its first layer or base colouring, run 400 steps at most |
 | Generator | its run at seed 1; a modifier: the reference fractal, modified at seed 1 |
-| A plug-in file | as its kind |
+| A Rhai file of a list's kind | as its kind |
 | Palette, fractal | their gradient, the gallery, the server's thumbnail, as before |
 
-A Rhai file of a kind that can be a plug-in -- an example, a file of
-yours -- previews through what registering it makes
-(`library::prepare_plugin`, not listed as a plug-in; the pickers do not
-offer it). A library, a track and an unreadable file have none. Previews
+A Rhai file of a kind a list uses -- an example, a file of yours, an
+adopted one -- previews through what compiling it makes
+(`inventory::plugin_of`, the same record the pickers use). A library, a
+track and an unreadable file have none. Previews
 that take the default palette use Fire without its black end, which on
 the black background hid whatever was drawn at index 0; a colouring
 starts from its own parameters, not the formula preset's. The info pane shows the selected entry's preview above

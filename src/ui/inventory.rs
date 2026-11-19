@@ -42,6 +42,62 @@ static SHARED: RwLock<Option<Arc<Vec<Entry>>>> = RwLock::new(None);
 /// again).
 static DOWNLOADS: Mutex<(Vec<(Kind, String)>, Vec<(Kind, String)>)> = Mutex::new((Vec::new(), Vec::new()));
 
+/// Curated online scripts asked for (L3): those not yet handed to the
+/// script cloud, and every id asked for this session.
+static ADOPTS: Mutex<(Vec<String>, Vec<String>)> = Mutex::new((Vec::new(), Vec::new()));
+
+/// The next curated script to adopt, when the script cloud is free: one
+/// at a time, as it takes one request at a time.
+pub fn take_adopt(busy: bool) -> Option<String> {
+    if busy {
+        return None;
+    }
+    let mut a = ADOPTS.lock().ok()?;
+    (!a.0.is_empty()).then(|| a.0.remove(0))
+}
+
+/// The curated online scripts the pickers offer (L3): asked for once a
+/// session, while the pickers offer downloads; until the answer, none;
+/// offline, none.
+#[derive(Default)]
+struct CuratedScripts {
+    job: Option<crate::api::job::Job<Vec<crate::api::types::ScriptListItem>>>,
+    asked: bool,
+    items: Vec<crate::api::types::ScriptListItem>,
+}
+
+impl CuratedScripts {
+    fn poll(&mut self) {
+        if !self.asked && picker_downloads() && !cfg!(test) {
+            self.asked = true;
+            let api = crate::api::ApiState::new(crate::api::API_BASE_URL);
+            let kinds: Vec<&'static str> = crate::storage::library::ALL_PUBLISHED
+                .iter()
+                .filter(|k| k.can_be_plugin())
+                .filter_map(|k| k.wire())
+                .collect();
+            self.job = Some(crate::api::job::spawn(
+                async move {
+                    let mut all = Vec::new();
+                    for kind in kinds {
+                        let words = crate::api::Browse { kind: Some(kind.to_string()), per_page: 100, ..Default::default() };
+                        all.extend(api.browse_scripts(crate::api::Scope::Curated, &words).await?.items.into_inner());
+                    }
+                    Ok(all)
+                },
+                || {},
+            ));
+        }
+        if let Some(result) = self.job.as_ref().and_then(crate::api::job::Job::take) {
+            self.job = None;
+            match result {
+                Ok(items) => self.items = items,
+                Err(e) => log::info!("Curated scripts not fetched: {e}"),
+            }
+        }
+    }
+}
+
 /// Downloads that failed this session, with the reason: their rows say so
 /// and offer Download again.
 static FAILED: Mutex<Vec<((Kind, String), String)>> = Mutex::new(Vec::new());
@@ -94,6 +150,20 @@ pub fn request_open_select(family: Family, key: EntryKey) {
     }
 }
 
+/// Whether the pickers offer what can be downloaded (L3; the user's
+/// setting, `SystemSettings::picker_downloads`): set once a frame.
+static PICKER_DOWNLOADS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Set whether the pickers offer downloads.
+pub fn set_picker_downloads(on: bool) {
+    PICKER_DOWNLOADS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the pickers offer downloads.
+pub fn picker_downloads() -> bool {
+    PICKER_DOWNLOADS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The open asked for since the last call.
 pub fn take_open() -> Option<(Option<Family>, Place, Option<EntryKey>)> {
     OPEN.lock().ok()?.take()
@@ -132,6 +202,15 @@ pub fn shared() -> Arc<Vec<Entry>> {
 
 /// Ask for an entry the app lacks (`!installed`) to be downloaded.
 pub fn request_download(e: &Entry) {
+    if let EntryKey::Online(_, id) = &e.key {
+        if let Ok(mut a) = ADOPTS.lock() {
+            if !a.1.contains(id) {
+                a.0.push(id.clone());
+                a.1.push(id.clone());
+            }
+        }
+        return;
+    }
     let EntryKey::Registered(kind, name) = &e.key else { return };
     if let Ok(mut f) = FAILED.lock() {
         f.retain(|((k, n), _)| !(k == kind && n == name));
@@ -147,6 +226,9 @@ pub fn request_download(e: &Entry) {
 
 /// Whether a download of the entry was asked for this session.
 pub fn download_requested(e: &Entry) -> bool {
+    if let EntryKey::Online(_, id) = &e.key {
+        return ADOPTS.lock().is_ok_and(|a| a.1.contains(id));
+    }
     let EntryKey::Registered(kind, name) = &e.key else { return false };
     DOWNLOADS.lock().is_ok_and(|d| d.1.iter().any(|(k, n)| k == kind && n == name))
 }
@@ -167,11 +249,10 @@ pub enum OriginFilter {
     Builtin,
     Yours,
     FromOthers,
-    Plugins,
 }
 
 impl OriginFilter {
-    const ALL: [OriginFilter; 5] = [OriginFilter::All, OriginFilter::Builtin, OriginFilter::Yours, OriginFilter::FromOthers, OriginFilter::Plugins];
+    const ALL: [OriginFilter; 4] = [OriginFilter::All, OriginFilter::Builtin, OriginFilter::Yours, OriginFilter::FromOthers];
 
     fn label_key(self) -> &'static str {
         match self {
@@ -179,7 +260,6 @@ impl OriginFilter {
             OriginFilter::Builtin => "catalog.origin_builtin",
             OriginFilter::Yours => "catalog.origin_yours",
             OriginFilter::FromOthers => "catalog.origin_from_others",
-            OriginFilter::Plugins => "catalog.origin_plugins",
         }
     }
 
@@ -189,7 +269,6 @@ impl OriginFilter {
             OriginFilter::Builtin => e.origin == Origin::Builtin,
             OriginFilter::Yours => e.origin == Origin::Local,
             OriginFilter::FromOthers => e.origin == Origin::Api,
-            OriginFilter::Plugins => e.plugin,
         }
     }
 }
@@ -287,6 +366,7 @@ pub struct InventoryPanel {
     /// The presets, a gallery a category, made when first shown.
     preset_galleries: Option<Vec<FractalConfigGallery>>,
     preset_category: PresetCategory,
+    curated: CuratedScripts,
 }
 
 impl Default for InventoryPanel {
@@ -316,6 +396,7 @@ impl InventoryPanel {
             run: super::script_run::ScriptRun::default(),
             preset_galleries: None,
             preset_category: PresetCategory::default(),
+            curated: CuratedScripts::default(),
         }
     }
 
@@ -362,6 +443,11 @@ impl InventoryPanel {
     /// Read the sources again when what they hold has changed, and share
     /// the list with the pickers. Once a frame, before any panel draws.
     pub fn refresh(&mut self, library: &PaletteLibrary, files: u64, online: inventory::Online) {
+        // The curated online scripts the pickers offer (L3): asked for once
+        // a session, in the background; until they come, none.
+        self.curated.poll();
+        let scripts = self.curated.items.clone();
+        let online = inventory::Online { scripts: &scripts, ..online };
         let rev = inventory::revision(library, files, online);
         if self.revision != Some(rev) {
             self.entries = Arc::new(inventory::scan(library, online));
@@ -387,7 +473,10 @@ impl InventoryPanel {
             // offers, downloaded or not.
             Place::Online => e.origin == Origin::Api || !e.installed,
         };
-        e.kind.family() == self.family && self.kind.is_none_or(|k| k == e.kind) && place && e.matches(&self.query)
+        // The curated rows the pickers offer (L3) are the Online place's
+        // own pages here.
+        let picker_only = matches!(e.key, EntryKey::Online(..));
+        !picker_only && e.kind.family() == self.family && self.kind.is_none_or(|k| k == e.kind) && place && e.matches(&self.query)
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext) -> InventoryResponse {
@@ -986,7 +1075,7 @@ pub(crate) fn row_label(e: &Entry) -> String {
     } else {
         ""
     };
-    format!("{}{}{available}", e.title, crate::storage::library::marks(e.origin, e.plugin))
+    format!("{}{}{available}", e.title, crate::storage::library::marks(e.origin))
 }
 
 /// Download, for an entry the app lacks: greyed once asked for.
@@ -1010,11 +1099,7 @@ fn origin_text(e: &Entry) -> String {
         },
         (Origin::Api, _) => t!("catalog.from_download"),
     };
-    if e.plugin {
-        format!("{base} {}", t!("catalog.plugin_note"))
-    } else {
-        base.to_string()
-    }
+    base.to_string()
 }
 
 /// The Use button's label for an entry.
@@ -1029,19 +1114,59 @@ fn use_label_key(e: &Entry) -> &'static str {
     }
 }
 
-/// A registered plug-in's record, by its file.
-pub(crate) fn plugin_of(e: &Entry) -> Option<crate::storage::library::Plugin> {
-    let EntryKey::File { store: Store::Formulas, file, shipped: false } = &e.key else { return None };
-    crate::storage::library::plugins().into_iter().find(|p| &p.file == file)
+/// A Rhai file of the formula store compiled, for the lists and Use
+/// (docs/projects/one-list.md, L1): a shipped example or a file of the
+/// user's, of a kind a list can use, compiled once per version
+/// (`library::compile_file`). `None` for anything else: a built-in, a CPU
+/// script, a UF or Fractint file.
+pub(crate) fn compiled(e: &Entry) -> Option<Result<crate::storage::library::Plugin, String>> {
+    let EntryKey::File { store: Store::Formulas, file, shipped } = &e.key else { return None };
+    if !crate::storage::formula_store::is_rhai(file) {
+        return None;
+    }
+    let Some(lib_kind) = crate::storage::library::Kind::from_wire(crate::inventory::online::script_wire(e.kind)?) else { return None };
+    if !lib_kind.can_be_plugin() {
+        return None;
+    }
+    let version = e.version.clone().unwrap_or_default();
+    let shipped = *shipped;
+    Some(crate::storage::library::compile_file(file, shipped, &version, || match shipped {
+        true => crate::storage::formula_store::EXAMPLES.iter().find(|(n, _)| n == file).map(|(_, s)| s.to_string()),
+        false => crate::storage::manage::load(Store::Formulas, file),
+    }))
 }
 
-/// The registry name an entry applies by: its own, or a plug-in's key.
+/// A file's compiled record, when it compiles.
+pub(crate) fn plugin_of(e: &Entry) -> Option<crate::storage::library::Plugin> {
+    compiled(e)?.ok()
+}
+
+/// The registry name an entry applies by: its own, or its file's key.
 pub(crate) fn applied_name(e: &Entry) -> Option<String> {
     match &e.key {
         EntryKey::Registered(_, n) => Some(n.clone()),
-        EntryKey::File { .. } if e.plugin => plugin_of(e).map(|p| p.key),
+        EntryKey::File { .. } => plugin_of(e).map(|p| p.key),
         _ => None,
     }
+}
+
+/// Whether a picker may offer an entry (docs/projects/one-list.md): a
+/// built-in or a download, installed, or a file that compiles; or, not
+/// installed, what can be downloaded (L3: the picker shows those only when
+/// the user's setting offers them). A file a list cannot use -- a UF or
+/// Fractint file, one that does not compile -- is not offered (L2).
+pub(crate) fn pickable(e: &Entry) -> bool {
+    !e.installed || picked_now(e)
+}
+
+/// [`pickable`], installed: what can be picked without a download.
+pub(crate) fn picked_now(e: &Entry) -> bool {
+    e.installed
+        && match &e.key {
+            EntryKey::Registered(..) => true,
+            EntryKey::File { .. } => plugin_of(e).is_some(),
+            _ => false,
+        }
 }
 
 /// Whether Use can apply the entry to this config, or why not.
@@ -1056,14 +1181,16 @@ pub(crate) fn usable(e: &Entry, config: &FractalConfig) -> Result<(), String> {
     if let super::visibility::Vis::Grey(reason) = super::visibility::catalog_use(e.kind, only_3d, config.render_mode) {
         return Err(t!(reason).to_string());
     }
-    // A file not registered is used from the editor (a Rhai entry), or
-    // run from the Scripts panel (a CPU script).
+    // A file is used as what it compiles to; one that does not compile,
+    // or is not a kind a list uses (a UF file, a track), from the editor;
+    // a CPU script from the Scripts panel.
     if let EntryKey::File { store, .. } = &e.key {
-        if *store == Store::Formulas && !e.plugin {
-            return Err(t!("catalog.open_to_use").to_string());
-        }
-        if e.plugin && plugin_of(e).is_none() {
-            return Err(t!("catalog.plugin_not_loaded").to_string());
+        if *store == Store::Formulas {
+            match compiled(e) {
+                Some(Ok(_)) => {}
+                Some(Err(why)) => return Err(t!("catalog.does_not_compile", error = why).to_string()),
+                None => return Err(t!("catalog.open_to_use").to_string()),
+            }
         }
     }
     let esc = &config.escape;
@@ -1130,8 +1257,7 @@ fn apply(e: &Entry, ctx: &egui::Context, cx: &mut InventoryContext, out: &mut In
 /// picker does with a choice (the Catalog's Use, and every picker's pick,
 /// `ui::picker`).
 pub(crate) fn use_entry(e: &Entry, ctx: &egui::Context, cm: &mut ConfigManager) {
-    let plugin = if e.plugin { plugin_of(e) } else { None };
-    use_entry_with(e, plugin, ctx, cm);
+    use_entry_with(e, plugin_of(e), ctx, cm);
 }
 
 /// [`use_entry`] with the entry's plug-in record given (a preview's, of a
@@ -1205,9 +1331,9 @@ mod tests {
         }
     }
 
-    /// The origin filter: built-in, the user's, somebody else's, plug-ins.
+    /// The origin filter: built-in, the user's (Custom), somebody else's.
     #[test]
-    fn the_origin_filter_reads_the_origin_and_the_plugin_flag() {
+    fn the_origin_filter_reads_the_origin() {
         let mut e = Entry {
             kind: Kind::Formula,
             key: EntryKey::Registered(Kind::Formula, "mandelbrot".into()),
@@ -1216,7 +1342,6 @@ mod tests {
             authors: Vec::new(),
             version: None,
             origin: Origin::Builtin,
-            plugin: false,
             group: inventory::Group { order: 0, label: String::new() },
             link: None,
             installed: true,
@@ -1224,10 +1349,9 @@ mod tests {
             update: None,
             online: None,
         };
-        assert!(OriginFilter::Builtin.admits(&e) && !OriginFilter::Yours.admits(&e) && !OriginFilter::Plugins.admits(&e));
+        assert!(OriginFilter::Builtin.admits(&e) && !OriginFilter::Yours.admits(&e));
         e.origin = Origin::Local;
-        e.plugin = true;
-        assert!(OriginFilter::Yours.admits(&e) && OriginFilter::Plugins.admits(&e) && !OriginFilter::FromOthers.admits(&e));
+        assert!(OriginFilter::Yours.admits(&e) && !OriginFilter::FromOthers.admits(&e));
         assert!(OriginFilter::ALL.iter().any(|o| *o == OriginFilter::All && o.admits(&e)));
     }
 
@@ -1265,7 +1389,6 @@ mod tests {
             authors: Vec::new(),
             version: None,
             origin: Origin::Builtin,
-            plugin: false,
             group: inventory::Group { order: 0, label: String::new() },
             link: None,
             installed: true,

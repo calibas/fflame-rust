@@ -1611,6 +1611,7 @@ impl EguiLayer {
         self.save_online_dialog_state.flame_owned = api_state.flame_owned_by(current_user_id);
         self.save_online_dialog_state.animation_owned = api_state.flame_owned_by(current_user_id);
         let menu_state = MenuState {
+            picker_downloads: config_manager.system_settings().picker_downloads != Some(false),
             can_undo,
             can_redo,
             is_paused: *paused,
@@ -1796,13 +1797,17 @@ impl EguiLayer {
             workspace.apply_startup_dock_minimums(ctx.screen_rect().width());
 
             // The Catalog's list, read before any panel draws: the panel
-            // and every picker show the same one this frame.
+            // and every picker show the same one this frame; and whether
+            // the pickers offer downloads (L3).
+            inventory::set_picker_downloads(config_manager.system_settings().picker_downloads != Some(false));
             self.inventory_panel.refresh(
                 palette_library,
                 script_cloud.library_generation,
                 crate::inventory::Online {
                     variations: variation_catalog.map_or(&[][..], |c| c.items.as_slice()),
                     effects: effect_catalog.map_or(&[][..], |c| c.items.as_slice()),
+                    // The panel adds its curated scripts (`refresh`).
+                    scripts: &[],
                 },
             );
 
@@ -2012,6 +2017,14 @@ impl EguiLayer {
             if let Some((family, place, select)) = inventory::take_open() {
                 self.inventory_panel.open_at(family, place, select);
                 open_catalog = true;
+            }
+
+            // A picker's Download of a curated script (L3): adopted, one
+            // at a time, as the Catalog's Online place adopts.
+            if script_cloud_request.is_none() {
+                if let Some(id) = inventory::take_adopt(script_cloud.busy) {
+                    script_cloud_request = Some(crate::app::script_cloud::ScriptCloudRequest::Adopt { id });
+                }
             }
 
             for (kind, name) in inventory::take_downloads() {
@@ -2483,6 +2496,12 @@ impl EguiLayer {
         if let Some(on) = menu_actions.file.set_online_account {
             let settings = config_manager.system_settings_mut();
             settings.online_account = on;
+            let _ = settings.save();
+        }
+        // The pickers' downloads (L3): a device preference, as above.
+        if let Some(on) = menu_actions.set_picker_downloads {
+            let settings = config_manager.system_settings_mut();
+            settings.picker_downloads = (!on).then_some(false);
             let _ = settings.save();
         }
 

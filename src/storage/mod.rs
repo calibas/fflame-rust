@@ -53,9 +53,8 @@ pub use thumbnail_cache::{shared_thumbnail_cache, ThumbnailCache, GalleryItem, T
 pub fn load_installed_resources() -> Vec<String> {
     variation_cache::load_all_into_registry();
     effect_cache::load_all_into_registry();
-    // The user's Rhai plug-ins (P3), after the downloads: a download
-    // cannot displace one, and one cannot displace a built-in.
-    library::load_plugins();
+    // The user's Rhai files are compiled when a list or a config needs
+    // them (docs/projects/one-list.md, L1), not at start.
     retired_plugin_files()
 }
 

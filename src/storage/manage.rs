@@ -120,7 +120,7 @@ fn remove(store: Store, file: &str) -> Result<(), String> {
 }
 
 /// Rename `file` to `name` (a formula file keeps its extension unless the
-/// name gives one); gives the new file. Its link and plug-in go with it.
+/// name gives one); gives the new file. Its link goes with it.
 pub fn rename(store: Store, file: &str, name: &str) -> Result<String, String> {
     let ext = file.rsplit_once('.').map_or("rhai", |(_, e)| e);
     let to = file_name(store, name, ext).ok_or_else(|| t!("manage.bad_name").to_string())?;
@@ -135,19 +135,16 @@ pub fn rename(store: Store, file: &str, name: &str) -> Result<String, String> {
     let to = write(store, &to, &text)?;
     remove(store, file)?;
     if let Some(link) = link {
-        set_link(store, &to, link.clone())?;
-        if store == Store::Formulas && link.plugin {
-            crate::storage::library::unlist_plugin(file);
-            if let Err(e) = crate::storage::library::register_plugin(&to, &text) {
-                log::warn!("The plug-in `{to}` did not register after its rename: {e}");
-            }
-        }
+        set_link(store, &to, link)?;
+    }
+    if store == Store::Formulas {
+        crate::storage::library::forget(file);
     }
     Ok(to)
 }
 
 /// A copy of `file`, under the first free `<name>-copy` name; gives the new
-/// file. A new file of the user's: no cloud id, no plug-in, an entry's id
+/// file. A new file of the user's: no cloud id, an entry's id
 /// its own; a copy of somebody else's CPU script still runs restricted.
 pub fn duplicate(store: Store, file: &str) -> Result<String, String> {
     let text = load(store, file).ok_or_else(|| t!("manage.missing", name = file).to_string())?;
@@ -172,46 +169,12 @@ fn with_own_new_id(store: Store, file: &str, text: &str) -> String {
     }
 }
 
-/// Delete `file`: its plug-in unlisted, its link dropped.
+/// Delete `file`: what it compiled to no longer offered, its link dropped.
 pub fn delete(store: Store, file: &str) -> Result<(), String> {
     if store == Store::Formulas {
-        crate::storage::library::unlist_plugin(file);
+        crate::storage::library::forget(file);
     }
     remove(store, file)
-}
-
-/// Whether a stored file can be a plug-in: a Rhai entry of the formula
-/// store of a kind registered at start ([`crate::storage::library::Kind::can_be_plugin`]).
-pub fn can_be_plugin(store: Store, file: &str, text: &str) -> bool {
-    store == Store::Formulas && formulas::is_rhai(file) && crate::storage::library::rhai_kind(text).can_be_plugin()
-}
-
-/// Make a stored file a plug-in, registered at every start, or stop;
-/// gives what it registered as (its title), or the file. One that needs
-/// an id of its own to register (a variation without a name, an effect)
-/// gets one, written into the file.
-pub fn set_plugin(file: &str, on: bool) -> Result<String, String> {
-    let mut link = formulas::link_of(file).unwrap_or_default();
-    if !on {
-        link.plugin = false;
-        crate::storage::library::unlist_plugin(file);
-        set_link(Store::Formulas, file, link)?;
-        return Ok(file.to_string());
-    }
-    let mut text = load(Store::Formulas, file).ok_or_else(|| t!("manage.missing", name = file).to_string())?;
-    let needs_id = match crate::storage::library::rhai_kind(&text) {
-        crate::storage::library::Kind::Variation => crate::variations::custom::needs_id(&text),
-        crate::storage::library::Kind::Effect => crate::api::entries::needs_id(&text),
-        _ => false,
-    };
-    if needs_id {
-        text = crate::lang::rhai::with_own_id(&text, &crate::scripted::mint_id());
-        write(Store::Formulas, file, &text)?;
-    }
-    let plugin = crate::storage::library::register_plugin(file, &text)?;
-    link.plugin = true;
-    set_link(Store::Formulas, file, link)?;
-    Ok(plugin.title)
 }
 
 /// Why a stored file cannot be published, if it cannot: somebody else's

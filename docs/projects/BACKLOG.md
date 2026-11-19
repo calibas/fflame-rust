@@ -159,6 +159,10 @@ and [v0.6.0-release.md](v0.6.0-release.md).
   and an optimistic version counter (and snapshots for the museum's
   published ones); a browsable history of every version is not built.
   [rhai-scripts-online.md](../archive/projects/rhai-scripts-online.md) §"4".
+- **Many resources in one file**, as palette packs: a UF or Fractint
+  file's entries in the pickers, an entry each; the pickers hide such
+  files for now (L2).
+  [one-list.md](one-list.md) §"Later".
 - **Per-kind registries**: registry, failure memory and provenance are
   still per kind; a track naming a variation key a later Use replaced;
   subflame transforms not re-keyed by Use.

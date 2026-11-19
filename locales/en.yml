@@ -50,6 +50,8 @@ menu:
   fly_mode_requires_3d: "Fly Mode needs a 3D view: a 3D flame, a solid, or a terrain"
   catalog: "Catalog"
   catalog_online: "Online…"
+  picker_downloads: "Offer downloads in pickers"
+  picker_downloads_tip: "The pickers (Add variation, the formula and colouring lists, ...) also offer what can be downloaded: the server's variations and effects, and the curated online items of their kind. Off, they offer only what is installed; the Catalog lists everything either way."
   window: "Window"
   help: "Help"
 
@@ -1874,7 +1876,7 @@ track_editor:
   # Script tracks (docs/archive/projects/rhai-tracks.md)
   script_track: "Script track"
   add_script_track: "Add Script Track"
-  script_plugins: "Your track plug-ins"
+  script_plugins: "Your tracks"
   script_new: "New in the Rhai Editor..."
   script_new_tip: "Open the Rhai Editor on an example track to write your own; Use as track adds it to the animation."
   script_window: "Script Track: %{name}"
@@ -2545,10 +2547,8 @@ textures_panel:
   trap_hint: "The Image Trap colouring (Escape panel) traps the orbit in this texture too."
   trap_in_use: "The Image Trap colouring is trapping the orbit in this texture."
 sim_panel:
-  plugins: "Your plug-ins"
   edit_as_rhai: "Rhai"
   edit_as_rhai_tip: "Edit this as a Rhai script of your own, in the Rhai Editor: its Rhai twin takes its place here, with its settings kept -- the same picture -- and Live shows each edit. The built-in is untouched."
-  plugin_tip: "A plug-in from your formulas (%{file}), registered at every start"
   terrain: "3D terrain"
   terrain_enabled: "Show as a 3D terrain"
   terrain_tip: "The grid as a height field: one channel of a layer, smoothed, as its height, coloured by the colour stack, seen through a camera over it. Lit while the simulation runs; path traced once it rests."
@@ -2712,8 +2712,6 @@ sim_panel:
   matte_edge_tip: "What Softness measures. Both settings put the edge in the same place — a distance field built from cells knows no more about where the boundary is than the cells do, and that was measured. Threshold feathers in the channel's own units, so the same Softness is a different width on every model. Distance builds a distance field every coloured frame, so Softness is a width in cells, the same on every model, and a wide feather stays a feather rather than a smear. It costs a few grid-sized passes per frame."
 
 escape_panel:
-  plugins: "Your plug-ins"
-  plugin_tip: "A plug-in from your formulas (%{file}), registered at every start"
   as_a_point: "As a point:"
   radius_tip: "The parameter's distance from 0: animate it (or the angle) to move the point around the origin"
   angle_tip: "The parameter's angle about 0, in degrees"
@@ -3113,9 +3111,6 @@ progress:
   sim_stopped: "Simulation stopped at step %{step}"
   animation: "Animation playing"
 
-library:
-  plugin: "(plug-in)"
-
 effects_panel:
   moved_to_catalog: "The online library's effects, updates and Clear Cache are in the Catalog."
   add_effect: "Add effect…"
@@ -3123,8 +3118,6 @@ effects_panel:
   update_all: "Update all (%{count})"
   clear_cache: "Clear downloaded effects (%{count})"
   clear_cache_tip: "Remove the effects downloaded from the online library, and its catalog: a flame using one fetches it again. The built-ins and your own are not touched."
-  plugins: "Your plug-ins"
-  plugin_tip: "A plug-in from your formulas (%{file}), registered at every start"
   edit_as_rhai: "Rhai"
   edit_as_rhai_tip: "Edit this effect as a Rhai script of your own, in the Rhai Editor: this instance runs your copy, with its settings kept, and Live shows each edit. The built-in is untouched."
   reset_history: "Reset History"
@@ -3187,12 +3180,6 @@ formula_editor:
   editing_builtin_variation: "%{name} is in use as your own variation; Save keeps it in your library"
   editing_builtin_effect: "%{name} is your own effect now, in use; Save keeps it in your library"
   editing_builtin_sim: "%{name} is your own now, in use; Save keeps it in your library"
-  plugin: "Load at start"
-  plugin_tip: "A plug-in: registered every time the app starts, so it is in the lists -- the variation pickers, the effects' Add list, the escape formulas and colourings -- without opening it here first. Saving it updates it."
-  plugin_on: "%{title} loads at every start"
-  plugin_off: "%{file} no longer loads at start"
-  plugin_save_first: "Save it first: what loads at start is the saved file"
-  plugin_failed: "%{file} did not load as a plug-in: %{error}"
   online: "Online"
   online_save_first: "Save it to publish it: what is published is the saved file"
   online_sign_in: "Sign in to publish it, so anybody can find it in the online library"
@@ -3414,7 +3401,6 @@ catalog:
   origin_builtin: "Built-in"
   origin_yours: "Custom"
   origin_from_others: "From others"
-  origin_plugins: "Plug-ins"
   nothing_matches: "Nothing here matches."
   select_hint: "Select something in the list to read about it."
   hover_hint: "Point at something in the list to read about it."
@@ -3497,7 +3483,6 @@ catalog:
   from_download: "Downloaded from the online library."
   from_adopted: "Adopted from the online library."
   from_adopted_by: "Adopted from the online library; by %{owner}."
-  plugin_note: "Loads at start as a plug-in."
   use: "Use"
   use_palette: "Apply"
   use_fractal: "Load"
@@ -3513,8 +3498,8 @@ catalog:
   open_palette_editor: "Open Palette Editor"
   open_in_formula_editor: "Open in Rhai Editor"
   open_in_editor: "Open in Editor"
-  open_to_use: "Open it in the Rhai Editor to use it, or make it a plug-in (below)."
-  plugin_not_loaded: "This plug-in did not load: open it in the Rhai Editor to see why."
+  open_to_use: "Open it in the Rhai Editor to use it."
+  does_not_compile: "It does not compile: %{error}"
   needs_escape_formula: "An escape-time colouring draws an escape-time formula: choose one first."
   coloring_does_not_suit: "This colouring cannot draw %{formula}."
   needs_field: "A field's colouring draws a field: choose one first."

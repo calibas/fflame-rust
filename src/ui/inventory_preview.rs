@@ -25,39 +25,13 @@
 use crate::config::{ConfigManager, FractalConfig};
 use crate::inventory::{Entry, EntryKey, Family, Kind};
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
 
 /// The registry names registered only to draw a preview (a file of the
 /// user's or an example, not a plug-in): the pickers do not offer them.
-static PREVIEW_ONLY: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-/// Whether `key` was registered only for a preview.
-pub fn preview_only(key: &str) -> bool {
-    PREVIEW_ONLY.lock().is_ok_and(|k| k.iter().any(|x| x == key))
-}
-
-/// The plug-in record an entry applies by: a plug-in's own; for a Rhai
-/// file of a kind that can be one -- an example, a file of the user's --
-/// what registering it makes, not listed (`library::prepare_plugin`).
+/// The record an entry previews by: its file's, compiled
+/// (`inventory::plugin_of`), for a Rhai file of a kind a list uses.
 fn plugin_for(e: &Entry) -> Option<crate::storage::library::Plugin> {
-    if e.plugin {
-        return super::inventory::plugin_of(e);
-    }
-    let EntryKey::File { store: crate::storage::library::Store::Formulas, file, shipped } = &e.key else { return None };
-    if !crate::storage::formula_store::is_rhai(file) {
-        return None;
-    }
-    let text = match shipped {
-        true => crate::storage::formula_store::EXAMPLES.iter().find(|(n, _)| n == file).map(|(_, s)| s.to_string()),
-        false => crate::storage::manage::load(crate::storage::library::Store::Formulas, file),
-    }?;
-    let plugin = crate::storage::library::prepare_plugin(file, &text).ok()?;
-    if let Ok(mut keys) = PREVIEW_ONLY.lock() {
-        if !keys.contains(&plugin.key) {
-            keys.push(plugin.key.clone());
-        }
-    }
-    Some(plugin)
+    super::inventory::plugin_of(e)
 }
 
 /// What a preview renders, and the key its pictures are kept under.

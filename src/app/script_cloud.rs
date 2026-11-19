@@ -57,16 +57,14 @@ impl Local {
         }
     }
 
-    /// Write `source` over it; returns where it was stored. A plug-in
-    /// entry's lists offer what was written.
+    /// Write `source` over it; returns where it was stored. The lists
+    /// compile what was written when they next need it.
     fn save(&self, source: &str) -> Result<Local, String> {
         match self {
             Local::Script(s) => store::save(s, source).map(Local::Script),
             Local::Entry(f) => {
                 let file = formula_store::save(f, source)?;
-                if formula_store::link_of(&file).is_some_and(|l| l.plugin) {
-                    crate::storage::library::register_plugin(&file, source)?;
-                }
+                crate::storage::library::forget(&file);
                 Ok(Local::Entry(file))
             }
         }
@@ -323,9 +321,7 @@ impl App {
                 ScriptCloudResult::Unpublished(local, Ok(())) => {
                     // Keep the local copy; drop only the cloud link, so
                     // the script stops claiming to be a server script.
-                    // A plug-in stays one.
-                    let plugin = local.link().is_some_and(|l| l.plugin);
-                    if let Err(e) = local.set_link(Link { plugin, ..Link::default() }) {
+                    if let Err(e) = local.set_link(Link::default()) {
                         log::warn!("Could not clear the cloud link for `{}`: {e}", local.name());
                     }
                     self.script_cloud.ok(format!("`{}` is no longer published", local.name()));
