@@ -237,7 +237,7 @@ winresource = "0.1"
 # driver fault never reaches Rust's panic hook. The version winit already
 # brings in.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_LibraryLoader"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Threading"] }
 
 [dev-dependencies]
 # Holds the audio FFT (audio::fft) and the GPU FFT to a reference.

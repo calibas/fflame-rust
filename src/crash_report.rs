@@ -76,8 +76,20 @@ mod windows_handler {
     use windows_sys::Win32::System::LibraryLoader::{
         GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
     };
+    use windows_sys::Win32::System::Threading::{GetCurrentThreadId, GetCurrentThreadStackLimits};
 
     static LINES: AtomicUsize = AtomicUsize::new(0);
+    /// The thread `install` ran on: the main one.
+    static MAIN_THREAD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    /// Which thread faulted, and its stack's size.
+    fn thread_line() -> String {
+        let id = unsafe { GetCurrentThreadId() };
+        let (mut low, mut high) = (0usize, 0usize);
+        unsafe { GetCurrentThreadStackLimits(&mut low, &mut high) };
+        let which = if id == MAIN_THREAD.load(Ordering::Relaxed) { "the main thread" } else { "another thread" };
+        format!("on {which} ({id}), stack {} KB", high.saturating_sub(low) / 1024)
+    }
     const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 
     /// The fatal kinds, and their names.
@@ -117,7 +129,8 @@ mod windows_handler {
         }
         let (module, offset) = unsafe { module_of(record.ExceptionAddress as usize) };
         let line = format!(
-            "native exception 0x{code:08X} ({kind}) in {module}+0x{offset:X} (logged at first chance: fatal unless something handles it); {}",
+            "native exception 0x{code:08X} ({kind}) in {module}+0x{offset:X} {} (logged at first chance: fatal unless something handles it); {}",
+            thread_line(),
             super::breadcrumbs()
         );
         append(&line);
@@ -135,6 +148,7 @@ mod windows_handler {
     }
 
     pub fn install() {
+        MAIN_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Relaxed);
         // First in the chain: before any other handler can swallow it.
         unsafe {
             AddVectoredExceptionHandler(1, Some(handler));

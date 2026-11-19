@@ -51,6 +51,22 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=BUILD_PROFILE={}", profile);
 
+    // An 8 MB main-thread stack on Windows (the default is 1 MB). The GPU
+    // driver compiles shaders on the thread that asks -- the main one, deep
+    // in winit's window callback, egui and the frame when the gallery or
+    // the viewport builds a pipeline -- and NVIDIA's compiler overflowed
+    // what was left of 1 MB on a Rhai solid's shader (exit 0xc000041d,
+    // a stack overflow in nvoglv64.dll; `crash_report` logged it). Linux
+    // and macOS give the main thread 8 MB already. Reserved address
+    // space, not memory.
+    if os == "windows" {
+        if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+            println!("cargo:rustc-link-arg-bins=/STACK:8388608");
+        } else {
+            println!("cargo:rustc-link-arg-bins=-Wl,--stack,8388608");
+        }
+    }
+
     // The API the app talks to (`api::API_BASE_URL`): the deployed server
     // for a `dist` build -- what ships, the web app included -- and any
     // other custom profile; this machine's (`http://localhost:3000`, ffapi's
