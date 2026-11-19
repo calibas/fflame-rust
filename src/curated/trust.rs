@@ -117,10 +117,14 @@ const ALWAYS_FILE: &str = "trusted_code.json";
 fn always() -> std::sync::MutexGuard<'static, Option<HashSet<String>>> {
     let mut guard = ALWAYS.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
+        // Tests keep it in memory: the app's data folder is the user's.
+        #[cfg(not(test))]
         let read = crate::storage::backend::read_file(std::path::Path::new(ALWAYS_FILE))
             .ok()
             .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
             .unwrap_or_default();
+        #[cfg(test)]
+        let read: Vec<String> = Vec::new();
         *guard = Some(read.into_iter().collect());
     }
     guard
@@ -144,6 +148,9 @@ pub fn trust_always<'a>(hashes: impl IntoIterator<Item = &'a str>) {
     let mut guard = always();
     let set = guard.get_or_insert_with(HashSet::new);
     set.extend(hashes.into_iter().map(str::to_string));
+    if cfg!(test) {
+        return;
+    }
     let mut list: Vec<&String> = set.iter().collect();
     list.sort();
     if let Ok(json) = serde_json::to_string(&list) {

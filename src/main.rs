@@ -354,8 +354,10 @@ fn install_crash_breadcrumb() {
 fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // Panic breadcrumb first: everything after this can crash.
+        // Panic breadcrumb first: everything after this can crash. Then
+        // the native one: a driver fault never reaches the panic hook.
         install_crash_breadcrumb();
+        fractal_flame_wgpu::crash_report::install();
         // Before anything can print, including clap's `--help` and its
         // parse errors.
         if std::env::args_os().len() > 1 {

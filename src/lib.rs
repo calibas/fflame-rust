@@ -54,6 +54,8 @@ pub mod script;
 /// What every user-written script shares: its identity and labels.
 pub mod scripted;
 pub mod curated;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod crash_report;
 /// One parameter system for every kind: definitions, values, layouts
 /// (docs/archive/projects/one-parameter-system.md).
 pub mod params;

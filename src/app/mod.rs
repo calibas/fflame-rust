@@ -778,6 +778,8 @@ pub struct App {
     pub(super) held_load: Option<trust::HeldLoad>,
     /// A load held for the curated items it names (`trust`).
     pub(super) held_refs: Option<trust::HeldRefs>,
+    /// The viewport as the crash breadcrumb last named it (`crash_report`).
+    pub(super) crash_viewport: String,
     pub(super) url_load_in_progress: bool,
     pub(super) url_load_started: Option<web_time::Instant>,
 
@@ -1039,6 +1041,7 @@ impl App {
             url_load_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             held_load: None,
             held_refs: None,
+            crash_viewport: String::new(),
             url_load_in_progress: false,
             url_load_started: None,
             pending_subflame_load_index: None,
@@ -1665,6 +1668,18 @@ impl App {
     }
     fn render(&mut self, window: &Window) -> Result<(), RenderError> {
         use web_time::Instant;
+
+        // What a native crash's log line says the viewport shows
+        // (`crash_report`): updated when it changes, not every frame.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let c = self.config_manager.active_config();
+            let key = crate::crash_report::describe(c);
+            if key != self.crash_viewport {
+                crate::crash_report::viewport(key.clone());
+                self.crash_viewport = key;
+            }
+        }
 
         // Sync fullscreen state with browser (WASM only)
         // Detects when browser exits fullscreen via its own Esc handler

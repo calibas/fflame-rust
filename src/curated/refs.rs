@@ -50,10 +50,14 @@ const KNOWN_FILE: &str = "curated_known.json";
 fn known_map() -> std::sync::MutexGuard<'static, Option<HashMap<String, (String, String)>>> {
     let mut guard = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
+        // Tests keep it in memory: the app's data folder is the user's.
+        #[cfg(not(test))]
         let read = crate::storage::backend::read_file(std::path::Path::new(KNOWN_FILE))
             .ok()
             .and_then(|s| serde_json::from_str::<HashMap<String, (String, String)>>(&s).ok())
             .unwrap_or_default();
+        #[cfg(test)]
+        let read = HashMap::new();
         *guard = Some(read);
     }
     guard
@@ -67,6 +71,9 @@ pub fn remember(kind: &str, name: &str, hash: &str) {
         return;
     }
     map.insert(hash.to_string(), (kind.to_string(), name.to_string()));
+    if cfg!(test) {
+        return;
+    }
     if let Ok(json) = serde_json::to_string(map) {
         if let Err(e) = crate::storage::backend::write_file(std::path::Path::new(KNOWN_FILE), &json) {
             log::warn!("curated names not saved: {e}");

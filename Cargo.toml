@@ -233,6 +233,12 @@ serde_json = "1.0"
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
+# The crash breadcrumb's native-exception handler (`crash_report`): a
+# driver fault never reaches Rust's panic hook. The version winit already
+# brings in.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_LibraryLoader"] }
+
 [dev-dependencies]
 # Holds the audio FFT (audio::fft) and the GPU FFT to a reference.
 rustfft = "6.2"
