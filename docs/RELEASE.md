@@ -137,6 +137,7 @@ The API is a separate repository. What it consumes from here:
 | the variation corpus | `cargo run --release --bin export_variations_json` | any variation added or edited |
 | the script corpus | `cargo run --release --bin export_scripts_json` | any built-in script added or edited |
 | the effect corpus | `cargo run --release --bin export_effects_json` | any effect added or edited |
+| the curated manifest | `cargo run --release --bin export_curated_json` | anything shipped: a preset, a palette pack, a script or example, a variation or effect. ffapi's `tools/sync_curated.py` posts it (a dry run unless `--write`; [curated-content.md](projects/curated-content.md)) |
 
 Only the contract and the catalog are committed. The three corpus binaries write to
 `output/variations-corpus.json`, `output/scripts-corpus.json` and

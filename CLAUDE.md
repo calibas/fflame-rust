@@ -121,7 +121,7 @@ UPDATE_CONTRACT=1 cargo test --lib contract_is_current        # docs/generated/e
 UPDATE_CATALOG=1 cargo test --lib catalog_is_current          # docs/generated/engine-catalog.json (the API's catalog; api-catalog-spec.md)
 UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps # tests/shader_dumps/
 ```
-The API's corpora come from `cargo run --release --bin export_variations_json` / `export_scripts_json` / `export_effects_json` (written to `output/`, gitignored). **A new `Feature`, `VariationCategory` or `ParamType` does NOT move the contract's shape fingerprint** -- tell the API repository directly (RELEASE.md §3). Release builds use `cargo build --profile dist` (31% smaller; the profile name is recorded in every PNG).
+The API's corpora come from `cargo run --release --bin export_variations_json` / `export_scripts_json` / `export_effects_json` (written to `output/`, gitignored); the curated manifest -- everything the app ships, which the API's seeding sync imports by content hash -- from `export_curated_json` (`src/curated.rs`; [curated-content.md](docs/projects/curated-content.md)). **A new `Feature`, `VariationCategory` or `ParamType` does NOT move the contract's shape fingerprint** -- tell the API repository directly (RELEASE.md §3). Release builds use `cargo build --profile dist` (31% smaller; the profile name is recorded in every PNG).
 
 ### Testing ([docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md))
 - `cargo test --release --lib` - ~1,900 tests; GPU tests skip without an adapter.

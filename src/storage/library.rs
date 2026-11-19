@@ -112,6 +112,11 @@ pub const ALL_PUBLISHED: &[Kind] = &[
 /// ([`crate::lang::rhai::kind_of`]), a track by its shape.
 pub fn rhai_kind(source: &str) -> Kind {
     use crate::lang::{rhai, EntryKind};
+    // A track first: a stateful one has `start` and `step` as a formula
+    // does, but only a track declares `TARGETS` and a `value` function.
+    if crate::animation::script::looks_like_track(source) {
+        return Kind::Track;
+    }
     match rhai::kind_of(source) {
         Some(EntryKind::Formula) => Kind::Formula,
         Some(EntryKind::Coloring) => Kind::Coloring,
@@ -122,8 +127,6 @@ pub fn rhai_kind(source: &str) -> Kind {
         Some(EntryKind::SimModel) => Kind::SimModel,
         Some(EntryKind::Field) => Kind::Field,
         Some(EntryKind::FieldColoring) => Kind::FieldColoring,
-        // A track is the CPU world's: no GPU kind reads it.
-        None if crate::animation::script::looks_like_track(source) => Kind::Track,
         None => Kind::Unknown,
     }
 }
@@ -470,6 +473,17 @@ fn value(t, p, ctx) { #{ rotation: t } }";
         let (key, carried) = register_kind(Kind::Track, "Turn", src).expect("registers");
         assert_eq!(key, "5b0f8c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e");
         assert_eq!(carried.source, src);
+    }
+
+    /// A stateful track has `start` and `step`, as a formula does: it was
+    /// read as a formula (the shipped Springy Zoom and Smoothed Jitter).
+    #[test]
+    fn a_stateful_track_is_a_track_not_a_formula() {
+        for (file, source) in crate::storage::formula_store::EXAMPLES {
+            if file.starts_with("track-") {
+                assert_eq!(rhai_kind(source), Kind::Track, "{file}");
+            }
+        }
     }
 
     #[test]

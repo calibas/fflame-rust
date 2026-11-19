@@ -1,6 +1,6 @@
 # Curated content
 
-**Status: steps 1 and 2 built 2026-11-18** on ffapi branch `curated-content` (migrations 119-121; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
+**Status: steps 1-3 built 2026-11-18** (ffapi branch `curated-content`, migrations 119-121, and this repo's branch `curated-content`; the production dry run waits on the ffapi deploy; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
 client (this one) and the API server (`c:/projects/ffapi`). Built from a
 survey of both on 2026-11-18. The survey's findings are summarised in
 *What exists*, with file references where they matter.
@@ -473,7 +473,18 @@ So, with what exists:
      downloads; `updated_at` moves only on a real change; animations are
      not importable yet. A dry run of both shipped corpora comes back
      all `unchanged`: the hash definitions agree with the stored rows.
-3. **The manifest and the first sync.**
+3. **The manifest and the first sync.** **Built 2026-11-18** except
+   the production run: `export_curated_json` (`src/curated.rs`: the
+   hashes, the corpora the two corpus exporters now share, the
+   manifest) and ffapi's `tools/sync_curated.py`. A local dry run of
+   the whole manifest agrees with the server record for record once
+   ffapi parses floats exactly (serde_json `float_roundtrip`: the
+   default parser put 20 records a bit off). The manifest leaves out the
+   built-ins' Rhai twins (their names are the built-ins' own) and the
+   UF/Fractint example files; the stateful track examples were read as
+   formulas (`library::rhai_kind`), fixed. **Step 5 note:** hashing
+   what the server serves (a fractal's config) needs exact parsing on
+   the client too.
    - `export_curated_json` and `tools/sync_curated.py`.
    - A dry run against production, which the user reviews: in
      particular the hand imports under *needs a decision*.

@@ -566,6 +566,7 @@ generates on demand. Each is large and written to the gitignored
 | `cargo run --release --bin export_variations_json [out.json]` | `output/variations-corpus.json` | every shipped variation: WGSL, parameters, features, and the description and authors recovered from `///` doc comments |
 | `cargo run --release --bin export_scripts_json [out.json]` | `output/scripts-corpus.json` | every built-in script: declared name, kind and flags, description, and the source verbatim |
 | `cargo run --release --bin export_effects_json [out.json]` | `output/effects-corpus.json` | every built-in effect: WGSL, parameters, category, `requires_blend_modes` |
+| `cargo run --release --bin export_curated_json [out.json]` | `output/curated-manifest.json` | everything the app ships as the seeding sync's records -- presets, palettes, shipped scripts and Rhai examples, the variation and effect corpora -- each with its canonical name and content hash (`src/curated.rs`, defined as the API defines it; [curated-content.md](../projects/curated-content.md)) |
 
 Each stamps the current `contract_shape`. The variation and script
 exporters refuse to write a corpus with a missing description (or, for

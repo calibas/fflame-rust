@@ -53,6 +53,7 @@ pub mod api;
 pub mod script;
 /// What every user-written script shares: its identity and labels.
 pub mod scripted;
+pub mod curated;
 /// One parameter system for every kind: definitions, values, layouts
 /// (docs/archive/projects/one-parameter-system.md).
 pub mod params;
