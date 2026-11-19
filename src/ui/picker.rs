@@ -170,7 +170,7 @@ impl<'a> Picker<'a> {
             let info = ui
                 .vertical(|ui| {
                     ui.set_width(PANE_WIDTH);
-                    egui::ScrollArea::vertical().id_salt(self.id.with("info")).max_height(self.max_height + 32.0).show(ui, |ui| self.info(ui, shown.as_ref()));
+                    egui::ScrollArea::vertical().id_salt(self.id.with("info")).max_height(self.max_height + 32.0).min_scrolled_height(self.floor(ui)).show(ui, |ui| self.info(ui, shown.as_ref()));
                 })
                 .response
                 .rect;
@@ -209,6 +209,14 @@ impl<'a> Picker<'a> {
             ui.separator();
             ui.colored_label(ui.visuals().warn_fg_color, reason);
         }
+    }
+
+    /// The least height of the list and the pane when their content is
+    /// longer: the whole `max_height`, unless the screen is too short for
+    /// it. The popup is that tall wherever it opens -- under its button,
+    /// above it, or over it when neither has the room.
+    fn floor(&self, ui: &egui::Ui) -> f32 {
+        self.max_height.min(ui.ctx().content_rect().height() - 140.0).max(64.0)
     }
 
     /// Whether any entry this picker offers has a preview (its grid is a
@@ -272,7 +280,15 @@ impl<'a> Picker<'a> {
         rows.sort_by_key(|e| !e.installed);
         let mut picked = None;
         // As wide as the search above it, not shrunk to the rows.
-        egui::ScrollArea::vertical().id_salt(self.id.with("scroll")).max_height(self.max_height).auto_shrink([false, true]).show(ui, |ui| {
+        // Never shorter than its floor: a scroll area takes only the room its
+        // popup had last frame, so once short (a narrow search, a button near
+        // the screen's bottom) it stayed one row tall.
+        egui::ScrollArea::vertical()
+            .id_salt(self.id.with("scroll"))
+            .max_height(self.max_height)
+            .min_scrolled_height(self.floor(ui))
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
             if rows.is_empty() {
                 ui.weak(t!("catalog.nothing_matches"));
                 return;
@@ -648,5 +664,66 @@ mod tests {
 
         let away = frame(Some(egui::pos2(5000.0, 5000.0)));
         assert_eq!(count(&away, "Pane Faraway"), 1, "and keeps it when the pointer leaves the list");
+    }
+
+    /// The popup keeps its height wherever its button is: near the
+    /// screen's bottom it opens above the button, or beside or over it when
+    /// neither has the room, never squeezed to a row under it (reported from
+    /// use: the Add Variation picker of a transform at the bottom of the
+    /// Transforms panel). And once short -- a search that matched one row
+    /// -- it grows back: a scroll area takes only the room its popup had
+    /// last frame, which kept it short.
+    #[test]
+    fn a_picker_keeps_its_height_wherever_it_opens() {
+        use super::*;
+        offer();
+        let admit = |e: &Entry| e.kind == Kind::Variation;
+        // (screen height, the button's top, inside a scroll area, the
+        // first frames' search)
+        let cases = [
+            (800.0, 760.0, false, ""),
+            (800.0, 785.0, true, ""),
+            (800.0, 798.0, true, ""),
+            (800.0, 300.0, false, "julian"),
+            (800.0, 770.0, false, "julian"),
+            // Room for it neither under nor above: beside (or over) it.
+            (480.0, 220.0, false, ""),
+        ];
+        for (height, at, scrolled, search) in cases {
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, height));
+            let ctx = egui::Context::default();
+            let mut rect = egui::Rect::NOTHING;
+            let mut button = egui::Rect::NOTHING;
+            for frame in 0..8 {
+                let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+                let _ = ctx.run_ui(input, |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        let mut body = |ui: &mut egui::Ui| {
+                            ui.add_space(at);
+                            let picker = Picker::new("picker_height", &admit);
+                            let query = if frame < 3 { search } else { "" };
+                            ui.data_mut(|d| d.insert_temp(picker.id.with("search"), query.to_string()));
+                            let btn = ui.button("open");
+                            button = btn.rect;
+                            egui::Popup::open_id(ui.ctx(), picker.popup_id());
+                            let _ = picker.popup(ui, &btn);
+                            ui.add_space(400.0);
+                        };
+                        if scrolled {
+                            egui::ScrollArea::vertical().show(ui, body);
+                        } else {
+                            body(ui);
+                        }
+                    });
+                });
+                rect = ctx.memory(|m| m.area_rect(Picker::new("picker_height", &admit).popup_id())).unwrap_or(egui::Rect::NOTHING);
+            }
+            let case = format!("screen {height}, button at {at}, scrolled {scrolled}, search {search:?}: {rect:?}");
+            assert!(rect.height() >= 340.0, "the popup is squeezed ({case})");
+            assert!(screen.contains_rect(rect), "or off the screen ({case})");
+            if height < 500.0 {
+                assert!(rect.min.y < button.max.y, "with no room under its button it is not under it ({case}, button {button:?})");
+            }
+        }
     }
 }
