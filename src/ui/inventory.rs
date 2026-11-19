@@ -235,6 +235,11 @@ pub struct InventoryResponse {
     pub load_api_flame: Option<(String, crate::api::FlameLoadResult)>,
     /// An online script to open (adopt into your files).
     pub script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest>,
+    /// An online animation to load, by its id (as the Animation panel's
+    /// list loads one).
+    pub load_api_animation: Option<String>,
+    /// A palette an online request found, to apply.
+    pub apply_palette: Option<crate::scene::palette::Palette>,
     /// What running a script produced (a flame, a batch, an animation).
     pub run: super::script_run::RunResult,
     /// Clear Cache: the downloaded variations, or effects.
@@ -389,6 +394,9 @@ impl InventoryPanel {
         let mut out = InventoryResponse::default();
         self.previews.begin_frame(ui.ctx());
         self.online.update(ui.ctx(), &self.query, &self.entries, &mut out);
+        if let Some(palette) = out.apply_palette.take() {
+            apply_palette(cx.config_manager, palette);
+        }
         self.render_top(ui, cx, &mut out);
         ui.separator();
         self.narrow = ui.available_width() < NARROW;

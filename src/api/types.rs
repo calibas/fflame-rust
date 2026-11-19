@@ -119,6 +119,45 @@ pub struct Owner {
     pub display_name: String,
 }
 
+/// What makes an item curated (docs/projects/curated-content.md): an
+/// admin's static copy under a canonical name. Absent on everything else.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Curation {
+    /// The canonical name; absent on a fractal frozen only as a curated
+    /// animation's.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Whether the name means this version now.
+    #[serde(default)]
+    pub current: bool,
+    #[serde(default)]
+    pub curated_at: Option<String>,
+    /// The content's hash: what a config pins (`crate::curated`).
+    #[serde(default)]
+    pub content_hash: String,
+    /// Whose work it is.
+    #[serde(default)]
+    pub credit: Option<String>,
+}
+
+/// What a canonical name or a hash resolves to (`GET /curated/{kind}/{name}`,
+/// `POST /curated/resolve`): where to fetch it and its version.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Resolution {
+    pub kind: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `flame`, `palette`, `script`, `animation`, or a built-in
+    /// `variation` / `effect`.
+    pub resource: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    pub content_hash: String,
+    #[serde(default)]
+    pub current: bool,
+    pub href: String,
+}
+
 /// A JSON null read as the type's default: a field the server may send as
 /// null (a variation's `category`) where this client keeps a value.
 fn null_as_default<'de, D, T>(d: D) -> Result<T, D::Error>
@@ -431,6 +470,14 @@ pub struct AnimationSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlameListItem {
     pub id: String,
+    /// `builtin` (the app's shipped content, seeded by the sync) or
+    /// `user`.
+    #[serde(default)]
+    pub origin: Option<String>,
+    /// Curated: the canonical name and the version's hash
+    /// (docs/projects/curated-content.md).
+    #[serde(default)]
+    pub curated: Option<Curation>,
     #[serde(default)]
     pub owner: Option<Owner>,
     pub name: String,
@@ -575,6 +622,14 @@ pub struct ApiPalette {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PaletteItem {
     pub id: String,
+    /// `builtin` (the app's shipped content, seeded by the sync) or
+    /// `user`.
+    #[serde(default)]
+    pub origin: Option<String>,
+    /// Curated: the canonical name and the version's hash
+    /// (docs/projects/curated-content.md).
+    #[serde(default)]
+    pub curated: Option<Curation>,
     #[serde(default)]
     pub owner: Option<Owner>,
     pub name: String,
@@ -708,9 +763,20 @@ pub struct AnimationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnimationListItem {
     pub id: String,
+    /// `builtin` (the app's shipped content, seeded by the sync) or
+    /// `user`.
+    #[serde(default)]
+    pub origin: Option<String>,
+    /// Curated: the canonical name and the version's hash
+    /// (docs/projects/curated-content.md).
+    #[serde(default)]
+    pub curated: Option<Curation>,
     #[serde(default)]
     pub owner: Option<Owner>,
     pub name: String,
+    /// Markdown.
+    #[serde(default)]
+    pub description: Option<String>,
     pub duration: f64,
     pub loop_mode: ApiLoopMode,
     pub visibility: ApiVisibility,
@@ -782,6 +848,14 @@ pub struct ScriptResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScriptListItem {
     pub id: String,
+    /// `builtin` (the app's shipped content, seeded by the sync) or
+    /// `user`.
+    #[serde(default)]
+    pub origin: Option<String>,
+    /// Curated: the canonical name and the version's hash
+    /// (docs/projects/curated-content.md).
+    #[serde(default)]
+    pub curated: Option<Curation>,
     #[serde(default)]
     pub owner: Option<Owner>,
     pub name: String,

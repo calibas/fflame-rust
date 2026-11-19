@@ -215,14 +215,29 @@ entries made by `inventory::online`):
 
 | Family | Online lists | Use |
 |---|---|---|
-| Palettes | `GET /palettes`; Account: `GET /users/me/palettes` -- each a row with its gradient | a click applies a copy; Account: Delete... (confirmed) |
-| Fractals | `GET /flames`; Account: `GET /users/me/flames` -- a grid of the server's thumbnails, a render-mode filter (All, 2D, 3D, Escape Time, Simulation) | a click loads it, one undo step, its online id kept so Save Online updates it; Account: Delete... (confirmed) |
+| Palettes | `GET /palettes?curated=true`; Account: `GET /users/me/palettes` -- each a row with its gradient | a click applies a copy; Account: Delete... (confirmed) |
+| Fractals | `GET /flames?curated=true`; Account: `GET /users/me/flames` -- a grid of the server's thumbnails, a render-mode filter (All, 2D, 3D, Escape Time, Simulation); and **Animations**, a kind of the family (the user's choice, 2026-11-18): `GET /animations?curated=true`, Account: `GET /users/me/animations`, as rows | a fractal: a click loads it, one undo step, its online id kept so Save Online updates it; Account: Delete... (confirmed). An animation: **Load**, with its fractal, as the Animation panel's list loads one |
 | Variations, Effects | the cached catalog first (downloaded, offered), then people's Rhai ones (`GET /scripts?kind=variation`, `effect`) | Download, Update; a Rhai one: Open |
 | Escape, Simulation, Scripts | `GET /scripts?kind=` for each of the family's kinds, a group each (the kind chips narrow it to one) | Open: adopt into your files (`ScriptCloudRequest::Adopt`), under the restrictions somebody else's code runs with |
 
-- **Public or Account.** Public is a guest's too; Account (the signed-in
-  account's own items, every visibility) needs the account
-  (the button says so when signed out).
+- **Curated or Account** ([curated-content.md](../projects/curated-content.md)).
+  Curated is the curated collection -- reviewed, static copies, each
+  under its canonical name (`Scope::Curated`: a list with
+  `curated=true`) -- a guest's too; Account (the signed-in account's own
+  items, every visibility) needs the account (the button says so when
+  signed out). Anyone else's public item is not browsed: it opens by its
+  id or link. A curated item's info says **Curated, as** its name (and
+  when it is an older version), and credits whose work it is.
+- **Open by ID or link**, under the scopes: an item's id, a link that
+  holds one (the web app's `?flame=` / `?animation=`, an API path, a
+  page of the browser app's: the resource named last before the id
+  decides), or a canonical name `kind/name` (resolved by
+  `GET /curated/{kind}/{name}`). It does what a click on the item's row
+  would: a fractal or an animation loads, a palette applies, a script is
+  opened (adopted). An id that names no resource is looked for as a
+  fractal, an animation, a palette, then a script; a built-in
+  variation's or effect's name says it is in the app already
+  (`inventory::online::parse_open`, `OnlinePlace::open`).
 - **Search** is the server's: the panel's search box, asked
   (`q`) once the typing has stopped for 0.4 s. **Sort**: the resource's
   (Newest, Most liked, Most viewed, Recently changed, Name; each

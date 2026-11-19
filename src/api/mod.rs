@@ -22,20 +22,24 @@ mod integration_tests;
 use crate::config::FractalConfig;
 use crate::resources::{FetchError, FetchResult, LoadState};
 
-/// Whose items a list asks for: the public ones, or the caller's own
-/// (every visibility; signed in).
+/// Whose items a list asks for: the curated ones (the app's browsing,
+/// docs/projects/curated-content.md), every public one (the API's own
+/// browsing, kept for its tests and tools), or the caller's own (every
+/// visibility; signed in).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Scope {
     #[default]
+    Curated,
     Public,
     Mine,
 }
 
 impl Scope {
-    /// The list's path for resource `r` (`flames`, `palettes`, `scripts`).
+    /// The list's path for resource `r` (`flames`, `palettes`, `scripts`,
+    /// `animations`).
     fn path(self, r: &str) -> String {
         match self {
-            Scope::Public => format!("/api/v1/{r}"),
+            Scope::Curated | Scope::Public => format!("/api/v1/{r}"),
             Scope::Mine => format!("/api/v1/users/me/{r}"),
         }
     }
@@ -466,12 +470,41 @@ impl ApiState {
         self.browse(scope, "scripts", words).await
     }
 
+    /// One page of animations (`sort` = `recent`, `updated`, `name`,
+    /// `popular`, `views`).
+    pub async fn browse_animations(&self, scope: Scope, words: &Browse) -> FetchResult<types::Page<types::AnimationListItem>> {
+        self.browse(scope, "animations", words).await
+    }
+
     async fn browse<T: serde::de::DeserializeOwned>(&self, scope: Scope, resource: &str, words: &Browse) -> FetchResult<types::Page<T>> {
+        let mut words = words.clone();
+        if scope == Scope::Curated {
+            words.filters.push(("curated".to_string(), "true".to_string()));
+        }
         let url = build_url(API_BASE_URL, &format!("{}{}", scope.path(resource), words.query()));
         match scope {
-            Scope::Public => self.public_get(&url).await,
+            Scope::Curated | Scope::Public => self.public_get(&url).await,
             Scope::Mine => client::api_get(&url, &self.require_token()?).await,
         }
+    }
+
+    /// One palette, by id (its colours included).
+    pub async fn get_palette(&self, id: &str) -> FetchResult<PaletteItem> {
+        let url = build_url(API_BASE_URL, &format!("/api/v1/palettes/{}", urlencode(id)));
+        self.public_get(&url).await
+    }
+
+    /// Whether `resource` (`flames`, `animations`, `palettes`, `scripts`)
+    /// has an item `id` the caller can read.
+    pub async fn exists(&self, resource: &str, id: &str) -> FetchResult<()> {
+        let url = build_url(API_BASE_URL, &format!("/api/v1/{resource}/{}", urlencode(id)));
+        self.public_get::<serde_json::Value>(&url).await.map(|_| ())
+    }
+
+    /// What a canonical name means now (`GET /curated/{kind}/{name}`).
+    pub async fn resolve_curated(&self, kind: &str, name: &str) -> FetchResult<types::Resolution> {
+        let url = build_url(API_BASE_URL, &format!("/api/v1/curated/{}/{}", urlencode(kind), urlencode(name)));
+        self.public_get(&url).await
     }
 
     /// A thumbnail's bytes, by the `thumbnail_url` an item gave (a path
@@ -587,9 +620,11 @@ impl ApiState {
         &self,
         animation_id: &str,
     ) -> FetchResult<(crate::animation::Animation, Option<FractalConfig>, Option<String>)> {
-        let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/v1/animations/{}", animation_id));
-        let resp: AnimationResponse = client::api_get(&url, &token).await?;
+        // Public: a curated or someone's public animation loads for a guest
+        // too; the token goes along when there is one (a private one of
+        // the user's own).
+        let url = build_url(API_BASE_URL, &format!("/api/v1/animations/{}", urlencode(animation_id)));
+        let resp: AnimationResponse = self.public_get(&url).await?;
         let flame_id = resp.flame_id.clone();
 
         // Convert embedded flame to FractalConfig (palette travels inline).
@@ -874,7 +909,9 @@ mod tests {
         };
         assert_eq!(words.query(), "?q=fire+%26+ice&sort=popular&kind=formula&render_mode=2d&per_page=100&cursor=abc%3D");
         assert_eq!(Scope::Public.path("flames"), "/api/v1/flames");
+        assert_eq!(Scope::Curated.path("animations"), "/api/v1/animations");
         assert_eq!(Scope::Mine.path("palettes"), "/api/v1/users/me/palettes");
+        assert_eq!(Scope::default(), Scope::Curated, "the app browses the curated collection");
     }
     use crate::scene::transforms::RenderMode;
 

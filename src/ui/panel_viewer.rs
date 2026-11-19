@@ -961,6 +961,9 @@ impl<'a> PanelViewer<'a> {
         if let Some(req) = response.script_cloud_request {
             *self.context.script_cloud_request = Some(req);
         }
+        if let Some(id) = response.load_api_animation {
+            *self.context.load_api_animation_id = Some(id);
+        }
         if let Some(config) = response.run.generated {
             *self.context.script_generated = Some(config);
         }

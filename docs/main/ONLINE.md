@@ -129,9 +129,9 @@ settings file that says so reads as a guest.)
 | --- | --- |
 | File → **Save Online** | loading a web deep link (`?flame=`, `?animation=`) |
 | Window → **Account**, the startup auto-login | the variation catalog, fetched once per session |
-| the Catalog's Online place, **Account** (your fractals, palettes and scripts; renaming, making public or private and deleting your fractals and palettes) | fetching a variation a loaded flame names but the app lacks, and updating stale downloads |
+| the Catalog's Online place, **Account** (your fractals, palettes, animations and scripts; renaming, making public or private and deleting your fractals and palettes) | fetching a variation a loaded flame names but the app lacks, and updating stale downloads |
 | the menu bar's connection and account indicator | the effect catalog, fetching a missing effect, updating downloaded effects |
-| the periodic health check | the Catalog's Online place, **Public**: browsing and searching every resource, loading a public fractal, applying a palette, opening a script |
+| the periodic health check | the Catalog's Online place, **Curated**: browsing and searching the curated collection; **Open by ID or link**: loading anyone's public fractal or animation, applying a palette, opening a script |
 | publishing your Rhai files and custom palettes (the Catalog's info pane) | |
 
 A guest's request goes unauthenticated (`ApiState::public_get`); signed
@@ -301,14 +301,18 @@ URL load either at startup, with a 30 s timeout.
 
 ## Browsing: the Catalog's Online place
 
-Fractals, palettes and scripts are browsed in the Catalog
+Fractals, animations, palettes and scripts are browsed in the Catalog
 ([CATALOG.md](CATALOG.md), *Online*): `ApiState::browse_flames`,
-`browse_palettes` and `browse_scripts` ask one page of a resource
-(`Scope::Public`, `GET /api/v1/R`, or `Scope::Mine`,
-`GET /api/v1/users/me/R`) with `Browse`'s words (`q`, `sort`, `kind`, the
+`browse_animations`, `browse_palettes` and `browse_scripts` ask one page
+of a resource (`Scope::Curated`, `GET /api/v1/R?curated=true`, the app's
+browsing; `Scope::Public`, every public item, which only the tests use;
+or `Scope::Mine`, `GET /api/v1/users/me/R`) with `Browse`'s words (`q`, `sort`, `kind`, the
 resource's filters such as `render_mode`, `per_page`, `cursor`) and
-page by the reply's `next`. A public fractal loads without a sign-in
-(`load_flame_with_visibility` asks as a guest when signed out); deleting
+page by the reply's `next`. A public fractal or animation loads without
+a sign-in (`load_flame_with_visibility`, `load_animation_full` ask as a
+guest when signed out); *Open by ID or link* also uses `get_palette`,
+`exists` (whether a resource has an id) and `resolve_curated` (a
+canonical name's current version, `GET /api/v1/curated/{kind}/{name}`); deleting
 your fractal (`DELETE /api/v1/flames/{id}`) or palette
 (`DELETE /api/v1/palettes/{id}`; its colours stay, since fractals may use
 them) asks for confirmation first. `fetch_thumbnail` reads a

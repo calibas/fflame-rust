@@ -37,6 +37,9 @@ pub use sources::{palette, preset};
 pub enum Kind {
     Palette,
     Fractal,
+    /// An animation: online only, the server's (the user's choice,
+    /// 2026-11-18: a kind of the Fractals family, not a family).
+    Animation,
     Variation,
     Effect,
     /// An escape-time formula (mode A).
@@ -99,7 +102,7 @@ impl Kind {
     pub fn family(self) -> Family {
         match self {
             Kind::Palette => Family::Palettes,
-            Kind::Fractal => Family::Fractals,
+            Kind::Fractal | Kind::Animation => Family::Fractals,
             Kind::Variation => Family::Variations,
             Kind::Effect => Family::Effects,
             Kind::Formula | Kind::Coloring | Kind::Field | Kind::FieldColoring | Kind::Solid | Kind::SolidColoring | Kind::FormulaFile => {
@@ -115,6 +118,7 @@ impl Kind {
         match self {
             Kind::Palette => "inventory.kind.palette",
             Kind::Fractal => "inventory.kind.fractal",
+            Kind::Animation => "inventory.kind.animation",
             Kind::Variation => "inventory.kind.variation",
             Kind::Effect => "inventory.kind.effect",
             Kind::Formula => "inventory.kind.formula",

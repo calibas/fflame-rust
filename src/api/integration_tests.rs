@@ -401,3 +401,39 @@ fn your_own_items_publish_rename_and_change_visibility() {
     block(author.delete_flame(&id)).unwrap();
     block(author.delete_palette(&made.id)).unwrap();
 }
+
+/// Curated browsing (docs/projects/curated-content.md, step 4): the
+/// curated lists hold curated items only; a canonical name resolves (a
+/// built-in variation's too); and what *Open by ID or link* reads --
+/// a palette by id, whether an item exists, a public animation for a
+/// guest -- answers.
+#[test]
+#[ignore = "needs a local ffapi: python scripts/api_integration.py"]
+fn curated_browsing_and_opening_by_id() {
+    if server().is_none() {
+        return;
+    }
+    let guest = ApiState::default();
+    let curated = block(guest.browse_flames(Scope::Curated, &Browse { per_page: 20, ..Default::default() })).expect("the curated fractals");
+    assert!(curated.items.into_inner().iter().all(|f| f.curated.is_some()), "a curated list holds curated items only");
+    let animations = block(guest.browse_animations(Scope::Curated, &Browse { per_page: 5, ..Default::default() })).expect("the curated animations");
+    assert!(animations.items.into_inner().iter().all(|a| a.curated.is_some()));
+    let linear = block(guest.resolve_curated("variation", "linear")).expect("a built-in variation resolves");
+    assert_eq!((linear.resource.as_str(), linear.href.as_str()), ("variation", "/api/v1/variations/linear"));
+    assert!(block(guest.resolve_curated("fractal", "no-such-name-anywhere-x1")).is_err());
+
+    let author = signed_in();
+    let mut palette = crate::scene::palette::Palette::default();
+    palette.name = "it open".into();
+    let made = block(author.create_palette(&palette, ApiVisibility::Unlisted)).expect("a palette");
+    let got = block(guest.get_palette(&made.id)).expect("an unlisted palette opens by id");
+    assert_eq!(got.content_hash, made.content_hash);
+    let flame_id = block(author.save_flame(&flame_config(), Some("it open"), Some(ApiVisibility::Public), None)).unwrap();
+    block(guest.exists("flames", &flame_id)).expect("a public fractal exists");
+    assert!(block(guest.exists("palettes", &flame_id)).is_err(), "not a palette");
+    let animation = crate::animation::Animation::new("it open".into(), 5.0);
+    let anim_id = block(author.save_animation(&animation, Some("it open"), Some(&flame_id), Some(ApiVisibility::Public))).expect("an animation");
+    block(guest.load_animation_full(&anim_id)).expect("a guest loads a public animation");
+    let mine = block(author.browse_animations(Scope::Mine, &Browse::default())).expect("your own animations");
+    assert!(mine.items.into_inner().iter().any(|a| a.id == anim_id));
+}

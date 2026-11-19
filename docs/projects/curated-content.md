@@ -1,6 +1,6 @@
 # Curated content
 
-**Status: steps 1-3 built 2026-11-18** (ffapi branch `curated-content`, migrations 119-121, and this repo's branch `curated-content`; the production dry run waits on the ffapi deploy; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
+**Status: steps 1-4 built 2026-11-18** (ffapi branch `curated-content`, migrations 119-121, and this repo's branch `curated-content`; the production dry run waits on the ffapi deploy; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
 client (this one) and the API server (`c:/projects/ffapi`). Built from a
 survey of both on 2026-11-18. The survey's findings are summarised in
 *What exists*, with file references where they matter.
@@ -490,7 +490,15 @@ So, with what exists:
      particular the hand imports under *needs a decision*.
    - Then the sync.
 4. **Client browsing.** Curated | Account, Open by id or link, and the
-   Animations family.
+   Animations family. **Built 2026-11-18**, this repository's branch:
+   `Scope::Curated` (the app's default; `Scope::Public` stays for the
+   tests); animations are a **kind of the Fractals family**, not a
+   family (the user's choice); Open by ID or link takes an id, a link or
+   `kind/name` and does what a click on the item would; items bind
+   `curated` and `origin`, and a curated item's info says so and credits
+   it. `load_animation_full` asks as a guest when signed out (a curated
+   animation loads for anyone). Checked against a local server by the
+   API integration test `curated_browsing_and_opening_by_id`.
 5. **Client names in configs and trust.** The curated table, resolution
    on load, the prompt, and untrusted tracks.
 6. **Client fetch unification, the cache by hash, and cleanups.**
