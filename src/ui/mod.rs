@@ -1800,6 +1800,11 @@ impl EguiLayer {
             // and every picker show the same one this frame; and whether
             // the pickers offer downloads (L3).
             inventory::set_picker_downloads(config_manager.system_settings().picker_downloads != Some(false));
+            // The files the lists asked for last frame, compiled here,
+            // outside any panel's draw (a panel may hold a registry's lock).
+            if inventory::compile_requested() {
+                ctx.request_repaint();
+            }
             self.inventory_panel.refresh(
                 palette_library,
                 script_cloud.library_generation,

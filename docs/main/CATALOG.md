@@ -88,6 +88,14 @@ when it changes.
   compiled the first time a list or a preview asks
   (`ui::inventory::compiled` -> `library::compile_file`, once per file and
   version, a file with no `INFO.id` under one derived from its name).
+  **Never inside a draw**: a list's ask is queued and compiled before the
+  next frame's panels (`inventory::compile_requested`), as a panel may
+  hold a registry's read guard while it draws a picker and registering
+  takes the write lock (it hung the Add Variation picker:
+  `a_pickers_filter_never_compiles_under_a_registry_guard`). Meanwhile
+  the row is offered and a preview shows its spinner.
+- **In a picker, what can be downloaded comes last**, after every kind's
+  own groups.
   Where a thing came from is its origin and link, nothing else: the
   *Load at start* flag (`Link::plugin`) is retired and ignored in old
   `_links.json` files.

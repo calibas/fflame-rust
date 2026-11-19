@@ -330,6 +330,12 @@ impl Previews {
     pub fn want(&mut self, e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Palette]) -> Shown {
         self.asked += 1;
         let id = (e.key.clone(), e.version.clone());
+        // A file not compiled yet: compiled before the next frame (never
+        // inside a draw, `inventory::compile_requested`); not "no preview".
+        if !self.built.contains_key(&id) && super::inventory::compile_pending(e) {
+            ctx.request_repaint();
+            return Shown::Pending;
+        }
         if !self.built.contains_key(&id) {
             let p = preview(e, ctx, palettes);
             self.built.insert(id.clone(), p);
@@ -517,6 +523,9 @@ mod inspection {
                 .iter()
                 .find(|e| e.kind == kind && (e.key == EntryKey::Registered(kind, name.into()) || matches!(&e.key, EntryKey::File { file, .. } if file.trim_end_matches(".rhai") == name)))
                 .unwrap_or_else(|| panic!("no {item}"));
+            if super::super::inventory::compile_pending(e) {
+                super::super::inventory::compile_requested();
+            }
             let Some(p) = preview(e, &ctx, &[]) else {
                 println!("{item}: no preview");
                 continue;

@@ -1114,26 +1114,66 @@ fn use_label_key(e: &Entry) -> &'static str {
     }
 }
 
-/// A Rhai file of the formula store compiled, for the lists and Use
-/// (docs/projects/one-list.md, L1): a shipped example or a file of the
-/// user's, of a kind a list can use, compiled once per version
-/// (`library::compile_file`). `None` for anything else: a built-in, a CPU
+/// Files a list asked for that are not compiled yet: compiled before the
+/// next frame's panels draw ([`compile_requested`]), never inside a draw.
+/// A panel may hold a registry's read guard while it draws a picker (the
+/// Transforms panel does), and registering what a file makes takes that
+/// registry's write lock: compiling inside the draw hung the app.
+static TO_COMPILE: Mutex<Vec<(String, bool, String)>> = Mutex::new(Vec::new());
+
+/// The file, shipped and version of a Rhai file of the formula store of a
+/// kind a list can use; `None` for anything else: a built-in, a CPU
 /// script, a UF or Fractint file.
-pub(crate) fn compiled(e: &Entry) -> Option<Result<crate::storage::library::Plugin, String>> {
+fn list_file(e: &Entry) -> Option<(String, bool, String)> {
     let EntryKey::File { store: Store::Formulas, file, shipped } = &e.key else { return None };
     if !crate::storage::formula_store::is_rhai(file) {
         return None;
     }
-    let Some(lib_kind) = crate::storage::library::Kind::from_wire(crate::inventory::online::script_wire(e.kind)?) else { return None };
+    let lib_kind = crate::storage::library::Kind::from_wire(crate::inventory::online::script_wire(e.kind)?)?;
     if !lib_kind.can_be_plugin() {
         return None;
     }
-    let version = e.version.clone().unwrap_or_default();
-    let shipped = *shipped;
-    Some(crate::storage::library::compile_file(file, shipped, &version, || match shipped {
-        true => crate::storage::formula_store::EXAMPLES.iter().find(|(n, _)| n == file).map(|(_, s)| s.to_string()),
-        false => crate::storage::manage::load(Store::Formulas, file),
-    }))
+    Some((file.clone(), *shipped, e.version.clone().unwrap_or_default()))
+}
+
+/// A Rhai file of the formula store compiled, for the lists and Use
+/// (docs/projects/one-list.md, L1): a shipped example or a file of the
+/// user's, of a kind a list can use, compiled once per version
+/// (`library::compile_file`). Not compiled yet, it is asked for (compiled
+/// before the next frame: [`TO_COMPILE`]) and says so, `Err`
+/// ([`compile_pending`] tells that apart). `None` for anything else.
+pub(crate) fn compiled(e: &Entry) -> Option<Result<crate::storage::library::Plugin, String>> {
+    let (file, shipped, version) = list_file(e)?;
+    if let Some(done) = crate::storage::library::compiled_cached(&file, shipped, &version) {
+        return Some(done);
+    }
+    if let Ok(mut asked) = TO_COMPILE.lock() {
+        let item = (file, shipped, version);
+        if !asked.contains(&item) {
+            asked.push(item);
+        }
+    }
+    Some(Err(t!("catalog.compiling").to_string()))
+}
+
+/// Whether the entry is a file a list uses that is not compiled yet (and
+/// now asked for).
+pub(crate) fn compile_pending(e: &Entry) -> bool {
+    list_file(e).is_some_and(|(file, shipped, version)| crate::storage::library::compiled_cached(&file, shipped, &version).is_none()) && compiled(e).is_some()
+}
+
+/// Compile the files the lists asked for since the last call; whether
+/// there were any (the caller repaints, so the lists show them). Called
+/// once a frame before any panel draws, holding no registry's lock.
+pub fn compile_requested() -> bool {
+    let asked = TO_COMPILE.lock().map(|mut a| std::mem::take(&mut *a)).unwrap_or_default();
+    for (file, shipped, version) in &asked {
+        let _ = crate::storage::library::compile_file(file, *shipped, version, || match shipped {
+            true => crate::storage::formula_store::EXAMPLES.iter().find(|(n, _)| n == file).map(|(_, s)| s.to_string()),
+            false => crate::storage::manage::load(Store::Formulas, file),
+        });
+    }
+    !asked.is_empty()
 }
 
 /// A file's compiled record, when it compiles.
@@ -1164,7 +1204,8 @@ pub(crate) fn picked_now(e: &Entry) -> bool {
     e.installed
         && match &e.key {
             EntryKey::Registered(..) => true,
-            EntryKey::File { .. } => plugin_of(e).is_some(),
+            // Not compiled yet: offered this frame, compiled before the next.
+            EntryKey::File { .. } => plugin_of(e).is_some() || compile_pending(e),
             _ => false,
         }
 }
@@ -1329,6 +1370,24 @@ mod tests {
             let want = presets.iter().filter(|p| PresetCategory::of(p) == category).count();
             assert_eq!(galleries[category.index()].len(), want, "{category:?}");
         }
+    }
+
+    /// A list's filter never compiles: the Transforms panel draws its Add
+    /// Variation picker holding the variation registry's read guard, and
+    /// compiling a variation file there took the write lock -- the app
+    /// hung. Asked with the guard held, a file not compiled yet is offered
+    /// and queued, and the call returns.
+    #[test]
+    fn a_pickers_filter_never_compiles_under_a_registry_guard() {
+        let entries = inventory::scan(&crate::scene::palette::global_palette_library().read().unwrap().clone(), inventory::Online::default());
+        let files: Vec<&Entry> = entries.iter().filter(|e| e.kind == Kind::Variation && matches!(e.key, EntryKey::File { shipped: true, .. })).collect();
+        assert!(!files.is_empty(), "the shipped variation examples");
+        let guard = crate::variations::global_registry();
+        for e in &files {
+            assert!(pickable(e), "{}: offered, compiled or not yet", e.title);
+            let _ = applied_name(e);
+        }
+        drop(guard);
     }
 
     /// The origin filter: built-in, the user's (Custom), somebody else's.

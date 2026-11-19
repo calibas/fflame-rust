@@ -214,7 +214,7 @@ impl<'a> Picker<'a> {
         ui.separator();
 
         let shared = super::inventory::shared();
-        let rows: Vec<&Entry> = self
+        let mut rows: Vec<&Entry> = self
             .lead
             .iter()
             .filter(|e| e.matches(&query))
@@ -222,8 +222,12 @@ impl<'a> Picker<'a> {
             // it (docs/projects/one-list.md, L3).
             .chain(shared.iter().chain(self.extra.iter()).filter(|e| (e.installed || super::inventory::picker_downloads()) && (self.admit)(e) && e.matches(&query)))
             .collect();
+        // What can be downloaded comes last, after every kind's own groups
+        // (stable: each part keeps the Catalog's order).
+        rows.sort_by_key(|e| !e.installed);
         let mut picked = None;
-        egui::ScrollArea::vertical().id_salt(self.id.with("scroll")).max_height(self.max_height).show(ui, |ui| {
+        // As wide as the search above it, not shrunk to the rows.
+        egui::ScrollArea::vertical().id_salt(self.id.with("scroll")).max_height(self.max_height).auto_shrink([false, true]).show(ui, |ui| {
             if rows.is_empty() {
                 ui.weak(t!("catalog.nothing_matches"));
                 return;

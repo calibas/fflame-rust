@@ -3500,6 +3500,7 @@ catalog:
   open_in_editor: "Open in Editor"
   open_to_use: "Open it in the Rhai Editor to use it."
   does_not_compile: "It does not compile: %{error}"
+  compiling: "Compiling…"
   needs_escape_formula: "An escape-time colouring draws an escape-time formula: choose one first."
   coloring_does_not_suit: "This colouring cannot draw %{formula}."
   needs_field: "A field's colouring draws a field: choose one first."

@@ -340,6 +340,13 @@ pub fn is_file_key(key: &str) -> bool {
 /// needs an id of its own to register (an effect, a variation without a
 /// name) gets one derived from its name -- the same every session --
 /// without the file being rewritten.
+/// What [`compile_file`] made of a file at a version, if it was asked
+/// already: never compiles (so it never takes a registry's lock).
+pub fn compiled_cached(file: &str, shipped: bool, version: &str) -> Option<Result<Plugin, String>> {
+    let key = (shipped, file.to_string(), version.to_string());
+    compiled_cache().lock().ok()?.get(&key).cloned()
+}
+
 pub fn compile_file(file: &str, shipped: bool, version: &str, source: impl FnOnce() -> Option<String>) -> Result<Plugin, String> {
     let key = (shipped, file.to_string(), version.to_string());
     if let Some(done) = compiled_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
