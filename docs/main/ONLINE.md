@@ -359,6 +359,9 @@ runs as soon as it loads, so a load from the server passes a gate first
     known to be curated, so everything not trusted is asked about.
 - **A script opened by ID** asks the same question before it joins your
   files, unless it is curated.
+- **Curated items a file names** instead of carrying them (File ▸ Save
+  As; [CONFIG.md](CONFIG.md), *Writing*) are fetched by name and hash
+  when it opens. Being curated, they are trusted.
 - **Script tracks** run in a locked-down engine: no module imports, no
   calls into other scripts, no `sleep`, and an operation budget. The
   untrusted restriction CPU scripts get (calls only into shipped scripts)

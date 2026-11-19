@@ -362,6 +362,14 @@ fn linked(resp: &ScriptResponse) -> Link {
 /// store. A kind this build does not know is refused rather than guessed.
 pub(crate) fn adopt(resp: &ScriptResponse) -> Result<Local, String> {
     let kind = resp.kind.as_deref().unwrap_or("generator");
+    // A curated script: what a config that uses it names on save instead
+    // of carrying it (`curated::refs`), and code that runs without asking.
+    if let Some(c) = &resp.curated {
+        if let Some(name) = &c.name {
+            crate::curated::refs::remember(kind, name, &c.content_hash);
+        }
+        crate::curated::trust::trust_for_session([c.content_hash.as_str()]);
+    }
     match Kind::from_wire(kind) {
         Some(k) if k.is_entry() => adopt_entry(resp).map(Local::Entry),
         Some(_) => adopt_script(resp).map(Local::Script),

@@ -65,9 +65,13 @@ impl App {
             }
         }
 
-        // Handle config save to file
-        if ui_response.config_save_file_requested {
+        // Handle config save to file. A curated item's source is left out
+        // and named instead (docs/projects/curated-content.md, D10-D11;
+        // `curated::refs`), unless the save is for offline use.
+        if ui_response.config_save_file_requested || ui_response.config_save_offline_requested {
+            let include_sources = ui_response.config_save_offline_requested;
             let config = self.export_config();
+            let json = crate::curated::refs::for_saving(&config, include_sources).and_then(|v| serde_json::to_string_pretty(&v));
 
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -77,17 +81,16 @@ impl App {
                     .set_file_name("fractal.fflame")
                     .save_file()
                 {
-                    if let Err(e) = config.save_to_file(&path) {
-                        eprintln!("Failed to save config: {}", e);
-                    } else {
-                        println!("Config saved to: {}", path.display());
+                    match json.as_ref().map_err(|e| e.to_string()).and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string())) {
+                        Err(e) => eprintln!("Failed to save config: {}", e),
+                        Ok(()) => println!("Config saved to: {}", path.display()),
                     }
                 }
             }
 
             #[cfg(target_arch = "wasm32")]
             {
-                if let Ok(json) = config.to_json() {
+                if let Ok(json) = json {
                     let filename = format!("{}.fflame", config.flame.name.to_lowercase().replace(' ', "_"));
                     if let Err(e) = trigger_browser_download(json.as_bytes(), &filename, "application/json") {
                         log::error!("Failed to trigger download: {}", e);

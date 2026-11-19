@@ -56,6 +56,8 @@ menu:
   # File Menu
   new: "📄 New"
   open: "📂 Open..."
+  save_as_offline: "💾 Save As for Offline Use..."
+  save_as_offline_tip: "Save, keeping the code of the curated items it uses in the file, so it opens without the network. (Save As names them instead, and they are fetched when it opens.)"
   save_as: "💾 Save As..."
   save_online: "☁ Save Online..."
   online_account: "Online account"
@@ -1653,6 +1655,8 @@ trust:
   always_tip: "Load it, and trust this exact code from now on, on this device. A changed version asks again."
   no: "Don't load"
   not_loaded: "%{name} was not loaded."
+  fetching_curated: "Fetching %{count} curated item(s) it names…"
+  curated_missing: "Could not fetch curated item(s): %{names}. They are missing from this fractal."
 api:
   update_available: "Version %{version} is available."
   newer_config: "This was made by a newer version. Settings this version cannot read are not shown, and are kept when you save."

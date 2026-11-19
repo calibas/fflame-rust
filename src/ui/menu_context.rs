@@ -10,6 +10,8 @@ pub struct FileMenuActions {
     pub open_preset_library: bool,
     pub load_config: bool,
     pub save_config: bool,
+    /// Save As, keeping the curated items' sources in the file (D10).
+    pub save_config_offline: bool,
     pub import_flame_xml: bool,
     pub export_flame_xml: bool,
     pub export_png: bool,

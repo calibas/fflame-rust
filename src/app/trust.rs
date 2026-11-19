@@ -51,6 +51,17 @@ impl ApiLoad {
     }
 }
 
+/// A load held for the curated items it names but does not carry
+/// (`curated::refs`): fetched by name and hash, put back, then loaded.
+pub(crate) struct HeldRefs {
+    config: FractalConfig,
+    description: String,
+    api_metadata: Option<ApiContentState>,
+    refs: Vec<crate::curated::refs::CuratedRef>,
+    /// The sources fetched, by entry.
+    fetch: Job<std::collections::HashMap<String, String>>,
+}
+
 /// A load held for its code.
 pub(crate) struct HeldLoad {
     load: ApiLoad,
@@ -88,15 +99,92 @@ impl App {
         self.held_load = Some(HeldLoad { load, unknown, lookup: Some(lookup), question: None });
     }
 
-    /// Once a frame: the server's answer, then the user's.
+    /// Load `config` once the curated items it names are fetched.
+    pub(super) fn hold_for_references(
+        &mut self,
+        config: FractalConfig,
+        description: String,
+        api_metadata: Option<ApiContentState>,
+        refs: Vec<crate::curated::refs::CuratedRef>,
+    ) {
+        self.egui_layer.show_api_notification(&t!("trust.fetching_curated", count = refs.len()), false);
+        let items: Vec<ResolveItem> =
+            refs.iter().map(|r| ResolveItem { kind: r.kind.clone(), name: Some(r.name.clone()), hash: Some(r.hash.clone()) }).collect();
+        let wanted: Vec<(String, String)> = refs.iter().map(|r| (r.entry.clone(), r.hash.clone())).collect();
+        let api = crate::api::ApiState::new(crate::api::API_BASE_URL);
+        let ctx = self.egui_layer.ctx.clone();
+        let fetch = job::spawn(
+            async move {
+                let answers = api.resolve_curated_many(&items).await?;
+                let mut out = std::collections::HashMap::new();
+                for ((entry, hash), answer) in wanted.into_iter().zip(answers) {
+                    // Curated Rhai is a script; its exact version, by hash.
+                    let Some(id) = answer.filter(|a| a.resource == "script" && a.content_hash == hash).and_then(|a| a.id) else { continue };
+                    if let Ok(script) = api.load_script(&id).await {
+                        if crate::scripted::version_of(&script.source) == hash {
+                            out.insert(entry, script.source);
+                        }
+                    }
+                }
+                Ok(out)
+            },
+            move || ctx.request_repaint(),
+        );
+        self.held_refs = Some(HeldRefs { config, description, api_metadata, refs, fetch });
+    }
+
+    /// Once a frame: the held loads' answers.
     pub(super) fn handle_held_load(&mut self) {
+        self.handle_held_refs();
+        self.handle_held_code();
+    }
+
+    fn handle_held_refs(&mut self) {
+        let Some(held) = self.held_refs.as_ref() else { return };
+        let Some(result) = held.fetch.take() else { return };
+        let Some(held) = self.held_refs.take() else { return };
+        let sources = result.unwrap_or_else(|e| {
+            log::warn!("curated items not fetched: {e}");
+            Default::default()
+        });
+        // Fetched by name and hash: curated, so trusted, and remembered.
+        for r in held.refs.iter().filter(|r| sources.contains_key(&r.entry)) {
+            trust::trust_for_session([r.hash.as_str()]);
+            crate::curated::refs::remember(&r.kind, &r.name, &r.hash);
+        }
+        let missing: Vec<&str> = held.refs.iter().filter(|r| !sources.contains_key(&r.entry)).map(|r| r.name.as_str()).collect();
+        if !missing.is_empty() {
+            self.egui_layer.show_api_notification(&t!("trust.curated_missing", names = missing.join(", ")), true);
+        }
+        let config = match crate::curated::refs::fill(&held.config, &sources) {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("curated sources not put back: {e}");
+                held.config
+            }
+        };
+        if let Err(e) = self.load_config_now(config, held.description, held.api_metadata) {
+            log::error!("Failed to load config: {}", e);
+        }
+    }
+
+    fn handle_held_code(&mut self) {
         let Some(held) = self.held_load.as_mut() else { return };
         if let Some(lookup) = &held.lookup {
             let Some(result) = lookup.take() else { return };
             held.lookup = None;
             match result {
-                // Curated: what the server answered for, hash for hash.
-                Ok(answers) => trust::trust_for_session(answers.iter().flatten().map(|r| r.content_hash.as_str())),
+                // Curated: what the server answered for, hash for hash --
+                // trusted for the session, and remembered by name (what a
+                // save names instead of carrying, `curated::refs`).
+                Ok(answers) => {
+                    for r in answers.iter().flatten() {
+                        trust::trust_for_session([r.content_hash.as_str()]);
+                        if let (Some(name), "script") = (&r.name, r.resource.as_str()) {
+                            crate::curated::refs::remember(&r.kind, name, &r.content_hash);
+                        }
+                    }
+                }
                 // Offline, or a server without the curated routes: nothing
                 // is known curated, so everything left is asked about.
                 Err(e) => log::info!("curated lookup failed ({e}): asking about all of it"),

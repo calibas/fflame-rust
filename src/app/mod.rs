@@ -778,6 +778,8 @@ pub struct App {
     pub(super) url_load_result: std::sync::Arc<std::sync::Mutex<Option<Result<UrlLoadedData, String>>>>,
     /// A load from the server held until its code is trusted (`trust`).
     pub(super) held_load: Option<trust::HeldLoad>,
+    /// A load held for the curated items it names (`trust`).
+    pub(super) held_refs: Option<trust::HeldRefs>,
     pub(super) url_load_in_progress: bool,
     pub(super) url_load_started: Option<web_time::Instant>,
 
@@ -1055,6 +1057,7 @@ impl App {
             pending_animation_save: None,
             url_load_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             held_load: None,
+            held_refs: None,
             url_load_in_progress: false,
             url_load_started: None,
             pending_subflame_load_index: None,

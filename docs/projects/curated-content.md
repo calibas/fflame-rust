@@ -1,6 +1,6 @@
 # Curated content
 
-**Status: steps 1-4 built 2026-11-18** (ffapi branch `curated-content`, migrations 119-121, and this repo's branch `curated-content`; the production dry run waits on the ffapi deploy; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
+**Status: steps 1-5 built 2026-11-18** (ffapi branch `curated-content`, migrations 119-121, and this repo's branch `curated-content`; the production dry run waits on the ffapi deploy; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
 client (this one) and the API server (`c:/projects/ffapi`). Built from a
 survey of both on 2026-11-18. The survey's findings are summarised in
 *What exists*, with file references where they matter.
@@ -509,8 +509,23 @@ So, with what exists:
    building: `Provenance` is not split -- trust is by hash, at the gate,
    and what loads registers as before; script tracks need no untrusted
    mode (their engine has no imports or cross-calls already). **The names
-   half** (the config's curated table, references on save, resolution on
-   load) is next.
+   half built 2026-11-18** (`curated::refs`; CONFIG.md, *Writing*): File ▸
+   Save As records each carried source this device knows is curated in
+   the config's `curated` table (`{kind, name, hash, entry}`) and leaves
+   its source out; **Save As for Offline Use** keeps the sources (D10);
+   loading holds a config with referenced sources until they are fetched
+   by name and hash, then puts them back (D11: loading never changes a
+   file). Decided while building: **the registry key stays the key** --
+   a carried source keeps its `entry` (`u<id>_<hash8>`, already a pin by
+   hash) and the table maps it to the canonical name, rather than
+   re-keying configs by canonical names; the device learns what is
+   curated from the trust lookups, adopted curated scripts and resolved
+   references (`curated_known.json`), so a save needs no network; only
+   `.fflame` saves strip -- PNG metadata and Save Online carry full
+   sources (a picture opens anywhere; the server's catalog reads them);
+   WGSL variations and palettes are not in the table (a variation is
+   named already; a palette is carried as colours); the CLI does not
+   resolve references yet.
 6. **Client fetch unification, the cache by hash, and cleanups.**
 7. **Later:**
    - the submission process (D3);

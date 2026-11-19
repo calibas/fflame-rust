@@ -46,6 +46,14 @@ pub fn render_menu_bar(
                     menu_actions.file.save_config = true;
                 }
 
+                if ui
+                    .selectable_label(false, t!("menu.save_as_offline").as_ref())
+                    .on_hover_text(t!("menu.save_as_offline_tip"))
+                    .clicked()
+                {
+                    menu_actions.file.save_config_offline = true;
+                }
+
                 if ui.selectable_label(false, t!("menu.export_flame_xml").as_ref()).clicked() {
                     menu_actions.file.export_flame_xml = true;
                 }

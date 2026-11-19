@@ -42,6 +42,8 @@ pub struct UiResponse {
     pub config_export_requested: Option<String>,
     pub config_import_requested: Option<String>,
     pub config_save_file_requested: bool,
+    /// Save As for offline use: the curated items' sources kept (D10).
+    pub config_save_offline_requested: bool,
     pub config_load_file_requested: bool,
     pub flame_xml_import_file_requested: bool,
     pub flame_xml_export_file_requested: bool,
@@ -238,6 +240,7 @@ impl Default for UiResponse {
             config_export_requested: None,
             config_import_requested: None,
             config_save_file_requested: false,
+            config_save_offline_requested: false,
             config_load_file_requested: false,
             flame_xml_import_file_requested: false,
             flame_xml_export_file_requested: false,

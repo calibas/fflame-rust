@@ -2452,6 +2452,7 @@ impl EguiLayer {
         // Extract menu actions into individual flags for backward compatibility
         config_load_file |= menu_actions.file.load_config;
         config_save_file |= menu_actions.file.save_config;
+        let config_save_offline = menu_actions.file.save_config_offline;
         flame_xml_import_file |= menu_actions.file.import_flame_xml;
         flame_xml_export_file |= menu_actions.file.export_flame_xml;
         new_flame_requested |= menu_actions.file.new_flame;
@@ -2634,6 +2635,7 @@ impl EguiLayer {
             config_export_requested: config_export_json,
             config_import_requested: config_import_json,
             config_save_file_requested: config_save_file,
+            config_save_offline_requested: config_save_offline,
             config_load_file_requested: config_load_file,
             flame_xml_import_file_requested: flame_xml_import_file,
             flame_xml_export_file_requested: flame_xml_export_file,

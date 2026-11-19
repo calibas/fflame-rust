@@ -31,6 +31,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+pub mod refs;
 pub mod trust;
 
 use serde_json::{json, Value};
