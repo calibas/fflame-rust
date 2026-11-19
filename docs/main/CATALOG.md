@@ -205,6 +205,19 @@ ComboBox: a combo closes on any click inside it, its search box included
 before any panel draws (`InventoryPanel::refresh`, from the UI's frame) and
 shared (`inventory::shared`), so every list of a kind is the same list.
 
+**Previews in pickers**: the info pane shows the entry's preview above
+its summary, as the Catalog's does; and a picker whose kinds have
+previews (`inventory_preview::has_previews`) offers **List / Grid** beside
+its search, remembered per picker (egui memory, `<picker id>/grid`). The
+grid is the Catalog's cells at 96 px, four across (the list widens to
+fit); a cell asks for its picture only while on screen; one that cannot
+be picked here is greyed with the reason on hover, one not installed is
+greyed with its Download in the pane. The Catalog and the pickers share
+one set of previews (`inventory_preview::with`, a thread-local store):
+its frame begins in the UI's frame before any panel draws, and the app
+makes one a frame of what was asked, so a closed Catalog does not stop
+a picker's (`the_picker_grid_asks_for_the_previews_on_screen`).
+
 | Picker | Filter | A pick |
 |---|---|---|
 | Transforms: Add variation | variations; Only3D only in 3D; not already on the transform nor superseded; the fractal's own Rhai variations after (`picker::own_variations`) | `add_variation` |

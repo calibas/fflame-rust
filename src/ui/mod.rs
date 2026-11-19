@@ -1805,6 +1805,8 @@ impl EguiLayer {
             if inventory::compile_requested() {
                 ctx.request_repaint();
             }
+            // The previews' frame: the Catalog's and every picker's.
+            inventory_preview::begin_frame(ctx);
             self.inventory_panel.refresh(
                 palette_library,
                 script_cloud.library_generation,

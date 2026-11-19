@@ -911,15 +911,30 @@ pub(super) fn grid_cell(ui: &mut egui::Ui, e: &Entry, texture: Option<&egui::Tex
 /// wrapped row the cursor is not where the cell lands, and a cell
 /// scrolled half out of view was taken for one off screen.
 pub(super) fn grid_cell_lazy(ui: &mut egui::Ui, e: &Entry, selected: bool, picture: impl FnOnce() -> (Option<egui::TextureHandle>, bool)) -> egui::Response {
-    let (rect, r) = ui.allocate_exact_size(egui::vec2(CELL, CELL + 18.0), egui::Sense::click());
+    grid_cell_sized(ui, e, &e.title, selected, true, CELL, picture)
+}
+
+/// [`grid_cell_lazy`] at a side of `cell`, captioned `label`; not
+/// `enabled`, greyed (a picker's cell it cannot pick, or not installed).
+pub(super) fn grid_cell_sized(
+    ui: &mut egui::Ui,
+    e: &Entry,
+    label: &str,
+    selected: bool,
+    enabled: bool,
+    cell: f32,
+    picture: impl FnOnce() -> (Option<egui::TextureHandle>, bool),
+) -> egui::Response {
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(cell, cell + 18.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let (texture, has_thumb) = picture();
         let texture = texture.as_ref();
         let visuals = ui.visuals();
-        let img = egui::Rect::from_min_size(rect.min, egui::vec2(CELL, CELL));
+        let img = egui::Rect::from_min_size(rect.min, egui::vec2(cell, cell));
         match texture {
             Some(t) => {
-                egui::Image::new(t).fit_to_exact_size(img.size()).paint_at(ui, img);
+                let tint = if enabled { egui::Color32::WHITE } else { egui::Color32::from_gray(90) };
+                egui::Image::new(t).fit_to_exact_size(img.size()).tint(tint).paint_at(ui, img);
             }
             None => {
                 ui.painter().rect_filled(img, 3.0, visuals.extreme_bg_color);
@@ -934,8 +949,9 @@ pub(super) fn grid_cell_lazy(ui: &mut egui::Ui, e: &Entry, selected: bool, pictu
             ui.painter().rect_stroke(img, 3.0, visuals.widgets.hovered.bg_stroke, egui::StrokeKind::Inside);
         }
         let name_rect = egui::Rect::from_min_max(egui::pos2(rect.min.x, img.max.y + 2.0), rect.max);
-        let galley = ui.painter().layout_no_wrap(e.title.clone(), egui::FontId::proportional(12.0), visuals.text_color());
-        ui.painter().with_clip_rect(name_rect).galley(name_rect.left_top(), galley, visuals.text_color());
+        let colour = if enabled { visuals.text_color() } else { visuals.weak_text_color() };
+        let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(12.0), colour);
+        ui.painter().with_clip_rect(name_rect).galley(name_rect.left_top(), galley, colour);
     }
     let tip = match e.online.as_ref().map(|o| o.owner.as_str()).filter(|o| !o.is_empty()) {
         Some(owner) => format!("{}\n{}", e.title, t!("catalog.by_owner", owner = owner)),

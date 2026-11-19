@@ -355,9 +355,9 @@ pub struct InventoryPanel {
     details: bool,
     /// Whether the panel was narrow when last drawn.
     narrow: bool,
-    /// The entries' previews (phase 6), and whether the list is a grid of
-    /// them (decision 1).
-    previews: super::inventory_preview::Previews,
+    /// Whether the list is a grid of the entries' previews (decision 1;
+    /// the previews themselves are shared with the pickers,
+    /// `inventory_preview::with`).
     grid: bool,
     online: super::inventory_online::OnlinePlace,
     manage: super::inventory_manage::Manage,
@@ -389,7 +389,6 @@ impl InventoryPanel {
             place: Place::Local,
             details: false,
             narrow: false,
-            previews: super::inventory_preview::Previews::default(),
             grid: false,
             online: super::inventory_online::OnlinePlace::new(),
             manage: super::inventory_manage::Manage::default(),
@@ -481,7 +480,6 @@ impl InventoryPanel {
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext) -> InventoryResponse {
         let mut out = InventoryResponse::default();
-        self.previews.begin_frame(ui.ctx());
         self.online.update(ui.ctx(), &self.query, &self.entries, &mut out);
         if let Some(palette) = out.apply_palette.take() {
             apply_palette(cx.config_manager, palette);
@@ -689,9 +687,8 @@ impl InventoryPanel {
                                 let e = &self.entries[i];
                                 let selected = self.selected.as_ref() == Some(&e.key);
                                 // Only a cell on screen asks for its picture.
-                                let previews = &mut self.previews;
                                 let ctx = ui.ctx().clone();
-                                let r = super::inventory_online::grid_cell_lazy(ui, e, selected, || match previews.want(e, &ctx, &palettes) {
+                                let r = super::inventory_online::grid_cell_lazy(ui, e, selected, || match super::inventory_preview::want(e, &ctx, &palettes) {
                                     super::inventory_preview::Shown::Ready(t) => (t.last().cloned(), true),
                                     super::inventory_preview::Shown::Pending => (None, true),
                                     super::inventory_preview::Shown::None => (None, false),
@@ -878,7 +875,7 @@ impl InventoryPanel {
         if self.shown_gallery().is_some_and(|g| g.generate_one_preview(ctx, &render_fn)) {
             return true;
         }
-        self.previews.generate_one(ctx, render_fn)
+        super::inventory_preview::with(|p| p.generate_one(ctx, render_fn))
     }
 
     /// WASM: spawn the next preset preview of the gallery drawn this frame.
@@ -887,7 +884,7 @@ impl InventoryPanel {
         if let Some(g) = self.shown_gallery() {
             g.start_next_preview(device, queue, ctx);
         }
-        self.previews.start_next(device, queue, ctx);
+        super::inventory_preview::with(|p| p.start_next(device, queue, ctx));
     }
 
     /// The gallery drawn this frame, every gallery's flag taken: only it
@@ -927,7 +924,7 @@ impl InventoryPanel {
             return;
         };
         let palettes: Vec<crate::scene::palette::Palette> = cx.palette_library.iter().cloned().collect();
-        let preview = self.previews.want(&e, ui.ctx(), &palettes);
+        let preview = super::inventory_preview::want(&e, ui.ctx(), &palettes);
         entry_summary(ui, &e, Some(cx.palette_library), Some(&preview));
         if let Some(v) = &e.update {
             ui.label(egui::RichText::new(t!("catalog.update_available", version = v.clone())).strong());
@@ -1561,6 +1558,7 @@ mod phone_tests {
         for _ in 0..2 {
             let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0))), ..Default::default() };
             let out = ctx.run_ui(input, |ui| {
+                super::super::inventory_preview::begin_frame(ui.ctx());
                 egui::CentralPanel::default().show_inside(ui, |ui| {
                     let mut cx = InventoryContext { config_manager: &mut cm, palette_library: &mut library, account: CloudAccount::default(), script_cloud: &cloud };
                     let _ = panel.render(ui, &mut cx);
@@ -1570,7 +1568,7 @@ mod phone_tests {
         }
         assert!(drawn.iter().any(|(t, _)| t == "Linear"), "a cell names its entry");
         // Asked for (made, cached or waiting): the cells on screen alone.
-        let asked = panel.previews.asked();
+        let asked = super::super::inventory_preview::with(|p| p.asked());
         let variations = panel.entries.iter().filter(|e| e.kind == Kind::Variation).count();
         assert!(asked > 0 && asked < variations / 4, "the cells on screen ask, not all {variations}: {asked}");
     }

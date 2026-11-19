@@ -21,6 +21,10 @@
 //!
 //! The key is the configs' hash with the entry's version, so an update or
 //! an edit makes a new preview.
+//!
+//! One set of previews serves the Catalog and every picker ([`with`]): its
+//! frame begins in the UI's frame, before any panel draws
+//! ([`begin_frame`]), and the app makes one a frame of what was asked.
 
 use crate::config::{ConfigManager, FractalConfig};
 use crate::inventory::{Entry, EntryKey, Family, Kind};
@@ -270,6 +274,29 @@ pub enum Shown {
     Pending,
     /// Its pictures (an effect's two).
     Ready(Vec<egui::TextureHandle>),
+}
+
+thread_local! {
+    /// The previews, the Catalog's and the pickers' (the UI is one thread).
+    static SHARED: std::cell::RefCell<Previews> = std::cell::RefCell::new(Previews::default());
+}
+
+/// The shared previews, for one call (not re-entered: building a preview
+/// draws no picker).
+pub fn with<R>(f: impl FnOnce(&mut Previews) -> R) -> R {
+    SHARED.with(|p| f(&mut p.borrow_mut()))
+}
+
+/// A new frame for the shared previews: called once a frame before any
+/// panel draws.
+pub fn begin_frame(ctx: &egui::Context) {
+    with(|p| p.begin_frame(ctx));
+}
+
+/// The preview of `e` from the shared previews, asking for it when it is
+/// not made.
+pub fn want(e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Palette]) -> Shown {
+    with(|p| p.want(e, ctx, palettes))
 }
 
 /// The previews asked for, made and shown.

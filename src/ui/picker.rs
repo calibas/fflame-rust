@@ -46,6 +46,10 @@ pub struct Picker<'a> {
 /// The info pane's width, beside the list.
 const PANE_WIDTH: f32 = 280.0;
 
+/// A grid cell's side, and the grid's width: four cells.
+const CELL: f32 = 96.0;
+const GRID_WIDTH: f32 = 4.0 * CELL + 3.0 * 6.0;
+
 impl<'a> Picker<'a> {
     pub fn new(id_salt: impl std::hash::Hash, admit: &'a dyn Fn(&Entry) -> bool) -> Self {
         Picker {
@@ -134,7 +138,12 @@ impl<'a> Picker<'a> {
     /// for both (a phone) keeps the list alone, with descriptions as
     /// tooltips.
     fn body(self, ui: &mut egui::Ui, focus: bool) -> Option<Entry> {
-        let pane = ui.ctx().content_rect().width() >= self.min_width + PANE_WIDTH + 64.0;
+        // The grid, when the user chose it (this picker's choice, kept)
+        // and its kinds have previews.
+        let previewable = self.previewable();
+        let grid = previewable && ui.data_mut(|d| d.get_persisted::<bool>(self.id.with("grid")).unwrap_or(false));
+        let width = if grid { GRID_WIDTH.max(self.min_width) } else { self.min_width };
+        let pane = ui.ctx().content_rect().width() >= width + PANE_WIDTH + 64.0;
         let shown_id = self.id.with("shown");
         if focus {
             ui.data_mut(|d| d.remove::<Entry>(shown_id));
@@ -145,8 +154,8 @@ impl<'a> Picker<'a> {
         ui.horizontal_top(|ui| {
             let list = ui
                 .vertical(|ui| {
-                    ui.set_width(self.min_width);
-                    picked = self.list(ui, focus, !pane, &mut hovered, &mut current);
+                    ui.set_width(width);
+                    picked = self.list(ui, focus, !pane, previewable.then_some(grid), &mut hovered, &mut current);
                 })
                 .response
                 .rect;
@@ -190,7 +199,9 @@ impl<'a> Picker<'a> {
             ui.heading(&e.title);
             return;
         }
-        super::inventory::entry_summary(ui, e, self.palettes, None);
+        // Its picture, as the Catalog's info pane shows it.
+        let preview = super::inventory_preview::has_previews(e.kind.family()).then(|| super::inventory_preview::want(e, ui.ctx(), &[]));
+        super::inventory::entry_summary(ui, e, self.palettes, preview.as_ref());
         if !e.installed {
             ui.separator();
             super::inventory::download_button(ui, e);
@@ -200,14 +211,48 @@ impl<'a> Picker<'a> {
         }
     }
 
-    fn list(&self, ui: &mut egui::Ui, focus: bool, tips: bool, hovered: &mut Option<Entry>, current: &mut Option<Entry>) -> Option<Entry> {
+    /// Whether any entry this picker offers has a preview (its grid is a
+    /// choice then).
+    fn previewable(&self) -> bool {
+        let shared = super::inventory::shared();
+        self.lead
+            .iter()
+            .chain(shared.iter())
+            .chain(self.extra.iter())
+            .any(|e| super::inventory_preview::has_previews(e.kind.family()) && (self.admit)(e))
+    }
+
+    /// The search (with List / Grid when `grid` is a choice: `Some`, and
+    /// whether it is the grid) and the entries in groups.
+    fn list(&self, ui: &mut egui::Ui, focus: bool, tips: bool, grid: Option<bool>, hovered: &mut Option<Entry>, current: &mut Option<Entry>) -> Option<Entry> {
         let search_id = self.id.with("search");
         let mut query = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
         ui.horizontal(|ui| {
-            let r = ui.add(egui::TextEdit::singleline(&mut query).hint_text(t!("catalog.search")).desired_width(f32::INFINITY));
-            super::vkb_sync(ui, &r, &query);
-            if focus {
-                r.request_focus();
+            let search = |ui: &mut egui::Ui, query: &mut String| {
+                let r = ui.add(egui::TextEdit::singleline(query).hint_text(t!("catalog.search")).desired_width(f32::INFINITY));
+                super::vkb_sync(ui, &r, query);
+                if focus {
+                    r.request_focus();
+                }
+            };
+            match grid {
+                Some(on) => {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mut chosen = on;
+                        if ui.selectable_label(on, t!("catalog.view_grid")).on_hover_text(t!("catalog.view_grid_tip")).clicked() {
+                            chosen = true;
+                        }
+                        if ui.selectable_label(!on, t!("catalog.view_list")).clicked() {
+                            chosen = false;
+                        }
+                        if chosen != on {
+                            ui.data_mut(|d| d.insert_persisted(self.id.with("grid"), chosen));
+                            ui.ctx().request_repaint();
+                        }
+                        search(ui, &mut query);
+                    });
+                }
+                None => search(ui, &mut query),
             }
         });
         ui.data_mut(|d| d.insert_temp(search_id, query.clone()));
@@ -247,6 +292,26 @@ impl<'a> Picker<'a> {
                 if !heading.is_empty() {
                     ui.label(egui::RichText::new(heading).strong());
                 }
+                if grid == Some(true) {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                        for e in &rows[start..end] {
+                            let (p, rect, is_current) = self.cell(ui, e, tips);
+                            if p.is_some() {
+                                picked = p;
+                            }
+                            if ui.rect_contains_pointer(rect) {
+                                *hovered = Some((*e).clone());
+                            }
+                            if is_current && current.is_none() {
+                                *current = Some((*e).clone());
+                            }
+                        }
+                    });
+                    ui.add_space(4.0);
+                    start = end;
+                    continue;
+                }
                 for e in &rows[start..end] {
                     let (p, rect, is_current) = self.row(ui, e, tips);
                     if p.is_some() {
@@ -264,6 +329,35 @@ impl<'a> Picker<'a> {
             }
         });
         picked
+    }
+
+    /// One entry as a grid cell: its preview (asked for only while the cell
+    /// is on screen) and its name; greyed when it cannot be picked here (the
+    /// reason on hover) or is not installed (Download is in the pane).
+    fn cell(&self, ui: &mut egui::Ui, e: &Entry, tips: bool) -> (Option<Entry>, egui::Rect, bool) {
+        let current = self.current.is_some_and(|c| super::inventory::applied_name(e).as_deref() == Some(c) || key_name(e) == Some(c));
+        let reason = if e.installed { self.unusable.and_then(|why| why(e)) } else { None };
+        let enabled = e.installed && reason.is_none();
+        let ctx = ui.ctx().clone();
+        let none = key_name(e) == Some("");
+        let label = super::inventory::row_label(e);
+        let r = super::inventory_online::grid_cell_sized(ui, e, &label, current, enabled, CELL, || {
+            if none || !super::inventory_preview::has_previews(e.kind.family()) {
+                return (None, false);
+            }
+            match super::inventory_preview::want(e, &ctx, &[]) {
+                super::inventory_preview::Shown::Ready(t) => (t.last().cloned(), true),
+                super::inventory_preview::Shown::Pending => (None, true),
+                super::inventory_preview::Shown::None => (None, false),
+            }
+        });
+        let rect = r.rect;
+        let r = match (&reason, tips && !e.description.is_empty()) {
+            (Some(why), _) => r.on_hover_text(why),
+            (None, true) => r.on_hover_text(crate::markdown::first_paragraph(&e.description)),
+            _ => r,
+        };
+        ((enabled && r.clicked()).then(|| e.clone()), rect, current)
     }
 
     /// One entry: selectable when it can be picked; greyed (with the reason
@@ -445,6 +539,53 @@ mod tests {
         let searched = frame(&ctx, Some("julian"));
         assert!(searched.iter().any(|t| t == "JuliaN"), "the search keeps a match: {searched:?}");
         assert!(!searched.iter().any(|t| t == "Linear"), "and narrows the list: {searched:?}");
+    }
+
+    /// The grid: a picker whose kinds have previews offers List / Grid;
+    /// chosen, the entries are cells, and only the cells on screen ask for
+    /// their previews. A palette picker has no grid.
+    #[test]
+    fn the_picker_grid_asks_for_the_previews_on_screen() {
+        use super::*;
+        offer();
+        let ctx = egui::Context::default();
+        let admit = |e: &Entry| e.kind == Kind::Variation;
+        let frame = |ctx: &egui::Context, grid: bool| -> Vec<String> {
+            let mut drawn = Vec::new();
+            for _ in 0..2 {
+                let out = ctx.run_ui(Default::default(), |ui| {
+                    super::super::inventory_preview::begin_frame(ui.ctx());
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        let picker = Picker::new("picker_grid_test", &admit);
+                        ui.data_mut(|d| d.insert_persisted(picker.id.with("grid"), grid));
+                        let btn = ui.button("open");
+                        egui::Popup::open_id(ui.ctx(), picker.popup_id());
+                        let _ = picker.popup(ui, &btn);
+                    });
+                });
+                drawn = texts(&out.shapes);
+            }
+            drawn
+        };
+        let list = frame(&ctx, false);
+        assert!(list.iter().any(|t| t == &t!("catalog.view_grid").to_string()), "a variation picker offers the grid");
+        let before = super::super::inventory_preview::with(|p| p.asked());
+        let cells = frame(&ctx, true);
+        assert!(cells.iter().any(|t| t == "Linear"), "a cell names its entry");
+        let asked = super::super::inventory_preview::with(|p| p.asked());
+        let variations = super::super::inventory::shared().iter().filter(|e| e.kind == Kind::Variation).count();
+        assert!(asked > before && asked < variations / 4, "the cells on screen ask, not all {variations}: {asked}");
+
+        let palettes = |e: &Entry| e.kind == Kind::Palette;
+        let out = ctx.run_ui(Default::default(), |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
+                let picker = Picker::new("picker_grid_palettes", &palettes);
+                let btn = ui.button("open");
+                egui::Popup::open_id(ui.ctx(), picker.popup_id());
+                let _ = picker.popup(ui, &btn);
+            });
+        });
+        assert!(!texts(&out.shapes).iter().any(|t| t == &t!("catalog.view_grid").to_string()), "no grid for palettes");
     }
 
     /// Where each piece of text a frame drew sits.
