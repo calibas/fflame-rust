@@ -31,6 +31,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+pub mod trust;
+
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 

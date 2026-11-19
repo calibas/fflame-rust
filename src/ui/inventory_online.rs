@@ -22,6 +22,10 @@ use std::sync::Arc;
 /// A page's items and the cursor of the next, `None` at the end.
 type PageResult = (Vec<Item>, Option<String>);
 
+/// Question ids *Open by ID* asks under (apart from the app's).
+const OPEN_QUESTION_BASE: u64 = 1 << 40;
+static OPEN_QUESTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// How long the search waits after the last key before asking.
 const SEARCH_SETTLE_SECONDS: f64 = 0.4;
 /// Thumbnails downloading at once.
@@ -109,7 +113,9 @@ enum Opened {
     Flame(String, crate::api::FlameLoadResult),
     Animation(String),
     Palette(crate::api::types::PaletteItem),
-    Script(String),
+    /// A script: its id, and whether it is curated (opened without
+    /// asking); otherwise its code, to ask about.
+    Script { id: String, title: String, trusted: bool, code: crate::curated::trust::Code },
     /// A built-in variation or effect: nothing to fetch, it is on this
     /// device (or downloads by name).
     Builtin(String, String),
@@ -159,6 +165,9 @@ pub struct OnlinePlace {
     /// *Open by ID or link*: what is typed, and the request on its way.
     open_text: String,
     open_job: Option<Job<Opened>>,
+    /// A script *Open by ID* found that nobody reviewed: the question
+    /// asked about it, and its id.
+    open_question: Option<(u64, String)>,
 }
 
 impl Default for OnlinePlace {
@@ -187,6 +196,7 @@ impl OnlinePlace {
             status: None,
             open_text: String::new(),
             open_job: None,
+            open_question: None,
         }
     }
 
@@ -311,12 +321,30 @@ impl OnlinePlace {
                     self.status = Some((t!("catalog.opened_palette", name = p.name.clone()).to_string(), false));
                     out.apply_palette = Some(crate::api::sync::palette_from_item(&p));
                 }
-                Ok(Opened::Script(id)) => out.script_cloud_request = Some(crate::app::script_cloud::ScriptCloudRequest::Adopt { id }),
+                Ok(Opened::Script { id, title, trusted, code }) => {
+                    if trusted || crate::curated::trust::is_trusted(&code.hash) {
+                        out.script_cloud_request = Some(crate::app::script_cloud::ScriptCloudRequest::Adopt { id });
+                    } else {
+                        // Somebody's code nobody reviewed: ask before it
+                        // joins your files (curated::trust).
+                        let qid = OPEN_QUESTION_BASE + OPEN_QUESTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        crate::curated::trust::ask(crate::curated::trust::Question { id: qid, what: title, owner: None, code: vec![code] });
+                        self.open_question = Some((qid, id));
+                    }
+                }
                 Ok(Opened::Builtin(kind, name)) => {
                     self.status = Some((t!("catalog.opened_builtin", kind = kind, name = name).to_string(), false));
                 }
                 Err(crate::resources::FetchError::NotFound(message)) => self.status = Some((message, true)),
                 Err(e) => self.status = Some((e.to_string(), true)),
+            }
+        }
+        if let Some((qid, id)) = &self.open_question {
+            if let Some(answer) = crate::curated::trust::take_answer(*qid) {
+                if answer != crate::curated::trust::Answer::No {
+                    out.script_cloud_request = Some(crate::app::script_cloud::ScriptCloudRequest::Adopt { id: id.clone() });
+                }
+                self.open_question = None;
             }
         }
         if let Some((key, id, name, job)) = &self.delete_job {
@@ -601,7 +629,15 @@ impl OnlinePlace {
                         "flames" => api.load_flame_with_visibility(&id).await.ok().map(|l| Opened::Flame(id.clone(), l)),
                         "animations" => api.exists("animations", &id).await.ok().map(|_| Opened::Animation(id.clone())),
                         "palettes" => api.get_palette(&id).await.ok().map(Opened::Palette),
-                        "scripts" => api.exists("scripts", &id).await.ok().map(|_| Opened::Script(id.clone())),
+                        "scripts" => match api.load_script(&id).await {
+                            Ok(s) => {
+                                let title = if s.display_name.is_empty() { s.name.clone() } else { s.display_name.clone() };
+                                let mut code = crate::curated::trust::code_of_source(&s.source);
+                                code.title = title.clone();
+                                Some(Opened::Script { id: id.clone(), title, trusted: s.curated.is_some(), code })
+                            }
+                            Err(_) => None,
+                        },
                         _ => None,
                     };
                     if let Some(found) = found {

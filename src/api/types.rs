@@ -140,6 +140,16 @@ pub struct Curation {
     pub credit: Option<String>,
 }
 
+/// One thing to resolve: a canonical name, a content hash, or both.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ResolveItem {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+}
+
 /// What a canonical name or a hash resolves to (`GET /curated/{kind}/{name}`,
 /// `POST /curated/resolve`): where to fetch it and its version.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -804,6 +814,9 @@ pub struct AnimationListItem {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScriptResponse {
     pub id: String,
+    /// Curated: the canonical name and the version's hash.
+    #[serde(default)]
+    pub curated: Option<Curation>,
     /// Owner (absent on a built-in). Distinct from `authors`, which is
     /// credit. Its display name is case-insensitively unique server-side,
     /// which makes `owner/name` a stable human-readable key and means an

@@ -329,6 +329,43 @@ loop, and only the Fractal Browser's signed out on a 401.)
 
 ---
 
+## Trusting code from the server
+
+A fractal or an animation from the server can carry Rhai: custom
+variations, escape-time formulas and colourings, simulation models,
+effects (shaders, on the GPU) and script tracks (on the CPU). All of it
+runs as soon as it loads, so a load from the server passes a gate first
+(`app::trust`, `curated::trust`; [curated-content.md](../projects/curated-content.md),
+*Trust*):
+
+- **What passes through it:** the Catalog's loads, *Open by ID or link*,
+  a deep link, and the Animation panel's list. Files opened from this
+  device, the shipped presets and the signed-in user's own items (the
+  owner is the user) skip it.
+- **What it reads:** the code the load carries, which is every carried
+  Rhai source in the config (`{dialect: "rhai", entry, source}`,
+  wherever it sits) plus the animation's script tracks. Each is hashed
+  with `scripted::version_of`.
+- **Curated code runs without asking.** Hashes not yet trusted go to
+  `POST /api/v1/curated/resolve` as a hash alone with their kind. What
+  the server finds curated is trusted for the session.
+- **Anything else asks once.** The load is held and a window asks
+  (*Unreviewed code*). It lists the code and offers **Load**, **Always
+  trust this code** or **Don't load**:
+  - Load trusts that code until the app closes.
+  - Always trusts it on this device from then on (`trusted_code.json`
+    in the app's data). A changed version asks again.
+  - Offline, or against a server without the curated routes, nothing is
+    known to be curated, so everything not trusted is asked about.
+- **A script opened by ID** asks the same question before it joins your
+  files, unless it is curated.
+- **Script tracks** run in a locked-down engine: no module imports, no
+  calls into other scripts, no `sleep`, and an operation budget. The
+  untrusted restriction CPU scripts get (calls only into shipped scripts)
+  has nothing more to take from them.
+
+---
+
 ## The online script library
 
 One scripts resource holds every Rhai kind

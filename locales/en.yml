@@ -1643,6 +1643,16 @@ browser:
   search_clear: "Clear"
 
 # API (cloud save/update)
+trust:
+  title: "Unreviewed code"
+  intro: "%{name} carries code that hasn't been reviewed:"
+  explain: "It runs as soon as it loads: shaders on your GPU, a script track on the CPU. Curated items are reviewed and load without asking."
+  load: "Load"
+  load_tip: "Load it, and trust this code until the app closes."
+  always: "Always trust this code"
+  always_tip: "Load it, and trust this exact code from now on, on this device. A changed version asks again."
+  no: "Don't load"
+  not_loaded: "%{name} was not loaded."
 api:
   update_available: "Version %{version} is available."
   newer_config: "This was made by a newer version. Settings this version cannot read are not shown, and are kept when you save."

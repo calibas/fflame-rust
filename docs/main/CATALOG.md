@@ -237,7 +237,10 @@ entries made by `inventory::online`):
   opened (adopted). An id that names no resource is looked for as a
   fractal, an animation, a palette, then a script; a built-in
   variation's or effect's name says it is in the app already
-  (`inventory::online::parse_open`, `OnlinePlace::open`).
+  (`inventory::online::parse_open`, `OnlinePlace::open`). Code nobody
+  reviewed asks first: a fractal's or an animation's when it loads, a
+  script before it is adopted ([ONLINE.md](ONLINE.md), *Trusting code
+  from the server*).
 - **Search** is the server's: the panel's search box, asked
   (`q`) once the typing has stopped for 0.4 s. **Sort**: the resource's
   (Newest, Most liked, Most viewed, Recently changed, Name; each

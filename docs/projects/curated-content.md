@@ -500,7 +500,17 @@ So, with what exists:
    animation loads for anyone). Checked against a local server by the
    API integration test `curated_browsing_and_opening_by_id`.
 5. **Client names in configs and trust.** The curated table, resolution
-   on load, the prompt, and untrusted tracks.
+   on load, the prompt, and untrusted tracks. **The trust half built
+   2026-11-18** (`curated::trust`, `app::trust`, `ui::trust_window`;
+   ONLINE.md, *Trusting code from the server*): a load from the server is
+   held while the code it carries is looked up by hash; curated code
+   runs, anything else asks once (Load / Always / Don't load). Files from
+   this device and the user's own items skip the gate. Decided while
+   building: `Provenance` is not split -- trust is by hash, at the gate,
+   and what loads registers as before; script tracks need no untrusted
+   mode (their engine has no imports or cross-calls already). **The names
+   half** (the config's curated table, references on save, resolution on
+   load) is next.
 6. **Client fetch unification, the cache by hash, and cleanups.**
 7. **Later:**
    - the submission process (D3);

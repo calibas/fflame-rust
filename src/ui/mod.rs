@@ -13,6 +13,7 @@ pub mod markdown;
 mod inventory_manage;
 pub mod script_run;
 mod inventory_online;
+mod trust_window;
 mod inventory_preview;
 pub mod picker;
 pub mod fractal_gallery;
@@ -2231,6 +2232,8 @@ impl EguiLayer {
         {
             let ctx = self.ctx.clone();
             self.render_api_notification(&ctx);
+            // Code from the server nobody reviewed: load it? (curated::trust)
+            trust_window::show(&ctx);
         }
 
         // Open Save Online dialog from animation panel (if requested)

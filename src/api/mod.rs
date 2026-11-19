@@ -501,6 +501,24 @@ impl ApiState {
         self.public_get::<serde_json::Value>(&url).await.map(|_| ())
     }
 
+    /// Many at once (`POST /curated/resolve`, at most 500): each item a
+    /// name, a hash, or both; one answer an item, in order, `None` where it
+    /// resolves to nothing. A hash alone asks whether that content is
+    /// curated -- what the client trusts without asking.
+    pub async fn resolve_curated_many(&self, items: &[types::ResolveItem]) -> FetchResult<Vec<Option<types::Resolution>>> {
+        #[derive(serde::Serialize)]
+        struct Request<'a> {
+            items: &'a [types::ResolveItem],
+        }
+        #[derive(serde::Deserialize)]
+        struct Response {
+            items: Vec<Option<types::Resolution>>,
+        }
+        let url = build_url(API_BASE_URL, "/api/v1/curated/resolve");
+        let resp: Response = client::api_post_unauth(&url, &Request { items }).await?;
+        Ok(resp.items)
+    }
+
     /// What a canonical name means now (`GET /curated/{kind}/{name}`).
     pub async fn resolve_curated(&self, kind: &str, name: &str) -> FetchResult<types::Resolution> {
         let url = build_url(API_BASE_URL, &format!("/api/v1/curated/{}/{}", urlencode(kind), urlencode(name)));

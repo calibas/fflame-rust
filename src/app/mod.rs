@@ -17,6 +17,7 @@ mod render_scale;
 mod sim_lock;
 mod render_progress;
 pub mod script_cloud;
+mod trust;
 mod fly_camera;
 pub mod export;
 pub mod render_mode;
@@ -775,6 +776,8 @@ pub struct App {
 
     // URL deep-link loading (WASM: ?flame=uuid or ?animation=uuid)
     pub(super) url_load_result: std::sync::Arc<std::sync::Mutex<Option<Result<UrlLoadedData, String>>>>,
+    /// A load from the server held until its code is trusted (`trust`).
+    pub(super) held_load: Option<trust::HeldLoad>,
     pub(super) url_load_in_progress: bool,
     pub(super) url_load_started: Option<web_time::Instant>,
 
@@ -1051,6 +1054,7 @@ impl App {
             api_animation_save_in_progress: false,
             pending_animation_save: None,
             url_load_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            held_load: None,
             url_load_in_progress: false,
             url_load_started: None,
             pending_subflame_load_index: None,

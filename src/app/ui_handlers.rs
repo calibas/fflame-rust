@@ -38,6 +38,7 @@ impl App {
         self.handle_save_online(ui_response);
         self.handle_save_animation_online(ui_response);
         self.handle_load_api_animation(ui_response);
+        self.handle_held_load();
         self.handle_url_load();
         self.handle_variation_fetches();
         self.handle_clear_variation_cache(ui_response);
@@ -1160,15 +1161,6 @@ impl App {
     /// Handle preset selection from Preset Library panel
     fn handle_preset_selection(&mut self, ui_response: &UiResponse) {
         if let Some(ref config) = ui_response.selected_preset_config {
-            // Show loading notification for API-loaded flames
-            if ui_response.loaded_api_flame_id.is_some() {
-                let name = config.flame.name.clone();
-                self.egui_layer.show_api_notification(
-                    &t!("api.loading_flame", name = name),
-                    false,
-                );
-            }
-
             let api_metadata = ui_response.loaded_api_flame_id.as_ref().map(|flame_id| {
                 crate::app::ApiContentState {
                     flame_id: Some(flame_id.clone()),
@@ -1179,19 +1171,16 @@ impl App {
                     animation_id: None,
                 }
             });
-            if let Err(e) = self.load_config_with_undo(config.clone(), "history.action.load_preset".to_string(), api_metadata) {
+            // From the server: through the trust gate (its code may need
+            // asking about; `trust`).
+            if api_metadata.is_some() {
+                self.admit(super::trust::ApiLoad::Preset { config: config.clone(), api_metadata });
+                return;
+            }
+            if let Err(e) = self.load_config_with_undo(config.clone(), "history.action.load_preset".to_string(), None) {
                 log::error!("Failed to load preset: {}", e);
             } else {
                 log::info!("Preset loaded successfully");
-
-                // Show success notification for API-loaded flames
-                if ui_response.loaded_api_flame_id.is_some() {
-                    let name = config.flame.name.clone();
-                    self.egui_layer.show_api_notification(
-                        &t!("api.load_flame_success", name = name),
-                        false,
-                    );
-                }
             }
         }
     }
@@ -2118,8 +2107,6 @@ impl App {
     }
 
     fn handle_url_load(&mut self) {
-        use super::UrlLoadedData;
-
         if !self.url_load_in_progress {
             return;
         }
@@ -2147,79 +2134,8 @@ impl App {
         self.paused = false;
 
         match result {
-            Ok(UrlLoadedData::Flame { config, flame_id, is_public, user_id, animation_count, animations }) => {
-                let name = config.flame.name.clone();
-                log::info!("URL load: flame '{}' ({})", name, flame_id);
-                let api_metadata = Some(crate::app::ApiContentState {
-                    flame_id: Some(flame_id.clone()),
-                    flame_is_public: is_public,
-                    flame_user_id: Some(user_id),
-                    animation_id: None,
-                    animation_count,
-                    flame_animations: animations,
-                });
-                if let Err(e) = self.load_config_with_undo(config, format!("Load flame from URL: {}", name), api_metadata) {
-                    log::error!("Failed to load flame from URL: {}", e);
-                    self.egui_layer.show_api_notification(
-                        &t!("api.url_load_error", error = e),
-                        true,
-                    );
-                    return;
-                }
-                self.egui_layer.show_api_notification(
-                    &t!("api.url_load_flame_success", name = name),
-                    false,
-                );
-            }
-            Ok(UrlLoadedData::Animation { animation, animation_id, flame_id, flame_meta }) => {
-                let anim_name = animation.name.clone();
-                log::info!("URL load: animation '{}' ({})", anim_name, animation_id);
-
-                // Switch to the animation-focused workspace so the user lands on a layout
-                // with the Animation panel visible. In compact mode, just open the panel
-                // since compact is single-panel.
-                let compact = self.config_manager.system_settings().compact_mode.unwrap_or(false);
-                if compact {
-                    let ctx = &self.egui_layer.ctx;
-                    self.workspace.open_compact_panel(crate::ui::workspace::PanelType::Animation, ctx);
-                } else if !matches!(self.workspace.current_layout, crate::ui::workspace::WorkspaceLayout::Animation) {
-                    self.workspace.apply_layout(crate::ui::workspace::WorkspaceLayout::Animation);
-                }
-
-                // Load the flame config from the animation's base_config (populated from embedded flame)
-                if let Some(config) = animation.base_config.clone() {
-                    let flame_name = config.flame.name.clone();
-                    let api_metadata = flame_meta.as_ref().map(|meta| crate::app::ApiContentState {
-                        flame_id: flame_id.clone(),
-                        flame_is_public: meta.is_public,
-                        flame_user_id: Some(meta.user_id.clone()),
-                        animation_id: Some(animation_id.clone()),
-                        animation_count: meta.animation_count,
-                        flame_animations: meta.animations.clone(),
-                    });
-                    if let Err(e) = self.load_config_with_undo(config, format!("Load flame for animation: {}", flame_name), api_metadata) {
-                        log::error!("Failed to load flame for animation: {}", e);
-                    }
-                }
-
-                // Load the animation
-                let generators = animation.generators.clone();
-                let duration = animation.duration;
-                self.animation_controller.load(animation);
-                // Bind AFTER controller.load — see file-load path above
-                // for the reasoning.
-                if let Some(anim) = self.animation_controller.animation.as_mut() {
-                    anim.bind_to_config(self.config_manager.active_config());
-                }
-                self.egui_layer.signal_panel_state.restore_generators(
-                    generators, &mut self.signal_manager, duration,
-                );
-
-                self.egui_layer.show_api_notification(
-                    &t!("api.url_load_animation_success", name = anim_name),
-                    false,
-                );
-            }
+            // Through the trust gate: its code may need asking about (`trust`).
+            Ok(data) => self.admit(super::trust::ApiLoad::Url(data)),
             Err(e) => {
                 log::error!("Failed to load from URL: {}", e);
                 self.egui_layer.show_api_notification(
