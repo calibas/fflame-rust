@@ -1,6 +1,6 @@
 # Curated content
 
-**Status: step 1 built 2026-11-18** on ffapi branch `curated-content` (migration 119; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
+**Status: steps 1 and 2 built 2026-11-18** on ffapi branch `curated-content` (migrations 119-121; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
 client (this one) and the API server (`c:/projects/ffapi`). Built from a
 survey of both on 2026-11-18. The survey's findings are summarised in
 *What exists*, with file references where they matter.
@@ -466,6 +466,13 @@ So, with what exists:
      and hashes.
    - `POST /admin/curated/import`: dry run, accept, retire.
    - Variations and effects onto it.
+   - **Built 2026-11-18.** Decided while building: the built-in
+     variations and effects keep one row a name (a fix replaces it and
+     moves `version`, as the client's cache expects), not every version;
+     their hashes are backfilled at startup and served on lists and
+     downloads; `updated_at` moves only on a real change; animations are
+     not importable yet. A dry run of both shipped corpora comes back
+     all `unchanged`: the hash definitions agree with the stored rows.
 3. **The manifest and the first sync.**
    - `export_curated_json` and `tools/sync_curated.py`.
    - A dry run against production, which the user reviews: in
