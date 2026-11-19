@@ -51,6 +51,23 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=BUILD_PROFILE={}", profile);
 
+    // The API the app talks to (`api::API_BASE_URL`): the deployed server
+    // for a `dist` build -- what ships, the web app included -- and any
+    // other custom profile; this machine's (`http://localhost:3000`, ffapi's
+    // default) for `release` and `debug`, the builds for testing against a
+    // local API. `FFLAME_API_BASE_URL` set at build time overrides both.
+    println!("cargo:rerun-if-env-changed=FFLAME_API_BASE_URL");
+    let api_base_url = env::var("FFLAME_API_BASE_URL")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| match profile.as_str() {
+            "release" | "debug" => "http://localhost:3000".to_string(),
+            _ => "https://fractalsforall.com".to_string(),
+        });
+    println!("cargo:rustc-env=FFLAME_API_BASE_URL={api_base_url}");
+    let chosen_by = if env::var("FFLAME_API_BASE_URL").is_ok_and(|u| !u.trim().is_empty()) { "override" } else { "profile" };
+    println!("cargo:rustc-env=FFLAME_API_BASE_URL_CHOSEN_BY={chosen_by}");
+
     // The gallery crates (wasm/render, wasm/script) build this crate as
     // a DEPENDENCY, and nothing in either surfaces build provenance —
     // but the git watch below re-emits GIT_HASH and BUILD_TIME on every

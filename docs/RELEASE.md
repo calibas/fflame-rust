@@ -23,7 +23,7 @@ Four surfaces, built four different ways, from one repository.
 
 | surface | built by | output | version source |
 |---|---|---|---|
-| Desktop app | `cargo build --profile dist` | `target/dist/FractalArtEditor(.exe)` | `Cargo.toml` |
+| Desktop app | `cargo build --profile dist` (the only profile that talks to `fractalsforall.com`: `--release` builds use a local API, ONLINE.md) | `target/dist/FractalArtEditor(.exe)` | `Cargo.toml` |
 | Web app | `build-wasm.bat` / `.sh` — `--profile dist` | `pkg/` + `index.html`, `css/`, `js/` | `Cargo.toml` |
 | Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
 | Python | `python python/build.py --wheel` (the WASI module, then the wheel) | `python/dist/*.whl`, one for every platform | `python/pyproject.toml` |

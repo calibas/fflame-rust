@@ -67,9 +67,19 @@ feature fails to a status line, not to a broken panel.
 
 ## The service and the transport
 
-**One server.** `api::API_BASE_URL` is `https://fractalsforall.com`,
-compiled in. `SystemSettings::api_base_url` is a deprecated field that
-is still read from old settings files and never written.
+**One server, chosen by the build.** `api::API_BASE_URL` is compiled
+in, by profile (`build.rs`):
+
+- `--profile dist`, what ships (the web app too), uses
+  `https://fractalsforall.com`;
+- `--release` and debug builds use `http://localhost:3000`, for testing
+  against an ffapi run on this machine (its default port).
+
+`FFLAME_API_BASE_URL`, set at build time, overrides either. At run time
+a desktop build also takes `FFLAME_API_URL` pointing at a loopback
+address (`client::local_override`), which the integration test uses.
+`SystemSettings::api_base_url` is a deprecated field that is still read
+from old settings files and never written.
 
 **The spec.** [openapi.json](openapi.json) is the API's own OpenAPI
 document (91 paths; refreshed 2026-11-16 from a local server on ffapi's
