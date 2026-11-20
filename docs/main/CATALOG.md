@@ -166,7 +166,8 @@ when it changes.
   closed; opened (on the web, fetched then, still off) its palettes are
   usable here like any other -- the checkbox decides only what the
   pickers and random palettes draw from. Filtering leaves out packs with
-  no match and opens those with one. Grouped otherwise, palettes are rows
+  no match and, when the search or a filter changes, opens those with
+  one -- once, so each can still be closed. Grouped otherwise, palettes are rows
   with their gradients, without the packs' checkboxes.
 - **The info pane** (at the right from 560 points wide): what the entry
   **under the pointer** is, or with the pointer elsewhere the selected

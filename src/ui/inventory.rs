@@ -323,6 +323,10 @@ pub struct InventoryPanel {
     /// Whether the panel was narrow when last drawn.
     narrow: bool,
     online: super::inventory_online::OnlinePlace,
+    /// The search and filters the palette packs were last opened for: a
+    /// change opens the packs with a match, once, so a pack can still be
+    /// closed while they stand.
+    packs_opened_for: Option<(String, Filters)>,
     manage: super::inventory_manage::Manage,
     /// A CPU script's run controls, for the script selected.
     run: super::script_run::ScriptRun,
@@ -356,6 +360,7 @@ impl InventoryPanel {
             details: false,
             narrow: false,
             online: super::inventory_online::OnlinePlace::new(),
+            packs_opened_for: None,
             manage: super::inventory_manage::Manage::default(),
             run: super::script_run::ScriptRun::default(),
             curated: CuratedScripts::default(),
@@ -765,6 +770,12 @@ impl InventoryPanel {
     /// Gives whether the last online row is on screen.
     fn render_palettes(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext, rows: &[super::inventory_view::Row], clicked: &mut Option<Drawn>, hovered: &mut Option<EntryKey>) -> bool {
         let filtering = !self.query.trim().is_empty() || self.filters != Filters::default();
+        // Open the packs with a match when the search or filters change --
+        // not every frame, which held them open (none could be closed while
+        // a filter stood).
+        let now = (self.query.trim().to_string(), self.filters.clone());
+        let open = filtering && self.packs_opened_for.as_ref() != Some(&now);
+        self.packs_opened_for = Some(now);
         let admitted: std::collections::HashSet<&EntryKey> = rows.iter().filter(|r| r.item.is_none()).map(|r| &r.entry.key).collect();
         for pack in 0..cx.palette_library.pack_count() {
             // This pack's entries, in its order (the scan keeps it), with
@@ -781,7 +792,7 @@ impl InventoryPanel {
                 continue;
             }
             let selected = self.selected.clone();
-            super::palette_library::pack_section(ui, cx.palette_library, pack, filtering, |ui, lib| {
+            super::palette_library::pack_section(ui, cx.palette_library, pack, open, |ui, lib| {
                 let Some(p) = lib.get_pack(pack) else { return };
                 for (j, e) in &members {
                     let (Some(palette), EntryKey::Palette(hash)) = (p.palettes.get(*j), &e.key) else { continue };
@@ -1645,5 +1656,72 @@ mod phone_tests {
         let (_, loaded) = frame(&mut panel, Some(cell + egui::vec2(4.0, 4.0)), true);
         assert!(loaded, "a click loads it");
         assert_eq!(panel.selected.as_ref(), Some(&first.key), "and selects it");
+    }
+
+    /// A pack can be closed while a filter stands (reported: with Owner
+    /// other than All, the packs would not collapse -- they were opened
+    /// again every frame). A filter's change opens the packs it matches
+    /// in, once.
+    #[test]
+    fn a_pack_closes_while_a_filter_stands() {
+        let mut library = crate::scene::palette::global_palette_library().read().unwrap().clone();
+        let mut cm = ConfigManager::new(FractalConfig::default());
+        let cloud = crate::app::script_cloud::ScriptCloudState::default();
+        let mut panel = InventoryPanel::new();
+        panel.entries = Arc::new(inventory::scan(&library, inventory::Online::default()));
+        panel.open_on(Family::Palettes);
+        panel.filters.source = Source::Device;
+        panel.filters.owner = Owner::Curated;
+        // The first built-in pack with palettes, and its first palette.
+        let pack = (0..library.pack_count()).find(|i| Some(*i) != library.custom_pack_index() && library.get_pack(*i).is_some_and(|p| !p.palettes.is_empty() && p.pack_name != "Local Files") && library.is_pack_enabled(*i)).expect("a built-in pack");
+        let name = library.get_pack(pack).unwrap().pack_name.clone();
+        let first = library.get_pack(pack).unwrap().palettes[0].name.clone();
+        let ctx = egui::Context::default();
+        let arrows = std::sync::Mutex::new(Vec::<egui::Pos2>::new());
+        // A clock: a section's closing is animated, and drawn until done.
+        let mut time = 0.0;
+        let mut frame = |panel: &mut InventoryPanel, click: Option<egui::Pos2>| {
+            let mut drawn = Vec::new();
+            for step in 0..3 {
+                time += 1.0;
+                let mut input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                    time: Some(time),
+                    ..Default::default()
+                };
+                if let (Some(p), 1) = (click, step) {
+                    input.events.push(egui::Event::PointerMoved(p));
+                    input.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+                    input.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+                }
+                let out = ctx.run_ui(input, |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        let mut cx = InventoryContext { config_manager: &mut cm, palette_library: &mut library, account: CloudAccount::default(), script_cloud: &cloud };
+                        let _ = panel.render(ui, &mut cx);
+                    });
+                });
+                drawn = placed(&out.shapes);
+                let mut a = arrows.lock().unwrap();
+                a.clear();
+                for s in &out.shapes {
+                    if let egui::Shape::Path(p) = &s.shape {
+                        if p.points.len() == 3 && p.closed {
+                            let n = p.points.len() as f32;
+                            a.push(egui::pos2(p.points.iter().map(|q| q.x).sum::<f32>() / n, p.points.iter().map(|q| q.y).sum::<f32>() / n));
+                        }
+                    }
+                }
+            }
+            drawn
+        };
+        let open = frame(&mut panel, None);
+        let heading = open.iter().find(|(t, _)| *t == name).map(|(_, p)| *p).expect("the pack's heading");
+        assert!(open.iter().any(|(t, _)| t.starts_with(&first)), "opened by the filter: {first}");
+        // Its arrow: the triangle painted on the heading's row, left of it.
+        let arrow = arrows.lock().unwrap().iter().copied().filter(|p| (p.y - heading.y).abs() < 16.0 && p.x < heading.x).min_by(|a, b| a.x.total_cmp(&b.x)).expect("the arrow");
+        let closed = frame(&mut panel, Some(arrow));
+        assert!(!closed.iter().any(|(t, _)| t.starts_with(&first)), "the arrow closes it");
+        let still = frame(&mut panel, None);
+        assert!(!still.iter().any(|(t, _)| t.starts_with(&first)), "and it stays closed while the filter stands");
     }
 }

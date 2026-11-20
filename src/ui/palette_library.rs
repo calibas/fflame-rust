@@ -68,8 +68,9 @@ pub fn poll_palette_packs(ctx: &egui::Context, library: &mut PaletteLibrary) {
 /// failure with a Retry, or, loaded, `palettes`. A pack turned off is
 /// still shown, and its palettes usable here: enabled decides what the
 /// pickers and random palettes draw from. It starts closed, and on the
-/// web opening it fetches it (still off). `open` opens it (a search
-/// matched in it).
+/// web opening it fetches it (still off). `open` opens it this frame (a
+/// search or filter that just changed matched in it); asked every frame it
+/// would hold the section open.
 pub fn pack_section(
     ui: &mut egui::Ui,
     library: &mut PaletteLibrary,
