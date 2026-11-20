@@ -1,9 +1,9 @@
 # One Catalog view
 
 **Status:** planned 2026-11-20; every question decided the same day
-(*Decisions*, below). Branch `one-catalog`. Steps 1-3 and 6 built
-2026-11-20 (one shell for every catalog, see *Order of work*); steps 4
-(the transform selector) and 5 (simulation previews) to do.
+(*Decisions*, below). Branch `one-catalog`. Steps 1-4 and 6 built
+2026-11-20 (one shell for every catalog, see *Order of work*); step 5
+(simulation previews) to do.
 
 ## Why
 
@@ -142,7 +142,8 @@ in this plan.
 2. **Escape-time, Simulation, Effects, Scripts** on the same shell.
    **Built** (step 1).
 3. **Palettes** (Group by, pack checkboxes). **Built** (step 1).
-4. **Variations** and the transform selector.
+4. **Variations** and the transform selector. **Built 2026-11-20**
+   (`transforms::transform_selector`, in the pane above Add to Transform).
 5. **Simulation previews.**
 6. The narrow layout (D7), tests, docs (CATALOG.md rewritten for
    the new layout, UI.md). **Built** with step 1.

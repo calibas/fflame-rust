@@ -910,6 +910,12 @@ impl InventoryPanel {
                     request_download(&e);
                 }
             }
+            // A variation: the transform it is added to, the Triangle
+            // Editor's selection (one list, Normal, Linked and Final).
+            if e.kind == Kind::Variation {
+                let flame = cx.config_manager.active_config().flame.clone();
+                super::transforms::transform_selector(ui, "catalog_transform", &flame);
+            }
             match usable(&e, cx.config_manager.active_config()) {
                 Ok(()) => {
                     if ui.button(t!(use_label_key(&e))).clicked() {
@@ -1415,6 +1421,26 @@ mod tests {
         e.installed = true;
         e.update = Some("v4".into());
         assert!(row_label(&e).ends_with("  \u{2191}"), "an update's mark");
+    }
+
+    /// Add to Transform adds to the transform the selector (the Triangle
+    /// Editor's selection) names -- a final one too -- not the first
+    /// (reported: it always added to the first transform).
+    #[test]
+    fn add_to_transform_adds_to_the_selected_transform() {
+        use crate::config::TransformRef;
+        let mut config = crate::scene::presets::global_preset_library().presets()[0].clone();
+        config.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        config.flame.final_transforms = vec![crate::scene::transforms::Transform::new()];
+        let mut cm = ConfigManager::new(config);
+        let ctx = egui::Context::default();
+        ctx.data_mut(|d| d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), TransformRef::Final(0)));
+        let julia = crate::ui::picker::row(Kind::Variation, "julia", "Julia", inventory::Group { order: 0, label: String::new() });
+        use_entry(&julia, &ctx, &mut cm);
+        let flame = &cm.active_config().flame;
+        assert!(flame.final_transforms[0].variations.contains_key("julia"), "added to Final 1");
+        assert!(!flame.transforms[0].variations.contains_key("julia"), "not to the first");
+        assert_eq!(super::super::transforms::transform_label(TransformRef::Final(0)), "Final 1");
     }
 
     /// Use's rules: a variation needs a flame mode (and 3D for a 3D-only

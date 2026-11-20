@@ -194,7 +194,7 @@ functions:
 |---|---|
 | Palette | the config's palette, an editable copy (`ConfigPath::Palette`) |
 | Fractal | loads it (`load_config_with_undo`, as the Fractal Browser did) |
-| Variation | adds it at weight 1 to the transform the editors are on (`transforms::editing_transform`: the Triangle Editor's selection, else the first), its source carried for a Rhai one (`transforms::add_variation`) |
+| Variation | **Add to Transform** adds it at weight 1 to the transform the pane's selector names -- the flame's Normal, Linked and Final transforms in one list, the Triangle Editor's own selection (`transforms::transform_selector`, `editing_transform`), so picking one in either picks it in both -- its source carried for a Rhai one (`transforms::add_variation`) |
 | Effect | adds it at the end of its chain, a file's source carried (`effects_panel::add_effect`) |
 | Formula, Field, Solid | `escape_panel::choose_formula` / `choose_field` / `choose_solid`: the default view, entering Escape |
 | Coloring | `escape_panel::pick_coloring`: what a fresh pick sets |
