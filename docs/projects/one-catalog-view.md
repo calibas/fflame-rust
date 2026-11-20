@@ -1,8 +1,8 @@
 # One Catalog view
 
-**Status:** planned 2026-11-20, open questions below; nothing built.
-Branch: `curated-content` (where the Catalog work is), unless the user
-says otherwise.
+**Status:** planned 2026-11-20; every question decided the same day
+(*Decisions*, below); nothing built. Branch: a new one, `one-catalog`,
+from `main` once `curated-content` is merged.
 
 ## Why
 
@@ -41,7 +41,7 @@ One row of selects, then one row of view options:
 | View | Grid / List | Grid (where there are previews) |
 | Search | one box, for everything shown | |
 | Size | the grid's cell size (Grid only) | |
-| Group by | Category, Source, Owner, Type, Name | Category |
+| Group by | Category, Source, Owner, Type, Name (also the order: no Sort select, D5) | Category |
 
 The Refresh icon stays in the corner. *Open by ID or link* (online) and
 the downloads bar (Update all, Clear Cache) stay as rows under the
@@ -62,7 +62,9 @@ merged:
   already finds most of these; fractals need a match by curated name or
   content hash).
 - **Grouping** is a heading per group (collapsible, as now). Group by
-  Name means no groups, A–Z.
+  Name means no groups, A–Z. Group by is also the order: there is no
+  Sort select (D5); online pages are asked for in the server's name
+  order (`sort=name`), so a page joins the list where it belongs.
 - **Paging:** online pages are asked for as the end of the list comes
   into view, for every online list the filters admit. Groups fill in as
   pages arrive.
@@ -74,8 +76,8 @@ merged:
 
 - **Hover** shows an entry in the info pane.
 - **Click** selects it and loads or applies it (a fractal loads; a
-  palette, formula, model or colouring applies). See question 3 for the
-  additive kinds (variations, effects).
+  palette, formula, model or colouring applies). The additive kinds
+  (variations, effects) select instead (D3).
 - When the pointer leaves the list, the pane goes back to the selected
   entry. So the pane's buttons (Download, Rename, Delete, Add to
   transform) always act on what you clicked, which is what the pane shows
@@ -83,18 +85,18 @@ merged:
 - **Everything the Fractals list showed when expanded moves to the
   pane** (`list_summary` / the expanded details: mode, transforms,
   variations, formula, model, size, ...). The `›` button goes. On a
-  narrow screen (a phone) there is no hover; see question 7.
+  narrow screen (a phone) there is no hover (D7).
 
 ### Each catalog
 
 | Catalog | Category | Type | Group by | View |
 |---|---|---|---|---|
-| **Fractals** | 2D Flame, 3D Flame, 2D Escape, 3D Escape, Simulation (`PresetCategory`) | Fractal, Animation | Category, Source, Owner, Type, Name | Grid/List, Size |
-| **Palettes** | — | — | Pack, Source, Owner, Name (question 4) | list as now (name + gradient); no Grid, no Size |
+| **Fractals** | 2D Flame, 3D Flame, 2D Escape, 3D Escape, Simulation (`PresetCategory` on the device; online the API's `engine` and `dimension`, D1) | Fractal, Animation | Category, Source, Owner, Type, Name | Grid/List, Size |
+| **Palettes** | — | — | Pack (default), Source, Owner, Name (D4) | list as now (name + gradient); no Grid, no Size |
 | **Variations** | the variation categories (Basic 2D, Advanced 2D, ...) | — | Category, Source, Owner, Name | Grid/List, Size; a **transform selector** |
 | **Escape-time** | Formula, Coloring, Field, Field Coloring, Solid, Solid Coloring, Formula File | — | Category, Source, Owner, Name | Grid/List, Size |
 | **Simulation** | Model, Coloring | — | Category, Source, Owner, Name | Grid/List, Size |
-| **Effects** | the effect stages (question 8) | — | Category, Source, Owner, Name | Grid/List, Size |
+| **Effects** | Density, Color (`EffectCategory`, D8) | — | Category, Source, Owner, Name | Grid/List, Size |
 | **Scripts** | Generator, Modifier, Library, Track | — | Category, Source, Owner, Name | List |
 
 **Owner** maps as:
@@ -103,25 +105,25 @@ merged:
 |---|---|---|
 | Curated | built-in (`Origin::Builtin`) | curated items |
 | Yours | your files, your saved palettes (`Origin::Local`) | your account's items (`Scope::Mine`) |
-| Others | what you downloaded or adopted from someone (`Origin::Api`, an owner not you) | see question 2 |
+| Others | what you downloaded or adopted from someone (`Origin::Api`, an owner not you) | nothing: other people's public items are not browsed (D2); they open by id or link |
 
 ### Variations: the transform selector
 
 A selector in the pane (or above the list), listing Normal, Linked and
-Final transforms together, as the triangle editor's does. **Add to
-transform** adds to the selected one. Recommended: the same selection as
-the triangle editor and Transforms panel (egui memory
-`triangle_editor_selected_transform`), so picking a transform anywhere
-picks it here.
+Final transforms together, the triangle editor's own list. **Add to
+transform** adds to the selected one. It is the same selection as the
+triangle editor's (egui memory `triangle_editor_selected_transform`), so
+picking a transform in either picks it in both (decided).
 
 ### Simulation previews
 
 A model's preview renders the model's **first preset** (its parameters,
 time step, boundary, initial field, steps and its colouring, all of
 which `SimPreset` carries) instead of a default field and colouring. A colouring's preview renders
-on a model that suits it: recommended, the first model of the colouring's
-state kind, at that model's first preset, instead of Gray-Scott for
-everything.
+on a model that suits it: the first model of the colouring's state
+kind, at that model's first preset, instead of Gray-Scott for everything
+(decided). Later, models and colourings may say which go together; not
+in this plan.
 
 ## Order of work
 
@@ -135,52 +137,41 @@ everything.
 3. **Palettes** (Group by, pack checkboxes).
 4. **Variations** and the transform selector.
 5. **Simulation previews.**
-6. The narrow layout (question 7), tests, docs (CATALOG.md rewritten for
+6. The narrow layout (D7), tests, docs (CATALOG.md rewritten for
    the new layout, UI.md).
 
 Each step is committed on its own and left working; the old views are
 deleted as each catalog moves over, not kept beside the new one.
 
-## Open questions
+## Decisions (2026-11-20)
 
-1. **2D vs 3D escape online.** The server filters fractals by
-   `render_mode` (2d, 3d, escape, simulation) and has no 2D/3D-escape
-   filter. Filtering escape pages on the client leaves pages half empty.
-   Options: (a) ask ffapi for a filter (e.g. `view=escape3d`, or a
-   meaning for `has_3d` on escape items); (b) online, the two escape
-   categories both ask for `escape` and the client sorts them, accepting
-   uneven pages. **Recommended: (a), with (b) until ffapi has it.**
-2. **Owner "Others" online.** The curated-content plan decided not to
-   browse other people's public items: they are opened by id or link.
-   Online, should Others (a) browse everyone's public items
-   (`Scope::Public`), or (b) mean only what you downloaded or adopted
-   from someone? **Recommended: (b) for now; (a) is a policy change for
-   the site** (moderation, what the Catalog shows by default).
-3. **Click on additive kinds.** For a fractal, palette, formula, model or
-   colouring, click = load/apply (it replaces something, and undo takes
-   it back). For a **variation** or an **effect**, a click that adds
-   means browsing adds things to your fractal by accident. **Recommended:
-   click selects (pane shows it, sticky), and Add to transform / Add
-   effect in the pane adds.** The alternative is click = add.
-4. **Palettes' Group by.** The pack checkboxes (enabled / disabled) live
-   on the pack headings. With Group by Source, Owner or Name there are no
-   pack headings. **Recommended: add Pack to Group by, as the default;
-   Source / Owner / Name as asked; the checkboxes appear only when
-   grouped by Pack.**
-5. **The online Sort** (Newest, Most liked, Most viewed, Recently
-   changed, Name) is not in the new controls. Drop it (rows sorted by
-   name within groups), or keep a Sort select beside Group by?
-   **Recommended: keep it, shown when Source admits online; it orders
-   rows within each group.**
-6. **"Yours" or "Account".** A guest's own files are theirs too, with no
-   account. **Recommended: "Yours"** (local files you made, and online
-   your account's items).
-7. **Narrow screens (phones)** have no hover. **Recommended: a tap
-   selects and loads (as on desktop), and a Details button in the top row
-   (not per row) shows the selected entry's pane.**
-8. **Effects and Scripts** were not in the request. **Recommended: the
-   same shell; Effects' categories are their stages (density, colour,
-   ...), Scripts' their kinds (Generator, Modifier, Library, Track),
-   List only for Scripts (no previews).**
-9. **Variations' Type.** One kind, so no Type select. Same for the other
-   single-kind catalogs. (Stated so it is not a surprise.)
+- **D1. 2D vs 3D escape online: already in the API.** The catalog spec
+  ([api-catalog-spec.md](api-catalog-spec.md), built 2026-11-11) gave
+  `GET /flames` the filters `engine` (`flame`, `escape`, `simulation`)
+  and `dimension` (`2`, `3`), and its list items the fields `engine`,
+  `scene`, `dimension`; `render_mode` stays for old clients (its `3d`
+  means a 3D flame only, and `has_3d` the same). The app still asks by
+  `render_mode`. The categories ask: 2D Flame `engine=flame&dimension=2`,
+  3D Flame `engine=flame&dimension=3`, 2D Escape `engine=escape&dimension=2`,
+  3D Escape `engine=escape&dimension=3` (solids and terrains),
+  Simulation `engine=simulation`. `FlameListItem` gains the three fields.
+  Items written before the summariser ran have none; the server
+  backfills them, so a row without them falls back to `render_mode`.
+- **D2. Owner "Others"** is only what you downloaded or adopted from
+  someone else. Other people's public items are not browsed.
+- **D3. A click on a variation or an effect selects** (the pane shows
+  it); the pane's Add to transform / Add effect adds. Every other kind
+  loads or applies on a click.
+- **D4. Palettes group by Pack** by default, then Source, Owner, Name;
+  the enable checkboxes show only when grouped by Pack.
+- **D5. No Sort select.** Group by is the order, to keep the controls
+  few.
+- **D6. "Yours"**, not "Account": your files on the device, your
+  account's items online.
+- **D7. Narrow screens:** a tap selects and loads; one Details button in
+  the top row shows the selected entry's pane.
+- **D8. Effects and Scripts** get the same shell. Effects' categories
+  are Density and Color; Scripts' are Generator, Modifier, Library and
+  Track, List only (no previews).
+- **D9. A catalog of one kind has no Type select** (Variations, Palettes,
+  ...): its Category says it.
