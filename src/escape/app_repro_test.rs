@@ -181,6 +181,7 @@ mod tests {
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -753,6 +754,7 @@ mod tests {
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -905,6 +907,7 @@ mod tests {
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -1064,6 +1067,7 @@ mod tests {
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -1267,6 +1271,7 @@ mod tests {
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -1484,6 +1489,7 @@ mod tests {
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -5120,6 +5126,7 @@ final:
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -5744,6 +5751,7 @@ final:
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -5954,6 +5962,7 @@ final:
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -6138,6 +6147,7 @@ final:
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -8896,6 +8906,7 @@ fn main() {
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -9081,6 +9092,7 @@ fn main() {
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -9298,6 +9310,7 @@ fn main() {
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -9862,6 +9875,7 @@ fn main() {
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.background_color = [0.0, 0.0, 0.0];
         config.exposure = 1.0;
@@ -14398,6 +14412,7 @@ fn main() {
                 .collect(),
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         config.escape.center_re = "-0.7436438870371587".to_string();
         config.escape.center_im = "0.1318259042053119".to_string();

@@ -78,8 +78,11 @@ run time:
 - A palette has a `name` and either `stops` (positions 0..1, RGB 0..1)
   or `indexed_colors`, a comma-separated list of `RRGGBB` values, one per
   slot, slot `i` at position `i / 255` (every shipped indexed palette
-  has 256). An optional `locked` marks a fixed 256-colour palette.
-  Unknown fields are ignored.
+  has 256). An optional `locked` marks a fixed 256-colour palette, and
+  an optional `description` (Markdown) says what it is or where it came
+  from -- the Catalog's info pane shows it; it is not the palette's
+  content (`palette_content_hash` leaves it out) and is written only
+  when not empty. Unknown fields are ignored.
 - When a palette is written out (a `.palette` file, a config, the Custom
   pack), exactly 256 evenly spaced stops are written as
   `indexed_colors` and anything else as `stops`.

@@ -74,6 +74,7 @@ fn palette_from_parts(
                     stops,
                     locked: false,
                     built_in: false,
+                    description: String::new(),
                 };
             }
         }
@@ -103,6 +104,7 @@ fn palette_from_parts(
                 stops,
                 locked: num_colors == 256,
                 built_in: false,
+                description: String::new(),
             };
         }
     }
@@ -440,6 +442,7 @@ mod tests {
                 .collect(),
             locked: true,
             built_in: false,
+            description: String::new(),
         };
         let odd = Palette {
             name: "Odd numbers".into(),
@@ -451,6 +454,7 @@ mod tests {
             ],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         vec![Palette::grayscale(), indexed, odd]
     }

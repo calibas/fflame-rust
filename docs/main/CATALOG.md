@@ -314,7 +314,11 @@ entries made by `inventory::online`):
   repeated id is shown once.
 - **What the app holds**: an online script you opened (its file's link
   names the id) or a palette of the same colours says so and offers
-  **Show it on this device**.
+  **Show it on this device**. A palette the app does not hold (curated
+  or your own) offers **Save a copy**: it joins the Custom pack under a
+  name none of yours has, its description saying where it came from,
+  when, by whom and its online id, then the server's description
+  (`inventory_online::saved_copy`).
 - **Thumbnails** (a fractal's `thumbnail_url`, used as given: it changes
   when the image does) download four at a time, decode off the frame,
   and are kept in the app's one thumbnail cache (`ThumbnailCache`, keyed

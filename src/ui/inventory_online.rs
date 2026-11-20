@@ -130,6 +130,38 @@ enum Opened {
     Builtin(String, String),
 }
 
+/// An online palette as a copy for the Custom pack: a name no palette of
+/// yours has (a save by name would replace it), and a description that
+/// says where it came from and when, then the server's own description.
+fn saved_copy(p: &crate::api::types::PaletteItem, info: &online::OnlineInfo, mine: bool, library: &crate::scene::palette::PaletteLibrary, today: &str) -> crate::scene::palette::Palette {
+    let mut palette = crate::api::sync::palette_from_item(p);
+    let base = palette.name.clone();
+    let mut n = 2;
+    while library.has_custom_palette_named(&palette.name) {
+        palette.name = format!("{base} ({n})");
+        n += 1;
+    }
+    let from = if mine {
+        t!("catalog.saved_from_mine", date = today).to_string()
+    } else if info.curated.is_some() {
+        t!("catalog.saved_from_curated", date = today).to_string()
+    } else {
+        t!("catalog.saved_from_online", date = today).to_string()
+    };
+    let mut lines = vec![from];
+    if !mine && !info.owner.is_empty() {
+        lines.push(t!("catalog.by_owner", owner = info.owner.clone()).to_string());
+    }
+    lines.push(t!("catalog.saved_online_id", id = info.id.clone()).to_string());
+    let mut description = lines.join(" ");
+    if let Some(d) = p.description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        description = format!("{description}\n\n{d}");
+    }
+    palette.description = description;
+    palette.built_in = false;
+    palette
+}
+
 /// What the info pane asks of the panel.
 pub enum InfoAction {
     /// Show the app's own entry of an online item, on this device.
@@ -761,9 +793,22 @@ impl OnlinePlace {
                 if ui.button(t!("catalog.use_palette")).clicked() {
                     super::inventory::apply_palette(cx.config_manager, crate::api::sync::palette_from_item(p));
                 }
-                if let Some(held) = &info.held {
-                    if ui.button(t!("catalog.show_local")).on_hover_text(t!("catalog.held_palette")).clicked() {
-                        action = Some(InfoAction::ShowLocal(held.clone()));
+                match &info.held {
+                    Some(held) => {
+                        if ui.button(t!("catalog.show_local")).on_hover_text(t!("catalog.held_palette")).clicked() {
+                            action = Some(InfoAction::ShowLocal(held.clone()));
+                        }
+                    }
+                    None => {
+                        if ui.button(t!("catalog.save_palette")).on_hover_text(t!("catalog.save_palette_tip")).clicked() {
+                            let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                            let palette = saved_copy(p, &info, mine, cx.palette_library, &today);
+                            let name = palette.name.clone();
+                            self.status = Some(match cx.palette_library.save_to_custom_library(palette) {
+                                Ok(()) => (t!("catalog.saved_palette", name = name).to_string(), false),
+                                Err(e) => (t!("catalog.save_palette_failed", error = e).to_string(), true),
+                            });
+                        }
                     }
                 }
             }
@@ -1066,6 +1111,36 @@ fn cache_key(url: &str) -> String {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    /// Save a copy: a name none of yours has (a save by name would replace
+    /// it), and a description that says where it came from, when, by whom
+    /// and its online id, then the server's own description.
+    #[test]
+    fn a_saved_online_palette_says_where_it_came_from() {
+        let item: crate::api::types::PaletteItem = serde_json::from_value(serde_json::json!({
+            "id": "pal-1", "name": "It Saved Copy", "description": "Warm dusk.", "content_hash": "h",
+            "content": {"stops": [{"position": 0.0, "color": [1.0, 0.0, 0.0]}, {"position": 1.0, "color": [0.0, 0.0, 1.0]}]}
+        }))
+        .unwrap();
+        let mut info = online::OnlineInfo { id: "pal-1".into(), owner: "ana".into(), updated: String::new(), thumbnail_url: None, visibility: None, held: None, curated: None };
+        info.curated = Some(serde_json::from_value(serde_json::json!({"name": "dusk", "current": true})).unwrap());
+        let mut library = crate::scene::palette::PaletteLibrary::new();
+        let custom = library.custom_pack_index().unwrap();
+        let mut taken = crate::api::sync::palette_from_item(&item);
+        taken.description.clear();
+        library.packs_mut()[custom].pack.as_mut().unwrap().palettes.push(taken);
+
+        let copy = saved_copy(&item, &info, false, &library, "2026-11-19");
+        assert_eq!(copy.name, "It Saved Copy (2)", "not the name of one of yours");
+        assert!(!copy.built_in);
+        let d = &copy.description;
+        assert!(d.starts_with(&t!("catalog.saved_from_curated", date = "2026-11-19").to_string()), "{d}");
+        assert!(d.contains("ana") && d.contains("pal-1") && d.ends_with("\n\nWarm dusk."), "{d}");
+
+        let yours = saved_copy(&item, &info, true, &library, "2026-11-19");
+        assert!(yours.description.starts_with(&t!("catalog.saved_from_mine", date = "2026-11-19").to_string()));
+        assert!(!yours.description.contains("ana"), "your own: no owner line");
+    }
 
     fn script(id: &str) -> Item {
         Item::Script(

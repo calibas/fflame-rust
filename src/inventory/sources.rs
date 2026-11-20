@@ -60,7 +60,9 @@ pub(super) fn palettes(lib: &crate::scene::palette::PaletteLibrary, out: &mut Ve
         let group = Group { order: i as u32, label: pack.pack_name.clone() };
         for p in &pack.palettes {
             let key = EntryKey::Palette(crate::api::sync::palette_content_hash(p));
-            out.push(entry(Kind::Palette, key, &p.name, group.clone(), origin));
+            let mut e = entry(Kind::Palette, key, &p.name, group.clone(), origin);
+            e.description = p.description.clone();
+            out.push(e);
         }
     }
 }

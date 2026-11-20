@@ -2244,6 +2244,7 @@ mod tests {
                 stops: vec![white.clone(), crate::scene::palette::ColorStop { position: 1.0, ..white }],
                 locked: false,
                 built_in: false,
+                description: String::new(),
             };
             let job = crate::renderer::RenderJob::new(&c, N, N);
             let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render");
@@ -2373,7 +2374,7 @@ mod tests {
         use crate::scene::palette::{ColorStop, Palette};
         const N: u32 = 96;
         let stop = |position: f32, color: [f32; 3]| ColorStop { position, color };
-        let palette = |stops: Vec<ColorStop>| Palette { name: "Test".to_string(), stops, locked: false, built_in: false };
+        let palette = |stops: Vec<ColorStop>| Palette { name: "Test".to_string(), stops, locked: false, built_in: false, description: String::new() };
         let rainbow = palette(vec![stop(0.0, [1.0, 0.1, 0.1]), stop(0.33, [0.1, 1.0, 0.1]), stop(0.66, [0.1, 0.1, 1.0]), stop(1.0, [1.0, 0.1, 0.1])]);
         let white = palette(vec![stop(0.0, [1.0; 3]), stop(1.0, [1.0; 3])]);
         let render = |base: &FractalConfig, palette: &Palette, orbit: Option<(&str, f32)>| -> Vec<u8> {
@@ -2460,7 +2461,7 @@ mod tests {
         base.escape.formula_params.insert("shadow".to_string(), 1.0);
         base.escape.formula_params.insert("occlusion".to_string(), 0.0);
         base.escape.path.samples = 64;
-        base.palette = Palette { name: "Grey".to_string(), stops: vec![grey.clone(), ColorStop { position: 1.0, ..grey }], locked: false, built_in: false };
+        base.palette = Palette { name: "Grey".to_string(), stops: vec![grey.clone(), ColorStop { position: 1.0, ..grey }], locked: false, built_in: false, description: String::new() };
         base.background_color = [0.0; 3];
         base.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
         base.exposure = 1.0;
