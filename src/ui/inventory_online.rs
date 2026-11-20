@@ -4,7 +4,7 @@
 //! by its id or link, *Open by ID or link*), asked for page by page,
 //! searched by the server, as the Catalog's entries
 //! ([`crate::inventory::online`]). The Catalog's one view
-//! (`ui::inventory_view`, docs/projects/one-catalog-view.md) draws them
+//! (`ui::inventory_view`, docs/archive/projects/one-catalog-view.md) draws them
 //! with the device's entries; this keeps the lists, the thumbnails, the
 //! info pane of an online item and *Open by ID or link*.
 //!

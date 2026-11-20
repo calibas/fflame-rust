@@ -1,5 +1,7 @@
 # One Catalog view
 
+> **Archived 2026-11-20** -- finished: every step built on branch `one-catalog`, with fixes from use (pack collapse under a filter, the info pane's widening) and two retirements (the Variations panel, the Catalog menu's Online... row). Reference: [CATALOG.md](../../main/CATALOG.md); open items are in [BACKLOG.md](../../projects/BACKLOG.md).
+
 **Status:** planned 2026-11-20; every question decided the same day
 (*Decisions*, below). Branch `one-catalog`. Every step built
 2026-11-20 (see *Order of work*); not yet seen in the running app.
@@ -160,7 +162,7 @@ deleted as each catalog moves over, not kept beside the new one.
 ## Decisions (2026-11-20)
 
 - **D1. 2D vs 3D escape online: already in the API.** The catalog spec
-  ([api-catalog-spec.md](api-catalog-spec.md), built 2026-11-11) gave
+  ([api-catalog-spec.md](../../projects/api-catalog-spec.md), built 2026-11-11) gave
   `GET /flames` the filters `engine` (`flame`, `escape`, `simulation`)
   and `dimension` (`2`, `3`), and its list items the fields `engine`,
   `scene`, `dimension`; `render_mode` stays for old clients (its `3d`

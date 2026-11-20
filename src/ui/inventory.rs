@@ -1,7 +1,7 @@
 //! The Catalog panel (docs/archive/projects/catalog.md): every resource the app
 //! knows, from [`crate::inventory`], to browse, read about and use.
 //!
-//! One view for every catalog (docs/projects/one-catalog-view.md): the
+//! One view for every catalog (docs/archive/projects/one-catalog-view.md): the
 //! top chooses the catalog (fractals, palettes, variations, ...), its
 //! filters (Category, Source, Owner, Type), the view (grid or list, the
 //! cells' size), a search and the grouping; the list is the device's
@@ -293,7 +293,7 @@ pub struct InventoryPanel {
     entries: Arc<Vec<Entry>>,
     revision: Option<u64>,
     family: Family,
-    /// Category, Source, Owner, Type (docs/projects/one-catalog-view.md).
+    /// Category, Source, Owner, Type (docs/archive/projects/one-catalog-view.md).
     filters: Filters,
     /// Each catalog's view: grid or list, the cells' size, the grouping.
     views: HashMap<Family, View>,

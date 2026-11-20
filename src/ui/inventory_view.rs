@@ -1,4 +1,4 @@
-//! The Catalog's one view (docs/projects/one-catalog-view.md): every
+//! The Catalog's one view (docs/archive/projects/one-catalog-view.md): every
 //! catalog drawn by the same rules, the device's entries and the server's
 //! pages in ONE list.
 //!

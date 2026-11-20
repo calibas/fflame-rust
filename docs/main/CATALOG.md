@@ -12,7 +12,7 @@ Variations and Effects panels' catalog sections moved there (the
 Variations panel itself is retired: the Variations catalog lists the
 registry). Every
 catalog is drawn by the same view (*The panel*;
-[one-catalog-view.md](../projects/one-catalog-view.md)). It manages your own resources -- Rhai
+[one-catalog-view.md](../archive/projects/one-catalog-view.md)). It manages your own resources -- Rhai
 files, palettes, online fractals -- and runs scripts (*Your own
 resources*, below); the Rhai Editor edits the file it opens. On a phone
 its list and info are two screens (*The phone layout*), and its entries

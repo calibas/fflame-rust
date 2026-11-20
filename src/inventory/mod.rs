@@ -181,7 +181,7 @@ pub enum EntryKey {
 }
 
 /// A fractal category's key, as an entry carries it ([`Entry::category`];
-/// the Catalog's Category filter, docs/projects/one-catalog-view.md).
+/// the Catalog's Category filter, docs/archive/projects/one-catalog-view.md).
 pub fn preset_category_key(c: crate::scene::presets::PresetCategory) -> &'static str {
     use crate::scene::presets::PresetCategory as P;
     match c {
