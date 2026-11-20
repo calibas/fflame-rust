@@ -1572,7 +1572,7 @@ palette_library:
 
   # Load states
   loading: "Loading..."
-  pack_disabled: "Turn the pack on to see its palettes."
+  pack_disabled: "Turned off: its palettes are not in the pickers or random palettes, but you can use them here."
   load_failed: "Failed to load"
   retry: "Retry"
 

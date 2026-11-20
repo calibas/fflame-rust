@@ -37,7 +37,8 @@ pub struct Picker<'a> {
     unusable: Option<&'a dyn Fn(&Entry) -> Option<String>>,
     /// Group headings name the kind too (a picker of several kinds).
     kind_headings: bool,
-    /// The palette library, for a palette's gradient in the info pane.
+    /// The palette library: a palette picker's rows show their gradients,
+    /// as the Catalog's do, and it has no info pane.
     palettes: Option<&'a crate::scene::palette::PaletteLibrary>,
     min_width: f32,
     max_height: f32,
@@ -143,7 +144,8 @@ impl<'a> Picker<'a> {
         let previewable = self.previewable();
         let grid = previewable && ui.data_mut(|d| d.get_persisted::<bool>(self.id.with("grid")).unwrap_or(false));
         let width = if grid { GRID_WIDTH.max(self.min_width) } else { self.min_width };
-        let pane = ui.ctx().content_rect().width() >= width + PANE_WIDTH + 64.0;
+        // A palette's row is its picture: nothing more for a pane to say.
+        let pane = self.palettes.is_none() && ui.ctx().content_rect().width() >= width + PANE_WIDTH + 64.0;
         let shown_id = self.id.with("shown");
         if focus {
             ui.data_mut(|d| d.remove::<Entry>(shown_id));
@@ -396,6 +398,14 @@ impl<'a> Picker<'a> {
             return (None, rect, false);
         }
         let current = self.current.is_some_and(|c| super::inventory::applied_name(e).as_deref() == Some(c) || key_name(e) == Some(c));
+        // A palette: its name and gradient, as the Catalog's row (the
+        // palette looked up in its pack only until its gradient is made).
+        if let (EntryKey::Palette(hash), Some(lib)) = (&e.key, self.palettes) {
+            let r = super::inventory::palette_row_lazy(ui, hash, &super::inventory::row_label(e), current, || {
+                lib.get_pack(e.group.order as usize)?.palettes.iter().find(|p| crate::api::sync::palette_content_hash(p) == *hash).cloned()
+            });
+            return (r.clicked().then(|| e.clone()), r.rect, current);
+        }
         if let Some(reason) = self.unusable.and_then(|why| why(e)) {
             let r = ui.add_enabled(false, egui::Button::selectable(current, super::inventory::row_label(e)));
             let rect = r.rect;
@@ -664,6 +674,40 @@ mod tests {
 
         let away = frame(Some(egui::pos2(5000.0, 5000.0)));
         assert_eq!(count(&away, "Pane Faraway"), 1, "and keeps it when the pointer leaves the list");
+    }
+
+    /// A palette picker: each row its name and gradient, as the Catalog's,
+    /// and no info pane (the current palette named once, by its row).
+    #[test]
+    fn a_palette_picker_shows_gradients_and_no_pane() {
+        use super::*;
+        offer();
+        let lib = crate::scene::palette::global_palette_library().read().unwrap().clone();
+        let admit = |e: &Entry| e.kind == Kind::Palette && lib.is_pack_enabled(e.group.order as usize);
+        let first = super::super::inventory::shared().iter().find(|e| admit(e)).cloned().expect("a palette of an enabled pack");
+        let hash = key_name(&first).unwrap().to_string();
+        let ctx = egui::Context::default();
+        let mut out = None;
+        for _ in 0..2 {
+            out = Some(ctx.run_ui(Default::default(), |ui| {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    let picker = Picker::new("palette_picker_test", &admit).palettes(&lib).current(Some(hash.as_str()));
+                    let btn = ui.button("open");
+                    egui::Popup::open_id(ui.ctx(), picker.popup_id());
+                    let _ = picker.popup(ui, &btn);
+                });
+            }));
+        }
+        let out = out.unwrap();
+        let drawn = texts(&out.shapes);
+        let label = super::super::inventory::row_label(&first);
+        assert_eq!(drawn.iter().filter(|t| **t == label || **t == first.title).count(), 1, "named by its row alone: {drawn:?}");
+        let gradients = out
+            .shapes
+            .iter()
+            .filter(|s| !matches!(s.shape, egui::Shape::Text(_)) && s.shape.texture_id() != egui::TextureId::default())
+            .count();
+        assert!(gradients > 0, "the rows show their gradients");
     }
 
     /// The popup keeps its height wherever its button is: near the

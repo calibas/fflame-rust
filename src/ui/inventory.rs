@@ -787,7 +787,7 @@ impl InventoryPanel {
                 continue;
             }
             let selected = self.selected.clone();
-            super::palette_library::pack_section(ui, cx.palette_library, pack, |ui, lib| {
+            super::palette_library::pack_section(ui, cx.palette_library, pack, searching, |ui, lib| {
                 let Some(p) = lib.get_pack(pack) else { return };
                 for (j, hash, title) in &rows {
                     let Some(palette) = p.palettes.get(*j) else { continue };
@@ -1026,6 +1026,12 @@ fn preset_galleries() -> Vec<FractalConfigGallery> {
 /// A palette row: its name, and its gradient at the right; the texture is
 /// made only once the row is on screen.
 pub(super) fn palette_row(ui: &mut egui::Ui, hash: &str, title: &str, palette: &crate::scene::palette::Palette, selected: bool) -> egui::Response {
+    palette_row_lazy(ui, hash, title, selected, || Some(palette.clone()))
+}
+
+/// [`palette_row`], the palette found only when its gradient is not made
+/// yet (a picker's rows hold an entry, not the palette).
+pub(super) fn palette_row_lazy(ui: &mut egui::Ui, hash: &str, title: &str, selected: bool, palette: impl FnOnce() -> Option<crate::scene::palette::Palette>) -> egui::Response {
     let h = 20.0;
     let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h + 4.0), egui::Sense::click());
     if !ui.is_rect_visible(rect) {
@@ -1043,8 +1049,11 @@ pub(super) fn palette_row(ui: &mut egui::Ui, hash: &str, title: &str, palette: &
     let galley = ui.painter().layout_no_wrap(title.to_string(), egui::FontId::default(), text_color);
     ui.painter().with_clip_rect(name_rect).galley(name_rect.left_center() + egui::vec2(4.0, -galley.size().y / 2.0), galley, text_color);
     let img = egui::Rect::from_min_size(egui::pos2(rect.max.x - preview_w, rect.min.y + 2.0), egui::vec2(preview_w, h));
-    let tex = super::palette_library::palette_preview(ui.ctx(), hash, palette, [200, 20]);
-    egui::Image::new(&tex).fit_to_exact_size(img.size()).paint_at(ui, img);
+    let size = [200, 20];
+    let tex = super::palette_library::palette_preview_made(ui.ctx(), hash, size).or_else(|| palette().map(|p| super::palette_library::palette_preview(ui.ctx(), hash, &p, size)));
+    if let Some(tex) = tex {
+        egui::Image::new(&tex).fit_to_exact_size(img.size()).paint_at(ui, img);
+    }
     if r.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }

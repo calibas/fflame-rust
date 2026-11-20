@@ -112,7 +112,9 @@ run time:
 Pack content is fetched over HTTP from `pkg/assets/palettes/packs/<file>`,
 relative to the page (`WEB_PACKS_DIR`; the build scripts copy the pack
 JSONs there, inside `pkg/`). An enabled pack is fetched on the first
-frame, a disabled one when it is enabled. Until a pack arrives, its
+frame, a disabled one when it is enabled or opened in the Catalog
+(still disabled: its palettes are usable there, not in the dropdown or
+the flat list). Until a pack arrives, its
 palettes are in neither the dropdown nor the flat list. A fetch
 completes into the global library; every frame, before any panel draws,
 the app's copy takes each pack whose load state changed and rebuilds its

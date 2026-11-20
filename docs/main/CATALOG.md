@@ -134,7 +134,11 @@ when it changes.
 - **Palettes**: pack by pack, each with its enable checkbox, its load
   state and a Retry (`palette_library::pack_section`), a row each: the name
   and a gradient (`palette_preview`, made once a row is on screen, kept
-  under its hash). Searching leaves out packs with no match. Signed in,
+  under its hash). A pack turned off is listed too, closed; opened (on
+  the web, fetched then, still off) its palettes are usable here like any
+  other -- the checkbox decides only what the pickers and random
+  palettes draw from. Searching leaves out packs with no match and opens
+  those with one. Signed in,
   a line after the packs shows the account's online palettes (Online,
   Account).
 - **Fractals**: the presets as `FractalConfigGallery` grids, a tab a
@@ -199,7 +203,9 @@ Beside the list, an info pane says what the entry under the pointer is --
 the Catalog's own summary (`inventory::entry_summary`), a refused entry's
 reason, Download -- keeping the last one pointed at while the pointer
 crosses to it, and the current choice on opening. A screen too narrow for
-both (a phone) shows the list alone, descriptions as tooltips. A popup, not a
+both (a phone) shows the list alone, descriptions as tooltips. A palette
+picker (`Picker::palettes`) has no pane: each row is the Catalog's
+palette row, its name and gradient (`inventory::palette_row_lazy`). A popup, not a
 ComboBox: a combo closes on any click inside it, its search box included
 (`the_picker_stays_open_while_it_is_used`). The list is read once a frame
 before any panel draws (`InventoryPanel::refresh`, from the UI's frame) and
