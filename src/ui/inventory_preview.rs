@@ -490,8 +490,14 @@ pub fn show(ui: &mut egui::Ui, shown: &Shown) {
             });
         }
         Shown::Ready(textures) => {
+            // Exactly the width there is, with the row's own spacing: a
+            // guessed gap 2 points short made an effect's pair 2 points too
+            // wide, the pane grew to hold it, the pictures grew with the
+            // pane -- every frame, up to 256 each, shifting the list under
+            // the pointer. Never wider than the room, so never a minimum.
             let n = textures.len().max(1) as f32;
-            let side = ((ui.available_width() - 6.0 * (n - 1.0)) / n).clamp(96.0, 256.0);
+            let spacing = ui.spacing().item_spacing.x;
+            let side = ((ui.available_width() - spacing * (n - 1.0)) / n).floor().clamp(1.0, 256.0);
             ui.horizontal(|ui| {
                 for (i, t) in textures.iter().enumerate() {
                     ui.vertical(|ui| {
@@ -509,6 +515,26 @@ pub fn show(ui: &mut egui::Ui, shown: &Shown) {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    /// An effect's two pictures fit the width they are given, frame after
+    /// frame (reported: the Catalog's info pane grew while an effect was
+    /// pointed at, shifting the list).
+    #[test]
+    fn two_pictures_fit_their_pane_and_it_keeps_its_width() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture("t", egui::ColorImage::new([4, 4], vec![egui::Color32::WHITE; 16]), egui::TextureOptions::LINEAR);
+        let shown = Shown::Ready(vec![texture.clone(), texture]);
+        let mut widths = Vec::new();
+        for _ in 0..6 {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))), ..Default::default() };
+            let _ = ctx.run_ui(input, |ui| {
+                let r = egui::Panel::right("pane_test").resizable(true).default_size(280.0).min_size(200.0).show_inside(ui, |ui| show(ui, &shown));
+                widths.push(r.response.rect.width());
+            });
+        }
+        assert!(widths.windows(2).all(|w| w[0] == w[1]), "the pane keeps its width: {widths:?}");
+        assert!(widths[0] <= 281.0, "its default: {widths:?}");
+    }
 
     fn entry(kind: Kind, name: &str) -> Entry {
         crate::inventory::scan(&crate::scene::palette::global_palette_library().read().unwrap().clone(), crate::inventory::Online::default())
