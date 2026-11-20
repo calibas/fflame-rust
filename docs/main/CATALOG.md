@@ -5,10 +5,12 @@ fractals, variations, effects, escape-time formulas and colourings,
 simulation models and colourings, and Rhai scripts -- to browse, read
 about and use. It replaced the Palette Library and holds the presets the
 Fractal Browser's Presets tab held; its list is also every picker's
-(*The picker*, below), and its **Online** place is what the server holds
-(*Online*, below): the Fractal Browser's Online tab, Cloud Palettes, the
-Scripts panel's public scripts and the Variations and Effects panels'
-catalog sections moved there. It manages your own resources -- Rhai
+(*The picker*, below), and it lists what the server holds beside what the
+device holds, in one list (*Online*, below): the Fractal Browser's Online
+tab, Cloud Palettes, the Scripts panel's public scripts and the
+Variations and Effects panels' catalog sections moved there. Every
+catalog is drawn by the same view (*The panel*;
+[one-catalog-view.md](../projects/one-catalog-view.md)). It manages your own resources -- Rhai
 files, palettes, online fractals -- and runs scripts (*Your own
 resources*, below); the Rhai Editor edits the file it opens. On a phone
 its list and info are two screens (*The phone layout*), and its entries
@@ -20,8 +22,10 @@ show previews (*Previews*). Built in phases 1 to 6 of
   engine catalog in both repositories (`crate::catalog`,
   `engine-catalog.json`).
 - Panel: `PanelType::Inventory`, drawn by `InventoryPanel`
-  ([src/ui/inventory.rs](../../src/ui/inventory.rs)). Saved layouts that
-  named `PaletteLibrary` open it (a serde alias).
+  ([src/ui/inventory.rs](../../src/ui/inventory.rs)); the view's rules
+  (filters, rows, grouping, the online lists) in
+  [src/ui/inventory_view.rs](../../src/ui/inventory_view.rs). Saved
+  layouts that named `PaletteLibrary` open it (a serde alias).
 - Picker: `ui::picker::Picker` ([src/ui/picker.rs](../../src/ui/picker.rs)).
 - Your own resources: [src/ui/inventory_manage.rs](../../src/ui/inventory_manage.rs),
   the operations [src/storage/manage.rs](../../src/storage/manage.rs);
@@ -39,8 +43,8 @@ widget), [VARIATIONS.md](VARIATIONS.md), [ESCAPE.md](ESCAPE.md),
 ## Opening it
 
 - **The Catalog menu**, in the menu bar after Rendering (and the compact
-  menu's Catalog submenu): a row a family opens it there; **Online...**
-  opens its Online place at the family it was on.
+  menu's Catalog submenu): a row a catalog opens it there (Source All);
+  **Online...** opens it at Source Online, on the catalog it was on.
 - The Colors panel's **Browse Palettes** and the Palette Editor's
   **Browse Palettes in the Catalog** open it on Palettes.
 - **File ▸ From Preset Library** opens it on Fractals.
@@ -122,40 +126,66 @@ when it changes.
 
 ## The panel
 
-- **The top**: a tab a family (Fractals, Palettes, Variations,
-  Escape-Time, Simulation, Effects, Scripts; it opens on Fractals) with
-  its count; a search over the
-  title, the name, the description and the authors; an origin filter
-  (every origin, built-in, custom, from others); and, in a family
-  of several kinds, a chip a kind.
-- **The list**: the family's entries in collapsing groups with counts;
-  a row is the title and its origin's mark (` *` yours, ` ↓` somebody
-  else's), its description's first line as the tooltip.
-- **Palettes**: pack by pack, each with its enable checkbox, its load
-  state and a Retry (`palette_library::pack_section`), a row each: the name
-  and a gradient (`palette_preview`, made once a row is on screen, kept
-  under its hash). A pack turned off is listed too, closed; opened (on
-  the web, fetched then, still off) its palettes are usable here like any
-  other -- the checkbox decides only what the pickers and random
-  palettes draw from. Searching leaves out packs with no match and opens
-  those with one. Signed in,
-  a line after the packs shows the account's online palettes (Online,
-  Account).
-- **Fractals**: the presets as `FractalConfigGallery` grids, a tab a
-  category, previews made for the gallery shown (the app's preview loop
-  drives the Catalog's galleries beside the Fractal Browser's). A search
-  or an origin filter shows rows instead.
-- **The info pane** (at the right from 560 points wide, under the list
-  when narrower): the title, kind and group, where it came from, the
-  version, the authors, a palette's gradient, the description, then the
-  actions.
+- **The top**, in three rows:
+  - the **catalog** (one dropdown: Fractals, Palettes, Variations,
+    Escape-Time, Simulation, Effects, Scripts; it opens on Fractals) and,
+    in the corner, **Refresh**;
+  - the filters, each starting at All: **Category** (a catalog's own:
+    a fractal's 2D / 3D Flame, 2D / 3D Escape, Simulation; a variation's
+    category; the escape-time kinds; Model / Coloring; an effect's
+    Density / Color; the script kinds; none for palettes), **Source**
+    (Online, This device), **Owner** (Curated, Yours, Others) and, where
+    a catalog has several kinds, **Type** (Fractal, Animation);
+  - the view: **Grid / List** (not for palettes or scripts; Grid by
+    default for fractals, escape-time, simulations and effects, List for
+    variations), the **search** (the title, the name, the description
+    and the authors; the server's own search online), the grid's
+    **Size**, and **Group by** (Category, Source, Owner, Type where
+    there are types, Name; palettes Pack, Source, Owner, Name). Group by
+    is also the order: rows are by name within their group, and there is
+    no other sort.
+  Each catalog keeps its own view (`InventoryPanel::views`); the filters
+  stay as set, a catalog's Category and Type starting at All.
+- **The list** is ONE list: the device's entries and the server's pages
+  (*Online*) as the filters admit them (`inventory_view::rows`), grouped
+  (`inventory_view::group`; collapsing groups with counts; Group by Name
+  has no headings). A row is the title, its marks (` *` yours, ` ↓`
+  somebody else's or to download, ` ↑` an update) and an online row's
+  owner; a cell its preview -- a fractal's rendered preset, an online
+  fractal's server thumbnail -- and its name.
+- **Owner**: Curated is the app's built-ins, its shipped files, the
+  server's own catalog downloads and the online curated collection;
+  Yours your files, saved palettes and your account's items; Others what
+  you adopted from somebody (`inventory_view::owner_of`). Other people's
+  public items are not browsed (they open by id or link).
+- **Palettes** grouped by Pack: pack by pack, each with its enable
+  checkbox, its load state and a Retry (`palette_library::pack_section`),
+  a row each: the name and a gradient (`palette_preview`, made once a row
+  is on screen, kept under its hash); the online palettes the device
+  does not hold in a section after. A pack turned off is listed too,
+  closed; opened (on the web, fetched then, still off) its palettes are
+  usable here like any other -- the checkbox decides only what the
+  pickers and random palettes draw from. Filtering leaves out packs with
+  no match and opens those with one. Grouped otherwise, palettes are rows
+  with their gradients, without the packs' checkboxes.
+- **The info pane** (at the right from 560 points wide): what the entry
+  **under the pointer** is, or with the pointer elsewhere the selected
+  one -- so the pane's buttons act on what was clicked: the title, kind
+  and group, where it came from, the version, the authors, a palette's
+  gradient, the preview, a preset's summary (mode, transforms,
+  variations, formula or model, zoom, iterations: what the presets'
+  gallery's list showed when a row was opened), the description, then
+  the actions.
 
 ## Selecting and using
 
-A click selects; the info pane's **Use** -- or a double click -- applies.
-A palette is applied by its click, and a fractal loaded by its click (one
-undo step each). `InventoryPanel::selected` gives the selection to any
-panel.
+A click selects the entry and loads or applies it, one undo step: a
+fractal loads, a palette, formula, field, solid, model or colouring
+applies (where it can: `usable`). A variation or an effect only selects
+(D3 of the plan): the pane's **Use** adds it, so browsing never adds by
+accident; nor does a click run a script, open a file or download what is
+not installed -- the pane does those. The pane's **Use** applies any
+entry.
 
 What Use does is what each kind's own picker does, through the same
 functions:
@@ -250,8 +280,8 @@ the pickers use (`sources::curated_scripts`; fetched once a session by
 the panel, `Scope::Curated`; the app's own shipped content the server
 holds, `origin` "builtin", left out; one already adopted left out). A
 curated row's Download adopts it (`ScriptCloudRequest::Adopt`, one at a
-time, as the Online place adopts); once adopted it is a file and is
-picked. The Catalog's own list leaves those rows to its Online place.
+time, as the Catalog's Open adopts); once adopted it is a file and is
+picked. The Catalog's own list leaves those rows to its online lists.
 **Offer downloads in pickers** in the Catalog menu
 (`SystemSettings::picker_downloads`, on unless turned off) offers only
 what is installed when off.
@@ -260,27 +290,31 @@ what is installed when off.
 
 ## Online
 
-The top's first row chooses the place: **On this device** (everything
-above) or **Online** (`Place`), what the server holds for the family
+Source **Online** or **All** adds what the server holds to the list
 ([src/ui/inventory_online.rs](../../src/ui/inventory_online.rs), its
-entries made by `inventory::online`):
+entries made by `inventory::online`; the lists asked for chosen by
+`inventory_view::online_lists`: curated, plus the account's own signed
+in, as Owner admits; none for This device). An online item the device
+holds -- a preset's curated copy, a palette of the same colours, an
+adopted script -- is one row, the device's, which counts as online too.
+Pages come in name order (`sort=name`), the next asked for as the list's
+end comes into view:
 
 | Family | Online lists | Use |
 |---|---|---|
 | Palettes | `GET /palettes?curated=true`; Account: `GET /users/me/palettes` -- each a row with its gradient | a click applies a copy; Account: Delete... (confirmed) |
-| Fractals | `GET /flames?curated=true`; Account: `GET /users/me/flames` -- a grid of the server's thumbnails, a render-mode filter (All, 2D, 3D, Escape Time, Simulation); and **Animations**, a kind of the family (the user's choice, 2026-11-18): `GET /animations?curated=true`, Account: `GET /users/me/animations`, as rows | a fractal: a click loads it, one undo step, its online id kept so Save Online updates it; Account: Delete... (confirmed). An animation: **Load**, with its fractal, as the Animation panel's list loads one |
+| Fractals | `GET /flames?curated=true`; Account: `GET /users/me/flames` -- the server's thumbnails; a Category asks by the catalog's `engine` and `dimension` (2D Flame `engine=flame&dimension=2`, ..., 3D Escape `engine=escape&dimension=3`, Simulation `engine=simulation`; api-catalog-spec.md), an item the server has not summarised falling back to its `render_mode`; and **Animations**, a kind of the family (the user's choice, 2026-11-18): `GET /animations?curated=true`, Account: `GET /users/me/animations`, as rows | a fractal: a click loads it, one undo step, its online id kept so Save Online updates it; Account: Delete... (confirmed). An animation: **Load**, with its fractal, as the Animation panel's list loads one |
 | Variations, Effects | the cached catalog first (downloaded, offered), then people's Rhai ones (`GET /scripts?kind=variation`, `effect`) | Download, Update; a Rhai one: Open |
-| Escape, Simulation, Scripts | `GET /scripts?kind=` for each of the family's kinds, a group each (the kind chips narrow it to one) | Open: adopt into your files (`ScriptCloudRequest::Adopt`), under the restrictions somebody else's code runs with |
+| Escape, Simulation, Scripts | `GET /scripts?kind=` for each of the catalog's kinds (a Category narrows it to one) | Open: adopt into your files (`ScriptCloudRequest::Adopt`), under the restrictions somebody else's code runs with |
 
-- **Curated or Account** ([curated-content.md](../projects/curated-content.md)).
-  Curated is the curated collection -- reviewed, static copies, each
-  under its canonical name (`Scope::Curated`: a list with
-  `curated=true`) -- a guest's too; Account (the signed-in account's own
-  items, every visibility) needs the account (the button says so when
-  signed out). Anyone else's public item is not browsed: it opens by its
-  id or link. A curated item's info says **Curated, as** its name (and
+- **Curated or Yours** ([curated-content.md](../projects/curated-content.md)),
+  as Owner chooses. Curated is the curated collection -- reviewed, static
+  copies, each under its canonical name (`Scope::Curated`: a list with
+  `curated=true`) -- a guest's too; Yours online is the signed-in
+  account's own items, every visibility (none signed out). Anyone else's
+  public item is not browsed: it opens by its id or link. A curated item's info says **Curated, as** its name (and
   when it is an older version), and credits whose work it is.
-- **Open by ID or link**, under the scopes: an item's id, a link that
+- **Open by ID or link**, under the filters while Source admits online: an item's id, a link that
   holds one (the web app's `?flame=` / `?animation=`, an API path, a
   page of the browser app's: the resource named last before the id
   decides), or a canonical name `kind/name` (resolved by
@@ -294,11 +328,10 @@ entries made by `inventory::online`):
   script before it is adopted ([ONLINE.md](ONLINE.md), *Trusting code
   from the server*).
 - **Search** is the server's: the panel's search box, asked
-  (`q`) once the typing has stopped for 0.4 s. **Sort**: the resource's
-  (Newest, Most liked, Most viewed, Recently changed, Name; each
-  resource takes some).
+  (`q`) once the typing has stopped for 0.4 s. There is no sort select:
+  Group by orders the list.
 - **Refresh** (⟳, the panel's top-right corner) does everything at
-  once, in either place: the Online lists and the pickers' curated
+  once, whatever the filters: the online lists and the pickers' curated
   scripts are asked for again, the files on disk are read again (a file
   dropped into a store appears), and the app fetches the variation and
   effect catalogs again (`InventoryPanel::refresh_all`). Palette packs
@@ -415,14 +448,12 @@ editing a line is not reading the rest.
 ## The phone layout
 
 Under 560 points wide (a phone's compact layout, a narrow dock) the list
-and the info are two screens. The list fills the panel; the selected row
-carries a **›** that opens its info full height, with **‹ Back** at its
-top. A tap still selects -- a palette still applies, a fractal still
-loads -- so auditioning palettes stays a tap each. Where the list is a
-gallery or a grid (the presets, online fractals) the selection and its
-› sit above it. The Online place, the picker (its info pane gives way to
-tooltips there) and the management actions work unchanged inside the two
-screens.
+and the info are two screens. The list fills the panel; with a
+selection, **Details** in the top row (beside Refresh) opens its info
+full height, with **‹ Back** at its top. There is no hover: a tap selects
+and loads or applies, as a click does, so auditioning palettes stays a
+tap each. The picker (its info pane gives way to tooltips there) and the
+management actions work unchanged inside the two screens.
 
 ---
 
@@ -452,9 +483,11 @@ adopted one -- previews through what compiling it makes
 track and an unreadable file have none. Previews
 that take the default palette use Fire without its black end, which on
 the black background hid whatever was drawn at index 0; a colouring
-starts from its own parameters, not the formula preset's. The info pane shows the selected entry's preview above
-its description (a spinner while it is made). A family with previews can
-be a **Grid** (beside the origin filter): each cell its entry's preview,
+starts from its own parameters, not the formula preset's. A preset's
+preview is the preset rendered, cached under the key the presets'
+gallery used (`ThumbnailCache::config_hash`). The info pane shows the
+entry's preview above its description (a spinner while it is made). A
+catalog with previews can be a **Grid**: each cell its entry's preview,
 asked for as it comes on screen -- the first look at 647 variations fills
 in as they scroll by, later looks come from the cache.
 `render_previews_for_inspection` (ignored) renders a sample through the

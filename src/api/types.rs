@@ -500,6 +500,13 @@ pub struct FlameListItem {
     #[serde(default)]
     pub thumbnail_url: Option<String>,
     pub render_mode: ApiRenderMode,
+    /// The catalog's facts (api-catalog-spec.md): `flame`, `escape` or
+    /// `simulation`, and 2 or 3; absent on an item the server has not
+    /// summarised yet.
+    #[serde(default)]
+    pub engine: Option<String>,
+    #[serde(default)]
+    pub dimension: Option<i16>,
     pub transform_count: i32,
     pub variation_names: Vec<String>,
     pub has_3d: bool,

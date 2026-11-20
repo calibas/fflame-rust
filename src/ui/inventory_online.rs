@@ -1,10 +1,12 @@
-//! The Catalog's **Online** place (docs/archive/projects/catalog.md, *Phase 3*):
-//! what the server holds for a family -- its **curated** items, or the
-//! account's own (docs/projects/curated-content.md: anyone else's public
-//! item is opened by its id or link, *Open by ID or link*) -- asked for
-//! page by page, searched by the server, and drawn as the Catalog's rows
-//! ([`crate::inventory::online`]); fractals as a grid of the server's
-//! thumbnails (decision 2), animations as rows.
+//! What the server holds for the Catalog (docs/archive/projects/catalog.md,
+//! *Phase 3*): a catalog's **curated** items, or the account's own
+//! (docs/projects/curated-content.md: anyone else's public item is opened
+//! by its id or link, *Open by ID or link*), asked for page by page,
+//! searched by the server, as the Catalog's entries
+//! ([`crate::inventory::online`]). The Catalog's one view
+//! (`ui::inventory_view`, docs/projects/one-catalog-view.md) draws them
+//! with the device's entries; this keeps the lists, the thumbnails, the
+//! info pane of an online item and *Open by ID or link*.
 //!
 //! Every request is an [`crate::api::job`]: a guest's goes unsigned, a
 //! signed-in one carries the token, and a 401 to it signs the session
@@ -33,27 +35,33 @@ static OPEN_QUESTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 const SEARCH_SETTLE_SECONDS: f64 = 0.4;
 /// Thumbnails downloading at once.
 const THUMBNAIL_JOBS: usize = 4;
-/// A grid cell's thumbnail side.
-pub(super) const CELL: f32 = 120.0;
 
+/// One list asked of the server: the view's list (kind, scope, a fractal
+/// category) and the search. Pages come in name order: Group by is the
+/// order (one-catalog-view.md, D5), so a page joins the list where it
+/// belongs.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ListKey {
+pub struct ListKey {
     kind: Kind,
     scope: Scope,
     q: String,
-    sort: &'static str,
-    /// A fractal's render mode (`2d`, `3d`, `escape`, `simulation`).
-    mode: Option<&'static str>,
+    /// A fractal category's key: the API's `engine` / `dimension` words.
+    category: Option<&'static str>,
 }
 
-/// The fractals' render-mode filter: the server's word, and the label.
-const MODES: &[(Option<&str>, &str)] = &[
-    (None, "browser.search_all"),
-    (Some("2d"), "browser.search_2d"),
-    (Some("3d"), "browser.search_3d"),
-    (Some("escape"), "mode.escape"),
-    (Some("simulation"), "mode.simulation"),
-];
+/// The sort every list is asked in.
+const SORT: &str = "name";
+
+/// Where the lists a view needs stand.
+#[derive(Debug, Default)]
+pub struct ListsState {
+    /// A page is on its way.
+    pub loading: bool,
+    /// A list failed: its error, and whether Try again can ask again.
+    pub error: Option<String>,
+    /// More pages to ask for.
+    pub more: bool,
+}
 
 /// A fractal's kind as a line: its mode, and for a flame its transform
 /// count and variations (an escape-time or simulation config has neither:
@@ -179,11 +187,6 @@ pub fn kinds(family: Family) -> Vec<Kind> {
 }
 
 pub struct OnlinePlace {
-    pub scope: Scope,
-    /// The fractals' render-mode filter.
-    mode: Option<&'static str>,
-    /// Each kind's sort, by the server's word.
-    sorts: HashMap<Kind, &'static str>,
     /// The search as typed, and when it last changed; `settled` is what
     /// the lists ask for.
     typed: String,
@@ -220,9 +223,6 @@ impl Default for OnlinePlace {
 impl OnlinePlace {
     pub fn new() -> Self {
         OnlinePlace {
-            scope: Scope::Curated,
-            mode: None,
-            sorts: HashMap::new(),
             typed: String::new(),
             typed_at: 0.0,
             settled: String::new(),
@@ -260,18 +260,67 @@ impl OnlinePlace {
     /// Signed out: your own lists go.
     pub fn signed_out(&mut self) {
         self.lists.retain(|k, _| k.scope != Scope::Mine);
-        if self.scope == Scope::Mine {
-            self.scope = Scope::Curated;
+    }
+
+    /// The keys of the view's online lists, at the settled search.
+    pub fn keys(&self, lists: &[super::inventory_view::OnlineList]) -> Vec<ListKey> {
+        let q = self.settled.trim().to_string();
+        lists.iter().map(|l| ListKey { kind: l.kind, scope: l.scope, q: q.clone(), category: l.category }).collect()
+    }
+
+    /// Ask for the first page of each list not asked yet.
+    pub fn start(&mut self, keys: &[ListKey], account: &CloudAccount, ctx: &egui::Context) {
+        for key in keys {
+            if !self.lists.get(key).is_some_and(|l| l.started || l.loading()) {
+                self.ask(key, account, ctx);
+            }
         }
     }
 
-    fn sort(&self, kind: Kind) -> &'static str {
-        self.sorts.get(&kind).copied().unwrap_or_else(|| online::sorts(kind)[0].0)
+    /// Ask for the next page of each list with more (the end of the list
+    /// came into view).
+    pub fn more(&mut self, keys: &[ListKey], account: &CloudAccount, ctx: &egui::Context) {
+        for key in keys {
+            if self.lists.get(key).is_some_and(|l| l.started && l.error.is_none() && List::more(l)) {
+                self.ask(key, account, ctx);
+            }
+        }
     }
 
-    fn key(&self, kind: Kind) -> ListKey {
-        let mode = if kind == Kind::Fractal { self.mode } else { None };
-        ListKey { kind, scope: self.scope, q: self.settled.trim().to_string(), sort: self.sort(kind), mode }
+    /// Try again: ask for the page each failed list did not get.
+    pub fn retry(&mut self, keys: &[ListKey], account: &CloudAccount, ctx: &egui::Context) {
+        for key in keys {
+            if self.lists.get(key).is_some_and(List::retryable) {
+                self.ask(key, account, ctx);
+            }
+        }
+    }
+
+    /// Where the lists stand.
+    pub fn state(&self, keys: &[ListKey]) -> ListsState {
+        let mut s = ListsState::default();
+        for l in keys.iter().filter_map(|k| self.lists.get(k)) {
+            s.loading |= l.loading();
+            s.more |= l.started && l.error.is_none() && l.more();
+            if s.error.is_none() {
+                s.error = l.error.clone();
+            }
+        }
+        s
+    }
+
+    /// The lists' rows, each with its list's scope.
+    pub fn rows(&self, keys: &[ListKey]) -> Vec<super::inventory_view::OnlineRow<'_>> {
+        keys.iter()
+            .filter_map(|k| self.lists.get(k).map(|l| (k.scope, l)))
+            .flat_map(|(scope, l)| l.rows.iter().map(move |(entry, item)| super::inventory_view::OnlineRow { entry, item, scope }))
+            .collect()
+    }
+
+    /// An online fractal's thumbnail, once it is in (asked for the first
+    /// time it is wanted).
+    pub fn thumbnail(&mut self, ctx: &egui::Context, url: &str, account: &CloudAccount) -> Option<egui::TextureHandle> {
+        self.thumbs.get(ctx, url, account)
     }
 
     /// An online entry and its item, by key, from any list kept.
@@ -309,7 +358,12 @@ impl OnlinePlace {
                             if list.rows.iter().any(|(_, i)| i.id() == item.id()) {
                                 continue;
                             }
-                            if let Some(e) = online::entry(&item, group.clone(), local) {
+                            if let Some(mut e) = online::entry(&item, group.clone(), local) {
+                                // Asked by category: in it, whatever the
+                                // item says (an unsummarised one says none).
+                                if e.category.is_none() {
+                                    e.category = key.category.map(str::to_string);
+                                }
                                 list.rows.push((e, item));
                             }
                         }
@@ -321,7 +375,10 @@ impl OnlinePlace {
             }
             if rematch {
                 for (e, item) in &mut list.rows {
-                    if let Some(fresh) = online::entry(item, group.clone(), local) {
+                    if let Some(mut fresh) = online::entry(item, group.clone(), local) {
+                        if fresh.category.is_none() {
+                            fresh.category = key.category.map(str::to_string);
+                        }
                         *e = fresh;
                     }
                 }
@@ -428,11 +485,11 @@ impl OnlinePlace {
         let api = account.api();
         let words = Browse {
             q: key.q.clone(),
-            sort: Some(key.sort.to_string()),
+            sort: Some(SORT.to_string()),
             kind: online::script_wire(key.kind).map(str::to_string),
             cursor: list.next.clone(),
             per_page: 50,
-            filters: key.mode.map(|m| vec![("render_mode".to_string(), m.to_string())]).unwrap_or_default(),
+            filters: key.category.map(super::inventory_view::fractal_words).unwrap_or_default(),
         };
         let (kind, scope) = (key.kind, key.scope);
         let wake = ctx.clone();
@@ -455,33 +512,8 @@ impl OnlinePlace {
 
     // ------------------------------------------------------------- the top
 
-    /// The scope and the sort, beside the panel's search; then *Open by ID
-    /// or link* (Refresh is the panel's, in its corner).
-    pub fn render_top(&mut self, ui: &mut egui::Ui, family: Family, account: &CloudAccount) {
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.scope, Scope::Curated, t!("catalog.scope_curated")).on_hover_text(t!("catalog.scope_curated_tip"));
-            let mine = ui.add_enabled(account.signed_in, egui::Button::selectable(self.scope == Scope::Mine, t!("catalog.scope_mine")));
-            let mine = if account.signed_in { mine } else { mine.on_disabled_hover_text(t!("catalog.sign_in_for_mine")) };
-            if mine.clicked() {
-                self.scope = Scope::Mine;
-            }
-            if let Some(kind) = kinds(family).first().copied() {
-                let sorts = online::sorts(kind);
-                let current = self.sort(kind);
-                let label = sorts.iter().find(|(w, _)| *w == current).map_or(current.to_string(), |(_, k)| t!(*k).to_string());
-                egui::ComboBox::from_id_salt(("catalog_sort", family)).selected_text(label).show_ui(ui, |ui| {
-                    for (word, key) in sorts {
-                        if ui.selectable_label(current == *word, t!(*key)).clicked() {
-                            for k in kinds(family) {
-                                if online::sorts(k).iter().any(|(w, _)| w == word) {
-                                    self.sorts.insert(k, word);
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        });
+    /// *Open by ID or link*, and what the last request said.
+    pub fn render_open(&mut self, ui: &mut egui::Ui, account: &CloudAccount) {
         ui.horizontal(|ui| {
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.open_text)
@@ -499,15 +531,6 @@ impl OnlinePlace {
                 ui.spinner();
             }
         });
-        if family == Family::Fractals {
-            ui.horizontal_wrapped(|ui| {
-                for (mode, label) in MODES {
-                    if ui.selectable_label(self.mode == *mode, t!(*label)).clicked() {
-                        self.mode = *mode;
-                    }
-                }
-            });
-        }
         if let Some((text, is_error)) = &self.status {
             if *is_error {
                 ui.colored_label(ui.visuals().error_fg_color, text);
@@ -515,135 +538,6 @@ impl OnlinePlace {
                 ui.weak(text);
             }
         }
-    }
-
-    // ------------------------------------------------------------ the list
-
-    /// The family's online lists, a group a kind (only `kind`, when the
-    /// chips chose one): rows, or a fractal grid; the next page asked for
-    /// as the end of a list comes into view. A click selects (a palette
-    /// applies, a fractal loads, as on this device).
-    /// Gives whether a narrow panel's selected row asked for its info.
-    pub fn render_list(&mut self, ui: &mut egui::Ui, family: Family, only: Option<Kind>, selected: &mut Option<EntryKey>, narrow: bool, cx: &mut InventoryContext) -> bool {
-        if self.scope == Scope::Mine && !cx.account.signed_in {
-            ui.weak(t!("catalog.sign_in_for_mine"));
-            return false;
-        }
-        let mut details = false;
-        // Narrow: the selection's way to its info, above the lists.
-        if narrow {
-            if let Some(title) = selected.as_ref().and_then(|k| self.find(k)).map(|(e, _)| e.title.clone()) {
-                ui.horizontal(|ui| {
-                    ui.strong(title);
-                    if ui.small_button("\u{203a}").on_hover_text(t!("catalog.details")).clicked() {
-                        details = true;
-                    }
-                });
-                ui.separator();
-            }
-        }
-        let shown: Vec<Kind> = kinds(family).into_iter().filter(|k| only.is_none_or(|o| o == *k)).collect();
-        let several = shown.len() > 1;
-        let ctx = ui.ctx().clone();
-        for kind in shown {
-            let key = self.key(kind);
-            if !self.lists.get(&key).is_some_and(|l| l.started || l.loading()) {
-                self.ask(&key, &cx.account, &ctx);
-            }
-            if several {
-                let n = self.lists.get(&key).map_or(0, |l| l.rows.len());
-                ui.strong(format!("{} ({n}{})", t!(kind.label_key()), if self.lists.get(&key).is_some_and(List::more) { "+" } else { "" }));
-            }
-            let end_visible = if kind == Kind::Fractal {
-                self.render_grid(ui, &key, selected, cx)
-            } else {
-                self.render_rows(ui, &key, selected, cx)
-            };
-            let list = self.lists.get(&key);
-            if list.is_some_and(List::loading) {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.weak(t!("catalog.loading"));
-                });
-            } else if let Some(err) = list.and_then(|l| l.error.clone()) {
-                ui.colored_label(ui.visuals().error_fg_color, err);
-                if ui.button(t!("catalog.retry")).clicked() {
-                    self.ask(&key, &cx.account, &ctx);
-                }
-            } else if list.is_some_and(|l| l.started && l.rows.is_empty()) {
-                ui.weak(t!("catalog.nothing_online"));
-            } else if end_visible && list.is_some_and(List::more) {
-                self.ask(&key, &cx.account, &ctx);
-            }
-            ui.add_space(6.0);
-        }
-        self.render_confirm_delete(&ctx, &cx.account);
-        details
-    }
-
-    /// A list's rows; whether its last row is on screen.
-    fn render_rows(&mut self, ui: &mut egui::Ui, key: &ListKey, selected: &mut Option<EntryKey>, cx: &mut InventoryContext) -> bool {
-        let Some(list) = self.lists.get(key) else { return false };
-        let mut clicked = None;
-        let mut end_visible = list.rows.is_empty();
-        for (i, (e, item)) in list.rows.iter().enumerate() {
-            let r = if let Item::Palette(p) = item {
-                palette_row(ui, e, p, selected.as_ref() == Some(&e.key))
-            } else {
-                let mut label = super::inventory::row_label(e);
-                if let Some(info) = &e.online {
-                    if !info.owner.is_empty() {
-                        label = format!("{label}  · {}", info.owner);
-                    }
-                }
-                ui.selectable_label(selected.as_ref() == Some(&e.key), label)
-            };
-            if r.clicked() {
-                clicked = Some((e.key.clone(), item.clone()));
-            }
-            if i + 1 == list.rows.len() {
-                end_visible = ui.is_rect_visible(r.rect);
-            }
-        }
-        if let Some((k, item)) = clicked {
-            *selected = Some(k);
-            if let Item::Palette(p) = &item {
-                super::inventory::apply_palette(cx.config_manager, crate::api::sync::palette_from_item(p));
-            }
-        }
-        end_visible
-    }
-
-    /// Fractals as a grid of the server's thumbnails; whether its last cell
-    /// is on screen. A click loads one.
-    fn render_grid(&mut self, ui: &mut egui::Ui, key: &ListKey, selected: &mut Option<EntryKey>, cx: &mut InventoryContext) -> bool {
-        let Some(list) = self.lists.get(key) else { return false };
-        let rows: Vec<(Entry, Option<String>, String)> = list
-            .rows
-            .iter()
-            .map(|(e, _)| (e.clone(), e.online.as_ref().and_then(|o| o.thumbnail_url.clone()), e.online.as_ref().map_or(String::new(), |o| o.id.clone())))
-            .collect();
-        let mut end_visible = rows.is_empty();
-        let mut clicked = None;
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            for (i, (e, thumb, id)) in rows.iter().enumerate() {
-                let texture = thumb.as_ref().and_then(|u| self.thumbs.get(ui.ctx(), u, &cx.account));
-                let is_selected = selected.as_ref() == Some(&e.key);
-                let r = grid_cell(ui, e, texture.as_ref(), is_selected, thumb.is_some());
-                if r.clicked() {
-                    clicked = Some((e.key.clone(), id.clone()));
-                }
-                if i + 1 == rows.len() {
-                    end_visible = ui.is_rect_visible(r.rect);
-                }
-            }
-        });
-        if let Some((k, id)) = clicked {
-            *selected = Some(k);
-            self.load_flame(&id, &cx.account, ui.ctx());
-        }
-        end_visible
     }
 
     /// *Open by ID or link*: read what was typed, find it on the server,
@@ -705,7 +599,7 @@ impl OnlinePlace {
         self.open_job = Some(job);
     }
 
-    fn load_flame(&mut self, id: &str, account: &CloudAccount, ctx: &egui::Context) {
+    pub fn load_flame(&mut self, id: &str, account: &CloudAccount, ctx: &egui::Context) {
         let api = account.api();
         let flame_id = id.to_string();
         let wake = ctx.clone();
@@ -905,7 +799,7 @@ impl OnlinePlace {
     }
 
     /// The delete's confirmation, and the request once confirmed.
-    fn render_confirm_delete(&mut self, ctx: &egui::Context, account: &CloudAccount) {
+    pub fn render_confirm_delete(&mut self, ctx: &egui::Context, account: &CloudAccount) {
         let Some((key, id, name)) = self.confirm_delete.clone() else { return };
         let mut open = true;
         let mut decided = None;
@@ -955,33 +849,11 @@ fn visibility_label(v: &str) -> String {
     }
 }
 
-/// An online palette: its name and owner, and its gradient at the right.
-fn palette_row(ui: &mut egui::Ui, e: &Entry, p: &crate::api::types::PaletteItem, selected: bool) -> egui::Response {
-    let palette = crate::api::sync::palette_from_item(p);
-    let mut title = e.title.clone();
-    if let Some(owner) = e.online.as_ref().map(|o| o.owner.as_str()).filter(|o| !o.is_empty()) {
-        title = format!("{title}  · {owner}");
-    }
-    super::inventory::palette_row(ui, &p.content_hash, &title, &palette, selected)
-}
-
-/// A fractal's cell: its thumbnail (a placeholder until it is in) and its
-/// name under it.
-pub(super) fn grid_cell(ui: &mut egui::Ui, e: &Entry, texture: Option<&egui::TextureHandle>, selected: bool, has_thumb: bool) -> egui::Response {
-    grid_cell_lazy(ui, e, selected, || (texture.cloned(), has_thumb))
-}
-
-/// A cell whose picture is asked for only once it is laid out and on
-/// screen (`picture` gives the texture, if it is in, and whether one is
-/// coming): its own rect decides, not a guess from the cursor -- in a
-/// wrapped row the cursor is not where the cell lands, and a cell
-/// scrolled half out of view was taken for one off screen.
-pub(super) fn grid_cell_lazy(ui: &mut egui::Ui, e: &Entry, selected: bool, picture: impl FnOnce() -> (Option<egui::TextureHandle>, bool)) -> egui::Response {
-    grid_cell_sized(ui, e, &e.title, selected, true, CELL, picture)
-}
-
-/// [`grid_cell_lazy`] at a side of `cell`, captioned `label`; not
-/// `enabled`, greyed (a picker's cell it cannot pick, or not installed).
+/// A cell at a side of `cell`, captioned `label`, whose picture is asked
+/// for only once it is laid out and on screen (`picture` gives the
+/// texture, if it is in, and whether one is coming): its own rect decides,
+/// not a guess from the cursor. Not `enabled`, greyed (a picker's cell it
+/// cannot pick, or not installed).
 pub(super) fn grid_cell_sized(
     ui: &mut egui::Ui,
     e: &Entry,
@@ -1177,7 +1049,7 @@ mod tests {
         let ctx = egui::Context::default();
         frame(&ctx, 0.0);
         let mut place = OnlinePlace::new();
-        let key = ListKey { kind: Kind::Coloring, scope: Scope::Public, q: String::new(), sort: "recent", mode: None };
+        let key = ListKey { kind: Kind::Coloring, scope: Scope::Public, q: String::new(), category: None };
         let page = (vec![script("s1"), script("s1"), script("s2")], Some("c2".to_string()));
         place.lists.insert(key.clone(), List { job: Some(job::spawn(async move { Ok(page) }, || {})), ..Default::default() });
         let none = Arc::new(Vec::new());
@@ -1206,7 +1078,7 @@ mod tests {
         let ctx = egui::Context::default();
         frame(&ctx, 0.0);
         let mut place = OnlinePlace::new();
-        let key = |kind| ListKey { kind, scope: Scope::Curated, q: String::new(), sort: "recent", mode: None };
+        let key = |kind| ListKey { kind, scope: Scope::Curated, q: String::new(), category: None };
         let (failed, partial, fine) = (key(Kind::Coloring), key(Kind::Formula), key(Kind::Fractal));
         let down = || job::spawn(async move { Err(crate::resources::FetchError::Network("down".into())) }, || {});
         place.lists.insert(failed.clone(), List { job: Some(down()), ..Default::default() });
@@ -1235,13 +1107,13 @@ mod tests {
         let mut place = OnlinePlace::new();
         frame(&ctx, 10.0);
         place.update(&ctx, "fire", &local, &mut InventoryResponse::default());
-        assert_eq!(place.key(Kind::Fractal).q, "", "not yet");
+        assert_eq!(place.keys(&[super::super::inventory_view::OnlineList { kind: Kind::Fractal, scope: Scope::Curated, category: None }])[0].q, "", "not yet");
         frame(&ctx, 10.1);
         place.update(&ctx, "fire", &local, &mut InventoryResponse::default());
-        assert_eq!(place.key(Kind::Fractal).q, "", "still typing, as far as it knows");
+        assert_eq!(place.keys(&[super::super::inventory_view::OnlineList { kind: Kind::Fractal, scope: Scope::Curated, category: None }])[0].q, "", "still typing, as far as it knows");
         frame(&ctx, 10.5);
         place.update(&ctx, "fire", &local, &mut InventoryResponse::default());
-        assert_eq!(place.key(Kind::Fractal).q, "fire");
+        assert_eq!(place.keys(&[super::super::inventory_view::OnlineList { kind: Kind::Fractal, scope: Scope::Curated, category: None }])[0].q, "fire");
     }
 
     fn flame(render_mode: crate::api::types::ApiRenderMode, transform_count: i32, variations: &[&str]) -> crate::api::types::FlameListItem {
@@ -1272,17 +1144,15 @@ mod tests {
         assert!(fractal_line(&flame(M::ThreeD, 2, &["a", "b", "c", "d"])).ends_with("| 2T | a, b, +2"));
     }
 
-    /// The mode filter asks the server by its word, for fractals only;
-    /// simulations are searchable (the server's render_mode knows them
-    /// since its migration 102).
+    /// A fractal category asks the server by the catalog's words (D1),
+    /// every list in name order (D5).
     #[test]
-    fn the_mode_filter_is_the_servers_word() {
-        let mut place = OnlinePlace::new();
-        place.mode = Some("simulation");
-        assert_eq!(place.key(Kind::Fractal).mode, Some("simulation"));
-        assert_eq!(place.key(Kind::Palette).mode, None, "palettes have no mode");
-        let words: Vec<_> = MODES.iter().filter_map(|(m, _)| *m).collect();
-        assert_eq!(words, ["2d", "3d", "escape", "simulation"]);
+    fn a_category_asks_by_engine_and_dimension() {
+        let place = OnlinePlace::new();
+        let key = place.keys(&[super::super::inventory_view::OnlineList { kind: Kind::Fractal, scope: Scope::Curated, category: Some("flame3d") }]).remove(0);
+        assert_eq!(key.category, Some("flame3d"));
+        assert_eq!(super::super::inventory_view::fractal_words("flame3d"), vec![("engine".to_string(), "flame".to_string()), ("dimension".to_string(), "3".to_string())]);
+        assert_eq!(SORT, "name");
     }
 
     /// Each family lists online what the server stores of its kinds.

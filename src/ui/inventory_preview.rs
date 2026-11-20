@@ -44,6 +44,17 @@ pub struct Preview {
     /// One config; an effect's two (before, after).
     pub configs: Vec<FractalConfig>,
     pub key: String,
+    /// The key is the picture's own key in the cache: a preset's, as the
+    /// presets' gallery cached it (`ThumbnailCache::config_hash`), so the
+    /// pictures made before are found.
+    pub raw: bool,
+}
+
+impl Preview {
+    /// Picture `i`'s key in the thumbnail cache.
+    fn image(&self, i: usize) -> String {
+        if self.raw { self.key.clone() } else { image_key(&self.key, i) }
+    }
 }
 
 /// How far a simulation's preview runs.
@@ -59,7 +70,7 @@ const COLOUR_ZOOM: f32 = 1.8;
 
 /// The families whose entries have previews (the grid's toggle).
 pub fn has_previews(family: Family) -> bool {
-    matches!(family, Family::Variations | Family::Effects | Family::Escape | Family::Simulation | Family::Scripts)
+    matches!(family, Family::Fractals | Family::Variations | Family::Effects | Family::Escape | Family::Simulation | Family::Scripts)
 }
 
 /// The reference fractal an effect is shown on and a modifier modifies:
@@ -242,13 +253,19 @@ fn configs(e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Pa
 
 /// The preview of `e`, or `None` for an entry with none.
 pub fn preview(e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Palette]) -> Option<Preview> {
+    // A preset is its own picture.
+    if let EntryKey::Preset(name) = &e.key {
+        let config = crate::inventory::preset(name)?;
+        let key = crate::storage::thumbnail_cache::ThumbnailCache::config_hash(&config);
+        return Some(Preview { configs: vec![config], key, raw: true });
+    }
     let configs = configs(e, ctx, palettes)?;
     let mut seed = String::from("catalog-preview-1");
     for c in &configs {
         seed.push_str(&crate::storage::thumbnail_cache::ThumbnailCache::config_hash(c));
     }
     seed.push_str(e.version.as_deref().unwrap_or(""));
-    Some(Preview { configs, key: hash16(&seed) })
+    Some(Preview { configs, key: hash16(&seed), raw: false })
 }
 
 fn hash16(s: &str) -> String {
@@ -376,7 +393,7 @@ impl Previews {
         }
         // Made before (this run or another): from the cache.
         let mut cache = crate::storage::thumbnail_cache::shared_thumbnail_cache();
-        let cached: Option<Vec<image::RgbaImage>> = (0..p.configs.len()).map(|i| cache.load(&image_key(&p.key, i))).collect();
+        let cached: Option<Vec<image::RgbaImage>> = (0..p.configs.len()).map(|i| cache.load(&p.image(i))).collect();
         drop(cache);
         if let Some(images) = cached {
             let t = upload(ctx, &p.key, &images);
@@ -402,7 +419,7 @@ impl Previews {
         let images: Vec<image::RgbaImage> = p.configs.iter().map(&render).collect();
         let mut cache = crate::storage::thumbnail_cache::shared_thumbnail_cache();
         for (i, img) in images.iter().enumerate() {
-            if let Err(e) = cache.save(&image_key(&p.key, i), img) {
+            if let Err(e) = cache.save(&p.image(i), img) {
                 log::info!("catalog preview not cached: {e}");
             }
         }

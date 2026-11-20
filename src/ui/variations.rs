@@ -89,7 +89,7 @@ pub fn render_variations_panel(
 
     // What the server has that this client does not, its updates and
     // Clear Cache: the Catalog's.
-    super::inventory::moved_here(ui, &t!("variations_panel.moved_to_catalog"), crate::inventory::Family::Variations, super::inventory::Place::Online);
+    super::inventory::moved_here(ui, &t!("variations_panel.moved_to_catalog"), crate::inventory::Family::Variations, super::inventory::Source::Online);
 
     ui.add_space(4.0);
 

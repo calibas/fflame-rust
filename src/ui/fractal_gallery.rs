@@ -588,7 +588,7 @@ impl Default for FractalConfigGallery {
 /// coloring, a simulation by its model and colouring. The flame columns
 /// on the other two read "1 transforms, ..., linear" -- the default
 /// flame they carry and never render.
-fn list_summary(config: &FractalConfig) -> String {
+pub(super) fn list_summary(config: &FractalConfig) -> String {
     use crate::scene::transforms::RenderMode;
     let render_mode = t!(match config.render_mode {
         RenderMode::TwoD => "fractal_gallery.render_mode_2d",
@@ -619,7 +619,7 @@ fn list_summary(config: &FractalConfig) -> String {
 }
 
 /// The list view's expanded details, by engine as [`list_summary`] is.
-fn list_details(config: &FractalConfig) -> Vec<String> {
+pub(super) fn list_details(config: &FractalConfig) -> Vec<String> {
     use crate::scene::transforms::RenderMode;
     match config.render_mode {
         RenderMode::TwoD | RenderMode::ThreeD => vec![

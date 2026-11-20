@@ -237,7 +237,7 @@ impl FractalBrowserPanel {
 
             // The online fractals moved to the Catalog.
             if ui.button(t!("browser.online_in_catalog")).on_hover_text(t!("browser.online_in_catalog_tip")).clicked() {
-                super::inventory::request_open(crate::inventory::Family::Fractals, super::inventory::Place::Online);
+                super::inventory::request_open(crate::inventory::Family::Fractals, super::inventory::Source::Online);
             }
         });
 

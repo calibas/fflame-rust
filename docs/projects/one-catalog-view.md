@@ -1,8 +1,9 @@
 # One Catalog view
 
 **Status:** planned 2026-11-20; every question decided the same day
-(*Decisions*, below); nothing built. Branch: a new one, `one-catalog`,
-from `main` once `curated-content` is merged.
+(*Decisions*, below). Branch `one-catalog`. Steps 1-3 and 6 built
+2026-11-20 (one shell for every catalog, see *Order of work*); steps 4
+(the transform selector) and 5 (simulation previews) to do.
 
 ## Why
 
@@ -70,7 +71,10 @@ merged:
   pages arrive.
 - **Grid** cells use the device's preview (rendered) or the server's
   thumbnail (online), at the Size slider's side. **List** rows are the
-  name and a small preview, never expandable.
+  name (a palette's: and its gradient), never expandable; the preview is
+  the pane's. (Built so: a preview in every row would render one for
+  each of 647 variations as the list scrolls, where the list was the
+  cheap view.)
 
 ### Clicking and hovering (every catalog)
 
@@ -132,13 +136,16 @@ in this plan.
    (device + online, duplicates merged, group by, paging), click and hover,
    the pane absorbing the expanded details. Fractals first, end to end;
    the presets' `FractalConfigGallery` no longer drawn in the Catalog
-   (the Fractal Browser keeps it).
+   (the Fractal Browser keeps it). **Built 2026-11-20** -- for every
+   catalog at once: the filters and the list are generic
+   (`ui::inventory_view`), so steps 2 and 3 came with it.
 2. **Escape-time, Simulation, Effects, Scripts** on the same shell.
-3. **Palettes** (Group by, pack checkboxes).
+   **Built** (step 1).
+3. **Palettes** (Group by, pack checkboxes). **Built** (step 1).
 4. **Variations** and the transform selector.
 5. **Simulation previews.**
 6. The narrow layout (D7), tests, docs (CATALOG.md rewritten for
-   the new layout, UI.md).
+   the new layout, UI.md). **Built** with step 1.
 
 Each step is committed on its own and left working; the old views are
 deleted as each catalog moves over, not kept beside the new one.

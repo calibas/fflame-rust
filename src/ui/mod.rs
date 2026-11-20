@@ -15,6 +15,7 @@ pub mod script_run;
 mod inventory_online;
 mod trust_window;
 mod inventory_preview;
+mod inventory_view;
 pub mod picker;
 pub mod fractal_gallery;
 mod help;
