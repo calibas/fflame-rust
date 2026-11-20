@@ -155,6 +155,29 @@ const EFFECT_CATEGORIES: [(&str, &str); 2] = [("color", "inventory.effect_catego
 
 use crate::inventory::preset_category_key as preset_key;
 
+/// Variations this flame uses that were downloaded.
+///
+/// "Is this flame running third-party code" is the question §1 of the
+/// shared-resources plan asks, and the answer must not depend on
+/// scrolling the list looking for downloads: the Variations catalog says
+/// so above its list. Downloads only, as the banner says: a Rhai
+/// variation of the user's (`Provenance::Local`) is theirs, and its key
+/// would read as noise (rhai-plugins.md, P3).
+///
+/// A name the registry does not know is NOT reported here — it is
+/// missing rather than untrusted, and the fetch path handles it.
+pub fn downloaded_variations_in_use(
+    flame: &crate::scene::transforms::Flame,
+    registry: &crate::variations::VariationRegistry,
+) -> Vec<String> {
+    flame
+        .active_variation_names_ordered(registry)
+        .into_iter()
+        .filter(|name| registry.get(name).is_some_and(|v| v.provenance.is_cached_download()))
+        .collect()
+}
+
+
 /// The API's catalog words for a fractal category (D1:
 /// api-catalog-spec.md's `engine` and `dimension`).
 pub fn fractal_words(key: &str) -> Vec<(String, String)> {
@@ -558,5 +581,65 @@ mod tests {
         assert!(!presets.is_empty() && presets.iter().all(|e| category_of(e).is_some()), "every preset has its category");
         let variations = entries.iter().filter(|e| e.kind == Kind::Variation && matches!(e.key, EntryKey::Registered(..))).collect::<Vec<_>>();
         assert!(variations.iter().all(|e| category_of(e).is_some()), "every variation has its category");
+    }
+
+    use crate::scene::transforms::{Flame, Transform};
+
+    fn api_download(name: &str) -> crate::api::types::VariationDownload {
+        crate::api::types::VariationDownload {
+            id: name.into(), name: name.into(), display_name: name.into(),
+            description: None, category: "advanced_2d".into(), version: 3,
+            phase: crate::api::types::ApiVariationPhase::Normal,
+            needs_rng: false, needs_transform: false, writes_color: false,
+            parameters: Vec::new(),
+            shader_2d: Some("fn variation_x(p: vec2<f32>) -> vec2<f32> { return p; }".into()),
+            shader_3d: None, init_param_count: 0, shader_init: None,
+            features: Vec::new(), state_count: 0, shader_state_init: None,
+            aliases: Vec::new(), plot_emits: 0, authors: Vec::new(),
+            description_plain: None,
+        }
+    }
+
+    /// A flame using a downloaded variation must say so; one using only
+    /// built-ins must not cry wolf.
+    #[test]
+    fn a_flame_reports_the_third_party_code_it_runs() {
+        let mut registry = crate::variations::VariationRegistry::new();
+        let _ = registry.register_from_api(&api_download("borrowed_thing"), crate::provenance::Provenance::Api { version: 3 });
+
+        // Built-ins only — nothing to warn about.
+        let mut flame = Flame::default();
+        let mut t = Transform::new();
+        t.set_variation("linear", 1.0);
+        flame.transforms.push(t);
+        assert!(downloaded_variations_in_use(&flame, &registry).is_empty());
+
+        // Add a downloaded one.
+        let mut t2 = Transform::new();
+        t2.set_variation("borrowed_thing", 1.0);
+        flame.transforms.push(t2);
+        assert_eq!(
+            downloaded_variations_in_use(&flame, &registry),
+            vec!["borrowed_thing".to_string()]
+        );
+
+        // One of the user's own Rhai variations is not a download.
+        let _ = registry.register_from_api(&api_download("mine_in_rhai"), crate::provenance::Provenance::Local);
+        let mut t3 = Transform::new();
+        t3.set_variation("mine_in_rhai", 1.0);
+        flame.transforms.push(t3);
+        assert_eq!(downloaded_variations_in_use(&flame, &registry), vec!["borrowed_thing".to_string()]);
+    }
+
+    /// An unknown name is missing, not untrusted — the fetch path deals
+    /// with it, and reporting it as third-party code would be a lie.
+    #[test]
+    fn an_unknown_variation_is_not_reported_as_downloaded() {
+        let registry = crate::variations::VariationRegistry::new();
+        let mut flame = Flame::default();
+        let mut t = Transform::new();
+        t.set_variation("never_heard_of_it", 1.0);
+        flame.transforms.push(t);
+        assert!(downloaded_variations_in_use(&flame, &registry).is_empty());
     }
 }

@@ -123,22 +123,14 @@ pub fn download_failure(e: &Entry) -> Option<String> {
 
 /// A panel asked to show the Catalog at a catalog and source, with an
 /// entry selected.
-static OPEN: Mutex<Option<(Option<Family>, Source, Option<EntryKey>)>> = Mutex::new(None);
+static OPEN: Mutex<Option<(Family, Source, Option<EntryKey>)>> = Mutex::new(None);
 
 /// Show the Catalog at `family`, Source `source` (opening its panel): the
 /// Catalog menu's rows, and what a panel whose online section moved into
 /// the Catalog offers instead.
 pub fn request_open(family: Family, source: Source) {
     if let Ok(mut o) = OPEN.lock() {
-        *o = Some((Some(family), source, None));
-    }
-}
-
-/// Show the Catalog at Source `source`, on the catalog it was last on
-/// (the Catalog menu's Online...).
-pub fn request_open_place(source: Source) {
-    if let Ok(mut o) = OPEN.lock() {
-        *o = Some((None, source, None));
+        *o = Some((family, source, None));
     }
 }
 
@@ -146,7 +138,7 @@ pub fn request_open_place(source: Source) {
 /// Catalog).
 pub fn request_open_select(family: Family, key: EntryKey) {
     if let Ok(mut o) = OPEN.lock() {
-        *o = Some((Some(family), Source::All, Some(key)));
+        *o = Some((family, Source::All, Some(key)));
     }
 }
 
@@ -165,23 +157,19 @@ pub fn picker_downloads() -> bool {
 }
 
 /// The open asked for since the last call.
-pub fn take_open() -> Option<(Option<Family>, Source, Option<EntryKey>)> {
+pub fn take_open() -> Option<(Family, Source, Option<EntryKey>)> {
     OPEN.lock().ok()?.take()
 }
 
-/// The Catalog menu's rows: a family each, then Online... (the desktop
-/// bar's menu and the compact menu's submenu draw the same rows).
+/// The Catalog menu's rows: a family each (the desktop bar's menu and the
+/// compact menu's submenu draw the same rows). Online or on this device
+/// is the panel's Source filter.
 pub fn catalog_menu_rows(ui: &mut egui::Ui) {
     for family in Family::ALL {
         if ui.button(t!(family.label_key())).clicked() {
             request_open(family, Source::All);
             ui.close();
         }
-    }
-    ui.separator();
-    if ui.button(t!("menu.catalog_online")).on_hover_text(t!("catalog.place_online_tip")).clicked() {
-        request_open_place(Source::Online);
-        ui.close();
     }
 }
 
@@ -397,10 +385,8 @@ impl InventoryPanel {
     }
 
     /// Show `family` (when given) at `source`, with `select` selected.
-    pub fn open_at(&mut self, family: Option<Family>, source: Source, select: Option<EntryKey>) {
-        if let Some(family) = family {
-            self.open_on(family);
-        }
+    pub fn open_at(&mut self, family: Family, source: Source, select: Option<EntryKey>) {
+        self.open_on(family);
         self.filters.source = source;
         if select.is_some() {
             self.selected = select;
@@ -585,6 +571,9 @@ impl InventoryPanel {
         if self.filters.source != Source::Device {
             self.online.render_open(ui, &cx.account);
         }
+        if family == Family::Variations {
+            flame_downloads_banner(ui, &cx.config_manager.active_config().flame);
+        }
         if matches!(family, Family::Variations | Family::Effects) {
             self.render_downloads_bar(ui, out);
         }
@@ -595,7 +584,8 @@ impl InventoryPanel {
 
     /// Variations and effects on this device: the downloads the server
     /// has a newer version of (a chip, and Update all), and Clear Cache
-    /// (the Variations and Effects panels' catalog sections, moved here).
+    /// (the Effects panel's catalog section and the retired Variations
+    /// panel's, moved here).
     fn render_downloads_bar(&mut self, ui: &mut egui::Ui, out: &mut InventoryResponse) {
         let family = self.family;
         let stale: Vec<Entry> = self.entries.iter().filter(|e| e.kind.family() == family && e.update.is_some()).cloned().collect();
@@ -889,6 +879,9 @@ impl InventoryPanel {
                 }
             }
         }
+        if let EntryKey::Registered(Kind::Variation, name) = &e.key {
+            variation_details(ui, name);
+        }
         if let Some(v) = &e.update {
             ui.label(egui::RichText::new(t!("catalog.update_available", version = v.clone())).strong());
         }
@@ -1097,6 +1090,44 @@ pub(crate) fn entry_summary(ui: &mut egui::Ui, e: &Entry, palettes: Option<&Pale
         ui.weak(t!("catalog.no_description"));
     } else {
         super::markdown::show(ui, &e.description);
+    }
+}
+
+/// The variations this flame uses that were downloaded, above the
+/// Variations catalog's list: is the flame running code that did not
+/// ship with the app (`inventory_view::downloaded_variations_in_use`).
+fn flame_downloads_banner(ui: &mut egui::Ui, flame: &crate::scene::transforms::Flame) {
+    let names = super::inventory_view::downloaded_variations_in_use(flame, &crate::variations::global_registry());
+    if names.is_empty() {
+        return;
+    }
+    egui::Frame::group(ui.style())
+        .fill(ui.visuals().warn_fg_color.linear_multiply(0.06))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(t!("catalog.flame_uses_downloaded", count = names.len(), names = names.join(", "))).strong());
+        })
+        .response
+        .on_hover_text(t!("catalog.flame_uses_downloaded_tip"));
+}
+
+/// A registered variation's particulars: a built-in's name (a Rhai
+/// variation's is a key, nothing to read), whether it has a 3D body (one
+/// without is dropped from a 3D flame, invisibly), and its parameters at
+/// their defaults.
+fn variation_details(ui: &mut egui::Ui, name: &str) {
+    let registry = crate::variations::global_registry();
+    let Some(v) = registry.get(name) else { return };
+    if !crate::scripted::is_key(&v.name) {
+        ui.weak(t!("catalog.variation_name", name = v.name.as_str()));
+    }
+    if v.wgsl_source_3d.is_none() {
+        ui.colored_label(ui.visuals().warn_fg_color, t!("catalog.two_d_only")).on_hover_text(t!("catalog.two_d_only_tip"));
+    }
+    if !v.parameters.is_empty() {
+        ui.label(t!("catalog.parameters"));
+        for p in &v.parameters {
+            ui.weak(format!("  {} = {}", p.label, p.slot_default()));
+        }
     }
 }
 

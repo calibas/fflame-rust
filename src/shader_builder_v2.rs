@@ -1763,7 +1763,7 @@ impl ShaderBuilder {
                                 "Variation '{name}' has no 3D shader and is being \
                                  dropped from this 3D flame — it will contribute \
                                  nothing. (2D-only variations are marked in the \
-                                 Variations panel.)"
+                                 Catalog.)"
                             );
                         }
                         info.wgsl_source_3d.as_deref()

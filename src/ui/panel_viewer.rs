@@ -269,10 +269,6 @@ pub struct PanelContext<'a> {
     /// Set by the View panel's fly-mode toggle button. Consumed by App.
     pub fly_mode_toggle_requested: &'a mut bool,
     pub flame: &'a mut crate::scene::transforms::Flame,
-    /// Last-fetched server variation catalog, if one has ever been
-    /// fetched. `None` offline-and-never-fetched; the Variations panel
-    /// simply omits its catalog section rather than showing an error.
-    pub variation_catalog: Option<&'a crate::storage::variation_catalog::CachedCatalog>,
 
     // Libraries
     pub palette_library: &'a mut crate::scene::palette::PaletteLibrary,
@@ -773,13 +769,6 @@ impl<'a> PanelViewer<'a> {
             }
             PanelType::SaveOnlineDialog => {
                 self.render_save_online_dialog(ui);
-            }
-            PanelType::Variations => {
-                super::variations::render_variations_panel(
-                    ui,
-                    self.context.flame,
-                    self.context.variation_catalog,
-                );
             }
             PanelType::Escape => {
                 super::escape_panel::render_escape_content(

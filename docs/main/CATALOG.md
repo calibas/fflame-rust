@@ -8,7 +8,9 @@ Fractal Browser's Presets tab held; its list is also every picker's
 (*The picker*, below), and it lists what the server holds beside what the
 device holds, in one list (*Online*, below): the Fractal Browser's Online
 tab, Cloud Palettes, the Scripts panel's public scripts and the
-Variations and Effects panels' catalog sections moved there. Every
+Variations and Effects panels' catalog sections moved there (the
+Variations panel itself is retired: the Variations catalog lists the
+registry). Every
 catalog is drawn by the same view (*The panel*;
 [one-catalog-view.md](../projects/one-catalog-view.md)). It manages your own resources -- Rhai
 files, palettes, online fractals -- and runs scripts (*Your own
@@ -43,8 +45,8 @@ widget), [VARIATIONS.md](VARIATIONS.md), [ESCAPE.md](ESCAPE.md),
 ## Opening it
 
 - **The Catalog menu**, in the menu bar after Rendering (and the compact
-  menu's Catalog submenu): a row a catalog opens it there (Source All);
-  **Online...** opens it at Source Online, on the catalog it was on.
+  menu's Catalog submenu): a row a catalog opens it there (Source All). Online or on this device
+  is the panel's Source filter.
 - The Colors panel's **Browse Palettes** and the Palette Editor's
   **Browse Palettes in the Catalog** open it on Palettes.
 - **File ▸ From Preset Library** opens it on Fractals.
@@ -195,7 +197,7 @@ functions:
 |---|---|
 | Palette | the config's palette, an editable copy (`ConfigPath::Palette`) |
 | Fractal | loads it (`load_config_with_undo`, as the Fractal Browser did) |
-| Variation | **Add to Transform** adds it at weight 1 to the transform the pane's selector names -- the flame's Normal, Linked and Final transforms in one list, the Triangle Editor's own selection (`transforms::transform_selector`, `editing_transform`), so picking one in either picks it in both -- its source carried for a Rhai one (`transforms::add_variation`) |
+| Variation | The pane gives a built-in's name, marks one with no 3D body **2D only** (a 3D flame drops it) and lists its parameters at their defaults; above the list, a banner names the variations the current flame uses that were downloaded (`inventory_view::downloaded_variations_in_use`). **Add to Transform** adds it at weight 1 to the transform the pane's selector names -- the flame's Normal, Linked and Final transforms in one list, the Triangle Editor's own selection (`transforms::transform_selector`, `editing_transform`), so picking one in either picks it in both -- its source carried for a Rhai one (`transforms::add_variation`) |
 | Effect | adds it at the end of its chain, a file's source carried (`effects_panel::add_effect`) |
 | Formula, Field, Solid | `escape_panel::choose_formula` / `choose_field` / `choose_solid`: the default view, entering Escape |
 | Coloring | `escape_panel::pick_coloring`: what a fresh pick sets |
@@ -374,7 +376,7 @@ effect, the fetch's timeout) is asked for no more: its info pane says why
 
 **Where the old sections went**: each panel says so and shows the
 Catalog there (`inventory::request_open`, drained once a frame): the
-Variations and Effects panels (their online sections), the Fractal
+Effects panel (its online section), the Fractal
 Browser (**Online...**), the Scripts panel (its public scripts and
 Published by you; its Publish, Update, Unpublish and conflicts stay
 until phase 4).

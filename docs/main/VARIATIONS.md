@@ -108,8 +108,8 @@ variations, does.
   `.fflame` deserialisation both canonicalise, parameter keys included.
 
 **Ordering for the UI.** Iterate `names()`, `all()` or
-`by_category(c)`, never the internal `HashMap`. The Variations panel
-and the Transforms panel's picker walk the categories in a fixed order
+`by_category(c)`, never the internal `HashMap`. The Transforms panel's
+picker walks the categories in a fixed order
 and list each one with `by_category`, which keeps registration order.
 
 **Removal.** `clear_api()` removes only `Api` variations — built-ins
@@ -859,7 +859,7 @@ function takes the point, and the ids when it has parameters (as
     key; one whose carried source did not compile by that source's
     title, `custom::title_of`): the Transforms panel and its collapsed
     summary, Undo History, animation targets and the track editor, the
-    Reset Orbits tooltip, the Variations panel, the Random Generator (one
+    Reset Orbits tooltip, the Random Generator (one
     version of each), the gallery, the browser (a key it does not know
     as "a Rhai variation"), the Rhai Editor's status, and the Flame
     Attractor's and Focused Rendering's refusals

@@ -536,7 +536,7 @@ is **registered first and cached second** (`register_from_api` answers
 whether it took it), so a payload this build refuses -- a built-in's
 name, a custom variation's, a missing shader -- is never cached; then
 the renderer reloads the config so the shader includes them. Failures
-and timeouts are notified. Updating from the Variations panel is the
+and timeouts are notified. Updating from the Catalog is the
 same fetch again; names held by a built-in or the user's own are
 filtered out first. A newer version is told by `version`, which the
 API's sync moves whenever a variation's content hash does
