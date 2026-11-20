@@ -180,6 +180,21 @@ pub enum EntryKey {
     Online(Kind, String),
 }
 
+/// A fractal category's key, as an entry carries it ([`Entry::category`];
+/// the Catalog's Category filter, docs/archive/projects/one-catalog-view.md).
+pub fn preset_category_key(c: crate::scene::presets::PresetCategory) -> &'static str {
+    use crate::scene::presets::PresetCategory as P;
+    match c {
+        P::Flame2d => "flame2d",
+        P::Flame3d => "flame3d",
+        P::Escape2d => "escape2d",
+        P::Escape3d => "escape3d",
+        P::Simulation => "simulation",
+    }
+}
+
+pub use sources::variation_category_key;
+
 /// The heading an entry is listed under, and where that heading sorts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Group {
@@ -209,8 +224,10 @@ pub struct Entry {
     /// (a variation or an effect in its cached catalog): it is listed to
     /// be downloaded, and used once it is.
     pub installed: bool,
-    /// What the server's catalog says of something not installed: an
-    /// effect's stage (`color`, `density`), a variation's category.
+    /// Its category, for the Catalog's Category filter: a fractal's
+    /// ([`preset_category_key`]), a variation's (`Basic2D`, ...), an
+    /// effect's stage (`color`, `density`) -- the server's word for
+    /// something not installed. `None` where the kind is the category.
     pub category: Option<String>,
     /// A download the server has a newer version of (`v4`): its Update.
     pub update: Option<String>,

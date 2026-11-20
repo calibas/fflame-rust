@@ -61,8 +61,6 @@ pub enum PanelType {
     LoginDialog,
     /// Save Online dialog (name input before cloud save)
     SaveOnlineDialog,
-    /// Variations panel (browse all registered variations)
-    Variations,
     /// Subflames panel (switch which flame the editor operates on)
     Subflames,
     /// Escape-time fractal editing surface (formula, view, coloring)
@@ -110,7 +108,6 @@ impl std::fmt::Display for PanelType {
             PanelType::SolidLighting => t!("panels.solid_lighting"),
             PanelType::LoginDialog => t!("login.title"),
             PanelType::SaveOnlineDialog => t!("api.save_dialog_title"),
-            PanelType::Variations => t!("panels.variations"),
             PanelType::Subflames => t!("panels.subflames"),
             PanelType::Escape => t!("panels.escape"),
             PanelType::Simulation => t!("panels.simulation"),
@@ -273,7 +270,6 @@ impl Workspace {
             PanelType::SolidLighting => egui::vec2(350.0, 500.0),
             PanelType::LoginDialog => egui::vec2(380.0, 320.0),
             PanelType::SaveOnlineDialog => egui::vec2(400.0, 370.0),
-            PanelType::Variations => egui::vec2(450.0, 500.0),
             PanelType::Subflames => egui::vec2(320.0, 360.0),
             PanelType::Escape => egui::vec2(350.0, 520.0),
             // Taller than escape's: the transport row and the init

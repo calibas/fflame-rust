@@ -44,10 +44,28 @@ pub struct Preview {
     /// One config; an effect's two (before, after).
     pub configs: Vec<FractalConfig>,
     pub key: String,
+    /// The key is the picture's own key in the cache: a preset's, as the
+    /// presets' gallery cached it (`ThumbnailCache::config_hash`), so the
+    /// pictures made before are found.
+    pub raw: bool,
 }
 
-/// How far a simulation's preview runs.
-const SIM_STEPS: u32 = 400;
+impl Preview {
+    /// Picture `i`'s key in the thumbnail cache.
+    fn image(&self, i: usize) -> String {
+        if self.raw { self.key.clone() } else { image_key(&self.key, i) }
+    }
+}
+
+/// How far a simulation's preview runs at most. A preview runs its
+/// preset's measured steps (the picture is the run at that count), but
+/// on desktop a preview renders on the UI's thread: two presets measure
+/// 200,000 and 2,000,000 steps, and every other first preset 24,000 or
+/// fewer.
+const SIM_STEPS: u32 = 25_000;
+/// A simulation preview's grid side, in cells (the picture is the
+/// preview's size, the grid resolved down to it).
+const SIM_GRID: u32 = 512;
 /// A variation's preview's zoom: the frame about 4.4 units wide, so the
 /// square it starts from fills half of it and most variations land within
 /// it (the far-flung ones show their core).
@@ -59,7 +77,7 @@ const COLOUR_ZOOM: f32 = 1.8;
 
 /// The families whose entries have previews (the grid's toggle).
 pub fn has_previews(family: Family) -> bool {
-    matches!(family, Family::Variations | Family::Effects | Family::Escape | Family::Simulation | Family::Scripts)
+    matches!(family, Family::Fractals | Family::Variations | Family::Effects | Family::Escape | Family::Simulation | Family::Scripts)
 }
 
 /// The reference fractal an effect is shown on and a modifier modifies:
@@ -195,6 +213,16 @@ fn configs(e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Pa
                         super::escape_panel::choose_field(&mut cm, f);
                     }
                 }
+                // A colouring on the model and preset that name it (a
+                // preset names the colouring it is to be seen through):
+                // Gray-Scott's spots were the wrong picture for most.
+                Kind::SimColoring => {
+                    let name = plugin.as_ref().map(|p| p.key.clone()).or_else(|| super::inventory::applied_name(e)).unwrap_or_default();
+                    if let Some((m, pre)) = super::sim_panel::preset_for_coloring(&name) {
+                        super::sim_panel::choose_first_layer_model(&mut cm, m);
+                        super::sim_panel::apply_first_layer_preset(&mut cm, m, pre);
+                    }
+                }
                 Kind::SolidColoring => {
                     // A solid it draws -- not the flame attractor, which a
                     // default config has no flame for.
@@ -211,9 +239,21 @@ fn configs(e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Pa
                 _ => {}
             }
             super::inventory::use_entry_with(e, plugin, ctx, &mut cm);
+            // A model at its first preset: its parameters, time step,
+            // boundary, initial field, steps and colouring -- one default
+            // field and colouring drew nothing for most models.
+            if e.kind == Kind::SimModel {
+                let model = crate::sim::model_or_default(&cm.active_config().sim.model);
+                if let Some(pre) = model.presets.first() {
+                    super::sim_panel::apply_first_layer_preset(&mut cm, model, pre);
+                }
+            }
             let mut config = cm.active_config().clone();
             if config.render_mode == crate::scene::transforms::RenderMode::Simulation {
                 config.sim.steps = config.sim.steps.min(SIM_STEPS);
+                // The grid the presets were measured at the scale of: on
+                // the preview's own 256 cells SmoothLife's gliders die.
+                config.sim.grid = crate::config::sim::SimGrid::Fixed { width: SIM_GRID, height: SIM_GRID };
             }
             // The default palette's black end on the black background hid
             // whatever an entry draws at index 0 (an orbit trap near the
@@ -242,13 +282,19 @@ fn configs(e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Pa
 
 /// The preview of `e`, or `None` for an entry with none.
 pub fn preview(e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Palette]) -> Option<Preview> {
+    // A preset is its own picture.
+    if let EntryKey::Preset(name) = &e.key {
+        let config = crate::inventory::preset(name)?;
+        let key = crate::storage::thumbnail_cache::ThumbnailCache::config_hash(&config);
+        return Some(Preview { configs: vec![config], key, raw: true });
+    }
     let configs = configs(e, ctx, palettes)?;
     let mut seed = String::from("catalog-preview-1");
     for c in &configs {
         seed.push_str(&crate::storage::thumbnail_cache::ThumbnailCache::config_hash(c));
     }
     seed.push_str(e.version.as_deref().unwrap_or(""));
-    Some(Preview { configs, key: hash16(&seed) })
+    Some(Preview { configs, key: hash16(&seed), raw: false })
 }
 
 fn hash16(s: &str) -> String {
@@ -376,7 +422,7 @@ impl Previews {
         }
         // Made before (this run or another): from the cache.
         let mut cache = crate::storage::thumbnail_cache::shared_thumbnail_cache();
-        let cached: Option<Vec<image::RgbaImage>> = (0..p.configs.len()).map(|i| cache.load(&image_key(&p.key, i))).collect();
+        let cached: Option<Vec<image::RgbaImage>> = (0..p.configs.len()).map(|i| cache.load(&p.image(i))).collect();
         drop(cache);
         if let Some(images) = cached {
             let t = upload(ctx, &p.key, &images);
@@ -402,7 +448,7 @@ impl Previews {
         let images: Vec<image::RgbaImage> = p.configs.iter().map(&render).collect();
         let mut cache = crate::storage::thumbnail_cache::shared_thumbnail_cache();
         for (i, img) in images.iter().enumerate() {
-            if let Err(e) = cache.save(&image_key(&p.key, i), img) {
+            if let Err(e) = cache.save(&p.image(i), img) {
                 log::info!("catalog preview not cached: {e}");
             }
         }
@@ -444,8 +490,14 @@ pub fn show(ui: &mut egui::Ui, shown: &Shown) {
             });
         }
         Shown::Ready(textures) => {
+            // Exactly the width there is, with the row's own spacing: a
+            // guessed gap 2 points short made an effect's pair 2 points too
+            // wide, the pane grew to hold it, the pictures grew with the
+            // pane -- every frame, up to 256 each, shifting the list under
+            // the pointer. Never wider than the room, so never a minimum.
             let n = textures.len().max(1) as f32;
-            let side = ((ui.available_width() - 6.0 * (n - 1.0)) / n).clamp(96.0, 256.0);
+            let spacing = ui.spacing().item_spacing.x;
+            let side = ((ui.available_width() - spacing * (n - 1.0)) / n).floor().clamp(1.0, 256.0);
             ui.horizontal(|ui| {
                 for (i, t) in textures.iter().enumerate() {
                     ui.vertical(|ui| {
@@ -463,6 +515,26 @@ pub fn show(ui: &mut egui::Ui, shown: &Shown) {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    /// An effect's two pictures fit the width they are given, frame after
+    /// frame (reported: the Catalog's info pane grew while an effect was
+    /// pointed at, shifting the list).
+    #[test]
+    fn two_pictures_fit_their_pane_and_it_keeps_its_width() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture("t", egui::ColorImage::new([4, 4], vec![egui::Color32::WHITE; 16]), egui::TextureOptions::LINEAR);
+        let shown = Shown::Ready(vec![texture.clone(), texture]);
+        let mut widths = Vec::new();
+        for _ in 0..6 {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))), ..Default::default() };
+            let _ = ctx.run_ui(input, |ui| {
+                let r = egui::Panel::right("pane_test").resizable(true).default_size(280.0).min_size(200.0).show_inside(ui, |ui| show(ui, &shown));
+                widths.push(r.response.rect.width());
+            });
+        }
+        assert!(widths.windows(2).all(|w| w[0] == w[1]), "the pane keeps its width: {widths:?}");
+        assert!(widths[0] <= 281.0, "its default: {widths:?}");
+    }
 
     fn entry(kind: Kind, name: &str) -> Entry {
         crate::inventory::scan(&crate::scene::palette::global_palette_library().read().unwrap().clone(), crate::inventory::Online::default())
@@ -498,9 +570,21 @@ mod tests {
         assert_eq!(p.configs[0].render_mode, crate::scene::transforms::RenderMode::Escape);
         assert_eq!(p.configs[0].escape.formula, "mandelbrot");
 
-        let model = crate::sim::MODELS[0].name;
-        let p = preview(&entry(Kind::SimModel, model), &ctx, &[]).expect("a model's preview");
-        assert!(p.configs[0].sim.steps <= SIM_STEPS, "the run capped");
+        // A model at its first preset; a colouring on the preset that
+        // names it.
+        for m in crate::sim::MODELS {
+            let Some(pre) = m.presets.first() else { continue };
+            let p = preview(&entry(Kind::SimModel, m.name), &ctx, &[]).expect("a model's preview");
+            let c = &p.configs[0];
+            assert_eq!(c.sim.steps, pre.steps.min(SIM_STEPS), "{}: its preset's steps, capped", m.name);
+            assert_eq!(c.sim.boundary, pre.boundary, "{}: its preset's boundary", m.name);
+            if let Some(col) = pre.coloring {
+                assert_eq!(c.sim.coloring, col, "{}: its preset's colouring", m.name);
+            }
+        }
+        let (m, _) = super::super::sim_panel::preset_for_coloring("age").expect("a preset names age");
+        let p = preview(&entry(Kind::SimColoring, "age"), &ctx, &[]).expect("a colouring's preview");
+        assert_eq!((p.configs[0].sim.model.as_str(), p.configs[0].sim.coloring.as_str()), (m.name, "age"));
     }
 }
 

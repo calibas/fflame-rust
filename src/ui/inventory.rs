@@ -1,17 +1,17 @@
 //! The Catalog panel (docs/archive/projects/catalog.md): every resource the app
 //! knows, from [`crate::inventory`], to browse, read about and use.
 //!
-//! The top chooses a family (palettes, fractals, variations, ...), a
-//! search and an origin; the list groups the family's entries (packs,
-//! categories, examples and yours); the info pane says what the selected
-//! one is, who wrote it, where it came from, and offers its **Use**. A
-//! click selects; Use (or a double click) applies -- except a palette,
-//! which a click applies (auditioning palettes is clicking through them),
-//! and a fractal, which a click loads, as the Fractal Browser's did: one
-//! undo step either way.
+//! One view for every catalog (docs/archive/projects/one-catalog-view.md): the
+//! top chooses the catalog (fractals, palettes, variations, ...), its
+//! filters (Category, Source, Owner, Type), the view (grid or list, the
+//! cells' size), a search and the grouping; the list is the device's
+//! entries and the server's pages together (`ui::inventory_view`); the
+//! info pane says what the entry under the pointer is -- or, the pointer
+//! elsewhere, the selected one -- who wrote it, where it came from, and
+//! offers its **Use**. A click selects and loads or applies (one undo
+//! step), except a variation or an effect, which the pane adds (D3).
 //!
-//! The selection is the panel's, readable by any panel through
-//! [`InventoryPanel::selected`]. Whether Use acts in the current mode is
+//! The selection is the panel's. Whether Use acts in the current mode is
 //! `visibility::catalog_use`'s answer; whether a colouring suits the
 //! current formula is the escape engine's own rule.
 //!
@@ -21,17 +21,17 @@
 //! server offers and the app lacks is listed too, its Use a **Download**
 //! ([`request_download`], drained into the app's fetches once a frame).
 //!
-//! Two places, chosen at the top: **On this device**, the list above, and
-//! **Online**, what the server holds for the family, public or your own,
-//! page by page (`ui::inventory_online`).
+//! What the server holds -- curated, or your own -- comes page by page
+//! (`ui::inventory_online`); Source chooses online, this device, or both.
 
-use super::fractal_gallery::FractalConfigGallery;
+pub use super::inventory_view::Source;
+use super::inventory_view::{categories, has_grid, types, Filters, GroupBy, Owner, View};
 use crate::config::{ConfigManager, ConfigPath, FractalConfig};
 use crate::inventory::{self, Entry, EntryKey, Family, Kind};
 use crate::provenance::Origin;
 use crate::scene::palette::PaletteLibrary;
-use crate::scene::presets::PresetCategory;
 use crate::storage::library::Store;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 /// The list as last read, for the pickers.
@@ -121,24 +121,16 @@ pub fn download_failure(e: &Entry) -> Option<String> {
     FAILED.lock().ok()?.iter().find(|((k, n), _)| k == kind && n == name).map(|(_, why)| why.clone())
 }
 
-/// A panel asked to show the Catalog at a family and place, with an
+/// A panel asked to show the Catalog at a catalog and source, with an
 /// entry selected.
-static OPEN: Mutex<Option<(Option<Family>, Place, Option<EntryKey>)>> = Mutex::new(None);
+static OPEN: Mutex<Option<(Family, Source, Option<EntryKey>)>> = Mutex::new(None);
 
-/// Show the Catalog at `family` in `place` (opening its panel): the
+/// Show the Catalog at `family`, Source `source` (opening its panel): the
 /// Catalog menu's rows, and what a panel whose online section moved into
 /// the Catalog offers instead.
-pub fn request_open(family: Family, place: Place) {
+pub fn request_open(family: Family, source: Source) {
     if let Ok(mut o) = OPEN.lock() {
-        *o = Some((Some(family), place, None));
-    }
-}
-
-/// Show the Catalog in `place`, at the family it was last on (the Catalog
-/// menu's Online...).
-pub fn request_open_place(place: Place) {
-    if let Ok(mut o) = OPEN.lock() {
-        *o = Some((None, place, None));
+        *o = Some((family, source, None));
     }
 }
 
@@ -146,7 +138,7 @@ pub fn request_open_place(place: Place) {
 /// Catalog).
 pub fn request_open_select(family: Family, key: EntryKey) {
     if let Ok(mut o) = OPEN.lock() {
-        *o = Some((Some(family), Place::Local, Some(key)));
+        *o = Some((family, Source::All, Some(key)));
     }
 }
 
@@ -165,32 +157,28 @@ pub fn picker_downloads() -> bool {
 }
 
 /// The open asked for since the last call.
-pub fn take_open() -> Option<(Option<Family>, Place, Option<EntryKey>)> {
+pub fn take_open() -> Option<(Family, Source, Option<EntryKey>)> {
     OPEN.lock().ok()?.take()
 }
 
-/// The Catalog menu's rows: a family each, then Online... (the desktop
-/// bar's menu and the compact menu's submenu draw the same rows).
+/// The Catalog menu's rows: a family each (the desktop bar's menu and the
+/// compact menu's submenu draw the same rows). Online or on this device
+/// is the panel's Source filter.
 pub fn catalog_menu_rows(ui: &mut egui::Ui) {
     for family in Family::ALL {
         if ui.button(t!(family.label_key())).clicked() {
-            request_open(family, Place::Local);
+            request_open(family, Source::All);
             ui.close();
         }
-    }
-    ui.separator();
-    if ui.button(t!("menu.catalog_online")).on_hover_text(t!("catalog.place_online_tip")).clicked() {
-        request_open_place(Place::Online);
-        ui.close();
     }
 }
 
 /// A line saying where something moved, and a button that shows it there.
-pub fn moved_here(ui: &mut egui::Ui, what: &str, family: Family, place: Place) {
+pub fn moved_here(ui: &mut egui::Ui, what: &str, family: Family, source: Source) {
     ui.horizontal_wrapped(|ui| {
         ui.weak(what);
         if ui.button(t!("catalog.open_in_catalog")).clicked() {
-            request_open(family, place);
+            request_open(family, source);
         }
     });
 }
@@ -240,46 +228,6 @@ pub fn take_downloads() -> Vec<(Kind, String)> {
 
 /// Below this width the list and the info are two screens (phase 5).
 const NARROW: f32 = 560.0;
-
-/// Which origins the list shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OriginFilter {
-    #[default]
-    All,
-    Builtin,
-    Yours,
-    FromOthers,
-}
-
-impl OriginFilter {
-    const ALL: [OriginFilter; 4] = [OriginFilter::All, OriginFilter::Builtin, OriginFilter::Yours, OriginFilter::FromOthers];
-
-    fn label_key(self) -> &'static str {
-        match self {
-            OriginFilter::All => "catalog.origin_all",
-            OriginFilter::Builtin => "catalog.origin_builtin",
-            OriginFilter::Yours => "catalog.origin_yours",
-            OriginFilter::FromOthers => "catalog.origin_from_others",
-        }
-    }
-
-    fn admits(self, e: &Entry) -> bool {
-        match self {
-            OriginFilter::All => true,
-            OriginFilter::Builtin => e.origin == Origin::Builtin,
-            OriginFilter::Yours => e.origin == Origin::Local,
-            OriginFilter::FromOthers => e.origin == Origin::Api,
-        }
-    }
-}
-
-/// Where the list comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Place {
-    #[default]
-    Local,
-    Online,
-}
 
 /// The online account as a request needs it: whether the session is
 /// signed in, and its token (desktop; the web's cookie needs none).
@@ -345,30 +293,31 @@ pub struct InventoryPanel {
     entries: Arc<Vec<Entry>>,
     revision: Option<u64>,
     family: Family,
-    /// Within a family of several kinds; `None` for all of them.
-    kind: Option<Kind>,
-    origin: OriginFilter,
+    /// Category, Source, Owner, Type (docs/archive/projects/one-catalog-view.md).
+    filters: Filters,
+    /// Each catalog's view: grid or list, the cells' size, the grouping.
+    views: HashMap<Family, View>,
     query: String,
     selected: Option<EntryKey>,
+    /// The entry under the pointer when the list was last drawn: the info
+    /// pane shows it (the pane is drawn before the list), else the
+    /// selection.
+    hovered: Option<EntryKey>,
     /// Only the downloads the server has a newer version of.
     updates_only: bool,
-    place: Place,
     /// Narrow (a phone, a narrow dock): the list and the info are two
-    /// screens, and this is the info's (phase 5).
+    /// screens, and this is the info's (phase 5; D7).
     details: bool,
     /// Whether the panel was narrow when last drawn.
     narrow: bool,
-    /// Whether the list is a grid of the entries' previews (decision 1;
-    /// the previews themselves are shared with the pickers,
-    /// `inventory_preview::with`).
-    grid: bool,
     online: super::inventory_online::OnlinePlace,
+    /// The search and filters the palette packs were last opened for: a
+    /// change opens the packs with a match, once, so a pack can still be
+    /// closed while they stand.
+    packs_opened_for: Option<(String, Filters)>,
     manage: super::inventory_manage::Manage,
     /// A CPU script's run controls, for the script selected.
     run: super::script_run::ScriptRun,
-    /// The presets, a gallery a category, made when first shown.
-    preset_galleries: Option<Vec<FractalConfigGallery>>,
-    preset_category: PresetCategory,
     curated: CuratedScripts,
 }
 
@@ -378,55 +327,67 @@ impl Default for InventoryPanel {
     }
 }
 
+/// A row as the list draws it: its entry and, online, its item.
+struct Drawn {
+    entry: Entry,
+    item: Option<crate::inventory::online::Item>,
+}
+
 impl InventoryPanel {
     pub fn new() -> Self {
         InventoryPanel {
             entries: Arc::new(Vec::new()),
             revision: None,
             family: Family::Fractals,
-            kind: None,
-            origin: OriginFilter::All,
+            filters: Filters::default(),
+            views: HashMap::new(),
             query: String::new(),
             selected: None,
+            hovered: None,
             updates_only: false,
-            place: Place::Local,
             details: false,
             narrow: false,
-            grid: false,
             online: super::inventory_online::OnlinePlace::new(),
+            packs_opened_for: None,
             manage: super::inventory_manage::Manage::default(),
             run: super::script_run::ScriptRun::default(),
-            preset_galleries: None,
-            preset_category: PresetCategory::default(),
             curated: CuratedScripts::default(),
         }
     }
 
-    /// Show a family (the Colors panel's and the Palette Editor's palette
-    /// library buttons, File > From Preset Library).
+    /// Show a catalog (the Colors panel's and the Palette Editor's palette
+    /// library buttons, File > From Preset Library). Its own Category and
+    /// Type start at All.
     pub fn open_on(&mut self, family: Family) {
         if self.family != family {
             self.family = family;
-            self.kind = None;
+            self.filters.category = None;
+            self.filters.kind = None;
+            self.hovered = None;
         }
     }
 
-    /// The entry selected, as the list last read it (an online one, as
-    /// its page did).
-    pub fn selected(&self) -> Option<&Entry> {
-        let key = self.selected.as_ref()?;
+    /// The catalog's view.
+    fn view(&self) -> View {
+        self.views.get(&self.family).copied().unwrap_or_else(|| View::default_for(self.family))
+    }
+
+    fn view_mut(&mut self) -> &mut View {
+        let family = self.family;
+        self.views.entry(family).or_insert_with(|| View::default_for(family))
+    }
+
+    fn entry(&self, key: &EntryKey) -> Option<&Entry> {
         if matches!(key, EntryKey::Online(..)) {
             return self.online.find(key).map(|(e, _)| e);
         }
         self.entries.iter().find(|e| &e.key == key)
     }
 
-    /// Show `family` in `place`, with `select` selected.
-    pub fn open_at(&mut self, family: Option<Family>, place: Place, select: Option<EntryKey>) {
-        if let Some(family) = family {
-            self.open_on(family);
-        }
-        self.place = place;
+    /// Show `family` (when given) at `source`, with `select` selected.
+    pub fn open_at(&mut self, family: Family, source: Source, select: Option<EntryKey>) {
+        self.open_on(family);
+        self.filters.source = source;
         if select.is_some() {
             self.selected = select;
         }
@@ -437,9 +398,9 @@ impl InventoryPanel {
         self.online.forget();
     }
 
-    /// Refresh, everything at once: the Online place's lists and the
-    /// curated scripts asked for again, the files on disk read again,
-    /// and (by the app) the variation and effect catalogs fetched again.
+    /// Refresh, everything at once: the online lists and the curated
+    /// scripts asked for again, the files on disk read again, and (by the
+    /// app) the variation and effect catalogs fetched again.
     fn refresh_all(&mut self, out: &mut InventoryResponse) {
         self.online.forget();
         if self.curated.job.is_none() {
@@ -449,7 +410,7 @@ impl InventoryPanel {
         out.refresh_catalogs = true;
     }
 
-    /// The session signed out: the Online place forgets your own lists.
+    /// The session signed out: your own online lists go.
     pub fn signed_out(&mut self) {
         self.online.signed_out();
     }
@@ -480,34 +441,23 @@ impl InventoryPanel {
         }
     }
 
-    fn visible(&self, e: &Entry) -> bool {
-        let place = match self.place {
-            Place::Local => self.origin.admits(e) && (!self.updates_only || e.update.is_some()),
-            // Online, of this device's list: what the server's catalog
-            // offers, downloaded or not.
-            Place::Online => e.origin == Origin::Api || !e.installed,
-        };
-        // The curated rows the pickers offer (L3) are the Online place's
-        // own pages here.
-        let picker_only = matches!(e.key, EntryKey::Online(..));
-        !picker_only && e.kind.family() == self.family && self.kind.is_none_or(|k| k == e.kind) && place && e.matches(&self.query)
-    }
-
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext) -> InventoryResponse {
         let mut out = InventoryResponse::default();
         self.online.update(ui.ctx(), &self.query, &self.entries, &mut out);
         if let Some(palette) = out.apply_palette.take() {
             apply_palette(cx.config_manager, palette);
         }
+        self.narrow = ui.available_width() < NARROW;
         self.render_top(ui, cx, &mut out);
         ui.separator();
-        self.narrow = ui.available_width() < NARROW;
+        let mut hovered = None;
         if !self.narrow {
             self.details = false;
+            let shown = self.hovered.clone().or_else(|| self.selected.clone());
             egui::Panel::right("catalog_info").resizable(true).default_size(280.0).min_size(200.0).show_inside(ui, |ui| {
-                egui::ScrollArea::vertical().id_salt("catalog_info_scroll").show(ui, |ui| self.render_info(ui, cx, &mut out));
+                egui::ScrollArea::vertical().id_salt("catalog_info_scroll").show(ui, |ui| self.render_info(ui, shown, cx, &mut out));
             });
-            egui::CentralPanel::default().show_inside(ui, |ui| self.render_list(ui, cx, &mut out));
+            egui::CentralPanel::default().show_inside(ui, |ui| self.render_list(ui, cx, &mut out, &mut hovered));
         } else if self.details && self.selected.is_some() {
             // Narrow (a phone, a narrow dock): the info is a screen of its
             // own, Back to the list.
@@ -515,99 +465,127 @@ impl InventoryPanel {
                 self.details = false;
             }
             ui.separator();
-            egui::ScrollArea::vertical().id_salt("catalog_info_scroll").show(ui, |ui| self.render_info(ui, cx, &mut out));
+            let shown = self.selected.clone();
+            egui::ScrollArea::vertical().id_salt("catalog_info_scroll").show(ui, |ui| self.render_info(ui, shown, cx, &mut out));
         } else {
             self.details = false;
-            self.render_list(ui, cx, &mut out);
+            self.render_list(ui, cx, &mut out, &mut hovered);
         }
+        // The pane follows the pointer: a change is drawn at once.
+        if hovered != self.hovered {
+            self.hovered = hovered;
+            ui.ctx().request_repaint();
+        }
+        self.online.render_confirm_delete(ui.ctx(), &cx.account);
         out
-    }
-
-    /// The selected row's way to its info, on a narrow panel: a › beside
-    /// it. Gives whether it was pressed.
-    fn details_button(ui: &mut egui::Ui) -> bool {
-        ui.small_button("\u{203a}").on_hover_text(t!("catalog.details")).clicked()
     }
 
     // ------------------------------------------------------------------ top
 
+    /// The catalog and Refresh; the filters; the view, search, size and
+    /// grouping; then *Open by ID or link* (online), the downloads bar and
+    /// the file actions, where they apply.
     fn render_top(&mut self, ui: &mut egui::Ui, cx: &InventoryContext, out: &mut InventoryResponse) {
+        let family = self.family;
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.place, Place::Local, t!("catalog.place_local"));
-            ui.selectable_value(&mut self.place, Place::Online, t!("catalog.place_online")).on_hover_text(t!("catalog.place_online_tip"));
-            // Refresh, in the corner: everything at once, whichever place
-            // is shown (`refresh_all`).
+            egui::ComboBox::from_id_salt("catalog_family").selected_text(t!(family.label_key())).show_ui(ui, |ui| {
+                for f in Family::ALL {
+                    if ui.selectable_label(f == family, t!(f.label_key())).clicked() {
+                        self.open_on(f);
+                    }
+                }
+            });
+            // Refresh in the corner: everything at once (`refresh_all`).
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("\u{27f3}").on_hover_text(t!("catalog.refresh_tip")).clicked() {
                     self.refresh_all(out);
                 }
+                // Narrow: no pane, no hover; the selection's info is a
+                // screen of its own (D7).
+                if self.narrow && self.selected.is_some() && ui.button(t!("catalog.details")).clicked() {
+                    self.details = true;
+                }
             });
         });
         ui.horizontal_wrapped(|ui| {
-            for family in Family::ALL {
-                let label = match self.place {
-                    Place::Local => {
-                        let count = self.entries.iter().filter(|e| e.kind.family() == family).count();
-                        format!("{} ({count})", t!(family.label_key()))
+            let categories = categories(family);
+            if !categories.is_empty() {
+                ui.label(t!("catalog.filter_category"));
+                let current = self.filters.category.and_then(|c| categories.iter().find(|g| g.order == c)).map_or_else(|| t!("catalog.filter_all").to_string(), |g| g.label.clone());
+                egui::ComboBox::from_id_salt(("catalog_category", family)).selected_text(current).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.filters.category, None, t!("catalog.filter_all"));
+                    for g in &categories {
+                        ui.selectable_value(&mut self.filters.category, Some(g.order), &g.label);
                     }
-                    Place::Online => t!(family.label_key()).to_string(),
-                };
-                if ui.selectable_label(self.family == family, label).clicked() {
-                    self.open_on(family);
+                });
+            }
+            ui.label(t!("catalog.filter_source"));
+            egui::ComboBox::from_id_salt("catalog_source").selected_text(t!(self.filters.source.label_key())).show_ui(ui, |ui| {
+                for s in Source::ALL {
+                    ui.selectable_value(&mut self.filters.source, s, t!(s.label_key()));
                 }
+            });
+            ui.label(t!("catalog.filter_owner"));
+            egui::ComboBox::from_id_salt("catalog_owner").selected_text(t!(self.filters.owner.label_key())).show_ui(ui, |ui| {
+                for o in Owner::ALL {
+                    ui.selectable_value(&mut self.filters.owner, o, t!(o.label_key()));
+                }
+            });
+            let types = types(family);
+            if !types.is_empty() {
+                ui.label(t!("catalog.filter_type"));
+                let current = self.filters.kind.map_or_else(|| t!("catalog.filter_all").to_string(), |k| t!(k.label_key()).to_string());
+                egui::ComboBox::from_id_salt(("catalog_type", family)).selected_text(current).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.filters.kind, None, t!("catalog.filter_all"));
+                    for k in types {
+                        ui.selectable_value(&mut self.filters.kind, Some(k), t!(k.label_key()));
+                    }
+                });
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.query).hint_text(t!("catalog.search")).desired_width(180.0));
+            let mut view = self.view();
+            if has_grid(family) {
+                ui.selectable_value(&mut view.grid, true, t!("catalog.view_grid")).on_hover_text(t!("catalog.view_grid_tip"));
+                ui.selectable_value(&mut view.grid, false, t!("catalog.view_list"));
+            }
+            let r = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text(t!("catalog.search")).desired_width(160.0));
+            super::vkb_sync(ui, &r, &mut self.query);
             if !self.query.is_empty() && ui.small_button("×").on_hover_text(t!("catalog.clear_search")).clicked() {
                 self.query.clear();
             }
-            if self.place == Place::Local {
-                egui::ComboBox::from_id_salt("catalog_origin").selected_text(t!(self.origin.label_key())).show_ui(ui, |ui| {
-                    for o in OriginFilter::ALL {
-                        ui.selectable_value(&mut self.origin, o, t!(o.label_key()));
-                    }
-                });
-                if super::inventory_preview::has_previews(self.family) {
-                    ui.selectable_value(&mut self.grid, false, t!("catalog.view_list"));
-                    ui.selectable_value(&mut self.grid, true, t!("catalog.view_grid")).on_hover_text(t!("catalog.view_grid_tip"));
-                }
+            if view.grid && has_grid(family) {
+                ui.label(t!("catalog.size"));
+                ui.add(super::VkbSlider::new(&mut view.size, super::inventory_view::SIZES).show_value(false));
             }
-        });
-        if self.place == Place::Online {
-            self.online.render_top(ui, self.family, &cx.account);
-        }
-        if self.place == Place::Local && matches!(self.family, Family::Variations | Family::Effects) {
-            self.render_downloads_bar(ui, out);
-        }
-        if self.place == Place::Local {
-            if let Some(super::inventory_manage::Act::Select(key)) = self.manage.render_top(ui, self.family, out) {
-                self.selected = Some(key);
-            }
-        }
-        // A family of several kinds: a chip each that has entries.
-        let mut kinds: Vec<Kind> = match self.place {
-            Place::Local => self.entries.iter().filter(|e| e.kind.family() == self.family).map(|e| e.kind).collect(),
-            Place::Online => super::inventory_online::kinds(self.family),
-        };
-        kinds.dedup();
-        if kinds.len() > 1 {
-            ui.horizontal_wrapped(|ui| {
-                if ui.selectable_label(self.kind.is_none(), t!("catalog.kind_all")).clicked() {
-                    self.kind = None;
-                }
-                for k in kinds {
-                    if ui.selectable_label(self.kind == Some(k), t!(k.label_key())).clicked() {
-                        self.kind = Some(k);
-                    }
+            ui.label(t!("catalog.group_by"));
+            egui::ComboBox::from_id_salt(("catalog_group_by", family)).selected_text(t!(view.group.label_key())).show_ui(ui, |ui| {
+                for g in GroupBy::offered(family) {
+                    ui.selectable_value(&mut view.group, *g, t!(g.label_key()));
                 }
             });
+            if view != self.view() {
+                *self.view_mut() = view;
+            }
+        });
+        if self.filters.source != Source::Device {
+            self.online.render_open(ui, &cx.account);
+        }
+        if family == Family::Variations {
+            flame_downloads_banner(ui, &cx.config_manager.active_config().flame);
+        }
+        if matches!(family, Family::Variations | Family::Effects) {
+            self.render_downloads_bar(ui, out);
+        }
+        if let Some(super::inventory_manage::Act::Select(key)) = self.manage.render_top(ui, family, out) {
+            self.selected = Some(key);
         }
     }
 
     /// Variations and effects on this device: the downloads the server
     /// has a newer version of (a chip, and Update all), and Clear Cache
-    /// (the Variations and Effects panels' catalog sections, moved here).
+    /// (the Effects panel's catalog section and the retired Variations
+    /// panel's, moved here).
     fn render_downloads_bar(&mut self, ui: &mut egui::Ui, out: &mut InventoryResponse) {
         let family = self.family;
         let stale: Vec<Entry> = self.entries.iter().filter(|e| e.kind.family() == family && e.update.is_some()).cloned().collect();
@@ -641,170 +619,180 @@ impl InventoryPanel {
 
     // ----------------------------------------------------------------- list
 
-    fn render_list(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext, out: &mut InventoryResponse) {
-        if self.place == Place::Online {
-            egui::ScrollArea::vertical().id_salt("catalog_online_list").auto_shrink([false, false]).show(ui, |ui| {
-                // Variations and effects: the cached catalog first (it is
-                // the server's whole list), then the Rhai ones people
-                // published.
-                if matches!(self.family, Family::Variations | Family::Effects) {
-                    self.render_grouped(ui, cx, out);
-                }
-                if self.online.render_list(ui, self.family, self.kind, &mut self.selected, self.narrow, cx) {
-                    self.details = true;
-                }
-            });
-            return;
+    /// The one list: the device's entries and the server's pages, as the
+    /// filters admit them, grouped, as cells or rows. Hovering a row shows
+    /// it in the pane; a click selects it and loads or applies it
+    /// (a variation or an effect only selects: its pane adds it, D3).
+    fn render_list(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext, out: &mut InventoryResponse, hovered: &mut Option<EntryKey>) {
+        let family = self.family;
+        let view = self.view();
+        let ctx = ui.ctx().clone();
+        let lists = super::inventory_view::online_lists(family, &self.filters, cx.account.signed_in);
+        let keys = self.online.keys(&lists);
+        self.online.start(&keys, &cx.account, &ctx);
+        // The online rows, owned for the frame (the thumbnails are asked
+        // of the same lists while the rows are drawn).
+        let online: Vec<(Entry, crate::inventory::online::Item, crate::api::Scope)> =
+            self.online.rows(&keys).into_iter().map(|r| (r.entry.clone(), r.item.clone(), r.scope)).collect();
+        let online_rows: Vec<super::inventory_view::OnlineRow> = online.iter().map(|(entry, item, scope)| super::inventory_view::OnlineRow { entry, item, scope: *scope }).collect();
+        let entries = self.entries.clone();
+        let mut rows = super::inventory_view::rows(family, &entries, &online_rows, &self.filters, &self.query);
+        if self.updates_only {
+            rows.retain(|r| r.entry.update.is_some());
         }
-        // The presets as galleries, unless a search or a filter asks for
-        // rows.
-        if self.family == Family::Fractals && self.query.trim().is_empty() && self.origin == OriginFilter::All {
-            self.render_presets(ui, out);
-            return;
-        }
+        let mut clicked: Option<Drawn> = None;
+        let mut end_visible = false;
         egui::ScrollArea::vertical().id_salt("catalog_list").auto_shrink([false, false]).show(ui, |ui| {
-            if self.family == Family::Palettes {
-                self.render_palettes(ui, cx);
-            } else {
-                self.render_grouped(ui, cx, out);
+            if family == Family::Palettes && view.group == GroupBy::Pack {
+                end_visible = self.render_palettes(ui, cx, &rows, &mut clicked, hovered);
+                return;
             }
-        });
-    }
-
-    /// The entries in groups, each a collapsing heading with its count.
-    fn render_grouped(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext, out: &mut InventoryResponse) {
-        let shown: Vec<usize> = (0..self.entries.len()).filter(|&i| self.visible(&self.entries[i])).collect();
-        if shown.is_empty() {
-            ui.weak(t!("catalog.nothing_matches"));
-            return;
-        }
-        let several = matches!(self.family, Family::Escape | Family::Simulation | Family::Scripts) && self.kind.is_none();
-        let (mut clicked, mut used) = (None, None);
-        let mut details = false;
-        let grid = self.grid && self.place == Place::Local && super::inventory_preview::has_previews(self.family);
-        let palettes: Vec<crate::scene::palette::Palette> = if grid { cx.palette_library.iter().cloned().collect() } else { Vec::new() };
-        let mut start = 0;
-        while start < shown.len() {
-            let first = &self.entries[shown[start]];
-            let mut end = start + 1;
-            while end < shown.len() && self.entries[shown[end]].kind == first.kind && self.entries[shown[end]].group == first.group {
-                end += 1;
+            if rows.is_empty() {
+                return;
             }
-            let kind_label = t!(first.kind.label_key());
-            let heading = if several && first.group.label != kind_label {
-                format!("{kind_label} · {} ({})", first.group.label, end - start)
-            } else {
-                format!("{} ({})", first.group.label, end - start)
-            };
-            let id = ui.make_persistent_id(("catalog_group", first.kind, first.group.order, first.group.label.as_str()));
-            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
-                .show_header(ui, |ui| {
-                    ui.strong(heading);
-                })
-                .body(|ui| {
-                    if grid {
+            let groups = super::inventory_view::group(family, rows.clone(), view.group);
+            // A script's preview runs it with the library's palettes; no
+            // other kind reads them.
+            let palettes: Vec<crate::scene::palette::Palette> = if family == Family::Scripts { cx.palette_library.iter().cloned().collect() } else { Vec::new() };
+            let last = groups.len() - 1;
+            for (gi, (g, members)) in groups.iter().enumerate() {
+                let mut body = |ui: &mut egui::Ui| {
+                    let n = members.len();
+                    let mut draw = |ui: &mut egui::Ui, i: usize, r: &super::inventory_view::Row| {
+                        let e = r.entry;
+                        let selected = self.selected.as_ref() == Some(&e.key);
+                        let label = online_label(e);
+                        let resp = if family == Family::Palettes {
+                            palette_entry_row(ui, e, r.item, &label, selected, cx.palette_library)
+                        } else if view.grid {
+                            let online = &mut self.online;
+                            let account = &cx.account;
+                            super::inventory_online::grid_cell_sized(ui, e, &label, selected, true, view.size, || picture(online, e, r.item, &ctx, account, &palettes))
+                        } else {
+                            text_row(ui, &label, selected)
+                        };
+                        if resp.hovered() {
+                            *hovered = Some(e.key.clone());
+                        }
+                        if resp.clicked() {
+                            clicked = Some(Drawn { entry: e.clone(), item: r.item.cloned() });
+                        }
+                        if gi == last && i + 1 == n {
+                            end_visible = ui.is_rect_visible(resp.rect);
+                        }
+                    };
+                    if view.grid && family != Family::Palettes {
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                            for &i in &shown[start..end] {
-                                let e = &self.entries[i];
-                                let selected = self.selected.as_ref() == Some(&e.key);
-                                // Only a cell on screen asks for its picture.
-                                let ctx = ui.ctx().clone();
-                                let r = super::inventory_online::grid_cell_lazy(ui, e, selected, || match super::inventory_preview::want(e, &ctx, &palettes) {
-                                    super::inventory_preview::Shown::Ready(t) => (t.last().cloned(), true),
-                                    super::inventory_preview::Shown::Pending => (None, true),
-                                    super::inventory_preview::Shown::None => (None, false),
-                                });
-                                if r.clicked() {
-                                    clicked = Some(e.key.clone());
-                                }
-                                if r.double_clicked() {
-                                    used = Some(i);
-                                }
+                            for (i, r) in members.iter().enumerate() {
+                                draw(ui, i, r);
                             }
                         });
-                        return;
+                    } else {
+                        for (i, r) in members.iter().enumerate() {
+                            draw(ui, i, r);
+                        }
                     }
-                    for &i in &shown[start..end] {
-                        let e = &self.entries[i];
-                        let selected = self.selected.as_ref() == Some(&e.key);
-                        ui.horizontal(|ui| {
-                            let r = ui.selectable_label(selected, row_label(e));
-                            let r = if e.description.is_empty() { r } else { r.on_hover_text(crate::markdown::first_paragraph(&e.description)) };
-                            if r.clicked() {
-                                clicked = Some(e.key.clone());
-                            }
-                            if r.double_clicked() {
-                                used = Some(i);
-                            }
-                            if selected && self.narrow && Self::details_button(ui) {
-                                details = true;
-                            }
-                        });
-                    }
-                });
-            start = end;
+                };
+                if g.label.is_empty() {
+                    body(ui);
+                    continue;
+                }
+                let id = ui.make_persistent_id(("catalog_group", family, view.group as u8, g.order, g.label.as_str()));
+                egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+                    .show_header(ui, |ui| {
+                        ui.strong(format!("{} ({})", g.label, members.len()));
+                    })
+                    .body(body);
+            }
+        });
+        // Where the server's lists stand, under the list.
+        let state = self.online.state(&keys);
+        if state.loading {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak(t!("catalog.loading"));
+            });
+        } else if let Some(err) = &state.error {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(ui.visuals().error_fg_color, err);
+                if ui.button(t!("catalog.retry")).clicked() {
+                    self.online.retry(&keys, &cx.account, &ctx);
+                }
+            });
+        } else if rows.is_empty() {
+            ui.weak(t!("catalog.nothing_matches"));
+        } else if (end_visible || rows.is_empty()) && state.more {
+            self.online.more(&keys, &cx.account, &ctx);
         }
-        if let Some(k) = clicked {
-            self.selected = Some(k);
+        if let Some(d) = clicked {
+            self.click(&d, &ctx, cx, out);
         }
-        if details {
-            self.details = true;
+    }
+
+    /// A click: select the entry, and load or apply it where a click does
+    /// (D3: not a variation or an effect, which the pane adds; not a
+    /// script, which the pane runs or opens; not what is not installed).
+    fn click(&mut self, d: &Drawn, ctx: &egui::Context, cx: &mut InventoryContext, out: &mut InventoryResponse) {
+        use crate::inventory::online::Item;
+        let e = &d.entry;
+        self.selected = Some(e.key.clone());
+        if !e.installed {
+            return;
         }
-        if let Some(i) = used {
-            let e = self.entries[i].clone();
-            if !e.installed {
-                request_download(&e);
-            } else if usable(&e, cx.config_manager.active_config()).is_ok() {
-                apply(&e, ui.ctx(), cx, out);
+        let id = e.online.as_ref().map(|o| o.id.clone()).unwrap_or_default();
+        match &d.item {
+            Some(Item::Flame(_)) => self.online.load_flame(&id, &cx.account, ctx),
+            Some(Item::Palette(p)) => apply_palette(cx.config_manager, crate::api::sync::palette_from_item(p)),
+            Some(Item::Animation(_)) => out.load_api_animation = Some(id),
+            Some(Item::Script(_)) => {}
+            None => {
+                if applies_on_click(e) && usable(e, cx.config_manager.active_config()).is_ok() {
+                    apply(e, ctx, cx, out);
+                }
             }
         }
     }
 
-    /// The palettes, pack by pack -- each pack's checkbox and load state,
-    /// as the Palette Library had them -- a row each: the name and its
-    /// gradient. A click applies it and selects it. Searching, a pack
-    /// without a match is left out.
-    fn render_palettes(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext) {
-        let searching = !self.query.trim().is_empty() || self.origin != OriginFilter::All;
-        let mut clicked: Option<(String, crate::scene::palette::Palette)> = None;
-        let (narrow, mut details) = (self.narrow, false);
+    /// Palettes grouped by pack (D4): each pack's checkbox and load state
+    /// (`palette_library::pack_section`), its palettes the filters admit;
+    /// online palettes the device does not hold in a section after.
+    /// Gives whether the last online row is on screen.
+    fn render_palettes(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext, rows: &[super::inventory_view::Row], clicked: &mut Option<Drawn>, hovered: &mut Option<EntryKey>) -> bool {
+        let filtering = !self.query.trim().is_empty() || self.filters != Filters::default();
+        // Open the packs with a match when the search or filters change --
+        // not every frame, which held them open (none could be closed while
+        // a filter stood).
+        let now = (self.query.trim().to_string(), self.filters.clone());
+        let open = filtering && self.packs_opened_for.as_ref() != Some(&now);
+        self.packs_opened_for = Some(now);
+        let admitted: std::collections::HashSet<&EntryKey> = rows.iter().filter(|r| r.item.is_none()).map(|r| &r.entry.key).collect();
         for pack in 0..cx.palette_library.pack_count() {
             // This pack's entries, in its order (the scan keeps it), with
-            // their index in the pack, those the search admits.
-            let rows: Vec<(usize, String, String)> = self
+            // their index in the pack, those the filters admit.
+            let members: Vec<(usize, Entry)> = self
                 .entries
                 .iter()
                 .filter(|e| e.kind == Kind::Palette && e.group.order == pack as u32)
                 .enumerate()
-                .filter(|(_, e)| self.origin.admits(e) && e.matches(&self.query))
-                .filter_map(|(j, e)| match &e.key {
-                    EntryKey::Palette(h) => Some((j, h.clone(), e.title.clone())),
-                    _ => None,
-                })
+                .filter(|(_, e)| admitted.contains(&e.key))
+                .map(|(j, e)| (j, e.clone()))
                 .collect();
-            if searching && rows.is_empty() {
+            if filtering && members.is_empty() {
                 continue;
             }
             let selected = self.selected.clone();
-            super::palette_library::pack_section(ui, cx.palette_library, pack, searching, |ui, lib| {
+            super::palette_library::pack_section(ui, cx.palette_library, pack, open, |ui, lib| {
                 let Some(p) = lib.get_pack(pack) else { return };
-                for (j, hash, title) in &rows {
-                    let Some(palette) = p.palettes.get(*j) else { continue };
-                    let is_selected = selected.as_ref().is_some_and(|k| *k == EntryKey::Palette(hash.clone()));
-                    let row = if is_selected && narrow {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if Self::details_button(ui) {
-                                details = true;
-                            }
-                            palette_row(ui, hash, title, palette, is_selected)
-                        })
-                        .inner
-                    } else {
-                        palette_row(ui, hash, title, palette, is_selected)
-                    };
+                for (j, e) in &members {
+                    let (Some(palette), EntryKey::Palette(hash)) = (p.palettes.get(*j), &e.key) else { continue };
+                    let is_selected = selected.as_ref() == Some(&e.key);
+                    let row = palette_row(ui, hash, &row_label(e), palette, is_selected);
+                    if row.hovered() {
+                        *hovered = Some(e.key.clone());
+                    }
                     if row.clicked() {
-                        clicked = Some((hash.clone(), palette.clone()));
+                        *clicked = Some(Drawn { entry: e.clone(), item: None });
                     }
                 }
             });
@@ -813,141 +801,87 @@ impl InventoryPanel {
             ui.label(t!("palette_library.no_packs"));
             ui.label(t!("palette_library.no_packs_hint"));
         }
-        if cx.account.signed_in {
-            // Cloud Palettes became the Online place's own palettes.
+        let online: Vec<&super::inventory_view::Row> = rows.iter().filter(|r| r.item.is_some()).collect();
+        let mut end_visible = false;
+        if !online.is_empty() {
             ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                ui.weak(t!("catalog.your_online_palettes"));
-                if ui.button(t!("catalog.show_mine")).clicked() {
-                    self.place = Place::Online;
-                    self.online.scope = crate::api::Scope::Mine;
+            ui.strong(t!("catalog.source_online"));
+            for (i, r) in online.iter().enumerate() {
+                let selected = self.selected.as_ref() == Some(&r.entry.key);
+                let resp = palette_entry_row(ui, r.entry, r.item, &online_label(r.entry), selected, cx.palette_library);
+                if resp.hovered() {
+                    *hovered = Some(r.entry.key.clone());
                 }
-            });
+                if resp.clicked() {
+                    *clicked = Some(Drawn { entry: r.entry.clone(), item: r.item.cloned() });
+                }
+                if i + 1 == online.len() {
+                    end_visible = ui.is_rect_visible(resp.rect);
+                }
+            }
         }
-        if let Some((hash, palette)) = clicked {
-            self.selected = Some(EntryKey::Palette(hash));
-            apply_palette(cx.config_manager, palette);
-        }
-        if details {
-            self.details = true;
-        }
+        end_visible
     }
 
-    // -------------------------------------------------------------- presets
-
-    /// The presets as galleries, a tab a category: a click loads one.
-    fn render_presets(&mut self, ui: &mut egui::Ui, out: &mut InventoryResponse) {
-        let galleries = self.preset_galleries.get_or_insert_with(preset_galleries);
-        if galleries[self.preset_category.index()].len() == 0 {
-            if let Some(c) = PresetCategory::ALL.into_iter().find(|c| galleries[c.index()].len() > 0) {
-                self.preset_category = c;
-            }
-        }
-        ui.horizontal_wrapped(|ui| {
-            for category in PresetCategory::ALL {
-                let count = galleries[category.index()].len();
-                if count == 0 {
-                    continue;
-                }
-                let label = format!("{} ({count})", t!(category.label_key()));
-                if ui.selectable_label(self.preset_category == category, label).clicked() {
-                    self.preset_category = category;
-                }
-            }
-        });
-        // Narrow: the selection's way to its info, above the gallery.
-        if self.narrow {
-            if let Some(title) = self.selected.as_ref().and_then(|k| self.entries.iter().find(|e| &e.key == k)).filter(|e| e.kind == Kind::Fractal).map(|e| e.title.clone()) {
-                ui.horizontal(|ui| {
-                    ui.strong(title);
-                    if Self::details_button(ui) {
-                        self.details = true;
-                    }
-                });
-            }
-        }
-        ui.separator();
-        let galleries = self.preset_galleries.get_or_insert_with(preset_galleries);
-        // The gallery scrolls on its own, under the category tabs, as every
-        // other list here does: drawn bare it stretched the panel, and the
-        // dock's scroll bar moved the whole Catalog instead.
-        let category = self.preset_category.index();
-        let response = egui::ScrollArea::vertical()
-            .id_salt("catalog_presets")
-            .auto_shrink([false, false])
-            .show(ui, |ui| galleries[category].render(ui))
-            .inner;
-        if let Some(config) = response.selected {
-            // Its entry: the first preset of that name (the inventory's
-            // key for it).
-            if let Some(e) = self.entries.iter().find(|e| e.kind == Kind::Fractal && e.title == config.flame.name) {
-                self.selected = Some(e.key.clone());
-            }
-            out.load_preset = Some(config);
-        }
-    }
-
-    /// Desktop: make one preset preview for the gallery drawn this frame.
+    /// Desktop: make one preview a frame of what the lists asked for.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn generate_one_preview<F>(&mut self, ctx: &egui::Context, render_fn: F) -> bool
     where
         F: Fn(&FractalConfig) -> image::RgbaImage,
     {
-        // The presets' gallery first, then the entries' previews.
-        if self.shown_gallery().is_some_and(|g| g.generate_one_preview(ctx, &render_fn)) {
-            return true;
-        }
         super::inventory_preview::with(|p| p.generate_one(ctx, render_fn))
     }
 
-    /// WASM: spawn the next preset preview of the gallery drawn this frame.
+    /// WASM: start the next preview the lists asked for.
     #[cfg(target_arch = "wasm32")]
     pub fn start_next_preview(&mut self, device: &egui_wgpu::wgpu::Device, queue: &egui_wgpu::wgpu::Queue, ctx: &egui::Context) {
-        if let Some(g) = self.shown_gallery() {
-            g.start_next_preview(device, queue, ctx);
-        }
         super::inventory_preview::with(|p| p.start_next(device, queue, ctx));
-    }
-
-    /// The gallery drawn this frame, every gallery's flag taken: only it
-    /// makes previews, so a closed panel or another family makes none.
-    fn shown_gallery(&mut self) -> Option<&mut FractalConfigGallery> {
-        let mut shown = None;
-        for g in self.preset_galleries.iter_mut().flatten() {
-            if g.take_shown() {
-                shown = Some(g);
-            }
-        }
-        shown
     }
 
     // ----------------------------------------------------------------- info
 
-    fn render_info(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext, out: &mut InventoryResponse) {
-        if let Some(key @ EntryKey::Online(..)) = self.selected.clone() {
+    /// What `key` is: the entry under the pointer, else the selection.
+    fn render_info(&mut self, ui: &mut egui::Ui, key: Option<EntryKey>, cx: &mut InventoryContext, out: &mut InventoryResponse) {
+        let Some(key) = key else {
+            ui.weak(t!("catalog.hover_hint"));
+            return;
+        };
+        if let EntryKey::Online(..) = key {
             match self.online.render_info(ui, &key, cx, out) {
                 Some(super::inventory_online::InfoAction::ShowLocal(local)) => {
                     if let Some(e) = self.entries.iter().find(|e| e.key == local) {
-                        self.family = e.kind.family();
-                        self.kind = None;
+                        let family = e.kind.family();
+                        self.open_on(family);
                     }
-                    self.place = Place::Local;
+                    self.filters.source = Source::All;
                     self.selected = Some(local);
                 }
                 None if self.online.find(&key).is_none() => {
-                    ui.weak(t!("catalog.select_hint"));
+                    ui.weak(t!("catalog.hover_hint"));
                 }
                 None => {}
             }
             return;
         }
-        let Some(e) = self.selected().cloned() else {
-            ui.weak(t!("catalog.select_hint"));
+        let Some(e) = self.entry(&key).cloned() else {
+            ui.weak(t!("catalog.hover_hint"));
             return;
         };
-        let palettes: Vec<crate::scene::palette::Palette> = cx.palette_library.iter().cloned().collect();
+        let palettes: Vec<crate::scene::palette::Palette> = if e.kind.family() == Family::Scripts { cx.palette_library.iter().cloned().collect() } else { Vec::new() };
         let preview = super::inventory_preview::want(&e, ui.ctx(), &palettes);
         entry_summary(ui, &e, Some(cx.palette_library), Some(&preview));
+        // A preset: what the Fractals list's expanded rows said.
+        if let EntryKey::Preset(name) = &e.key {
+            if let Some(config) = inventory::preset(name) {
+                ui.label(super::fractal_gallery::list_summary(&config));
+                for line in super::fractal_gallery::list_details(&config) {
+                    ui.weak(line);
+                }
+            }
+        }
+        if let EntryKey::Registered(Kind::Variation, name) = &e.key {
+            variation_details(ui, name);
+        }
         if let Some(v) = &e.update {
             ui.label(egui::RichText::new(t!("catalog.update_available", version = v.clone())).strong());
         }
@@ -980,9 +914,16 @@ impl InventoryPanel {
                     request_download(&e);
                 }
             }
+            // A variation: the transform it is added to, the Triangle
+            // Editor's selection (one list, Normal, Linked and Final).
+            if e.kind == Kind::Variation {
+                let flame = cx.config_manager.active_config().flame.clone();
+                super::transforms::transform_selector(ui, "catalog_transform", &flame);
+            }
             match usable(&e, cx.config_manager.active_config()) {
                 Ok(()) => {
                     if ui.button(t!(use_label_key(&e))).clicked() {
+                        self.selected = Some(e.key.clone());
                         apply(&e, ui.ctx(), cx, out);
                     }
                 }
@@ -1005,22 +946,81 @@ impl InventoryPanel {
                 _ => {}
             }
         });
-        // Your own: edit, rename, duplicate, delete, the plug-in flag,
-        // publishing; a shipped file or a built-in: a copy of yours.
+        // Your own: edit, rename, duplicate, delete, publishing; a shipped
+        // file or a built-in: a copy of yours.
         if let Some(super::inventory_manage::Act::Select(key)) = self.manage.render_actions(ui, &e, cx, out) {
             self.selected = Some(key);
         }
     }
 }
 
-/// The presets from the library, sorted into their categories' galleries
-/// (`PresetCategory::ALL` order), each in the library's order.
-fn preset_galleries() -> Vec<FractalConfigGallery> {
-    let mut by: Vec<Vec<FractalConfig>> = vec![Vec::new(); PresetCategory::ALL.len()];
-    for p in crate::scene::presets::global_preset_library().presets() {
-        by[PresetCategory::of(p).index()].push(p.clone());
+/// Whether a click on a device entry loads or applies it: what replaces
+/// something (a fractal, a palette, a formula, a model, a colouring), not
+/// what adds (a variation, an effect: D3) nor a script or a file to open.
+fn applies_on_click(e: &Entry) -> bool {
+    !matches!(e.kind, Kind::Variation | Kind::Effect | Kind::Generator | Kind::Modifier | Kind::ScriptLibrary | Kind::Track | Kind::FormulaFile | Kind::Unreadable)
+        && !matches!(e.key, EntryKey::File { store: Store::Scripts, .. })
+}
+
+/// A row's label: its marks, and an online row's owner.
+fn online_label(e: &Entry) -> String {
+    let label = row_label(e);
+    match e.online.as_ref().map(|o| o.owner.as_str()).filter(|o| !o.is_empty()) {
+        Some(owner) => format!("{label}  · {owner}"),
+        None => label,
     }
-    by.into_iter().map(FractalConfigGallery::new).collect()
+}
+
+/// A cell's picture: an online fractal's thumbnail, else the entry's
+/// preview; and whether one is coming.
+fn picture(
+    online: &mut super::inventory_online::OnlinePlace,
+    e: &Entry,
+    item: Option<&crate::inventory::online::Item>,
+    ctx: &egui::Context,
+    account: &CloudAccount,
+    palettes: &[crate::scene::palette::Palette],
+) -> (Option<egui::TextureHandle>, bool) {
+    if let Some(url) = e.online.as_ref().and_then(|o| o.thumbnail_url.as_deref()) {
+        return (online.thumbnail(ctx, url, account), true);
+    }
+    if item.is_some() || !super::inventory_preview::has_previews(e.kind.family()) {
+        return (None, false);
+    }
+    match super::inventory_preview::want(e, ctx, palettes) {
+        super::inventory_preview::Shown::Ready(t) => (t.last().cloned(), true),
+        super::inventory_preview::Shown::Pending => (None, true),
+        super::inventory_preview::Shown::None => (None, false),
+    }
+}
+
+/// A list row: its label across the list's width, highlighted when
+/// selected or under the pointer.
+fn text_row(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let h = ui.spacing().interact_size.y + 2.0;
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.visuals();
+        if selected {
+            ui.painter().rect_filled(rect, 2.0, visuals.selection.bg_fill);
+        } else if r.hovered() {
+            ui.painter().rect_filled(rect, 2.0, visuals.widgets.hovered.bg_fill);
+        }
+        let colour = if selected { visuals.selection.stroke.color } else { visuals.text_color() };
+        let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::default(), colour);
+        ui.painter().with_clip_rect(rect).galley(rect.left_center() + egui::vec2(4.0, -galley.size().y / 2.0), galley, colour);
+    }
+    r
+}
+
+/// A palette's row in the list: the device's (its gradient looked up in
+/// the library only until made), or an online one's (its item's colours).
+fn palette_entry_row(ui: &mut egui::Ui, e: &Entry, item: Option<&crate::inventory::online::Item>, label: &str, selected: bool, library: &PaletteLibrary) -> egui::Response {
+    match (item, &e.key) {
+        (Some(crate::inventory::online::Item::Palette(p)), _) => palette_row_lazy(ui, &p.content_hash, label, selected, || Some(crate::api::sync::palette_from_item(p))),
+        (_, EntryKey::Palette(hash)) => palette_row_lazy(ui, hash, label, selected, || inventory::palette(library, hash)),
+        _ => text_row(ui, label, selected),
+    }
 }
 
 /// A palette row: its name, and its gradient at the right; the texture is
@@ -1090,6 +1090,44 @@ pub(crate) fn entry_summary(ui: &mut egui::Ui, e: &Entry, palettes: Option<&Pale
         ui.weak(t!("catalog.no_description"));
     } else {
         super::markdown::show(ui, &e.description);
+    }
+}
+
+/// The variations this flame uses that were downloaded, above the
+/// Variations catalog's list: is the flame running code that did not
+/// ship with the app (`inventory_view::downloaded_variations_in_use`).
+fn flame_downloads_banner(ui: &mut egui::Ui, flame: &crate::scene::transforms::Flame) {
+    let names = super::inventory_view::downloaded_variations_in_use(flame, &crate::variations::global_registry());
+    if names.is_empty() {
+        return;
+    }
+    egui::Frame::group(ui.style())
+        .fill(ui.visuals().warn_fg_color.linear_multiply(0.06))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(t!("catalog.flame_uses_downloaded", count = names.len(), names = names.join(", "))).strong());
+        })
+        .response
+        .on_hover_text(t!("catalog.flame_uses_downloaded_tip"));
+}
+
+/// A registered variation's particulars: a built-in's name (a Rhai
+/// variation's is a key, nothing to read), whether it has a 3D body (one
+/// without is dropped from a 3D flame, invisibly), and its parameters at
+/// their defaults.
+fn variation_details(ui: &mut egui::Ui, name: &str) {
+    let registry = crate::variations::global_registry();
+    let Some(v) = registry.get(name) else { return };
+    if !crate::scripted::is_key(&v.name) {
+        ui.weak(t!("catalog.variation_name", name = v.name.as_str()));
+    }
+    if v.wgsl_source_3d.is_none() {
+        ui.colored_label(ui.visuals().warn_fg_color, t!("catalog.two_d_only")).on_hover_text(t!("catalog.two_d_only_tip"));
+    }
+    if !v.parameters.is_empty() {
+        ui.label(t!("catalog.parameters"));
+        for p in &v.parameters {
+            ui.weak(format!("  {} = {}", p.label, p.slot_default()));
+        }
     }
 }
 
@@ -1388,18 +1426,6 @@ pub(crate) fn use_entry_with(e: &Entry, plugin: Option<crate::storage::library::
 mod tests {
     use super::*;
 
-    /// The Catalog holds every preset, each in its category's gallery (as
-    /// the Fractal Browser's Presets tab did).
-    #[test]
-    fn the_catalog_sorts_the_presets_into_their_galleries() {
-        let presets = crate::resources::load_presets_with_fallback();
-        let galleries = preset_galleries();
-        for category in PresetCategory::ALL {
-            let want = presets.iter().filter(|p| PresetCategory::of(p) == category).count();
-            assert_eq!(galleries[category.index()].len(), want, "{category:?}");
-        }
-    }
-
     /// A list's filter never compiles: the Transforms panel draws its Add
     /// Variation picker holding the variation registry's read guard, and
     /// compiling a variation file there took the write lock -- the app
@@ -1416,30 +1442,6 @@ mod tests {
             let _ = applied_name(e);
         }
         drop(guard);
-    }
-
-    /// The origin filter: built-in, the user's (Custom), somebody else's.
-    #[test]
-    fn the_origin_filter_reads_the_origin() {
-        let mut e = Entry {
-            kind: Kind::Formula,
-            key: EntryKey::Registered(Kind::Formula, "mandelbrot".into()),
-            title: "Mandelbrot".into(),
-            description: String::new(),
-            authors: Vec::new(),
-            version: None,
-            origin: Origin::Builtin,
-            group: inventory::Group { order: 0, label: String::new() },
-            link: None,
-            installed: true,
-            category: None,
-            update: None,
-            online: None,
-        };
-        assert!(OriginFilter::Builtin.admits(&e) && !OriginFilter::Yours.admits(&e));
-        e.origin = Origin::Local;
-        assert!(OriginFilter::Yours.admits(&e) && !OriginFilter::FromOthers.admits(&e));
-        assert!(OriginFilter::ALL.iter().any(|o| *o == OriginFilter::All && o.admits(&e)));
     }
 
     /// A failed download is asked for no more and says why; asking again
@@ -1461,6 +1463,26 @@ mod tests {
         e.installed = true;
         e.update = Some("v4".into());
         assert!(row_label(&e).ends_with("  \u{2191}"), "an update's mark");
+    }
+
+    /// Add to Transform adds to the transform the selector (the Triangle
+    /// Editor's selection) names -- a final one too -- not the first
+    /// (reported: it always added to the first transform).
+    #[test]
+    fn add_to_transform_adds_to_the_selected_transform() {
+        use crate::config::TransformRef;
+        let mut config = crate::scene::presets::global_preset_library().presets()[0].clone();
+        config.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        config.flame.final_transforms = vec![crate::scene::transforms::Transform::new()];
+        let mut cm = ConfigManager::new(config);
+        let ctx = egui::Context::default();
+        ctx.data_mut(|d| d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), TransformRef::Final(0)));
+        let julia = crate::ui::picker::row(Kind::Variation, "julia", "Julia", inventory::Group { order: 0, label: String::new() });
+        use_entry(&julia, &ctx, &mut cm);
+        let flame = &cm.active_config().flame;
+        assert!(flame.final_transforms[0].variations.contains_key("julia"), "added to Final 1");
+        assert!(!flame.transforms[0].variations.contains_key("julia"), "not to the first");
+        assert_eq!(super::super::transforms::transform_label(TransformRef::Final(0)), "Final 1");
     }
 
     /// Use's rules: a variation needs a flame mode (and 3D for a 3D-only
@@ -1522,8 +1544,9 @@ mod phone_tests {
         out
     }
 
-    /// Narrow (a phone): the list fills the panel; the selected row's ›
-    /// opens its info as a screen of its own, Back returns to the list.
+    /// Narrow (a phone, D7): the list fills the panel; with a selection,
+    /// Details in the top row opens its info as a screen of its own, Back
+    /// returns to the list.
     #[test]
     fn a_narrow_catalog_is_two_screens() {
         let mut library = crate::scene::palette::global_palette_library().read().unwrap().clone();
@@ -1534,6 +1557,8 @@ mod phone_tests {
         panel.entries = Arc::new(inventory::scan(&library, inventory::Online::default()));
         panel.revision = Some(inventory::revision(&library, 0, inventory::Online::default()));
         panel.open_on(Family::Variations);
+        // No server in a test.
+        panel.filters.source = Source::Device;
         let linear = panel.entries.iter().find(|e| e.key == EntryKey::Registered(Kind::Variation, "linear".into())).unwrap().key.clone();
         panel.selected = Some(linear);
         let ctx = egui::Context::default();
@@ -1561,11 +1586,12 @@ mod phone_tests {
         };
         let list = frame(&mut panel, None);
         assert!(panel.narrow, "400 points is narrow");
-        let chevron = list.iter().find(|(t, _)| t == "\u{203a}").map(|(_, p)| *p).expect("the selected row's ›");
+        let details = list.iter().find(|(t, _)| t == &t!("catalog.details").to_string()).map(|(_, p)| *p).expect("Details");
+        assert!(!list.iter().any(|(t, _)| t == "\u{203a}"), "no › on a row");
         assert!(!list.iter().any(|(t, _)| t == &t!("catalog.back").to_string()), "the list alone");
 
-        let info = frame(&mut panel, Some(chevron + egui::vec2(3.0, 6.0)));
-        assert!(panel.details, "the › opens the info");
+        let info = frame(&mut panel, Some(details + egui::vec2(3.0, 6.0)));
+        assert!(panel.details, "Details opens the info");
         let back = info.iter().find(|(t, _)| t == &t!("catalog.back").to_string()).map(|(_, p)| *p).expect("Back");
         assert!(info.iter().any(|(t, _)| t == "Linear"), "the info names it: {info:?}");
 
@@ -1583,7 +1609,9 @@ mod phone_tests {
         let mut panel = InventoryPanel::new();
         panel.entries = Arc::new(inventory::scan(&library, inventory::Online::default()));
         panel.open_on(Family::Variations);
-        panel.grid = true;
+        // No server in a test.
+        panel.filters.source = Source::Device;
+        panel.views.insert(Family::Variations, View { grid: true, ..View::default_for(Family::Variations) });
         let ctx = egui::Context::default();
         let mut drawn = Vec::new();
         for _ in 0..2 {
@@ -1602,5 +1630,129 @@ mod phone_tests {
         let asked = super::super::inventory_preview::with(|p| p.asked());
         let variations = panel.entries.iter().filter(|e| e.kind == Kind::Variation).count();
         assert!(asked > 0 && asked < variations / 4, "the cells on screen ask, not all {variations}: {asked}");
+    }
+
+    /// The Fractals catalog (one-catalog-view.md): the presets as cells
+    /// under the panel's one search (the presets' gallery and its own
+    /// search are gone); the pointer on a cell shows it in the pane; a
+    /// click loads it.
+    #[test]
+    fn the_fractals_catalog_is_one_list_that_hovers_and_loads() {
+        let mut library = crate::scene::palette::global_palette_library().read().unwrap().clone();
+        let mut cm = ConfigManager::new(FractalConfig::default());
+        let cloud = crate::app::script_cloud::ScriptCloudState::default();
+        let mut panel = InventoryPanel::new();
+        panel.entries = Arc::new(inventory::scan(&library, inventory::Online::default()));
+        panel.filters.source = Source::Device;
+        let ctx = egui::Context::default();
+        let mut frame = |panel: &mut InventoryPanel, pointer: Option<egui::Pos2>, click: bool| {
+            let mut drawn = Vec::new();
+            let mut loaded = false;
+            for step in 0..3 {
+                let mut input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                    ..Default::default()
+                };
+                if let Some(p) = pointer {
+                    input.events.push(egui::Event::PointerMoved(p));
+                    if click && step == 1 {
+                        input.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+                        input.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+                    }
+                }
+                let out = ctx.run_ui(input, |ui| {
+                    super::super::inventory_preview::begin_frame(ui.ctx());
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        let mut cx = InventoryContext { config_manager: &mut cm, palette_library: &mut library, account: CloudAccount::default(), script_cloud: &cloud };
+                        loaded |= panel.render(ui, &mut cx).load_preset.is_some();
+                    });
+                });
+                drawn = placed(&out.shapes);
+            }
+            (drawn, loaded)
+        };
+        let (list, _) = frame(&mut panel, None, false);
+        assert!(panel.view().grid, "the Fractals catalog starts as a grid");
+        let search = t!("catalog.search").to_string();
+        assert_eq!(list.iter().filter(|(t, _)| *t == search).count(), 1, "one search box");
+        assert!(!list.iter().any(|(t, _)| *t == t!("fractal_gallery.search").to_string()), "not the gallery's");
+        let first = panel.entries.iter().find(|e| matches!(e.key, EntryKey::Preset(_))).unwrap().clone();
+        let cell = list.iter().find(|(t, _)| *t == first.title).map(|(_, p)| *p).expect("a preset's cell");
+
+        let (hovered, loaded) = frame(&mut panel, Some(cell + egui::vec2(4.0, 4.0)), false);
+        assert!(!loaded, "pointing loads nothing");
+        assert_eq!(panel.hovered.as_ref(), Some(&first.key));
+        assert!(hovered.iter().filter(|(t, _)| *t == first.title).count() >= 2, "the pane names the cell pointed at");
+
+        let (_, loaded) = frame(&mut panel, Some(cell + egui::vec2(4.0, 4.0)), true);
+        assert!(loaded, "a click loads it");
+        assert_eq!(panel.selected.as_ref(), Some(&first.key), "and selects it");
+    }
+
+    /// A pack can be closed while a filter stands (reported: with Owner
+    /// other than All, the packs would not collapse -- they were opened
+    /// again every frame). A filter's change opens the packs it matches
+    /// in, once.
+    #[test]
+    fn a_pack_closes_while_a_filter_stands() {
+        let mut library = crate::scene::palette::global_palette_library().read().unwrap().clone();
+        let mut cm = ConfigManager::new(FractalConfig::default());
+        let cloud = crate::app::script_cloud::ScriptCloudState::default();
+        let mut panel = InventoryPanel::new();
+        panel.entries = Arc::new(inventory::scan(&library, inventory::Online::default()));
+        panel.open_on(Family::Palettes);
+        panel.filters.source = Source::Device;
+        panel.filters.owner = Owner::Curated;
+        // The first built-in pack with palettes, and its first palette.
+        let pack = (0..library.pack_count()).find(|i| Some(*i) != library.custom_pack_index() && library.get_pack(*i).is_some_and(|p| !p.palettes.is_empty() && p.pack_name != "Local Files") && library.is_pack_enabled(*i)).expect("a built-in pack");
+        let name = library.get_pack(pack).unwrap().pack_name.clone();
+        let first = library.get_pack(pack).unwrap().palettes[0].name.clone();
+        let ctx = egui::Context::default();
+        let arrows = std::sync::Mutex::new(Vec::<egui::Pos2>::new());
+        // A clock: a section's closing is animated, and drawn until done.
+        let mut time = 0.0;
+        let mut frame = |panel: &mut InventoryPanel, click: Option<egui::Pos2>| {
+            let mut drawn = Vec::new();
+            for step in 0..3 {
+                time += 1.0;
+                let mut input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                    time: Some(time),
+                    ..Default::default()
+                };
+                if let (Some(p), 1) = (click, step) {
+                    input.events.push(egui::Event::PointerMoved(p));
+                    input.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+                    input.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+                }
+                let out = ctx.run_ui(input, |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        let mut cx = InventoryContext { config_manager: &mut cm, palette_library: &mut library, account: CloudAccount::default(), script_cloud: &cloud };
+                        let _ = panel.render(ui, &mut cx);
+                    });
+                });
+                drawn = placed(&out.shapes);
+                let mut a = arrows.lock().unwrap();
+                a.clear();
+                for s in &out.shapes {
+                    if let egui::Shape::Path(p) = &s.shape {
+                        if p.points.len() == 3 && p.closed {
+                            let n = p.points.len() as f32;
+                            a.push(egui::pos2(p.points.iter().map(|q| q.x).sum::<f32>() / n, p.points.iter().map(|q| q.y).sum::<f32>() / n));
+                        }
+                    }
+                }
+            }
+            drawn
+        };
+        let open = frame(&mut panel, None);
+        let heading = open.iter().find(|(t, _)| *t == name).map(|(_, p)| *p).expect("the pack's heading");
+        assert!(open.iter().any(|(t, _)| t.starts_with(&first)), "opened by the filter: {first}");
+        // Its arrow: the triangle painted on the heading's row, left of it.
+        let arrow = arrows.lock().unwrap().iter().copied().filter(|p| (p.y - heading.y).abs() < 16.0 && p.x < heading.x).min_by(|a, b| a.x.total_cmp(&b.x)).expect("the arrow");
+        let closed = frame(&mut panel, Some(arrow));
+        assert!(!closed.iter().any(|(t, _)| t.starts_with(&first)), "the arrow closes it");
+        let still = frame(&mut panel, None);
+        assert!(!still.iter().any(|(t, _)| t.starts_with(&first)), "and it stays closed while the filter stands");
     }
 }

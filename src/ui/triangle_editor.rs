@@ -257,14 +257,8 @@ fn render_triangle_editor_core(
                 };
             }
 
-            // Helper for display text.
-            let xref_display = |xref: TransformRef| -> String {
-                match xref {
-                    TransformRef::Normal(i) => t!("triangle_editor.transform_n", n = i + 1).to_string(),
-                    TransformRef::Linked(i) => format!("Linked {}", i + 1),
-                    TransformRef::Final(i) => format!("Final {}", i + 1),
-                }
-            };
+            // Helper for display text (the Catalog's selector says the same).
+            let xref_display = super::transforms::transform_label;
 
             // Auto selection: every triangle can be grabbed, and the one
             // grabbed becomes the selected (active) transform, which the

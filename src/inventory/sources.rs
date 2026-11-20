@@ -84,7 +84,9 @@ pub(super) fn presets(out: &mut Vec<Entry>) {
     for (name, config) in preset_names() {
         let category = crate::scene::presets::PresetCategory::of(config);
         let group = Group { order: category.index() as u32, label: t!(category.label_key()).to_string() };
-        out.push(entry(Kind::Fractal, EntryKey::Preset(name.clone()), &name, group, Origin::Builtin));
+        let mut e = entry(Kind::Fractal, EntryKey::Preset(name.clone()), &name, group, Origin::Builtin);
+        e.category = Some(super::preset_category_key(category).to_string());
+        out.push(e);
     }
 }
 
@@ -111,7 +113,8 @@ pub fn preset(name: &str) -> Option<FractalConfig> {
 
 // -------------------------------------------------------------- variations
 
-fn variation_category_key(c: crate::variations::VariationCategory) -> &'static str {
+/// A variation category's label key.
+pub fn variation_category_key(c: crate::variations::VariationCategory) -> &'static str {
     use crate::variations::VariationCategory as C;
     match c {
         C::Basic2D => "inventory.variation_category.basic_2d",
@@ -138,6 +141,7 @@ pub(super) fn variations(online: super::Online, out: &mut Vec<Entry>) {
         let order = crate::variations::VariationCategory::ALL.iter().position(|c| *c == v.category).unwrap_or(99) as u32;
         let group = Group { order, label: t!(variation_category_key(v.category)).to_string() };
         let mut e = entry(Kind::Variation, EntryKey::Registered(Kind::Variation, v.name.clone()), &v.display_name, group, v.provenance.origin());
+        e.category = Some(format!("{:?}", v.category));
         e.version = version_of(&v.provenance);
         e.update = update_of(offered.get(v.name.as_str()).copied(), &v.provenance);
         let p = if v.provenance.is_builtin() { prose::variation(&v.name) } else { None };
@@ -157,12 +161,13 @@ pub(super) fn effects(online: super::Online, out: &mut Vec<Entry>) {
         if e.provenance == Provenance::Local {
             continue;
         }
-        let (order, key) = match e.category {
-            EffectCategory::Color => (0, "inventory.effect_category.color"),
-            EffectCategory::Density => (1, "inventory.effect_category.density"),
+        let (order, key, word) = match e.category {
+            EffectCategory::Color => (0, "inventory.effect_category.color", "color"),
+            EffectCategory::Density => (1, "inventory.effect_category.density", "density"),
         };
         let group = Group { order, label: t!(key).to_string() };
         let mut entry = entry(Kind::Effect, EntryKey::Registered(Kind::Effect, e.name.clone()), &e.translated_name(), group, e.provenance.origin());
+        entry.category = Some(word.to_string());
         entry.version = version_of(&e.provenance);
         entry.update = update_of(offered.get(e.name.as_str()).copied(), &e.provenance);
         let p = if e.provenance.is_builtin() { prose::twin(Kind::Effect, &e.name) } else { None };

@@ -1,8 +1,10 @@
 # One Catalog view
 
+> **Archived 2026-11-20** -- finished: every step built on branch `one-catalog`, with fixes from use (pack collapse under a filter, the info pane's widening) and two retirements (the Variations panel, the Catalog menu's Online... row). Reference: [CATALOG.md](../../main/CATALOG.md); open items are in [BACKLOG.md](../../projects/BACKLOG.md).
+
 **Status:** planned 2026-11-20; every question decided the same day
-(*Decisions*, below); nothing built. Branch: a new one, `one-catalog`,
-from `main` once `curated-content` is merged.
+(*Decisions*, below). Branch `one-catalog`. Every step built
+2026-11-20 (see *Order of work*); not yet seen in the running app.
 
 ## Why
 
@@ -70,7 +72,10 @@ merged:
   pages arrive.
 - **Grid** cells use the device's preview (rendered) or the server's
   thumbnail (online), at the Size slider's side. **List** rows are the
-  name and a small preview, never expandable.
+  name (a palette's: and its gradient), never expandable; the preview is
+  the pane's. (Built so: a preview in every row would render one for
+  each of 647 variations as the list scrolls, where the list was the
+  cheap view.)
 
 ### Clicking and hovering (every catalog)
 
@@ -132,13 +137,24 @@ in this plan.
    (device + online, duplicates merged, group by, paging), click and hover,
    the pane absorbing the expanded details. Fractals first, end to end;
    the presets' `FractalConfigGallery` no longer drawn in the Catalog
-   (the Fractal Browser keeps it).
+   (the Fractal Browser keeps it). **Built 2026-11-20** -- for every
+   catalog at once: the filters and the list are generic
+   (`ui::inventory_view`), so steps 2 and 3 came with it.
 2. **Escape-time, Simulation, Effects, Scripts** on the same shell.
-3. **Palettes** (Group by, pack checkboxes).
-4. **Variations** and the transform selector.
-5. **Simulation previews.**
+   **Built** (step 1).
+3. **Palettes** (Group by, pack checkboxes). **Built** (step 1).
+4. **Variations** and the transform selector. **Built 2026-11-20**
+   (`transforms::transform_selector`, in the pane above Add to Transform).
+5. **Simulation previews.** **Built 2026-11-20.** A colouring carries
+   no state kind, so "the first model of its state kind" had nothing to
+   read; a colouring is shown on the first preset that NAMES it (82
+   presets name theirs), Distance on a matte preset, Occupancy on an
+   agent model. Previews run on a 512-cell grid (SmoothLife's gliders
+   die on 256) and 25,000 steps at most (desktop previews block the UI:
+   the heaviest take ~4 s once; Rössler's 2,000,000 steps stay out of
+   reach).
 6. The narrow layout (D7), tests, docs (CATALOG.md rewritten for
-   the new layout, UI.md).
+   the new layout, UI.md). **Built** with step 1.
 
 Each step is committed on its own and left working; the old views are
 deleted as each catalog moves over, not kept beside the new one.
@@ -146,7 +162,7 @@ deleted as each catalog moves over, not kept beside the new one.
 ## Decisions (2026-11-20)
 
 - **D1. 2D vs 3D escape online: already in the API.** The catalog spec
-  ([api-catalog-spec.md](api-catalog-spec.md), built 2026-11-11) gave
+  ([api-catalog-spec.md](../../projects/api-catalog-spec.md), built 2026-11-11) gave
   `GET /flames` the filters `engine` (`flame`, `escape`, `simulation`)
   and `dimension` (`2`, `3`), and its list items the fields `engine`,
   `scene`, `dimension`; `render_mode` stays for old clients (its `3d`

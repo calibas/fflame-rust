@@ -1,6 +1,6 @@
 # Curated content
 
-**Status: steps 1-6 built 2026-11-18** (ffapi branch `curated-content`, migrations 119-121, and this repo's branch `curated-content`; the production dry run waits on the ffapi deploy; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
+**Status: steps 1-6 built 2026-11-18 and merged** (ffapi's `curated-content`, migrations 119-121, and this repo's, PR #172; the production dry run waits on the API's deploy with the 0.6 release; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
 client (this one) and the API server (`c:/projects/ffapi`). Built from a
 survey of both on 2026-11-18. The survey's findings are summarised in
 *What exists*, with file references where they matter.

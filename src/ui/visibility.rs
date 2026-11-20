@@ -210,7 +210,6 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> PanelUse {
         // from a per-mode policy.
         | P::Transforms
         | P::TriangleEditor
-        | P::Variations
         // A generated flame loads with its own mode, from any mode.
         | P::RandomGenerator
         // Formulas, colourings and solids for Escape (using one enters
@@ -580,7 +579,6 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::Paths, "menu.window_paths"),
     row(PanelType::RandomGenerator, "menu.window_random_generator"),
     row(PanelType::Effects, "menu.window_effects"),
-    row(PanelType::Variations, "menu.window_variations"),
     row(PanelType::Subflames, "menu.window_subflames"),
     row(PanelType::XaosEditor, "menu.window_xaos_editor"),
     row(PanelType::Signal, "menu.window_signal"),
@@ -604,7 +602,6 @@ pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::SolidLighting,
     PanelType::Rendering,
     PanelType::FractalBrowser,
-    PanelType::Variations,
     PanelType::Subflames,
     PanelType::RhaiEditor,
     PanelType::Escape,
@@ -677,7 +674,6 @@ mod tests {
         PanelType::Signal,
         PanelType::LoginDialog,
         PanelType::SaveOnlineDialog,
-        PanelType::Variations,
         PanelType::Subflames,
         PanelType::Escape,
         PanelType::Simulation,
@@ -743,7 +739,7 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), ALL_PANELS.len(), "duplicate entry in ALL_PANELS");
-        assert_eq!(ALL_PANELS.len(), 31, "a panel was added or retired; decide what it means per mode");
+        assert_eq!(ALL_PANELS.len(), 30, "a panel was added or retired; decide what it means per mode");
     }
 
     /// Every control this build knows about.

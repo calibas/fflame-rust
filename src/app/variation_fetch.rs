@@ -189,7 +189,7 @@ impl App {
         self.trigger_variation_fetches(names);
     }
 
-    /// Handle the user clicking "Clear Variation Cache" in the Variations panel.
+    /// Handle the user clicking Clear Cache in the Variations catalog.
     pub(super) fn handle_clear_variation_cache(&mut self, ui_response: &UiResponse) {
         if !ui_response.clear_variation_cache_requested {
             return;

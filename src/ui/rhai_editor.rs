@@ -1230,7 +1230,7 @@ impl RhaiEditorPanel {
         if self.file.is_none() && self.text.is_empty() {
             ui.weak(t!("rhai_editor.nothing_open"));
             if ui.button(t!("rhai_editor.open_catalog")).clicked() {
-                super::inventory::request_open(crate::inventory::Family::Scripts, super::inventory::Place::Local);
+                super::inventory::request_open(crate::inventory::Family::Scripts, super::inventory::Source::All);
             }
             return run;
         }

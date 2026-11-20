@@ -139,7 +139,14 @@ pub fn entry(item: &Item, group: Group, local: &[Entry]) -> Option<Entry> {
     let held = match item {
         Item::Palette(p) => local.iter().find(|e| e.key == EntryKey::Palette(p.content_hash.clone())).map(|e| e.key.clone()),
         Item::Script(s) => local.iter().find(|e| e.link.as_ref().and_then(|l| l.cloud_id.as_deref()) == Some(s.id.as_str())).map(|e| e.key.clone()),
+        // A curated fractal is a preset's online copy (curated-content.md:
+        // every preset is curated under its name).
+        Item::Flame(f) if f.curated.is_some() => local.iter().find(|e| matches!(e.key, EntryKey::Preset(_)) && e.title == f.name).map(|e| e.key.clone()),
         Item::Flame(_) | Item::Animation(_) => None,
+    };
+    let category = match item {
+        Item::Flame(f) => fractal_category(f.engine.as_deref(), f.dimension, &f.render_mode).map(str::to_string),
+        _ => None,
     };
     Some(Entry {
         kind,
@@ -152,7 +159,7 @@ pub fn entry(item: &Item, group: Group, local: &[Entry]) -> Option<Entry> {
         group,
         link: None,
         installed: true,
-        category: None,
+        category,
         update: None,
         online: Some(OnlineInfo {
             id: item.id().to_string(),
@@ -164,6 +171,28 @@ pub fn entry(item: &Item, group: Group, local: &[Entry]) -> Option<Entry> {
             curated: item.curated().cloned(),
         }),
     })
+}
+
+/// The fractal category an online fractal is in ([`super::preset_category_key`]),
+/// by what the server says of it: its engine and dimension
+/// (api-catalog-spec.md), or, on an item the server has not summarised,
+/// its render mode where that settles it (an escape-time one's dimension
+/// it does not).
+pub fn fractal_category(engine: Option<&str>, dimension: Option<i16>, render_mode: &crate::api::types::ApiRenderMode) -> Option<&'static str> {
+    use crate::api::types::ApiRenderMode as M;
+    match (engine, dimension) {
+        (Some("flame"), Some(2)) => Some("flame2d"),
+        (Some("flame"), Some(3)) => Some("flame3d"),
+        (Some("escape"), Some(2)) => Some("escape2d"),
+        (Some("escape"), Some(3)) => Some("escape3d"),
+        (Some("simulation"), _) => Some("simulation"),
+        _ => match render_mode {
+            M::TwoD => Some("flame2d"),
+            M::ThreeD => Some("flame3d"),
+            M::Simulation => Some("simulation"),
+            M::Escape | M::Unknown(_) => None,
+        },
+    }
 }
 
 /// The sorts a resource takes (docs/projects/catalog-api.md, *The

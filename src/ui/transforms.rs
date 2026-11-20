@@ -1546,6 +1546,53 @@ pub(crate) fn add_variation(
     }
 }
 
+/// A transform's name in the transform selectors: "Transform 2",
+/// "Linked 1", "Final 1".
+pub(crate) fn transform_label(xref: crate::config::TransformRef) -> String {
+    use crate::config::TransformRef;
+    match xref {
+        TransformRef::Normal(i) => t!("triangle_editor.transform_n", n = i + 1).to_string(),
+        TransformRef::Linked(i) => format!("Linked {}", i + 1),
+        TransformRef::Final(i) => format!("Final {}", i + 1),
+    }
+}
+
+/// The transform selector of a panel that adds to a transform (the
+/// Catalog's Add to Transform): the flame's Normal, Linked and Final
+/// transforms in one list, as the Triangle Editor's, choosing the SAME
+/// selection (its persisted `triangle_editor_selected_transform`), so a
+/// transform picked in either is picked in both. Gives the transform it
+/// names; `None` for a flame with none.
+pub(crate) fn transform_selector(ui: &mut egui::Ui, id_salt: &str, flame: &crate::scene::transforms::Flame) -> Option<crate::config::TransformRef> {
+    use crate::config::TransformRef;
+    let current = editing_transform(ui.ctx(), flame)?;
+    let mut chosen = current;
+    egui::ComboBox::from_id_salt(id_salt).selected_text(transform_label(current)).show_ui(ui, |ui| {
+        let mut entry = |ui: &mut egui::Ui, xref: TransformRef| {
+            ui.selectable_value(&mut chosen, xref, transform_label(xref));
+        };
+        for i in 0..flame.transforms.len() {
+            entry(ui, TransformRef::Normal(i));
+        }
+        if !flame.linked_transforms.is_empty() {
+            ui.separator();
+            for i in 0..flame.linked_transforms.len() {
+                entry(ui, TransformRef::Linked(i));
+            }
+        }
+        if !flame.final_transforms.is_empty() {
+            ui.separator();
+            for i in 0..flame.final_transforms.len() {
+                entry(ui, TransformRef::Final(i));
+            }
+        }
+    });
+    if chosen != current {
+        ui.ctx().data_mut(|d| d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), chosen));
+    }
+    Some(chosen)
+}
+
 /// The transform the editors are on: the Triangle Editor's selection when
 /// it names one the flame has, else the first transform of any pool;
 /// `None` for a flame with none.

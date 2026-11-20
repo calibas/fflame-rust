@@ -364,6 +364,19 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
   uncached texture** generates it, blocking.
 - **~60 stale comments** and possibly dead public functions, never
   re-audited. §"Stale comments", §"Dead code".
+- **The Catalog's known gaps** ([CATALOG.md](../main/CATALOG.md),
+  [one-catalog-view.md](../archive/projects/one-catalog-view.md)):
+  Rössler's preview is undeveloped (its presets run 2,000,000 steps,
+  past the 25,000 a preview runs); the heaviest simulation previews
+  (Lattice4, Turing, Species) block the desktop UI ~4 s once; offline,
+  a list with Source All or Online shows the network error under it;
+  Refresh does not rescan the palette packs folder; an adopted curated
+  script may read Owner Others; whether the Variations catalog shows one
+  version of each of your Rhai variations, as the retired panel did,
+  is unchecked.
+- **Models and colourings that say which go together** (the user's,
+  2026-11-20): a simulation colouring's preview now uses the first
+  preset that names it.
 - **Known gaps**: no PNG input for `export`; flame-only metadata written
   for escape and simulation pictures; es/ja/zh mostly English.
   [escape-sim-followups.md](../archive/projects/escape-sim-followups.md) §"Known gaps".

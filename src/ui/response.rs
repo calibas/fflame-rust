@@ -186,7 +186,7 @@ pub struct UiResponse {
     pub loaded_api_flame_animations: Vec<crate::api::types::AnimationSummary>,
     // API: Animation ID to load (from the animations list in the panel)
     pub load_api_animation_id: Option<String>,
-    // Variations panel: clear all API-loaded variations from cache+registry
+    // The Catalog's Clear Cache: clear all API-loaded variations from cache+registry
     pub clear_variation_cache_requested: bool,
     /// The Catalog's Refresh: fetch the variation and effect catalogs again.
     pub refresh_catalogs_requested: bool,

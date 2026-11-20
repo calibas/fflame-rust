@@ -15,6 +15,7 @@ pub mod script_run;
 mod inventory_online;
 mod trust_window;
 mod inventory_preview;
+mod inventory_view;
 pub mod picker;
 pub mod fractal_gallery;
 mod help;
@@ -51,7 +52,6 @@ mod tone_mapping;
 pub mod track_editor;
 mod transforms;
 mod transform_colors;
-mod variations;
 mod triangle_editor;
 mod undo_history;
 mod variation_params;
@@ -1823,7 +1823,6 @@ impl EguiLayer {
                 .id(egui::Id::new("main_dock_area"))
                 .show(ctx, &mut panel_viewer::PanelViewer {
                     context: panel_viewer::PanelContext {
-                        variation_catalog,
                         // Core state
                         config_manager,
                         flame,

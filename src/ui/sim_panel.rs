@@ -1326,6 +1326,36 @@ pub(crate) fn choose_first_layer_plugin_model(config_manager: &mut ConfigManager
     choose_plugin_model(config_manager, first_layer(&sim), p);
 }
 
+/// A model's preset from outside the panel (the Catalog's previews): its
+/// whole recipe on the first layer, as the panel's preset buttons apply
+/// it (`preset_changes`).
+pub(crate) fn apply_first_layer_preset(config_manager: &mut ConfigManager, model: &'static crate::sim::ModelDef, pre: &'static crate::sim::SimPreset) {
+    let slot = first_layer(&config_manager.active_config().sim);
+    let _ = config_manager.update_batch(preset_changes(model, pre, slot), "preset".to_string());
+}
+
+/// The built-in model and preset a colouring is meant for: the first
+/// preset that names it (a preset names the colouring it is to be seen
+/// through), with its model. Two that no preset names say what they
+/// need another way: Distance, the distance to the matte's edge (the
+/// first preset with a matte), and Occupancy, the agents' density (the
+/// first agent model). Models and colourings do not yet declare what
+/// suits what; until they do, this is the table.
+pub(crate) fn preset_for_coloring(coloring: &str) -> Option<(&'static crate::sim::ModelDef, &'static crate::sim::SimPreset)> {
+    use crate::sim::{ColoringFeature, ModelFeature, MODELS};
+    let first = |want: &dyn Fn(&crate::sim::ModelDef, &crate::sim::SimPreset) -> bool| MODELS.iter().copied().find_map(|m| m.presets.iter().find(|p| want(m, p)).map(|p| (m, p)));
+    first(&|_, p| p.coloring == Some(coloring)).or_else(|| {
+        let def = crate::sim::COLORINGS.iter().find(|c| c.name == coloring)?;
+        if def.has(ColoringFeature::NeedsDistance) {
+            first(&|_, p| p.matte.is_some())
+        } else if coloring == "occupancy" {
+            first(&|m, _| m.has(ModelFeature::NeedsAgents))
+        } else {
+            None
+        }
+    })
+}
+
 /// Choosing the base colouring from outside the panel (the Catalog): a
 /// built-in by name, which drops a carried Rhai source, or a plug-in with
 /// its source carried -- in the simulation, entered in the same step.
