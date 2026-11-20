@@ -472,10 +472,12 @@ entry's version, so an update or an edit makes a new one:
 | Effect | a reference fractal (the first 2D preset) before and after |
 | Formula, field, solid | its default view |
 | Colouring (escape, field, solid) | the default formula drawn with it |
-| Simulation model, colouring | its first layer or base colouring, run 400 steps at most |
+| Simulation model | the first layer's model at its **first preset** -- its parameters, time step, boundary, initial field, steps and colouring (`sim_panel::apply_first_layer_preset`) -- on a 512-cell grid (on the preview's own 256, SmoothLife's gliders die), 25,000 steps at most (desktop previews render on the UI's thread: the heaviest, Lattice4 and Turing, take about 4 s the first time; the Rössler lattice's presets need 2,000,000 steps, so its preview is undeveloped) |
+| Simulation colouring | on the model and preset that name it (`sim_panel::preset_for_coloring`: a preset names the colouring it is to be seen through); Distance on the first preset with a matte, Occupancy on the first agent model; any other on the default model |
 | Generator | its run at seed 1; a modifier: the reference fractal, modified at seed 1 |
 | A Rhai file of a list's kind | as its kind |
-| Palette, fractal | their gradient, the gallery, the server's thumbnail, as before |
+| Palette | its gradient |
+| Fractal | a preset rendered (cached under the presets' gallery's key); an online one, the server's thumbnail |
 
 A Rhai file of a kind a list uses -- an example, a file of yours, an
 adopted one -- previews through what compiling it makes

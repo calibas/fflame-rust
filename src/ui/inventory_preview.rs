@@ -57,8 +57,15 @@ impl Preview {
     }
 }
 
-/// How far a simulation's preview runs.
-const SIM_STEPS: u32 = 400;
+/// How far a simulation's preview runs at most. A preview runs its
+/// preset's measured steps (the picture is the run at that count), but
+/// on desktop a preview renders on the UI's thread: two presets measure
+/// 200,000 and 2,000,000 steps, and every other first preset 24,000 or
+/// fewer.
+const SIM_STEPS: u32 = 25_000;
+/// A simulation preview's grid side, in cells (the picture is the
+/// preview's size, the grid resolved down to it).
+const SIM_GRID: u32 = 512;
 /// A variation's preview's zoom: the frame about 4.4 units wide, so the
 /// square it starts from fills half of it and most variations land within
 /// it (the far-flung ones show their core).
@@ -206,6 +213,16 @@ fn configs(e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Pa
                         super::escape_panel::choose_field(&mut cm, f);
                     }
                 }
+                // A colouring on the model and preset that name it (a
+                // preset names the colouring it is to be seen through):
+                // Gray-Scott's spots were the wrong picture for most.
+                Kind::SimColoring => {
+                    let name = plugin.as_ref().map(|p| p.key.clone()).or_else(|| super::inventory::applied_name(e)).unwrap_or_default();
+                    if let Some((m, pre)) = super::sim_panel::preset_for_coloring(&name) {
+                        super::sim_panel::choose_first_layer_model(&mut cm, m);
+                        super::sim_panel::apply_first_layer_preset(&mut cm, m, pre);
+                    }
+                }
                 Kind::SolidColoring => {
                     // A solid it draws -- not the flame attractor, which a
                     // default config has no flame for.
@@ -222,9 +239,21 @@ fn configs(e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Pa
                 _ => {}
             }
             super::inventory::use_entry_with(e, plugin, ctx, &mut cm);
+            // A model at its first preset: its parameters, time step,
+            // boundary, initial field, steps and colouring -- one default
+            // field and colouring drew nothing for most models.
+            if e.kind == Kind::SimModel {
+                let model = crate::sim::model_or_default(&cm.active_config().sim.model);
+                if let Some(pre) = model.presets.first() {
+                    super::sim_panel::apply_first_layer_preset(&mut cm, model, pre);
+                }
+            }
             let mut config = cm.active_config().clone();
             if config.render_mode == crate::scene::transforms::RenderMode::Simulation {
                 config.sim.steps = config.sim.steps.min(SIM_STEPS);
+                // The grid the presets were measured at the scale of: on
+                // the preview's own 256 cells SmoothLife's gliders die.
+                config.sim.grid = crate::config::sim::SimGrid::Fixed { width: SIM_GRID, height: SIM_GRID };
             }
             // The default palette's black end on the black background hid
             // whatever an entry draws at index 0 (an orbit trap near the
@@ -515,9 +544,21 @@ mod tests {
         assert_eq!(p.configs[0].render_mode, crate::scene::transforms::RenderMode::Escape);
         assert_eq!(p.configs[0].escape.formula, "mandelbrot");
 
-        let model = crate::sim::MODELS[0].name;
-        let p = preview(&entry(Kind::SimModel, model), &ctx, &[]).expect("a model's preview");
-        assert!(p.configs[0].sim.steps <= SIM_STEPS, "the run capped");
+        // A model at its first preset; a colouring on the preset that
+        // names it.
+        for m in crate::sim::MODELS {
+            let Some(pre) = m.presets.first() else { continue };
+            let p = preview(&entry(Kind::SimModel, m.name), &ctx, &[]).expect("a model's preview");
+            let c = &p.configs[0];
+            assert_eq!(c.sim.steps, pre.steps.min(SIM_STEPS), "{}: its preset's steps, capped", m.name);
+            assert_eq!(c.sim.boundary, pre.boundary, "{}: its preset's boundary", m.name);
+            if let Some(col) = pre.coloring {
+                assert_eq!(c.sim.coloring, col, "{}: its preset's colouring", m.name);
+            }
+        }
+        let (m, _) = super::super::sim_panel::preset_for_coloring("age").expect("a preset names age");
+        let p = preview(&entry(Kind::SimColoring, "age"), &ctx, &[]).expect("a colouring's preview");
+        assert_eq!((p.configs[0].sim.model.as_str(), p.configs[0].sim.coloring.as_str()), (m.name, "age"));
     }
 }
 

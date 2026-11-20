@@ -1,9 +1,8 @@
 # One Catalog view
 
 **Status:** planned 2026-11-20; every question decided the same day
-(*Decisions*, below). Branch `one-catalog`. Steps 1-4 and 6 built
-2026-11-20 (one shell for every catalog, see *Order of work*); step 5
-(simulation previews) to do.
+(*Decisions*, below). Branch `one-catalog`. Every step built
+2026-11-20 (see *Order of work*); not yet seen in the running app.
 
 ## Why
 
@@ -144,7 +143,14 @@ in this plan.
 3. **Palettes** (Group by, pack checkboxes). **Built** (step 1).
 4. **Variations** and the transform selector. **Built 2026-11-20**
    (`transforms::transform_selector`, in the pane above Add to Transform).
-5. **Simulation previews.**
+5. **Simulation previews.** **Built 2026-11-20.** A colouring carries
+   no state kind, so "the first model of its state kind" had nothing to
+   read; a colouring is shown on the first preset that NAMES it (82
+   presets name theirs), Distance on a matte preset, Occupancy on an
+   agent model. Previews run on a 512-cell grid (SmoothLife's gliders
+   die on 256) and 25,000 steps at most (desktop previews block the UI:
+   the heaviest take ~4 s once; Rössler's 2,000,000 steps stay out of
+   reach).
 6. The narrow layout (D7), tests, docs (CATALOG.md rewritten for
    the new layout, UI.md). **Built** with step 1.
 
