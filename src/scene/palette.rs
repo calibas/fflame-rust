@@ -91,6 +91,11 @@ pub struct Palette {
     /// If true, palette is built-in and should not be edited directly (create copy instead)
     /// This flag is ONLY set at runtime in PaletteLibrary, never serialized
     pub built_in: bool,
+    /// What it is or where it came from (a copy saved from the online
+    /// library says so); Markdown, as the Catalog's info pane shows it.
+    /// Not its content: the content hash leaves it out. Written only when
+    /// not empty, so files without one stay as they were.
+    pub description: String,
 }
 
 impl Default for Palette {
@@ -107,6 +112,7 @@ impl Palette {
             stops,
             locked: false,
             built_in: false,
+            description: String::new(),
         }
     }
 
@@ -117,6 +123,7 @@ impl Palette {
             stops,
             locked: false,
             built_in: true,
+            description: String::new(),
         }
     }
 
@@ -385,6 +392,7 @@ impl Palette {
             stops,
             locked: true,
             built_in: false,
+            description: String::new(),
         }
     }
 
@@ -469,6 +477,7 @@ impl Palette {
             stops: stops?,
             locked,
             built_in: false,
+            description: String::new(),
         })
     }
 }
@@ -801,17 +810,27 @@ impl serde::Serialize for Palette {
         // Check if this is an indexed 256-color palette
         if self.is_indexed_256() {
             // Serialize in compact hex format
-            let mut state = serializer.serialize_struct("Palette", 3)?;
+            let mut state = serializer.serialize_struct("Palette", 4)?;
             state.serialize_field("name", &self.name)?;
             state.serialize_field("indexed_colors", &self.to_hex_string())?;
             state.serialize_field("locked", &self.locked)?;
+            if self.description.is_empty() {
+                state.skip_field("description")?;
+            } else {
+                state.serialize_field("description", &self.description)?;
+            }
             state.end()
         } else {
             // Serialize as gradient with stops (legacy format)
-            let mut state = serializer.serialize_struct("Palette", 3)?;
+            let mut state = serializer.serialize_struct("Palette", 4)?;
             state.serialize_field("name", &self.name)?;
             state.serialize_field("stops", &self.stops)?;
             state.serialize_field("locked", &self.locked)?;
+            if self.description.is_empty() {
+                state.skip_field("description")?;
+            } else {
+                state.serialize_field("description", &self.description)?;
+            }
             state.end()
         }
     }
@@ -842,6 +861,7 @@ impl<'de> serde::Deserialize<'de> for Palette {
                 let mut indexed_colors: Option<String> = None;
                 let mut stops: Option<Vec<ColorStop>> = None;
                 let mut locked: Option<bool> = None;
+                let mut description = String::new();
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
@@ -857,6 +877,9 @@ impl<'de> serde::Deserialize<'de> for Palette {
                         "locked" => {
                             locked = Some(map.next_value()?);
                         }
+                        "description" => {
+                            description = map.next_value::<Option<String>>()?.unwrap_or_default();
+                        }
                         _ => {
                             // Skip unknown fields
                             let _: serde::de::IgnoredAny = map.next_value()?;
@@ -870,6 +893,7 @@ impl<'de> serde::Deserialize<'de> for Palette {
                 // Try compact format first, fallback to legacy stops format
                 if let Some(hex_string) = indexed_colors {
                     Palette::from_hex_string(name, &hex_string, locked)
+                        .map(|p| Palette { description, ..p })
                         .map_err(de::Error::custom)
                 } else if let Some(stops) = stops {
                     Ok(Palette {
@@ -877,6 +901,7 @@ impl<'de> serde::Deserialize<'de> for Palette {
                         stops,
                         locked,
                         built_in: false,
+                        description,
                     })
                 } else {
                     Err(de::Error::missing_field("indexed_colors or stops"))
@@ -884,7 +909,7 @@ impl<'de> serde::Deserialize<'de> for Palette {
             }
         }
 
-        deserializer.deserialize_struct("Palette", &["name", "indexed_colors", "stops", "locked"], PaletteVisitor)
+        deserializer.deserialize_struct("Palette", &["name", "indexed_colors", "stops", "locked", "description"], PaletteVisitor)
     }
 }
 
@@ -1557,6 +1582,27 @@ impl PaletteLibrary {
 mod tests {
     use super::*;
 
+    /// A palette's description is kept in its file (both forms: stops and
+    /// indexed colours), left out when empty -- a file without one is
+    /// written as it was -- and is not its content: the hash ignores it.
+    #[test]
+    fn a_palette_keeps_its_description_and_its_hash() {
+        let mut stops = Palette::fire();
+        let plain = serde_json::to_string(&stops).unwrap();
+        assert!(!plain.contains("description"), "none written when empty: {plain}");
+        stops.description = "Saved from somewhere.".to_string();
+        let mut indexed = Palette::from_hex_string("Idx".to_string(), &vec!["FF8800"; 256].join(","), true).unwrap();
+        indexed.description = "Indexed, described.".to_string();
+        for p in [&stops, &indexed] {
+            let back: Palette = serde_json::from_str(&serde_json::to_string(p).unwrap()).unwrap();
+            assert_eq!(back.description, p.description);
+            assert_eq!(back.stops, p.stops);
+        }
+        let mut bare = stops.clone();
+        bare.description.clear();
+        assert_eq!(crate::api::sync::palette_content_hash(&stops), crate::api::sync::palette_content_hash(&bare));
+    }
+
     /// The embedded pack is also a file in the packs folder, so the
     /// desktop scan has to skip it. When the embedded pack moved from
     /// `builtin.json` to `starter_pack.json` and the skip did not, the
@@ -1802,6 +1848,7 @@ mod tests {
             stops,
             locked: true,
             built_in: false,
+            description: String::new(),
         };
 
         // Serialize to JSON
@@ -1889,6 +1936,7 @@ mod tests {
             stops,
             locked: true,
             built_in: false,
+            description: String::new(),
         };
 
         let compact_json = serde_json::to_string(&palette).unwrap();

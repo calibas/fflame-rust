@@ -5,7 +5,8 @@ use std::fmt;
 /// Errors that can occur during resource fetching
 #[derive(Debug, Clone)]
 pub enum FetchError {
-    /// Network error (connection failed, timeout, etc.)
+    /// Network error (connection failed, timeout, etc.): what failed, without
+    /// "Network error:" (`Display` says that).
     Network(String),
     /// HTTP error (non-2xx status code)
     Http { status: u16, message: String },

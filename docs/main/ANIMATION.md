@@ -792,7 +792,7 @@ writes the targets it declares, every frame. It is written in the
 Rhai Editor (**Use as track**), or added from the track editor's
 **Add Script Track** menu: the shipped examples (Breathing, Springy
 Zoom, Smoothed Jitter, in `assets/formulas/track-*.rhai`), the user's
-track plug-ins (`library::Kind::Track`), or a new one begun in the
+track files (`library::Kind::Track`), or a new one begun in the
 editor. The animation carries its source and its parameter values, so a
 `.anim` plays anywhere.
 

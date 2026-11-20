@@ -100,7 +100,7 @@ A background export (PNG on its own device, high-res, video) **freezes the viewp
 ## Build, Release, Test
 
 ```bash
-cargo run --release                      # desktop app (binary: FractalArtEditor)
+cargo run --release                      # desktop app (binary: FractalArtEditor), talking to a LOCAL API (localhost:3000)
 # CLI subcommands: export, export-animation, generate (Rhai scripts), list-encoders
 cargo run --release -- export -i tests/visual/configs/2d -o output/visual-2d   # one folder (not recursive); the whole suite is run_tests.py
 ./build-wasm.sh                          # web app (or build-wasm.bat): --profile dist + wasm-bindgen, not wasm-pack
@@ -121,7 +121,7 @@ UPDATE_CONTRACT=1 cargo test --lib contract_is_current        # docs/generated/e
 UPDATE_CATALOG=1 cargo test --lib catalog_is_current          # docs/generated/engine-catalog.json (the API's catalog; api-catalog-spec.md)
 UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps # tests/shader_dumps/
 ```
-The API's corpora come from `cargo run --release --bin export_variations_json` / `export_scripts_json` / `export_effects_json` (written to `output/`, gitignored). **A new `Feature`, `VariationCategory` or `ParamType` does NOT move the contract's shape fingerprint** -- tell the API repository directly (RELEASE.md §3). Release builds use `cargo build --profile dist` (31% smaller; the profile name is recorded in every PNG).
+The API's corpora come from `cargo run --release --bin export_variations_json` / `export_scripts_json` / `export_effects_json` (written to `output/`, gitignored); the curated manifest -- everything the app ships, which the API's seeding sync imports by content hash -- from `export_curated_json` (`src/curated.rs`; [curated-content.md](docs/projects/curated-content.md)). **A new `Feature`, `VariationCategory` or `ParamType` does NOT move the contract's shape fingerprint** -- tell the API repository directly (RELEASE.md §3). Release builds use `cargo build --profile dist` (31% smaller; the profile name is recorded in every PNG). **The API address follows the profile** (`build.rs`): `dist` talks to `https://fractalsforall.com`, `--release` and debug builds to `http://localhost:3000` (a local ffapi); `FFLAME_API_BASE_URL` at build time overrides. So a `cargo build --release` binary is never one to ship.
 
 ### Testing ([docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md))
 - `cargo test --release --lib` - ~1,900 tests; GPU tests skip without an adapter.
@@ -203,7 +203,7 @@ Structural actions -- adding or deleting a transform, loading a config (preset, 
 See @Cargo.toml. Key: **wgpu 29.0** (desktop vulkan/metal/gles -- dx12 deliberately omitted; WASM webgpu only), **winit 0.30**, **egui 0.34** + **egui_dock 0.19**, **serde/serde_json**, **quick-xml** (.flame), **image/png**, **bytemuck**, **cpal/symphonia** (audio; the FFT is ours), **rayon** (CPU export paths), **ureq** (desktop HTTP), **rhai** + **rand_pcg** (scripting; the PCG stream is what `script + seed` means, so it is pinned).
 
 ## File Formats
-- **.fflame** - JSON, the complete FractalConfig (see `src/config/fractal_config.rs`): everything needed for exact reproduction -- the flame, view and camera, rendering settings, colour and palette data, tone mapping, depth effects, and the escape/sim/terrain blocks. Versioned (`CURRENT_CONFIG_VERSION`, migrated on load); new fields are skip-if-default.
+- **.fflame** - JSON, the complete FractalConfig (see `src/config/fractal_config.rs`): everything needed for exact reproduction -- except that File > Save As names a curated item's Rhai (`curated` table: kind, canonical name, content hash, entry) instead of carrying its source, fetched back on load (`curated::refs`; Save As for Offline Use keeps the sources) -- the flame, view and camera, rendering settings, colour and palette data, tone mapping, depth effects, and the escape/sim/terrain blocks. Versioned (`CURRENT_CONFIG_VERSION`, migrated on load); new fields are skip-if-default.
 - **.flame** - Apophysis/JWildfire XML (`src/flame_xml.rs`): round-trips the camera (`cam_pitch/yaw`, the `cam_roll`->bank rename quirk, `rotate`->rotation, `cam_pos_x/y/z` + legacy `cam_zpos`), perspective, DoF, post-symmetry, xaos, palettes and variation parameters (with per-parameter unit conversions). Our own extensions (depth-density compensation, far-density fade) are `.fflame`-only.
 - **.palette** / pack JSON - a palette's name and its colours (stops, or `indexed_colors` hex in most packs).
 

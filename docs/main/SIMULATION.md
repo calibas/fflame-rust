@@ -716,7 +716,8 @@ to the `sim_color` the colour template calls.
   Simulation Colouring** puts it in the config -- in a stack, in the
   colour layer picked from its menu -- entering Simulation in the same
   step, and Live updates every entry carrying a version, by its id; a
-  plug-in one is in every entry's picker under "Your plug-ins".
+  file of the kind that compiles is in every entry's picker, as in the
+  Catalog ([one-list.md](../projects/one-list.md)).
 - **Twins**: `sim::custom::SHIPPED`, every built-in colouring (13,
   `assets/sim/<name>.rhai`), each held to its built-in's settings
   (`every_colouring_twin_carries_its_built_ins_settings`: parameters,

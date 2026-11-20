@@ -11,7 +11,26 @@ impl App {
     /// Local loads (file, preset, random, new): pass `None` to clear API state.
     /// API loads (browser, URL deep-link): pass `Some(api_state)` with the
     /// flame_id, animations, ownership, etc. from the API response.
+    ///
+    /// A config naming curated items whose sources it left out (a `.fflame`
+    /// save, `curated::refs`) loads once they are fetched: the load is held
+    /// meanwhile (`trust::hold_for_references`) and this returns at once.
     pub fn load_config_with_undo(
+        &mut self,
+        config: FractalConfig,
+        description: String,
+        api_metadata: Option<ApiContentState>,
+    ) -> Result<(), String> {
+        let missing = crate::curated::refs::unresolved(&config);
+        if !missing.is_empty() {
+            self.hold_for_references(config, description, api_metadata, missing);
+            return Ok(());
+        }
+        self.load_config_now(config, description, api_metadata)
+    }
+
+    /// [`Self::load_config_with_undo`], whatever the config names.
+    pub(super) fn load_config_now(
         &mut self,
         config: FractalConfig,
         description: String,

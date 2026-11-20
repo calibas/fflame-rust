@@ -1,74 +1,41 @@
-//! Async fetching of API-managed variations when a flame references
-//! variations not yet in the registry.
+//! Fetching API-managed variations a flame references but the registry
+//! does not hold, and the variation catalog.
+//!
+//! One rule set with the effect fetch (`effect_fetch`; docs/projects/
+//! curated-content.md, step 6): each download an [`api::job`]
+//! (`downloads::Downloads`), registered first and cached only once the
+//! registry accepted it, a built-in's or a custom variation's name never
+//! replaced. A missing variation pauses rendering (the flame would draw
+//! wrong meanwhile); a missing effect does not (the picture is merely
+//! un-effected).
 
+use crate::api::job;
 use crate::app::App;
-use crate::api::types::VariationDownload;
 use crate::ui::UiResponse;
 
 const VARIATION_FETCH_TIMEOUT_SECS: u64 = 30;
 
 impl App {
-    /// Fire off async fetches for the given variation names.
-    /// Pauses rendering until all complete (or timeout).
+    /// Fetch these variation names; rendering pauses until all are in (or
+    /// the batch times out). A new batch replaces one in flight.
     pub(super) fn trigger_variation_fetches(&mut self, names: Vec<String>) {
         if names.is_empty() {
             return;
         }
         log::info!("Fetching {} unknown variations from API: {:?}", names.len(), names);
-
-        self.egui_layer.show_api_notification(
-            &t!("api.loading_variations", names = names.join(", ")),
-            false,
-        );
-
-        // New batch: anything still in flight from a previous one is now
-        // a straggler and must not be counted against this batch.
-        self.variation_fetch_epoch = self.variation_fetch_epoch.wrapping_add(1);
-        let epoch = self.variation_fetch_epoch;
-        if let Ok(mut slot) = self.variation_fetch_results.lock() {
-            slot.clear();
-        }
-
-        self.variation_fetch_in_progress = true;
-        self.variation_fetch_started = Some(web_time::Instant::now());
-        self.variation_fetch_pending_count = names.len();
-        self.variation_fetch_names = names.clone();
+        self.egui_layer.show_api_notification(&t!("api.loading_variations", names = names.join(", ")), false);
+        self.variation_downloads.new_batch();
         self.paused = true;
-
-        let base_url = crate::api::API_BASE_URL.to_string();
-        let result_slot = self.variation_fetch_results.clone();
-
         for name in names {
-            let url_name = name.clone();
-            let slot = result_slot.clone();
-            let base = base_url.clone();
+            let api = crate::api::ApiState::new(crate::api::API_BASE_URL);
             let window = self.window.clone();
-
-            #[cfg(target_arch = "wasm32")]
-            wasm_bindgen_futures::spawn_local(async move {
-                let api = crate::api::ApiState::new(&base);
-                let result = api.fetch_variation(&url_name).await
-                    .map_err(|e| e.to_string());
-                if let Ok(mut s) = slot.lock() {
-                    s.push((epoch, url_name, result));
-                }
-                window.request_redraw();
-            });
-
-            #[cfg(not(target_arch = "wasm32"))]
-            std::thread::spawn(move || {
-                let api = crate::api::ApiState::new(&base);
-                let result = pollster::block_on(api.fetch_variation(&url_name))
-                    .map_err(|e| e.to_string());
-                if let Ok(mut s) = slot.lock() {
-                    s.push((epoch, url_name, result));
-                }
-                window.request_redraw();
-            });
+            let wanted = name.clone();
+            let download = job::spawn(async move { api.fetch_variation(&wanted).await }, move || window.request_redraw());
+            self.variation_downloads.push(name, download);
         }
     }
 
-/// Split missing variations into "we can fetch this" and "you are
+    /// Split missing variations into "we can fetch this" and "you are
     /// missing a plugin", and act differently on each.
     ///
     /// From the config the two look identical — both are a name the
@@ -99,20 +66,12 @@ impl App {
                 // offline is not evidence that a name is unlisted, so
                 // this tries the fetch and lets it fail honestly.
                 MissingReason::Downloadable | MissingReason::Unknown => fetchable.push(name),
-                MissingReason::KnownButNotFetchable | MissingReason::NotInCatalog => {
-                    unresolvable.push(name)
-                }
+                MissingReason::KnownButNotFetchable | MissingReason::NotInCatalog => unresolvable.push(name),
             }
         }
 
         if !unresolvable.is_empty() {
-            self.egui_layer.show_api_notification(
-                &t!(
-                    "api.variations_need_a_plugin",
-                    names = unresolvable.join(", ")
-                ),
-                true,
-            );
+            self.egui_layer.show_api_notification(&t!("api.variations_need_a_plugin", names = unresolvable.join(", ")), true);
         }
         if !fetchable.is_empty() {
             // A guest's too: variations are publicly readable.
@@ -120,102 +79,50 @@ impl App {
         }
     }
 
-    /// Poll for completed variation fetches, register successes, and finalize when done.
-    /// Called every frame while a fetch is in progress.
+    /// Once a frame: register what came back; when the batch is done (or
+    /// timed out), rebuild the shader and render again.
     pub(super) fn handle_variation_fetches(&mut self) {
-        if !self.variation_fetch_in_progress {
+        if !self.variation_downloads.busy() {
             return;
         }
-
-        // Timeout watchdog
-        if let Some(started) = self.variation_fetch_started {
-            if started.elapsed() > std::time::Duration::from_secs(VARIATION_FETCH_TIMEOUT_SECS) {
-                log::error!("Variation fetch timed out after {}s", VARIATION_FETCH_TIMEOUT_SECS);
-                // Tell the user. `finalize` used to take a `had_failures`
-                // flag and ignore it, so a timeout resumed rendering in
-                // silence and the flame just drew wrong.
-                for name in &self.variation_fetch_names {
-                    crate::ui::inventory::download_failed(crate::inventory::Kind::Variation, name, &t!("catalog.download_timed_out"));
-                }
-                let names = std::mem::take(&mut self.variation_fetch_names).join(", ");
-                self.egui_layer.show_api_notification(
-                    &t!("api.variation_fetch_timeout", names = names),
-                    true,
-                );
-                self.finalize_variation_fetches();
-                return;
+        if self.variation_downloads.started.is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(VARIATION_FETCH_TIMEOUT_SECS)) {
+            log::error!("Variation fetch timed out after {}s", VARIATION_FETCH_TIMEOUT_SECS);
+            let names = self.variation_downloads.names();
+            for name in &names {
+                crate::ui::inventory::download_failed(crate::inventory::Kind::Variation, name, &t!("catalog.download_timed_out"));
             }
-        }
-
-        // Drain any completed fetches
-        let drained: Vec<(u64, String, Result<VariationDownload, String>)> = {
-            let mut slot = match self.variation_fetch_results.lock() {
-                Ok(s) => s,
-                Err(_) => return,
-            };
-            std::mem::take(&mut *slot)
-        };
-        // Drop stragglers from an abandoned batch. Counting them here is
-        // what finalized the current batch early.
-        let epoch = self.variation_fetch_epoch;
-        let mut stale = 0usize;
-        let new_results: Vec<(String, Result<VariationDownload, String>)> = drained
-            .into_iter()
-            .filter_map(|(e, name, result)| {
-                if e == epoch {
-                    Some((name, result))
-                } else {
-                    stale += 1;
-                    None
-                }
-            })
-            .collect();
-        if stale > 0 {
-            log::debug!("Discarded {stale} variation fetch result(s) from an earlier batch");
-        }
-
-        if new_results.is_empty() {
+            self.variation_downloads.abandon();
+            self.egui_layer.show_api_notification(&t!("api.variation_fetch_timeout", names = names.join(", ")), true);
+            self.finalize_variation_fetches();
             return;
         }
 
-        let mut succeeded = 0;
+        let done = self.variation_downloads.take_done();
+        if done.is_empty() {
+            return;
+        }
         let mut failed = Vec::new();
-        for (name, result) in new_results {
-            self.variation_fetch_pending_count = self.variation_fetch_pending_count.saturating_sub(1);
-            match result {
-                Ok(download) => {
-                    // Persist to cache, then register
-                    if let Err(e) = crate::storage::variation_cache::save(&download) {
-                        log::warn!("Failed to cache variation '{}': {}", download.name, e);
-                    }
-                    crate::variations::global_registry_mut().register_from_api(
-                        &download,
-                        crate::provenance::Provenance::Api { version: download.version },
-                    );
-                    succeeded += 1;
+        for (name, result) in done {
+            let outcome = result.map_err(|e| e.to_string()).and_then(|download| {
+                // Register FIRST, cache second: a payload the registry
+                // refuses would only be refused again at every start.
+                crate::variations::global_registry_mut()
+                    .register_from_api(&download, crate::provenance::Provenance::Api { version: download.version })?;
+                if let Err(e) = crate::storage::variation_cache::save(&download) {
+                    log::warn!("Failed to cache variation '{}': {}", download.name, e);
                 }
-                Err(e) => {
-                    log::warn!("Failed to fetch variation '{}': {}", name, e);
-                    crate::ui::inventory::download_failed(crate::inventory::Kind::Variation, &name, &e);
-                    failed.push(name);
-                }
+                Ok(())
+            });
+            if let Err(e) = outcome {
+                log::warn!("Variation '{name}' not installed: {e}");
+                crate::ui::inventory::download_failed(crate::inventory::Kind::Variation, &name, &e);
+                failed.push(name);
             }
         }
-
-        if succeeded > 0 {
-            // Variations were added — the renderer needs to rebuild the shader
-            // when it next renders. Mark for shader rebuild via flame_renderer.
-            // (The next render will detect the new variations and rebuild.)
-            log::info!("Registered {} new variations from API", succeeded);
-        }
-
-        if self.variation_fetch_pending_count == 0 {
+        if !self.variation_downloads.busy() {
             self.finalize_variation_fetches();
             if !failed.is_empty() {
-                self.egui_layer.show_api_notification(
-                    &t!("api.variation_fetch_failed", names = failed.join(", ")),
-                    true,
-                );
+                self.egui_layer.show_api_notification(&t!("api.variation_fetch_failed", names = failed.join(", ")), true);
             }
         }
     }
@@ -223,51 +130,26 @@ impl App {
     /// Refresh the variation catalog once per session, in the
     /// background.
     ///
-    /// Deliberately NOT gated on `variation_fetch_in_progress` and
-    /// deliberately not pausing the render: the catalog is metadata for
-    /// the panel, not something a frame depends on. A failure is a
-    /// logged warning and nothing else — the cached copy (or an empty
-    /// listing) is a correct answer, and an app that renders fractals
-    /// offline should not surface a modal because a catalog endpoint
-    /// was unreachable.
+    /// Deliberately not gated on a fetch in flight and not pausing the
+    /// render: the catalog is metadata for the panel, not something a
+    /// frame depends on. A failure is a logged note and nothing else —
+    /// the cached copy (or an empty listing) is a correct answer, and an
+    /// app that renders fractals offline should not surface a modal
+    /// because a catalog endpoint was unreachable.
     pub(super) fn refresh_variation_catalog(&mut self) {
         if !self.catalog_fetch_started {
             self.catalog_fetch_started = true;
-            let slot = self.catalog_fetch_result.clone();
-            let base = crate::api::API_BASE_URL.to_string();
+            let api = crate::api::ApiState::new(crate::api::API_BASE_URL);
             let window = self.window.clone();
-
-            #[cfg(target_arch = "wasm32")]
-            wasm_bindgen_futures::spawn_local(async move {
-                let api = crate::api::ApiState::new(&base);
-                let r = api.list_variations().await.map_err(|e| e.to_string());
-                if let Ok(mut s) = slot.lock() { *s = Some(r); }
-                window.request_redraw();
-            });
-
-            #[cfg(not(target_arch = "wasm32"))]
-            std::thread::spawn(move || {
-                let api = crate::api::ApiState::new(&base);
-                let r = pollster::block_on(api.list_variations()).map_err(|e| e.to_string());
-                if let Ok(mut s) = slot.lock() { *s = Some(r); }
-                window.request_redraw();
-            });
+            self.catalog_job = Some(job::spawn(async move { api.list_variations().await }, move || window.request_redraw()));
             return;
         }
-
-        let drained = match self.catalog_fetch_result.lock() {
-            Ok(mut s) => s.take(),
-            Err(_) => return,
-        };
-        let Some(result) = drained else { return };
-
+        let Some(result) = self.catalog_job.as_ref().and_then(job::Job::take) else { return };
+        self.catalog_job = None;
         match result {
             Ok(items) => {
                 log::info!("Variation catalog: {} entries", items.len());
-                let catalog = crate::storage::variation_catalog::CachedCatalog {
-                    items,
-                    version: None,
-                };
+                let catalog = crate::storage::variation_catalog::CachedCatalog { items, version: None };
                 if let Err(e) = crate::storage::variation_catalog::save(&catalog) {
                     log::warn!("Could not cache the variation catalog: {e}");
                 }
@@ -277,11 +159,7 @@ impl App {
                 // Offline is a normal state, not an error condition.
                 log::info!(
                     "Variation catalog unavailable ({e}) — showing what is installed{}",
-                    if self.variation_catalog.is_some() {
-                        " plus the last cached listing"
-                    } else {
-                        ""
-                    }
+                    if self.variation_catalog.is_some() { " plus the last cached listing" } else { "" }
                 );
             }
         }
@@ -297,8 +175,6 @@ impl App {
         if ui_response.variation_update_requested.is_empty() {
             return;
         }
-        // A built-in can never be replaced by a download, so asking to
-        // update one is a no-op the fetch would spend 30s discovering.
         let registry = crate::variations::global_registry();
         let names: Vec<String> = ui_response
             .variation_update_requested
@@ -309,6 +185,7 @@ impl App {
             .filter(|n| registry.get(n).is_none_or(|v| v.provenance.is_cached_download()))
             .cloned()
             .collect();
+        drop(registry);
         self.trigger_variation_fetches(names);
     }
 
@@ -323,32 +200,18 @@ impl App {
         match crate::storage::variation_cache::clear_all() {
             Ok(count) => {
                 crate::variations::global_registry_mut().clear_api();
-                self.egui_layer.show_api_notification(
-                    &t!("api.variation_cache_cleared", count = count),
-                    false,
-                );
+                self.egui_layer.show_api_notification(&t!("api.variation_cache_cleared", count = count), false);
             }
             Err(e) => {
                 log::error!("Failed to clear variation cache: {}", e);
-                self.egui_layer.show_api_notification(
-                    &t!("api.variation_cache_clear_failed", error = e),
-                    true,
-                );
+                self.egui_layer.show_api_notification(&t!("api.variation_cache_clear_failed", error = e), true);
             }
         }
     }
 
-    /// Reset fetch state and rebuild the shader.
-    ///
-    /// Deliberately says nothing to the user: the two call sites need
-    /// different messages (timeout vs. partial failure), so each shows
-    /// its own. The old signature took a `had_failures` flag and ignored
-    /// it, which is why a timeout was silent.
+    /// Resume rendering and rebuild the shader. Says nothing to the user:
+    /// the two call sites (timeout, partial failure) each show their own.
     fn finalize_variation_fetches(&mut self) {
-        self.variation_fetch_in_progress = false;
-        self.variation_fetch_started = None;
-        self.variation_fetch_pending_count = 0;
-        self.variation_fetch_names.clear();
         self.paused = false;
         // Trigger a render reset so the new shader (with the fetched variations)
         // takes effect immediately.

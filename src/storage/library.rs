@@ -112,6 +112,11 @@ pub const ALL_PUBLISHED: &[Kind] = &[
 /// ([`crate::lang::rhai::kind_of`]), a track by its shape.
 pub fn rhai_kind(source: &str) -> Kind {
     use crate::lang::{rhai, EntryKind};
+    // A track first: a stateful one has `start` and `step` as a formula
+    // does, but only a track declares `TARGETS` and a `value` function.
+    if crate::animation::script::looks_like_track(source) {
+        return Kind::Track;
+    }
     match rhai::kind_of(source) {
         Some(EntryKind::Formula) => Kind::Formula,
         Some(EntryKind::Coloring) => Kind::Coloring,
@@ -122,8 +127,6 @@ pub fn rhai_kind(source: &str) -> Kind {
         Some(EntryKind::SimModel) => Kind::SimModel,
         Some(EntryKind::Field) => Kind::Field,
         Some(EntryKind::FieldColoring) => Kind::FieldColoring,
-        // A track is the CPU world's: no GPU kind reads it.
-        None if crate::animation::script::looks_like_track(source) => Kind::Track,
         None => Kind::Unknown,
     }
 }
@@ -186,14 +189,9 @@ pub fn scan() -> Vec<Entry> {
 
 /// What a list shows after an entry's title -- the Scripts panel's and
 /// the Formula Editor's alike (P3, step 4): the origin's mark
-/// ([`Origin::mark`]), and whether it is a plug-in.
-pub fn marks(origin: Origin, plugin: bool) -> String {
-    let mut out = origin.mark().to_string();
-    if plugin {
-        out.push(' ');
-        out.push_str(&t!("library.plugin"));
-    }
-    out
+/// ([`Origin::mark`]).
+pub fn marks(origin: Origin) -> String {
+    origin.mark().to_string()
 }
 
 /// A stored file's origin, from its link.
@@ -282,17 +280,22 @@ fn formula_entry(file: &str, source: &str, origin: Origin, link: Link) -> Entry 
 }
 
 // ============================================================================
-// Plug-ins (P3, step 2)
+// Compiled files (docs/projects/one-list.md; once the plug-ins, P3 step 2)
 // ============================================================================
 
-/// A plug-in as registered: a GPU Rhai entry of the formula store with
-/// its link's `plugin` set, which every start registers
-/// ([`load_plugins`]) so the lists offer it without a config carrying it.
+/// A GPU Rhai file of the formula store -- a shipped example or a file of
+/// the user's -- compiled: registered in its kind's registry, its source as
+/// a config carries it. Every usable file is compiled when a list first
+/// needs it (L1: there is no plug-in flag; any file of a pickable kind is
+/// offered), once per version.
 #[derive(Debug, Clone)]
 pub struct Plugin {
     pub kind: Kind,
-    /// Its file in the formula store.
+    /// Its file in the formula store (a shipped example's name, when
+    /// `shipped`).
     pub file: String,
+    /// A shipped example, not a file of the user's.
+    pub shipped: bool,
     pub title: String,
     /// What it registered as, which a config names: a variation's or an
     /// effect's key, an escape slot's name.
@@ -307,88 +310,97 @@ fn registered() -> &'static std::sync::RwLock<Vec<Plugin>> {
     P.get_or_init(Default::default)
 }
 
-/// The plug-ins registered, in the order they loaded.
+/// What each `(shipped, file, version)` compiled to, a failure included,
+/// so neither is repeated every frame.
+type CompileCache = std::collections::HashMap<(bool, String, String), Result<Plugin, String>>;
+
+fn compiled_cache() -> &'static std::sync::Mutex<CompileCache> {
+    static C: std::sync::OnceLock<std::sync::Mutex<CompileCache>> = std::sync::OnceLock::new();
+    C.get_or_init(Default::default)
+}
+
+/// The files compiled this session, in the order they compiled.
 pub fn plugins() -> Vec<Plugin> {
     registered().read().map(|p| p.clone()).unwrap_or_default()
 }
 
-/// The plug-ins of a kind.
+/// The files of a kind compiled this session.
 pub fn plugins_of(kind: Kind) -> Vec<Plugin> {
     plugins().into_iter().filter(|p| p.kind == kind).collect()
 }
 
-/// Register every plug-in of the formula store: what each start does
-/// where the downloads register (`storage::load_installed_resources`), on
-/// every platform and entry point. Gives what did not register, each with
-/// why, which is also logged.
-pub fn load_plugins() -> Vec<String> {
-    let mut failed = Vec::new();
-    if let Ok(mut f) = failures().write() {
-        f.clear();
+/// Whether `key` was registered by compiling a file (what a list offers as
+/// that file, not as the registry's own entry).
+pub fn is_file_key(key: &str) -> bool {
+    registered().read().is_ok_and(|all| all.iter().any(|p| p.key == key))
+}
+
+/// A file compiled: from the cache by `(shipped, file, version)`, or
+/// compiled now from `source()` and kept, a failure too. A file that
+/// needs an id of its own to register (an effect, a variation without a
+/// name) gets one derived from its name -- the same every session --
+/// without the file being rewritten.
+/// What [`compile_file`] made of a file at a version, if it was asked
+/// already: never compiles (so it never takes a registry's lock).
+pub fn compiled_cached(file: &str, shipped: bool, version: &str) -> Option<Result<Plugin, String>> {
+    let key = (shipped, file.to_string(), version.to_string());
+    compiled_cache().lock().ok()?.get(&key).cloned()
+}
+
+pub fn compile_file(file: &str, shipped: bool, version: &str, source: impl FnOnce() -> Option<String>) -> Result<Plugin, String> {
+    let key = (shipped, file.to_string(), version.to_string());
+    if let Some(done) = compiled_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return done;
     }
-    for (file, link) in crate::storage::formula_store::links() {
-        if !link.plugin {
-            continue;
-        }
-        let Some(source) = crate::storage::formula_store::load(&file) else {
-            failed.push(format!("{file}: not in your formulas"));
-            continue;
+    let result = source().ok_or_else(|| format!("`{file}` could not be read")).and_then(|text| {
+        let needs_id = match rhai_kind(&text) {
+            Kind::Variation => crate::variations::custom::needs_id(&text),
+            Kind::Effect => crate::api::entries::needs_id(&text),
+            _ => false,
         };
-        if let Err(e) = register_plugin(&file, &source) {
-            log::warn!("The plug-in `{file}` did not register: {e}");
-            failed.push(format!("{file}: {e}"));
+        let text = if needs_id {
+            let owner = if shipped { "shipped" } else { "own" };
+            crate::lang::rhai::with_own_id(&text, &crate::scripted::derived_id(&format!("{owner}:{file}")))
+        } else {
+            text
+        };
+        let mut plugin = prepare_plugin(file, &text)?;
+        plugin.shipped = shipped;
+        Ok(plugin)
+    });
+    if let Ok(plugin) = &result {
+        if let Ok(mut all) = registered().write() {
+            all.retain(|p| !(p.file == plugin.file && p.shipped == plugin.shipped));
+            all.push(plugin.clone());
         }
     }
-    if let Ok(mut f) = failures().write() {
-        f.clone_from(&failed);
+    if let Ok(mut cache) = compiled_cache().lock() {
+        cache.insert(key, result.clone());
     }
-    failed
+    result
 }
 
-fn failures() -> &'static std::sync::RwLock<Vec<String>> {
-    static F: std::sync::OnceLock<std::sync::RwLock<Vec<String>>> = std::sync::OnceLock::new();
-    F.get_or_init(Default::default)
-}
-
-/// The plug-ins the last [`load_plugins`] could not register, each with
-/// why: what the app's start reports, as a plug-in that fails silently is
-/// a list missing an entry for no reason anyone can see.
-pub fn plugin_failures() -> Vec<String> {
-    failures().read().map(|f| f.clone()).unwrap_or_default()
-}
-
-/// Register one formula store file as a plug-in, replacing what it
-/// registered before (an edit is a new version: a new key). A variation
-/// or an effect registers in its registry under its key (`Provenance::
-/// Local`, the user's namespace); a formula, colouring or solid in the
-/// escape engine's under its slot name.
-pub fn register_plugin(file: &str, source: &str) -> Result<Plugin, String> {
-    let plugin = prepare_plugin(file, source)?;
-    if let Ok(mut all) = registered().write() {
-        all.retain(|p| p.file != file);
-        all.push(plugin.clone());
-    }
-    Ok(plugin)
-}
-
-/// What [`register_plugin`] makes of a file -- registered in its kind's
-/// registry, its source as a config carries it -- without listing it as
-/// a plug-in: the Catalog's preview of a file of the user's or an example.
+/// What a file makes -- registered in its kind's registry, its source as a
+/// config carries it -- without keeping it: the Catalog's preview of a file
+/// goes through [`compile_file`] instead, which keeps it.
 pub fn prepare_plugin(file: &str, source: &str) -> Result<Plugin, String> {
     let entry = formula_entry(file, source, Origin::Local, Link::default());
     if !entry.kind.can_be_plugin() {
-        return Err("a plug-in is a Rhai variation, effect, formula, colouring or solid".to_string());
+        return Err("only a Rhai variation, effect, formula, colouring, solid or track can be used from a list".to_string());
     }
     let (key, carried) = register_kind(entry.kind, &entry.title, source)?;
-    Ok(Plugin { kind: entry.kind, file: file.to_string(), title: entry.title, key, carried })
+    Ok(Plugin { kind: entry.kind, file: file.to_string(), shipped: false, title: entry.title, key, carried })
 }
 
-/// Stop offering a file's plug-in. What it registered stays registered
-/// until the app restarts -- a config may already be using it -- but the
-/// lists no longer offer it.
-pub fn unlist_plugin(file: &str) {
+/// Forget what a file of the user's compiled to (it was renamed, edited or
+/// deleted). What it registered stays registered until the app restarts --
+/// a config may already be using it -- but the lists no longer offer it.
+pub fn forget(file: &str) {
     if let Ok(mut all) = registered().write() {
-        all.retain(|p| p.file != file);
+        all.retain(|p| !(p.file == file && !p.shipped));
+    }
+    if let Ok(mut cache) = compiled_cache().lock() {
+        cache.retain(|(shipped, f, _), _| *shipped || f != file);
     }
 }
 
@@ -472,6 +484,17 @@ fn value(t, p, ctx) { #{ rotation: t } }";
         assert_eq!(carried.source, src);
     }
 
+    /// A stateful track has `start` and `step`, as a formula does: it was
+    /// read as a formula (the shipped Springy Zoom and Smoothed Jitter).
+    #[test]
+    fn a_stateful_track_is_a_track_not_a_formula() {
+        for (file, source) in crate::storage::formula_store::EXAMPLES {
+            if file.starts_with("track-") {
+                assert_eq!(rhai_kind(source), Kind::Track, "{file}");
+            }
+        }
+    }
+
     #[test]
     fn the_scan_reads_every_shipped_entry() {
         let all = scan();
@@ -487,14 +510,12 @@ fn value(t, p, ctx) { #{ rotation: t } }";
         assert!(shipped.iter().any(|e| e.kind == Kind::Formula), "the formula examples");
     }
 
-    /// Both lists mark an entry alike: whose it is, and a plug-in.
+    /// Both lists mark an entry alike: whose it is.
     #[test]
-    fn the_marks_say_whose_it_is_and_a_plugin() {
-        assert_eq!(marks(Origin::Builtin, false), "");
-        assert_eq!(marks(Origin::Local, false), " *");
-        assert_eq!(marks(Origin::Api, false), " ↓");
-        let plugin = marks(Origin::Local, true);
-        assert!(plugin.starts_with(" * ") && plugin.contains("plug-in"), "{plugin}");
+    fn the_marks_say_whose_it_is() {
+        assert_eq!(marks(Origin::Builtin), "");
+        assert_eq!(marks(Origin::Local), " *");
+        assert_eq!(marks(Origin::Api), " ↓");
     }
 
     /// A formula store file's link: set, read back, cleared by deleting the
@@ -505,9 +526,10 @@ fn value(t, p, ctx) { #{ rotation: t } }";
     fn a_formula_files_link_goes_with_it() {
         use crate::storage::formula_store as store;
         let file = store::save("__library link test__.rhai", "fn variation(z, p) { z }\n").expect("save");
-        store::set_link(&file, Link { plugin: true, ..Default::default() }).expect("link");
-        assert!(store::link_of(&file).is_some_and(|l| l.plugin));
-        assert!(scan().iter().any(|e| e.file == file && e.origin == Origin::Local && e.link.plugin), "the scan reads it");
+        let cloud = Some("link-test-cloud".to_string());
+        store::set_link(&file, Link { cloud_id: cloud.clone(), ..Default::default() }).expect("link");
+        assert!(store::link_of(&file).is_some_and(|l| l.cloud_id == cloud));
+        assert!(scan().iter().any(|e| e.file == file && e.origin == Origin::Local && e.link.cloud_id == cloud), "the scan reads it");
         store::delete(&file).expect("delete");
         assert!(store::link_of(&file).is_none(), "deleting the file forgets its link");
         // An empty link is no entry at all.
@@ -517,21 +539,39 @@ fn value(t, p, ctx) { #{ rotation: t } }";
         store::delete(&file).expect("delete");
     }
 
-    /// An effect plug-in registers under its key, its source carried
-    /// under it, and is offered as one; a file of no plug-in's kind is
-    /// refused; unlisting stops the offer.
+    /// An effect file compiles under its key, its source carried under it,
+    /// and is offered; the second ask is the cache's (the source is not read
+    /// again); forgetting stops the offer; a file of no list's kind is
+    /// refused (docs/projects/one-list.md).
     #[test]
-    fn an_effect_plugin_registers_and_is_offered() {
+    fn an_effect_file_compiles_once_and_is_offered() {
         let src = "const INFO = #{ title: \"Tint test\", id: \"1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a\" };\nfn effect(c, p) { c }\n";
-        let p = register_plugin("__tint test__.rhai", src).expect("registers");
+        let p = compile_file("__tint test__.rhai", false, "v1", || Some(src.to_string())).expect("compiles");
         assert_eq!(p.kind, Kind::Effect);
         assert!(crate::effects::global_effect_registry().get(&p.key).is_some_and(|i| i.provenance == crate::provenance::Provenance::Local));
         assert_eq!(p.carried.entry, p.key);
         assert!(plugins_of(Kind::Effect).iter().any(|q| q.file == p.file));
-        unlist_plugin(&p.file);
+        assert!(is_file_key(&p.key));
+        let again = compile_file("__tint test__.rhai", false, "v1", || None).expect("from the cache");
+        assert_eq!(again.key, p.key);
+        forget(&p.file);
         assert!(!plugins_of(Kind::Effect).iter().any(|q| q.file == p.file));
         crate::effects::global_effect_registry_mut().remove_by_name(&p.key);
-        assert!(register_plugin("__lib__.rhai", "script(\"x\", \"generator\");\n").is_err());
+        assert!(compile_file("__lib__.rhai", false, "v1", || Some("script(\"x\", \"generator\");\n".to_string())).is_err());
+    }
+
+    /// An effect file with no id of its own compiles under one derived
+    /// from its name -- the same every time -- and the file is not
+    /// rewritten (it was, by the plug-in flag).
+    #[test]
+    fn a_file_without_an_id_compiles_under_a_derived_one() {
+        let src = "const INFO = #{ title: \"No id test\" };\nfn effect(c, p) { c }\n";
+        let a = compile_file("__no id test__.rhai", false, "a", || Some(src.to_string())).expect("compiles");
+        forget("__no id test__.rhai");
+        let b = compile_file("__no id test__.rhai", false, "b", || Some(src.to_string())).expect("compiles again");
+        assert_eq!(a.key, b.key, "the same id: derived from the name");
+        forget("__no id test__.rhai");
+        crate::effects::global_effect_registry_mut().remove_by_name(&a.key);
     }
 
     /// A formula and a colouring plug-in register in the escape engine's
@@ -540,12 +580,12 @@ fn value(t, p, ctx) { #{ rotation: t } }";
     fn an_escape_plugin_registers_in_its_slot() {
         let formula = "const INFO = #{ title: \"Plug test\" };\nfn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
                        fn step(s, p) { s.z = s.z * s.z + s.c; s }\nfn escaped(s, p) { s.z.norm_sqr() > 4.0 }\n";
-        let p = register_plugin("__plug test__.rhai", formula).expect("registers");
+        let p = compile_file("__plug test__.rhai", false, "v1", || Some(formula.to_string())).expect("compiles");
         assert_eq!((p.kind, p.title.as_str()), (Kind::Formula, "Plug test"));
         assert!(p.key.starts_with(crate::escape::custom::PREFIX));
         assert!(crate::escape::custom::formula(&p.key).is_some(), "registered under its slot name");
         assert_eq!(p.carried.source, formula);
-        unlist_plugin(&p.file);
+        forget(&p.file);
     }
 
     /// A variation plug-in registers under its key. Writes the global
@@ -554,11 +594,11 @@ fn value(t, p, ctx) { #{ rotation: t } }";
     #[ignore = "writes the global variation registry: run alone"]
     fn a_variation_plugin_registers_under_its_key() {
         let src = "const INFO = #{ title: \"Plug var\", name: \"rhai_plug_test\" };\nfn variation(z, p) { z * 0.5 }\n";
-        let p = register_plugin("__plug var__.rhai", src).expect("registers");
+        let p = compile_file("__plug var__.rhai", false, "v1", || Some(src.to_string())).expect("compiles");
         assert_eq!(p.kind, Kind::Variation);
         assert!(crate::scripted::is_key(&p.key));
         assert!(crate::variations::global_registry().has(&p.key));
-        unlist_plugin(&p.file);
+        forget(&p.file);
         crate::variations::global_registry_mut().remove_by_name(&p.key);
     }
 

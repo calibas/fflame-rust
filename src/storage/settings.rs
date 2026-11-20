@@ -113,6 +113,13 @@ pub struct SystemSettings {
     #[serde(default = "default_online_account", alias = "online_mode")]
     pub online_account: bool,
 
+    /// Whether the pickers offer what can be downloaded -- the server's
+    /// variations and effects, and the curated online scripts of their
+    /// kinds -- beside what is installed (docs/projects/one-list.md, L3).
+    /// The Catalog lists them either way. On unless turned off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picker_downloads: Option<bool>,
+
     /// Deprecated: API URL is now hard-coded in api::API_BASE_URL.
     /// Kept for deserialization compatibility with existing settings files.
     #[serde(default = "default_api_base_url", skip_serializing)]
@@ -361,6 +368,7 @@ impl Default for SystemSettings {
             show_help_on_startup: default_show_help_on_startup(),
             compact_mode: None,
             online_account: default_online_account(),
+            picker_downloads: None,
             api_base_url: default_api_base_url(),
             auth_token: None,
             auth_email: None,

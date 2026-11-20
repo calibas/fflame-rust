@@ -374,6 +374,9 @@ pub async fn render(
     mut job: RenderJob<'_>,
     progress: &mut dyn RenderProgress,
 ) -> Result<RenderOutput, RenderError> {
+    // What a native crash's log line says was rendering (`crash_report`).
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::crash_report::activity(format!("{} at {}x{}", crate::crash_report::describe(job.config), job.width, job.height));
     // A flame the transform buffers cannot hold would panic in packing.
     if let Some(why) = job.config.flame.gpu_capacity_error() {
         return Err(RenderError::TooLarge(format!("this flame cannot be rendered: {why}")));

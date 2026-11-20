@@ -42,6 +42,62 @@ static SHARED: RwLock<Option<Arc<Vec<Entry>>>> = RwLock::new(None);
 /// again).
 static DOWNLOADS: Mutex<(Vec<(Kind, String)>, Vec<(Kind, String)>)> = Mutex::new((Vec::new(), Vec::new()));
 
+/// Curated online scripts asked for (L3): those not yet handed to the
+/// script cloud, and every id asked for this session.
+static ADOPTS: Mutex<(Vec<String>, Vec<String>)> = Mutex::new((Vec::new(), Vec::new()));
+
+/// The next curated script to adopt, when the script cloud is free: one
+/// at a time, as it takes one request at a time.
+pub fn take_adopt(busy: bool) -> Option<String> {
+    if busy {
+        return None;
+    }
+    let mut a = ADOPTS.lock().ok()?;
+    (!a.0.is_empty()).then(|| a.0.remove(0))
+}
+
+/// The curated online scripts the pickers offer (L3): asked for once a
+/// session, while the pickers offer downloads; until the answer, none;
+/// offline, none.
+#[derive(Default)]
+struct CuratedScripts {
+    job: Option<crate::api::job::Job<Vec<crate::api::types::ScriptListItem>>>,
+    asked: bool,
+    items: Vec<crate::api::types::ScriptListItem>,
+}
+
+impl CuratedScripts {
+    fn poll(&mut self) {
+        if !self.asked && picker_downloads() && !cfg!(test) {
+            self.asked = true;
+            let api = crate::api::ApiState::new(crate::api::API_BASE_URL);
+            let kinds: Vec<&'static str> = crate::storage::library::ALL_PUBLISHED
+                .iter()
+                .filter(|k| k.can_be_plugin())
+                .filter_map(|k| k.wire())
+                .collect();
+            self.job = Some(crate::api::job::spawn(
+                async move {
+                    let mut all = Vec::new();
+                    for kind in kinds {
+                        let words = crate::api::Browse { kind: Some(kind.to_string()), per_page: 100, ..Default::default() };
+                        all.extend(api.browse_scripts(crate::api::Scope::Curated, &words).await?.items.into_inner());
+                    }
+                    Ok(all)
+                },
+                || {},
+            ));
+        }
+        if let Some(result) = self.job.as_ref().and_then(crate::api::job::Job::take) {
+            self.job = None;
+            match result {
+                Ok(items) => self.items = items,
+                Err(e) => log::info!("Curated scripts not fetched: {e}"),
+            }
+        }
+    }
+}
+
 /// Downloads that failed this session, with the reason: their rows say so
 /// and offer Download again.
 static FAILED: Mutex<Vec<((Kind, String), String)>> = Mutex::new(Vec::new());
@@ -94,6 +150,20 @@ pub fn request_open_select(family: Family, key: EntryKey) {
     }
 }
 
+/// Whether the pickers offer what can be downloaded (L3; the user's
+/// setting, `SystemSettings::picker_downloads`): set once a frame.
+static PICKER_DOWNLOADS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Set whether the pickers offer downloads.
+pub fn set_picker_downloads(on: bool) {
+    PICKER_DOWNLOADS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the pickers offer downloads.
+pub fn picker_downloads() -> bool {
+    PICKER_DOWNLOADS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The open asked for since the last call.
 pub fn take_open() -> Option<(Option<Family>, Place, Option<EntryKey>)> {
     OPEN.lock().ok()?.take()
@@ -132,6 +202,15 @@ pub fn shared() -> Arc<Vec<Entry>> {
 
 /// Ask for an entry the app lacks (`!installed`) to be downloaded.
 pub fn request_download(e: &Entry) {
+    if let EntryKey::Online(_, id) = &e.key {
+        if let Ok(mut a) = ADOPTS.lock() {
+            if !a.1.contains(id) {
+                a.0.push(id.clone());
+                a.1.push(id.clone());
+            }
+        }
+        return;
+    }
     let EntryKey::Registered(kind, name) = &e.key else { return };
     if let Ok(mut f) = FAILED.lock() {
         f.retain(|((k, n), _)| !(k == kind && n == name));
@@ -147,6 +226,9 @@ pub fn request_download(e: &Entry) {
 
 /// Whether a download of the entry was asked for this session.
 pub fn download_requested(e: &Entry) -> bool {
+    if let EntryKey::Online(_, id) = &e.key {
+        return ADOPTS.lock().is_ok_and(|a| a.1.contains(id));
+    }
     let EntryKey::Registered(kind, name) = &e.key else { return false };
     DOWNLOADS.lock().is_ok_and(|d| d.1.iter().any(|(k, n)| k == kind && n == name))
 }
@@ -167,11 +249,10 @@ pub enum OriginFilter {
     Builtin,
     Yours,
     FromOthers,
-    Plugins,
 }
 
 impl OriginFilter {
-    const ALL: [OriginFilter; 5] = [OriginFilter::All, OriginFilter::Builtin, OriginFilter::Yours, OriginFilter::FromOthers, OriginFilter::Plugins];
+    const ALL: [OriginFilter; 4] = [OriginFilter::All, OriginFilter::Builtin, OriginFilter::Yours, OriginFilter::FromOthers];
 
     fn label_key(self) -> &'static str {
         match self {
@@ -179,7 +260,6 @@ impl OriginFilter {
             OriginFilter::Builtin => "catalog.origin_builtin",
             OriginFilter::Yours => "catalog.origin_yours",
             OriginFilter::FromOthers => "catalog.origin_from_others",
-            OriginFilter::Plugins => "catalog.origin_plugins",
         }
     }
 
@@ -189,7 +269,6 @@ impl OriginFilter {
             OriginFilter::Builtin => e.origin == Origin::Builtin,
             OriginFilter::Yours => e.origin == Origin::Local,
             OriginFilter::FromOthers => e.origin == Origin::Api,
-            OriginFilter::Plugins => e.plugin,
         }
     }
 }
@@ -235,11 +314,19 @@ pub struct InventoryResponse {
     pub load_api_flame: Option<(String, crate::api::FlameLoadResult)>,
     /// An online script to open (adopt into your files).
     pub script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest>,
+    /// An online animation to load, by its id (as the Animation panel's
+    /// list loads one).
+    pub load_api_animation: Option<String>,
+    /// A palette an online request found, to apply.
+    pub apply_palette: Option<crate::scene::palette::Palette>,
     /// What running a script produced (a flame, a batch, an animation).
     pub run: super::script_run::RunResult,
     /// Clear Cache: the downloaded variations, or effects.
     pub clear_variation_cache: bool,
     pub clear_effect_cache: bool,
+    /// Refresh: the app asks the server for its variation and effect
+    /// catalogs again.
+    pub refresh_catalogs: bool,
 }
 
 /// What the panel needs from the app to draw.
@@ -271,9 +358,9 @@ pub struct InventoryPanel {
     details: bool,
     /// Whether the panel was narrow when last drawn.
     narrow: bool,
-    /// The entries' previews (phase 6), and whether the list is a grid of
-    /// them (decision 1).
-    previews: super::inventory_preview::Previews,
+    /// Whether the list is a grid of the entries' previews (decision 1;
+    /// the previews themselves are shared with the pickers,
+    /// `inventory_preview::with`).
     grid: bool,
     online: super::inventory_online::OnlinePlace,
     manage: super::inventory_manage::Manage,
@@ -282,6 +369,7 @@ pub struct InventoryPanel {
     /// The presets, a gallery a category, made when first shown.
     preset_galleries: Option<Vec<FractalConfigGallery>>,
     preset_category: PresetCategory,
+    curated: CuratedScripts,
 }
 
 impl Default for InventoryPanel {
@@ -304,13 +392,13 @@ impl InventoryPanel {
             place: Place::Local,
             details: false,
             narrow: false,
-            previews: super::inventory_preview::Previews::default(),
             grid: false,
             online: super::inventory_online::OnlinePlace::new(),
             manage: super::inventory_manage::Manage::default(),
             run: super::script_run::ScriptRun::default(),
             preset_galleries: None,
             preset_category: PresetCategory::default(),
+            curated: CuratedScripts::default(),
         }
     }
 
@@ -349,6 +437,18 @@ impl InventoryPanel {
         self.online.forget();
     }
 
+    /// Refresh, everything at once: the Online place's lists and the
+    /// curated scripts asked for again, the files on disk read again,
+    /// and (by the app) the variation and effect catalogs fetched again.
+    fn refresh_all(&mut self, out: &mut InventoryResponse) {
+        self.online.forget();
+        if self.curated.job.is_none() {
+            self.curated.asked = false;
+        }
+        self.revision = None;
+        out.refresh_catalogs = true;
+    }
+
     /// The session signed out: the Online place forgets your own lists.
     pub fn signed_out(&mut self) {
         self.online.signed_out();
@@ -357,6 +457,11 @@ impl InventoryPanel {
     /// Read the sources again when what they hold has changed, and share
     /// the list with the pickers. Once a frame, before any panel draws.
     pub fn refresh(&mut self, library: &PaletteLibrary, files: u64, online: inventory::Online) {
+        // The curated online scripts the pickers offer (L3): asked for once
+        // a session, in the background; until they come, none.
+        self.curated.poll();
+        let scripts = self.curated.items.clone();
+        let online = inventory::Online { scripts: &scripts, ..online };
         let rev = inventory::revision(library, files, online);
         if self.revision != Some(rev) {
             self.entries = Arc::new(inventory::scan(library, online));
@@ -382,13 +487,18 @@ impl InventoryPanel {
             // offers, downloaded or not.
             Place::Online => e.origin == Origin::Api || !e.installed,
         };
-        e.kind.family() == self.family && self.kind.is_none_or(|k| k == e.kind) && place && e.matches(&self.query)
+        // The curated rows the pickers offer (L3) are the Online place's
+        // own pages here.
+        let picker_only = matches!(e.key, EntryKey::Online(..));
+        !picker_only && e.kind.family() == self.family && self.kind.is_none_or(|k| k == e.kind) && place && e.matches(&self.query)
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext) -> InventoryResponse {
         let mut out = InventoryResponse::default();
-        self.previews.begin_frame(ui.ctx());
         self.online.update(ui.ctx(), &self.query, &self.entries, &mut out);
+        if let Some(palette) = out.apply_palette.take() {
+            apply_palette(cx.config_manager, palette);
+        }
         self.render_top(ui, cx, &mut out);
         ui.separator();
         self.narrow = ui.available_width() < NARROW;
@@ -422,9 +532,16 @@ impl InventoryPanel {
     // ------------------------------------------------------------------ top
 
     fn render_top(&mut self, ui: &mut egui::Ui, cx: &InventoryContext, out: &mut InventoryResponse) {
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             ui.selectable_value(&mut self.place, Place::Local, t!("catalog.place_local"));
             ui.selectable_value(&mut self.place, Place::Online, t!("catalog.place_online")).on_hover_text(t!("catalog.place_online_tip"));
+            // Refresh, in the corner: everything at once, whichever place
+            // is shown (`refresh_all`).
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("\u{27f3}").on_hover_text(t!("catalog.refresh_tip")).clicked() {
+                    self.refresh_all(out);
+                }
+            });
         });
         ui.horizontal_wrapped(|ui| {
             for family in Family::ALL {
@@ -592,9 +709,8 @@ impl InventoryPanel {
                                 let e = &self.entries[i];
                                 let selected = self.selected.as_ref() == Some(&e.key);
                                 // Only a cell on screen asks for its picture.
-                                let previews = &mut self.previews;
                                 let ctx = ui.ctx().clone();
-                                let r = super::inventory_online::grid_cell_lazy(ui, e, selected, || match previews.want(e, &ctx, &palettes) {
+                                let r = super::inventory_online::grid_cell_lazy(ui, e, selected, || match super::inventory_preview::want(e, &ctx, &palettes) {
                                     super::inventory_preview::Shown::Ready(t) => (t.last().cloned(), true),
                                     super::inventory_preview::Shown::Pending => (None, true),
                                     super::inventory_preview::Shown::None => (None, false),
@@ -671,7 +787,7 @@ impl InventoryPanel {
                 continue;
             }
             let selected = self.selected.clone();
-            super::palette_library::pack_section(ui, cx.palette_library, pack, |ui, lib| {
+            super::palette_library::pack_section(ui, cx.palette_library, pack, searching, |ui, lib| {
                 let Some(p) = lib.get_pack(pack) else { return };
                 for (j, hash, title) in &rows {
                     let Some(palette) = p.palettes.get(*j) else { continue };
@@ -781,7 +897,7 @@ impl InventoryPanel {
         if self.shown_gallery().is_some_and(|g| g.generate_one_preview(ctx, &render_fn)) {
             return true;
         }
-        self.previews.generate_one(ctx, render_fn)
+        super::inventory_preview::with(|p| p.generate_one(ctx, render_fn))
     }
 
     /// WASM: spawn the next preset preview of the gallery drawn this frame.
@@ -790,7 +906,7 @@ impl InventoryPanel {
         if let Some(g) = self.shown_gallery() {
             g.start_next_preview(device, queue, ctx);
         }
-        self.previews.start_next(device, queue, ctx);
+        super::inventory_preview::with(|p| p.start_next(device, queue, ctx));
     }
 
     /// The gallery drawn this frame, every gallery's flag taken: only it
@@ -830,7 +946,7 @@ impl InventoryPanel {
             return;
         };
         let palettes: Vec<crate::scene::palette::Palette> = cx.palette_library.iter().cloned().collect();
-        let preview = self.previews.want(&e, ui.ctx(), &palettes);
+        let preview = super::inventory_preview::want(&e, ui.ctx(), &palettes);
         entry_summary(ui, &e, Some(cx.palette_library), Some(&preview));
         if let Some(v) = &e.update {
             ui.label(egui::RichText::new(t!("catalog.update_available", version = v.clone())).strong());
@@ -910,6 +1026,12 @@ fn preset_galleries() -> Vec<FractalConfigGallery> {
 /// A palette row: its name, and its gradient at the right; the texture is
 /// made only once the row is on screen.
 pub(super) fn palette_row(ui: &mut egui::Ui, hash: &str, title: &str, palette: &crate::scene::palette::Palette, selected: bool) -> egui::Response {
+    palette_row_lazy(ui, hash, title, selected, || Some(palette.clone()))
+}
+
+/// [`palette_row`], the palette found only when its gradient is not made
+/// yet (a picker's rows hold an entry, not the palette).
+pub(super) fn palette_row_lazy(ui: &mut egui::Ui, hash: &str, title: &str, selected: bool, palette: impl FnOnce() -> Option<crate::scene::palette::Palette>) -> egui::Response {
     let h = 20.0;
     let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h + 4.0), egui::Sense::click());
     if !ui.is_rect_visible(rect) {
@@ -927,8 +1049,11 @@ pub(super) fn palette_row(ui: &mut egui::Ui, hash: &str, title: &str, palette: &
     let galley = ui.painter().layout_no_wrap(title.to_string(), egui::FontId::default(), text_color);
     ui.painter().with_clip_rect(name_rect).galley(name_rect.left_center() + egui::vec2(4.0, -galley.size().y / 2.0), galley, text_color);
     let img = egui::Rect::from_min_size(egui::pos2(rect.max.x - preview_w, rect.min.y + 2.0), egui::vec2(preview_w, h));
-    let tex = super::palette_library::palette_preview(ui.ctx(), hash, palette, [200, 20]);
-    egui::Image::new(&tex).fit_to_exact_size(img.size()).paint_at(ui, img);
+    let size = [200, 20];
+    let tex = super::palette_library::palette_preview_made(ui.ctx(), hash, size).or_else(|| palette().map(|p| super::palette_library::palette_preview(ui.ctx(), hash, &p, size)));
+    if let Some(tex) = tex {
+        egui::Image::new(&tex).fit_to_exact_size(img.size()).paint_at(ui, img);
+    }
     if r.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -978,7 +1103,7 @@ pub(crate) fn row_label(e: &Entry) -> String {
     } else {
         ""
     };
-    format!("{}{}{available}", e.title, crate::storage::library::marks(e.origin, e.plugin))
+    format!("{}{}{available}", e.title, crate::storage::library::marks(e.origin))
 }
 
 /// Download, for an entry the app lacks: greyed once asked for.
@@ -1002,11 +1127,7 @@ fn origin_text(e: &Entry) -> String {
         },
         (Origin::Api, _) => t!("catalog.from_download"),
     };
-    if e.plugin {
-        format!("{base} {}", t!("catalog.plugin_note"))
-    } else {
-        base.to_string()
-    }
+    base.to_string()
 }
 
 /// The Use button's label for an entry.
@@ -1021,19 +1142,100 @@ fn use_label_key(e: &Entry) -> &'static str {
     }
 }
 
-/// A registered plug-in's record, by its file.
-pub(crate) fn plugin_of(e: &Entry) -> Option<crate::storage::library::Plugin> {
-    let EntryKey::File { store: Store::Formulas, file, shipped: false } = &e.key else { return None };
-    crate::storage::library::plugins().into_iter().find(|p| &p.file == file)
+/// Files a list asked for that are not compiled yet: compiled before the
+/// next frame's panels draw ([`compile_requested`]), never inside a draw.
+/// A panel may hold a registry's read guard while it draws a picker (the
+/// Transforms panel does), and registering what a file makes takes that
+/// registry's write lock: compiling inside the draw hung the app.
+static TO_COMPILE: Mutex<Vec<(String, bool, String)>> = Mutex::new(Vec::new());
+
+/// The file, shipped and version of a Rhai file of the formula store of a
+/// kind a list can use; `None` for anything else: a built-in, a CPU
+/// script, a UF or Fractint file.
+fn list_file(e: &Entry) -> Option<(String, bool, String)> {
+    let EntryKey::File { store: Store::Formulas, file, shipped } = &e.key else { return None };
+    if !crate::storage::formula_store::is_rhai(file) {
+        return None;
+    }
+    let lib_kind = crate::storage::library::Kind::from_wire(crate::inventory::online::script_wire(e.kind)?)?;
+    if !lib_kind.can_be_plugin() {
+        return None;
+    }
+    Some((file.clone(), *shipped, e.version.clone().unwrap_or_default()))
 }
 
-/// The registry name an entry applies by: its own, or a plug-in's key.
+/// A Rhai file of the formula store compiled, for the lists and Use
+/// (docs/projects/one-list.md, L1): a shipped example or a file of the
+/// user's, of a kind a list can use, compiled once per version
+/// (`library::compile_file`). Not compiled yet, it is asked for (compiled
+/// before the next frame: [`TO_COMPILE`]) and says so, `Err`
+/// ([`compile_pending`] tells that apart). `None` for anything else.
+pub(crate) fn compiled(e: &Entry) -> Option<Result<crate::storage::library::Plugin, String>> {
+    let (file, shipped, version) = list_file(e)?;
+    if let Some(done) = crate::storage::library::compiled_cached(&file, shipped, &version) {
+        return Some(done);
+    }
+    if let Ok(mut asked) = TO_COMPILE.lock() {
+        let item = (file, shipped, version);
+        if !asked.contains(&item) {
+            asked.push(item);
+        }
+    }
+    Some(Err(t!("catalog.compiling").to_string()))
+}
+
+/// Whether the entry is a file a list uses that is not compiled yet (and
+/// now asked for).
+pub(crate) fn compile_pending(e: &Entry) -> bool {
+    list_file(e).is_some_and(|(file, shipped, version)| crate::storage::library::compiled_cached(&file, shipped, &version).is_none()) && compiled(e).is_some()
+}
+
+/// Compile the files the lists asked for since the last call; whether
+/// there were any (the caller repaints, so the lists show them). Called
+/// once a frame before any panel draws, holding no registry's lock.
+pub fn compile_requested() -> bool {
+    let asked = TO_COMPILE.lock().map(|mut a| std::mem::take(&mut *a)).unwrap_or_default();
+    for (file, shipped, version) in &asked {
+        let _ = crate::storage::library::compile_file(file, *shipped, version, || match shipped {
+            true => crate::storage::formula_store::EXAMPLES.iter().find(|(n, _)| n == file).map(|(_, s)| s.to_string()),
+            false => crate::storage::manage::load(Store::Formulas, file),
+        });
+    }
+    !asked.is_empty()
+}
+
+/// A file's compiled record, when it compiles.
+pub(crate) fn plugin_of(e: &Entry) -> Option<crate::storage::library::Plugin> {
+    compiled(e)?.ok()
+}
+
+/// The registry name an entry applies by: its own, or its file's key.
 pub(crate) fn applied_name(e: &Entry) -> Option<String> {
     match &e.key {
         EntryKey::Registered(_, n) => Some(n.clone()),
-        EntryKey::File { .. } if e.plugin => plugin_of(e).map(|p| p.key),
+        EntryKey::File { .. } => plugin_of(e).map(|p| p.key),
         _ => None,
     }
+}
+
+/// Whether a picker may offer an entry (docs/projects/one-list.md): a
+/// built-in or a download, installed, or a file that compiles; or, not
+/// installed, what can be downloaded (L3: the picker shows those only when
+/// the user's setting offers them). A file a list cannot use -- a UF or
+/// Fractint file, one that does not compile -- is not offered (L2).
+pub(crate) fn pickable(e: &Entry) -> bool {
+    !e.installed || picked_now(e)
+}
+
+/// [`pickable`], installed: what can be picked without a download.
+pub(crate) fn picked_now(e: &Entry) -> bool {
+    e.installed
+        && match &e.key {
+            EntryKey::Registered(..) => true,
+            // Not compiled yet: offered this frame, compiled before the next.
+            EntryKey::File { .. } => plugin_of(e).is_some() || compile_pending(e),
+            _ => false,
+        }
 }
 
 /// Whether Use can apply the entry to this config, or why not.
@@ -1048,14 +1250,16 @@ pub(crate) fn usable(e: &Entry, config: &FractalConfig) -> Result<(), String> {
     if let super::visibility::Vis::Grey(reason) = super::visibility::catalog_use(e.kind, only_3d, config.render_mode) {
         return Err(t!(reason).to_string());
     }
-    // A file not registered is used from the editor (a Rhai entry), or
-    // run from the Scripts panel (a CPU script).
+    // A file is used as what it compiles to; one that does not compile,
+    // or is not a kind a list uses (a UF file, a track), from the editor;
+    // a CPU script from the Scripts panel.
     if let EntryKey::File { store, .. } = &e.key {
-        if *store == Store::Formulas && !e.plugin {
-            return Err(t!("catalog.open_to_use").to_string());
-        }
-        if e.plugin && plugin_of(e).is_none() {
-            return Err(t!("catalog.plugin_not_loaded").to_string());
+        if *store == Store::Formulas {
+            match compiled(e) {
+                Some(Ok(_)) => {}
+                Some(Err(why)) => return Err(t!("catalog.does_not_compile", error = why).to_string()),
+                None => return Err(t!("catalog.open_to_use").to_string()),
+            }
         }
     }
     let esc = &config.escape;
@@ -1122,8 +1326,7 @@ fn apply(e: &Entry, ctx: &egui::Context, cx: &mut InventoryContext, out: &mut In
 /// picker does with a choice (the Catalog's Use, and every picker's pick,
 /// `ui::picker`).
 pub(crate) fn use_entry(e: &Entry, ctx: &egui::Context, cm: &mut ConfigManager) {
-    let plugin = if e.plugin { plugin_of(e) } else { None };
-    use_entry_with(e, plugin, ctx, cm);
+    use_entry_with(e, plugin_of(e), ctx, cm);
 }
 
 /// [`use_entry`] with the entry's plug-in record given (a preview's, of a
@@ -1197,9 +1400,27 @@ mod tests {
         }
     }
 
-    /// The origin filter: built-in, the user's, somebody else's, plug-ins.
+    /// A list's filter never compiles: the Transforms panel draws its Add
+    /// Variation picker holding the variation registry's read guard, and
+    /// compiling a variation file there took the write lock -- the app
+    /// hung. Asked with the guard held, a file not compiled yet is offered
+    /// and queued, and the call returns.
     #[test]
-    fn the_origin_filter_reads_the_origin_and_the_plugin_flag() {
+    fn a_pickers_filter_never_compiles_under_a_registry_guard() {
+        let entries = inventory::scan(&crate::scene::palette::global_palette_library().read().unwrap().clone(), inventory::Online::default());
+        let files: Vec<&Entry> = entries.iter().filter(|e| e.kind == Kind::Variation && matches!(e.key, EntryKey::File { shipped: true, .. })).collect();
+        assert!(!files.is_empty(), "the shipped variation examples");
+        let guard = crate::variations::global_registry();
+        for e in &files {
+            assert!(pickable(e), "{}: offered, compiled or not yet", e.title);
+            let _ = applied_name(e);
+        }
+        drop(guard);
+    }
+
+    /// The origin filter: built-in, the user's (Custom), somebody else's.
+    #[test]
+    fn the_origin_filter_reads_the_origin() {
         let mut e = Entry {
             kind: Kind::Formula,
             key: EntryKey::Registered(Kind::Formula, "mandelbrot".into()),
@@ -1208,7 +1429,6 @@ mod tests {
             authors: Vec::new(),
             version: None,
             origin: Origin::Builtin,
-            plugin: false,
             group: inventory::Group { order: 0, label: String::new() },
             link: None,
             installed: true,
@@ -1216,10 +1436,9 @@ mod tests {
             update: None,
             online: None,
         };
-        assert!(OriginFilter::Builtin.admits(&e) && !OriginFilter::Yours.admits(&e) && !OriginFilter::Plugins.admits(&e));
+        assert!(OriginFilter::Builtin.admits(&e) && !OriginFilter::Yours.admits(&e));
         e.origin = Origin::Local;
-        e.plugin = true;
-        assert!(OriginFilter::Yours.admits(&e) && OriginFilter::Plugins.admits(&e) && !OriginFilter::FromOthers.admits(&e));
+        assert!(OriginFilter::Yours.admits(&e) && !OriginFilter::FromOthers.admits(&e));
         assert!(OriginFilter::ALL.iter().any(|o| *o == OriginFilter::All && o.admits(&e)));
     }
 
@@ -1257,7 +1476,6 @@ mod tests {
             authors: Vec::new(),
             version: None,
             origin: Origin::Builtin,
-            plugin: false,
             group: inventory::Group { order: 0, label: String::new() },
             link: None,
             installed: true,
@@ -1371,6 +1589,7 @@ mod phone_tests {
         for _ in 0..2 {
             let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0))), ..Default::default() };
             let out = ctx.run_ui(input, |ui| {
+                super::super::inventory_preview::begin_frame(ui.ctx());
                 egui::CentralPanel::default().show_inside(ui, |ui| {
                     let mut cx = InventoryContext { config_manager: &mut cm, palette_library: &mut library, account: CloudAccount::default(), script_cloud: &cloud };
                     let _ = panel.render(ui, &mut cx);
@@ -1380,7 +1599,7 @@ mod phone_tests {
         }
         assert!(drawn.iter().any(|(t, _)| t == "Linear"), "a cell names its entry");
         // Asked for (made, cached or waiting): the cells on screen alone.
-        let asked = panel.previews.asked();
+        let asked = super::super::inventory_preview::with(|p| p.asked());
         let variations = panel.entries.iter().filter(|e| e.kind == Kind::Variation).count();
         assert!(asked > 0 && asked < variations / 4, "the cells on screen ask, not all {variations}: {asked}");
     }

@@ -21,43 +21,21 @@
 //!
 //! The key is the configs' hash with the entry's version, so an update or
 //! an edit makes a new preview.
+//!
+//! One set of previews serves the Catalog and every picker ([`with`]): its
+//! frame begins in the UI's frame, before any panel draws
+//! ([`begin_frame`]), and the app makes one a frame of what was asked.
 
 use crate::config::{ConfigManager, FractalConfig};
 use crate::inventory::{Entry, EntryKey, Family, Kind};
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
 
 /// The registry names registered only to draw a preview (a file of the
 /// user's or an example, not a plug-in): the pickers do not offer them.
-static PREVIEW_ONLY: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-/// Whether `key` was registered only for a preview.
-pub fn preview_only(key: &str) -> bool {
-    PREVIEW_ONLY.lock().is_ok_and(|k| k.iter().any(|x| x == key))
-}
-
-/// The plug-in record an entry applies by: a plug-in's own; for a Rhai
-/// file of a kind that can be one -- an example, a file of the user's --
-/// what registering it makes, not listed (`library::prepare_plugin`).
+/// The record an entry previews by: its file's, compiled
+/// (`inventory::plugin_of`), for a Rhai file of a kind a list uses.
 fn plugin_for(e: &Entry) -> Option<crate::storage::library::Plugin> {
-    if e.plugin {
-        return super::inventory::plugin_of(e);
-    }
-    let EntryKey::File { store: crate::storage::library::Store::Formulas, file, shipped } = &e.key else { return None };
-    if !crate::storage::formula_store::is_rhai(file) {
-        return None;
-    }
-    let text = match shipped {
-        true => crate::storage::formula_store::EXAMPLES.iter().find(|(n, _)| n == file).map(|(_, s)| s.to_string()),
-        false => crate::storage::manage::load(crate::storage::library::Store::Formulas, file),
-    }?;
-    let plugin = crate::storage::library::prepare_plugin(file, &text).ok()?;
-    if let Ok(mut keys) = PREVIEW_ONLY.lock() {
-        if !keys.contains(&plugin.key) {
-            keys.push(plugin.key.clone());
-        }
-    }
-    Some(plugin)
+    super::inventory::plugin_of(e)
 }
 
 /// What a preview renders, and the key its pictures are kept under.
@@ -298,6 +276,29 @@ pub enum Shown {
     Ready(Vec<egui::TextureHandle>),
 }
 
+thread_local! {
+    /// The previews, the Catalog's and the pickers' (the UI is one thread).
+    static SHARED: std::cell::RefCell<Previews> = std::cell::RefCell::new(Previews::default());
+}
+
+/// The shared previews, for one call (not re-entered: building a preview
+/// draws no picker).
+pub fn with<R>(f: impl FnOnce(&mut Previews) -> R) -> R {
+    SHARED.with(|p| f(&mut p.borrow_mut()))
+}
+
+/// A new frame for the shared previews: called once a frame before any
+/// panel draws.
+pub fn begin_frame(ctx: &egui::Context) {
+    with(|p| p.begin_frame(ctx));
+}
+
+/// The preview of `e` from the shared previews, asking for it when it is
+/// not made.
+pub fn want(e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Palette]) -> Shown {
+    with(|p| p.want(e, ctx, palettes))
+}
+
 /// The previews asked for, made and shown.
 #[derive(Default)]
 pub struct Previews {
@@ -356,6 +357,12 @@ impl Previews {
     pub fn want(&mut self, e: &Entry, ctx: &egui::Context, palettes: &[crate::scene::palette::Palette]) -> Shown {
         self.asked += 1;
         let id = (e.key.clone(), e.version.clone());
+        // A file not compiled yet: compiled before the next frame (never
+        // inside a draw, `inventory::compile_requested`); not "no preview".
+        if !self.built.contains_key(&id) && super::inventory::compile_pending(e) {
+            ctx.request_repaint();
+            return Shown::Pending;
+        }
         if !self.built.contains_key(&id) {
             let p = preview(e, ctx, palettes);
             self.built.insert(id.clone(), p);
@@ -543,6 +550,9 @@ mod inspection {
                 .iter()
                 .find(|e| e.kind == kind && (e.key == EntryKey::Registered(kind, name.into()) || matches!(&e.key, EntryKey::File { file, .. } if file.trim_end_matches(".rhai") == name)))
                 .unwrap_or_else(|| panic!("no {item}"));
+            if super::super::inventory::compile_pending(e) {
+                super::super::inventory::compile_requested();
+            }
             let Some(p) = preview(e, &ctx, &[]) else {
                 println!("{item}: no preview");
                 continue;

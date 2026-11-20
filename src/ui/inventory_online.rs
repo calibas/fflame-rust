@@ -1,13 +1,18 @@
 //! The Catalog's **Online** place (docs/archive/projects/catalog.md, *Phase 3*):
-//! what the server holds for a family -- its public items, or the
-//! caller's own -- asked for page by page, searched by the server, and
-//! drawn as the Catalog's rows ([`crate::inventory::online`]); fractals
-//! as a grid of the server's thumbnails (decision 2).
+//! what the server holds for a family -- its **curated** items, or the
+//! account's own (docs/projects/curated-content.md: anyone else's public
+//! item is opened by its id or link, *Open by ID or link*) -- asked for
+//! page by page, searched by the server, and drawn as the Catalog's rows
+//! ([`crate::inventory::online`]); fractals as a grid of the server's
+//! thumbnails (decision 2), animations as rows.
 //!
 //! Every request is an [`crate::api::job`]: a guest's goes unsigned, a
 //! signed-in one carries the token, and a 401 to it signs the session
 //! out. A list is kept per (kind, scope, search, sort), so going back to
-//! an earlier search shows what it found; Refresh forgets them all.
+//! an earlier search shows what it found; the panel's Refresh forgets
+//! them all. A list that failed is asked again by Try again, and by
+//! itself once another list's page comes back (the server answers
+//! again): it does not keep its error.
 
 use super::inventory::{CloudAccount, InventoryContext, InventoryResponse};
 use crate::api::job::{self, Job};
@@ -19,6 +24,10 @@ use std::sync::Arc;
 
 /// A page's items and the cursor of the next, `None` at the end.
 type PageResult = (Vec<Item>, Option<String>);
+
+/// Question ids *Open by ID* asks under (apart from the app's).
+const OPEN_QUESTION_BASE: u64 = 1 << 40;
+static OPEN_QUESTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// How long the search waits after the last key before asking.
 const SEARCH_SETTLE_SECONDS: f64 = 0.4;
@@ -100,6 +109,57 @@ impl List {
     fn more(&self) -> bool {
         !self.started || (self.next.is_some() && self.error.is_none())
     }
+
+    /// The page that failed may be asked for again (Try again): the
+    /// first, or the one after `next`.
+    fn retryable(&self) -> bool {
+        self.error.is_some() && (self.rows.is_empty() || self.next.is_some())
+    }
+}
+
+/// What *Open by ID or link* found: what it does with it.
+enum Opened {
+    Flame(String, crate::api::FlameLoadResult),
+    Animation(String),
+    Palette(crate::api::types::PaletteItem),
+    /// A script: its id, and whether it is curated (opened without
+    /// asking); otherwise its code, to ask about.
+    Script { id: String, title: String, trusted: bool, code: crate::curated::trust::Code },
+    /// A built-in variation or effect: nothing to fetch, it is on this
+    /// device (or downloads by name).
+    Builtin(String, String),
+}
+
+/// An online palette as a copy for the Custom pack: a name no palette of
+/// yours has (a save by name would replace it), and a description that
+/// says where it came from and when, then the server's own description.
+fn saved_copy(p: &crate::api::types::PaletteItem, info: &online::OnlineInfo, mine: bool, library: &crate::scene::palette::PaletteLibrary, today: &str) -> crate::scene::palette::Palette {
+    let mut palette = crate::api::sync::palette_from_item(p);
+    let base = palette.name.clone();
+    let mut n = 2;
+    while library.has_custom_palette_named(&palette.name) {
+        palette.name = format!("{base} ({n})");
+        n += 1;
+    }
+    let from = if mine {
+        t!("catalog.saved_from_mine", date = today).to_string()
+    } else if info.curated.is_some() {
+        t!("catalog.saved_from_curated", date = today).to_string()
+    } else {
+        t!("catalog.saved_from_online", date = today).to_string()
+    };
+    let mut lines = vec![from];
+    if !mine && !info.owner.is_empty() {
+        lines.push(t!("catalog.by_owner", owner = info.owner.clone()).to_string());
+    }
+    lines.push(t!("catalog.saved_online_id", id = info.id.clone()).to_string());
+    let mut description = lines.join(" ");
+    if let Some(d) = p.description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        description = format!("{description}\n\n{d}");
+    }
+    palette.description = description;
+    palette.built_in = false;
+    palette
 }
 
 /// What the info pane asks of the panel.
@@ -113,7 +173,7 @@ pub enum InfoAction {
 pub fn kinds(family: Family) -> Vec<Kind> {
     match family {
         Family::Palettes => vec![Kind::Palette],
-        Family::Fractals => vec![Kind::Fractal],
+        Family::Fractals => vec![Kind::Fractal, Kind::Animation],
         _ => crate::storage::library::ALL_PUBLISHED.iter().filter_map(|k| Kind::of_file(*k)).filter(|k| k.family() == family).collect(),
     }
 }
@@ -143,6 +203,12 @@ pub struct OnlinePlace {
     /// Asked to delete, awaiting the confirmation: the list, id, name.
     confirm_delete: Option<(ListKey, String, String)>,
     status: Option<(String, bool)>,
+    /// *Open by ID or link*: what is typed, and the request on its way.
+    open_text: String,
+    open_job: Option<Job<Opened>>,
+    /// A script *Open by ID* found that nobody reviewed: the question
+    /// asked about it, and its id.
+    open_question: Option<(u64, String)>,
 }
 
 impl Default for OnlinePlace {
@@ -154,7 +220,7 @@ impl Default for OnlinePlace {
 impl OnlinePlace {
     pub fn new() -> Self {
         OnlinePlace {
-            scope: Scope::Public,
+            scope: Scope::Curated,
             mode: None,
             sorts: HashMap::new(),
             typed: String::new(),
@@ -169,6 +235,9 @@ impl OnlinePlace {
             renaming: None,
             confirm_delete: None,
             status: None,
+            open_text: String::new(),
+            open_job: None,
+            open_question: None,
         }
     }
 
@@ -178,11 +247,21 @@ impl OnlinePlace {
         self.status = None;
     }
 
+    /// The server answered: the lists that failed lose their error, so
+    /// they are asked again when shown (one with nothing yet starts over;
+    /// one with rows asks for its next page at its end).
+    fn forget_failures(&mut self) {
+        self.lists.retain(|_, l| l.error.is_none() || !l.rows.is_empty());
+        for l in self.lists.values_mut() {
+            l.error = None;
+        }
+    }
+
     /// Signed out: your own lists go.
     pub fn signed_out(&mut self) {
-        self.lists.retain(|k, _| k.scope == Scope::Public);
+        self.lists.retain(|k, _| k.scope != Scope::Mine);
         if self.scope == Scope::Mine {
-            self.scope = Scope::Public;
+            self.scope = Scope::Curated;
         }
     }
 
@@ -218,6 +297,7 @@ impl OnlinePlace {
         }
         let rematch = !self.local.as_ref().is_some_and(|l| Arc::ptr_eq(l, local));
         self.local = Some(local.clone());
+        let mut answered = false;
         for (key, list) in &mut self.lists {
             let group = group_of(key.kind);
             if let Some(result) = list.job.as_ref().and_then(Job::take) {
@@ -234,6 +314,7 @@ impl OnlinePlace {
                             }
                         }
                         list.next = next;
+                        answered = true;
                     }
                     Err(e) => list.error = Some(e.to_string()),
                 }
@@ -245,6 +326,9 @@ impl OnlinePlace {
                     }
                 }
             }
+        }
+        if answered {
+            self.forget_failures();
         }
         if let Some((id, job)) = &self.flame_job {
             if let Some(result) = job.take() {
@@ -269,6 +353,7 @@ impl OnlinePlace {
                                         Item::Flame(f) => f.name = name.clone(),
                                         Item::Palette(p) => p.name = name.clone(),
                                         Item::Script(s) => s.display_name = name.clone(),
+                                        Item::Animation(a) => a.name = name.clone(),
                                     }
                                 }
                                 if let (Some(v), Some(info)) = (&patch.visibility, e.online.as_mut()) {
@@ -281,6 +366,41 @@ impl OnlinePlace {
                     Err(e) => self.status = Some((t!("catalog.change_failed", error = e.to_string()).to_string(), true)),
                 }
                 self.patch_job = None;
+            }
+        }
+        if let Some(result) = self.open_job.as_ref().and_then(Job::take) {
+            self.open_job = None;
+            match result {
+                Ok(Opened::Flame(id, loaded)) => out.load_api_flame = Some((id, loaded)),
+                Ok(Opened::Animation(id)) => out.load_api_animation = Some(id),
+                Ok(Opened::Palette(p)) => {
+                    self.status = Some((t!("catalog.opened_palette", name = p.name.clone()).to_string(), false));
+                    out.apply_palette = Some(crate::api::sync::palette_from_item(&p));
+                }
+                Ok(Opened::Script { id, title, trusted, code }) => {
+                    if trusted || crate::curated::trust::is_trusted(&code.hash) {
+                        out.script_cloud_request = Some(crate::app::script_cloud::ScriptCloudRequest::Adopt { id });
+                    } else {
+                        // Somebody's code nobody reviewed: ask before it
+                        // joins your files (curated::trust).
+                        let qid = OPEN_QUESTION_BASE + OPEN_QUESTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        crate::curated::trust::ask(crate::curated::trust::Question { id: qid, what: title, owner: None, code: vec![code] });
+                        self.open_question = Some((qid, id));
+                    }
+                }
+                Ok(Opened::Builtin(kind, name)) => {
+                    self.status = Some((t!("catalog.opened_builtin", kind = kind, name = name).to_string(), false));
+                }
+                Err(crate::resources::FetchError::NotFound(message)) => self.status = Some((message, true)),
+                Err(e) => self.status = Some((e.to_string(), true)),
+            }
+        }
+        if let Some((qid, id)) = &self.open_question {
+            if let Some(answer) = crate::curated::trust::take_answer(*qid) {
+                if answer != crate::curated::trust::Answer::No {
+                    out.script_cloud_request = Some(crate::app::script_cloud::ScriptCloudRequest::Adopt { id: id.clone() });
+                }
+                self.open_question = None;
             }
         }
         if let Some((key, id, name, job)) = &self.delete_job {
@@ -302,7 +422,7 @@ impl OnlinePlace {
     /// Ask for a list's next page, unless one is on its way.
     fn ask(&mut self, key: &ListKey, account: &CloudAccount, ctx: &egui::Context) {
         let list = self.lists.entry(key.clone()).or_default();
-        if list.loading() || !list.more() {
+        if list.loading() || !(list.more() || list.retryable()) {
             return;
         }
         let api = account.api();
@@ -323,6 +443,7 @@ impl OnlinePlace {
                     match kind {
                         Kind::Fractal => api.browse_flames(scope, &words).await.map(|p| (p.items.into_inner().into_iter().map(Item::Flame).collect(), p.next)),
                         Kind::Palette => api.browse_palettes(scope, &words).await.map(|p| (p.items.into_inner().into_iter().map(Item::Palette).collect(), p.next)),
+                        Kind::Animation => api.browse_animations(scope, &words).await.map(|p| (p.items.into_inner().into_iter().map(Item::Animation).collect(), p.next)),
                         _ => api.browse_scripts(scope, &words).await.map(|p| (p.items.into_inner().into_iter().map(Item::Script).collect(), p.next)),
                     }
                 },
@@ -334,10 +455,11 @@ impl OnlinePlace {
 
     // ------------------------------------------------------------- the top
 
-    /// The scope, the sort and Refresh, beside the panel's search.
+    /// The scope and the sort, beside the panel's search; then *Open by ID
+    /// or link* (Refresh is the panel's, in its corner).
     pub fn render_top(&mut self, ui: &mut egui::Ui, family: Family, account: &CloudAccount) {
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.scope, Scope::Public, t!("catalog.scope_public"));
+            ui.selectable_value(&mut self.scope, Scope::Curated, t!("catalog.scope_curated")).on_hover_text(t!("catalog.scope_curated_tip"));
             let mine = ui.add_enabled(account.signed_in, egui::Button::selectable(self.scope == Scope::Mine, t!("catalog.scope_mine")));
             let mine = if account.signed_in { mine } else { mine.on_disabled_hover_text(t!("catalog.sign_in_for_mine")) };
             if mine.clicked() {
@@ -359,8 +481,22 @@ impl OnlinePlace {
                     }
                 });
             }
-            if ui.button(t!("catalog.refresh")).clicked() {
-                self.forget();
+        });
+        ui.horizontal(|ui| {
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut self.open_text)
+                    .hint_text(t!("catalog.open_hint"))
+                    .desired_width((ui.available_width() - 80.0).max(120.0)),
+            )
+            .on_hover_text(t!("catalog.open_tip"));
+            super::vkb_sync(ui, &r, &mut self.open_text);
+            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let busy = self.open_job.is_some();
+            if (ui.add_enabled(!busy && !self.open_text.trim().is_empty(), egui::Button::new(t!("catalog.open"))).clicked() || enter) && !busy {
+                self.open(account, ui.ctx());
+            }
+            if busy {
+                ui.spinner();
             }
         });
         if family == Family::Fractals {
@@ -510,6 +646,65 @@ impl OnlinePlace {
         end_visible
     }
 
+    /// *Open by ID or link*: read what was typed, find it on the server,
+    /// and use it as a click on its row would -- a fractal or an animation
+    /// loads, a palette applies, a script is opened (adopted). An id alone
+    /// is looked for as each resource in turn.
+    fn open(&mut self, account: &CloudAccount, ctx: &egui::Context) {
+        let Some(target) = online::parse_open(&self.open_text) else {
+            self.status = Some((t!("catalog.open_unreadable").to_string(), true));
+            return;
+        };
+        let api = account.api();
+        let wake = ctx.clone();
+        self.status = None;
+        let job = job::spawn(
+            async move {
+                use crate::inventory::online::OpenTarget;
+                let not_found = || crate::resources::FetchError::NotFound(t!("catalog.open_not_found").to_string());
+                let (resource, id) = match target {
+                    OpenTarget::Id { resource, id } => (resource.map(str::to_string), id),
+                    OpenTarget::Name { kind, name } => {
+                        let r = api.resolve_curated(&kind, &name).await.map_err(|_| not_found())?;
+                        match (r.resource.as_str(), r.id) {
+                            ("variation" | "effect", _) => return Ok(Opened::Builtin(r.kind, r.name.unwrap_or(name))),
+                            (res, Some(id)) => (Some(format!("{res}s")), id),
+                            _ => return Err(not_found()),
+                        }
+                    }
+                };
+                let order: Vec<String> = match resource {
+                    Some(r) => vec![r],
+                    None => ["flames", "animations", "palettes", "scripts"].iter().map(|s| s.to_string()).collect(),
+                };
+                for r in order {
+                    let found = match r.as_str() {
+                        "flames" => api.load_flame_with_visibility(&id).await.ok().map(|l| Opened::Flame(id.clone(), l)),
+                        "animations" => api.exists("animations", &id).await.ok().map(|_| Opened::Animation(id.clone())),
+                        "palettes" => api.get_palette(&id).await.ok().map(Opened::Palette),
+                        "scripts" => match api.load_script(&id).await {
+                            Ok(s) => {
+                                let title = if s.display_name.is_empty() { s.name.clone() } else { s.display_name.clone() };
+                                let mut code = crate::curated::trust::code_of_source(&s.source);
+                                code.title = title.clone();
+                                Some(Opened::Script { id: id.clone(), title, trusted: s.curated.is_some(), code })
+                            }
+                            Err(_) => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(found) = found {
+                        return Ok(found);
+                    }
+                }
+                Err(not_found())
+            },
+            move || wake.request_repaint(),
+        )
+        .authed(account.signed_in);
+        self.open_job = Some(job);
+    }
+
     fn load_flame(&mut self, id: &str, account: &CloudAccount, ctx: &egui::Context) {
         let api = account.api();
         let flame_id = id.to_string();
@@ -534,7 +729,21 @@ impl OnlinePlace {
         if let Item::Flame(f) = &item {
             ui.label(egui::RichText::new(fractal_line(f)).weak());
         }
-        ui.label(t!("catalog.from_online"));
+        match &info.curated {
+            Some(c) => {
+                let mut line = match &c.name {
+                    Some(name) => t!("catalog.curated_as", name = name.clone()).to_string(),
+                    None => t!("catalog.curated").to_string(),
+                };
+                if !c.current {
+                    line = format!("{line} · {}", t!("catalog.curated_older"));
+                }
+                ui.label(line).on_hover_text(t!("catalog.curated_tip"));
+            }
+            None => {
+                ui.label(t!("catalog.from_online"));
+            }
+        }
         if !info.updated.is_empty() {
             let mut when = t!("catalog.updated", date = info.updated.chars().take(10).collect::<String>()).to_string();
             if let Some(v) = &info.visibility {
@@ -568,7 +777,7 @@ impl OnlinePlace {
                 ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(w, 24.0)));
                 ui.add_space(4.0);
             }
-            Item::Script(_) => {}
+            Item::Script(_) | Item::Animation(_) => {}
         }
         if e.description.is_empty() {
             ui.weak(t!("catalog.no_description"));
@@ -584,9 +793,22 @@ impl OnlinePlace {
                 if ui.button(t!("catalog.use_palette")).clicked() {
                     super::inventory::apply_palette(cx.config_manager, crate::api::sync::palette_from_item(p));
                 }
-                if let Some(held) = &info.held {
-                    if ui.button(t!("catalog.show_local")).on_hover_text(t!("catalog.held_palette")).clicked() {
-                        action = Some(InfoAction::ShowLocal(held.clone()));
+                match &info.held {
+                    Some(held) => {
+                        if ui.button(t!("catalog.show_local")).on_hover_text(t!("catalog.held_palette")).clicked() {
+                            action = Some(InfoAction::ShowLocal(held.clone()));
+                        }
+                    }
+                    None => {
+                        if ui.button(t!("catalog.save_palette")).on_hover_text(t!("catalog.save_palette_tip")).clicked() {
+                            let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                            let palette = saved_copy(p, &info, mine, cx.palette_library, &today);
+                            let name = palette.name.clone();
+                            self.status = Some(match cx.palette_library.save_to_custom_library(palette) {
+                                Ok(()) => (t!("catalog.saved_palette", name = name).to_string(), false),
+                                Err(e) => (t!("catalog.save_palette_failed", error = e).to_string(), true),
+                            });
+                        }
                     }
                 }
             }
@@ -597,6 +819,11 @@ impl OnlinePlace {
                 }
                 if loading {
                     ui.spinner();
+                }
+            }
+            Item::Animation(_) => {
+                if ui.button(t!("catalog.use_animation")).on_hover_text(t!("catalog.use_animation_tip")).clicked() {
+                    out.load_api_animation = Some(info.id.clone());
                 }
             }
             Item::Script(_) => match &info.held {
@@ -750,15 +977,30 @@ pub(super) fn grid_cell(ui: &mut egui::Ui, e: &Entry, texture: Option<&egui::Tex
 /// wrapped row the cursor is not where the cell lands, and a cell
 /// scrolled half out of view was taken for one off screen.
 pub(super) fn grid_cell_lazy(ui: &mut egui::Ui, e: &Entry, selected: bool, picture: impl FnOnce() -> (Option<egui::TextureHandle>, bool)) -> egui::Response {
-    let (rect, r) = ui.allocate_exact_size(egui::vec2(CELL, CELL + 18.0), egui::Sense::click());
+    grid_cell_sized(ui, e, &e.title, selected, true, CELL, picture)
+}
+
+/// [`grid_cell_lazy`] at a side of `cell`, captioned `label`; not
+/// `enabled`, greyed (a picker's cell it cannot pick, or not installed).
+pub(super) fn grid_cell_sized(
+    ui: &mut egui::Ui,
+    e: &Entry,
+    label: &str,
+    selected: bool,
+    enabled: bool,
+    cell: f32,
+    picture: impl FnOnce() -> (Option<egui::TextureHandle>, bool),
+) -> egui::Response {
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(cell, cell + 18.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let (texture, has_thumb) = picture();
         let texture = texture.as_ref();
         let visuals = ui.visuals();
-        let img = egui::Rect::from_min_size(rect.min, egui::vec2(CELL, CELL));
+        let img = egui::Rect::from_min_size(rect.min, egui::vec2(cell, cell));
         match texture {
             Some(t) => {
-                egui::Image::new(t).fit_to_exact_size(img.size()).paint_at(ui, img);
+                let tint = if enabled { egui::Color32::WHITE } else { egui::Color32::from_gray(90) };
+                egui::Image::new(t).fit_to_exact_size(img.size()).tint(tint).paint_at(ui, img);
             }
             None => {
                 ui.painter().rect_filled(img, 3.0, visuals.extreme_bg_color);
@@ -773,8 +1015,9 @@ pub(super) fn grid_cell_lazy(ui: &mut egui::Ui, e: &Entry, selected: bool, pictu
             ui.painter().rect_stroke(img, 3.0, visuals.widgets.hovered.bg_stroke, egui::StrokeKind::Inside);
         }
         let name_rect = egui::Rect::from_min_max(egui::pos2(rect.min.x, img.max.y + 2.0), rect.max);
-        let galley = ui.painter().layout_no_wrap(e.title.clone(), egui::FontId::proportional(12.0), visuals.text_color());
-        ui.painter().with_clip_rect(name_rect).galley(name_rect.left_top(), galley, visuals.text_color());
+        let colour = if enabled { visuals.text_color() } else { visuals.weak_text_color() };
+        let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(12.0), colour);
+        ui.painter().with_clip_rect(name_rect).galley(name_rect.left_top(), galley, colour);
     }
     let tip = match e.online.as_ref().map(|o| o.owner.as_str()).filter(|o| !o.is_empty()) {
         Some(owner) => format!("{}\n{}", e.title, t!("catalog.by_owner", owner = owner)),
@@ -869,6 +1112,36 @@ fn cache_key(url: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Save a copy: a name none of yours has (a save by name would replace
+    /// it), and a description that says where it came from, when, by whom
+    /// and its online id, then the server's own description.
+    #[test]
+    fn a_saved_online_palette_says_where_it_came_from() {
+        let item: crate::api::types::PaletteItem = serde_json::from_value(serde_json::json!({
+            "id": "pal-1", "name": "It Saved Copy", "description": "Warm dusk.", "content_hash": "h",
+            "content": {"stops": [{"position": 0.0, "color": [1.0, 0.0, 0.0]}, {"position": 1.0, "color": [0.0, 0.0, 1.0]}]}
+        }))
+        .unwrap();
+        let mut info = online::OnlineInfo { id: "pal-1".into(), owner: "ana".into(), updated: String::new(), thumbnail_url: None, visibility: None, held: None, curated: None };
+        info.curated = Some(serde_json::from_value(serde_json::json!({"name": "dusk", "current": true})).unwrap());
+        let mut library = crate::scene::palette::PaletteLibrary::new();
+        let custom = library.custom_pack_index().unwrap();
+        let mut taken = crate::api::sync::palette_from_item(&item);
+        taken.description.clear();
+        library.packs_mut()[custom].pack.as_mut().unwrap().palettes.push(taken);
+
+        let copy = saved_copy(&item, &info, false, &library, "2026-11-19");
+        assert_eq!(copy.name, "It Saved Copy (2)", "not the name of one of yours");
+        assert!(!copy.built_in);
+        let d = &copy.description;
+        assert!(d.starts_with(&t!("catalog.saved_from_curated", date = "2026-11-19").to_string()), "{d}");
+        assert!(d.contains("ana") && d.contains("pal-1") && d.ends_with("\n\nWarm dusk."), "{d}");
+
+        let yours = saved_copy(&item, &info, true, &library, "2026-11-19");
+        assert!(yours.description.starts_with(&t!("catalog.saved_from_mine", date = "2026-11-19").to_string()));
+        assert!(!yours.description.contains("ana"), "your own: no owner line");
+    }
+
     fn script(id: &str) -> Item {
         Item::Script(
             serde_json::from_value(serde_json::json!({
@@ -923,6 +1196,35 @@ mod tests {
         place.update(&ctx, "", &local, &mut InventoryResponse::default());
         let held = place.find(&EntryKey::Online(Kind::Coloring, "s1".into())).and_then(|(e, _)| e.online.as_ref()?.held.clone());
         assert_eq!(held, Some(adopted.key), "the row knows the file it was opened into");
+    }
+
+    /// A list that failed can be asked again (Try again), and does not
+    /// keep its error once the server answers another list: one with
+    /// nothing starts over when shown, one with rows keeps them.
+    #[test]
+    fn a_failed_list_is_asked_again_once_the_server_answers() {
+        let ctx = egui::Context::default();
+        frame(&ctx, 0.0);
+        let mut place = OnlinePlace::new();
+        let key = |kind| ListKey { kind, scope: Scope::Curated, q: String::new(), sort: "recent", mode: None };
+        let (failed, partial, fine) = (key(Kind::Coloring), key(Kind::Formula), key(Kind::Fractal));
+        let down = || job::spawn(async move { Err(crate::resources::FetchError::Network("down".into())) }, || {});
+        place.lists.insert(failed.clone(), List { job: Some(down()), ..Default::default() });
+        let none = Arc::new(Vec::new());
+        settle(&mut place, &ctx, &none, &failed);
+        let list = &place.lists[&failed];
+        assert_eq!(list.error.as_deref(), Some("Network error: down"), "said once");
+        assert!(!list.more() && list.retryable(), "Try again asks for the first page");
+        let rows = vec![(online::entry(&script("s1"), group_of(Kind::Formula), &none).unwrap(), script("s1"))];
+        place.lists.insert(partial.clone(), List { rows, next: Some("c2".into()), started: true, job: None, error: Some("down".into()) });
+        assert!(place.lists[&partial].retryable(), "or the page after its last");
+
+        let page = (vec![script("s2")], None);
+        place.lists.insert(fine.clone(), List { job: Some(job::spawn(async move { Ok(page) }, || {})), ..Default::default() });
+        settle(&mut place, &ctx, &none, &fine);
+        assert!(!place.lists.contains_key(&failed), "the failed list starts over when shown");
+        let partial = &place.lists[&partial];
+        assert!(partial.error.is_none() && partial.rows.len() == 1 && partial.more(), "the one with rows keeps them, and asks on");
     }
 
     /// The search is asked for once the typing stops, not at every key.
@@ -987,7 +1289,7 @@ mod tests {
     #[test]
     fn families_list_their_kinds_online() {
         assert_eq!(kinds(Family::Palettes), vec![Kind::Palette]);
-        assert_eq!(kinds(Family::Fractals), vec![Kind::Fractal]);
+        assert_eq!(kinds(Family::Fractals), vec![Kind::Fractal, Kind::Animation], "animations are a kind of the Fractals family");
         assert_eq!(kinds(Family::Simulation), vec![Kind::SimModel, Kind::SimColoring]);
         assert!(kinds(Family::Escape).contains(&Kind::Formula) && kinds(Family::Escape).contains(&Kind::Coloring));
         assert_eq!(kinds(Family::Variations), vec![Kind::Variation], "people's Rhai variations, after the server's catalog");

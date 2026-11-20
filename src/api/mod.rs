@@ -22,20 +22,24 @@ mod integration_tests;
 use crate::config::FractalConfig;
 use crate::resources::{FetchError, FetchResult, LoadState};
 
-/// Whose items a list asks for: the public ones, or the caller's own
-/// (every visibility; signed in).
+/// Whose items a list asks for: the curated ones (the app's browsing,
+/// docs/projects/curated-content.md), every public one (the API's own
+/// browsing, kept for its tests and tools), or the caller's own (every
+/// visibility; signed in).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Scope {
     #[default]
+    Curated,
     Public,
     Mine,
 }
 
 impl Scope {
-    /// The list's path for resource `r` (`flames`, `palettes`, `scripts`).
+    /// The list's path for resource `r` (`flames`, `palettes`, `scripts`,
+    /// `animations`).
     fn path(self, r: &str) -> String {
         match self {
-            Scope::Public => format!("/api/v1/{r}"),
+            Scope::Curated | Scope::Public => format!("/api/v1/{r}"),
             Scope::Mine => format!("/api/v1/users/me/{r}"),
         }
     }
@@ -136,9 +140,12 @@ pub fn adopt_server_flame(
     }
 }
 
-/// Hard-coded API base URL. Change this for release builds.
-pub const API_BASE_URL: &str = "https://fractalsforall.com";
-// pub const API_BASE_URL: &str = "http://localhost:3000";
+/// The API's base URL, chosen by the build profile (`build.rs`): the
+/// deployed server (`https://fractalsforall.com`) for `--profile dist`,
+/// what ships; a local one (`http://localhost:3000`) for `--release` and
+/// debug builds, for testing against an API run on this machine. Set
+/// `FFLAME_API_BASE_URL` when building to choose another.
+pub const API_BASE_URL: &str = env!("FFLAME_API_BASE_URL");
 
 use auth::AuthState;
 use client::build_url;
@@ -171,8 +178,7 @@ pub enum HealthCheckOutcome {
 /// Percent-encode a query-string value.
 ///
 /// Written rather than pulled in: the need is a few free-text query
-/// values (this endpoint's, and `SearchFlamesParams::to_query_string`'s
-/// name and variation), and the unreserved set from RFC 3986 is short
+/// values (the list words', a name in a path), and the unreserved set from RFC 3986 is short
 /// enough to state.
 pub(crate) fn urlencode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -433,19 +439,6 @@ impl ApiState {
         client::api_delete(&url, &token).await
     }
 
-    /// Your own flames, filtered (`GET /users/me/flames` with its words).
-    pub async fn search_flames(
-        &self,
-        params: &SearchFlamesParams,
-    ) -> FetchResult<Vec<FlameListItem>> {
-        let token = self.require_token()?;
-        let url = build_url(
-            API_BASE_URL,
-            &format!("/api/v1/users/me/flames{}", params.to_query_string()),
-        );
-        client::api_get::<types::Lenient<FlameListItem>>(&url, &token).await.map(types::Lenient::into_inner)
-    }
-
     /// One page of fractals: the public ones, or yours (`sort` =
     /// `recent`, `updated`, `name`, `popular`, `views`; `render_mode` and
     /// the catalog filters as `filters`).
@@ -466,12 +459,59 @@ impl ApiState {
         self.browse(scope, "scripts", words).await
     }
 
+    /// One page of animations (`sort` = `recent`, `updated`, `name`,
+    /// `popular`, `views`).
+    pub async fn browse_animations(&self, scope: Scope, words: &Browse) -> FetchResult<types::Page<types::AnimationListItem>> {
+        self.browse(scope, "animations", words).await
+    }
+
     async fn browse<T: serde::de::DeserializeOwned>(&self, scope: Scope, resource: &str, words: &Browse) -> FetchResult<types::Page<T>> {
+        let mut words = words.clone();
+        if scope == Scope::Curated {
+            words.filters.push(("curated".to_string(), "true".to_string()));
+        }
         let url = build_url(API_BASE_URL, &format!("{}{}", scope.path(resource), words.query()));
         match scope {
-            Scope::Public => self.public_get(&url).await,
+            Scope::Curated | Scope::Public => self.public_get(&url).await,
             Scope::Mine => client::api_get(&url, &self.require_token()?).await,
         }
+    }
+
+    /// One palette, by id (its colours included).
+    pub async fn get_palette(&self, id: &str) -> FetchResult<PaletteItem> {
+        let url = build_url(API_BASE_URL, &format!("/api/v1/palettes/{}", urlencode(id)));
+        self.public_get(&url).await
+    }
+
+    /// Whether `resource` (`flames`, `animations`, `palettes`, `scripts`)
+    /// has an item `id` the caller can read.
+    pub async fn exists(&self, resource: &str, id: &str) -> FetchResult<()> {
+        let url = build_url(API_BASE_URL, &format!("/api/v1/{resource}/{}", urlencode(id)));
+        self.public_get::<serde_json::Value>(&url).await.map(|_| ())
+    }
+
+    /// Many at once (`POST /curated/resolve`, at most 500): each item a
+    /// name, a hash, or both; one answer an item, in order, `None` where it
+    /// resolves to nothing. A hash alone asks whether that content is
+    /// curated -- what the client trusts without asking.
+    pub async fn resolve_curated_many(&self, items: &[types::ResolveItem]) -> FetchResult<Vec<Option<types::Resolution>>> {
+        #[derive(serde::Serialize)]
+        struct Request<'a> {
+            items: &'a [types::ResolveItem],
+        }
+        #[derive(serde::Deserialize)]
+        struct Response {
+            items: Vec<Option<types::Resolution>>,
+        }
+        let url = build_url(API_BASE_URL, "/api/v1/curated/resolve");
+        let resp: Response = client::api_post_unauth(&url, &Request { items }).await?;
+        Ok(resp.items)
+    }
+
+    /// What a canonical name means now (`GET /curated/{kind}/{name}`).
+    pub async fn resolve_curated(&self, kind: &str, name: &str) -> FetchResult<types::Resolution> {
+        let url = build_url(API_BASE_URL, &format!("/api/v1/curated/{}/{}", urlencode(kind), urlencode(name)));
+        self.public_get(&url).await
     }
 
     /// A thumbnail's bytes, by the `thumbnail_url` an item gave (a path
@@ -496,28 +536,6 @@ impl ApiState {
     }
 
     // --- Palettes ---
-
-    /// The caller's palettes, every visibility (`GET /users/me/palettes`),
-    /// each with its colours.
-    pub async fn list_my_palettes(&self, page: u32, per_page: u32) -> FetchResult<Vec<PaletteItem>> {
-        let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/v1/users/me/palettes?page={page}&per_page={per_page}"));
-        client::api_get::<types::Lenient<PaletteItem>>(&url, &token).await.map(types::Lenient::into_inner)
-    }
-
-    /// A palette's content by hash. Public: no auth required.
-    pub async fn get_palette_data(&self, hash: &str) -> FetchResult<ApiPalette> {
-        let url = build_url(API_BASE_URL, &format!("/api/v1/palette-data/{hash}"));
-        client::api_get_unauth(&url).await
-    }
-
-    /// Rename one of the caller's palettes.
-    pub async fn rename_palette(&self, id: &str, name: &str) -> FetchResult<PaletteItem> {
-        let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/v1/palettes/{id}"));
-        let req = PatchPaletteRequest { name: Some(name.to_string()) };
-        client::api_patch(&url, &req, &token).await
-    }
 
     /// Publish a palette of the user's (`POST /palettes`), private or
     /// public: a palette item of its own, its colours by hash.
@@ -587,9 +605,11 @@ impl ApiState {
         &self,
         animation_id: &str,
     ) -> FetchResult<(crate::animation::Animation, Option<FractalConfig>, Option<String>)> {
-        let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/v1/animations/{}", animation_id));
-        let resp: AnimationResponse = client::api_get(&url, &token).await?;
+        // Public: a curated or someone's public animation loads for a guest
+        // too; the token goes along when there is one (a private one of
+        // the user's own).
+        let url = build_url(API_BASE_URL, &format!("/api/v1/animations/{}", urlencode(animation_id)));
+        let resp: AnimationResponse = self.public_get(&url).await?;
         let flame_id = resp.flame_id.clone();
 
         // Convert embedded flame to FractalConfig (palette travels inline).
@@ -661,22 +681,6 @@ impl ApiState {
     // Scripts
     // ========================================================================
 
-    /// The caller's own scripts, of one kind (its wire name,
-    /// `storage::library::Kind::wire`) or every kind.
-    pub async fn list_my_scripts(
-        &self,
-        kind: Option<&str>,
-        page: u32,
-        per_page: u32,
-    ) -> FetchResult<Vec<types::ScriptListItem>> {
-        let token = self.require_token()?;
-        let url = build_url(
-            API_BASE_URL,
-            &format!("/api/v1/users/me/scripts?page={page}&per_page={per_page}{}", kind_param(kind)),
-        );
-        client::api_get::<types::Lenient<types::ScriptListItem>>(&url, &token).await.map(types::Lenient::into_inner)
-    }
-
     /// Create a script. Returns the server's copy — including the id,
     /// and the version to hold for the next update.
     ///
@@ -721,33 +725,6 @@ impl ApiState {
         client::api_delete(&url, &token).await
     }
 
-    /// Public script search.
-    ///
-    /// This is the point where a user can run code somebody else wrote.
-    /// Whatever surfaces these results owes them visible provenance, and
-    /// anything loaded from here must be run through
-    /// `ScriptHost::with_untrusted` — which is what makes running one
-    /// survivable rather than merely allowed.
-    ///
-    /// `kind` narrows it to one kind (its wire name).
-    pub async fn search_public_scripts(
-        &self,
-        query: &str,
-        kind: Option<&str>,
-        page: u32,
-        per_page: u32,
-    ) -> FetchResult<Vec<types::ScriptListItem>> {
-        let url = build_url(
-            API_BASE_URL,
-            &format!(
-                "/api/v1/scripts?q={}&page={page}&per_page={per_page}{}",
-                urlencode(query),
-                kind_param(kind)
-            ),
-        );
-        self.public_get::<types::Lenient<types::ScriptListItem>>(&url).await.map(types::Lenient::into_inner)
-    }
-
     // ========================================================================
     // Effects
     // ========================================================================
@@ -787,14 +764,15 @@ impl ApiState {
     /// refuses a null one rather than adding an effect that renders
     /// nothing.
     pub async fn fetch_effect(&self, name: &str) -> FetchResult<types::EffectDownload> {
-        let url = build_url(API_BASE_URL, &format!("/api/v1/effects/{name}"));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/effects/{}", urlencode(name)));
         self.public_get(&url).await
     }
 
     pub async fn fetch_variation(&self, name: &str) -> FetchResult<types::VariationDownload> {
-        let url = build_url(API_BASE_URL, &format!("/api/v1/variations/{}", name));
-        // Use empty token — variations are publicly readable
-        client::api_get::<types::VariationDownload>(&url, "").await
+        // Publicly readable: a guest's request goes unsigned (never an
+        // empty `Bearer`), a signed-in one carries the token.
+        let url = build_url(API_BASE_URL, &format!("/api/v1/variations/{}", urlencode(name)));
+        self.public_get(&url).await
     }
 
     /// List all available variations on the server (summary form, no shader code).
@@ -839,14 +817,22 @@ pub fn is_newer_release(latest: &str, current: &str) -> bool {
     }
 }
 
-/// `&kind=<wire name>`, or nothing for every kind.
-fn kind_param(kind: Option<&str>) -> String {
-    kind.map(|k| format!("&kind={}", urlencode(k))).unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--profile dist` (what ships) talks to the deployed server; a
+    /// `--release` or debug build to one on this machine (`build.rs`).
+    #[test]
+    fn the_api_follows_the_build_profile() {
+        if env!("FFLAME_API_BASE_URL_CHOSEN_BY") == "override" {
+            return;
+        }
+        match env!("BUILD_PROFILE") {
+            "release" | "debug" => assert_eq!(API_BASE_URL, "http://localhost:3000"),
+            _ => assert_eq!(API_BASE_URL, "https://fractalsforall.com"),
+        }
+    }
 
     #[test]
     fn release_versions_compare_as_numbers() {
@@ -874,7 +860,9 @@ mod tests {
         };
         assert_eq!(words.query(), "?q=fire+%26+ice&sort=popular&kind=formula&render_mode=2d&per_page=100&cursor=abc%3D");
         assert_eq!(Scope::Public.path("flames"), "/api/v1/flames");
+        assert_eq!(Scope::Curated.path("animations"), "/api/v1/animations");
         assert_eq!(Scope::Mine.path("palettes"), "/api/v1/users/me/palettes");
+        assert_eq!(Scope::default(), Scope::Curated, "the app browses the curated collection");
     }
     use crate::scene::transforms::RenderMode;
 

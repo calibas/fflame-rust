@@ -4,15 +4,15 @@
 `fractalsforall.com`: signing in, saving and loading flames and
 animations, the cloud palette library and the script library, and the
 **shared resources** — variations and effects the app downloads,
-caches and registers at run time, next to the user's own local
-plugins. Also what this repository publishes **for** the service: the
+caches and registers at run time, next to the user's own Rhai
+files. Also what this repository publishes **for** the service: the
 generated engine contract, the corpora, and the OpenAPI spec both
 repositories work to. The app renders fully offline; every online
 feature fails to a status line, not to a broken panel.
 
 **See also:**
 - [VARIATIONS.md](VARIATIONS.md) — the registry rules downloads and
-  plugins register under
+  the user's Rhai files register under
 - [EFFECTS.md](EFFECTS.md) — the effect registry and its download checks
 - [ANIMATION.md](ANIMATION.md) — what an animation carries
 - [FRACTAL-BROWSER.md](FRACTAL-BROWSER.md) — the Fractal Browser's Online
@@ -67,9 +67,19 @@ feature fails to a status line, not to a broken panel.
 
 ## The service and the transport
 
-**One server.** `api::API_BASE_URL` is `https://fractalsforall.com`,
-compiled in. `SystemSettings::api_base_url` is a deprecated field that
-is still read from old settings files and never written.
+**One server, chosen by the build.** `api::API_BASE_URL` is compiled
+in, by profile (`build.rs`):
+
+- `--profile dist`, what ships (the web app too), uses
+  `https://fractalsforall.com`;
+- `--release` and debug builds use `http://localhost:3000`, for testing
+  against an ffapi run on this machine (its default port).
+
+`FFLAME_API_BASE_URL`, set at build time, overrides either. At run time
+a desktop build also takes `FFLAME_API_URL` pointing at a loopback
+address (`client::local_override`), which the integration test uses.
+`SystemSettings::api_base_url` is a deprecated field that is still read
+from old settings files and never written.
 
 **The spec.** [openapi.json](openapi.json) is the API's own OpenAPI
 document (91 paths; refreshed 2026-11-16 from a local server on ffapi's
@@ -129,9 +139,9 @@ settings file that says so reads as a guest.)
 | --- | --- |
 | File → **Save Online** | loading a web deep link (`?flame=`, `?animation=`) |
 | Window → **Account**, the startup auto-login | the variation catalog, fetched once per session |
-| the Catalog's Online place, **Account** (your fractals, palettes and scripts; renaming, making public or private and deleting your fractals and palettes) | fetching a variation a loaded flame names but the app lacks, and updating stale downloads |
+| the Catalog's Online place, **Account** (your fractals, palettes, animations and scripts; renaming, making public or private and deleting your fractals and palettes) | fetching a variation a loaded flame names but the app lacks, and updating stale downloads |
 | the menu bar's connection and account indicator | the effect catalog, fetching a missing effect, updating downloaded effects |
-| the periodic health check | the Catalog's Online place, **Public**: browsing and searching every resource, loading a public fractal, applying a palette, opening a script |
+| the periodic health check | the Catalog's Online place, **Curated**: browsing and searching the curated collection; **Open by ID or link**: loading anyone's public fractal or animation, applying a palette, opening a script |
 | publishing your Rhai files and custom palettes (the Catalog's info pane) | |
 
 A guest's request goes unauthenticated (`ApiState::public_get`); signed
@@ -301,14 +311,18 @@ URL load either at startup, with a 30 s timeout.
 
 ## Browsing: the Catalog's Online place
 
-Fractals, palettes and scripts are browsed in the Catalog
+Fractals, animations, palettes and scripts are browsed in the Catalog
 ([CATALOG.md](CATALOG.md), *Online*): `ApiState::browse_flames`,
-`browse_palettes` and `browse_scripts` ask one page of a resource
-(`Scope::Public`, `GET /api/v1/R`, or `Scope::Mine`,
-`GET /api/v1/users/me/R`) with `Browse`'s words (`q`, `sort`, `kind`, the
+`browse_animations`, `browse_palettes` and `browse_scripts` ask one page
+of a resource (`Scope::Curated`, `GET /api/v1/R?curated=true`, the app's
+browsing; `Scope::Public`, every public item, which only the tests use;
+or `Scope::Mine`, `GET /api/v1/users/me/R`) with `Browse`'s words (`q`, `sort`, `kind`, the
 resource's filters such as `render_mode`, `per_page`, `cursor`) and
-page by the reply's `next`. A public fractal loads without a sign-in
-(`load_flame_with_visibility` asks as a guest when signed out); deleting
+page by the reply's `next`. A public fractal or animation loads without
+a sign-in (`load_flame_with_visibility`, `load_animation_full` ask as a
+guest when signed out); *Open by ID or link* also uses `get_palette`,
+`exists` (whether a resource has an id) and `resolve_curated` (a
+canonical name's current version, `GET /api/v1/curated/{kind}/{name}`); deleting
 your fractal (`DELETE /api/v1/flames/{id}`) or palette
 (`DELETE /api/v1/palettes/{id}`; its colours stay, since fractals may use
 them) asks for confirmation first. `fetch_thumbnail` reads a
@@ -322,6 +336,46 @@ the session expired (`take_session_expired`), and the UI signs out once
 -- whichever request it was. A 403 is the server refusing that request
 and leaves the session alone. (The older sections each had their own
 loop, and only the Fractal Browser's signed out on a 401.)
+
+---
+
+## Trusting code from the server
+
+A fractal or an animation from the server can carry Rhai: custom
+variations, escape-time formulas and colourings, simulation models,
+effects (shaders, on the GPU) and script tracks (on the CPU). All of it
+runs as soon as it loads, so a load from the server passes a gate first
+(`app::trust`, `curated::trust`; [curated-content.md](../projects/curated-content.md),
+*Trust*):
+
+- **What passes through it:** the Catalog's loads, *Open by ID or link*,
+  a deep link, and the Animation panel's list. Files opened from this
+  device, the shipped presets and the signed-in user's own items (the
+  owner is the user) skip it.
+- **What it reads:** the code the load carries, which is every carried
+  Rhai source in the config (`{dialect: "rhai", entry, source}`,
+  wherever it sits) plus the animation's script tracks. Each is hashed
+  with `scripted::version_of`.
+- **Curated code runs without asking.** Hashes not yet trusted go to
+  `POST /api/v1/curated/resolve` as a hash alone with their kind. What
+  the server finds curated is trusted for the session.
+- **Anything else asks once.** The load is held and a window asks
+  (*Unreviewed code*). It lists the code and offers **Load**, **Always
+  trust this code** or **Don't load**:
+  - Load trusts that code until the app closes.
+  - Always trusts it on this device from then on (`trusted_code.json`
+    in the app's data). A changed version asks again.
+  - Offline, or against a server without the curated routes, nothing is
+    known to be curated, so everything not trusted is asked about.
+- **A script opened by ID** asks the same question before it joins your
+  files, unless it is curated.
+- **Curated items a file names** instead of carrying them (File ▸ Save
+  As; [CONFIG.md](CONFIG.md), *Writing*) are fetched by name and hash
+  when it opens. Being curated, they are trusted.
+- **Script tracks** run in a locked-down engine: no module imports, no
+  calls into other scripts, no `sleep`, and an operation budget. The
+  untrusted restriction CPU scripts get (calls only into shipped scripts)
+  has nothing more to take from them.
 
 ---
 
@@ -351,8 +405,8 @@ and searching are the Catalog's (above).
 | `Publish` | create; records the returned id and version against the local file |
 | `Update` | update with the version last read; a 409 is a **conflict** the user resolves (`ScriptConflict`) in the info pane of the file it names: overwrite the server's copy, or load theirs (`Refetch`) |
 | `Adopt` | fetch someone's script and save it locally under a free name, marked as somebody else's: a CPU script in the script store (it runs under the restrictions downloaded scripts get), an entry in the formula library. A kind this build does not know is refused |
-| `Refetch` | replace a local file's content with the server's in place, keeping its provenance and plug-in flag |
-| `Unpublish` | delete it from the server; the local copy stays (and stays a plug-in) |
+| `Refetch` | replace a local file's content with the server's in place, keeping its provenance |
+| `Unpublish` | delete it from the server; the local copy stays, now only the user's |
 | `SetVisibility` | make a published file public or private |
 
 A CPU script's payload (`script_to_create_request`) is derived from the
@@ -398,8 +452,8 @@ not.
 Every registered variation and effect has a `Provenance`
 ([provenance.rs](../../src/provenance.rs)), the registry's form of the
 one origin model every kind shares (`Origin`: `Builtin`, `Local`,
-`Api`), with the server's version on a download. A plug-in is `Local`
-in the registry whoever wrote it (the user keeps it: Clear Cache leaves
+`Api`), with the server's version on a download. A compiled Rhai file
+is `Local` in the registry whoever wrote it (the user keeps it: Clear Cache leaves
 it); the library's mark on its file says who wrote it.
 
 | | `Builtin` | `Api { version }` | `Local` (the user's own Rhai) |
@@ -475,23 +529,34 @@ names with non-zero weight that the registry lacks, and
 | listed, not downloadable | `KnownButNotFetchable` | notifies that a plugin is needed |
 | not listed | `NotInCatalog` | notifies that a plugin is needed |
 
-Fetches (`GET /api/v1/variations/{name}`, no authentication) run in
-parallel and **pause rendering** until they all finish or 30 s pass.
-Each download is cached, then registered as `Api { version }`; then the
-renderer reloads the config so the shader includes them. Failures and
-timeouts are notified. Updating from the Variations panel is the same
-fetch again; names held by a built-in or the user's own are filtered
-out first.
+Fetches (`GET /api/v1/variations/{name}`; a name or an alias, encoded;
+a guest's unsigned, a signed-in one with the token) run in parallel and
+**pause rendering** until they all finish or 30 s pass. Each download
+is **registered first and cached second** (`register_from_api` answers
+whether it took it), so a payload this build refuses -- a built-in's
+name, a custom variation's, a missing shader -- is never cached; then
+the renderer reloads the config so the shader includes them. Failures
+and timeouts are notified. Updating from the Variations panel is the
+same fetch again; names held by a built-in or the user's own are
+filtered out first. A newer version is told by `version`, which the
+API's sync moves whenever a variation's content hash does
+([curated-content.md](../projects/curated-content.md), step 2); the
+hash itself is served (`content_hash`) for a client that wants it.
 
 ### Missing effects
 
 A missing effect is found where the effect chain compiles and has no
-registry entry (`effects::take_missing_effects`). If signed in, the app
-fetches it (`GET /api/v1/effects/{name}`); each name is tried once per
-session. A download is **registered first and cached second**, so a
-payload this build refuses is never cached; a refusal is notified.
-Rendering is not paused: the picture simply lacks the effect until it
-arrives. The registration checks are in [EFFECTS.md](EFFECTS.md).
+registry entry (`effects::take_missing_effects`). The app fetches it
+(`GET /api/v1/effects/{name}`, a guest's too); each name is tried once
+per session. As a variation's, a download is **registered first and
+cached second** -- never under a built-in's or a custom effect's name --
+and a refusal is notified. Rendering is not paused: the picture simply
+lacks the effect until it arrives. The registration checks are in
+[EFFECTS.md](EFFECTS.md).
+
+Both fetches are `api::job`s, kept by one helper (`app::downloads`): a
+new variation batch drops an earlier batch's stragglers with their
+jobs, so none is counted against it.
 
 ---
 
@@ -499,11 +564,12 @@ arrives. The registration checks are in [EFFECTS.md](EFFECTS.md).
 
 Local WGSL plug-in files -- a variation or effect in the download's
 JSON under `<app data>/plugins/variations/` or `plugins/effects/` --
-were retired 2026-11-01 ([rhai-plugins.md](../archive/projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them. A start that finds such files names them in a
+were retired 2026-11-01 ([rhai-plugins.md](../archive/projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai files replace them. A start that finds such files names them in a
 notice (stderr headless) for one release and leaves them in place
-(`storage::retired_plugin_files`). Their replacement is local: Rhai
-plug-ins, a flag on a file of the user's formulas
-([VARIATIONS.md](VARIATIONS.md#downloaded-variations)).
+(`storage::retired_plugin_files`). Their replacement is local: a Rhai
+file of the user's formulas, in the lists as it is in the Catalog
+([VARIATIONS.md](VARIATIONS.md#downloaded-variations)); the later *Load
+at start* flag is retired too ([one-list.md](../projects/one-list.md)).
 
 ---
 
@@ -566,6 +632,7 @@ generates on demand. Each is large and written to the gitignored
 | `cargo run --release --bin export_variations_json [out.json]` | `output/variations-corpus.json` | every shipped variation: WGSL, parameters, features, and the description and authors recovered from `///` doc comments |
 | `cargo run --release --bin export_scripts_json [out.json]` | `output/scripts-corpus.json` | every built-in script: declared name, kind and flags, description, and the source verbatim |
 | `cargo run --release --bin export_effects_json [out.json]` | `output/effects-corpus.json` | every built-in effect: WGSL, parameters, category, `requires_blend_modes` |
+| `cargo run --release --bin export_curated_json [out.json]` | `output/curated-manifest.json` | everything the app ships as the seeding sync's records -- presets, palettes, shipped scripts and Rhai examples, the variation and effect corpora -- each with its canonical name and content hash (`src/curated.rs`, defined as the API defines it; [curated-content.md](../projects/curated-content.md)) |
 
 Each stamps the current `contract_shape`. The variation and script
 exporters refuse to write a corpus with a missing description (or, for

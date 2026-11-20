@@ -13,6 +13,7 @@ pub mod markdown;
 mod inventory_manage;
 pub mod script_run;
 mod inventory_online;
+mod trust_window;
 mod inventory_preview;
 pub mod picker;
 pub mod fractal_gallery;
@@ -1570,6 +1571,7 @@ impl EguiLayer {
         let mut open_save_online_dialog = false;
         let mut load_api_animation_id: Option<String> = None;
         let mut clear_variation_cache_requested = false;
+        let mut refresh_catalogs_requested = false;
         // Mutated by the simulation panel; copied into the response
         // below so the App owns the authoritative state.
         let mut sim_running_local = sim_running;
@@ -1610,6 +1612,7 @@ impl EguiLayer {
         self.save_online_dialog_state.flame_owned = api_state.flame_owned_by(current_user_id);
         self.save_online_dialog_state.animation_owned = api_state.flame_owned_by(current_user_id);
         let menu_state = MenuState {
+            picker_downloads: config_manager.system_settings().picker_downloads != Some(false),
             can_undo,
             can_redo,
             is_paused: *paused,
@@ -1795,13 +1798,24 @@ impl EguiLayer {
             workspace.apply_startup_dock_minimums(ctx.screen_rect().width());
 
             // The Catalog's list, read before any panel draws: the panel
-            // and every picker show the same one this frame.
+            // and every picker show the same one this frame; and whether
+            // the pickers offer downloads (L3).
+            inventory::set_picker_downloads(config_manager.system_settings().picker_downloads != Some(false));
+            // The files the lists asked for last frame, compiled here,
+            // outside any panel's draw (a panel may hold a registry's lock).
+            if inventory::compile_requested() {
+                ctx.request_repaint();
+            }
+            // The previews' frame: the Catalog's and every picker's.
+            inventory_preview::begin_frame(ctx);
             self.inventory_panel.refresh(
                 palette_library,
                 script_cloud.library_generation,
                 crate::inventory::Online {
                     variations: variation_catalog.map_or(&[][..], |c| c.items.as_slice()),
                     effects: effect_catalog.map_or(&[][..], |c| c.items.as_slice()),
+                    // The panel adds its curated scripts (`refresh`).
+                    scripts: &[],
                 },
             );
 
@@ -1985,6 +1999,7 @@ impl EguiLayer {
                         open_save_online_dialog: &mut open_save_online_dialog,
                         load_api_animation_id: &mut load_api_animation_id,
                         clear_variation_cache_requested: &mut clear_variation_cache_requested,
+                        refresh_catalogs_requested: &mut refresh_catalogs_requested,
                         sim_running: &mut sim_running_local,
                         sim_step_once: &mut sim_step_once_local,
                         sim_reseed: &mut sim_reseed_local,
@@ -2011,6 +2026,14 @@ impl EguiLayer {
             if let Some((family, place, select)) = inventory::take_open() {
                 self.inventory_panel.open_at(family, place, select);
                 open_catalog = true;
+            }
+
+            // A picker's Download of a curated script (L3): adopted, one
+            // at a time, as the Catalog's Online place adopts.
+            if script_cloud_request.is_none() {
+                if let Some(id) = inventory::take_adopt(script_cloud.busy) {
+                    script_cloud_request = Some(crate::app::script_cloud::ScriptCloudRequest::Adopt { id });
+                }
             }
 
             for (kind, name) in inventory::take_downloads() {
@@ -2231,6 +2254,8 @@ impl EguiLayer {
         {
             let ctx = self.ctx.clone();
             self.render_api_notification(&ctx);
+            // Code from the server nobody reviewed: load it? (curated::trust)
+            trust_window::show(&ctx);
         }
 
         // Open Save Online dialog from animation panel (if requested)
@@ -2449,6 +2474,7 @@ impl EguiLayer {
         // Extract menu actions into individual flags for backward compatibility
         config_load_file |= menu_actions.file.load_config;
         config_save_file |= menu_actions.file.save_config;
+        let config_save_offline = menu_actions.file.save_config_offline;
         flame_xml_import_file |= menu_actions.file.import_flame_xml;
         flame_xml_export_file |= menu_actions.file.export_flame_xml;
         new_flame_requested |= menu_actions.file.new_flame;
@@ -2479,6 +2505,12 @@ impl EguiLayer {
         if let Some(on) = menu_actions.file.set_online_account {
             let settings = config_manager.system_settings_mut();
             settings.online_account = on;
+            let _ = settings.save();
+        }
+        // The pickers' downloads (L3): a device preference, as above.
+        if let Some(on) = menu_actions.set_picker_downloads {
+            let settings = config_manager.system_settings_mut();
+            settings.picker_downloads = (!on).then_some(false);
             let _ = settings.save();
         }
 
@@ -2631,6 +2663,7 @@ impl EguiLayer {
             config_export_requested: config_export_json,
             config_import_requested: config_import_json,
             config_save_file_requested: config_save_file,
+            config_save_offline_requested: config_save_offline,
             config_load_file_requested: config_load_file,
             flame_xml_import_file_requested: flame_xml_import_file,
             flame_xml_export_file_requested: flame_xml_export_file,
@@ -2694,6 +2727,7 @@ impl EguiLayer {
             loaded_api_flame_animations,
             load_api_animation_id,
             clear_variation_cache_requested,
+            refresh_catalogs_requested,
             // Only report Run when the mode is actually simulation, so
             // a stale toggle from another session cannot start a run
             // the user cannot see.

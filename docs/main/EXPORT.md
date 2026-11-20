@@ -432,8 +432,8 @@ FractalArtEditor export -i scene.flame -o out/ --transparent --supersample
 | `--dump-shader` | off | write the flame shader to `debug_shader_2d.wgsl` / `debug_shader_3d.wgsl` in the working directory |
 
 In batch mode each PNG is named after the flame (lower case, spaces as
-underscores; a repeated name gets `_2`, `_3`, …). Locally installed
-plugins are loaded first, and a refused plugin is reported on stderr.
+underscores; a repeated name gets `_2`, `_3`, …). The installed
+downloads are registered first.
 The CLI compiles flame data into the shader as constants
 (`enable_inlined_constants`). A config naming something the build lacks
 is reported and skipped; a config that fails is reported and the batch

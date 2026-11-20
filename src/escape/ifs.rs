@@ -15756,6 +15756,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             stops: vec![white.clone(), crate::scene::palette::ColorStop { position: 1.0, ..white }],
             locked: false,
             built_in: false,
+            description: String::new(),
         };
         let job = crate::renderer::RenderJob::new(&cfg, n, n);
         let out = pollster::block_on(crate::renderer::render(device, queue, job, &mut crate::renderer::NoProgress)).expect("render");

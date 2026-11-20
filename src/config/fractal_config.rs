@@ -554,6 +554,12 @@ pub struct FractalConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_effects: Vec<crate::config::escape::CustomSource>,
 
+    /// The curated items whose sources a `.fflame` save left out, each by
+    /// canonical name and content hash (docs/projects/curated-content.md,
+    /// D9-D11; `curated::refs`): fetched back on load.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curated: Vec<crate::curated::refs::CuratedRef>,
+
     /// Optional: Deterministic RNG for reproducible renders
     #[serde(default, skip_serializing_if = "skip::deterministic_rng")]
     pub deterministic_rng: bool,
@@ -1424,6 +1430,7 @@ impl Default for FractalConfig {
             density_effects: Vec::new(),
             color_effects: Vec::new(),
             custom_effects: Vec::new(),
+            curated: Vec::new(),
             deterministic_rng: false,
             importance: ImportanceSettings::default(),
             cylinder_targeting: false,

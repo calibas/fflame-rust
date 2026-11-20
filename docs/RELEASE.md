@@ -23,7 +23,7 @@ Four surfaces, built four different ways, from one repository.
 
 | surface | built by | output | version source |
 |---|---|---|---|
-| Desktop app | `cargo build --profile dist` | `target/dist/FractalArtEditor(.exe)` | `Cargo.toml` |
+| Desktop app | `cargo build --profile dist` (the only profile that talks to `fractalsforall.com`: `--release` builds use a local API, ONLINE.md) | `target/dist/FractalArtEditor(.exe)` | `Cargo.toml` |
 | Web app | `build-wasm.bat` / `.sh` — `--profile dist` | `pkg/` + `index.html`, `css/`, `js/` | `Cargo.toml` |
 | Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
 | Python | `python python/build.py --wheel` (the WASI module, then the wheel) | `python/dist/*.whl`, one for every platform | `python/pyproject.toml` |
@@ -137,6 +137,7 @@ The API is a separate repository. What it consumes from here:
 | the variation corpus | `cargo run --release --bin export_variations_json` | any variation added or edited |
 | the script corpus | `cargo run --release --bin export_scripts_json` | any built-in script added or edited |
 | the effect corpus | `cargo run --release --bin export_effects_json` | any effect added or edited |
+| the curated manifest | `cargo run --release --bin export_curated_json` | anything shipped: a preset, a palette pack, a script or example, a variation or effect. ffapi's `tools/sync_curated.py` posts it (a dry run unless `--write`; [curated-content.md](projects/curated-content.md)) |
 
 Only the contract and the catalog are committed. The three corpus binaries write to
 `output/variations-corpus.json`, `output/scripts-corpus.json` and

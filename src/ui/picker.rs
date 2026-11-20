@@ -37,7 +37,8 @@ pub struct Picker<'a> {
     unusable: Option<&'a dyn Fn(&Entry) -> Option<String>>,
     /// Group headings name the kind too (a picker of several kinds).
     kind_headings: bool,
-    /// The palette library, for a palette's gradient in the info pane.
+    /// The palette library: a palette picker's rows show their gradients,
+    /// as the Catalog's do, and it has no info pane.
     palettes: Option<&'a crate::scene::palette::PaletteLibrary>,
     min_width: f32,
     max_height: f32,
@@ -45,6 +46,10 @@ pub struct Picker<'a> {
 
 /// The info pane's width, beside the list.
 const PANE_WIDTH: f32 = 280.0;
+
+/// A grid cell's side, and the grid's width: four cells.
+const CELL: f32 = 96.0;
+const GRID_WIDTH: f32 = 4.0 * CELL + 3.0 * 6.0;
 
 impl<'a> Picker<'a> {
     pub fn new(id_salt: impl std::hash::Hash, admit: &'a dyn Fn(&Entry) -> bool) -> Self {
@@ -134,7 +139,13 @@ impl<'a> Picker<'a> {
     /// for both (a phone) keeps the list alone, with descriptions as
     /// tooltips.
     fn body(self, ui: &mut egui::Ui, focus: bool) -> Option<Entry> {
-        let pane = ui.ctx().content_rect().width() >= self.min_width + PANE_WIDTH + 64.0;
+        // The grid, when the user chose it (this picker's choice, kept)
+        // and its kinds have previews.
+        let previewable = self.previewable();
+        let grid = previewable && ui.data_mut(|d| d.get_persisted::<bool>(self.id.with("grid")).unwrap_or(false));
+        let width = if grid { GRID_WIDTH.max(self.min_width) } else { self.min_width };
+        // A palette's row is its picture: nothing more for a pane to say.
+        let pane = self.palettes.is_none() && ui.ctx().content_rect().width() >= width + PANE_WIDTH + 64.0;
         let shown_id = self.id.with("shown");
         if focus {
             ui.data_mut(|d| d.remove::<Entry>(shown_id));
@@ -145,8 +156,8 @@ impl<'a> Picker<'a> {
         ui.horizontal_top(|ui| {
             let list = ui
                 .vertical(|ui| {
-                    ui.set_width(self.min_width);
-                    picked = self.list(ui, focus, !pane, &mut hovered, &mut current);
+                    ui.set_width(width);
+                    picked = self.list(ui, focus, !pane, previewable.then_some(grid), &mut hovered, &mut current);
                 })
                 .response
                 .rect;
@@ -161,7 +172,7 @@ impl<'a> Picker<'a> {
             let info = ui
                 .vertical(|ui| {
                     ui.set_width(PANE_WIDTH);
-                    egui::ScrollArea::vertical().id_salt(self.id.with("info")).max_height(self.max_height + 32.0).show(ui, |ui| self.info(ui, shown.as_ref()));
+                    egui::ScrollArea::vertical().id_salt(self.id.with("info")).max_height(self.max_height + 32.0).min_scrolled_height(self.floor(ui)).show(ui, |ui| self.info(ui, shown.as_ref()));
                 })
                 .response
                 .rect;
@@ -190,7 +201,9 @@ impl<'a> Picker<'a> {
             ui.heading(&e.title);
             return;
         }
-        super::inventory::entry_summary(ui, e, self.palettes, None);
+        // Its picture, as the Catalog's info pane shows it.
+        let preview = super::inventory_preview::has_previews(e.kind.family()).then(|| super::inventory_preview::want(e, ui.ctx(), &[]));
+        super::inventory::entry_summary(ui, e, self.palettes, preview.as_ref());
         if !e.installed {
             ui.separator();
             super::inventory::download_button(ui, e);
@@ -200,28 +213,84 @@ impl<'a> Picker<'a> {
         }
     }
 
-    fn list(&self, ui: &mut egui::Ui, focus: bool, tips: bool, hovered: &mut Option<Entry>, current: &mut Option<Entry>) -> Option<Entry> {
+    /// The least height of the list and the pane when their content is
+    /// longer: the whole `max_height`, unless the screen is too short for
+    /// it. The popup is that tall wherever it opens -- under its button,
+    /// above it, or over it when neither has the room.
+    fn floor(&self, ui: &egui::Ui) -> f32 {
+        self.max_height.min(ui.ctx().content_rect().height() - 140.0).max(64.0)
+    }
+
+    /// Whether any entry this picker offers has a preview (its grid is a
+    /// choice then).
+    fn previewable(&self) -> bool {
+        let shared = super::inventory::shared();
+        self.lead
+            .iter()
+            .chain(shared.iter())
+            .chain(self.extra.iter())
+            .any(|e| super::inventory_preview::has_previews(e.kind.family()) && (self.admit)(e))
+    }
+
+    /// The search (with List / Grid when `grid` is a choice: `Some`, and
+    /// whether it is the grid) and the entries in groups.
+    fn list(&self, ui: &mut egui::Ui, focus: bool, tips: bool, grid: Option<bool>, hovered: &mut Option<Entry>, current: &mut Option<Entry>) -> Option<Entry> {
         let search_id = self.id.with("search");
         let mut query = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
         ui.horizontal(|ui| {
-            let r = ui.add(egui::TextEdit::singleline(&mut query).hint_text(t!("catalog.search")).desired_width(f32::INFINITY));
-            super::vkb_sync(ui, &r, &query);
-            if focus {
-                r.request_focus();
+            let search = |ui: &mut egui::Ui, query: &mut String| {
+                let r = ui.add(egui::TextEdit::singleline(query).hint_text(t!("catalog.search")).desired_width(f32::INFINITY));
+                super::vkb_sync(ui, &r, query);
+                if focus {
+                    r.request_focus();
+                }
+            };
+            match grid {
+                Some(on) => {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mut chosen = on;
+                        if ui.selectable_label(on, t!("catalog.view_grid")).on_hover_text(t!("catalog.view_grid_tip")).clicked() {
+                            chosen = true;
+                        }
+                        if ui.selectable_label(!on, t!("catalog.view_list")).clicked() {
+                            chosen = false;
+                        }
+                        if chosen != on {
+                            ui.data_mut(|d| d.insert_persisted(self.id.with("grid"), chosen));
+                            ui.ctx().request_repaint();
+                        }
+                        search(ui, &mut query);
+                    });
+                }
+                None => search(ui, &mut query),
             }
         });
         ui.data_mut(|d| d.insert_temp(search_id, query.clone()));
         ui.separator();
 
         let shared = super::inventory::shared();
-        let rows: Vec<&Entry> = self
+        let mut rows: Vec<&Entry> = self
             .lead
             .iter()
             .filter(|e| e.matches(&query))
-            .chain(shared.iter().chain(self.extra.iter()).filter(|e| (self.admit)(e) && e.matches(&query)))
+            // What can be downloaded only when the user's setting offers
+            // it (docs/projects/one-list.md, L3).
+            .chain(shared.iter().chain(self.extra.iter()).filter(|e| (e.installed || super::inventory::picker_downloads()) && (self.admit)(e) && e.matches(&query)))
             .collect();
+        // What can be downloaded comes last, after every kind's own groups
+        // (stable: each part keeps the Catalog's order).
+        rows.sort_by_key(|e| !e.installed);
         let mut picked = None;
-        egui::ScrollArea::vertical().id_salt(self.id.with("scroll")).max_height(self.max_height).show(ui, |ui| {
+        // As wide as the search above it, not shrunk to the rows.
+        // Never shorter than its floor: a scroll area takes only the room its
+        // popup had last frame, so once short (a narrow search, a button near
+        // the screen's bottom) it stayed one row tall.
+        egui::ScrollArea::vertical()
+            .id_salt(self.id.with("scroll"))
+            .max_height(self.max_height)
+            .min_scrolled_height(self.floor(ui))
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
             if rows.is_empty() {
                 ui.weak(t!("catalog.nothing_matches"));
                 return;
@@ -241,6 +310,26 @@ impl<'a> Picker<'a> {
                 if !heading.is_empty() {
                     ui.label(egui::RichText::new(heading).strong());
                 }
+                if grid == Some(true) {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                        for e in &rows[start..end] {
+                            let (p, rect, is_current) = self.cell(ui, e, tips);
+                            if p.is_some() {
+                                picked = p;
+                            }
+                            if ui.rect_contains_pointer(rect) {
+                                *hovered = Some((*e).clone());
+                            }
+                            if is_current && current.is_none() {
+                                *current = Some((*e).clone());
+                            }
+                        }
+                    });
+                    ui.add_space(4.0);
+                    start = end;
+                    continue;
+                }
                 for e in &rows[start..end] {
                     let (p, rect, is_current) = self.row(ui, e, tips);
                     if p.is_some() {
@@ -258,6 +347,35 @@ impl<'a> Picker<'a> {
             }
         });
         picked
+    }
+
+    /// One entry as a grid cell: its preview (asked for only while the cell
+    /// is on screen) and its name; greyed when it cannot be picked here (the
+    /// reason on hover) or is not installed (Download is in the pane).
+    fn cell(&self, ui: &mut egui::Ui, e: &Entry, tips: bool) -> (Option<Entry>, egui::Rect, bool) {
+        let current = self.current.is_some_and(|c| super::inventory::applied_name(e).as_deref() == Some(c) || key_name(e) == Some(c));
+        let reason = if e.installed { self.unusable.and_then(|why| why(e)) } else { None };
+        let enabled = e.installed && reason.is_none();
+        let ctx = ui.ctx().clone();
+        let none = key_name(e) == Some("");
+        let label = super::inventory::row_label(e);
+        let r = super::inventory_online::grid_cell_sized(ui, e, &label, current, enabled, CELL, || {
+            if none || !super::inventory_preview::has_previews(e.kind.family()) {
+                return (None, false);
+            }
+            match super::inventory_preview::want(e, &ctx, &[]) {
+                super::inventory_preview::Shown::Ready(t) => (t.last().cloned(), true),
+                super::inventory_preview::Shown::Pending => (None, true),
+                super::inventory_preview::Shown::None => (None, false),
+            }
+        });
+        let rect = r.rect;
+        let r = match (&reason, tips && !e.description.is_empty()) {
+            (Some(why), _) => r.on_hover_text(why),
+            (None, true) => r.on_hover_text(crate::markdown::first_paragraph(&e.description)),
+            _ => r,
+        };
+        ((enabled && r.clicked()).then(|| e.clone()), rect, current)
     }
 
     /// One entry: selectable when it can be picked; greyed (with the reason
@@ -280,6 +398,14 @@ impl<'a> Picker<'a> {
             return (None, rect, false);
         }
         let current = self.current.is_some_and(|c| super::inventory::applied_name(e).as_deref() == Some(c) || key_name(e) == Some(c));
+        // A palette: its name and gradient, as the Catalog's row (the
+        // palette looked up in its pack only until its gradient is made).
+        if let (EntryKey::Palette(hash), Some(lib)) = (&e.key, self.palettes) {
+            let r = super::inventory::palette_row_lazy(ui, hash, &super::inventory::row_label(e), current, || {
+                lib.get_pack(e.group.order as usize)?.palettes.iter().find(|p| crate::api::sync::palette_content_hash(p) == *hash).cloned()
+            });
+            return (r.clicked().then(|| e.clone()), r.rect, current);
+        }
         if let Some(reason) = self.unusable.and_then(|why| why(e)) {
             let r = ui.add_enabled(false, egui::Button::selectable(current, super::inventory::row_label(e)));
             let rect = r.rect;
@@ -322,7 +448,6 @@ pub fn row(kind: Kind, name: &str, title: &str, group: Group) -> Entry {
         authors: Vec::new(),
         version: None,
         origin: Origin::Local,
-        plugin: false,
         group,
         link: None,
         installed: true,
@@ -336,22 +461,14 @@ pub fn row(kind: Kind, name: &str, title: &str, group: Group) -> Entry {
 /// the user's (`Provenance::Local`) that no plug-in file stands for (the
 /// Catalog lists those), one version each, under "Custom".
 pub fn own_variations(flame: &crate::scene::transforms::Flame) -> Vec<Entry> {
-    let shared = super::inventory::shared();
-    let plugin_keys: std::collections::HashSet<String> = shared
-        .iter()
-        .filter(|e| e.plugin && e.kind == Kind::Variation)
-        .filter_map(super::inventory::applied_name)
-        .collect();
     let registry = crate::variations::global_registry();
     let superseded = registry.superseded(&flame.custom_variations);
     let group = Group { order: 2000, label: t!("inventory.group.yours").to_string() };
     registry
         .all()
         .into_iter()
-        .filter(|v| v.provenance == crate::provenance::Provenance::Local && !plugin_keys.contains(&v.name) && !superseded.contains(&v.name))
-        // Registered only to draw a Catalog preview, unless the fractal
-        // carries it.
-        .filter(|v| !super::inventory_preview::preview_only(&v.name) || flame.custom_variations.iter().any(|c| c.entry == v.name))
+        // Not a file's: the list offers that as its file (L1).
+        .filter(|v| v.provenance == crate::provenance::Provenance::Local && !crate::storage::library::is_file_key(&v.name) && !superseded.contains(&v.name))
         .map(|v| row(Kind::Variation, &v.name, &v.display_name, group.clone()))
         .collect()
 }
@@ -388,7 +505,7 @@ mod tests {
         };
         let offered = [item("it_picker_offered", "Offered Afar"), item("it_pane_offered", "Pane Faraway")];
         let lib = crate::scene::palette::global_palette_library().read().unwrap().clone();
-        super::super::inventory::InventoryPanel::new().refresh(&lib, 0, crate::inventory::Online { variations: &offered, effects: &[] });
+        super::super::inventory::InventoryPanel::new().refresh(&lib, 0, crate::inventory::Online { variations: &offered, effects: &[], scripts: &[] });
     }
 
     /// Every piece of text a frame drew.
@@ -448,6 +565,53 @@ mod tests {
         let searched = frame(&ctx, Some("julian"));
         assert!(searched.iter().any(|t| t == "JuliaN"), "the search keeps a match: {searched:?}");
         assert!(!searched.iter().any(|t| t == "Linear"), "and narrows the list: {searched:?}");
+    }
+
+    /// The grid: a picker whose kinds have previews offers List / Grid;
+    /// chosen, the entries are cells, and only the cells on screen ask for
+    /// their previews. A palette picker has no grid.
+    #[test]
+    fn the_picker_grid_asks_for_the_previews_on_screen() {
+        use super::*;
+        offer();
+        let ctx = egui::Context::default();
+        let admit = |e: &Entry| e.kind == Kind::Variation;
+        let frame = |ctx: &egui::Context, grid: bool| -> Vec<String> {
+            let mut drawn = Vec::new();
+            for _ in 0..2 {
+                let out = ctx.run_ui(Default::default(), |ui| {
+                    super::super::inventory_preview::begin_frame(ui.ctx());
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        let picker = Picker::new("picker_grid_test", &admit);
+                        ui.data_mut(|d| d.insert_persisted(picker.id.with("grid"), grid));
+                        let btn = ui.button("open");
+                        egui::Popup::open_id(ui.ctx(), picker.popup_id());
+                        let _ = picker.popup(ui, &btn);
+                    });
+                });
+                drawn = texts(&out.shapes);
+            }
+            drawn
+        };
+        let list = frame(&ctx, false);
+        assert!(list.iter().any(|t| t == &t!("catalog.view_grid").to_string()), "a variation picker offers the grid");
+        let before = super::super::inventory_preview::with(|p| p.asked());
+        let cells = frame(&ctx, true);
+        assert!(cells.iter().any(|t| t == "Linear"), "a cell names its entry");
+        let asked = super::super::inventory_preview::with(|p| p.asked());
+        let variations = super::super::inventory::shared().iter().filter(|e| e.kind == Kind::Variation).count();
+        assert!(asked > before && asked < variations / 4, "the cells on screen ask, not all {variations}: {asked}");
+
+        let palettes = |e: &Entry| e.kind == Kind::Palette;
+        let out = ctx.run_ui(Default::default(), |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
+                let picker = Picker::new("picker_grid_palettes", &palettes);
+                let btn = ui.button("open");
+                egui::Popup::open_id(ui.ctx(), picker.popup_id());
+                let _ = picker.popup(ui, &btn);
+            });
+        });
+        assert!(!texts(&out.shapes).iter().any(|t| t == &t!("catalog.view_grid").to_string()), "no grid for palettes");
     }
 
     /// Where each piece of text a frame drew sits.
@@ -510,5 +674,100 @@ mod tests {
 
         let away = frame(Some(egui::pos2(5000.0, 5000.0)));
         assert_eq!(count(&away, "Pane Faraway"), 1, "and keeps it when the pointer leaves the list");
+    }
+
+    /// A palette picker: each row its name and gradient, as the Catalog's,
+    /// and no info pane (the current palette named once, by its row).
+    #[test]
+    fn a_palette_picker_shows_gradients_and_no_pane() {
+        use super::*;
+        offer();
+        let lib = crate::scene::palette::global_palette_library().read().unwrap().clone();
+        let admit = |e: &Entry| e.kind == Kind::Palette && lib.is_pack_enabled(e.group.order as usize);
+        let first = super::super::inventory::shared().iter().find(|e| admit(e)).cloned().expect("a palette of an enabled pack");
+        let hash = key_name(&first).unwrap().to_string();
+        let ctx = egui::Context::default();
+        let mut out = None;
+        for _ in 0..2 {
+            out = Some(ctx.run_ui(Default::default(), |ui| {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    let picker = Picker::new("palette_picker_test", &admit).palettes(&lib).current(Some(hash.as_str()));
+                    let btn = ui.button("open");
+                    egui::Popup::open_id(ui.ctx(), picker.popup_id());
+                    let _ = picker.popup(ui, &btn);
+                });
+            }));
+        }
+        let out = out.unwrap();
+        let drawn = texts(&out.shapes);
+        let label = super::super::inventory::row_label(&first);
+        assert_eq!(drawn.iter().filter(|t| **t == label || **t == first.title).count(), 1, "named by its row alone: {drawn:?}");
+        let gradients = out
+            .shapes
+            .iter()
+            .filter(|s| !matches!(s.shape, egui::Shape::Text(_)) && s.shape.texture_id() != egui::TextureId::default())
+            .count();
+        assert!(gradients > 0, "the rows show their gradients");
+    }
+
+    /// The popup keeps its height wherever its button is: near the
+    /// screen's bottom it opens above the button, or beside or over it when
+    /// neither has the room, never squeezed to a row under it (reported from
+    /// use: the Add Variation picker of a transform at the bottom of the
+    /// Transforms panel). And once short -- a search that matched one row
+    /// -- it grows back: a scroll area takes only the room its popup had
+    /// last frame, which kept it short.
+    #[test]
+    fn a_picker_keeps_its_height_wherever_it_opens() {
+        use super::*;
+        offer();
+        let admit = |e: &Entry| e.kind == Kind::Variation;
+        // (screen height, the button's top, inside a scroll area, the
+        // first frames' search)
+        let cases = [
+            (800.0, 760.0, false, ""),
+            (800.0, 785.0, true, ""),
+            (800.0, 798.0, true, ""),
+            (800.0, 300.0, false, "julian"),
+            (800.0, 770.0, false, "julian"),
+            // Room for it neither under nor above: beside (or over) it.
+            (480.0, 220.0, false, ""),
+        ];
+        for (height, at, scrolled, search) in cases {
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, height));
+            let ctx = egui::Context::default();
+            let mut rect = egui::Rect::NOTHING;
+            let mut button = egui::Rect::NOTHING;
+            for frame in 0..8 {
+                let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+                let _ = ctx.run_ui(input, |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        let mut body = |ui: &mut egui::Ui| {
+                            ui.add_space(at);
+                            let picker = Picker::new("picker_height", &admit);
+                            let query = if frame < 3 { search } else { "" };
+                            ui.data_mut(|d| d.insert_temp(picker.id.with("search"), query.to_string()));
+                            let btn = ui.button("open");
+                            button = btn.rect;
+                            egui::Popup::open_id(ui.ctx(), picker.popup_id());
+                            let _ = picker.popup(ui, &btn);
+                            ui.add_space(400.0);
+                        };
+                        if scrolled {
+                            egui::ScrollArea::vertical().show(ui, body);
+                        } else {
+                            body(ui);
+                        }
+                    });
+                });
+                rect = ctx.memory(|m| m.area_rect(Picker::new("picker_height", &admit).popup_id())).unwrap_or(egui::Rect::NOTHING);
+            }
+            let case = format!("screen {height}, button at {at}, scrolled {scrolled}, search {search:?}: {rect:?}");
+            assert!(rect.height() >= 340.0, "the popup is squeezed ({case})");
+            assert!(screen.contains_rect(rect), "or off the screen ({case})");
+            if height < 500.0 {
+                assert!(rect.min.y < button.max.y, "with no room under its button it is not under it ({case}, button {button:?})");
+            }
+        }
     }
 }

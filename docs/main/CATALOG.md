@@ -51,13 +51,13 @@ It is drawn in every mode.
 
 `inventory::scan(palettes)` reads every source into one list of
 `Entry`s: kind, key, title, description, authors, version, origin
-(`provenance::Origin`), plug-in flag, group and link record. The list is
+(`provenance::Origin`), group and link record. The list is
 sorted by kind, then group, then each source's own order -- never a
 map's. `inventory::revision(palettes, files)` hashes what changes while
 the app runs (the palette library's generation and packs, the variation
-and effect registries, the plug-ins, and the stores' change count, the
-online library's `library_generation`); the panel scans again when it
-changes.
+and effect registries, the stores' change count, the online library's
+`library_generation`, the curated scripts fetched); the panel scans again
+when it changes.
 
 | Kind | Source | Key | Group |
 |---|---|---|---|
@@ -78,10 +78,27 @@ changes.
   them, never with an exponent. Checked against vectors the server's
   function produced (`a_palettes_id_is_the_servers_content_hash`). The same
   palette in two packs is one palette, listed in each.
-- **The user's own registry entries are not listed twice**: a plug-in is
-  its file (marked a plug-in), and a source a config carries is the
-  config's. A built-in's Rhai twin is the built-in's own source, not an
-  entry of its own.
+- **The user's own registry entries are not listed twice**: a compiled
+  file is its file, and a source a config carries is the config's. A
+  built-in's Rhai twin is the built-in's own source, not an entry of its
+  own.
+- **One list, no plug-ins** ([one-list.md](../projects/one-list.md)): a
+  Rhai file of a kind a list uses -- a shipped example, a file of the
+  user's, an adopted one -- is in the pickers as it is in the Catalog,
+  compiled the first time a list or a preview asks
+  (`ui::inventory::compiled` -> `library::compile_file`, once per file and
+  version, a file with no `INFO.id` under one derived from its name).
+  **Never inside a draw**: a list's ask is queued and compiled before the
+  next frame's panels (`inventory::compile_requested`), as a panel may
+  hold a registry's read guard while it draws a picker and registering
+  takes the write lock (it hung the Add Variation picker:
+  `a_pickers_filter_never_compiles_under_a_registry_guard`). Meanwhile
+  the row is offered and a preview shows its spinner.
+- **In a picker, what can be downloaded comes last**, after every kind's
+  own groups.
+  Where a thing came from is its origin and link, nothing else: the
+  *Load at start* flag (`Link::plugin`) is retired and ignored in old
+  `_links.json` files.
 - **Prose comes from where it is written** (`inventory::prose`): a
   variation's twin opens with its built-in's doc block, so 640 of the 647
   have their description and authors offline; a built-in's Rhai twin's
@@ -109,15 +126,19 @@ changes.
   Escape-Time, Simulation, Effects, Scripts; it opens on Fractals) with
   its count; a search over the
   title, the name, the description and the authors; an origin filter
-  (every origin, built-in, custom, from others, plug-ins); and, in a family
+  (every origin, built-in, custom, from others); and, in a family
   of several kinds, a chip a kind.
 - **The list**: the family's entries in collapsing groups with counts;
   a row is the title and its origin's mark (` *` yours, ` ↓` somebody
-  else's, `(plug-in)`), its description's first line as the tooltip.
+  else's), its description's first line as the tooltip.
 - **Palettes**: pack by pack, each with its enable checkbox, its load
   state and a Retry (`palette_library::pack_section`), a row each: the name
   and a gradient (`palette_preview`, made once a row is on screen, kept
-  under its hash). Searching leaves out packs with no match. Signed in,
+  under its hash). A pack turned off is listed too, closed; opened (on
+  the web, fetched then, still off) its palettes are usable here like any
+  other -- the checkbox decides only what the pickers and random
+  palettes draw from. Searching leaves out packs with no match and opens
+  those with one. Signed in,
   a line after the packs shows the account's online palettes (Online,
   Account).
 - **Fractals**: the presets as `FractalConfigGallery` grids, a tab a
@@ -144,15 +165,15 @@ functions:
 | Palette | the config's palette, an editable copy (`ConfigPath::Palette`) |
 | Fractal | loads it (`load_config_with_undo`, as the Fractal Browser did) |
 | Variation | adds it at weight 1 to the transform the editors are on (`transforms::editing_transform`: the Triangle Editor's selection, else the first), its source carried for a Rhai one (`transforms::add_variation`) |
-| Effect | adds it at the end of its chain, a plug-in's source carried (`effects_panel::add_effect`) |
+| Effect | adds it at the end of its chain, a file's source carried (`effects_panel::add_effect`) |
 | Formula, Field, Solid | `escape_panel::choose_formula` / `choose_field` / `choose_solid`: the default view, entering Escape |
 | Coloring | `escape_panel::pick_coloring`: what a fresh pick sets |
 | Field or Solid Coloring | `escape_panel::choose_named_coloring` |
 | Simulation Model | the first layer's (`sim_panel::choose_first_layer_model`) |
 | Simulation Coloring | the base colouring (`sim_panel::choose_base_coloring`) |
-| A plug-in file | as its kind, by its registered key (`escape_panel::choose_plugin`, ...) |
+| A Rhai file that compiles | as its kind, by its compiled key (`escape_panel::choose_plugin`, ...) |
 | A CPU script | runs it: the info pane's parameters, seed, Generate / Apply, Batch / Mutate (`ui::script_run`) |
-| Another Rhai file, a UF or Fractint file, a track | **Edit** opens it in the Rhai Editor (`RhaiEditorPanel::open_file`); a plug-in is used as its kind |
+| Another Rhai file (one that does not compile), a UF or Fractint file, a track | **Edit** opens it in the Rhai Editor (`RhaiEditorPanel::open_file`); Use says why it cannot apply |
 
 **Not installed.** What the server offers and the app lacks -- a
 variation or an effect in the cached catalog (`inventory::Online`, the
@@ -182,11 +203,26 @@ Beside the list, an info pane says what the entry under the pointer is --
 the Catalog's own summary (`inventory::entry_summary`), a refused entry's
 reason, Download -- keeping the last one pointed at while the pointer
 crosses to it, and the current choice on opening. A screen too narrow for
-both (a phone) shows the list alone, descriptions as tooltips. A popup, not a
+both (a phone) shows the list alone, descriptions as tooltips. A palette
+picker (`Picker::palettes`) has no pane: each row is the Catalog's
+palette row, its name and gradient (`inventory::palette_row_lazy`). A popup, not a
 ComboBox: a combo closes on any click inside it, its search box included
 (`the_picker_stays_open_while_it_is_used`). The list is read once a frame
 before any panel draws (`InventoryPanel::refresh`, from the UI's frame) and
 shared (`inventory::shared`), so every list of a kind is the same list.
+
+**Previews in pickers**: the info pane shows the entry's preview above
+its summary, as the Catalog's does; and a picker whose kinds have
+previews (`inventory_preview::has_previews`) offers **List / Grid** beside
+its search, remembered per picker (egui memory, `<picker id>/grid`). The
+grid is the Catalog's cells at 96 px, four across (the list widens to
+fit); a cell asks for its picture only while on screen; one that cannot
+be picked here is greyed with the reason on hover, one not installed is
+greyed with its Download in the pane. The Catalog and the pickers share
+one set of previews (`inventory_preview::with`, a thread-local store):
+its frame begins in the UI's frame before any panel draws, and the app
+makes one a frame of what was asked, so a closed Catalog does not stop
+a picker's (`the_picker_grid_asks_for_the_previews_on_screen`).
 
 | Picker | Filter | A pick |
 |---|---|---|
@@ -194,15 +230,31 @@ shared (`inventory::shared`), so every list of a kind is the same list.
 | Escape lens | None, the recommended lenses, then the measured set (Show all: every variation, downloads too) | `lens_choice` |
 | Escape transformations | variations with a 2D body (a solid: a 3D body) | the entry's variation |
 | Effects: Add effect… | effects of the stage (an uninstalled one by its catalog `category`) | `add_effect` |
-| Escape formula | formulas, fields, solids, plug-ins of those kinds | `inventory::use_entry` |
-| Escape colouring | the colourings that draw the formula (`coloring_suits_formula`), plug-ins | `use_entry` (`pick_coloring`) |
-| A field's or a solid's colouring | its registry's (a solid: `coloring_applies`), plug-ins | `use_entry` |
+| Escape formula | formulas, fields, solids, Rhai files of those kinds that compile | `inventory::use_entry` |
+| Escape colouring | the colourings that draw the formula (`coloring_suits_formula`), Rhai colouring files | `use_entry` (`pick_coloring`) |
+| A field's or a solid's colouring | its registry's (a solid: `coloring_applies`), Rhai files of the kind | `use_entry` |
 | Texture layer | None, the colourings that draw the formula; one the base refuses greyed (`layer_refusal`) | `pick_layer` |
-| Simulation model, colourings | models, colourings, plug-ins, in every layer and slot | the slot's own choice |
+| Simulation model, colourings | models, colourings, Rhai files of the kind, in every layer and slot | the slot's own choice |
 | Colors: palette | the palettes of enabled packs | the config's palette, an editable copy |
 
-A plug-in file is picked by its registered key (`inventory::applied_name`);
-the Random Generator's variation multi-select stays as it is.
+A picker admits what it can use (`inventory::pickable`): an installed
+built-in or download, a file that compiles; a UF or Fractint file, a file
+that does not compile, is not offered (L2). A file is picked by its
+compiled key (`inventory::applied_name`); the Random Generator's variation
+multi-select stays as it is.
+
+**Downloads in pickers** (L3): the pickers also offer what is not
+installed -- the server's variations and effects (as the Catalog's
+*Available to download*), and the **curated online scripts** of the kinds
+the pickers use (`sources::curated_scripts`; fetched once a session by
+the panel, `Scope::Curated`; the app's own shipped content the server
+holds, `origin` "builtin", left out; one already adopted left out). A
+curated row's Download adopts it (`ScriptCloudRequest::Adopt`, one at a
+time, as the Online place adopts); once adopted it is a file and is
+picked. The Catalog's own list leaves those rows to its Online place.
+**Offer downloads in pickers** in the Catalog menu
+(`SystemSettings::picker_downloads`, on unless turned off) offers only
+what is installed when off.
 
 ---
 
@@ -215,25 +267,58 @@ entries made by `inventory::online`):
 
 | Family | Online lists | Use |
 |---|---|---|
-| Palettes | `GET /palettes`; Account: `GET /users/me/palettes` -- each a row with its gradient | a click applies a copy; Account: Delete... (confirmed) |
-| Fractals | `GET /flames`; Account: `GET /users/me/flames` -- a grid of the server's thumbnails, a render-mode filter (All, 2D, 3D, Escape Time, Simulation) | a click loads it, one undo step, its online id kept so Save Online updates it; Account: Delete... (confirmed) |
+| Palettes | `GET /palettes?curated=true`; Account: `GET /users/me/palettes` -- each a row with its gradient | a click applies a copy; Account: Delete... (confirmed) |
+| Fractals | `GET /flames?curated=true`; Account: `GET /users/me/flames` -- a grid of the server's thumbnails, a render-mode filter (All, 2D, 3D, Escape Time, Simulation); and **Animations**, a kind of the family (the user's choice, 2026-11-18): `GET /animations?curated=true`, Account: `GET /users/me/animations`, as rows | a fractal: a click loads it, one undo step, its online id kept so Save Online updates it; Account: Delete... (confirmed). An animation: **Load**, with its fractal, as the Animation panel's list loads one |
 | Variations, Effects | the cached catalog first (downloaded, offered), then people's Rhai ones (`GET /scripts?kind=variation`, `effect`) | Download, Update; a Rhai one: Open |
 | Escape, Simulation, Scripts | `GET /scripts?kind=` for each of the family's kinds, a group each (the kind chips narrow it to one) | Open: adopt into your files (`ScriptCloudRequest::Adopt`), under the restrictions somebody else's code runs with |
 
-- **Public or Account.** Public is a guest's too; Account (the signed-in
-  account's own items, every visibility) needs the account
-  (the button says so when signed out).
+- **Curated or Account** ([curated-content.md](../projects/curated-content.md)).
+  Curated is the curated collection -- reviewed, static copies, each
+  under its canonical name (`Scope::Curated`: a list with
+  `curated=true`) -- a guest's too; Account (the signed-in account's own
+  items, every visibility) needs the account (the button says so when
+  signed out). Anyone else's public item is not browsed: it opens by its
+  id or link. A curated item's info says **Curated, as** its name (and
+  when it is an older version), and credits whose work it is.
+- **Open by ID or link**, under the scopes: an item's id, a link that
+  holds one (the web app's `?flame=` / `?animation=`, an API path, a
+  page of the browser app's: the resource named last before the id
+  decides), or a canonical name `kind/name` (resolved by
+  `GET /curated/{kind}/{name}`). It does what a click on the item's row
+  would: a fractal or an animation loads, a palette applies, a script is
+  opened (adopted). An id that names no resource is looked for as a
+  fractal, an animation, a palette, then a script; a built-in
+  variation's or effect's name says it is in the app already
+  (`inventory::online::parse_open`, `OnlinePlace::open`). Code nobody
+  reviewed asks first: a fractal's or an animation's when it loads, a
+  script before it is adopted ([ONLINE.md](ONLINE.md), *Trusting code
+  from the server*).
 - **Search** is the server's: the panel's search box, asked
   (`q`) once the typing has stopped for 0.4 s. **Sort**: the resource's
   (Newest, Most liked, Most viewed, Recently changed, Name; each
-  resource takes some). **Refresh** forgets every list.
+  resource takes some).
+- **Refresh** (⟳, the panel's top-right corner) does everything at
+  once, in either place: the Online lists and the pickers' curated
+  scripts are asked for again, the files on disk are read again (a file
+  dropped into a store appears), and the app fetches the variation and
+  effect catalogs again (`InventoryPanel::refresh_all`). Palette packs
+  are still read only at startup.
+- **A failed list** says why once (`FetchError`'s `Display` names a
+  network error; the client's message does not repeat it). **Try again**
+  asks for the page that failed; and when another list's page comes
+  back, every failed list drops its error, so it is asked again when
+  shown (`OnlinePlace::forget_failures`).
 - **Paging** is lazy, by the server's cursor: reaching a list's end asks
   for its next page. Lists are kept per (kind, scope, search, sort,
   mode), so going back to an earlier search shows what it found; a
   repeated id is shown once.
 - **What the app holds**: an online script you opened (its file's link
   names the id) or a palette of the same colours says so and offers
-  **Show it on this device**.
+  **Show it on this device**. A palette the app does not hold (curated
+  or your own) offers **Save a copy**: it joins the Custom pack under a
+  name none of yours has, its description saying where it came from,
+  when, by whom and its online id, then the server's description
+  (`inventory_online::saved_copy`).
 - **Thumbnails** (a fractal's `thumbnail_url`, used as given: it changes
   when the image does) download four at a time, decode off the frame,
   and are kept in the app's one thumbnail cache (`ThumbnailCache`, keyed
@@ -269,7 +354,7 @@ info pane offers, for
 
 | Entry | Actions |
 |---|---|
-| A Rhai file of yours (either store) | **Edit**, **Rename...**, **Duplicate**, **Delete...** (confirmed), **Export...**, the **plug-in** flag (a GPU entry), and **Online**: Publish (private, public), Update, Make Public / Make Private, Unpublish; a conflict's Overwrite / Load theirs, shown with the file it names |
+| A Rhai file of yours (either store) | **Edit**, **Rename...**, **Duplicate**, **Delete...** (confirmed), **Export...**, and **Online**: Publish (private, public), Update, Make Public / Make Private, Unpublish; a conflict's Overwrite / Load theirs, shown with the file it names |
 | A shipped file, a built-in with a Rhai twin | **Edit as Rhai**: a copy among your files (`inventory::twin_source`), opened in the editor |
 | A palette of yours (the Custom pack) | **Rename...**, **Delete...**, Publish (private, public): a palette item of its own online |
 | Online, a fractal or palette of yours | **Rename...**, Make Public / Make Private, **Delete...** |
@@ -283,13 +368,13 @@ The operations are `storage::manage`'s, over both stores' rules (a
 formula file keyed by its name and extension, a script by its stem; a
 shipped stem reserved):
 
-- **Rename** keeps the file's link (cloud id, origin) and its plug-in,
-  registered again under the new name; a taken name is refused.
-- **Duplicate** is a new file of the user's: no cloud id, no plug-in,
-  an entry's `INFO.id` replaced (two files with one id would be one
-  script online and to the plug-in lists).
-- **Delete** unlists a plug-in and drops the link with the file; a
-  published copy stays online.
+- **Rename** keeps the file's link (cloud id, origin); it compiles again
+  under the new name; a taken name is refused.
+- **Duplicate** is a new file of the user's: no cloud id, an entry's
+  `INFO.id` replaced (two files with one id would be one script online
+  and in the lists).
+- **Delete** forgets its compiled record and drops the link with the
+  file; a published copy stays online.
 - **Import** and **New** never overwrite: a taken name gains `-2`, `-3`.
 - Somebody else's file, as adopted, is not the user's to publish
   (`manage::publish_refusal`); an edit or a copy of it is (decision 3,
@@ -358,13 +443,13 @@ entry's version, so an update or an edit makes a new one:
 | Colouring (escape, field, solid) | the default formula drawn with it |
 | Simulation model, colouring | its first layer or base colouring, run 400 steps at most |
 | Generator | its run at seed 1; a modifier: the reference fractal, modified at seed 1 |
-| A plug-in file | as its kind |
+| A Rhai file of a list's kind | as its kind |
 | Palette, fractal | their gradient, the gallery, the server's thumbnail, as before |
 
-A Rhai file of a kind that can be a plug-in -- an example, a file of
-yours -- previews through what registering it makes
-(`library::prepare_plugin`, not listed as a plug-in; the pickers do not
-offer it). A library, a track and an unreadable file have none. Previews
+A Rhai file of a kind a list uses -- an example, a file of yours, an
+adopted one -- previews through what compiling it makes
+(`inventory::plugin_of`, the same record the pickers use). A library, a
+track and an unreadable file have none. Previews
 that take the default palette use Fire without its black end, which on
 the black background hid whatever was drawn at index 0; a colouring
 starts from its own parameters, not the formula preset's. The info pane shows the selected entry's preview above

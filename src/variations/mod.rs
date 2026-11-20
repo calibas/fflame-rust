@@ -560,22 +560,21 @@ impl VariationRegistry {
         &mut self,
         dl: &crate::api::types::VariationDownload,
         provenance: crate::provenance::Provenance,
-    ) {
+    ) -> Result<(), String> {
         if let Some(existing) = self.variations.get(&dl.name) {
             if existing.provenance.is_builtin() {
-                log::warn!(
-                    "Cannot register API variation '{}' — name conflicts with built-in",
-                    dl.name
-                );
-                return;
+                let e = format!("variation `{}` is built in; it cannot be replaced", dl.name);
+                log::warn!("{e}");
+                return Err(e);
             }
             // Nor one the user wrote: only its own source replaces it.
             // Collisions are reported, never shadowed, and silently
             // replacing something the user wrote with something they did
             // not is the worse direction.
             if existing.provenance == crate::provenance::Provenance::Local && provenance != crate::provenance::Provenance::Local {
-                log::warn!("Cannot register variation '{}' — a custom variation has that name", dl.name);
-                return;
+                let e = format!("a custom variation is named `{}`; the download would replace it", dl.name);
+                log::warn!("{e}");
+                return Err(e);
             }
         }
 
@@ -597,7 +596,7 @@ impl VariationRegistry {
                 dl.name,
                 dl.category
             );
-            return;
+            return Err(format!("variation `{}` has no 2D shader and is not only_3d", dl.name));
         }
         // ...and an only_3d variation with no 3D body has nothing at all.
         if category == VariationCategory::Only3D && dl.shader_3d.is_none() {
@@ -606,7 +605,7 @@ impl VariationRegistry {
                  shader_3d — it would render nothing in any mode.",
                 dl.name
             );
-            return;
+            return Err(format!("variation `{}` is only_3d with no 3D shader", dl.name));
         }
         let info = VariationInfo::from_download(dl, provenance);
         if !self.ordered_names.contains(&info.name) {
@@ -637,6 +636,7 @@ impl VariationRegistry {
         log::info!("Registered variation '{}' ({})", info.name, info.provenance.label());
         self.variations.insert(info.name.clone(), info);
         self.version = self.version.wrapping_add(1);
+        Ok(())
     }
 
     /// Remove one variation by name, whatever its provenance.

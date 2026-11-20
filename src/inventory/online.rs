@@ -10,7 +10,7 @@
 //! network.
 
 use super::{Entry, EntryKey, Group, Kind};
-use crate::api::types::{FlameListItem, PaletteItem, ScriptListItem};
+use crate::api::types::{AnimationListItem, Curation, FlameListItem, PaletteItem, ScriptListItem};
 use crate::provenance::Origin;
 
 /// An item a page held, kept for what its entry does not say: a palette's
@@ -20,6 +20,7 @@ pub enum Item {
     Flame(FlameListItem),
     Palette(PaletteItem),
     Script(ScriptListItem),
+    Animation(AnimationListItem),
 }
 
 /// What an online row says beyond an entry's fields.
@@ -38,6 +39,8 @@ pub struct OnlineInfo {
     /// What the app already holds of it: an adopted script's file, a
     /// palette of the same colours.
     pub held: Option<EntryKey>,
+    /// Curated: its canonical name, version and credit.
+    pub curated: Option<Curation>,
 }
 
 impl Item {
@@ -46,6 +49,17 @@ impl Item {
             Item::Flame(f) => &f.id,
             Item::Palette(p) => &p.id,
             Item::Script(s) => &s.id,
+            Item::Animation(a) => &a.id,
+        }
+    }
+
+    /// Its curation, when curated.
+    pub fn curated(&self) -> Option<&Curation> {
+        match self {
+            Item::Flame(f) => f.curated.as_ref(),
+            Item::Palette(p) => p.curated.as_ref(),
+            Item::Script(s) => s.curated.as_ref(),
+            Item::Animation(a) => a.curated.as_ref(),
         }
     }
 
@@ -55,6 +69,7 @@ impl Item {
             Item::Flame(_) => Some(Kind::Fractal),
             Item::Palette(_) => Some(Kind::Palette),
             Item::Script(s) => script_kind(s.kind.as_deref()?),
+            Item::Animation(_) => Some(Kind::Animation),
         }
     }
 }
@@ -106,11 +121,25 @@ pub fn entry(item: &Item, group: Group, local: &[Entry]) -> Option<Entry> {
             None,
             visibility(&s.visibility),
         ),
+        Item::Animation(a) => (
+            a.name.clone(),
+            a.description.clone().unwrap_or_default(),
+            Vec::new(),
+            a.owner.as_ref().map(|o| o.display_name.clone()),
+            a.updated_at.clone(),
+            None,
+            visibility(&Some(a.visibility.clone())),
+        ),
+    };
+    // A curated item credits whose work it is.
+    let authors = match item.curated().and_then(|c| c.credit.clone()) {
+        Some(credit) if authors.is_empty() => vec![credit],
+        _ => authors,
     };
     let held = match item {
         Item::Palette(p) => local.iter().find(|e| e.key == EntryKey::Palette(p.content_hash.clone())).map(|e| e.key.clone()),
         Item::Script(s) => local.iter().find(|e| e.link.as_ref().and_then(|l| l.cloud_id.as_deref()) == Some(s.id.as_str())).map(|e| e.key.clone()),
-        Item::Flame(_) => None,
+        Item::Flame(_) | Item::Animation(_) => None,
     };
     Some(Entry {
         kind,
@@ -120,7 +149,6 @@ pub fn entry(item: &Item, group: Group, local: &[Entry]) -> Option<Entry> {
         authors,
         version: None,
         origin: Origin::Api,
-        plugin: false,
         group,
         link: None,
         installed: true,
@@ -133,6 +161,7 @@ pub fn entry(item: &Item, group: Group, local: &[Entry]) -> Option<Entry> {
             thumbnail_url,
             visibility: vis,
             held,
+            curated: item.curated().cloned(),
         }),
     })
 }
@@ -141,7 +170,7 @@ pub fn entry(item: &Item, group: Group, local: &[Entry]) -> Option<Entry> {
 /// routes*), the first its default; each with its label's locale key.
 pub fn sorts(kind: Kind) -> &'static [(&'static str, &'static str)] {
     match kind {
-        Kind::Fractal => &[
+        Kind::Fractal | Kind::Animation => &[
             ("recent", "catalog.sort_recent"),
             ("popular", "catalog.sort_popular"),
             ("views", "catalog.sort_views"),
@@ -158,9 +187,102 @@ pub fn sorts(kind: Kind) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// What the Online place's *Open by ID or link* names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenTarget {
+    /// An item by its id; `resource` (`flames`, `animations`, `palettes`,
+    /// `scripts`) when the text says which.
+    Id { resource: Option<&'static str>, id: String },
+    /// A canonical name, written `kind/name` (`fractal/sierpinski`).
+    Name { kind: String, name: String },
+}
+
+/// The first UUID in `text` (any case), where it starts.
+fn find_uuid(text: &str) -> Option<(usize, String)> {
+    let lower = text.to_ascii_lowercase();
+    let b = lower.as_bytes();
+    (0..b.len().saturating_sub(35)).find_map(|i| {
+        let s = &lower[i..i + 36];
+        let edge_ok = |j: usize| j >= b.len() || !b[j].is_ascii_hexdigit();
+        (crate::scripted::is_uuid(s) && (i == 0 || !b[i - 1].is_ascii_hexdigit()) && edge_ok(i + 36)).then(|| (i, s.to_string()))
+    })
+}
+
+/// Read what a person pastes to open: an id, a link that holds one (the
+/// web app's `?flame=` / `?animation=`, an item's API path, a page of the
+/// browser app's), or a canonical name `kind/name`. `None` for anything
+/// else.
+pub fn parse_open(text: &str) -> Option<OpenTarget> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if let Some((at, id)) = find_uuid(text) {
+        // The resource the text names last before the id.
+        let before = text[..at].to_ascii_lowercase();
+        let hints: [(&str, &'static str); 5] =
+            [("animation", "animations"), ("flame", "flames"), ("fractal", "flames"), ("palette", "palettes"), ("script", "scripts")];
+        let resource = hints.iter().filter_map(|(word, r)| before.rfind(word).map(|i| (i, *r))).max_by_key(|(i, _)| *i).map(|(_, r)| r);
+        return Some(OpenTarget::Id { resource, id });
+    }
+    let (kind, name) = text.split_once('/')?;
+    let (kind, name) = (kind.trim().to_ascii_lowercase(), name.trim());
+    let known = matches!(kind.as_str(), "fractal" | "palette" | "animation" | "variation" | "effect")
+        || crate::storage::library::Kind::from_wire(&kind).is_some();
+    let name_ok = !name.is_empty() && name.len() <= 64 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    (known && name_ok).then(|| OpenTarget::Name { kind, name: name.to_string() })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A curated item says so, and credits whose work it is.
+    #[test]
+    fn a_curated_item_reads_its_curation() {
+        let item: crate::api::types::FlameListItem = serde_json::from_value(serde_json::json!({
+            "id": "f1", "name": "Sunrise", "render_mode": "2d", "transform_count": 2, "variation_names": [],
+            "has_3d": false, "created_at": "", "updated_at": "", "origin": "user",
+            "owner": {"id": "a", "display_name": "curator"},
+            "curated": {"name": "sunrise", "current": true, "content_hash": "abc", "credit": "Ana"}
+        }))
+        .unwrap();
+        let e = entry(&Item::Flame(item), Group { order: 0, label: String::new() }, &[]).unwrap();
+        let info = e.online.as_ref().unwrap();
+        assert_eq!(info.curated.as_ref().and_then(|c| c.name.as_deref()), Some("sunrise"));
+        assert_eq!(e.authors, vec!["Ana".to_string()], "the credit, as its authors");
+        let anim: crate::api::types::AnimationListItem = serde_json::from_value(serde_json::json!({
+            "id": "a1", "name": "Dance", "duration": 10.0, "loop_mode": "loop", "visibility": "public",
+            "flame_id": null, "created_at": "", "updated_at": ""
+        }))
+        .unwrap();
+        let e = entry(&Item::Animation(anim), Group { order: 0, label: String::new() }, &[]).unwrap();
+        assert_eq!(e.kind, Kind::Animation);
+        assert_eq!(e.kind.family(), crate::inventory::Family::Fractals);
+        assert!(e.online.unwrap().curated.is_none());
+    }
+
+    #[test]
+    fn what_a_person_pastes_opens() {
+        let id = "5b0f8c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e";
+        let at = |resource: Option<&'static str>| Some(OpenTarget::Id { resource, id: id.to_string() });
+        assert_eq!(parse_open(id), at(None));
+        assert_eq!(parse_open(&format!("  {} ", id.to_uppercase())), at(None));
+        assert_eq!(parse_open(&format!("https://fractalsforall.com/app/?flame={id}")), at(Some("flames")));
+        assert_eq!(parse_open(&format!("https://fractalsforall.com/app/?animation={id}")), at(Some("animations")));
+        assert_eq!(parse_open(&format!("https://fractalsforall.com/api/v1/palettes/{id}")), at(Some("palettes")));
+        assert_eq!(parse_open(&format!("/api/v1/scripts/{id}?reader=7")), at(Some("scripts")));
+        // The last resource named before the id wins (a flame's animation).
+        assert_eq!(parse_open(&format!("/flames/x/animations/{id}")), at(Some("animations")));
+        assert_eq!(
+            parse_open("fractal/sierpinski-carpet"),
+            Some(OpenTarget::Name { kind: "fractal".into(), name: "sierpinski-carpet".into() })
+        );
+        assert_eq!(parse_open("Formula/Mandelbrot"), Some(OpenTarget::Name { kind: "formula".into(), name: "Mandelbrot".into() }));
+        for nothing in ["", "hello", "room/x", "fractal/", "fractal/has space", "5b0f8c1e-2d3a", "https://example.com/a/b"] {
+            assert_eq!(parse_open(nothing), None, "{nothing}");
+        }
+    }
 
     fn script(id: &str, kind: &str) -> Item {
         Item::Script(

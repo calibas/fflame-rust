@@ -53,6 +53,9 @@ pub mod api;
 pub mod script;
 /// What every user-written script shares: its identity and labels.
 pub mod scripted;
+pub mod curated;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod crash_report;
 /// One parameter system for every kind: definitions, values, layouts
 /// (docs/archive/projects/one-parameter-system.md).
 pub mod params;
@@ -165,9 +168,6 @@ fn report_installed_resources() {
             "WARNING: WGSL plug-in files are no longer loaded (the plug-in system was retired): {}",
             retired.join(", ")
         );
-    }
-    for failed in crate::storage::library::plugin_failures() {
-        eprintln!("WARNING: a plug-in did not load: {failed}");
     }
 }
 

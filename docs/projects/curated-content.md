@@ -1,6 +1,6 @@
 # Curated content
 
-**Status: planned 2026-11-18, not started; every decision made (D1-D11).** Both repositories: the
+**Status: steps 1-6 built 2026-11-18** (ffapi branch `curated-content`, migrations 119-121, and this repo's branch `curated-content`; the production dry run waits on the ffapi deploy; what was built and decided is ffapi's `docs/curated-build.md`); every decision made (D1-D11). Both repositories: the
 client (this one) and the API server (`c:/projects/ffapi`). Built from a
 survey of both on 2026-11-18. The survey's findings are summarised in
 *What exists*, with file references where they matter.
@@ -235,7 +235,9 @@ not bump the version.
 - A unique index on `(kind, canonical_name)` for current rows, and a
   name-history table for older versions.
 - The static trigger.
-- The three "featured" mechanisms fold into this:
+- The three "featured" mechanisms fold into this (**deferred** at step 1:
+  `featured_at` and the `featured` word stay as they were, since the
+  browser app may use them; folding waits until it moves to `curated`):
   - flames' `featured_at` is migrated;
   - the scripts museum keeps its owner pin (`published_*`), but the
     admin feature becomes curate;
@@ -451,23 +453,98 @@ So, with what exists:
    - The columns, `origin` on every table, `content_hash` and the static
      trigger.
    - `POST /admin/.../curate` and `?curated=1` on the lists.
-   - Fold flames' `featured_at` into it.
+   - Fold flames' `featured_at` into it (deferred: see *API changes*).
+   - **Built 2026-11-18**, ffapi branch `curated-content`. Decided while
+     building: a curated animation freezes its fractal with it (an
+     unnamed static copy); a curated script's copy takes the canonical
+     name as its stem, an older version's stem moving aside to
+     `<name>~<hash8>`; thumbnails and tags of a curated fractal are
+     static too; `q` searches canonical names.
    - Reserve built-in names.
 2. **API resolve and import.**
    - `/curated/{kind}/{name}` and `POST /curated/resolve`, with aliases
      and hashes.
    - `POST /admin/curated/import`: dry run, accept, retire.
    - Variations and effects onto it.
-3. **The manifest and the first sync.**
+   - **Built 2026-11-18.** Decided while building: the built-in
+     variations and effects keep one row a name (a fix replaces it and
+     moves `version`, as the client's cache expects), not every version;
+     their hashes are backfilled at startup and served on lists and
+     downloads; `updated_at` moves only on a real change; animations are
+     not importable yet. A dry run of both shipped corpora comes back
+     all `unchanged`: the hash definitions agree with the stored rows.
+3. **The manifest and the first sync.** **Built 2026-11-18** except
+   the production run: `export_curated_json` (`src/curated.rs`: the
+   hashes, the corpora the two corpus exporters now share, the
+   manifest) and ffapi's `tools/sync_curated.py`. A local dry run of
+   the whole manifest agrees with the server record for record once
+   ffapi parses floats exactly (serde_json `float_roundtrip`: the
+   default parser put 20 records a bit off). The manifest leaves out the
+   built-ins' Rhai twins (their names are the built-ins' own) and the
+   UF/Fractint example files; the stateful track examples were read as
+   formulas (`library::rhai_kind`), fixed. **Step 5 note:** hashing
+   what the server serves (a fractal's config) needs exact parsing on
+   the client too.
    - `export_curated_json` and `tools/sync_curated.py`.
    - A dry run against production, which the user reviews: in
      particular the hand imports under *needs a decision*.
    - Then the sync.
 4. **Client browsing.** Curated | Account, Open by id or link, and the
-   Animations family.
+   Animations family. **Built 2026-11-18**, this repository's branch:
+   `Scope::Curated` (the app's default; `Scope::Public` stays for the
+   tests); animations are a **kind of the Fractals family**, not a
+   family (the user's choice); Open by ID or link takes an id, a link or
+   `kind/name` and does what a click on the item would; items bind
+   `curated` and `origin`, and a curated item's info says so and credits
+   it. `load_animation_full` asks as a guest when signed out (a curated
+   animation loads for anyone). Checked against a local server by the
+   API integration test `curated_browsing_and_opening_by_id`.
 5. **Client names in configs and trust.** The curated table, resolution
-   on load, the prompt, and untrusted tracks.
+   on load, the prompt, and untrusted tracks. **The trust half built
+   2026-11-18** (`curated::trust`, `app::trust`, `ui::trust_window`;
+   ONLINE.md, *Trusting code from the server*): a load from the server is
+   held while the code it carries is looked up by hash; curated code
+   runs, anything else asks once (Load / Always / Don't load). Files from
+   this device and the user's own items skip the gate. Decided while
+   building: `Provenance` is not split -- trust is by hash, at the gate,
+   and what loads registers as before; script tracks need no untrusted
+   mode (their engine has no imports or cross-calls already). **The names
+   half built 2026-11-18** (`curated::refs`; CONFIG.md, *Writing*): File ▸
+   Save As records each carried source this device knows is curated in
+   the config's `curated` table (`{kind, name, hash, entry}`) and leaves
+   its source out; **Save As for Offline Use** keeps the sources (D10);
+   loading holds a config with referenced sources until they are fetched
+   by name and hash, then puts them back (D11: loading never changes a
+   file). Decided while building: **the registry key stays the key** --
+   a carried source keeps its `entry` (`u<id>_<hash8>`, already a pin by
+   hash) and the table maps it to the canonical name, rather than
+   re-keying configs by canonical names; the device learns what is
+   curated from the trust lookups, adopted curated scripts and resolved
+   references (`curated_known.json`), so a save needs no network; only
+   `.fflame` saves strip -- PNG metadata and Save Online carry full
+   sources (a picture opens anywhere; the server's catalog reads them);
+   WGSL variations and palettes are not in the table (a variation is
+   named already; a palette is carried as colours); the CLI does not
+   resolve references yet.
 6. **Client fetch unification, the cache by hash, and cleanups.**
+   **Built 2026-11-18.** Both fetches are `api::job`s through one helper
+   (`app::downloads`); one rule set -- registered first, cached once
+   accepted, never under a built-in's or a custom item's name (effects
+   gained that refusal), names encoded, no empty `Bearer`. Six uncalled
+   API methods deleted (`search_flames`, `list_my_scripts`,
+   `search_public_scripts`, `list_my_palettes`, `get_palette_data`,
+   `rename_palette`; `list_my_flames` stays: the JS API's
+   `api_list_flames` uses it) with `SearchFlamesParams` and
+   `PatchPaletteRequest`; the integration tests use the browse calls.
+   The server's `GET /variations/{name}` resolves aliases. Decided while
+   building: **the cache keeps comparing versions** -- the sync moves a
+   variation's or effect's `version` whenever its hash changes, so a
+   hash compare would find nothing more; a missing effect still does not
+   pause rendering (the un-effected picture is a fine thing to see
+   meanwhile); curated Rhai variations and effects are fetched by name
+   through the config's references (step 5), not this path; an edited
+   adopted copy needs no mark dropped -- its hash changes, so it is the
+   user's own from then on.
 7. **Later:**
    - the submission process (D3);
    - browsing another user's items (D2);

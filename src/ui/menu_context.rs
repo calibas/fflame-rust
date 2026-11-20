@@ -10,6 +10,8 @@ pub struct FileMenuActions {
     pub open_preset_library: bool,
     pub load_config: bool,
     pub save_config: bool,
+    /// Save As, keeping the curated items' sources in the file (D10).
+    pub save_config_offline: bool,
     pub import_flame_xml: bool,
     pub export_flame_xml: bool,
     pub export_png: bool,
@@ -81,6 +83,8 @@ pub struct MenuActions {
     pub animation: AnimationMenuActions,
     /// Menu-bar Fly Mode toggle button was clicked this frame.
     pub fly_mode_toggle: bool,
+    /// The Catalog menu's *Offer downloads in pickers*, toggled to this.
+    pub set_picker_downloads: Option<bool>,
     /// The mode a Mode-menu row asked for this frame, if any. One
     /// field rather than a flag per mode: with four modes the flags
     /// were about to become four booleans that must not disagree.
@@ -89,6 +93,8 @@ pub struct MenuActions {
 
 /// Read-only state needed by menus to determine enabled/disabled state
 pub struct MenuState {
+    /// Whether the pickers offer downloads (`SystemSettings::picker_downloads`).
+    pub picker_downloads: bool,
     pub can_undo: bool,
     pub can_redo: bool,
     pub is_paused: bool,

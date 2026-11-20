@@ -867,7 +867,7 @@ fn render_variations_section(
     // variations; the fractal's own Rhai variations, which the Catalog
     // lists as files only when they are plug-ins, follow the list.
     let picker_entries = super::picker::own_variations(&config_manager.active_config().flame);
-    let superseded = global_registry().superseded(&config_manager.active_config().flame.custom_variations);
+    let superseded = registry.superseded(&config_manager.active_config().flame.custom_variations);
     let admit = |e: &crate::inventory::Entry| -> bool {
         if e.kind != crate::inventory::Kind::Variation {
             return false;
@@ -875,7 +875,6 @@ fn render_variations_section(
         let Some(name) = super::inventory::applied_name(e).or_else(|| (!e.installed).then(|| entry_name(e))) else {
             return false;
         };
-        let registry = global_registry();
         let only_3d = registry.get(&name).is_some_and(|v| v.category == VariationCategory::Only3D);
         (render_mode == RenderMode::ThreeD || !only_3d) && !transform.variations.contains_key(&name) && !superseded.contains(&name)
     };

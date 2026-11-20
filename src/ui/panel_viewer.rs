@@ -479,6 +479,8 @@ pub struct PanelContext<'a> {
     pub open_save_online_dialog: &'a mut bool,
     pub load_api_animation_id: &'a mut Option<String>,
     pub clear_variation_cache_requested: &'a mut bool,
+    /// The Catalog's Refresh: fetch the variation and effect catalogs again.
+    pub refresh_catalogs_requested: &'a mut bool,
     /// Simulation transport, owned by App. It is view state rather than
     /// config -- like the playhead, not like a parameter -- so it is
     /// passed through rather than stored in the FractalConfig, and a
@@ -961,6 +963,9 @@ impl<'a> PanelViewer<'a> {
         if let Some(req) = response.script_cloud_request {
             *self.context.script_cloud_request = Some(req);
         }
+        if let Some(id) = response.load_api_animation {
+            *self.context.load_api_animation_id = Some(id);
+        }
         if let Some(config) = response.run.generated {
             *self.context.script_generated = Some(config);
         }
@@ -975,6 +980,9 @@ impl<'a> PanelViewer<'a> {
         }
         if response.clear_effect_cache {
             *self.context.clear_effect_cache_requested = true;
+        }
+        if response.refresh_catalogs {
+            *self.context.refresh_catalogs_requested = true;
         }
         if let Some(config) = response.load_preset {
             *self.context.selected_preset_config = Some(config);

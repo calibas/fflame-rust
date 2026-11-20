@@ -240,12 +240,13 @@ pub fn render_escape_content(
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.formula"));
         // The Catalog's escape kinds (docs/archive/projects/catalog.md, *The
-        // picker*): the iterated formulas, the fields, the solids (mode D:
-        // `ifs_flame` reads the LOADED FLAME, so the flame's own extent
-        // decides where to stand), and the user's plug-ins of those kinds.
+        // picker*; docs/projects/one-list.md): the iterated formulas, the
+        // fields, the solids (mode D: `ifs_flame` reads the LOADED FLAME, so
+        // the flame's own extent decides where to stand), and every Rhai
+        // file of those kinds -- the examples, the user's, the adopted.
         let admit = |e: &crate::inventory::Entry| {
             use crate::inventory::Kind as K;
-            matches!(e.kind, K::Formula | K::Field | K::Solid) && e.installed && (e.plugin || matches!(e.key, crate::inventory::EntryKey::Registered(..)))
+            matches!(e.kind, K::Formula | K::Field | K::Solid) && super::inventory::pickable(e)
         };
         let btn = super::picker::button(ui, selected_label);
         let picker = super::picker::Picker::new("escape_formula", &admit).kind_headings().current(Some(esc.formula.as_str()));
@@ -2372,7 +2373,7 @@ fn show_coloring_section(
         ui.horizontal(|ui| {
             ui.label(t!("escape_panel.coloring"));
             let admit = |e: &crate::inventory::Entry| {
-                e.kind == crate::inventory::Kind::FieldColoring && e.installed && (e.plugin || matches!(e.key, crate::inventory::EntryKey::Registered(..)))
+                e.kind == crate::inventory::Kind::FieldColoring && super::inventory::pickable(e)
             };
             let btn = super::picker::button(ui, coloring.display_name);
             if let Some(e) = super::picker::Picker::new("escape_field_coloring", &admit).current(Some(esc.coloring.as_str())).popup(ui, &btn) {
@@ -2429,8 +2430,9 @@ fn show_coloring_section(
         ui.label(t!("escape_panel.coloring"));
         let admit = |e: &crate::inventory::Entry| {
             e.kind == crate::inventory::Kind::Coloring
-                && e.installed
-                && (e.plugin
+                && super::inventory::pickable(e)
+                && (!e.installed
+                    || matches!(e.key, crate::inventory::EntryKey::File { .. })
                     || super::picker::key_name(e)
                         .and_then(crate::escape::find_coloring)
                         .is_some_and(|c| crate::escape::coloring_suits_formula(formula_def, c)))

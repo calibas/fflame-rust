@@ -1163,9 +1163,9 @@ impl RhaiEditorPanel {
                 self.saved = self.text.clone();
                 self.status = Some(t!("formula_editor.saved", file = file).to_string());
                 if made_own {
-                    let was = adopted.unwrap_or_default();
+                    let _ = adopted;
                     let link = match store {
-                        Store::Formulas => crate::storage::links::Link { plugin: was.plugin, ..Default::default() },
+                        Store::Formulas => crate::storage::links::Link::default(),
                         Store::Scripts => crate::storage::links::Link { from_others: true, ..Default::default() },
                     };
                     if let Err(e) = manage::set_link(store, &file, link) {
@@ -1173,11 +1173,10 @@ impl RhaiEditorPanel {
                     }
                     self.status = Some(t!("formula_editor.own_id", file = file).to_string());
                 }
-                // A plug-in's lists offer what was saved: its new version.
-                if store == Store::Formulas && formula_store::link_of(&file).is_some_and(|l| l.plugin) {
-                    if let Err(e) = crate::storage::library::register_plugin(&file, &self.text) {
-                        self.status = Some(t!("formula_editor.plugin_failed", file = file, error = e).to_string());
-                    }
+                // The lists offer what was saved, compiled when they next
+                // need it.
+                if store == Store::Formulas {
+                    crate::storage::library::forget(&file);
                 }
                 self.name = file.clone();
                 self.file = Some(file);

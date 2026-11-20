@@ -799,22 +799,22 @@ mod tests {
         let mut reg = crate::variations::VariationRegistry::new();
 
         // Legitimate: only_3d with a 3D body and no 2D body.
-        reg.register_from_api(&download("emit3d", "only_3d", None, Some("fn f(){}")), API);
+        let _ = reg.register_from_api(&download("emit3d", "only_3d", None, Some("fn f(){}")), API);
         assert!(reg.has("emit3d"), "only_3d without shader_2d must register");
 
         // The dangerous case: any other category missing its 2D body.
-        reg.register_from_api(&download("sneaky", "advanced_2d", None, Some("fn f(){}")), API);
+        let _ = reg.register_from_api(&download("sneaky", "advanced_2d", None, Some("fn f(){}")), API);
         assert!(
             !reg.has("sneaky"),
             "a non-only_3d variation with no shader_2d must be refused, not registered to silently render nothing"
         );
 
         // And only_3d with NO body at all is useless in every mode.
-        reg.register_from_api(&download("empty", "only_3d", None, None), API);
+        let _ = reg.register_from_api(&download("empty", "only_3d", None, None), API);
         assert!(!reg.has("empty"), "only_3d with no shader_3d must be refused");
 
         // The ordinary shape still works.
-        reg.register_from_api(&download("fine", "advanced_2d", Some("fn f(){}"), None), API);
+        let _ = reg.register_from_api(&download("fine", "advanced_2d", Some("fn f(){}"), None), API);
         assert!(reg.has("fine"));
     }
 

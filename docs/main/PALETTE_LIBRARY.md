@@ -78,8 +78,11 @@ run time:
 - A palette has a `name` and either `stops` (positions 0..1, RGB 0..1)
   or `indexed_colors`, a comma-separated list of `RRGGBB` values, one per
   slot, slot `i` at position `i / 255` (every shipped indexed palette
-  has 256). An optional `locked` marks a fixed 256-colour palette.
-  Unknown fields are ignored.
+  has 256). An optional `locked` marks a fixed 256-colour palette, and
+  an optional `description` (Markdown) says what it is or where it came
+  from -- the Catalog's info pane shows it; it is not the palette's
+  content (`palette_content_hash` leaves it out) and is written only
+  when not empty. Unknown fields are ignored.
 - When a palette is written out (a `.palette` file, a config, the Custom
   pack), exactly 256 evenly spaced stops are written as
   `indexed_colors` and anything else as `stops`.
@@ -112,7 +115,9 @@ run time:
 Pack content is fetched over HTTP from `pkg/assets/palettes/packs/<file>`,
 relative to the page (`WEB_PACKS_DIR`; the build scripts copy the pack
 JSONs there, inside `pkg/`). An enabled pack is fetched on the first
-frame, a disabled one when it is enabled. Until a pack arrives, its
+frame, a disabled one when it is enabled or opened in the Catalog
+(still disabled: its palettes are usable there, not in the dropdown or
+the flat list). Until a pack arrives, its
 palettes are in neither the dropdown nor the flat list. A fetch
 completes into the global library; every frame, before any panel draws,
 the app's copy takes each pack whose load state changed and rebuilds its

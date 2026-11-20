@@ -46,6 +46,14 @@ pub fn render_menu_bar(
                     menu_actions.file.save_config = true;
                 }
 
+                if ui
+                    .selectable_label(false, t!("menu.save_as_offline").as_ref())
+                    .on_hover_text(t!("menu.save_as_offline_tip"))
+                    .clicked()
+                {
+                    menu_actions.file.save_config_offline = true;
+                }
+
                 if ui.selectable_label(false, t!("menu.export_flame_xml").as_ref()).clicked() {
                     menu_actions.file.export_flame_xml = true;
                 }
@@ -342,6 +350,11 @@ pub fn render_menu_bar(
             ui.menu_button(t!("menu.catalog"), |ui| {
                 rows_do_not_wrap(ui);
                 super::inventory::catalog_menu_rows(ui);
+                ui.separator();
+                let mut on = menu_state.picker_downloads;
+                if ui.checkbox(&mut on, t!("menu.picker_downloads")).on_hover_text(t!("menu.picker_downloads_tip")).changed() {
+                    menu_actions.set_picker_downloads = Some(on);
+                }
             });
 
             // Windows Menu

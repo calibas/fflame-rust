@@ -1562,6 +1562,7 @@ dependencies = [
  "web-time",
  "webbrowser",
  "wgpu",
+ "windows-sys 0.59.0",
  "winit",
  "winresource",
 ]

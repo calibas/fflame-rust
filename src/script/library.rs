@@ -173,7 +173,7 @@ impl ScriptEntry {
             ScriptKind::Library => "Library",
         };
         // The library's marks, the Formula Editor's too.
-        format!("{tag} · {}{}", self.display_name, crate::storage::library::marks(self.origin(), false))
+        format!("{tag} · {}{}", self.display_name, crate::storage::library::marks(self.origin()))
     }
 
     /// Who wrote it: a shipped script is built in wherever it is read

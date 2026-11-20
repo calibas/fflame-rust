@@ -634,7 +634,7 @@ fn escaped(s, p) {
     `bailout` (the squared bailout it is best drawn at, as a built-in's
     `recommended_bailout`) and `pick` (`#{ deband: 1 }`, the values a
     fresh pick takes, `pick_params`). The panel's colouring picker, its
-    plug-ins and the Rhai Editor's first Use of a colouring apply
+    Rhai files and the Rhai Editor's first Use of a colouring apply
     them as they do a built-in's (`escape_panel::pick_changes`); Edit as
     Rhai does not, keeping the settings in use.
   - **A colour, not a palette position** (batch 5): beside `finish`,
@@ -1403,7 +1403,7 @@ fn escaped(s, p) {
   built-ins' `esc_reduce` does, for a phase that grows term by term; the
   language's `sin` and `cos` reduce their own arguments. A field has no
   `prepare`. Used from the Rhai Editor ("Use as field") or the
-  formula picker's plug-ins (`library::Kind::Field`).
+  formula picker, as a file (`library::Kind::Field`).
 - **A Rhai field colouring** (`EntryKind::FieldColoring`, a file with
   `fn shade`): `fn shade(sum, grad, n[, p])` -- the field's sum, its
   summed gradient and the term count -- returns the palette position, or
@@ -1958,9 +1958,9 @@ files ship (`assets/formulas/`), each entry compiled by
 `every_example_entry_compiles`, and the Catalog's Edit as Rhai copies one,
 or a built-in's twin, among the user's files and opens it here. The
 Catalog marks each file (`storage::library::marks`: ` *` the user's,
-` ↓` somebody else's, and "(plug-in)"), and a stored Rhai file has
-**Load at start** in its info pane: a plug-in, registered at every
-start and offered in the lists ([VARIATIONS.md](VARIATIONS.md#downloaded-variations)).
+` ↓` somebody else's), and a Rhai file of a kind a list uses is offered
+in the lists, compiled when first asked for
+([VARIATIONS.md](VARIATIONS.md#downloaded-variations)).
 Scripts: `escape.custom_formula` and `escape.custom_coloring`
 ([SCRIPTING.md](SCRIPTING.md)).
 

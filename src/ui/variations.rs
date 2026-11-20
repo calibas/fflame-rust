@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn a_flame_reports_the_third_party_code_it_runs() {
         let mut registry = crate::variations::VariationRegistry::new();
-        registry.register_from_api(&api_download("borrowed_thing"), crate::provenance::Provenance::Api { version: 3 });
+        let _ = registry.register_from_api(&api_download("borrowed_thing"), crate::provenance::Provenance::Api { version: 3 });
 
         // Built-ins only — nothing to warn about.
         let mut flame = Flame::default();
@@ -237,7 +237,7 @@ mod tests {
         );
 
         // One of the user's own Rhai variations is not a download.
-        registry.register_from_api(&api_download("mine_in_rhai"), crate::provenance::Provenance::Local);
+        let _ = registry.register_from_api(&api_download("mine_in_rhai"), crate::provenance::Provenance::Local);
         let mut t3 = Transform::new();
         t3.set_variation("mine_in_rhai", 1.0);
         flame.transforms.push(t3);

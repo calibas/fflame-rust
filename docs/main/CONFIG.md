@@ -160,6 +160,35 @@ version bump and a migration arm that restores the old value (see
   saved as `0.98` and not `0.9799999594688416`. Numbers that need f64
   (the pan) are left alone.
 
+**The app's File ▸ Save As writes `curated::refs::for_saving`**, not
+`to_json()` ([curated-content.md](../projects/curated-content.md),
+D9-D11):
+
+- **What it changes:** each carried Rhai source (`CustomSource`,
+  wherever it sits) that this device knows is a curated item's is
+  recorded in the config's `curated` table as `{kind, name, hash,
+  entry}`: the canonical name, pinned by the content hash, and the
+  registry key.
+- **What it leaves out:** the source itself, unless the save is
+  **Save As for Offline Use**, which keeps the sources and still writes
+  the table.
+- **How the device knows** what is curated (`curated::refs::remember`,
+  `curated_known.json` in the app's data):
+  - the trust lookups;
+  - the curated scripts adopted from the Catalog;
+  - the references resolved on load.
+
+  A source the device doesn't know as curated is carried as before. That
+  includes the user's own sources and any edited copy of a curated one.
+- **On load**, `App::load_config_with_undo` holds a config whose
+  referenced sources are missing (`refs::unresolved`). It resolves each
+  name and hash (`POST /curated/resolve`) and fetches the exact version.
+  Then it puts the sources back (`refs::fill`) and loads, so loading
+  never changes what a file means (D11). What can't be fetched is
+  reported and missing.
+- **Elsewhere:** the PNG metadata, Save Online and the CLI write and
+  read full sources as before.
+
 `save_to_file` writes `to_json()`. `to_json_array` and
 `save_multi_to_file` write a JSON array of configs, each by
 `to_json_value()`.

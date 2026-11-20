@@ -65,17 +65,26 @@ pub fn poll_palette_packs(ctx: &egui::Context, library: &mut PaletteLibrary) {
 /// A pack's place in a list of packs (the Catalog's palettes): a checkbox
 /// that enables it -- on the web, fetching it -- and a collapsing header
 /// with its name and load state; open, the body shows its loading, its
-/// failure with a Retry, or, enabled and loaded, `palettes`.
+/// failure with a Retry, or, loaded, `palettes`. A pack turned off is
+/// still shown, and its palettes usable here: enabled decides what the
+/// pickers and random palettes draw from. It starts closed, and on the
+/// web opening it fetches it (still off). `open` opens it (a search
+/// matched in it).
 pub fn pack_section(
     ui: &mut egui::Ui,
     library: &mut PaletteLibrary,
     pack_idx: usize,
+    open: bool,
     palettes: impl FnOnce(&mut egui::Ui, &mut PaletteLibrary),
 ) {
     let Some(info) = library.get_pack_info(pack_idx) else { return };
     let (pack_name, palette_count, is_enabled, load_state) = (info.name().to_string(), info.palette_count(), info.enabled, info.load_state.clone());
     let header_id = ui.make_persistent_id(format!("pack_header_{}", pack_idx));
-    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), header_id, true)
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), header_id, is_enabled);
+    if open {
+        state.set_open(true);
+    }
+    state
         .show_header(ui, |ui| {
             let mut enabled = is_enabled;
             if ui.checkbox(&mut enabled, "").on_hover_text(t!("palette_library.tooltip_enable_pack")).changed() {
@@ -101,9 +110,12 @@ pub fn pack_section(
         })
         .body(|ui| match &load_state {
             LoadState::NotLoaded => {
-                if !is_enabled {
-                    ui.weak(t!("palette_library.pack_disabled"));
-                }
+                // Opened, it loads (on the web, a fetch), enabled or not.
+                load_pack(ui.ctx(), library, pack_idx);
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(t!("palette_library.loading"));
+                });
             }
             LoadState::Loading => {
                 ui.horizontal(|ui| {
@@ -121,13 +133,27 @@ pub fn pack_section(
                 }
             }
             LoadState::Loaded => {
-                if is_enabled {
-                    palettes(ui, library);
-                } else {
+                if !is_enabled {
                     ui.weak(t!("palette_library.pack_disabled"));
                 }
+                palettes(ui, library);
             }
         });
+}
+
+/// Load a pack without enabling it (on the web, a fetch).
+fn load_pack(ctx: &egui::Context, library: &mut PaletteLibrary, pack_idx: usize) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = ctx;
+        library.start_pack_load(pack_idx);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(file_path) = library.start_pack_load(pack_idx) {
+            spawn_pack_fetch(ctx.clone(), pack_idx, file_path);
+        }
+    }
 }
 
 /// Enable or disable a pack; enabling one not loaded loads it (on the
@@ -144,6 +170,11 @@ fn enable_pack(ctx: &egui::Context, library: &mut PaletteLibrary, pack_idx: usiz
             spawn_pack_fetch(ctx.clone(), pack_idx, file_path);
         }
     }
+}
+
+/// A palette's gradient as [`palette_preview`] made it, if it did.
+pub fn palette_preview_made(ctx: &egui::Context, key: &str, size: [usize; 2]) -> Option<egui::TextureHandle> {
+    ctx.data_mut(|d| d.get_temp::<egui::TextureHandle>(egui::Id::new(("palette_preview", key, size))))
 }
 
 /// A palette's gradient as a texture, made once and kept in egui's

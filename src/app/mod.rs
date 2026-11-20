@@ -7,6 +7,7 @@ mod gpu_updates;
 mod animation_update;
 mod effect_fetch;
 mod variation_fetch;
+mod downloads;
 mod texture_sync;
 mod aa_governor;
 mod motion_blur;
@@ -17,6 +18,7 @@ mod render_scale;
 mod sim_lock;
 mod render_progress;
 pub mod script_cloud;
+mod trust;
 mod fly_camera;
 pub mod export;
 pub mod render_mode;
@@ -733,16 +735,13 @@ pub struct App {
     pub(super) current_user_id: Option<String>,
     /// Online-library state for the Scripts panel, and the slot its
     /// background requests land in.
-    /// Effects fetched on demand: results in flight, and the names
+    /// Effects fetched on demand: the downloads in flight, and the names
     /// already tried this session so a miss is not retried every frame.
-    pub(super) effect_fetch_results:
-        std::sync::Arc<std::sync::Mutex<Vec<(String, Result<crate::api::types::EffectDownload, String>)>>>,
+    pub(super) effect_downloads: downloads::Downloads<crate::api::types::EffectDownload>,
     pub(super) effect_fetch_attempted: std::collections::HashSet<String>,
     /// Last-fetched effect catalog, and the once-per-session refresh.
     pub(super) effect_catalog: Option<crate::storage::effect_catalog::CachedEffectCatalog>,
-    pub(super) effect_catalog_result: std::sync::Arc<
-        std::sync::Mutex<Option<Result<Vec<crate::api::types::EffectListItem>, String>>>,
-    >,
+    pub(super) effect_catalog_job: Option<crate::api::job::Job<Vec<crate::api::types::EffectListItem>>>,
     pub(super) effect_catalog_started: bool,
     pub(super) script_cloud: script_cloud::ScriptCloudState,
     pub(in crate::app) script_cloud_results: script_cloud::ScriptCloudSlot,
@@ -775,6 +774,12 @@ pub struct App {
 
     // URL deep-link loading (WASM: ?flame=uuid or ?animation=uuid)
     pub(super) url_load_result: std::sync::Arc<std::sync::Mutex<Option<Result<UrlLoadedData, String>>>>,
+    /// A load from the server held until its code is trusted (`trust`).
+    pub(super) held_load: Option<trust::HeldLoad>,
+    /// A load held for the curated items it names (`trust`).
+    pub(super) held_refs: Option<trust::HeldRefs>,
+    /// The viewport as the crash breadcrumb last named it (`crash_report`).
+    pub(super) crash_viewport: String,
     pub(super) url_load_in_progress: bool,
     pub(super) url_load_started: Option<web_time::Instant>,
 
@@ -792,22 +797,10 @@ pub struct App {
     // until done (or timeout).
     /// Completed fetches, tagged with the batch that asked for them.
     ///
-    /// The tag is load-bearing. A timed-out batch's threads keep running
-    /// and push here whenever they finish — possibly *after* the next
-    /// batch has started. Untagged, the next drain counted those as its
-    /// own and decremented its pending count, finalizing it early and
-    /// registering variations nobody asked for. Clearing the vector on
-    /// trigger does not fix that: the late push happens after the clear.
-    pub(super) variation_fetch_results: std::sync::Arc<std::sync::Mutex<
-        Vec<(u64, String, Result<crate::api::types::VariationDownload, String>)>
-    >>,
-    pub(super) variation_fetch_in_progress: bool,
-    pub(super) variation_fetch_started: Option<web_time::Instant>,
-    /// Number of in-flight fetches; when this drops to 0, processing is complete
-    pub(super) variation_fetch_pending_count: usize,
-    /// Monotonic batch id. Results not carrying the current value are
-    /// stragglers from an abandoned batch and are discarded.
-    pub(super) variation_fetch_epoch: u64,
+    /// Variations fetched on demand (`variation_fetch`): a batch's
+    /// downloads in flight; a new batch drops a previous one's stragglers
+    /// with their jobs, so none is counted against it.
+    pub(super) variation_downloads: downloads::Downloads<crate::api::types::VariationDownload>,
 
     /// The server's variation catalog, for the panel's merged listing.
     ///
@@ -816,15 +809,10 @@ pub struct App {
     /// nor a successful fetch — the panel then shows only what is
     /// installed, which is still the truth, just less of it.
     pub(super) variation_catalog: Option<crate::storage::variation_catalog::CachedCatalog>,
-    /// In-flight catalog fetch. Same shared-slot shape as the variation
-    /// fetches; no epoch needed because there is only ever one and a
-    /// stale result is merely old data, not a miscount.
-    pub(super) catalog_fetch_result: std::sync::Arc<std::sync::Mutex<
-        Option<Result<Vec<crate::api::types::VariationListItem>, String>>
-    >>,
+    /// The catalog fetch in flight (once a session; a stale result is
+    /// merely old data).
+    pub(super) catalog_job: Option<crate::api::job::Job<Vec<crate::api::types::VariationListItem>>>,
     pub(super) catalog_fetch_started: bool,
-    /// What the current batch is still waiting on, for the timeout message.
-    pub(super) variation_fetch_names: Vec<String>,
 
     // API connectivity tracking
     pub(super) health_check_result: std::sync::Arc<std::sync::Mutex<Option<crate::api::HealthCheckOutcome>>>,
@@ -864,10 +852,6 @@ impl App {
                 ),
                 true,
             );
-        }
-        let failed_plugins = crate::storage::library::plugin_failures();
-        if !failed_plugins.is_empty() {
-            egui_layer.show_api_notification(&format!("Plug-ins that did not load: {}", failed_plugins.join("; ")), true);
         }
 
         // Use global preset library singleton
@@ -1033,10 +1017,10 @@ impl App {
             signal_manager: crate::signal::SignalManager::new(),
             api_state: ApiContentState::default(),
             current_user_id: None,
-            effect_fetch_results: Default::default(),
+            effect_downloads: Default::default(),
             effect_fetch_attempted: Default::default(),
             effect_catalog: crate::storage::effect_catalog::load(),
-            effect_catalog_result: Default::default(),
+            effect_catalog_job: None,
             effect_catalog_started: false,
             script_cloud: Default::default(),
             script_cloud_results: Default::default(),
@@ -1051,19 +1035,17 @@ impl App {
             api_animation_save_in_progress: false,
             pending_animation_save: None,
             url_load_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            held_load: None,
+            held_refs: None,
+            crash_viewport: String::new(),
             url_load_in_progress: false,
             url_load_started: None,
             pending_subflame_load_index: None,
 
-            variation_fetch_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            variation_fetch_in_progress: false,
-            variation_fetch_started: None,
-            variation_fetch_epoch: 0,
+            variation_downloads: Default::default(),
             variation_catalog: crate::storage::variation_catalog::load(),
-            catalog_fetch_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            catalog_job: None,
             catalog_fetch_started: false,
-            variation_fetch_names: Vec::new(),
-            variation_fetch_pending_count: 0,
             health_check_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             health_check_in_progress: false,
             api_connectivity: crate::api::ApiConnectivity::Unknown,
@@ -1682,6 +1664,18 @@ impl App {
     }
     fn render(&mut self, window: &Window) -> Result<(), RenderError> {
         use web_time::Instant;
+
+        // What a native crash's log line says the viewport shows
+        // (`crash_report`): updated when it changes, not every frame.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let c = self.config_manager.active_config();
+            let key = crate::crash_report::describe(c);
+            if key != self.crash_viewport {
+                crate::crash_report::viewport(key.clone());
+                self.crash_viewport = key;
+            }
+        }
 
         // Sync fullscreen state with browser (WASM only)
         // Detects when browser exits fullscreen via its own Esc handler

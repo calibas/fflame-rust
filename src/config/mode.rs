@@ -208,8 +208,9 @@ field_class!(
 /// What every engine shares: the picture's frame and its reproducibility.
 pub const SHARED: &[&str] = &["image_size", "deterministic_rng"];
 
-/// The engines' own blocks, the mode, and the stash.
-pub const STRUCTURE: &[&str] = &["flame", "render_mode", "escape", "sim", "engine_settings", "unread"];
+/// The engines' own blocks, the mode, the stash, and the curated items
+/// the config's sources name (`curated::refs`: every engine's sources).
+pub const STRUCTURE: &[&str] = &["flame", "render_mode", "escape", "sim", "engine_settings", "unread", "curated"];
 
 /// Whether a JSON pointer into a config is inside an engine-owned field.
 fn owned_pointer(pointer: &str) -> bool {
