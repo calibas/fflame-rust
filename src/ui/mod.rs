@@ -1571,6 +1571,7 @@ impl EguiLayer {
         let mut open_save_online_dialog = false;
         let mut load_api_animation_id: Option<String> = None;
         let mut clear_variation_cache_requested = false;
+        let mut refresh_catalogs_requested = false;
         // Mutated by the simulation panel; copied into the response
         // below so the App owns the authoritative state.
         let mut sim_running_local = sim_running;
@@ -1998,6 +1999,7 @@ impl EguiLayer {
                         open_save_online_dialog: &mut open_save_online_dialog,
                         load_api_animation_id: &mut load_api_animation_id,
                         clear_variation_cache_requested: &mut clear_variation_cache_requested,
+                        refresh_catalogs_requested: &mut refresh_catalogs_requested,
                         sim_running: &mut sim_running_local,
                         sim_step_once: &mut sim_step_once_local,
                         sim_reseed: &mut sim_reseed_local,
@@ -2725,6 +2727,7 @@ impl EguiLayer {
             loaded_api_flame_animations,
             load_api_animation_id,
             clear_variation_cache_requested,
+            refresh_catalogs_requested,
             // Only report Run when the mode is actually simulation, so
             // a stale toggle from another session cannot start a run
             // the user cannot see.

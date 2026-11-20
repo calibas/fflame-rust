@@ -290,7 +290,18 @@ entries made by `inventory::online`):
 - **Search** is the server's: the panel's search box, asked
   (`q`) once the typing has stopped for 0.4 s. **Sort**: the resource's
   (Newest, Most liked, Most viewed, Recently changed, Name; each
-  resource takes some). **Refresh** forgets every list.
+  resource takes some).
+- **Refresh** (⟳, the panel's top-right corner) does everything at
+  once, in either place: the Online lists and the pickers' curated
+  scripts are asked for again, the files on disk are read again (a file
+  dropped into a store appears), and the app fetches the variation and
+  effect catalogs again (`InventoryPanel::refresh_all`). Palette packs
+  are still read only at startup.
+- **A failed list** says why once (`FetchError`'s `Display` names a
+  network error; the client's message does not repeat it). **Try again**
+  asks for the page that failed; and when another list's page comes
+  back, every failed list drops its error, so it is asked again when
+  shown (`OnlinePlace::forget_failures`).
 - **Paging** is lazy, by the server's cursor: reaching a list's end asks
   for its next page. Lists are kept per (kind, scope, search, sort,
   mode), so going back to an earlier search shows what it found; a

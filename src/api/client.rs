@@ -447,7 +447,7 @@ mod native {
             Err(ureq::Error::Status(status, resp)) => {
                 Err(FetchError::Http { status, message: resp.into_string().unwrap_or_else(|_| format!("HTTP error {status}")) })
             }
-            Err(ureq::Error::Transport(e)) => Err(FetchError::Network(format!("Network error: {e}"))),
+            Err(ureq::Error::Transport(e)) => Err(FetchError::Network(e.to_string())),
         }
     }
 
@@ -505,7 +505,7 @@ mod native {
                 Err(FetchError::Http { status, message })
             }
             Err(ureq::Error::Transport(e)) => {
-                Err(FetchError::Network(format!("Network error: {}", e)))
+                Err(FetchError::Network(e.to_string()))
             }
         }
     }
@@ -566,7 +566,7 @@ mod native {
                 Err(FetchError::Http { status, message })
             }
             Err(ureq::Error::Transport(e)) => {
-                Err(FetchError::Network(format!("Network error: {}", e)))
+                Err(FetchError::Network(e.to_string()))
             }
         }
     }

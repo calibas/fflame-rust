@@ -188,6 +188,8 @@ pub struct UiResponse {
     pub load_api_animation_id: Option<String>,
     // Variations panel: clear all API-loaded variations from cache+registry
     pub clear_variation_cache_requested: bool,
+    /// The Catalog's Refresh: fetch the variation and effect catalogs again.
+    pub refresh_catalogs_requested: bool,
     /// Something the Scripts panel wants done against the online
     /// library. Performed by App, which owns the async machinery.
     pub script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest>,
@@ -304,6 +306,7 @@ impl Default for UiResponse {
             loaded_api_flame_animations: Vec::new(),
             load_api_animation_id: None,
             clear_variation_cache_requested: false,
+            refresh_catalogs_requested: false,
             script_cloud_request: None,
             variation_update_requested: Vec::new(),
             effect_update_requested: Vec::new(),

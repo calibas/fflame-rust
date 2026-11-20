@@ -47,7 +47,16 @@ impl App {
         self.handle_effect_updates(ui_response);
         // The catalogs and a missing effect's fetch are a guest's too
         // (`online_account` off): the server serves them without a
-        // sign-in, and a request then carries no token.
+        // sign-in, and a request then carries no token. The Catalog's
+        // Refresh asks for them again (unless one is on its way).
+        if ui_response.refresh_catalogs_requested {
+            if self.catalog_job.is_none() {
+                self.catalog_fetch_started = false;
+            }
+            if self.effect_catalog_job.is_none() {
+                self.effect_catalog_started = false;
+            }
+        }
         self.refresh_variation_catalog();
         self.handle_effect_fetches();
         self.refresh_effect_catalog();

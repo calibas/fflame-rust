@@ -324,6 +324,9 @@ pub struct InventoryResponse {
     /// Clear Cache: the downloaded variations, or effects.
     pub clear_variation_cache: bool,
     pub clear_effect_cache: bool,
+    /// Refresh: the app asks the server for its variation and effect
+    /// catalogs again.
+    pub refresh_catalogs: bool,
 }
 
 /// What the panel needs from the app to draw.
@@ -434,6 +437,18 @@ impl InventoryPanel {
         self.online.forget();
     }
 
+    /// Refresh, everything at once: the Online place's lists and the
+    /// curated scripts asked for again, the files on disk read again,
+    /// and (by the app) the variation and effect catalogs fetched again.
+    fn refresh_all(&mut self, out: &mut InventoryResponse) {
+        self.online.forget();
+        if self.curated.job.is_none() {
+            self.curated.asked = false;
+        }
+        self.revision = None;
+        out.refresh_catalogs = true;
+    }
+
     /// The session signed out: the Online place forgets your own lists.
     pub fn signed_out(&mut self) {
         self.online.signed_out();
@@ -517,9 +532,16 @@ impl InventoryPanel {
     // ------------------------------------------------------------------ top
 
     fn render_top(&mut self, ui: &mut egui::Ui, cx: &InventoryContext, out: &mut InventoryResponse) {
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             ui.selectable_value(&mut self.place, Place::Local, t!("catalog.place_local"));
             ui.selectable_value(&mut self.place, Place::Online, t!("catalog.place_online")).on_hover_text(t!("catalog.place_online_tip"));
+            // Refresh, in the corner: everything at once, whichever place
+            // is shown (`refresh_all`).
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("\u{27f3}").on_hover_text(t!("catalog.refresh_tip")).clicked() {
+                    self.refresh_all(out);
+                }
+            });
         });
         ui.horizontal_wrapped(|ui| {
             for family in Family::ALL {

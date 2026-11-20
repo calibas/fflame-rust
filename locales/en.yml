@@ -3435,7 +3435,7 @@ catalog:
   sort_views: "Most viewed"
   sort_updated: "Recently changed"
   sort_name: "Name"
-  refresh: "Refresh"
+  refresh_tip: "Refresh: ask the server again, and look for new files on this device"
   loading: "Loading…"
   retry: "Try again"
   nothing_online: "Nothing online matches."

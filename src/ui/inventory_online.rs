@@ -9,7 +9,10 @@
 //! Every request is an [`crate::api::job`]: a guest's goes unsigned, a
 //! signed-in one carries the token, and a 401 to it signs the session
 //! out. A list is kept per (kind, scope, search, sort), so going back to
-//! an earlier search shows what it found; Refresh forgets them all.
+//! an earlier search shows what it found; the panel's Refresh forgets
+//! them all. A list that failed is asked again by Try again, and by
+//! itself once another list's page comes back (the server answers
+//! again): it does not keep its error.
 
 use super::inventory::{CloudAccount, InventoryContext, InventoryResponse};
 use crate::api::job::{self, Job};
@@ -105,6 +108,12 @@ impl List {
     /// More pages to ask for.
     fn more(&self) -> bool {
         !self.started || (self.next.is_some() && self.error.is_none())
+    }
+
+    /// The page that failed may be asked for again (Try again): the
+    /// first, or the one after `next`.
+    fn retryable(&self) -> bool {
+        self.error.is_some() && (self.rows.is_empty() || self.next.is_some())
     }
 }
 
@@ -206,6 +215,16 @@ impl OnlinePlace {
         self.status = None;
     }
 
+    /// The server answered: the lists that failed lose their error, so
+    /// they are asked again when shown (one with nothing yet starts over;
+    /// one with rows asks for its next page at its end).
+    fn forget_failures(&mut self) {
+        self.lists.retain(|_, l| l.error.is_none() || !l.rows.is_empty());
+        for l in self.lists.values_mut() {
+            l.error = None;
+        }
+    }
+
     /// Signed out: your own lists go.
     pub fn signed_out(&mut self) {
         self.lists.retain(|k, _| k.scope != Scope::Mine);
@@ -246,6 +265,7 @@ impl OnlinePlace {
         }
         let rematch = !self.local.as_ref().is_some_and(|l| Arc::ptr_eq(l, local));
         self.local = Some(local.clone());
+        let mut answered = false;
         for (key, list) in &mut self.lists {
             let group = group_of(key.kind);
             if let Some(result) = list.job.as_ref().and_then(Job::take) {
@@ -262,6 +282,7 @@ impl OnlinePlace {
                             }
                         }
                         list.next = next;
+                        answered = true;
                     }
                     Err(e) => list.error = Some(e.to_string()),
                 }
@@ -273,6 +294,9 @@ impl OnlinePlace {
                     }
                 }
             }
+        }
+        if answered {
+            self.forget_failures();
         }
         if let Some((id, job)) = &self.flame_job {
             if let Some(result) = job.take() {
@@ -366,7 +390,7 @@ impl OnlinePlace {
     /// Ask for a list's next page, unless one is on its way.
     fn ask(&mut self, key: &ListKey, account: &CloudAccount, ctx: &egui::Context) {
         let list = self.lists.entry(key.clone()).or_default();
-        if list.loading() || !list.more() {
+        if list.loading() || !(list.more() || list.retryable()) {
             return;
         }
         let api = account.api();
@@ -399,8 +423,8 @@ impl OnlinePlace {
 
     // ------------------------------------------------------------- the top
 
-    /// The scope, the sort and Refresh, beside the panel's search; then
-    /// *Open by ID or link*.
+    /// The scope and the sort, beside the panel's search; then *Open by ID
+    /// or link* (Refresh is the panel's, in its corner).
     pub fn render_top(&mut self, ui: &mut egui::Ui, family: Family, account: &CloudAccount) {
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.scope, Scope::Curated, t!("catalog.scope_curated")).on_hover_text(t!("catalog.scope_curated_tip"));
@@ -424,9 +448,6 @@ impl OnlinePlace {
                         }
                     }
                 });
-            }
-            if ui.button(t!("catalog.refresh")).clicked() {
-                self.forget();
             }
         });
         ui.horizontal(|ui| {
@@ -1100,6 +1121,35 @@ mod tests {
         place.update(&ctx, "", &local, &mut InventoryResponse::default());
         let held = place.find(&EntryKey::Online(Kind::Coloring, "s1".into())).and_then(|(e, _)| e.online.as_ref()?.held.clone());
         assert_eq!(held, Some(adopted.key), "the row knows the file it was opened into");
+    }
+
+    /// A list that failed can be asked again (Try again), and does not
+    /// keep its error once the server answers another list: one with
+    /// nothing starts over when shown, one with rows keeps them.
+    #[test]
+    fn a_failed_list_is_asked_again_once_the_server_answers() {
+        let ctx = egui::Context::default();
+        frame(&ctx, 0.0);
+        let mut place = OnlinePlace::new();
+        let key = |kind| ListKey { kind, scope: Scope::Curated, q: String::new(), sort: "recent", mode: None };
+        let (failed, partial, fine) = (key(Kind::Coloring), key(Kind::Formula), key(Kind::Fractal));
+        let down = || job::spawn(async move { Err(crate::resources::FetchError::Network("down".into())) }, || {});
+        place.lists.insert(failed.clone(), List { job: Some(down()), ..Default::default() });
+        let none = Arc::new(Vec::new());
+        settle(&mut place, &ctx, &none, &failed);
+        let list = &place.lists[&failed];
+        assert_eq!(list.error.as_deref(), Some("Network error: down"), "said once");
+        assert!(!list.more() && list.retryable(), "Try again asks for the first page");
+        let rows = vec![(online::entry(&script("s1"), group_of(Kind::Formula), &none).unwrap(), script("s1"))];
+        place.lists.insert(partial.clone(), List { rows, next: Some("c2".into()), started: true, job: None, error: Some("down".into()) });
+        assert!(place.lists[&partial].retryable(), "or the page after its last");
+
+        let page = (vec![script("s2")], None);
+        place.lists.insert(fine.clone(), List { job: Some(job::spawn(async move { Ok(page) }, || {})), ..Default::default() });
+        settle(&mut place, &ctx, &none, &fine);
+        assert!(!place.lists.contains_key(&failed), "the failed list starts over when shown");
+        let partial = &place.lists[&partial];
+        assert!(partial.error.is_none() && partial.rows.len() == 1 && partial.more(), "the one with rows keeps them, and asks on");
     }
 
     /// The search is asked for once the typing stops, not at every key.
