@@ -27,7 +27,7 @@ bar with a single menu button (see [Compact (mobile) UI](#compact-mobile-ui)).
 ## Panels
 
 `PanelType` in [src/ui/workspace.rs](../../src/ui/workspace.rs) defines
-**30 panels**. Each renders from its own `src/ui/*.rs` file;
+**31 panels**. Each renders from its own `src/ui/*.rs` file;
 `src/ui/mod.rs` coordinates docking and returns cross-panel results to
 the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uiresponse)).
 
@@ -107,7 +107,7 @@ actions by folding them into the frame's `UiResponse`.
 
 | Menu | Holds |
 |---|---|
-| File | New, Open, Save As (a curated item it uses is named, not carried: [CONFIG.md](CONFIG.md), *Writing*), Save As for Offline Use (keeps their sources), Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Online account (the `online_account` switch, off a guest; [ONLINE.md](ONLINE.md)), Save Online (the account's), Export PNG (the Export panel), Config Import/Export, Quit |
+| File | New, Open, Save As (a curated item it uses is named, not carried: [CONFIG.md](CONFIG.md), *Writing*), Save As for Offline Use (keeps their sources), Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Save Online (the account's), Export PNG (the Export panel), Config Import/Export, Settings (the Settings panel), Quit |
 | Edit | Undo, Redo (Preferences is a disabled stub) |
 | View | Reset View, Zoom In, Zoom Out — present in every mode (`Control::ViewNavigation`) |
 | Rendering | First the viewport's **Render Scale** (100/75/50%), its **Upscaler** (Catmull-Rom, the default, bilinear, nearest, or FSR 1: AMD's edge-adaptive upscale and sharpening, `shaders/upscale_fsr.wgsl`) and **Render at Physical Pixels** (`SystemSettings::render_scale`, `upscaler`, `render_physical_pixels`, saved at once; `app/render_scale.rs`, `renderer::upscale`): the picture renders at that share of the viewport each side and is drawn up to the screen's pixels; disabled in Simulation, whose grid scale is its render scale (`Control::RenderScale`). Then the **Quality Governor**, on or off in every mode (`SystemSettings::frame_governor`; off, nothing is governed: the flame's batch, escape-time's antialiasing and render scale; a flame's render scale is never the governor's), and the **Target Frame Rate** it holds (`SystemSettings::target_rate`: the display's refresh, the video export's frame rate, or 24/30/60/120; `app/governor.rs`). Then Pause/Resume, Reset Accumulation, Iterations per Thread (128 to 4096), **Reset Orbits Each Dispatch** (the flame's `reset_orbits`, also in the Settings panel under Iterations per Thread; disabled and on where a variation needs it, its tooltip naming the variation), the Workgroups a frame dispatches while the governor is off, Reset to Defaults. Those configure the chaos game, so outside the flame modes the menu says so and their rows are disabled; it is always there, so nothing after it moves with the mode |
@@ -402,6 +402,22 @@ in [ANIMATION.md](ANIMATION.md).
 
 ---
 
+## The Settings panel
+
+`PanelType::Preferences` ([preferences.rs](../../src/ui/preferences.rs)),
+shown as **Settings** (File ▸ Settings, Window ▸ Settings, and the
+compact menu's File ▸ Settings): the device's preferences that belong to
+no other panel -- the **online account** (`SystemSettings::online_account`;
+[ONLINE.md](ONLINE.md)), **Offer downloads in pickers**
+(`picker_downloads`; [CATALOG.md](CATALOG.md)) and the **language** (the
+desktop's globe menu does the same; on the compact layout this is the
+only one; `menu_bar::choose_locale` is their one path). Saved at once,
+outside the undo history; never anything of the loaded config. A
+preference with a panel of its own stays there (the chaos game's and the
+display's in Rendering, the camera's in View, the export's in Export),
+and the menus keep their actions, not their switches. Not the old
+Settings panel, which became Rendering (`ui::settings`).
+
 ## Panel reference
 
 Every panel renders from its own file. `PanelViewer::render_panel`
@@ -427,6 +443,7 @@ contract.
 | Catalog | [inventory.rs](../../src/ui/inventory.rs), [inventory_view.rs](../../src/ui/inventory_view.rs), [palette_library.rs](../../src/ui/palette_library.rs) | see [CATALOG.md](CATALOG.md) |
 | Effects | [effects_panel.rs](../../src/ui/effects_panel.rs) | see [EFFECTS.md](EFFECTS.md) |
 | Rendering | [settings.rs](../../src/ui/settings.rs) | below |
+| Settings | [preferences.rs](../../src/ui/preferences.rs) | below |
 | Performance | [performance.rs](../../src/ui/performance.rs) | |
 | History | [undo_history.rs](../../src/ui/undo_history.rs) | the undo/redo history |
 | Animation | [animation_panel.rs](../../src/ui/animation_panel.rs), [track_editor.rs](../../src/ui/track_editor.rs) | see [ANIMATION.md](ANIMATION.md) |
@@ -698,7 +715,8 @@ record: [mobile-ui-redesign.md](../archive/projects/mobile-ui-redesign.md).
   policy as the desktop rows) in the desktop bar's order, the transport,
   Undo, Redo, the account button (the
   online account), Help, and Desktop View. Reset Accumulation is the
-  Rendering panel's. There is no language picker on the compact layout.
+  Rendering panel's. File ▸ Settings opens the Settings panel, the
+  compact layout's language picker.
 - **The transport** follows Space (`render_mode::space_runs_the_simulation`):
   in Simulation, Run/Pause and Stop (pause and restart from the seed)
   drive the run -- unless the timeline owns the step count, when the
@@ -863,5 +881,5 @@ need nothing more. For anything else:
 
 Every label is a `t!("group.key")` lookup in `locales/*.yml`; English is
 the reference and the fallback. The language picker is the globe menu
-in the menu bar's right strip. Translations, fonts and the locale tests
+in the menu bar's right strip, and the Settings panel's Language. Translations, fonts and the locale tests
 are in [I18N.md](I18N.md).

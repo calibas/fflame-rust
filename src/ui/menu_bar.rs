@@ -77,18 +77,8 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                // The online account (ONLINE.md, Online account): off,
-                // the app is a guest of the online service -- downloads
-                // still work, nothing signs in or saves online.
-                let mut online = menu_state.online_account;
-                if ui
-                    .checkbox(&mut online, t!("menu.online_account").as_ref())
-                    .on_hover_text(t!("menu.tooltip_online_account").as_ref())
-                    .changed()
-                {
-                    menu_actions.file.set_online_account = Some(online);
-                }
-
+                // The online account's switch is in the Settings panel
+                // (`ui::preferences`); its actions are here.
                 // Present whenever the online account is on, signed in or not —
                 // hiding it while signed out makes the feature look
                 // absent. Signed out it opens the login panel instead.
@@ -136,6 +126,12 @@ pub fn render_menu_bar(
 
 
                 ui.separator();
+
+                // The device's preferences (`ui::preferences`).
+                let settings_open = workspace.panel_exists(super::workspace::PanelType::Preferences);
+                if ui.selectable_label(settings_open, t!("menu.settings").as_ref()).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Preferences, ctx);
+                }
 
                 if ui.selectable_label(false, t!("menu.quit").as_ref()).clicked() {
                     menu_actions.file.quit = true;
@@ -350,11 +346,6 @@ pub fn render_menu_bar(
             ui.menu_button(t!("menu.catalog"), |ui| {
                 rows_do_not_wrap(ui);
                 super::inventory::catalog_menu_rows(ui);
-                ui.separator();
-                let mut on = menu_state.picker_downloads;
-                if ui.checkbox(&mut on, t!("menu.picker_downloads")).on_hover_text(t!("menu.picker_downloads_tip")).changed() {
-                    menu_actions.set_picker_downloads = Some(on);
-                }
             });
 
             // Windows Menu
@@ -509,19 +500,7 @@ pub fn render_menu_bar(
                             current_locale == locale.code,
                             locale.display_text()
                         ).clicked() {
-                            // Try to load font for this locale
-                            let font_loaded = crate::ui::ensure_font_for_locale(ui.ctx(), locale.code);
-
-                            if font_loaded {
-                                // Font loaded or default font is sufficient
-                                crate::i18n::set_locale(locale.code);
-                                log::info!("Language changed to: {} ({})", locale.name, locale.code);
-
-                            } else {
-                                // Font required but not available - reset to English
-                                log::warn!("Font required for {} not found - resetting to English", locale.code);
-                                crate::i18n::set_locale("en");
-
+                            if !choose_locale(ui.ctx(), locale.code) {
                                 // Show error message to user
                                 #[cfg(not(target_arch = "wasm32"))]
                                 {
@@ -607,4 +586,20 @@ pub fn render_menu_bar(
             } // available_width >= 500.0
         });
     });
+}
+
+/// Switch the UI's language to `code`, loading the font it needs: the
+/// globe menu's and the Settings panel's one path. False when the font is
+/// missing, and the language is English instead; the caller says so. The
+/// app saves the choice after the frame.
+pub(super) fn choose_locale(ctx: &egui::Context, code: &str) -> bool {
+    if crate::ui::ensure_font_for_locale(ctx, code) {
+        crate::i18n::set_locale(code);
+        log::info!("Language changed to {code}");
+        true
+    } else {
+        log::warn!("Font required for {code} not found - resetting to English");
+        crate::i18n::set_locale("en");
+        false
+    }
 }

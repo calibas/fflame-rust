@@ -17,8 +17,6 @@ pub struct FileMenuActions {
     pub export_png: bool,
     pub export_png_transparent: bool,
     pub sign_out: bool,
-    /// The Online account checkbox was toggled to this value.
-    pub set_online_account: Option<bool>,
     pub quit: bool,
 }
 
@@ -93,8 +91,6 @@ pub struct MenuActions {
     pub simulation: SimulationMenuActions,
     /// Menu-bar Fly Mode toggle button was clicked this frame.
     pub fly_mode_toggle: bool,
-    /// The Catalog menu's *Offer downloads in pickers*, toggled to this.
-    pub set_picker_downloads: Option<bool>,
     /// The mode a Mode-menu row asked for this frame, if any. One
     /// field rather than a flag per mode: with four modes the flags
     /// were about to become four booleans that must not disagree.
@@ -103,8 +99,6 @@ pub struct MenuActions {
 
 /// Read-only state needed by menus to determine enabled/disabled state
 pub struct MenuState {
-    /// Whether the pickers offer downloads (`SystemSettings::picker_downloads`).
-    pub picker_downloads: bool,
     pub can_undo: bool,
     pub can_redo: bool,
     pub is_paused: bool,

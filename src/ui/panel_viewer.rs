@@ -718,6 +718,9 @@ impl<'a> PanelViewer<'a> {
             PanelType::Rendering => {
                 self.render_rendering_panel(ui);
             }
+            PanelType::Preferences => {
+                super::preferences::render_preferences_panel(ui, self.context.config_manager);
+            }
             PanelType::SolidLighting => {
                 self.render_solid_lighting_panel(ui);
             }

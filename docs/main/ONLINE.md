@@ -124,9 +124,9 @@ an empty success.
 
 ## The online account, and guests
 
-`SystemSettings::online_account` (default `true`) is the account: File →
-**Online account** (a checkbox, also in the compact menu's File section)
-switches it; like any device preference it is saved at once and is not
+`SystemSettings::online_account` (default `true`) is the account: the
+**Online account** checkbox in the Settings panel (File → Settings, on
+the compact layout too; `ui::preferences`) switches it; like any device preference it is saved at once and is not
 undoable. Off, the app is a **guest** of the online service: it never
 signs in (`is_signed_in` is false, so no request carries a token, and
 the desktop's auto-login is skipped) and offers nothing that needs an

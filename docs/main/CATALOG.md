@@ -285,7 +285,7 @@ holds, `origin` "builtin", left out; one already adopted left out). A
 curated row's Download adopts it (`ScriptCloudRequest::Adopt`, one at a
 time, as the Catalog's Open adopts); once adopted it is a file and is
 picked. The Catalog's own list leaves those rows to its online lists.
-**Offer downloads in pickers** in the Catalog menu
+**Offer downloads in pickers** in the Settings panel (`ui::preferences`)
 (`SystemSettings::picker_downloads`, on unless turned off) offers only
 what is installed when off.
 

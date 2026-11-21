@@ -145,16 +145,6 @@ fn render_compact_menu_items(
             ui.close();
         }
 
-        // The online account, as in the desktop File menu.
-        let mut online = menu_state.online_account;
-        if ui
-            .checkbox(&mut online, t!("menu.online_account").as_ref())
-            .on_hover_text(t!("menu.tooltip_online_account").as_ref())
-            .changed()
-        {
-            menu_actions.file.set_online_account = Some(online);
-        }
-
         // Shown whenever the online account is on, signed in or not: hiding it
         // when signed out (the old gate) made the feature look absent —
         // the reported "Save Online missing from the mobile File menu".
@@ -198,6 +188,14 @@ fn render_compact_menu_items(
         let config_open = workspace.panel_exists(PanelType::ConfigDialog);
         if ui.selectable_label(config_open, t!("menu.config_import_export").as_ref()).clicked() {
             workspace.open_compact_panel(PanelType::ConfigDialog, ctx);
+            ui.close();
+        }
+
+        // The device's preferences: the online account's switch, the
+        // pickers' downloads, the language (none on this layout else).
+        let settings_open = workspace.panel_exists(PanelType::Preferences);
+        if ui.selectable_label(settings_open, t!("menu.settings").as_ref()).clicked() {
+            workspace.open_compact_panel(PanelType::Preferences, ctx);
             ui.close();
         }
     });

@@ -70,6 +70,8 @@ mod palette_generate;
 mod script_params;
 pub mod params;
 mod xaos_editor;
+/// The Settings panel: device preferences no other panel holds.
+mod preferences;
 
 pub use export_status::{ExportKind, ExportStatus, UiReporter};
 pub use font_loader::ensure_font_for_locale;
@@ -1617,7 +1619,6 @@ impl EguiLayer {
         self.save_online_dialog_state.flame_owned = api_state.flame_owned_by(current_user_id);
         self.save_online_dialog_state.animation_owned = api_state.flame_owned_by(current_user_id);
         let menu_state = MenuState {
-            picker_downloads: config_manager.system_settings().picker_downloads != Some(false),
             can_undo,
             can_redo,
             is_paused: *paused,
@@ -2506,20 +2507,8 @@ impl EguiLayer {
             api_animation_save_action = action;
         }
 
-        // The Online account switch. A device preference: written to
-        // SystemSettings and saved at once, outside the undo history,
-        // as signing out does.
-        if let Some(on) = menu_actions.file.set_online_account {
-            let settings = config_manager.system_settings_mut();
-            settings.online_account = on;
-            let _ = settings.save();
-        }
-        // The pickers' downloads (L3): a device preference, as above.
-        if let Some(on) = menu_actions.set_picker_downloads {
-            let settings = config_manager.system_settings_mut();
-            settings.picker_downloads = (!on).then_some(false);
-            let _ = settings.save();
-        }
+        // The online account's switch and the pickers' downloads are the
+        // Settings panel's (`ui::preferences`), written there.
 
         // A request that carried the session's credentials came back 401
         // (`api::job`): the session expired, whoever asked.

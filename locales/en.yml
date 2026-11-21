@@ -139,6 +139,7 @@ menu:
   window_subflames: "✨ Subflames"
   window_scripts: "📜 Scripts"
   window_xaos_editor: "🔀 Xaos Editor"
+  window_settings: "⚙ Settings"
   window_signal: "📊 Signals"
   window_account: "👤 Account"
 
@@ -169,6 +170,7 @@ menu:
   keyboard_shortcuts: "⌨ Keyboard Shortcuts"
   report_bug: "🐛 Report Bug..."
   about: "📄 About..."
+  settings: "⚙ Settings..."
 
 # Help Panel
 help:
@@ -272,6 +274,7 @@ panels:
   palette_library: "Palette Library"
   view: "View"
   rendering: "Rendering"
+  preferences: "Settings"
   history: "History"
   animation: "Animation"
   performance: "Performance"
@@ -293,6 +296,13 @@ panels:
   rhai_editor: "Rhai Editor"
   hybrid_designer: "Hybrid Designer"
   simulation: "Simulation"
+
+# The Settings panel (ui::preferences): device preferences
+preferences:
+  online: "Online"
+  catalog: "Catalog"
+  language: "Language"
+  font_missing: "%{language} needs a font this build does not have; the language is English."
 
 # Random Generator Panel
 random_generator:

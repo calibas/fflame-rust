@@ -198,6 +198,8 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> PanelUse {
         | P::ConfigDialog
         | P::Export
         | P::Rendering
+        // Device preferences: nothing of a mode's.
+        | P::Preferences
         | P::LoginDialog
         | P::SaveOnlineDialog
         // The transform editors, in EVERY mode. Simulation uses the
@@ -582,6 +584,7 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::Subflames, "menu.window_subflames"),
     row(PanelType::XaosEditor, "menu.window_xaos_editor"),
     row(PanelType::Signal, "menu.window_signal"),
+    row(PanelType::Preferences, "menu.window_settings"),
     WindowMenuRow {
         panel: PanelType::LoginDialog,
         label_key: "menu.window_account",
@@ -613,6 +616,7 @@ pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::Animation,
     PanelType::Signal,
     PanelType::Performance,
+    PanelType::Preferences,
 ];
 
 /// The label a compact row shows, from the shared table.
@@ -680,6 +684,7 @@ mod tests {
         PanelType::Textures,
         PanelType::RhaiEditor,
         PanelType::HybridDesigner,
+        PanelType::Preferences,
     ];
 
     /// The list above is the whole enum. `PanelType` has no iterator,
@@ -739,7 +744,7 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), ALL_PANELS.len(), "duplicate entry in ALL_PANELS");
-        assert_eq!(ALL_PANELS.len(), 30, "a panel was added or retired; decide what it means per mode");
+        assert_eq!(ALL_PANELS.len(), 31, "a panel was added or retired; decide what it means per mode");
     }
 
     /// Every control this build knows about.
