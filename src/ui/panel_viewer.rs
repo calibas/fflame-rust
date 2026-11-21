@@ -536,6 +536,12 @@ impl<'a> TabViewer for PanelViewer<'a> {
     fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
         if matches!(tab, PanelType::FractalViewport) {
             [false, false]
+        } else if matches!(tab, PanelType::Inventory) {
+            // The Catalog fits its tab: its list and info pane scroll
+            // themselves. Scrolled by the dock as well it had a scrollbar
+            // inside a scrollbar, and the status under the list fell past
+            // the bottom.
+            [false, false]
         } else if matches!(tab, PanelType::Simulation) {
             // The Simulation panel pins its transport row and scrolls
             // its own body, so egui_dock must not scroll this tab
@@ -562,7 +568,7 @@ impl<'a> TabViewer for PanelViewer<'a> {
         // it owns its scrolling, and this wrapper would put the pinned
         // transport row inside the scrolled region again.
         if self.context.compact_mode
-            && !matches!(tab, PanelType::FractalViewport | PanelType::Simulation)
+            && !matches!(tab, PanelType::FractalViewport | PanelType::Simulation | PanelType::Inventory)
         {
             egui::ScrollArea::vertical()
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)

@@ -1566,8 +1566,8 @@ mod tests {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 600.0))),
                     ..Default::default()
                 };
-                let _ = ctx.run(input, |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                let _ = ctx.run_ui(input, |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
                         egui::ScrollArea::vertical().max_height(500.0).vertical_scroll_offset(offset).show(ui, |ui| {
                             ui.allocate_space(egui::vec2(100.0, 120.0)); // the controls
                             got = super::source_height(ui);
