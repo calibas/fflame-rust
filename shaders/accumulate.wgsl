@@ -27,7 +27,7 @@ const HISTOGRAM_COLOR_SCALE: f32 = 100.0;
 //                       drops below it (a recency bias). The colour
 //                       only: the density is cumulative in every mode.
 //
-// Precision over long renders (docs/projects/exact-accumulator.md):
+// Precision over long renders (docs/archive/projects/exact-accumulator.md):
 //   - The DENSITY was an f32 running sum, and past 2^24 hits each
 //     dispatch's addition rounds -- the same way every time, so the
 //     error builds (simulated: 2.6% after 4M dispatches into a bright

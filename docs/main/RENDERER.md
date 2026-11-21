@@ -298,7 +298,7 @@ pixel, 28% after 30M). Once a render has run `EXACT_COUNT_AFTER_PASSES`
 64-bit integer, seeded from the texture's count, and `a` derived from
 it every pass. Shorter renders bind a dummy and are unchanged; a render
 starting again retires it
-([exact-accumulator.md](../projects/exact-accumulator.md)).
+([exact-accumulator.md](../archive/projects/exact-accumulator.md)).
 
 With the solid depth region present, a pixel whose nearest
 depth moves closer by more than 1.5 × `surface_thickness` discards its

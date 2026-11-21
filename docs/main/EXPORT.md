@@ -294,7 +294,7 @@ What `HighResExporter::new` does with each:
   fits beside the app's own device.
 
 **The GPU paths' sums are folded before they wrap** (`export::fold`;
-[exact-accumulator.md](../projects/exact-accumulator.md)). The tile
+[exact-accumulator.md](../archive/projects/exact-accumulator.md)). The tile
 histogram is u32 for the whole export, and a pixel's density word is
 100 x its hits, so it wrapped past ~43M hits -- reachable by any
 long-render export (a 1080p export at 100T averages ~48M). The

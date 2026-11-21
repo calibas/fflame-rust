@@ -4040,7 +4040,7 @@ mod targeting_tests {
 }
 
 /// The whole-export u32 sums' fold (`export::fold`;
-/// docs/projects/exact-accumulator.md). The same export with the fold
+/// docs/archive/projects/exact-accumulator.md). The same export with the fold
 /// limit forced low, folding many times, against the export that never
 /// folds: the tile histogram and the blur splat buffer are summed as
 /// exact whole numbers and divided once, so the pictures match to the

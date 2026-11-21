@@ -1,5 +1,7 @@
 # Exact accumulation for long renders
 
+> **Archived 2026-11-20** -- finished: both parts built on branch `exact-accumulator` and seen in the app (no visible change at the switch; a 50B-iteration tiny export, dark spots on main, right on the branch). Reference: [RENDERER.md](../../main/RENDERER.md) (*Long renders count exactly*), [EXPORT.md](../../main/EXPORT.md).
+
 **Status:** built 2026-11-20 on branch `exact-accumulator` (both
 decisions as recommended, *Decisions*); see *Built* at the end.
 

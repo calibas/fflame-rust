@@ -360,7 +360,7 @@ fn disc_contains(outer: crate::scene::cylinder::View, inner: crate::scene::cylin
 /// Accumulate passes after which a render's density is counted exactly
 /// (`FlameRenderer::exact_count_after`). Below it the f32 running sum
 /// stays true (simulated: no measurable error at 10^5 passes, 0.01% at
-/// 10^6, percents from 4x10^6; docs/projects/exact-accumulator.md).
+/// 10^6, percents from 4x10^6; docs/archive/projects/exact-accumulator.md).
 pub(crate) const EXACT_COUNT_AFTER_PASSES: u64 = 1 << 18;
 
 /// The threshold a renderer starts with: `EXACT_COUNT_AFTER_PASSES`, or
@@ -530,7 +530,7 @@ pub struct FlameRenderer {
     /// count (`exact_count_after`).
     accum_passes: u64,
     /// Passes after which the density is counted exactly
-    /// (`FlameBuffers::set_accum_count`; docs/projects/exact-accumulator.md):
+    /// (`FlameBuffers::set_accum_count`; docs/archive/projects/exact-accumulator.md):
     /// `EXACT_COUNT_AFTER_PASSES`, lowered by tests.
     pub(crate) exact_count_after: u64,
     dof_focus_distance: f32, // DOF: Distance from origin where image is sharpest
@@ -6913,7 +6913,7 @@ mod subflame_tests {
 }
 
 /// The exact density count (accumulate.wgsl's `accum_count`;
-/// docs/projects/exact-accumulator.md). Each test drives the accumulate
+/// docs/archive/projects/exact-accumulator.md). Each test drives the accumulate
 /// pass alone over a histogram written by hand -- the pass does not clear
 /// it, so every pass adds the same words -- from an accumulator texture
 /// written by hand.

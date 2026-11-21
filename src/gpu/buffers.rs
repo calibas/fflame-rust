@@ -1233,7 +1233,7 @@ pub struct FlameBuffers {
     /// The exact density count (accumulate.wgsl, `accum_count`): a
     /// `vec2<u32>` a pixel, 8 B/px, made by `ensure_accum_count` once a
     /// render is long enough for the f32 count to drift
-    /// (docs/projects/exact-accumulator.md) and retired when a render
+    /// (docs/archive/projects/exact-accumulator.md) and retired when a render
     /// starts again. None: the dummy orbit buffer is bound instead.
     pub accum_count_buffer: Option<Buffer>,
 

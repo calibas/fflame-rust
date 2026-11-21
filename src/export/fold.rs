@@ -1,5 +1,5 @@
 //! **Whole-export sums folded into f64 before a u32 wraps**
-//! (docs/projects/exact-accumulator.md, part 2).
+//! (docs/archive/projects/exact-accumulator.md, part 2).
 //!
 //! `HighResExporter` keeps three sums for the whole export in u32: the
 //! tile histogram (a pixel's density word is 100 x its hits, so it wraps

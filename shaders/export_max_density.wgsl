@@ -1,7 +1,7 @@
 // The largest density word in a span of RGBD histogram words (4 a
 // pixel, density the 4th), folded into one atomic maximum. The tiled
 // exporter's whole-export u32 sums read it to fold themselves into f64
-// before they wrap (src/export/fold.rs; docs/projects/exact-accumulator.md).
+// before they wrap (src/export/fold.rs; docs/archive/projects/exact-accumulator.md).
 // Colour words never exceed their pixel's density word, so the density
 // is the one to watch.
 //

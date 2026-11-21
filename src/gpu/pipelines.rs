@@ -211,7 +211,7 @@ impl FlamePipelines {
                     count: None,
                 },
                 // 5: the exact density count (long renders; dummy until
-                // a render needs it, docs/projects/exact-accumulator.md)
+                // a render needs it, docs/archive/projects/exact-accumulator.md)
                 BindGroupLayoutEntry {
                     binding: 5,
                     visibility: ShaderStages::COMPUTE,
