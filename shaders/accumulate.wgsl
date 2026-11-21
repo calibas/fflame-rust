@@ -22,18 +22,26 @@ const HISTOGRAM_COLOR_SCALE: f32 = 100.0;
 //
 // `blend_factor = 0`  → effective = cumulative rate. Pure
 //                       density-weighted running mean — matches the
-//                       reference Fractal Flame algorithm. Asymptotic
-//                       precision floor on f32 is ~10^9 iters/pixel
-//                       (mantissa caps the `prev * prev_density +
-//                       new * new_density` sum precision).
+//                       reference Fractal Flame algorithm.
 // `blend_factor > 0`  → effective floors at this rate once cumulative
-//                       drops below it. Each batch keeps contributing
-//                       at least `blend_factor` × (new_color − prev),
-//                       which stays well above f32 precision for any
-//                       practical floor. Slight recency bias in
-//                       exchange for unbounded sample-count headroom.
-//                       Set this to ~0.001 for high-quality renders
-//                       past ~10^9 iters.
+//                       drops below it (a recency bias). The colour
+//                       only: the density is cumulative in every mode.
+//
+// Precision over long renders (docs/archive/projects/exact-accumulator.md):
+//   - The DENSITY was an f32 running sum, and past 2^24 hits each
+//     dispatch's addition rounds -- the same way every time, so the
+//     error builds (simulated: 2.6% after 4M dispatches into a bright
+//     pixel, 28% after 30M; a pixel hit once a dispatch freezes at
+//     2^25). Once a render has run `exact_count` passes' worth, the
+//     host binds `accum_count`: the pixel's density word summed EXACTLY
+//     as a 64-bit integer (lo, hi), and `a` is derived from it each
+//     pass: within two f32 steps of the count, never accumulated. Integer only, so Metal's
+//     fast-math cannot reassociate it away.
+//   - The COLOUR is updated as `prev + (new - prev) * alpha`, not
+//     `prev * (1 - alpha) + new * alpha`: with alpha tiny, `1 - alpha`
+//     rounds to a multiple of 2^-24 and the mean drifted (simulated:
+//     one 8-bit level after 3M dispatches); the delta form stays
+//     100-1000x closer, for the same arithmetic.
 // Overwrite mode (clear prev before add) is its own mode value
 // (`use_fixed_ema == 2`), the host's parameter-change reset signal.
 // It used to be signalled by `blend_factor ≥ 0.99`, which a Fixed
@@ -59,15 +67,11 @@ struct AccumulateParams {
     // Mode (was _pad0):
     //   0 = cumulative-mean — α per pixel = new_density / total_density.
     //       Matches the reference Fractal Flame algorithm. Brightness
-    //       correct from the first frame. Hits an f32 precision wall
-    //       around ~10^9 iters/pixel where each batch's contribution
-    //       drops below the storage's smallest representable change.
-    //   1 = fixed EMA — α = blend_factor, applied uniformly. First
-    //       frames are dim (stored value bootstraps from 0 at rate α);
-    //       steady state is the running EMA mean. Precision-stable
-    //       indefinitely because each batch's contribution stays at
-    //       a constant proportion of the stored value, well above
-    //       f32 precision for any reasonable blend rate.
+    //       correct from the first frame.
+    //   1 = fixed EMA — α = blend_factor for the colour, applied
+    //       uniformly (the density stays cumulative). First frames are
+    //       dim (stored value bootstraps from 0 at rate α); steady
+    //       state is the running EMA mean.
     //   2 = overwrite — discard prev, store this batch alone (the
     //       host's parameter-change reset; it counts only this
     //       batch's samples in `samples_in_buffer` to match).
@@ -81,8 +85,10 @@ struct AccumulateParams {
     // accum_depth is a real buffer).
     surface_thickness: f32,
     has_depth: u32,
+    // 1 when `accum_count` is a real buffer: the density is counted
+    // exactly (see the header). 0: a dummy is bound, never touched.
+    exact_count: u32,
     _pad2: u32,
-    _pad3: u32,
 }
 
 @group(0) @binding(0) var previous_accumulation: texture_2d<f32>;
@@ -93,6 +99,10 @@ struct AccumulateParams {
 // ACCUMULATED data belongs to. 0 = none. 4-byte dummy when has_depth
 // == 0 — never indexed then.
 @group(0) @binding(4) var<storage, read_write> accum_depth: array<u32>;
+// The exact density, in the histogram's own integer units (density x
+// HISTOGRAM_COLOR_SCALE), as a 64-bit count: x = low word, y = high.
+// A dummy when exact_count == 0 -- never indexed then.
+@group(0) @binding(5) var<storage, read_write> accum_count: array<vec2<u32>>;
 
 // Decode the splat path's inverted ordered-float depth encoding
 // (0 handled by callers).
@@ -164,7 +174,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // the tonemap's sample_density expects (iters / pixel_count).
     let color_scale = HISTOGRAM_COLOR_SCALE;
     let new_density = scaled_density / color_scale;
-    let total_density = prev.a + new_density;
+    var total_density = prev.a + new_density;
+
+    // The exact count, when bound. An empty history (`prev.a == 0`:
+    // overwrite, the depth reset, a clear, never hit) empties the count
+    // too, so a count can never outlive its texture. A zero count
+    // beside a non-zero `a` is a count made this render: seeded from
+    // `a`, which was exact enough when the host made it. Written back
+    // every pass, hit or not, so a reset reaches it.
+    if (params.exact_count != 0u) {
+        var count = accum_count[pixel_idx];
+        if (prev.a == 0.0) {
+            count = vec2<u32>(0u);
+        } else if (count.x == 0u && count.y == 0u) {
+            let seed = prev.a * color_scale;
+            let hi = floor(seed / 4294967296.0);
+            count = vec2<u32>(u32(seed - hi * 4294967296.0), u32(hi));
+        }
+        let lo = count.x + histogram[base_idx + 3u];
+        count = vec2<u32>(lo, count.y + select(0u, 1u, lo < count.x));
+        accum_count[pixel_idx] = count;
+        total_density = (f32(count.y) * 4294967296.0 + f32(count.x)) / color_scale;
+        prev.a = total_density;
+    }
 
     // No new contribution this pixel this dispatch — keep prev. (In
     // overwrite mode, prev was already cleared above, so this stores
@@ -187,12 +219,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     //   0 → cumulative-mean rate (α = new_density / total_density)
     //   1 → fixed EMA at blend_factor
     //   2 → overwrite: prev was cleared, so the cumulative rate is 1
-    // Lerp formulation `prev * (1-α) + new * α` is used in every mode;
-    // it keeps both terms in [0,1] range and is algebraically identical
-    // to the density-weighted mean for cumulative mode.
+    // The delta form `prev + (new - prev) * α`, in every mode:
+    // algebraically the density-weighted mean in cumulative mode, and
+    // it does not round `1 - α` (see the header).
     let cumulative_alpha = new_density / total_density;
     let alpha = select(cumulative_alpha, params.blend_factor, params.use_fixed_ema == 1u);
-    let blended_rgb = prev.rgb * (1.0 - alpha) + new_color * alpha;
+    let blended_rgb = prev.rgb + (new_color - prev.rgb) * alpha;
 
     textureStore(output_texture, pixel, vec4<f32>(blended_rgb, total_density));
 }

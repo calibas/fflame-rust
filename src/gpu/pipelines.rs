@@ -210,6 +210,18 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // 5: the exact density count (long renders; dummy until
+                // a render needs it, docs/archive/projects/exact-accumulator.md)
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -753,6 +765,17 @@ impl FlamePipelines {
                         .accum_depth_buffer
                         .as_ref()
                         .unwrap_or(&buffers.dummy_xaos_buffer)
+                        .as_entire_binding(),
+                },
+                // The exact count, or a stand-in the shader never touches
+                // (`exact_count == 0`): the orbit dummy, 64 bytes, as an
+                // array of vec2<u32> needs at least 8.
+                BindGroupEntry {
+                    binding: 5,
+                    resource: buffers
+                        .accum_count_buffer
+                        .as_ref()
+                        .unwrap_or(&buffers.dummy_orbit_buffer)
                         .as_entire_binding(),
                 },
             ],

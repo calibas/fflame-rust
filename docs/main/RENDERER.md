@@ -285,10 +285,22 @@ Overwrite is its own mode. It used to be `blend_factor ≥ 0.99` in mode
 every batch while the host kept counting them into `samples_in_buffer`,
 and the picture faded.
 
-Density is cumulative in every mode. Cumulative mean is the reference
-algorithm and reaches an f32 precision floor around 10⁹ hits a pixel;
-fixed EMA stays precision-stable indefinitely at the cost of dim early
-frames. With the solid depth region present, a pixel whose nearest
+Density is cumulative in every mode; fixed EMA changes only how the
+colour blends (dim early frames). The colour is updated as
+`prev + (new - prev) * α`, which does not round `1 - α`.
+
+**Long renders count exactly.** The density was an f32 running sum, and
+past 2^24 hits a pixel each dispatch's addition rounded the same way:
+the count drifted (simulated, 2.6% after 4M dispatches into a bright
+pixel, 28% after 30M). Once a render has run `EXACT_COUNT_AFTER_PASSES`
+(2^18) accumulate passes, `FlameBuffers::set_accum_count` makes
+`accum_count_buffer` (8 B/px): each pixel's density word summed as a
+64-bit integer, seeded from the texture's count, and `a` derived from
+it every pass. Shorter renders bind a dummy and are unchanged; a render
+starting again retires it
+([exact-accumulator.md](../archive/projects/exact-accumulator.md)).
+
+With the solid depth region present, a pixel whose nearest
 depth moves closer by more than 1.5 × `surface_thickness` discards its
 history (the depth-tightening reset, tracked in `accum_depth_buffer`).
 Formulas and history: [COLOR.md](COLOR.md),

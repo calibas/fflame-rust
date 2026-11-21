@@ -293,6 +293,22 @@ What `HighResExporter::new` does with each:
   image as one GPU tile, which is leaner than the direct renderer and
   fits beside the app's own device.
 
+**The GPU paths' sums are folded before they wrap** (`export::fold`;
+[exact-accumulator.md](../archive/projects/exact-accumulator.md)). The tile
+histogram is u32 for the whole export, and a pixel's density word is
+100 x its hits, so it wrapped past ~43M hits -- reachable by any
+long-render export (a 1080p export at 100T averages ~48M). The
+analytic-blur splat buffer and the solid occlusion counters are
+whole-export u32 sums too. Every 8 dispatches a small pass
+(`shaders/export_max_density.wgsl`) finds the largest density word and
+reads it back with the occlusion counters, which are folded into f64 at
+every check; when the next check could pass 2^31, the histogram and the
+splat buffer are read into f64 running sums (the histogram's into the
+export's own `HistogramPixel` vector, idle on this path until the end,
+as raw words) and cleared. The end divides once, as an unfolded export
+does: folding changes no bit. A 1080p export at 2B iterations took the
+same time with the check on and off.
+
 Then the tone map, on the same `tonemap.wgsl`. Above a 1 GB
 accumulation (about 8000²) it runs in strips of at most 256 MB, so the
 `Rgba32Float` accumulation is never whole on the GPU. Density effects
