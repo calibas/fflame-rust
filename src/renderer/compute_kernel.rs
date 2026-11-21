@@ -363,6 +363,14 @@ fn disc_contains(outer: crate::scene::cylinder::View, inner: crate::scene::cylin
 /// 10^6, percents from 4x10^6; docs/projects/exact-accumulator.md).
 pub(crate) const EXACT_COUNT_AFTER_PASSES: u64 = 1 << 18;
 
+/// The threshold a renderer starts with: `EXACT_COUNT_AFTER_PASSES`, or
+/// `FFLAME_EXACT_COUNT_AFTER=<passes>` to see the switch in the app
+/// without rendering for an hour (2^18 passes at 60 fps is 73 minutes).
+/// With `RUST_LOG=fractal_flame_wgpu=info` the log says when it happens.
+fn exact_count_after_default() -> u64 {
+    std::env::var("FFLAME_EXACT_COUNT_AFTER").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(EXACT_COUNT_AFTER_PASSES)
+}
+
 pub struct FlameRenderer {
     /// Reachability-census mode (see `src/census/`). Set only by
     /// `enable_census`, read into `ShaderConstants::census`. Never a
@@ -900,7 +908,7 @@ impl FlameRenderer {
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
             accum_passes: 0,
-            exact_count_after: EXACT_COUNT_AFTER_PASSES,
+            exact_count_after: exact_count_after_default(),
             dof_focus_distance: crate::config::DEFAULT_DOF_FOCUS_DISTANCE,
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
@@ -1558,6 +1566,11 @@ impl FlameRenderer {
         let exact = self.accum_passes >= self.exact_count_after;
         if self.buffers.set_accum_count(device, exact) {
             self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+            if exact {
+                log::info!("Accumulator: counting exactly from pass {} ({}x{}, {} MB)", self.accum_passes, self.width, self.height, u64::from(self.width) * u64::from(self.height) * 8 / (1024 * 1024));
+            } else {
+                log::info!("Accumulator: exact count retired (the render started again)");
+            }
         }
 
         // Pick blend mode + rate for the accumulate shader. See
