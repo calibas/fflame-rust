@@ -131,7 +131,7 @@ at 10.
 | group | bindings | built by |
 | --- | --- | --- |
 | variation init | 0: `variation_params_buffer`, `read_write` | `create_init_bind_group`; layout `ShaderCache::init_bind_group_layout` |
-| accumulate | 0: previous accumulator (`texture_2d<f32>`, non-filterable) · 1: histogram (`storage, read`) · 2: output accumulator (`texture_storage_2d<rgba32float, write>`) · 3: `AccumulateParams` (uniform) · 4: `accum_depth_buffer` (`read_write`; the 4-byte xaos dummy when absent) | `create_accumulate_bind_group`, rebuilt after every swap |
+| accumulate | 0: previous accumulator (`texture_2d<f32>`, non-filterable) · 1: histogram (`storage, read`) · 2: output accumulator (`texture_storage_2d<rgba32float, write>`) · 3: `AccumulateParams` (uniform) · 4: `accum_depth_buffer` (`read_write`; the 4-byte xaos dummy when absent) · 5: `accum_count_buffer` (`read_write`, `vec2<u32>` a pixel; the 64-byte orbit dummy when absent) | `create_accumulate_bind_group`, rebuilt after every swap and when the count is made or retired |
 | histogram blur H / V | 0: input (`read`) · 1: output (`read_write`) · 2: `HistogramBlurParams` (uniform) | H reads the histogram and writes the scratch; V reads the scratch and writes the histogram. Two params buffers, because queued writes land before any dispatch runs |
 | analytic-blur convolve | 0: low-res splat (`read`) · 1: low-res convolved (`read_write`) · 2: `BlurConvolveParams` · 3: kernel weights (`read`) | `create_blur_convolve_bind_group` |
 | analytic-blur upscale | 0: low-res convolved (`read`) · 1: histogram (`read_write`) · 2: `BlurConvolveParams` | `create_blur_upscale_bind_group` |
@@ -318,8 +318,9 @@ before every tone map (`refresh_sample_density`; see
 `width`, `height`, `blend_factor`, `use_fixed_ema` (0 cumulative mean,
 1 fixed EMA), `background_r/g/b` (unused by the shader), `_pad1`,
 `surface_thickness`, `has_depth` (1 when the histogram carries the
-depth region and `accum_depth_buffer` exists), `_pad2: [u32; 2]`. A
-`blend_factor ≥ 0.99` is the overwrite signal.
+depth region and `accum_depth_buffer` exists), `exact_count` (1 when
+`accum_count_buffer` is bound), `_pad2`. `use_fixed_ema` 2 is overwrite,
+its own mode; a `blend_factor` is always a rate.
 
 ### `HistogramBlurParams` (32 bytes) and `BlurConvolveParams` (96 bytes)
 
@@ -399,6 +400,11 @@ on the desktop and with an empty render pass on the web.
 `accum_depth_buffer`, one `u32` a pixel, exists with the depth region:
 the nearest depth the accumulated colour belongs to, for the
 accumulate pass's depth-tightening reset.
+
+`accum_count_buffer`, a `vec2<u32>` a pixel (8 B/px), exists once a
+render has run 2^18 accumulate passes: the pixel's density in the
+histogram's integer units as a 64-bit count, from which the pass
+derives `a` ([RENDERER.md](RENDERER.md), *Long renders count exactly*).
 
 ### The output, palette and curve
 

@@ -1,7 +1,7 @@
 # Exact accumulation for long renders
 
-**Status:** planned 2026-11-20, both decisions made (*Decisions*). Branch
-`exact-accumulator`.
+**Status:** built 2026-11-20 on branch `exact-accumulator` (both
+decisions as recommended, *Decisions*); see *Built* at the end.
 
 ## Why
 
@@ -128,6 +128,29 @@ unchanged (checked).
 (compute_kernel.rs, buffers.rs) corrected; RENDERER.md (the
 accumulator), EXPORT.md (the fold, occlusion counters), BUFFERS.md
 (the new binding).
+
+## Built (2026-11-20)
+
+- **Part 1** as designed. The derived `a` is within two f32 steps of the
+  count (measured one: the low word, the sum and the /100 each round),
+  not "one rounding" as first written. Tests in `compute_kernel.rs`
+  (`exact_count_tests`): a long render's count keeps every hit (2^28
+  plus 3 a pass, 1000 passes; the f32 sum shown stuck beside it), the
+  carry, the threshold and seed, resets, a steady colour (the lerp form
+  moves 0.3 to 0.29999983 over the same passes on the CPU).
+- **Part 2** as designed, plus the blur splat buffer. Found while
+  building: the in-app long-render route (`max_iterations` above 250M,
+  so nearly every in-app export) takes this path as one tile -- the
+  wrap was reachable from the app, not only by huge exports. Tests in
+  `high_res.rs` (`fold_tests`): a 4x4 export of 1.2B samples wraps
+  unfolded (the test shows it) and counts every sample folded; plain and
+  analytic-blur exports folded many times match the unfolded export to
+  the byte, a solid one within tolerance. The shadow buffers gained
+  `COPY_DST` (the check clears the occlusion words).
+- Timing: a 1080p export at 2B iterations, 2.21-2.27 s with the check on
+  and off (never folds). The lib suite, the visual suite (383/383: the
+  delta colour form changes no reference beyond tolerance), the WASM
+  and no-default-features checks pass.
 
 ## Decisions (2026-11-20)
 

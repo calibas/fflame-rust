@@ -175,6 +175,20 @@ pub struct HighResExporter {
     accumulate_params_buffer: Buffer,
     tile_histograms_buffer: Option<Buffer>,
     tile_layout: Option<TileLayout>,
+    /// The whole-export u32 sums' fold (`export::fold`): the check, and
+    /// what the blur splat buffer and the occlusion counters folded so
+    /// far. The tile histogram's folds go into `export`'s own histogram
+    /// vector, idle on that path until the end.
+    fold: crate::export::fold::Fold,
+    folded_blur: Option<Vec<f64>>,
+    folded_occ: (f64, f64),
+    /// A test's switch: never check, so the u32 sums wrap as they did.
+    #[cfg(test)]
+    fold_off: bool,
+    /// What the last export's histogram counted, and the samples it
+    /// scattered: equal for a flame whose samples all weigh one.
+    #[cfg(test)]
+    counted: (f64, u64),
 
     // Variation init pipeline (runs once before sample generation to
     // populate derived params for variations with `wgsl_init` —
@@ -1088,6 +1102,8 @@ impl HighResExporter {
             &device,
             &accumulate_bind_group_layout,
         );
+        // The whole-export u32 sums' fold check (`export::fold`).
+        let fold = crate::export::fold::Fold::new(&device);
         let accumulate_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Accumulate Params Buffer"),
             size: std::mem::size_of::<crate::export::accumulate::AccumulateParams>() as u64,
@@ -1480,7 +1496,7 @@ impl HighResExporter {
                 label: Some("Export Shadow Maps"),
                 // + 8 bytes: occlusion-survival counter pair at the tail.
                 size: 4 * 1024 * 1024 * 4 + 8,
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST, // COPY_DST: the fold check clears the counters
                 mapped_at_creation: false,
             }))
         } else {
@@ -1494,7 +1510,7 @@ impl HighResExporter {
         let shadow_dummy_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Shadow Dummy"),
             size: 16,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -1527,6 +1543,13 @@ impl HighResExporter {
             accumulate_params_buffer,
             tile_histograms_buffer,
             tile_layout,
+            fold,
+            folded_blur: None,
+            folded_occ: (0.0, 0.0),
+            #[cfg(test)]
+            fold_off: false,
+            #[cfg(test)]
+            counted: (0.0, 0),
             init_pipeline,
             init_bind_group_layout,
             init_pair_count,
@@ -1645,6 +1668,11 @@ impl HighResExporter {
             clear_encoder.clear_buffer(hist, 0, None);
             self.queue.submit(std::iter::once(clear_encoder.finish()));
         }
+
+        // Nothing folded yet (`export::fold`).
+        self.fold.watch.reset();
+        self.folded_blur = None;
+        self.folded_occ = (0.0, 0.0);
 
         // Analytic-blur low-res splat buffer accumulates mean-splats across ALL
         // dispatches (convolved + upscaled once at the end), so clear it once.
@@ -2237,6 +2265,19 @@ impl HighResExporter {
                     total_samples_accumulated += samples.len() as u64;
                 }
             }
+
+            // The whole-export u32 sums, folded into f64 before they wrap
+            // (`export::fold`).
+            #[cfg(test)]
+            let fold_off = self.fold_off;
+            #[cfg(not(test))]
+            let fold_off = false;
+            if (dispatch + 1) % crate::export::fold::CHECK_EVERY == 0
+                && (use_gpu_accumulate || self.blur_setup.is_some())
+                && !fold_off
+            {
+                self.check_fold(&mut histogram).await?;
+            }
         }
 
         // GPU accumulate path: read the histogram back once and
@@ -2244,7 +2285,11 @@ impl HighResExporter {
         // produced, so the existing tonemap_gpu code path runs
         // unchanged.
         if use_gpu_accumulate {
-            histogram = self.read_gpu_histogram(color_scale_f).await?;
+            self.read_gpu_histogram(color_scale_f, &mut histogram).await?;
+            #[cfg(test)]
+            {
+                self.counted = (histogram.iter().map(|p| p.count).sum(), total_samples_accumulated);
+            }
         }
 
         // Analytic-blur fold: read the low-res splat buffer back, convolve +
@@ -2414,10 +2459,7 @@ impl HighResExporter {
         if let Some((num, den)) = self.cpu_occ_stats {
             return Some((num, den));
         }
-        let (buf, word_off): (&Buffer, u64) = match &self.shadow_maps_buffer {
-            Some(b) => (b, 4 * 1024 * 1024),
-            None => (&self.shadow_dummy_buffer, 0),
-        };
+        let (buf, word_off) = self.occ_words();
         let staging = self.device.create_buffer(&BufferDescriptor {
             label: Some("Occ Stats Staging"),
             size: 8,
@@ -2441,7 +2483,8 @@ impl HighResExporter {
         let den = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
         drop(data);
         staging.unmap();
-        Some((f64::from(num), f64::from(den)))
+        // Plus what the fold checks read and cleared (`export::fold`).
+        Some((f64::from(num) + self.folded_occ.0, f64::from(den) + self.folded_occ.1))
     }
 
     /// Read sample counter from GPU
@@ -2501,88 +2544,165 @@ impl HighResExporter {
     /// `color_scale`. We divide back by `color_scale` so the
     /// HistogramPixel units match the CPU path's
     /// (r,g,b summed in [0,n], count = sample count).
-    async fn read_gpu_histogram(&self, color_scale: f32) -> Result<Vec<HistogramPixel>, String> {
-        // ParallelTiles tiles are horizontal slices laid out
-        // back-to-back in the concatenated buffer, which is exactly
-        // the natural image row order — no stitching needed at the
-        // byte level, just a single full-buffer readback.
-        let hist = self
-            .tile_histograms_buffer
-            .as_ref()
-            .ok_or_else(|| "read_gpu_histogram called without a GPU histogram buffer".to_string())?;
+    /// The tile histogram's RGBD spans (buffer byte offset, bytes), in
+    /// image row order: ParallelTiles tiles are horizontal slices laid
+    /// back-to-back, each ending with its depth region under solid
+    /// rendering, which is not summed and never read here.
+    fn histogram_spans(&self) -> Vec<(u64, u64)> {
+        let num_pixels = (self.width as u64) * (self.height as u64);
+        match self.tile_layout {
+            Some(layout) => (0..layout.num_tiles)
+                .map(|t| (layout.tile_byte_offset(t), (layout.image_width as u64) * (layout.tile_actual_height(t) as u64) * 16))
+                .collect(),
+            None => vec![(0, num_pixels * 16)],
+        }
+    }
 
-        let num_pixels = (self.width as usize) * (self.height as usize);
-        let bytes = (num_pixels * 16) as u64;
-
+    /// Read `spans` of `buffer` back, packed in order, as words.
+    async fn read_spans(&self, buffer: &Buffer, spans: &[(u64, u64)], what: &str) -> Result<Vec<u32>, String> {
+        let bytes: u64 = spans.iter().map(|s| s.1).sum();
         let readback = self.device.create_buffer(&BufferDescriptor {
-            label: Some("Export GPU Histogram Readback"),
-            size: bytes,
+            label: Some("Export Readback"),
+            size: bytes.max(4),
             usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-
-        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Export GPU Histogram Readback Encoder"),
-        });
-        match self.tile_layout {
-            Some(layout) if layout.words_per_pixel > 4 => {
-                // Solid rendering: each tile's span ends with its depth
-                // region — gather only the RGBD words, packed contiguously
-                // into the readback buffer (row order is preserved because
-                // tiles are horizontal slices in image order).
-                let mut dst: u64 = 0;
-                for tile_idx in 0..layout.num_tiles {
-                    let rgbd_bytes = (layout.image_width as u64)
-                        * (layout.tile_actual_height(tile_idx) as u64)
-                        * 16;
-                    encoder.copy_buffer_to_buffer(
-                        hist,
-                        layout.tile_byte_offset(tile_idx),
-                        &readback,
-                        dst,
-                        rgbd_bytes,
-                    );
-                    dst += rgbd_bytes;
-                }
-            }
-            _ => {
-                encoder.copy_buffer_to_buffer(hist, 0, &readback, 0, bytes);
-            }
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Export Readback Encoder") });
+        let mut dst = 0;
+        for &(offset, size) in spans {
+            encoder.copy_buffer_to_buffer(buffer, offset, &readback, dst, size);
+            dst += size;
         }
         self.queue.submit(std::iter::once(encoder.finish()));
-
-        let slice = readback.slice(..);
+        let slice = readback.slice(..bytes.max(4));
         let (tx, rx) = futures::channel::oneshot::channel();
         slice.map_async(MapMode::Read, move |r| {
             tx.send(r).ok();
         });
         let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
         rx.await
-            .map_err(|_| "GPU histogram readback receiver dropped".to_string())?
-            .map_err(|e| format!("Failed to map GPU histogram: {:?}", e))?;
-
-        let data = slice.get_mapped_range();
-        let words: &[u32] = bytemuck::cast_slice(&data);
-        let scale = color_scale as f64;
-
-        // Convert in parallel — at 8K we're processing 64M pixels and
-        // serial conversion measurably stretches export time.
-        let pixels: Vec<HistogramPixel> = (0..num_pixels)
-            .into_par_iter()
-            .map(|i| {
-                let base = i * 4;
-                HistogramPixel {
-                    r: (words[base] as f64) / scale,
-                    g: (words[base + 1] as f64) / scale,
-                    b: (words[base + 2] as f64) / scale,
-                    count: (words[base + 3] as f64) / scale,
-                }
-            })
-            .collect();
-
-        drop(data);
+            .map_err(|_| format!("{what} readback receiver dropped"))?
+            .map_err(|e| format!("Failed to map {what}: {:?}", e))?;
+        let words = bytemuck::cast_slice::<u8, u32>(&slice.get_mapped_range())[..(bytes / 4) as usize].to_vec();
         readback.unmap();
-        Ok(pixels)
+        Ok(words)
+    }
+
+    /// The tile histogram's last words, added to what the export folded
+    /// into `histogram` (raw words; zeros if it never folded), then
+    /// divided by the colour scale in place -- once, as an unfolded
+    /// export divides, so folding does not change a bit.
+    async fn read_gpu_histogram(&self, color_scale: f32, histogram: &mut [HistogramPixel]) -> Result<(), String> {
+        let hist = self
+            .tile_histograms_buffer
+            .as_ref()
+            .ok_or_else(|| "read_gpu_histogram called without a GPU histogram buffer".to_string())?;
+        let words = self.read_spans(hist, &self.histogram_spans(), "GPU histogram").await?;
+        let scale = color_scale as f64;
+        // In parallel -- at 8K we're processing 64M pixels and serial
+        // conversion measurably stretches export time.
+        histogram.par_iter_mut().zip(words.par_chunks_exact(4)).for_each(|(p, w)| {
+            p.r = (p.r + w[0] as f64) / scale;
+            p.g = (p.g + w[1] as f64) / scale;
+            p.b = (p.b + w[2] as f64) / scale;
+            p.count = (p.count + w[3] as f64) / scale;
+        });
+        Ok(())
+    }
+
+    /// Every `fold::CHECK_EVERY` dispatches: the largest density word of
+    /// the tile histogram and the blur splat buffer, and the occlusion
+    /// counters (folded every check); when the next check could pass the
+    /// limit, both sums are read into their f64 running sums -- the tile
+    /// histogram's into `histogram`, as raw words -- and cleared.
+    async fn check_fold(&mut self, histogram: &mut [HistogramPixel]) -> Result<(), String> {
+        let hist_spans = if self.tile_histograms_buffer.is_some() { self.histogram_spans() } else { Vec::new() };
+        let blur_bytes = self.blur_splat_bytes();
+        let (occ_buf, occ_word) = self.occ_words();
+        let occ_live = self.tile_histograms_buffer.is_some() && self.solid_enabled;
+
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Export Fold Check") });
+        let mut spans: Vec<(&Buffer, u64, u64)> = Vec::new();
+        if let Some(hist) = self.tile_histograms_buffer.as_ref() {
+            spans.extend(hist_spans.iter().map(|&(o, s)| (hist, o, s)));
+        }
+        if blur_bytes > 0 {
+            spans.push((&self.blur_splat_buffer, 0, blur_bytes));
+        }
+        self.fold.encode_max(&self.device, &mut encoder, &spans);
+        if occ_live {
+            encoder.copy_buffer_to_buffer(occ_buf, occ_word * 4, &self.fold.staging, 4, 8);
+            encoder.clear_buffer(occ_buf, occ_word * 4, Some(8));
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        let slice = self.fold.staging.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        slice.map_async(MapMode::Read, move |r| {
+            tx.send(r).ok();
+        });
+        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "fold check readback receiver dropped".to_string())?
+            .map_err(|e| format!("Failed to map the fold check: {:?}", e))?;
+        let (max, num, den) = {
+            let data = slice.get_mapped_range();
+            let w: &[u32] = bytemuck::cast_slice(&data);
+            (w[0], w[1], w[2])
+        };
+        self.fold.staging.unmap();
+        if occ_live {
+            self.folded_occ.0 += f64::from(num);
+            self.folded_occ.1 += f64::from(den);
+        }
+        if !self.fold.watch.due(max) {
+            return Ok(());
+        }
+        log::info!("High-res export: folding the u32 sums at a density word of {max} (fold {})", self.fold.watch.folds);
+        if let Some(hist) = self.tile_histograms_buffer.as_ref() {
+            let words = self.read_spans(hist, &hist_spans, "GPU histogram").await?;
+            histogram.par_iter_mut().zip(words.par_chunks_exact(4)).for_each(|(p, w)| {
+                p.r += w[0] as f64;
+                p.g += w[1] as f64;
+                p.b += w[2] as f64;
+                p.count += w[3] as f64;
+            });
+        }
+        if blur_bytes > 0 {
+            let words = self.read_spans(&self.blur_splat_buffer, &[(0, blur_bytes)], "blur splat").await?;
+            let folded = self.folded_blur.get_or_insert_with(|| vec![0.0; words.len()]);
+            for (f, w) in folded.iter_mut().zip(&words) {
+                *f += f64::from(*w);
+            }
+        }
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Export Fold Clear") });
+        if let Some(hist) = self.tile_histograms_buffer.as_ref() {
+            for &(offset, size) in &hist_spans {
+                encoder.clear_buffer(hist, offset, Some(size));
+            }
+        }
+        if blur_bytes > 0 {
+            encoder.clear_buffer(&self.blur_splat_buffer, 0, Some(blur_bytes));
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
+    }
+
+    /// The blur splat buffer's live bytes (slots x low-res plane x RGBD),
+    /// or 0 without analytic blur.
+    fn blur_splat_bytes(&self) -> u64 {
+        match self.blur_setup.as_ref() {
+            Some(s) => (s.meta.len() as u64) * (s.lowres_w as u64) * (s.lowres_h as u64) * 16,
+            None => 0,
+        }
+    }
+
+    /// Where the GPU path's two occlusion words live: the tail of the
+    /// shadow-maps buffer, or the stand-in.
+    fn occ_words(&self) -> (&Buffer, u64) {
+        match &self.shadow_maps_buffer {
+            Some(b) => (b, 4 * 1024 * 1024),
+            None => (&self.shadow_dummy_buffer, 0),
+        }
     }
 
     /// Read the low-res analytic-blur splat buffer back, convolve it with each
@@ -2633,7 +2753,12 @@ impl HighResExporter {
             .map_err(|_| "blur splat readback receiver dropped".to_string())?
             .map_err(|e| format!("Failed to map blur splat: {:?}", e))?;
         let data = slice.get_mapped_range();
-        let splat: &[u32] = bytemuck::cast_slice(&data);
+        // The splat words, plus what the fold checks read and cleared
+        // (`export::fold`): exact whole numbers in f64.
+        let splat: Vec<f64> = match self.folded_blur.as_ref() {
+            Some(folded) => bytemuck::cast_slice::<u8, u32>(&data).iter().zip(folded).map(|(w, f)| f64::from(*w) + f).collect(),
+            None => bytemuck::cast_slice::<u8, u32>(&data).iter().map(|w| f64::from(*w)).collect(),
+        };
 
         // ---- convolve each slot's slice at low res (mirror blur_convolve.wgsl) ----
         let mut conv = vec![[0f32; 4]; count * plane];
@@ -3911,5 +4036,102 @@ mod targeting_tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}
+
+/// The whole-export u32 sums' fold (`export::fold`;
+/// docs/projects/exact-accumulator.md). The same export with the fold
+/// limit forced low, folding many times, against the export that never
+/// folds: the tile histogram and the blur splat buffer are summed as
+/// exact whole numbers and divided once, so the pictures match to the
+/// byte. A solid export is not bit-reproducible run to run (its depth
+/// region races within a batch), so it is held to a tolerance; its
+/// occlusion counters fold at every check.
+#[cfg(test)]
+mod fold_tests {
+    use super::*;
+    use crate::scene::transforms::{RenderMode, Transform};
+
+    struct Quiet;
+    impl crate::export::ExportReporter for Quiet {
+        fn progress(&mut self, _fraction: f32, _detail: &str) {}
+    }
+
+    fn flame() -> FractalConfig {
+        let mut cfg = FractalConfig::default();
+        cfg.flame.transforms.clear();
+        for (m, colour) in [([0.5f32, -0.5, 0.5, 0.5, 0.0, 0.0], 0.2f32), ([-0.5, -0.5, 0.5, -0.5, 1.0, 0.0], 0.8)] {
+            let mut t = Transform::default();
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (m[0], m[1], m[2], m[3], m[4], m[5]);
+            t.weight = 1.0;
+            t.color = colour;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            cfg.flame.transforms.push(t);
+        }
+        (cfg.zoom, cfg.pan_x, cfg.pan_y) = (1.0, 0.5, 0.25);
+        cfg.render_mode = RenderMode::TwoD;
+        cfg
+    }
+
+    /// The export, and how many times it folded.
+    fn export(cfg: &FractalConfig, limit: u32) -> Option<(Vec<u8>, u32)> {
+        let mut exporter = pollster::block_on(HighResExporter::new(cfg, 96, 64, Some(64))).ok()?;
+        exporter.fold.watch.limit = limit;
+        let rgba = pollster::block_on(exporter.export(cfg, 40_000_000, false, false, &mut Quiet)).expect("export");
+        Some((rgba, exporter.fold.watch.folds))
+    }
+
+    /// **A long export's histogram counts every sample.** 1.2 billion
+    /// samples on 16 pixels is ~75M hits a pixel: a density word (100 a
+    /// hit) passes 2^32 at ~43M. Unfolded, the words wrap and the count
+    /// comes up short by whole multiples of 2^32 / 100; folded, it is the
+    /// samples scattered.
+    #[test]
+    fn a_long_exports_count_does_not_wrap() {
+        let cfg = flame();
+        let run = |fold_off: bool| {
+            let mut exporter = pollster::block_on(HighResExporter::new(&cfg, 4, 4, Some(1024))).ok()?;
+            exporter.fold_off = fold_off;
+            pollster::block_on(exporter.export(&cfg, 1_200_000_000, false, false, &mut Quiet)).expect("export");
+            Some((exporter.counted, exporter.fold.watch.folds))
+        };
+        let Some(((wrapped, samples_w), _)) = run(true) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let ((counted, samples), folds) = run(false).expect("export");
+        let per_pixel = samples as f64 / 16.0;
+        assert!(per_pixel * 100.0 > 1.5 * 4_294_967_296.0, "{per_pixel:.3e} hits a pixel: not enough to wrap a density word");
+        assert!(wrapped < 0.9 * samples_w as f64, "unfolded, the count {wrapped:.4e} of {samples_w} samples should have wrapped -- if not, this test no longer shows it");
+        assert!(folds >= 1, "the export should have folded");
+        assert_eq!(counted, samples as f64, "folded {folds} times, the histogram counts {counted} of {samples} samples");
+    }
+
+    #[test]
+    fn a_folded_export_is_the_unfolded_export() {
+        let plain = flame();
+        let mut blurred = flame();
+        blurred.flame.transforms[1].set_variation("analytic_blur", 0.3);
+        assert!(blurred.flame.analytic_blur_active(&global_registry(), blurred.render_mode), "the blur case must take the analytic path");
+        let mut solid = flame();
+        solid.render_mode = RenderMode::ThreeD;
+        solid.solid_strength = 0.5;
+        for (name, cfg, exact) in [("plain", plain, true), ("analytic blur", blurred, true), ("solid", solid, false)] {
+            let Some((unfolded, none)) = export(&cfg, crate::export::fold::LIMIT) else {
+                eprintln!("no GPU adapter; skipping");
+                return;
+            };
+            let (folded, folds) = export(&cfg, 3_000).expect("export");
+            assert_eq!(none, 0, "{name}: a small export never comes near the real limit");
+            assert!(folds >= 2, "{name}: the forced limit should fold more than once, folded {folds}");
+            if exact {
+                assert!(folded == unfolded, "{name}: folding {folds} times changed the picture");
+            } else {
+                let diff = folded.iter().zip(&unfolded).map(|(a, b)| (*a as f64 - *b as f64).abs()).sum::<f64>() / folded.len() as f64;
+                assert!(diff < 1.0, "{name}: folding {folds} times moved the picture by {diff:.2} a channel");
+            }
+        }
     }
 }
