@@ -1447,6 +1447,10 @@ impl EguiLayer {
         self.ctx.data_mut(|d| {
             d.remove_temp::<String>(egui_dock::egui::Id::new("vkb_editing_text"));
         });
+        // Whether a focus brings up the phone's keyboard: the overlay's own
+        // condition, below. The pickers' search waits for a tap there.
+        #[cfg(target_arch = "wasm32")]
+        picker::set_touch_keyboard(self.compact_mode || Self::device_has_touch());
 
         // Inject clipboard paste events from the browser (WASM only)
         #[cfg(target_arch = "wasm32")]

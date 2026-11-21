@@ -9,10 +9,14 @@
     background: rgba(0, 0, 0, 0.7);
 }
 
-/* The sign key (number fields that may be negative), styled as its
-   neighbours; js/vkb.js shows it. */
-#vkb-overlay .vkb-sign {
+/* The sign key (number fields that may be negative); js/vkb.js shows
+   it. A light key with a dark grey sign: the shared button rule's white
+   text on the browser's light grey was unreadable. */
+#vkb-overlay button.vkb-sign {
     flex: none;
+    background: #ddd;
+    color: #333;
+    font-size: 18px;
 }
 
 #vkb-overlay .vkb-bar {

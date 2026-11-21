@@ -8,7 +8,7 @@
 
 const PARAMS = #{
     depth: #{ value: 0.1, min: 0.0, max: 1.0, caption: "Depth", hint: "How far the zoom breathes in and out." },
-    rate: #{ value: 0.25, min: 0.01, max: 4.0, caption: "Rate", hint: "Breaths a second." },
+    rate: #{ value: 0.2, min: 0.01, max: 4.0, caption: "Rate", hint: "Breaths a second." },
     sway: #{ value: 0.05, min: 0.0, max: 0.5, caption: "Sway", hint: "How far the rotation swings either way, in radians." },
 };
 

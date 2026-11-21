@@ -710,7 +710,9 @@ record: [mobile-ui-redesign.md](../archive/projects/mobile-ui-redesign.md).
   an HTML input above the canvas with the matching keyboard, then hands
   the text back (`web_text_agent.rs`). A number field that may be
   negative (no range, or one below zero) gets a **±** key: the phones'
-  numeric keypads have no minus.
+  numeric keypads have no minus. A picker's search takes the focus on opening
+  on the desktop; there it waits for a tap, or the keyboard would come up
+  over the list (`picker::touch_keyboard`).
 - **Panels open docked**, not floating (`Workspace::open_panel` →
   `open_compact_panel`): the first splits off the viewport (below it at
   0.55 in portrait, beside it at 0.60 in landscape) and later ones join

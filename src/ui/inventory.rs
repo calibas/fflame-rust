@@ -165,8 +165,10 @@ pub fn take_open() -> Option<(Family, Source, Option<EntryKey>)> {
 /// compact menu's submenu draw the same rows). Online or on this device
 /// is the panel's Source filter.
 pub fn catalog_menu_rows(ui: &mut egui::Ui) {
+    // Selectable rows, as the File and Window menus' (buttons drew a
+    // lighter background in the phone's submenu).
     for family in Family::ALL {
-        if ui.button(t!(family.label_key())).clicked() {
+        if ui.selectable_label(false, t!(family.label_key()).as_ref()).clicked() {
             request_open(family, Source::All);
             ui.close();
         }
