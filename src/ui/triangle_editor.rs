@@ -1160,13 +1160,31 @@ fn render_triangle_editor_core(
                         let (o, x, y) = (to_canvas(o), to_canvas(x), to_canvas(y));
                         let ring = Stroke::new(2.0, Color32::WHITE);
                         let side = Stroke::new(4.0, Color32::from_white_alpha(200));
+                        // The side stops at the vertices' dots, so it
+                        // passes behind them as the triangle's own sides do
+                        // (it is drawn last, over everything). The dots'
+                        // sizes are `draw_transform`'s and `draw_post_affine`'s.
+                        let dot = if post {
+                            5.0 * std::f32::consts::FRAC_1_SQRT_2
+                        } else if xref == selected_transform {
+                            6.0
+                        } else {
+                            4.0
+                        };
+                        let side_between = |a: Pos2, b: Pos2| {
+                            let len = a.distance(b);
+                            if len > 2.0 * dot {
+                                let u = (b - a) / len;
+                                painter.line_segment([a + u * dot, b - u * dot], side);
+                            }
+                        };
                         match part {
                             TrianglePart::Origin => { painter.circle_stroke(o, 9.0, ring); }
                             TrianglePart::XPoint => { painter.circle_stroke(x, 9.0, ring); }
                             TrianglePart::YPoint => { painter.circle_stroke(y, 9.0, ring); }
-                            TrianglePart::EdgeOX => { painter.line_segment([o, x], side); }
-                            TrianglePart::EdgeOY => { painter.line_segment([o, y], side); }
-                            TrianglePart::EdgeXY => { painter.line_segment([x, y], side); }
+                            TrianglePart::EdgeOX => side_between(o, x),
+                            TrianglePart::EdgeOY => side_between(o, y),
+                            TrianglePart::EdgeXY => side_between(x, y),
                         }
                         // The pointer says what a drag does: a hand to move,
                         // a circular arrow to rotate (drawn above everything,

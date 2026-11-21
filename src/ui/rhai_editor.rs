@@ -1432,12 +1432,14 @@ impl RhaiEditorPanel {
             job.wrap.max_width = wrap_width;
             ui.fonts_mut(|f| f.layout_job(job))
         };
-        egui::ScrollArea::vertical().id_salt("formula_editor_scroll").max_height(360.0).show(ui, |ui| {
+        let height = source_height(ui);
+        egui::ScrollArea::vertical().id_salt("formula_editor_scroll").max_height(height).min_scrolled_height(height).show(ui, |ui| {
             let editor = ui.add(
                 egui::TextEdit::multiline(&mut self.text)
                     .id_salt("formula_editor_source")
                     .code_editor()
-                    .desired_rows(16)
+                    .desired_rows(1)
+                    .min_size(egui::vec2(0.0, height))
                     .desired_width(f32::INFINITY)
                     .layouter(&mut layouter),
             );
@@ -1454,6 +1456,18 @@ impl RhaiEditorPanel {
     }
 }
 
+
+/// The source's height: the rest of the panel below the controls, above
+/// the status line. What is visible (the clip) less what the content above
+/// took, measured from the content's top -- not from the cursor on screen,
+/// which moves with the panel's scroll and would grow the editor as the
+/// panel scrolled. At least eight rows; a panel too short for them scrolls.
+fn source_height(ui: &egui::Ui) -> f32 {
+    let row = ui.text_style_height(&egui::TextStyle::Monospace);
+    let status = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
+    let used = ui.cursor().top() - ui.max_rect().top();
+    (ui.clip_rect().height() - used - status - ui.spacing().item_spacing.y).max(8.0 * row).floor()
+}
 
 /// The config with the built-in variation `builtin` in the transform
 /// `xref` of the flame `target` names replaced by the variation `src`
@@ -1538,6 +1552,37 @@ fn apply_track_now(cm: &mut ConfigManager, animation: &mut crate::animation::Ani
 
 #[cfg(test)]
 mod tests {
+    /// The source fills what the panel shows below the controls, and the
+    /// panel's scroll does not change it: scrolled down by 60 points, the
+    /// same height, not 60 more (which would grow the editor without end
+    /// as the panel scrolled).
+    #[test]
+    fn the_source_fills_the_panel_and_holds_while_it_scrolls() {
+        let measure = |offset: f32| {
+            let ctx = egui::Context::default();
+            let mut got = 0.0;
+            for _ in 0..3 {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 600.0))),
+                    ..Default::default()
+                };
+                let _ = ctx.run(input, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::vertical().max_height(500.0).vertical_scroll_offset(offset).show(ui, |ui| {
+                            ui.allocate_space(egui::vec2(100.0, 120.0)); // the controls
+                            got = super::source_height(ui);
+                            ui.allocate_space(egui::vec2(100.0, got + 40.0)); // the editor, the status
+                        });
+                    });
+                });
+            }
+            got
+        };
+        let (top, scrolled) = (measure(0.0), measure(60.0));
+        assert!(top > 300.0 && top < 380.0, "500 visible less 120 of controls less the status line, not {top}");
+        assert_eq!(scrolled, top, "the panel's scroll changed the editor's height");
+    }
+
     use super::*;
     use crate::scene::transforms::RenderMode;
 

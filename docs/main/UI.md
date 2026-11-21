@@ -693,11 +693,12 @@ record: [mobile-ui-redesign.md](../archive/projects/mobile-ui-redesign.md).
   `SystemSettings::compact_mode`; afterwards the saved value decides.
   Window ▸ Mobile View and the compact menu's Desktop View switch, and
   the switch is saved too.
-- **The menu** holds a Window submenu (`COMPACT_WINDOW_MENU`, with the
-  same mode policy as the desktop rows), File, View (Reset View), Mode,
-  the animation transport (Play/Pause, Stop), Reset Accumulation, Undo,
-  Redo, the account button (the online account), Help, and Desktop View. There
-  is no language picker on the compact layout.
+- **The menu** holds the Mode, then File, View (Reset View and the View
+  panel), Catalog and Window (`COMPACT_WINDOW_MENU`, with the same mode
+  policy as the desktop rows) in the desktop bar's order, the animation
+  transport (Play/Pause, Stop), Undo, Redo, the account button (the
+  online account), Help, and Desktop View. Reset Accumulation is the
+  Rendering panel's. There is no language picker on the compact layout.
 - **Panels open docked**, not floating (`Workspace::open_panel` →
   `open_compact_panel`): the first splits off the viewport (below it at
   0.55 in portrait, beside it at 0.60 in landscape) and later ones join

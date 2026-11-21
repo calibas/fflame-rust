@@ -105,28 +105,8 @@ fn render_compact_menu_items(
     });
     ui.separator();
 
-    // --- Catalog submenu: a family each, as the desktop bar's ---
-    ui.menu_button(t!("menu.catalog"), |ui| {
-        rows_do_not_wrap(ui);
-        super::inventory::catalog_menu_rows(ui);
-    });
+    // The submenus in the desktop bar's order: File, View, Catalog, Window.
 
-    // --- Window submenu ---
-    ui.menu_button(t!("menu.window"), |ui| {
-        rows_do_not_wrap(ui);
-        // Order is this menu's own -- touch priority, transforms
-        // first -- but the labels come from the shared table, so the two
-        // menus cannot drift apart. Every row opens its panel, in every
-        // mode (one-workspace plan).
-        for panel_type in super::visibility::COMPACT_WINDOW_MENU {
-            let is_open = workspace.panel_exists(*panel_type);
-            let label = t!(super::visibility::label_key_of(*panel_type));
-            if ui.selectable_label(is_open, label.as_ref()).clicked() {
-                workspace.open_compact_panel(*panel_type, ctx);
-                ui.close();
-            }
-        }
-    });
     // --- File submenu ---
     // Same row style as the Window submenu (full-width selectable rows,
     // not size-to-content buttons). Actions carry no open/closed state,
@@ -222,14 +202,42 @@ fn render_compact_menu_items(
         }
     });
 
-    // --- View submenu ---
+    // --- View submenu: Reset View, and the View panel ---
     ui.menu_button(t!("menu.view"), |ui| {
         rows_do_not_wrap(ui);
-        if ui.button(t!("menu.reset_view")).clicked() {
+        if ui.selectable_label(false, t!("menu.reset_view").as_ref()).clicked() {
             menu_actions.view.reset_view = true;
             ui.close();
         }
+        let view_open = workspace.panel_exists(PanelType::View);
+        let label = t!(super::visibility::label_key_of(PanelType::View));
+        if ui.selectable_label(view_open, label.as_ref()).clicked() {
+            workspace.open_compact_panel(PanelType::View, ctx);
+            ui.close();
+        }
+    });
 
+    // --- Catalog submenu: a family each, as the desktop bar's ---
+    ui.menu_button(t!("menu.catalog"), |ui| {
+        rows_do_not_wrap(ui);
+        super::inventory::catalog_menu_rows(ui);
+    });
+
+    // --- Window submenu ---
+    ui.menu_button(t!("menu.window"), |ui| {
+        rows_do_not_wrap(ui);
+        // Order is this menu's own -- touch priority, transforms
+        // first -- but the labels come from the shared table, so the two
+        // menus cannot drift apart. Every row opens its panel, in every
+        // mode (one-workspace plan).
+        for panel_type in super::visibility::COMPACT_WINDOW_MENU {
+            let is_open = workspace.panel_exists(*panel_type);
+            let label = t!(super::visibility::label_key_of(*panel_type));
+            if ui.selectable_label(is_open, label.as_ref()).clicked() {
+                workspace.open_compact_panel(*panel_type, ctx);
+                ui.close();
+            }
+        }
     });
 
     // --- Animation transport ---
@@ -252,11 +260,6 @@ fn render_compact_menu_items(
         .clicked()
     {
         menu_actions.animation.stop = true;
-        ui.close();
-    }
-
-    if ui.button(t!("menu.reset_accumulation")).clicked() {
-        menu_actions.rendering.reset_accumulation = true;
         ui.close();
     }
 
