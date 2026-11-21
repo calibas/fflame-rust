@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "2310990b",
+  "git_hash": "5f8f39f7",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -39,8 +39,8 @@
       "sha256": "cec98cd8689fb115b6973dc551eb968e8bc4f7fd7a9a00a0c403674e00ec4c22"
     },
     "3d-cpow3_wf-smoke.png": {
-      "bytes": 31344,
-      "sha256": "d4c07afafe01695c6e2f0147be6bd1962798201c76634e4710d2b4b3191088f7"
+      "bytes": 31230,
+      "sha256": "f577e1850e7418a799bbb15e99da7d63eae23b48a07bc70c0dc05b00b3b29212"
     },
     "3d-flatten-smoke.png": {
       "bytes": 4470,
@@ -1055,12 +1055,12 @@
       "sha256": "596abfd06c41f7ed34500157d08c79625fcc7dcb6dcd9f678bd739c3bb64fc4c"
     },
     "variations-apo-misc10-smoke.png": {
-      "bytes": 34383,
-      "sha256": "a82141604e095f4feba3d15fd0e97c224bf8bdeb7f575592c5698dc107e5e9b7"
+      "bytes": 34737,
+      "sha256": "fb51500cee8649a590ab0a8903ba6773bb6b91915c392b69316551543f239f25"
     },
     "variations-apo-misc11-smoke.png": {
-      "bytes": 36073,
-      "sha256": "f52f1e309d2dbf4c49c576c2c7ee5497990ced2ca65397eef48d349153cd1a5e"
+      "bytes": 36441,
+      "sha256": "dd919652186f121c5cac67c9c08ed1735121ecf96737ec9e8772e6100d613815"
     },
     "variations-apo-misc12-smoke.png": {
       "bytes": 6311,
@@ -1107,8 +1107,8 @@
       "sha256": "4416376e6185766d5abb79a82f339ecbad52fae0983808f9875940794be26751"
     },
     "variations-apo_misc20-smoke.png": {
-      "bytes": 30851,
-      "sha256": "4ebe80862eaf4a0c93ee34b471c5b20b328239925633ddab78d78b1f5722d229"
+      "bytes": 31195,
+      "sha256": "c89d67717f34f5aa51c3aa120aedd8b85cc9a3fa1a4b8df7667abe90334aea3d"
     },
     "variations-apo_misc21-smoke.png": {
       "bytes": 9868,
@@ -1127,8 +1127,8 @@
       "sha256": "7cbc57bc40a2e884910f794a65216be167c46cdc9ddfff930b87c3712b8dcbc6"
     },
     "variations-boarders-smoke.png": {
-      "bytes": 25791,
-      "sha256": "3ccc2aebde8d3bbb8543a58ed8f23ddb3a9e4aaee61c3f08eea12ef2fc6aa269"
+      "bytes": 26048,
+      "sha256": "6ac4165257d9027169c5376859a425a5ee0d95aa17072b3c343bc345680e6bfc"
     },
     "variations-bubblet3d-smoke.png": {
       "bytes": 1302,
@@ -1151,8 +1151,8 @@
       "sha256": "7120c40534fe0cbc80e126a60f2c9c7a5a039b9b6f555317b7b6de2213808fd4"
     },
     "variations-circle_rand_misc-smoke.png": {
-      "bytes": 35146,
-      "sha256": "89879c9337dd9fd36b6d783b3a5c90dd7dd6467a8f3bc34edc1afd768f32a21d"
+      "bytes": 35058,
+      "sha256": "1ee82685fbef690a0fc3c19859b8432a65876882ced5f73acd5615fc722dc0f2"
     },
     "variations-circlecrop-exblur-smoke.png": {
       "bytes": 443,
@@ -1259,8 +1259,8 @@
       "sha256": "a3581c6c17ee92746ece10052ecc49ef295c078b3a7ac42ec4142381484013b6"
     },
     "variations-hypertile-poincare.png": {
-      "bytes": 23944,
-      "sha256": "c8bb0610058a84eaabdc1d1266bc517b28882f6b8168d7a761d5ae7696794970"
+      "bytes": 24055,
+      "sha256": "feb33d4ad58e5bc17846d2d4fc7e2d92b41b46ce51193672e926fbea738966fb"
     },
     "variations-hypertile-smoke.png": {
       "bytes": 4079,
@@ -1323,12 +1323,12 @@
       "sha256": "5277d543d01931430900e81232d90a132ebf8c51b363cb7d1a10afcbd599e9a1"
     },
     "variations-misc-2d-smoke.png": {
-      "bytes": 29810,
-      "sha256": "94b9d2fd224bc24ba09ddc4fa5abd81988941fdf554e025591fc760c55f65a3e"
+      "bytes": 30225,
+      "sha256": "320b4b0a32ea4939bc927da048d549374b9fe12a6a4b7d6a2d0aed9e8898926f"
     },
     "variations-misc-extras-smoke.png": {
-      "bytes": 29962,
-      "sha256": "e549e21c9d441ca1befda0944cb3314439d978d89bcdfa622eedeba24cff6f69"
+      "bytes": 30410,
+      "sha256": "b4d4e9a3847af5f125638fb5452b9dc41b79d62793da8df433d10f695a38f134"
     },
     "variations-misc-extras2-smoke.png": {
       "bytes": 11338,
@@ -1367,8 +1367,8 @@
       "sha256": "2768a66f44872636278d3135f54003e97f0f0be16e6e3e7afdeb2829aa444552"
     },
     "variations-parametric-curves-smoke.png": {
-      "bytes": 31091,
-      "sha256": "51f8e1b7d26ac4e9253faecd8aae3f437985385ed446d98b6c88ce6e0096b8c4"
+      "bytes": 31382,
+      "sha256": "b51921b5d3fd011b4f3ef4e0c5a70a0a8e9a3f4689e1c8f6dfc45486d85990eb"
     },
     "variations-plusrecip-smoke.png": {
       "bytes": 3036,
@@ -1387,8 +1387,8 @@
       "sha256": "868352d0ec328ef7447cf9d437e941d209f56261dba3434ba652742de8671267"
     },
     "variations-post-rblur-smoke.png": {
-      "bytes": 14841,
-      "sha256": "43975c6282a81bce4cbb7d0895ab212a8f197dcd38b5e591d1b869b2cbc7895d"
+      "bytes": 15143,
+      "sha256": "f250556acd40e8c19453dd9f1174dea343c6236fadcd62fdf5e549c4361ba790"
     },
     "variations-post_axis_symmetry-smoke.png": {
       "bytes": 5511,
@@ -1419,20 +1419,20 @@
       "sha256": "432b2b3ce32324eaac00f9a4917282254d1e823dad829cbbb887cb7976a152db"
     },
     "variations-shapes3-smoke.png": {
-      "bytes": 36829,
-      "sha256": "7e3c9ba262c1df2525bcd3955779f201399294bbfa5cf5b1b78da35106b2fef5"
+      "bytes": 37093,
+      "sha256": "6d3a786888672e83a70809cf1729b1c3402225760125de769482b33c241dd7f5"
     },
     "variations-siercarpet_js-smoke.png": {
       "bytes": 14470,
       "sha256": "dda6b262d90f1ce6b27c44c30f989266c32b951af78cfb6b5f7bc8ec5d48056f"
     },
     "variations-simple-classics-smoke.png": {
-      "bytes": 32970,
-      "sha256": "55a4b0a613e5f1479bf079b76221179189731fa8eddac4345ae9d3b1012eb31c"
+      "bytes": 33286,
+      "sha256": "2781dc6522d260410bfab76ab0305f94e305c2d75f15aeb4fda7289547c8de2b"
     },
     "variations-singleton-misc-smoke.png": {
-      "bytes": 24440,
-      "sha256": "f13b7f83f89912fb49068b488d8364897a24a3d7c044e07f1caf1b694d79fc5b"
+      "bytes": 24751,
+      "sha256": "f5680ada07d8409d199985bb7ee7df977294c07b8d2aed5efed41cb2f2c352de"
     },
     "variations-sosa_attractors-smoke.png": {
       "bytes": 27631,
@@ -1447,8 +1447,8 @@
       "sha256": "a6e846728638095e250dcf5f46f364e6951947df97339c5c8209f2ba3697099c"
     },
     "variations-sosa_attractors4-smoke.png": {
-      "bytes": 31471,
-      "sha256": "2b9cb86d4e21dcf1683f5e864d305b3e627e0d0c60c5bc4199c41af4d5b408e5"
+      "bytes": 31802,
+      "sha256": "655ede5795b7239c94f2718fb4fd4f607772f89ca372269d1a19ab365e971162"
     },
     "variations-spin-phase-smoke.png": {
       "bytes": 19035,
@@ -1471,8 +1471,8 @@
       "sha256": "c221af840c39a68cf48c158fb854f9955d579ae21aa40a77f89957d31e7a5d92"
     },
     "variations-stub-recoveries2-smoke.png": {
-      "bytes": 35047,
-      "sha256": "ce5edd4e2c0adb97abf555bad0522131331e539fa6ee8174eb0ed85b10e4c009"
+      "bytes": 35470,
+      "sha256": "cacb2ebf9f441969b2867fcca693c394c5d0ae14baeb9d112a056fc7786f4692"
     },
     "variations-supershape3d-smoke.png": {
       "bytes": 4063,
@@ -1495,8 +1495,8 @@
       "sha256": "94b9441af192e26a88e79faf32ece80fd4a6c6da55cf7044730c34607c35c3b1"
     },
     "variations-watchlist-misc-smoke.png": {
-      "bytes": 35079,
-      "sha256": "ff9c062d30d6fc580a246cb248741ccc1feb169264c8b2fec293916a9d80d782"
+      "bytes": 35089,
+      "sha256": "e8ab52176a0c0aadd574d2c99078d1256a588b2d6fc911846e760962413e32ae"
     },
     "variations-waveblur_wf-smoke.png": {
       "bytes": 5058,
@@ -1511,8 +1511,8 @@
       "sha256": "31692219ed95dbf3a53ced35bcfb26df7d851fa62bcdc89c908df421a54b613c"
     },
     "variations-wedge-extended-smoke.png": {
-      "bytes": 32522,
-      "sha256": "ac684e1c01cd6412a7b00cb30a2a200ca52df7116686845900baaf7aeec9cdad"
+      "bytes": 33025,
+      "sha256": "d47ccf1fd645b054e2174a634e21ff9caf261d2db6feeca1181b0c7bf9d64395"
     },
     "variations-weight-hack-smoke.png": {
       "bytes": 19388,
