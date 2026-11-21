@@ -2062,7 +2062,6 @@ settings:
   progress: "Progress: %{current} / %{max} (%{percent}%)"
   iterations_per_thread: "Iterations per Thread"
   reset_orbits: "Reset Orbits Each Dispatch"
-  advanced: "Advanced"
   burn_in: "Burn-in Iterations"
   use_dynamic_blend: "Use Dynamic Blend"
   fixed_blend_rate: "Fixed Blend Rate"
