@@ -1642,6 +1642,8 @@ impl EguiLayer {
             api_flame_id: api_state.flame_id.clone(),
             api_flame_is_public: api_state.flame_is_public,
             has_animation_tracks,
+            sim_running,
+            sim_timeline_driven,
             animation_playing: animation_controller.is_playing(),
             api_animation_id: api_state.animation_id.clone(),
             animation_count: api_state.animation_count,
@@ -2080,8 +2082,6 @@ impl EguiLayer {
                         // cover strip — no scale discontinuity at the seam.
                         let leaf_rect = leaf.rect;
                         let leaf_size = leaf_rect.size();
-                        // The touch's Alt, the viewport's Pan/Turn toggle.
-                        let turn_lock = self.touch_tracker.turn_lock;
                         // Letterboxed, the strip is a bar: black, the texture
                         // not under it, and not a place to steer from (the
                         // picture's rect is elsewhere in the leaf).
@@ -2121,9 +2121,11 @@ impl EguiLayer {
                                 // input the same way; here we use the leaf's
                                 // full rect/size so scaling matches between the
                                 // two regions.
-                                let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
+                                // Ctrl+drag turns, as in the body (it was
+                                // Alt here after the body moved to Ctrl).
+                                let (ctrl, shift) = ui.input(|i| (i.modifiers.ctrl, i.modifiers.shift));
                                 let pointer = response.interact_pointer_pos().or_else(|| response.hover_pos());
-                                for (button, turn) in [(egui::PointerButton::Primary, alt || turn_lock), (egui::PointerButton::Secondary, true)] {
+                                for (button, turn) in [(egui::PointerButton::Primary, ctrl), (egui::PointerButton::Secondary, true)] {
                                     if response.dragged_by(button) {
                                         panel_viewer::view_drag(
                                             config_manager,
@@ -2579,6 +2581,15 @@ impl EguiLayer {
         }
         if menu_actions.animation.stop {
             animation_controller.stop();
+        }
+        // The compact menu's transport in Simulation mode: the run's, as
+        // the panel's Run and Reset write it.
+        if menu_actions.simulation.run_pause {
+            sim_running_local = !sim_running_local;
+        }
+        if menu_actions.simulation.stop {
+            sim_running_local = false;
+            sim_reseed_local = true;
         }
 
         // Handle Rendering menu actions

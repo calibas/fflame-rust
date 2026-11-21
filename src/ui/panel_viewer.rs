@@ -56,12 +56,6 @@ pub struct TouchTracker {
     prev_single_pos: Option<egui::Pos2>,
     /// The one finger's press, while it is down.
     press: Option<Press>,
-    /// What a one-finger drag does, the touch's Alt: pan (false) or turn
-    /// (true). Sticky, set by the viewport's Pan/Turn toggle.
-    pub turn_lock: bool,
-    /// Whether a touch has been seen: what shows that toggle outside the
-    /// compact layout (a touchscreen laptop).
-    pub seen_touch: bool,
 }
 
 /// A one-finger press: where and when it began, the movement it has
@@ -90,10 +84,6 @@ impl TouchTracker {
         if events.is_empty() && self.active.len() != 1 {
             return None;
         }
-        if events.iter().any(|e| matches!(e, egui::Event::Touch { .. })) {
-            self.seen_touch = true;
-        }
-
         // Collect IDs present in this event batch
         let batch_ids: std::collections::HashSet<u64> = events.iter()
             .filter_map(|e| if let egui::Event::Touch { id, .. } = e { Some(id.0) } else { None })
@@ -1448,14 +1438,15 @@ impl<'a> PanelViewer<'a> {
 
             let pointer = response.interact_pointer_pos().or_else(|| response.hover_pos());
             let fly = self.context.fly_mode_active;
-            // Touch (camera-unification C3): a drag pans -- or turns, with
-            // the viewport's Turn toggle on, the touch's Alt -- and a long
+            // Touch (camera-unification C3): a drag pans, two fingers
+            // pinch, pan and twist (`TouchGesture::Pinch`), and a long
             // press is the right button: held, it reads the path in
-            // PathMap; dragged, it turns.
+            // PathMap; dragged, it turns. Nothing on the viewport to tap:
+            // the gestures are the controls.
             let mut touch_hold: Option<egui::Pos2> = None;
             match touch_gesture {
                 Some(TouchGesture::Pan(delta)) | Some(TouchGesture::Turn(delta)) => {
-                    let turn = self.touch_tracker.turn_lock || matches!(touch_gesture, Some(TouchGesture::Turn(_)));
+                    let turn = matches!(touch_gesture, Some(TouchGesture::Turn(_)));
                     let finger = self.touch_tracker.finger();
                     view_drag(
                         self.context.config_manager,
@@ -1550,13 +1541,6 @@ impl<'a> PanelViewer<'a> {
                     egui::Stroke::new(3.0, egui::Color32::from_white_alpha(200)),
                 );
             }
-            // The touch's Alt: what a one-finger drag does, Pan or Turn,
-            // as a sticky toggle on the viewport -- shown on the compact
-            // layout and wherever a touch has been seen.
-            if self.context.compact_mode || self.touch_tracker.seen_touch {
-                self.render_touch_mode_toggle(ui, response.rect);
-            }
-
             // Display path info overlay when available (PathMap mode only)
             if is_path_map_mode {
                 if let Some(click_info) = self.context.path_click_info {
@@ -1569,36 +1553,6 @@ impl<'a> PanelViewer<'a> {
                 ui.label(t!("viewport.initializing"));
             });
         }
-    }
-
-    /// The Pan/Turn toggle for touch, at the viewport's bottom left: what a
-    /// one-finger drag does (Turn is Ctrl+drag: a 2D view rotates, a 3D
-    /// camera orbits). A long press and drag turns either way.
-    fn render_touch_mode_toggle(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
-        egui::Area::new(egui::Id::new("viewport_touch_mode"))
-            .fixed_pos(rect.left_bottom() + egui::vec2(12.0, -56.0))
-            .order(egui::Order::Foreground)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style())
-                    .fill(egui::Color32::from_black_alpha(170))
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .inner_margin(egui::Margin::same(4))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            for (turn, label, tip) in [
-                                (false, t!("viewport.touch_pan"), t!("viewport.touch_pan_tip")),
-                                (true, t!("viewport.touch_turn"), t!("viewport.touch_turn_tip")),
-                            ] {
-                                let on = self.touch_tracker.turn_lock == turn;
-                                let button = egui::Button::selectable(on, egui::RichText::new(label.as_ref()).size(16.0))
-                                    .min_size(egui::vec2(64.0, 36.0));
-                                if ui.add(button).on_hover_text(tip.as_ref()).clicked() {
-                                    self.touch_tracker.turn_lock = turn;
-                                }
-                            }
-                        });
-                    });
-            });
     }
 
     /// Render path overlay showing pixel info, coordinates, path, and color preview
@@ -2036,7 +1990,6 @@ mod touch_tests {
             Some(TouchGesture::Pan(d)) => assert_eq!(d, egui::vec2(5.0, 0.0)),
             _ => panic!("still a pan"),
         }
-        assert!(t.seen_touch);
     }
 
     /// A finger held still becomes the right button: held, at its place,

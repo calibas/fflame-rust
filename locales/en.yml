@@ -155,6 +155,10 @@ menu:
   play_animation: "▶ Play Animation"
   pause_animation: "⏸ Pause Animation"
   stop_animation: "⏹ Stop Animation"
+  run_simulation: "▶ Run Simulation"
+  pause_simulation: "⏸ Pause Simulation"
+  stop_simulation: "⏹ Stop Simulation"
+  stop_simulation_tip: "Pause and restart from the seed"
   layout_compact: "📱 Mobile View"
   layout_advanced: "Advanced"
   layout_export: "Export"
@@ -1844,7 +1848,7 @@ track_editor:
   unreadable_track: "A track this version cannot play (made by a newer version). It is kept as it is and saved unchanged."
   # Script tracks (docs/archive/projects/rhai-tracks.md)
   script_track: "Script track"
-  add_script_track: "Add Script Track"
+  scripted: "📜 Scripted"
   script_plugins: "Your tracks"
   script_new: "New in the Rhai Editor..."
   script_new_tip: "Open the Rhai Editor on an example track to write your own; Use as track adds it to the animation."
@@ -2189,10 +2193,6 @@ messages:
 # Fractal Viewport
 viewport:
   initializing: "Initializing fractal renderer..."
-  touch_pan: "✋ Pan"
-  touch_pan_tip: "A one-finger drag moves the view. Long-press, then drag, to turn instead."
-  touch_turn: "⟳ Turn"
-  touch_turn_tip: "A one-finger drag turns the view, as Ctrl+drag does: a 2D view rotates, a 3D camera orbits. Two fingers still pinch to zoom."
 
 # Path Info Overlay (right-click in PathMap mode, or a long press on touch)
 path_overlay:

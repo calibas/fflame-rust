@@ -240,27 +240,40 @@ fn render_compact_menu_items(
         }
     });
 
-    // --- Animation transport ---
-    // Play/pause/stop drive the ANIMATION, not the renderer. These used
-    // to toggle the render pause, which on a phone reads as "the app
-    // froze"; a transport row means the animation everywhere else in
-    // the app (animation panel, Space key), so it does here too.
-    let play_text = if menu_state.animation_playing {
-        t!("menu.pause_animation")
-    } else {
-        t!("menu.play_animation")
-    };
-    let can_play = menu_state.animation_playing || menu_state.has_animation_tracks;
-    if ui.add_enabled(can_play, egui::Button::new(play_text.as_ref())).clicked() {
-        menu_actions.animation.play_pause = true;
-        ui.close();
-    }
-    if ui
-        .add_enabled(menu_state.animation_playing, egui::Button::new(t!("menu.stop_animation").as_ref()))
-        .clicked()
-    {
-        menu_actions.animation.stop = true;
-        ui.close();
+    // --- Transport ---
+    // In Simulation the run's, as Space drives it there
+    // (`render_mode::space_runs_the_simulation`) -- unless the timeline
+    // owns the step count, when the animation is what moves the grid.
+    // Elsewhere the animation's, shown only when there is one to play.
+    // (These once toggled the render pause, which on a phone reads as
+    // "the app froze".)
+    if super::render_mode::space_runs_the_simulation(menu_state.render_mode) && !menu_state.sim_timeline_driven {
+        let run_text = if menu_state.sim_running { t!("menu.pause_simulation") } else { t!("menu.run_simulation") };
+        if ui.button(run_text.as_ref()).clicked() {
+            menu_actions.simulation.run_pause = true;
+            ui.close();
+        }
+        if ui.button(t!("menu.stop_simulation").as_ref()).on_hover_text(t!("menu.stop_simulation_tip").as_ref()).clicked() {
+            menu_actions.simulation.stop = true;
+            ui.close();
+        }
+    } else if menu_state.animation_playing || menu_state.has_animation_tracks {
+        let play_text = if menu_state.animation_playing {
+            t!("menu.pause_animation")
+        } else {
+            t!("menu.play_animation")
+        };
+        if ui.button(play_text.as_ref()).clicked() {
+            menu_actions.animation.play_pause = true;
+            ui.close();
+        }
+        if ui
+            .add_enabled(menu_state.animation_playing, egui::Button::new(t!("menu.stop_animation").as_ref()))
+            .clicked()
+        {
+            menu_actions.animation.stop = true;
+            ui.close();
+        }
     }
 
     ui.separator();

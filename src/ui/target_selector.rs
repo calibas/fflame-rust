@@ -70,6 +70,25 @@ impl TargetCategory {
     }
 }
 
+/// A script track the selector offers in its Scripted section: a shipped
+/// example, or one of the user's or adopted track files.
+pub struct ScriptChoice {
+    pub title: String,
+    pub source: String,
+    /// The user's (or adopted) file, listed after the examples.
+    pub yours: bool,
+}
+
+/// What the selector picked.
+pub enum Picked {
+    /// A parameter, on a flame.
+    Target(EditingTarget, ConfigPath),
+    /// A script track, by its index in the choices.
+    Script(usize),
+    /// A new script track, begun in the Rhai Editor.
+    NewScript,
+}
+
 /// A selectable target item
 struct TargetItem {
     path: ConfigPath,
@@ -97,7 +116,8 @@ impl TargetItem {
 
 /// Render the hierarchical target selector.
 ///
-/// Returns `Some((flame_target, path))` if a target was selected, `None` otherwise.
+/// Returns what was picked: a parameter (on a flame), or from the
+/// Scripted section at the top, a script track or a new one.
 ///
 /// Categories are grouped by flame: Main flame at the top with the
 /// full set of categories (View / Color / Tone / Rendering / Effects /
@@ -109,8 +129,9 @@ pub fn render_target_selector(
     state: &mut TargetSelectorState,
     config: &FractalConfig,
     current_selection: Option<(EditingTarget, &str)>,
-) -> Option<(EditingTarget, ConfigPath)> {
-    let mut selected: Option<(EditingTarget, ConfigPath)> = None;
+    scripts: &[ScriptChoice],
+) -> Option<Picked> {
+    let mut selected: Option<Picked> = None;
 
     // Search filter
     ui.horizontal(|ui| {
@@ -133,6 +154,13 @@ pub fn render_target_selector(
             let filter = state.search_filter.to_lowercase();
             let has_filter = !filter.is_empty();
 
+            // === Scripted tracks ===
+            // A track a Rhai script writes (docs/archive/projects/rhai-tracks.md):
+            // the shipped examples, the user's files, a new one.
+            if let Some(pick) = render_scripted(ui, state, scripts, &filter, has_filter) {
+                selected = Some(pick);
+            }
+
             // === Main flame ===
             // Always rendered at the top, not wrapped in a "Main"
             // collapsible header — the main flame's categories are
@@ -149,7 +177,7 @@ pub fn render_target_selector(
                 has_filter,
                 current_selection,
             ) {
-                selected = Some((EditingTarget::Main, path));
+                selected = Some(Picked::Target(EditingTarget::Main, path));
             }
 
             // === Subflames ===
@@ -183,7 +211,7 @@ pub fn render_target_selector(
                             has_filter,
                             current_selection,
                         ) {
-                            selected = Some((target, path));
+                            selected = Some(Picked::Target(target, path));
                         }
                     });
 
@@ -198,6 +226,50 @@ pub fn render_target_selector(
         });
 
     selected
+}
+
+/// The Scripted section: the examples, the user's track files after them,
+/// and New. Filtered by title like every category; a filter that matches
+/// none of them hides it.
+fn render_scripted(ui: &mut Ui, state: &mut TargetSelectorState, scripts: &[ScriptChoice], filter: &str, has_filter: bool) -> Option<Picked> {
+    let shown: Vec<(usize, &ScriptChoice)> = scripts
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !has_filter || s.title.to_lowercase().contains(filter))
+        .collect();
+    if has_filter && shown.is_empty() {
+        return None;
+    }
+    let mut picked = None;
+    let id = "scripted";
+    let header = CollapsingHeader::new(t!("track_editor.scripted"))
+        .id_salt(id)
+        .default_open(state.expanded.contains(id) || has_filter)
+        .show(ui, |ui| {
+            let mut yours_heading = false;
+            for (i, s) in &shown {
+                if s.yours && !yours_heading {
+                    yours_heading = true;
+                    ui.separator();
+                    ui.weak(t!("track_editor.script_plugins"));
+                }
+                if ui.selectable_label(false, &s.title).clicked() {
+                    picked = Some(Picked::Script(*i));
+                }
+            }
+            if !has_filter {
+                ui.separator();
+                if ui.selectable_label(false, t!("track_editor.script_new").as_ref()).on_hover_text(t!("track_editor.script_new_tip").as_ref()).clicked() {
+                    picked = Some(Picked::NewScript);
+                }
+            }
+        });
+    if header.header_response.clicked() {
+        if !state.expanded.remove(id) {
+            state.expanded.insert(id.to_string());
+        }
+    }
+    picked
 }
 
 /// Render the categories belonging to one flame (Main or a subflame).
@@ -1554,5 +1626,80 @@ mod escape_target_tests {
             &ConfigPath::EscapeCamTargetX
         )
         .is_none());
+    }
+}
+
+/// The Scripted section: script tracks beside the parameters, in the one
+/// selector (it was a separate Add Script Track menu).
+#[cfg(test)]
+mod scripted_tests {
+    use super::*;
+
+    fn choices() -> Vec<ScriptChoice> {
+        vec![
+            ScriptChoice { title: "Breathing Zoom".into(), source: "a".into(), yours: false },
+            ScriptChoice { title: "My Spin".into(), source: "b".into(), yours: true },
+        ]
+    }
+
+    /// One frame of the selector, the Scripted section open, a click at
+    /// `click` if given: what it picked and where each text landed.
+    fn frame(ctx: &egui::Context, state: &mut TargetSelectorState, click: Option<egui::Pos2>) -> (Option<Picked>, Vec<(String, egui::Pos2)>) {
+        let config = FractalConfig::default();
+        let scripts = choices();
+        let mut picked = None;
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 800.0))),
+            ..Default::default()
+        };
+        if let Some(p) = click {
+            input.events.push(egui::Event::PointerMoved(p));
+            input.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+            input.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        }
+        let out = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
+                picked = render_target_selector(ui, state, &config, None, &scripts);
+            });
+        });
+        let mut texts = Vec::new();
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+            match shape {
+                egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos)),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        for s in &out.shapes {
+            walk(&s.shape, &mut texts);
+        }
+        (picked, texts)
+    }
+
+    #[test]
+    fn a_script_track_is_picked_in_the_selector() {
+        let ctx = egui::Context::default();
+        let mut state = TargetSelectorState::default();
+        state.expanded.insert("scripted".into());
+        let (_, texts) = frame(&ctx, &mut state, None);
+        let at = |name: &str| texts.iter().find(|(t, _)| t == name).map(|(_, p)| *p + egui::vec2(4.0, 4.0));
+        let heading = t!("track_editor.scripted").to_string();
+        assert!(at(&heading).is_some(), "the Scripted section: {texts:?}");
+        assert!(at(&t!("track_editor.script_plugins").to_string()).is_some(), "the user's tracks under their own heading");
+
+        let (picked, _) = frame(&ctx, &mut state, at("My Spin"));
+        assert!(matches!(picked, Some(Picked::Script(1))), "a click on a track picks it");
+        let (_, texts) = frame(&ctx, &mut state, None);
+        let new = texts.iter().find(|(t, _)| *t == t!("track_editor.script_new").to_string()).map(|(_, p)| *p + egui::vec2(4.0, 4.0));
+        let (picked, _) = frame(&ctx, &mut state, new);
+        assert!(matches!(picked, Some(Picked::NewScript)), "New begins one in the Rhai Editor");
+
+        // A search the scripts do not match hides the section; one they do shows only those.
+        state.search_filter = "spin".into();
+        let (_, texts) = frame(&ctx, &mut state, None);
+        assert!(texts.iter().any(|(t, _)| t == "My Spin") && !texts.iter().any(|(t, _)| t == "Breathing Zoom"), "filtered by title");
+        state.search_filter = "zzzz".into();
+        let (_, texts) = frame(&ctx, &mut state, None);
+        assert!(!texts.iter().any(|(t, _)| *t == heading), "no match, no section");
     }
 }

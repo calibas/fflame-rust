@@ -73,6 +73,15 @@ pub struct AnimationMenuActions {
     pub stop: bool,
 }
 
+/// The compact menu's transport in Simulation mode: the run's.
+#[derive(Default)]
+pub struct SimulationMenuActions {
+    /// Run if paused, pause if running.
+    pub run_pause: bool,
+    /// Pause and restart from the seed.
+    pub stop: bool,
+}
+
 /// Combined context for all menu actions
 #[derive(Default)]
 pub struct MenuActions {
@@ -81,6 +90,7 @@ pub struct MenuActions {
     pub view: ViewMenuActions,
     pub rendering: RenderingMenuActions,
     pub animation: AnimationMenuActions,
+    pub simulation: SimulationMenuActions,
     /// Menu-bar Fly Mode toggle button was clicked this frame.
     pub fly_mode_toggle: bool,
     /// The Catalog menu's *Offer downloads in pickers*, toggled to this.
@@ -135,6 +145,10 @@ pub struct MenuState {
     pub has_api_flame_id: bool,
     pub api_flame_id: Option<String>,
     pub api_flame_is_public: Option<bool>,
+    /// Whether the simulation is running, and whether the timeline owns
+    /// its step count (its transport is then the animation's).
+    pub sim_running: bool,
+    pub sim_timeline_driven: bool,
     pub has_animation_tracks: bool,
     /// Whether the animation controller is currently playing (drives
     /// the compact menu's play/pause label).

@@ -789,11 +789,13 @@ in [EXPORT.md](EXPORT.md) (*Video Export*). What belongs to animation:
 A **script track** (`TrackSource::Script`; plan and record in
 [rhai-tracks.md](../archive/projects/rhai-tracks.md)) is a Rhai script that
 writes the targets it declares, every frame. It is written in the
-Rhai Editor (**Use as track**), or added from the track editor's
-**Add Script Track** menu: the shipped examples (Breathing, Springy
-Zoom, Smoothed Jitter, in `assets/formulas/track-*.rhai`), the user's
-track files (`library::Kind::Track`), or a new one begun in the
-editor. The animation carries its source and its parameter values, so a
+Rhai Editor (**Use as track**), or added from the **Scripted** section
+at the top of the Add Track dialog's target selector, beside the
+parameters (`target_selector::ScriptChoice`, listed when the dialog
+opens): the shipped examples (Breathing, Springy Zoom, Smoothed Jitter,
+in `assets/formulas/track-*.rhai`), the user's track files
+(`library::Kind::Track`), or a new one begun in the editor. Picking one
+adds the track, opens its window and closes the dialog. The animation carries its source and its parameter values, so a
 `.anim` plays anywhere.
 
 ```rhai

@@ -651,7 +651,7 @@ behind them is in [CAMERA.md](CAMERA.md).
 | Shift | finer steps | finer steps | sprint |
 | W A S D Q E | -- | -- | fly (Q/E: screen up in FreeLook, world up in FPS) |
 | Arrows, + / − | pan, zoom | pan, dolly | -- |
-| One finger | pan (rotate with the Turn toggle) | pan (orbit with the Turn toggle) | look |
+| One finger | pan | pan | look |
 | Long press, then drag | rotate | orbit | look |
 | Two fingers | pinch zoom, twist rotate, drag pan | pinch dolly, twist orbit, drag pan | -- |
 
@@ -662,9 +662,9 @@ behind them is in [CAMERA.md](CAMERA.md).
   work on the web. A finger held still within 10 points for half a
   second is a **long press -- the touch's right button**: held, it reads
   the path in PathMap (as holding the right button does); dragged, it
-  turns. The **Pan/Turn toggle** at the viewport's bottom left is the
-  touch's **Ctrl**: a sticky choice of what a one-finger drag does. It
-  shows on the compact layout and once a touch has been seen.
+  turns. Two fingers pinch to zoom, move to pan and twist to turn. The
+  gestures are the controls: nothing is drawn on the viewport to tap (a
+  Pan/Turn toggle at its bottom left was removed for 0.6).
 - **Keys** ([src/app/input.rs](../../src/app/input.rs),
   `handle_keyboard`): arrows pan 5% of the view a press and + / −
   zoom by 1.5, through the same gestures; Ctrl/Cmd+Z and +Y undo and
@@ -695,10 +695,15 @@ record: [mobile-ui-redesign.md](../archive/projects/mobile-ui-redesign.md).
   the switch is saved too.
 - **The menu** holds the Mode, then File, View (Reset View and the View
   panel), Catalog and Window (`COMPACT_WINDOW_MENU`, with the same mode
-  policy as the desktop rows) in the desktop bar's order, the animation
-  transport (Play/Pause, Stop), Undo, Redo, the account button (the
+  policy as the desktop rows) in the desktop bar's order, the transport,
+  Undo, Redo, the account button (the
   online account), Help, and Desktop View. Reset Accumulation is the
   Rendering panel's. There is no language picker on the compact layout.
+- **The transport** follows Space (`render_mode::space_runs_the_simulation`):
+  in Simulation, Run/Pause and Stop (pause and restart from the seed)
+  drive the run -- unless the timeline owns the step count, when the
+  animation's transport shows; elsewhere Play/Pause and Stop drive the
+  animation, and show only when it has tracks.
 - **Panels open docked**, not floating (`Workspace::open_panel` →
   `open_compact_panel`): the first splits off the viewport (below it at
   0.55 in portrait, beside it at 0.60 in landscape) and later ones join

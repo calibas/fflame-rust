@@ -12,7 +12,7 @@ use crate::animation::{
 };
 use crate::config::{ConfigPath, ConfigValue, EditingTarget, FractalConfig};
 use super::animation_panel::TimelineLayout;
-use super::target_selector::{TargetSelectorState, render_target_selector};
+use super::target_selector::{render_target_selector, Picked, ScriptChoice, TargetSelectorState};
 
 /// UI state for track editor
 #[derive(Default)]
@@ -38,6 +38,10 @@ pub struct TrackEditorState {
     /// The script track whose window is open, by index
     /// (docs/archive/projects/rhai-tracks.md).
     pub script_panel: Option<usize>,
+    /// The script tracks the Add Track dialog's Scripted section offers,
+    /// listed when it opens (`script_choices`): a user's file is compiled
+    /// to be offered, and the dialog draws every frame.
+    pub script_choices: Option<Vec<ScriptChoice>>,
     /// A track source to open in the Formula Editor: a script track's Edit
     /// there, or a new one from an example. Taken by the caller, which
     /// holds the editor.
@@ -239,9 +243,6 @@ pub fn render_track_editor(
             .fill(egui::Color32::from_rgb(0, 68, 0));
         if ui.add_enabled(has_animation, add_button).clicked() {
             open_add_track_panel(state);
-        }
-        if let Some(animation) = controller.animation.as_mut() {
-            script_track_menu(ui, animation, state);
         }
     });
 
@@ -680,51 +681,22 @@ fn script_row(animation: &Animation, index: usize) -> Option<ScriptRow> {
     })
 }
 
-/// The menu adding a script track: one of the shipped examples, one of
-/// the user's or adopted track files (compiled as the lists compile every
-/// file: docs/projects/one-list.md), or a new one begun in the Formula
-/// Editor.
-///
-/// Drawn every frame the panel shows, so it does nothing until opened: the
-/// examples are found once (compiling every shipped formula to find the
-/// tracks cost 34 ms a frame, a tenth of the flame's frame rate), and the
-/// files are listed only while the menu is open.
-fn script_track_menu(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditorState) {
-    ui.menu_button(t!("track_editor.add_script_track"), |ui| {
-        let examples = track_examples();
-        let plugins: Vec<crate::storage::library::Plugin> = super::inventory::shared()
+/// The script tracks the Add Track dialog offers (its target selector's
+/// Scripted section): the shipped examples, then the user's or adopted
+/// track files (compiled as the lists compile every file:
+/// docs/projects/one-list.md). Listed when the dialog opens, not every
+/// frame it draws; the examples are found once (compiling every shipped
+/// formula to find the tracks cost 34 ms).
+fn script_choices() -> Vec<ScriptChoice> {
+    let mut out: Vec<ScriptChoice> = track_examples().iter().map(|(title, source)| ScriptChoice { title: title.clone(), source: source.clone(), yours: false }).collect();
+    out.extend(
+        super::inventory::shared()
             .iter()
             .filter(|e| e.kind == crate::inventory::Kind::Track && matches!(e.key, crate::inventory::EntryKey::File { shipped: false, .. }))
             .filter_map(super::inventory::plugin_of)
-            .collect();
-        let mut add: Option<String> = None;
-        for (title, source) in examples {
-            if ui.button(title.as_str()).clicked() {
-                add = Some(source.clone());
-            }
-        }
-        if !plugins.is_empty() {
-            ui.separator();
-            ui.weak(t!("track_editor.script_plugins"));
-            for p in &plugins {
-                if ui.button(&p.title).clicked() {
-                    add = Some(p.carried.source.clone());
-                }
-            }
-        }
-        ui.separator();
-        if ui.button(t!("track_editor.script_new")).on_hover_text(t!("track_editor.script_new_tip")).clicked() {
-            state.open_in_formula_editor = examples.first().map(|(_, s)| s.clone());
-            ui.close();
-        }
-        if let Some(source) = add {
-            if let Ok(track) = Track::script(source) {
-                let index = animation.add_track(track);
-                state.script_panel = Some(index);
-            }
-            ui.close();
-        }
-    });
+            .map(|p| ScriptChoice { title: p.title, source: p.carried.source, yours: true }),
+    );
+    out
 }
 
 /// The shipped example tracks, title and source, found once.
@@ -966,12 +938,24 @@ fn render_track_editor_panel_content(
             } else {
                 Some((state.new_track_flame_target, state.new_track_target.as_str()))
             };
-            if let Some((flame_target, path)) = render_target_selector(
-                ui,
-                &mut state.target_selector_state,
-                config,
-                current,
-            ) {
+            let scripts = state.script_choices.get_or_insert_with(script_choices);
+            let picked = render_target_selector(ui, &mut state.target_selector_state, config, current, scripts);
+            // A script track: added, its window opened, this dialog done.
+            match &picked {
+                Some(Picked::Script(i)) => {
+                    let source = scripts[*i].source.clone();
+                    if let Ok(track) = Track::script(source) {
+                        state.script_panel = Some(animation.add_track(track));
+                    }
+                    state.track_editor_panel_open = false;
+                }
+                Some(Picked::NewScript) => {
+                    state.open_in_formula_editor = track_examples().first().map(|(_, s)| s.clone());
+                    state.track_editor_panel_open = false;
+                }
+                _ => {}
+            }
+            if let Some(Picked::Target(flame_target, path)) = picked {
                 state.new_track_target = path.to_string_key();
                 state.new_track_flame_target = flame_target;
                 // Auto-initialize values based on track type (Add mode only)
@@ -1476,6 +1460,7 @@ fn close_track_editor_panel(state: &mut TrackEditorState) {
 /// Open the track editor panel to add a new track
 pub fn open_add_track_panel(state: &mut TrackEditorState) {
     state.track_editor_panel_open = true;
+    state.script_choices = None;
     state.editing_track_index = None;
     state.new_track_target.clear();
     state.new_track_flame_target = EditingTarget::Main;
