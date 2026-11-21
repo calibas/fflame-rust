@@ -1146,10 +1146,9 @@ pub struct AccumulateParams {
     /// The fixed-EMA rate, read only in mode 1. Any value is a rate,
     /// 1.0 included: overwrite is mode 2, never inferred from this.
     pub blend_factor: f32,
-    /// Mode — 0 = cumulative-mean (algorithmic ideal,
-    /// precision-limited around 10^9 iters/pixel on f32), 1 = fixed
-    /// EMA at `blend_factor` (precision-stable, dim early frames as
-    /// the EMA bootstraps from 0), 2 = overwrite (discard the
+    /// Mode — 0 = cumulative-mean (algorithmic ideal), 1 = fixed EMA
+    /// at `blend_factor` for the colour (dim early frames as the EMA
+    /// bootstraps from 0; the density stays cumulative), 2 = overwrite (discard the
     /// accumulation, store this batch alone: the parameter-change
     /// reset). Mirrors `accumulate.wgsl`'s `use_fixed_ema` field.
     pub use_fixed_ema: u32,
@@ -1164,7 +1163,10 @@ pub struct AccumulateParams {
     /// 1 when the histogram carries the depth region AND accum_depth
     /// is a real buffer.
     pub has_depth: u32,
-    pub _pad2: [u32; 2],
+    /// 1 when `accum_count_buffer` is bound: the density is counted
+    /// exactly (accumulate.wgsl's header).
+    pub exact_count: u32,
+    pub _pad2: u32,
 }
 
 /// Manages GPU buffers and textures for fractal flame rendering
@@ -1228,6 +1230,12 @@ pub struct FlameBuffers {
     // belongs to (accumulate.wgsl's depth-tightening reset). Allocated
     // with the depth region; 0-filled = "no data yet".
     pub accum_depth_buffer: Option<Buffer>,
+    /// The exact density count (accumulate.wgsl, `accum_count`): a
+    /// `vec2<u32>` a pixel, 8 B/px, made by `ensure_accum_count` once a
+    /// render is long enough for the f32 count to drift
+    /// (docs/projects/exact-accumulator.md) and retired when a render
+    /// starts again. None: the dummy orbit buffer is bound instead.
+    pub accum_count_buffer: Option<Buffer>,
 
     // Per-pixel iteration count buffer for convergence tracking
     // Per-pixel path buffer for PathMap color mode (OPTIONAL)
@@ -1416,6 +1424,7 @@ impl FlameBuffers {
         if let Some(b) = &self.cylinder_buffer { b.destroy(); }
         self.coverage_buffer.destroy();
         if let Some(b) = &self.accum_depth_buffer { b.destroy(); }
+        if let Some(b) = &self.accum_count_buffer { b.destroy(); }
         if let Some(b) = &self.blur_splat_buffer { b.destroy(); }
         if let Some(b) = &self.blur_convolved_buffer { b.destroy(); }
         if let Some(b) = &self.orbit_buffer { b.destroy(); }
@@ -1479,6 +1488,7 @@ impl FlameBuffers {
         self.histogram_buffer_scratch.destroy();
         self.accumulation_texture_a.destroy();
         self.accumulation_texture_b.destroy();
+        if let Some(b) = &self.accum_count_buffer { b.destroy(); }
         if let Some(b) = &self.path_buffer { b.destroy(); }
         if let Some(b) = &self.blur_splat_buffer { b.destroy(); }
         if let Some(b) = &self.blur_convolved_buffer { b.destroy(); }
@@ -1613,7 +1623,8 @@ impl FlameBuffers {
             _pad1: 0.0,
             surface_thickness: 0.0,
             has_depth: 0,
-            _pad2: [0; 2],
+            exact_count: 0,
+            _pad2: 0,
         };
         let accumulate_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Accumulate Params Buffer"),
@@ -1907,6 +1918,7 @@ impl FlameBuffers {
             solid_depth_region: false,
             census_region: false,
             accum_depth_buffer: None,
+            accum_count_buffer: None,
             path_buffer,
             dummy_path_buffer,
             xaos_buffer: None,  // Created on demand when xaos is used
@@ -2008,6 +2020,11 @@ impl FlameBuffers {
         }
         if let Some(ref ad) = self.accum_depth_buffer {
             encoder.clear_buffer(ad, 0, None);
+        }
+        // The shader empties a count beside an empty texel anyway; cleared
+        // so the two never disagree in between.
+        if let Some(ref c) = self.accum_count_buffer {
+            encoder.clear_buffer(c, 0, None);
         }
 
         // Clear path buffer (zero out all paths) - only if enabled
@@ -2145,6 +2162,28 @@ impl FlameBuffers {
             }));
         }
         self.solid_depth_region = enabled;
+        true
+    }
+
+    /// Make the exact density count, or retire it (accumulate.wgsl's
+    /// `accum_count`). A new buffer is zeroed, which the shader reads as
+    /// "seed from the texture's count". True when it changed: the
+    /// accumulate bind group must be rebuilt.
+    pub fn set_accum_count(&mut self, device: &Device, enabled: bool) -> bool {
+        if enabled == self.accum_count_buffer.is_some() {
+            return false;
+        }
+        if let Some(b) = self.accum_count_buffer.take() {
+            self.retire_buffer(b);
+        }
+        if enabled {
+            self.accum_count_buffer = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Accumulator Exact Count"),
+                size: (self.width as u64) * (self.height as u64) * 8,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }));
+        }
         true
     }
 

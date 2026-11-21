@@ -357,6 +357,12 @@ fn disc_contains(outer: crate::scene::cylinder::View, inner: crate::scene::cylin
     d + inner.radius <= outer.radius
 }
 
+/// Accumulate passes after which a render's density is counted exactly
+/// (`FlameRenderer::exact_count_after`). Below it the f32 running sum
+/// stays true (simulated: no measurable error at 10^5 passes, 0.01% at
+/// 10^6, percents from 4x10^6; docs/projects/exact-accumulator.md).
+pub(crate) const EXACT_COUNT_AFTER_PASSES: u64 = 1 << 18;
+
 pub struct FlameRenderer {
     /// Reachability-census mode (see `src/census/`). Set only by
     /// `enable_census`, read into `ShaderConstants::census`. Never a
@@ -511,6 +517,14 @@ pub struct FlameRenderer {
     far_density_fade_start: f32,
     deterministic_rng: bool,
     frame_counter: u32, // For deterministic seed progression
+    /// Accumulate passes since the accumulator last held nothing (an
+    /// overwrite pass counts as the first): what decides the exact
+    /// count (`exact_count_after`).
+    accum_passes: u64,
+    /// Passes after which the density is counted exactly
+    /// (`FlameBuffers::set_accum_count`; docs/projects/exact-accumulator.md):
+    /// `EXACT_COUNT_AFTER_PASSES`, lowered by tests.
+    pub(crate) exact_count_after: u64,
     dof_focus_distance: f32, // DOF: Distance from origin where image is sharpest
     dof_blur_strength: f32, // DOF: Blur amount (0.0 = disabled)
     fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
@@ -885,6 +899,8 @@ impl FlameRenderer {
             far_density_fade_start: 0.0,
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
+            accum_passes: 0,
+            exact_count_after: EXACT_COUNT_AFTER_PASSES,
             dof_focus_distance: crate::config::DEFAULT_DOF_FOCUS_DISTANCE,
             dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
             fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
@@ -1083,6 +1099,7 @@ impl FlameRenderer {
         self.effective_iterations = 0; // Reset for new accumulation phase
         self.samples_in_buffer = 0; // Buffer's contents will be replaced/regrown after the reset
         self.frame_counter = 0; // Reset frame counter for deterministic seed progression
+        self.accum_passes = 0;
     }
 
     /// Like `reset_iteration_counter`, but preserves `samples_in_buffer`.
@@ -1528,9 +1545,19 @@ impl FlameRenderer {
         if self.overwrite_mode {
             self.samples_in_buffer = samples_this_frame;
             self.last_batch_samples = samples_this_frame;
+            self.accum_passes = 1;
         } else {
             self.samples_in_buffer += samples_this_frame;
             self.last_batch_samples = samples_this_frame;
+            self.accum_passes += 1;
+        }
+
+        // The exact density count once this render is long enough for
+        // the f32 sum to drift, and not before: an ordinary render binds
+        // the dummy and stays bit-identical (accumulate.wgsl's header).
+        let exact = self.accum_passes >= self.exact_count_after;
+        if self.buffers.set_accum_count(device, exact) {
+            self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
         }
 
         // Pick blend mode + rate for the accumulate shader. See
@@ -1545,13 +1572,10 @@ impl FlameRenderer {
         //     samples_in_buffer, and the picture faded frame by frame.
         //   - use_dynamic_blend=true (default): pure cumulative-mean.
         //     blend_factor unused.
-        //   - use_dynamic_blend=false: fixed EMA at user's blend_factor.
-        //     Dim early frames as the EMA bootstraps from 0; settles
-        //     to a stable steady-state. Precision-stable indefinitely
-        //     (each batch contributes a constant proportion regardless
-        //     of total sample count). Use ~0.001 for high-quality
-        //     renders past ~10^9 iters/pixel where cumulative-mean
-        //     hits f32's precision floor.
+        //   - use_dynamic_blend=false: fixed EMA at user's blend_factor
+        //     for the colour (the density stays cumulative). Dim early
+        //     frames as the EMA bootstraps from 0; settles to a stable
+        //     steady-state.
         let (blend_factor, use_fixed_ema) = if self.overwrite_mode {
             (1.0, 2u32)
         } else if self.use_dynamic_blend {
@@ -1573,7 +1597,8 @@ impl FlameRenderer {
             has_depth: u32::from(
                 self.buffers.solid_depth_region && self.buffers.accum_depth_buffer.is_some(),
             ),
-            _pad2: [0; 2],
+            exact_count: u32::from(self.buffers.accum_count_buffer.is_some()),
+            _pad2: 0,
         };
 
         self.buffers.update_accumulate_params(queue, &params);
@@ -6871,5 +6896,212 @@ mod subflame_tests {
         assert!(total > 0.9, "only {total:.3} of the points landed in a view around x = 2");
         let mean = acc.iter().map(|p| p[0] * p[3]).sum::<f64>() / total;
         assert!(mean > 0.9, "the subflame's points are {mean:.3} red, not the white the final's colour blend gives");
+    }
+}
+
+/// The exact density count (accumulate.wgsl's `accum_count`;
+/// docs/projects/exact-accumulator.md). Each test drives the accumulate
+/// pass alone over a histogram written by hand -- the pass does not clear
+/// it, so every pass adds the same words -- from an accumulator texture
+/// written by hand.
+#[cfg(test)]
+mod exact_count_tests {
+    use super::FlameRenderer;
+
+    const W: u32 = 4;
+    const H: u32 = 2;
+
+    fn renderer(device: &wgpu::Device, queue: &wgpu::Queue) -> FlameRenderer {
+        let cfg = crate::config::FractalConfig::default();
+        FlameRenderer::with_palette_size(device, queue, wgpu::TextureFormat::Rgba8Unorm, W, H, &cfg.flame, cfg.palette_size)
+    }
+
+    /// Every pixel's histogram words: (r, g, b, density), density x 100.
+    fn write_histogram(r: &FlameRenderer, queue: &wgpu::Queue, words: [u32; 4]) {
+        let all: Vec<u32> = (0..W * H).flat_map(|_| words).collect();
+        queue.write_buffer(&r.buffers.histogram_buffer, 0, bytemuck::cast_slice(&all));
+    }
+
+    /// Every pixel of the accumulator the next pass reads.
+    fn write_accumulator(r: &FlameRenderer, queue: &wgpu::Queue, texel: [f32; 4]) {
+        let all: Vec<f32> = (0..W * H).flat_map(|_| texel).collect();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: r.buffers.current_accumulation_texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&all),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(W * 16), rows_per_image: Some(H) },
+            wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        );
+    }
+
+    /// `passes` accumulate passes, one submission each.
+    fn passes(r: &mut FlameRenderer, device: &wgpu::Device, queue: &wgpu::Queue, passes: usize) {
+        for _ in 0..passes {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pass") });
+            r.accumulate_pass(&mut enc, queue, device, 1);
+            queue.submit(Some(enc.finish()));
+        }
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// Pixel 0's texel, raw.
+    fn texel(r: &FlameRenderer, device: &wgpu::Device, queue: &wgpu::Queue) -> [f32; 4] {
+        let p = r.read_accumulator_blocking(device, queue)[0];
+        let per = 1.0 / (r.samples_in_buffer.max(1) as f64 * r.cylinder_iteration_scale());
+        [p[0] as f32, p[1] as f32, p[2] as f32, (p[3] / per) as f32]
+    }
+
+    /// Pixel 0's exact count, (lo, hi).
+    fn count(r: &FlameRenderer, device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32) {
+        let buf = r.buffers.accum_count_buffer.as_ref().expect("the exact count");
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("count readback"),
+            size: 8,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("count") });
+        enc.copy_buffer_to_buffer(buf, 0, &staging, 0, 8);
+        queue.submit(Some(enc.finish()));
+        staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let data = staging.slice(..).get_mapped_range();
+        let w: &[u32] = bytemuck::cast_slice(&data);
+        (w[0], w[1])
+    }
+
+    /// A bright pixel late in a long render: 2^28 hits, three more a
+    /// pass. The f32 sum cannot add 3 to 2^28 (its step there is 32) and
+    /// stays put; the exact count is seeded from it, carries past 2^32
+    /// at once (2^28 x 100), and adds every one. `a` comes from it
+    /// through a few roundings (the low word, the sum, the /100): within
+    /// two f32 steps, and never more however long the render runs.
+    #[test]
+    fn a_long_renders_count_keeps_every_hit() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let start = (1u64 << 28) as f32;
+        let run = |exact: bool| {
+            let mut r = renderer(&device, &queue);
+            r.exact_count_after = if exact { 1 } else { u64::MAX };
+            write_accumulator(&r, &queue, [0.5, 0.5, 0.5, start]);
+            write_histogram(&r, &queue, [150, 150, 150, 300]);
+            passes(&mut r, &device, &queue, 1000);
+            let t = texel(&r, &device, &queue);
+            let c = exact.then(|| count(&r, &device, &queue));
+            r.destroy();
+            (t, c)
+        };
+        let truth = (1u64 << 28) + 3 * 1000;
+
+        let (f32_sum, _) = run(false);
+        assert_eq!(f32_sum[3], start, "the f32 sum should be stuck at 2^28 -- if it moved, this test no longer shows the drift");
+
+        let (exact, count) = run(true);
+        let (lo, hi) = count.expect("a count");
+        assert_eq!((u64::from(hi) << 32) | u64::from(lo), truth * 100, "the count holds every hit, x 100");
+        let off = (f64::from(exact[3]) / truth as f64 - 1.0).abs();
+        assert!(off < 2.0 * f64::from(f32::EPSILON), "a = {} is {off:.1e} off the count {truth}: more than two f32 steps", exact[3]);
+    }
+
+    /// The low word wraps into the high one.
+    #[test]
+    fn the_count_carries_into_its_high_word() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut r = renderer(&device, &queue);
+        r.exact_count_after = 1;
+        write_accumulator(&r, &queue, [0.5, 0.5, 0.5, 1.0]);
+        write_histogram(&r, &queue, [0, 0, 0, 0]);
+        passes(&mut r, &device, &queue, 1);
+        // A count just short of the low word's end, then 0x200 more.
+        let near = [0xFFFF_FF00u32, 7];
+        let all: Vec<u32> = (0..W * H).flat_map(|_| near).collect();
+        queue.write_buffer(r.buffers.accum_count_buffer.as_ref().expect("the count"), 0, bytemuck::cast_slice(&all));
+        write_histogram(&r, &queue, [0x100, 0x100, 0x100, 0x200]);
+        passes(&mut r, &device, &queue, 1);
+        assert_eq!(count(&r, &device, &queue), (0x100, 8));
+        let a = texel(&r, &device, &queue)[3];
+        let want = ((8u64 << 32) | 0x100) as f64 / 100.0;
+        assert!(((a as f64) / want - 1.0).abs() < 1e-7, "a = {a}, the count says {want}");
+        r.destroy();
+    }
+
+    /// Made at the threshold and not before, seeded from the texture's
+    /// count; retired when the render starts again.
+    #[test]
+    fn the_count_is_made_when_a_render_gets_long() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut r = renderer(&device, &queue);
+        r.exact_count_after = 5;
+        write_accumulator(&r, &queue, [0.5, 0.5, 0.5, 0.0]);
+        write_histogram(&r, &queue, [100, 100, 100, 200]);
+        passes(&mut r, &device, &queue, 4);
+        assert!(r.buffers.accum_count_buffer.is_none(), "four passes: no count yet");
+        assert_eq!(texel(&r, &device, &queue)[3], 8.0, "four passes of two hits");
+        passes(&mut r, &device, &queue, 1);
+        assert_eq!(count(&r, &device, &queue), (1000, 0), "seeded from the texture's 8 hits, then 2 more, x 100");
+        r.reset_iteration_counter();
+        passes(&mut r, &device, &queue, 1);
+        assert!(r.buffers.accum_count_buffer.is_none(), "a render starting again retires it");
+        r.destroy();
+    }
+
+    /// An overwrite pass, and an emptied texture, empty the count too.
+    #[test]
+    fn a_reset_empties_the_count() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut r = renderer(&device, &queue);
+        r.exact_count_after = 1;
+        write_accumulator(&r, &queue, [0.5, 0.5, 0.5, 1000.0]);
+        write_histogram(&r, &queue, [100, 100, 100, 200]);
+        passes(&mut r, &device, &queue, 3);
+        assert_eq!(count(&r, &device, &queue), (100_600, 0));
+        // A texture emptied behind the count's back (a clear): the count follows.
+        write_accumulator(&r, &queue, [0.0; 4]);
+        passes(&mut r, &device, &queue, 1);
+        assert_eq!(count(&r, &device, &queue), (200, 0), "an empty texel empties its count");
+        r.exact_count_after = 0;
+        r.set_overwrite_mode(true);
+        passes(&mut r, &device, &queue, 1);
+        assert_eq!(count(&r, &device, &queue), (200, 0), "overwrite: this pass's words alone");
+        r.destroy();
+    }
+
+    /// The same colour, pass after pass, stays that colour to the bit:
+    /// `prev + (new - prev) * a` adds nothing. `prev * (1 - a) + new * a`
+    /// rounded `1 - a` and wandered.
+    #[test]
+    fn a_steady_colour_does_not_wander() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut r = renderer(&device, &queue);
+        write_accumulator(&r, &queue, [0.0; 4]);
+        write_histogram(&r, &queue, [30, 30, 30, 100]);
+        // The first pass sets the colour as the GPU computes 30 / 100
+        // (simulated on the CPU, the lerp form takes 0.3 to 0.29999983
+        // over these 2000 passes; the delta form keeps it).
+        passes(&mut r, &device, &queue, 1);
+        let first = texel(&r, &device, &queue);
+        passes(&mut r, &device, &queue, 2000);
+        let t = texel(&r, &device, &queue);
+        assert_eq!([t[0], t[1], t[2]], [first[0], first[1], first[2]], "the colour moved");
+        r.destroy();
     }
 }
