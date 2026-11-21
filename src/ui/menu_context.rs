@@ -149,6 +149,8 @@ pub struct MenuState {
     /// its step count (its transport is then the animation's).
     pub sim_running: bool,
     pub sim_timeline_driven: bool,
+    /// The animation is stopped at its start: Stop has nothing to do.
+    pub animation_at_start: bool,
     pub has_animation_tracks: bool,
     /// Whether the animation controller is currently playing (drives
     /// the compact menu's play/pause label).

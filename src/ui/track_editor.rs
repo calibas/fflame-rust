@@ -768,20 +768,30 @@ pub fn render_script_track_panel(ctx: &egui::Context, controller: &mut Animation
         .resizable(true)
         .default_width(320.0)
         .show(ctx, |ui| {
-            for (name, mode, under) in &row.targets {
+            // "Targets: rotation, zoom" -- each one's mode (sets, adds
+            // to, scales) on hover, and what lies under it, if anything,
+            // on a line of its own.
+            if !row.targets.is_empty() {
                 ui.horizontal_wrapped(|ui| {
-                    ui.monospace(name);
-                    ui.label(mode_text(*mode));
-                    match (under, under.note(*mode)) {
-                        (Under::Script, Some(note)) => {
-                            ui.colored_label(Color32::from_rgb(220, 140, 60), format!("⚠ {note}"));
-                        }
-                        (_, Some(note)) => {
-                            ui.weak(note);
-                        }
-                        _ => {}
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label(format!("{} ", t!("track_editor.script_targets")));
+                    let last = row.targets.len() - 1;
+                    for (i, (name, mode, _)) in row.targets.iter().enumerate() {
+                        let text = if i < last { format!("{name}, ") } else { name.clone() };
+                        ui.label(egui::RichText::new(text).strong()).on_hover_text(mode_text(*mode));
                     }
                 });
+            }
+            for (name, mode, under) in &row.targets {
+                match (under, under.note(*mode)) {
+                    (Under::Script, Some(note)) => {
+                        ui.colored_label(Color32::from_rgb(220, 140, 60), format!("⚠ {name}: {note}"));
+                    }
+                    (_, Some(note)) => {
+                        ui.weak(format!("{name}: {note}"));
+                    }
+                    _ => {}
+                }
             }
             if let Some(e) = &row.error {
                 ui.colored_label(Color32::from_rgb(240, 120, 120), e);
@@ -2023,12 +2033,30 @@ mod tests {
         assert_eq!(state.script_panel, Some(1));
         assert!(!state.track_editor_panel_open, "not the keyframe panel");
         let ctx = egui::Context::default();
+        let mut drawn = Vec::new();
         for _ in 0..2 {
-            let _ = ctx.run_ui(Default::default(), |ui| {
+            let out = ctx.run_ui(Default::default(), |ui| {
                 render_script_track_panel(ui.ctx(), &mut controller, &mut state);
             });
+            drawn.clear();
+            fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+                match shape {
+                    egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                    _ => {}
+                }
+            }
+            for s in &out.shapes {
+                walk(&s.shape, &mut drawn);
+            }
         }
         assert_eq!(state.script_panel, Some(1), "still open");
+        // "Targets: zoom, rotation": the targets in one line, not each with
+        // a dangling mode ("zoom  added to").
+        assert!(drawn.iter().any(|t| t.trim() == t!("track_editor.script_targets")), "a Targets label: {drawn:?}");
+        assert!(drawn.iter().any(|t| t.starts_with("zoom")) && drawn.iter().any(|t| t.starts_with("rotation")), "the targets named: {drawn:?}");
+        assert!(!drawn.iter().any(|t| *t == t!("track_editor.script_mode_add")), "no bare mode word beside a target: {drawn:?}");
+        assert!(drawn.iter().any(|t| t.starts_with("zoom: ")), "the zoom's note (over its keyframe track) names it: {drawn:?}");
 
         // The parameter store writes into the track.
         let TrackSource::Script { source, params } = &mut controller.animation.as_mut().unwrap().tracks[1].source else { panic!() };

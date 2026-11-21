@@ -365,7 +365,9 @@ panels' sliders use — writes silently too (`update_batch` does not
 check the mode). Stopping or pausing leaves animation mode and
 records one undo entry, `history.action.animation_exit`, from the
 snapshot to the config as it stands. **Stop** then returns to t = 0 and
-applies the tracks there; **Pause** leaves the picture at the playhead.
+applies the tracks there -- from Pause or a scrubbed playhead too (it
+seeks, as a frame step does), so it is enabled whenever the animation is
+not stopped at its start; **Pause** leaves the picture at the playhead.
 
 **Rendering while playing.**
 

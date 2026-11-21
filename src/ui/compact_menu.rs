@@ -267,8 +267,9 @@ fn render_compact_menu_items(
             menu_actions.animation.play_pause = true;
             ui.close();
         }
+        // Stop rewinds to the start, playing or paused.
         if ui
-            .add_enabled(menu_state.animation_playing, egui::Button::new(t!("menu.stop_animation").as_ref()))
+            .add_enabled(!menu_state.animation_at_start, egui::Button::new(t!("menu.stop_animation").as_ref()))
             .clicked()
         {
             menu_actions.animation.stop = true;

@@ -264,7 +264,8 @@ impl egui_dock::egui::Widget for VkbU64<'_> {
         }
 
         ui.memory_mut(|m| m.data.insert_temp(id, text.clone()));
-        vkb_sync_opts(ui, &response, &text, "integer");
+        // Unsigned: no sign key on the phone's keypad.
+        vkb_sync_full(ui, &response, &text, "integer", Some(0.0), None);
         response
     }
 }
@@ -1644,6 +1645,7 @@ impl EguiLayer {
             has_animation_tracks,
             sim_running,
             sim_timeline_driven,
+            animation_at_start: animation_controller.state == crate::animation::PlaybackState::Stopped && animation_controller.current_time == 0.0,
             animation_playing: animation_controller.is_playing(),
             api_animation_id: api_state.animation_id.clone(),
             animation_count: api_state.animation_count,
@@ -2580,7 +2582,15 @@ impl EguiLayer {
             }
         }
         if menu_actions.animation.stop {
+            // Paused (or scrubbed), the picture is at that time and
+            // nothing will move it: the seek puts it at the start, as the
+            // stop of a playing animation does (`seek_to_animation_start`).
+            let was_playing = animation_controller.is_playing();
             animation_controller.stop();
+            if !was_playing {
+                animation_seek_changed = true;
+                animation_seek_drag_stopped = true;
+            }
         }
         // The compact menu's transport in Simulation mode: the run's, as
         // the panel's Run and Reset write it.

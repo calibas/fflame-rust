@@ -703,7 +703,14 @@ record: [mobile-ui-redesign.md](../archive/projects/mobile-ui-redesign.md).
   in Simulation, Run/Pause and Stop (pause and restart from the seed)
   drive the run -- unless the timeline owns the step count, when the
   animation's transport shows; elsewhere Play/Pause and Stop drive the
-  animation, and show only when it has tracks.
+  animation, and show only when it has tracks. Stop rewinds a paused
+  animation too.
+- **Typing on a phone** (the web app on a touch device): a focused text
+  field publishes its text and kind (`vkb_sync`), and `js/vkb.js` shows
+  an HTML input above the canvas with the matching keyboard, then hands
+  the text back (`web_text_agent.rs`). A number field that may be
+  negative (no range, or one below zero) gets a **±** key: the phones'
+  numeric keypads have no minus.
 - **Panels open docked**, not floating (`Workspace::open_panel` →
   `open_compact_panel`): the first splits off the viewport (below it at
   0.55 in portrait, beside it at 0.60 in landscape) and later ones join

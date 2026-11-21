@@ -264,13 +264,20 @@ fn render_playback_controls(
             controller.pause();
         }
 
-        // Stop button
-        let can_stop = controller.state != PlaybackState::Stopped;
+        // Stop button: back to the start, playing, paused or scrubbed.
+        // Paused, nothing else moves the picture (the stop of a playing
+        // animation seeks it, `seek_to_animation_start`): the seek here.
+        let can_stop = controller.state != PlaybackState::Stopped || controller.current_time != 0.0;
         if ui.add_enabled(has_animation && can_stop, egui::Button::new("⏹"))
             .on_hover_text(t!("animation_panel.stop"))
             .clicked()
         {
+            let was_playing = controller.is_playing();
             controller.stop();
+            if !was_playing {
+                response.seek_changed = true;
+                response.seek_drag_stopped = true;
+            }
         }
 
         ui.separator();
@@ -931,7 +938,7 @@ fn render_export_settings(
                     s.parse::<f64>().ok()
                 }
             }));
-        super::vkb_sync_opts(ui, &r, &format!("{}", settings.max_iterations), "integer");
+        super::vkb_sync_full(ui, &r, &format!("{}", settings.max_iterations), "integer", Some(0.0), None);
     });
 
     // ── Speed: the same for every frame (docs/archive/projects/quality-governor.md,

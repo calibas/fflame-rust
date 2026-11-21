@@ -9,6 +9,12 @@
     background: rgba(0, 0, 0, 0.7);
 }
 
+/* The sign key (number fields that may be negative), styled as its
+   neighbours; js/vkb.js shows it. */
+#vkb-overlay .vkb-sign {
+    flex: none;
+}
+
 #vkb-overlay .vkb-bar {
     position: absolute;
     top: env(safe-area-inset-top, 0px);
