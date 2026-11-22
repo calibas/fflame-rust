@@ -143,7 +143,9 @@ struct Band {
 /// none before its next, so each is measured alone.
 #[derive(Default)]
 struct BandClock {
-    done: Vec<(u32, Vec<Band>, f32)>,
+    /// Each finished call: its generation, its bands, its time, and
+    /// whether its pipeline was new to it (`SolidPath::compiling`).
+    done: Vec<(u32, Vec<Band>, f32, bool)>,
     last: Option<web_time::Instant>,
     outstanding: u32,
 }
@@ -186,6 +188,14 @@ pub(super) struct SolidPath {
     /// Restarts so far: a band measured before one is not this picture's.
     generation: u32,
     clock: Arc<Mutex<BandClock>>,
+    /// The next call is the first on a pipeline just made. A browser
+    /// compiles a pipeline at its first use, so that call's time is the
+    /// compile's as much as the GPU's -- seconds for a solid's path tracer
+    /// (4.4 s on the desktop, 6.5 s in its Chrome, more on an M2) -- and
+    /// a loss during it is the compile's too. Neither halves the bands nor
+    /// prices a row (2026-11-22: the compile had taught a Mac a sixteenth
+    /// of its bands).
+    compiling: bool,
     /// The path tracer's settings the sum was gathered under.
     settings: Option<String>,
     /// Every dispatch's rows times samples, the cap it was under, and its
@@ -273,6 +283,7 @@ impl SolidPath {
             max_ms: 0.0,
             generation: 0,
             clock: Arc::new(Mutex::new(BandClock::default())),
+            compiling: false,
             settings: None,
             #[cfg(test)]
             dispatched: Vec::new(),
@@ -314,7 +325,10 @@ impl SolidPath {
     fn collect(&mut self) {
         let done = self.clock.lock().map(|mut c| std::mem::take(&mut c.done)).unwrap_or_default();
         let w = self.width.max(1) as f32;
-        for (generation, bands, ms) in done {
+        for (generation, bands, ms, compiling) in done {
+            if compiling {
+                continue;
+            }
             if ms > SLOW_CALL_MS {
                 let shift = super::PATH_BUDGET_SHIFT.load(std::sync::atomic::Ordering::Relaxed);
                 super::PATH_BUDGET_SHIFT.store((shift + 1).min(6), std::sync::atomic::Ordering::Relaxed);
@@ -815,19 +829,24 @@ impl EscapeRenderer {
         }
         if let Some(submitted) = first_submit {
             let (clock, generation) = (Arc::clone(&path.clock), path.generation);
+            let compiling = std::mem::take(&mut path.compiling);
             if let Ok(mut c) = clock.lock() {
                 c.outstanding += 1;
             }
             // A device lost from here to the call's completion is this
-            // call's (`note_device_lost`).
-            super::PATH_CALLS_IN_FLIGHT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // call's (`note_device_lost`) -- unless it is the compile's.
+            if !compiling {
+                super::PATH_CALLS_IN_FLIGHT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             queue.on_submitted_work_done(move || {
                 use std::sync::atomic::Ordering;
-                let _ = super::PATH_CALLS_IN_FLIGHT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| Some(v.saturating_sub(1)));
+                if !compiling {
+                    let _ = super::PATH_CALLS_IN_FLIGHT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| Some(v.saturating_sub(1)));
+                }
                 if let Ok(mut c) = clock.lock() {
                     let now = web_time::Instant::now();
                     let from = c.last.map_or(submitted, |l| l.max(submitted));
-                    c.done.push((generation, traced, now.duration_since(from).as_secs_f32() * 1000.0));
+                    c.done.push((generation, traced, now.duration_since(from).as_secs_f32() * 1000.0, compiling));
                     c.last = Some(now);
                     c.outstanding = c.outstanding.saturating_sub(1);
                 }
@@ -933,6 +952,10 @@ impl EscapeRenderer {
                 cache: None,
             });
             self.pipelines.insert(key.clone(), pipeline);
+            // Its first call carries the compile (`SolidPath::compiling`).
+            if let Some(path) = self.solid_path.as_mut() {
+                path.compiling = true;
+            }
         }
         key
     }

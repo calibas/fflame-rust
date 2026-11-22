@@ -460,8 +460,15 @@ mod tuning {
 
     const KEY: &str = "gpu_tuning.json";
 
+    /// The path tracer's shift, under a name of its own since 2026-11-22:
+    /// before then a browser's first call on a new pipeline carried its
+    /// compile, and the shift learned from it (a slow call, a loss during
+    /// the compile) was the compile's, not the GPU's -- an M2 had reached
+    /// four halvings. The old `path_shift` is left unread.
+    const PATH_KEY: &str = "path_shift_v2";
+
     pub(super) fn encode(direct: u32, perturb: u32, path: u32) -> String {
-        serde_json::json!({ "direct_shift": direct, "perturb_shift": perturb, "path_shift": path }).to_string()
+        serde_json::json!({ "direct_shift": direct, "perturb_shift": perturb, PATH_KEY: path }).to_string()
     }
 
     pub(super) fn decode(text: &str) -> (u32, u32, u32) {
@@ -469,7 +476,7 @@ mod tuning {
             return (0, 0, 0);
         };
         let get = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0).min(6) as u32;
-        (get("direct_shift"), get("perturb_shift"), get("path_shift"))
+        (get("direct_shift"), get("perturb_shift"), get(PATH_KEY))
     }
 
     pub(super) fn ensure_loaded() {
