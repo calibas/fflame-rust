@@ -256,7 +256,7 @@ pub fn drawn_transforms<'a>(escape: &'a EscapeConfig, registry: &'a VariationReg
     let solid = solid3(escape);
     escape.transforms.iter().filter(move |t| {
         if solid {
-            t.stage == TransformStage::Orbit && registry.get(&t.variation).is_some_and(|v| v.wgsl_source_3d.is_some())
+            t.stage == TransformStage::Orbit && registry.get(&t.variation).is_some_and(|v| v.wgsl_source_3d.is_some() && !walks_subflames(v))
         } else {
             map_usable(registry, &t.variation)
         }
@@ -294,13 +294,21 @@ fn map_value(escape: &EscapeConfig, v: &crate::lang::ir::MapValue) -> f64 {
 /// amount. Zero is the identity in either direction, so it is "no lens";
 /// negative is a lens, and a useful one.
 fn lens_on(escape: &EscapeConfig, registry: &VariationRegistry) -> bool {
-    !escape.lens.is_empty() && escape.lens_amount != 0.0 && registry.get(&escape.lens).is_some()
+    !escape.lens.is_empty() && escape.lens_amount != 0.0 && registry.get(&escape.lens).is_some_and(|v| !walks_subflames(v))
+}
+
+/// A variation that walks a subflame (`subflame_iterate`): no map. A
+/// map's flame has no subflames, and the lens layout leaves their table
+/// out (`LensGpu`), so its shader would not build against the layout.
+fn walks_subflames(v: &crate::variations::VariationInfo) -> bool {
+    let calls = |s: Option<&str>| s.is_some_and(|s| s.contains("subflame_iterate"));
+    calls(v.wgsl_source.as_deref()) || calls(v.wgsl_source_3d.as_deref())
 }
 
 /// Whether a variation can be a map of the escape view: registered, with
 /// a 2D body (not `only_3d`).
 fn map_usable(registry: &VariationRegistry, name: &str) -> bool {
-    registry.get(name).is_some_and(|v| v.category != crate::variations::VariationCategory::Only3D)
+    registry.get(name).is_some_and(|v| v.category != crate::variations::VariationCategory::Only3D && !walks_subflames(v))
 }
 
 /// Where each map sits in the maps flame (the KIFS plan, C4): the lens,
@@ -620,12 +628,14 @@ use wgpu::util::DeviceExt;
 
 /// The lens flame's buffers and its bind group.
 ///
-/// The same five bindings the flame header declares and the
-/// simulation's layer warp binds -- transforms, the flame's params,
-/// the packed variation params, attachments, subflame metadata. Four
-/// of them are inert for a lens (a map has no attachments, no
-/// subflames and no plot), but the header declares them, so they must
-/// be bound or the group is rejected.
+/// Three of the five bindings the flame header declares: transforms,
+/// the flame's params, the packed variation params. The header's other
+/// two, attachments and subflame metadata, are read only by the flame's
+/// chaos-game loop and the subflame code, which a lens map never
+/// includes -- and a layout needs only what the shader uses. Leaving
+/// them out keeps mode D's IFS walk with a lens at 9 storage buffers: at
+/// 11 it broke on a browser that allows 10 (macOS Chrome, 2026-11-22).
+/// `the_lens_layout_holds_every_binding_a_lens_uses` keeps it honest.
 pub struct LensGpu {
     /// What this was built for, so a change of lens rebuilds and a
     /// change of amount does not.
@@ -633,8 +643,6 @@ pub struct LensGpu {
     transforms: wgpu::Buffer,
     flame_params: wgpu::Buffer,
     variation_params: wgpu::Buffer,
-    attachments: wgpu::Buffer,
-    subflame_meta: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
 }
 
@@ -665,8 +673,6 @@ pub fn lens_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 count: None,
             },
             storage_ro(5),
-            storage_ro(10),
-            storage_ro(12),
         ],
     })
 }
@@ -704,16 +710,6 @@ impl LensGpu {
             ),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let attachments = vec![
-            <crate::gpu::buffers::GpuAttachmentList as bytemuck::Zeroable>::zeroed();
-            crate::gpu::buffers::MAX_TRANSFORMS
-        ];
-        let metas = crate::gpu::buffers::build_subflame_metas(&[]).unwrap_or_else(|_| {
-            [<crate::gpu::buffers::SubflameMeta as bytemuck::Zeroable>::zeroed();
-                crate::gpu::buffers::MAX_SUBFLAMES]
-        });
-        let attachments = make("Escape Lens Attachments", bytemuck::cast_slice(&attachments));
-        let subflame_meta = make("Escape Lens Subflame Meta", bytemuck::cast_slice(&metas));
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Escape Lens BG"),
             layout,
@@ -721,8 +717,6 @@ impl LensGpu {
                 wgpu::BindGroupEntry { binding: 0, resource: transforms.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: flame_params.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 5, resource: variation_params.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 10, resource: attachments.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 12, resource: subflame_meta.as_entire_binding() },
             ],
         });
         Self {
@@ -730,8 +724,6 @@ impl LensGpu {
             transforms,
             flame_params,
             variation_params,
-            attachments,
-            subflame_meta,
             bind_group,
         }
     }
@@ -750,7 +742,7 @@ impl LensGpu {
         queue.write_buffer(&self.variation_params, 0, bytemuck::cast_slice(&vparams));
         // Referenced so the buffers outlive the bind group; nothing
         // else writes them.
-        let _ = (&self.flame_params, &self.attachments, &self.subflame_meta);
+        let _ = &self.flame_params;
     }
 }
 
@@ -1196,6 +1188,36 @@ mod gpu_tests {
             source: format!("const INFO = #{{ name: \"{name}\" }};\nfn variation(z, p) {{\n    {body}\n}}\n"),
             variations: Vec::new(),
         }
+    }
+
+    /// **The lens layout holds every binding a lens uses**: transforms,
+    /// the flame's params and the variation params (0, 1, 5) -- for every
+    /// variation as a 2D lens and as a solid's 3D Orbit transformation.
+    /// The layout left out the header's attachments and subflame metadata
+    /// so mode D's walk with a lens fits a browser's 10 storage buffers; a
+    /// variation whose body read either would need them back.
+    #[test]
+    fn the_lens_layout_holds_every_binding_a_lens_uses() {
+        use crate::config::escape::TransformStage;
+        let registry = crate::variations::global_registry().clone();
+        let names: Vec<String> = registry.all().iter().map(|v| v.name.to_string()).collect();
+        let mut wrong = Vec::new();
+        for name in &names {
+            let mut plane = crate::config::escape::EscapeConfig::default();
+            plane.lens = name.to_string();
+            plane.lens_amount = 1.0;
+            let mut solid = crate::config::escape::EscapeConfig::default();
+            solid.formula = "quaternion_julia_solid".to_string();
+            solid.transforms.push(transform(TransformStage::Orbit, name));
+            for (what, e) in [("lens", &plane), ("solid", &solid)] {
+                let Some(src) = crate::escape::lens::lens_source(e, &registry) else { continue };
+                let extra: Vec<u32> = crate::gpu::pipelines::used_bindings(&src).into_iter().filter(|b| [10, 12].contains(b)).collect();
+                if !extra.is_empty() {
+                    wrong.push(format!("{name} ({what}): {extra:?}"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "a lens uses a binding its layout leaves out: {wrong:?}");
     }
 
     fn transform(stage: crate::config::escape::TransformStage, variation: &str) -> crate::config::escape::EscapeTransform {

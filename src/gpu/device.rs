@@ -73,6 +73,26 @@ pub fn device_was_lost() -> bool {
     DEVICE_EVER_LOST.load(std::sync::atomic::Ordering::Acquire)
 }
 
+/// The web app's notice that the GPU device is gone: HTML over the
+/// canvas, since egui draws through the dead device too, with a Reload
+/// button. Shown once; the frame loop stops drawing when it shows it
+/// (`App`'s `gpu_lost`). The budgets that lowered on the loss are
+/// already saved, so the reload starts with smaller GPU calls.
+#[cfg(target_arch = "wasm32")]
+pub fn show_lost_notice() {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return };
+    if doc.get_element_by_id("gpu-lost").is_some() {
+        return;
+    }
+    let Some(container) = doc.get_element_by_id("canvas-container") else { return };
+    let text = crate::t!("escape_panel.gpu_lost_reload").replace('&', "&amp;").replace('<', "&lt;");
+    let reload = crate::t!("escape_panel.gpu_lost_reload_button").replace('&', "&amp;").replace('<', "&lt;");
+    let html = format!(
+        "<div id=\"gpu-lost\" style=\"position:absolute;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.7)\">         <div style=\"max-width:28rem;margin:16px;padding:20px 24px;background:#222;color:#eee;border-radius:8px;font:15px/1.4 sans-serif;text-align:center\">         <p style=\"margin:0 0 16px\">{text}</p>         <button onclick=\"location.reload()\" style=\"padding:8px 20px;font-size:15px;border:0;border-radius:6px;background:#4a8;color:#fff;cursor:pointer\">{reload}</button>         </div></div>"
+    );
+    let _ = container.insert_adjacent_html("beforeend", &html);
+}
+
 /// Raise the signal by hand (tests, and the device-lost callback's
 /// own path is the only other writer).
 #[cfg(test)]

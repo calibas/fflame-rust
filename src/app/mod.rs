@@ -629,6 +629,10 @@ pub struct App {
     /// as for input -- a Catalog preview being made, a fade, a search
     /// settling all ask for frames nobody's input brings.
     pub(super) ui_repaint_at: Option<web_time::Instant>,
+    /// The web app's GPU device was lost: the frame loop does nothing more
+    /// (the page shows a Reload notice).
+    #[cfg(target_arch = "wasm32")]
+    pub(super) gpu_lost: bool,
     pub(super) last_input_time: Option<web_time::Instant>,  // Time of last user input (for idle detection)
     // Tracks whether the fractal was actively rendering on the previous
     // AboutToWait. When it transitions from true to false (e.g.,
@@ -984,6 +988,8 @@ impl App {
             rendering_complete: false,
             clear_paths_next_frame: true,  // Clear paths on first frame
             ui_repaint_at: None,
+            #[cfg(target_arch = "wasm32")]
+            gpu_lost: false,
             last_input_time: None,
             was_rendering_prev_frame: false,
             progress_drawn: crate::ui::RenderProgress::Idle,
@@ -1163,6 +1169,26 @@ impl App {
         // reasoning about whether it fires. See
         // docs/archive/projects/wasm-load-crash.md.
         let handler = move |event: Event<()>, elwt: &ActiveEventLoop| {
+            // The web app's GPU device lost: nothing more touches it. The
+            // browser cannot give the page a new one in place, and every
+            // call on the dead one fails -- a readback mapped again while
+            // its first map never answered panicked inside wgpu (macOS
+            // Chrome, 2026-11-22). The page shows an HTML notice with a
+            // Reload button instead (`gpu::device::show_lost_notice`).
+            #[cfg(target_arch = "wasm32")]
+            {
+                if app.gpu_lost {
+                    elwt.set_control_flow(ControlFlow::Wait);
+                    return;
+                }
+                if crate::gpu::device::take_device_lost() {
+                    log::error!("GPU device lost: stopping, and asking the page to reload");
+                    app.gpu_lost = true;
+                    crate::gpu::device::show_lost_notice();
+                    elwt.set_control_flow(ControlFlow::Wait);
+                    return;
+                }
+            }
             match event {
                 Event::WindowEvent { event, window_id } if window_id == window.id() => {
                     // Let egui handle events first
