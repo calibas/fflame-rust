@@ -332,6 +332,32 @@ pub fn wire_type(k: &ParamKind) -> serde_json::Value {
     }
 }
 
+/// [`api_json`] with nothing converted: an angle in its stored unit,
+/// which `angle_unit` names (none for degrees). For the app's own Rhai
+/// variations, registered through the wire form; never what goes to the
+/// API, whose angles are degrees.
+pub fn api_json_exact(d: &ParamDef) -> serde_json::Value {
+    let bounds = d.kind.bounds();
+    let mut v = serde_json::json!({
+        "name": d.name,
+        "display_name": d.label,
+        "param_type": wire_type(&d.kind),
+        "default_value": d.slot_default(),
+        "min_value": bounds.map(|b| b.0 as f32),
+        "max_value": bounds.map(|b| b.1 as f32),
+        "description": d.hint(),
+    });
+    if let ParamKind::Float { angle: true, unit, free, .. } = d.kind {
+        if unit != AngleUnit::Degrees {
+            v["angle_unit"] = unit.rhai_type().into();
+        }
+        if free {
+            v["angle_free"] = true.into();
+        }
+    }
+    v
+}
+
 /// A parameter downloaded (a variation's or an effect's), a missing
 /// bound filled as its control draws one: `float` the range an unranged
 /// float is drawn over (a variation's -10..10, an effect's 0..1); an
@@ -340,9 +366,18 @@ pub fn wire_type(k: &ParamKind) -> serde_json::Value {
 pub fn from_api(p: &crate::api::types::ApiVariationParameter, float: (f32, f32)) -> ParamDef {
     use crate::api::types::ApiParamType as T;
     let range = |(lo, hi): (f32, f32)| (f64::from(p.min_value.unwrap_or(lo)), f64::from(p.max_value.unwrap_or(hi)));
-    let number = |fallback, free, angle| {
+    // An angle in its stored unit where the parameter names one
+    // (`api_json_exact`), in degrees otherwise.
+    let unit = match p.angle_unit.as_deref() {
+        Some("radians") => AngleUnit::Radians,
+        Some("turns") => AngleUnit::Turns,
+        _ => AngleUnit::Degrees,
+    };
+    let number = |fallback: (f32, f32), free, angle| {
+        let fallback = if angle { (0.0, unit.turn() as f32) } else { fallback };
         let (min, max) = range(fallback);
-        ParamKind::Float { default: p.default_value.into(), min, max, free, log: false, angle, unit: AngleUnit::Degrees }
+        let free = free || (angle && p.angle_free == Some(true));
+        ParamKind::Float { default: p.default_value.into(), min, max, free, log: false, angle, unit: if angle { unit } else { AngleUnit::Degrees } }
     };
     let int = |fallback, free| {
         let (min, max) = range(fallback);

@@ -1748,6 +1748,8 @@ mod download_tests {
             min_value: None,
             max_value: None,
             description: None,
+            angle_unit: None,
+            angle_free: None,
         }
     }
 

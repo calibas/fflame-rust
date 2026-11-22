@@ -1008,6 +1008,19 @@ pub struct ApiVariationParameter {
     /// VARIATIONS_WIRE_FORMAT.md §8).
     #[serde(default)]
     pub description: Option<String>,
+    /// An angle's stored unit, `"radians"` or `"turns"`, its numbers then
+    /// in that unit; absent, an angle is in degrees, as the API gives
+    /// every one. Only the app's own Rhai variations set it
+    /// (`params::api_json_exact`): their registration goes through this
+    /// form, and in degrees a twin stored in turns or radians registered
+    /// with its default multiplied (dc_hexes_wf's 0.166 turns read as
+    /// 59.76, 2026-11-22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle_unit: Option<String>,
+    /// An angle whose typed value may leave its range (the wire's `angle`
+    /// type has no unlimited form). Set with `angle_unit`, by the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle_free: Option<bool>,
 }
 
 /// Full variation definition fetched from the API.
