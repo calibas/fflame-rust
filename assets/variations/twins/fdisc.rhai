@@ -21,12 +21,12 @@ const PARAMS = #{
         hint: "Angular offset added to `atan2(y, x) / π`.",
     },
     xshift: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "X shift",
         hint: "Phase offset on the X cosine wave.",
     },
     yshift: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Y shift",
         hint: "Phase offset on the Y sine wave.",
     },

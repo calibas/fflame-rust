@@ -22,12 +22,11 @@ menu:
   # Edit Menu
   undo: "元に戻す"
   redo: "やり直す"
-  preferences: "環境設定..."
 
   # View Menu
-  reset_view: "表示をリセット"
-  zoom_in: "拡大"
-  zoom_out: "縮小"
+  reset_view: "🔄 表示をリセット"
+  zoom_in: "➕ 拡大"
+  zoom_out: "➖ 縮小"
   mode_2d: "2Dモード"
   mode_3d: "3Dモード"
 

@@ -50,6 +50,15 @@ impl App {
         // sign-in, and a request then carries no token. The Catalog's
         // Refresh asks for them again (unless one is on its way).
         if ui_response.refresh_catalogs_requested {
+            // The palette packs folder too (desktop: the folder is the
+            // catalog; the web's packs come from the build's manifest).
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.palette_library.rescan_packs();
+                if let Ok(mut global) = crate::scene::palette::global_palette_library().write() {
+                    *global = self.palette_library.clone();
+                }
+            }
             if self.catalog_job.is_none() {
                 self.catalog_fetch_started = false;
             }

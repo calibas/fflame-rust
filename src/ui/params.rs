@@ -136,7 +136,29 @@ pub fn control(ui: &mut Ui, def: &ParamDef, value: &mut Value, salt: &str) -> Ed
     };
     let label = &*def.label;
     match (&def.kind, value) {
-        (&ParamKind::Float { min, max, free, log, angle, .. }, Value::Float(v)) => {
+        (&ParamKind::Float { min, max, free, log, angle, unit, .. }, Value::Float(v)) => {
+            // An angle stored in radians or turns is drawn in degrees: the
+            // control edits a converted copy, written back when it changes.
+            if angle && unit != crate::params::AngleUnit::Degrees {
+                let mut deg = unit.to_degrees(*v);
+                let (lo, hi) = (unit.to_degrees(min), unit.to_degrees(max));
+                let add = |ui: &mut Ui, d: &mut f64| {
+                    let s = super::VkbSlider::new(d, lo..=hi)
+                        .text(label)
+                        .clamping(clamping(free))
+                        .drag_value_speed(((hi - lo) / 500.0).max(1e-6))
+                        .suffix("°");
+                    tip(ui.add(s))
+                };
+                let edit = number(ui, def, &mut deg, (lo, hi), salt, add);
+                if edit.changed {
+                    *v = unit.from_degrees(deg);
+                    if free {
+                        *v = v.clamp(f32::MIN.into(), f32::MAX.into());
+                    }
+                }
+                return edit;
+            }
             let add = |ui: &mut Ui, v: &mut f64| {
                 let mut s = super::VkbSlider::new(v, min..=max).text(label).clamping(clamping(free));
                 // Logarithmic over a range above zero; a linear drag of

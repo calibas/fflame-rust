@@ -124,7 +124,7 @@ pub static LOG_DB: VariationDef = VariationDef {
         ParamDef::new(
             "fix_period",
             "Fix Period",
-            "How much random vertical shift gets added each iteration. 0 = no shift; higher = more striping.",
+            "Step of the random vertical shift added each iteration, in multiples of π; 0 or below acts as 1 (a step of π). Higher = more striping.",
             Spec::float(1.0, 0.0, 10.0).free(),
         ),
     ],

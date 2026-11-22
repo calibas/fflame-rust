@@ -9,14 +9,14 @@
 
 const PARAMS = #{
     even: #{
-        value: 0.0, min: -360.0, max: 360.0, type: "angle",
+        value: 0.0, min: -6.2831855, max: 6.2831855, type: "radians",
         caption: "Even",
-        hint: "Rotation angle (degrees) applied to even-numbered rings.",
+        hint: "Rotation applied to even-numbered rings.",
     },
     odd: #{
-        value: 0.0, min: -360.0, max: 360.0, type: "angle",
+        value: 0.0, min: -6.2831855, max: 6.2831855, type: "radians",
         caption: "Odd",
-        hint: "Rotation angle (degrees) applied to odd-numbered rings.",
+        hint: "Rotation applied to odd-numbered rings.",
     },
     size: #{
         value: 1.0, min: 0.01, max: 10.0, free: true,

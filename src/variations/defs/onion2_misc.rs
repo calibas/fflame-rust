@@ -41,7 +41,7 @@ pub static ONION2: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform, Feature::AlwaysZ],
     parameters: &[
-        param!("meeting_pt", "Meeting Pt", unlimited_float, 0.5, -10.0, 10.0, "Where the circle and exponential curves meet (in radians)."),
+        param!("meeting_pt", "Meeting Pt", unlimited_radians, 0.5, -10.0, 10.0, "Where the circle and exponential curves meet (in radians)."),
         param!("circle_a", "Circle A", unlimited_float, 1.0, -10.0, 10.0, "Radius scale for the circle branch (controls overall onion radius)."),
         param!("circle_b", "Circle B", unlimited_float, 1.0, -10.0, 10.0, "Radius scale for the exponential branch (controls Z output)."),
         param!("shift_x", "Shift X", unlimited_float, 0.0, -10.0, 10.0, "X center offset (subtracted from input, added back to output)."),

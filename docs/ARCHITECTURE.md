@@ -107,7 +107,7 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | path | what it is | read |
 | --- | --- | --- |
 | `src/app/` | The running editor. `mod.rs` (about 4,800 lines) holds `App`, the winit event loop, the frame (`App::render`) and the frame governor (`Batch`, `Knee`, `adjust_iter_scale`). Beside it: `ui_handlers.rs` (acting on `UiResponse`), `gpu_updates.rs` (applying `UpdateAction` to the GPU, the overwrite window, `freeze_viewport`), `config.rs` (load/import/export, undo/redo glue, background export launch), `export.rs` (headless export and `ExportEngine`), `input.rs` (keyboard, fullscreen), `fly_camera.rs`, `animation_update.rs`, `governor.rs` (the quality governor: escape-time's, terrains', simulations' rungs and a flame batch's pacing cap), `aa_governor.rs` (its fallback without a GPU timer), `render_mode.rs` (the Normal/Animating/Overwrite state machine; not the render-mode policy), `render_progress.rs`, `texture_sync.rs`, `variation_fetch.rs`, `effect_fetch.rs`, `script_cloud.rs` | [UI.md](main/UI.md), [RENDERER.md](main/RENDERER.md) |
-| `src/ui/` | 63 files: the egui_dock workspace and every panel. Coordination: `mod.rs`, `workspace.rs` (`PanelType`, 30 panels; `WorkspaceLayout`), `panel_viewer.rs`, `menu_bar.rs`, `compact_menu.rs`, `response.rs` (`UiResponse`). Policy: `render_mode.rs`, `visibility.rs`. Panels include `transforms`, `triangle_editor`, `view` and `view_controls`, `tone_mapping`, `palette_editor`, `palette_library`, `inventory` (the Catalog, with `inventory_manage`, `inventory_online`), `fractal_browser` (with `fractal_gallery`), `escape_panel`, `sim_panel`, `textures_panel`, `lighting_panel` (Lighting), `effects_panel`, `animation_panel`, `track_editor`, `signal_panel`, `rhai_editor` (with `script_run`), `paths_panel`, `xaos_editor`, `subflames`, `random_generator`, `undo_history`, `export_panel` | [UI.md](main/UI.md), [FRACTAL-BROWSER.md](main/FRACTAL-BROWSER.md) |
+| `src/ui/` | 64 files: the egui_dock workspace and every panel. Coordination: `mod.rs`, `workspace.rs` (`PanelType`, 31 panels; `WorkspaceLayout`), `panel_viewer.rs`, `menu_bar.rs`, `compact_menu.rs`, `response.rs` (`UiResponse`). Policy: `render_mode.rs`, `visibility.rs`. Panels include `transforms`, `triangle_editor`, `view` and `view_controls`, `tone_mapping`, `palette_editor`, `palette_library`, `inventory` (the Catalog, with `inventory_manage`, `inventory_online`), `fractal_browser` (with `fractal_gallery`), `escape_panel`, `sim_panel`, `textures_panel`, `lighting_panel` (Lighting), `effects_panel`, `animation_panel`, `track_editor`, `signal_panel`, `rhai_editor` (with `script_run`), `paths_panel`, `xaos_editor`, `subflames`, `random_generator`, `undo_history`, `export_panel` | [UI.md](main/UI.md), [FRACTAL-BROWSER.md](main/FRACTAL-BROWSER.md) |
 | `src/i18n.rs` | `t!`'s lookup (a table `build.rs` makes from `locales/*.yml`) and locale switching | [I18N.md](main/I18N.md) |
 
 ### Model and state
@@ -274,7 +274,7 @@ Detail: [UI.md](main/UI.md).
 ### UI organisation
 
 - All UI is dockable panels (egui_dock). `PanelType` in
-  `src/ui/workspace.rs` defines 30 panels; `WorkspaceLayout` holds the
+  `src/ui/workspace.rs` defines 31 panels; `WorkspaceLayout` holds the
   presets (Standard, Flames, Escape Time, Simulation, Animation,
   Scripting, Compact), none applied by a mode change. One workspace
   serves every mode: in Standard, Transforms, Escape and Simulation are

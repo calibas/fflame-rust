@@ -17,7 +17,7 @@ const PARAMS = #{
     fix_period: #{
         value: 1.0, min: 0.0, max: 10.0, free: true,
         caption: "Fix Period",
-        hint: "How much random vertical shift gets added each iteration. 0 = no shift; higher = more striping.",
+        hint: "Step of the random vertical shift added each iteration, in multiples of π; 0 or below acts as 1 (a step of π). Higher = more striping.",
     },
 };
 

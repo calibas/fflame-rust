@@ -14,9 +14,9 @@ const PARAMS = #{
         hint: "Wedge width. Controls how many sectors the fan is split into.",
     },
     y: #{
-        value: 0.0, min: -5.0, max: 5.0, free: true,
+        value: 0.0, min: -5.0, max: 5.0, free: true, type: "radians",
         caption: "Y",
-        hint: "Rotation offset. Spins the whole fan around the origin.",
+        hint: "Shifts where the fan's wedges are cut, around the origin. The points are not rotated.",
     },
 };
 

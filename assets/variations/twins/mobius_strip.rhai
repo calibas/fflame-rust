@@ -39,14 +39,14 @@ const PARAMS = #{
         hint: "Range of the Y input mapped onto the strip's width.",
     },
     rotate_x: #{
-        value: 0.0, min: -1.0, max: 1.0, free: true,
+        value: 0.0, min: -1.0, max: 1.0, free: true, type: "turns",
         caption: "Rotate X",
-        hint: "Rotation around the X axis (in units of 2π).",
+        hint: "Rotation around the X axis.",
     },
     rotate_y: #{
-        value: 0.0, min: -1.0, max: 1.0, free: true,
+        value: 0.0, min: -1.0, max: 1.0, free: true, type: "turns",
         caption: "Rotate Y",
-        hint: "Rotation around the Y axis (in units of 2π).",
+        hint: "Rotation around the Y axis.",
     },
     modify_z: #{
         value: 1.0, min: -10.0, max: 10.0, free: true,

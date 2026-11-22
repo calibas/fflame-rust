@@ -11,7 +11,7 @@
 
 const PARAMS = #{
     meeting_pt: #{
-        value: 0.5, min: -10.0, max: 10.0, free: true,
+        value: 0.5, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Meeting Pt",
         hint: "Where the circle and exponential curves meet (in radians).",
     },

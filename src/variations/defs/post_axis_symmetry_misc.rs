@@ -46,7 +46,7 @@ pub static POST_AXIS_SYMMETRY_WF: VariationDef = VariationDef {
         param!("centre_x", "Centre X", unlimited_float, 0.25, -10.0, 10.0, "X coordinate of the symmetry plane center."),
         param!("centre_y", "Centre Y", unlimited_float, 0.5, -10.0, 10.0, "Y coordinate of the symmetry plane center."),
         param!("centre_z", "Centre Z", unlimited_float, 0.5, -10.0, 10.0, "Z coordinate of the symmetry plane center (3D only)."),
-        param!("rotation", "Rotation", unlimited_float, 30.0, -360.0, 360.0, "Post-mirror rotation angle, in degrees. Full circle = 360. Init precomputes `sin/cos(rotation · 2π/180 / 2)`."),
+        param!("rotation", "Rotation", unlimited_angle, 30.0, -360.0, 360.0, "Post-mirror rotation angle, in degrees. Full circle = 360. Init precomputes `sin/cos(rotation · 2π/180 / 2)`."),
     ],
     init_param_count: 2,
     wgsl_init: Some(r#"

@@ -45,7 +45,7 @@ pub static GLYNNSSHAPE: VariationDef = VariationDef {
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Outer cutoff radius. Points inside use the super-shape curve; outside use the Glynn power-warp."),
         param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0, "Inner-curve sampling radius. Negative values trigger a small-circle fallback inside the cutoff."),
         param!("thickness", "Thickness", unlimited_float, 1.0, -10.0, 10.0, "Inner-circle thickness (used when `radius1 < 0`)."),
-        param!("phi1", "Phi 1", unlimited_float, 0.0, -360.0, 360.0, "Inner-curve center angle, in degrees."),
+        param!("phi1", "Phi 1", unlimited_angle, 0.0, -360.0, 360.0, "Inner-curve center angle, in degrees."),
         param!("m", "M", unlimited_float, 5.0, -50.0, 50.0, "Super-shape symmetry parameter (number of lobes)."),
         param!("n1", "N1", unlimited_float, 1.7, -10.0, 10.0, "Super-shape exponent 1 — outer envelope shape (controls overall sharpness)."),
         param!("n2", "N2", unlimited_float, 1.7, -10.0, 10.0, "Super-shape exponent 2 — controls the cos-side shape."),

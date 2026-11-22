@@ -1525,7 +1525,7 @@ struct EditAsRhai {
 fn edit_as_rhai_button(ui: &mut egui::Ui, builtin: &str, model: bool) -> bool {
     let shipped = if model { crate::sim::custom::SHIPPED_MODELS } else { crate::sim::custom::SHIPPED };
     shipped.iter().any(|(n, _)| *n == builtin)
-        && ui.small_button(t!("sim_panel.edit_as_rhai")).on_hover_text(t!("sim_panel.edit_as_rhai_tip")).clicked()
+        && super::edit_as_rhai_button(ui, true, &t!("sim_panel.edit_as_rhai_tip")).clicked()
 }
 
 /// The Model section: one list whose entry 0 is the primary model.

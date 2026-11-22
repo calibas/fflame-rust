@@ -39,7 +39,7 @@ const PARAMS = #{
     phase: #{
         value: 0.0, min: -10.0, max: 10.0, free: true,
         caption: "Phase",
-        hint: "Phase interpolation factor: 0 = first phase-shifted position, 1 = second.",
+        hint: "Phase of the ripple. Becomes `phase·2π − π`, which shifts the wave (times `velocity`) and weights the blend of the two phase-shifted positions.",
     },
     scale: #{
         value: 1.0, min: -10.0, max: 10.0, free: true,

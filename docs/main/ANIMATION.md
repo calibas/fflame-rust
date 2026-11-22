@@ -190,9 +190,11 @@ an f64 track, about 16 digits: a moving centre is only that precise
 (past a zoom of about 10^13 its steps show), and a frame whose value is
 the centre's own f64 leaves the exact decimal alone
 (`animation::holds_exact_centre`), so a held centre survives any zoom.
-Angles are stored in **radians** (`is_angle_path` in
-[track_editor.rs](../../src/ui/track_editor.rs) lists them) and the
-editor shows and accepts degrees.
+Angles are stored as their settings store them -- the rotations and
+cameras in radians, the escape lighting's angles in degrees, a variation
+parameter in its kind's unit (`angle_unit_of_path` in
+[track_editor.rs](../../src/ui/track_editor.rs)) -- and the editor shows
+and accepts degrees for every one.
 
 **`flame_target`** says which flame a per-flame path resolves against:
 the main flame or a subflame by position. Paths that live on the
@@ -365,7 +367,9 @@ panels' sliders use — writes silently too (`update_batch` does not
 check the mode). Stopping or pausing leaves animation mode and
 records one undo entry, `history.action.animation_exit`, from the
 snapshot to the config as it stands. **Stop** then returns to t = 0 and
-applies the tracks there; **Pause** leaves the picture at the playhead.
+applies the tracks there -- from Pause or a scrubbed playhead too (it
+seeks, as a frame step does), so it is enabled whenever the animation is
+not stopped at its start; **Pause** leaves the picture at the playhead.
 
 **Rendering while playing.**
 
@@ -789,11 +793,13 @@ in [EXPORT.md](EXPORT.md) (*Video Export*). What belongs to animation:
 A **script track** (`TrackSource::Script`; plan and record in
 [rhai-tracks.md](../archive/projects/rhai-tracks.md)) is a Rhai script that
 writes the targets it declares, every frame. It is written in the
-Rhai Editor (**Use as track**), or added from the track editor's
-**Add Script Track** menu: the shipped examples (Breathing, Springy
-Zoom, Smoothed Jitter, in `assets/formulas/track-*.rhai`), the user's
-track files (`library::Kind::Track`), or a new one begun in the
-editor. The animation carries its source and its parameter values, so a
+Rhai Editor (**Use as track**), or added from the **Scripted** section
+at the top of the Add Track dialog's target selector, beside the
+parameters (`target_selector::ScriptChoice`, listed when the dialog
+opens): the shipped examples (Breathing, Springy Zoom, Smoothed Jitter,
+in `assets/formulas/track-*.rhai`), the user's track files
+(`library::Kind::Track`), or a new one begun in the editor. Picking one
+adds the track, opens its window and closes the dialog. The animation carries its source and its parameter values, so a
 `.anim` plays anywhere.
 
 ```rhai

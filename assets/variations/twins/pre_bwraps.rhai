@@ -21,14 +21,14 @@ const PARAMS = #{
         hint: "How strongly each bubble wraps its contents inward.",
     },
     inner_twist: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Inner Twist",
-        hint: "Rotation (in degrees) applied at the center of each bubble.",
+        hint: "Rotation applied at the center of each bubble.",
     },
     outer_twist: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Outer Twist",
-        hint: "Rotation (in degrees) applied at the edge of each bubble.",
+        hint: "Rotation applied at the edge of each bubble.",
     },
 };
 
@@ -45,8 +45,8 @@ fn prepare(p) {
         out[0] = 0.0;
         out[1] = 0.0;
         out[2] = 0.0;
-        out[3] = inner_twist * 3.14159265358979 / 180.0;
-        out[4] = outer_twist * 3.14159265358979 / 180.0;
+        out[3] = inner_twist;
+        out[4] = outer_twist;
     } else {
         let radius = 0.5 * (cellsize / (1.0 + space * space));
         let g2 = (gain * gain) / (radius + 1.0e-6) + 1.0e-6;
@@ -59,8 +59,8 @@ fn prepare(p) {
         out[0] = g2;
         out[1] = radius * radius;
         out[2] = radius / max_bubble;
-        out[3] = inner_twist * 3.14159265358979 / 180.0;
-        out[4] = outer_twist * 3.14159265358979 / 180.0;
+        out[3] = inner_twist;
+        out[4] = outer_twist;
     }
     #{ g2: out[0], r2: out[1], rfactor: out[2], d3: out[3], d4: out[4] }
 }

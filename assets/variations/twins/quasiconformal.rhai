@@ -16,7 +16,7 @@ const PARAMS = #{
     spiral: #{
         value: 0.0, min: -4.0, max: 4.0, free: true,
         caption: "Spiral",
-        hint: "Exact mode: imaginary part of a — couples radius into angle so the map spirals (the logarithmic-spiral part of z ↦ z^a). Field mode: radial winding of the stretch orientation (turns per e-fold of radius).",
+        hint: "Exact mode: imaginary part of a — couples radius into angle so the map spirals (the logarithmic-spiral part of z ↦ z^a). Field mode: radial winding of the stretch orientation (radians per e-fold of radius).",
     },
     dilation: #{
         value: 0.35, min: 0.0, max: 0.98,

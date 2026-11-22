@@ -1376,4 +1376,25 @@ mod layout_tests {
         println!("  targeted, auto-exposed, importance-sampled, 10 storage buffers: {n} pixels lit");
         assert!(n > 100, "the targeted flame drew {n} pixels");
     }
+
+    /// **Mode D's IFS walk with a transformation fits a browser's ten.**
+    /// The walk's two groups hold seven storage buffers and a lens or
+    /// transformation adds its group; at eleven (the lens group then held
+    /// the flame header's attachments and subflame table, which no map
+    /// reads) every IFS solid with a transformation failed on macOS Chrome
+    /// (2026-11-22). wgpu rejects the pipeline layout outright when it
+    /// is over, so a render that completes is the test.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn an_ifs_solid_with_a_transformation_fits_a_browsers_storage_limit() {
+        use crate::config::escape::{EscapeTransform, TransformStage};
+        let (device, queue) = limited_device(10);
+        let mut cfg = FractalConfig::default();
+        cfg.render_mode = crate::scene::transforms::RenderMode::Escape;
+        cfg.escape.formula = "quaternion_julia_solid".to_string();
+        cfg.escape.transforms.push(EscapeTransform::new(TransformStage::Orbit, "spherical", 1.0));
+        let job = crate::renderer::RenderJob::new(&cfg, 64, 64);
+        let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render");
+        assert_eq!(out.rgba_data.len(), 64 * 64 * 4);
+    }
 }

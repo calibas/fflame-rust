@@ -74,7 +74,7 @@ pub static MAURER_ROSE: VariationDef = VariationDef {
         param!("kd", "K Denominator", unlimited_float, 1.0, -50.0, 50.0, "K denominator."),
         param!("c", "C Offset", unlimited_float, 0.0, -10.0, 10.0, "Constant offset added to the rose radius. Shifts the curve outward."),
         param!("line_count", "Line Count", unlimited_float, 360.0, 1.0, 10000.0, "Number of Maurer-rose line segments per cycle."),
-        param!("line_offset_degrees", "Line Offset (deg)", unlimited_float, 71.0, -3600.0, 3600.0, "Angular step between successive samples on the rhodonea, in degrees. Together with line_count, controls how many cycles wrap around the rose."),
+        param!("line_offset_degrees", "Line Offset (deg)", unlimited_angle, 71.0, -3600.0, 3600.0, "Angular step between successive samples on the rhodonea, in degrees. Together with line_count, controls how many cycles wrap around the rose."),
         param!("show_lines", "Show Lines", float, 1.0, 0.0, 10.0, "Relative weight of sampling along the Maurer line segments."),
         param!("show_points", "Show Points", float, 0.0, 0.0, 10.0, "Relative weight of sampling at the segment endpoints."),
         param!("show_curve", "Show Curve", float, 0.05, 0.0, 10.0, "Relative weight of sampling directly on the underlying rhodonea curve."),

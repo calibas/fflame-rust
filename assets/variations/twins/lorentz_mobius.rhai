@@ -15,7 +15,7 @@ const PARAMS = #{
         hint: "Magnitude of the θ-slot generators (the notebook's 'rotation z/y/x' trio g3–g5). These exponentiate σ/2, so as Möbius maps they are HYPERBOLIC — boost-like squeezes toward antipodal fixed points (the notebook's labels are the reverse of the physics convention). Notebook value: 1.",
     },
     eta: #{
-        value: 0.0, min: -4.0, max: 4.0, free: true,
+        value: 0.0, min: -4.0, max: 4.0, free: true, type: "radians",
         caption: "Eta",
         hint: "Magnitude of the η-slot generators (the notebook's 'boost ±z' pair g1–g2). These exponentiate iσ/2, so as Möbius maps they are ELLIPTIC — rotations about the ±z celestial poles by η radians. Notebook value: 1.",
     },

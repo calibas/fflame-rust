@@ -79,6 +79,11 @@ pub enum PanelType {
     RhaiEditor,
     /// Kalles Fraktaler-style hybrid formulas (escape::lang::hybrid)
     HybridDesigner,
+    /// The Settings panel (`ui::preferences`): device preferences that
+    /// belong to no other panel -- the online account, the pickers'
+    /// downloads, the language. Not the old Settings panel, which is
+    /// `Rendering`.
+    Preferences,
 }
 
 impl std::fmt::Display for PanelType {
@@ -93,6 +98,7 @@ impl std::fmt::Display for PanelType {
             PanelType::FractalBrowser => t!("browser.title"),
             PanelType::View => t!("panels.view"),
             PanelType::Rendering => t!("panels.rendering"),
+            PanelType::Preferences => t!("panels.preferences"),
             PanelType::History => t!("panels.history"),
             PanelType::Animation => t!("panels.animation"),
             PanelType::Performance => t!("panels.performance"),
@@ -255,6 +261,7 @@ impl Workspace {
             PanelType::FractalBrowser => egui::vec2(600.0, 500.0),
             PanelType::View => egui::vec2(350.0, 350.0),
             PanelType::Rendering => egui::vec2(350.0, 350.0),
+            PanelType::Preferences => egui::vec2(320.0, 280.0),
             PanelType::History => egui::vec2(350.0, 400.0),
             PanelType::Animation => egui::vec2(600.0, 300.0),
             PanelType::Performance => egui::vec2(350.0, 300.0),

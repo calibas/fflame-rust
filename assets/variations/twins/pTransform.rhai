@@ -9,9 +9,9 @@
 
 const PARAMS = #{
     rotate: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Rotate",
-        hint: "Angular rotation added to θ, in radians.",
+        hint: "Angular rotation added to θ.",
     },
     power: #{
         value: 1, min: -50, max: 50,

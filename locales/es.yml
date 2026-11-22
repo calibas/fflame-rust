@@ -22,12 +22,11 @@ menu:
   # Edit Menu
   undo: "Deshacer"
   redo: "Rehacer"
-  preferences: "Preferencias..."
 
   # View Menu
-  reset_view: "Restablecer Vista"
-  zoom_in: "Acercar"
-  zoom_out: "Alejar"
+  reset_view: "🔄 Restablecer Vista"
+  zoom_in: "➕ Acercar"
+  zoom_out: "➖ Alejar"
   mode_2d: "Modo 2D"
   mode_3d: "Modo 3D"
 

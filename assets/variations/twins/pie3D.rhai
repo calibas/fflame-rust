@@ -10,9 +10,9 @@ const PARAMS = #{
         hint: "Number of pie wedges (1-64).",
     },
     rotation: #{
-        value: 0.0, min: 0.0, max: 360.0, type: "angle",
+        value: 0.0, min: 0.0, max: 6.2831855, type: "radians",
         caption: "Rotation",
-        hint: "Rotation angle of the whole pie in degrees.",
+        hint: "Rotation of the whole pie, in degrees (stored in radians, as Apophysis holds it).",
     },
     thickness: #{
         value: 0.5, min: 0.0, max: 1.0,

@@ -15,9 +15,9 @@ const PARAMS = #{
         hint: "Maximum scatter distance along the blur direction.",
     },
     angle: #{
-        value: 0.5, min: -6.28318, max: 6.28318, free: true,
-        caption: "Angle (rad)",
-        hint: "Direction of the blur, in radians.",
+        value: 0.5, min: -6.28318, max: 6.28318, free: true, type: "radians",
+        caption: "Angle",
+        hint: "Direction of the blur.",
     },
 };
 

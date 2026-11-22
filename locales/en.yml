@@ -77,12 +77,11 @@ menu:
   # Edit Menu
   undo: "⮪ Undo"
   redo: "⮫ Redo"
-  preferences: "⚙ Preferences..."
 
   # View Menu
-  reset_view: "Reset View"
-  zoom_in: "Zoom In"
-  zoom_out: "Zoom Out"
+  reset_view: "🔄 Reset View"
+  zoom_in: "➕ Zoom In"
+  zoom_out: "➖ Zoom Out"
   mode_2d: "2D Mode"
   mode_3d: "3D Mode"
 
@@ -132,6 +131,7 @@ menu:
   window_file_browser: "📂 File Browser"
   window_config_dialog: "📄 Config Import/Export"
   window_history: "⮪ Undo/Redo History"
+  window_more: "More"
   window_animation: "🎬 Animation"
   window_paths: "🌳 Paths"
   window_random_generator: "🎲 Random Generator"
@@ -139,6 +139,7 @@ menu:
   window_subflames: "✨ Subflames"
   window_scripts: "📜 Scripts"
   window_xaos_editor: "🔀 Xaos Editor"
+  window_settings: "⚙ Settings"
   window_signal: "📊 Signals"
   window_account: "👤 Account"
 
@@ -155,6 +156,10 @@ menu:
   play_animation: "▶ Play Animation"
   pause_animation: "⏸ Pause Animation"
   stop_animation: "⏹ Stop Animation"
+  run_simulation: "▶ Run Simulation"
+  pause_simulation: "⏸ Pause Simulation"
+  stop_simulation: "⏹ Stop Simulation"
+  stop_simulation_tip: "Pause and restart from the seed"
   layout_compact: "📱 Mobile View"
   layout_advanced: "Advanced"
   layout_export: "Export"
@@ -164,7 +169,8 @@ menu:
   help_panel: "❓ Help"
   keyboard_shortcuts: "⌨ Keyboard Shortcuts"
   report_bug: "🐛 Report Bug..."
-  about: "ℹ About..."
+  about: "📄 About..."
+  settings: "⚙ Settings..."
 
 # Help Panel
 help:
@@ -268,6 +274,7 @@ panels:
   palette_library: "Palette Library"
   view: "View"
   rendering: "Rendering"
+  preferences: "Settings"
   history: "History"
   animation: "Animation"
   performance: "Performance"
@@ -289,6 +296,13 @@ panels:
   rhai_editor: "Rhai Editor"
   hybrid_designer: "Hybrid Designer"
   simulation: "Simulation"
+
+# The Settings panel (ui::preferences): device preferences
+preferences:
+  online: "Online"
+  catalog: "Catalog"
+  language: "Language"
+  font_missing: "%{language} needs a font this build does not have; the language is English."
 
 # Random Generator Panel
 random_generator:
@@ -459,7 +473,6 @@ variations:
   reorder: "Order"
   move_up: "⬆ Move up"
   move_down: "⬇ Move down"
-  edit_as_rhai: "Edit as Rhai"
   edit_as_rhai_tip: "Put this variation's Rhai twin in its place in this transform -- the same flame, its weight and parameters kept -- and open it in the Rhai Editor to change as your own. The built-in is untouched."
   search: "Search:"
   category: "Category"
@@ -1844,14 +1857,15 @@ track_editor:
   unreadable_track: "A track this version cannot play (made by a newer version). It is kept as it is and saved unchanged."
   # Script tracks (docs/archive/projects/rhai-tracks.md)
   script_track: "Script track"
-  add_script_track: "Add Script Track"
+  scripted: "📜 Scripted"
   script_plugins: "Your tracks"
   script_new: "New in the Rhai Editor..."
   script_new_tip: "Open the Rhai Editor on an example track to write your own; Use as track adds it to the animation."
   script_window: "Script Track: %{name}"
-  script_mode_set: "set"
-  script_mode_add: "added to"
-  script_mode_scale: "scaled"
+  script_targets: "Targets:"
+  script_mode_set: "sets the value"
+  script_mode_add: "adds to the value"
+  script_mode_scale: "scales the value"
   script_clash: "another script track writes this too; the later one wins"
   script_over_set: "replaces the track under it (ctx.get reads that track's value)"
   script_over_adjust: "applied to the track under it"
@@ -2047,7 +2061,6 @@ settings:
   progress: "Progress: %{current} / %{max} (%{percent}%)"
   iterations_per_thread: "Iterations per Thread"
   reset_orbits: "Reset Orbits Each Dispatch"
-  advanced: "Advanced"
   burn_in: "Burn-in Iterations"
   use_dynamic_blend: "Use Dynamic Blend"
   fixed_blend_rate: "Fixed Blend Rate"
@@ -2189,10 +2202,6 @@ messages:
 # Fractal Viewport
 viewport:
   initializing: "Initializing fractal renderer..."
-  touch_pan: "✋ Pan"
-  touch_pan_tip: "A one-finger drag moves the view. Long-press, then drag, to turn instead."
-  touch_turn: "⟳ Turn"
-  touch_turn_tip: "A one-finger drag turns the view, as Ctrl+drag does: a 2D view rotates, a 3D camera orbits. Two fingers still pinch to zoom."
 
 # Path Info Overlay (right-click in PathMap mode, or a long press on touch)
 path_overlay:
@@ -2386,6 +2395,7 @@ signal:
   generator_name_taken: "Another signal (audio analysis or a signal file) has this name, so this generator's signal is not in use. Rename it."
   no_signal_files: "No signal files loaded."
   load_signal_file: "Load Signal..."
+  files_not_on_web: "Signal files can't be loaded or saved in the web app yet."
   save_signal: "Save"
 
 # Audio (sub-section of Signal Panel)
@@ -2516,7 +2526,6 @@ textures_panel:
   trap_hint: "The Image Trap colouring (Escape panel) traps the orbit in this texture too."
   trap_in_use: "The Image Trap colouring is trapping the orbit in this texture."
 sim_panel:
-  edit_as_rhai: "Rhai"
   edit_as_rhai_tip: "Edit this as a Rhai script of your own, in the Rhai Editor: its Rhai twin takes its place here, with its settings kept -- the same picture -- and Live shows each edit. The built-in is untouched."
   terrain: "3D terrain"
   terrain_enabled: "Show as a 3D terrain"
@@ -2686,11 +2695,8 @@ escape_panel:
   angle_tip: "The parameter's angle about 0, in degrees"
   edit_as_formula: "Edit as Formula"
   edit_as_formula_tip: "Put this formula's Rhai twin in its place -- the same picture -- and open it in the Rhai Editor to change as your own. Mann damping and the biomorph test are the built-in's alone."
-  edit_field_as_rhai: "Edit Field as Rhai"
   edit_field_as_rhai_tip: "Put this field's Rhai twin in its place -- the same picture, its settings and the view kept -- and open it in the Rhai Editor to change as your own. The built-in is untouched."
-  edit_solid_as_rhai: "Edit Solid as Rhai"
   edit_solid_as_rhai_tip: "Put this solid's Rhai twin in its place -- the same picture, its settings and the camera kept -- and open it in the Rhai Editor to change as your own. The built-in is untouched."
-  edit_as_rhai: "Edit as Rhai"
   edit_coloring_as_rhai_tip: "Put this colouring's Rhai twin in its place -- the same picture, its settings kept -- and open it in the Rhai Editor to change as your own. The built-in is untouched."
   contrast: "Auto Contrast"
   contrast_mode: "Mode"
@@ -2743,7 +2749,8 @@ escape_panel:
   tooltip_detect_period: "Ball-method period detection at the center's intrinsic depth. Runs in the background; minutes for large periods."
   searching_period: "Detecting period…"
   building_reference: "Computing reference orbit… %{percent}% \n(%{have} / %{want} iterations)"
-  gpu_lost_reload: "The GPU stopped responding and the browser dropped the device. Reload the page; the render budget has been lowered for next time."
+  gpu_lost_reload: "The graphics card stopped responding, and the browser reset it. Reload the page to continue; unsaved changes are lost. The app now sends smaller pieces of work, so the same picture may render after the reload."
+  gpu_lost_reload_button: "Reload"
   period_found: "Period %{period} — wrap exact to 2^-%{octave}, i.e. zoom ~10^%{zoom}"
   period_none: "No period under 8,000,000 wraps at this depth — leave the field empty and let the plain reference run."
   detected_period: "In use: period %{period}"
@@ -3087,7 +3094,6 @@ effects_panel:
   update_all: "Update all (%{count})"
   clear_cache: "Clear downloaded effects (%{count})"
   clear_cache_tip: "Remove the effects downloaded from the online library, and its catalog: a flame using one fetches it again. The built-ins and your own are not touched."
-  edit_as_rhai: "Rhai"
   edit_as_rhai_tip: "Edit this effect as a Rhai script of your own, in the Rhai Editor: this instance runs your copy, with its settings kept, and Live shows each edit. The built-in is untouched."
   reset_history: "Reset History"
   reset_history_tip: "Start the temporal effects' memory of earlier frames over. It carries on while the animation plays, is held while it is paused, and starts over on a seek or a loop."
@@ -3143,7 +3149,6 @@ formula_editor:
   use_field: "Use as field"
   use_field_coloring: "Use as field colouring"
   use_effect: "Use as effect"
-  edit_as_rhai: "Edit as Rhai"
   editing_builtin: "`%{entry}` is in use as your own formula; Save keeps it in your library"
   editing_builtin_coloring: "`%{entry}` is in use as your own colouring; Save keeps it in your library"
   editing_builtin_variation: "%{name} is in use as your own variation; Save keeps it in your library"
@@ -3300,6 +3305,7 @@ inventory:
       ifs_measure: "The flame's own density and colour, read through the inverse walk instead of sampled by the chaos game, so it does not starve at depth."
 
 rhai_editor:
+  edit_as_rhai: "Edit as Rhai"
   nothing_open: "Nothing is open. Choose a file in the Catalog and Edit it, or make a New one there."
   open_catalog: "Open the Catalog"
   unsaved: "(not saved yet)"

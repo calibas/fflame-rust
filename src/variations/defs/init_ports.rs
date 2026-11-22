@@ -45,14 +45,14 @@ pub static TARGET: VariationDef = VariationDef {
         ParamDef::new(
             "even",
             "Even",
-            "Rotation angle (degrees) applied to even-numbered rings.",
-            Spec::angle(0.0, -360.0, 360.0),
+            "Rotation applied to even-numbered rings.",
+            Spec::radians(0.0, -std::f32::consts::TAU, std::f32::consts::TAU),
         ),
         ParamDef::new(
             "odd",
             "Odd",
-            "Rotation angle (degrees) applied to odd-numbered rings.",
-            Spec::angle(0.0, -360.0, 360.0),
+            "Rotation applied to odd-numbered rings.",
+            Spec::radians(0.0, -std::f32::consts::TAU, std::f32::consts::TAU),
         ),
         ParamDef::new(
             "size",

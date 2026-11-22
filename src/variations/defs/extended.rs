@@ -396,8 +396,8 @@ pub static BWRAPS: VariationDef = VariationDef {
         param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Width of each grid cell — the plane is divided into cells of this size, each becoming a bubble."),
         param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Gap between cells. 0 = no gap; positive values push the bubbles apart."),
         param!("gain", "Gain", unlimited_float, 1.0, -5.0, 5.0, "How strongly each bubble wraps its contents inward."),
-        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation (in degrees) applied at the center of each bubble."),
-        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation (in degrees) applied at the edge of each bubble."),
+        param!("inner_twist", "Inner Twist", unlimited_radians, 0.0, -10.0, 10.0, "Rotation applied at the center of each bubble."),
+        param!("outer_twist", "Outer Twist", unlimited_radians, 0.0, -10.0, 10.0, "Rotation applied at the edge of each bubble."),
     ],
     // 3 derived values at slots 5..8:
     //   5: g2        (gain² / (radius + ε) + ε)

@@ -11,9 +11,9 @@
 
 const PARAMS = #{
     spin: #{
-        value: 3.1415927, min: -10.0, max: 10.0, free: true,
+        value: 3.1415927, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Spin",
-        hint: "Lazysusan-quadrant rotation amount, in radians.",
+        hint: "Lazysusan-quadrant rotation amount.",
     },
     space: #{
         value: 0.0, min: -10.0, max: 10.0, free: true,

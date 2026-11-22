@@ -20732,6 +20732,10 @@
         "builtin": "pre_bwraps2",
         "kind": "variation"
       },
+      "u022a692c26bb892392bfd1e9e42a2668_c48f740e": {
+        "builtin": "pre_bwraps2",
+        "kind": "variation"
+      },
       "u022a692c26bb892392bfd1e9e42a2668_cf4d932b": {
         "builtin": "pre_bwraps2",
         "kind": "variation"
@@ -20816,6 +20820,10 @@
         "builtin": "sym_ng6",
         "kind": "variation"
       },
+      "u04a488af2cd688a7bc82173c03a27636_17ffca40": {
+        "builtin": "affine3D",
+        "kind": "variation"
+      },
       "u04a488af2cd688a7bc82173c03a27636_2a8cdda3": {
         "builtin": "affine3D",
         "kind": "variation"
@@ -20896,6 +20904,10 @@
         "builtin": "bTransform",
         "kind": "variation"
       },
+      "u07b8825066bb8ef4a1f5c004c4f4fbf1_c1892ad4": {
+        "builtin": "bTransform",
+        "kind": "variation"
+      },
       "u083ebb944a398d18b2fe5928c31b53d7_126b40a8": {
         "builtin": "cross",
         "kind": "variation"
@@ -20916,6 +20928,10 @@
         "builtin": "bwraps7",
         "kind": "variation"
       },
+      "u088ca57db5428f2992f02d804bc08550_9ae76742": {
+        "builtin": "bwraps7",
+        "kind": "variation"
+      },
       "u088ca57db5428f2992f02d804bc08550_fe8f5118": {
         "builtin": "bwraps7",
         "kind": "variation"
@@ -20926,6 +20942,10 @@
       },
       "u08cc769c2cb38ab287f472ef23858ab1_8b09f4fa": {
         "builtin": "cylinder2",
+        "kind": "variation"
+      },
+      "u093b3f2f88f588cda55abc0cb7635190_1c2c92fa": {
+        "builtin": "ripple",
         "kind": "variation"
       },
       "u093b3f2f88f588cda55abc0cb7635190_2585fd20": {
@@ -20960,12 +20980,20 @@
         "builtin": "glsl_kaliset",
         "kind": "variation"
       },
+      "u0aa3901f9cd3808589edad9d63dae77c_8f07d71b": {
+        "builtin": "glsl_kaliset",
+        "kind": "variation"
+      },
       "u0aa687d8c548868fae8959841e39e768_27335451": {
         "builtin": "jac_sn",
         "kind": "variation"
       },
       "u0aa687d8c548868fae8959841e39e768_37cbc4b6": {
         "builtin": "jac_sn",
+        "kind": "variation"
+      },
+      "u0aea08001bef879b8ae13901f89463c1_afb81ce5": {
+        "builtin": "post_bwraps2",
         "kind": "variation"
       },
       "u0aea08001bef879b8ae13901f89463c1_ec97acad": {
@@ -21201,6 +21229,10 @@
         "kind": "variation"
       },
       "u1b4b59df990a8eef9443a8e17ccebcb6_4534e65f": {
+        "builtin": "bwraps",
+        "kind": "variation"
+      },
+      "u1b4b59df990a8eef9443a8e17ccebcb6_62371e9b": {
         "builtin": "bwraps",
         "kind": "variation"
       },
@@ -21552,6 +21584,10 @@
         "builtin": "z",
         "kind": "variation"
       },
+      "u2f436afafbcf85419645e7fd70194c73_8ad0a4e8": {
+        "builtin": "z",
+        "kind": "variation"
+      },
       "u2f4ee168f3cb8124aff2aab4db690f93_4d0b4f6f": {
         "builtin": "polarplot3d_wf",
         "kind": "variation"
@@ -21597,6 +21633,10 @@
         "kind": "variation"
       },
       "u31a2f37d50f886cd8512c2bb2eea62bb_9b607a33": {
+        "builtin": "fourth",
+        "kind": "variation"
+      },
+      "u31a2f37d50f886cd8512c2bb2eea62bb_fb990ccd": {
         "builtin": "fourth",
         "kind": "variation"
       },
@@ -21665,6 +21705,14 @@
         "kind": "variation"
       },
       "u33f3fd4de39680e1a5a449c4f5beaa27_223aae42": {
+        "builtin": "bubbleT3D",
+        "kind": "variation"
+      },
+      "u33f3fd4de39680e1a5a449c4f5beaa27_318c1754": {
+        "builtin": "bubbleT3D",
+        "kind": "variation"
+      },
+      "u33f3fd4de39680e1a5a449c4f5beaa27_7d6f814e": {
         "builtin": "bubbleT3D",
         "kind": "variation"
       },
@@ -21816,6 +21864,10 @@
         "builtin": "funnel",
         "kind": "variation"
       },
+      "u3a7d98a1bd198a228ba1fe16830b3ae7_f07486f5": {
+        "builtin": "funnel",
+        "kind": "variation"
+      },
       "u3a91a173dc1887658cc35b72fd1cccab_0763d041": {
         "builtin": "fan",
         "kind": "variation"
@@ -21933,6 +21985,10 @@
         "kind": "variation"
       },
       "u40b81c42d5eb86adbb0fdbd6dac04b79_bceb760c": {
+        "builtin": "w",
+        "kind": "variation"
+      },
+      "u40b81c42d5eb86adbb0fdbd6dac04b79_d1d0a204": {
         "builtin": "w",
         "kind": "variation"
       },
@@ -22104,11 +22160,19 @@
         "builtin": "quaternion",
         "kind": "variation"
       },
+      "u489b219f22978ddb99e709082777b2cf_4dc3a41f": {
+        "builtin": "wedge_sph",
+        "kind": "variation"
+      },
       "u489b219f22978ddb99e709082777b2cf_99637369": {
         "builtin": "wedge_sph",
         "kind": "variation"
       },
       "u489b219f22978ddb99e709082777b2cf_a8a9a6c3": {
+        "builtin": "wedge_sph",
+        "kind": "variation"
+      },
+      "u489b219f22978ddb99e709082777b2cf_f77db229": {
         "builtin": "wedge_sph",
         "kind": "variation"
       },
@@ -22332,6 +22396,10 @@
         "builtin": "cut_rgrid",
         "kind": "variation"
       },
+      "u543d77bb699588fca4801258d909cba4_79619476": {
+        "builtin": "cut_rgrid",
+        "kind": "variation"
+      },
       "u543d77bb699588fca4801258d909cba4_eece4903": {
         "builtin": "cut_rgrid",
         "kind": "variation"
@@ -22349,6 +22417,10 @@
         "kind": "variation"
       },
       "u55c357c9642b8430a6cff5131fbc5882_babdb389": {
+        "builtin": "glynnSShape",
+        "kind": "variation"
+      },
+      "u55c357c9642b8430a6cff5131fbc5882_e33aceec": {
         "builtin": "glynnSShape",
         "kind": "variation"
       },
@@ -22672,6 +22744,10 @@
         "builtin": "mobius_strip",
         "kind": "variation"
       },
+      "u62fd4b8fd3998098abad0888eb029bd6_f296e48e": {
+        "builtin": "mobius_strip",
+        "kind": "variation"
+      },
       "u63162f2253528ebb8c448e0c6c2a252c_7c442075": {
         "builtin": "sin",
         "kind": "variation"
@@ -22700,6 +22776,10 @@
         "builtin": "pie3D",
         "kind": "variation"
       },
+      "u6399bfca87d58c7f894ea11be9e1ecec_42bb2318": {
+        "builtin": "pie3D",
+        "kind": "variation"
+      },
       "u6399bfca87d58c7f894ea11be9e1ecec_d93ef85e": {
         "builtin": "pie3D",
         "kind": "variation"
@@ -22718,6 +22798,10 @@
       },
       "u6589c02dcba3828896e7e149465b4287_13bf111c": {
         "builtin": "julian3Dx",
+        "kind": "variation"
+      },
+      "u658ca47f5e3f823eb102de336aa9276e_56f7cf77": {
+        "builtin": "glsl_fractaldots",
         "kind": "variation"
       },
       "u658ca47f5e3f823eb102de336aa9276e_5d7a3d98": {
@@ -22825,6 +22909,10 @@
         "kind": "variation"
       },
       "u6b50414cf44481ecac251de166f35a25_0d874046": {
+        "builtin": "post_axis_symmetry_wf",
+        "kind": "variation"
+      },
+      "u6b50414cf44481ecac251de166f35a25_55d95acb": {
         "builtin": "post_axis_symmetry_wf",
         "kind": "variation"
       },
@@ -22976,6 +23064,10 @@
         "builtin": "coshq",
         "kind": "variation"
       },
+      "u74cfe67c5b278a468c871f13cd13719d_2017ab5d": {
+        "builtin": "waffle",
+        "kind": "variation"
+      },
       "u74cfe67c5b278a468c871f13cd13719d_5db2ea2e": {
         "builtin": "waffle",
         "kind": "variation"
@@ -23020,6 +23112,10 @@
         "builtin": "synth",
         "kind": "variation"
       },
+      "u77633383d3fb8c91a776c29019f7e47f_1e66e19f": {
+        "builtin": "synth",
+        "kind": "variation"
+      },
       "u77633383d3fb8c91a776c29019f7e47f_f006bf40": {
         "builtin": "synth",
         "kind": "variation"
@@ -23040,12 +23136,20 @@
         "builtin": "tqmirror",
         "kind": "variation"
       },
+      "u784b31a295f28024a09e545a1a11a038_022d88bd": {
+        "builtin": "dc_hexes_wf",
+        "kind": "variation"
+      },
       "u784b31a295f28024a09e545a1a11a038_0236e77c": {
         "builtin": "dc_hexes_wf",
         "kind": "variation"
       },
       "u784b31a295f28024a09e545a1a11a038_0b7536ee": {
         "builtin": "dc_hexes_wf",
+        "kind": "variation"
+      },
+      "u78a0a29ff08286258fbcf66ceb09f116_e445adb4": {
+        "builtin": "glynnSim1",
         "kind": "variation"
       },
       "u78a0a29ff08286258fbcf66ceb09f116_e90d0b4f": {
@@ -23102,6 +23206,10 @@
       },
       "u79a9899fa25f8e5b9ae07cbd68ebb214_e041ba2a": {
         "builtin": "sym_ng2",
+        "kind": "variation"
+      },
+      "u79b0311e10c08afc95f6424f57548958_683f6f65": {
+        "builtin": "glynnspiro",
         "kind": "variation"
       },
       "u79b0311e10c08afc95f6424f57548958_723ca9e0": {
@@ -23276,6 +23384,10 @@
         "builtin": "lorentz_mobius",
         "kind": "variation"
       },
+      "u81d74abd4f2587d7a2a2d27962233bd9_45417602": {
+        "builtin": "lorentz_mobius",
+        "kind": "variation"
+      },
       "u81d74abd4f2587d7a2a2d27962233bd9_b385101a": {
         "builtin": "lorentz_mobius",
         "kind": "variation"
@@ -23289,6 +23401,10 @@
         "kind": "variation"
       },
       "u82397a4533f585f095fd606da1a62ca8_0a69d2ba": {
+        "builtin": "quasiconformal",
+        "kind": "variation"
+      },
+      "u82397a4533f585f095fd606da1a62ca8_0d07a332": {
         "builtin": "quasiconformal",
         "kind": "variation"
       },
@@ -23448,6 +23564,10 @@
         "builtin": "perspective",
         "kind": "variation"
       },
+      "u877acf63919988c580eda206354e38de_3d73acc8": {
+        "builtin": "eRotate",
+        "kind": "variation"
+      },
       "u877acf63919988c580eda206354e38de_8ed2a21f": {
         "builtin": "eRotate",
         "kind": "variation"
@@ -23504,6 +23624,10 @@
         "builtin": "circlize",
         "kind": "variation"
       },
+      "u89ae68c4ed0d887abc54a7575016e9d9_8a68a1ea": {
+        "builtin": "wedge_julia",
+        "kind": "variation"
+      },
       "u89ae68c4ed0d887abc54a7575016e9d9_a366fb01": {
         "builtin": "wedge_julia",
         "kind": "variation"
@@ -23540,6 +23664,10 @@
         "builtin": "glynnSim2",
         "kind": "variation"
       },
+      "u8b1057cff9588e61bb68eda1c306e809_84774ca4": {
+        "builtin": "glynnSim2",
+        "kind": "variation"
+      },
       "u8b1057cff9588e61bb68eda1c306e809_8f048bf2": {
         "builtin": "glynnSim2",
         "kind": "variation"
@@ -23566,6 +23694,10 @@
       },
       "u8bcb2b15e1ca8eef87078ab6d50cefd5_9cd647fa": {
         "builtin": "tan2_bs",
+        "kind": "variation"
+      },
+      "u8bfb3b338c4287f1bd25325e70b735e1_2df2bf2d": {
+        "builtin": "onion2",
         "kind": "variation"
       },
       "u8bfb3b338c4287f1bd25325e70b735e1_5413a1b8": {
@@ -23696,11 +23828,19 @@
         "builtin": "lissajous",
         "kind": "variation"
       },
+      "u91fcf28d71b68cda8614458d5a34adb3_f921d9ee": {
+        "builtin": "lissajous",
+        "kind": "variation"
+      },
       "u9228890412df8b6b920d34be0e3e1625_060b5363": {
         "builtin": "pRose3D",
         "kind": "variation"
       },
       "u9228890412df8b6b920d34be0e3e1625_8bec7723": {
+        "builtin": "pRose3D",
+        "kind": "variation"
+      },
+      "u9228890412df8b6b920d34be0e3e1625_a617059a": {
         "builtin": "pRose3D",
         "kind": "variation"
       },
@@ -23752,7 +23892,15 @@
         "builtin": "cannabiscurve_wf",
         "kind": "variation"
       },
+      "u95d5eee6b6448d11a26b201b0008307a_30368774": {
+        "builtin": "fan2",
+        "kind": "variation"
+      },
       "u95d5eee6b6448d11a26b201b0008307a_78435c3e": {
+        "builtin": "fan2",
+        "kind": "variation"
+      },
+      "u95d5eee6b6448d11a26b201b0008307a_809ff6a6": {
         "builtin": "fan2",
         "kind": "variation"
       },
@@ -23832,6 +23980,10 @@
         "builtin": "pre_blur",
         "kind": "variation"
       },
+      "u99eeb599253d8318b5020dad4df75067_a90f2fac": {
+        "builtin": "log_db",
+        "kind": "variation"
+      },
       "u99eeb599253d8318b5020dad4df75067_ada238d7": {
         "builtin": "log_db",
         "kind": "variation"
@@ -23868,6 +24020,10 @@
         "builtin": "mask",
         "kind": "variation"
       },
+      "u9cce129326018d23a80f70def0f05a97_2c57c533": {
+        "builtin": "mask",
+        "kind": "variation"
+      },
       "u9cce129326018d23a80f70def0f05a97_c3364f16": {
         "builtin": "mask",
         "kind": "variation"
@@ -23897,6 +24053,10 @@
         "kind": "variation"
       },
       "u9eb753a6b76c8da6b5a96ce1cd52127b_af1037f2": {
+        "builtin": "harmonograph_js",
+        "kind": "variation"
+      },
+      "u9eb753a6b76c8da6b5a96ce1cd52127b_c61d5da0": {
         "builtin": "harmonograph_js",
         "kind": "variation"
       },
@@ -23956,6 +24116,10 @@
         "builtin": "dc_cylinder",
         "kind": "variation"
       },
+      "ua13997a028cc8e70b58454da9de1827f_65a83604": {
+        "builtin": "dc_cylinder",
+        "kind": "variation"
+      },
       "ua13997a028cc8e70b58454da9de1827f_6c650589": {
         "builtin": "dc_cylinder",
         "kind": "variation"
@@ -23965,6 +24129,10 @@
         "kind": "variation"
       },
       "ua1457193488484ccbe6d1d44bb0362e5_6eeb7ddb": {
+        "builtin": "ePush",
+        "kind": "variation"
+      },
+      "ua1457193488484ccbe6d1d44bb0362e5_a9a0c36e": {
         "builtin": "ePush",
         "kind": "variation"
       },
@@ -23985,6 +24153,10 @@
         "kind": "variation"
       },
       "ua29ae97c8ae48c629035b3e635ebef4f_025096be": {
+        "builtin": "quaternion_camera",
+        "kind": "variation"
+      },
+      "ua29ae97c8ae48c629035b3e635ebef4f_4d4683c1": {
         "builtin": "quaternion_camera",
         "kind": "variation"
       },
@@ -24020,8 +24192,16 @@
         "builtin": "blur_linear",
         "kind": "variation"
       },
+      "ua3d52e07eed58e00a05111c2e8ec9d28_542eb0fa": {
+        "builtin": "blur_linear",
+        "kind": "variation"
+      },
       "ua3d52e07eed58e00a05111c2e8ec9d28_77e7bfc4": {
         "builtin": "blur_linear",
+        "kind": "variation"
+      },
+      "ua40da5c70b848eb19b346f50016d1e5c_0fb56e72": {
+        "builtin": "superShape3d",
         "kind": "variation"
       },
       "ua40da5c70b848eb19b346f50016d1e5c_17a4dac4": {
@@ -24304,6 +24484,10 @@
         "builtin": "popcorn",
         "kind": "variation"
       },
+      "ub46e315be151840285314f97986b22c2_869bce8b": {
+        "builtin": "target",
+        "kind": "variation"
+      },
       "ub46e315be151840285314f97986b22c2_dc917f44": {
         "builtin": "target",
         "kind": "variation"
@@ -24512,6 +24696,10 @@
         "builtin": "glynnlissa",
         "kind": "variation"
       },
+      "ubc2f1d4018df80f6bf570713ba2e32cc_f711cc6f": {
+        "builtin": "glynnlissa",
+        "kind": "variation"
+      },
       "ubc348a2237fb834bad01c8223398eba7_44cd1cab": {
         "builtin": "rosoni",
         "kind": "variation"
@@ -24584,6 +24772,10 @@
         "builtin": "pie",
         "kind": "variation"
       },
+      "uc118d2d082c0818a93496e8fdb3649d4_3b0a4caf": {
+        "builtin": "pie",
+        "kind": "variation"
+      },
       "uc13c628b743789cea775d74b0f6ab09e_05430405": {
         "builtin": "arcsinh",
         "kind": "variation"
@@ -24609,6 +24801,10 @@
         "kind": "variation"
       },
       "uc45297509f628c3c9af9aa49a9fdf79d_0273768a": {
+        "builtin": "dc_cylinder2",
+        "kind": "variation"
+      },
+      "uc45297509f628c3c9af9aa49a9fdf79d_0c24492a": {
         "builtin": "dc_cylinder2",
         "kind": "variation"
       },
@@ -24676,6 +24872,10 @@
         "builtin": "lazyTravis",
         "kind": "variation"
       },
+      "uca15b3731f658ec4b9bc74fa9fe3f315_5d805787": {
+        "builtin": "lazyTravis",
+        "kind": "variation"
+      },
       "uca15b3731f658ec4b9bc74fa9fe3f315_b66816b3": {
         "builtin": "lazyTravis",
         "kind": "variation"
@@ -24689,6 +24889,14 @@
         "kind": "variation"
       },
       "uca6c620f5398833bb6c598f82b24889c_3af7ae3b": {
+        "builtin": "post_bwraps",
+        "kind": "variation"
+      },
+      "uca6c620f5398833bb6c598f82b24889c_5b80676a": {
+        "builtin": "post_bwraps",
+        "kind": "variation"
+      },
+      "uca6c620f5398833bb6c598f82b24889c_c9ad3ab8": {
         "builtin": "post_bwraps",
         "kind": "variation"
       },
@@ -24836,6 +25044,10 @@
         "builtin": "fdisc",
         "kind": "variation"
       },
+      "ud30f54c2a467824aa1a16ff4097ae835_48eae891": {
+        "builtin": "fdisc",
+        "kind": "variation"
+      },
       "ud30f54c2a467824aa1a16ff4097ae835_edec9b79": {
         "builtin": "fdisc",
         "kind": "variation"
@@ -24894,6 +25106,10 @@
       },
       "ud62e2117977282fba54a579a454420f7_26c79b99": {
         "builtin": "checks",
+        "kind": "variation"
+      },
+      "ud72dfaaad769888b9be638ed86b8011a_0a3f2731": {
+        "builtin": "vibration2",
         "kind": "variation"
       },
       "ud72dfaaad769888b9be638ed86b8011a_d6ea517b": {
@@ -25088,11 +25304,19 @@
         "builtin": "atan2_spirals",
         "kind": "variation"
       },
+      "ue0cbc231e91a87548604ae2f02c58443_d1308528": {
+        "builtin": "atan2_spirals",
+        "kind": "variation"
+      },
       "ue0ef48b9cea98dcd9c636ae3552415ff_058554c8": {
         "builtin": "maurer_rose",
         "kind": "variation"
       },
       "ue0ef48b9cea98dcd9c636ae3552415ff_556494e5": {
+        "builtin": "maurer_rose",
+        "kind": "variation"
+      },
+      "ue0ef48b9cea98dcd9c636ae3552415ff_87692178": {
         "builtin": "maurer_rose",
         "kind": "variation"
       },
@@ -25152,7 +25376,15 @@
         "builtin": "cut_bricks",
         "kind": "variation"
       },
+      "ue41f81da5c1f8751bc9d2fddbdeb699a_8b1d345d": {
+        "builtin": "pre_bwraps",
+        "kind": "variation"
+      },
       "ue41f81da5c1f8751bc9d2fddbdeb699a_9bb3262d": {
+        "builtin": "pre_bwraps",
+        "kind": "variation"
+      },
+      "ue41f81da5c1f8751bc9d2fddbdeb699a_a11e566a": {
         "builtin": "pre_bwraps",
         "kind": "variation"
       },
@@ -25209,6 +25441,10 @@
         "kind": "variation"
       },
       "ue645dad495558c95893d250f62f4d4a3_4160d826": {
+        "builtin": "pTransform",
+        "kind": "variation"
+      },
+      "ue645dad495558c95893d250f62f4d4a3_c29abd3c": {
         "builtin": "pTransform",
         "kind": "variation"
       },
@@ -25313,6 +25549,10 @@
         "kind": "variation"
       },
       "ueadd20c8959e8fa8811263b172fcf06e_9e777f08": {
+        "builtin": "lazyjess",
+        "kind": "variation"
+      },
+      "ueadd20c8959e8fa8811263b172fcf06e_b158b102": {
         "builtin": "lazyjess",
         "kind": "variation"
       },
@@ -25512,6 +25752,10 @@
         "builtin": "pre_curl",
         "kind": "variation"
       },
+      "uf33c663cddda8d6a9bebd22fd7b33a18_0cc7882a": {
+        "builtin": "glsl_kaliset2",
+        "kind": "variation"
+      },
       "uf33c663cddda8d6a9bebd22fd7b33a18_25144a54": {
         "builtin": "glsl_kaliset2",
         "kind": "variation"
@@ -25708,7 +25952,15 @@
         "builtin": "truchet",
         "kind": "variation"
       },
+      "ufb9f6e012da588c0a6dd04c37c6b0283_48c327cf": {
+        "builtin": "truchet",
+        "kind": "variation"
+      },
       "ufb9f6e012da588c0a6dd04c37c6b0283_7ac93fe4": {
+        "builtin": "truchet",
+        "kind": "variation"
+      },
+      "ufb9f6e012da588c0a6dd04c37c6b0283_fefbbde9": {
         "builtin": "truchet",
         "kind": "variation"
       },
@@ -25720,6 +25972,10 @@
         "builtin": "hypertile2",
         "kind": "variation"
       },
+      "ufbde73c2f51b8867a59fb627f8fe025c_14e71ecb": {
+        "builtin": "eMotion",
+        "kind": "variation"
+      },
       "ufbde73c2f51b8867a59fb627f8fe025c_2385b8b9": {
         "builtin": "eMotion",
         "kind": "variation"
@@ -25729,6 +25985,10 @@
         "kind": "variation"
       },
       "ufd8b781766348629b0405480b4077422_25262d38": {
+        "builtin": "pre_wave3D_wf",
+        "kind": "variation"
+      },
+      "ufd8b781766348629b0405480b4077422_db462bad": {
         "builtin": "pre_wave3D_wf",
         "kind": "variation"
       },

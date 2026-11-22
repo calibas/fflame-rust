@@ -703,7 +703,7 @@ fn render_enabled_variation(
             // the Formula Editor as the user's own.
             if crate::variations::twins::source(variation_name).is_some() {
                 ui.separator();
-                if ui.button(t!("variations.edit_as_rhai")).on_hover_text(t!("variations.edit_as_rhai_tip")).clicked() {
+                if ui.button(format!("\u{270F} {}", t!("rhai_editor.edit_as_rhai"))).on_hover_text(t!("variations.edit_as_rhai_tip")).clicked() {
                     edit_as_rhai = true;
                     ui.close();
                 }

@@ -593,7 +593,8 @@ to bring it to every mode, under this convention, is
 - **Touch** (`TouchTracker`):
   - a finger held still for half a second within 10 points is a long
     press, the touch's right button: dragged, it turns;
-  - the viewport's Pan/Turn toggle is the touch's Ctrl;
+  - two fingers twist to turn (2D rotates, 3D orbits about world up);
+    nothing is drawn on the viewport to tap;
   - two fingers are `pinch`.
 
 ---

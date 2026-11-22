@@ -12,7 +12,7 @@ const PARAMS = #{
     effect: #{
         value: 8, min: -100, max: 100,
         caption: "Effect",
-        hint: "Additive angular offset on each axis (scaled by π). Higher = more horizontal/vertical bias.",
+        hint: "Added (times π) to sec(x) and sec(y) before they scale tanh of each axis. Higher = more horizontal/vertical bias.",
     },
 };
 

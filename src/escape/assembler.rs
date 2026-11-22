@@ -8436,16 +8436,22 @@ fn ifs_refine(o: vec3<f32>, d: vec3<f32>, t_out: f32, t_in: f32, eps: f32) -> f3
 // PROPERTY of d, not a reconstruction from neighbouring depths. That
 // is the whole difference from the splat pipeline's screen-space
 // normals, and it is why this cannot speckle.
+//
+// The six taps are ONE call in a loop, not six calls: a GPU compiler
+// inlines the distance function -- the whole formula walk -- at every
+// call site, and six sites here (times every caller of the normal) made
+// a solid's path tracer take seconds to compile, long enough for macOS
+// Chrome to drop the device (2026-11-22). Same points, same arithmetic.
 fn ifs_normal(p: vec3<f32>, h: f32) -> vec3<f32> {
-    let dx = vec3<f32>(h, 0.0, 0.0);
-    let dy = vec3<f32>(0.0, h, 0.0);
-    let dz = vec3<f32>(0.0, 0.0, h);
     let e = h * 0.01;
-    let n = vec3<f32>(
-        ifs_distance_at(p + dx, e) - ifs_distance_at(p - dx, e),
-        ifs_distance_at(p + dy, e) - ifs_distance_at(p - dy, e),
-        ifs_distance_at(p + dz, e) - ifs_distance_at(p - dz, e),
-    );
+    var d: array<f32, 6>;
+    for (var k = 0u; k < 6u; k = k + 1u) {
+        var off = vec3<f32>(0.0, 0.0, 0.0);
+        off[k / 2u] = h;
+        let q = select(p + off, p - off, (k & 1u) == 1u);
+        d[k] = ifs_distance_at(q, e);
+    }
+    let n = vec3<f32>(d[0] - d[1], d[2] - d[3], d[4] - d[5]);
     let len = length(n);
     if (!(len > 0.0)) {
         return vec3<f32>(0.0, 0.0, 1.0);

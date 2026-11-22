@@ -523,6 +523,27 @@ macro_rules! param {
     ($name:expr, $display:expr, angle, $default:expr, $desc:expr) => {
         $crate::params::ParamDef::new($name, $display, $desc, $crate::params::Spec::angle($default, -360.0, 360.0))
     };
+    // ---- Angles with a range, by what they are stored in (shown in
+    // degrees whatever it is; UI.md, *Angles*). `unlimited_` lets a
+    // typed value leave the range, as `unlimited_float`.
+    ($name:expr, $display:expr, angle, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        $crate::params::ParamDef::new($name, $display, $desc, $crate::params::Spec::angle($default, $min, $max))
+    };
+    ($name:expr, $display:expr, unlimited_angle, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        $crate::params::ParamDef::new($name, $display, $desc, $crate::params::Spec::angle($default, $min, $max).free())
+    };
+    ($name:expr, $display:expr, radians, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        $crate::params::ParamDef::new($name, $display, $desc, $crate::params::Spec::radians($default, $min, $max))
+    };
+    ($name:expr, $display:expr, unlimited_radians, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        $crate::params::ParamDef::new($name, $display, $desc, $crate::params::Spec::radians($default, $min, $max).free())
+    };
+    ($name:expr, $display:expr, turns, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        $crate::params::ParamDef::new($name, $display, $desc, $crate::params::Spec::turns($default, $min, $max))
+    };
+    ($name:expr, $display:expr, unlimited_turns, $default:expr, $min:expr, $max:expr, $desc:expr) => {
+        $crate::params::ParamDef::new($name, $display, $desc, $crate::params::Spec::turns($default, $min, $max).free())
+    };
     // ---- Boolean ----
     ($name:expr, $display:expr, bool, $default:expr) => {
         $crate::param!($name, $display, bool, $default, "")

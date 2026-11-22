@@ -14,7 +14,7 @@ const PARAMS = #{
         hint: "Additive offset on μ (sign chosen by the sign of ν).",
     },
     rotate: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Rotate",
         hint: "Additive offset on ν.",
     },

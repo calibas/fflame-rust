@@ -80,6 +80,15 @@ pub fn render_compact_menu(
 
 /// Render the menu items inside the compact popup.
 /// Uses `open_compact_panel()` to dock panels into the main surface.
+/// A row opening a panel, docked as the compact layout docks them,
+/// selected while the panel is open.
+fn panel_row(ui: &mut egui::Ui, ctx: &egui::Context, workspace: &mut Workspace, panel: PanelType, label_key: &str) {
+    if ui.selectable_label(workspace.panel_exists(panel), t!(label_key).as_ref()).clicked() {
+        workspace.open_compact_panel(panel, ctx);
+        ui.close();
+    }
+}
+
 fn render_compact_menu_items(
     ui: &mut egui::Ui,
     ctx: &egui::Context,
@@ -105,28 +114,8 @@ fn render_compact_menu_items(
     });
     ui.separator();
 
-    // --- Catalog submenu: a family each, as the desktop bar's ---
-    ui.menu_button(t!("menu.catalog"), |ui| {
-        rows_do_not_wrap(ui);
-        super::inventory::catalog_menu_rows(ui);
-    });
+    // The submenus in the desktop bar's order: File, View, Catalog, Window.
 
-    // --- Window submenu ---
-    ui.menu_button(t!("menu.window"), |ui| {
-        rows_do_not_wrap(ui);
-        // Order is this menu's own -- touch priority, transforms
-        // first -- but the labels come from the shared table, so the two
-        // menus cannot drift apart. Every row opens its panel, in every
-        // mode (one-workspace plan).
-        for panel_type in super::visibility::COMPACT_WINDOW_MENU {
-            let is_open = workspace.panel_exists(*panel_type);
-            let label = t!(super::visibility::label_key_of(*panel_type));
-            if ui.selectable_label(is_open, label.as_ref()).clicked() {
-                workspace.open_compact_panel(*panel_type, ctx);
-                ui.close();
-            }
-        }
-    });
     // --- File submenu ---
     // Same row style as the Window submenu (full-width selectable rows,
     // not size-to-content buttons). Actions carry no open/closed state,
@@ -163,16 +152,6 @@ fn render_compact_menu_items(
         if ui.selectable_label(export_open, t!("menu.export").as_ref()).clicked() {
             workspace.open_compact_panel(PanelType::Export, ctx);
             ui.close();
-        }
-
-        // The online account, as in the desktop File menu.
-        let mut online = menu_state.online_account;
-        if ui
-            .checkbox(&mut online, t!("menu.online_account").as_ref())
-            .on_hover_text(t!("menu.tooltip_online_account").as_ref())
-            .changed()
-        {
-            menu_actions.file.set_online_account = Some(online);
         }
 
         // Shown whenever the online account is on, signed in or not: hiding it
@@ -220,44 +199,102 @@ fn render_compact_menu_items(
             workspace.open_compact_panel(PanelType::ConfigDialog, ctx);
             ui.close();
         }
+
+        // The device's preferences: the online account's switch, the
+        // pickers' downloads, the language (none on this layout else).
+        let settings_open = workspace.panel_exists(PanelType::Preferences);
+        if ui.selectable_label(settings_open, t!("menu.settings").as_ref()).clicked() {
+            workspace.open_compact_panel(PanelType::Preferences, ctx);
+            ui.close();
+        }
     });
 
-    // --- View submenu ---
+    // --- View submenu: Reset View, then the picture's panels ---
     ui.menu_button(t!("menu.view"), |ui| {
         rows_do_not_wrap(ui);
-        if ui.button(t!("menu.reset_view")).clicked() {
+        if ui.selectable_label(false, t!("menu.reset_view").as_ref()).clicked() {
             menu_actions.view.reset_view = true;
             ui.close();
         }
-
+        for panel in super::visibility::COMPACT_VIEW_PANELS {
+            panel_row(ui, ctx, workspace, *panel, super::visibility::label_key_of(*panel));
+        }
     });
 
-    // --- Animation transport ---
-    // Play/pause/stop drive the ANIMATION, not the renderer. These used
-    // to toggle the render pause, which on a phone reads as "the app
-    // froze"; a transport row means the animation everywhere else in
-    // the app (animation panel, Space key), so it does here too.
-    let play_text = if menu_state.animation_playing {
-        t!("menu.pause_animation")
-    } else {
-        t!("menu.play_animation")
-    };
-    let can_play = menu_state.animation_playing || menu_state.has_animation_tracks;
-    if ui.add_enabled(can_play, egui::Button::new(play_text.as_ref())).clicked() {
-        menu_actions.animation.play_pause = true;
-        ui.close();
-    }
-    if ui
-        .add_enabled(menu_state.animation_playing, egui::Button::new(t!("menu.stop_animation").as_ref()))
-        .clicked()
-    {
-        menu_actions.animation.stop = true;
-        ui.close();
-    }
+    // --- Catalog submenu: a family each, as the desktop bar's ---
+    ui.menu_button(t!("menu.catalog"), |ui| {
+        rows_do_not_wrap(ui);
+        super::inventory::catalog_menu_rows(ui);
+    });
 
-    if ui.button(t!("menu.reset_accumulation")).clicked() {
-        menu_actions.rendering.reset_accumulation = true;
-        ui.close();
+    // --- Window submenu: the mode's panels, then More with the rest ---
+    // Labels come from the shared table, so the menus cannot drift
+    // apart. Every row opens its panel, in every mode (one-workspace plan).
+    ui.menu_button(t!("menu.window"), |ui| {
+        rows_do_not_wrap(ui);
+        let mode = menu_state.render_mode;
+        for (i, group) in super::visibility::compact_window_menu(mode).iter().enumerate() {
+            if i > 0 {
+                ui.separator();
+            }
+            for panel in *group {
+                panel_row(ui, ctx, workspace, *panel, super::visibility::label_key_of(*panel));
+            }
+        }
+        ui.separator();
+        ui.menu_button(t!("menu.window_more"), |ui| {
+            rows_do_not_wrap(ui);
+            let mut first = true;
+            for group in super::visibility::compact_more(mode) {
+                let rows: Vec<_> = group.into_iter().filter(|r| !r.account_only || menu_state.online_account).collect();
+                if rows.is_empty() {
+                    continue;
+                }
+                if !std::mem::take(&mut first) {
+                    ui.separator();
+                }
+                for row in rows {
+                    panel_row(ui, ctx, workspace, row.panel, row.label_key);
+                }
+            }
+        });
+    });
+
+    // --- Transport ---
+    // In Simulation the run's, as Space drives it there
+    // (`render_mode::space_runs_the_simulation`) -- unless the timeline
+    // owns the step count, when the animation is what moves the grid.
+    // Elsewhere the animation's, shown only when there is one to play.
+    // (These once toggled the render pause, which on a phone reads as
+    // "the app froze".)
+    if super::render_mode::space_runs_the_simulation(menu_state.render_mode) && !menu_state.sim_timeline_driven {
+        let run_text = if menu_state.sim_running { t!("menu.pause_simulation") } else { t!("menu.run_simulation") };
+        if ui.button(run_text.as_ref()).clicked() {
+            menu_actions.simulation.run_pause = true;
+            ui.close();
+        }
+        if ui.button(t!("menu.stop_simulation").as_ref()).on_hover_text(t!("menu.stop_simulation_tip").as_ref()).clicked() {
+            menu_actions.simulation.stop = true;
+            ui.close();
+        }
+    } else if menu_state.animation_playing || menu_state.has_animation_tracks {
+        let play_text = if menu_state.animation_playing {
+            t!("menu.pause_animation")
+        } else {
+            t!("menu.play_animation")
+        };
+        if ui.button(play_text.as_ref()).clicked() {
+            menu_actions.animation.play_pause = true;
+            ui.close();
+        }
+        // Stop rewinds to the start, playing or paused.
+        if ui
+            .add_enabled(!menu_state.animation_at_start, egui::Button::new(t!("menu.stop_animation").as_ref()))
+            .clicked()
+        {
+            menu_actions.animation.stop = true;
+            ui.close();
+        }
     }
 
     ui.separator();

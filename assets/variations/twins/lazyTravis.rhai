@@ -14,12 +14,12 @@ const PARAMS = #{
     spin_in: #{
         value: 1.0, min: -10.0, max: 10.0, free: true,
         caption: "Spin In",
-        hint: "Inner-square angular offset along the perimeter (multiplied by 4 internally; one unit = one full lap of the square).",
+        hint: "Inner-square offset along the perimeter (multiplied by 4 internally; one unit = half a lap of the square, not uniform in angle).",
     },
     spin_out: #{
         value: 0.5, min: -10.0, max: 10.0, free: true,
         caption: "Spin Out",
-        hint: "Outer-square angular offset along the perimeter (same scaling as `spin_in`).",
+        hint: "Outer-square offset along the perimeter (same scaling as `spin_in`).",
     },
     space: #{
         value: 1.5707964, min: -10.0, max: 10.0, free: true,

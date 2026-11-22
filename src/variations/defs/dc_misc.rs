@@ -57,7 +57,7 @@ pub static DC_CYLINDER: VariationDef = VariationDef {
     features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Color-projection offset. Init precomputes `offset · π` for parity (unused) and the raw `offset` is added to the projection."),
-        param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Color-projection rotation angle (radians). Init precomputes `cos(angle)` and `sin(angle)`."),
+        param!("angle", "Angle", unlimited_radians, 0.0, -10.0, 10.0, "Color-projection rotation angle. Init precomputes `cos(angle)` and `sin(angle)`."),
         param!("scale", "Scale", unlimited_float, 0.5, -10.0, 10.0, "Color-projection scale. Init precomputes `1/scale` (with zero-guard)."),
         param!("x", "X", unlimited_float, 0.125, -10.0, 10.0, "X-axis output scale (multiplies the `sin(x + rr·sin(a))` term)."),
         param!("y", "Y", unlimited_float, 0.125, -10.0, 10.0, "Y-axis output scale (multiplies the input Y in the output)."),
@@ -176,7 +176,7 @@ pub static DC_CYLINDER2: VariationDef = VariationDef {
     features: &[Feature::NeedsRng, Feature::NeedsTransform, Feature::WritesColor, Feature::AlwaysZ],
     parameters: &[
         param!("offset", "Offset", unlimited_float, 0.0, -10.0, 10.0, "Color-projection offset. Init precomputes `offset · π` for parity (unused) and the raw `offset` is added to the projection."),
-        param!("angle", "Angle", unlimited_float, 0.0, -10.0, 10.0, "Color-projection rotation angle (radians). Init precomputes `cos(angle)` and `sin(angle)`."),
+        param!("angle", "Angle", unlimited_radians, 0.0, -10.0, 10.0, "Color-projection rotation angle. Init precomputes `cos(angle)` and `sin(angle)`."),
         param!("scale", "Scale", unlimited_float, 0.5, -10.0, 10.0, "Color-projection scale. Init precomputes `1/scale` (with zero-guard)."),
         param!("x", "X", unlimited_float, 0.125, -10.0, 10.0, "X-axis output scale (multiplies the `sin(x + rr·sin(a))` term)."),
         param!("y", "Y", unlimited_float, 0.125, -10.0, 10.0, "Y-axis output scale (multiplies the input Y in the output)."),

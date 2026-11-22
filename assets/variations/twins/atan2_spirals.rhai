@@ -60,7 +60,7 @@ const PARAMS = #{
         hint: "Additive offset on y in the second atan2.",
     },
     sin_add: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Sin Add",
         hint: "Phase offset on the sine wrap around the second atan2.",
     },

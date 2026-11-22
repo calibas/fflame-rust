@@ -268,6 +268,14 @@ impl OnlinePlace {
         lists.iter().map(|l| ListKey { kind: l.kind, scope: l.scope, q: q.clone(), category: l.category }).collect()
     }
 
+    /// For a test: `keys` asked for and failed with `error`.
+    #[cfg(test)]
+    pub(super) fn fail_for_test(&mut self, keys: &[ListKey], error: &str) {
+        for key in keys {
+            self.lists.insert(key.clone(), List { started: true, error: Some(error.to_string()), ..Default::default() });
+        }
+    }
+
     /// Ask for the first page of each list not asked yet.
     pub fn start(&mut self, keys: &[ListKey], account: &CloudAccount, ctx: &egui::Context) {
         for key in keys {

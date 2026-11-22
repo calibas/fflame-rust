@@ -70,6 +70,8 @@ mod palette_generate;
 mod script_params;
 pub mod params;
 mod xaos_editor;
+/// The Settings panel: device preferences no other panel holds.
+mod preferences;
 
 pub use export_status::{ExportKind, ExportStatus, UiReporter};
 pub use font_loader::ensure_font_for_locale;
@@ -121,6 +123,15 @@ pub fn vkb_sync_full(
             }
         });
     }
+}
+
+/// The Edit as Rhai button, everywhere one is: a pencil, whose hover
+/// says what it does -- "Edit as Rhai", then `tip`, the place's own.
+/// `small` in a row of small buttons.
+pub(crate) fn edit_as_rhai_button(ui: &mut egui::Ui, small: bool, tip: &str) -> egui::Response {
+    let button = egui::Button::new("\u{270F}");
+    let button = if small { button.small() } else { button };
+    ui.add(button).on_hover_text(format!("{}\n\n{tip}", t!("rhai_editor.edit_as_rhai")))
 }
 
 /// Shorten `s` to at most `max_chars` characters, ending in "..." when cut.
@@ -264,7 +275,8 @@ impl egui_dock::egui::Widget for VkbU64<'_> {
         }
 
         ui.memory_mut(|m| m.data.insert_temp(id, text.clone()));
-        vkb_sync_opts(ui, &response, &text, "integer");
+        // Unsigned: no sign key on the phone's keypad.
+        vkb_sync_full(ui, &response, &text, "integer", Some(0.0), None);
         response
     }
 }
@@ -1446,6 +1458,10 @@ impl EguiLayer {
         self.ctx.data_mut(|d| {
             d.remove_temp::<String>(egui_dock::egui::Id::new("vkb_editing_text"));
         });
+        // Whether a focus brings up the phone's keyboard: the overlay's own
+        // condition, below. The pickers' search waits for a tap there.
+        #[cfg(target_arch = "wasm32")]
+        picker::set_touch_keyboard(self.compact_mode || Self::device_has_touch());
 
         // Inject clipboard paste events from the browser (WASM only)
         #[cfg(target_arch = "wasm32")]
@@ -1612,7 +1628,6 @@ impl EguiLayer {
         self.save_online_dialog_state.flame_owned = api_state.flame_owned_by(current_user_id);
         self.save_online_dialog_state.animation_owned = api_state.flame_owned_by(current_user_id);
         let menu_state = MenuState {
-            picker_downloads: config_manager.system_settings().picker_downloads != Some(false),
             can_undo,
             can_redo,
             is_paused: *paused,
@@ -1642,6 +1657,9 @@ impl EguiLayer {
             api_flame_id: api_state.flame_id.clone(),
             api_flame_is_public: api_state.flame_is_public,
             has_animation_tracks,
+            sim_running,
+            sim_timeline_driven,
+            animation_at_start: animation_controller.state == crate::animation::PlaybackState::Stopped && animation_controller.current_time == 0.0,
             animation_playing: animation_controller.is_playing(),
             api_animation_id: api_state.animation_id.clone(),
             animation_count: api_state.animation_count,
@@ -2080,8 +2098,6 @@ impl EguiLayer {
                         // cover strip — no scale discontinuity at the seam.
                         let leaf_rect = leaf.rect;
                         let leaf_size = leaf_rect.size();
-                        // The touch's Alt, the viewport's Pan/Turn toggle.
-                        let turn_lock = self.touch_tracker.turn_lock;
                         // Letterboxed, the strip is a bar: black, the texture
                         // not under it, and not a place to steer from (the
                         // picture's rect is elsewhere in the leaf).
@@ -2121,9 +2137,11 @@ impl EguiLayer {
                                 // input the same way; here we use the leaf's
                                 // full rect/size so scaling matches between the
                                 // two regions.
-                                let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
+                                // Ctrl+drag turns, as in the body (it was
+                                // Alt here after the body moved to Ctrl).
+                                let (ctrl, shift) = ui.input(|i| (i.modifiers.ctrl, i.modifiers.shift));
                                 let pointer = response.interact_pointer_pos().or_else(|| response.hover_pos());
-                                for (button, turn) in [(egui::PointerButton::Primary, alt || turn_lock), (egui::PointerButton::Secondary, true)] {
+                                for (button, turn) in [(egui::PointerButton::Primary, ctrl), (egui::PointerButton::Secondary, true)] {
                                     if response.dragged_by(button) {
                                         panel_viewer::view_drag(
                                             config_manager,
@@ -2293,8 +2311,11 @@ impl EguiLayer {
             self.show_api_notification(&message, is_error);
         }
 
-        // Log egui repaint requests for performance investigation
-        let needs_repaint = self.ctx.has_requested_repaint();
+        // When egui wants its next frame (the frame loop honours it).
+        let repaint_delay = full_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map_or(std::time::Duration::MAX, |v| v.repaint_delay);
 
         // Write copied text to browser clipboard (WASM only)
         #[cfg(target_arch = "wasm32")]
@@ -2498,20 +2519,8 @@ impl EguiLayer {
             api_animation_save_action = action;
         }
 
-        // The Online account switch. A device preference: written to
-        // SystemSettings and saved at once, outside the undo history,
-        // as signing out does.
-        if let Some(on) = menu_actions.file.set_online_account {
-            let settings = config_manager.system_settings_mut();
-            settings.online_account = on;
-            let _ = settings.save();
-        }
-        // The pickers' downloads (L3): a device preference, as above.
-        if let Some(on) = menu_actions.set_picker_downloads {
-            let settings = config_manager.system_settings_mut();
-            settings.picker_downloads = (!on).then_some(false);
-            let _ = settings.save();
-        }
+        // The online account's switch and the pickers' downloads are the
+        // Settings panel's (`ui::preferences`), written there.
 
         // A request that carried the session's credentials came back 401
         // (`api::job`): the session expired, whoever asked.
@@ -2578,7 +2587,24 @@ impl EguiLayer {
             }
         }
         if menu_actions.animation.stop {
+            // Paused (or scrubbed), the picture is at that time and
+            // nothing will move it: the seek puts it at the start, as the
+            // stop of a playing animation does (`seek_to_animation_start`).
+            let was_playing = animation_controller.is_playing();
             animation_controller.stop();
+            if !was_playing {
+                animation_seek_changed = true;
+                animation_seek_drag_stopped = true;
+            }
+        }
+        // The compact menu's transport in Simulation mode: the run's, as
+        // the panel's Run and Reset write it.
+        if menu_actions.simulation.run_pause {
+            sim_running_local = !sim_running_local;
+        }
+        if menu_actions.simulation.stop {
+            sim_running_local = false;
+            sim_reseed_local = true;
         }
 
         // Handle Rendering menu actions
@@ -2701,7 +2727,7 @@ impl EguiLayer {
             fractal_viewport_size,
             fly_mouse_drag,
             fly_mode_toggle_requested,
-            needs_repaint,
+            repaint_delay,
             selected_preset_config,
             file_browser_open_requested,
             animation_export_requested,

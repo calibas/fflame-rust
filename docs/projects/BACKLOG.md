@@ -327,7 +327,7 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
 ## Web app and builds
 
 - **Web gaps against the desktop**: video (WebCodecs on `FrameSource`);
-  signal file load/save (silent no-op); HDRI skies (none on the web,
+  signal file load/save (greyed in the Signals panel; to build, phones included); HDRI skies (none on the web,
   `environment.rs`); CJK fonts; deep zoom's orbit worker and store;
   Detect Period; the planner budget at 8M; naga validation and derived
   bounds; 2x supersample and terrain background export; persistent
@@ -355,6 +355,17 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
 
 ## App, UI and code health
 
+- **Shader compile times (before 0.6, the user's pick)**: a solid's
+  path tracer inlines its formula's walk at every call site (about ten:
+  the camera, bounce and light marches, their refines, the surface's
+  normal and colour, twice). Bristorbrot's compiles in 2.25 s on the
+  desktop's Vulkan driver and in more than 30 s on an M2 through Chrome,
+  which then drops the device. The normal's six taps are one call
+  already (half the compile). Next: the path tracer as one loop calling
+  the walk once, and compiles that do not hang the UI.
+- **A lost GPU device on the web** stops with a Reload notice
+  (`gpu::device::show_lost_notice`); recovering in place (a new device,
+  every renderer rebuilt) is not built.
 - **Deep-zoom gates read gitignored files** (`output/flame-zoom/*.fflame`):
   they cannot run from a fresh clone.
   [doc-review-findings.md](../archive/projects/doc-review-findings.md) §"Still open".
@@ -377,6 +388,9 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
 - **Models and colourings that say which go together** (the user's,
   2026-11-20): a simulation colouring's preview now uses the first
   preset that names it.
+- **Angles shown raw**: the variation audit's leftovers, a decision each
+  (time parameters, curve ranges, rates, angles in units of pi): [angle-audit.md](angle-audit.md). Escape
+  and simulation parameters not yet surveyed (effects are degrees).
 - **Known gaps**: no PNG input for `export`; flame-only metadata written
   for escape and simulation pictures; es/ja/zh mostly English.
   [escape-sim-followups.md](../archive/projects/escape-sim-followups.md) §"Known gaps".

@@ -17,14 +17,14 @@
 
 const PARAMS = #{
     dir: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Direction",
-        hint: "Wave 1: direction angle (radians) along which the wave propagates. The input is projected onto this direction before phase computation.",
+        hint: "Wave 1: direction angle along which the wave propagates. The input is projected onto this direction before phase computation.",
     },
     angle: #{
-        value: 1.5708, min: -10.0, max: 10.0, free: true,
+        value: 1.5708, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Angle",
-        hint: "Wave 1: output rotation angle (radians) — controls which direction in the output plane the wave's displacement points.",
+        hint: "Wave 1: output rotation angle — controls which direction in the output plane the wave's displacement points.",
     },
     freq: #{
         value: 1.0, min: -10.0, max: 10.0, free: true,
@@ -42,12 +42,12 @@ const PARAMS = #{
         hint: "Wave 1: phase offset in cycles; converted internally to radians as `2π·phase/freq`.",
     },
     dir2: #{
-        value: 1.5708, min: -10.0, max: 10.0, free: true,
+        value: 1.5708, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Direction 2",
         hint: "Wave 2: direction angle. See `dir`.",
     },
     angle2: #{
-        value: 1.5708, min: -10.0, max: 10.0, free: true,
+        value: 1.5708, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Angle 2",
         hint: "Wave 2: output rotation angle. See `angle`.",
     },

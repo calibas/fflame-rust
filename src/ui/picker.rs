@@ -21,6 +21,22 @@
 use crate::inventory::{Entry, EntryKey, Group, Kind};
 use crate::provenance::Origin;
 
+/// Whether a focused text field brings up an on-screen keyboard (the web
+/// app on a phone or a touch device: the condition the keyboard overlay
+/// opens on, in the UI's frame). Set once a frame, in the web build only.
+static TOUCH_KEYBOARD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Set whether a focus brings up an on-screen keyboard.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn set_touch_keyboard(on: bool) {
+    TOUCH_KEYBOARD.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether a focus brings up an on-screen keyboard.
+pub fn touch_keyboard() -> bool {
+    TOUCH_KEYBOARD.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// A filtered view of the Catalog's list, shown as a popup or in place.
 pub struct Picker<'a> {
     id: egui::Id,
@@ -241,7 +257,10 @@ impl<'a> Picker<'a> {
             let search = |ui: &mut egui::Ui, query: &mut String| {
                 let r = ui.add(egui::TextEdit::singleline(query).hint_text(t!("catalog.search")).desired_width(f32::INFINITY));
                 super::vkb_sync(ui, &r, query);
-                if focus {
+                // Ready to type on opening -- but on a phone a focused
+                // field brings up the keyboard over the list, so there
+                // the search waits for a tap.
+                if focus && !touch_keyboard() {
                     r.request_focus();
                 }
             };

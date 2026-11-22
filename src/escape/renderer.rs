@@ -349,6 +349,13 @@ pub(super) static PATH_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
 pub(super) static PATH_CALLS_IN_FLIGHT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
+/// The solid path tracer's pipeline compiles not yet done (the empty
+/// submission after a new pipeline, `SolidPath::compiling`): a device
+/// lost meanwhile is the compile's, which no dispatch size changes, and
+/// is said so in the log rather than learned as a halving.
+pub(super) static PATH_COMPILES_IN_FLIGHT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
 /// Ceiling on an adaptively grown chunk, before the session shift.
 /// The feedback loop stops well below this on any real configuration;
 /// it exists so a pathological measurement (a frame that reports
@@ -460,8 +467,15 @@ mod tuning {
 
     const KEY: &str = "gpu_tuning.json";
 
+    /// The path tracer's shift, under a name of its own since 2026-11-22:
+    /// before then a browser's first call on a new pipeline carried its
+    /// compile, and the shift learned from it (a slow call, a loss during
+    /// the compile) was the compile's, not the GPU's -- an M2 had reached
+    /// four halvings. The old `path_shift` is left unread.
+    const PATH_KEY: &str = "path_shift_v2";
+
     pub(super) fn encode(direct: u32, perturb: u32, path: u32) -> String {
-        serde_json::json!({ "direct_shift": direct, "perturb_shift": perturb, "path_shift": path }).to_string()
+        serde_json::json!({ "direct_shift": direct, "perturb_shift": perturb, PATH_KEY: path }).to_string()
     }
 
     pub(super) fn decode(text: &str) -> (u32, u32, u32) {
@@ -469,7 +483,7 @@ mod tuning {
             return (0, 0, 0);
         };
         let get = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0).min(6) as u32;
-        (get("direct_shift"), get("perturb_shift"), get("path_shift"))
+        (get("direct_shift"), get("perturb_shift"), get(PATH_KEY))
     }
 
     pub(super) fn ensure_loaded() {
@@ -531,6 +545,11 @@ pub fn note_device_lost() {
             "escape: device lost during a perturbed render -- halving the \
              perturbed chunk budget (ceiling now {} iterations) for this session",
             CHUNK_ITERS_MAX_BASE >> s
+        );
+    }
+    if PATH_COMPILES_IN_FLIGHT.swap(0, Ordering::Relaxed) > 0 {
+        log::warn!(
+            "escape: device lost while the solid path tracer's pipeline compiled --              a compile too long for the browser, not a dispatch too large"
         );
     }
     if PATH_CALLS_IN_FLIGHT.swap(0, Ordering::Relaxed) > 0 {

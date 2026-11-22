@@ -5,6 +5,7 @@
 //! Phase 2 adds visual timeline bars for tracks aligned with the scrubber.
 //! Phase 3 adds interactions: click to seek, keyframe hover/click.
 
+use crate::params::AngleUnit;
 use egui::{Ui, Color32, Rect, Pos2, Stroke, CornerRadius, Sense, ScrollArea};
 use crate::animation::{
     Animation, AnimationController, EasingFunction, Interpolation,
@@ -12,7 +13,7 @@ use crate::animation::{
 };
 use crate::config::{ConfigPath, ConfigValue, EditingTarget, FractalConfig};
 use super::animation_panel::TimelineLayout;
-use super::target_selector::{TargetSelectorState, render_target_selector};
+use super::target_selector::{render_target_selector, Picked, ScriptChoice, TargetSelectorState};
 
 /// UI state for track editor
 #[derive(Default)]
@@ -38,6 +39,10 @@ pub struct TrackEditorState {
     /// The script track whose window is open, by index
     /// (docs/archive/projects/rhai-tracks.md).
     pub script_panel: Option<usize>,
+    /// The script tracks the Add Track dialog's Scripted section offers,
+    /// listed when it opens (`script_choices`): a user's file is compiled
+    /// to be offered, and the dialog draws every frame.
+    pub script_choices: Option<Vec<ScriptChoice>>,
     /// A track source to open in the Formula Editor: a script track's Edit
     /// there, or a new one from an example. Taken by the caller, which
     /// holds the editor.
@@ -240,9 +245,6 @@ pub fn render_track_editor(
         if ui.add_enabled(has_animation, add_button).clicked() {
             open_add_track_panel(state);
         }
-        if let Some(animation) = controller.animation.as_mut() {
-            script_track_menu(ui, animation, state);
-        }
     });
 
     ui.separator();
@@ -393,7 +395,7 @@ fn render_tracks_visual(
                             // Show tooltip on hover using manual tooltip window
                             if is_hovered {
                                 let value_str = keyframe.value.as_f64()
-                                    .map(|v| if is_angle_key(&path) { format!("{:.1}°", v.to_degrees()) } else { format!("{:.3}", v) })
+                                    .map(|v| match angle_unit_of_key(&path) { Some(unit) => format!("{:.1}°", unit.to_degrees(v)), None => format!("{:.3}", v) })
                                     .unwrap_or_else(|| format!("{}", keyframe.value));
 
                                 // Create a tooltip area near the pointer.
@@ -680,51 +682,22 @@ fn script_row(animation: &Animation, index: usize) -> Option<ScriptRow> {
     })
 }
 
-/// The menu adding a script track: one of the shipped examples, one of
-/// the user's or adopted track files (compiled as the lists compile every
-/// file: docs/projects/one-list.md), or a new one begun in the Formula
-/// Editor.
-///
-/// Drawn every frame the panel shows, so it does nothing until opened: the
-/// examples are found once (compiling every shipped formula to find the
-/// tracks cost 34 ms a frame, a tenth of the flame's frame rate), and the
-/// files are listed only while the menu is open.
-fn script_track_menu(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditorState) {
-    ui.menu_button(t!("track_editor.add_script_track"), |ui| {
-        let examples = track_examples();
-        let plugins: Vec<crate::storage::library::Plugin> = super::inventory::shared()
+/// The script tracks the Add Track dialog offers (its target selector's
+/// Scripted section): the shipped examples, then the user's or adopted
+/// track files (compiled as the lists compile every file:
+/// docs/projects/one-list.md). Listed when the dialog opens, not every
+/// frame it draws; the examples are found once (compiling every shipped
+/// formula to find the tracks cost 34 ms).
+fn script_choices() -> Vec<ScriptChoice> {
+    let mut out: Vec<ScriptChoice> = track_examples().iter().map(|(title, source)| ScriptChoice { title: title.clone(), source: source.clone(), yours: false }).collect();
+    out.extend(
+        super::inventory::shared()
             .iter()
             .filter(|e| e.kind == crate::inventory::Kind::Track && matches!(e.key, crate::inventory::EntryKey::File { shipped: false, .. }))
             .filter_map(super::inventory::plugin_of)
-            .collect();
-        let mut add: Option<String> = None;
-        for (title, source) in examples {
-            if ui.button(title.as_str()).clicked() {
-                add = Some(source.clone());
-            }
-        }
-        if !plugins.is_empty() {
-            ui.separator();
-            ui.weak(t!("track_editor.script_plugins"));
-            for p in &plugins {
-                if ui.button(&p.title).clicked() {
-                    add = Some(p.carried.source.clone());
-                }
-            }
-        }
-        ui.separator();
-        if ui.button(t!("track_editor.script_new")).on_hover_text(t!("track_editor.script_new_tip")).clicked() {
-            state.open_in_formula_editor = examples.first().map(|(_, s)| s.clone());
-            ui.close();
-        }
-        if let Some(source) = add {
-            if let Ok(track) = Track::script(source) {
-                let index = animation.add_track(track);
-                state.script_panel = Some(index);
-            }
-            ui.close();
-        }
-    });
+            .map(|p| ScriptChoice { title: p.title, source: p.carried.source, yours: true }),
+    );
+    out
 }
 
 /// The shipped example tracks, title and source, found once.
@@ -796,20 +769,30 @@ pub fn render_script_track_panel(ctx: &egui::Context, controller: &mut Animation
         .resizable(true)
         .default_width(320.0)
         .show(ctx, |ui| {
-            for (name, mode, under) in &row.targets {
+            // "Targets: rotation, zoom" -- each one's mode (sets, adds
+            // to, scales) on hover, and what lies under it, if anything,
+            // on a line of its own.
+            if !row.targets.is_empty() {
                 ui.horizontal_wrapped(|ui| {
-                    ui.monospace(name);
-                    ui.label(mode_text(*mode));
-                    match (under, under.note(*mode)) {
-                        (Under::Script, Some(note)) => {
-                            ui.colored_label(Color32::from_rgb(220, 140, 60), format!("⚠ {note}"));
-                        }
-                        (_, Some(note)) => {
-                            ui.weak(note);
-                        }
-                        _ => {}
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label(format!("{} ", t!("track_editor.script_targets")));
+                    let last = row.targets.len() - 1;
+                    for (i, (name, mode, _)) in row.targets.iter().enumerate() {
+                        let text = if i < last { format!("{name}, ") } else { name.clone() };
+                        ui.label(egui::RichText::new(text).strong()).on_hover_text(mode_text(*mode));
                     }
                 });
+            }
+            for (name, mode, under) in &row.targets {
+                match (under, under.note(*mode)) {
+                    (Under::Script, Some(note)) => {
+                        ui.colored_label(Color32::from_rgb(220, 140, 60), format!("⚠ {name}: {note}"));
+                    }
+                    (_, Some(note)) => {
+                        ui.weak(format!("{name}: {note}"));
+                    }
+                    _ => {}
+                }
             }
             if let Some(e) = &row.error {
                 ui.colored_label(Color32::from_rgb(240, 120, 120), e);
@@ -966,12 +949,24 @@ fn render_track_editor_panel_content(
             } else {
                 Some((state.new_track_flame_target, state.new_track_target.as_str()))
             };
-            if let Some((flame_target, path)) = render_target_selector(
-                ui,
-                &mut state.target_selector_state,
-                config,
-                current,
-            ) {
+            let scripts = state.script_choices.get_or_insert_with(script_choices);
+            let picked = render_target_selector(ui, &mut state.target_selector_state, config, current, scripts);
+            // A script track: added, its window opened, this dialog done.
+            match &picked {
+                Some(Picked::Script(i)) => {
+                    let source = scripts[*i].source.clone();
+                    if let Ok(track) = Track::script(source) {
+                        state.script_panel = Some(animation.add_track(track));
+                    }
+                    state.track_editor_panel_open = false;
+                }
+                Some(Picked::NewScript) => {
+                    state.open_in_formula_editor = track_examples().first().map(|(_, s)| s.clone());
+                    state.track_editor_panel_open = false;
+                }
+                _ => {}
+            }
+            if let Some(Picked::Target(flame_target, path)) = picked {
                 state.new_track_target = path.to_string_key();
                 state.new_track_flame_target = flame_target;
                 // Auto-initialize values based on track type (Add mode only)
@@ -1045,7 +1040,7 @@ fn render_keyframe_subpanel(
     // If editing an existing keyframe track, show the keyframes
     if let Some(track_index) = state.editing_track_index {
         if let Some(track) = animation.get_track_mut(track_index) {
-            let angle = is_angle_key(&track.target);
+            let angle = angle_unit_of_key(&track.target);
             if let TrackSource::Keyframes { ref mut keyframes } = track.source {
                 // Interpolation selector
                 ui.horizontal(|ui| {
@@ -1165,7 +1160,7 @@ fn render_keyframe_subpanel(
 
         // Preview keyframe list
         ui.label(format!("{}: {}", t!("track_editor.keyframe_count"), state.preview_keyframes.len()));
-        let angle = is_angle_key(&state.new_track_target);
+        let angle = angle_unit_of_key(&state.new_track_target);
 
         ScrollArea::vertical()
             .max_height(150.0)
@@ -1476,6 +1471,7 @@ fn close_track_editor_panel(state: &mut TrackEditorState) {
 /// Open the track editor panel to add a new track
 pub fn open_add_track_panel(state: &mut TrackEditorState) {
     state.track_editor_panel_open = true;
+    state.script_choices = None;
     state.editing_track_index = None;
     state.new_track_target.clear();
     state.new_track_flame_target = EditingTarget::Main;
@@ -1814,7 +1810,39 @@ pub fn get_current_value(
 
 /// Whether a track's values are angles: stored in radians, shown and
 /// typed in degrees (camera-unification C5 -- no radians in the UI).
-pub fn is_angle_path(path: &ConfigPath) -> bool {
+/// What an angle target is stored in, or `None` for one that is not an
+/// angle. The editor shows every angle in degrees (UI.md, *Angles*): a
+/// stored radian converts, a stored degree shows as it is. A variation's
+/// parameter answers by its definition's kind.
+pub fn angle_unit_of_path(path: &ConfigPath) -> Option<AngleUnit> {
+    use ConfigPath as P;
+    match path {
+        // Stored in degrees.
+        P::HueShift
+        | P::PostSymmetryRotation
+        | P::EscapeShadingLightAngle
+        | P::EscapeShadingTextureAngle
+        | P::EscapeShadingTextureAngleSoft
+        | P::EscapeShadingElevation
+        | P::EscapePathEnvironmentRotation
+        | P::SimPathEnvironmentRotation => return Some(AngleUnit::Degrees),
+        P::TransformVariationParam { variation, param, .. }
+        | P::LinkedTransformVariationParam { variation, param, .. }
+        | P::FinalTransformVariationParam { variation, param, .. } => {
+            let reg = crate::variations::global_registry();
+            let def = reg.get(variation)?;
+            return def.parameters.iter().find(|d| &*d.name == param.as_str()).and_then(|d| match d.kind {
+                crate::params::ParamKind::Float { angle: true, unit, .. } => Some(unit),
+                _ => None,
+            });
+        }
+        _ => {}
+    }
+    is_radian_path(path).then_some(AngleUnit::Radians)
+}
+
+/// The config's angles stored in radians (rotations, the cameras).
+fn is_radian_path(path: &ConfigPath) -> bool {
     matches!(
         path,
         ConfigPath::TransformRotation { .. }
@@ -1841,20 +1869,21 @@ pub fn is_angle_path(path: &ConfigPath) -> bool {
     )
 }
 
-/// [`is_angle_path`] for a track's key.
-fn is_angle_key(key: &str) -> bool {
-    ConfigPath::from_string_key(key).is_some_and(|p| is_angle_path(&p))
+/// [`angle_unit_of_path`] for a track's key.
+fn angle_unit_of_key(key: &str) -> Option<AngleUnit> {
+    ConfigPath::from_string_key(key).and_then(|p| angle_unit_of_path(&p))
 }
 
 /// A keyframe's value as the editor shows it, and edits it: degrees for
-/// an angle, the stored value otherwise. True when it changed.
-fn keyframe_value_ui(ui: &mut Ui, value: &mut serde_json::Value, angle: bool) -> bool {
+/// an angle (whatever it is stored in), the stored value otherwise. True
+/// when it changed.
+fn keyframe_value_ui(ui: &mut Ui, value: &mut serde_json::Value, angle: Option<AngleUnit>) -> bool {
     let stored = value.as_f64().unwrap_or(0.0);
-    let changed = if angle {
-        let mut deg = stored.to_degrees();
+    let changed = if let Some(unit) = angle {
+        let mut deg = unit.to_degrees(stored);
         let changed = ui.add(super::VkbDragValue::new(&mut deg).speed(0.5).min_decimals(1).suffix("°")).changed();
         if changed {
-            *value = serde_json::json!(deg.to_radians());
+            *value = serde_json::json!(unit.from_degrees(deg));
         }
         changed
     } else {
@@ -2038,12 +2067,30 @@ mod tests {
         assert_eq!(state.script_panel, Some(1));
         assert!(!state.track_editor_panel_open, "not the keyframe panel");
         let ctx = egui::Context::default();
+        let mut drawn = Vec::new();
         for _ in 0..2 {
-            let _ = ctx.run_ui(Default::default(), |ui| {
+            let out = ctx.run_ui(Default::default(), |ui| {
                 render_script_track_panel(ui.ctx(), &mut controller, &mut state);
             });
+            drawn.clear();
+            fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+                match shape {
+                    egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                    _ => {}
+                }
+            }
+            for s in &out.shapes {
+                walk(&s.shape, &mut drawn);
+            }
         }
         assert_eq!(state.script_panel, Some(1), "still open");
+        // "Targets: zoom, rotation": the targets in one line, not each with
+        // a dangling mode ("zoom  added to").
+        assert!(drawn.iter().any(|t| t.trim() == t!("track_editor.script_targets")), "a Targets label: {drawn:?}");
+        assert!(drawn.iter().any(|t| t.starts_with("zoom")) && drawn.iter().any(|t| t.starts_with("rotation")), "the targets named: {drawn:?}");
+        assert!(!drawn.iter().any(|t| *t == t!("track_editor.script_mode_add")), "no bare mode word beside a target: {drawn:?}");
+        assert!(drawn.iter().any(|t| t.starts_with("zoom: ")), "the zoom's note (over its keyframe track) names it: {drawn:?}");
 
         // The parameter store writes into the track.
         let TrackSource::Script { source, params } = &mut controller.animation.as_mut().unwrap().tracks[1].source else { panic!() };

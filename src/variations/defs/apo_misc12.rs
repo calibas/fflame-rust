@@ -170,7 +170,7 @@ pub static WAFFLE: VariationDef = VariationDef {
         param!("slices", "Slices", int, 6.0, 1.0, 100.0, "Number of grid divisions per axis."),
         param!("xthickness", "X thickness", unlimited_float, 0.5, -10.0, 10.0, "X-axis line thickness (0 = grid lines only, 1 = solid fill)."),
         param!("ythickness", "Y thickness", unlimited_float, 0.5, -10.0, 10.0, "Y-axis line thickness."),
-        param!("rotation", "Rotation", unlimited_float, 0.0, -10.0, 10.0, "Output rotation in radians."),
+        param!("rotation", "Rotation", unlimited_radians, 0.0, -10.0, 10.0, "Output rotation."),
     ],
     // 2 derived values at slots 4..6:
     //   4: cos_rot

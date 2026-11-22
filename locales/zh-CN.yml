@@ -22,12 +22,11 @@ menu:
   # Edit Menu
   undo: "撤销"
   redo: "重做"
-  preferences: "首选项..."
 
   # View Menu
-  reset_view: "重置视图"
-  zoom_in: "放大"
-  zoom_out: "缩小"
+  reset_view: "🔄 重置视图"
+  zoom_in: "➕ 放大"
+  zoom_out: "➖ 缩小"
   mode_2d: "2D模式"
   mode_3d: "3D模式"
 

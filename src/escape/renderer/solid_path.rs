@@ -186,6 +186,15 @@ pub(super) struct SolidPath {
     /// Restarts so far: a band measured before one is not this picture's.
     generation: u32,
     clock: Arc<Mutex<BandClock>>,
+    /// A pipeline was just made, and the next call is its compile alone.
+    /// A browser builds a pipeline before the first submission after it
+    /// -- seconds for a solid's path tracer (Bristorbrot's: 2.3 s on the
+    /// desktop's Vulkan driver, more in a browser, more again on an M2) --
+    /// so the first band would carry the compile in its time and, on a
+    /// loss, in its blame. An empty submission takes it instead: its
+    /// completion is the compile, logged; the bands wait for it (`busy`),
+    /// and a loss during it is the compile's (`PATH_COMPILES_IN_FLIGHT`).
+    compiling: bool,
     /// The path tracer's settings the sum was gathered under.
     settings: Option<String>,
     /// Every dispatch's rows times samples, the cap it was under, and its
@@ -273,6 +282,7 @@ impl SolidPath {
             max_ms: 0.0,
             generation: 0,
             clock: Arc::new(Mutex::new(BandClock::default())),
+            compiling: false,
             settings: None,
             #[cfg(test)]
             dispatched: Vec::new(),
@@ -635,6 +645,32 @@ impl EscapeRenderer {
             settings.noise_threshold = 0.0;
         }
         let key = self.ensure_solid_path_pipeline(device, escape, def);
+        // A pipeline just made: its compile alone, first (`compiling`). An
+        // empty submission is done once the pipeline before it is built;
+        // until then the viewport waits (`busy`) and shows what it had.
+        {
+            let path = self.solid_path.as_mut().expect("made above");
+            if std::mem::take(&mut path.compiling) {
+                let clock = Arc::clone(&path.clock);
+                if let Ok(mut c) = clock.lock() {
+                    c.outstanding += 1;
+                }
+                super::PATH_COMPILES_IN_FLIGHT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let started = web_time::Instant::now();
+                queue.submit(std::iter::empty());
+                queue.on_submitted_work_done(move || {
+                    use std::sync::atomic::Ordering;
+                    let _ = super::PATH_COMPILES_IN_FLIGHT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| Some(v.saturating_sub(1)));
+                    let now = web_time::Instant::now();
+                    log::info!("escape solid path: pipeline ready in {:.0} ms", now.duration_since(started).as_secs_f64() * 1000.0);
+                    if let Ok(mut c) = clock.lock() {
+                        c.outstanding = c.outstanding.saturating_sub(1);
+                        c.last = Some(now);
+                    }
+                });
+                return true;
+            }
+        }
         let ifs_group = self.ifs_bind_group(device);
         let (env_view, env_sampler) = {
             self.env.bindings(device)
@@ -933,6 +969,10 @@ impl EscapeRenderer {
                 cache: None,
             });
             self.pipelines.insert(key.clone(), pipeline);
+            // Its first call carries the compile (`SolidPath::compiling`).
+            if let Some(path) = self.solid_path.as_mut() {
+                path.compiling = true;
+            }
         }
         key
     }
@@ -4113,6 +4153,11 @@ mod tests {
         let mut c = cube_config();
         c.escape.path.samples = 64;
         let mut r = renderer_for(&device, &c, 48, 32);
+        // The first call is the new pipeline's compile alone (`compiling`):
+        // no band, and out until the GPU is done with it.
+        assert!(r.trace_solid_viewport(&device, &queue, &c, &palette, VIEWPORT_FRAME_MS));
+        assert!(r.solid_path.as_ref().expect("made").dispatched.is_empty(), "a band with the compile");
+        wait(&device);
         assert!(r.trace_solid_viewport(&device, &queue, &c, &palette, VIEWPORT_FRAME_MS));
         wait(&device);
         let p = r.solid_path.as_ref().expect("traced");

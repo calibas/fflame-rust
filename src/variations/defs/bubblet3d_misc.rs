@@ -59,7 +59,7 @@ pub static BUBBLE_T3D: VariationDef = VariationDef {
     parameters: &[
         param!("number_of_stripes", "Number of Stripes", int, 0.0, -50.0, 50.0, "Number of angular stripe sectors around the XY plane. 0 disables stripes entirely. Negative value inverts the stripe pattern (swap drawn vs blanked sectors)."),
         param!("ratio_of_stripes", "Ratio of Stripes", unlimited_float, 1.0, 0.01, 1.99, "Width fraction of the drawn stripe within each sector, clamped to [0.01, 1.99]. 1.0 = stripes and gaps are equal width."),
-        param!("angle_of_hole", "Angle of Hole", unlimited_float, 0.0, -180.0, 180.0, "Half-angle of the Z-axis hole in degrees. Negative value inverts which side of the hole is drawn vs blanked."),
+        param!("angle_of_hole", "Angle of Hole", unlimited_angle, 0.0, -180.0, 180.0, "Full opening angle of the Z-axis hole (half of it either side of the axis). Negative value inverts which side of the hole is drawn vs blanked."),
         param!("exponent_z", "Exponent Z", unlimited_float, 1.0, 0.1, 10.0, "Z-axis bubble shape exponent. 1.0 = standard inversion; smaller values flatten the bubble, larger values elongate it."),
         param!("symmetry_z", "Symmetry Z", bool, false, "When on, mirror the Z hole symmetrically across the XY plane (clamps `|angle_of_hole|` to < 180°). When off, apply the hole to only one Z-pole."),
         param!("modus_blur", "Modus Blur", bool, false, "When on, smooth-blend the stripe/hole interior via angular rotation. When off, hard-cutout (zero out). Only effective on the Z hole when `exponent_z == 1`; otherwise falls back to hard cutout regardless."),

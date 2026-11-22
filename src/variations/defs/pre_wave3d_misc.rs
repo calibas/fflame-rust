@@ -42,7 +42,7 @@ pub static PRE_WAVE3D_WF: VariationDef = VariationDef {
     parameters: &[
         param!("axis", "Axis", enum, 0, &["XY → Z", "YZ → X", "ZX → Y", "Radial"], "Wave plane and displacement axis. Plane modes wave one coordinate in and out of the other two; Radial waves along the unit vector from the origin."),
         param!("wavelen", "Wavelength", unlimited_float, 0.5, -10.0, 10.0, "Wavelength of the sine perturbation."),
-        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the sine argument."),
+        param!("phase", "Phase", unlimited_radians, 0.0, -10.0, 10.0, "Phase offset on the sine argument."),
         param!("damping", "Damping", unlimited_float, 0.01, -10.0, 10.0, "Exponential damping rate (proportional to `dl`). 0 disables damping."),
         param!("centre_x", "Centre X", unlimited_float, 0.0, -10.0, 10.0, "X coordinate of the wave center (subtracted from input before the distance calculation)."),
         param!("centre_y", "Centre Y", unlimited_float, 0.0, -10.0, 10.0, "Y coordinate of the wave center."),

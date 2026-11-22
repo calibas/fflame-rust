@@ -36,12 +36,17 @@ pub fn render_lighting_panel_content(ui: &mut egui::Ui, config_manager: &mut Con
             super::escape_panel::show_sky(ui, config_manager, config.background_color, &pt, &paths, tier, mapped)
         });
     }
-    section(ui, "lighting.lights", &mut |ui| lights(ui, config_manager, &config, view, &rig));
-    section(ui, "lighting.shading", &mut |ui| shading(ui, config_manager, &config, view, &rig));
-    section(ui, "lighting.shadows", &mut |ui| shadows(ui, config_manager, &config, view, &rig));
-    if rig.in_use || view != ViewKind::Flame3d {
-        section(ui, "lighting.material", &mut |ui| material(ui, config_manager, &rig));
+    // A 3D flame's Shading first: its strength is what turns the shade
+    // pass on, and every row after it reads as its.
+    if rig.flame {
+        section(ui, "lighting.shading", &mut |ui| shading(ui, config_manager, &config, view, &rig));
     }
+    section(ui, "lighting.lights", &mut |ui| lights(ui, config_manager, &config, view, &rig));
+    if !rig.flame {
+        section(ui, "lighting.shading", &mut |ui| shading(ui, config_manager, &config, view, &rig));
+    }
+    section(ui, "lighting.shadows", &mut |ui| shadows(ui, config_manager, &config, view, &rig));
+    section(ui, "lighting.material", &mut |ui| material(ui, config_manager, &rig));
     if matches!(view, ViewKind::Flame3d | ViewKind::EscapeTerrain) {
         section(ui, "lighting.surface", &mut |ui| surface(ui, config_manager, &config, view));
     }
@@ -63,9 +68,10 @@ struct Rig {
     /// The changes that take an untouched rig over; empty once it is
     /// touched, and in a 3D flame, whose untouched rig is no lighting.
     take_over: Vec<(ConfigPath, ConfigValue)>,
-    /// Whether the rig's rows draw: always over a solid or a terrain; in a
-    /// 3D flame once its strength is above 0 (at 0 the shade pass is off).
-    in_use: bool,
+    /// A 3D flame at Shading strength 0: the shade pass is off, and the
+    /// Lights and Shadows sections say so above their rows. The rows
+    /// draw all the same, ready for when it is raised (they were hidden).
+    unlit: bool,
     /// The view is a 3D flame's: the splat pipeline's own controls.
     flame: bool,
 }
@@ -75,17 +81,17 @@ impl Rig {
         let flame = view == ViewKind::Flame3d;
         let shading = &config.solid_shading;
         if flame {
-            return Self { shown: shading.clone(), take_over: Vec::new(), in_use: shading.shading_strength > 0.0, flame };
+            return Self { shown: shading.clone(), take_over: Vec::new(), unlit: !(shading.shading_strength > 0.0), flame };
         }
         if !shading.rig_untouched() {
-            return Self { shown: shading.clone(), take_over: Vec::new(), in_use: true, flame };
+            return Self { shown: shading.clone(), take_over: Vec::new(), unlit: false, flame };
         }
         let take_over = super::render_mode::rig_taken_over(config);
         let mut after = config.clone();
         for (path, value) in &take_over {
             let _ = crate::config::apply(&mut after, crate::config::EditingTarget::Main, path, value.clone());
         }
-        Self { shown: after.solid_shading, take_over, in_use: true, flame }
+        Self { shown: after.solid_shading, take_over, unlit: false, flame }
     }
 
     /// Whether the picture is the default key light's, not the rows'.
@@ -137,9 +143,8 @@ fn lights(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &Fracta
         // Said, so the rows below are not read as the picture's.
         ui.label(egui::RichText::new(t!("view.lighting_default_rig")).small().weak());
     }
-    if !rig.in_use {
+    if rig.unlit {
         ui.label(egui::RichText::new(t!("lighting.flame_unlit")).small().weak());
-        return;
     }
     // Whose space the directional lights are in. No conversion: the
     // lights keep their angles, read in the other space (the Fly Mode
@@ -203,9 +208,6 @@ fn shading(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &Fract
     if !rig.flame && !(shading.shading_strength > 0.0) {
         ui.label(egui::RichText::new(t!("view.lit_strength_zero")).small().weak());
     }
-    if !rig.in_use {
-        return;
-    }
     rig.slider(ui, config_manager, ConfigPath::SolidAmbient, "view.solid_ambient", "lighting.ambient_tip", shading.ambient, 0.0..=1.0, 0.01);
     if rig.flame {
         rig.slider(ui, config_manager, ConfigPath::SsaoStrength, "view.ssao_strength", "", shading.ssao_strength, 0.0..=1.0, 0.01);
@@ -240,12 +242,11 @@ fn shading(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &Fract
 fn shadows(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &FractalConfig, view: ViewKind, rig: &Rig) {
     match view {
         ViewKind::Flame3d => {
-            if rig.in_use {
-                // Splat-resolution shadow maps (Stage 2).
-                rig.slider(ui, config_manager, ConfigPath::SolidShadowStrength, "view.shadow_strength", "", rig.shown.shadow_strength, 0.0..=1.0, 0.01);
-            } else {
+            if rig.unlit {
                 ui.label(egui::RichText::new(t!("lighting.flame_unlit")).small().weak());
             }
+            // Splat-resolution shadow maps (Stage 2).
+            rig.slider(ui, config_manager, ConfigPath::SolidShadowStrength, "view.shadow_strength", "", rig.shown.shadow_strength, 0.0..=1.0, 0.01);
         }
         ViewKind::Solid => {
             solid_params(ui, config_manager, config, &["shadow", "shadow_sharpness"]);
@@ -273,11 +274,9 @@ fn shadows(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &Fract
 /// and leave it untouched.
 fn material(ui: &mut egui::Ui, config_manager: &mut ConfigManager, rig: &Rig) {
     let shading = &rig.shown;
-    if rig.in_use {
-        rig.slider(ui, config_manager, ConfigPath::SolidDiffuse, "view.solid_diffuse", "view.material_diffuse_tip", shading.diffuse, 0.0..=2.0, 0.01);
-        rig.slider(ui, config_manager, ConfigPath::SolidSpecular, "view.material_highlight", "view.material_highlight_tip", shading.specular, 0.0..=2.0, 0.01);
-        rig.slider(ui, config_manager, ConfigPath::SolidShininess, "view.material_highlight_size", "view.material_highlight_size_tip", shading.shininess, 1.0..=128.0, 1.0);
-    }
+    rig.slider(ui, config_manager, ConfigPath::SolidDiffuse, "view.solid_diffuse", "view.material_diffuse_tip", shading.diffuse, 0.0..=2.0, 0.01);
+    rig.slider(ui, config_manager, ConfigPath::SolidSpecular, "view.material_highlight", "view.material_highlight_tip", shading.specular, 0.0..=2.0, 0.01);
+    rig.slider(ui, config_manager, ConfigPath::SolidShininess, "view.material_highlight_size", "view.material_highlight_size_tip", shading.shininess, 1.0..=128.0, 1.0);
     let coat = |ui: &mut egui::Ui, config_manager: &mut ConfigManager, path: ConfigPath, label: &str, tip: &str, value: f32, range: std::ops::RangeInclusive<f32>| {
         let mut v = value;
         if ui.add(super::VkbSlider::new(&mut v, range).text(t!(label).as_ref()).step_by(0.01)).on_hover_text(t!(tip)).changed() {
@@ -688,6 +687,7 @@ mod tests {
         text.iter().any(|t| t == what)
     }
 
+
     /// A solid's light is drawn in the Lighting panel alone
     /// (3d-look-and-tools P3): its Shadows, Shadow Sharpness and Occlusion
     /// Reach -- formula parameters -- there and not among the Escape
@@ -788,6 +788,6 @@ mod tests {
         let mut f = FractalConfig::default();
         f.render_mode = RenderMode::ThreeD;
         let rig = Rig::of(&f, ViewKind::Flame3d);
-        assert!(!rig.untouched() && !rig.in_use);
+        assert!(!rig.untouched() && rig.unlit);
     }
 }

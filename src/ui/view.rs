@@ -21,6 +21,17 @@ pub fn render_view_content(
     use crate::camera::gesture::{self, ViewKind};
     let kind = gesture::view_kind(&config);
 
+    // ── Every 3D view's light is the Lighting panel's: its button first,
+    // where it is seen (it sat below Atmosphere and Depth of Field).
+    if kind.is_3d()
+        && ui
+            .button(t!("view.open_lighting_panel").as_ref())
+            .on_hover_text(t!("view.open_lighting_panel_tip"))
+            .clicked()
+    {
+        *open_lighting_panel = true;
+    }
+
     // ── The picture's size, every mode's: what the exports render at,
     // and the shape the viewport can letterbox to.
     egui::CollapsingHeader::new(t!("view.output_size").as_ref())
@@ -74,13 +85,6 @@ pub fn render_view_content(
         egui::CollapsingHeader::new(t!("view.depth_of_field").as_ref())
             .default_open(false)
             .show(ui, |ui| super::view_controls::depth_of_field_3d(ui, config_manager));
-        if ui
-            .button(t!("view.open_lighting_panel").as_ref())
-            .on_hover_text(t!("view.open_lighting_panel_tip"))
-            .clicked()
-        {
-            *open_lighting_panel = true;
-        }
     }
     if !matches!(kind, ViewKind::Flame2d | ViewKind::Flame3d) {
         return;

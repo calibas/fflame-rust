@@ -14,9 +14,9 @@ const PARAMS = #{
         hint: "Color-projection offset. Init precomputes `offset · π` for parity (unused) and the raw `offset` is added to the projection.",
     },
     angle: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Angle",
-        hint: "Color-projection rotation angle (radians). Init precomputes `cos(angle)` and `sin(angle)`.",
+        hint: "Color-projection rotation angle. Init precomputes `cos(angle)` and `sin(angle)`.",
     },
     scale: #{
         value: 0.5, min: -10.0, max: 10.0, free: true,

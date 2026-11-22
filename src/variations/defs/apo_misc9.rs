@@ -171,7 +171,7 @@ pub static EMOTION: VariationDef = VariationDef {
     features: &[],
     parameters: &[
         param!("move", "Move", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on μ (sign chosen by the sign of ν)."),
-        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on ν."),
+        param!("rotate", "Rotate", unlimited_radians, 0.0, -10.0, 10.0, "Additive offset on ν."),
     ],
     init_param_count: 0,
     wgsl_init: None,

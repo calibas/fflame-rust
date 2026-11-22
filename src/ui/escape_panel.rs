@@ -269,7 +269,7 @@ pub fn render_escape_content(
         // same, as a field.
         if let Some(f) = field {
             if let Some(src) = crate::escape::twins::field_custom_source(f.name) {
-                if ui.button(t!("escape_panel.edit_field_as_rhai")).on_hover_text(t!("escape_panel.edit_field_as_rhai_tip")).clicked() {
+                if super::edit_as_rhai_button(ui, false, &t!("escape_panel.edit_field_as_rhai_tip")).clicked() {
                     edit_formula_twin(config_manager, f.name, src, crate::lang::EntryKind::Field, rhai_editor, open_rhai_editor);
                 }
             }
@@ -278,7 +278,7 @@ pub fn render_escape_content(
         // same, as a solid.
         if ifs_def.is_some_and(|d| d.solid) {
             if let Some(src) = crate::escape::twins::solid_custom_source(&esc.formula) {
-                if ui.button(t!("escape_panel.edit_solid_as_rhai")).on_hover_text(t!("escape_panel.edit_solid_as_rhai_tip")).clicked() {
+                if super::edit_as_rhai_button(ui, false, &t!("escape_panel.edit_solid_as_rhai_tip")).clicked() {
                     edit_formula_twin(config_manager, &esc.formula, src, crate::lang::EntryKind::Solid, rhai_editor, open_rhai_editor);
                 }
             }
@@ -2383,7 +2383,7 @@ fn show_coloring_section(
             }
             // A built-in with a twin (`escape::twins::FIELD_COLORING_TWINS`).
             if let Some(src) = crate::escape::twins::field_coloring_custom_source(coloring.name) {
-                if ui.button(t!("escape_panel.edit_as_rhai")).on_hover_text(t!("escape_panel.edit_coloring_as_rhai_tip")).clicked() {
+                if super::edit_as_rhai_button(ui, false, &t!("escape_panel.edit_coloring_as_rhai_tip")).clicked() {
                     edit_coloring_twin(config_manager, coloring.name, src, crate::lang::EntryKind::FieldColoring, rhai_editor, open_rhai_editor);
                 }
             }
@@ -2448,7 +2448,7 @@ fn show_coloring_section(
         // put the twin in its place, the picture unchanged, and open it in
         // the Formula Editor as the user's own to change.
         if let Some(src) = crate::escape::twins::coloring_custom_source(&esc.coloring) {
-            if ui.button(t!("escape_panel.edit_as_rhai")).on_hover_text(t!("escape_panel.edit_coloring_as_rhai_tip")).clicked() {
+            if super::edit_as_rhai_button(ui, false, &t!("escape_panel.edit_coloring_as_rhai_tip")).clicked() {
                 edit_coloring_as_rhai(config_manager, &esc.coloring, src, rhai_editor, open_rhai_editor);
             }
         }

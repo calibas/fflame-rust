@@ -285,7 +285,7 @@ holds, `origin` "builtin", left out; one already adopted left out). A
 curated row's Download adopts it (`ScriptCloudRequest::Adopt`, one at a
 time, as the Catalog's Open adopts); once adopted it is a file and is
 picked. The Catalog's own list leaves those rows to its online lists.
-**Offer downloads in pickers** in the Catalog menu
+**Offer downloads in pickers** in the Settings panel (`ui::preferences`)
 (`SystemSettings::picker_downloads`, on unless turned off) offers only
 what is installed when off.
 
@@ -344,6 +344,11 @@ end comes into view:
   asks for the page that failed; and when another list's page comes
   back, every failed list drops its error, so it is asked again when
   shown (`OnlinePlace::forget_failures`).
+- **The status** (loading, a failed list's message and Try again,
+  Nothing matches) sits in a strip under the list that the list's
+  scroll area leaves room for, wrapped. The panel fits its tab: the
+  dock does not scroll it (`PanelViewer::scroll_bars`), so the list and
+  the info pane scroll on their own, never inside a second scrollbar.
 - **Paging** is lazy, by the server's cursor: reaching a list's end asks
   for its next page. Lists are kept per (kind, scope, search, sort,
   mode), so going back to an earlier search shows what it found; a

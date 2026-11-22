@@ -50,8 +50,8 @@ pub static SUPERSHAPE_3D: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng, Feature::AlwaysZ],
     parameters: &[
-        param!("rho", "Rho", unlimited_float, 9.9, -100.0, 100.0, "Angular range (radians) for uniform random sampling of the ρ axis. Larger values sweep through more of the shape per iteration; default 9.9 (~3π)."),
-        param!("phi", "Phi", unlimited_float, 2.5, -100.0, 100.0, "Angular range (radians) for the φ axis (sampled in `[-phi, phi]`). Default 2.5 (~0.8π)."),
+        param!("rho", "Rho", unlimited_float, 9.9, -100.0, 100.0, "Range for uniform random sampling of the ρ angle, which runs over `[0, rho · 2/π]` radians. Larger values sweep through more of the shape per iteration."),
+        param!("phi", "Phi", unlimited_float, 2.5, -100.0, 100.0, "Range for the φ angle, sampled in `[-phi, phi] · 2/π` radians."),
         param!("m1", "M1", unlimited_float, 6.0, -50.0, 50.0, "Petal count for the ρ-axis Gielis shape — controls rotational symmetry. Higher values produce more spokes."),
         param!("m2", "M2", unlimited_float, 3.0, -50.0, 50.0, "Petal count for the φ-axis Gielis shape."),
         param!("a1", "A1", unlimited_float, 1.0, -10.0, 10.0, "Cosine-term width scaling for the ρ-axis shape. Smaller values pinch the cos-side petals narrower."),

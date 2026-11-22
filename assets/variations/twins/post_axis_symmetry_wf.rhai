@@ -29,7 +29,7 @@ const PARAMS = #{
         hint: "Z coordinate of the symmetry plane center (3D only).",
     },
     rotation: #{
-        value: 30.0, min: -360.0, max: 360.0, free: true,
+        value: 30.0, min: -360.0, max: 360.0, free: true, type: "angle",
         caption: "Rotation",
         hint: "Post-mirror rotation angle, in degrees. Full circle = 360. Init precomputes `sin/cos(rotation · 2π/180 / 2)`.",
     },

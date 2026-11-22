@@ -39,9 +39,9 @@ const PARAMS = #{
         hint: "Star symmetry count (number of points).",
     },
     star_slope: #{
-        value: 2.0, min: -10.0, max: 10.0, free: true,
+        value: 2.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Star Slope",
-        hint: "Star arm slope angle (radians). Internally pre-computed as `tan(star_slope)` and used as the slope of each star arm.",
+        hint: "Star arm slope angle. Internally pre-computed as `tan(star_slope)` and used as the slope of each star arm.",
     },
     lituus: #{
         value: 0.0, min: -10.0, max: 10.0, free: true,

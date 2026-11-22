@@ -27,7 +27,7 @@ bar with a single menu button (see [Compact (mobile) UI](#compact-mobile-ui)).
 ## Panels
 
 `PanelType` in [src/ui/workspace.rs](../../src/ui/workspace.rs) defines
-**30 panels**. Each renders from its own `src/ui/*.rs` file;
+**31 panels**. Each renders from its own `src/ui/*.rs` file;
 `src/ui/mod.rs` coordinates docking and returns cross-panel results to
 the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uiresponse)).
 
@@ -107,9 +107,9 @@ actions by folding them into the frame's `UiResponse`.
 
 | Menu | Holds |
 |---|---|
-| File | New, Open, Save As (a curated item it uses is named, not carried: [CONFIG.md](CONFIG.md), *Writing*), Save As for Offline Use (keeps their sources), Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Online account (the `online_account` switch, off a guest; [ONLINE.md](ONLINE.md)), Save Online (the account's), Export PNG (the Export panel), Config Import/Export, Quit |
-| Edit | Undo, Redo (Preferences is a disabled stub) |
-| View | Reset View, Zoom In, Zoom Out — present in every mode (`Control::ViewNavigation`) |
+| File | New, Open, Save As (a curated item it uses is named, not carried: [CONFIG.md](CONFIG.md), *Writing*), Save As for Offline Use (keeps their sources), Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Save Online (the account's), Export PNG (the Export panel), Config Import/Export, Settings (the Settings panel), Quit |
+| Edit | Undo, Redo |
+| View | Reset View, Zoom In, Zoom Out — present in every mode (`Control::ViewNavigation`) — then Lighting (the Lighting panel; the compact View submenu has it too) |
 | Rendering | First the viewport's **Render Scale** (100/75/50%), its **Upscaler** (Catmull-Rom, the default, bilinear, nearest, or FSR 1: AMD's edge-adaptive upscale and sharpening, `shaders/upscale_fsr.wgsl`) and **Render at Physical Pixels** (`SystemSettings::render_scale`, `upscaler`, `render_physical_pixels`, saved at once; `app/render_scale.rs`, `renderer::upscale`): the picture renders at that share of the viewport each side and is drawn up to the screen's pixels; disabled in Simulation, whose grid scale is its render scale (`Control::RenderScale`). Then the **Quality Governor**, on or off in every mode (`SystemSettings::frame_governor`; off, nothing is governed: the flame's batch, escape-time's antialiasing and render scale; a flame's render scale is never the governor's), and the **Target Frame Rate** it holds (`SystemSettings::target_rate`: the display's refresh, the video export's frame rate, or 24/30/60/120; `app/governor.rs`). Then Pause/Resume, Reset Accumulation, Iterations per Thread (128 to 4096), **Reset Orbits Each Dispatch** (the flame's `reset_orbits`, also in the Settings panel under Iterations per Thread; disabled and on where a variation needs it, its tooltip naming the variation), the Workgroups a frame dispatches while the governor is off, Reset to Defaults. Those configure the chaos game, so outside the flame modes the menu says so and their rows are disabled; it is always there, so nothing after it moves with the mode |
 | Catalog | A row a family -- Fractals, Palettes, Variations, Escape Time, Simulation, Effects, Scripts -- opening the Catalog there (online or on this device is the panel's Source filter); the compact menu's Catalog submenu draws the same rows (`inventory::catalog_menu_rows`). The Catalog is not a Window row |
 | Window | Reset Workspace, Mobile View, the panel rows, Workspace Layout |
@@ -129,12 +129,18 @@ only), and the Fly Mode button, which is greyed in a 2D view
 (`MenuState::fly_available`, from `visibility::fly_mode`).
 
 **The panel rows in both Window menus come from one table**,
-`visibility::WINDOW_MENU`. Every row opens its panel in every mode; a
-panel the mode does not use shows its reason on hover. The compact menu
-keeps its own order — touch priority, transforms
-first — in `COMPACT_WINDOW_MENU`, but takes its labels from the shared
-table, and a test asserts it is a subset. Add a panel row there, not in
-either menu.
+`visibility::WINDOW_MENU`, in groups the desktop menu separates: Reset
+Workspace and Mobile View; the picture (Performance, View, Colors &
+Tone Mapping, Rendering, Lighting); the flame (Transforms, Triangle
+Editor, Xaos, Paths, Subflames); escape-time (Escape, Hybrid Designer);
+Simulation; effects and motion (Effects, Animation, Signals, Textures);
+tools (Palette Editor, Rhai Editor, Fractal Browser, Random Generator);
+Settings and Account; then Workspace Layout. The Undo/Redo History is
+the Edit menu's, under Undo and Redo (both layouts). Every row opens its
+panel in every mode; a panel the mode does not use shows its reason on
+hover. The compact menu (below) keeps its own arrangement but takes its
+labels from the shared table, and reaches every row of it in every mode
+(a test). Add a panel row there, not in either menu.
 
 ### The progress bar
 
@@ -402,6 +408,22 @@ in [ANIMATION.md](ANIMATION.md).
 
 ---
 
+## The Settings panel
+
+`PanelType::Preferences` ([preferences.rs](../../src/ui/preferences.rs)),
+shown as **Settings** (File ▸ Settings, Window ▸ Settings, and the
+compact menu's File ▸ Settings): the device's preferences that belong to
+no other panel -- the **online account** (`SystemSettings::online_account`;
+[ONLINE.md](ONLINE.md)), **Offer downloads in pickers**
+(`picker_downloads`; [CATALOG.md](CATALOG.md)) and the **language** (the
+desktop's globe menu does the same; on the compact layout this is the
+only one; `menu_bar::choose_locale` is their one path). Saved at once,
+outside the undo history; never anything of the loaded config. A
+preference with a panel of its own stays there (the chaos game's and the
+display's in Rendering, the camera's in View, the export's in Export),
+and the menus keep their actions, not their switches. Not the old
+Settings panel, which became Rendering (`ui::settings`).
+
 ## Panel reference
 
 Every panel renders from its own file. `PanelViewer::render_panel`
@@ -427,6 +449,7 @@ contract.
 | Catalog | [inventory.rs](../../src/ui/inventory.rs), [inventory_view.rs](../../src/ui/inventory_view.rs), [palette_library.rs](../../src/ui/palette_library.rs) | see [CATALOG.md](CATALOG.md) |
 | Effects | [effects_panel.rs](../../src/ui/effects_panel.rs) | see [EFFECTS.md](EFFECTS.md) |
 | Rendering | [settings.rs](../../src/ui/settings.rs) | below |
+| Settings | [preferences.rs](../../src/ui/preferences.rs) | below |
 | Performance | [performance.rs](../../src/ui/performance.rs) | |
 | History | [undo_history.rs](../../src/ui/undo_history.rs) | the undo/redo history |
 | Animation | [animation_panel.rs](../../src/ui/animation_panel.rs), [track_editor.rs](../../src/ui/track_editor.rs) | see [ANIMATION.md](ANIMATION.md) |
@@ -531,7 +554,9 @@ never over one that is there. Choosing, creating, renaming, deleting,
 importing, exporting, the plug-in flag and publishing are the Catalog's
 ([CATALOG.md](CATALOG.md)), whose **Edit** opens a file here; every
 panel's Edit as Rhai (Escape, Transforms, Effects, Simulation, the
-track editor) opens its copy here too. Saved layouts that name the old
+track editor) opens its copy here too. Edit as Rhai is a pencil (✏)
+button, its name and what it does on hover (`ui::edit_as_rhai_button`);
+in a menu, the pencil and the words. Saved layouts that name the old
 Formula Editor or Scripts panel open it (serde aliases).
 
 **Scripts run** in the Catalog's info pane, for the script selected, and
@@ -583,12 +608,13 @@ in [CAMERA.md](CAMERA.md).
 
 | Section | Shown for | Holds |
 |---|---|---|
+| 💡 Lighting... | every 3D view | first, a button that opens the Lighting panel |
 | Output Size | every view | the picture's size (`FractalConfig::image_size`, `ConfigPath::ImageWidth`/`ImageHeight`, undoable): what Export PNG and Export Animation render at. Presets (720p, 1080p, 1440p, 4K, 1:1) and a swap for portrait, each one history step. **Letterbox the viewport** (`SystemSettings::viewport_letterbox`, off by default, saved at once): the viewport shows the picture's shape, black bars beside or above it (`view_controls::letterbox_rect`), and renders, pans and zooms at that rect's size; the tab-bar cover goes black and stops steering, and fullscreen letterboxes alike. An active simulation letterboxes the same way to its grid's shape once the viewport is no longer the size its run began at (`view_controls::letterbox_shape`, `app/sim_lock.rs`; [SIMULATION.md](SIMULATION.md)) |
 | Camera | 2D views, and a 3D flame's projected picture | zoom, centre (the escape centre as exact decimals), rotation, an arrow pad and Reset, through `camera::gesture` as the keys and the mouse are |
 | 3D Camera | every 3D view | position, target, zoom or distance, pitch, yaw, bank, roll, field of view or perspective, Reset, and fly mode with its settings. A terrain shows its eye as a readout; a solid's eye is editable, and moving it moves the camera, target and all; a terrain's target has a lift |
 | Camera Lens | an escape plane or solid | a variation used as a lens on the pixels or rays |
 | Image | every escape view; a 2D simulation | escape: antialiasing (supersampling) and how the samples combine; simulation: the resolve filters (upscale, fit, downscale) and tiling a periodic field |
-| Atmosphere, Depth of Field | every 3D view | fog, a flame's depth weighting, a terrain's far and haze; a flame's focus and blur or the path tracer's lens; then a button that opens the Lighting panel |
+| Atmosphere, Depth of Field | every 3D view | fog, a flame's depth weighting, a terrain's far and haze; a flame's focus and blur or the path tracer's lens |
 | Deep Zoom | flames (`Control::DeepZoom`) | auto exposure and the Focused Rendering switch |
 | Render Mode, Preserve Z, post symmetry | flames | the 2D/3D switch (through `switch_render_mode`), JWildfire's `preserve_z` (3D), post symmetry |
 
@@ -612,11 +638,16 @@ sections by the view:
 |---|---|---|---|---|
 | Rendering | render tier; samples, noise threshold, bounces, denoise (not Lit) | the same | the same | -- |
 | Sky | HDRI sky (None, the bundled skies, Starfield) with Rotation, Horizon, Stars, Show as backdrop and its credit; else sky colour (the background, as in Colors), gradient and zenith, Studio light; Sky light (not Lit, unless the studio or a sky is on) | the same | the same | -- |
-| Lights | Light 1 to 4: kind, colour, its settings, intensity | the same | the same | directional only, once Shading strength is above 0 |
+| Lights | Light 1 to 4: kind, colour, its settings, intensity | the same | the same | directional only |
 | Shading | strength, ambient, occlusion strength and reach (not Path traced) | the same, the terrain's reach | the same, the terrain's reach | strength, ambient, SSAO strength and radius, normal smoothing, gap fill |
 | Shadows | Shadows, Shadow sharpness (formula parameters), Ray tolerance | the terrain's | the terrain's | shadow maps' strength |
-| Material | diffuse, highlight and its size, gloss, roughness, glow | the same | the same | the same, once lit |
+| Material | diffuse, highlight and its size, gloss, roughness, glow | the same | the same | the same |
 | Surface | -- | the surface texture; the lake's tint and roughness | -- | solid strength, surface thickness |
+
+A 3D flame's panel opens on **Shading** (its strength turns the shade
+pass on), then Lights, Shadows, Material, Surface. At Shading strength 0
+every row still shows; Lights and Shadows say at their top that nothing
+is lit until the strength is raised.
 
 A solid's **Shadows, Shadow sharpness and Occlusion reach** stay formula
 parameters in the file (`escape::ifs::LIGHTING_PARAMS`); the Escape panel
@@ -651,7 +682,7 @@ behind them is in [CAMERA.md](CAMERA.md).
 | Shift | finer steps | finer steps | sprint |
 | W A S D Q E | -- | -- | fly (Q/E: screen up in FreeLook, world up in FPS) |
 | Arrows, + / − | pan, zoom | pan, dolly | -- |
-| One finger | pan (rotate with the Turn toggle) | pan (orbit with the Turn toggle) | look |
+| One finger | pan | pan | look |
 | Long press, then drag | rotate | orbit | look |
 | Two fingers | pinch zoom, twist rotate, drag pan | pinch dolly, twist orbit, drag pan | -- |
 
@@ -662,9 +693,9 @@ behind them is in [CAMERA.md](CAMERA.md).
   work on the web. A finger held still within 10 points for half a
   second is a **long press -- the touch's right button**: held, it reads
   the path in PathMap (as holding the right button does); dragged, it
-  turns. The **Pan/Turn toggle** at the viewport's bottom left is the
-  touch's **Ctrl**: a sticky choice of what a one-finger drag does. It
-  shows on the compact layout and once a touch has been seen.
+  turns. Two fingers pinch to zoom, move to pan and twist to turn. The
+  gestures are the controls: nothing is drawn on the viewport to tap (a
+  Pan/Turn toggle at its bottom left was removed for 0.6).
 - **Keys** ([src/app/input.rs](../../src/app/input.rs),
   `handle_keyboard`): arrows pan 5% of the view a press and + / −
   zoom by 1.5, through the same gestures; Ctrl/Cmd+Z and +Y undo and
@@ -693,11 +724,35 @@ record: [mobile-ui-redesign.md](../archive/projects/mobile-ui-redesign.md).
   `SystemSettings::compact_mode`; afterwards the saved value decides.
   Window ▸ Mobile View and the compact menu's Desktop View switch, and
   the switch is saved too.
-- **The menu** holds a Window submenu (`COMPACT_WINDOW_MENU`, with the
-  same mode policy as the desktop rows), File, View (Reset View), Mode,
-  the animation transport (Play/Pause, Stop), Reset Accumulation, Undo,
-  Redo, the account button (the online account), Help, and Desktop View. There
-  is no language picker on the compact layout.
+- **The menu** holds the Mode, then File, View, Catalog and Window in
+  the desktop bar's order, the transport, Undo, Redo, the account button
+  (the online account), Help, and Desktop View. Kept short for a phone's
+  screen (`visibility::COMPACT_VIEW_PANELS`, `compact_window_menu`,
+  `compact_more`):
+  - **View:** Reset View, then the desktop's picture group: View,
+    Lighting, Colors & Tone Mapping, Rendering, Performance.
+  - **Window:** the mode's panels -- a flame's Transforms, Triangle
+    Editor, Xaos, Paths and Subflames; Escape's Escape, Hybrid Designer
+    and Transforms; Simulation's Simulation, Textures and Transforms --
+    then Effects, Animation and Signals, then the Undo/Redo History,
+    then **More**: every other desktop Window row, in the desktop's
+    groups (Settings is File's alone). Reset Accumulation is the
+  Rendering panel's. File ▸ Settings opens the Settings panel, the
+  compact layout's language picker.
+- **The transport** follows Space (`render_mode::space_runs_the_simulation`):
+  in Simulation, Run/Pause and Stop (pause and restart from the seed)
+  drive the run -- unless the timeline owns the step count, when the
+  animation's transport shows; elsewhere Play/Pause and Stop drive the
+  animation, and show only when it has tracks. Stop rewinds a paused
+  animation too.
+- **Typing on a phone** (the web app on a touch device): a focused text
+  field publishes its text and kind (`vkb_sync`), and `js/vkb.js` shows
+  an HTML input above the canvas with the matching keyboard, then hands
+  the text back (`web_text_agent.rs`). A number field that may be
+  negative (no range, or one below zero) gets a **±** key: the phones'
+  numeric keypads have no minus. A picker's search takes the focus on opening
+  on the desktop; there it waits for a tap, or the keyboard would come up
+  over the list (`picker::touch_keyboard`).
 - **Panels open docked**, not floating (`Workspace::open_panel` →
   `open_compact_panel`): the first splits off the viewport (below it at
   0.55 in portrait, beside it at 0.60 in landscape) and later ones join
@@ -809,12 +864,39 @@ iterate the registry's `HashMap`.
 
 ---
 
+## Angles: the user sees degrees
+
+**Every angle a user sees or types is in degrees**, whatever the config,
+the shader or a foreign format stores. Storage keeps its own units (no
+config or wire change to make a control read in degrees); the control
+converts.
+
+- **A parameter** (`params::ParamDef`, drawn by `ui::params`): stored in
+  degrees, `Spec::angle` / `param!(... angle ...)` (the shader converts);
+  stored in radians or turns, as Apophysis or JWildfire holds it,
+  `Spec::radians` / `Spec::turns` (`param!(... radians ...)`,
+  `unlimited_radians`, `turns`, ...; default and range as stored too).
+  The control shows degrees, and the wire carries degrees as an `angle`
+  (`params::AngleUnit`). A Rhai `PARAMS` entry says `type: "angle"`,
+  `"radians"` or `"turns"`. Never a plain float for an angle.
+- **A config setting**: the rotations and cameras stored in radians
+  (`view_controls::angle_slider`), the escape lighting's angles, hue
+  shift and post symmetry in degrees. **Animation targets**: the track
+  editor shows every angle's keyframes in degrees whatever it is stored
+  in (`track_editor::angle_unit_of_path`; a variation's parameter answers
+  by its kind).
+- **Scripts** read what the file stores (radians for config targets;
+  SCRIPTING.md). A script's own `param_angle` is degrees.
+
+What the variation audit left, a decision each, is in
+[angle-audit.md](../projects/angle-audit.md).
+
 ## Common UI Modification Tasks
 
 ### Add a panel
 1. Add a variant to `PanelType` ([workspace.rs](../../src/ui/workspace.rs)), a title arm in its `Display` impl, and a `default_size_for_panel` arm.
 2. Add a case to `visibility::panel` — the match is exhaustive, so this is not optional — and add it to the test list `ALL_PANELS` (the count is asserted in `the_test_list_covers_every_panel`).
-3. Add a row to `visibility::WINDOW_MENU` (and to `COMPACT_WINDOW_MENU` if it belongs on a phone).
+3. Add a row to `visibility::WINDOW_MENU` (the phone's More submenu picks it up; to `compact_window_menu` or `COMPACT_VIEW_PANELS` if it belongs on the phone's first level).
 4. Add a dispatch arm in `PanelViewer::render_panel` ([panel_viewer.rs](../../src/ui/panel_viewer.rs)).
 5. Add the `menu.window_*` and `panels.*` keys to `locales/en.yml`.
 
@@ -848,5 +930,5 @@ need nothing more. For anything else:
 
 Every label is a `t!("group.key")` lookup in `locales/*.yml`; English is
 the reference and the fallback. The language picker is the globe menu
-in the menu bar's right strip. Translations, fonts and the locale tests
+in the menu bar's right strip, and the Settings panel's Language. Translations, fonts and the locale tests
 are in [I18N.md](I18N.md).

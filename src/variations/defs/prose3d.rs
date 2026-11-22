@@ -35,7 +35,7 @@ pub static PROSE3D: VariationDef = VariationDef {
     parameters: &[
         param!("l", "Length", unlimited_float, 1.0, 0.0, 3.0, "Rose length / overall scale (`length`). 0 is clamped to a tiny value."),
         param!("k", "Petals", unlimited_float, 6.0, -15.0, 15.0, "Petal count `k` (the polar-rose frequency); may be fractional. Sign flips petal parity."),
-        param!("c", "Constant", unlimited_float, 0.0, -3.14159265, 3.14159265, "Angular phase constant added inside `cos(k·θ + c)`."),
+        param!("c", "Constant", unlimited_radians, 0.0, -3.14159265, 3.14159265, "Angular phase constant added inside `cos(k·θ + c)`."),
         param!("z1", "Scale Z1", unlimited_float, 1.0, -2.0, 2.0, "Z scale of the main (non-reflected) petals."),
         param!("z2", "Scale Z2", unlimited_float, 1.0, -2.0, 2.0, "Z scale of the reflected (ghost) petals."),
         param!("refSc", "Reflection Scale", unlimited_float, 1.0, 0.0, 2.0, "XY scale applied to reflected points."),

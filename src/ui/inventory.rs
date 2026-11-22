@@ -165,8 +165,10 @@ pub fn take_open() -> Option<(Family, Source, Option<EntryKey>)> {
 /// compact menu's submenu draw the same rows). Online or on this device
 /// is the panel's Source filter.
 pub fn catalog_menu_rows(ui: &mut egui::Ui) {
+    // Selectable rows, as the File and Window menus' (buttons drew a
+    // lighter background in the phone's submenu).
     for family in Family::ALL {
-        if ui.button(t!(family.label_key())).clicked() {
+        if ui.selectable_label(false, t!(family.label_key()).as_ref()).clicked() {
             request_open(family, Source::All);
             ui.close();
         }
@@ -642,6 +644,30 @@ impl InventoryPanel {
         }
         let mut clicked: Option<Drawn> = None;
         let mut end_visible = false;
+        // Where the server's lists stand, in a strip under the list that
+        // the list's scroll area leaves room for (drawn after it, the
+        // status fell below the panel and was cut off).
+        let state = self.online.state(&keys);
+        let status = state.loading || state.error.is_some() || rows.is_empty();
+        if status {
+            egui::Panel::bottom(egui::Id::new(("catalog_status", family))).resizable(false).show_inside(ui, |ui| {
+                if state.loading {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.weak(t!("catalog.loading"));
+                    });
+                } else if let Some(err) = &state.error {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add(egui::Label::new(egui::RichText::new(err.as_str()).color(ui.visuals().error_fg_color)).wrap());
+                        if ui.button(t!("catalog.retry")).clicked() {
+                            self.online.retry(&keys, &cx.account, &ctx);
+                        }
+                    });
+                } else {
+                    ui.weak(t!("catalog.nothing_matches"));
+                }
+            });
+        }
         egui::ScrollArea::vertical().id_salt("catalog_list").auto_shrink([false, false]).show(ui, |ui| {
             if family == Family::Palettes && view.group == GroupBy::Pack {
                 end_visible = self.render_palettes(ui, cx, &rows, &mut clicked, hovered);
@@ -706,23 +732,8 @@ impl InventoryPanel {
                     .body(body);
             }
         });
-        // Where the server's lists stand, under the list.
-        let state = self.online.state(&keys);
-        if state.loading {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.weak(t!("catalog.loading"));
-            });
-        } else if let Some(err) = &state.error {
-            ui.horizontal_wrapped(|ui| {
-                ui.colored_label(ui.visuals().error_fg_color, err);
-                if ui.button(t!("catalog.retry")).clicked() {
-                    self.online.retry(&keys, &cx.account, &ctx);
-                }
-            });
-        } else if rows.is_empty() {
-            ui.weak(t!("catalog.nothing_matches"));
-        } else if (end_visible || rows.is_empty()) && state.more {
+        // The next page, as the list's end comes into view.
+        if !status && end_visible && state.more {
             self.online.more(&keys, &cx.account, &ctx);
         }
         if let Some(d) = clicked {
@@ -1630,6 +1641,46 @@ mod phone_tests {
         let asked = super::super::inventory_preview::with(|p| p.asked());
         let variations = panel.entries.iter().filter(|e| e.kind == Kind::Variation).count();
         assert!(asked > 0 && asked < variations / 4, "the cells on screen ask, not all {variations}: {asked}");
+    }
+
+    /// **The status fits the panel.** A network error under the list was
+    /// drawn after a scroll area that took the whole height, so it fell
+    /// below the panel -- cut off, and the dock scrolled the tab to reach
+    /// it (a scrollbar inside a scrollbar). It sits in a strip the list
+    /// leaves room for now, wrapped, Try again beside it.
+    #[test]
+    fn a_network_error_shows_inside_the_panel() {
+        let mut library = crate::scene::palette::global_palette_library().read().unwrap().clone();
+        let mut cm = ConfigManager::new(FractalConfig::default());
+        let cloud = crate::app::script_cloud::ScriptCloudState::default();
+        let mut panel = InventoryPanel::new();
+        panel.entries = Arc::new(inventory::scan(&library, inventory::Online::default()));
+        panel.filters.source = Source::All;
+        let lists = super::super::inventory_view::online_lists(panel.family, &panel.filters, false);
+        assert!(!lists.is_empty(), "Source All asks the server");
+        let keys = panel.online.keys(&lists);
+        // Long, and a URL: nowhere to break but anywhere.
+        let error = "Network error: http://localhost:3000/api/v1/flames?scope=curated&sort=name&engine=flame&dimension=2&limit=60: connection refused (os error 10061)";
+        panel.online.fail_for_test(&keys, error);
+        const H: f32 = 500.0;
+        let ctx = egui::Context::default();
+        let mut drawn = Vec::new();
+        for _ in 0..3 {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, H))), ..Default::default() };
+            let out = ctx.run_ui(input, |ui| {
+                super::super::inventory_preview::begin_frame(ui.ctx());
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    let mut cx = InventoryContext { config_manager: &mut cm, palette_library: &mut library, account: CloudAccount::default(), script_cloud: &cloud };
+                    let _ = panel.render(ui, &mut cx);
+                });
+            });
+            drawn = placed(&out.shapes);
+        }
+        let shown: Vec<&(String, egui::Pos2)> = drawn.iter().filter(|(t, _)| error.starts_with(t.split('\n').next().unwrap_or("")) && t.starts_with("Network error")).collect();
+        let at = shown.first().unwrap_or_else(|| panic!("the error is drawn: {drawn:?}")).1;
+        assert!(at.y > 0.0 && at.y < H - 20.0, "the error inside the panel, not below it: at y {}", at.y);
+        let retry = drawn.iter().find(|(t, _)| *t == t!("catalog.retry").to_string()).map(|(_, p)| *p).expect("Try again");
+        assert!(retry.y < H - 10.0, "Try again inside the panel too: at y {}", retry.y);
     }
 
     /// The Fractals catalog (one-catalog-view.md): the presets as cells

@@ -409,13 +409,16 @@ pub(super) enum UrlLoadedData {
 fn escape_view<'a>(
     escape: &'a Option<crate::escape::EscapeRenderer>,
     #[cfg(feature = "terrain")] terrain: &'a Option<crate::escape::footprint::EscapeTerrain>,
-    config: &crate::config::FractalConfig,
+    terrain_on: bool,
 ) -> Option<&'a egui_wgpu::wgpu::TextureView> {
+    // `terrain_on` is the frame's one decision, the escape branch's: asked
+    // again here, the question could answer otherwise (it reads the
+    // registry of the user's solids as well as the config).
     #[cfg(feature = "terrain")]
-    if config.escape.terrain_active() {
+    if terrain_on {
         return terrain.as_ref().map(|t| t.output_view());
     }
-    let _ = config;
+    let _ = terrain_on;
     // A motion-blurred frame, finished, while the next builds.
     escape.as_ref().map(|e| e.presented_view().unwrap_or_else(|| e.output_view()))
 }
@@ -621,7 +624,15 @@ pub struct App {
     pub(super) last_param_change_time: Option<web_time::Instant>,
     pub(super) rendering_complete: bool,  // True when rendering has finished (max_iterations reached)
     pub(super) clear_paths_next_frame: bool,  // Clear path buffer on next compute pass (full reset)
-    pub(super) ui_needs_repaint: bool,  // Track if UI is requesting repaints (for frame rate boost)
+    /// When the UI asked for its next frame (egui's repaint delay from the
+    /// last frame), or `None`: the frame loop keeps drawing once it is due,
+    /// as for input -- a Catalog preview being made, a fade, a search
+    /// settling all ask for frames nobody's input brings.
+    pub(super) ui_repaint_at: Option<web_time::Instant>,
+    /// The web app's GPU device was lost: the frame loop does nothing more
+    /// (the page shows a Reload notice).
+    #[cfg(target_arch = "wasm32")]
+    pub(super) gpu_lost: bool,
     pub(super) last_input_time: Option<web_time::Instant>,  // Time of last user input (for idle detection)
     // Tracks whether the fractal was actively rendering on the previous
     // AboutToWait. When it transitions from true to false (e.g.,
@@ -976,7 +987,9 @@ impl App {
             last_param_change_time: None,
             rendering_complete: false,
             clear_paths_next_frame: true,  // Clear paths on first frame
-            ui_needs_repaint: false,
+            ui_repaint_at: None,
+            #[cfg(target_arch = "wasm32")]
+            gpu_lost: false,
             last_input_time: None,
             was_rendering_prev_frame: false,
             progress_drawn: crate::ui::RenderProgress::Idle,
@@ -1156,6 +1169,26 @@ impl App {
         // reasoning about whether it fires. See
         // docs/archive/projects/wasm-load-crash.md.
         let handler = move |event: Event<()>, elwt: &ActiveEventLoop| {
+            // The web app's GPU device lost: nothing more touches it. The
+            // browser cannot give the page a new one in place, and every
+            // call on the dead one fails -- a readback mapped again while
+            // its first map never answered panicked inside wgpu (macOS
+            // Chrome, 2026-11-22). The page shows an HTML notice with a
+            // Reload button instead (`gpu::device::show_lost_notice`).
+            #[cfg(target_arch = "wasm32")]
+            {
+                if app.gpu_lost {
+                    elwt.set_control_flow(ControlFlow::Wait);
+                    return;
+                }
+                if crate::gpu::device::take_device_lost() {
+                    log::error!("GPU device lost: stopping, and asking the page to reload");
+                    app.gpu_lost = true;
+                    crate::gpu::device::show_lost_notice();
+                    elwt.set_control_flow(ControlFlow::Wait);
+                    return;
+                }
+            }
             match event {
                 Event::WindowEvent { event, window_id } if window_id == window.id() => {
                     // Let egui handle events first
@@ -1431,7 +1464,9 @@ impl App {
                     const UI_IDLE_TIMEOUT: Duration = Duration::from_millis(700);
                     let ui_active = app.last_input_time
                         .map(|t| t.elapsed() < UI_IDLE_TIMEOUT)
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                        // ...or the UI asked for a frame that is due now.
+                        || app.ui_repaint_at.is_some_and(|t| t <= web_time::Instant::now());
 
                     // If surface needs recreation, request one redraw to trigger it
                     // but don't continuously spin — wait for events after that
@@ -1524,6 +1559,10 @@ impl App {
                             }
                             _ => window.request_redraw(),
                         }
+                    } else if let Some(at) = app.ui_repaint_at {
+                        // Idle, but the UI wants a frame later (a search
+                        // settling, a tooltip's delay): sleep until then.
+                        elwt.set_control_flow(ControlFlow::WaitUntil(at));
                     } else {
                         // Truly idle: sleep until event wakes us
                         elwt.set_control_flow(ControlFlow::Wait);
@@ -1966,8 +2005,9 @@ impl App {
         let ui_cpu_ms = t_ui_start.elapsed().as_secs_f64() * 1000.0;
         self.metrics.record_ui_time(ui_cpu_ms);
 
-        // Track UI repaint requests for frame rate optimization
-        self.ui_needs_repaint = ui_response.needs_repaint;
+        // When the UI wants its next frame (none: `Duration::MAX`, which
+        // `checked_add` turns into no deadline).
+        self.ui_repaint_at = web_time::Instant::now().checked_add(ui_response.repaint_delay);
 
         // Handle viewport resize immediately (before rendering)
         // WASM: Debounce resizes to prevent rapid resize loops that can freeze the browser
@@ -2345,6 +2385,16 @@ impl App {
         // An export in the background freezes the viewport: nothing below
         // renders, and the picture it last drew stays on screen.
         let frozen = self.freeze_viewport();
+
+        // The config's own sources -- a Rhai formula, solid, colouring,
+        // variation, model, effect -- registered before anything below asks
+        // what its names are. A twin first used this frame (Edit as Rhai)
+        // was unknown to the governor's and the escape branch's questions
+        // (not a solid, so a terrain), then registered mid-frame by the
+        // render's own resolve, so the tail's same question answered
+        // otherwise and found no escape renderer: a panic. Cheap when they
+        // are registered already.
+        self.config_manager.active_config().ensure_sources();
 
         // The quality governor's rung for escape-time this frame (governor.rs):
         // None in a still, a terrain, a path-traced solid, another mode. An
@@ -3688,7 +3738,7 @@ impl App {
                         &self.escape_renderer,
                         #[cfg(feature = "terrain")]
                         &self.escape_terrain,
-                        final_config,
+                        terrain_on,
                     )
                     .expect("escape branch above created it"),
                 )

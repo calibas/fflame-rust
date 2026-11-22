@@ -19,7 +19,7 @@ const PARAMS = #{
         hint: "Offset-circle radius for the generator.",
     },
     phi1: #{
-        value: 110.0, min: -360.0, max: 360.0, free: true,
+        value: 110.0, min: -360.0, max: 360.0, free: true, type: "angle",
         caption: "Phi 1",
         hint: "Angular position of the offset circle (degrees).",
     },

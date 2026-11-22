@@ -198,6 +198,8 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> PanelUse {
         | P::ConfigDialog
         | P::Export
         | P::Rendering
+        // Device preferences: nothing of a mode's.
+        | P::Preferences
         | P::LoginDialog
         | P::SaveOnlineDialog
         // The transform editors, in EVERY mode. Simulation uses the
@@ -553,72 +555,119 @@ const fn row(panel: PanelType, label_key: &'static str) -> WindowMenuRow {
     WindowMenuRow { panel, label_key, account_only: false }
 }
 
-/// The desktop Window menu, in order. The single source of which
-/// panels a menu offers and what they are called; the compact submenu
-/// below picks from it rather than keeping its own copy of the labels.
-pub static WINDOW_MENU: &[WindowMenuRow] = &[
-    row(PanelType::Performance, "menu.window_performance"),
-    row(PanelType::Rendering, "menu.window_rendering"),
-    row(PanelType::View, "menu.window_view"),
-    // Every lit 3D view's lighting, shadows, material and surface
-    // (3d-look-and-tools P3; it was the View panel's Lighting & Material
-    // section from camera-unification C5 until then).
-    row(PanelType::SolidLighting, "menu.window_solid_lighting"),
-    row(PanelType::Escape, "menu.window_escape"),
-    row(PanelType::Simulation, "menu.window_simulation"),
-    row(PanelType::Textures, "menu.window_textures"),
-    row(PanelType::RhaiEditor, "menu.window_formula_editor"),
-    row(PanelType::HybridDesigner, "menu.window_hybrid_designer"),
-    row(PanelType::Transforms, "menu.window_transforms"),
-    row(PanelType::TriangleEditor, "menu.window_triangle_editor"),
-    row(PanelType::Colors, "menu.window_colors"),
-    row(PanelType::PaletteEditor, "menu.window_palette_editor"),
-    row(PanelType::FractalBrowser, "menu.window_fractal_browser"),
-    row(PanelType::History, "menu.window_history"),
-    row(PanelType::Animation, "menu.window_animation"),
-    row(PanelType::Paths, "menu.window_paths"),
-    row(PanelType::RandomGenerator, "menu.window_random_generator"),
-    row(PanelType::Effects, "menu.window_effects"),
-    row(PanelType::Subflames, "menu.window_subflames"),
-    row(PanelType::XaosEditor, "menu.window_xaos_editor"),
-    row(PanelType::Signal, "menu.window_signal"),
-    WindowMenuRow {
-        panel: PanelType::LoginDialog,
-        label_key: "menu.window_account",
-        account_only: true,
-    },
+/// The desktop Window menu's panels, in groups, in order; a separator
+/// between groups (Reset Workspace and Mobile View above them, Workspace
+/// Layout below). The single source of which panels a menu offers and
+/// what they are called; the compact submenu below picks from it rather
+/// than keeping its own copy of the labels. The Undo/Redo History is the
+/// Edit menu's.
+pub static WINDOW_MENU: &[&[WindowMenuRow]] = &[
+    // The picture: how it is seen, coloured, rendered and lit.
+    &[
+        row(PanelType::Performance, "menu.window_performance"),
+        row(PanelType::View, "menu.window_view"),
+        row(PanelType::Colors, "menu.window_colors"),
+        row(PanelType::Rendering, "menu.window_rendering"),
+        // Every lit 3D view's lighting, shadows, material and surface
+        // (3d-look-and-tools P3; it was the View panel's Lighting & Material
+        // section from camera-unification C5 until then).
+        row(PanelType::SolidLighting, "menu.window_solid_lighting"),
+    ],
+    // The flame.
+    &[
+        row(PanelType::Transforms, "menu.window_transforms"),
+        row(PanelType::TriangleEditor, "menu.window_triangle_editor"),
+        row(PanelType::XaosEditor, "menu.window_xaos_editor"),
+        row(PanelType::Paths, "menu.window_paths"),
+        row(PanelType::Subflames, "menu.window_subflames"),
+    ],
+    // Escape-time.
+    &[row(PanelType::Escape, "menu.window_escape"), row(PanelType::HybridDesigner, "menu.window_hybrid_designer")],
+    // Simulation.
+    &[row(PanelType::Simulation, "menu.window_simulation")],
+    // Every engine's: effects and motion.
+    &[
+        row(PanelType::Effects, "menu.window_effects"),
+        row(PanelType::Animation, "menu.window_animation"),
+        row(PanelType::Signal, "menu.window_signal"),
+        row(PanelType::Textures, "menu.window_textures"),
+    ],
+    // Tools.
+    &[
+        row(PanelType::PaletteEditor, "menu.window_palette_editor"),
+        row(PanelType::RhaiEditor, "menu.window_formula_editor"),
+        row(PanelType::FractalBrowser, "menu.window_fractal_browser"),
+        row(PanelType::RandomGenerator, "menu.window_random_generator"),
+    ],
+    // The device's.
+    &[
+        row(PanelType::Preferences, "menu.window_settings"),
+        WindowMenuRow {
+            panel: PanelType::LoginDialog,
+            label_key: "menu.window_account",
+            account_only: true,
+        },
+    ],
 ];
 
-/// The compact Window submenu keeps its own ORDER -- touch priority,
-/// transforms first -- but not its own labels. The Palette Editor is
-/// deliberately absent: it is reachable from the Colors panel, and on a
-/// phone this menu was scrolling off the bottom. Paths, Random Generator
-/// and Account are absent too.
-pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
-    PanelType::Transforms,
-    PanelType::TriangleEditor,
-    PanelType::Colors,
+/// Every row of the Window menu, groups flattened.
+pub fn window_menu_rows() -> impl Iterator<Item = &'static WindowMenuRow> {
+    WINDOW_MENU.iter().flat_map(|g| g.iter())
+}
+
+// ── The phone's menu: short enough for a phone's screen ──
+//
+// Its View submenu takes the desktop's picture group, after Reset View;
+// its Window submenu is the mode's panels, then a More submenu with
+// every other desktop row (in the desktop's groups), so a phone reaches
+// every panel a desktop does. Settings is File's alone there.
+
+/// The compact View submenu's panels, after Reset View.
+pub static COMPACT_VIEW_PANELS: &[PanelType] = &[
     PanelType::View,
     PanelType::SolidLighting,
+    PanelType::Colors,
     PanelType::Rendering,
-    PanelType::FractalBrowser,
-    PanelType::Subflames,
-    PanelType::RhaiEditor,
-    PanelType::Escape,
-    PanelType::Simulation,
-    PanelType::Textures,
-    PanelType::History,
-    PanelType::Effects,
-    PanelType::XaosEditor,
-    PanelType::Animation,
-    PanelType::Signal,
     PanelType::Performance,
 ];
 
-/// The label a compact row shows, from the shared table.
-pub fn label_key_of(p: PanelType) -> &'static str {
+/// Every mode's motion and effects, then the history.
+const COMPACT_SHARED: &[&[PanelType]] = &[&[PanelType::Effects, PanelType::Animation, PanelType::Signal], &[PanelType::History]];
+
+/// The compact Window submenu's main rows for a mode, in groups (a
+/// separator between), More after them. The Transforms panel is in
+/// every mode's: simulation layers warp by it, and escape mode D draws
+/// the flame.
+pub fn compact_window_menu(m: RenderMode) -> [&'static [PanelType]; 3] {
+    use PanelType as P;
+    let editors: &'static [PanelType] = match m {
+        RenderMode::TwoD | RenderMode::ThreeD => &[P::Transforms, P::TriangleEditor, P::XaosEditor, P::Paths, P::Subflames],
+        RenderMode::Escape => &[P::Escape, P::HybridDesigner, P::Transforms],
+        RenderMode::Simulation => &[P::Simulation, P::Textures, P::Transforms],
+    };
+    [editors, COMPACT_SHARED[0], COMPACT_SHARED[1]]
+}
+
+/// The compact More submenu for a mode: the desktop Window menu's rows
+/// the phone's View and Window submenus do not show, nor Settings (File
+/// opens it), in the desktop's groups; an emptied group goes.
+pub fn compact_more(m: RenderMode) -> Vec<Vec<&'static WindowMenuRow>> {
+    let main = compact_window_menu(m);
+    let shown = |p: PanelType| main.iter().any(|g| g.contains(&p)) || COMPACT_VIEW_PANELS.contains(&p) || p == PanelType::Preferences;
     WINDOW_MENU
         .iter()
+        .map(|g| g.iter().filter(|r| !shown(r.panel)).collect::<Vec<_>>())
+        .filter(|g| !g.is_empty())
+        .collect()
+}
+
+/// The label a menu row shows, from the shared table; the Undo/Redo
+/// History, the desktop Edit menu's, has its own.
+pub fn label_key_of(p: PanelType) -> &'static str {
+    if p == PanelType::History {
+        return "menu.window_history";
+    }
+    window_menu_rows()
         .find(|r| r.panel == p)
         .map(|r| r.label_key)
         .unwrap_or("menu.window")
@@ -680,6 +729,7 @@ mod tests {
         PanelType::Textures,
         PanelType::RhaiEditor,
         PanelType::HybridDesigner,
+        PanelType::Preferences,
     ];
 
     /// The list above is the whole enum. `PanelType` has no iterator,
@@ -739,7 +789,7 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), ALL_PANELS.len(), "duplicate entry in ALL_PANELS");
-        assert_eq!(ALL_PANELS.len(), 30, "a panel was added or retired; decide what it means per mode");
+        assert_eq!(ALL_PANELS.len(), 31, "a panel was added or retired; decide what it means per mode");
     }
 
     /// Every control this build knows about.
@@ -971,27 +1021,35 @@ mod tests {
         }
     }
 
-    /// The compact submenu picks from the desktop table rather than
-    /// keeping its own, so labels cannot drift apart.
+    /// In every mode the phone's menu reaches every panel the desktop's
+    /// Window menu does (Settings through File), each once, and its main
+    /// rows are the desktop's panels or the History.
     #[test]
-    fn the_compact_menu_is_a_subset_of_the_window_menu() {
-        for p in COMPACT_WINDOW_MENU {
-            let row = WINDOW_MENU.iter().find(|r| r.panel == *p);
-            let row = row.unwrap_or_else(|| panic!("{p:?} is in the compact menu but not the desktop one"));
-            assert!(!row.account_only, "{p:?}: the compact menu has no account gate");
-            assert_eq!(label_key_of(*p), row.label_key);
+    fn the_compact_menu_reaches_every_window_panel_once() {
+        for m in RenderMode::ALL {
+            let main = compact_window_menu(*m);
+            let mut reached: Vec<PanelType> = COMPACT_VIEW_PANELS.iter().chain(main.iter().flat_map(|g| g.iter())).copied().collect();
+            reached.extend(compact_more(*m).iter().flatten().map(|r| r.panel));
+            reached.push(PanelType::Preferences);
+            for p in &reached {
+                assert_ne!(label_key_of(*p), "menu.window", "{m:?}: {p:?} has no label");
+                assert_eq!(reached.iter().filter(|q| *q == p).count(), 1, "{m:?}: {p:?} shows twice");
+            }
+            for r in window_menu_rows() {
+                assert!(reached.contains(&r.panel), "{m:?}: the phone's menu never reaches {:?}", r.panel);
+            }
         }
     }
 
     /// No panel appears twice in a menu, and every label key exists.
     #[test]
     fn the_window_menu_is_well_formed() {
-        let mut seen: Vec<String> = WINDOW_MENU.iter().map(|r| format!("{:?}", r.panel)).collect();
+        let mut seen: Vec<String> = window_menu_rows().map(|r| format!("{:?}", r.panel)).collect();
         seen.sort();
         let before = seen.len();
         seen.dedup();
         assert_eq!(seen.len(), before, "a panel appears twice in the Window menu");
-        for r in WINDOW_MENU {
+        for r in window_menu_rows() {
             let text = t!(r.label_key);
             assert_ne!(text.as_ref(), r.label_key, "missing locale key {}", r.label_key);
         }

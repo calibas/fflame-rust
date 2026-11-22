@@ -131,7 +131,7 @@ fn add_effect_picker(ui: &mut Ui, config_manager: &mut ConfigManager, category: 
 /// (`RhaiEditorPanel::edit_effect_as_rhai`).
 fn edit_as_rhai_button(ui: &mut Ui, effect_type: &str) -> bool {
     let twin = crate::effects::custom::rhai_builtins().any(|(n, _)| *n == effect_type);
-    twin && ui.small_button(t!("effects_panel.edit_as_rhai")).on_hover_text(t!("effects_panel.edit_as_rhai_tip")).clicked()
+    twin && super::edit_as_rhai_button(ui, true, &t!("effects_panel.edit_as_rhai_tip")).clicked()
 }
 
 /// Draw the parameters of the effect at `index` in `list`.

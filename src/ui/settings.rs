@@ -22,6 +22,8 @@ pub fn render_settings_content(
     let mode = config.render_mode;
     let tone = config.tonemap_mode;
     let chaos = control(Control::ChaosGame, mode, tone) != Vis::Hide;
+    // The orbit cache is the desktop's (the web build has no orbit store).
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     let show_orbit =
         cfg!(not(target_arch = "wasm32")) && control(Control::OrbitCache, mode, tone).is_show();
 
@@ -119,77 +121,72 @@ pub fn render_settings_content(
         }
     }
 
-    // Advanced settings (collapsed by default)
-    if chaos || show_orbit {
-        egui::CollapsingHeader::new(t!("settings.advanced"))
-            .default_open(false)
-            .show(ui, |ui| {
-                if chaos {
-                    // Burn-in iterations
-                    let mut temp_burn_in = config_manager.system_settings().burn_in;
-                    let response = ui.add(super::VkbSlider::new(&mut temp_burn_in, 0..=4096)
-                        .text(t!("settings.burn_in")))
-                        .on_hover_text(t!("settings.tooltip_burn_in"));
+    // Burn-in, the deep-zoom orbit cache and the deterministic RNG (an
+    // Advanced section until the 0.6 review), at the top level.
+    if chaos {
+        // Burn-in iterations
+        let mut temp_burn_in = config_manager.system_settings().burn_in;
+        let response = ui.add(super::VkbSlider::new(&mut temp_burn_in, 0..=4096)
+            .text(t!("settings.burn_in")))
+            .on_hover_text(t!("settings.tooltip_burn_in"));
 
-                    if response.changed() {
-                        let _ = config_manager.update_system_setting(
-                            crate::config::ConfigPath::SystemBurnIn,
-                            temp_burn_in.into()
-                        );
-                    }
-                }
+        if response.changed() {
+            let _ = config_manager.update_system_setting(
+                crate::config::ConfigPath::SystemBurnIn,
+                temp_burn_in.into()
+            );
+        }
+    }
 
-                // Deep-zoom reference orbit cache (desktop only: the wasm
-                // build has no orbit store).
-                #[cfg(not(target_arch = "wasm32"))]
-                if show_orbit {
-                    let mut temp_cache_mb = config_manager.system_settings().orbit_cache_mb;
-                    let response = ui
-                        .add(
-                            super::VkbSlider::new(&mut temp_cache_mb, 64..=8192)
-                                .text(t!("settings.orbit_cache_mb")),
-                        )
-                        .on_hover_text(t!("settings.tooltip_orbit_cache_mb"));
-                    if response.changed() {
-                        let _ = config_manager.update_system_setting(
-                            crate::config::ConfigPath::SystemOrbitCacheMb,
-                            temp_cache_mb.into(),
-                        );
-                    }
-                    ui.horizontal(|ui| {
-                        let used_mb =
-                            crate::escape::orbit_store::bytes_in_use() as f64 / (1024.0 * 1024.0);
-                        ui.label(
-                            egui::RichText::new(t!(
-                                "settings.orbit_cache_in_use",
-                                used = format!("{used_mb:.0}")
-                            ))
-                            .small()
-                            .weak(),
-                        );
-                        if ui
-                            .small_button(t!("settings.orbit_cache_clear").as_ref())
-                            .on_hover_text(t!("settings.tooltip_orbit_cache_clear"))
-                            .clicked()
-                        {
-                            crate::escape::orbit_store::clear();
-                        }
-                    });
-                }
+    // Deep-zoom reference orbit cache (desktop only: the wasm
+    // build has no orbit store).
+    #[cfg(not(target_arch = "wasm32"))]
+    if show_orbit {
+        let mut temp_cache_mb = config_manager.system_settings().orbit_cache_mb;
+        let response = ui
+            .add(
+                super::VkbSlider::new(&mut temp_cache_mb, 64..=8192)
+                    .text(t!("settings.orbit_cache_mb")),
+            )
+            .on_hover_text(t!("settings.tooltip_orbit_cache_mb"));
+        if response.changed() {
+            let _ = config_manager.update_system_setting(
+                crate::config::ConfigPath::SystemOrbitCacheMb,
+                temp_cache_mb.into(),
+            );
+        }
+        ui.horizontal(|ui| {
+            let used_mb =
+                crate::escape::orbit_store::bytes_in_use() as f64 / (1024.0 * 1024.0);
+            ui.label(
+                egui::RichText::new(t!(
+                    "settings.orbit_cache_in_use",
+                    used = format!("{used_mb:.0}")
+                ))
+                .small()
+                .weak(),
+            );
+            if ui
+                .small_button(t!("settings.orbit_cache_clear").as_ref())
+                .on_hover_text(t!("settings.tooltip_orbit_cache_clear"))
+                .clicked()
+            {
+                crate::escape::orbit_store::clear();
+            }
+        });
+    }
 
-                if chaos {
-                    let mut temp_deterministic = config.deterministic_rng;
-                    if ui.checkbox(&mut temp_deterministic, t!("settings.deterministic_rng").as_ref())
-                        .on_hover_text(t!("settings.tooltip_deterministic_rng"))
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(
-                            ConfigPath::DeterministicRng,
-                            temp_deterministic.into()
-                        );
-                    }
-                }
-            });
+    if chaos {
+        let mut temp_deterministic = config.deterministic_rng;
+        if ui.checkbox(&mut temp_deterministic, t!("settings.deterministic_rng").as_ref())
+            .on_hover_text(t!("settings.tooltip_deterministic_rng"))
+            .changed()
+        {
+            let _ = config_manager.update_param(
+                ConfigPath::DeterministicRng,
+                temp_deterministic.into()
+            );
+        }
     }
 
     if chaos {

@@ -600,8 +600,14 @@ fn render_signal_files_section(
     load_signal_file: &mut bool,
     save_signal_file: &mut Option<String>,
 ) {
-    // Load button
-    if ui.button(t!("signal.load_signal_file")).clicked() {
+    // Load button: greyed in the web app, where nothing reads the file
+    // yet (no picker wired for .signal files; BACKLOG.md).
+    let files = !cfg!(target_arch = "wasm32");
+    if ui
+        .add_enabled(files, egui::Button::new(t!("signal.load_signal_file")))
+        .on_disabled_hover_text(t!("signal.files_not_on_web"))
+        .clicked()
+    {
         *load_signal_file = true;
     }
 

@@ -1379,6 +1379,23 @@ impl PaletteLibrary {
         self.generation
     }
 
+    /// The Catalog's Refresh: the packs folder and the loose `.palette`
+    /// files read again, as at startup -- a pack dropped in, edited or
+    /// removed shows -- with each pack's on/off switch kept (by name) and
+    /// the generation moved on, so everything keyed by it re-reads.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn rescan_packs(&mut self) {
+        let mut fresh = Self::new();
+        for info in &mut fresh.packs {
+            if let Some(old) = self.packs.iter().find(|o| o.name() == info.name()) {
+                info.enabled = old.enabled;
+            }
+        }
+        fresh.rebuild_palette_list();
+        fresh.generation = self.generation.wrapping_add(1);
+        *self = fresh;
+    }
+
     // ===== PACK LOADING METHODS =====
 
     /// Start loading a pack by index (desktop - synchronous)
@@ -1607,6 +1624,22 @@ mod tests {
     /// desktop scan has to skip it. When the embedded pack moved from
     /// `builtin.json` to `starter_pack.json` and the skip did not, the
     /// Palette Library showed "Starter Pack" twice.
+    /// Refresh reads the folder again but keeps a pack switched off as
+    /// it was, and moves the generation on (the Catalog re-reads by it).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_rescan_keeps_each_packs_switch() {
+        let mut library = PaletteLibrary::new();
+        let i = library.packs.iter().position(|p| p.enabled && !p.is_builtin).expect("an enabled pack on disk");
+        let name = library.packs[i].name().to_string();
+        library.set_pack_enabled(i, false);
+        let generation = library.generation();
+        library.rescan_packs();
+        let after = library.packs.iter().find(|p| p.name() == name).expect("the pack again");
+        assert!(!after.enabled, "{name} came back switched on");
+        assert_ne!(library.generation(), generation);
+    }
+
     #[test]
     fn no_pack_is_discovered_twice() {
         let library = PaletteLibrary::new();

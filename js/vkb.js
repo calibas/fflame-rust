@@ -42,8 +42,18 @@
     cancelBtn.textContent = '✕';
     cancelBtn.type = 'button';
 
+    // The sign, for a number field that may be negative: the phones'
+    // numeric and decimal keypads have no minus key (iOS's never do,
+    // many Android keyboards neither). Flips a leading '-'.
+    const signBtn = document.createElement('button');
+    signBtn.className = 'vkb-sign';
+    signBtn.textContent = '±';
+    signBtn.type = 'button';
+    signBtn.style.display = 'none';
+
     bar.appendChild(input);
     bar.appendChild(area);
+    bar.appendChild(signBtn);
     bar.appendChild(submitBtn);
     bar.appendChild(cancelBtn);
     overlay.appendChild(bar);
@@ -100,17 +110,33 @@
         if (detail.max != null) input.max = detail.max;
         else input.removeAttribute('max');
         input.required = !!detail.required;
+
+        // A number that may go below zero gets the sign key.
+        const numeric = fieldType === 'integer' || fieldType === 'decimal';
+        signBtn.style.display = numeric && (detail.min == null || detail.min < 0) ? 'block' : 'none';
+    }
+
+    // Every open and close starts from nothing: a mark left by one
+    // session (a button pressed while the input had no focus, so no blur
+    // came to clear it) made the next session drop an edit and stay open.
+    function resetState() {
+        blurFromButton = false;
+        pendingOpen = null;
     }
 
     function close() {
         active = false;
+        resetState();
         submitCooldown = true;
         setTimeout(function () { submitCooldown = false; }, 200);
 
         overlay.style.display = 'none';
+        signBtn.style.display = 'none';
         input.value = '';
         area.value = '';
         field.blur();
+        // The blur above may queue a blur handler: it must find no mark.
+        blurFromButton = false;
 
         // Wake the app from idle — dispatch a synthetic pointer event on the canvas
         const canvas = document.getElementById('canvas');
@@ -145,6 +171,18 @@
         blurFromButton = true;
         submit();
     });
+
+    // The sign: flips a leading '-', keeping the focus (and the keyboard)
+    // on the field -- preventDefault stops the press from blurring it.
+    function flipSign(e) {
+        e.preventDefault();
+        if (!active) return;
+        const v = input.value.trim();
+        input.value = v.startsWith('-') ? v.slice(1) : '-' + v;
+        input.focus();
+    }
+    signBtn.addEventListener('mousedown', flipSign);
+    signBtn.addEventListener('touchstart', flipSign);
 
     cancelBtn.addEventListener('mousedown', function (e) {
         e.preventDefault();
@@ -190,6 +228,7 @@
     // Rust dispatches vkb-open: show overlay, configure input, wait for touchend to focus
     document.addEventListener('vkb-open', function (e) {
         if (submitCooldown || active) return;
+        resetState();
         pendingOpen = e.detail;
         configureInput(e.detail);
         overlay.style.display = 'block';

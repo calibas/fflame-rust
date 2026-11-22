@@ -19,7 +19,7 @@ const PARAMS = #{
         hint: "Wavelength of the sine perturbation.",
     },
     phase: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Phase",
         hint: "Phase offset on the sine argument.",
     },
