@@ -500,8 +500,8 @@ pub static PIE: VariationDef = VariationDef {
         ParamDef::new(
             "rotation",
             "Rotation",
-            "Rotation angle of the whole pie in degrees.",
-            Spec::angle(0.0, 0.0, 360.0),
+            "Rotation of the whole pie, in degrees (stored in radians, as Apophysis holds it).",
+            Spec::radians(0.0, 0.0, std::f32::consts::TAU),
         ),
         ParamDef::new(
             "thickness",
@@ -562,8 +562,8 @@ pub static PIE3D: VariationDef = VariationDef {
         ParamDef::new(
             "rotation",
             "Rotation",
-            "Rotation angle of the whole pie in degrees.",
-            Spec::angle(0.0, 0.0, 360.0),
+            "Rotation of the whole pie, in degrees (stored in radians, as Apophysis holds it).",
+            Spec::radians(0.0, 0.0, std::f32::consts::TAU),
         ),
         ParamDef::new(
             "thickness",

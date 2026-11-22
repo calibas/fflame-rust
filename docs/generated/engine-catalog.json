@@ -22700,6 +22700,10 @@
         "builtin": "pie3D",
         "kind": "variation"
       },
+      "u6399bfca87d58c7f894ea11be9e1ecec_42bb2318": {
+        "builtin": "pie3D",
+        "kind": "variation"
+      },
       "u6399bfca87d58c7f894ea11be9e1ecec_d93ef85e": {
         "builtin": "pie3D",
         "kind": "variation"
@@ -24581,6 +24585,10 @@
         "kind": "variation"
       },
       "uc118d2d082c0818a93496e8fdb3649d4_3a93302b": {
+        "builtin": "pie",
+        "kind": "variation"
+      },
+      "uc118d2d082c0818a93496e8fdb3649d4_3b0a4caf": {
         "builtin": "pie",
         "kind": "variation"
       },

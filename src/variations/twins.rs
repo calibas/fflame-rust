@@ -900,7 +900,7 @@ fn text(s: &str) -> String {
 /// A def's parameters as a twin's `PARAMS` map, each as the built-in
 /// declares it: a free range `free: true`, a log slider `exponential:
 /// true`, a range of five decades that is not one `exponential: false`,
-/// an angle `type: "angle"`.
+/// an angle `type: "angle"`, one stored in radians `type: "radians"`.
 pub fn params_rhai(params: &[ParamDef]) -> String {
     if params.is_empty() {
         return String::new();
@@ -908,7 +908,7 @@ pub fn params_rhai(params: &[ParamDef]) -> String {
     let mut out = String::from("const PARAMS = #{\n");
     for p in params {
         let head = match &p.kind {
-            ParamKind::Float { default, min, max, free, log, angle } => {
+            ParamKind::Float { default, min, max, free, log, angle, radians } => {
                 let mut s = format!("value: {}, min: {}, max: {}", float(*default), float(*min), float(*max));
                 if *free {
                     s += ", free: true";
@@ -918,7 +918,9 @@ pub fn params_rhai(params: &[ParamDef]) -> String {
                 } else if *min > 0.0 && *max / *min >= 1e5 {
                     s += ", exponential: false";
                 }
-                if *angle {
+                if *radians {
+                    s += ", type: \"radians\"";
+                } else if *angle {
                     s += ", type: \"angle\"";
                 }
                 s

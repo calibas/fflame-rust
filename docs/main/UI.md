@@ -864,6 +864,28 @@ iterate the registry's `HashMap`.
 
 ---
 
+## Angles: the user sees degrees
+
+**Every angle a user sees or types is in degrees**, whatever the config,
+the shader or a foreign format stores. Storage keeps its own units (no
+config or wire change to make a control read in degrees); the control
+converts.
+
+- **A parameter** (`params::ParamDef`, drawn by `ui::params`): stored in
+  degrees, `Spec::angle` / `param!(... angle ...)` (the shader converts);
+  stored in radians, as Apophysis or JWildfire holds it, `Spec::radians`
+  (default and range in radians too; the control shows degrees, and the
+  wire carries degrees as an `angle`). A Rhai `PARAMS` entry says
+  `type: "angle"` or `type: "radians"`. Never a plain float for an angle.
+- **A config setting** (rotation, the cameras' angles): stored in radians,
+  drawn with `view_controls::angle_slider`; the track editor shows an
+  angle path's keyframes in degrees (`track_editor::is_angle_path`).
+- **Scripts** read what the file stores (radians for config targets;
+  SCRIPTING.md). A script's own `param_angle` is degrees.
+
+Parameters still shown raw (in radians, turns or a plain float in
+degrees) are listed in [BACKLOG.md](../projects/BACKLOG.md).
+
 ## Common UI Modification Tasks
 
 ### Add a panel

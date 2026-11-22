@@ -346,7 +346,7 @@ fn leak(s: String) -> &'static str {
 /// from above zero.
 fn float_kind(default: f64, (min, max): (f32, f32), exponential: bool) -> ParamKind {
     let log = min > 0.0 && (exponential || max / min >= 1e5);
-    ParamKind::Float { default: f64::from(default as f32), min: min.into(), max: max.into(), free: false, log, angle: false }
+    ParamKind::Float { default: f64::from(default as f32), min: min.into(), max: max.into(), free: false, log, angle: false, radians: false }
 }
 
 /// A program's parameter definitions, leaked for the registry.

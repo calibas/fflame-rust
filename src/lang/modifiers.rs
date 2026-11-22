@@ -66,6 +66,7 @@ pub fn damped(p: &Program) -> Program {
         linear: false,
         free: false,
         angle: false,
+        radians: false,
         span: Default::default(),
     });
     let alpha = out.params.len() - 1;

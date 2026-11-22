@@ -280,11 +280,14 @@ range, and whether it is slow. `param!` writes one:
 | `int, default, min, max` | an int (`integer`) | an integer in an `f32` |
 | `unlimited_int, default, min, max` | a free int (`unlimited_integer`) | as an int, with typing past the slider |
 | `angle, default` | an angle (`angle`) | degrees, slider −360…360; the body converts |
+| `Spec::radians(default, min, max)` | an angle (`angle`, in degrees on the wire) | radians, as the foreign format holds it (pie's rotation); shown in degrees |
 | `bool, default` | a switch (`boolean`) | 0.0 or 1.0 |
 | `enum, default, &[choices]` | a choice (`enum`) | the choice's index |
 
 Each form also takes a trailing description, and `param!(slow ...)`
-marks any form slow. The Transforms panel, the escape transformations
+marks any form slow. **An angle is never a plain float**: the user sees
+degrees (UI.md, *Angles*), so a port whose source holds radians keeps
+them with `Spec::radians` rather than asking the user to type them. The Transforms panel, the escape transformations
 and the lens draw them through the one renderer (`ui::params`). The
 wire names are the contract's vocabulary (`ParamType`), which
 `params::wire_type` spells a definition in.

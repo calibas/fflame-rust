@@ -428,7 +428,7 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
             if min > max {
                 return Err(err(format!("param `{key}`: min ({min}) is above max ({max})")));
             }
-            let decl = ParamDef::owned(key.to_string(), humanize(key), "", ParamKind::Float { default, min, max, free: false, log: false, angle: false });
+            let decl = ParamDef::owned(key.to_string(), humanize(key), "", ParamKind::Float { default, min, max, free: false, log: false, angle: false, radians: false });
             match s.borrow_mut().declare(decl).map_err(err)? {
                 ParamValue::Float(v) => Ok(v.clamp(min, max)),
                 other => Err(err(format!("param `{key}`: expected a number, got {other:?}"))),
@@ -442,7 +442,7 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
         if min > max {
             return Err(err(format!("param `{key}`: min ({min}) is above max ({max})")));
         }
-        let decl = ParamDef::owned(key.to_string(), humanize(key), "", ParamKind::Float { default, min, max, free: false, log: false, angle: true });
+        let decl = ParamDef::owned(key.to_string(), humanize(key), "", ParamKind::Float { default, min, max, free: false, log: false, angle: true, radians: false });
         match s.borrow_mut().declare(decl).map_err(err)? {
             ParamValue::Float(v) => Ok(v.clamp(min, max)),
             other => Err(err(format!("param `{key}`: expected an angle, got {other:?}"))),

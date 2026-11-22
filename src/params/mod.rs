@@ -41,8 +41,11 @@ pub struct ParamDef {
 pub enum ParamKind {
     /// `free`: a typed value may leave the range, and the slider keeps it
     /// (an unlimited float). `log`: the slider runs logarithmically (a
-    /// range above zero). `angle`: degrees, drawn with the angle control.
-    Float { default: f64, min: f64, max: f64, free: bool, log: bool, angle: bool },
+    /// range above zero). `angle`: an angle, drawn with the angle control,
+    /// in degrees -- a user always sees degrees. `radians` (with `angle`):
+    /// stored in radians, as a foreign format holds it (pie's rotation,
+    /// Apophysis's), its default and range too; the control converts.
+    Float { default: f64, min: f64, max: f64, free: bool, log: bool, angle: bool, radians: bool },
     /// `free` as a float's.
     Int { default: i64, min: i64, max: i64, free: bool },
     Bool { default: bool },
@@ -197,8 +200,8 @@ impl ParamDef {
     /// A built-in, in one const call.
     pub const fn new(name: &'static str, label: &'static str, hint: &'static str, spec: Spec) -> Self {
         let kind = match spec.kind {
-            SpecKind::Float { default, min, max, free, log, angle } => {
-                ParamKind::Float { default: default as f64, min: min as f64, max: max as f64, free, log, angle }
+            SpecKind::Float { default, min, max, free, log, angle, radians } => {
+                ParamKind::Float { default: default as f64, min: min as f64, max: max as f64, free, log, angle, radians }
             }
             SpecKind::Int { default, min, max, free } => ParamKind::Int { default, min, max, free },
             SpecKind::Bool { default } => ParamKind::Bool { default },
@@ -243,13 +246,19 @@ impl ParamDef {
 /// wire format (VARIATIONS_WIRE_FORMAT.md): its type's name
 /// ([`wire_type`]), its numbers as the f32s its slot holds, a switch's
 /// bounds and an empty hint null.
+///
+/// An angle stored in radians goes out in degrees, as an `angle`, the
+/// units every angle on the wire is in and the user sees.
 pub fn api_json(d: &ParamDef) -> serde_json::Value {
-    let bounds = d.kind.bounds();
+    let radians = matches!(d.kind, ParamKind::Float { radians: true, .. });
+    let unit = |v: f64| if radians { v.to_degrees() } else { v };
+    let bounds = d.kind.bounds().map(|(lo, hi)| (unit(lo), unit(hi)));
+    let default = if radians { unit(f64::from(d.slot_default())) as f32 } else { d.slot_default() };
     serde_json::json!({
         "name": d.name,
         "display_name": d.label,
         "param_type": wire_type(&d.kind),
-        "default_value": d.slot_default(),
+        "default_value": default,
         "min_value": bounds.map(|b| b.0 as f32),
         "max_value": bounds.map(|b| b.1 as f32),
         "description": d.hint(),
@@ -284,7 +293,7 @@ pub fn from_api(p: &crate::api::types::ApiVariationParameter, float: (f32, f32))
     let range = |(lo, hi): (f32, f32)| (f64::from(p.min_value.unwrap_or(lo)), f64::from(p.max_value.unwrap_or(hi)));
     let number = |fallback, free, angle| {
         let (min, max) = range(fallback);
-        ParamKind::Float { default: p.default_value.into(), min, max, free, log: false, angle }
+        ParamKind::Float { default: p.default_value.into(), min, max, free, log: false, angle, radians: false }
     };
     let int = |fallback, free| {
         let (min, max) = range(fallback);
@@ -462,7 +471,7 @@ pub struct Spec {
 
 #[derive(Clone, Copy, Debug)]
 enum SpecKind {
-    Float { default: f32, min: f32, max: f32, free: bool, log: bool, angle: bool },
+    Float { default: f32, min: f32, max: f32, free: bool, log: bool, angle: bool, radians: bool },
     Int { default: i64, min: i64, max: i64, free: bool },
     Bool { default: bool },
     Choice { default: usize, options: &'static [&'static str] },
@@ -470,12 +479,18 @@ enum SpecKind {
 
 impl Spec {
     pub const fn float(default: f32, min: f32, max: f32) -> Self {
-        Self { kind: SpecKind::Float { default, min, max, free: false, log: false, angle: false }, slow: false }
+        Self { kind: SpecKind::Float { default, min, max, free: false, log: false, angle: false, radians: false }, slow: false }
     }
 
     /// Degrees, drawn with the angle control.
     pub const fn angle(default: f32, min: f32, max: f32) -> Self {
-        Self { kind: SpecKind::Float { default, min, max, free: false, log: false, angle: true }, slow: false }
+        Self { kind: SpecKind::Float { default, min, max, free: false, log: false, angle: true, radians: false }, slow: false }
+    }
+
+    /// An angle stored in RADIANS (default and range too), as a foreign
+    /// format holds it; the control shows degrees, as every angle's.
+    pub const fn radians(default: f32, min: f32, max: f32) -> Self {
+        Self { kind: SpecKind::Float { default, min, max, free: false, log: false, angle: true, radians: true }, slow: false }
     }
 
     pub const fn int(default: i64, min: i64, max: i64) -> Self {
@@ -493,7 +508,7 @@ impl Spec {
     /// A typed value may leave the range (a number's alone).
     pub const fn free(self) -> Self {
         let kind = match self.kind {
-            SpecKind::Float { default, min, max, log, angle, .. } => SpecKind::Float { default, min, max, free: true, log, angle },
+            SpecKind::Float { default, min, max, log, angle, radians, .. } => SpecKind::Float { default, min, max, free: true, log, angle, radians },
             SpecKind::Int { default, min, max, .. } => SpecKind::Int { default, min, max, free: true },
             _ => panic!("only a number is free"),
         };
@@ -503,7 +518,7 @@ impl Spec {
     /// A logarithmic slider (a float's alone).
     pub const fn log(self) -> Self {
         let kind = match self.kind {
-            SpecKind::Float { default, min, max, free, angle, .. } => SpecKind::Float { default, min, max, free, log: true, angle },
+            SpecKind::Float { default, min, max, free, angle, radians, .. } => SpecKind::Float { default, min, max, free, log: true, angle, radians },
             _ => panic!("only a float is logarithmic"),
         };
         Self { kind, ..self }
@@ -532,7 +547,7 @@ mod tests {
     #[test]
     fn a_built_in_holds_what_its_spec_says() {
         let [feed, turn, n, on, mode] = BUILT_INS else { unreachable!() };
-        assert_eq!(feed.kind, ParamKind::Float { default: f64::from(0.055f32), min: 0.0, max: f64::from(0.1f32), free: false, log: true, angle: false });
+        assert_eq!(feed.kind, ParamKind::Float { default: f64::from(0.055f32), min: 0.0, max: f64::from(0.1f32), free: false, log: true, angle: false, radians: false });
         assert!(feed.slow && !turn.slow);
         assert_eq!(feed.kind.slot_default().to_bits(), 0.055f32.to_bits());
         assert_eq!(turn.kind.slot_default().to_bits(), (-0.1f32).to_bits());
@@ -560,6 +575,20 @@ mod tests {
 
     /// The published range: a number's bounds, a choice's indices, none
     /// for a switch.
+    /// An angle stored in radians goes out on the wire as every angle
+    /// does, in degrees: pie's rotation reads as it did before it was
+    /// stored-in-radians (an `angle`, 0..360).
+    #[test]
+    fn an_angle_stored_in_radians_goes_out_in_degrees() {
+        let d = ParamDef::new("r", "R", "", Spec::radians(std::f32::consts::FRAC_PI_2, 0.0, std::f32::consts::TAU));
+        let j = api_json(&d);
+        assert_eq!(j["param_type"], "angle");
+        let near = |k: &str, want: f64| assert!((j[k].as_f64().unwrap() - want).abs() < 1e-3, "{k}: {}", j[k]);
+        near("default_value", 90.0);
+        near("min_value", 0.0);
+        near("max_value", 360.0);
+    }
+
     #[test]
     fn bounds_are_a_numbers_or_a_choices() {
         assert_eq!(BUILT_INS[2].kind.bounds(), Some((1.0, 10.0)));

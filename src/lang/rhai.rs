@@ -3167,12 +3167,20 @@ impl<'s> Lowerer<'s> {
                             _ => return self.err(k.pos, "`free` is `true` or `false`: whether a typed value may leave the range"),
                         },
                         // What the control is, beyond what the value says:
-                        // an angle, in degrees as stored and shown.
+                        // an angle, in degrees as stored and shown; or one
+                        // stored in radians (its range too), shown in
+                        // degrees as every angle is.
                         "type" => match x {
-                            Expr::StringConstant(t, _) if t.as_str() == "angle" => {
-                                settings.push(Setting { name: "angle".into(), value: SettingValue::Expr(mk(ExprKind::Bool(true), kspan)), span: kspan })
+                            Expr::StringConstant(t, _) if t.as_str() == "angle" || t.as_str() == "radians" => {
+                                settings.push(Setting { name: "angle".into(), value: SettingValue::Expr(mk(ExprKind::Bool(true), kspan)), span: kspan });
+                                if t.as_str() == "radians" {
+                                    settings.push(Setting { name: "radians".into(), value: SettingValue::Expr(mk(ExprKind::Bool(true), kspan)), span: kspan });
+                                }
                             }
-                            _ => return self.err(k.pos, "`type` is `\"angle\"` (degrees, as stored and shown); a number's other kinds follow its `value`"),
+                            _ => return self.err(
+                                k.pos,
+                                "`type` is `\"angle\"` (degrees, as stored and shown) or `\"radians\"` (stored in radians, shown in degrees); a number's other kinds follow its `value`",
+                            ),
                         },
                         o => {
                             return self.err(

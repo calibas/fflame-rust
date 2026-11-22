@@ -136,7 +136,28 @@ pub fn control(ui: &mut Ui, def: &ParamDef, value: &mut Value, salt: &str) -> Ed
     };
     let label = &*def.label;
     match (&def.kind, value) {
-        (&ParamKind::Float { min, max, free, log, angle, .. }, Value::Float(v)) => {
+        (&ParamKind::Float { min, max, free, log, angle, radians, .. }, Value::Float(v)) => {
+            // An angle stored in radians is drawn in degrees: the control
+            // edits a converted copy, written back when it changes.
+            if radians {
+                let mut deg = v.to_degrees();
+                let add = |ui: &mut Ui, d: &mut f64| {
+                    let s = super::VkbSlider::new(d, min.to_degrees()..=max.to_degrees())
+                        .text(label)
+                        .clamping(clamping(free))
+                        .drag_value_speed(((max - min).to_degrees() / 500.0).max(1e-6))
+                        .suffix("°");
+                    tip(ui.add(s))
+                };
+                let edit = number(ui, def, &mut deg, (min.to_degrees(), max.to_degrees()), salt, add);
+                if edit.changed {
+                    *v = deg.to_radians();
+                    if free {
+                        *v = v.clamp(f32::MIN.into(), f32::MAX.into());
+                    }
+                }
+                return edit;
+            }
             let add = |ui: &mut Ui, v: &mut f64| {
                 let mut s = super::VkbSlider::new(v, min..=max).text(label).clamping(clamping(free));
                 // Logarithmic over a range above zero; a linear drag of

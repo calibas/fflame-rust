@@ -356,6 +356,9 @@ pub struct Param {
     /// control is the angle one, `ParamType::Angle`. The script reads the
     /// degrees as stored and shown.
     pub angle: bool,
+    /// With `angle`: stored in radians (`type: "radians"`), its range
+    /// too; the control shows degrees. The script reads the radians.
+    pub radians: bool,
     pub span: Span,
 }
 
@@ -726,7 +729,8 @@ pub enum ComplexParams {
 /// from above zero.
 fn number_kind(p: &Param, default: f64) -> crate::params::ParamKind {
     let (lo, hi) = if p.angle {
-        (p.min.unwrap_or(0.0), p.max.unwrap_or(360.0))
+        let turn = if p.radians { std::f64::consts::TAU } else { 360.0 };
+        (p.min.unwrap_or(0.0), p.max.unwrap_or(turn))
     } else {
         let reach = default.abs().max(1.0) * 4.0;
         let lo = p.min.unwrap_or_else(|| p.max.map_or(-reach, |m| m - 2.0 * reach).min(default));
@@ -739,7 +743,7 @@ fn number_kind(p: &Param, default: f64) -> crate::params::ParamKind {
         ParamKind::Int => crate::params::ParamKind::Int { default: default.round() as i64, min: lo.round() as i64, max: hi.round() as i64, free },
         _ => {
             let log = lo > 0.0 && !p.linear && (p.exponential || hi / lo >= 1e5);
-            crate::params::ParamKind::Float { default: f64::from(default as f32), min: lo.into(), max: hi.into(), free: free && !p.angle, log, angle: p.angle }
+            crate::params::ParamKind::Float { default: f64::from(default as f32), min: lo.into(), max: hi.into(), free: free && !p.angle, log, angle: p.angle, radians: p.radians }
         }
     }
 }
@@ -948,7 +952,7 @@ mod param_defs_tests {
     use crate::params::{Options, ParamKind as K};
 
     fn float(default: f64, min: f64, max: f64, free: bool, log: bool, angle: bool) -> K {
-        K::Float { default: f64::from(default as f32), min: f64::from(min as f32), max: f64::from(max as f32), free, log, angle }
+        K::Float { default: f64::from(default as f32), min: f64::from(min as f32), max: f64::from(max as f32), free, log, angle, radians: false }
     }
 
     /// One converter for every kind's script parameters: a number bounded
