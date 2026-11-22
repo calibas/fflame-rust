@@ -555,42 +555,65 @@ const fn row(panel: PanelType, label_key: &'static str) -> WindowMenuRow {
     WindowMenuRow { panel, label_key, account_only: false }
 }
 
-/// The desktop Window menu, in order. The single source of which
-/// panels a menu offers and what they are called; the compact submenu
-/// below picks from it rather than keeping its own copy of the labels.
-pub static WINDOW_MENU: &[WindowMenuRow] = &[
-    row(PanelType::Performance, "menu.window_performance"),
-    row(PanelType::Rendering, "menu.window_rendering"),
-    row(PanelType::View, "menu.window_view"),
-    // Every lit 3D view's lighting, shadows, material and surface
-    // (3d-look-and-tools P3; it was the View panel's Lighting & Material
-    // section from camera-unification C5 until then).
-    row(PanelType::SolidLighting, "menu.window_solid_lighting"),
-    row(PanelType::Escape, "menu.window_escape"),
-    row(PanelType::Simulation, "menu.window_simulation"),
-    row(PanelType::Textures, "menu.window_textures"),
-    row(PanelType::RhaiEditor, "menu.window_formula_editor"),
-    row(PanelType::HybridDesigner, "menu.window_hybrid_designer"),
-    row(PanelType::Transforms, "menu.window_transforms"),
-    row(PanelType::TriangleEditor, "menu.window_triangle_editor"),
-    row(PanelType::Colors, "menu.window_colors"),
-    row(PanelType::PaletteEditor, "menu.window_palette_editor"),
-    row(PanelType::FractalBrowser, "menu.window_fractal_browser"),
-    row(PanelType::History, "menu.window_history"),
-    row(PanelType::Animation, "menu.window_animation"),
-    row(PanelType::Paths, "menu.window_paths"),
-    row(PanelType::RandomGenerator, "menu.window_random_generator"),
-    row(PanelType::Effects, "menu.window_effects"),
-    row(PanelType::Subflames, "menu.window_subflames"),
-    row(PanelType::XaosEditor, "menu.window_xaos_editor"),
-    row(PanelType::Signal, "menu.window_signal"),
-    row(PanelType::Preferences, "menu.window_settings"),
-    WindowMenuRow {
-        panel: PanelType::LoginDialog,
-        label_key: "menu.window_account",
-        account_only: true,
-    },
+/// The desktop Window menu's panels, in groups, in order; a separator
+/// between groups (Reset Workspace and Mobile View above them, Workspace
+/// Layout below). The single source of which panels a menu offers and
+/// what they are called; the compact submenu below picks from it rather
+/// than keeping its own copy of the labels. The Undo/Redo History is the
+/// Edit menu's.
+pub static WINDOW_MENU: &[&[WindowMenuRow]] = &[
+    // The picture: how it is seen, coloured, rendered and lit.
+    &[
+        row(PanelType::Performance, "menu.window_performance"),
+        row(PanelType::View, "menu.window_view"),
+        row(PanelType::Colors, "menu.window_colors"),
+        row(PanelType::Rendering, "menu.window_rendering"),
+        // Every lit 3D view's lighting, shadows, material and surface
+        // (3d-look-and-tools P3; it was the View panel's Lighting & Material
+        // section from camera-unification C5 until then).
+        row(PanelType::SolidLighting, "menu.window_solid_lighting"),
+    ],
+    // The flame.
+    &[
+        row(PanelType::Transforms, "menu.window_transforms"),
+        row(PanelType::TriangleEditor, "menu.window_triangle_editor"),
+        row(PanelType::XaosEditor, "menu.window_xaos_editor"),
+        row(PanelType::Paths, "menu.window_paths"),
+        row(PanelType::Subflames, "menu.window_subflames"),
+    ],
+    // Escape-time.
+    &[row(PanelType::Escape, "menu.window_escape"), row(PanelType::HybridDesigner, "menu.window_hybrid_designer")],
+    // Simulation.
+    &[row(PanelType::Simulation, "menu.window_simulation")],
+    // Every engine's: effects and motion.
+    &[
+        row(PanelType::Effects, "menu.window_effects"),
+        row(PanelType::Animation, "menu.window_animation"),
+        row(PanelType::Signal, "menu.window_signal"),
+        row(PanelType::Textures, "menu.window_textures"),
+    ],
+    // Tools.
+    &[
+        row(PanelType::PaletteEditor, "menu.window_palette_editor"),
+        row(PanelType::RhaiEditor, "menu.window_formula_editor"),
+        row(PanelType::FractalBrowser, "menu.window_fractal_browser"),
+        row(PanelType::RandomGenerator, "menu.window_random_generator"),
+    ],
+    // The device's.
+    &[
+        row(PanelType::Preferences, "menu.window_settings"),
+        WindowMenuRow {
+            panel: PanelType::LoginDialog,
+            label_key: "menu.window_account",
+            account_only: true,
+        },
+    ],
 ];
+
+/// Every row of the Window menu, groups flattened.
+pub fn window_menu_rows() -> impl Iterator<Item = &'static WindowMenuRow> {
+    WINDOW_MENU.iter().flat_map(|g| g.iter())
+}
 
 /// The compact Window submenu keeps its own ORDER -- touch priority,
 /// transforms first -- but not its own labels. The Palette Editor is
@@ -610,7 +633,6 @@ pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::Escape,
     PanelType::Simulation,
     PanelType::Textures,
-    PanelType::History,
     PanelType::Effects,
     PanelType::XaosEditor,
     PanelType::Animation,
@@ -621,8 +643,7 @@ pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
 
 /// The label a compact row shows, from the shared table.
 pub fn label_key_of(p: PanelType) -> &'static str {
-    WINDOW_MENU
-        .iter()
+    window_menu_rows()
         .find(|r| r.panel == p)
         .map(|r| r.label_key)
         .unwrap_or("menu.window")
@@ -981,7 +1002,7 @@ mod tests {
     #[test]
     fn the_compact_menu_is_a_subset_of_the_window_menu() {
         for p in COMPACT_WINDOW_MENU {
-            let row = WINDOW_MENU.iter().find(|r| r.panel == *p);
+            let row = window_menu_rows().find(|r| r.panel == *p);
             let row = row.unwrap_or_else(|| panic!("{p:?} is in the compact menu but not the desktop one"));
             assert!(!row.account_only, "{p:?}: the compact menu has no account gate");
             assert_eq!(label_key_of(*p), row.label_key);
@@ -991,12 +1012,12 @@ mod tests {
     /// No panel appears twice in a menu, and every label key exists.
     #[test]
     fn the_window_menu_is_well_formed() {
-        let mut seen: Vec<String> = WINDOW_MENU.iter().map(|r| format!("{:?}", r.panel)).collect();
+        let mut seen: Vec<String> = window_menu_rows().map(|r| format!("{:?}", r.panel)).collect();
         seen.sort();
         let before = seen.len();
         seen.dedup();
         assert_eq!(seen.len(), before, "a panel appears twice in the Window menu");
-        for r in WINDOW_MENU {
+        for r in window_menu_rows() {
             let text = t!(r.label_key);
             assert_ne!(text.as_ref(), r.label_key, "missing locale key {}", r.label_key);
         }

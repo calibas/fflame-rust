@@ -148,6 +148,13 @@ pub fn render_menu_bar(
                 if ui.add_enabled(menu_state.can_redo, egui::Button::new(t!("menu.redo"))).clicked() {
                     menu_actions.edit.redo = true;
                 }
+
+                ui.separator();
+
+                let history = super::workspace::PanelType::History;
+                if ui.selectable_label(workspace.panel_exists(history), t!("menu.window_history").as_ref()).clicked() {
+                    workspace.open_floating_panel(history, ctx);
+                }
             });
 
             // View Menu -- the view's moves, then the Lighting panel (every
@@ -372,27 +379,26 @@ pub fn render_menu_bar(
                     workspace.apply_layout(super::workspace::WorkspaceLayout::Compact);
                 }
 
-                ui.separator();
-
-                // Every row comes from the shared table, and opens its
-                // panel in every mode (one-workspace plan): one the mode
-                // does not use says so on hover, and at its own top.
+                // Every row comes from the shared table, a separator
+                // before each of its groups, and opens its panel in every
+                // mode (one-workspace plan): one the mode does not use
+                // says so on hover, and at its own top.
                 let mode = menu_state.render_mode;
-                for row in super::visibility::WINDOW_MENU {
-                    if row.account_only {
-                        if !menu_state.online_account {
+                for group in super::visibility::WINDOW_MENU {
+                    ui.separator();
+                    for row in *group {
+                        if row.account_only && !menu_state.online_account {
                             continue;
                         }
-                        ui.separator();
-                    }
-                    let open = workspace.panel_exists(row.panel);
-                    let label = t!(row.label_key);
-                    let mut r = ui.selectable_label(open, label.as_ref());
-                    if let super::visibility::PanelUse::Inactive { reason, .. } = super::visibility::panel(row.panel, mode, menu_state.solid) {
-                        r = r.on_hover_text(t!(reason));
-                    }
-                    if r.clicked() {
-                        workspace.open_floating_panel(row.panel, ctx);
+                        let open = workspace.panel_exists(row.panel);
+                        let label = t!(row.label_key);
+                        let mut r = ui.selectable_label(open, label.as_ref());
+                        if let super::visibility::PanelUse::Inactive { reason, .. } = super::visibility::panel(row.panel, mode, menu_state.solid) {
+                            r = r.on_hover_text(t!(reason));
+                        }
+                        if r.clicked() {
+                            workspace.open_floating_panel(row.panel, ctx);
+                        }
                     }
                 }
 

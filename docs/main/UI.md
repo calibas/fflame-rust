@@ -129,8 +129,16 @@ only), and the Fly Mode button, which is greyed in a 2D view
 (`MenuState::fly_available`, from `visibility::fly_mode`).
 
 **The panel rows in both Window menus come from one table**,
-`visibility::WINDOW_MENU`. Every row opens its panel in every mode; a
-panel the mode does not use shows its reason on hover. The compact menu
+`visibility::WINDOW_MENU`, in groups the desktop menu separates: Reset
+Workspace and Mobile View; the picture (Performance, View, Colors &
+Tone Mapping, Rendering, Lighting); the flame (Transforms, Triangle
+Editor, Xaos, Paths, Subflames); escape-time (Escape, Hybrid Designer);
+Simulation; effects and motion (Effects, Animation, Signals, Textures);
+tools (Palette Editor, Rhai Editor, Fractal Browser, Random Generator);
+Settings and Account; then Workspace Layout. The Undo/Redo History is
+the Edit menu's, under Undo and Redo (both layouts). Every row opens its
+panel in every mode; a panel the mode does not use shows its reason on
+hover. The compact menu
 keeps its own order — touch priority, transforms
 first — in `COMPACT_WINDOW_MENU`, but takes its labels from the shared
 table, and a test asserts it is a subset. Add a panel row there, not in

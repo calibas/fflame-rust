@@ -292,6 +292,11 @@ fn render_compact_menu_items(
         menu_actions.edit.redo = true;
         ui.close();
     }
+    // The Undo/Redo History, beside them (the desktop's Edit menu has it).
+    if ui.selectable_label(workspace.panel_exists(PanelType::History), t!("menu.window_history").as_ref()).clicked() {
+        workspace.open_compact_panel(PanelType::History, ctx);
+        ui.close();
+    }
 
     ui.separator();
 
