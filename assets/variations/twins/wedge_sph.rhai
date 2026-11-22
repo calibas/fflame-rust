@@ -26,7 +26,7 @@ const PARAMS = #{
     swirl: #{
         value: 0.3, min: -10.0, max: 10.0, free: true,
         caption: "Swirl",
-        hint: "Extra rotation that grows with distance — gives the wedges a spiral.",
+        hint: "Extra rotation that grows toward the centre (as 1/r) — gives the wedges a spiral.",
     },
 };
 

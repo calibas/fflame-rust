@@ -254,8 +254,8 @@ pub static LAZYTRAVIS: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
-        param!("spin_in", "Spin In", unlimited_float, 1.0, -10.0, 10.0, "Inner-square angular offset along the perimeter (multiplied by 4 internally; one unit = one full lap of the square)."),
-        param!("spin_out", "Spin Out", unlimited_float, 0.5, -10.0, 10.0, "Outer-square angular offset along the perimeter (same scaling as `spin_in`)."),
+        param!("spin_in", "Spin In", unlimited_float, 1.0, -10.0, 10.0, "Inner-square offset along the perimeter (multiplied by 4 internally; one unit = half a lap of the square, not uniform in angle)."),
+        param!("spin_out", "Spin Out", unlimited_float, 0.5, -10.0, 10.0, "Outer-square offset along the perimeter (same scaling as `spin_in`)."),
         param!("space", "Space", unlimited_float, 1.5707963267948966, -10.0, 10.0, "Outer-square padding — extends the box edge by `space` and proportionally stretches the perpendicular coordinate."),
     ],
     // 2 derived values at slots 3..5:

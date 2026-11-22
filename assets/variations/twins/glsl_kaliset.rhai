@@ -26,7 +26,7 @@ const PARAMS = #{
     time: #{
         value: 200.0, min: 1.0, max: 1000.0, free: true,
         caption: "Time",
-        hint: "Animation parameter. Drives the rotation angle (`time/603 · 2π` for cos, `time/407.4 · 2π` for sin) and the zoom factor (`time/184 + 1`). JWildfire clamps to `[1, 1000]`; we follow suit.",
+        hint: "Animation parameter. Drives the rotation angle (`time/603 · 7.2` for cos, `time/407.4 · 7.2` for sin; JWildfire's constant 7.2, not 2π) and the zoom factor (`time/184 + 1`). JWildfire clamps to `[1, 1000]`; we follow suit.",
     },
     n_iters: #{
         value: 60, min: 1, max: 100, free: true,

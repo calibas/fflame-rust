@@ -27,7 +27,7 @@ const PARAMS = #{
     angle_of_hole: #{
         value: 0.0, min: -180.0, max: 180.0, free: true, type: "angle",
         caption: "Angle of Hole",
-        hint: "Half-angle of the Z-axis hole in degrees. Negative value inverts which side of the hole is drawn vs blanked.",
+        hint: "Full opening angle of the Z-axis hole (half of it either side of the axis). Negative value inverts which side of the hole is drawn vs blanked.",
     },
     exponent_z: #{
         value: 1.0, min: 0.1, max: 10.0, free: true,

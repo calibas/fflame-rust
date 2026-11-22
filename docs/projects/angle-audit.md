@@ -26,31 +26,18 @@ degrees throughout. This page holds the rest, for a decision each.
    leave the offsets and the ones scaled by another parameter.
 5. **Medium/low confidence** rows: each needs a look at the code.
 
-## Hints that contradict the code (found on the way)
+## Fixed on the way
 
-- `ripple.phase`: called a 0..1 factor; the code uses `phase*2pi - pi` as a
-  cosine phase and as the factor.
-- `bubbleT3D.angle_of_hole`: says half-angle; the stored value is the
-  full opening (the code halves it).
-- `fan2.y`: says it spins the fan; it only shifts the sector boundaries.
-- `lazyTravis.spin_in/spin_out`: say one unit is a lap; it is half a lap,
-  and not uniform in angle.
-- `superShape3d.rho/phi`: say a range in radians; the range is value x 2/pi.
-- `wedge_sph.swirl`: says it grows with distance; it grows with 1/r.
-- `truchet.rotation`: called a rotation of the input; it scales it by
-  `cos r - sin r`.
-- `log_db.fix_period`: says 0 is no shift; `<= 0` becomes pi.
-- `glsl_kaliset.time`: says x 2pi; the code multiplies by 7.2.
-- `funnel.effect`: called an angular offset; it is added to sec(x).
-- `quasiconformal.spiral`: says turns per e-fold; it is radians.
-
-## Worth checking against Apophysis
-
-- `pre_bwraps` / `post_bwraps` (`pre_phase.rs`, `post_phase.rs`) convert
-  their twists from degrees; JWildfire's `pre_bwraps2` / `post_bwraps2`
-  read radians (ours do too). Whether Apophysis's `pre_bwraps` plugin
-  reads degrees is unverified; if it reads radians, `.flame` imports of
-  these are off by 57x.
+- Eleven hints that contradicted their code (ripple's phase, bubbleT3D's
+  angle of hole, fan2's y, lazyTravis's spins, superShape3d's rho/phi,
+  wedge_sph's swirl, truchet's rotation, log_db's fix period,
+  glsl_kaliset's time, funnel's effect, quasiconformal's spiral): reworded
+  to what the code does.
+- `pre_bwraps` / `post_bwraps` read their twists in degrees; Apophysis 7x
+  (`varPreBwraps.pas`, `varPostBwraps.pas`) feeds them to `SinCos` as
+  radians. Now radians, as Apophysis: a `.flame` import renders as it does
+  there, and a value saved by this app before 2026-11-22 is read as
+  radians (57x the turn it had).
 
 ## The rows left
 

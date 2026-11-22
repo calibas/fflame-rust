@@ -166,7 +166,7 @@ pub static RIPPLE: VariationDef = VariationDef {
         param!("amplitude", "Amplitude", unlimited_float, 0.5, -10.0, 10.0, "Wave amplitude (× 0.01 internally)."),
         param!("centerx", "Center X", unlimited_float, 0.0, -10.0, 10.0, "X-axis center of the radial wave."),
         param!("centery", "Center Y", unlimited_float, 0.0, -10.0, 10.0, "Y-axis center of the radial wave."),
-        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase interpolation factor: 0 = first phase-shifted position, 1 = second."),
+        param!("phase", "Phase", unlimited_float, 0.0, -10.0, 10.0, "Phase of the ripple. Becomes `phase·2π − π`, which shifts the wave (times `velocity`) and weights the blend of the two phase-shifted positions."),
         param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Input pre-scale factor."),
         param!("fixed_dist_calc", "Fixed Dist Calc", bool, false, "When on, use Euclidean distance `sqrt(x² + y²)`. When off, the upstream-quirk product `sqrt(x²·y²)`."),
     ],

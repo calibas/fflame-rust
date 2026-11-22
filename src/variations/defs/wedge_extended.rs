@@ -148,7 +148,7 @@ pub static WEDGE_SPH: VariationDef = VariationDef {
         param!("angle", "Angle", unlimited_radians, 0.2, -10.0, 10.0, "Wedge sector rotation."),
         param!("hole", "Hole", unlimited_float, 0.2, -10.0, 10.0, "Radial offset added after the inversion. Positive opens a hole at the center; negative compresses inward."),
         param!("count", "Count", unlimited_float, 2.0, -10.0, 10.0, "Number of wedge sectors around the center."),
-        param!("swirl", "Swirl", unlimited_float, 0.3, -10.0, 10.0, "Extra rotation that grows with distance — gives the wedges a spiral."),
+        param!("swirl", "Swirl", unlimited_float, 0.3, -10.0, 10.0, "Extra rotation that grows toward the centre (as 1/r) — gives the wedges a spiral."),
     ],
     // 1 derived value at slot 4:
     //   4: cf  (1 − angle · count / (2π))

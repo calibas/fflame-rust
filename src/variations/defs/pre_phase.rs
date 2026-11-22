@@ -186,15 +186,15 @@ pub static PRE_BWRAPS: VariationDef = VariationDef {
         param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Width of each grid cell — the plane is divided into cells of this size, each becoming a bubble."),
         param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Gap between cells. 0 = no gap; positive values push the bubbles apart."),
         param!("gain", "Gain", unlimited_float, 1.0, -5.0, 5.0, "How strongly each bubble wraps its contents inward."),
-        param!("inner_twist", "Inner Twist", unlimited_angle, 0.0, -10.0, 10.0, "Rotation (in degrees) applied at the center of each bubble."),
-        param!("outer_twist", "Outer Twist", unlimited_angle, 0.0, -10.0, 10.0, "Rotation (in degrees) applied at the edge of each bubble."),
+        param!("inner_twist", "Inner Twist", unlimited_radians, 0.0, -10.0, 10.0, "Rotation applied at the center of each bubble."),
+        param!("outer_twist", "Outer Twist", unlimited_radians, 0.0, -10.0, 10.0, "Rotation applied at the edge of each bubble."),
     ],
     // 5 derived values at slots 5..10:
     //   5: g2                  (gain² / (radius + ε) + ε)
     //   6: r2                  (radius²)
     //   7: rfactor             (radius / max_bubble)
-    //   8: inner_twist_rad     (inner_twist · π/180)
-    //   9: outer_twist_rad     (outer_twist · π/180)
+    //   8: inner_twist         (radians, as Apophysis reads it)
+    //   9: outer_twist         (radians)
     init_param_count: 5,
     wgsl_init: Some(r#"
 fn init_pre_bwraps(user: array<f32, 5>) -> array<f32, 5> {
@@ -206,8 +206,8 @@ fn init_pre_bwraps(user: array<f32, 5>) -> array<f32, 5> {
     var out: array<f32, 5>;
     if (cellsize == 0.0) {
         out[0] = 0.0; out[1] = 0.0; out[2] = 0.0;
-        out[3] = inner_twist * 3.14159265358979 / 180.0;
-        out[4] = outer_twist * 3.14159265358979 / 180.0;
+        out[3] = inner_twist;
+        out[4] = outer_twist;
         return out;
     }
     let radius = 0.5 * (cellsize / (1.0 + space * space));
@@ -221,8 +221,8 @@ fn init_pre_bwraps(user: array<f32, 5>) -> array<f32, 5> {
     out[0] = g2;
     out[1] = radius * radius;
     out[2] = radius / max_bubble;
-    out[3] = inner_twist * 3.14159265358979 / 180.0;
-    out[4] = outer_twist * 3.14159265358979 / 180.0;
+    out[3] = inner_twist;
+    out[4] = outer_twist;
     return out;
 }
 "#),

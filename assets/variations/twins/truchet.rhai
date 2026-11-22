@@ -29,7 +29,7 @@ const PARAMS = #{
     rotation: #{
         value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Rotation",
-        hint: "Pre-rotation angle applied to the input.",
+        hint: "An angle r that scales the input by `cos r − sin r` before the tiling (upstream calls it a rotation; the input is not rotated).",
     },
     size: #{
         value: 1.0, min: 0.001, max: 10.0, free: true,

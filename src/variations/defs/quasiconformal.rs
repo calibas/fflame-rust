@@ -71,7 +71,7 @@ pub static QUASICONFORMAL: VariationDef = VariationDef {
     wgsl_state_init: None,
     parameters: &[
         param!("power", "Power", unlimited_float, 1.0, -4.0, 4.0, "Exact mode: real part of the conformal exponent a — the radial power (z ↦ z^power). Field mode: angular winding of the stretch orientation (how many times the ellipse axis turns going once around the center)."),
-        param!("spiral", "Spiral", unlimited_float, 0.0, -4.0, 4.0, "Exact mode: imaginary part of a — couples radius into angle so the map spirals (the logarithmic-spiral part of z ↦ z^a). Field mode: radial winding of the stretch orientation (turns per e-fold of radius)."),
+        param!("spiral", "Spiral", unlimited_float, 0.0, -4.0, 4.0, "Exact mode: imaginary part of a — couples radius into angle so the map spirals (the logarithmic-spiral part of z ↦ z^a). Field mode: radial winding of the stretch orientation (radians per e-fold of radius)."),
         param!("dilation", "Dilation", float, 0.35, 0.0, 0.98, "The quasiconformal strength k = |μ/a|, the Beltrami modulus. 0 = conformal (a pure power-spiral, circles stay circles); higher values squash circles into ellipses of dilatation K = (1+k)/(1−k). Clamped below 1 (k→1 is the degenerate non-invertible limit)."),
         param!("stretch_angle", "Stretch Angle", angle, 0.0, "Base orientation ψ of the quasiconformal stretch, in degrees — the direction along which infinitesimal circles are stretched into ellipses (the axis rotates around the plane on top of this base)."),
         param!("cx", "Center X", unlimited_float, 0.0, -2.0, 2.0, "X of the fixed center: the map is taken about (cx, cy). In Exact mode the center and infinity are the two fixed points."),

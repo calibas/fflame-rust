@@ -378,8 +378,7 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
   2026-11-20): a simulation colouring's preview now uses the first
   preset that names it.
 - **Angles shown raw**: the variation audit's leftovers, a decision each
-  (time parameters, curve ranges, rates, angles in units of pi, hints
-  that contradict the code): [angle-audit.md](angle-audit.md). Escape
+  (time parameters, curve ranges, rates, angles in units of pi): [angle-audit.md](angle-audit.md). Escape
   and simulation parameters not yet surveyed (effects are degrees).
 - **Known gaps**: no PNG input for `export`; flame-only metadata written
   for escape and simulation pictures; es/ja/zh mostly English.

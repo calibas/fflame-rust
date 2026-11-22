@@ -20944,6 +20944,10 @@
         "builtin": "cylinder2",
         "kind": "variation"
       },
+      "u093b3f2f88f588cda55abc0cb7635190_1c2c92fa": {
+        "builtin": "ripple",
+        "kind": "variation"
+      },
       "u093b3f2f88f588cda55abc0cb7635190_2585fd20": {
         "builtin": "ripple",
         "kind": "variation"
@@ -20973,6 +20977,10 @@
         "kind": "variation"
       },
       "u0aa3901f9cd3808589edad9d63dae77c_718d0c6e": {
+        "builtin": "glsl_kaliset",
+        "kind": "variation"
+      },
+      "u0aa3901f9cd3808589edad9d63dae77c_8f07d71b": {
         "builtin": "glsl_kaliset",
         "kind": "variation"
       },
@@ -21700,6 +21708,10 @@
         "builtin": "bubbleT3D",
         "kind": "variation"
       },
+      "u33f3fd4de39680e1a5a449c4f5beaa27_318c1754": {
+        "builtin": "bubbleT3D",
+        "kind": "variation"
+      },
       "u33f3fd4de39680e1a5a449c4f5beaa27_7d6f814e": {
         "builtin": "bubbleT3D",
         "kind": "variation"
@@ -21849,6 +21861,10 @@
         "kind": "variation"
       },
       "u3a7d98a1bd198a228ba1fe16830b3ae7_d25684e8": {
+        "builtin": "funnel",
+        "kind": "variation"
+      },
+      "u3a7d98a1bd198a228ba1fe16830b3ae7_f07486f5": {
         "builtin": "funnel",
         "kind": "variation"
       },
@@ -22142,6 +22158,10 @@
       },
       "u488c2592c82f8a149cbcd6eeb5322118_a51ba17e": {
         "builtin": "quaternion",
+        "kind": "variation"
+      },
+      "u489b219f22978ddb99e709082777b2cf_4dc3a41f": {
+        "builtin": "wedge_sph",
         "kind": "variation"
       },
       "u489b219f22978ddb99e709082777b2cf_99637369": {
@@ -23384,6 +23404,10 @@
         "builtin": "quasiconformal",
         "kind": "variation"
       },
+      "u82397a4533f585f095fd606da1a62ca8_0d07a332": {
+        "builtin": "quasiconformal",
+        "kind": "variation"
+      },
       "u82397a4533f585f095fd606da1a62ca8_d5e15415": {
         "builtin": "quasiconformal",
         "kind": "variation"
@@ -23876,6 +23900,10 @@
         "builtin": "fan2",
         "kind": "variation"
       },
+      "u95d5eee6b6448d11a26b201b0008307a_809ff6a6": {
+        "builtin": "fan2",
+        "kind": "variation"
+      },
       "u95d5eee6b6448d11a26b201b0008307a_97c3d9fb": {
         "builtin": "fan2",
         "kind": "variation"
@@ -23950,6 +23978,10 @@
       },
       "u998530d8a95e8412a5d15478c0b275ed_fc6834cc": {
         "builtin": "pre_blur",
+        "kind": "variation"
+      },
+      "u99eeb599253d8318b5020dad4df75067_a90f2fac": {
+        "builtin": "log_db",
         "kind": "variation"
       },
       "u99eeb599253d8318b5020dad4df75067_ada238d7": {
@@ -24166,6 +24198,10 @@
       },
       "ua3d52e07eed58e00a05111c2e8ec9d28_77e7bfc4": {
         "builtin": "blur_linear",
+        "kind": "variation"
+      },
+      "ua40da5c70b848eb19b346f50016d1e5c_0fb56e72": {
+        "builtin": "superShape3d",
         "kind": "variation"
       },
       "ua40da5c70b848eb19b346f50016d1e5c_17a4dac4": {
@@ -24836,6 +24872,10 @@
         "builtin": "lazyTravis",
         "kind": "variation"
       },
+      "uca15b3731f658ec4b9bc74fa9fe3f315_5d805787": {
+        "builtin": "lazyTravis",
+        "kind": "variation"
+      },
       "uca15b3731f658ec4b9bc74fa9fe3f315_b66816b3": {
         "builtin": "lazyTravis",
         "kind": "variation"
@@ -24853,6 +24893,10 @@
         "kind": "variation"
       },
       "uca6c620f5398833bb6c598f82b24889c_5b80676a": {
+        "builtin": "post_bwraps",
+        "kind": "variation"
+      },
+      "uca6c620f5398833bb6c598f82b24889c_c9ad3ab8": {
         "builtin": "post_bwraps",
         "kind": "variation"
       },
@@ -25330,6 +25374,10 @@
       },
       "ue344162936fb897d938109cb227a2b34_e01386ff": {
         "builtin": "cut_bricks",
+        "kind": "variation"
+      },
+      "ue41f81da5c1f8751bc9d2fddbdeb699a_8b1d345d": {
+        "builtin": "pre_bwraps",
         "kind": "variation"
       },
       "ue41f81da5c1f8751bc9d2fddbdeb699a_9bb3262d": {
@@ -25909,6 +25957,10 @@
         "kind": "variation"
       },
       "ufb9f6e012da588c0a6dd04c37c6b0283_7ac93fe4": {
+        "builtin": "truchet",
+        "kind": "variation"
+      },
+      "ufb9f6e012da588c0a6dd04c37c6b0283_fefbbde9": {
         "builtin": "truchet",
         "kind": "variation"
       },

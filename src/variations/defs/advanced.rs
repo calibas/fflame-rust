@@ -1537,7 +1537,7 @@ pub static FAN2: VariationDef = VariationDef {
         ParamDef::new(
             "y",
             "Y",
-            "Rotation offset. Spins the whole fan around the origin.",
+            "Shifts where the fan's wedges are cut, around the origin. The points are not rotated.",
             Spec::radians(0.0, -5.0, 5.0).free(),
         ),
     ],

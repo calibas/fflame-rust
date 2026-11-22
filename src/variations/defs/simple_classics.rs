@@ -176,7 +176,7 @@ pub static FUNNEL: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[],
     parameters: &[
-        param!("effect", "Effect", int, 8.0, -100.0, 100.0, "Additive angular offset on each axis (scaled by π). Higher = more horizontal/vertical bias."),
+        param!("effect", "Effect", int, 8.0, -100.0, 100.0, "Added (times π) to sec(x) and sec(y) before they scale tanh of each axis. Higher = more horizontal/vertical bias."),
     ],
     init_param_count: 0,
     wgsl_init: None,

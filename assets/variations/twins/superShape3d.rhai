@@ -17,12 +17,12 @@ const PARAMS = #{
     rho: #{
         value: 9.9, min: -100.0, max: 100.0, free: true,
         caption: "Rho",
-        hint: "Angular range (radians) for uniform random sampling of the ρ axis. Larger values sweep through more of the shape per iteration; default 9.9 (~3π).",
+        hint: "Range for uniform random sampling of the ρ angle, which runs over `[0, rho · 2/π]` radians. Larger values sweep through more of the shape per iteration.",
     },
     phi: #{
         value: 2.5, min: -100.0, max: 100.0, free: true,
         caption: "Phi",
-        hint: "Angular range (radians) for the φ axis (sampled in `[-phi, phi]`). Default 2.5 (~0.8π).",
+        hint: "Range for the φ angle, sampled in `[-phi, phi] · 2/π` radians.",
     },
     m1: #{
         value: 6.0, min: -50.0, max: 50.0, free: true,
