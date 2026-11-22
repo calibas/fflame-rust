@@ -158,3 +158,38 @@ fn path_traced_presets_hash() {
     std::fs::write(format!("output/pt-ab/{tag}.txt"), &out).unwrap();
     print!("{out}");
 }
+
+/// The 2D escape formulas' compile (mode A), each built-in beside its Rhai
+/// twin where it has one, with the default colouring: what a Catalog
+/// preview or a formula switch compiles. `COMPILE_COST_2D=1`.
+#[test]
+#[ignore = "a measurement"]
+fn compile_cost_2d() {
+    if std::env::var("COMPILE_COST_2D").is_err() {
+        return;
+    }
+    let (device, _queue) = pollster::block_on(crate::probe::run::open_device("compile cost 2d")).expect("a GPU");
+    let coloring = crate::escape::get_coloring("smooth");
+    let mut rows = Vec::new();
+    for f in crate::escape::FORMULAS {
+        let src = crate::escape::assembler::assemble(f, coloring, false);
+        let (_, _, ms) = time(&device, &src);
+        rows.push((format!("{} (built-in)", f.name), src.len(), ms));
+        if let Some(cs) = crate::escape::twins::custom_source(f.name) {
+            let key = crate::escape::custom::name_of(EntryKind::Formula, &cs);
+            if let Ok(def) = crate::escape::custom::compile_formula(&cs, &key) {
+                let src = crate::escape::assembler::assemble(def, coloring, false);
+                let (_, _, ms) = time(&device, &src);
+                rows.push((format!("{} (Rhai twin)", f.name), src.len(), ms));
+            }
+        }
+    }
+    rows.sort_by(|a, b| b.2.total_cmp(&a.2));
+    let total: f64 = rows.iter().map(|r| r.2).sum();
+    println!("{} shaders, {total:.0} ms in all; the slowest:", rows.len());
+    for (name, bytes, ms) in rows.iter().take(15) {
+        println!("  {name:<40} {bytes:>7} B  {ms:>7.0} ms");
+    }
+    let med = rows[rows.len() / 2].2;
+    println!("median {med:.0} ms");
+}
