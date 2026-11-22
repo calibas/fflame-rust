@@ -409,13 +409,16 @@ pub(super) enum UrlLoadedData {
 fn escape_view<'a>(
     escape: &'a Option<crate::escape::EscapeRenderer>,
     #[cfg(feature = "terrain")] terrain: &'a Option<crate::escape::footprint::EscapeTerrain>,
-    config: &crate::config::FractalConfig,
+    terrain_on: bool,
 ) -> Option<&'a egui_wgpu::wgpu::TextureView> {
+    // `terrain_on` is the frame's one decision, the escape branch's: asked
+    // again here, the question could answer otherwise (it reads the
+    // registry of the user's solids as well as the config).
     #[cfg(feature = "terrain")]
-    if config.escape.terrain_active() {
+    if terrain_on {
         return terrain.as_ref().map(|t| t.output_view());
     }
-    let _ = config;
+    let _ = terrain_on;
     // A motion-blurred frame, finished, while the next builds.
     escape.as_ref().map(|e| e.presented_view().unwrap_or_else(|| e.output_view()))
 }
@@ -2346,6 +2349,16 @@ impl App {
         // renders, and the picture it last drew stays on screen.
         let frozen = self.freeze_viewport();
 
+        // The config's own sources -- a Rhai formula, solid, colouring,
+        // variation, model, effect -- registered before anything below asks
+        // what its names are. A twin first used this frame (Edit as Rhai)
+        // was unknown to the governor's and the escape branch's questions
+        // (not a solid, so a terrain), then registered mid-frame by the
+        // render's own resolve, so the tail's same question answered
+        // otherwise and found no escape renderer: a panic. Cheap when they
+        // are registered already.
+        self.config_manager.active_config().ensure_sources();
+
         // The quality governor's rung for escape-time this frame (governor.rs):
         // None in a still, a terrain, a path-traced solid, another mode. An
         // escape terrain's render scale instead, in its lit tiers.
@@ -3688,7 +3701,7 @@ impl App {
                         &self.escape_renderer,
                         #[cfg(feature = "terrain")]
                         &self.escape_terrain,
-                        final_config,
+                        terrain_on,
                     )
                     .expect("escape branch above created it"),
                 )
