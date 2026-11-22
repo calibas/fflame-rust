@@ -349,6 +349,13 @@ pub(super) static PATH_BUDGET_SHIFT: std::sync::atomic::AtomicU32 =
 pub(super) static PATH_CALLS_IN_FLIGHT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
+/// The solid path tracer's pipeline compiles not yet done (the empty
+/// submission after a new pipeline, `SolidPath::compiling`): a device
+/// lost meanwhile is the compile's, which no dispatch size changes, and
+/// is said so in the log rather than learned as a halving.
+pub(super) static PATH_COMPILES_IN_FLIGHT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
 /// Ceiling on an adaptively grown chunk, before the session shift.
 /// The feedback loop stops well below this on any real configuration;
 /// it exists so a pathological measurement (a frame that reports
@@ -538,6 +545,11 @@ pub fn note_device_lost() {
             "escape: device lost during a perturbed render -- halving the \
              perturbed chunk budget (ceiling now {} iterations) for this session",
             CHUNK_ITERS_MAX_BASE >> s
+        );
+    }
+    if PATH_COMPILES_IN_FLIGHT.swap(0, Ordering::Relaxed) > 0 {
+        log::warn!(
+            "escape: device lost while the solid path tracer's pipeline compiled --              a compile too long for the browser, not a dispatch too large"
         );
     }
     if PATH_CALLS_IN_FLIGHT.swap(0, Ordering::Relaxed) > 0 {
