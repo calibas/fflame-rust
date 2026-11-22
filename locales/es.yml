@@ -22,7 +22,6 @@ menu:
   # Edit Menu
   undo: "Deshacer"
   redo: "Rehacer"
-  preferences: "Preferencias..."
 
   # View Menu
   reset_view: "Restablecer Vista"

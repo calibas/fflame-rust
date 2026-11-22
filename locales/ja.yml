@@ -22,7 +22,6 @@ menu:
   # Edit Menu
   undo: "元に戻す"
   redo: "やり直す"
-  preferences: "環境設定..."
 
   # View Menu
   reset_view: "表示をリセット"

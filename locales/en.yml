@@ -77,7 +77,6 @@ menu:
   # Edit Menu
   undo: "⮪ Undo"
   redo: "⮫ Redo"
-  preferences: "⚙ Preferences..."
 
   # View Menu
   reset_view: "Reset View"

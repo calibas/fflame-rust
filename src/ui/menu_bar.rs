@@ -148,10 +148,6 @@ pub fn render_menu_bar(
                 if ui.add_enabled(menu_state.can_redo, egui::Button::new(t!("menu.redo"))).clicked() {
                     menu_actions.edit.redo = true;
                 }
-
-                ui.separator();
-
-                ui.add_enabled(false, egui::Button::new(t!("menu.preferences")));
             });
 
             // View Menu -- the view's moves, then the Lighting panel (every
