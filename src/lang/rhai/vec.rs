@@ -372,8 +372,34 @@ impl Lowerer<'_> {
                     self.pending.push(super::assign(super::mk(ExprKind::Name(copy.clone()), span), a, span));
                     Binding::Local(copy)
                 }
+                // An argument that is more than a name or a literal: once,
+                // into a local, where a statement may go. Pasted in at
+                // every read, `sorted(p.mirror(s.z))` evaluated its
+                // function choice -- a switch over forty complex functions
+                // -- at each of `sorted`'s eight reads, and the KIFS Menger
+                // example's path tracer took 15 s to compile. Rhai
+                // evaluates an argument once, so this is its meaning too
+                // (a `rand()` in one was drawn at every read).
+                None if !self.pure && !trivial(&a) => {
+                    let span = self.pos.span(e.position());
+                    let ty = self.ty_of(&a);
+                    let t = self.local("arg", ty);
+                    self.pending.push(ast::Stmt::Decl { ty, name: t.clone(), init: Some(a), dims: None, span });
+                    Binding::Local(t)
+                }
                 None => Binding::Value(a),
             },
+            // A vector's parts likewise, each into a local of its own.
+            Val::V(v) if !self.pure && v.parts.iter().any(|x| !trivial(x)) => {
+                let span = self.pos.span(e.position());
+                let mut names = Vec::new();
+                for (axis, part) in v.kind.axes().iter().zip(v.parts) {
+                    let t = self.local(&format!("arg_{axis}"), TypeName::Float);
+                    self.pending.push(ast::Stmt::Decl { ty: TypeName::Float, name: t.clone(), init: Some(part), dims: None, span });
+                    names.push(t);
+                }
+                Binding::VecLocal(v.kind, names)
+            }
             Val::V(v) => Binding::VecValue(Box::new(v)),
         })
     }
@@ -2405,4 +2431,11 @@ fn distance(s, p) {
         }
         assert!(on_paths > 100, "most draws find a start: {on_paths}");
     }
+}
+
+/// An expression cheap and exact to evaluate wherever it is read: a name,
+/// a literal, a built-in's value. Anything else a helper's argument takes
+/// once, into a local (`helper_arg`).
+fn trivial(e: &ast::Expr) -> bool {
+    matches!(e.kind, ExprKind::Name(_) | ExprKind::Float(_) | ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Predef(_))
 }
