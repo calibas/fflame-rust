@@ -79,9 +79,9 @@ menu:
   redo: "⮫ Redo"
 
   # View Menu
-  reset_view: "Reset View"
-  zoom_in: "Zoom In"
-  zoom_out: "Zoom Out"
+  reset_view: "🔄 Reset View"
+  zoom_in: "➕ Zoom In"
+  zoom_out: "➖ Zoom Out"
   mode_2d: "2D Mode"
   mode_3d: "3D Mode"
 
