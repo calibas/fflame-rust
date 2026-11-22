@@ -2038,6 +2038,18 @@ fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> b
     return !hf_trace(o, d, min(t_end, 1.0e30), 0.0).hit;
 }
 
+// The scene's one cast (`pt_path`): a shadow ray's hit is its blocking.
+// The ground marches its camera's ray itself (`pt_sample`), so the path
+// never asks for that one here.
+fn pt_scene_cast(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32, kind: u32) -> PtHit {
+    if (kind == PT_CAST_SHADOW) {
+        var out: PtHit;
+        out.hit = !pt_scene_visible(o, d, t_end, travelled);
+        return out;
+    }
+    return pt_scene_next(o, d, travelled);
+}
+
 // One sample of the pixel: (radiance times coverage, coverage). The
 // coverage is the first surface's albedo's -- a hole lets the
 // background through -- faded by the fog with depth, as the lit tier
@@ -2056,7 +2068,7 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
         let depth = h.t * dot(ray.d, ifs_forward());
         coverage = coverage * exp(-params.fdata[7].x * max(depth - params.fdata[7].y, 0.0));
     }
-    let l = pt_clamp(pt_path(ray.o, ray.d, h));
+    let l = pt_clamp(pt_path(ray.o, ray.d, h, false));
     return vec4<f32>(l * coverage, coverage);
 }
 "#;

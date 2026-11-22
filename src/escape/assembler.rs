@@ -9120,15 +9120,14 @@ const MARCH_INSIDE: &[(&str, &str)] = &[
         "let vis = clamp(ifs_distance_at(p + dir * h, h * 0.01) / h, 0.0, 1.0);",
         "let vis = select(0.0, 1.0, ifs_distance_at(p + dir * h, h * 0.01) > 0.0);",
     ),
-    // The path tracer's rays, as the camera's: a bounce's floor the pixel
-    // at the length of its path.
+    // The path tracer's rays (`pt_ifs_cast`, every ray's one march), as
+    // the camera's: a bounce's or a shadow's floor the pixel at the length
+    // of its path, the camera's its own tolerance. The march's steps
+    // alone: the bisection after a step lands inside reads the distance
+    // as it is.
     (
-        "let dist = ifs_distance_at(o + d * t, eps);",
-        "var dist = ifs_distance_at(o + d * t, eps);\nif (dist > 0.0) {\n    let px = pt_ifs_eps(travelled + t);\n    crawl = select(0.0, crawl + 1.0, dist < 2.0 * px);\n    dist = max(dist, px * (1.0 + 0.125 * crawl));\n}",
-    ),
-    (
-        "let dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);",
-        "var dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);\nif (dist > 0.0) {\n    crawl = select(0.0, crawl + 1.0, dist < 2.0 * eps);\n    dist = max(dist, eps * (1.0 + 0.125 * crawl));\n}",
+        "let dist = ifs_distance_at(o + d * x, e);",
+        "var dist = ifs_distance_at(o + d * x, e);\nif (!refining && dist > 0.0) {\n    let px = select(pt_ifs_eps(travelled + t), hit_eps, camera);\n    crawl = select(0.0, crawl + 1.0, dist < 2.0 * px);\n    dist = max(dist, px * (1.0 + 0.125 * crawl));\n}",
     ),
 ];
 
@@ -9252,96 +9251,120 @@ fn pt_ifs_surface(p: vec3<f32>, t: f32, dist: f32) -> PtHit {
     return out;
 }
 
-// A ray leaving a surface `travelled` along the path, as the walk's
-// shadow rays leave one (`ifs_shadow`): from four of its pixels out,
-// and calling a hit at a tenth of that (or a ten-thousandth of the
-// ball), so it clears the surface it left. The distance to the hit,
-// or -1.
 // Where a ray from o first meets the solid, no further than `t_end`; -1
-// for nowhere.
-fn pt_ifs_leave(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> f32 {
+// for nowhere. The camera's ray (`camera`) is sphere-traced as the walk
+// traces it, from the ball's entry to its exit, stopping within a pixel
+// of the surface (its tolerance growing with the distance). A ray leaving
+// a surface `travelled` along the path, as the walk's shadow rays leave
+// one (`ifs_shadow`): from four of its pixels out, and calling a hit at a
+// tenth of that (or a ten-thousandth of the ball), so it clears the
+// surface it left.
+//
+// The march and, once a step lands inside, the bisection back to the
+// surface (`ifs_refine`'s eight halvings) are one loop around ONE
+// distance call: each call is the formula's whole walk, inlined (see
+// `pt_path`). The same points, in the same order, as the two loops were.
+fn pt_ifs_cast(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32, camera: bool) -> f32 {
     let span = pt_ifs_ball(o, d);
-    if (span.y < span.x) {
+    if (!camera && span.y < span.x) {
         return -1.0;
     }
     let e0 = pt_ifs_eps(travelled);
-    let eps = max(min(ifs_radius() * ifs_ray_tolerance(), e0 * 0.4), 1.0e-30);
-    var t = max(e0 * 4.0, span.x);
+    let leave_eps = max(min(ifs_radius() * ifs_ray_tolerance(), e0 * 0.4), 1.0e-30);
+    var t = select(max(e0 * 4.0, span.x), span.x, camera);
     // The ball's exit or the light, whichever is nearer: one bound, so the
     // march's every step tests one number.
-    let t_stop = min(span.y, t_end);
+    let t_stop = select(min(span.y, t_end), span.y, camera);
     let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
     var t_prev = t;
-    for (var i = 0u; i < max_steps; i = i + 1u) {
-        if (t > t_stop) {
-            break;
+    var i = 0u;
+    // The bisection, once stepped in: between `a` (outside) and `b`.
+    var refining = false;
+    var a = 0.0;
+    var b = 0.0;
+    var halvings = 0u;
+    var r_eps = 0.0;
+    loop {
+        var x = t;
+        var e = leave_eps;
+        var hit_eps = leave_eps;
+        if (refining) {
+            if (halvings >= 8u) {
+                return b;
+            }
+            x = 0.5 * (a + b);
+            e = r_eps;
+        } else {
+            if (i >= max_steps || t > t_stop) {
+                return -1.0;
+            }
+            if (camera) {
+                hit_eps = pt_ifs_eps(t) * ifs_detail();
+                e = hit_eps * 0.01;
+            }
         }
-        let dist = ifs_distance_at(o + d * t, eps);
-        if (dist < eps) {
-            // Stepped in: back to the surface (`ifs_refine`).
+        let dist = ifs_distance_at(o + d * x, e);
+        if (refining) {
+            if (dist <= 0.0) {
+                b = x;
+            } else {
+                a = x;
+            }
+            halvings = halvings + 1u;
+            continue;
+        }
+        if (dist < hit_eps) {
+            // Stepped in: back to the surface.
             if (dist <= 0.0 && i > 0u) {
-                return ifs_refine(o, d, t_prev, t, eps);
+                refining = true;
+                a = t_prev;
+                b = t;
+                r_eps = e;
+                continue;
             }
             return t;
         }
         t_prev = t;
         t = t + dist;
+        i = i + 1u;
     }
     return -1.0;
 }
 
-fn pt_scene_next(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> PtHit {
-    let t = pt_ifs_leave(o, d, 3.0e38, travelled);
+// The scene's one cast (`pt_path`): the march, and the surface where it
+// stopped unless it is a shadow ray's.
+fn pt_scene_cast(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32, kind: u32) -> PtHit {
+    var out: PtHit;
+    out.hit = false;
+    let camera = kind == PT_CAST_CAMERA;
+    let t = pt_ifs_cast(o, d, t_end, travelled, camera);
     if (t < 0.0) {
-        var out: PtHit;
-        out.hit = false;
         return out;
     }
-    return pt_ifs_surface(o + d * t, t, travelled + t);
+    if (kind == PT_CAST_SHADOW) {
+        out.hit = true;
+        out.t = t;
+        return out;
+    }
+    return pt_ifs_surface(o + d * t, t, select(travelled + t, t, camera));
 }
 
-fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> bool {
-    return pt_ifs_leave(o, d, t_end, travelled) < 0.0;
-}
-
-// One sample of the pixel: the camera's ray sphere-traced as the walk
-// traces it, from the ball's entry to its exit, stopping within a pixel
-// of the surface; then the path. A miss is coverage 0, the background
-// through it. The rig's fog after the light, toward its colour.
+// One sample of the pixel: the camera's ray, then the path, both through
+// the path's one cast. A miss is coverage 0, the background through it.
+// The rig's fog after the light, toward its colour.
 fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     let j = pt_rand2() - vec2<f32>(0.5, 0.5);
     let ray = pt_ray(px, py, j.x, j.y);
     if (ifs_count() == 0u) {
         return pt_sky_seen(ray.d);
     }
-    let span = pt_ifs_ball(ray.o, ray.d);
-    var t = span.x;
-    let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
-    var hit = false;
-    var t_prev = t;
-    for (var i = 0u; i < max_steps; i = i + 1u) {
-        if (t > span.y) {
-            break;
-        }
-        let eps = pt_ifs_eps(t) * ifs_detail();
-        let dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);
-        if (dist < eps) {
-            // Stepped in: back to the surface (`ifs_refine`).
-            if (dist <= 0.0 && i > 0u) {
-                t = ifs_refine(ray.o, ray.d, t_prev, t, eps * 0.01);
-            }
-            hit = true;
-            break;
-        }
-        t_prev = t;
-        t = t + dist;
-    }
-    if (!hit) {
+    var none: PtHit;
+    let traced = pt_path(ray.o, ray.d, none, true);
+    if (pt_camera_missed) {
         return pt_sky_seen(ray.d);
     }
-    let h = pt_ifs_surface(ray.o + ray.d * t, t, t);
-    pt_first(h, ray.d);
-    var l = pt_clamp(pt_path(ray.o, ray.d, h));
+    let t = pt_camera_t;
+    var l = pt_clamp(traced);
     // Fog toward the background as the tonemap shows it (the colour
     // arrives in the accumulator's terms, `path_core::solid_fog`, as the
     // lit tier's rig takes it): the fog is diffuse.
@@ -11351,9 +11374,10 @@ mod lens_tests {
             (&walk, "t = t + max(d, px * (1.0 + 0.125 * crawl));", 1),
             (&walk, "let vis = select(0.0, 1.0,", 1),
             (&walk, "var crawl = 0.0;", 2),
-            (&path, "dist = max(dist, ", 2),
-            // The shadow's, the bounce's and the camera ray's.
-            (&path, "var crawl = 0.0;", 3),
+            // Every ray's one march (`pt_ifs_cast`).
+            (&path, "dist = max(dist, ", 1),
+            // The walk's shadow (its helpers come along) and the march.
+            (&path, "var crawl = 0.0;", 2),
         ] {
             assert_eq!(text.matches(needle).count(), n, "{needle}");
         }

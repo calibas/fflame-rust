@@ -1150,12 +1150,36 @@ fn pt_guide_white(guide: vec2<f32>) {
     }
 }
 
+// What a scene's one cast is for (`pt_scene_cast`): a bounce's next
+// surface, a light's shadow ray (its hit: blocked), or the camera's ray.
+const PT_CAST_NEXT: u32 = 0u;
+const PT_CAST_SHADOW: u32 = 1u;
+const PT_CAST_CAMERA: u32 = 2u;
+
+// The camera's cast, when the path makes it (`pt_path`'s `cast_camera`):
+// whether it missed, and how far it went.
+var<private> pt_camera_missed: bool;
+var<private> pt_camera_t: f32;
+
 // The radiance a path brings back from its first surface `first`,
-// reached along (o0, d0): at each surface its glow, the lights sampled
-// over their angular size with a shadow ray each, and a bounce -- the
-// coat's lobe or Lambert's -- whose escape sees the environment, with
-// Russian roulette from the second.
-fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
+// reached along (o0, d0) -- or, `cast_camera`, from the surface the
+// camera's ray (o0, d0) meets, `first` unread (a miss sets
+// `pt_camera_missed`): at each surface its glow, the lights sampled over
+// their angular size with a shadow ray each, and a bounce -- the coat's
+// lobe or Lambert's -- whose escape sees the environment, with Russian
+// roulette from the second.
+//
+// Every ray -- the camera's, each shadow ray, each bounce -- goes through
+// ONE call of `pt_scene_cast`. A GPU compiler inlines a call at every
+// site, and a solid's cast is its whole formula walk: at the ten sites
+// the camera, shadow and bounce marches, their refines and the surfaces
+// made, Bristorbrot's path tracer inlined to 350 KB and compiled for more
+// than 30 s on an M2 (compile-times branch). So the path is a small
+// state machine: the steps that cast nothing run until the next cast is
+// wanted, the cast is made, and its result read by what wanted it --
+// the same steps in the same order as the loop it replaced, its random
+// numbers drawn in the same order.
+fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit, cast_camera: bool) -> vec3<f32> {
     var o = o0;
     var d = d0;
     var h = first;
@@ -1170,64 +1194,132 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
     var spec_path = false;
     var direct = vec3<f32>(0.0, 0.0, 0.0);
     var deep = false;
-    for (var bounce = 0u; bounce <= pt.bounces; bounce = bounce + 1u) {
-        let p = o + d * h.t;
-        travelled = travelled + h.t;
-        if (!(h.albedo.a > 0.0)) {
-            // A hole's floor: nothing there; past the first surface, the
-            // sky through it.
-            if (bounce > 0u) {
-                radiance = radiance + through * pt_sky(d);
+    var bounce = 0u;
+    var s: PtShade;
+    var l: PtLight;
+    var guide = vec2<f32>(0.0, 0.0);
+    var li = 0u;
+    var coat_pdf = 0.0;
+    // The step: 0 at a surface (`h`), 1 at the next light or the bounce,
+    // 2 the camera's cast wanted, 3 a light's shadow ray, 4 the bounce's
+    // cast, 5 done.
+    var phase = select(0u, 2u, cast_camera);
+    pt_camera_missed = false;
+    loop {
+        // The steps that cast nothing, to the next cast or the end.
+        loop {
+            if (phase == 0u) {
+                let p = o + d * h.t;
+                travelled = travelled + h.t;
+                if (!(h.albedo.a > 0.0)) {
+                    // A hole's floor: nothing there; past the first
+                    // surface, the sky through it.
+                    if (bounce > 0u) {
+                        radiance = radiance + through * pt_sky(d);
+                    }
+                    phase = 5u;
+                    break;
+                }
+                // What the first surface brought -- its lights, and the sky
+                // or the lights its bounce met -- and from here on, the rest.
+                if (bounce == 1u) {
+                    direct = radiance;
+                    deep = true;
+                }
+                s = pt_shade(h, p, d, regular, bounce);
+                // Its glow: the colour's own.
+                radiance = radiance + through * h.albedo.rgb * pt.mat.z;
+                guide = vec2<f32>(0.0, 0.0);
+                li = 0u;
+                phase = 1u;
             }
+            if (phase != 1u) {
+                break;
+            }
+            if (li < ifs_light_count()) {
+                l = pt_light(s, li, bounce, h.rough);
+                // Its shadow ray, but none at strength 0.
+                if (l.lit && pt.misc.z > 0.0) {
+                    phase = 3u;
+                    break;
+                }
+                if (l.lit) {
+                    radiance = pt_light_add(radiance, through, l, 1.0, s.shadow_strength);
+                    if (bounce == 0u) {
+                        pt_spec = pt_spec + pt_light_spec(through, l, 1.0, s.shadow_strength);
+                    }
+                }
+                guide = guide + l.guide;
+                li = li + 1u;
+                continue;
+            }
+            if (bounce == 0u) {
+                pt_guide_white(guide);
+            }
+            if (bounce >= pt.bounces) {
+                phase = 5u;
+                break;
+            }
+            let b = pt_bounce(s, through, regular, bounce);
+            if (!b.go) {
+                phase = 5u;
+                break;
+            }
+            if (bounce == 0u && b.spec) {
+                spec_path = true;
+                spec_from = radiance;
+            }
+            through = b.through;
+            regular = b.regular;
+            o = s.start;
+            d = b.dir;
+            coat_pdf = b.coat_pdf;
+            phase = 4u;
             break;
         }
-        // What the first surface brought -- its lights, and the sky or
-        // the lights its bounce met -- and from here on, the rest.
-        if (bounce == 1u) {
-            direct = radiance;
-            deep = true;
+        if (phase == 5u) {
+            break;
         }
-        let s = pt_shade(h, p, d, regular, bounce);
-        // Its glow: the colour's own.
-        radiance = radiance + through * h.albedo.rgb * pt.mat.z;
-        var guide = vec2<f32>(0.0, 0.0);
-        for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
-            let l = pt_light(s, li, bounce, h.rough);
-            if (l.lit) {
-                // No shadow ray at strength 0.
-                var seen = 1.0;
-                if (pt.misc.z > 0.0) {
-                    seen = select(0.0, 1.0, pt_scene_visible(s.start, l.dir, l.dist, travelled));
-                }
-                radiance = pt_light_add(radiance, through, l, seen, s.shadow_strength);
-                if (bounce == 0u) {
-                    pt_spec = pt_spec + pt_light_spec(through, l, seen, s.shadow_strength);
-                }
+        // The one cast.
+        var co = o;
+        var cd = d;
+        var cend = 3.0e38;
+        var kind = PT_CAST_NEXT;
+        if (phase == 2u) {
+            kind = PT_CAST_CAMERA;
+        } else if (phase == 3u) {
+            co = s.start;
+            cd = l.dir;
+            cend = l.dist;
+            kind = PT_CAST_SHADOW;
+        }
+        let r = pt_scene_cast(co, cd, cend, travelled, kind);
+        if (phase == 2u) {
+            if (!r.hit) {
+                pt_camera_missed = true;
+                return vec3<f32>(0.0, 0.0, 0.0);
+            }
+            h = r;
+            pt_camera_t = r.t;
+            pt_first(h, d);
+            phase = 0u;
+        } else if (phase == 3u) {
+            let seen = select(0.0, 1.0, !r.hit);
+            radiance = pt_light_add(radiance, through, l, seen, s.shadow_strength);
+            if (bounce == 0u) {
+                pt_spec = pt_spec + pt_light_spec(through, l, seen, s.shadow_strength);
             }
             guide = guide + l.guide;
-        }
-        if (bounce == 0u) {
-            pt_guide_white(guide);
-        }
-        if (bounce >= pt.bounces) {
-            break;
-        }
-        let b = pt_bounce(s, through, regular, bounce);
-        if (!b.go) {
-            break;
-        }
-        if (bounce == 0u && b.spec) {
-            spec_path = true;
-            spec_from = radiance;
-        }
-        through = b.through;
-        regular = b.regular;
-        o = s.start;
-        d = b.dir;
-        h = pt_scene_next(o, d, travelled);
-        if (!h.hit) {
-            radiance = pt_escape(radiance, through, d, b.coat_pdf);
-            break;
+            li = li + 1u;
+            phase = 1u;
+        } else {
+            h = r;
+            if (!h.hit) {
+                radiance = pt_escape(radiance, through, d, coat_pdf);
+                break;
+            }
+            bounce = bounce + 1u;
+            phase = 0u;
         }
     }
     // The light from past the first surface clamped on its own

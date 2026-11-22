@@ -113,3 +113,48 @@ fn compile_cost() {
     }
     std::fs::write(dir.join("compile-cost.tsv"), tsv).unwrap();
 }
+
+/// A/B for a change to the path tracer's shader: every solid and terrain
+/// preset path traced small, its pixels hashed, to `output/pt-ab/<tag>.txt`
+/// (`PT_AB_TAG`); run before and after, and diff the two files.
+#[test]
+#[ignore = "an A/B measurement: writes output/pt-ab/"]
+fn path_traced_presets_hash() {
+    use crate::config::escape::RenderTier;
+    let Ok(tag) = std::env::var("PT_AB_TAG") else { return };
+    let (device, queue) = pollster::block_on(crate::probe::run::open_device("pt a/b")).expect("a GPU");
+    let mut out = String::new();
+    for cfg in crate::scene::presets::global_preset_library().presets() {
+        use crate::scene::transforms::RenderMode;
+        let mut c = cfg.clone();
+        c.ensure_sources();
+        let (solid, terrain) = match c.render_mode {
+            RenderMode::Escape => (get_ifs(&c.escape.formula).is_some_and(|d| d.solid), c.escape.terrain.enabled),
+            RenderMode::Simulation => (false, c.sim.terrain.enabled),
+            _ => (false, false),
+        };
+        if !solid && !terrain {
+            continue;
+        }
+        c.escape.solid_tier = RenderTier::PathTraced;
+        c.escape.terrain.tier = RenderTier::PathTraced;
+        c.sim.terrain.tier = RenderTier::PathTraced;
+        c.escape.path.samples = 3;
+        let job = crate::renderer::RenderJob::new(&c, 96, 64);
+        let px = match pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)) {
+            Ok(o) => o.rgba_data,
+            Err(e) => {
+                out.push_str(&format!("{}\terror {e}\n", c.flame.name));
+                continue;
+            }
+        };
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        px.hash(&mut h);
+        let lit = px.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 0).count();
+        out.push_str(&format!("{}\t{}\t{:016x}\tlit {lit}\n", c.flame.name, if solid { "solid" } else { "terrain" }, h.finish()));
+    }
+    std::fs::create_dir_all("output/pt-ab").unwrap();
+    std::fs::write(format!("output/pt-ab/{tag}.txt"), &out).unwrap();
+    print!("{out}");
+}
