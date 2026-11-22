@@ -1002,7 +1002,7 @@ pub static CUT_RGRID: VariationDef = VariationDef {
         param!("mode", "Mode", enum, 1, &["Affine Input", "Random Point"], "Affine Input samples the incoming point; Random Point samples a fresh uniform point each call."),
         param!("zoom", "Zoom", float, 7.0, 0.1, 50.0, "Pattern scale (cell count): `point·zoom`."),
         param!("invert", "Invert", bool, false, "Invert the cut — keep what would be hidden and vice versa."),
-        param!("angle", "Angle", int, 0.0, 0.0, 90.0, "Grid rotation angle in degrees."),
+        param!("angle", "Angle", angle, 0.0, 0.0, 90.0, "Grid rotation angle in degrees."),
     ],
     init_param_count: 0,
     wgsl_init: None,

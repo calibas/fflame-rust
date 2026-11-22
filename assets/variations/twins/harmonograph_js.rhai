@@ -35,7 +35,7 @@ const PARAMS = #{
         hint: "X-axis oscillator 1: frequency.",
     },
     p1: #{
-        value: 0, min: 0, max: 360,
+        value: 0.0, min: 0.0, max: 360.0, type: "angle",
         caption: "P1",
         hint: "X-axis oscillator 1: phase offset in degrees (converted to radians internally).",
     },
@@ -55,7 +55,7 @@ const PARAMS = #{
         hint: "X-axis oscillator 2: frequency.",
     },
     p2: #{
-        value: 0, min: 0, max: 360,
+        value: 0.0, min: 0.0, max: 360.0, type: "angle",
         caption: "P2",
         hint: "X-axis oscillator 2: phase offset in degrees.",
     },

@@ -873,18 +873,23 @@ converts.
 
 - **A parameter** (`params::ParamDef`, drawn by `ui::params`): stored in
   degrees, `Spec::angle` / `param!(... angle ...)` (the shader converts);
-  stored in radians, as Apophysis or JWildfire holds it, `Spec::radians`
-  (default and range in radians too; the control shows degrees, and the
-  wire carries degrees as an `angle`). A Rhai `PARAMS` entry says
-  `type: "angle"` or `type: "radians"`. Never a plain float for an angle.
-- **A config setting** (rotation, the cameras' angles): stored in radians,
-  drawn with `view_controls::angle_slider`; the track editor shows an
-  angle path's keyframes in degrees (`track_editor::is_angle_path`).
+  stored in radians or turns, as Apophysis or JWildfire holds it,
+  `Spec::radians` / `Spec::turns` (`param!(... radians ...)`,
+  `unlimited_radians`, `turns`, ...; default and range as stored too).
+  The control shows degrees, and the wire carries degrees as an `angle`
+  (`params::AngleUnit`). A Rhai `PARAMS` entry says `type: "angle"`,
+  `"radians"` or `"turns"`. Never a plain float for an angle.
+- **A config setting**: the rotations and cameras stored in radians
+  (`view_controls::angle_slider`), the escape lighting's angles, hue
+  shift and post symmetry in degrees. **Animation targets**: the track
+  editor shows every angle's keyframes in degrees whatever it is stored
+  in (`track_editor::angle_unit_of_path`; a variation's parameter answers
+  by its kind).
 - **Scripts** read what the file stores (radians for config targets;
   SCRIPTING.md). A script's own `param_angle` is degrees.
 
-Parameters still shown raw (in radians, turns or a plain float in
-degrees) are listed in [BACKLOG.md](../projects/BACKLOG.md).
+What the variation audit left, a decision each, is in
+[angle-audit.md](../projects/angle-audit.md).
 
 ## Common UI Modification Tasks
 

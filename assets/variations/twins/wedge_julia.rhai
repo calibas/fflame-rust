@@ -23,9 +23,9 @@ const PARAMS = #{
         hint: "Number of wedge sectors around the center.",
     },
     angle: #{
-        value: 0.3, min: -10.0, max: 10.0, free: true,
+        value: 0.3, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Angle",
-        hint: "Wedge sector rotation, in radians.",
+        hint: "Wedge sector rotation.",
     },
 };
 

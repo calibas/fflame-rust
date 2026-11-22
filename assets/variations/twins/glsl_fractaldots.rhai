@@ -46,14 +46,14 @@ const PARAMS = #{
         hint: "Initial fold offset (`uv = abs(uv) - spacing`).",
     },
     rotate1: #{
-        value: 0.0, min: -6.28, max: 6.28, free: true,
+        value: 0.0, min: -6.28, max: 6.28, free: true, type: "radians",
         caption: "Rotate 1",
-        hint: "Global pre-iteration rotation angle (radians).",
+        hint: "Global pre-iteration rotation angle.",
     },
     rotate2: #{
-        value: 0.0, min: -6.28, max: 6.28, free: true,
+        value: 0.0, min: -6.28, max: 6.28, free: true, type: "radians",
         caption: "Rotate 2",
-        hint: "Per-iteration rotation angle (radians).",
+        hint: "Per-iteration rotation angle.",
     },
     zoom: #{
         value: 1.0, min: 0.1, max: 10.0, free: true,

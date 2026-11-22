@@ -377,17 +377,10 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
 - **Models and colourings that say which go together** (the user's,
   2026-11-20): a simulation colouring's preview now uses the first
   preset that names it.
-- **Angles shown raw** (the policy: UI.md, *Angles*): variation
-  parameters declared as plain floats that are angles -- by their hints,
-  ~45 in radians (circle_blur's angle, quaternion_camera's rot_xw/rot_yw,
-  glsl_fields' rotate1/2, lazy_family's spin, ...), ~23 in degrees
-  (affine3d_misc's rotateX/Y/Z, post_axis_symmetry's rotation,
-  bubblet3d's angle_of_hole, ...) and ~6 in turns (dc_hexes_wf's rotate,
-  apo_misc19's rotate_x/y); more whose hints do not say. Each becomes
-  `Spec::radians` or `Spec::angle` (degrees as a plain float: only the
-  kind changes; turns need a factor the kind does not have yet). Pie and
-  pie3D done 2026-11-22. Escape, simulation and effect parameters not
-  yet surveyed.
+- **Angles shown raw**: the variation audit's leftovers, a decision each
+  (time parameters, curve ranges, rates, angles in units of pi, hints
+  that contradict the code): [angle-audit.md](angle-audit.md). Escape
+  and simulation parameters not yet surveyed (effects are degrees).
 - **Known gaps**: no PNG input for `export`; flame-only metadata written
   for escape and simulation pictures; es/ja/zh mostly English.
   [escape-sim-followups.md](../archive/projects/escape-sim-followups.md) §"Known gaps".

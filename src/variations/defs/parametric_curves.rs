@@ -146,7 +146,7 @@ pub static LISSAJOUS: VariationDef = VariationDef {
         param!("a", "A", unlimited_float, 3.0, -20.0, 20.0, "X-axis frequency multiplier."),
         param!("b", "B", unlimited_float, 2.0, -20.0, 20.0, "Y-axis frequency multiplier."),
         param!("c", "C", unlimited_float, 0.0, -10.0, 10.0, "Linear drift added to both axes."),
-        param!("d", "D", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the X axis."),
+        param!("d", "D", unlimited_radians, 0.0, -10.0, 10.0, "Phase offset on the X axis."),
         param!("e", "E", unlimited_float, 0.0, -10.0, 10.0, "Noise scale added to both axes."),
     ],
     init_param_count: 0,

@@ -224,7 +224,7 @@ pub static PTRANSFORM: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[],
     parameters: &[
-        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Angular rotation added to θ, in radians."),
+        param!("rotate", "Rotate", unlimited_radians, 0.0, -10.0, 10.0, "Angular rotation added to θ."),
         param!("power", "Power", int, 1.0, -50.0, 50.0, "Radial divisor. When `use_log` is off, this is the reciprocal scaling factor on the input radius."),
         param!("move", "Move", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on ρ."),
         param!("split", "Split", unlimited_float, 0.0, -10.0, 10.0, "Asymmetric ρ offset, added when x ≥ 0 and subtracted when x < 0."),

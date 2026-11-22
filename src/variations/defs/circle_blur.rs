@@ -201,7 +201,7 @@ pub static BLUR_LINEAR: VariationDef = VariationDef {
     features: &[Feature::NeedsRng],
     parameters: &[
         param!("length", "Length", unlimited_float, 1.0, 0.0, 10.0, "Maximum scatter distance along the blur direction."),
-        param!("angle", "Angle (rad)", unlimited_float, 0.5, -6.28318, 6.28318, "Direction of the blur, in radians."),
+        param!("angle", "Angle", unlimited_radians, 0.5, -6.28318, 6.28318, "Direction of the blur."),
     ],
     // 2 derived values at slots 2..4:
     //   2: cos_angle

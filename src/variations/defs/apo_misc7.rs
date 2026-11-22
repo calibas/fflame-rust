@@ -252,8 +252,8 @@ pub static FDISC: VariationDef = VariationDef {
     parameters: &[
         param!("ashift", "A shift", unlimited_float, 1.0, -10.0, 10.0, "Radial denominator offset added to `sqrt(x² + y²)`."),
         param!("rshift", "R shift", unlimited_float, 1.0, -10.0, 10.0, "Angular offset added to `atan2(y, x) / π`."),
-        param!("xshift", "X shift", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the X cosine wave."),
-        param!("yshift", "Y shift", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the Y sine wave."),
+        param!("xshift", "X shift", unlimited_radians, 0.0, -10.0, 10.0, "Phase offset on the X cosine wave."),
+        param!("yshift", "Y shift", unlimited_radians, 0.0, -10.0, 10.0, "Phase offset on the Y sine wave."),
         param!("term1", "Term 1", unlimited_float, 1.0, -10.0, 10.0, "Weight on the pure `prx`/`pry` (radius × axis-wave) contribution."),
         param!("term2", "Term 2", unlimited_float, 0.0, -10.0, 10.0, "Weight on the input-scaled `x·prx`/`y·pry` contribution."),
         param!("term3", "Term 3", unlimited_float, 0.0, -10.0, 10.0, "Weight on the `x·pr`/`y·pr` (input-scaled radius) contribution."),
@@ -344,7 +344,7 @@ pub static BTRANSFORM: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsRng],
     parameters: &[
-        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Additive rotation on the bipolar σ coordinate."),
+        param!("rotate", "Rotate", unlimited_radians, 0.0, -10.0, 10.0, "Additive rotation on the bipolar σ coordinate."),
         param!("power", "Power", int, 1.0, 1.0, 100.0, "Number of angular branches (≥ 1)."),
         param!("move", "Move", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on τ."),
         param!("split", "Split", unlimited_float, 0.0, -10.0, 10.0, "Asymmetric τ offset: added when x ≥ 0, subtracted when x < 0."),

@@ -55,7 +55,7 @@ pub static LAZYJESS: VariationDef = VariationDef {
     features: &[Feature::NeedsTransform],
     parameters: &[
         param!("n", "N", int, 4.0, 2.0, 50.0, "Polygon vertex count. The n = 2 special case uses a line-segment test instead of a true polygon."),
-        param!("spin", "Spin", unlimited_float, 3.14159265, -10.0, 10.0, "Rotation applied to points inside the N-gon, in radians."),
+        param!("spin", "Spin", unlimited_radians, 3.14159265, -10.0, 10.0, "Rotation applied to points inside the N-gon."),
         param!("space", "Space", unlimited_float, 0.0, -10.0, 10.0, "Radial nudge applied to points outside the N-gon (added to the radius, scaled inversely by `modulus`)."),
         param!("corner", "Corner", int, 1.0, 1.0, 50.0, "Which of the N corners to flip to when the post-rotation inside-test fails (1-based)."),
     ],

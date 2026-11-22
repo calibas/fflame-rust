@@ -44,7 +44,7 @@ pub static GLYNNSPIRO: VariationDef = VariationDef {
         param!("radius", "Radius", unlimited_float, 1.0, -10.0, 10.0, "Outer cutoff radius. Points inside use the Spirograph curve; outside use the Glynn power-warp."),
         param!("radius1", "Radius 1", unlimited_float, 0.5, -10.0, 10.0, "Inner-curve sampling radius. Negative values trigger a small-circle fallback inside the cutoff."),
         param!("thickness", "Thickness", unlimited_float, 1.0, -10.0, 10.0, "Inner-circle thickness (used when `radius1 < 0`)."),
-        param!("phi1", "Phi 1", unlimited_float, 0.0, -360.0, 360.0, "Inner-curve center angle, in degrees."),
+        param!("phi1", "Phi 1", unlimited_angle, 0.0, -360.0, 360.0, "Inner-curve center angle, in degrees."),
         param!("a", "A", unlimited_float, 1.0, -10.0, 10.0, "Spirograph outer-wheel radius."),
         param!("b", "B", unlimited_float, -0.3, -10.0, 10.0, "Spirograph inner-wheel radius (signed; negative produces an internal spirograph)."),
         param!("c", "C", unlimited_float, 0.4, -10.0, 10.0, "Spirograph pen-arm length."),

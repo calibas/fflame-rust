@@ -391,7 +391,7 @@ fn an_angle_parameter_is_a_float_that_says_so() {
     let json = crate::params::script_json(&meta.params[0]);
     assert_eq!((json["type"].as_str(), json["angle"].as_bool()), (Some("float"), Some(true)));
     // A plain float's wire form is as it was.
-    let plain = crate::params::script_json(&ParamDef::owned("k", "K", "", ParamKind::Float { default: 1.0, min: 0.0, max: 2.0, free: false, log: false, angle: false, radians: false }));
+    let plain = crate::params::script_json(&ParamDef::owned("k", "K", "", ParamKind::Float { default: 1.0, min: 0.0, max: 2.0, free: false, log: false, angle: false, unit: crate::params::AngleUnit::Degrees }));
     assert!(plain.get("angle").is_none(), "{plain}");
     let out = run(script, 1).unwrap();
     assert_eq!(out.config.flame.transforms[0].weight, 0.55);

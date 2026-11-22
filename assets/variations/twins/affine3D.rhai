@@ -42,17 +42,17 @@ const PARAMS = #{
         hint: "Z-axis scale.",
     },
     rotateX: #{
-        value: 0.0, min: -360.0, max: 360.0, free: true,
+        value: 0.0, min: -360.0, max: 360.0, free: true, type: "angle",
         caption: "Rotate X",
         hint: "Rotation around the X axis (pitch), in degrees.",
     },
     rotateY: #{
-        value: 0.0, min: -360.0, max: 360.0, free: true,
+        value: 0.0, min: -360.0, max: 360.0, free: true, type: "angle",
         caption: "Rotate Y",
         hint: "Rotation around the Y axis (yaw), in degrees.",
     },
     rotateZ: #{
-        value: 0.0, min: -360.0, max: 360.0, free: true,
+        value: 0.0, min: -360.0, max: 360.0, free: true, type: "angle",
         caption: "Rotate Z",
         hint: "Rotation around the Z axis (roll), in degrees.",
     },

@@ -29,19 +29,19 @@ const PARAMS = #{
         hint: "4D eye position along the 4th axis — THE slider this variation exists for. Sweep it to fly through the object in w; with Perspective > 0, parts you pass are clipped away like a real fly-through.",
     },
     rot_xw: #{
-        value: 0.0, min: -3.1416, max: 3.1416, free: true,
+        value: 0.0, min: -3.1416, max: 3.1416, free: true, type: "radians",
         caption: "Rotate XW",
-        hint: "Rotation of the (x, w) plane in radians — turns the view into the 4th dimension (a '4D yaw'). The ordinary xy/xz/yz rotations belong to the engine's 3D camera.",
+        hint: "Rotation of the (x, w) plane — turns the view into the 4th dimension (a '4D yaw'). The ordinary xy/xz/yz rotations belong to the engine's 3D camera.",
     },
     rot_yw: #{
-        value: 0.0, min: -3.1416, max: 3.1416, free: true,
+        value: 0.0, min: -3.1416, max: 3.1416, free: true, type: "radians",
         caption: "Rotate YW",
-        hint: "Rotation of the (y, w) plane in radians (a '4D pitch').",
+        hint: "Rotation of the (y, w) plane (a '4D pitch').",
     },
     rot_zw: #{
-        value: 0.0, min: -3.1416, max: 3.1416, free: true,
+        value: 0.0, min: -3.1416, max: 3.1416, free: true, type: "radians",
         caption: "Rotate ZW",
-        hint: "Rotation of the (z, w) plane in radians.",
+        hint: "Rotation of the (z, w) plane.",
     },
     persp: #{
         value: 1.0, min: 0.0, max: 4.0,

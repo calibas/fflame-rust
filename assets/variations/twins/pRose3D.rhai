@@ -18,7 +18,7 @@ const PARAMS = #{
         hint: "Petal count `k` (the polar-rose frequency); may be fractional. Sign flips petal parity.",
     },
     c: #{
-        value: 0.0, min: -3.1415927, max: 3.1415927, free: true,
+        value: 0.0, min: -3.1415927, max: 3.1415927, free: true, type: "radians",
         caption: "Constant",
         hint: "Angular phase constant added inside `cos(k·θ + c)`.",
     },

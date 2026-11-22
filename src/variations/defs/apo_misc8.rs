@@ -262,7 +262,7 @@ pub static ATAN2_SPIRALS: VariationDef = VariationDef {
         param!("yx_add", "YX Add", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on x in the second atan2."),
         param!("yy_div", "YY Div", unlimited_float, 1.25, -10.0, 10.0, "Divisor on y in the second atan2."),
         param!("yy_add", "YY Add", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on y in the second atan2."),
-        param!("sin_add", "Sin Add", unlimited_float, 0.0, -10.0, 10.0, "Phase offset on the sine wrap around the second atan2."),
+        param!("sin_add", "Sin Add", unlimited_radians, 0.0, -10.0, 10.0, "Phase offset on the sine wrap around the second atan2."),
         param!("y_mult", "Y Mult", unlimited_float, 1.0, -10.0, 10.0, "Output multiplier on Y."),
         param!("r_power", "R Power", unlimited_float, 0.5, -10.0, 10.0, "Exponent on the radial term `r = (x²+y²)^r_power`."),
         param!("x2y2_pow", "X²Y² Pow", unlimited_float, 1.0, -10.0, 10.0, "Exponent on the xy² term `xy² = (x²+y²)^x2y2_pow`."),

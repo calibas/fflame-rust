@@ -615,7 +615,13 @@ impl Checker {
             let angle = block.get("angle").is_some_and(|s| {
                 matches!(&s.value, SettingValue::Expr(Expr { kind: ExprKind::Bool(true), .. }))
             });
-            let radians = flag("radians", true);
+            let unit = if flag("radians", true) {
+                crate::params::AngleUnit::Radians
+            } else if flag("turns", true) {
+                crate::params::AngleUnit::Turns
+            } else {
+                crate::params::AngleUnit::Degrees
+            };
             let param = Param {
                 name: block.name.clone(),
                 caption: string_setting(block.get("caption")).unwrap_or_else(|| block.name.clone()),
@@ -629,7 +635,7 @@ impl Checker {
                 linear,
                 free,
                 angle,
-                radians,
+                unit,
                 span: block.span,
             };
             // The last block for a name wins (UF's rule).
@@ -981,7 +987,7 @@ impl Checker {
             linear: false,
             free: false,
             angle: false,
-            radians: false,
+            unit: crate::params::AngleUnit::Degrees,
             span,
         });
         id

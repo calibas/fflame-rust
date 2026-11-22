@@ -57,7 +57,7 @@ pub static MASK: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[],
     parameters: &[
-        param!("xshift", "X shift", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on X before the sin term."),
+        param!("xshift", "X shift", unlimited_radians, 0.0, -10.0, 10.0, "Additive offset on X before the sin term."),
         param!("yshift", "Y shift", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on Y before the cosh term."),
         param!("ushift", "U shift", unlimited_float, 1.0, -10.0, 10.0, "Constant offset added to `cosh(yf)`."),
         param!("xscale", "X scale", unlimited_float, 1.0, -10.0, 10.0, "Multiplier on X before the sin term."),

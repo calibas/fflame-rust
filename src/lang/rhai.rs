@@ -3168,18 +3168,18 @@ impl<'s> Lowerer<'s> {
                         },
                         // What the control is, beyond what the value says:
                         // an angle, in degrees as stored and shown; or one
-                        // stored in radians (its range too), shown in
-                        // degrees as every angle is.
+                        // stored in radians or turns (its range too), shown
+                        // in degrees as every angle is.
                         "type" => match x {
-                            Expr::StringConstant(t, _) if t.as_str() == "angle" || t.as_str() == "radians" => {
+                            Expr::StringConstant(t, _) if matches!(t.as_str(), "angle" | "radians" | "turns") => {
                                 settings.push(Setting { name: "angle".into(), value: SettingValue::Expr(mk(ExprKind::Bool(true), kspan)), span: kspan });
-                                if t.as_str() == "radians" {
-                                    settings.push(Setting { name: "radians".into(), value: SettingValue::Expr(mk(ExprKind::Bool(true), kspan)), span: kspan });
+                                if t.as_str() != "angle" {
+                                    settings.push(Setting { name: t.to_string(), value: SettingValue::Expr(mk(ExprKind::Bool(true), kspan)), span: kspan });
                                 }
                             }
                             _ => return self.err(
                                 k.pos,
-                                "`type` is `\"angle\"` (degrees, as stored and shown) or `\"radians\"` (stored in radians, shown in degrees); a number's other kinds follow its `value`",
+                                "`type` is `\"angle\"` (degrees, as stored and shown), `\"radians\"` or `\"turns\"` (stored so, shown in degrees); a number's other kinds follow its `value`",
                             ),
                         },
                         o => {

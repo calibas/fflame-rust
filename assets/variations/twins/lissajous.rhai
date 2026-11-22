@@ -33,7 +33,7 @@ const PARAMS = #{
         hint: "Linear drift added to both axes.",
     },
     d: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "D",
         hint: "Phase offset on the X axis.",
     },

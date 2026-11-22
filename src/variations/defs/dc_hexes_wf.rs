@@ -55,7 +55,7 @@ pub static DC_HEXES_WF: VariationDef = VariationDef {
     parameters: &[
         param!("cellsize", "Cell Size", unlimited_float, 1.0, 0.0, 10.0, "Hex cell size. 0 disables the spatial warp entirely (Z still passes through)."),
         param!("power", "Power", unlimited_float, 1.0, -10.0, 10.0, "Exponent on the Voronoi distance for the target radius: `trgL = (L1 + 1e-6)^power · scale`."),
-        param!("rotate", "Rotate", unlimited_float, 0.166, -10.0, 10.0, "Per-cell rotation, in turns (multiplied by 2π). 0.166 ≈ 1/6 turn aligns with the hex symmetry."),
+        param!("rotate", "Rotate", unlimited_turns, 0.166, -10.0, 10.0, "Per-cell rotation. About 60° (1/6 turn) aligns with the hex symmetry."),
         param!("scale", "Scale", unlimited_float, 1.0, -10.0, 10.0, "Per-cell scale factor applied to the warped radius."),
         param!("color_scale", "Color Scale", unlimited_float, 0.5, -10.0, 10.0, "Multiplier on the Voronoi distance `L` for the colour index. Visible colour requires the transform's Direct Color slider > 0."),
         param!("color_offset", "Color Offset", unlimited_float, 0.0, -10.0, 10.0, "Offset added to `L·color_scale` before clamping the colour index to [0, 1]."),

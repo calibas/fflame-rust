@@ -75,9 +75,9 @@ const PARAMS = #{
         hint: "Angular frequency of layer b — the input theta gets multiplied by this before the phase shift. Higher = more wiggles per revolution.",
     },
     b_phs: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "b_phs",
-        hint: "Phase offset of layer b (radians, added to `theta * b_frq`).",
+        hint: "Phase offset of layer b (added to `theta * b_frq`).",
     },
     b_layer: #{
         value: 0, min: 0, max: 3, free: true,
@@ -105,7 +105,7 @@ const PARAMS = #{
         hint: "Angular frequency of layer c — see `b_frq`.",
     },
     c_phs: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "c_phs",
         hint: "Phase offset of layer c — see `b_phs`.",
     },
@@ -135,7 +135,7 @@ const PARAMS = #{
         hint: "Angular frequency of layer d.",
     },
     d_phs: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "d_phs",
         hint: "Phase offset of layer d.",
     },
@@ -165,7 +165,7 @@ const PARAMS = #{
         hint: "Angular frequency of layer e.",
     },
     e_phs: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "e_phs",
         hint: "Phase offset of layer e.",
     },
@@ -195,7 +195,7 @@ const PARAMS = #{
         hint: "Angular frequency of layer f.",
     },
     f_phs: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "f_phs",
         hint: "Phase offset of layer f.",
     },

@@ -32,7 +32,7 @@ const PARAMS = #{
         hint: "Number of Maurer-rose line segments per cycle.",
     },
     line_offset_degrees: #{
-        value: 71.0, min: -3600.0, max: 3600.0, free: true,
+        value: 71.0, min: -3600.0, max: 3600.0, free: true, type: "angle",
         caption: "Line Offset (deg)",
         hint: "Angular step between successive samples on the rhodonea, in degrees. Together with line_count, controls how many cycles wrap around the rose.",
     },

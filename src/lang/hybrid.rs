@@ -496,7 +496,7 @@ pub fn compose(members: &[(Program, Option<Program>)], rename: &dyn Fn(usize, bo
                 linear: false,
                 free: false,
                 angle: false,
-                radians: false,
+                unit: crate::params::AngleUnit::Degrees,
                 span: Span::default(),
             });
             let t = IExpr { kind: IExprKind::Convert(Box::new(IExpr { kind: IExprKind::Param(out.params.len() - 1), ty: Ty::Float })), ty: Ty::Complex };

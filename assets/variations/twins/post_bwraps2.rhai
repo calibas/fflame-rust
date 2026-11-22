@@ -27,12 +27,12 @@ const PARAMS = #{
         hint: "Bubble strength — controls both bubble size and twist intensity.",
     },
     inner_twist: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Inner Twist",
         hint: "Rotation amount applied at the bubble center.",
     },
     outer_twist: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Outer Twist",
         hint: "Rotation amount applied at the bubble edge. Interpolated radially with `inner_twist`.",
     },

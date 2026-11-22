@@ -638,7 +638,7 @@ pub static EPUSH: VariationDef = VariationDef {
     parameters: &[
         param!("push", "Push", unlimited_float, 0.0, -10.0, 10.0, "Additive offset on μ."),
         param!("dist", "Dist", unlimited_float, 1.0, -10.0, 10.0, "Multiplicative scale on μ."),
-        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Angular shift on ν, in radians."),
+        param!("rotate", "Rotate", unlimited_radians, 0.0, -10.0, 10.0, "Angular shift on ν."),
     ],
     init_param_count: 0,
     wgsl_init: None,
@@ -701,7 +701,7 @@ pub static EROTATE: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[],
     parameters: &[
-        param!("rotate", "Rotate", unlimited_float, 0.0, -10.0, 10.0, "Angular shift on ν, in radians."),
+        param!("rotate", "Rotate", unlimited_radians, 0.0, -10.0, 10.0, "Angular shift on ν."),
     ],
     init_param_count: 0,
     wgsl_init: None,

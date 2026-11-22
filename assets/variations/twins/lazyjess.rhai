@@ -17,9 +17,9 @@ const PARAMS = #{
         hint: "Polygon vertex count. The n = 2 special case uses a line-segment test instead of a true polygon.",
     },
     spin: #{
-        value: 3.1415927, min: -10.0, max: 10.0, free: true,
+        value: 3.1415927, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Spin",
-        hint: "Rotation applied to points inside the N-gon, in radians.",
+        hint: "Rotation applied to points inside the N-gon.",
     },
     space: #{
         value: 0.0, min: -10.0, max: 10.0, free: true,

@@ -280,14 +280,18 @@ range, and whether it is slow. `param!` writes one:
 | `int, default, min, max` | an int (`integer`) | an integer in an `f32` |
 | `unlimited_int, default, min, max` | a free int (`unlimited_integer`) | as an int, with typing past the slider |
 | `angle, default` | an angle (`angle`) | degrees, slider −360…360; the body converts |
-| `Spec::radians(default, min, max)` | an angle (`angle`, in degrees on the wire) | radians, as the foreign format holds it (pie's rotation); shown in degrees |
+| `angle, default, min, max` / `unlimited_angle, ...` | an angle (`angle`) | degrees with a range (unlimited: typed values may leave it) |
+| `radians, default, min, max` / `unlimited_radians, ...` (`Spec::radians`) | an angle (`angle`, in degrees on the wire) | radians, as the foreign format holds it, range too; shown in degrees |
+| `turns, default, min, max` / `unlimited_turns, ...` (`Spec::turns`) | an angle (`angle`, in degrees on the wire) | whole turns (1 = 360 degrees); shown in degrees |
 | `bool, default` | a switch (`boolean`) | 0.0 or 1.0 |
 | `enum, default, &[choices]` | a choice (`enum`) | the choice's index |
 
 Each form also takes a trailing description, and `param!(slow ...)`
 marks any form slow. **An angle is never a plain float**: the user sees
 degrees (UI.md, *Angles*), so a port whose source holds radians keeps
-them with `Spec::radians` rather than asking the user to type them. The Transforms panel, the escape transformations
+them with `radians` (or `turns`) rather than asking the user to type them.
+The 2026-11-22 audit's leftovers are in
+[angle-audit.md](../projects/angle-audit.md). The Transforms panel, the escape transformations
 and the lens draw them through the one renderer (`ui::params`). The
 wire names are the contract's vocabulary (`ParamType`), which
 `params::wire_type` spells a definition in.

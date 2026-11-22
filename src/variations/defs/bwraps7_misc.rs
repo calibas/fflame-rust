@@ -43,8 +43,8 @@ pub static BWRAPS7: VariationDef = VariationDef {
         param!("cellsize", "Cell Size", unlimited_float, 1.0, -10.0, 10.0, "Grid cell size."),
         param!("space", "Space", unlimited_float, 0.0, -1.0, 1.0, "Inter-cell spacing factor. 0 = no space (bubble fills the cell); larger = smaller bubble relative to the cell."),
         param!("gain", "Gain", unlimited_float, 2.0, -5.0, 5.0, "Bubble strength — controls both bubble size and twist intensity."),
-        param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble center."),
-        param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble edge. Interpolated radially with `inner_twist`."),
+        param!("inner_twist", "Inner Twist", unlimited_radians, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble center."),
+        param!("outer_twist", "Outer Twist", unlimited_radians, 0.0, -10.0, 10.0, "Rotation amount applied at the bubble edge. Interpolated radially with `inner_twist`."),
     ],
     // 3 derived values at slots 5..8: g2, r2, rfactor
     init_param_count: 3,

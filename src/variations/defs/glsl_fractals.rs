@@ -280,7 +280,7 @@ pub static GLSL_KALISET2: VariationDef = VariationDef {
         param!("time", "Time", unlimited_float, 85.5, -10000.0, 10000.0, "Animation parameter. Drives the per-step Y shift via `2 + 2 · sin(0.03 · time)`."),
         param!("n_iters", "N", unlimited_int, 100.0, 1.0, 100.0, "Inner iteration count. **GPU-clamped to ≤ 100.**"),
         param!("radio", "Radio", unlimited_float, 1.0, -10.0, 10.0, "Inversion radius squared (`rad²` in the cpp). Points outside this radius get folded inward via `r² → rad²/r²`. JWildfire calls this 'radio'; we keep the name for round-trip."),
-        param!("shift_x", "Shift X", unlimited_float, -0.356, -5.0, 5.0, "Rotation angle in units of full turns (multiplied by `2π` internally). Small values produce slow rotation; 1.0 = full revolution per step. Despite the name 'Shift', this is angular, not linear."),
+        param!("shift_x", "Shift X", unlimited_turns, -0.356, -5.0, 5.0, "Rotation angle. Small values produce slow rotation; 360° = a full revolution per step. Despite the name 'Shift', this is angular, not linear."),
         param!("shift_y", "Shift Y", unlimited_float, 0.686, -5.0, 5.0, "Zoom scale: actual per-step zoom is `2 + 5 · shift_y`. JWildfire reuses the 'Shift' label."),
         param!("fr", "Red Fac.", unlimited_float, 1.8, -10.0, 10.0, "Red-channel frequency multiplier on the final `col` value: `red = cos(col · fr)`."),
         param!("fg", "Green Fac.", unlimited_float, 1.9, -10.0, 10.0, "Green-channel frequency."),

@@ -161,7 +161,7 @@ mod tests {
     }
 
     fn float(min: f64, max: f64) -> ParamKind {
-        ParamKind::Float { default: 0.0, min, max, free: false, log: false, angle: false, radians: false }
+        ParamKind::Float { default: 0.0, min, max, free: false, log: false, angle: false, unit: crate::params::AngleUnit::Degrees }
     }
 
     fn choice(options: &'static [&'static str]) -> ParamKind {

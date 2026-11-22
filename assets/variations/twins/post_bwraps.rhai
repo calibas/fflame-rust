@@ -20,12 +20,12 @@ const PARAMS = #{
         hint: "How strongly each bubble wraps its contents inward.",
     },
     inner_twist: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "angle",
         caption: "Inner Twist",
         hint: "Rotation (in degrees) applied at the center of each bubble.",
     },
     outer_twist: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "angle",
         caption: "Outer Twist",
         hint: "Rotation (in degrees) applied at the edge of each bubble.",
     },

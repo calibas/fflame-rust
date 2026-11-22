@@ -29,12 +29,12 @@ const PARAMS = #{
         hint: "Power for the contrast probability.",
     },
     phi1: #{
-        value: 110.0, min: -360.0, max: 360.0, free: true,
+        value: 110.0, min: -360.0, max: 360.0, free: true, type: "angle",
         caption: "Phi 1",
         hint: "Start angle of the arc segment (degrees).",
     },
     phi2: #{
-        value: 150.0, min: -360.0, max: 360.0, free: true,
+        value: 150.0, min: -360.0, max: 360.0, free: true, type: "angle",
         caption: "Phi 2",
         hint: "End angle of the arc segment (degrees).",
     },

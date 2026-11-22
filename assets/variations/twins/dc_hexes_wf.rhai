@@ -21,9 +21,9 @@ const PARAMS = #{
         hint: "Exponent on the Voronoi distance for the target radius: `trgL = (L1 + 1e-6)^power · scale`.",
     },
     rotate: #{
-        value: 0.166, min: -10.0, max: 10.0, free: true,
+        value: 0.166, min: -10.0, max: 10.0, free: true, type: "turns",
         caption: "Rotate",
-        hint: "Per-cell rotation, in turns (multiplied by 2π). 0.166 ≈ 1/6 turn aligns with the hex symmetry.",
+        hint: "Per-cell rotation. About 60° (1/6 turn) aligns with the hex symmetry.",
     },
     scale: #{
         value: 1.0, min: -10.0, max: 10.0, free: true,

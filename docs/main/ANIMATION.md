@@ -190,9 +190,11 @@ an f64 track, about 16 digits: a moving centre is only that precise
 (past a zoom of about 10^13 its steps show), and a frame whose value is
 the centre's own f64 leaves the exact decimal alone
 (`animation::holds_exact_centre`), so a held centre survives any zoom.
-Angles are stored in **radians** (`is_angle_path` in
-[track_editor.rs](../../src/ui/track_editor.rs) lists them) and the
-editor shows and accepts degrees.
+Angles are stored as their settings store them -- the rotations and
+cameras in radians, the escape lighting's angles in degrees, a variation
+parameter in its kind's unit (`angle_unit_of_path` in
+[track_editor.rs](../../src/ui/track_editor.rs)) -- and the editor shows
+and accepts degrees for every one.
 
 **`flame_target`** says which flame a per-flame path resolves against:
 the main flame or a subflame by position. Paths that live on the

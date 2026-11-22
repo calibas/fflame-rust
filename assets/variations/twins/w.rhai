@@ -13,9 +13,9 @@
 
 const PARAMS = #{
     angle: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Angle",
-        hint: "Rotation angle (radians) applied to the input angle before the radial rebake. The output direction is `a + angle` (wrapped into `[-π, π]`).",
+        hint: "Rotation angle applied to the input angle before the radial rebake. The output direction is `a + angle` (wrapped into `[-π, π]`).",
     },
     hypergon: #{
         value: 0.0, min: -10.0, max: 10.0, free: true,
@@ -43,9 +43,9 @@ const PARAMS = #{
         hint: "Star symmetry count (number of points).",
     },
     star_slope: #{
-        value: 2.0, min: -10.0, max: 10.0, free: true,
+        value: 2.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Star Slope",
-        hint: "Star arm slope angle (radians). Internally pre-computed as `tan(star_slope)` and used as the slope of each star arm.",
+        hint: "Star arm slope angle. Internally pre-computed as `tan(star_slope)` and used as the slope of each star arm.",
     },
     lituus: #{
         value: 0.0, min: -10.0, max: 10.0, free: true,

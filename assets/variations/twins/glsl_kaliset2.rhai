@@ -41,9 +41,9 @@ const PARAMS = #{
         hint: "Inversion radius squared (`rad²` in the cpp). Points outside this radius get folded inward via `r² → rad²/r²`. JWildfire calls this 'radio'; we keep the name for round-trip.",
     },
     shift_x: #{
-        value: -0.356, min: -5.0, max: 5.0, free: true,
+        value: -0.356, min: -5.0, max: 5.0, free: true, type: "turns",
         caption: "Shift X",
-        hint: "Rotation angle in units of full turns (multiplied by `2π` internally). Small values produce slow rotation; 1.0 = full revolution per step. Despite the name 'Shift', this is angular, not linear.",
+        hint: "Rotation angle. Small values produce slow rotation; 360° = a full revolution per step. Despite the name 'Shift', this is angular, not linear.",
     },
     shift_y: #{
         value: 0.686, min: -5.0, max: 5.0, free: true,

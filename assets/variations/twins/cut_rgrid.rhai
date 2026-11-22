@@ -22,7 +22,7 @@ const PARAMS = #{
         hint: "Invert the cut — keep what would be hidden and vice versa.",
     },
     angle: #{
-        value: 0, min: 0, max: 90,
+        value: 0.0, min: 0.0, max: 90.0, type: "angle",
         caption: "Angle",
         hint: "Grid rotation angle in degrees.",
     },

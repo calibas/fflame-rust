@@ -256,7 +256,7 @@ pub static GLYNN_SIM1: VariationDef = VariationDef {
     parameters: &[
         param!("radius", "Radius", unlimited_float, 1.0, -5.0, 5.0, "Main Glynn-set inversion radius."),
         param!("radius1", "Radius 1", unlimited_float, 0.1, -5.0, 5.0, "Offset-circle radius for the generator."),
-        param!("phi1", "Phi 1", unlimited_float, 110.0, -360.0, 360.0, "Angular position of the offset circle (degrees)."),
+        param!("phi1", "Phi 1", unlimited_angle, 110.0, -360.0, 360.0, "Angular position of the offset circle (degrees)."),
         param!("thickness", "Thickness", float, 0.1, 0.0, 1.0, "Circle thickness — fraction of the radius (0 = points on the boundary, 1 = filled disc)."),
         param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0, "Power for the contrast probability — higher concentrates points near the boundary."),
         param!("contrast", "Contrast", float, 0.5, 0.0, 1.0, "Probability scaling for the inversion-vs-pass-through branch."),
@@ -398,8 +398,8 @@ pub static GLYNN_SIM2: VariationDef = VariationDef {
         param!("thickness", "Thickness", float, 0.1, 0.0, 1.0, "Arc thickness — fraction of the radius."),
         param!("contrast", "Contrast", float, 0.5, 0.0, 1.0, "Probability scaling for the inversion-vs-pass-through branch."),
         param!("pow", "Pow", unlimited_float, 1.5, -10.0, 10.0, "Power for the contrast probability."),
-        param!("phi1", "Phi 1", unlimited_float, 110.0, -360.0, 360.0, "Start angle of the arc segment (degrees)."),
-        param!("phi2", "Phi 2", unlimited_float, 150.0, -360.0, 360.0, "End angle of the arc segment (degrees)."),
+        param!("phi1", "Phi 1", unlimited_angle, 110.0, -360.0, 360.0, "Start angle of the arc segment (degrees)."),
+        param!("phi2", "Phi 2", unlimited_angle, 150.0, -360.0, 360.0, "End angle of the arc segment (degrees)."),
     ],
     // 5 derived values at slots 6..11:
     //   6: phi10

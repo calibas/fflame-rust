@@ -25,9 +25,9 @@ const PARAMS = #{
         hint: "Y-axis line thickness.",
     },
     rotation: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Rotation",
-        hint: "Output rotation in radians.",
+        hint: "Output rotation.",
     },
 };
 

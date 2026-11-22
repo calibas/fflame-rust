@@ -27,9 +27,9 @@ const PARAMS = #{
         hint: "Width of the arc segments (clamped to [0.001, 1]).",
     },
     rotation: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Rotation",
-        hint: "Pre-rotation angle applied to the input, in radians.",
+        hint: "Pre-rotation angle applied to the input.",
     },
     size: #{
         value: 1.0, min: 0.001, max: 10.0, free: true,

@@ -5,6 +5,7 @@
 //! Phase 2 adds visual timeline bars for tracks aligned with the scrubber.
 //! Phase 3 adds interactions: click to seek, keyframe hover/click.
 
+use crate::params::AngleUnit;
 use egui::{Ui, Color32, Rect, Pos2, Stroke, CornerRadius, Sense, ScrollArea};
 use crate::animation::{
     Animation, AnimationController, EasingFunction, Interpolation,
@@ -394,7 +395,7 @@ fn render_tracks_visual(
                             // Show tooltip on hover using manual tooltip window
                             if is_hovered {
                                 let value_str = keyframe.value.as_f64()
-                                    .map(|v| if is_angle_key(&path) { format!("{:.1}°", v.to_degrees()) } else { format!("{:.3}", v) })
+                                    .map(|v| match angle_unit_of_key(&path) { Some(unit) => format!("{:.1}°", unit.to_degrees(v)), None => format!("{:.3}", v) })
                                     .unwrap_or_else(|| format!("{}", keyframe.value));
 
                                 // Create a tooltip area near the pointer.
@@ -1039,7 +1040,7 @@ fn render_keyframe_subpanel(
     // If editing an existing keyframe track, show the keyframes
     if let Some(track_index) = state.editing_track_index {
         if let Some(track) = animation.get_track_mut(track_index) {
-            let angle = is_angle_key(&track.target);
+            let angle = angle_unit_of_key(&track.target);
             if let TrackSource::Keyframes { ref mut keyframes } = track.source {
                 // Interpolation selector
                 ui.horizontal(|ui| {
@@ -1159,7 +1160,7 @@ fn render_keyframe_subpanel(
 
         // Preview keyframe list
         ui.label(format!("{}: {}", t!("track_editor.keyframe_count"), state.preview_keyframes.len()));
-        let angle = is_angle_key(&state.new_track_target);
+        let angle = angle_unit_of_key(&state.new_track_target);
 
         ScrollArea::vertical()
             .max_height(150.0)
@@ -1809,7 +1810,39 @@ pub fn get_current_value(
 
 /// Whether a track's values are angles: stored in radians, shown and
 /// typed in degrees (camera-unification C5 -- no radians in the UI).
-pub fn is_angle_path(path: &ConfigPath) -> bool {
+/// What an angle target is stored in, or `None` for one that is not an
+/// angle. The editor shows every angle in degrees (UI.md, *Angles*): a
+/// stored radian converts, a stored degree shows as it is. A variation's
+/// parameter answers by its definition's kind.
+pub fn angle_unit_of_path(path: &ConfigPath) -> Option<AngleUnit> {
+    use ConfigPath as P;
+    match path {
+        // Stored in degrees.
+        P::HueShift
+        | P::PostSymmetryRotation
+        | P::EscapeShadingLightAngle
+        | P::EscapeShadingTextureAngle
+        | P::EscapeShadingTextureAngleSoft
+        | P::EscapeShadingElevation
+        | P::EscapePathEnvironmentRotation
+        | P::SimPathEnvironmentRotation => return Some(AngleUnit::Degrees),
+        P::TransformVariationParam { variation, param, .. }
+        | P::LinkedTransformVariationParam { variation, param, .. }
+        | P::FinalTransformVariationParam { variation, param, .. } => {
+            let reg = crate::variations::global_registry();
+            let def = reg.get(variation)?;
+            return def.parameters.iter().find(|d| &*d.name == param.as_str()).and_then(|d| match d.kind {
+                crate::params::ParamKind::Float { angle: true, unit, .. } => Some(unit),
+                _ => None,
+            });
+        }
+        _ => {}
+    }
+    is_radian_path(path).then_some(AngleUnit::Radians)
+}
+
+/// The config's angles stored in radians (rotations, the cameras).
+fn is_radian_path(path: &ConfigPath) -> bool {
     matches!(
         path,
         ConfigPath::TransformRotation { .. }
@@ -1836,20 +1869,21 @@ pub fn is_angle_path(path: &ConfigPath) -> bool {
     )
 }
 
-/// [`is_angle_path`] for a track's key.
-fn is_angle_key(key: &str) -> bool {
-    ConfigPath::from_string_key(key).is_some_and(|p| is_angle_path(&p))
+/// [`angle_unit_of_path`] for a track's key.
+fn angle_unit_of_key(key: &str) -> Option<AngleUnit> {
+    ConfigPath::from_string_key(key).and_then(|p| angle_unit_of_path(&p))
 }
 
 /// A keyframe's value as the editor shows it, and edits it: degrees for
-/// an angle, the stored value otherwise. True when it changed.
-fn keyframe_value_ui(ui: &mut Ui, value: &mut serde_json::Value, angle: bool) -> bool {
+/// an angle (whatever it is stored in), the stored value otherwise. True
+/// when it changed.
+fn keyframe_value_ui(ui: &mut Ui, value: &mut serde_json::Value, angle: Option<AngleUnit>) -> bool {
     let stored = value.as_f64().unwrap_or(0.0);
-    let changed = if angle {
-        let mut deg = stored.to_degrees();
+    let changed = if let Some(unit) = angle {
+        let mut deg = unit.to_degrees(stored);
         let changed = ui.add(super::VkbDragValue::new(&mut deg).speed(0.5).min_decimals(1).suffix("°")).changed();
         if changed {
-            *value = serde_json::json!(deg.to_radians());
+            *value = serde_json::json!(unit.from_degrees(deg));
         }
         changed
     } else {

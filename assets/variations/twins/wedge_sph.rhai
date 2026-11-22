@@ -9,9 +9,9 @@
 
 const PARAMS = #{
     angle: #{
-        value: 0.2, min: -10.0, max: 10.0, free: true,
+        value: 0.2, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Angle",
-        hint: "Wedge sector rotation, in radians.",
+        hint: "Wedge sector rotation.",
     },
     hole: #{
         value: 0.2, min: -10.0, max: 10.0, free: true,

@@ -24,7 +24,7 @@ const PARAMS = #{
         hint: "Inner-circle thickness (used when `radius1 < 0`).",
     },
     phi1: #{
-        value: 0.0, min: -360.0, max: 360.0, free: true,
+        value: 0.0, min: -360.0, max: 360.0, free: true, type: "angle",
         caption: "Phi 1",
         hint: "Inner-curve center angle, in degrees.",
     },
@@ -44,7 +44,7 @@ const PARAMS = #{
         hint: "Y-jitter amplitude (random per-iteration scatter on the inner-curve sample).",
     },
     phase: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Phase",
         hint: "Lissajous phase offset on the X frequency term.",
     },

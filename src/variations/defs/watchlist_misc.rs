@@ -673,7 +673,7 @@ pub static FOURTH: VariationDef = VariationDef {
     phase: VariationPhase::Any,
     features: &[Feature::NeedsTransform],
     parameters: &[
-        param!("spin", "Spin", unlimited_float, 3.14159265, -10.0, 10.0, "Lazysusan-quadrant rotation amount, in radians."),
+        param!("spin", "Spin", unlimited_radians, 3.14159265, -10.0, 10.0, "Lazysusan-quadrant rotation amount."),
         param!("space", "Space", unlimited_float, 0.0, -10.0, 10.0, "Lazysusan-quadrant radial nudge for the outside-threshold case."),
         param!("twist", "Twist", unlimited_float, 0.0, -10.0, 10.0, "Lazysusan-quadrant additional rotation, proportional to distance from the threshold edge."),
         param!("x", "X", unlimited_float, 0.0, -10.0, 10.0, "Lazysusan-quadrant X center offset."),

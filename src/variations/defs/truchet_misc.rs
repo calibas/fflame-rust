@@ -55,7 +55,7 @@ pub static TRUCHET: VariationDef = VariationDef {
         param!("extended", "Extended", bool, false, "When on, use the slow iterated-LCG hash for tile-type selection (more cells produce distinct patterns). When off, the fast single-step LCG."),
         param!("exponent", "Exponent", unlimited_float, 2.0, 0.001, 2.0, "Lp-norm exponent for the arc shape (clamped to [0.001, 2]). 2 = circular arcs; lower values produce more angular shapes."),
         param!("arc_width", "Arc Width", unlimited_float, 0.5, 0.001, 1.0, "Width of the arc segments (clamped to [0.001, 1])."),
-        param!("rotation", "Rotation", unlimited_float, 0.0, -10.0, 10.0, "Pre-rotation angle applied to the input, in radians."),
+        param!("rotation", "Rotation", unlimited_radians, 0.0, -10.0, 10.0, "Pre-rotation angle applied to the input."),
         param!("size", "Size", unlimited_float, 1.0, 0.001, 10.0, "Output scale factor for each cell (clamped to [0.001, 10])."),
         param!("seed", "Seed", unlimited_float, 50.0, -1000.0, 1000.0, "Hash seed for the per-cell tile-type selection."),
         param!("direct_color", "Direct Color", bool, false, "When on, writes `clamp(r0, 0, 1)` to the color register on the r0 arc and `clamp(1 − r1, 0, 1)` on the r1 arc. Visible color requires the transform's Direct Color slider > 0."),

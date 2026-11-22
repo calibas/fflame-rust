@@ -11,7 +11,7 @@
 
 const PARAMS = #{
     rotate: #{
-        value: 0.0, min: -10.0, max: 10.0, free: true,
+        value: 0.0, min: -10.0, max: 10.0, free: true, type: "radians",
         caption: "Rotate",
         hint: "Additive rotation on the bipolar σ coordinate.",
     },

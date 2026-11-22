@@ -900,7 +900,7 @@ fn text(s: &str) -> String {
 /// A def's parameters as a twin's `PARAMS` map, each as the built-in
 /// declares it: a free range `free: true`, a log slider `exponential:
 /// true`, a range of five decades that is not one `exponential: false`,
-/// an angle `type: "angle"`, one stored in radians `type: "radians"`.
+/// an angle `type: "angle"` (degrees), `"radians"` or `"turns"` as stored.
 pub fn params_rhai(params: &[ParamDef]) -> String {
     if params.is_empty() {
         return String::new();
@@ -908,7 +908,7 @@ pub fn params_rhai(params: &[ParamDef]) -> String {
     let mut out = String::from("const PARAMS = #{\n");
     for p in params {
         let head = match &p.kind {
-            ParamKind::Float { default, min, max, free, log, angle, radians } => {
+            ParamKind::Float { default, min, max, free, log, angle, unit } => {
                 let mut s = format!("value: {}, min: {}, max: {}", float(*default), float(*min), float(*max));
                 if *free {
                     s += ", free: true";
@@ -918,10 +918,8 @@ pub fn params_rhai(params: &[ParamDef]) -> String {
                 } else if *min > 0.0 && *max / *min >= 1e5 {
                     s += ", exponential: false";
                 }
-                if *radians {
-                    s += ", type: \"radians\"";
-                } else if *angle {
-                    s += ", type: \"angle\"";
+                if *angle {
+                    s += &format!(", type: \"{}\"", unit.rhai_type());
                 }
                 s
             }
@@ -1268,6 +1266,41 @@ mod tests {
             let text = skeleton(name, block.as_deref()).unwrap_or_else(|| panic!("no built-in `{name}`"));
             std::fs::write(&path, text).unwrap();
             println!("wrote {path}");
+        }
+    }
+
+    /// A twin's `PARAMS` block written again from its built-in's
+    /// parameters, for every twin whose parameters no longer match (a
+    /// built-in's kind, range or hint changed): `TWIN_PARAMS=1 cargo test
+    /// --release --lib -- --ignored rewrite_twin_params`. The rest of the
+    /// file is left as it is.
+    #[test]
+    #[ignore = "writes files"]
+    fn rewrite_twin_params() {
+        if std::env::var("TWIN_PARAMS").is_err() {
+            return;
+        }
+        let reg = super::super::global_registry();
+        for (name, src) in TWINS {
+            let Some(builtin) = reg.get(name) else { continue };
+            let p = crate::lang::rhai::transformation(src).or_else(|_| crate::lang::rhai::transformation3(src)).unwrap();
+            let params = super::super::custom::param_defs(&p, src).unwrap();
+            let same = params.len() == builtin.parameters.len()
+                && params.iter().zip(&builtin.parameters).all(|(t, b)| (&t.name, &t.label, &t.hint, &t.kind, t.slow) == (&b.name, &b.label, &b.hint, &b.kind, b.slow));
+            if same {
+                continue;
+            }
+            let path = format!("assets/variations/twins/{name}.rhai");
+            let text = std::fs::read_to_string(&path).unwrap();
+            let start = text.find("const PARAMS = #{").unwrap_or_else(|| panic!("{path}: no PARAMS"));
+            let end = start + text[start..].find("\n};").unwrap() + 3;
+            let mut block = params_rhai(&builtin.parameters).trim_end().to_string();
+            if text.contains("\r\n") {
+                block = block.replace('\n', "\r\n");
+            }
+            let block = block.trim_end_matches('\r').to_string();
+            std::fs::write(&path, format!("{}{}{}", &text[..start], block, &text[end..])).unwrap();
+            println!("rewrote {path}");
         }
     }
 
