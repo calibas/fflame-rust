@@ -2395,6 +2395,7 @@ signal:
   generator_name_taken: "Another signal (audio analysis or a signal file) has this name, so this generator's signal is not in use. Rename it."
   no_signal_files: "No signal files loaded."
   load_signal_file: "Load Signal..."
+  files_not_on_web: "Signal files can't be loaded or saved in the web app yet."
   save_signal: "Save"
 
 # Audio (sub-section of Signal Panel)
