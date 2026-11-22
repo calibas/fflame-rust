@@ -80,6 +80,15 @@ pub fn render_compact_menu(
 
 /// Render the menu items inside the compact popup.
 /// Uses `open_compact_panel()` to dock panels into the main surface.
+/// A row opening a panel, docked as the compact layout docks them,
+/// selected while the panel is open.
+fn panel_row(ui: &mut egui::Ui, ctx: &egui::Context, workspace: &mut Workspace, panel: PanelType, label_key: &str) {
+    if ui.selectable_label(workspace.panel_exists(panel), t!(label_key).as_ref()).clicked() {
+        workspace.open_compact_panel(panel, ctx);
+        ui.close();
+    }
+}
+
 fn render_compact_menu_items(
     ui: &mut egui::Ui,
     ctx: &egui::Context,
@@ -200,24 +209,15 @@ fn render_compact_menu_items(
         }
     });
 
-    // --- View submenu: Reset View, the View panel, the Lighting panel ---
+    // --- View submenu: Reset View, then the picture's panels ---
     ui.menu_button(t!("menu.view"), |ui| {
         rows_do_not_wrap(ui);
         if ui.selectable_label(false, t!("menu.reset_view").as_ref()).clicked() {
             menu_actions.view.reset_view = true;
             ui.close();
         }
-        let view_open = workspace.panel_exists(PanelType::View);
-        let label = t!(super::visibility::label_key_of(PanelType::View));
-        if ui.selectable_label(view_open, label.as_ref()).clicked() {
-            workspace.open_compact_panel(PanelType::View, ctx);
-            ui.close();
-        }
-        let lighting_open = workspace.panel_exists(PanelType::SolidLighting);
-        let label = t!(super::visibility::label_key_of(PanelType::SolidLighting));
-        if ui.selectable_label(lighting_open, label.as_ref()).clicked() {
-            workspace.open_compact_panel(PanelType::SolidLighting, ctx);
-            ui.close();
+        for panel in super::visibility::COMPACT_VIEW_PANELS {
+            panel_row(ui, ctx, workspace, *panel, super::visibility::label_key_of(*panel));
         }
     });
 
@@ -227,21 +227,37 @@ fn render_compact_menu_items(
         super::inventory::catalog_menu_rows(ui);
     });
 
-    // --- Window submenu ---
+    // --- Window submenu: the mode's panels, then More with the rest ---
+    // Labels come from the shared table, so the menus cannot drift
+    // apart. Every row opens its panel, in every mode (one-workspace plan).
     ui.menu_button(t!("menu.window"), |ui| {
         rows_do_not_wrap(ui);
-        // Order is this menu's own -- touch priority, transforms
-        // first -- but the labels come from the shared table, so the two
-        // menus cannot drift apart. Every row opens its panel, in every
-        // mode (one-workspace plan).
-        for panel_type in super::visibility::COMPACT_WINDOW_MENU {
-            let is_open = workspace.panel_exists(*panel_type);
-            let label = t!(super::visibility::label_key_of(*panel_type));
-            if ui.selectable_label(is_open, label.as_ref()).clicked() {
-                workspace.open_compact_panel(*panel_type, ctx);
-                ui.close();
+        let mode = menu_state.render_mode;
+        for (i, group) in super::visibility::compact_window_menu(mode).iter().enumerate() {
+            if i > 0 {
+                ui.separator();
+            }
+            for panel in *group {
+                panel_row(ui, ctx, workspace, *panel, super::visibility::label_key_of(*panel));
             }
         }
+        ui.separator();
+        ui.menu_button(t!("menu.window_more"), |ui| {
+            rows_do_not_wrap(ui);
+            let mut first = true;
+            for group in super::visibility::compact_more(mode) {
+                let rows: Vec<_> = group.into_iter().filter(|r| !r.account_only || menu_state.online_account).collect();
+                if rows.is_empty() {
+                    continue;
+                }
+                if !std::mem::take(&mut first) {
+                    ui.separator();
+                }
+                for row in rows {
+                    panel_row(ui, ctx, workspace, row.panel, row.label_key);
+                }
+            }
+        });
     });
 
     // --- Transport ---
@@ -290,11 +306,6 @@ fn render_compact_menu_items(
     }
     if ui.add_enabled(menu_state.can_redo, egui::Button::new(t!("menu.redo"))).clicked() {
         menu_actions.edit.redo = true;
-        ui.close();
-    }
-    // The Undo/Redo History, beside them (the desktop's Edit menu has it).
-    if ui.selectable_label(workspace.panel_exists(PanelType::History), t!("menu.window_history").as_ref()).clicked() {
-        workspace.open_compact_panel(PanelType::History, ctx);
         ui.close();
     }
 

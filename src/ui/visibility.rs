@@ -615,34 +615,58 @@ pub fn window_menu_rows() -> impl Iterator<Item = &'static WindowMenuRow> {
     WINDOW_MENU.iter().flat_map(|g| g.iter())
 }
 
-/// The compact Window submenu keeps its own ORDER -- touch priority,
-/// transforms first -- but not its own labels. The Palette Editor is
-/// deliberately absent: it is reachable from the Colors panel, and on a
-/// phone this menu was scrolling off the bottom. Paths, Random Generator
-/// and Account are absent too.
-pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
-    PanelType::Transforms,
-    PanelType::TriangleEditor,
-    PanelType::Colors,
+// ── The phone's menu: short enough for a phone's screen ──
+//
+// Its View submenu takes the desktop's picture group, after Reset View;
+// its Window submenu is the mode's panels, then a More submenu with
+// every other desktop row (in the desktop's groups), so a phone reaches
+// every panel a desktop does. Settings is File's alone there.
+
+/// The compact View submenu's panels, after Reset View.
+pub static COMPACT_VIEW_PANELS: &[PanelType] = &[
     PanelType::View,
     PanelType::SolidLighting,
+    PanelType::Colors,
     PanelType::Rendering,
-    PanelType::FractalBrowser,
-    PanelType::Subflames,
-    PanelType::RhaiEditor,
-    PanelType::Escape,
-    PanelType::Simulation,
-    PanelType::Textures,
-    PanelType::Effects,
-    PanelType::XaosEditor,
-    PanelType::Animation,
-    PanelType::Signal,
     PanelType::Performance,
-    PanelType::Preferences,
 ];
 
-/// The label a compact row shows, from the shared table.
+/// Every mode's motion and effects, then the history.
+const COMPACT_SHARED: &[&[PanelType]] = &[&[PanelType::Effects, PanelType::Animation, PanelType::Signal], &[PanelType::History]];
+
+/// The compact Window submenu's main rows for a mode, in groups (a
+/// separator between), More after them. The Transforms panel is in
+/// every mode's: simulation layers warp by it, and escape mode D draws
+/// the flame.
+pub fn compact_window_menu(m: RenderMode) -> [&'static [PanelType]; 3] {
+    use PanelType as P;
+    let editors: &'static [PanelType] = match m {
+        RenderMode::TwoD | RenderMode::ThreeD => &[P::Transforms, P::TriangleEditor, P::XaosEditor, P::Paths, P::Subflames],
+        RenderMode::Escape => &[P::Escape, P::HybridDesigner, P::Transforms],
+        RenderMode::Simulation => &[P::Simulation, P::Textures, P::Transforms],
+    };
+    [editors, COMPACT_SHARED[0], COMPACT_SHARED[1]]
+}
+
+/// The compact More submenu for a mode: the desktop Window menu's rows
+/// the phone's View and Window submenus do not show, nor Settings (File
+/// opens it), in the desktop's groups; an emptied group goes.
+pub fn compact_more(m: RenderMode) -> Vec<Vec<&'static WindowMenuRow>> {
+    let main = compact_window_menu(m);
+    let shown = |p: PanelType| main.iter().any(|g| g.contains(&p)) || COMPACT_VIEW_PANELS.contains(&p) || p == PanelType::Preferences;
+    WINDOW_MENU
+        .iter()
+        .map(|g| g.iter().filter(|r| !shown(r.panel)).collect::<Vec<_>>())
+        .filter(|g| !g.is_empty())
+        .collect()
+}
+
+/// The label a menu row shows, from the shared table; the Undo/Redo
+/// History, the desktop Edit menu's, has its own.
 pub fn label_key_of(p: PanelType) -> &'static str {
+    if p == PanelType::History {
+        return "menu.window_history";
+    }
     window_menu_rows()
         .find(|r| r.panel == p)
         .map(|r| r.label_key)
@@ -997,15 +1021,23 @@ mod tests {
         }
     }
 
-    /// The compact submenu picks from the desktop table rather than
-    /// keeping its own, so labels cannot drift apart.
+    /// In every mode the phone's menu reaches every panel the desktop's
+    /// Window menu does (Settings through File), each once, and its main
+    /// rows are the desktop's panels or the History.
     #[test]
-    fn the_compact_menu_is_a_subset_of_the_window_menu() {
-        for p in COMPACT_WINDOW_MENU {
-            let row = window_menu_rows().find(|r| r.panel == *p);
-            let row = row.unwrap_or_else(|| panic!("{p:?} is in the compact menu but not the desktop one"));
-            assert!(!row.account_only, "{p:?}: the compact menu has no account gate");
-            assert_eq!(label_key_of(*p), row.label_key);
+    fn the_compact_menu_reaches_every_window_panel_once() {
+        for m in RenderMode::ALL {
+            let main = compact_window_menu(*m);
+            let mut reached: Vec<PanelType> = COMPACT_VIEW_PANELS.iter().chain(main.iter().flat_map(|g| g.iter())).copied().collect();
+            reached.extend(compact_more(*m).iter().flatten().map(|r| r.panel));
+            reached.push(PanelType::Preferences);
+            for p in &reached {
+                assert_ne!(label_key_of(*p), "menu.window", "{m:?}: {p:?} has no label");
+                assert_eq!(reached.iter().filter(|q| *q == p).count(), 1, "{m:?}: {p:?} shows twice");
+            }
+            for r in window_menu_rows() {
+                assert!(reached.contains(&r.panel), "{m:?}: the phone's menu never reaches {:?}", r.panel);
+            }
         }
     }
 

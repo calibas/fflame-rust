@@ -131,6 +131,7 @@ menu:
   window_file_browser: "📂 File Browser"
   window_config_dialog: "📄 Config Import/Export"
   window_history: "⮪ Undo/Redo History"
+  window_more: "More"
   window_animation: "🎬 Animation"
   window_paths: "🌳 Paths"
   window_random_generator: "🎲 Random Generator"

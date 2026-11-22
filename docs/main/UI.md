@@ -138,11 +138,9 @@ tools (Palette Editor, Rhai Editor, Fractal Browser, Random Generator);
 Settings and Account; then Workspace Layout. The Undo/Redo History is
 the Edit menu's, under Undo and Redo (both layouts). Every row opens its
 panel in every mode; a panel the mode does not use shows its reason on
-hover. The compact menu
-keeps its own order — touch priority, transforms
-first — in `COMPACT_WINDOW_MENU`, but takes its labels from the shared
-table, and a test asserts it is a subset. Add a panel row there, not in
-either menu.
+hover. The compact menu (below) keeps its own arrangement but takes its
+labels from the shared table, and reaches every row of it in every mode
+(a test). Add a panel row there, not in either menu.
 
 ### The progress bar
 
@@ -726,11 +724,19 @@ record: [mobile-ui-redesign.md](../archive/projects/mobile-ui-redesign.md).
   `SystemSettings::compact_mode`; afterwards the saved value decides.
   Window ▸ Mobile View and the compact menu's Desktop View switch, and
   the switch is saved too.
-- **The menu** holds the Mode, then File, View (Reset View and the View
-  panel), Catalog and Window (`COMPACT_WINDOW_MENU`, with the same mode
-  policy as the desktop rows) in the desktop bar's order, the transport,
-  Undo, Redo, the account button (the
-  online account), Help, and Desktop View. Reset Accumulation is the
+- **The menu** holds the Mode, then File, View, Catalog and Window in
+  the desktop bar's order, the transport, Undo, Redo, the account button
+  (the online account), Help, and Desktop View. Kept short for a phone's
+  screen (`visibility::COMPACT_VIEW_PANELS`, `compact_window_menu`,
+  `compact_more`):
+  - **View:** Reset View, then the desktop's picture group: View,
+    Lighting, Colors & Tone Mapping, Rendering, Performance.
+  - **Window:** the mode's panels -- a flame's Transforms, Triangle
+    Editor, Xaos, Paths and Subflames; Escape's Escape, Hybrid Designer
+    and Transforms; Simulation's Simulation, Textures and Transforms --
+    then Effects, Animation and Signals, then the Undo/Redo History,
+    then **More**: every other desktop Window row, in the desktop's
+    groups (Settings is File's alone). Reset Accumulation is the
   Rendering panel's. File ▸ Settings opens the Settings panel, the
   compact layout's language picker.
 - **The transport** follows Space (`render_mode::space_runs_the_simulation`):
@@ -863,7 +869,7 @@ iterate the registry's `HashMap`.
 ### Add a panel
 1. Add a variant to `PanelType` ([workspace.rs](../../src/ui/workspace.rs)), a title arm in its `Display` impl, and a `default_size_for_panel` arm.
 2. Add a case to `visibility::panel` — the match is exhaustive, so this is not optional — and add it to the test list `ALL_PANELS` (the count is asserted in `the_test_list_covers_every_panel`).
-3. Add a row to `visibility::WINDOW_MENU` (and to `COMPACT_WINDOW_MENU` if it belongs on a phone).
+3. Add a row to `visibility::WINDOW_MENU` (the phone's More submenu picks it up; to `compact_window_menu` or `COMPACT_VIEW_PANELS` if it belongs on the phone's first level).
 4. Add a dispatch arm in `PanelViewer::render_panel` ([panel_viewer.rs](../../src/ui/panel_viewer.rs)).
 5. Add the `menu.window_*` and `panels.*` keys to `locales/en.yml`.
 
