@@ -200,7 +200,7 @@ fn render_compact_menu_items(
         }
     });
 
-    // --- View submenu: Reset View, and the View panel ---
+    // --- View submenu: Reset View, the View panel, the Lighting panel ---
     ui.menu_button(t!("menu.view"), |ui| {
         rows_do_not_wrap(ui);
         if ui.selectable_label(false, t!("menu.reset_view").as_ref()).clicked() {
@@ -211,6 +211,12 @@ fn render_compact_menu_items(
         let label = t!(super::visibility::label_key_of(PanelType::View));
         if ui.selectable_label(view_open, label.as_ref()).clicked() {
             workspace.open_compact_panel(PanelType::View, ctx);
+            ui.close();
+        }
+        let lighting_open = workspace.panel_exists(PanelType::SolidLighting);
+        let label = t!(super::visibility::label_key_of(PanelType::SolidLighting));
+        if ui.selectable_label(lighting_open, label.as_ref()).clicked() {
+            workspace.open_compact_panel(PanelType::SolidLighting, ctx);
             ui.close();
         }
     });

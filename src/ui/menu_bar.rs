@@ -154,8 +154,8 @@ pub fn render_menu_bar(
                 ui.add_enabled(false, egui::Button::new(t!("menu.preferences")));
             });
 
-            // View Menu -- all three rows move a view, which
-            // Simulation does not have, so the whole menu goes there.
+            // View Menu -- the view's moves, then the Lighting panel (every
+            // 3D view's light; the View panel opens it too).
             if super::visibility::control(
                 super::visibility::Control::ViewNavigation,
                 menu_state.render_mode,
@@ -176,6 +176,17 @@ pub fn render_menu_bar(
 
                     if ui.button(t!("menu.zoom_out")).clicked() {
                         menu_actions.view.zoom_out = true;
+                    }
+
+                    ui.separator();
+
+                    let lighting = super::workspace::PanelType::SolidLighting;
+                    let mut r = ui.selectable_label(workspace.panel_exists(lighting), t!(super::visibility::label_key_of(lighting)).as_ref());
+                    if let super::visibility::PanelUse::Inactive { reason, .. } = super::visibility::panel(lighting, menu_state.render_mode, menu_state.solid) {
+                        r = r.on_hover_text(t!(reason));
+                    }
+                    if r.clicked() {
+                        workspace.open_floating_panel(lighting, ctx);
                     }
                 });
             }
