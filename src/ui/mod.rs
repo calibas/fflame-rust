@@ -125,6 +125,15 @@ pub fn vkb_sync_full(
     }
 }
 
+/// The Edit as Rhai button, everywhere one is: a pencil, whose hover
+/// says what it does -- "Edit as Rhai", then `tip`, the place's own.
+/// `small` in a row of small buttons.
+pub(crate) fn edit_as_rhai_button(ui: &mut egui::Ui, small: bool, tip: &str) -> egui::Response {
+    let button = egui::Button::new("\u{270F}");
+    let button = if small { button.small() } else { button };
+    ui.add(button).on_hover_text(format!("{}\n\n{tip}", t!("rhai_editor.edit_as_rhai")))
+}
+
 /// Shorten `s` to at most `max_chars` characters, ending in "..." when cut.
 ///
 /// Counts `char`s, never bytes: a name is user text in any script, and

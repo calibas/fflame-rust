@@ -548,7 +548,9 @@ never over one that is there. Choosing, creating, renaming, deleting,
 importing, exporting, the plug-in flag and publishing are the Catalog's
 ([CATALOG.md](CATALOG.md)), whose **Edit** opens a file here; every
 panel's Edit as Rhai (Escape, Transforms, Effects, Simulation, the
-track editor) opens its copy here too. Saved layouts that name the old
+track editor) opens its copy here too. Edit as Rhai is a pencil (✏)
+button, its name and what it does on hover (`ui::edit_as_rhai_button`);
+in a menu, the pencil and the words. Saved layouts that name the old
 Formula Editor or Scripts panel open it (serde aliases).
 
 **Scripts run** in the Catalog's info pane, for the script selected, and

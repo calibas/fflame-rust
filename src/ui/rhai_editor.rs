@@ -1384,7 +1384,7 @@ impl RhaiEditorPanel {
                     }
                 }
                 // A UF or Fractint entry is edited as Rhai.
-                if foreign && row.errors(row.likely).is_empty() && ui.button(t!("formula_editor.edit_as_rhai")).on_hover_text(t!("formula_editor.edit_as_rhai_tip")).clicked() {
+                if foreign && row.errors(row.likely).is_empty() && super::edit_as_rhai_button(ui, false, &t!("formula_editor.edit_as_rhai_tip")).clicked() {
                     convert = Some(i);
                 }
             });
