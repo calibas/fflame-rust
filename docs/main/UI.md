@@ -629,11 +629,16 @@ sections by the view:
 |---|---|---|---|---|
 | Rendering | render tier; samples, noise threshold, bounces, denoise (not Lit) | the same | the same | -- |
 | Sky | HDRI sky (None, the bundled skies, Starfield) with Rotation, Horizon, Stars, Show as backdrop and its credit; else sky colour (the background, as in Colors), gradient and zenith, Studio light; Sky light (not Lit, unless the studio or a sky is on) | the same | the same | -- |
-| Lights | Light 1 to 4: kind, colour, its settings, intensity | the same | the same | directional only, once Shading strength is above 0 |
+| Lights | Light 1 to 4: kind, colour, its settings, intensity | the same | the same | directional only |
 | Shading | strength, ambient, occlusion strength and reach (not Path traced) | the same, the terrain's reach | the same, the terrain's reach | strength, ambient, SSAO strength and radius, normal smoothing, gap fill |
 | Shadows | Shadows, Shadow sharpness (formula parameters), Ray tolerance | the terrain's | the terrain's | shadow maps' strength |
-| Material | diffuse, highlight and its size, gloss, roughness, glow | the same | the same | the same, once lit |
+| Material | diffuse, highlight and its size, gloss, roughness, glow | the same | the same | the same |
 | Surface | -- | the surface texture; the lake's tint and roughness | -- | solid strength, surface thickness |
+
+A 3D flame's panel opens on **Shading** (its strength turns the shade
+pass on), then Lights, Shadows, Material, Surface. At Shading strength 0
+every row still shows; Lights and Shadows say at their top that nothing
+is lit until the strength is raised.
 
 A solid's **Shadows, Shadow sharpness and Occlusion reach** stay formula
 parameters in the file (`escape::ifs::LIGHTING_PARAMS`); the Escape panel
