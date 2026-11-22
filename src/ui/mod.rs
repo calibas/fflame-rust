@@ -2311,8 +2311,11 @@ impl EguiLayer {
             self.show_api_notification(&message, is_error);
         }
 
-        // Log egui repaint requests for performance investigation
-        let needs_repaint = self.ctx.has_requested_repaint();
+        // When egui wants its next frame (the frame loop honours it).
+        let repaint_delay = full_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map_or(std::time::Duration::MAX, |v| v.repaint_delay);
 
         // Write copied text to browser clipboard (WASM only)
         #[cfg(target_arch = "wasm32")]
@@ -2724,7 +2727,7 @@ impl EguiLayer {
             fractal_viewport_size,
             fly_mouse_drag,
             fly_mode_toggle_requested,
-            needs_repaint,
+            repaint_delay,
             selected_preset_config,
             file_browser_open_requested,
             animation_export_requested,

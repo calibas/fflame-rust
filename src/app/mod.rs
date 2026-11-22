@@ -624,7 +624,11 @@ pub struct App {
     pub(super) last_param_change_time: Option<web_time::Instant>,
     pub(super) rendering_complete: bool,  // True when rendering has finished (max_iterations reached)
     pub(super) clear_paths_next_frame: bool,  // Clear path buffer on next compute pass (full reset)
-    pub(super) ui_needs_repaint: bool,  // Track if UI is requesting repaints (for frame rate boost)
+    /// When the UI asked for its next frame (egui's repaint delay from the
+    /// last frame), or `None`: the frame loop keeps drawing once it is due,
+    /// as for input -- a Catalog preview being made, a fade, a search
+    /// settling all ask for frames nobody's input brings.
+    pub(super) ui_repaint_at: Option<web_time::Instant>,
     pub(super) last_input_time: Option<web_time::Instant>,  // Time of last user input (for idle detection)
     // Tracks whether the fractal was actively rendering on the previous
     // AboutToWait. When it transitions from true to false (e.g.,
@@ -979,7 +983,7 @@ impl App {
             last_param_change_time: None,
             rendering_complete: false,
             clear_paths_next_frame: true,  // Clear paths on first frame
-            ui_needs_repaint: false,
+            ui_repaint_at: None,
             last_input_time: None,
             was_rendering_prev_frame: false,
             progress_drawn: crate::ui::RenderProgress::Idle,
@@ -1434,7 +1438,9 @@ impl App {
                     const UI_IDLE_TIMEOUT: Duration = Duration::from_millis(700);
                     let ui_active = app.last_input_time
                         .map(|t| t.elapsed() < UI_IDLE_TIMEOUT)
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                        // ...or the UI asked for a frame that is due now.
+                        || app.ui_repaint_at.is_some_and(|t| t <= web_time::Instant::now());
 
                     // If surface needs recreation, request one redraw to trigger it
                     // but don't continuously spin — wait for events after that
@@ -1527,6 +1533,10 @@ impl App {
                             }
                             _ => window.request_redraw(),
                         }
+                    } else if let Some(at) = app.ui_repaint_at {
+                        // Idle, but the UI wants a frame later (a search
+                        // settling, a tooltip's delay): sleep until then.
+                        elwt.set_control_flow(ControlFlow::WaitUntil(at));
                     } else {
                         // Truly idle: sleep until event wakes us
                         elwt.set_control_flow(ControlFlow::Wait);
@@ -1969,8 +1979,9 @@ impl App {
         let ui_cpu_ms = t_ui_start.elapsed().as_secs_f64() * 1000.0;
         self.metrics.record_ui_time(ui_cpu_ms);
 
-        // Track UI repaint requests for frame rate optimization
-        self.ui_needs_repaint = ui_response.needs_repaint;
+        // When the UI wants its next frame (none: `Duration::MAX`, which
+        // `checked_add` turns into no deadline).
+        self.ui_repaint_at = web_time::Instant::now().checked_add(ui_response.repaint_delay);
 
         // Handle viewport resize immediately (before rendering)
         // WASM: Debounce resizes to prevent rapid resize loops that can freeze the browser

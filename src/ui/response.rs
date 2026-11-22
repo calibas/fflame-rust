@@ -114,8 +114,11 @@ pub struct UiResponse {
     // Free-fly camera: user requested toggle (View panel button).
     pub fly_mode_toggle_requested: bool,
 
-    // UI interaction state (for frame rate optimization)
-    pub needs_repaint: bool,
+    /// When egui asked for its next frame: zero for at once (an
+    /// animation, a preview being made, a fade), a delay for later (a
+    /// search settling), `Duration::MAX` for none. The frame loop honours
+    /// it as it honours input (`App::ui_repaint_at`).
+    pub repaint_delay: std::time::Duration,
 
     // Preset selection from library
     pub selected_preset_config: Option<crate::config::FractalConfig>,
@@ -281,7 +284,7 @@ impl Default for UiResponse {
             fractal_viewport_size: None,
             fly_mouse_drag: None,
             fly_mode_toggle_requested: false,
-            needs_repaint: false,
+            repaint_delay: std::time::Duration::MAX,
             selected_preset_config: None,
             file_browser_open_requested: false,
             animation_export_requested: None,
