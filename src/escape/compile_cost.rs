@@ -290,7 +290,16 @@ fn compile_cost_flame_sites() {
     use crate::scene::transforms::{Flame, Transform};
     let (device, _queue) = pollster::block_on(crate::probe::run::open_device("compile cost sites")).expect("a GPU");
     let builder = crate::shader_builder_v2::ShaderBuilder::new(crate::variations::global_registry().clone());
-    let heavy = ["electron_orbital", "chladni_disc", "crackle", "synth", "honeycomb", "quaternion", "sphere_packing", "waves2b", "dc_perlin", "complex"];
+    // Ten of the heaviest variations by default (a stress test, not a
+    // typical flame); `COMPILE_COST_SITES_VARS=a,b,...` for any ten.
+    let given = std::env::var("COMPILE_COST_SITES_VARS").ok();
+    let default = ["electron_orbital", "chladni_disc", "crackle", "synth", "honeycomb", "quaternion", "sphere_packing", "waves2b", "dc_perlin", "complex"];
+    let heavy: Vec<&str> = match &given {
+        Some(v) => v.split(',').collect(),
+        None => default.to_vec(),
+    };
+    assert!(heavy.len() >= 2, "at least two variations");
+    let half = heavy.len() / 2;
     let xf = |vars: &[&str]| {
         let mut t = Transform::new();
         for v in vars {
@@ -300,8 +309,8 @@ fn compile_cost_flame_sites() {
     };
     for (label, linked, fin) in [("plain", false, false), ("final", false, true), ("linked + final", true, true)] {
         let mut flame = Flame::new();
-        flame.transforms.push(xf(&heavy[..5]));
-        flame.transforms.push(xf(&heavy[5..]));
+        flame.transforms.push(xf(&heavy[..half]));
+        flame.transforms.push(xf(&heavy[half..]));
         if linked {
             flame.linked_transforms.push(xf(&heavy));
             for t in &mut flame.transforms {
