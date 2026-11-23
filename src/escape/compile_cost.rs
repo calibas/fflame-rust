@@ -381,3 +381,92 @@ fn flame_chain_hash() {
     std::fs::write(format!("output/pt-ab/flame-{tag}.txt"), &out).unwrap();
     print!("{out}");
 }
+
+/// Everything else that compiles on a user's choice, beside the flame and
+/// the solids: each simulation model's step and each colouring (built-in
+/// beside its Rhai twin), each escape field, each formula's perturbed
+/// (deep zoom) shader, and the terrains' walk and path tracer.
+/// `COMPILE_COST_REST=1`.
+#[test]
+#[ignore = "a measurement"]
+fn compile_cost_rest() {
+    if std::env::var("COMPILE_COST_REST").is_err() {
+        return;
+    }
+    use crate::config::sim::{SimBoundary, SimDownscale, SimUpscale};
+    let (device, _queue) = pollster::block_on(crate::probe::run::open_device("compile cost rest")).expect("a GPU");
+    let dir = std::path::Path::new("output/compile-cost");
+    std::fs::create_dir_all(dir).unwrap();
+    let mut rows: Vec<(String, usize, f64)> = Vec::new();
+    // Each compute entry point is a pipeline of its own.
+    let entries = |src: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = src;
+        while let Some(at) = rest.find("@compute") {
+            rest = &rest[at..];
+            if let Some(f) = rest.find("fn ") {
+                let name: String = rest[f + 3..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                out.push(name);
+                rest = &rest[f + 3..];
+            } else {
+                break;
+            }
+        }
+        out
+    };
+    let mut measure = |rows: &mut Vec<(String, usize, f64)>, name: String, src: String| {
+        std::fs::write(dir.join(format!("rest-{}.wgsl", slug(&name))), &src).unwrap();
+        let es = entries(&src);
+        if es.len() <= 1 {
+            let (_, _, ms) = time(&device, &src);
+            rows.push((name, src.len(), ms));
+        } else {
+            for e in es {
+                let (_, _, ms) = time_entry(&device, &src, Some(&e));
+                rows.push((format!("{name} [{e}]"), src.len(), ms));
+            }
+        }
+    };
+    let b = SimBoundary::default();
+    for m in crate::sim::MODELS {
+        measure(&mut rows, format!("sim model {} (built-in)", m.name), crate::sim::assembler::assemble_step(m, b, 0));
+    }
+    for (name, src) in crate::sim::custom::SHIPPED_MODELS {
+        if let Ok(def) = crate::sim::custom::compile_model(src, &format!("cc-{name}")) {
+            let def: &'static crate::sim::ModelDef = Box::leak(Box::new(def));
+            measure(&mut rows, format!("sim model {name} (Rhai twin)"), crate::sim::assembler::assemble_step(def, b, 0));
+        }
+    }
+    for c in crate::sim::COLORINGS {
+        measure(&mut rows, format!("sim colouring {} (built-in)", c.name), crate::sim::assembler::assemble_color(c, b, SimUpscale::default(), SimDownscale::default(), false));
+    }
+    for (name, src) in crate::sim::custom::SHIPPED {
+        if let Ok(def) = crate::sim::custom::compile(src, &format!("cc-{name}")) {
+            measure(&mut rows, format!("sim colouring {name} (Rhai twin)"), crate::sim::assembler::assemble_color(&def, b, SimUpscale::default(), SimDownscale::default(), false));
+        }
+    }
+    for f in crate::escape::fields::FIELDS {
+        let col = crate::escape::fields::FIELD_COLORINGS[0];
+        measure(&mut rows, format!("field {}", f.name), crate::escape::assembler::assemble_field(f, col));
+    }
+    let smooth = crate::escape::get_coloring("smooth");
+    for f in crate::escape::FORMULAS {
+        let escape = crate::config::escape::EscapeConfig { formula: f.name.to_string(), ..Default::default() };
+        let escape = crate::escape::custom::resolve(&escape).into_owned();
+        if let Some(tier) = crate::escape::custom::perturb_tier(&escape) {
+            for fe in [false, true] {
+                let src = crate::escape::assembler::assemble_perturbed_full(smooth, None, fe, tier, None, None);
+                measure(&mut rows, format!("perturbed {}{}", f.name, if fe { " (floatexp)" } else { "" }), src);
+            }
+        }
+    }
+    for placed in [false, true] {
+        measure(&mut rows, format!("terrain walk{}", if placed { " (placed lights)" } else { "" }), crate::escape::terrain::assemble_walk(placed));
+        measure(&mut rows, format!("terrain path{}", if placed { " (placed lights)" } else { "" }), crate::escape::terrain::assemble_path(placed));
+    }
+    rows.sort_by(|a, b| b.2.total_cmp(&a.2));
+    println!("{} shaders; median {:.0} ms; the slowest:", rows.len(), rows[rows.len() / 2].2);
+    for (name, bytes, ms) in rows.iter().take(30) {
+        println!("  {name:<48} {bytes:>7} B  {ms:>7.0} ms");
+    }
+}

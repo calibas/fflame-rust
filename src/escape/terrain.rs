@@ -2038,16 +2038,28 @@ fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> b
     return !hf_trace(o, d, min(t_end, 1.0e30), 0.0).hit;
 }
 
-// The scene's one cast (`pt_path`): a shadow ray's hit is its blocking.
-// The ground marches its camera's ray itself (`pt_sample`), so the path
-// never asks for that one here.
+// The scene's one cast (`pt_path`): the camera's ray, out to the
+// distance the view renders to; a bounce's, out to anything; a shadow
+// ray's, out to its light, its hit its blocking. ONE trace of the ground
+// and one surface: a GPU compiler inlines a call at every site, and the
+// trace -- the section march and its height reads -- at three sites made
+// the terrain's path tracer take 7.8 s to compile (compile-times branch).
+// The same traces and surfaces as `pt_scene_next`, `pt_scene_visible`
+// and the camera's own were.
 fn pt_scene_cast(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32, kind: u32) -> PtHit {
+    var tmax = 1.0e30;
+    if (kind == PT_CAST_SHADOW) {
+        tmax = min(t_end, 1.0e30);
+    } else if (kind == PT_CAST_CAMERA) {
+        tmax = params.fdata[6].w / max(dot(d, ifs_forward()), 1.0e-4);
+    }
+    let tr = hf_trace(o, d, tmax, 0.0);
     if (kind == PT_CAST_SHADOW) {
         var out: PtHit;
-        out.hit = !pt_scene_visible(o, d, t_end, travelled);
+        out.hit = tr.hit;
         return out;
     }
-    return pt_scene_next(o, d, travelled);
+    return pt_surface(o, d, tr, travelled);
 }
 
 // One sample of the pixel: (radiance times coverage, coverage). The
@@ -2057,18 +2069,19 @@ fn pt_scene_cast(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32, kind: u
 fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     let j = pt_rand2() - vec2<f32>(0.5, 0.5);
     let ray = pt_ray(px, py, j.x, j.y);
-    let tmax = params.fdata[6].w / max(dot(ray.d, ifs_forward()), 1.0e-4);
-    let h = pt_surface(ray.o, ray.d, hf_trace(ray.o, ray.d, tmax, 0.0), 0.0);
-    if (!h.hit) {
+    // The camera's ray through the path's one cast (`pt_scene_cast`).
+    var none: PtHit;
+    let traced = pt_path(ray.o, ray.d, none, true);
+    if (pt_camera_missed) {
         return pt_sky_seen(ray.d);
     }
-    pt_first(h, ray.d);
+    let h = pt_camera_hit;
     var coverage = clamp(h.albedo.a, 0.0, 1.0);
     if (params.fdata[7].x > 0.0) {
         let depth = h.t * dot(ray.d, ifs_forward());
         coverage = coverage * exp(-params.fdata[7].x * max(depth - params.fdata[7].y, 0.0));
     }
-    let l = pt_clamp(pt_path(ray.o, ray.d, h, false));
+    let l = pt_clamp(traced);
     return vec4<f32>(l * coverage, coverage);
 }
 "#;

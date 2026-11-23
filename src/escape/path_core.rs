@@ -1157,9 +1157,10 @@ const PT_CAST_SHADOW: u32 = 1u;
 const PT_CAST_CAMERA: u32 = 2u;
 
 // The camera's cast, when the path makes it (`pt_path`'s `cast_camera`):
-// whether it missed, and how far it went.
+// whether it missed, how far it went, and the surface it met.
 var<private> pt_camera_missed: bool;
 var<private> pt_camera_t: f32;
+var<private> pt_camera_hit: PtHit;
 
 // The radiance a path brings back from its first surface `first`,
 // reached along (o0, d0) -- or, `cast_camera`, from the surface the
@@ -1301,6 +1302,7 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit, cast_camera: bool) -> vec
             }
             h = r;
             pt_camera_t = r.t;
+            pt_camera_hit = r;
             pt_first(h, d);
             phase = 0u;
         } else if (phase == 3u) {
