@@ -357,9 +357,24 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
 
 - **Shader compile times**: a solid's walk is compiled once in its lit
   walk and its path tracer since the compile-times branch (5-18x faster).
-  Left: a run-time function choice applied to a vector calls its switch
-  once a part, and compiles that do not hang the UI
-  ([async-pipelines.md](../experimental/async-pipelines.md)).
+  Future work, measured there (`escape::compile_cost`, ignored tests):
+  - **A flame's final chain at the same `apply_variations` call** as the
+    normal transform and its linked chain. A flame that stacks heavy
+    variations compiles them three times with a final transform: ten of
+    the heaviest took 1.5 s plain, 6.8 s with a final (11.9 s before the
+    linked merge); ten common ones 133 vs 140 ms, so typical flames do
+    not need it. The final chain runs after the hide check, recovery
+    and the plot's gates, about 300 template lines of `#if` blocks, so
+    it means that section as a state machine.
+  - **Deep zoom's floatexp tier** for a few formulas: Lattès 9-10 s,
+    Novaretti 8 s, Barnsley, Newton and Tetration 1.2-1.6 s (the plain
+    perturbed tier 0.1-0.2 s). 31x inlined from the extended-precision
+    arithmetic itself (each floatexp operation a dozen double-float
+    ones), not repeated call sites; compiled only past floatexp's zoom.
+  - A run-time function choice applied to a vector calls its switch
+    once a part.
+  - Compiles that do not hang the UI
+    ([async-pipelines.md](../experimental/async-pipelines.md)).
 - **A lost GPU device on the web** stops with a Reload notice
   (`gpu::device::show_lost_notice`); recovering in place (a new device,
   every renderer rebuilt) is not built.

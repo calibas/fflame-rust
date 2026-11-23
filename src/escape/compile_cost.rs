@@ -47,19 +47,35 @@ fn slug(s: &str) -> String {
 ///
 /// The driver keeps compiled pipelines on disk, keyed by what it is
 /// given: a source measured twice compiled in milliseconds the second
-/// time. An uncalled function holding this run's nanoseconds makes every
-/// source new to it without changing what runs.
+/// time. Every entry point opens with a test of a private value against
+/// this run's nanoseconds, which is never true, so every source is new to
+/// the driver without changing what runs. (An uncalled function holding
+/// them was not enough: the driver drops what no entry point reaches
+/// before it looks, and an unchanged shader came back from its cache.)
 fn time(device: &wgpu::Device, src: &str) -> (f64, f64, f64) {
     time_entry(device, src, None)
+}
+
+/// `src` with every compute entry point opening with the never-true test.
+fn with_nonce(src: &str) -> String {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u32) | 1;
+    let mut out = String::from("var<private> compile_cost_nonce: u32 = 0u;\n");
+    let mut rest = src;
+    while let Some(at) = rest.find("@compute") {
+        let Some(f) = rest[at..].find("fn ").map(|f| at + f) else { break };
+        let Some(brace) = rest[f..].find('{').map(|b| f + b) else { break };
+        out.push_str(&rest[..=brace]);
+        out.push_str(&format!("\n    if (compile_cost_nonce == {nonce}u) {{ return; }}\n"));
+        rest = &rest[brace + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// [`time`] with the entry point named (a module with several).
 fn time_entry(device: &wgpu::Device, src: &str, entry: Option<&str>) -> (f64, f64, f64) {
     use wgpu::naga;
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u32);
-    let src = &format!("{src}
-fn compile_cost_nonce() -> u32 {{ return {nonce}u; }}
-");
+    let src = &with_nonce(src);
     let ms = |t: std::time::Instant| t.elapsed().as_secs_f64() * 1000.0;
     let t = std::time::Instant::now();
     let module = naga::front::wgsl::parse_str(src).expect("parses");
@@ -423,7 +439,11 @@ fn compile_cost_rest() {
         }
         out
     };
+    let only = std::env::var("COMPILE_COST_REST").ok().filter(|v| v != "1");
     let mut measure = |rows: &mut Vec<(String, usize, f64)>, name: String, src: String| {
+        if only.as_deref().is_some_and(|o| !name.contains(o)) {
+            return;
+        }
         std::fs::write(dir.join(format!("rest-{}.wgsl", slug(&name))), &src).unwrap();
         let es = entries(&src);
         if es.len() <= 1 {
@@ -470,6 +490,7 @@ fn compile_cost_rest() {
         }
     }
     for placed in [false, true] {
+        measure(&mut rows, format!("terrain relight{}", if placed { " (placed lights)" } else { "" }), crate::escape::terrain::assemble_relight(placed));
         measure(&mut rows, format!("terrain walk{}", if placed { " (placed lights)" } else { "" }), crate::escape::terrain::assemble_walk(placed));
         measure(&mut rows, format!("terrain path{}", if placed { " (placed lights)" } else { "" }), crate::escape::terrain::assemble_path(placed));
     }
