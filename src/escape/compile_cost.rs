@@ -136,9 +136,11 @@ fn path_traced_presets_hash() {
         if !solid && !terrain {
             continue;
         }
-        c.escape.solid_tier = RenderTier::PathTraced;
-        c.escape.terrain.tier = RenderTier::PathTraced;
-        c.sim.terrain.tier = RenderTier::PathTraced;
+        // `PT_AB_TIER=lit` for the lit tier (the walk's own shader).
+        let tier = if std::env::var("PT_AB_TIER").as_deref() == Ok("lit") { RenderTier::Lit } else { RenderTier::PathTraced };
+        c.escape.solid_tier = tier;
+        c.escape.terrain.tier = tier;
+        c.sim.terrain.tier = tier;
         c.escape.path.samples = 3;
         let job = crate::renderer::RenderJob::new(&c, 96, 64);
         let px = match pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)) {

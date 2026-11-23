@@ -8526,85 +8526,234 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var hit = false;
         var d = 0.0;
         var t_prev = t;
+        // Every distance the walk asks for -- the march, its refine, the
+        // normal's six taps, the occlusion's probes, each light's shadow
+        // march -- through ONE call of `ifs_distance_at`, the formula's
+        // whole walk: a GPU compiler inlines a call at every site, and at
+        // six sites a heavy solid's walk compiled six times
+        // (compile-times branch). So the steps are a small state machine,
+        // each pass one distance; the same points, the same arithmetic,
+        // as the separate loops (`ifs_refine`, `ifs_normal`, `ifs_ao`,
+        // `ifs_shadow`, whose comments say why each is as it is). The
+        // colour's walk is its own call, below.
+        //
+        // The step: 0 the march, 1 its refine, 2 the normal's taps, 3 the
+        // occlusion's probes, 4 a light's shadow, 5 done.
+        var phase = 0u;
+        var m_eps = 0.0;
+        var r_a = 0.0;
+        var r_b = 0.0;
+        var r_eps = 0.0;
+        var halvings = 0u;
+        var p = vec3<f32>(0.0, 0.0, 0.0);
+        var eps0 = 0.0;
+        var taps: array<f32, 6>;
+        var tap = 0u;
+        var n = vec3<f32>(0.0, 0.0, 1.0);
+        let reach = ifs_radius() * fparam(5u);
+        var ao = 1.0;
+        var tx = vec3<f32>(0.0, 0.0, 0.0);
+        var ty = vec3<f32>(0.0, 0.0, 0.0);
+        var open = 0.0;
+        var free = 0.0;
+        var probe = 0u;
+        var sun = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+        let lights = ifs_light_count();
+        var li = 0u;
+        var sh_from = vec3<f32>(0.0, 0.0, 0.0);
+        var sh_dir = vec3<f32>(0.0, 0.0, 0.0);
+        var sh_t = 0.0;
+        var sh_t_max = 0.0;
+        var sh_eps = 0.0;
+        var sh_bias = 0.0;
+        var sh_shade = 1.0;
+        var sh_i = 0u;
+        var sh_active = false;
         loop {
-            if (steps >= max_steps || t > t_max) {
-                break;
-            }
-            let p = eye + dir * t;
-            // A pixel's width at this depth is both the hit tolerance
-            // and the precision the walk is asked for. The
-            // floor here used to be 1e-7 -- a guard against an
-            // absolute position's own f32 resolution, which was the
-            // right scale while the marcher worked in absolute
-            // coordinates. Seeded, it is not: past about 2^20 a pixel
-            // is SMALLER than that floor, so the surface was found a
-            // fixed distance early and the picture stopped sharpening
-            // with the zoom. The remaining floor exists only so a
-            // sample at t = 0 cannot give an epsilon of zero.
-            // Less than a pixel at a finer Surface Detail (`ifs_detail`).
-            let eps = max(px_at * t * ifs_detail(), 1e-30);
-            // The walk is asked for a HUNDREDTH of that. A pixel of
-            // slack in the distance is a pixel of slack in where the
-            // ray lands, and on structure that is itself a pixel
-            // across -- the sponge's pits at 512 -- that is a different
-            // face, a different normal, a different shade. Measured:
-            // at one pixel 2882 pixels changed by more than 24 of 765
-            // and 253 flipped between hit and miss; at a hundredth, 18
-            // and 2, which is f32 noise, for an extra 15% of the time.
-            d = ifs_distance_at(p, eps * 0.01);  // an offset from the target
-            if (d < eps) {
-                // Stepped in: back to the surface (`ifs_refine`).
-                if (d <= 0.0 && steps > 0u) {
-                    t = ifs_refine(eye, dir, t_prev, t, eps * 0.01);
+            // Where the next distance is asked, and how finely; or the
+            // step moves on without one.
+            var q = vec3<f32>(0.0, 0.0, 0.0);
+            var e = 0.0;
+            if (phase == 0u) {
+                if (steps >= max_steps || t > t_max) {
+                    break;
                 }
-                hit = true;
+                // A pixel's width at this depth is both the hit tolerance
+                // and the precision the walk is asked for -- a hundredth
+                // of it (see the history in `ifs_refine`'s neighbours).
+                // Less than a pixel at a finer Surface Detail.
+                m_eps = max(px_at * t * ifs_detail(), 1e-30);
+                q = eye + dir * t;
+                e = m_eps * 0.01;
+            } else if (phase == 1u) {
+                if (halvings >= 8u) {
+                    t = r_b;
+                    hit = true;
+                    phase = 2u;
+                    p = eye + dir * t;
+                    eps0 = max(px_at * t, 1e-30);
+                    continue;
+                }
+                q = eye + dir * (0.5 * (r_a + r_b));
+                e = r_eps;
+            } else if (phase == 2u) {
+                if (tap >= 6u) {
+                    // The normal: central differences of the distance.
+                    let g = vec3<f32>(taps[0] - taps[1], taps[2] - taps[3], taps[4] - taps[5]);
+                    let len = length(g);
+                    n = select(vec3<f32>(0.0, 0.0, 1.0), g / len, len > 0.0);
+                    phase = 3u;
+                    if (reach > 0.0) {
+                        var seed = vec3<f32>(0.0, 0.0, 1.0);
+                        if (abs(n.z) > 0.9) {
+                            seed = vec3<f32>(1.0, 0.0, 0.0);
+                        }
+                        tx = normalize(cross(seed, n));
+                        ty = cross(n, tx);
+                    } else {
+                        probe = 12u;
+                    }
+                    continue;
+                }
+                var off = vec3<f32>(0.0, 0.0, 0.0);
+                off[tap / 2u] = eps0;
+                q = select(p + off, p - off, (tap & 1u) == 1u);
+                e = eps0 * 0.01;
+            } else if (phase == 3u) {
+                if (probe >= 12u) {
+                    if (reach > 0.0) {
+                        ao = clamp(open / max(free, 1e-30), 0.0, 1.0);
+                    }
+                    phase = 4u;
+                    li = 0u;
+                    sh_active = false;
+                    // Shadows off: no shadow terms at all.
+                    if (!(fparam(3u) > 0.0)) {
+                        phase = 5u;
+                        break;
+                    }
+                    continue;
+                }
+                var pdir = n;
+                let ring = probe / 2u;
+                if (ring > 0u) {
+                    let a = 1.2566371 * f32(ring - 1u);
+                    pdir = n * 0.5735764 + (tx * cos(a) + ty * sin(a)) * 0.8191520;
+                }
+                let h = reach * 0.35 * f32(probe % 2u + 1u);
+                q = p + pdir * h;
+                e = h * 0.01;
+            } else if (phase == 4u) {
+                // A light's march over (or none begun): its shadow, then
+                // the next light that faces the surface.
+                if (!sh_active || sh_i >= max_steps || sh_t > sh_t_max) {
+                    if (sh_active) {
+                        sun[li] = clamp(sh_shade, 0.0, 1.0);
+                        li = li + 1u;
+                    }
+                    sh_active = false;
+                    var found = false;
+                    loop {
+                        if (li >= lights) {
+                            break;
+                        }
+                        let la = ifs_light_at(li, p);
+                        if (dot(n, la.dir) > 0.0) {
+                            // Toward the light from this point, leaving at
+                            // the bounding sphere, no further than the light.
+                            sh_from = p + n * eps0 * 2.0;
+                            sh_dir = la.dir;
+                            sh_bias = eps0 * 4.0;
+                            let oc = sh_from + ifs_target_offset();
+                            let b = dot(oc, sh_dir);
+                            let disc = b * b - (dot(oc, oc) - ifs_radius() * ifs_radius());
+                            if (disc > 0.0) {
+                                sh_t_max = min(-b + sqrt(disc), la.dist);
+                                sh_eps = max(min(ifs_radius() * ifs_ray_tolerance(), sh_bias * 0.1), 1e-30);
+                                sh_t = sh_bias;
+                                sh_shade = 1.0;  // a new light
+                                sh_i = 0u;
+                                sh_active = true;
+                                found = true;
+                                break;
+                            }
+                        }
+                        li = li + 1u;
+                    }
+                    if (!found) {
+                        phase = 5u;
+                        break;
+                    }
+                    continue;
+                }
+                q = sh_from + sh_dir * sh_t;
+                e = sh_eps;
+            } else {
                 break;
             }
-            t_prev = t;
-            t = t + d;
-            steps = steps + 1u;
+            let r = ifs_distance_at(q, e);  // an offset from the target
+            if (phase == 0u) {
+                d = r;  // the march's step
+                if (d < m_eps) {
+                    // Stepped in: back to the surface (`ifs_refine`).
+                    if (d <= 0.0 && steps > 0u) {
+                        phase = 1u;
+                        r_a = t_prev;
+                        r_b = t;
+                        r_eps = m_eps * 0.01;
+                        halvings = 0u;
+                        continue;
+                    }
+                    hit = true;
+                    phase = 2u;
+                    p = eye + dir * t;
+                    eps0 = max(px_at * t, 1e-30);
+                    continue;
+                }
+                t_prev = t;
+                t = t + d;
+                steps = steps + 1u;
+            } else if (phase == 1u) {
+                let m = 0.5 * (r_a + r_b);
+                if (r <= 0.0) {
+                    r_b = m;
+                } else {
+                    r_a = m;
+                }
+                halvings = halvings + 1u;
+            } else if (phase == 2u) {
+                taps[tap] = r;
+                tap = tap + 1u;
+            } else if (phase == 3u) {
+                let ring = probe / 2u;
+                var pdir = n;
+                if (ring > 0u) {
+                    let a = 1.2566371 * f32(ring - 1u);
+                    pdir = n * 0.5735764 + (tx * cos(a) + ty * sin(a)) * 0.8191520;
+                }
+                let cosd = max(dot(pdir, n), 0.0);
+                let h = reach * 0.35 * f32(probe % 2u + 1u);
+                let vis = clamp(r / h, 0.0, 1.0);
+                open = open + vis * cosd;
+                free = free + cosd * cosd;
+                probe = probe + 1u;
+            } else {
+                let sd = r;  // a shadow step
+                if (sd < sh_eps) {
+                    sun[li] = 0.0;
+                    li = li + 1u;
+                    sh_active = false;
+                    continue;
+                }
+                sh_shade = min(sh_shade, fparam(4u) * sd / sh_t);
+                sh_t = sh_t + sd;
+                sh_i = sh_i + 1u;
+            }
         }
 
         if (hit) {
-            let p = eye + dir * t;
             let res = ifs_evaluate3(p);
 
-            let eps0 = max(px_at * t, 1e-30);
-            let n = ifs_normal(p, eps0);
-            // The occlusion reach is a fraction of the attractor, not
-            // of the pixel: it is asking how enclosed this point is,
-            // which is a fact about the shape at the scale being
-            // looked at. Tied to the view instead, the same geometry
-            // would change how occluded it was as you zoomed.
-            let ao = ifs_ao(p, n, ifs_radius() * fparam(5u));
-
-            // One traced shadow per light, RAW -- the panel's shadow
-            // strength is applied at relight, so that changing it is
-            // not a walk. Skipped where the surface faces away from
-            // the light, since nothing lit is there to darken, and
-            // skipped entirely when shadows are off: that is the one
-            // shadow setting that IS a geometry input, because it
-            // decides whether these terms exist.
-            var sun = vec4<f32>(1.0, 1.0, 1.0, 1.0);
-            if (fparam(3u) > 0.0) {
-                let lights = ifs_light_count();
-                for (var li = 0u; li < lights; li = li + 1u) {
-                    // Toward the light from this point, and no further
-                    // than it: a point or a headlamp sits in the world.
-                    let la = ifs_light_at(li, p);
-                    if (dot(n, la.dir) <= 0.0) {
-                        continue;
-                    }
-                    sun[li] = ifs_shadow(p + n * eps0 * 2.0, la.dir, fparam(4u), eps0 * 4.0, max_steps, la.dist);
-                }
-            }
-
-            // The walk does not shade. It records what it found and the
-            // relight pass -- the same `ifs_rig`, over this record and
-            // the geometry -- owns the picture, every frame. That is
-            // what makes a lighting change a relight instead of a
-            // walk, and what stops a light edit part-way through a
-            // banded pass from striping the frame.
             geom = ifs_pack_geom(n, ao, sun, t);
 
             rec.distance = res.distance;
@@ -9120,6 +9269,21 @@ const MARCH_INSIDE: &[(&str, &str)] = &[
         "let vis = clamp(ifs_distance_at(p + dir * h, h * 0.01) / h, 0.0, 1.0);",
         "let vis = select(0.0, 1.0, ifs_distance_at(p + dir * h, h * 0.01) > 0.0);",
     ),
+    // The walk's one distance call (its state machine, `IFS_TEMPLATE`):
+    // the march's step, as the camera's above.
+    ("var sh_shade = 1.0;", "var sh_shade = 1.0;\nvar sh_crawl = 0.0;"),
+    (
+        "d = r;  // the march's step",
+        "d = r;  // the march's step\nif (d > 0.0) {\n    let px = m_eps * f32(max((params.flags >> 4u) & 15u, 1u));\n    crawl = select(0.0, crawl + 1.0, d < 2.0 * px);\n    d = max(d, px * (1.0 + 0.125 * crawl));\n}",
+    ),
+    // A shadow's step, as the shadow's above, its crawl the light's own.
+    ("sh_shade = 1.0;  // a new light", "sh_shade = 1.0;  // a new light\nsh_crawl = 0.0;"),
+    (
+        "let sd = r;  // a shadow step",
+        "let sd = r;  // a shadow step\nif (sd > 0.0) {\n    let px = sh_bias * 0.25 * f32(max((params.flags >> 4u) & 15u, 1u));\n    sh_crawl = select(0.0, sh_crawl + 1.0, sd < 2.0 * px);\n    sh_t = sh_t + max(sd, px * (1.0 + 0.125 * sh_crawl));\n    sh_i = sh_i + 1u;\n    continue;\n}",
+    ),
+    // An occlusion probe, as above.
+    ("let vis = clamp(r / h, 0.0, 1.0);", "let vis = select(0.0, 1.0, r > 0.0);"),
     // The path tracer's rays (`pt_ifs_cast`, every ray's one march), as
     // the camera's: a bounce's or a shadow's floor the pixel at the length
     // of its path, the camera's its own tolerance. The march's steps
@@ -11368,11 +11532,17 @@ mod lens_tests {
         let col = crate::escape::ifs::get_ifs_coloring("ifs_level", near);
         let walk = assemble_ifs(&inside, col, 1);
         let path = assemble_ifs_path(&inside, col, 1, None, false, false);
-        // The camera's march, the shadow, the occlusion; the path's two.
+        // The walk's one distance call's march, shadow and occlusion (its
+        // state machine), and `ifs_shadow` and `ifs_ao`, which it no
+        // longer calls but which come along; the path's march.
         for (text, needle, n) in [
             (&walk, "d = max(d, px * (1.0 + 0.125 * crawl));", 1),
+            (&walk, "sh_t = sh_t + max(sd, px * (1.0 + 0.125 * sh_crawl));", 1),
+            (&walk, "var sh_crawl = 0.0;", 1),
+            (&walk, "sh_crawl = 0.0;
+", 2),
             (&walk, "t = t + max(d, px * (1.0 + 0.125 * crawl));", 1),
-            (&walk, "let vis = select(0.0, 1.0,", 1),
+            (&walk, "let vis = select(0.0, 1.0,", 2),
             (&walk, "var crawl = 0.0;", 2),
             // Every ray's one march (`pt_ifs_cast`).
             (&path, "dist = max(dist, ", 1),
