@@ -1147,6 +1147,36 @@ pub(crate) fn constant_arrays(p: &Program, bodies: &[&[IStmt]]) -> Vec<Option<Ve
     sets.into_iter().map(|s| s.and_then(|slots| slots.into_iter().collect())).collect()
 }
 
+/// The variables a Rhai program's functions keep to themselves: the
+/// lowering's locals (`l<n>_...`: a `let`, a helper's argument, an
+/// inlined helper's own), which Rhai scopes to one call of the function
+/// they are in, so none lives from one step to the next. Kept in a state
+/// struct, every one was copied into and out of every step: Bristorbrot's
+/// struct held 258 fields, nearly all its quaternion products'
+/// temporaries, and macOS Chrome took 7 s to compile its walk where the
+/// desktop's driver took 0.2 s (compile-times branch). A program that is
+/// not a Rhai script's (Ultra Fractal's variables live across its
+/// sections) has none of these names. And one the loop reads before it
+/// writes (`perturb::carried_vars`) stays in the state whatever its
+/// name: it is carried from one pass to the next.
+fn local_vars(p: &Program) -> Vec<bool> {
+    let lowered = |n: &str| n.strip_prefix('l').and_then(|r| r.split_once('_')).is_some_and(|(k, _)| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()));
+    let carried = super::perturb::carried_vars(&p.loop_body);
+    p.vars.iter().enumerate().map(|(i, v)| !v.global && !v.perturb && lowered(&v.name) && !carried.contains(&i)).collect()
+}
+
+/// Each local's declaration, at the top of every function of the struct:
+/// a function that does not use one leaves it unread.
+fn local_decls(p: &Program, locals: &[bool]) -> String {
+    let mut out = String::new();
+    for (i, v) in p.vars.iter().enumerate() {
+        if locals.get(i).copied().unwrap_or(false) {
+            let _ = writeln!(out, "    var v{i}: {};", var_ty(v));
+        }
+    }
+    out
+}
+
 /// A solid's WGSL (the KIFS plan, B3): its program as `solid_init(pixel,
 /// pixel_z)`, `solid_step`, `solid_go` and `solid_distance` over a
 /// `SolidState`, and mode D's `ifs_walk3` around them -- the walk the
@@ -1200,23 +1230,30 @@ pub fn solid(p: &Program, slots: &[usize], func_base: usize, depth_slot: usize) 
         *k = func_base + i;
     }
     g.global_base = Some(depth_slot + 2);
+    // The state: what lives from one step to the next. A script's own
+    // locals (its `let`s, its helpers' arguments) are each function's.
+    g.locals = local_vars(p);
+    let decls = local_decls(p, &g.locals);
     let mut body = String::from("struct SolidState {\n");
     for (i, v) in p.vars.iter().enumerate() {
-        if !v.global && !v.perturb {
+        if !v.global && !v.perturb && !g.locals[i] {
             let _ = writeln!(body, "    v{i}: {},", var_ty(v));
         }
     }
     body.push_str("}\n\n");
     body.push_str("fn solid_init(pixel: vec2<f32>, pixel_z: f32) -> SolidState {\n    var s: SolidState;\n");
+    body.push_str(&decls);
     g.stmts(&p.init, 1, &mut body);
     body.push_str("    return s;\n}\n\n");
     body.push_str("fn solid_step(s_in: SolidState, pixel: vec2<f32>, pixel_z: f32) -> SolidState {\n    var s = s_in;\n");
+    body.push_str(&decls);
     g.stmts(&p.loop_body, 1, &mut body);
     body.push_str("    return s;\n}\n\n");
     let test = p.bailout.as_ref().map_or_else(|| "true".to_string(), |b| g.expr(b));
     let _ = write!(body, "fn solid_go(s: SolidState, pixel: vec2<f32>, pixel_z: f32) -> bool {{\n    return {test};\n}}\n\n");
     // Its locals are the state's fields: a copy it may set.
     body.push_str("fn solid_distance(s_in: SolidState, pixel: vec2<f32>, pixel_z: f32) -> f32 {\n    var s = s_in;\n    var index = 0.0;\n");
+    body.push_str(&decls);
     g.stmts(&p.final_body, 1, &mut body);
     body.push_str("    return index;\n}\n\n");
     let z = format!("vec3<f32>({}, {}, {})", g.var(zx), g.var(zy), g.var(zz));
@@ -1329,17 +1366,22 @@ pub fn field(p: &Program) -> Result<String, String> {
     };
     let grad = find("s_grad", Ty::Complex);
     let mut g = Gen::new(p, Ctx::Formula, "uffd_");
+    // The state: what lives from one term to the next (`local_vars`).
+    g.locals = local_vars(p);
+    let decls = local_decls(p, &g.locals);
     let mut body = String::from("struct FieldState {\n");
     for (i, v) in p.vars.iter().enumerate() {
-        if !v.global && !v.perturb {
+        if !v.global && !v.perturb && !g.locals[i] {
             let _ = writeln!(body, "    v{i}: {},", var_ty(v));
         }
     }
     body.push_str("}\n\nstruct FieldStep {\n    state: FieldState,\n    value: f32,\n    grad: vec2<f32>,\n}\n\n");
     body.push_str("fn field_init(pixel: vec2<f32>) -> FieldState {\n    var s: FieldState;\n");
+    body.push_str(&decls);
     g.stmts(&p.init, 1, &mut body);
     body.push_str("    return s;\n}\n\n");
     body.push_str("fn field_step(n: u32, pixel: vec2<f32>, s_in: FieldState) -> FieldStep {\n    var s = s_in;\n");
+    body.push_str(&decls);
     g.stmts(&p.loop_body, 1, &mut body);
     let gr = grad.map_or_else(|| "vec2<f32>(0.0, 0.0)".to_string(), |v| g.var(v));
     let _ = writeln!(body, "    return FieldStep(s, f32({}), {gr});\n}}", g.var(value));
@@ -1399,11 +1441,14 @@ pub fn validate_solid(wgsl: &str) -> Result<(), String> {
 pub fn formula(p: &Program) -> String {
     let mut g = Gen::new(p, Ctx::Formula, "uff_");
     let mut body = String::new();
-    // The state: z and every variable but the globals and the
-    // perturbation equations' own (the perturb functions' locals).
+    // The state: z and every variable but the globals, the perturbation
+    // equations' own (the perturb functions' locals) and a script's own
+    // locals, each function's (`local_vars`).
+    g.locals = local_vars(p);
+    let decls = local_decls(p, &g.locals);
     body.push_str("struct FormulaState {\n    z: vec2<f32>,\n");
     for (i, v) in p.vars.iter().enumerate() {
-        if !v.global && !v.perturb {
+        if !v.global && !v.perturb && !g.locals[i] {
             let _ = writeln!(body, "    v{i}: {},", var_ty(v));
         }
     }
@@ -1416,12 +1461,14 @@ pub fn formula(p: &Program) -> String {
     }
     body.push_str("}\n\n");
     body.push_str("fn formula_init(pixel: vec2<f32>) -> FormulaState {\n    var s: FormulaState;\n");
+    body.push_str(&decls);
     g.stmts(&p.init, 1, &mut body);
     if pass {
         body.push_str("    s.npass = 0;\n");
     }
     body.push_str("    return s;\n}\n\n");
     body.push_str("fn formula_loop(s_in: FormulaState, pixel: vec2<f32>) -> FormulaState {\n    var s = s_in;\n");
+    body.push_str(&decls);
     g.stmts(&p.loop_body, 1, &mut body);
     if pass {
         body.push_str("    s.npass = s.npass + 1;\n");
@@ -2027,8 +2074,10 @@ pub fn formula_with_derivative(p: &Program) -> Option<String> {
     let q_get = d.dzq_var.map_or("vec2<f32>(0.0, 0.0)".to_string(), |q| format!("s.v{q}"));
     let q_set = d.dzq_var.map_or(String::new(), |q| format!("    (*s).v{q} = q;\n"));
     // Every variable the derivative pass added is a complex derivative
-    // (or a temporary of one).
-    let scale: String = (p.vars.len()..d.vars.len()).map(|i| format!("    (*s).v{i} = ldexp((*s).v{i}, kk);\n")).collect();
+    // (or a temporary of one); those the state holds (a local's is
+    // recomputed every pass, as the local is: `local_vars`).
+    let locals = local_vars(&d);
+    let scale: String = (p.vars.len()..d.vars.len()).filter(|i| !locals[*i]).map(|i| format!("    (*s).v{i} = ldexp((*s).v{i}, kk);\n")).collect();
     let _ = write!(
         out,
         "\nfn formula_deriv_get(s: FormulaState) -> vec4<f32> {{\n    return vec4<f32>(s.v{dz}, {q_get});\n}}\n\
@@ -2300,6 +2349,9 @@ struct Gen<'p> {
     /// Emitting a deviation at its true size (`S` times its held value):
     /// inside an operation the scaled form has no rule for.
     true_small: bool,
+    /// The variables a state struct's functions keep as their own locals,
+    /// by id ([`local_vars`]): emitted `v{i}`, not `s.v{i}`.
+    locals: Vec<bool>,
     /// A user function's difference called, on true values and on the
     /// floatexp rung: its helper is emitted ([`Gen::user_diff_fn`]).
     user_diff: (bool, bool),
@@ -2385,6 +2437,7 @@ impl<'p> Gen<'p> {
             opaque: false,
             small_vars: Vec::new(),
             true_small: false,
+            locals: Vec::new(),
             user_diff: (false, false),
             user_jac: false,
             exact_near_zero: false,
@@ -2564,7 +2617,7 @@ impl<'p> Gen<'p> {
         if self.ctx == Ctx::PerturbFe && self.small_vars.get(v).copied().unwrap_or(false) {
             return if self.p.vars[v].ty == Ty::Float { format!("cfe2_to_f32(v{v}).x") } else { format!("cfe2_to_f32(v{v})") };
         }
-        if self.ctx == Ctx::Formula {
+        if self.ctx == Ctx::Formula && !self.locals.get(v).copied().unwrap_or(false) {
             format!("s.v{v}")
         } else {
             format!("v{v}")
