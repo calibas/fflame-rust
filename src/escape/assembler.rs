@@ -8534,8 +8534,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // (compile-times branch). So the steps are a small state machine,
         // each pass one distance; the same points, the same arithmetic,
         // as the separate loops (`ifs_refine`, `ifs_normal`, `ifs_ao`,
-        // `ifs_shadow`, whose comments say why each is as it is). The
-        // colour's walk is its own call, below.
+        // `ifs_shadow`, whose comments say why each is as it is) -- and
+        // the colour's walk, the seventh tap (`ifs_sample`).
         //
         // The step: 0 the march, 1 its refine, 2 the normal's taps, 3 the
         // occlusion's probes, 4 a light's shadow, 5 done.
@@ -8549,6 +8549,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var eps0 = 0.0;
         var taps: array<f32, 6>;
         var tap = 0u;
+        var res: IfsResult;
         var n = vec3<f32>(0.0, 0.0, 1.0);
         let reach = ifs_radius() * fparam(5u);
         var ao = 1.0;
@@ -8574,6 +8575,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // step moves on without one.
             var q = vec3<f32>(0.0, 0.0, 0.0);
             var e = 0.0;
+            var colour = false;
             if (phase == 0u) {
                 if (steps >= max_steps || t > t_max) {
                     break;
@@ -8597,7 +8599,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 q = eye + dir * (0.5 * (r_a + r_b));
                 e = r_eps;
             } else if (phase == 2u) {
-                if (tap >= 6u) {
+                if (tap >= 7u) {
                     // The normal: central differences of the distance.
                     let g = vec3<f32>(taps[0] - taps[1], taps[2] - taps[3], taps[4] - taps[5]);
                     let len = length(g);
@@ -8615,10 +8617,16 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     }
                     continue;
                 }
-                var off = vec3<f32>(0.0, 0.0, 0.0);
-                off[tap / 2u] = eps0;
-                q = select(p + off, p - off, (tap & 1u) == 1u);
-                e = eps0 * 0.01;
+                if (tap == 6u) {
+                    // The colour, at the surface itself.
+                    q = p;
+                    colour = true;
+                } else {
+                    var off = vec3<f32>(0.0, 0.0, 0.0);
+                    off[tap / 2u] = eps0;
+                    q = select(p + off, p - off, (tap & 1u) == 1u);
+                    e = eps0 * 0.01;
+                }
             } else if (phase == 3u) {
                 if (probe >= 12u) {
                     if (reach > 0.0) {
@@ -8691,7 +8699,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             } else {
                 break;
             }
-            let r = ifs_distance_at(q, e);  // an offset from the target
+            let walked = ifs_sample(q, e, colour);  // an offset from the target
+            let r = walked.distance;
             if (phase == 0u) {
                 d = r;  // the march's step
                 if (d < m_eps) {
@@ -8722,7 +8731,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
                 halvings = halvings + 1u;
             } else if (phase == 2u) {
-                taps[tap] = r;
+                if (tap == 6u) {
+                    res = walked;
+                } else {
+                    taps[tap] = r;
+                }
                 tap = tap + 1u;
             } else if (phase == 3u) {
                 let ring = probe / 2u;
@@ -8752,8 +8765,6 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         if (hit) {
-            let res = ifs_evaluate3(p);
-
             geom = ifs_pack_geom(n, ao, sun, t);
 
             rec.distance = res.distance;
@@ -9284,14 +9295,14 @@ const MARCH_INSIDE: &[(&str, &str)] = &[
     ),
     // An occlusion probe, as above.
     ("let vis = clamp(r / h, 0.0, 1.0);", "let vis = select(0.0, 1.0, r > 0.0);"),
-    // The path tracer's rays (`pt_ifs_cast`, every ray's one march), as
+    // The path tracer's rays (`pt_scene_cast`, every ray's one walk), as
     // the camera's: a bounce's or a shadow's floor the pixel at the length
     // of its path, the camera's its own tolerance. The march's steps
-    // alone: the bisection after a step lands inside reads the distance
-    // as it is.
+    // alone: the bisection after a step lands inside, and the surface's
+    // taps, read the distance as it is.
     (
-        "let dist = ifs_distance_at(o + d * x, e);",
-        "var dist = ifs_distance_at(o + d * x, e);\nif (!refining && dist > 0.0) {\n    let px = select(pt_ifs_eps(travelled + t), hit_eps, camera);\n    crawl = select(0.0, crawl + 1.0, dist < 2.0 * px);\n    dist = max(dist, px * (1.0 + 0.125 * crawl));\n}",
+        "let dist = walked.distance;",
+        "var dist = walked.distance;\nif (phase == 0u && dist > 0.0) {\n    let px = select(pt_ifs_eps(travelled + t), hit_eps, camera);\n    crawl = select(0.0, crawl + 1.0, dist < 2.0 * px);\n    dist = max(dist, px * (1.0 + 0.125 * crawl));\n}",
     ),
 ];
 
@@ -9332,6 +9343,20 @@ fn ifs_trap_point_wgsl(orbit: bool) -> &'static str {
 fn ifs_trap_point(p: vec3<f32>) -> vec3<f32> {
     return p;
 }
+
+// One walk for the colour and every distance: `ifs_evaluate3(q)` when
+// `colour`, `ifs_distance_at(q, e)`'s walk otherwise. A GPU compiler
+// inlines a call at every site, and a solid's walk is its whole formula;
+// the lit walk and the path tracer each call this from one place
+// (compile-times branch).
+fn ifs_sample(q: vec3<f32>, e: f32, colour: bool) -> IfsResult {
+    let d = select(q, ifs_colour_point(q), colour);
+    var res = ifs_walk3(d, select(e, 0.0, colour));
+    if (colour) {
+        ifs_colour_finish(d, &res);
+    }
+    return res;
+}
 ";
     }
     "
@@ -9350,6 +9375,20 @@ fn ifs_trap_point(p: vec3<f32>) -> vec3<f32> {
 fn ifs_colour3(p: vec3<f32>) -> IfsResult {
     ifs_colouring = true;
     let res = ifs_evaluate3(p);
+    ifs_colouring = false;
+    return res;
+}
+
+// One walk for the colour and every distance, as the plain solid's:
+// the colour's through the Orbit transformations (`ifs_colour3`), the
+// distances' not.
+fn ifs_sample(q: vec3<f32>, e: f32, colour: bool) -> IfsResult {
+    ifs_colouring = colour;
+    let d = select(q, ifs_colour_point(q), colour);
+    var res = ifs_walk3(d, select(e, 0.0, colour));
+    if (colour) {
+        ifs_colour_finish(d, &res);
+    }
     ifs_colouring = false;
     return res;
 }
@@ -9395,43 +9434,32 @@ fn pt_ifs_ball(o: vec3<f32>, d: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(max(-b - root, 0.0), -b + root);
 }
 
-// The surface where a march stopped at p, `dist` along the path: the
-// normal from the distance's gradient and the albedo the colouring and
-// the palette give it -- the walk's and the relight's own -- and a ray
-// leaving it starts two pixels off it.
-fn pt_ifs_surface(p: vec3<f32>, t: f32, dist: f32) -> PtHit {
-    var out: PtHit;
-    out.hit = true;
-    out.t = t;
-    let eps = pt_ifs_eps(dist);
-    out.n = ifs_normal(p, eps);
-    let shade = ifs_color(ifs_evaluate3(p));
-    let tt = esc_wrap(esc_transfer(shade.t), false);
-    out.albedo = vec4<f32>(esc_palette(tt) * clamp(shade.lum, 0.0, 4.0), 1.0);
-    out.bias = eps * 2.0;
-    out.f0 = pt.mat.x;
-    out.rough = pt.mat.y;
-    out.metal = ifs_metallic();
-    return out;
-}
-
-// Where a ray from o first meets the solid, no further than `t_end`; -1
-// for nowhere. The camera's ray (`camera`) is sphere-traced as the walk
-// traces it, from the ball's entry to its exit, stopping within a pixel
-// of the surface (its tolerance growing with the distance). A ray leaving
-// a surface `travelled` along the path, as the walk's shadow rays leave
-// one (`ifs_shadow`): from four of its pixels out, and calling a hit at a
-// tenth of that (or a ten-thousandth of the ball), so it clears the
-// surface it left.
+// The scene's one cast (`pt_path`): where a ray from o first meets the
+// solid, no further than `t_end`, and -- unless it is a shadow ray's --
+// the surface there: the normal from the distance's gradient and the
+// albedo the colouring and the palette give it, the walk's and the
+// relight's own, a ray leaving it starting two pixels off it.
 //
-// The march and, once a step lands inside, the bisection back to the
-// surface (`ifs_refine`'s eight halvings) are one loop around ONE
-// distance call: each call is the formula's whole walk, inlined (see
-// `pt_path`). The same points, in the same order, as the two loops were.
-fn pt_ifs_cast(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32, camera: bool) -> f32 {
+// The camera's ray is sphere-traced as the walk traces it, from the
+// ball's entry to its exit, stopping within a pixel of the surface (its
+// tolerance growing with the distance). A ray leaving a surface
+// `travelled` along the path, as the walk's shadow rays leave one
+// (`ifs_shadow`): from four of its pixels out, calling a hit at a tenth
+// of that (or a ten-thousandth of the ball), so it clears the surface it
+// left.
+//
+// The march, the bisection back to the surface once a step lands inside
+// (`ifs_refine`'s eight halvings), the normal's six taps and the colour
+// are one loop around ONE walk (`ifs_sample`): each call is the formula's
+// whole walk, inlined (see `pt_path`). The same points, in the same
+// order, as the separate loops were.
+fn pt_scene_cast(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32, kind: u32) -> PtHit {
+    var out: PtHit;
+    out.hit = false;
+    let camera = kind == PT_CAST_CAMERA;
     let span = pt_ifs_ball(o, d);
     if (!camera && span.y < span.x) {
-        return -1.0;
+        return out;
     }
     let e0 = pt_ifs_eps(travelled);
     let leave_eps = max(min(ifs_radius() * ifs_ray_tolerance(), e0 * 0.4), 1.0e-30);
@@ -9442,33 +9470,66 @@ fn pt_ifs_cast(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32, camera: b
     let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
     var t_prev = t;
     var i = 0u;
-    // The bisection, once stepped in: between `a` (outside) and `b`.
-    var refining = false;
+    // The step: 0 the march, 1 its bisection (between `a`, outside, and
+    // `b`), 2 the surface's taps -- six for the normal, then the colour.
+    var phase = 0u;
     var a = 0.0;
     var b = 0.0;
     var halvings = 0u;
     var r_eps = 0.0;
+    var p = vec3<f32>(0.0, 0.0, 0.0);
+    var s_eps = 0.0;
+    var taps: array<f32, 6>;
+    var tap = 0u;
+    var res: IfsResult;
     loop {
         var x = t;
+        var q = vec3<f32>(0.0, 0.0, 0.0);
         var e = leave_eps;
         var hit_eps = leave_eps;
-        if (refining) {
+        var colour = false;
+        if (phase == 1u) {
             if (halvings >= 8u) {
-                return b;
+                t = b;
+                if (kind == PT_CAST_SHADOW) {
+                    out.hit = true;
+                    out.t = t;
+                    return out;
+                }
+                phase = 2u;
+                p = o + d * t;
+                s_eps = pt_ifs_eps(select(travelled + t, t, camera));
+                continue;
             }
             x = 0.5 * (a + b);
+            q = o + d * x;
             e = r_eps;
+        } else if (phase == 2u) {
+            if (tap >= 7u) {
+                break;
+            }
+            if (tap == 6u) {
+                q = p;
+                colour = true;
+            } else {
+                var off = vec3<f32>(0.0, 0.0, 0.0);
+                off[tap / 2u] = s_eps;
+                q = select(p + off, p - off, (tap & 1u) == 1u);
+                e = s_eps * 0.01;
+            }
         } else {
             if (i >= max_steps || t > t_stop) {
-                return -1.0;
+                return out;
             }
             if (camera) {
                 hit_eps = pt_ifs_eps(t) * ifs_detail();
                 e = hit_eps * 0.01;
             }
+            q = o + d * x;
         }
-        let dist = ifs_distance_at(o + d * x, e);
-        if (refining) {
+        let walked = ifs_sample(q, e, colour);
+        let dist = walked.distance;
+        if (phase == 1u) {
             if (dist <= 0.0) {
                 b = x;
             } else {
@@ -9477,40 +9538,52 @@ fn pt_ifs_cast(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32, camera: b
             halvings = halvings + 1u;
             continue;
         }
+        if (phase == 2u) {
+            if (tap == 6u) {
+                res = walked;
+            } else {
+                taps[tap] = dist;
+            }
+            tap = tap + 1u;
+            continue;
+        }
         if (dist < hit_eps) {
             // Stepped in: back to the surface.
             if (dist <= 0.0 && i > 0u) {
-                refining = true;
+                phase = 1u;
                 a = t_prev;
                 b = t;
                 r_eps = e;
                 continue;
             }
-            return t;
+            if (kind == PT_CAST_SHADOW) {
+                out.hit = true;
+                out.t = t;
+                return out;
+            }
+            phase = 2u;
+            p = o + d * t;
+            s_eps = pt_ifs_eps(select(travelled + t, t, camera));
+            continue;
         }
         t_prev = t;
         t = t + dist;
         i = i + 1u;
     }
-    return -1.0;
-}
-
-// The scene's one cast (`pt_path`): the march, and the surface where it
-// stopped unless it is a shadow ray's.
-fn pt_scene_cast(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32, kind: u32) -> PtHit {
-    var out: PtHit;
-    out.hit = false;
-    let camera = kind == PT_CAST_CAMERA;
-    let t = pt_ifs_cast(o, d, t_end, travelled, camera);
-    if (t < 0.0) {
-        return out;
-    }
-    if (kind == PT_CAST_SHADOW) {
-        out.hit = true;
-        out.t = t;
-        return out;
-    }
-    return pt_ifs_surface(o + d * t, t, select(travelled + t, t, camera));
+    // The surface, from its taps and its colour.
+    out.hit = true;
+    out.t = t;
+    let g = vec3<f32>(taps[0] - taps[1], taps[2] - taps[3], taps[4] - taps[5]);
+    let len = length(g);
+    out.n = select(vec3<f32>(0.0, 0.0, 1.0), g / len, len > 0.0);
+    let shade = ifs_color(res);
+    let tt = esc_wrap(esc_transfer(shade.t), false);
+    out.albedo = vec4<f32>(esc_palette(tt) * clamp(shade.lum, 0.0, 4.0), 1.0);
+    out.bias = s_eps * 2.0;
+    out.f0 = pt.mat.x;
+    out.rough = pt.mat.y;
+    out.metal = ifs_metallic();
+    return out;
 }
 
 // One sample of the pixel: the camera's ray, then the path, both through
@@ -11388,10 +11461,12 @@ mod lens_tests {
             let src = crate::escape::lens::lens_source(&cfg, &r).unwrap_or_else(|| panic!("{}: no maps", def.name));
             assert!(src.contains("fn esc_orbit3("), "{}: no orbit stage", def.name);
             let walk = assemble_ifs_rig(def, col, 4, Some(&src), false, false, false);
-            assert!(walk.contains("let res = ifs_colour3(p);"), "{}: the walk's colour site", def.name);
+            // The colour site is the one walk's (`ifs_sample`), whose Orbit
+            // form turns the transformations on for the colour alone.
+            assert!(walk.contains("ifs_colouring = colour;") && walk.contains("ifs_sample(q, e, colour)"), "{}: the walk's colour site", def.name);
             validate_lens(&walk, &format!("{} with an Orbit transformation", def.name));
             let path = assemble_ifs_path(def, col, 4, Some(&src), false, false);
-            assert!(path.contains("ifs_color(ifs_colour3(p))"), "{}: the path tracer's colour site", def.name);
+            assert!(path.contains("ifs_colouring = colour;") && path.contains("ifs_sample(q, e, colour)"), "{}: the path tracer's colour site", def.name);
             validate_lens(&path, &format!("{}'s path tracer with an Orbit transformation", def.name));
             let plain = assemble_ifs_rig(def, col, 4, None, false, false, false);
             assert!(!plain.contains("ifs_colour3") && plain.contains("fn ifs_trap_point("), "{}: the plain walk", def.name);

@@ -1298,6 +1298,14 @@ fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {{
     return ifs_walk3(delta, eps).distance;
 }}
 
+// The colour walk's start and finish (`ifs_sample`): the point itself,
+// and nothing after.
+fn ifs_colour_point(delta: vec3<f32>) -> vec3<f32> {{
+    return delta;
+}}
+
+fn ifs_colour_finish(d: vec3<f32>, res: ptr<function, IfsResult>) {{}}
+
 fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {{
     return ifs_walk3(delta, 0.0);
 }}

@@ -1564,7 +1564,11 @@ fn ifs_colour_walk3(delta: vec3<f32>, res: ptr<function, IfsResult>) {
 // ball, every other surface point, is untouched. The correction is
 // subtracted from the delta as a small displacement, never by forming
 // `target + delta` (see the chain).
-fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
+//
+// In three parts, so one walk call serves the colour and the distances
+// alike (`ifs_sample`): where the colour walk starts, the walk, and what
+// follows it.
+fn ifs_colour_point(delta: vec3<f32>) -> vec3<f32> {
     let rel = delta + ifs_target_offset();
     let dw = ifs_slice_w() - ifs_ball_w();
     let reach2 = ifs_radius() * ifs_radius() - dw * dw;
@@ -1576,17 +1580,26 @@ fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
             d = delta - rel * (1.0 - limit / len);
         }
     }
-    var res = ifs_walk3(d, 0.0);
-    ifs_colour_walk3(d, &res);
+    return d;
+}
+
+fn ifs_colour_finish(d: vec3<f32>, res: ptr<function, IfsResult>) {
+    ifs_colour_walk3(d, res);
     // The address from a later map: its first digits shifted out, so
     // every copy of a piece reads alike. The last branch at every level
     // rounds the address up to 1.0 (the address colouring's note), which
     // shifted is 0, the palette's other end: it stays at the end.
     let start = round(clamp(fparam(9u), 0.0, 2.0));
     if (start > 0.5) {
-        let shifted = res.address * pow(f32(max(ifs_count(), 1u)), start);
-        res.address = select(fract(shifted), 0.99999994, res.address >= 0.99999994);
+        let shifted = (*res).address * pow(f32(max(ifs_count(), 1u)), start);
+        (*res).address = select(fract(shifted), 0.99999994, (*res).address >= 0.99999994);
     }
+}
+
+fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
+    let d = ifs_colour_point(delta);
+    var res = ifs_walk3(d, 0.0);
+    ifs_colour_finish(d, &res);
     return res;
 }
 "#,
@@ -2051,6 +2064,14 @@ fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
     return ifs_walk3(delta, eps).distance;
 }
 
+// The colour walk's start and finish (`ifs_sample`): the point itself,
+// and nothing after.
+fn ifs_colour_point(delta: vec3<f32>) -> vec3<f32> {
+    return delta;
+}
+
+fn ifs_colour_finish(d: vec3<f32>, res: ptr<function, IfsResult>) {}
+
 fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
     return ifs_walk3(delta, 0.0);
 }
@@ -2423,6 +2444,14 @@ fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
     return ifs_walk3(delta, eps).distance;
 }
 
+// The colour walk's start and finish (`ifs_sample`): the point itself,
+// and nothing after.
+fn ifs_colour_point(delta: vec3<f32>) -> vec3<f32> {
+    return delta;
+}
+
+fn ifs_colour_finish(d: vec3<f32>, res: ptr<function, IfsResult>) {}
+
 fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
     return ifs_walk3(delta, 0.0);
 }
@@ -2659,6 +2688,14 @@ fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
     return ifs_walk3(delta, eps).distance;
 }
 
+// The colour walk's start and finish (`ifs_sample`): the point itself,
+// and nothing after.
+fn ifs_colour_point(delta: vec3<f32>) -> vec3<f32> {
+    return delta;
+}
+
+fn ifs_colour_finish(d: vec3<f32>, res: ptr<function, IfsResult>) {}
+
 fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
     return ifs_walk3(delta, 0.0);
 }
@@ -2870,6 +2907,14 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
 fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
     return ifs_walk3(delta, eps).distance;
 }
+
+// The colour walk's start and finish (`ifs_sample`): the point itself,
+// and nothing after.
+fn ifs_colour_point(delta: vec3<f32>) -> vec3<f32> {
+    return delta;
+}
+
+fn ifs_colour_finish(d: vec3<f32>, res: ptr<function, IfsResult>) {}
 
 fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
     return ifs_walk3(delta, 0.0);
