@@ -355,14 +355,11 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
 
 ## App, UI and code health
 
-- **Shader compile times (before 0.6, the user's pick)**: a solid's
-  path tracer inlines its formula's walk at every call site (about ten:
-  the camera, bounce and light marches, their refines, the surface's
-  normal and colour, twice). Bristorbrot's compiles in 2.25 s on the
-  desktop's Vulkan driver and in more than 30 s on an M2 through Chrome,
-  which then drops the device. The normal's six taps are one call
-  already (half the compile). Next: the path tracer as one loop calling
-  the walk once, and compiles that do not hang the UI.
+- **Shader compile times**: a solid's walk is compiled once in its lit
+  walk and its path tracer since the compile-times branch (5-18x faster).
+  Left: a run-time function choice applied to a vector calls its switch
+  once a part, and compiles that do not hang the UI
+  ([async-pipelines.md](../experimental/async-pipelines.md)).
 - **A lost GPU device on the web** stops with a Reload notice
   (`gpu::device::show_lost_notice`); recovering in place (a new device,
   every renderer rebuilt) is not built.
@@ -400,6 +397,10 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
 Each is a plan, kept in [docs/experimental/](../experimental/); move it
 back to `docs/projects/` when work starts.
 
+- [async-pipelines.md](../experimental/async-pipelines.md) -- pipelines
+  compiled off the frame, so no compile hangs the UI: a worker thread on
+  the desktop, wgpu's async creation on the web. Waits for
+  gfx-rs/wgpu#10438 in a release; not for 0.6.
 - [terrain-speed.md](../experimental/terrain-speed.md) -- a deep escape
   terrain's section renders (100-360 ms steps) out of the governor's
   reach; measure first.
