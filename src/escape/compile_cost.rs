@@ -50,6 +50,11 @@ fn slug(s: &str) -> String {
 /// time. An uncalled function holding this run's nanoseconds makes every
 /// source new to it without changing what runs.
 fn time(device: &wgpu::Device, src: &str) -> (f64, f64, f64) {
+    time_entry(device, src, None)
+}
+
+/// [`time`] with the entry point named (a module with several).
+fn time_entry(device: &wgpu::Device, src: &str, entry: Option<&str>) -> (f64, f64, f64) {
     use wgpu::naga;
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u32);
     let src = &format!("{src}
@@ -69,7 +74,7 @@ fn compile_cost_nonce() -> u32 {{ return {nonce}u; }}
         label: None,
         layout: None,
         module: &m,
-        entry_point: None,
+        entry_point: entry,
         compilation_options: Default::default(),
         cache: None,
     });
@@ -194,4 +199,185 @@ fn compile_cost_2d() {
     }
     let med = rows[rows.len() / 2].2;
     println!("median {med:.0} ms");
+}
+
+/// The flame's chaos-game shader for every flame preset, as the shader
+/// cache builds it (its active variations, the config's constants), timed
+/// and written to `output/compile-cost/flame-*.wgsl`. `COMPILE_COST_FLAMES=1`.
+#[test]
+#[ignore = "a measurement"]
+fn compile_cost_flames() {
+    if std::env::var("COMPILE_COST_FLAMES").is_err() {
+        return;
+    }
+    use crate::scene::transforms::RenderMode;
+    let (device, _queue) = pollster::block_on(crate::probe::run::open_device("compile cost flames")).expect("a GPU");
+    let dir = std::path::Path::new("output/compile-cost");
+    std::fs::create_dir_all(dir).unwrap();
+    let builder = crate::shader_builder_v2::ShaderBuilder::new(crate::variations::global_registry().clone());
+    let mut rows = Vec::new();
+    for cfg in crate::scene::presets::global_preset_library().presets() {
+        if !matches!(cfg.render_mode, RenderMode::TwoD | RenderMode::ThreeD) {
+            continue;
+        }
+        let mut c = cfg.clone();
+        c.ensure_sources();
+        let active = c.flame.extract_active_variations();
+        let constants = crate::shader_cache::ShaderCache::constants_from_config(&c);
+        let src = builder.build_from_template(&c.flame, &active, c.render_mode == RenderMode::ThreeD, false, c.flame.has_xaos(), true, &constants);
+        std::fs::write(dir.join(format!("flame-{}.wgsl", slug(&c.flame.name))), &src).unwrap();
+        let (_, _, ms) = time_entry(&device, &src, Some("main"));
+        rows.push((format!("{} ({:?}, {} variations)", c.flame.name, c.render_mode, active.len()), src.len(), ms));
+    }
+    rows.sort_by(|a, b| b.2.total_cmp(&a.2));
+    let total: f64 = rows.iter().map(|r| r.2).sum();
+    println!("{} flames, {total:.0} ms in all; median {:.0} ms; the slowest:", rows.len(), rows[rows.len() / 2].2);
+    for (name, bytes, ms) in rows.iter().take(15) {
+        println!("  {name:<60} {bytes:>7} B  {ms:>7.0} ms");
+    }
+}
+
+/// Every registered variation alone in a one-transform 2D flame, its
+/// shader's compile timed: which variations cost the compile.
+/// `COMPILE_COST_VARIATIONS=1` (about a minute).
+#[test]
+#[ignore = "a measurement"]
+fn compile_cost_variations() {
+    if std::env::var("COMPILE_COST_VARIATIONS").is_err() {
+        return;
+    }
+    let (device, _queue) = pollster::block_on(crate::probe::run::open_device("compile cost variations")).expect("a GPU");
+    let reg = crate::variations::global_registry().clone();
+    let builder = crate::shader_builder_v2::ShaderBuilder::new(reg.clone());
+    let names: Vec<String> = reg.all().iter().filter(|v| v.wgsl_source.is_some()).map(|v| v.name.to_string()).collect();
+    // The flame with no variation but linear: the floor every row sits on.
+    let flame_of = |name: &str| {
+        let mut flame = crate::scene::transforms::Flame::new();
+        let mut xf = crate::scene::transforms::Transform::new();
+        xf.set_variation(name, 1.0);
+        flame.transforms.push(xf);
+        flame
+    };
+    let mut cfg = crate::config::FractalConfig::default();
+    let mut rows = Vec::new();
+    for name in std::iter::once("linear".to_string()).chain(names) {
+        cfg.flame = flame_of(&name);
+        let active = cfg.flame.extract_active_variations();
+        let constants = crate::shader_cache::ShaderCache::constants_from_config(&cfg);
+        let src = builder.build_from_template(&cfg.flame, &active, false, false, false, true, &constants);
+        let (_, _, ms) = time_entry(&device, &src, Some("main"));
+        rows.push((name, src.len(), ms));
+    }
+    let floor = rows[0].2;
+    rows.sort_by(|a, b| b.2.total_cmp(&a.2));
+    println!("{} variations; linear alone {floor:.0} ms; the slowest:", rows.len());
+    for (name, bytes, ms) in rows.iter().take(25) {
+        println!("  {name:<28} {bytes:>7} B  {ms:>7.0} ms");
+    }
+    let over = rows.iter().filter(|r| r.2 > floor + 200.0).count();
+    println!("{over} variations add more than 200 ms");
+}
+
+/// One flame of ten heavier variations, plain, with a final transform, and
+/// with linked and final ones: what `apply_variations`' call sites cost.
+/// `COMPILE_COST_SITES=1`.
+#[test]
+#[ignore = "a measurement"]
+fn compile_cost_flame_sites() {
+    if std::env::var("COMPILE_COST_SITES").is_err() {
+        return;
+    }
+    use crate::scene::transforms::{Flame, Transform};
+    let (device, _queue) = pollster::block_on(crate::probe::run::open_device("compile cost sites")).expect("a GPU");
+    let builder = crate::shader_builder_v2::ShaderBuilder::new(crate::variations::global_registry().clone());
+    let heavy = ["electron_orbital", "chladni_disc", "crackle", "synth", "honeycomb", "quaternion", "sphere_packing", "waves2b", "dc_perlin", "complex"];
+    let xf = |vars: &[&str]| {
+        let mut t = Transform::new();
+        for v in vars {
+            t.set_variation(v, 1.0);
+        }
+        t
+    };
+    for (label, linked, fin) in [("plain", false, false), ("final", false, true), ("linked + final", true, true)] {
+        let mut flame = Flame::new();
+        flame.transforms.push(xf(&heavy[..5]));
+        flame.transforms.push(xf(&heavy[5..]));
+        if linked {
+            flame.linked_transforms.push(xf(&heavy));
+            for t in &mut flame.transforms {
+                t.linked_attachments.push(0);
+            }
+        }
+        if fin {
+            flame.final_transforms.push(xf(&heavy));
+            for t in &mut flame.transforms {
+                t.final_attachments.push(0);
+            }
+        }
+        let mut cfg = crate::config::FractalConfig::default();
+        cfg.flame = flame;
+        let active = cfg.flame.extract_active_variations();
+        let constants = crate::shader_cache::ShaderCache::constants_from_config(&cfg);
+        let src = builder.build_from_template(&cfg.flame, &active, false, false, false, true, &constants);
+        std::fs::write(format!("output/compile-cost/flame-sites-{}.wgsl", slug(label)), &src).unwrap();
+        let (_, _, ms) = time_entry(&device, &src, Some("main"));
+        println!("  {label:<16} {:>7} B  {ms:>7.0} ms", src.len());
+    }
+}
+
+/// A/B for a change to the flame shader's chain: the visual configs with
+/// linked or final transforms, and two flames of the sites measurement,
+/// rendered at a fixed iteration count and hashed, to
+/// `output/pt-ab/flame-<tag>.txt` (`FLAME_AB_TAG`).
+#[test]
+#[ignore = "an A/B measurement"]
+fn flame_chain_hash() {
+    use crate::scene::transforms::{Flame, Transform};
+    let Ok(tag) = std::env::var("FLAME_AB_TAG") else { return };
+    let (device, queue) = pollster::block_on(crate::probe::run::open_device("flame a/b")).expect("a GPU");
+    let mut cfgs: Vec<(String, crate::config::FractalConfig)> = Vec::new();
+    for f in ["3d/stereogram-smoke", "variations/multi_kaleidoscope-smoke", "variations/spray_blur-normal-xform-smoke", "variations/spray_blur-smoke"] {
+        let text = std::fs::read_to_string(format!("tests/visual/configs/{f}.fflame")).unwrap();
+        cfgs.push((f.to_string(), crate::config::FractalConfig::from_json(&text).unwrap()));
+    }
+    let xf = |vars: &[&str], a: f32| {
+        let mut t = Transform::new();
+        for v in vars {
+            t.set_variation(v, 0.5);
+        }
+        t.a = a;
+        t.d = a;
+        t
+    };
+    for (label, linked) in [("final", false), ("linked + final", true)] {
+        let mut flame = Flame::new();
+        flame.transforms.push(xf(&["spherical", "swirl"], 0.6));
+        flame.transforms.push(xf(&["julia", "disc"], 0.7));
+        if linked {
+            flame.linked_transforms.push(xf(&["sinusoidal"], 0.9));
+            flame.transforms[0].linked_attachments.push(0);
+        }
+        flame.final_transforms.push(xf(&["bubble"], 1.0));
+        for t in &mut flame.transforms {
+            t.final_attachments.push(0);
+        }
+        let mut c = crate::config::FractalConfig::default();
+        c.deterministic_rng = true;
+        c.flame = flame;
+        cfgs.push((label.to_string(), c));
+    }
+    let mut out = String::new();
+    for (name, mut c) in cfgs {
+        c.ensure_sources();
+        let job = crate::renderer::RenderJob::new(&c, 96, 64).with_iterations(2_000_000);
+        let px = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data;
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        px.hash(&mut h);
+        let lit = px.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 0).count();
+        out.push_str(&format!("{name}\t{:016x}\tlit {lit}\n", h.finish()));
+    }
+    std::fs::create_dir_all("output/pt-ab").unwrap();
+    std::fs::write(format!("output/pt-ab/flame-{tag}.txt"), &out).unwrap();
+    print!("{out}");
 }
