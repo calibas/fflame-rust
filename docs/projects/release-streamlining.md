@@ -127,8 +127,9 @@ prompt that names what it is about to do.
 4. **The update notice reads GitHub.** App versions are tracked as GitHub
    releases, and the server reads the newest one itself (cached), so
    nothing has to be set by hand and it can't announce a version before
-   its release exists. This is ffapi work: `/app/latest` answers from
-   `APP_LATEST_VERSION` / `APP_LATEST_URL` today.
+   its release exists. Built 2026-11-24 on ffapi's branch
+   `app-latest-github`: `APP_RELEASES_REPO` (`owner/name`) turns it on,
+   and `APP_LATEST_VERSION` still overrides it when set.
 5. **How far `release.py` reaches, as proposed.**
    - It copies files and runs their tools and tests in `ffapi`, and
      deploys `ffbrowser`'s already-pushed `main`.
@@ -146,8 +147,8 @@ prompt that names what it is about to do.
    side effects, so they can be built and run any time.
 2. `version.json` in the builds, then `deploy-web` and `deploy-api`,
    first tried against the live site with the 0.6 deploy itself.
-3. `publish`, then `ship` gluing it together. On the server, `/app/latest`
-   reading the newest GitHub release (decision 4).
+3. `publish`, then `ship` gluing it together. (On the server,
+   `/app/latest` reading the newest GitHub release, decision 4: built.)
 4. **The 0.6 release is the test:** run `ship 0.6.0` stage by stage.
    Fix what breaks, and correct RELEASE.md to describe what actually ran.
 5. Then use `ship 0.6.1` for the first patch, to see whether a small

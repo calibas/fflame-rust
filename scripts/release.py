@@ -9,6 +9,9 @@
     python scripts/release.py changelog          # from git, since the last tag
     python scripts/release.py notes              # the changelog into NOTES.md, for editing
     python scripts/release.py sync-api           # the generated files into ../ffapi, its tests
+    python scripts/release.py sync-web           # the editor page into ../ffbrowser
+    python scripts/release.py deploy-api         # build and restart the API on the server; curated sync
+    python scripts/release.py deploy-web         # upload the web builds, build the site, check it
     python scripts/release.py build              # every shipping artifact
     python scripts/release.py version 0.5.0      # bump every version together
     python scripts/release.py versions           # show them; exit 1 if they disagree
@@ -24,6 +27,11 @@ this repository's Cargo.toml, never in the docs:
 
     [server]
     ssh = "user@host"            # what `ssh` and the deploy stages connect to
+    key = "~/.ssh/id_ed25519"    # optional: ssh -i
+    site = "https://example.com" # the public site, to check what it serves
+    ffbrowser_dir = "/home/user/ffbrowser"   # the server's ffbrowser checkout
+    ffapi_dir = "/home/user/ffapi"           # the server's ffapi checkout
+    api_port = 3000              # optional: where /health answers on the server
 
 Nothing here runs on push, on commit, or on a timer. That is the point:
 the work CI would do is worth automating, the *triggering* is what gets
@@ -327,8 +335,14 @@ def run_gates(gates, args):
         print(f"\n{RED}{BOLD}{len(failed)} gate(s) failed{RESET}")
         for g, out in failed:
             print(f"\n{BOLD}── {g.name}{RESET}")
-            tail = [l for l in out.strip().split("\n") if l.strip()][-15:]
-            print("\n".join("   " + l for l in tail))
+            lines = [l for l in out.strip().split("\n") if l.strip()]
+            # A test's panic says why; the tail is cargo's summary of
+            # which binary failed. So the panics first, cut to fit.
+            for i, l in enumerate(lines):
+                if "panicked at" in l:
+                    for p in lines[i:i + 2]:
+                        print("   " + (p if len(p) <= 400 else p[:400] + " …"))
+            print("\n".join("   " + l for l in lines[-15:]))
         return True
     return False
 
@@ -572,6 +586,73 @@ def sibling(name):
 SIBLINGS = ["ffapi", "ffbrowser"]
 
 
+def server():
+    """release.local.toml's [server]: where the deploy stages go."""
+    return local_config().get("server", {})
+
+
+def missing_settings(*keys):
+    """The [server] keys a stage needs that release.local.toml lacks, as
+    an error message, or None."""
+    lacking = [k for k in keys if not server().get(k)]
+    if not lacking:
+        return None
+    where = LOCAL_CONFIG.relative_to(ROOT)
+    return f"{where} has no [server] {', '.join(lacking)} (its format: release.py's header)"
+
+
+def ssh_cmd(remote, tty=False):
+    """`ssh` to the server running `remote` (one shell string). With
+    `tty`, a terminal for a password prompt (sudo); otherwise BatchMode,
+    so a missing key fails rather than waiting for a password."""
+    s = server()
+    cmd = ["ssh", "-o", "ConnectTimeout=15"]
+    if s.get("key"):
+        cmd += ["-i", os.path.expanduser(s["key"])]
+    cmd += ["-t"] if tty else ["-o", "BatchMode=yes"]
+    return cmd + [s["ssh"], remote]
+
+
+def remote(script, tty=False, capture=False, stdin=None):
+    """Run `script` on the server. Streams to this terminal unless
+    `capture`. (ok, output)."""
+    cmd = ssh_cmd(script, tty=tty)
+    p = subprocess.run(cmd, input=stdin, capture_output=capture or stdin is not None)
+    out = b"" if not (capture or stdin is not None) else (p.stdout or b"") + (p.stderr or b"")
+    return p.returncode == 0, out.decode("utf-8", errors="replace")
+
+
+def confirm(lines):
+    """Say what is about to happen and ask. Only `yes` goes on."""
+    print(f"\n{BOLD}About to:{RESET}")
+    for l in lines:
+        print(f"  - {l}")
+    try:
+        answer = input(f"\nType {BOLD}yes{RESET} to go on: ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() != "yes":
+        print(f"{YELLOW}Stopped; nothing was done.{RESET}")
+        return False
+    return True
+
+
+def fetch_url(url):
+    """(status, body bytes) for a GET, past any cache (a fresh query)."""
+    import urllib.error
+    import urllib.request
+    sep = "&" if "?" in url else "?"
+    req = urllib.request.Request(f"{url}{sep}t={int(time.time())}",
+                                 headers={"User-Agent": "release.py", "Cache-Control": "no-cache"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+    except OSError as e:
+        return None, str(e).encode()
+
+
 def editor_running():
     """Whether a FractalArtEditor is running: on Windows it locks the
     binary a release build writes and the visual suite renders with."""
@@ -615,10 +696,9 @@ def repo_ready(path, fetch):
 
 
 def ssh_reachable():
-    host = local_config().get("server", {}).get("ssh")
-    if not host:
+    if not server().get("ssh"):
         return None, "no [server] ssh in release.local.toml (the deploy stages need it)"
-    return run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, "true"])
+    return run(ssh_cmd("true"))
 
 
 def cmd_preflight(args):
@@ -748,6 +828,324 @@ def cmd_sync_api(args):
     return 0
 
 
+# ------------------------------------------------------ sync-web, deploys
+
+# The web builds a deploy uploads: this repository's output directory,
+# where it goes in the server's ffbrowser checkout, and where the site
+# serves it (ffbrowser's docs/DEPLOYMENT.md). Each carries version.json.
+WEB_BUILDS = [
+    ("pkg", "public/editor/pkg", "editor/pkg"),
+    ("wasm/render/pkg", "public/wasm/render", "wasm/render"),
+    ("wasm/script/pkg", "public/wasm/script", "wasm/script"),
+]
+
+# The editor's page around pkg/: ffbrowser keeps its own tracked copy in
+# public/editor/, which drifted while only pkg/ was uploaded. `sync-web`
+# copies these there for a commit; `deploy-web` refuses while they differ.
+EDITOR_FILES = ["index.html", "css", "js"]
+EDITOR_DEST = Path("public/editor")
+
+
+def _files_under(base, names):
+    """{relative path: bytes} for the files and directory trees `names`."""
+    out = {}
+    for name in names:
+        p = base / name
+        if p.is_file():
+            out[name] = p.read_bytes()
+        elif p.is_dir():
+            for f in sorted(p.rglob("*")):
+                if f.is_file():
+                    out[f.relative_to(base).as_posix()] = f.read_bytes()
+    return out
+
+
+def editor_drift():
+    """How ffbrowser's copy of the editor page differs from ours: a list of
+    (relative path, what), empty when it matches."""
+    ours = _files_under(ROOT, EDITOR_FILES)
+    theirs = _files_under(sibling("ffbrowser") / EDITOR_DEST, EDITOR_FILES)
+    drift = []
+    for rel in sorted(set(ours) | set(theirs)):
+        if rel not in theirs:
+            drift.append((rel, "missing there"))
+        elif rel not in ours:
+            drift.append((rel, "only there"))
+        elif not _same_text(ours[rel], theirs[rel]):
+            drift.append((rel, "differs"))
+    return drift
+
+
+def cmd_sync_web(args):
+    browser = sibling("ffbrowser")
+    dest = browser / EDITOR_DEST
+    print(f"{BOLD}Syncing the editor page into ffbrowser{RESET}  "
+          f"{DIM}({dest}; nothing is committed there){RESET}\n")
+    if not dest.is_dir():
+        print(f"{RED}No {dest}{RESET} {DIM}([repos] in release.local.toml says where ffbrowser is){RESET}")
+        return 1
+    drift = editor_drift()
+    if not drift:
+        print(f"{GREEN}{BOLD}Nothing to sync:{RESET} {DIM}ffbrowser's copy matches.{RESET}")
+        return 0
+    for rel, what in drift:
+        print(f"  {YELLOW}{what:<13}{RESET} {rel}")
+    if args.dry_run:
+        print(f"\n{DIM}Dry run: nothing copied.{RESET}")
+        return 0
+    pathspecs = [(EDITOR_DEST / n).as_posix() for n in EDITOR_FILES]
+    _, status = run(["git", "status", "--porcelain", "--", *pathspecs], cwd=browser)
+    if status.strip():
+        print(f"\n{RED}ffbrowser has uncommitted changes there:{RESET}\n{status}"
+              f"{DIM}Commit or discard them first; this replaces those files.{RESET}")
+        return 1
+    for rel, what in drift:
+        target = dest / rel
+        if what == "only there":
+            target.unlink()
+            continue
+        data = (ROOT / rel).read_bytes()
+        if target.exists() and b"\r\n" in target.read_bytes():
+            data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    _, stat = run(["git", "diff", "--stat", "--", *pathspecs], cwd=browser)
+    print("\n" + stat.rstrip())
+    print(f"\n{GREEN}{BOLD}Synced.{RESET} {DIM}Read the diff, commit and push it in ffbrowser "
+          f"before deploy-web.{RESET}")
+    return 0
+
+
+def build_matches_head(rel):
+    """(ok, why) for a web build's version.json against this checkout:
+    the version and commit it says, and not built from a dirty tree."""
+    path = ROOT / rel / "version.json"
+    if not path.exists():
+        return False, f"{rel}/version.json missing: `release.py build`"
+    import json
+    info = json.loads(path.read_text(encoding="utf-8"))
+    _, head = run(["git", "rev-parse", "--short=8", "HEAD"])
+    want = (read_version(), head.strip())
+    have = (info.get("version"), info.get("git_hash"))
+    if have != want:
+        return False, f"{rel} is {have[0]} {have[1]}, this checkout {want[0]} {want[1]}: `release.py build`"
+    if info.get("git_dirty"):
+        return False, f"{rel} was built from a tree with uncommitted changes"
+    return True, f"{info['version']} {info['git_hash']} {info.get('profile')}"
+
+
+def changed_typings(site):
+    """The gallery modules' .d.ts files whose live copies differ: the
+    museum's src/museum/wasmTypes.ts mirrors them by hand."""
+    changed = []
+    for rel, _, live in WEB_BUILDS[1:]:
+        for f in sorted((ROOT / rel).glob("*.d.ts")):
+            status, body = fetch_url(f"{site.rstrip('/')}/{live}/{f.name}")
+            if status != 200:
+                changed.append(f"{live}/{f.name} (live: {status or 'unreachable'})")
+            elif not _same_text(f.read_bytes(), body):
+                changed.append(f"{live}/{f.name}")
+    return changed
+
+
+def upload_dir(local, remote_dir):
+    """`local` into `remote_dir` on the server, whole: unpacked beside it
+    and swapped in, so the site never serves half an upload and files the
+    new build lacks do not linger. tar over ssh: no rsync needed here."""
+    import io
+    import shlex
+    import tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for f in sorted(local.rglob("*")):
+            if f.is_file():
+                tar.add(f, arcname=f.relative_to(local).as_posix())
+    d = shlex.quote(remote_dir)
+    script = (f"set -e; d={d}; rm -rf \"$d.new\" \"$d.old\"; mkdir -p \"$d.new\"; "
+              f"tar -xzf - -C \"$d.new\"; if [ -e \"$d\" ]; then mv \"$d\" \"$d.old\"; fi; "
+              f"mv \"$d.new\" \"$d\"; rm -rf \"$d.old\"")
+    return remote(script, stdin=buf.getvalue())
+
+
+def cmd_deploy_web(args):
+    print(f"{BOLD}Deploying the web app and the gallery modules{RESET}\n")
+    lacking = missing_settings("ssh", "site", "ffbrowser_dir")
+    if lacking:
+        print(f"{RED}{lacking}{RESET}")
+        return 1
+    s = server()
+    site, base = s["site"].rstrip("/"), s["ffbrowser_dir"].rstrip("/")
+    browser = sibling("ffbrowser")
+
+    gates = [Gate(f"{rel} built", lambda r=rel: build_matches_head(r),
+                  why="each build's version.json says this checkout")
+             for rel, _, _ in WEB_BUILDS]
+    gates.append(Gate("editor page in ffbrowser",
+                      lambda: (lambda d: (not d, "\n".join(f"{w}: {r}" for r, w in d)))(editor_drift()),
+                      why="`release.py sync-web`, then commit and push in ffbrowser"))
+    gates.append(Gate("ffbrowser ready", lambda: repo_ready(browser, fetch=True),
+                      why="the server pulls origin/main: clean, on main, pushed"))
+    if run_gates(gates, argparse.Namespace(fix=False)):
+        return 1
+
+    typings = changed_typings(site)
+    if typings and not args.types_checked:
+        print(f"\n{RED}The gallery modules' typings changed:{RESET}")
+        print("\n".join(f"  {t}" for t in typings))
+        print(f"{DIM}ffbrowser's src/museum/wasmTypes.ts mirrors them by hand. Update it, push, "
+              f"and run again with --types-checked.{RESET}")
+        return 1
+
+    _, local_head = run(["git", "rev-parse", "HEAD"], cwd=browser)
+    plan = [f"pull ffbrowser {local_head.strip()[:8]} into {s['ssh']}:{base}"]
+    plan += [f"upload {rel}/ to {base}/{dest}/ (swapped in whole)" for rel, dest, _ in WEB_BUILDS]
+    plan += [f"build there (`npm ci` if package-lock.json changed, `npm run build`)",
+             f"check {site} serves each build's version.json and the editor page"]
+    if args.dry_run:
+        print(f"\n{BOLD}Would:{RESET}")
+        print("\n".join(f"  - {l}" for l in plan))
+        return 0
+    if not confirm(plan):
+        return 1
+
+    import shlex
+    q = shlex.quote(base)
+    ok, out = remote(f"set -e; cd {q}; git rev-parse HEAD; git pull --ff-only -q; git rev-parse HEAD",
+                     capture=True)
+    heads = [l.strip() for l in out.splitlines() if re.fullmatch(r"[0-9a-f]{40}", l.strip())]
+    if not ok or len(heads) != 2:
+        print(f"{RED}git pull on the server failed:{RESET}\n{out}")
+        return 1
+    old, new = heads
+    if new != local_head.strip():
+        print(f"{RED}The server's ffbrowser is at {new[:8]}, ours {local_head.strip()[:8]}.{RESET}")
+        return 1
+    print(f"  {GREEN}pulled{RESET} ffbrowser {old[:8]} -> {new[:8]}")
+
+    for rel, dest, _ in WEB_BUILDS:
+        ok, out = upload_dir(ROOT / rel, f"{base}/{dest}")
+        if not ok:
+            print(f"{RED}Upload of {rel} failed:{RESET}\n{out}")
+            return 1
+        print(f"  {GREEN}uploaded{RESET} {rel} -> {dest}")
+
+    print(f"\n{DIM}Building on the server…{RESET}")
+    ok, _ = remote(f"set -e; cd {q}; "
+                   f"if ! git diff --quiet {old} {new} -- package-lock.json; then npm ci; fi; "
+                   f"npm run build")
+    if not ok:
+        print(f"{RED}The server's build failed.{RESET} {DIM}The uploads are in place; "
+              f"the site still serves the previous dist/.{RESET}")
+        return 1
+
+    print()
+    return 0 if verify_web(site) else 1
+
+
+def verify_web(site):
+    """What the site serves is what was built: each build's version.json,
+    and the editor page."""
+    import json
+    good = True
+    for rel, _, live in WEB_BUILDS:
+        want = json.loads((ROOT / rel / "version.json").read_text(encoding="utf-8"))
+        status, body = fetch_url(f"{site}/{live}/version.json")
+        try:
+            have = json.loads(body) if status == 200 else None
+        except ValueError:
+            have = None
+        same = have is not None and all(have.get(k) == want.get(k) for k in ("version", "git_hash", "built"))
+        good &= same
+        print(f"  {GREEN + 'live' if same else RED + 'STALE'}{RESET}  {live:<12} "
+              f"{DIM}{(have or {}).get('version')} {(have or {}).get('git_hash')} "
+              f"(status {status}){RESET}")
+    status, body = fetch_url(f"{site}/editor/index.html")
+    same = status == 200 and _same_text((ROOT / "index.html").read_bytes(), body)
+    good &= same
+    print(f"  {GREEN + 'live' if same else RED + 'STALE'}{RESET}  editor page  {DIM}(status {status}){RESET}")
+    print(f"\n{GREEN + BOLD + 'Deployed.' if good else RED + BOLD + 'The site does not serve what was built.'}"
+          f"{RESET}")
+    return good
+
+
+def cmd_deploy_api(args):
+    print(f"{BOLD}Deploying the API{RESET}\n")
+    lacking = missing_settings("ssh", "site", "ffapi_dir")
+    if lacking:
+        print(f"{RED}{lacking}{RESET}")
+        return 1
+    s = server()
+    site, base, port = s["site"].rstrip("/"), s["ffapi_dir"].rstrip("/"), int(s.get("api_port", 3000))
+    ffapi = sibling("ffapi")
+    if run_gates([Gate("ffapi ready", lambda: repo_ready(ffapi, fetch=True),
+                       why="the server pulls origin/main: clean, on main, pushed")],
+                 argparse.Namespace(fix=False)):
+        return 1
+
+    _, local_head = run(["git", "rev-parse", "HEAD"], cwd=ffapi)
+    manifest = ROOT / CURATED_MANIFEST[0]
+    token = os.environ.get("FFAPI_TOKEN")
+    plan = [f"pull ffapi {local_head.strip()[:8]} into {s['ssh']}:{base}",
+            "build it there (`cargo clean -p ffapi --release && cargo build --release`: "
+            "migrations embed at compile time)",
+            "stop the service, copy the binary to /opt/ffapi, start it (sudo: a password prompt)",
+            f"wait for /health on port {port}; show {site}/api/v1/app/latest"]
+    if token and manifest.exists():
+        plan.append("the curated sync: a dry run, its report, then --write only if you say so")
+    else:
+        plan.append("the curated sync is left for you (FFAPI_TOKEN unset or no manifest: `release.py sync-api`)")
+    if args.dry_run:
+        print(f"{BOLD}Would:{RESET}")
+        print("\n".join(f"  - {l}" for l in plan))
+        return 0
+    if not confirm(plan):
+        return 1
+
+    import shlex
+    q = shlex.quote(base)
+    cargo_env = '. "$HOME/.cargo/env" 2>/dev/null || true'
+    ok, out = remote(f"set -e; cd {q}; git pull --ff-only -q; git rev-parse HEAD", capture=True)
+    head = out.strip().splitlines()[-1] if out.strip() else ""
+    if not ok or head != local_head.strip():
+        print(f"{RED}The server's ffapi is not at ours ({local_head.strip()[:8]}):{RESET}\n{out}")
+        return 1
+    print(f"  {GREEN}pulled{RESET} ffapi {head[:8]}")
+
+    print(f"\n{DIM}Building on the server…{RESET}")
+    ok, _ = remote(f"set -e; {cargo_env}; cd {q}; cargo clean -p ffapi --release; cargo build --release")
+    if not ok:
+        print(f"{RED}The build failed;{RESET} {DIM}the running API is untouched.{RESET}")
+        return 1
+
+    print(f"\n{DIM}Swapping the binary (sudo)…{RESET}")
+    ok, _ = remote(f"cd {q} && sudo service ffapi stop && sudo cp target/release/ffapi /opt/ffapi/ "
+                   f"&& sudo chown -R ffapi:ffapi /opt/ffapi && sudo service ffapi start", tty=True)
+    if not ok:
+        print(f"{RED}The swap failed.{RESET} {DIM}Check `sudo systemctl status ffapi` on the server.{RESET}")
+        return 1
+
+    ok, out = remote(f"for i in $(seq 60); do curl -fsS http://127.0.0.1:{port}/health && exit 0; "
+                     f"sleep 1; done; exit 1", capture=True)
+    if not ok:
+        print(f"{RED}No /health after 60s:{RESET} {DIM}`journalctl -u ffapi -n 50` on the server.{RESET}\n{out}")
+        return 1
+    print(f"  {GREEN}healthy{RESET} {DIM}{out.strip()[:80]}{RESET}")
+    status, body = fetch_url(f"{site}/api/v1/app/latest")
+    print(f"  {DIM}/app/latest: {status} {body.decode('utf-8', errors='replace')[:120]}{RESET}")
+
+    if token and manifest.exists():
+        sync = [sys.executable, str(ffapi / "tools" / "sync_curated.py"), str(manifest), "--api", site]
+        print(f"\n{BOLD}Curated sync, dry run{RESET}\n")
+        if subprocess.run(sync).returncode != 0:
+            print(f"{RED}The dry run failed or reported a hash mismatch;{RESET} {DIM}nothing written.{RESET}")
+            return 1
+        if confirm(["write the curated sync the report above describes (sync_curated.py --write)"]):
+            if subprocess.run(sync + ["--write"]).returncode != 0:
+                return 1
+    print(f"\n{GREEN}{BOLD}API deployed.{RESET}")
+    return 0
+
+
 # ----------------------------------------------------------------- build
 
 # (name, command, note, directory). The two gallery modules are two
@@ -840,6 +1238,20 @@ def main():
                     help="write ours and say what differs; copy nothing, run nothing in ffapi")
     sa.add_argument("--skip-tests", action="store_true", help="copy, but leave ffapi's tests")
     sa.set_defaults(fn=cmd_sync_api)
+
+    sw = sub.add_parser("sync-web", help="copy the editor page (index.html, css, js) into ffbrowser")
+    sw.add_argument("--dry-run", action="store_true", help="say what differs; copy nothing")
+    sw.set_defaults(fn=cmd_sync_web)
+
+    dw = sub.add_parser("deploy-web", help="upload the web app and gallery modules, build the site, check it")
+    dw.add_argument("--dry-run", action="store_true", help="run the checks and say what it would do")
+    dw.add_argument("--types-checked", action="store_true",
+                    help="the gallery typings changed and ffbrowser's wasmTypes.ts follows them")
+    dw.set_defaults(fn=cmd_deploy_web)
+
+    da = sub.add_parser("deploy-api", help="build and restart the API on the server, then the curated sync")
+    da.add_argument("--dry-run", action="store_true", help="run the checks and say what it would do")
+    da.set_defaults(fn=cmd_deploy_api)
 
     n = sub.add_parser("notes", help="the changelog into NOTES.md, for editing")
     n.add_argument("--since", help="tag or ref (default: last tag)")
