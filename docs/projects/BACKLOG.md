@@ -12,7 +12,7 @@ take it off this list. When one is done or dropped, delete its line.
 
 **Active elsewhere:** the v0.6.0 release checklist
 ([v0.6.0-release.md](v0.6.0-release.md)), the release streamlining plan
-([release-streamlining.md](release-streamlining.md), six decisions), the
+([release-streamlining.md](release-streamlining.md), decided 2026-11-24), the
 API update plan ([api-updates.md](../archive/projects/api-updates.md); step 4 built on
 branches, [rhai-scripts-online.md](../archive/projects/rhai-scripts-online.md)) and
 the size study ([size-study.md](size-study.md)).

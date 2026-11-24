@@ -2,7 +2,8 @@
 
 **Status 2026-11-12:** plan, not built. The user's call: build it as the
 last item before 0.6, and test it with the 0.6 release itself
-([v0.6.0-release.md](v0.6.0-release.md)).
+([v0.6.0-release.md](v0.6.0-release.md)). **All six decisions made
+2026-11-24 (§3).**
 
 **The goal, in the user's words:** "smaller, more frequent updates,
 different from the enormous changes we've made between 0.5.0 and 0.6.0."
@@ -63,8 +64,8 @@ repositories and two machines, all by hand.
   - `src/museum/wasmTypes.ts` hand-mirrors the modules' `.d.ts`;
   - the API's generated files are copied by hand.
 - **Every desktop release needs both machines.**
-- **Undecided:** the tag form (`0.5` was lightweight; RELEASE.md shows an
-  annotated `v0.5.0`) and what a patch release is.
+- **Was undecided** (now §3): the tag form (`0.5` was lightweight;
+  RELEASE.md shows an annotated `v0.5.0`) and what a patch release is.
 
 ---
 
@@ -80,13 +81,13 @@ prompt that names what it is about to do.
 | `preflight` | All three repositories (`fflame-rust`, `ffapi`, `ffbrowser`, found beside this one) clean, on `main`, level with `origin`; versions agree; `gh` and `ssh` reachable | by eye |
 | `version X.Y.Z` | as now | exists |
 | `notes` | `changelog` grouped by area, written to `NOTES.md` for editing | exists as `changelog` |
-| `check` | as now, plus **the visual suite** and **the API integration test** (`scripts/api_integration.py`) as gates; `--quick` leaves out the visual suite for a web-only patch | partly |
+| `check` | as now, plus **the visual suite** and **the API integration test** (`scripts/api_integration.py`) as gates | partly |
 | `sync-api` | Copy the contract, the catalog and the corpora into `../ffapi`; run its generators (effects, variations, script import); run its conformance tests; show the diff; leave the commit to the user | by hand |
 | `build` | as now | exists |
 | `deploy-api` | Over SSH, per ffapi's deployment doc: pull, build, swap the binary, restart; wait for `/health`; check `/api/app/latest`; run the script import if `sync-api` regenerated it | by hand |
 | `deploy-web` | Build `pkg/` and the gallery modules; rsync the three into the server's `ffbrowser/public/`, **and the editor's `index.html`, `css/`, `js/`** (ending the drift); build on the server; then fetch the served editor and modules and check they report the new version | by hand |
-| `publish` | Annotated tag `vX.Y.Z`, push it, `gh release create` with whichever zips are present; set the update notice (§3, decision 4) | by hand |
-| `ship X.Y.Z [--web-only]` | `preflight` → `version` → `notes` (pause to edit) → `check` → `sync-api` → `build` → pause for the smoke test → `deploy-api` → `deploy-web` → `publish` | n/a |
+| `publish` | Annotated tag `vX.Y.Z`, push it, `gh release create` with whichever zips are present; the server's update notice follows the GitHub release by itself (§3, decision 4) | by hand |
+| `ship X.Y.Z` | `preflight` → `version` → `notes` (pause to edit) → `check` → `sync-api` → `build` → pause for the smoke test → `deploy-api` → `deploy-web` → `publish` | n/a |
 
 ### Details that make it trustworthy
 
@@ -105,36 +106,35 @@ prompt that names what it is about to do.
   page.
 - **Two machines:** `publish` uploads whichever zips exist, so a release
   can go out from Windows with the macOS zip added later
-  (`gh release upload`), or not at all for a web-only patch.
+  (`gh release upload`).
 
 ---
 
-## 3. Decisions for the user
+## 3. Decisions (the user, 2026-11-24)
 
-1. **Release kinds.**
-   - Proposed: a **web-only patch** (`0.6.1`: web app, museum modules and
-     server; no desktop zips) as the frequent kind.
-   - And a **full release** (desktop on both machines) less often, or
-     whenever the desktop has fixes worth shipping.
-2. **Version policy.**
-   - Proposed: `0.6.x` while configs stay readable by 0.6 (no
-     `min_reader` bump).
+1. **Release kinds: one.** No web-only patch version. Every release,
+   minor or patch, ships the desktop and the web together, and patches
+   will be frequent on both. (`publish` still uploads whichever zips are
+   present, so the macOS zip can follow the Windows one.)
+2. **Version policy, as proposed.**
+   - `0.6.x` while configs stay readable by 0.6 (no `min_reader` bump).
    - The next minor (`0.7`) when a release raises `min_reader`, or
      changes something older apps would need to know.
-3. **Tag form.** Proposed: annotated `vX.Y.Z` from 0.6 on, leaving `0.5`
-   as it is.
-4. **The update notice.** Either `publish` sets the server's
-   `APP_LATEST_VERSION` over SSH, or the server reads the newest GitHub
-   release itself (cached, so nothing to remember). Proposed: the server
-   reads GitHub. It's one less step, and it can't announce a version
-   before its release exists.
-5. **How far `release.py` reaches into the other repositories.**
-   - Proposed: it copies files and runs their tools and tests in `ffapi`,
-     and deploys `ffbrowser`'s already-pushed `main`.
-   - It never commits in either: commits stay yours, with a printed
+3. **Tag form, as proposed:** annotated `vX.Y.Z` from 0.6 on, leaving
+   `0.5` as it is.
+4. **The update notice reads GitHub.** App versions are tracked as GitHub
+   releases, and the server reads the newest one itself (cached), so
+   nothing has to be set by hand and it can't announce a version before
+   its release exists. This is ffapi work: `/app/latest` answers from
+   `APP_LATEST_VERSION` / `APP_LATEST_URL` today.
+5. **How far `release.py` reaches, as proposed.**
+   - It copies files and runs their tools and tests in `ffapi`, and
+     deploys `ffbrowser`'s already-pushed `main`.
+   - It never commits in either: commits stay the user's, with a printed
      summary.
-6. **CI.** Still none (RELEASE.md §7, deliberate). `release.py` remains
-   the thing that runs everything on demand.
+6. **CI: none yet.** Maybe later, once the release is streamlined; the
+   automated tests aren't trusted enough yet to gate on their own.
+   `release.py` remains the thing that runs everything on demand.
 
 ---
 
@@ -144,8 +144,9 @@ prompt that names what it is about to do.
    side effects, so they can be built and run any time.
 2. `version.json` in the builds, then `deploy-web` and `deploy-api`,
    first tried against the live site with the 0.6 deploy itself.
-3. `publish`, then `ship` gluing it together.
+3. `publish`, then `ship` gluing it together. On the server, `/app/latest`
+   reading the newest GitHub release (decision 4).
 4. **The 0.6 release is the test:** run `ship 0.6.0` stage by stage.
    Fix what breaks, and correct RELEASE.md to describe what actually ran.
-5. Then use `ship 0.6.1 --web-only` for the first patch, to see whether a
-   small release is really small.
+5. Then use `ship 0.6.1` for the first patch, to see whether a small
+   release is really small.

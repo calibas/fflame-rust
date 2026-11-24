@@ -23,7 +23,7 @@ by area, each linking the doc with the detail (finished and paused docs in
 | [size-study.md](size-study.md) | Measured 2026-11-11: build time, binary size, repository. The profile (fat LTO, one codegen unit) is the build-time lever, not the content; 547 variations as downloads would save ~10% of the web download; the repository's weight is binary history. Seven decisions. |
 | [v0.6.0-release.md](v0.6.0-release.md) | The v0.6.0 release's checklist (rewritten 2026-11-12): the testing pass, what is left of the API, the modules, the release itself. |
 | [curated-content.md](curated-content.md) | Built 2026-11-18 on both repositories and merged (PR #172 here): curated items as frozen, canonically named copies for every kind; browsing is Curated or the account's own, anything else by id; curated code trusted by hash; configs name curated items by canonical name; every kind synced by hash through one API import. Left: the production dry run, with the API's deploy in the 0.6 release. |
-| [release-streamlining.md](release-streamlining.md) | Planned 2026-11-12, to build last before 0.6 and test with it: `release.py` stages (preflight, sync-api, deploy-api, deploy-web, publish, ship) for smaller, more frequent releases. Six decisions. |
+| [release-streamlining.md](release-streamlining.md) | Planned 2026-11-12, to build last before 0.6 and test with it: `release.py` stages (preflight, sync-api, deploy-api, deploy-web, publish, ship) for smaller, more frequent releases. Decisions made 2026-11-24. |
 
 ## Standing references
 
