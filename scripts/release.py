@@ -12,6 +12,8 @@
     python scripts/release.py sync-web           # the editor page into ../ffbrowser
     python scripts/release.py deploy-api         # build and restart the API on the server; curated sync
     python scripts/release.py deploy-web         # upload the web builds, build the site, check it
+    python scripts/release.py publish            # tag vX.Y.Z, GitHub release with the zips here
+    python scripts/release.py ship 0.6.0         # all of it in order; --from STAGE resumes; --dry-run
     python scripts/release.py build              # every shipping artifact
     python scripts/release.py version 0.5.0      # bump every version together
     python scripts/release.py versions           # show them; exit 1 if they disagree
@@ -1056,9 +1058,11 @@ def verify_web(site):
             have = None
         same = have is not None and all(have.get(k) == want.get(k) for k in ("version", "git_hash", "built"))
         good &= same
-        print(f"  {GREEN + 'live' if same else RED + 'STALE'}{RESET}  {live:<12} "
-              f"{DIM}{(have or {}).get('version')} {(have or {}).get('git_hash')} "
-              f"(status {status}){RESET}")
+        # A missing file is the SPA's own page with a 200 (nginx's
+        # try_files fallback), so "not JSON" is "not there".
+        seen = (f"{have.get('version')} {have.get('git_hash')} built {have.get('built')}" if have
+                else "no version.json" if status == 200 else f"status {status}")
+        print(f"  {GREEN + 'live' if same else RED + 'STALE'}{RESET}  {live:<12} {DIM}{seen}{RESET}")
     status, body = fetch_url(f"{site}/editor/index.html")
     same = status == 200 and _same_text((ROOT / "index.html").read_bytes(), body)
     good &= same
@@ -1143,6 +1147,183 @@ def cmd_deploy_api(args):
             if subprocess.run(sync + ["--write"]).returncode != 0:
                 return 1
     print(f"\n{GREEN}{BOLD}API deployed.{RESET}")
+    return 0
+
+
+# --------------------------------------------------------------- publish
+
+def release_zips(version):
+    """The desktop zips of `version` that exist here (each is built on its
+    own machine: whichever this one made)."""
+    return [p for p in (ROOT / "target" / "windows" / f"FractalArtEditor-{version}-windows.zip",
+                        ROOT / "target" / "macos" / f"FractalArtEditor-{version}-macos.zip")
+            if p.exists()]
+
+
+def cmd_publish(args):
+    """Tag, push the tag, and create the GitHub release with the zips
+    here. Run again on the other machine, it adds that machine's zip to
+    the release. Last of the stages: the server's update notice reads the
+    newest GitHub release, so it must not exist before the deploys."""
+    version = read_version()
+    tag = f"v{version}"
+    print(f"{BOLD}Publishing {tag}{RESET}\n")
+    zips = release_zips(version)
+    ok, _ = run(["gh", "release", "view", tag, "--json", "tagName"])
+    if ok:
+        # The release exists: this is the second machine adding its zip.
+        _, out = run(["gh", "release", "view", tag, "--json", "assets", "--jq", ".assets[].name"])
+        have = set(out.split())
+        new = [z for z in zips if z.name not in have]
+        if not new:
+            print(f"{GREEN}{tag} is published{RESET} {DIM}with {', '.join(sorted(have)) or 'no zips'}; "
+                  f"nothing here to add.{RESET}")
+            return 0
+        if args.dry_run:
+            print(f"{BOLD}Would:{RESET} upload {', '.join(z.name for z in new)} to {tag}")
+            return 0
+        if not confirm([f"upload {', '.join(z.name for z in new)} to the GitHub release {tag}"]):
+            return 1
+        ok, out = run(["gh", "release", "upload", tag, *map(str, new)])
+        print(f"{GREEN}uploaded{RESET}" if ok else f"{RED}upload failed:{RESET}\n{out}")
+        return 0 if ok else 1
+
+    notes = ROOT / "NOTES.md"
+    gates = [
+        Gate("fflame-rust ready", lambda: repo_ready(ROOT, fetch=True),
+             why="the tag goes on the pushed main"),
+        Gate("versions agree", lambda: check_versions(), why="`release.py versions`"),
+        Gate("gh signed in", ["gh", "auth", "status"], why="the release is created with gh"),
+        Gate("tag is new", lambda: (lambda ok_out: (not ok_out[1].strip(), f"{tag} exists"))(
+            run(["git", "tag", "--list", tag])), why="a tag is never moved"),
+        Gate("NOTES.md", lambda: (notes.exists(), "missing: `release.py notes`, then edit it"),
+             why="the release's notes"),
+        Gate("a zip to upload", lambda: (bool(zips), f"no FractalArtEditor-{version}-*.zip: `release.py build`"),
+             why="the macOS one can follow from that machine (`publish` again there)"),
+    ]
+    if run_gates(gates, argparse.Namespace(fix=False)):
+        return 1
+    _, head = run(["git", "rev-parse", "--short=8", "HEAD"])
+    plan = [f"tag {head.strip()} as {tag} (annotated) and push the tag to origin",
+            f"create the GitHub release {tag}, notes from NOTES.md, with {', '.join(z.name for z in zips)}",
+            "the server's update notice follows within the hour (it reads the newest release)"]
+    if args.dry_run:
+        print(f"\n{BOLD}Would:{RESET}")
+        print("\n".join(f"  - {l}" for l in plan))
+        return 0
+    if not confirm(plan):
+        return 1
+    for cmd in (["git", "tag", "-a", tag, "-m", version],
+                ["git", "push", "origin", tag],
+                ["gh", "release", "create", tag, "--title", version, "--notes-file", str(notes),
+                 *map(str, zips)]):
+        ok, out = run(cmd)
+        if not ok:
+            print(f"{RED}{' '.join(cmd[:3])} failed:{RESET}\n{out}")
+            return 1
+        print(f"  {GREEN}done{RESET} {' '.join(cmd[:3])}")
+    print(f"\n{GREEN}{BOLD}Published {tag}.{RESET} {DIM}On the other machine: build, then "
+          f"`release.py publish` adds its zip.{RESET}")
+    return 0
+
+
+# ------------------------------------------------------------------ ship
+
+def pause(message):
+    """Wait for a person: Enter goes on, anything else stops."""
+    try:
+        answer = input(f"\n{YELLOW}{message}{RESET}\n  Enter to go on, or type stop: ")
+    except EOFError:
+        answer = "stop"
+    return answer.strip() == ""
+
+
+def cmd_ship(args):
+    """Every stage in order (release-streamlining.md §2), stopping at the
+    first failure and pausing where a person must act. `--from` resumes."""
+    version = args.number
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        print(f"{RED}`{version}` is not x.y.z{RESET}", file=sys.stderr)
+        return 1
+    ns = argparse.Namespace
+    dry = args.dry_run
+
+    def bump():
+        if read_version() == version:
+            print(f"{DIM}Already {version}.{RESET}")
+            return 0
+        return cmd_version(ns(number=version, dry_run=dry))
+
+    def notes():
+        if (ROOT / "NOTES.md").exists():
+            print(f"{DIM}NOTES.md exists; kept.{RESET}")
+        elif dry:
+            print(f"{DIM}Would write NOTES.md from the changelog, and wait while you edit it.{RESET}")
+        elif cmd_notes(ns(since=None, all=False, force=False)):
+            return 1
+        return 0 if dry or pause("Edit NOTES.md down to what a user would notice.") else 1
+
+    def commit():
+        _, status = run(["git", "status", "--porcelain"])
+        if not status.strip():
+            return 0
+        print(f"{DIM}Uncommitted here (the version bump, lock files):{RESET}\n{status}")
+        if dry:
+            return 0
+        if not pause("Commit these on main (\"Release " + version + "\") and push, so the builds "
+                     "and the tag name one pushed commit."):
+            return 1
+        return 0 if repo_ready(ROOT, fetch=True)[0] else 1
+
+    def synced(name, fn):
+        def stage():
+            if fn(ns(dry_run=dry, skip_tests=False)):
+                return 1
+            path = sibling(name)
+            _, status = run(["git", "status", "--porcelain"], cwd=path)
+            if status.strip() and not dry and not pause(
+                    f"Commit and push the sync in {name} (merge to its main as you do)."):
+                return 1
+            return 0
+        return stage
+
+    def smoke():
+        return 0 if dry or pause("Smoke-test each artifact (RELEASE.md §4.5).") else 1
+
+    stages = [
+        ("preflight", lambda: cmd_preflight(ns(no_fetch=False))),
+        ("version", bump),
+        ("notes", notes),
+        ("check", lambda: cmd_check(ns(fix=False, full=True))),
+        ("commit", commit),
+        ("sync-api", synced("ffapi", cmd_sync_api)),
+        ("sync-web", synced("ffbrowser", cmd_sync_web)),
+        ("build", lambda: cmd_build(ns(only=None))),
+        ("smoke", smoke),
+        ("deploy-api", lambda: cmd_deploy_api(ns(dry_run=dry))),
+        ("deploy-web", lambda: cmd_deploy_web(ns(dry_run=dry, types_checked=args.types_checked))),
+        ("publish", lambda: cmd_publish(ns(dry_run=dry))),
+    ]
+    names = [n for n, _ in stages]
+    if args.from_stage and args.from_stage not in names:
+        print(f"{RED}No stage `{args.from_stage}`:{RESET} {', '.join(names)}", file=sys.stderr)
+        return 1
+    start = names.index(args.from_stage) if args.from_stage else 0
+    if dry:
+        # A dry run checks and says; it builds nothing, so the stages that
+        # only make things (check, build) are named, not run.
+        print(f"{DIM}Dry run: check and build are skipped; every other stage checks and says "
+              f"what it would do.{RESET}")
+    for name, stage in stages[start:]:
+        print(f"\n{BOLD}━━ {name}{RESET}")
+        if dry and name in ("check", "build"):
+            print(f"{DIM}(skipped in a dry run){RESET}")
+            continue
+        if stage():
+            print(f"\n{RED}{BOLD}Stopped at {name}.{RESET} {DIM}Fix it, then "
+                  f"`release.py ship {version} --from {name}`.{RESET}")
+            return 1
+    print(f"\n{GREEN}{BOLD}{version} shipped.{RESET}")
     return 0
 
 
@@ -1252,6 +1433,18 @@ def main():
     da = sub.add_parser("deploy-api", help="build and restart the API on the server, then the curated sync")
     da.add_argument("--dry-run", action="store_true", help="run the checks and say what it would do")
     da.set_defaults(fn=cmd_deploy_api)
+
+    pb = sub.add_parser("publish", help="tag, push the tag, create the GitHub release (or add this machine's zip)")
+    pb.add_argument("--dry-run", action="store_true", help="run the checks and say what it would do")
+    pb.set_defaults(fn=cmd_publish)
+
+    sh = sub.add_parser("ship", help="every stage in order, pausing where a person must act")
+    sh.add_argument("number", help="the version to release, x.y.z")
+    sh.add_argument("--from", dest="from_stage", help="resume at this stage")
+    sh.add_argument("--dry-run", action="store_true",
+                    help="every stage's checks and plans; nothing built, changed or sent")
+    sh.add_argument("--types-checked", action="store_true", help="passed to deploy-web")
+    sh.set_defaults(fn=cmd_ship)
 
     n = sub.add_parser("notes", help="the changelog into NOTES.md, for editing")
     n.add_argument("--since", help="tag or ref (default: last tag)")

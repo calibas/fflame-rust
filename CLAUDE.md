@@ -116,6 +116,7 @@ python scripts/release.py check      # every fast gate (versions agree, tests, w
 python scripts/release.py gallery    # the gallery crates' own tests (GPU smoke, script parity), before the modules deploy
 python scripts/release.py preflight  # the three repositories (this, ffapi, ffbrowser) clean, on main, pushed; gh; the server
 python scripts/release.py sync-api   # the generated files into ../ffapi, and its tests that read them (never commits there)
+python scripts/release.py ship 0.6.0 # every stage in order (preflight ... deploy-api, deploy-web, publish); --dry-run, --from STAGE
 python scripts/release.py            # ...and a changelog preview
 ```
 Three committed files are **generated**, and a stale one fails a test rather than failing silently -- regenerate deliberately and read the diff:

@@ -232,6 +232,19 @@ has gone stale before.
 Ordered, and every step is a command you type. Nothing fires on push or
 on a timer.
 
+**`python scripts/release.py ship X.Y.Z`** runs the steps below in
+order. It stops at the first failure and pauses wherever a person must
+act: editing the notes, committing the version bump, committing a sync in
+ffapi or ffbrowser, and the smoke test. Each stage is also its own
+subcommand. `--from STAGE` resumes after a stop, and `--dry-run` runs
+every check and prints each plan without building, changing or sending
+anything. The stages are `preflight`, `version`, `notes`, `check
+--full`, `commit` (yours), `sync-api`, `sync-web`, `build`, `smoke`,
+`deploy-api`, `deploy-web`, `publish`. The design is in
+[release-streamlining.md](projects/release-streamlining.md). The deploy
+stages and `publish` first run for real with 0.6.0; correct this section
+to what actually ran.
+
 ### Before you start
 
 ```bash
@@ -389,10 +402,24 @@ unsigned means Gatekeeper refuses on first launch, and the steps differ
 by macOS version. Copy from the checklist doc, which keeps the current
 wording.
 
-**Web:** upload `pkg/` + `index.html`, `css/`, `js/` to
-`fractalsforall.com/editor/`. `pkg/` is gitignored and there is no deploy
-script, so this is a manual copy (§5). Load the page afterwards and check
-the version — a partial upload leaves a working page running old wasm.
+`python scripts/release.py publish` does this: it tags, pushes the tag
+and creates the release with whichever zips this machine has. Run it
+again on the other machine and it adds that machine's zip.
+
+**Web:** run `python scripts/release.py sync-web`, which copies
+`index.html`, `css/` and `js/` into ffbrowser's tracked `public/editor/`;
+commit and push that there. Then run `python scripts/release.py
+deploy-web`. It checks that each build's `version.json` matches this
+checkout, uploads `pkg/` and the two gallery modules into the server's
+ffbrowser checkout (each swapped in whole), builds the site there, and
+reads every `version.json` back from the live site. A partial upload can
+no longer pass unnoticed.
+
+**API:** `python scripts/release.py deploy-api` follows ffapi's
+`docs/deployment-ubuntu.md` §10: pull, build, swap the binary (sudo), and
+wait for `/health`. With `FFAPI_TOKEN` set, it then runs the curated
+sync: a dry run first, and `--write` only if you say so. Run it before
+`deploy-web`, and both before `publish`.
 
 ---
 
@@ -781,7 +808,8 @@ Honest list, so nobody assumes these exist:
   lightweight one; from 0.6 on they are annotated `vX.Y.Z` (§4.1).
   Every exported PNG records a git *hash*, so builds are traceable
   either way — tags are what make them nameable.
-- **No web deploy step.** `pkg/` is gitignored and the upload to
+- **The web deploy step is new** (`release.py deploy-web`, 2026-11-24)
+  and has not run against the server yet. Before it, `pkg/` was gitignored and the upload to
   `fractalsforall.com/editor/` is manual (§5). A manual upload is also
   how the retired `calibas.github.io` mirror drifted five months behind
   before anyone noticed — one host now, but nothing stops the one host

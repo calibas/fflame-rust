@@ -3,9 +3,12 @@
 **Status 2026-11-12:** plan, not built. The user's call: build it as the
 last item before 0.6, and test it with the 0.6 release itself
 ([v0.6.0-release.md](v0.6.0-release.md)). **All six decisions made
-2026-11-24 (§3).** **Step 1 of §4 built 2026-11-24** on branch
-`release-stages`: `preflight`, `notes`, `check --full`, `sync-api`, and
-`version.json` in the web and gallery builds (from step 2).
+2026-11-24 (§3).** **Steps 1-3 of §4 built 2026-11-24** on branch
+`release-stages`: every stage in §2's table, plus `sync-web`, which copies
+the editor page into ffbrowser. The local stages ran for real: `sync-api`
+synced ffapi on its branch `app-latest-github`. The remote stages
+(`deploy-api`, `deploy-web`, `publish`) have only run as dry runs and
+against stand-ins; their first real run is 0.6.0 (step 4).
 
 **The goal, in the user's words:** "smaller, more frequent updates,
 different from the enormous changes we've made between 0.5.0 and 0.6.0."
@@ -87,7 +90,7 @@ prompt that names what it is about to do.
 | `sync-api` | Copy the contract, the catalog and the corpora into `../ffapi`; run its generators (effects, variations, script import); run its conformance tests; show the diff; leave the commit to the user | by hand |
 | `build` | as now | exists |
 | `deploy-api` | Over SSH, per ffapi's deployment doc: pull, build, swap the binary, restart; wait for `/health`; check `/api/app/latest`; run the script import if `sync-api` regenerated it | by hand |
-| `deploy-web` | Build `pkg/` and the gallery modules; rsync the three into the server's `ffbrowser/public/`, **and the editor's `index.html`, `css/`, `js/`** (ending the drift); build on the server; then fetch the served editor and modules and check they report the new version | by hand |
+| `deploy-web` | Check the builds' `version.json` against HEAD; upload `pkg/` and the gallery modules into the server's `ffbrowser/public/` (tar over ssh, each swapped in whole: no rsync on Windows); build on the server; then fetch the served editor and modules and check they report the new version. The editor's `index.html`, `css/`, `js/` are ffbrowser's tracked files, so a local `sync-web` copies them there for a commit, and `deploy-web` refuses while they differ | by hand |
 | `publish` | Annotated tag `vX.Y.Z`, push it, `gh release create` with whichever zips are present; the server's update notice follows the GitHub release by itself (§3, decision 4) | by hand |
 | `ship X.Y.Z` | `preflight` → `version` → `notes` (pause to edit) → `check` → `sync-api` → `build` → pause for the smoke test → `deploy-api` → `deploy-web` → `publish` | n/a |
 
