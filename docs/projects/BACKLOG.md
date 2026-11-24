@@ -355,14 +355,26 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
 
 ## App, UI and code health
 
-- **Shader compile times (before 0.6, the user's pick)**: a solid's
-  path tracer inlines its formula's walk at every call site (about ten:
-  the camera, bounce and light marches, their refines, the surface's
-  normal and colour, twice). Bristorbrot's compiles in 2.25 s on the
-  desktop's Vulkan driver and in more than 30 s on an M2 through Chrome,
-  which then drops the device. The normal's six taps are one call
-  already (half the compile). Next: the path tracer as one loop calling
-  the walk once, and compiles that do not hang the UI.
+- **Shader compile times**: a solid's walk is compiled once in its lit
+  walk and its path tracer since the compile-times branch (5-18x faster).
+  Future work, measured there (`escape::compile_cost`, ignored tests):
+  - **A flame's final chain at the same `apply_variations` call** as the
+    normal transform and its linked chain. A flame that stacks heavy
+    variations compiles them three times with a final transform: ten of
+    the heaviest took 1.5 s plain, 6.8 s with a final (11.9 s before the
+    linked merge); ten common ones 133 vs 140 ms, so typical flames do
+    not need it. The final chain runs after the hide check, recovery
+    and the plot's gates, about 300 template lines of `#if` blocks, so
+    it means that section as a state machine.
+  - **Deep zoom's floatexp tier** for a few formulas: Lattès 9-10 s,
+    Novaretti 8 s, Barnsley, Newton and Tetration 1.2-1.6 s (the plain
+    perturbed tier 0.1-0.2 s). 31x inlined from the extended-precision
+    arithmetic itself (each floatexp operation a dozen double-float
+    ones), not repeated call sites; compiled only past floatexp's zoom.
+  - A run-time function choice applied to a vector calls its switch
+    once a part.
+  - Compiles that do not hang the UI
+    ([async-pipelines.md](../experimental/async-pipelines.md)).
 - **A lost GPU device on the web** stops with a Reload notice
   (`gpu::device::show_lost_notice`); recovering in place (a new device,
   every renderer rebuilt) is not built.
@@ -400,6 +412,10 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
 Each is a plan, kept in [docs/experimental/](../experimental/); move it
 back to `docs/projects/` when work starts.
 
+- [async-pipelines.md](../experimental/async-pipelines.md) -- pipelines
+  compiled off the frame, so no compile hangs the UI: a worker thread on
+  the desktop, wgpu's async creation on the web. Waits for
+  gfx-rs/wgpu#10438 in a release; not for 0.6.
 - [terrain-speed.md](../experimental/terrain-speed.md) -- a deep escape
   terrain's section renders (100-360 ms steps) out of the governor's
   reach; measure first.

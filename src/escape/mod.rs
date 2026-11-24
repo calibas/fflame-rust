@@ -58,6 +58,9 @@ mod moran;
 /// Tests: the Bristorbrot and the Quaternionbrot, their presets.
 #[cfg(test)]
 mod bristor;
+
+#[cfg(test)]
+mod compile_cost;
 /// Tests: Iterated Dynamics' orbit maps and escape-time types, written
 /// in Rhai (`assets/formulas`), run as the program's code does.
 #[cfg(test)]

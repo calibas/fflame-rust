@@ -124,7 +124,8 @@ pub fn compile_as(source: &str, key: &str) -> Result<VariationDownload, String> 
     record_layout(&name, source)?;
     // As every kind takes a script's (`ir::Program::param_defs`), on the
     // wire a downloaded variation's parameters are.
-    let parameters: Vec<serde_json::Value> = param_defs(&p, source)?.iter().map(crate::params::api_json).collect();
+    // Exact: an angle in its stored unit (`api_json_exact`).
+    let parameters: Vec<serde_json::Value> = param_defs(&p, source)?.iter().map(crate::params::api_json_exact).collect();
     // Its flag for the renderer: orbits started afresh every dispatch.
     let mut features = wgsl.features.clone();
     if lang::rhai::info_bool(source, "resets_orbits") == Some(true) {

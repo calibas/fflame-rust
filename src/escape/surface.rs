@@ -276,17 +276,21 @@ fn surf_bump(n: vec3<f32>, p: vec3<f32>, foot: f32) -> vec3<f32> {
     var bw = pow(abs(n), vec3<f32>(4.0));
     bw = bw / max(bw.x + bw.y + bw.z, 1.0e-6);
     var g = vec3<f32>(0.0);
-    if (bw.z > 0.01) {
-        let t = surf_layer(p.x, p.y, 0u, 1u, foot);
-        g = g + bw.z * vec3<f32>(t.y, t.z, 0.0);
-    }
-    if (bw.x > 0.01) {
-        let t = surf_layer(p.y, p.z, 1u, 2u, foot);
-        g = g + bw.x * vec3<f32>(0.0, t.y, t.z);
-    }
-    if (bw.y > 0.01) {
-        let t = surf_layer(p.x, p.z, 0u, 2u, foot);
-        g = g + bw.y * vec3<f32>(t.y, 0.0, t.z);
+    // The three projections through ONE `surf_layer` call, in the order
+    // their gradients are summed (z's plane, x's, y's): a GPU compiler
+    // inlines a call at every site, and a layer is its octaves of noise
+    // (compile-times branch).
+    for (var k = 0u; k < 3u; k = k + 1u) {
+        let w = select(select(bw.y, bw.x, k == 1u), bw.z, k == 0u);
+        if (w > 0.01) {
+            let u = select(p.x, p.y, k == 1u);
+            let v = select(p.z, p.y, k == 0u);
+            let ia = select(0u, 1u, k == 1u);
+            let ib = select(2u, 1u, k == 0u);
+            let t = surf_layer(u, v, ia, ib, foot);
+            let lift = select(select(vec3<f32>(t.y, 0.0, t.z), vec3<f32>(0.0, t.y, t.z), k == 1u), vec3<f32>(t.y, t.z, 0.0), k == 0u);
+            g = g + w * lift;
+        }
     }
     let gs = g - dot(g, n) * n;
     return normalize(n - (params.fdata[22].y * m) * gs);

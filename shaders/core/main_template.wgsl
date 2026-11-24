@@ -316,7 +316,49 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // bounded (cos/sin-based, ≈[-1.2, 1.2]); -1e30 can't collide.
         var vrc: vec3<f32> = vec3<f32>(-1.0e30);
 {{/if}}
-
+{{#if HAS_ATTACHMENTS}}
+        // The NORMAL transform and its LINKED CHAIN, in one loop: step 0 the
+        // normal transform, then each Linked one -- affine, variations,
+        // post-affine -- every output feeding the next (deterministic
+        // dynamics; the Linked variations' DC writes reach *vc). ONE call of
+        // `apply_variations`, so a driver inlines the flame's variations
+        // once here, not once for the normal transform and once more for
+        // the chain (compile-times branch). The same steps, in the same
+        // order, as the two calls were.
+        // Gated by HAS_ATTACHMENTS -- with no Linked or Final in the flame
+        // the normal transform alone is applied below, and the
+        // per-iteration `attachments[xform_idx]` load is stripped from the
+        // compiled shader entirely.
+        // See docs/archive/projects/per-transform-linked-and-final.md.
+        let attach = attachments[xform_idx];
+        for (var li = 0u; li <= attach.linked_count; li = li + 1u) {
+            var cid = xform_idx;
+            var cxform = xform;
+            if (li > 0u) {
+                cid = attach.linked[li - 1u];
+                cxform = transforms[cid];
+            }
+            let caff = apply_affine(cxform, current);
+{{#if HAS_DC}}
+{{#if HAS_RGB}}
+            current = apply_variations(cxform, cid, caff, &rng, &vc, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
+{{else}}
+            current = apply_variations(cxform, cid, caff, &rng, &vc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
+{{/if}}
+{{else}}
+{{#if HAS_RGB}}
+            current = apply_variations(cxform, cid, caff, &rng, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
+{{else}}
+            current = apply_variations(cxform, cid, caff, &rng, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
+{{/if}}
+{{/if}}
+            if (HAS_POST_AFFINE) {
+                if (cxform.post_enabled > 0.5) {
+                    current = apply_post_affine(cxform, current);
+                }
+            }
+        }
+{{else}}
         // Apply NORMAL transform: affine + variations + post-affine.
         // The 4-way call shape (HAS_DC × HAS_RGB) keeps each combination
         // as its own variant rather than an inline conditional, because
@@ -340,40 +382,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 current = apply_post_affine(xform, current);
             }
         }
+{{/if}}
 
-{{#if HAS_ATTACHMENTS}}
-        // LINKED CHAIN — deterministic dynamics extension.
-        // Each Linked transform's output feeds the next iteration; their
-        // variations contribute to color flow (DC writes affect *vc).
-        // Gated by HAS_ATTACHMENTS — when no Linked or Final exists in
-        // the flame, the per-iteration `attachments[xform_idx]` load is
-        // stripped from the compiled shader entirely.
-        // See docs/archive/projects/per-transform-linked-and-final.md.
-        let attach = attachments[xform_idx];
-        for (var li = 0u; li < attach.linked_count; li = li + 1u) {
-            let lid = attach.linked[li];
-            let lxform = transforms[lid];
-            let laff = apply_affine(lxform, current);
-{{#if HAS_DC}}
-{{#if HAS_RGB}}
-            current = apply_variations(lxform, lid, laff, &rng, &vc, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
-{{else}}
-            current = apply_variations(lxform, lid, laff, &rng, &vc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
-{{/if}}
-{{else}}
-{{#if HAS_RGB}}
-            current = apply_variations(lxform, lid, laff, &rng, &vrc, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
-{{else}}
-            current = apply_variations(lxform, lid, laff, &rng, &should_hide{{#if HAS_ANALYTIC_BLUR}}, &blur_contribution{{/if}});
-{{/if}}
-{{/if}}
-            if (HAS_POST_AFFINE) {
-                if (lxform.post_enabled > 0.5) {
-                    current = apply_post_affine(lxform, current);
-                }
-            }
-        }
-{{/if}}
 
         // A Normal- or Linked-phase CanHide (cut_*) variation removed this
         // point: the cut_* family returns the origin (0,0) when it hides, and

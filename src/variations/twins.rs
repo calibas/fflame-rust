@@ -994,6 +994,25 @@ mod tests {
         crate::lang::rhai::with_own_id(source(name).unwrap(), &crate::scripted::mint_id())
     }
 
+    /// **A twin's angles register in their stored unit**, as its built-in
+    /// declares them. A Rhai variation registers through the wire form,
+    /// whose angles were all degrees: a twin in turns or radians came back
+    /// with its default multiplied (dc_hexes_wf's 0.166 turns as 59.76) and
+    /// its range in degrees, and rendered apart from its built-in.
+    #[test]
+    fn a_twins_angles_register_in_their_stored_unit() {
+        let reg = super::super::global_registry();
+        for name in ["dc_hexes_wf", "pie", "waffle", "target", "affine3D"] {
+            let builtin = reg.get(name).unwrap();
+            let dl = super::super::custom::compile(&own(name)).unwrap();
+            let info = super::super::VariationInfo::from_download(&dl, crate::provenance::Provenance::Local);
+            for b in &builtin.parameters {
+                let t = info.get_param(&b.name).unwrap_or_else(|| panic!("{name}: no `{}`", b.name));
+                assert_eq!(t.kind, b.kind, "{name}.{}", b.name);
+            }
+        }
+    }
+
     /// **An unedited twin is known as its built-in**: as shipped, with the
     /// id Edit as Rhai gives it, with Windows line ends -- and not once a
     /// character of it is changed.

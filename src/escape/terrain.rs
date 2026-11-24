@@ -882,7 +882,7 @@ fn hf_row_raw(a: i32, y: i32) -> vec4<f32> {
 }
 
 fn hf_row(a: i32, y: i32) -> vec4<f32> {
-    var r = vec4<f32>(hf_h(a - 1, y), hf_h(a, y), hf_h(a + 1, y), hf_h(a + 2, y));
+    var r = hf_h4(vec4<i32>(a - 1, a, a + 1, a + 2), vec4<i32>(y, y, y, y));
     if (hf_extends()) {
         if (a == 0) {
             r.x = 2.0 * r.y - r.z;
@@ -996,6 +996,22 @@ fn hf_h(i: i32, j: i32) -> f32 {
     return hf_f(hf_raw(i, j)) * hf_sec.geo.w;
 }
 
+// Four samples' heights, (i[k], j[k]) each: `hf_h` in a loop, so the
+// height map (`hf_f`, the curves and modes) is compiled once, not four
+// times. A GPU compiler inlines a call at every site, and a spline cell's
+// sixteen reads at each of the cell's callers made the terrain's shaders
+// take seconds to compile (compile-times branch). Each component is
+// written through `select`, never a dynamic index, so the four stay in
+// registers.
+fn hf_h4(i: vec4<i32>, j: vec4<i32>) -> vec4<f32> {
+    var r = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    for (var k = 0u; k < 4u; k = k + 1u) {
+        let h = hf_h(i[k], j[k]);
+        r = select(r, vec4<f32>(h, h, h, h), vec4<u32>(k, k, k, k) == vec4<u32>(0u, 1u, 2u, 3u));
+    }
+    return r;
+}
+
 // The surface's height at (x, y) in the current section's cells: the
 // spline, or the bilinear patch of its cell.
 fn hf_height_at(x: f32, y: f32) -> f32 {
@@ -1016,8 +1032,9 @@ fn hf_bilinear_at(x: f32, y: f32) -> f32 {
     let b = min(i32(floor(cy)), m - 2);
     let u = cx - f32(a);
     let v = cy - f32(b);
-    let h0 = mix(hf_h(a, b), hf_h(a + 1, b), u);
-    let h1 = mix(hf_h(a, b + 1), hf_h(a + 1, b + 1), u);
+    let q = hf_h4(vec4<i32>(a, a + 1, a, a + 1), vec4<i32>(b, b, b + 1, b + 1));
+    let h0 = mix(q.x, q.y, u);
+    let h1 = mix(q.z, q.w, u);
     return mix(h0, h1, v);
 }
 
@@ -1029,10 +1046,11 @@ fn hf_patch(a: i32, b: i32, o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32) -> f32
     if (hf_smooth()) {
         return hf_spline_hit(a, b, o, d, t0, t1);
     }
-    let h00 = hf_h(a, b);
-    let h10 = hf_h(a + 1, b);
-    let h01 = hf_h(a, b + 1);
-    let h11 = hf_h(a + 1, b + 1);
+    let corners = hf_h4(vec4<i32>(a, a + 1, a, a + 1), vec4<i32>(b, b, b + 1, b + 1));
+    let h00 = corners.x;
+    let h10 = corners.y;
+    let h01 = corners.z;
+    let h11 = corners.w;
     let q = o + d * t0;
     let u0 = q.x - f32(a);
     let v0 = q.y - f32(b);
@@ -1339,8 +1357,15 @@ fn hf_trace_section(o: vec3<f32>, d: vec3<f32>, ta: f32, tb: f32, soft_k: f32) -
         if (soft_k > 0.0 && t > 0.0) {
             // How close the ray passed this cell's surface, at its ends,
             // in the world's units over the world's distance.
+            // Its two ends' heights through ONE call (`hf_height_at` is a
+            // spline cell of sixteen reads, inlined at every site).
             let p1 = o + d * t_far;
-            let gap = min(p.z - hf_height_at(p.x, p.y), p1.z - hf_height_at(p1.x, p1.y)) * texel;
+            var lowest = 3.0e38;
+            for (var e = 0; e < 2; e = e + 1) {
+                let q = select(p, p1, e == 1);
+                lowest = min(lowest, q.z - hf_height_at(q.x, q.y));
+            }
+            let gap = lowest * texel;
             out.soft = min(out.soft, clamp(soft_k * gap / max(t, 1.0e-3 * texel), 0.0, 1.0));
         }
         t = max(t_far, t) + eps;
@@ -1479,8 +1504,9 @@ fn hf_corner_normal(i: i32, j: i32) -> vec3<f32> {
     let i1 = min(i + 1, i32(hf_sec.dims.x) - 1);
     let j0 = max(j - 1, 0);
     let j1 = min(j + 1, i32(hf_sec.dims.y) - 1);
-    let dx = (hf_h(i1, j) - hf_h(i0, j)) / f32(max(i1 - i0, 1));
-    let dy = (hf_h(i, j1) - hf_h(i, j0)) / f32(max(j1 - j0, 1));
+    let q = hf_h4(vec4<i32>(i1, i0, i, i), vec4<i32>(j, j, j1, j0));
+    let dx = (q.x - q.y) / f32(max(i1 - i0, 1));
+    let dy = (q.z - q.w) / f32(max(j1 - j0, 1));
     return vec3<f32>(-dx, -dy, 1.0);
 }
 
@@ -1577,16 +1603,66 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // The ground ends at the view depth `far` (fdata[6].w), where the
     // fog has reached the background.
     let tmax = params.fdata[6].w / max(dot(d, ifs_forward()), 1.0e-4);
-    let h = hf_trace(o, d, tmax, 0.0);
-    var steps = h.steps;
-    if (!h.hit) {
-        ifs_geom[idx] = vec4<u32>(0u, 0u, 0u, 0u);
-    } else {
-        let p = o + d * h.t;
+    // The camera's trace, then each light's shadow, through ONE call of
+    // `hf_trace`: a GPU compiler inlines a call at every site, and the
+    // trace -- the section march, its spline cells -- at two made the
+    // walk take seconds to compile (compile-times branch). The same
+    // traces, in the same order, as the camera's and the light loop's.
+    var h: HfHit;
+    var steps = 0u;
+    var p = vec3<f32>(0.0, 0.0, 0.0);
+    var n = vec3<f32>(0.0, 0.0, 1.0);
+    var ao = 1.0;
+    var sun = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    var start = vec3<f32>(0.0, 0.0, 0.0);
+    var li = 0u;
+    var lights = false;
+    loop {
+        var to = o;
+        var td = d;
+        var tm = tmax;
+        var soft = 0.0;
+        if (lights) {
+            // The next light that faces the surface, toward it from here,
+            // no further than it.
+            var la: IfsLightAt;
+            var found = false;
+            loop {
+                if (li >= ifs_light_count()) {
+                    break;
+                }
+                la = ifs_light_at(li, p);
+                if (dot(n, la.dir) > 0.0) {
+                    found = true;
+                    break;
+                }
+                li = li + 1u;
+            }
+            if (!found) {
+                break;
+            }
+            to = start;
+            td = la.dir;
+            tm = min(la.dist, 1.0e30);
+            soft = params.misc.y;
+        }
+        let traced = hf_trace(to, td, tm, soft);
+        if (lights) {
+            steps = steps + traced.steps;
+            sun[li] = select(traced.soft, 0.0, traced.hit);
+            li = li + 1u;
+            continue;
+        }
+        h = traced;
+        steps = h.steps;
+        if (!h.hit) {
+            break;
+        }
+        p = o + d * h.t;
         hf_load(h.sec, h.off);
         let ps = vec3<f32>((p.xy - hf_sec.geo.xy) * hf_sec.geo.w, p.z * hf_sec.geo.w);
-        var n = hf_normal(ps.x, ps.y);
-        var ao = hf_occlusion(p, params.misc.z);
+        n = hf_normal(ps.x, ps.y);
+        ao = hf_occlusion(p, params.misc.z);
         // A ray that entered a section through its side under the
         // surface hit a WALL -- the ground's edge, or a step between
         // sections of different detail -- lit by its own outward normal,
@@ -1598,24 +1674,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             n = hf_wall_normal(ps);
             ao = 1.0;
         }
-        var sun = vec4<f32>(1.0, 1.0, 1.0, 1.0);
-        if (ifs_shadow_strength() > 0.0) {
-            // Past a position's rounding at these coordinates, or a
-            // surface shadows itself in speckles.
-            let bias = hf_sec.geo.z * 1.0e-3 + (length(p) + length(o)) * 1.0e-6;
-            let start = p + n * bias;
-            for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
-                // Toward the light from here, no further than it.
-                let la = ifs_light_at(li, p);
-                let ld = la.dir;
-                if (dot(n, ld) <= 0.0) {
-                    continue;
-                }
-                let s = hf_trace(start, ld, min(la.dist, 1.0e30), params.misc.y);
-                steps = steps + s.steps;
-                sun[li] = select(s.soft, 0.0, s.hit);
-            }
+        if (!(ifs_shadow_strength() > 0.0)) {
+            break;
         }
+        // Past a position's rounding at these coordinates, or a
+        // surface shadows itself in speckles.
+        let bias = hf_sec.geo.z * 1.0e-3 + (length(p) + length(o)) * 1.0e-6;
+        start = p + n * bias;
+        lights = true;
+    }
+    if (!h.hit) {
+        ifs_geom[idx] = vec4<u32>(0u, 0u, 0u, 0u);
+    } else {
         ifs_geom[idx] = ifs_pack_geom(n, ao, sun, h.t);
     }
     if ((params.flags & 1u) != 0u) {
@@ -2038,6 +2108,30 @@ fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> b
     return !hf_trace(o, d, min(t_end, 1.0e30), 0.0).hit;
 }
 
+// The scene's one cast (`pt_path`): the camera's ray, out to the
+// distance the view renders to; a bounce's, out to anything; a shadow
+// ray's, out to its light, its hit its blocking. ONE trace of the ground
+// and one surface: a GPU compiler inlines a call at every site, and the
+// trace -- the section march and its height reads -- at three sites made
+// the terrain's path tracer take 7.8 s to compile (compile-times branch).
+// The same traces and surfaces as `pt_scene_next`, `pt_scene_visible`
+// and the camera's own were.
+fn pt_scene_cast(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32, kind: u32) -> PtHit {
+    var tmax = 1.0e30;
+    if (kind == PT_CAST_SHADOW) {
+        tmax = min(t_end, 1.0e30);
+    } else if (kind == PT_CAST_CAMERA) {
+        tmax = params.fdata[6].w / max(dot(d, ifs_forward()), 1.0e-4);
+    }
+    let tr = hf_trace(o, d, tmax, 0.0);
+    if (kind == PT_CAST_SHADOW) {
+        var out: PtHit;
+        out.hit = tr.hit;
+        return out;
+    }
+    return pt_surface(o, d, tr, travelled);
+}
+
 // One sample of the pixel: (radiance times coverage, coverage). The
 // coverage is the first surface's albedo's -- a hole lets the
 // background through -- faded by the fog with depth, as the lit tier
@@ -2045,18 +2139,19 @@ fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> b
 fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     let j = pt_rand2() - vec2<f32>(0.5, 0.5);
     let ray = pt_ray(px, py, j.x, j.y);
-    let tmax = params.fdata[6].w / max(dot(ray.d, ifs_forward()), 1.0e-4);
-    let h = pt_surface(ray.o, ray.d, hf_trace(ray.o, ray.d, tmax, 0.0), 0.0);
-    if (!h.hit) {
+    // The camera's ray through the path's one cast (`pt_scene_cast`).
+    var none: PtHit;
+    let traced = pt_path(ray.o, ray.d, none, true);
+    if (pt_camera_missed) {
         return pt_sky_seen(ray.d);
     }
-    pt_first(h, ray.d);
+    let h = pt_camera_hit;
     var coverage = clamp(h.albedo.a, 0.0, 1.0);
     if (params.fdata[7].x > 0.0) {
         let depth = h.t * dot(ray.d, ifs_forward());
         coverage = coverage * exp(-params.fdata[7].x * max(depth - params.fdata[7].y, 0.0));
     }
-    let l = pt_clamp(pt_path(ray.o, ray.d, h));
+    let l = pt_clamp(traced);
     return vec4<f32>(l * coverage, coverage);
 }
 "#;
@@ -2531,11 +2626,17 @@ pub struct TerrainRenderer {
     albedo_mip_layout: BindGroupLayout,
     albedo_mip_pipeline: ComputePipeline,
     path_layout: BindGroupLayout,
-    path_pipeline: ComputePipeline,
-    /// The walk, the relight and the path tracer with points and
-    /// headlamps compiled into their rig, built when a view first has one
-    /// (`assembler::ifs_rig`: their code costs registers unused).
-    placed: Option<[ComputePipeline; 3]>,
+    /// The path tracer, built when a view is first path traced
+    /// (`ensure_path`): its compile is seconds, which a terrain seen only
+    /// lit paid on every start (compile-times branch).
+    path_pipeline: Option<ComputePipeline>,
+    /// The walk and the relight with points and headlamps compiled into
+    /// their rig, built when a view first has one (`assembler::ifs_rig`:
+    /// their code costs registers unused).
+    placed: Option<[ComputePipeline; 2]>,
+    /// The path tracer with them, built when a view with them is first
+    /// path traced.
+    placed_path: Option<ComputePipeline>,
     /// The path tracer's per-pixel sum, and the samples in it.
     path: PathSum,
     sampler: Sampler,
@@ -2837,7 +2938,6 @@ impl TerrainRenderer {
             ..Default::default()
         });
         let surface_dummy = Self::create_surface_image(device, 1, 1);
-        let path_pipeline = pipeline("Terrain Path", &path_layout, assemble_path(false));
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Terrain Albedo"),
             address_mode_u: AddressMode::ClampToEdge,
@@ -2903,7 +3003,8 @@ impl TerrainRenderer {
             albedo_mip_layout,
             albedo_mip_pipeline,
             path_layout,
-            path_pipeline,
+            path_pipeline: None,
+            placed_path: None,
             placed: None,
             path,
             sampler,
@@ -4161,16 +4262,45 @@ impl TerrainRenderer {
         self.placed = Some([
             make("Terrain Walk (placed lights)", &self.walk_layout, &assemble_walk(true)),
             make("Terrain Relight (placed lights)", &self.relight_layout, &assemble_relight(true)),
-            make("Terrain Path (placed lights)", &self.path_layout, &assemble_path(true)),
         ]);
     }
 
-    /// The walk (0), the relight (1) or the path tracer (2) for a view:
+    /// The path tracer a view needs, built on its first path-traced frame:
     /// with points and headlamps compiled in when it has one.
+    fn ensure_path(&mut self, device: &Device, placed: bool) {
+        let slot = if placed { &self.placed_path } else { &self.path_pipeline };
+        if slot.is_some() {
+            return;
+        }
+        let label = if placed { "Terrain Path (placed lights)" } else { "Terrain Path" };
+        let module = device.create_shader_module(ShaderModuleDescriptor { label: Some(label), source: ShaderSource::Wgsl(assemble_path(placed).into()) });
+        let pl = device.create_pipeline_layout(&PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: &[Some(&self.path_layout)], immediate_size: 0 });
+        let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some(label),
+            layout: Some(&pl),
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        if placed {
+            self.placed_path = Some(pipeline);
+        } else {
+            self.path_pipeline = Some(pipeline);
+        }
+    }
+
+    /// The walk (0), the relight (1) or the path tracer (2, built by
+    /// `ensure_path`) for a view: with points and headlamps compiled in
+    /// when it has one.
     fn rig_pipeline(&self, placed: bool, k: usize) -> &ComputePipeline {
+        if k == 2 {
+            let path = if placed { &self.placed_path } else { &self.path_pipeline };
+            return path.as_ref().expect("ensure_path before the path pass");
+        }
         match (&self.placed, placed) {
             (Some(p), true) => &p[k],
-            _ => [&self.walk_pipeline, &self.relight_pipeline, &self.path_pipeline][k],
+            _ => [&self.walk_pipeline, &self.relight_pipeline][k],
         }
     }
 
@@ -4298,6 +4428,7 @@ impl TerrainRenderer {
         }
         let placed = view.shading.placed_lights();
         self.ensure_placed(device, placed);
+        self.ensure_path(device, placed);
         self.env.set(device, queue, view.environment);
         // The denoiser's guides start with the sum; the pass gathers them
         // only where they fit (`set_guided`).
