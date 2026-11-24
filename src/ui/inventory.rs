@@ -444,6 +444,13 @@ impl InventoryPanel {
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut InventoryContext) -> InventoryResponse {
+        // Drawn inside its tab, however short: egui_dock clips a tab's body
+        // only at its top, leaving the bottom to its scroll area, which the
+        // Catalog turns off (it scrolls its own list). A tab shorter than
+        // the header and the status line drew them over the panel below.
+        // A little past the rect, so a focus ring at the edge stays whole.
+        ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect().expand(2.0)));
+        let tab = ui.max_rect();
         let mut out = InventoryResponse::default();
         self.online.update(ui.ctx(), &self.query, &self.entries, &mut out);
         if let Some(palette) = out.apply_palette.take() {
@@ -453,11 +460,16 @@ impl InventoryPanel {
         self.render_top(ui, cx, &mut out);
         ui.separator();
         let mut hovered = None;
-        if !self.narrow {
+        // No room under the header, nothing of the body: egui's panels clip
+        // to their own rect, not their parent's, and one placed below the
+        // tab drew there.
+        if ui.cursor().top() >= tab.bottom() {
+            // Nothing is drawn to hover.
+        } else if !self.narrow {
             self.details = false;
             let shown = self.hovered.clone().or_else(|| self.selected.clone());
             egui::Panel::right("catalog_info").resizable(true).default_size(280.0).min_size(200.0).show_inside(ui, |ui| {
-                egui::ScrollArea::vertical().id_salt("catalog_info_scroll").show(ui, |ui| self.render_info(ui, shown, cx, &mut out));
+                egui::ScrollArea::vertical().id_salt("catalog_info_scroll").min_scrolled_height(0.0).show(ui, |ui| self.render_info(ui, shown, cx, &mut out));
             });
             egui::CentralPanel::default().show_inside(ui, |ui| self.render_list(ui, cx, &mut out, &mut hovered));
         } else if self.details && self.selected.is_some() {
@@ -468,7 +480,7 @@ impl InventoryPanel {
             }
             ui.separator();
             let shown = self.selected.clone();
-            egui::ScrollArea::vertical().id_salt("catalog_info_scroll").show(ui, |ui| self.render_info(ui, shown, cx, &mut out));
+            egui::ScrollArea::vertical().id_salt("catalog_info_scroll").min_scrolled_height(0.0).show(ui, |ui| self.render_info(ui, shown, cx, &mut out));
         } else {
             self.details = false;
             self.render_list(ui, cx, &mut out, &mut hovered);
@@ -1662,7 +1674,10 @@ mod phone_tests {
     /// it (a scrollbar inside a scrollbar). Then, wrapped in a strip, a
     /// server's many-line answer took most of the panel, and a short
     /// panel pushed the strip past its foot. It is one line now, cut to
-    /// fit, Try again at its end, inside a tall panel and a short one.
+    /// fit, Try again at its end, inside a tall panel and a short one;
+    /// and hosted as the dock hosts it -- a rect on a taller screen,
+    /// clipped only at its top -- nothing it draws shows below its tab,
+    /// however short.
     #[test]
     fn a_network_error_shows_inside_the_panel() {
         let mut library = crate::scene::palette::global_palette_library().read().unwrap().clone();
@@ -1681,26 +1696,39 @@ mod phone_tests {
             (0..20).map(|i| format!("  <p>line {i} of the server's answer</p>")).collect::<Vec<_>>().join("\n")
         );
         panel.online.fail_for_test(&keys, &error);
-        for h in [500.0f32, 160.0] {
+        // The panel in a tab `h` tall on a screen of 700: the dock's body
+        // ui, its clip the screen's below the tab's top.
+        let mut frame = |panel: &mut InventoryPanel, h: f32| {
             let ctx = egui::Context::default();
-            let mut drawn = Vec::new();
+            let mut shapes = Vec::new();
             for _ in 0..3 {
-                let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, h))), ..Default::default() };
+                let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 700.0))), ..Default::default() };
                 let out = ctx.run_ui(input, |ui| {
                     super::super::inventory_preview::begin_frame(ui.ctx());
-                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                    let body = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, h));
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
                         let mut cx = InventoryContext { config_manager: &mut cm, palette_library: &mut library, account: CloudAccount::default(), script_cloud: &cloud };
                         let _ = panel.render(ui, &mut cx);
                     });
                 });
-                drawn = placed(&out.shapes);
+                shapes = out.shapes;
             }
+            shapes
+        };
+        for h in [500.0f32, 160.0] {
+            let drawn = placed(&frame(&mut panel, h));
             let shown: Vec<&(String, egui::Pos2)> = drawn.iter().filter(|(t, _)| t.starts_with("Network error")).collect();
             let at = shown.first().unwrap_or_else(|| panic!("the error is drawn at height {h}: {drawn:?}")).1;
             assert!(at.y > 0.0 && at.y < h - 20.0, "the error inside the panel, not below it: at y {} of {h}", at.y);
             assert!(!drawn.iter().any(|(t, _)| t.contains("line 3 of the server's answer")), "one line of the error, not its every line");
             let retry = drawn.iter().find(|(t, _)| *t == t!("catalog.retry").to_string()).map(|(_, p)| *p).expect("Try again");
             assert!(retry.y < h - 10.0, "Try again inside the panel too: at y {} of {h}", retry.y);
+        }
+        for h in [120.0f32, 100.0, 80.0, 40.0] {
+            for s in frame(&mut panel, h) {
+                let seen = s.clip_rect.intersect(s.shape.visual_bounding_rect());
+                assert!(!seen.is_positive() || seen.bottom() <= h + 2.5, "drawn below a tab {h} tall: to y {} ({:?})", seen.bottom(), s.shape);
+            }
         }
     }
 
