@@ -644,31 +644,22 @@ impl InventoryPanel {
         }
         let mut clicked: Option<Drawn> = None;
         let mut end_visible = false;
-        // Where the server's lists stand, in a strip under the list that
-        // the list's scroll area leaves room for (drawn after it, the
-        // status fell below the panel and was cut off).
+        // Where the server's lists stand: ONE line under the list, which
+        // the list's scroll area leaves room for. A network error is cut
+        // to the line, the whole of it on hover -- wrapped, a server's
+        // twenty-line answer took most of the panel. The list has no
+        // minimum height, so a short panel never pushes the line out of
+        // it (the scroll area's default minimum spilled past its foot).
         let state = self.online.state(&keys);
         let status = state.loading || state.error.is_some() || rows.is_empty();
-        if status {
-            egui::Panel::bottom(egui::Id::new(("catalog_status", family))).resizable(false).show_inside(ui, |ui| {
-                if state.loading {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.weak(t!("catalog.loading"));
-                    });
-                } else if let Some(err) = &state.error {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(err.as_str()).color(ui.visuals().error_fg_color)).wrap());
-                        if ui.button(t!("catalog.retry")).clicked() {
-                            self.online.retry(&keys, &cx.account, &ctx);
-                        }
-                    });
-                } else {
-                    ui.weak(t!("catalog.nothing_matches"));
-                }
-            });
-        }
-        egui::ScrollArea::vertical().id_salt("catalog_list").auto_shrink([false, false]).show(ui, |ui| {
+        let line = ui.spacing().interact_size.y;
+        let list_height = (ui.available_height() - if status { line + ui.spacing().item_spacing.y } else { 0.0 }).max(0.0);
+        egui::ScrollArea::vertical()
+            .id_salt("catalog_list")
+            .auto_shrink([false, false])
+            .max_height(list_height)
+            .min_scrolled_height(0.0)
+            .show(ui, |ui| {
             if family == Family::Palettes && view.group == GroupBy::Pack {
                 end_visible = self.render_palettes(ui, cx, &rows, &mut clicked, hovered);
                 return;
@@ -732,6 +723,28 @@ impl InventoryPanel {
                     .body(body);
             }
         });
+        if status {
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), line), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                if state.loading {
+                    ui.spinner();
+                    ui.weak(t!("catalog.loading"));
+                } else if let Some(err) = &state.error {
+                    // Try again at the line's end; the message cut to what
+                    // is left of it, its first line only.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(t!("catalog.retry")).clicked() {
+                            self.online.retry(&keys, &cx.account, &ctx);
+                        }
+                        let first = err.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add(egui::Label::new(egui::RichText::new(first).color(ui.visuals().error_fg_color)).truncate()).on_hover_text(err.as_str());
+                        });
+                    });
+                } else {
+                    ui.weak(t!("catalog.nothing_matches"));
+                }
+            });
+        }
         // The next page, as the list's end comes into view.
         if !status && end_visible && state.more {
             self.online.more(&keys, &cx.account, &ctx);
@@ -1646,8 +1659,10 @@ mod phone_tests {
     /// **The status fits the panel.** A network error under the list was
     /// drawn after a scroll area that took the whole height, so it fell
     /// below the panel -- cut off, and the dock scrolled the tab to reach
-    /// it (a scrollbar inside a scrollbar). It sits in a strip the list
-    /// leaves room for now, wrapped, Try again beside it.
+    /// it (a scrollbar inside a scrollbar). Then, wrapped in a strip, a
+    /// server's many-line answer took most of the panel, and a short
+    /// panel pushed the strip past its foot. It is one line now, cut to
+    /// fit, Try again at its end, inside a tall panel and a short one.
     #[test]
     fn a_network_error_shows_inside_the_panel() {
         let mut library = crate::scene::palette::global_palette_library().read().unwrap().clone();
@@ -1659,28 +1674,34 @@ mod phone_tests {
         let lists = super::super::inventory_view::online_lists(panel.family, &panel.filters, false);
         assert!(!lists.is_empty(), "Source All asks the server");
         let keys = panel.online.keys(&lists);
-        // Long, and a URL: nowhere to break but anywhere.
-        let error = "Network error: http://localhost:3000/api/v1/flames?scope=curated&sort=name&engine=flame&dimension=2&limit=60: connection refused (os error 10061)";
-        panel.online.fail_for_test(&keys, error);
-        const H: f32 = 500.0;
-        let ctx = egui::Context::default();
-        let mut drawn = Vec::new();
-        for _ in 0..3 {
-            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, H))), ..Default::default() };
-            let out = ctx.run_ui(input, |ui| {
-                super::super::inventory_preview::begin_frame(ui.ctx());
-                egui::CentralPanel::default().show_inside(ui, |ui| {
-                    let mut cx = InventoryContext { config_manager: &mut cm, palette_library: &mut library, account: CloudAccount::default(), script_cloud: &cloud };
-                    let _ = panel.render(ui, &mut cx);
+        // Long, a URL (nowhere to break but anywhere), and a server's
+        // answer of many lines after it.
+        let error = format!(
+            "Network error: http://localhost:3000/api/v1/flames?scope=curated&sort=name&engine=flame&dimension=2&limit=60: connection refused (os error 10061)\n{}",
+            (0..20).map(|i| format!("  <p>line {i} of the server's answer</p>")).collect::<Vec<_>>().join("\n")
+        );
+        panel.online.fail_for_test(&keys, &error);
+        for h in [500.0f32, 160.0] {
+            let ctx = egui::Context::default();
+            let mut drawn = Vec::new();
+            for _ in 0..3 {
+                let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, h))), ..Default::default() };
+                let out = ctx.run_ui(input, |ui| {
+                    super::super::inventory_preview::begin_frame(ui.ctx());
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        let mut cx = InventoryContext { config_manager: &mut cm, palette_library: &mut library, account: CloudAccount::default(), script_cloud: &cloud };
+                        let _ = panel.render(ui, &mut cx);
+                    });
                 });
-            });
-            drawn = placed(&out.shapes);
+                drawn = placed(&out.shapes);
+            }
+            let shown: Vec<&(String, egui::Pos2)> = drawn.iter().filter(|(t, _)| t.starts_with("Network error")).collect();
+            let at = shown.first().unwrap_or_else(|| panic!("the error is drawn at height {h}: {drawn:?}")).1;
+            assert!(at.y > 0.0 && at.y < h - 20.0, "the error inside the panel, not below it: at y {} of {h}", at.y);
+            assert!(!drawn.iter().any(|(t, _)| t.contains("line 3 of the server's answer")), "one line of the error, not its every line");
+            let retry = drawn.iter().find(|(t, _)| *t == t!("catalog.retry").to_string()).map(|(_, p)| *p).expect("Try again");
+            assert!(retry.y < h - 10.0, "Try again inside the panel too: at y {} of {h}", retry.y);
         }
-        let shown: Vec<&(String, egui::Pos2)> = drawn.iter().filter(|(t, _)| error.starts_with(t.split('\n').next().unwrap_or("")) && t.starts_with("Network error")).collect();
-        let at = shown.first().unwrap_or_else(|| panic!("the error is drawn: {drawn:?}")).1;
-        assert!(at.y > 0.0 && at.y < H - 20.0, "the error inside the panel, not below it: at y {}", at.y);
-        let retry = drawn.iter().find(|(t, _)| *t == t!("catalog.retry").to_string()).map(|(_, p)| *p).expect("Try again");
-        assert!(retry.y < H - 10.0, "Try again inside the panel too: at y {}", retry.y);
     }
 
     /// The Fractals catalog (one-catalog-view.md): the presets as cells
