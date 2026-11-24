@@ -84,6 +84,12 @@ echo "Copying assets..."
 mkdir -p pkg/assets/palettes/packs
 cp assets/palettes/packs/*.json pkg/assets/palettes/packs/
 
+# pkg/version.json: the version, commit and profile, which a deploy reads
+# back from the live site (scripts/write_version_json.py). `python` first:
+# on Windows `python3` can be the Store's stub, which only prints a hint.
+PY=$(command -v python || command -v python3)
+"$PY" scripts/write_version_json.py pkg --profile "$PROFILE"
+
 echo ""
 echo "✅ Build complete! Output in ./pkg"
 echo ""

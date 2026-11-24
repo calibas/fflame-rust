@@ -18,6 +18,7 @@ cargo test --release --lib
 # links, the gallery modules and the WASI module checked
 python scripts/release.py check
 python scripts/release.py check --fix      # ...and regenerate stale generated files
+python scripts/release.py check --full     # ...plus the visual suite and the API integration test
 python scripts/release.py gallery          # the gallery modules' own tests, before they deploy
 
 # Visual regression suite (needs a GPU; does NOT build the binary)

@@ -3,7 +3,9 @@
 **Status 2026-11-12:** plan, not built. The user's call: build it as the
 last item before 0.6, and test it with the 0.6 release itself
 ([v0.6.0-release.md](v0.6.0-release.md)). **All six decisions made
-2026-11-24 (§3).**
+2026-11-24 (§3).** **Step 1 of §4 built 2026-11-24** on branch
+`release-stages`: `preflight`, `notes`, `check --full`, `sync-api`, and
+`version.json` in the web and gallery builds (from step 2).
 
 **The goal, in the user's words:** "smaller, more frequent updates,
 different from the enormous changes we've made between 0.5.0 and 0.6.0."

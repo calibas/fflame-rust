@@ -1,14 +1,29 @@
 #!/usr/bin/env python3
 """Release automation you invoke, not automation that invokes itself.
 
-    python scripts/release.py check              # run every gate
+    python scripts/release.py preflight          # three repositories ready, tools reachable
+    python scripts/release.py check              # run every fast gate
     python scripts/release.py check --fix        # ...and regenerate what is stale
+    python scripts/release.py check --full       # ...plus the visual suite and the API integration test
     python scripts/release.py gallery            # the gallery modules' own tests, before they deploy
     python scripts/release.py changelog          # from git, since the last tag
+    python scripts/release.py notes              # the changelog into NOTES.md, for editing
+    python scripts/release.py sync-api           # the generated files into ../ffapi, its tests
     python scripts/release.py build              # every shipping artifact
     python scripts/release.py version 0.5.0      # bump every version together
     python scripts/release.py versions           # show them; exit 1 if they disagree
     python scripts/release.py                    # check, then changelog preview
+
+The stages and their order are docs/projects/release-streamlining.md.
+Machine-local settings live in an untracked release.local.toml beside
+this repository's Cargo.toml, never in the docs:
+
+    [repos]                      # only if they are not beside this one
+    ffapi = "c:/projects/ffapi"
+    ffbrowser = "c:/projects/ffbrowser"
+
+    [server]
+    ssh = "user@host"            # what `ssh` and the deploy stages connect to
 
 Nothing here runs on push, on commit, or on a timer. That is the point:
 the work CI would do is worth automating, the *triggering* is what gets
@@ -225,13 +240,40 @@ def python_tests():
     return run([sys.executable, "-m", "pytest", "-q", "tests"], cwd="python")
 
 
+# The release's own gates (`check --full`): minutes each, and each needs
+# something the fast gates do not -- a GPU and a closed editor for the
+# visual suite, a local ffapi checkout and its database for the API test.
+# Out of the plain `check` so it stays a thing to run between commits.
+RELEASE_GATES = [
+    Gate("visual suite", lambda: visual_suite(),
+         why="~375 renders against the baselines; `python tests/visual/run_tests.py` for the report"),
+    Gate("API integration", lambda: run([sys.executable, "scripts/api_integration.py",
+                                         "--ffapi", str(sibling("ffapi"))]),
+         why="the client's calls against a local ffapi (scripts/api_integration.py)"),
+]
+
+
+def visual_suite():
+    """Build the binary the suite renders with, then run it. The suite
+    does not build, and a running editor locks the binary, which turns a
+    failed build into a stale one being measured."""
+    if editor_running():
+        return False, "FractalArtEditor is running: it locks the binary the suite renders with"
+    ok, out = run(["cargo", "build", "--release", "--bin", "FractalArtEditor"])
+    if not ok:
+        return False, out
+    return run([sys.executable, "tests/visual/run_tests.py"])
+
+
 def cmd_check(args):
     print(f"{BOLD}Gates{RESET}  {DIM}(nothing is fixed unless you pass --fix){RESET}\n")
-    if run_gates(GATES, args):
+    gates = GATES + (RELEASE_GATES if args.full else [])
+    if run_gates(gates, args):
         return 1
     print(f"\n{GREEN}{BOLD}All gates pass.{RESET}")
     print(f"{DIM}Not covered here — they need a GPU and a few minutes:{RESET}")
-    print(f"{DIM}  cargo build --release && python tests/visual/run_tests.py{RESET}")
+    if not args.full:
+        print(f"{DIM}  release.py check --full   (the visual suite and the API integration test){RESET}")
     print(f"{DIM}  python scripts/run_benchmarks.py --quick{RESET}")
     print(f"{DIM}  cargo run --release --bin variation_probe   "
           f"(regenerate if variation math changed){RESET}")
@@ -256,6 +298,11 @@ def run_gates(gates, args):
         ok, out = g.cmd() if callable(g.cmd) else run(g.cmd, cwd=g.cwd)
         secs = time.time() - t0
 
+        if ok is None:
+            # Not applicable here (a setting not made, a tool this
+            # platform lacks): said, and not a failure.
+            print(f"  {YELLOW}skip{RESET}  {g.name:<22} {DIM}{out}{RESET}")
+            continue
         if ok:
             print(f"  {GREEN}pass{RESET}  {g.name:<22} {DIM}{secs:5.1f}s{RESET}")
             continue
@@ -294,12 +341,44 @@ def last_tag():
 
 
 def cmd_changelog(args):
-    since = args.since or last_tag()
+    text, notes = changelog(args.since, args.all)
+    if text is None:
+        print(f"{RED}git log failed:{RESET} {notes[0]}", file=sys.stderr)
+        return 1
+    print(text)
+    for n in notes:
+        print(f"{DIM}# {n}{RESET}", file=sys.stderr)
+    return 0
+
+
+def cmd_notes(args):
+    """The changelog, written to NOTES.md for editing (RELEASE.md §4.1).
+    It is hand-edited, so an existing one is never overwritten unasked."""
+    path = ROOT / "NOTES.md"
+    if path.exists() and not args.force:
+        print(f"{RED}NOTES.md exists{RESET} {DIM}(it may hold your edits): "
+              f"--force to replace it{RESET}", file=sys.stderr)
+        return 1
+    text, notes = changelog(args.since, args.all)
+    if text is None:
+        print(f"{RED}git log failed:{RESET} {notes[0]}", file=sys.stderr)
+        return 1
+    path.write_bytes(text.encode("utf-8"))
+    print(f"{GREEN}wrote{RESET} NOTES.md")
+    for n in notes:
+        print(f"{DIM}  {n}{RESET}")
+    print(f"{DIM}  Edit it down to what a user would notice; it is the GitHub release's notes "
+          f"and is not committed.{RESET}")
+    return 0
+
+
+def changelog(since=None, show_all=False):
+    """(markdown, notes about it), or (None, [error]) when git fails."""
+    since = since or last_tag()
     rng = f"{since}..HEAD" if since else "HEAD"
     ok, out = run(["git", "log", "--format=%H%x00%s", rng])
     if not ok:
-        print(f"{RED}git log failed:{RESET} {out}", file=sys.stderr)
-        return 1
+        return None, [out]
 
     groups, other = {}, []
     for line in out.strip().split("\n"):
@@ -314,7 +393,7 @@ def cmd_changelog(args):
         else:
             other.append((sha[:8], subject))
 
-    if not args.all:
+    if not show_all:
         hidden = {a: v for a, v in groups.items() if a in INTERNAL}
         groups = {a: v for a, v in groups.items() if a not in INTERNAL}
     else:
@@ -330,23 +409,20 @@ def cmd_changelog(args):
             lines.append(f"- {text} ({sha})")
         lines.append("")
 
-    if other and args.all:
+    if other and show_all:
         lines.append("### other")
         for sha, text in other:
             lines.append(f"- {text} ({sha})")
         lines.append("")
 
-    print("\n".join(lines))
-
     n = sum(len(v) for v in groups.values())
-    skipped = sum(len(v) for v in hidden.values()) + (0 if args.all else len(other))
-    print(f"{DIM}# {n} entries"
-          + (f", {skipped} internal/unparsed hidden — --all to see them" if skipped else "")
-          + f"{RESET}", file=sys.stderr)
+    skipped = sum(len(v) for v in hidden.values()) + (0 if show_all else len(other))
+    notes = [f"{n} entries"
+             + (f", {skipped} internal/unparsed hidden — --all to see them" if skipped else "")]
     if not since:
-        print(f"{DIM}# No tags yet, so this is the whole history. "
-              f"Tag a release and the next run is the diff.{RESET}", file=sys.stderr)
-    return 0
+        notes.append("No tags yet, so this is the whole history. "
+                     "Tag a release and the next run is the diff.")
+    return "\n".join(lines), notes
 
 
 # --------------------------------------------------------------- version
@@ -471,6 +547,207 @@ def cmd_version(args):
     return 0
 
 
+# ------------------------------------------------- settings and siblings
+
+LOCAL_CONFIG = ROOT / "release.local.toml"
+
+
+def local_config():
+    """release.local.toml as a dict ({} when there is none). Untracked:
+    the server's address and anything else that is this machine's."""
+    if not LOCAL_CONFIG.exists():
+        return {}
+    import tomllib
+    with open(LOCAL_CONFIG, "rb") as f:
+        return tomllib.load(f)
+
+
+def sibling(name):
+    """Another repository of the release, beside this one unless
+    release.local.toml's [repos] says where."""
+    where = local_config().get("repos", {}).get(name)
+    return Path(where).resolve() if where else ROOT.parent / name
+
+
+SIBLINGS = ["ffapi", "ffbrowser"]
+
+
+def editor_running():
+    """Whether a FractalArtEditor is running: on Windows it locks the
+    binary a release build writes and the visual suite renders with."""
+    if sys.platform == "win32":
+        ok, out = run(["tasklist", "/FI", "IMAGENAME eq FractalArtEditor.exe", "/NH"])
+        return ok and "FractalArtEditor.exe" in out
+    ok, _ = run(["pgrep", "-x", "FractalArtEditor"])
+    return ok
+
+
+# ------------------------------------------------------------- preflight
+
+def repo_ready(path, fetch):
+    """A repository a release can be built from: on main, nothing
+    uncommitted or untracked, level with origin/main. (ok, the problems)."""
+    if not (path / ".git").exists():
+        return False, f"{path}: not a git repository ([repos] in release.local.toml says where)"
+    problems = []
+    _, branch = run(["git", "branch", "--show-current"], cwd=path)
+    if branch.strip() != "main":
+        problems.append(f"on `{branch.strip() or '(detached HEAD)'}`, not main")
+    _, status = run(["git", "status", "--porcelain"], cwd=path)
+    dirty = [l for l in status.splitlines() if l.strip()]
+    if dirty:
+        problems.append(f"{len(dirty)} uncommitted or untracked:")
+        problems += ["  " + l for l in dirty[:8]] + (["  ..."] if len(dirty) > 8 else [])
+    if fetch:
+        ok, out = run(["git", "fetch", "--quiet", "origin"], cwd=path)
+        if not ok:
+            problems.append(f"git fetch failed: {out.strip()}")
+    ok, out = run(["git", "rev-list", "--left-right", "--count", "HEAD...origin/main"], cwd=path)
+    if ok:
+        ahead, behind = (int(n) for n in out.split())
+        if ahead:
+            problems.append(f"{ahead} commit(s) not pushed")
+        if behind:
+            problems.append(f"{behind} commit(s) behind origin/main")
+    else:
+        problems.append("no origin/main to compare with")
+    return not problems, "\n".join(problems)
+
+
+def ssh_reachable():
+    host = local_config().get("server", {}).get("ssh")
+    if not host:
+        return None, "no [server] ssh in release.local.toml (the deploy stages need it)"
+    return run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, "true"])
+
+
+def cmd_preflight(args):
+    print(f"{BOLD}Preflight{RESET}  {DIM}(nothing is changed but the remote-tracking "
+          f"refs a fetch updates){RESET}\n")
+    fetch = not args.no_fetch
+    gates = [Gate(f"{name} ready", lambda p=path: repo_ready(p, fetch),
+                  why="clean, on main, level with origin")
+             for name, path in [("fflame-rust", ROOT)] + [(n, sibling(n)) for n in SIBLINGS]]
+    gates += [
+        Gate("versions agree", lambda: check_versions(),
+             why="`release.py versions` lists them"),
+        Gate("editor closed", lambda: (False, "close FractalArtEditor") if editor_running() else (True, ""),
+             why="a running editor locks the binary the build and the visual suite use"),
+        Gate("gh signed in", ["gh", "auth", "status"],
+             why="`publish` tags and creates the GitHub release with gh"),
+        Gate("server reachable", lambda: ssh_reachable(),
+             why="the deploy stages run over ssh (BatchMode: a key, no password prompt)"),
+    ]
+    if run_gates(gates, argparse.Namespace(fix=False)):
+        return 1
+    print(f"\n{GREEN}{BOLD}Ready.{RESET}")
+    return 0
+
+
+# -------------------------------------------------------------- sync-api
+
+# What the API copies from here (RELEASE.md §3): the file, and the
+# binary that writes it, or None for one committed here and kept current
+# by a gate. They land in ffapi's docs/generated/ under the same name.
+SYNC_FILES = [
+    ("docs/generated/engine-contract.json", None),
+    ("docs/generated/engine-catalog.json", None),
+    ("output/variations-corpus.json", "export_variations_json"),
+    ("output/scripts-corpus.json", "export_scripts_json"),
+    ("output/effects-corpus.json", "export_effects_json"),
+]
+
+# Not copied: the curated manifest is posted to a server, by ffapi's
+# tools/sync_curated.py, at deploy time. Written here so it is current.
+CURATED_MANIFEST = ("output/curated-manifest.json", "export_curated_json")
+
+# ffapi's tests that read the copied files. The first and the last open
+# the database in ffapi's .env (its test database).
+FFAPI_TESTS = ["contract_conformance", "catalog_conformance", "corpus_preflight", "curated_sync"]
+
+
+def _same_text(a, b):
+    """Equal but for line endings: ffapi checks these out CRLF on Windows
+    (core.autocrlf), and git would see no change between the two."""
+    return a.replace(b"\r\n", b"\n") == b.replace(b"\r\n", b"\n")
+
+
+def cmd_sync_api(args):
+    ffapi = sibling("ffapi")
+    dest = ffapi / "docs" / "generated"
+    print(f"{BOLD}Syncing the API{RESET}  {DIM}({ffapi}; nothing is committed there){RESET}\n")
+    if not dest.is_dir():
+        print(f"{RED}No {dest}{RESET} {DIM}([repos] in release.local.toml says where ffapi is){RESET}")
+        return 1
+    # Never over someone's work: the copies replace these files whole.
+    _, status = run(["git", "status", "--porcelain", "--", "docs/generated"], cwd=ffapi)
+    if status.strip() and not args.dry_run:
+        print(f"{RED}ffapi's docs/generated has uncommitted changes:{RESET}\n{status}"
+              f"{DIM}Commit or discard them first; this replaces those files.{RESET}")
+        return 1
+
+    # 1. Ours current: the committed two by their gates (stale ones are
+    #    `check --fix`'s to regenerate, with a diff to read), the rest
+    #    written fresh.
+    gates = [Gate("contract, catalog",
+                  ["cargo", "test", "--release", "--lib", "--", "contract_is_current", "catalog_is_current"],
+                  why="stale: `release.py check --fix`, read the diff, commit, then sync")]
+    for rel, binary in SYNC_FILES + [CURATED_MANIFEST]:
+        if binary:
+            gates.append(Gate(binary,
+                              ["cargo", "run", "--release", "--quiet", "--bin", binary],
+                              why=f"cargo run --release --bin {binary}"))
+    if run_gates(gates, argparse.Namespace(fix=False)):
+        return 1
+
+    # 2. Copy what differs, keeping the line endings ffapi's copy has.
+    print()
+    changed = []
+    for rel, _ in SYNC_FILES:
+        ours = (ROOT / rel).read_bytes()
+        target = dest / Path(rel).name
+        theirs = target.read_bytes() if target.exists() else None
+        if theirs is not None and _same_text(ours, theirs):
+            print(f"  {DIM}same   {Path(rel).name}{RESET}")
+            continue
+        changed.append(target.name)
+        if args.dry_run:
+            print(f"  {YELLOW}differs{RESET} {target.name}")
+            continue
+        if theirs is not None and b"\r\n" in theirs:
+            ours = ours.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        target.write_bytes(ours)
+        print(f"  {GREEN}copied{RESET} {target.name}")
+
+    if args.dry_run:
+        print(f"\n{DIM}Dry run: nothing copied, ffapi's tests not run.{RESET}")
+        return 0
+
+    # 3. ffapi's tests that read them. A failure after a copy is the point:
+    #    the API's side must follow (a vocabulary, the summary's rules).
+    if not args.skip_tests:
+        print(f"\n{BOLD}ffapi's tests{RESET}  {DIM}({', '.join(FFAPI_TESTS)}; "
+              f"the database in its .env){RESET}\n")
+        cmd = ["cargo", "test"] + [a for t in FFAPI_TESTS for a in ("--test", t)]
+        if run_gates([Gate("ffapi conformance", lambda: run(cmd, cwd=ffapi),
+                           why="the API disagrees with the files it was given")],
+                     argparse.Namespace(fix=False)):
+            print(f"\n{DIM}The copies are in place in {dest}; fix the API's side, "
+                  f"or `git checkout docs/generated` there to undo.{RESET}")
+            return 1
+
+    print()
+    if changed:
+        _, stat = run(["git", "diff", "--stat", "--", "docs/generated"], cwd=ffapi)
+        print(stat.rstrip())
+        print(f"\n{GREEN}{BOLD}Synced.{RESET} {DIM}Read the diff and commit it in ffapi.{RESET}")
+    else:
+        print(f"{GREEN}{BOLD}Nothing to sync:{RESET} {DIM}ffapi's copies are current.{RESET}")
+    print(f"{DIM}The curated manifest ({CURATED_MANIFEST[0]}) is posted at deploy: "
+          f"ffapi's tools/sync_curated.py.{RESET}")
+    return 0
+
+
 # ----------------------------------------------------------------- build
 
 # (name, command, note, directory). The two gallery modules are two
@@ -515,6 +792,14 @@ def cmd_build(args):
         p = subprocess.run(cmd, cwd=ROOT / sub if sub else ROOT,
                            capture_output=True, text=True)
         secs = time.time() - t0
+        if p.returncode == 0 and name.startswith("gallery:"):
+            # wasm-pack recreates pkg/, so after it: what deploy-web reads
+            # back from the live site (the web app's comes from
+            # build-wasm.sh itself).
+            ok, out = run([sys.executable, "scripts/write_version_json.py",
+                           f"{sub}/pkg", "--profile", "release"])
+            if not ok:
+                p.returncode, p.stdout, p.stderr = 1, out, ""
         if p.returncode == 0:
             print(f"  {GREEN}built{RESET} {name:<20} {DIM}{secs:6.1f}s{RESET}\n")
         else:
@@ -537,10 +822,30 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd")
 
+    pf = sub.add_parser("preflight", help="all three repositories ready; gh and the server reachable")
+    pf.add_argument("--no-fetch", action="store_true",
+                    help="compare with the remote-tracking refs as they are")
+    pf.set_defaults(fn=cmd_preflight)
+
     c = sub.add_parser("check", help="run every gate")
     c.add_argument("--fix", action="store_true",
                    help="regenerate stale generated files (still read the diff)")
+    c.add_argument("--full", action="store_true",
+                   help="also the visual suite and the API integration test (minutes; a GPU, "
+                        "the editor closed, ffapi beside this repository)")
     c.set_defaults(fn=cmd_check)
+
+    sa = sub.add_parser("sync-api", help="copy the generated files into ffapi and run its tests")
+    sa.add_argument("--dry-run", action="store_true",
+                    help="write ours and say what differs; copy nothing, run nothing in ffapi")
+    sa.add_argument("--skip-tests", action="store_true", help="copy, but leave ffapi's tests")
+    sa.set_defaults(fn=cmd_sync_api)
+
+    n = sub.add_parser("notes", help="the changelog into NOTES.md, for editing")
+    n.add_argument("--since", help="tag or ref (default: last tag)")
+    n.add_argument("--all", action="store_true", help="include docs/tools/merges")
+    n.add_argument("--force", action="store_true", help="replace an existing NOTES.md")
+    n.set_defaults(fn=cmd_notes)
 
     gl = sub.add_parser("gallery", help="the gallery modules' and pyfflame's own tests, before they ship")
     gl.set_defaults(fn=cmd_gallery, fix=False)
@@ -565,7 +870,7 @@ def main():
     args = ap.parse_args()
     if not args.cmd:
         # Bare invocation: the question "could I release right now?"
-        rc = cmd_check(argparse.Namespace(fix=False))
+        rc = cmd_check(argparse.Namespace(fix=False, full=False))
         print()
         cmd_changelog(argparse.Namespace(since=None, all=False))
         return rc

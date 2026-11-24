@@ -79,6 +79,11 @@ echo Copying assets...
 if not exist "pkg\assets\palettes\packs" mkdir "pkg\assets\palettes\packs"
 xcopy /Y /Q "assets\palettes\packs\*.json" "pkg\assets\palettes\packs\" >nul 2>&1
 
+REM pkg\version.json: the version, commit and profile, which a deploy
+REM reads back from the live site (scripts\write_version_json.py).
+python scripts\write_version_json.py pkg --profile %PROFILE%
+if %errorlevel% neq 0 exit /b %errorlevel%
+
 echo.
 echo Build complete! Output in ./pkg
 echo.
