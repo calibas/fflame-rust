@@ -1273,7 +1273,10 @@ def cmd_ship(args):
         if not pause("Commit these on main (\"Release " + version + "\") and push, so the builds "
                      "and the tag name one pushed commit."):
             return 1
-        return 0 if repo_ready(ROOT, fetch=True)[0] else 1
+        ready, problems = repo_ready(ROOT, fetch=True)
+        if not ready:
+            print(f"{RED}Not ready to build from:{RESET}\n{problems}")
+        return 0 if ready else 1
 
     def synced(name, fn):
         def stage():
