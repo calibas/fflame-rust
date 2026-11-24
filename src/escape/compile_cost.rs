@@ -500,3 +500,51 @@ fn compile_cost_rest() {
         println!("  {name:<48} {bytes:>7} B  {ms:>7.0} ms");
     }
 }
+
+/// A/B for a change to the terrain's shaders: the visual suite's terrain
+/// configs, each lit and path traced, rendered small, hashed and timed (the
+/// best of three, the compile out of it: the first render warms the
+/// pipeline cache), to `output/pt-ab/terrain-<tag>.txt` (`TERRAIN_AB_TAG`).
+#[test]
+#[ignore = "an A/B measurement"]
+fn terrain_hash_and_time() {
+    use crate::config::escape::RenderTier;
+    let Ok(tag) = std::env::var("TERRAIN_AB_TAG") else { return };
+    let (device, queue) = pollster::block_on(crate::probe::run::open_device("terrain a/b")).expect("a GPU");
+    let files = [
+        "escape/origami-creases-terrain-rock", "escape/origami-creases-terrain", "escape/terrain-deep-60",
+        "escape/terrain-seahorse-denoised", "escape/terrain-seahorse-lake", "escape/terrain-seahorse-lit",
+        "escape/terrain-seahorse-sky", "escape/terrain-seahorse", "sim/sim-terrain-coral-contours", "sim/sim-terrain-coral-near",
+    ];
+    let mut out = String::new();
+    let only = std::env::var("TERRAIN_AB_ONLY").ok();
+    for f in files.iter().filter(|f| only.as_deref().is_none_or(|o| o.split(',').any(|x| f.contains(x)))) {
+        let text = std::fs::read_to_string(format!("tests/visual/configs/{f}.fflame")).unwrap();
+        let base = crate::config::FractalConfig::from_json(&text).unwrap();
+        for tier in [RenderTier::Lit, RenderTier::PathTraced] {
+            let mut c = base.clone();
+            c.ensure_sources();
+            c.escape.terrain.tier = tier;
+            c.sim.terrain.tier = tier;
+            c.escape.path.samples = 4;
+            c.sim.terrain.path.samples = 4;
+            let mut px = Vec::new();
+            let mut best = f64::MAX;
+            for _ in 0..3 {
+                // `TERRAIN_AB_SIZE=WxH` for a larger picture, the march's share.
+                let (w, h) = std::env::var("TERRAIN_AB_SIZE").ok().and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))).unwrap_or((240, 135));
+                let job = crate::renderer::RenderJob::new(&c, w, h);
+                let t = std::time::Instant::now();
+                px = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data;
+                best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            px.hash(&mut h);
+            out.push_str(&format!("{f}\t{tier:?}\t{:016x}\t{best:.0} ms\n", h.finish()));
+        }
+    }
+    std::fs::create_dir_all("output/pt-ab").unwrap();
+    std::fs::write(format!("output/pt-ab/terrain-{tag}.txt"), &out).unwrap();
+    print!("{out}");
+}
