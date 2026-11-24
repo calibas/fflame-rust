@@ -1077,10 +1077,11 @@ impl ShaderBuilder {
     /// builder so the slot in `xform.variations[idx]` and the `variation_id`
     /// passed to parameterized variation calls always match the buffer layout.
     ///
-    /// `mode_filter`: if `Some(true)` for 2D, drops variations that aren't
-    /// `Basic2D`/`Advanced2D`. This is purely a code-emission filter — the
-    /// dropped variations still occupy their local slot in the buffer
-    /// (harmless: nothing reads them in this shader).
+    /// A 2D shader drops `Only3D` variations. This is purely a
+    /// code-emission filter: the dropped variations keep their local slot
+    /// in the buffer, and their parameters keep their slots in a
+    /// transform's row -- `build_packed_get_param` lays the row out from
+    /// the flame's whole map, never from this list.
     fn active_with_local_indices(
         &self,
         flame: &crate::scene::transforms::Flame,
@@ -1261,23 +1262,6 @@ impl ShaderBuilder {
             .to_string()
     }
 
-    /// Compute the packed parameter layout for the active variation set.
-    ///
-    /// Wraps [`crate::scene::transforms::compute_packed_layout`] given the
-    /// `(name, local_idx)` pairs from `active_with_local_indices`. Walks
-    /// in local-index order and assigns each variation a contiguous slot
-    /// range in the packed buffer.
-    fn packed_layout(
-        &self,
-        active_variations: &[(String, u32)],
-    ) -> Vec<crate::scene::transforms::PackedParamEntry> {
-        let local_map: std::collections::HashMap<String, u32> = active_variations
-            .iter()
-            .map(|(n, i)| (n.clone(), *i))
-            .collect();
-        crate::scene::transforms::compute_packed_layout(&local_map, &self.registry)
-    }
-
     /// Build the per-thread state initialization block injected into main()
     /// before the iteration loop. For each (xform, variation) pair where
     /// the variation declares `wgsl_state_init`, emit a scoped block with
@@ -1443,11 +1427,25 @@ impl ShaderBuilder {
     /// Variations not in the active set never have their `get_param` called
     /// (the shader builder only emits calls for active ones), but the switch
     /// includes a `default` case returning 0.0 for safety.
+    ///
+    /// **The row is laid out from the flame's whole map** -- the one
+    /// `gpu::buffers::pack_gpu_variation_params` and the init shader take
+    /// -- not from the shader's active list, which a 2D shader shortens by
+    /// its `Only3D` variations. Laid out from that list, a 3D-only Rhai
+    /// variation (`fn variation3` alone) in a 2D flame's map, even as a
+    /// sticky extra at weight 0, gave the shader a shorter `PARAM_STRIDE`
+    /// than the host packed: every transform's row after the first was
+    /// read from the wrong place, and julian presets drew nothing or a
+    /// single pixel after a 3D preset with one (the web report of
+    /// 2026-11-24, `a_3d_only_extra_keeps_a_2d_flames_rows`).
     fn build_packed_get_param(
         &self,
-        active_variations: &[(String, u32)],
+        flame: &crate::scene::transforms::Flame,
     ) -> String {
-        let layout = self.packed_layout(active_variations);
+        let local_map = crate::scene::transforms::compute_local_index_map(
+            flame.active_variation_names_ordered(&self.registry),
+        );
+        let layout = crate::scene::transforms::compute_packed_layout(&local_map, &self.registry);
         let mut out = String::new();
         out.push_str(&format!(
             "// Per-flame packed get_param: each active variation has its own\n\
@@ -2068,7 +2066,7 @@ impl ShaderBuilder {
         //    version replaces the fixed-stride version that used to live in
         //    utilities.wgsl — each variation now has exactly its declared
         //    slot count instead of a fixed 16.
-        shader.push_str(&self.build_packed_get_param(&active));
+        shader.push_str(&self.build_packed_get_param(flame));
         shader.push('\n');
 
         // 8a. Per-thread variation state (only emits if any active variation
@@ -3424,6 +3422,53 @@ mod tests {
         .validate(&module)
         .unwrap_or_else(|e| panic!("validation (3d={render_3d}):\n{}", e.emit_to_string(&shader)));
         shader
+    }
+
+    /// **A 3D-only variation keeps its slots in a 2D flame's rows.** A
+    /// Rhai variation with `fn variation3` alone is `Only3D`, which a 2D
+    /// shader leaves out of its code -- and once left out of its row
+    /// layout too, so the shader's `PARAM_STRIDE` came out shorter than
+    /// the host's. One in a 2D flame's map (here at weight 0 on transform
+    /// 0, as the sticky superset carries extras; the web report of
+    /// 2026-11-24 had it from the Halayka presets) shifted every row after
+    /// the first: julian on transforms 1-3 read the wrong slots and Grand
+    /// Julian drew nothing. In a local registry: a test writing the global
+    /// one can hang the suite.
+    #[test]
+    fn a_3d_only_extra_keeps_a_2d_flames_rows() {
+        use crate::scene::transforms::{Flame, Transform};
+        let presets = crate::resources::presets::load_embedded_presets().expect("presets");
+        let halayka = presets.iter().find(|c| c.flame.name.starts_with("Halayka Escape Paths")).expect("a Halayka preset");
+        let custom = halayka.flame.custom_variations.first().expect("its Rhai variation");
+        let mut registry = (*crate::variations::global_registry()).clone();
+        let dl = crate::variations::custom::compile(&custom.source).expect("it compiles");
+        let key = crate::variations::custom::register_into(&mut registry, &dl, &custom.source).expect("it registers");
+        assert!(matches!(registry.get(&key).map(|v| v.category), Some(crate::variations::VariationCategory::Only3D)), "a variation3-only Rhai variation is Only3D");
+        assert!(registry.get(&key).is_some_and(|v| v.slot_count() > 0), "with parameters, or it shifts nothing");
+
+        let xform = |names: &[(&str, f32)]| {
+            let mut t = Transform::new();
+            t.variations.clear();
+            t.variation_order.clear();
+            for (n, w) in names {
+                t.variations.insert(n.to_string(), *w);
+                t.variation_order.push(n.to_string());
+            }
+            t
+        };
+        let mut flame = Flame::new();
+        flame.transforms = vec![xform(&[("julian", 1.0), (key.as_str(), 0.0)]), xform(&[("julian", 1.0)]), xform(&[("julian", 1.0)])];
+        let local_map = crate::scene::transforms::compute_local_index_map(flame.active_variation_names_ordered(&registry));
+        assert!(local_map.contains_key(&key), "the extra is in the flame's map");
+        let host = crate::scene::transforms::packed_param_stride_of(&crate::scene::transforms::compute_packed_layout(&local_map, &registry));
+        let constants = ShaderConstants::with_inlined_transforms(&flame, &registry, 0, crate::scene::transforms::RenderMode::TwoD, false);
+        let shader = ShaderBuilder::new(registry.clone()).build_from_template(&flame, &HashMap::new(), false, false, false, true, &constants);
+        assert!(
+            shader.contains(&format!("const PARAM_STRIDE: u32 = {host}u;")),
+            "the 2D shader's row stride is the host's, {host}: {}",
+            shader.lines().find(|l| l.contains("const PARAM_STRIDE")).unwrap_or("none"),
+        );
+        assert!(!shader.contains(&format!("fn variation_{key}(")), "its code stays out of a 2D shader");
     }
 
     /// The shaders read a transform's row where the host packs it: the
