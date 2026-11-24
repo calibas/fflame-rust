@@ -3491,9 +3491,13 @@ impl EscapeRenderer {
     }
 
     /// Whether the base colouring or the texture layer has a feature:
-    /// the assembler compiles the loop for the union of the two.
+    /// the assembler compiles the loop for the union of the two. A name
+    /// the mode-A table does not hold -- a solid's or a field's colouring,
+    /// asked every frame -- has none: `find_coloring`, not `get_coloring`,
+    /// whose fallback (Escape Count, featureless) gave the same answer
+    /// with a warning each time, thousands a session in the web console.
     fn colourings_have(escape: &EscapeConfig, f: super::ColoringFeature) -> bool {
-        super::get_coloring(&escape.coloring).has_feature(f)
+        super::find_coloring(&escape.coloring).is_some_and(|c| c.has_feature(f))
             || super::layer_of(escape).is_some_and(|l| l.has_feature(f))
     }
 
