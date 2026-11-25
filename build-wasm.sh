@@ -59,6 +59,10 @@ echo "Generating JavaScript bindings..."
 # touched, in any order.
 OUTDIR=./pkg
 if [ "$SYMBOLS" = "1" ]; then OUTDIR=./pkg-names; mkdir -p pkg-names; fi
+# ./pkg from scratch: wasm-bindgen only adds files, and what an older
+# build left there (wasm-pack's package.json and README, a 17 MiB
+# names module) was copied and deployed with every new one.
+if [ "$SYMBOLS" != "1" ]; then rm -rf pkg; fi
 wasm-bindgen $BINDGEN_FLAGS --out-dir "$OUTDIR" --target web "./target/wasm32-unknown-unknown/$PROFILE/fractal_flame_wgpu.wasm"
 
 if [ $? -ne 0 ]; then

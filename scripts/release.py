@@ -9,7 +9,7 @@
     python scripts/release.py changelog          # from git, since the last tag
     python scripts/release.py notes              # the changelog into NOTES.md, for editing
     python scripts/release.py sync-api           # the generated files into ../ffapi, its tests
-    python scripts/release.py sync-web           # the editor page into ../ffbrowser
+    python scripts/release.py sync-web           # the web builds + editor page into ../ffbrowser
     python scripts/release.py deploy-api         # build and restart the API on the server; curated sync
     python scripts/release.py deploy-web         # upload the web builds, build the site, check it
     python scripts/release.py publish            # tag vX.Y.Z, GitHub release with the zips here
@@ -878,17 +878,49 @@ def editor_drift():
     return drift
 
 
+def copy_builds(browser, dry_run):
+    """The three web builds into ffbrowser's public/, where its dev server
+    serves them and a deploy puts them on the server (gitignored there, so
+    nothing to commit). Each replaces its directory whole. Says which
+    commit each was built from, and warns when that is not HEAD."""
+    import json
+    import shutil
+    _, head = run(["git", "rev-parse", "--short=8", "HEAD"])
+    for rel, dest, _ in WEB_BUILDS:
+        src, target = ROOT / rel, browser / dest
+        info_path = src / "version.json"
+        if not info_path.exists():
+            print(f"  {RED}missing{RESET}  {rel}/version.json {DIM}(`release.py build`){RESET}")
+            return False
+        info = json.loads(info_path.read_text(encoding="utf-8"))
+        built = f"{info.get('version')} {info.get('git_hash')} {info.get('profile')}, {info.get('built')}"
+        stale = info.get("git_hash") != head.strip() or info.get("git_dirty")
+        note = f"  {YELLOW}(not HEAD {head.strip()}){RESET}" if stale else ""
+        if dry_run:
+            print(f"  {DIM}would copy{RESET} {rel} -> {dest}  {DIM}{built}{RESET}{note}")
+            continue
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(src, target)
+        print(f"  {GREEN}copied{RESET} {rel} -> {dest}  {DIM}{built}{RESET}{note}")
+    return True
+
+
 def cmd_sync_web(args):
     browser = sibling("ffbrowser")
     dest = browser / EDITOR_DEST
-    print(f"{BOLD}Syncing the editor page into ffbrowser{RESET}  "
-          f"{DIM}({dest}; nothing is committed there){RESET}\n")
+    print(f"{BOLD}Syncing the web builds and the editor page into ffbrowser{RESET}  "
+          f"{DIM}({browser}; nothing is committed there){RESET}\n")
     if not dest.is_dir():
         print(f"{RED}No {dest}{RESET} {DIM}([repos] in release.local.toml says where ffbrowser is){RESET}")
         return 1
+    if not args.page_only:
+        if not copy_builds(browser, args.dry_run):
+            return 1
+        print()
     drift = editor_drift()
     if not drift:
-        print(f"{GREEN}{BOLD}Nothing to sync:{RESET} {DIM}ffbrowser's copy matches.{RESET}")
+        print(f"{GREEN}{BOLD}The editor page matches{RESET} {DIM}ffbrowser's copy; nothing to commit.{RESET}")
         return 0
     for rel, what in drift:
         print(f"  {YELLOW}{what:<13}{RESET} {rel}")
@@ -1280,7 +1312,9 @@ def cmd_ship(args):
 
     def synced(name, fn):
         def stage():
-            if fn(ns(dry_run=dry, skip_tests=False)):
+            # page_only: in a release the builds come later and deploy-web
+            # uploads them; only the tracked editor page needs a commit.
+            if fn(ns(dry_run=dry, skip_tests=False, page_only=True)):
                 return 1
             path = sibling(name)
             _, status = run(["git", "status", "--porcelain"], cwd=path)
@@ -1423,8 +1457,10 @@ def main():
     sa.add_argument("--skip-tests", action="store_true", help="copy, but leave ffapi's tests")
     sa.set_defaults(fn=cmd_sync_api)
 
-    sw = sub.add_parser("sync-web", help="copy the editor page (index.html, css, js) into ffbrowser")
+    sw = sub.add_parser("sync-web", help="copy the web builds and the editor page into ffbrowser")
     sw.add_argument("--dry-run", action="store_true", help="say what differs; copy nothing")
+    sw.add_argument("--page-only", action="store_true",
+                    help="only the editor page (index.html, css, js), not the three builds")
     sw.set_defaults(fn=cmd_sync_web)
 
     dw = sub.add_parser("deploy-web", help="upload the web app and gallery modules, build the site, check it")
