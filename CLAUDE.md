@@ -24,7 +24,7 @@ Project history is in git: `git log --oneline`.
 - Shell within VSCode: Git Bash (MSYS2 MinGW64)
 - Use forward slashes for paths
 - Avoid `/dev/null` (creates literal files on Windows)
-- **Use relative paths for file edits** (e.g., `src/ui/mod.rs` not `c:\projects\fflame-rust\src\ui\mod.rs`) - helps avoid "file unexpectedly modified" errors from IDE/linter race conditions
+- **Use relative paths for file edits** (e.g., `src/ui/mod.rs` not `c:\projects\fractal-art-editor\src\ui\mod.rs`) - helps avoid "file unexpectedly modified" errors from IDE/linter race conditions
 - One-shot codemod scripts go in `scripts/`, not temp folders outside the repo
 
 ## Quick Reference
@@ -54,7 +54,7 @@ Project history is in git: `git log --oneline`.
 - `src/api/` (online client), `src/storage/` (settings, backend, caches, catalogs, plugins, credentials), `src/resources/` (HTTP/filesystem fetching, lazy palette packs)
 - `src/probe/`, `src/census/` - the variation math probe and reachability census; `src/contract.rs` (engine contract), `src/provenance.rs`, `src/shader_dumps.rs`
 - `src/flame_xml.rs` (.flame import/export), `src/png_metadata.rs`, `src/wasm_api.rs`, `src/i18n.rs`
-- `wasm/{render,script}` - the gallery modules (one renderer for every engine, and scripts); `wasm/python` - the library built for WASI, which `python/` (pyfflame) runs with wasmtime and wgpu-py: editing, scripts, rendering, animation ([pyfflame.md](docs/archive/projects/pyfflame.md))
+- `wasm/{render,script}` - the gallery modules (one renderer for every engine, and scripts); `wasm/python` - the library built for WASI, which `python/` (pyfae) runs with wasmtime and wgpu-py: editing, scripts, rendering, animation ([pyfae.md](docs/archive/projects/pyfflame.md))
 
 ### The flame pipeline (each frame; [RENDERER.md](docs/main/RENDERER.md))
 1. **Compute** - the chaos game; each plotted sample atomically adds into a per-pixel u32 histogram (R, G, B, density x `color_scale = 100`). Dispatch = workgroups x 64 threads x `iterations_per_thread` (default 1024). **Orbits persist** between dispatches (orbit buffer, binding 8): only an edit to the dynamics (the orbit key: the flame, render mode, preserve_z, colour mode, speed factor) starts a new generation, never a pan or zoom -- except on a flame carrying variation STATE, which restarts with the accumulation (JWF re-inits variations per render), and on a flame in reset mode (config `reset_orbits`, or a variation with `Feature::ResetsOrbits`), which restarts every dispatch, each orbit `iterations_per_thread` long -- or a variation's `orbit_length` parameter, saved with the flame, which `compute_pass` dispatches on every path. Burn-in is paid once per restart, and the plotted count comes from `OrbitFuses` -- every sample-counting caller must use what `compute_pass` returns. Bad-value recovery as flam3/JWF: X/Y divergence respawns; Z saturates at +/-1e32.
@@ -86,7 +86,7 @@ Opt-in, 2D flames only (config `cylinder_targeting`; code says "cylinder targeti
 ### Config, state, storage ([CONFIG.md](docs/main/CONFIG.md))
 - **All configuration changes flow through ConfigManager**: `ConfigPath` identifies every parameter; the `UpdateType` it returns drives selective GPU updates. Undo: delta-based, 500 states; rapid changes coalesce (500 ms inactivity, 3 s max span); camera gestures coalesce by description.
 - `FractalConfig` (per fractal, undoable; versioned with `migrate_value`, now v7 -- `render_mode`, `perspective_strength`, `preserve_z` live on the config, not the flame) vs `SystemSettings` (device preferences, no undo, saved immediately via `update_system_setting()`): VSync/FPS, iterations per thread, burn-in, the governor and manual workgroups, orbit cache size, the video export's encoder, the viewport letterbox, fly-mode preferences, online credentials, compact mode. The picture's size (`image_size`, what the exports render at) is the config's.
-- Storage (`src/storage/backend.rs`): Windows `%APPDATA%\Fractals for All\Fractal Art Editor\data\`, macOS/Linux via `directories`, WASM localStorage. Presets are one bundled file, `assets/presets.fflame`.
+- Storage (`src/storage/backend.rs`): Windows `%APPDATA%\Fractals for All\Fractal Art Editor\data\`, macOS/Linux via `directories`, WASM localStorage. Presets are one bundled file, `assets/presets.fae`.
 
 ### GPU memory during exports ([EXPORT.md](docs/main/EXPORT.md))
 A background export (PNG on its own device, high-res, video) **freezes the viewport** (`App::freeze_viewport`): nothing renders, its last picture stays, the escape renderer and terrains are freed and rebuilt after. Renderers hold only what they draw: the solid shade pass's textures are made on its first run; escape/terrain/sim renders get `FlameRenderer::for_tail`; a terrain's section renderer frees its pixels once the sections are in; on a discrete GPU an export fits its terrain section cap (64-256) to the card (`fit_export_sections`).
@@ -125,12 +125,12 @@ UPDATE_CONTRACT=1 cargo test --lib contract_is_current        # docs/generated/e
 UPDATE_CATALOG=1 cargo test --lib catalog_is_current          # docs/generated/engine-catalog.json (the API's catalog; api-catalog-spec.md)
 UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps # tests/shader_dumps/
 ```
-The API's corpora come from `cargo run --release --bin export_variations_json` / `export_scripts_json` / `export_effects_json` (written to `output/`, gitignored); the curated manifest -- everything the app ships, which the API's seeding sync imports by content hash -- from `export_curated_json` (`src/curated.rs`; [curated-content.md](docs/projects/curated-content.md)). **A new `Feature`, `VariationCategory` or `ParamType` does NOT move the contract's shape fingerprint** -- tell the API repository directly (RELEASE.md §3). Release builds use `cargo build --profile dist` (31% smaller; the profile name is recorded in every PNG). **The API address follows the profile** (`build.rs`): `dist` talks to `https://fractalsforall.com`, `--release` and debug builds to `http://localhost:3000` (a local ffapi); `FFLAME_API_BASE_URL` at build time overrides. So a `cargo build --release` binary is never one to ship.
+The API's corpora come from `cargo run --release --bin export_variations_json` / `export_scripts_json` / `export_effects_json` (written to `output/`, gitignored); the curated manifest -- everything the app ships, which the API's seeding sync imports by content hash -- from `export_curated_json` (`src/curated.rs`; [curated-content.md](docs/projects/curated-content.md)). **A new `Feature`, `VariationCategory` or `ParamType` does NOT move the contract's shape fingerprint** -- tell the API repository directly (RELEASE.md §3). Release builds use `cargo build --profile dist` (31% smaller; the profile name is recorded in every PNG). **The API address follows the profile** (`build.rs`): `dist` talks to `https://fractalsforall.com`, `--release` and debug builds to `http://localhost:3000` (a local ffapi); `FAE_API_BASE_URL` at build time overrides. So a `cargo build --release` binary is never one to ship.
 
 ### Testing ([docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md))
 - `cargo test --release --lib` - ~1,900 tests; GPU tests skip without an adapter.
 - `python tests/visual/run_tests.py` - the visual suite (~375 configs in 2d/3d/escape/sim/solid/tonemap/variations, tolerance compare). **It does not build**: run `cargo build --release` first, and note a running app locks the binary.
-- Render configs for inspection without the binary: `INSPECT="a.fflame=a.png" INSPECT_SIZE=WxH cargo test --release --lib -- --ignored render_configs_for_inspection`.
+- Render configs for inspection without the binary: `INSPECT="a.fae=a.png" INSPECT_SIZE=WxH cargo test --release --lib -- --ignored render_configs_for_inspection`.
 - `python scripts/run_benchmarks.py --quick` - CPU + GPU benchmarks (its exact-hash tables are informational).
 - `cargo run --release --bin variation_probe` - every variation's arithmetic at adversarial inputs in 2D and 3D (`docs/generated/variation-probe*.txt`); `variation_probe -- compare OLD NEW` finds cross-platform divergence by value class. The first run on a machine pays cold driver compiles (~4 min).
 
@@ -198,7 +198,7 @@ Structural actions -- adding or deleting a transform, loading a config (preset, 
 ### Other additions
 - **An escape formula or colouring**: [ESCAPE.md](docs/main/ESCAPE.md). **A simulation model or colouring**: [SIMULATION.md](docs/main/SIMULATION.md). **An effect**: [EFFECTS.md](docs/main/EFFECTS.md). All registries are append-only.
 - **A palette**: a pack JSON in `assets/palettes/packs/` (it appears on the next start), a loose `.palette` in `assets/palettes/`, or the Palette Editor's import/Save to Library.
-- **A preset**: add the config to `assets/presets.fflame` (one JSON array; desktop reads it at runtime, the binary embeds it as the fallback).
+- **A preset**: add the config to `assets/presets.fae` (one JSON array; desktop reads it at runtime, the binary embeds it as the fallback).
 - **Tone mapping**: `shaders/tonemap.wgsl`, `TonemapParams` in `src/gpu/buffers.rs`, controls in `src/ui/tone_mapping.rs`.
 - **UI controls**: in the panel's own `src/ui/*.rs`, writing through `update_param` / `update_batch`; cross-panel results via `UiResponse`, handled in `src/app/ui_handlers.rs`; availability per mode in `src/ui/visibility.rs`. A set of parameters is never drawn by hand: `ui::params::list` over its `ParamDef`s, through a `ConfigStore`.
 - **3D flame presets**: set the config's `render_mode = RenderMode::ThreeD` and `perspective_strength` (0 orthographic; ~0.1-0.3 typical); give Z structure with 3D variations (zcone, flatten, hemisphere, zscale, ...) and per-transform `g` offsets (`xform.variations.insert("zcone".into(), 0.5)`); check with camera pitch/yaw or fly mode.
@@ -207,8 +207,8 @@ Structural actions -- adding or deleting a transform, loading a config (preset, 
 See @Cargo.toml. Key: **wgpu 29.0** (desktop vulkan/metal/gles -- dx12 deliberately omitted; WASM webgpu only), **winit 0.30**, **egui 0.34** + **egui_dock 0.19**, **serde/serde_json**, **quick-xml** (.flame), **image/png**, **bytemuck**, **cpal/symphonia** (audio; the FFT is ours), **rayon** (CPU export paths), **ureq** (desktop HTTP), **rhai** + **rand_pcg** (scripting; the PCG stream is what `script + seed` means, so it is pinned).
 
 ## File Formats
-- **.fflame** - JSON, the complete FractalConfig (see `src/config/fractal_config.rs`): everything needed for exact reproduction -- except that File > Save As names a curated item's Rhai (`curated` table: kind, canonical name, content hash, entry) instead of carrying its source, fetched back on load (`curated::refs`; Save As for Offline Use keeps the sources) -- the flame, view and camera, rendering settings, colour and palette data, tone mapping, depth effects, and the escape/sim/terrain blocks. Versioned (`CURRENT_CONFIG_VERSION`, migrated on load); new fields are skip-if-default.
-- **.flame** - Apophysis/JWildfire XML (`src/flame_xml.rs`): round-trips the camera (`cam_pitch/yaw`, the `cam_roll`->bank rename quirk, `rotate`->rotation, `cam_pos_x/y/z` + legacy `cam_zpos`), perspective, DoF, post-symmetry, xaos, palettes and variation parameters (with per-parameter unit conversions). Our own extensions (depth-density compensation, far-density fade) are `.fflame`-only.
+- **.fae** (`.fflame` until 2026-11-26, still read everywhere: `config::is_config_path`; [rename.md](docs/projects/rename.md)) - JSON, the complete FractalConfig (see `src/config/fractal_config.rs`): everything needed for exact reproduction -- except that File > Save As names a curated item's Rhai (`curated` table: kind, canonical name, content hash, entry) instead of carrying its source, fetched back on load (`curated::refs`; Save As for Offline Use keeps the sources) -- the flame, view and camera, rendering settings, colour and palette data, tone mapping, depth effects, and the escape/sim/terrain blocks. Versioned (`CURRENT_CONFIG_VERSION`, migrated on load); new fields are skip-if-default.
+- **.flame** - Apophysis/JWildfire XML (`src/flame_xml.rs`): round-trips the camera (`cam_pitch/yaw`, the `cam_roll`->bank rename quirk, `rotate`->rotation, `cam_pos_x/y/z` + legacy `cam_zpos`), perspective, DoF, post-symmetry, xaos, palettes and variation parameters (with per-parameter unit conversions). Our own extensions (depth-density compensation, far-density fade) are `.fae`-only.
 - **.palette** / pack JSON - a palette's name and its colours (stops, or `indexed_colors` hex in most packs).
 
 ## Known Issues
@@ -216,7 +216,7 @@ See @Cargo.toml. Key: **wgpu 29.0** (desktop vulkan/metal/gles -- dx12 deliberat
 - **Config v1 files from two windows** load with the wrong values, by decision: explicit Levels values saved 2026-01-15..05-12 (raw density, now multiples of the mean) and a DoF blur strength saved 2026-01-24..05-29 (now scaled by 0.1). A version stamp cannot pick those files out, so nothing migrates them; re-set them by hand (`docs/archive/projects/config-v2-migration.md`).
 - **Focused Rendering's open gaps** (opt-in only): a forced sample is plotted by the free orbit's transform's opacity, not its word's last transform's; in Speed colour mode it wears the free orbit's colour; the GPU planner's f32 can drop children at 1e5-1e6 (C16).
 - Density effects on the `HighResExporter` path are skipped above a ~4 GiB budget (~9,100^2, 52 B/px with the `Rgba32Float` density chain) to avoid OOM; below it they apply as in the app.
-- No error handling for invalid `.fflame` or `.palette` imports.
+- No error handling for invalid `.fae` or `.palette` imports.
 
 ## Optional/Future Features
 - **Async export** for a custom-size 2D escape or simulation export (flame high-res and terrain exports already run in the background).

@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-#[link(wasm_import_module = "fflame_gpu")]
+#[link(wasm_import_module = "fae_gpu")]
 extern "C" {
     /// Runs one command; returns the length of its result (0: none).
     fn call(cmd: *const u8, cmd_len: usize, data: *const u8, data_len: usize) -> usize;

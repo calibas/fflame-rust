@@ -14,7 +14,7 @@
 //! Original to this project (no JWildfire/Apophysis counterpart).
 //!
 //! # Authors
-//! - fflame-rust (original)
+//! - Fractal Art Editor (original)
 
 use crate::variations::{
     definition::{Feature, VariationDef},

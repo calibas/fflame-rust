@@ -45,16 +45,16 @@ Five manifests carry a version number, one Python module carries it as
 
 ```
 Cargo.toml                 0.5.0   ← desktop + web app, and what PNG metadata records
-wasm/python/Cargo.toml     0.5.0   ← pyfflame's engine module
+wasm/python/Cargo.toml     0.5.0   ← pyfae's engine module
 python/pyproject.toml      0.5.0   ← the wheel's version
-python/pyfflame/__init__.py 0.5.0  ← what pyfflame.__version__ reports
+python/pyfae/__init__.py 0.5.0  ← what pyfae.__version__ reports
 wasm/render/Cargo.toml     0.5.0
 wasm/script/Cargo.toml     0.5.0
 index.html                 ?v=0.5.0 on css/vkb.css and js/vkb.js
 ```
 
 A user reporting "0.5.0 crashes" is describing the app. A user reporting
-"pyfflame 0.1.0 gives a different flame" — which every pyfflame said
+"pyfae 0.1.0 gives a different flame" — which every pyfae said
 until `python/Cargo.toml` was brought into line — is describing a build
 that could have come from any app version, because nothing records which.
 
@@ -67,7 +67,7 @@ gate (§2) fails when any differs from `Cargo.toml` — or when a tracked
 `Cargo.toml` or `pyproject.toml` is missing from the list, which is how
 the three single-engine crates and `python/Cargo.toml` fell behind.
 
-The artifacts are not independently useful: a `pyfflame` wheel and the
+The artifacts are not independently useful: a `pyfae` wheel and the
 app it matches come from one commit, and pretending otherwise creates a
 compatibility matrix nobody will maintain. The cost is a version bump on
 crates that did not change, which is cheap and visible.
@@ -90,7 +90,7 @@ The gates, in order: every version agrees (§1), unit tests
 (`cargo test --release --lib`), the library compiled for
 `wasm32-unknown-unknown`, the generated contract, the shader dumps, doc
 links, the gallery modules (one incremental `cargo check` of both
-gallery crates and their tests) and pyfflame's WASI module. The gallery
+gallery crates and their tests) and pyfae's WASI module. The gallery
 crates' own test runs are `python scripts/release.py gallery`, before the modules deploy.
 The commands are in [TESTING-GUIDE.md §2](TESTING-GUIDE.md).
 
@@ -436,7 +436,7 @@ Different on every surface, and none of it is automatic yet.
 User data survives on both desktop platforms because it lives outside
 the app: `%APPDATA%` / `~/Library/Application Support/…` keyed by bundle
 identity (settings, downloaded plugins, scripts, effects). Replacing the
-app never touches it. `.fflame` files migrate forward on load
+app never touches it. `.fae` files migrate forward on load
 (`CURRENT_CONFIG_VERSION`). From 0.6 on, an older build reads a newer
 file whose `min_reader` it meets, keeping what it cannot read for the
 save (docs/main/CONFIG.md, *Reading a newer config*). 0.5 refuses every
@@ -742,7 +742,7 @@ matter, and neither is cosmetic:
   repo root silently misses `wasm/.cargo/config.toml`, and with it both
   wins it carries: one shared `wasm/target-gallery` for every crate
   under `wasm/` (the parent crate compiled once instead of once each,
-  and ~10 GB less on disk) and `FFLAME_SKIP_GIT_PROVENANCE`, which stops `build.rs`
+  and ~10 GB less on disk) and `FAE_SKIP_GIT_PROVENANCE`, which stops `build.rs`
   re-emitting `GIT_HASH`/`BUILD_TIME` into these builds on every commit.
   That last one was the real cost: a commit touches no gallery code, but
   it changed the hash, which invalidated the parent crate in each
@@ -777,7 +777,7 @@ thing that guards it:
 - **`script + seed` reproduces a flame** across desktop, web and Python.
   Guarded by the CLI-parity fixtures; the pinned PCG64-MCG stream and
   `rand` version are load-bearing (see the `Cargo.toml` comment).
-- **A `.fflame` from an older version still opens.** Guarded by
+- **A `.fae` from an older version still opens.** Guarded by
   `CURRENT_CONFIG_VERSION` and the `migrate_value` arms. Adding a field
   is free (`serde(default)`); changing a *default* needs an explicit arm.
 - **Apophysis/JWildfire `.flame` round-trips.** Guarded by unit tests.

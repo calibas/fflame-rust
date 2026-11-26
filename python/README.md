@@ -1,10 +1,10 @@
-# pyfflame
+# pyfae
 
 Fractal flames, escape-time fractals and simulations from Python: build
 and edit them, run the app's Rhai scripts, render them on the GPU,
 animate them, and write PNGs and video.
 
-pyfflame is the Fractal Art Editor's own engine, built as one
+pyfae is the Fractal Art Editor's own engine, built as one
 WebAssembly module: [wasmtime](https://pypi.org/project/wasmtime/) runs
 it and [wgpu-py](https://pypi.org/project/wgpu/) does its GPU work, so
 one wheel serves every platform those two do. A flame saved here is the
@@ -15,7 +15,7 @@ byte; a render is the CLI's picture.
 
 ```bash
 rustup target add wasm32-wasip1        # once
-python python/build.py                 # the module -> python/pyfflame/fflame.wasm
+python python/build.py                 # the module -> python/pyfae/fae.wasm
 pip install -e python/                 # or: python python/build.py --wheel; pip install python/dist/*.whl
 ```
 
@@ -26,7 +26,7 @@ FFmpeg on the PATH for `VideoWriter`.
 ## Build and edit a flame
 
 ```python
-import pyfflame as ff
+import pyfae as ff
 
 c = ff.Config()
 i = c.add_transform()
@@ -36,7 +36,7 @@ c.add_variation(i, "julian", 1.0)          # checked: a typo raises
 c.set_variation_param(i, "julian.power", 3.0)
 c.zoom = 1.5
 
-c.save("mine.fflame")                      # the app's JSON
+c.save("mine.fae")                      # the app's JSON
 c.save_flame_xml("mine.flame")             # Apophysis / JWildfire XML
 c.set("exposure", 0.8)                     # any setting, by the app's rules
 c.set("Sim.Terrain.Height", 0.25)          # the file's name or the track's
@@ -65,7 +65,7 @@ gives the flame the editor and `FractalArtEditor generate` give.
 src = open("assets/scripts/generators/lsystem.rhai", encoding="utf-8").read()
 r = ff.run_script(src, seed=3, params={"output": "Path (finite depth)", "angle": 90.0})
 print(r.messages)
-r.config.save("hilbert.fflame")            # byte-identical to the CLI's
+r.config.save("hilbert.fae")            # byte-identical to the CLI's
 ```
 
 A choice parameter takes its option's text or index, a colour `"#rrggbb"`
@@ -117,7 +117,7 @@ with eng.open_animation(r.animation, 1280, 720, fps=30) as frames:
 
 ```bash
 python -m pytest python/tests              # GPU tests skip without an adapter
-python python/tools/compare_native.py tests/visual/configs/escape/*.fflame
+python python/tools/compare_native.py tests/visual/configs/escape/*.fae
                                            # the module's pictures against the CLI's
 ```
 

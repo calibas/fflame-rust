@@ -1,4 +1,4 @@
-# pyfflame's engine module is a WASI build: `cargo build --release` here
+# pyfae's engine module is a WASI build: `cargo build --release` here
 # builds it (python/build.py runs exactly that). The target directory is
 # wasm/.cargo/config.toml's, shared with the gallery crates.
 [build]

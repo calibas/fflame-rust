@@ -280,7 +280,7 @@ built-in content.
 Each record carries `kind`, `canonical_name`, `display_name`, `authors`,
 `content_hash`, the content, and its prose. It covers:
 
-- the 84 presets in `assets/presets.fflame` (16 2D, 6 3D, 45
+- the 84 presets in `assets/presets.fae` (16 2D, 6 3D, 45
   escape-time, 17 simulation), as fractals;
 - the 728 palettes in the packs (D7, below);
 - the 647 variations and 18 effects. WGSL comes from the registry, as
@@ -521,7 +521,7 @@ So, with what exists:
    re-keying configs by canonical names; the device learns what is
    curated from the trust lookups, adopted curated scripts and resolved
    references (`curated_known.json`), so a save needs no network; only
-   `.fflame` saves strip -- PNG metadata and Save Online carry full
+   `.fae` saves strip -- PNG metadata and Save Online carry full
    sources (a picture opens anywhere; the server's catalog reads them);
    WGSL variations and palettes are not in the table (a variation is
    named already; a palette is carried as colours); the CLI does not

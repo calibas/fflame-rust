@@ -6,8 +6,8 @@
     python scripts/governor_playback.py [--seconds N] [--only a,b] [--warm] [--tag T] [--render-scale S]
 
 Each scene in output/governor/scenes/ is opened in the release app with
-the frame log on (FFLAME_FRAME_LOG, FFLAME_FRAME_LOG_OPEN,
-FFLAME_FRAME_LOG_SECONDS; src/app/frame_log.rs), played for N seconds
+the frame log on (FAE_FRAME_LOG, FAE_FRAME_LOG_OPEN,
+FAE_FRAME_LOG_SECONDS; src/app/frame_log.rs), played for N seconds
 (default 20) and closed; the logs go to output/governor/playback[-T]/.
 `--warm` first runs each scene for a few seconds and throws the log
 away: the first run after a rebuild pays the driver's cold shader
@@ -40,20 +40,20 @@ def binary():
 
 
 def run(exe, scene, log, seconds, render_scale=None, target_fps=None, vsync=None, no_gpu_timer=False):
-    env = dict(os.environ, FFLAME_FRAME_LOG=log, FFLAME_FRAME_LOG_OPEN=scene,
-               FFLAME_FRAME_LOG_SECONDS=str(seconds))
+    env = dict(os.environ, FAE_FRAME_LOG=log, FAE_FRAME_LOG_OPEN=scene,
+               FAE_FRAME_LOG_SECONDS=str(seconds))
     if render_scale is not None:
         # The run's render scale, in place of the saved setting (untouched).
-        env['FFLAME_FRAME_LOG_RENDER_SCALE'] = str(render_scale)
+        env['FAE_FRAME_LOG_RENDER_SCALE'] = str(render_scale)
     if target_fps is not None:
         # The run's Target Frame Rate ('display' or fps), likewise.
-        env['FFLAME_FRAME_LOG_TARGET_FPS'] = str(target_fps)
+        env['FAE_FRAME_LOG_TARGET_FPS'] = str(target_fps)
     if vsync is not None:
         # The run's VSync ('on' or 'off'), likewise.
-        env['FFLAME_FRAME_LOG_VSYNC'] = vsync
+        env['FAE_FRAME_LOG_VSYNC'] = vsync
     if no_gpu_timer:
         # Without the frame timer, as a browser without timestamp-query.
-        env['FFLAME_FRAME_LOG_NO_GPU_TIMER'] = '1'
+        env['FAE_FRAME_LOG_NO_GPU_TIMER'] = '1'
     try:
         subprocess.run([exe], env=env, timeout=seconds + 120, check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -148,10 +148,10 @@ class VisualTestRunner:
 
         This warmup ensures consistent performance measurements across all tests.
         """
-        warmup_config = self.configs_dir / "warmup.fflame"
+        warmup_config = self.configs_dir / "warmup.fae"
 
         if not warmup_config.exists():
-            print("Note: No warmup.fflame found - skipping GPU warmup")
+            print("Note: No warmup.fae found - skipping GPU warmup")
             return
 
         print("GPU Warmup: Running warmup render...")
@@ -490,7 +490,7 @@ class VisualTestRunner:
         configs = []
 
         # Search for all .fflame files
-        for fflame_path in self.configs_dir.rglob("*.fflame"):
+        for fflame_path in sorted([*self.configs_dir.rglob("*.fae"), *self.configs_dir.rglob("*.fflame")]):
             # Get category from parent directory name
             category = fflame_path.parent.name if fflame_path.parent != self.configs_dir else "general"
 

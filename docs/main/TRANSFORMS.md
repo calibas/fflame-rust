@@ -118,7 +118,7 @@ override, two `Replace` or two colour-writing variations, or a
 the visual suite) turn the superset off. See
 [SHADERS.md](SHADERS.md#the-sticky-variation-superset).
 
-### `.fflame` serialization
+### `.fae` serialization
 
 `Transform` has hand-written serde:
 - Maps are written as sorted maps, so a config's JSON is byte-stable.
@@ -632,7 +632,7 @@ cannot evaluate) imports as 0.
   alone: effects, Levels, palette squeeze, fog, depth-density
   compensation, far-density fade.
 
-Use `.fflame` for a lossless save.
+Use `.fae` for a lossless save.
 
 **Compatibility trackers:**
 [jwf-features.md](../archive/projects/jwf-features.md) (non-variation JWildfire

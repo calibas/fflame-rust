@@ -1,4 +1,4 @@
-//! fflame-render — the Endless Gallery's renderer.
+//! fae-render — the Endless Gallery's renderer.
 //!
 //! One call: a `FractalConfig` JSON string (exactly what the script
 //! module's `config_json` field carries, or any `.fflame` file) plus
@@ -39,10 +39,10 @@
 //! error rather than sharing the renderer — see `render_impl`. `release()`
 //! frees everything for a page that is done.
 
-use fractal_flame_wgpu::config::defaults::DEFAULT_EXPORT_ITERATIONS_PER_THREAD;
-use fractal_flame_wgpu::config::FractalConfig;
-use fractal_flame_wgpu::renderer::compute_kernel::FlameRenderer;
-use fractal_flame_wgpu::renderer::render::{render_with, NoProgress, RenderJob};
+use fae::config::defaults::DEFAULT_EXPORT_ITERATIONS_PER_THREAD;
+use fae::config::FractalConfig;
+use fae::renderer::compute_kernel::FlameRenderer;
+use fae::renderer::render::{render_with, NoProgress, RenderJob};
 use std::cell::RefCell;
 
 /// The device, queue and renderer, kept alive across tiles.

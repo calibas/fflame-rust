@@ -9,7 +9,7 @@ import copy
 import json
 import os
 
-BASE = "tests/visual/configs/sim/mccabe-memory.fflame"
+BASE = "tests/visual/configs/sim/mccabe-memory.fae"
 OUT = "output/mccabe-scale-warp"
 
 # name -> {param: value}, scales 0-4 (radii 2..32).

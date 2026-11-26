@@ -28,13 +28,13 @@
 //! param-slot ceiling binds long before 95 arbitrary variations), so it
 //! measures branch-and-code-size cost, not heavyweight-body cost.
 
-use fractal_flame_wgpu::config::FractalConfig;
-use fractal_flame_wgpu::renderer::compute_kernel::FlameRenderer;
-use fractal_flame_wgpu::renderer::render::{render_with, NoProgress, RenderJob};
-use fractal_flame_wgpu::scene::randomize::{
+use fae::config::FractalConfig;
+use fae::renderer::compute_kernel::FlameRenderer;
+use fae::renderer::render::{render_with, NoProgress, RenderJob};
+use fae::scene::randomize::{
     generate_random_flame_with_rng, RandomGeneratorSettings,
 };
-use fractal_flame_wgpu::scene::transforms::Flame;
+use fae::scene::transforms::Flame;
 use rand::SeedableRng;
 
 const SEEDS: u64 = 20;
@@ -69,7 +69,7 @@ fn main() {
 /// order Layer B's map will use for sticky extras.
 fn pool_in_canonical_order() -> Vec<String> {
     let settings = RandomGeneratorSettings::default();
-    let reg = fractal_flame_wgpu::variations::global_registry();
+    let reg = fae::variations::global_registry();
     reg.names()
         .iter()
         .filter(|n| settings.enabled_variations.contains(*n))
@@ -168,7 +168,7 @@ fn dead_cost_curve(device: &wgpu::Device, queue: &wgpu::Queue) {
 
     // Small-footprint dead candidates: registry order, parameterless or
     // nearly so, so 95 of them stay under the 1600 param-slot ceiling.
-    let reg = fractal_flame_wgpu::variations::global_registry();
+    let reg = fae::variations::global_registry();
     let candidates: Vec<String> = reg
         .names()
         .iter()

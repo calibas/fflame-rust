@@ -1699,7 +1699,7 @@ fn write_xform(
         carries_custom(&parent_config.flame, name) || registry.get(name).is_some_and(|v| v.provenance == crate::provenance::Provenance::Local)
     };
     for name in xform.variations.keys().filter(|n| custom(n)) {
-        log::warn!("`.flame` export: the custom variation `{name}` is not written (only a .fflame carries it)");
+        log::warn!("`.flame` export: the custom variation `{name}` is not written (only a .fae carries it)");
     }
 
     // Variations — emit in the transform's recorded order

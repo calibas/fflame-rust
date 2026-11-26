@@ -34,7 +34,7 @@ pub fn render_help_panel_content(
 
         ui.label(t!("help.tutorial_description"));
         if ui.link(t!("help.view_tutorial")).clicked() {
-            let _ = webbrowser::open("https://github.com/calibas/fflame-rust/tree/main/docs/tutorials/README.md");
+            let _ = webbrowser::open("https://github.com/calibas/fractal-art-editor/tree/main/docs/tutorials/README.md");
         }
         ui.add_space(12.0);
 

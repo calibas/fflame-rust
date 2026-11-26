@@ -103,7 +103,7 @@ for formula, items in SELECTION.items():
     const = formula.upper()
     lines = [f"pub static {const}: &[EscapePreset] = &["]
     for display, stem in items:
-        path = f"tests/visual/configs/escape/{stem}.fflame"
+        path = f"tests/visual/configs/escape/{stem}.fae"
         d = json.load(io.open(path, encoding="utf-8"))
         e = d.get("escape", {})
         assert e.get("formula", "mandelbrot") == formula, (stem, e.get("formula"))
@@ -129,7 +129,7 @@ for field, items in FIELD_SELECTION.items():
     const = field.upper()
     lines = [f"pub static {const}: &[EscapePreset] = &["]
     for display, stem in items:
-        path = f"tests/visual/configs/escape/{stem}.fflame"
+        path = f"tests/visual/configs/escape/{stem}.fae"
         d = json.load(io.open(path, encoding="utf-8"))
         e = d.get("escape", {})
         assert e.get("formula") == field, (stem, e.get("formula"))

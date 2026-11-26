@@ -525,7 +525,7 @@ model and colouring registries, and Save as texture. See
 ### Textures
 
 The simulation textures an escape-time config can use: the shipped
-presets (`assets/textures/*.fflame`) and the user's own, saved from
+presets (`assets/textures/*.fae`) and the user's own, saved from
 Simulation mode with Save as texture, each with a generated preview
 (desktop generates one a frame; the web spawns them). Picking one
 writes it into the config as one undo step and, from another mode,

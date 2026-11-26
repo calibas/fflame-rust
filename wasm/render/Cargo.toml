@@ -1,4 +1,4 @@
-# fflame-render — the Endless Gallery's renderer, as a standalone
+# fae-render — the Endless Gallery's renderer, as a standalone
 # WASM module. FractalConfig JSON + dimensions in, raw RGBA pixels out
 # (canvas.putImageData on the JS side; PNG encoding, if wanted, is
 # canvas.toBlob — no image codecs in here).
@@ -7,7 +7,7 @@
 # every crate under wasm/. The app must be unaffected by anything here.
 
 [package]
-name = "fflame-render"
+name = "fae-render"
 version = "0.5.0"
 edition = "2021"
 
@@ -26,7 +26,7 @@ crate-type = ["cdylib", "rlib"]
 # simulation layer is warped by the flame -- and a module without the
 # catalog drew those configs wrong without saying so. `terrain` stays
 # off: a terrain config renders as its 2D picture.
-fractal_flame_wgpu = { path = "../..", default-features = false }
+fae = { path = "../..", default-features = false }
 # The main crate's wgpu; its features (webgpu on wasm32, the native
 # backends otherwise) come from the main crate and unify with this.
 wgpu = { version = "29.0", default-features = false }

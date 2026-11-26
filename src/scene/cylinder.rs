@@ -4846,7 +4846,7 @@ mod gpu_tests {
             }
         }
         let mut zoomset: Vec<std::path::PathBuf> = std::fs::read_dir("output/flame-zoom")
-            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().and_then(|x| x.to_str()) == Some("fflame")).collect())
+            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| crate::config::is_config_path(&p)).collect())
             .unwrap_or_default();
         zoomset.sort();
         for path in &zoomset {
@@ -7130,7 +7130,7 @@ mod tests {
                 let Ok(text) = std::fs::read_to_string(&p) else { continue };
                 let stem = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
                 match p.extension().and_then(|x| x.to_str()) {
-                    Some("fflame") => {
+                    Some("fae" | "fflame") => {
                         if let Ok(c) = serde_json::from_str::<crate::config::FractalConfig>(&text) {
                             configs.push((stem, c));
                         }
@@ -9875,7 +9875,7 @@ mod tests {
         files.sort();
 
         for path in files {
-            if path.extension().and_then(|x| x.to_str()) != Some("fflame") {
+            if !crate::config::is_config_path(&path) {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&path) else { continue };
@@ -10364,7 +10364,7 @@ mod tests {
         let mut files: Vec<std::path::PathBuf> = Vec::new();
         for dir in ["output/flame-zoom", "tests/visual/configs/2d", "tests/visual/configs/variations"] {
             if let Ok(rd) = std::fs::read_dir(dir) {
-                files.extend(rd.flatten().map(|e| e.path()).filter(|p| p.extension().and_then(|x| x.to_str()) == Some("fflame")));
+                files.extend(rd.flatten().map(|e| e.path()).filter(|p| crate::config::is_config_path(&p)));
             }
         }
         files.sort();

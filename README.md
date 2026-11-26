@@ -1,5 +1,5 @@
 # Fractal Art Editor [FAE]
-GPU-accelerated Fractal Flame Renderer
+GPU-accelerated Fractal Renderer
 
 We just launched our companion website, [Fractals for All](https://fractalsforall.com/), which includes an API for saving and sharing fractals online.
 
@@ -7,9 +7,9 @@ See the [online version in your browser](https://fractalsforall.com/editor/) (li
 
 ## Installation
 
-See the [Releases](https://github.com/calibas/fflame-rust/releases) page for the latest version.
+See the [Releases](https://github.com/calibas/fractal-art-editor/releases) page for the latest version.
 
-- [Download 0.5 Beta](https://github.com/calibas/fflame-rust/releases/tag/0.5)
+- [Download 0.5 Beta](https://github.com/calibas/fractal-art-editor/releases/tag/0.5)
 
 ### Building
 Download or clone this reposity, [install Rust](https://rust-lang.org/tools/install/) and then run:

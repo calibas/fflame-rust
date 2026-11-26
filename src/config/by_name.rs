@@ -215,7 +215,7 @@ mod tests {
                 let path = entry.path();
                 if path.is_dir() {
                     stack.push(path);
-                } else if path.extension().is_some_and(|e| e == "fflame") {
+                } else if crate::config::is_config_path(&path) {
                     out.extend(std::fs::read_to_string(&path).ok().and_then(|t| FractalConfig::from_json(&t).ok()));
                 }
             }

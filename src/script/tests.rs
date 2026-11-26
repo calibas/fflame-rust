@@ -4936,8 +4936,8 @@ fn shipped_scripts_give_the_clis_flames_for_their_seeds() {
     let basic = include_str!("../../assets/scripts/generators/basic_random.rhai");
     let jitter = include_str!("../../assets/scripts/modifiers/jitter.rhai");
     let lsystem = include_str!("../../assets/scripts/generators/lsystem.rhai");
-    let base = fixture("basic_random_seed7.fflame");
+    let base = fixture("basic_random_seed7.fae");
     assert_eq!(flame(basic, 7, None, None), value(&base), "basic_random, seed 7");
-    assert_eq!(flame(jitter, 7, Some(&base), None), value(&fixture("basic_random_seed7_jitter.fflame")), "jitter on it, seed 7");
-    assert_eq!(flame(lsystem, 3, None, Some(("preset", "2D · Koch snowflake"))), value(&fixture("lsystem_koch_seed3.fflame")), "lsystem's Koch snowflake, seed 3");
+    assert_eq!(flame(jitter, 7, Some(&base), None), value(&fixture("basic_random_seed7_jitter.fae")), "jitter on it, seed 7");
+    assert_eq!(flame(lsystem, 3, None, Some(("preset", "2D · Koch snowflake"))), value(&fixture("lsystem_koch_seed3.fae")), "lsystem's Koch snowflake, seed 3");
 }

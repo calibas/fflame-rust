@@ -10,7 +10,7 @@
 // panics and log output without ceremony.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-use fractal_flame_wgpu::desktop_main;
+use fae::desktop_main;
 
 #[cfg(not(target_arch = "wasm32"))]
 use clap::{Parser, Subcommand};
@@ -128,8 +128,8 @@ enum Commands {
         supersample: bool,
 
         /// Force a render engine (auto = size-based routing; flamerenderer / highres force one path — for parity testing)
-        #[arg(long, value_enum, default_value_t = fractal_flame_wgpu::ExportEngine::Auto)]
-        engine: fractal_flame_wgpu::ExportEngine,
+        #[arg(long, value_enum, default_value_t = fae::ExportEngine::Auto)]
+        engine: fae::ExportEngine,
     },
 
     /// Export animation to video (pipes directly to ffmpeg, requires ffmpeg in PATH)
@@ -161,7 +161,7 @@ enum Commands {
         fps: u32,
 
         /// Iterations per thread — trajectory depth per dispatch (the interactive app uses 256)
-        #[arg(long, default_value_t = fractal_flame_wgpu::config::defaults::DEFAULT_EXPORT_ITERATIONS_PER_THREAD)]
+        #[arg(long, default_value_t = fae::config::defaults::DEFAULT_EXPORT_ITERATIONS_PER_THREAD)]
         iterations_per_thread: u32,
 
         /// Video codec: h264, h265, or vp9 (default: h265)
@@ -336,7 +336,7 @@ fn install_crash_breadcrumb() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let bt = std::backtrace::Backtrace::force_capture();
-        if let Ok(dir) = fractal_flame_wgpu::storage::backend::get_app_data_dir() {
+        if let Ok(dir) = fae::storage::backend::get_app_data_dir() {
             use std::io::Write;
             let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
             if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -357,7 +357,7 @@ fn main() {
         // Panic breadcrumb first: everything after this can crash. Then
         // the native one: a driver fault never reaches the panic hook.
         install_crash_breadcrumb();
-        fractal_flame_wgpu::crash_report::install();
+        fae::crash_report::install();
         // Before anything can print, including clap's `--help` and its
         // parse errors.
         if std::env::args_os().len() > 1 {
@@ -368,10 +368,10 @@ fn main() {
         match cli.command {
             Some(Commands::ListEncoders) => {
                 // List available FFmpeg encoders
-                fractal_flame_wgpu::animation::export::print_available_encoders();
+                fae::animation::export::print_available_encoders();
             }
             Some(Commands::Generate { script, output, seed, base, sets, list_params }) => {
-                fractal_flame_wgpu::generate_mode(
+                fae::generate_mode(
                     &script,
                     output.as_deref(),
                     seed,
@@ -382,12 +382,12 @@ fn main() {
             }
             Some(Commands::Export { input, output, width, height, category, iterations_per_thread, dump_shader, transparent, premultiplied, supersample, strip_metadata, engine }) => {
                 // Before any render: the encoder reads this from a global.
-                fractal_flame_wgpu::png_metadata::set_strip_metadata(strip_metadata);
+                fae::png_metadata::set_strip_metadata(strip_metadata);
                 // Run in headless export mode
-                fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread, dump_shader, transparent, premultiplied, engine, supersample);
+                fae::export_mode(&input, &output, width, height, category, iterations_per_thread, dump_shader, transparent, premultiplied, engine, supersample);
             }
             Some(Commands::ExportAnimation { config, animation, output, width, height, fps, iterations_per_thread, video_codec, hw_accel, video_quality, audio, audio_offset, audio_fade_in, audio_fade_out, audio_bitrate, render_scale, upscaler, escape_supersample }) => {
-                use fractal_flame_wgpu::animation::export::{HardwareAccel, VideoCodec};
+                use fae::animation::export::{HardwareAccel, VideoCodec};
 
                 // An unknown name falls back to the DEFAULT, and says
                 // which one that is. (It used to print "Using h264" and
@@ -420,21 +420,21 @@ fn main() {
                 }
 
                 // Build video settings (always required - pipes directly to ffmpeg)
-                let video_settings = fractal_flame_wgpu::animation::export::VideoEncodingSettings {
+                let video_settings = fae::animation::export::VideoEncodingSettings {
                     codec,
                     hardware_accel: if hardware_accel.supports_codec(codec) {
                         hardware_accel
                     } else {
-                        fractal_flame_wgpu::animation::export::HardwareAccel::None
+                        fae::animation::export::HardwareAccel::None
                     },
                     quality: video_quality,
-                    preset: fractal_flame_wgpu::animation::export::EncodingPreset::default(),  // TODO: Add CLI args
-                    tune: fractal_flame_wgpu::animation::export::EncodingTune::default(),
+                    preset: fae::animation::export::EncodingPreset::default(),  // TODO: Add CLI args
+                    tune: fae::animation::export::EncodingTune::default(),
                 };
 
                 // Build audio config (if audio file specified)
                 let audio_config = audio.map(|file| {
-                    fractal_flame_wgpu::animation::export::AudioExportConfig {
+                    fae::animation::export::AudioExportConfig {
                         file: std::path::PathBuf::from(file),
                         offset: audio_offset,
                         fade_in: audio_fade_in,
@@ -444,8 +444,8 @@ fn main() {
                 });
 
                 // The export's speed-ups (`ExportRung`).
-                let upscaler = fractal_flame_wgpu::renderer::upscale::UpscaleFilter::from_cli_name(&upscaler).unwrap_or_else(|| {
-                    let fallback = fractal_flame_wgpu::renderer::upscale::UpscaleFilter::default();
+                let upscaler = fae::renderer::upscale::UpscaleFilter::from_cli_name(&upscaler).unwrap_or_else(|| {
+                    let fallback = fae::renderer::upscale::UpscaleFilter::default();
                     eprintln!(
                         "Unknown upscaler '{upscaler}' (expected nearest, bilinear, catmull-rom or fsr). Using the default, {fallback:?}."
                     );
@@ -454,14 +454,14 @@ fn main() {
                 if !(0.25..=1.0).contains(&render_scale) {
                     eprintln!("--render-scale {render_scale} is outside 0.25-1; it is clamped.");
                 }
-                let rung = fractal_flame_wgpu::animation::export::ExportRung {
+                let rung = fae::animation::export::ExportRung {
                     render_scale,
                     upscaler,
                     escape_supersample,
                 };
 
                 // Run animation export mode
-                fractal_flame_wgpu::export_animation_mode(config.as_deref(), &animation, &output, width, height, fps, iterations_per_thread, video_settings, audio_config, rung);
+                fae::export_animation_mode(config.as_deref(), &animation, &output, width, height, fps, iterations_per_thread, video_settings, audio_config, rung);
             }
             None => {
                 // Run normal GUI mode

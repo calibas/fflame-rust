@@ -812,7 +812,7 @@ fn dbg_what_persistent_orbits_cost() {
     if let Some(c) = band_flame() {
         flames.push(("julian-disc (band)".into(), c));
     }
-    for (name, path) in [("random1", "output/flame-zoom/random1.fflame"), ("bubble-3d", "tests/visual/configs/3d/bubble-3d.fflame")] {
+    for (name, path) in [("random1", "output/flame-zoom/random1.fflame"), ("bubble-3d", "tests/visual/configs/3d/bubble-3d.fae")] {
         if let Ok(text) = std::fs::read_to_string(path) {
             let mut c: FractalConfig = serde_json::from_str(&text).expect("a config");
             c.levels_enabled = false;

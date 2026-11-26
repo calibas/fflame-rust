@@ -781,7 +781,7 @@ in [EXPORT.md](EXPORT.md) (*Video Export*). What belongs to animation:
   iterations are the export's own. Into the platform's Videos folder. The CLI:
 
   ```bash
-  FractalArtEditor export-animation -c config.fflame -a anim.anim -o out.mp4 \
+  FractalArtEditor export-animation -c config.fae -a anim.anim -o out.mp4 \
     -w 1920 -H 1080 --fps 30 --video-codec h265 --hw-accel none --video-quality 18 \
     --audio track.mp3 --audio-offset=-2.0
   ```
@@ -881,7 +881,7 @@ fn value(t, p, ctx) { #{ zoom: p.depth * sin(t) } }
 
 A Rhai script that touches the `anim` object emits an animation beside
 its flame, with the flame as its `base_config`; the CLI writes it as an
-`.anim` next to the `.fflame`, and the app loads it after the script's
+`.anim` next to the `.fae`, and the app loads it after the script's
 config and binds it. The calls are in [SCRIPTING.md](SCRIPTING.md)
 (*The `anim` object*, *Per-transform keyframes*, *Animating the
 simulation itself*).

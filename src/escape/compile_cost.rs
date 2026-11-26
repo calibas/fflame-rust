@@ -362,7 +362,7 @@ fn flame_chain_hash() {
     let (device, queue) = pollster::block_on(crate::probe::run::open_device("flame a/b")).expect("a GPU");
     let mut cfgs: Vec<(String, crate::config::FractalConfig)> = Vec::new();
     for f in ["3d/stereogram-smoke", "variations/multi_kaleidoscope-smoke", "variations/spray_blur-normal-xform-smoke", "variations/spray_blur-smoke"] {
-        let text = std::fs::read_to_string(format!("tests/visual/configs/{f}.fflame")).unwrap();
+        let text = std::fs::read_to_string(format!("tests/visual/configs/{f}.fae")).unwrap();
         cfgs.push((f.to_string(), crate::config::FractalConfig::from_json(&text).unwrap()));
     }
     let xf = |vars: &[&str], a: f32| {
@@ -519,7 +519,7 @@ fn terrain_hash_and_time() {
     let mut out = String::new();
     let only = std::env::var("TERRAIN_AB_ONLY").ok();
     for f in files.iter().filter(|f| only.as_deref().is_none_or(|o| o.split(',').any(|x| f.contains(x)))) {
-        let text = std::fs::read_to_string(format!("tests/visual/configs/{f}.fflame")).unwrap();
+        let text = std::fs::read_to_string(format!("tests/visual/configs/{f}.fae")).unwrap();
         let base = crate::config::FractalConfig::from_json(&text).unwrap();
         for tier in [RenderTier::Lit, RenderTier::PathTraced] {
             let mut c = base.clone();

@@ -62,7 +62,7 @@ REM ./pkg from scratch: wasm-bindgen only adds files, and what an older
 REM build left there (wasm-pack's package.json and README, a 17 MiB
 REM names module) was copied and deployed with every new one.
 if not "%SYMBOLS%"=="1" if exist "pkg" rmdir /S /Q "pkg"
-wasm-bindgen %BINDGEN_FLAGS% --out-dir %OUTDIR% --target web ./target/wasm32-unknown-unknown/%PROFILE%/fractal_flame_wgpu.wasm
+wasm-bindgen %BINDGEN_FLAGS% --out-dir %OUTDIR% --target web ./target/wasm32-unknown-unknown/%PROFILE%/fae.wasm
 if %errorlevel% neq 0 exit /b %errorlevel%
 
 REM A names build stops here: nothing of it goes into ./pkg. (It used

@@ -652,7 +652,7 @@ pub struct App {
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
-    /// The frame log (`FFLAME_FRAME_LOG`; frame_log.rs), when asked for.
+    /// The frame log (`FAE_FRAME_LOG`; frame_log.rs), when asked for.
     pub(super) frame_log: Option<frame_log::FrameLog>,
     /// Each frame's GPU time for the UI and for the engine
     /// (`gpu::timer::FrameTimer`), while the device can time passes: what
@@ -1068,7 +1068,7 @@ impl App {
             update_check_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
 
-        // A scripted run may go without it (`FFLAME_FRAME_LOG_NO_GPU_TIMER`;
+        // A scripted run may go without it (`FAE_FRAME_LOG_NO_GPU_TIMER`;
         // frame_log.rs), as a browser without `timestamp-query` does.
         app.frame_timer = if frame_log::without_gpu_timer() {
             None

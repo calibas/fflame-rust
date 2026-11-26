@@ -391,7 +391,7 @@ fn print_boundary_views() {
     find("frothy-basin", &froth, -2.0, 2.0, -0.6);
 }
 
-/// The three as presets (`assets/presets.fflame`): each carries its
+/// The three as presets (`assets/presets.fae`): each carries its
 /// formula -- and Frothy Basin its colouring -- as the example file has
 /// it, under the names those sources hash to.
 fn presets() -> Vec<serde_json::Value> {
@@ -456,7 +456,7 @@ fn presets() -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Not a test: the three presets, to splice into `assets/presets.fflame`
+/// Not a test: the three presets, to splice into `assets/presets.fae`
 /// (`output/legacy-presets.json`).
 #[test]
 #[ignore = "one-shot: writes the presets"]

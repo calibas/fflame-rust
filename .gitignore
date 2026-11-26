@@ -51,8 +51,8 @@ tests/visual/current/
 *.webm
 *.mov
 
-# pyfflame: the engine module build.py packages, and the wheel's build output
-python/pyfflame/fflame.wasm
+# pyfae: the engine module build.py packages, and the wheel's build output
+python/pyfae/fae.wasm
 python/dist/
 python/build/
 python/*.egg-info/

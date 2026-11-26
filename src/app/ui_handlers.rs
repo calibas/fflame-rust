@@ -95,8 +95,8 @@ impl App {
             {
                 if let Some(path) = rfd::FileDialog::new()
                     .set_parent(self.window.as_ref())
-                    .add_filter("Fractal Flame Config", &["fflame"])
-                    .set_file_name("fractal.fflame")
+                    .add_filter("Fractal Art Editor config", &["fae"])
+                    .set_file_name("fractal.fae")
                     .save_file()
                 {
                     match json.as_ref().map_err(|e| e.to_string()).and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string())) {
@@ -109,7 +109,7 @@ impl App {
             #[cfg(target_arch = "wasm32")]
             {
                 if let Ok(json) = json {
-                    let filename = format!("{}.fflame", config.flame.name.to_lowercase().replace(' ', "_"));
+                    let filename = format!("{}.{}", config.flame.name.to_lowercase().replace(' ', "_"), crate::config::CONFIG_EXT);
                     if let Err(e) = trigger_browser_download(json.as_bytes(), &filename, "application/json") {
                         log::error!("Failed to trigger download: {}", e);
                     }
@@ -742,7 +742,7 @@ impl App {
             {
                 if let Some(path) = rfd::FileDialog::new()
                     .set_parent(self.window.as_ref())
-                    .add_filter("Fractal Flame Config", &["fflame"])
+                    .add_filter("Fractal Art Editor config", &["fae", "fflame"])
                     .pick_file()
                 {
                     match FractalConfig::load_from_file(&path) {
@@ -764,7 +764,7 @@ impl App {
                             }
                         }
                         Err(e) => {
-                            log::error!("Failed to load .fflame file: {}", e);
+                            log::error!("Failed to load the config file: {}", e);
                         }
                     }
                 }
@@ -776,7 +776,7 @@ impl App {
                 self.pending_subflame_load_index = Some(index);
                 let ctx = self.egui_layer.ctx.clone();
                 super::trigger_browser_file_picker(
-                    ".fflame", ctx, "pending_subflame_load_raw",
+                    ".fae,.fflame", ctx, "pending_subflame_load_raw",
                 );
             }
         }
@@ -800,7 +800,7 @@ impl App {
                         }
                     }
                     Err(e) => {
-                        log::error!("Failed to parse .fflame JSON: {}", e);
+                        log::error!("Failed to parse the config JSON: {}", e);
                     }
                 }
             }
@@ -814,12 +814,12 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 // Desktop: synchronous file dialog. Open accepts both our
-                // native JSON `.fflame` and Apophysis/JWildfire XML
+                // native JSON `.fae` (or the old `.fflame`) and Apophysis/JWildfire XML
                 // `.flame` — the extension picks the parse path.
                 if let Some(path) = rfd::FileDialog::new()
                     .set_parent(self.window.as_ref())
-                    .add_filter("Fractal Flame", &["fflame", "flame"])
-                    .add_filter("Fractal Flame Config (.fflame)", &["fflame"])
+                    .add_filter("Fractals", &["fae", "fflame", "flame"])
+                    .add_filter("Fractal Art Editor config (.fae, .fflame)", &["fae", "fflame"])
                     .add_filter("Apophysis Flame (.flame)", &["flame"])
                     .pick_file()
                 {
@@ -897,7 +897,7 @@ impl App {
                 // pickup (handle_animation_requests) content-sniffs XML
                 // vs JSON since the browser gives us only the file text.
                 let ctx = self.egui_layer.ctx.clone();
-                super::trigger_browser_file_picker(".fflame,.flame", ctx, "pending_config_load_raw");
+                super::trigger_browser_file_picker(".fae,.fflame,.flame", ctx, "pending_config_load_raw");
             }
         }
 
@@ -1011,7 +1011,7 @@ impl App {
                 // Desktop: synchronous file dialog
                 if let Some(path) = rfd::FileDialog::new()
                     .set_parent(self.window.as_ref())
-                    .add_filter("Fractal Flame Config", &["fflame"])
+                    .add_filter("Fractal Art Editor config", &["fae", "fflame"])
                     .pick_file()
                 {
                     self.egui_layer.load_file_into_fractal_browser(path);
@@ -1025,7 +1025,7 @@ impl App {
             {
                 // WASM: use native file picker (no extra dialogs)
                 let ctx = self.egui_layer.ctx.clone();
-                super::trigger_browser_file_picker(".fflame", ctx, "pending_file_browser_json_raw");
+                super::trigger_browser_file_picker(".fae,.fflame", ctx, "pending_file_browser_json_raw");
             }
         }
 
@@ -1293,10 +1293,10 @@ impl App {
         }
     }
 
-    /// Open a config file's text, JSON `.fflame` or XML `.flame`: the web
+    /// Open a config file's text, JSON `.fae` (or `.fflame`) or XML `.flame`: the web
     /// file picker hands over only the text, so the first non-space
     /// character tells them apart (`<` is XML). The frame log's
-    /// `FFLAME_FRAME_LOG_OPEN` opens a file this way on desktop too.
+    /// `FAE_FRAME_LOG_OPEN` opens a file this way on desktop too.
     pub(super) fn open_config_text(&mut self, text: &str) {
         let is_xml = text.trim_start().starts_with('<');
         if is_xml {

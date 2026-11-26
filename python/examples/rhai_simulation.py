@@ -10,7 +10,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import pyfflame as ff  # noqa: E402
+import pyfae as ff  # noqa: E402
 
 out = sys.argv[1] if len(sys.argv) > 1 else "output/python/rhai_simulation"
 os.makedirs(out, exist_ok=True)
@@ -46,5 +46,5 @@ print(f"{anim.frames} frames in {time.perf_counter() - start:.1f}s")
 # model=brusselator` writes.
 sweep = eng.run_script(eng.script_source("sim_sweep"), seed=42, params={"model": "brusselator"})
 eng.render(sweep.config, W, H).save(os.path.join(out, "sim_sweep-42.png"))
-sweep.config.save(os.path.join(out, "sim_sweep-42.fflame"))
+sweep.config.save(os.path.join(out, "sim_sweep-42.fae"))
 print("sim_sweep seed 42 ->", out)

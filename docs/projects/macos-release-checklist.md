@@ -110,7 +110,7 @@ does anything feel platform-wrong (shortcuts, focus, lag)?
 - [ ] **In-app version check.** `APP_VERSION` + one HTTP GET + "0.5.0 is
       out" link. Small; the biggest update-UX win short of Sparkle.
 - [ ] **Sparkle auto-update.** Only worth it post-notarization.
-- [ ] **`.fflame` file association** (`CFBundleDocumentTypes` +
+- [ ] **`.fae` file association** (`CFBundleDocumentTypes` +
       open-file event handling). Double-click a flame → opens in app.
 - [ ] **macOS version breadth.** Plist claims 11.0; tested on 14.3/M2
       only. One probe+census run on any other Apple Silicon machine

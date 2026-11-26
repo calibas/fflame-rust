@@ -7,10 +7,10 @@ use super::FetchError;
 use crate::config::FractalConfig;
 
 /// Presets file embedded at compile time for offline/WASM fallback
-pub const PRESETS_JSON: &str = include_str!("../../assets/presets.fflame");
+pub const PRESETS_JSON: &str = include_str!("../../assets/presets.fae");
 
 /// Preset file path for desktop runtime loading (optional)
-pub const PRESETS_PATH: &str = "assets/presets.fflame";
+pub const PRESETS_PATH: &str = "assets/presets.fae";
 
 /// Create the default fallback preset (identity transform + linear variation)
 ///
@@ -108,7 +108,7 @@ pub fn load_presets_with_fallback() -> Vec<FractalConfig> {
 #[cfg(test)]
 pub fn presets_and_test_scenes() -> Vec<FractalConfig> {
     let mut scenes = load_embedded_presets().expect("presets parse");
-    let solids = include_str!("../../tests/test_configs/ifs-solid-scenes.fflame");
+    let solids = include_str!("../../tests/test_configs/ifs-solid-scenes.fae");
     scenes.extend(FractalConfig::from_json_multi(solids).expect("the test scenes parse"));
     scenes
 }

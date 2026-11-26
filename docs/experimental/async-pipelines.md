@@ -107,7 +107,7 @@ the desktop (as they block on renders now), awaited on the web
    compiles.
 4. **The "Compiling..." state** in the progress bar and the phone's menu.
 5. **Exports and headless paths** awaiting jobs; the gallery modules and
-   pyfflame checked, since they share `render_with`.
+   pyfae checked, since they share `render_with`.
 
 ## Open questions
 

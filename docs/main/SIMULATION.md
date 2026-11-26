@@ -557,10 +557,10 @@ recipe that reproduces its field exactly, used by escape-time pictures
 (`EscapeConfig::texture`; see [ESCAPE.md](ESCAPE.md)). The library
 ([src/textures/mod.rs](../../src/textures/mod.rs)) lists:
 
-- **Presets**, `assets/textures/*.fflame`, embedded in the binary by
+- **Presets**, `assets/textures/*.fae`, embedded in the binary by
   `build.rs`.
 - **User textures**, saved from Simulation mode, stored as
-  `textures/<name>.fflame` through the storage backend (the data
+  `textures/<name>.fae` through the storage backend (the data
   directory on desktop, browser storage on the web).
 
 **Save as texture** (the Simulation panel) saves the simulation as it
@@ -858,7 +858,7 @@ any model the built-ins are, each of the 31 with a twin.
   (above), and `presets`: a
   list of maps, each `name`, `title`, `params` (by name), `steps`, `dt`,
   and the config's `boundary`, `init`, `coloring` (a built-in's name),
-  `coloring_params`, `matte` and `warp` spelled as a `.fflame` spells
+  `coloring_params`, `matte` and `warp` spelled as a `.fae` spells
   them (`init: #{ blobs: #{ count: 6, radius: 24 } }`), read through
   serde; and `repeat: #{ pass: 2, param: "relax" }`, a pass run that
   parameter's number of times a step (up to `MAX_INNER_ITERATIONS`),

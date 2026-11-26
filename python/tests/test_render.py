@@ -14,7 +14,7 @@ import tempfile
 import pytest
 import wgpu
 
-import pyfflame as ff
+import pyfae as ff
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 CONFIGS = os.path.join(ROOT, "tests", "visual", "configs")
@@ -51,21 +51,21 @@ def test_a_png_carries_the_clis_metadata(eng):
 
 def test_renders_are_reproducible(eng):
     """Same config, two engines (no shared state): the same bytes."""
-    path = os.path.join(CONFIGS, "3d", "murl-smoke.fflame")
+    path = os.path.join(CONFIGS, "3d", "murl-smoke.fae")
     a = eng.render(path, 96, 72).rgba
     b = ff.Engine().render(path, 96, 72).rgba
     assert a == b
 
 
 def test_escape_and_simulation_render(eng):
-    for path in ("escape/burning-ship.fflame", "sim/gray-scott-coral.fflame"):
+    for path in ("escape/burning-ship.fae", "sim/gray-scott-coral.fae"):
         assert lit(eng.render(os.path.join(CONFIGS, path), 96, 72)) > 1000, path
 
 
 def test_a_sequence_runs_a_simulation_on(eng):
     """A sequence frame continues the last one's field: stepping to 2N
     from a frame at N is the field a still at 2N draws from the seed."""
-    cfg = json.load(open(os.path.join(CONFIGS, "sim", "gray-scott-coral.fflame"), encoding="utf-8"))
+    cfg = json.load(open(os.path.join(CONFIGS, "sim", "gray-scott-coral.fae"), encoding="utf-8"))
     n = 300
     cfg["sim"]["steps"] = n
     eng.render(cfg, 96, 72, sequence=True)

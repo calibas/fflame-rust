@@ -1,4 +1,4 @@
-# wasm/python — pyfflame's engine module
+# wasm/python — pyfae's engine module
 
 The engine built for WASI (`wasm32-wasip1`): the module the Python
 package in [`python/`](../../python/README.md) runs with wasmtime. Every
@@ -10,10 +10,10 @@ cargo build --release      # here: .cargo/config.toml selects wasm32-wasip1
 python python/build.py     # from the root: builds this and puts it in the package
 ```
 
-- `src/lib.rs` — the one export, `fflame_call` (a JSON request and a
+- `src/lib.rs` — the one export, `fae_call` (a JSON request and a
   block of bytes), and the calls it answers.
 - `src/backend.rs` — a wgpu custom backend: every GPU call becomes a
-  JSON command for the host (`python/pyfflame/_gpu.py`, over wgpu-py).
+  JSON command for the host (`python/pyfae/_gpu.py`, over wgpu-py).
 - `src/render.rs` — stills, Python-driven sequences, and animations as
   the video export renders them.
 - `src/scripts.rs` — Rhai, as the gallery's script module runs it.

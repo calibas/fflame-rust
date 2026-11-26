@@ -18,11 +18,11 @@ category.
   ([src/storage/thumbnail_cache.rs](../../src/storage/thumbnail_cache.rs)).
 - Thumbnail render: [src/renderer/thumbnail.rs](../../src/renderer/thumbnail.rs).
 - Presets: `PresetLibrary` ([src/scene/presets.rs](../../src/scene/presets.rs))
-  loading [assets/presets.fflame](../../assets/presets.fflame) through
+  loading [assets/presets.fae](../../assets/presets.fae) through
   [src/resources/presets.rs](../../src/resources/presets.rs).
 
 **See also:** [UI.md](UI.md) (panels and layouts), [ONLINE.md](ONLINE.md)
-(the online API), [CONFIG.md](CONFIG.md) (the `.fflame` format).
+(the online API), [CONFIG.md](CONFIG.md) (the `.fae` format).
 Design record: [fractal-browser.md](../archive/projects/fractal-browser.md).
 
 ---
@@ -46,14 +46,14 @@ It is available in every render mode.
 | Tab label | `BrowserTab` | What it holds |
 |---|---|---|
 | Random | `Batch` | The last batch from the Random Generator or a script's batch, until the next one replaces it. The label shows the count |
-| Files | `Files` | The configs from one file: **Open File...** on the tab, a multi-config `.fflame` or multi-flame `.flame` opened with File ▸ Open, or a multi-flame `.flame` from Import Apophysis. The label shows the count |
+| Files | `Files` | The configs from one file: **Open File...** on the tab, a multi-config `.fae` or multi-flame `.flame` opened with File ▸ Open, or a multi-flame `.flame` from Import Apophysis. The label shows the count |
 
 The code calls the second tab `Batch`; its label (`browser.tab_batch`)
 is "Random".
 
 ### Files
 
-**Open File...** opens a `.fflame` picker (desktop: a native dialog;
+**Open File...** opens a `.fae` picker (desktop: a native dialog;
 web: the browser's file picker, which hands back the text). A file may
 hold one config or a JSON array of them; `FractalConfig::from_json_multi`
 reads either. A failed read or parse is shown in red above the gallery.
@@ -146,7 +146,7 @@ session.
 
 ## Presets
 
-[assets/presets.fflame](../../assets/presets.fflame) is a JSON array of
+[assets/presets.fae](../../assets/presets.fae) is a JSON array of
 complete configs. `global_preset_library()` loads it once per run:
 
 - **Desktop** reads the file at run time (so it can be edited without a

@@ -1,6 +1,6 @@
 //! Write the curated manifest: everything the app ships, as the records
 //! the API's seeding sync imports (docs/projects/curated-content.md,
-//! *Seeding and syncing*; `fractal_flame_wgpu::curated`).
+//! *Seeding and syncing*; `fae::curated`).
 //!
 //! ```text
 //! cargo run --release --bin export_curated_json -- out.json
@@ -13,7 +13,7 @@
 fn main() {
     let out_path = std::env::args().nth(1).unwrap_or_else(|| "output/curated-manifest.json".to_string());
 
-    let manifest = fractal_flame_wgpu::curated::manifest();
+    let manifest = fae::curated::manifest();
     let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for r in &manifest.records {
         *counts.entry(r["kind"].as_str().unwrap_or("?").to_string()).or_default() += 1;
@@ -23,7 +23,7 @@ fn main() {
                      the app ships -- {kind, name, display_name, description, credit, \
                      content_hash, content} -- the shape POST /admin/curated/import takes. \
                      A kind's records are its whole set: post each kind in one batch.",
-        "content_hash_version": fractal_flame_wgpu::curated::VERSION,
+        "content_hash_version": fae::curated::VERSION,
         "counts": counts,
         "records": manifest.records,
     });

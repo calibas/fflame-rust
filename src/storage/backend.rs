@@ -49,7 +49,8 @@ pub type StorageResult<T> = Result<T, StorageError>;
 /// Get the application data directory (cross-platform)
 ///
 /// Named for the product, never for the crate: these paths are things a
-/// user browses to, and `fractal_flame_wgpu` means nothing to them.
+/// user browses to, and a crate name (`fae`, once `fractal_flame_wgpu`)
+/// means nothing to them.
 /// `directories` applies each platform's own convention, so the strings
 /// differ by design:
 ///
@@ -369,8 +370,8 @@ mod naming_tests {
 
     /// No internal name may appear in a path a user can see.
     ///
-    /// The repo is `fflame-rust`, the crate is `fractal_flame_wgpu`, and
-    /// an earlier build wrote to `FractalFlame`. None of those mean
+    /// The repo was `fflame-rust`, the crate `fractal_flame_wgpu` (now
+    /// `fae`), and an earlier build wrote to `FractalFlame`. None of those mean
     /// anything to somebody browsing their AppData folder, and every one
     /// of them has been in a user-visible path at some point.
     #[cfg(not(target_arch = "wasm32"))]

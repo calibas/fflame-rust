@@ -299,7 +299,7 @@ def canonical_mean_abs(name, params, C, max_iter, julia_c=None):
 
 def make_config(name, params, view, field=False, mean_abs=False,
                 mean_scale=1.0, mean_offset=0.0, max_iter=None):
-    base = json.load(open("tests/visual/configs/escape/ducks-param.fflame"))
+    base = json.load(open("tests/visual/configs/escape/ducks-param.fae"))
     base["flame"]["name"] = "audit-" + name
     # All-white palette: "escaped" becomes "not background", with no
     # dependence on where the palette happens to be dark.
@@ -330,7 +330,7 @@ def make_config(name, params, view, field=False, mean_abs=False,
            if name in JULIA else {}),
     }
     suffix = "-mean" if mean_abs else "-field" if field else ""
-    path = "%s/%s%s.fflame" % (OUT, name, suffix)
+    path = "%s/%s%s.fae" % (OUT, name, suffix)
     json.dump(base, open(path, "w"))
     return path
 

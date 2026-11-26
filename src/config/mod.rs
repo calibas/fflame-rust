@@ -38,3 +38,34 @@ pub use fractal_config::{FractalConfig, LightKind, SolidLight, SolidShadingSetti
 pub use manager::{ConfigError, ConfigManager, EditingTarget, UpdateAction};
 #[cfg(feature = "web-app")]
 pub use slider::{ConfigSlider, ConfigSliderResult, ConfigSliderUi, LazyUndoUi};
+
+/// The config file's extension: `.fae`, the Fractal Art Editor's own.
+pub const CONFIG_EXT: &str = "fae";
+/// What it was until 2026-11-26 (docs/projects/rename.md). Read forever:
+/// every config saved, shipped or shared before then has it.
+pub const LEGACY_CONFIG_EXT: &str = "fflame";
+
+/// Whether `path` names a config file by its extension: `.fae` or the old
+/// `.fflame`, in any case. Not `.flame`: that is Apophysis XML.
+pub fn is_config_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(CONFIG_EXT) || e.eq_ignore_ascii_case(LEGACY_CONFIG_EXT))
+}
+
+#[cfg(test)]
+mod config_path_tests {
+    use super::is_config_path;
+    use std::path::Path;
+
+    /// `.fae` and the old `.fflame`, in any case; not Apophysis `.flame`.
+    #[test]
+    fn both_spellings_are_configs() {
+        for yes in ["a.fae", "dir/b.FAE", "c.fflame", "D.FFlame"] {
+            assert!(is_config_path(Path::new(yes)), "{yes}");
+        }
+        for no in ["a.flame", "a.json", "a", "fae", "a.fae.bak"] {
+            assert!(!is_config_path(Path::new(no)), "{no}");
+        }
+    }
+}

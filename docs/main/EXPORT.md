@@ -427,14 +427,14 @@ CLI can print.
 ### export
 
 ```bash
-FractalArtEditor export -i config.fflame -o out.png -w 3840 -H 2160
+FractalArtEditor export -i config.fae -o out.png -w 3840 -H 2160
 FractalArtEditor export -i tests/visual/configs -o tests/visual/current --category variations
 FractalArtEditor export -i scene.flame -o out/ --transparent --supersample
 ```
 
 | flag | default | meaning |
 | --- | --- | --- |
-| `-i`, `--input` | required | a `.fflame` file (one config), a `.flame` XML file (each `<flame>` in it), or a directory (every `*.fflame` in it, not `.flame`, ordered by flame name) |
+| `-i`, `--input` | required | a `.fae` (or `.fflame`) file (one config), a `.flame` XML file (each `<flame>` in it), or a directory (every `*.fae` and `*.fflame` in it, not `.flame`, ordered by flame name) |
 | `-o`, `--output` | required | a PNG path for a single config; otherwise a directory, created if missing |
 | `-w`, `--width` | 1920 | the config's `image_size` is not used (the app's exports read it) |
 | `-H`, `--height` | 1080 | |
@@ -457,9 +457,9 @@ goes on. The exit code is non-zero if any config was not exported, and
 on a missing input or unwritable output.
 
 **Previews of a folder.** `scripts/make_previews.py DIR` renders a
-480 × 480 preview (`--size N` or `WxH`) of every `.fflame`, `.flame`,
+480 × 480 preview (`--size N` or `WxH`) of every `.fae`, `.flame`,
 `.anim` and `.json` in a folder (not its subfolders), through `export`,
-one config at a time. Each is named after its file (`Ocean.fflame` makes
+one config at a time. Each is named after its file (`Ocean.fae` makes
 `Ocean.png`), beside it or in `-o DIR`; a file holding several configs
 makes one each, numbered from 1 (`Ocean-1.png`, `Ocean-2.png`, …). An
 animation previews its embedded base config, tracks not played. Nothing
@@ -469,7 +469,7 @@ previewed, is skipped with a warning. It needs a release build.
 ### export-animation
 
 ```bash
-FractalArtEditor export-animation -c config.fflame -a animation.anim -o out.mp4 \
+FractalArtEditor export-animation -c config.fae -a animation.anim -o out.mp4 \
   -w 1920 -H 1080 --fps 30 --video-codec h265
 ```
 
@@ -498,7 +498,7 @@ machine.
 
 ### generate
 
-Runs a Rhai script headlessly and writes the `.fflame` it produces:
+Runs a Rhai script headlessly and writes the `.fae` it produces:
 `--script`, `--output`, `--seed` (any integer, reduced modulo 2^64),
 `--base` (a starting config for modifier scripts), `--set key=value`,
 `--list-params`. See [SCRIPTING-GUIDE.md](SCRIPTING-GUIDE.md).
@@ -532,7 +532,7 @@ the image data.
 
 The `Config` chunk is the canonical saved form,
 `FractalConfig::to_json_value` (compact, with its `version`), so it
-reloads through `FractalConfig::from_json` exactly as a `.fflame` does.
+reloads through `FractalConfig::from_json` exactly as a `.fae` does.
 PNGs exported before that carry the plain serde derive with no
 `version`; `from_json` dates those by their top-level `render_mode` (see
 [CONFIG.md](CONFIG.md), *Versioning*).
@@ -552,12 +552,12 @@ chunks at all.
 colour, exposure and gamma are not parsed back and read as fixed
 placeholders. It accepts the old product name, `Fractal Flame Renderer
 v…`, too. `scripts/png_metadata.py` lists the chunks of any PNG and
-extracts the config (`--config`, `-o out.fflame`, or `--save-config`
-for a `.fflame` of the PNG's name beside it, never overwriting one)
+extracts the config (`--config`, `-o out.fae`, or `--save-config`
+for a `.fae` of the PNG's name beside it, never overwriting one)
 without a build.
 
 ```rust
-use fractal_flame_wgpu::png_metadata::read_png_metadata;
+use fae::png_metadata::read_png_metadata;
 use sha2::{Digest, Sha256};
 
 let bytes = std::fs::read("output.png")?;

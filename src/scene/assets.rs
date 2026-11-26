@@ -59,7 +59,7 @@ pub fn load_configs_from_dir(dir: &Path) -> Vec<FractalConfig> {
         Ok(entries) => {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("fflame") {
+                if crate::config::is_config_path(&path) {
                     match load_config(&path) {
                         Ok(config) => {
                             log::info!("Loaded preset: {} from {}", config.flame.name, path.display());
@@ -131,7 +131,7 @@ mod tests {
         let on_disk = std::fs::read_dir(&dir)
             .expect("tests/visual/configs/2d exists")
             .flatten()
-            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("fflame"))
+            .filter(|e| crate::config::is_config_path(&e.path()))
             .count();
         assert!(on_disk > 0);
         assert_eq!(load_configs_from_dir(&dir).len(), on_disk);

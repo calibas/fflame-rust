@@ -646,7 +646,7 @@ mod inspection {
                 let img = crate::renderer::render_preview(&device, &queue, c);
                 println!("{item}[{i}] in {} ms", t.elapsed().as_millis());
                 img.save(dir.join(format!("{k}-{name}-{i}.png"))).unwrap();
-                std::fs::write(dir.join(format!("{k}-{name}-{i}.fflame")), c.to_json().unwrap_or_default()).unwrap();
+                std::fs::write(dir.join(format!("{k}-{name}-{i}.fae")), c.to_json().unwrap_or_default()).unwrap();
                 sheet.push(img);
             }
         }

@@ -1,6 +1,6 @@
 //! Preset library for fractal configurations
 //!
-//! Presets are loaded from `assets/presets.fflame` on both Desktop and WASM.
+//! Presets are loaded from `assets/presets.fae` on both Desktop and WASM.
 //! Falls back to a simple default preset if loading fails.
 
 use crate::config::FractalConfig;
@@ -80,7 +80,7 @@ impl Default for PresetLibrary {
 }
 
 impl PresetLibrary {
-    /// Create a new preset library by loading from assets/presets.fflame
+    /// Create a new preset library by loading from assets/presets.fae
     ///
     /// This works identically on Desktop and WASM - both load from the same file.
     /// Falls back to a simple default preset if loading fails.

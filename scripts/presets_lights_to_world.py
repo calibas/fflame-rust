@@ -18,7 +18,7 @@ converted by the real code), removed after the run. It was, in
         for (path, value) in lights_to_world(&c) { apply_value_detached(&mut after, ..) }
         out[i] = serde_json::to_value(after.solid_shading.lights);
     }
- This patches `assets/presets.fflame` in place:
+ This patches `assets/presets.fae` in place:
 each converted preset's lights (azimuth and elevation rounded to 1e-4
 degrees; a preset with no lights stored takes the four whole), and its
 version to 6. Everything else in the file is left byte for byte.
@@ -29,7 +29,7 @@ import io
 import json
 import sys
 
-PRESETS = "assets/presets.fflame"
+PRESETS = "assets/presets.fae"
 
 
 def main(path):

@@ -1,5 +1,5 @@
 # Build settings for the standalone crates here: the gallery modules
-# (render, script) and pyfflame's engine (python, whose own
+# (render, script) and pyfae's engine (python, whose own
 # .cargo/config.toml adds its WASI target), and `release.py`'s check of
 # the library at each engine's own features.
 #
@@ -27,4 +27,4 @@ target-dir = "target-gallery"
 # Skip the git provenance that build.rs otherwise re-emits on every
 # commit — see the comment at its use site. Nothing in the gallery
 # modules reads the version, hash or build time.
-FFLAME_SKIP_GIT_PROVENANCE = "1"
+FAE_SKIP_GIT_PROVENANCE = "1"

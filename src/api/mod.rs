@@ -144,8 +144,8 @@ pub fn adopt_server_flame(
 /// deployed server (`https://fractalsforall.com`) for `--profile dist`,
 /// what ships; a local one (`http://localhost:3000`) for `--release` and
 /// debug builds, for testing against an API run on this machine. Set
-/// `FFLAME_API_BASE_URL` when building to choose another.
-pub const API_BASE_URL: &str = env!("FFLAME_API_BASE_URL");
+/// `FAE_API_BASE_URL` when building to choose another.
+pub const API_BASE_URL: &str = env!("FAE_API_BASE_URL");
 
 use auth::AuthState;
 use client::build_url;
@@ -825,7 +825,7 @@ mod tests {
     /// `--release` or debug build to one on this machine (`build.rs`).
     #[test]
     fn the_api_follows_the_build_profile() {
-        if env!("FFLAME_API_BASE_URL_CHOSEN_BY") == "override" {
+        if env!("FAE_API_BASE_URL_CHOSEN_BY") == "override" {
             return;
         }
         match env!("BUILD_PROFILE") {

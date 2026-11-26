@@ -2,7 +2,7 @@
 here as a JSON command (with a block of bytes when it carries data) and
 is made with wgpu-py.
 
-The module imports two functions, `fflame_gpu.call` and `fflame_gpu.take`.
+The module imports two functions, `fae_gpu.call` and `fae_gpu.take`.
 Objects are integer handles the module allocates; `GpuHost.objs` holds
 the wgpu-py objects under them. A command buffer arrives whole at submit
 and is replayed on a wgpu-py encoder.

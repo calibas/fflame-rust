@@ -1,4 +1,4 @@
-"""Build pyfflame's engine module (wasm/python, for WASI) and put it in
+"""Build pyfae's engine module (wasm/python, for WASI) and put it in
 the package; with --wheel, build the wheel as well.
 
     python python/build.py [--wheel]
@@ -16,8 +16,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CRATE = ROOT / "wasm" / "python"
-BUILT = ROOT / "wasm" / "target-gallery" / "wasm32-wasip1" / "release" / "fflame_python.wasm"
-PACKAGED = ROOT / "python" / "pyfflame" / "fflame.wasm"
+BUILT = ROOT / "wasm" / "target-gallery" / "wasm32-wasip1" / "release" / "fae_python.wasm"
+PACKAGED = ROOT / "python" / "pyfae" / "fae.wasm"
 
 
 def main():

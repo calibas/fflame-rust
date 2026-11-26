@@ -2,8 +2,9 @@
 
 `FractalConfig` is everything needed to reproduce one picture: the flame,
 the view, the colouring and tone mapping, the effects, and the settings
-of the escape-time and simulation engines. It is saved as a `.fflame`
-JSON file, embedded in exported PNGs, and stored as the cloud API's
+of the escape-time and simulation engines. It is saved as a `.fae`
+JSON file (`.fflame` until 2026-11-26, which every reader still takes:
+`config::is_config_path`), embedded in exported PNGs, and stored as the cloud API's
 config blob. Every edit the editor makes goes through `ConfigManager`,
 which records it for undo and says what the renderers must refresh.
 Device preferences that are not part of a picture live separately, in
@@ -256,7 +257,7 @@ Animations do the same for their own fields and generators
 
 `from_json_multi` accepts either one object or an array, and
 `load_multi_from_file` reads such a file; File > Open uses it, so one
-`.fflame` can hold several configs.
+`.fae` can hold several configs.
 
 ---
 
@@ -268,7 +269,7 @@ Animations do the same for their own fields and generators
 | arm | what it does |
 | --- | --- |
 | v0 → v1 | nothing; configs from before versioning |
-| v1 → v2 | nothing. v2 is the cloud "opaque blob" format ([api-v2.md](../archive/api-v1-v2/api-v2.md)): the `.fflame` JSON stored as-is |
+| v1 → v2 | nothing. v2 is the cloud "opaque blob" format ([api-v2.md](../archive/api-v1-v2/api-v2.md)): the `.fae` JSON stored as-is |
 | v2 → v3 | lifts the scene-level render fields from `flame` to the top level: `render_mode` (absent: `"2d"`), `perspective_strength` (or the legacy `projection` enum, converted), `depth_density_compensation`, `far_density_fade`, `far_density_fade_start`, and `preserve_z` (absent: `true`) |
 | v3 → v4 | for a file saved as v3 only: an absent `levels_gamma` becomes 1.0. A v3 save skipped the field at 1.0, the pre-2026-05-31 default, rather than at its 0.5 default; every v3 file postdates that change, so absent meant 1.0. Older files keep loading at 0.5, as that change intended |
 | v4 → v5 | the Shadows default rose from 0.7 to 0.98 (2026-10-19): an absent `shadow` becomes 0.7 in `escape.formula_params` when the formula is a solid (a built-in solid's name, or a `custom-` formula whose carried source has `fn distance`), and in `escape.terrain` and `sim.terrain` when the file has them |
@@ -457,7 +458,7 @@ snapshots rather than single deltas.
 
 The App wraps the manager: `App::load_config_with_undo`
 (`src/app/config.rs`) loads a config through `load_config` and pushes it
-to the renderers; File > Open accepts `.fflame` (one or several configs)
+to the renderers; File > Open accepts `.fae` or `.fflame` (one or several configs)
 and `.flame` XML; File > Save writes `save_to_file`; the JSON dialog and
 the clipboard go through `from_json` and `to_json`
 (`src/app/ui_handlers.rs`).
@@ -635,7 +636,7 @@ if ui.add(egui::Slider::new(&mut value, 0.1..=5.0)).changed() {
 
 ## Presets
 
-The shipped presets are one file, `assets/presets.fflame`: a JSON array
+The shipped presets are one file, `assets/presets.fae`: a JSON array
 of configs (84 at present). `src/resources/presets.rs` loads it:
 
 - **Desktop** reads the file at runtime (resolved against the working

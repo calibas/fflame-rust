@@ -6,7 +6,7 @@
 use anyhow::Result;
 use clap::Parser;
 use image::{ImageBuffer, Rgba};
-use fractal_flame_wgpu::png_metadata::read_png_metadata;
+use fae::png_metadata::read_png_metadata;
 
 #[derive(Parser, Debug)]
 #[command(name = "compare_images")]

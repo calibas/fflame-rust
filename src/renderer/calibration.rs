@@ -40,21 +40,21 @@ struct Scene {
 }
 
 const SCENES: &[Scene] = &[
-    Scene { name: "escape-seahorse", path: "tests/visual/configs/escape/mandelbrot-seahorse-zoom.fflame", kind: Kind::Escape },
-    Scene { name: "escape-deep", path: "tests/visual/configs/escape/deep-zoom-30.fflame", kind: Kind::Escape },
-    Scene { name: "escape-newton", path: "tests/visual/configs/escape/newton-3.fflame", kind: Kind::Escape },
-    Scene { name: "escape-solid", path: "tests/visual/configs/escape/ifs-solid-tetrahedron-sky.fflame", kind: Kind::EscapeSolid },
+    Scene { name: "escape-seahorse", path: "tests/visual/configs/escape/mandelbrot-seahorse-zoom.fae", kind: Kind::Escape },
+    Scene { name: "escape-deep", path: "tests/visual/configs/escape/deep-zoom-30.fae", kind: Kind::Escape },
+    Scene { name: "escape-newton", path: "tests/visual/configs/escape/newton-3.fae", kind: Kind::Escape },
+    Scene { name: "escape-solid", path: "tests/visual/configs/escape/ifs-solid-tetrahedron-sky.fae", kind: Kind::EscapeSolid },
     Scene { name: "flame-2d", path: "tests/visual/configs/2d/plastic-sierpinski.fflame", kind: Kind::Flame },
-    Scene { name: "flame-3d", path: "tests/visual/configs/3d/bubble-3d.fflame", kind: Kind::Flame },
-    Scene { name: "sim-gray-scott", path: "tests/visual/configs/sim/gray-scott-bilinear-upscale.fflame", kind: Kind::Sim },
-    Scene { name: "sim-mccabe", path: "tests/visual/configs/sim/mccabe-coarse.fflame", kind: Kind::Sim },
-    Scene { name: "sim-cyclic-ca", path: "tests/visual/configs/sim/cyclic-ca-1-1-14.fflame", kind: Kind::Sim },
-    Scene { name: "sim-sandpile", path: "tests/visual/configs/sim/sandpile-moore.fflame", kind: Kind::Sim },
-    Scene { name: "sim-physarum", path: "tests/visual/configs/sim/physarum-coarse.fflame", kind: Kind::Sim },
-    Scene { name: "sim-lenia", path: "tests/visual/configs/sim/lenia-soup.fflame", kind: Kind::Sim },
-    Scene { name: "sim-smoothlife", path: "tests/visual/configs/sim/smoothlife-glider.fflame", kind: Kind::Sim },
-    Scene { name: "sim-cahn-hilliard", path: "tests/visual/configs/sim/cahn-hilliard-age.fflame", kind: Kind::Sim },
-    Scene { name: "sim-dla", path: "tests/visual/configs/sim/dla-age.fflame", kind: Kind::Sim },
+    Scene { name: "flame-3d", path: "tests/visual/configs/3d/bubble-3d.fae", kind: Kind::Flame },
+    Scene { name: "sim-gray-scott", path: "tests/visual/configs/sim/gray-scott-bilinear-upscale.fae", kind: Kind::Sim },
+    Scene { name: "sim-mccabe", path: "tests/visual/configs/sim/mccabe-coarse.fae", kind: Kind::Sim },
+    Scene { name: "sim-cyclic-ca", path: "tests/visual/configs/sim/cyclic-ca-1-1-14.fae", kind: Kind::Sim },
+    Scene { name: "sim-sandpile", path: "tests/visual/configs/sim/sandpile-moore.fae", kind: Kind::Sim },
+    Scene { name: "sim-physarum", path: "tests/visual/configs/sim/physarum-coarse.fae", kind: Kind::Sim },
+    Scene { name: "sim-lenia", path: "tests/visual/configs/sim/lenia-soup.fae", kind: Kind::Sim },
+    Scene { name: "sim-smoothlife", path: "tests/visual/configs/sim/smoothlife-glider.fae", kind: Kind::Sim },
+    Scene { name: "sim-cahn-hilliard", path: "tests/visual/configs/sim/cahn-hilliard-age.fae", kind: Kind::Sim },
+    Scene { name: "sim-dla", path: "tests/visual/configs/sim/dla-age.fae", kind: Kind::Sim },
 ];
 
 /// Escape's reference supersampling, and its rungs: (supersampling,
@@ -381,7 +381,7 @@ fn allocation_cost() {
     }
 
     // Escape-time: a resize and the picture after it, against the picture alone.
-    let config = FractalConfig::from_json(&std::fs::read_to_string("tests/visual/configs/escape/mandelbrot-seahorse-zoom.fflame").expect("scene"))
+    let config = FractalConfig::from_json(&std::fs::read_to_string("tests/visual/configs/escape/mandelbrot-seahorse-zoom.fae").expect("scene"))
         .expect("parse");
     let flame_for_palette = crate::renderer::FlameRenderer::for_job(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64, &config);
     let mut e = crate::escape::EscapeRenderer::new(&device, 1920, 1080);

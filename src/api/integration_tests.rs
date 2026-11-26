@@ -3,7 +3,7 @@
 //!
 //! Run by `python scripts/api_integration.py`, which starts the server on a
 //! free port with a scratch-safe environment (email off) and runs these with
-//! `FFLAME_API_URL` pointing at it. Ignored in the ordinary suite, and each
+//! `FAE_API_URL` pointing at it. Ignored in the ordinary suite, and each
 //! test returns at once when the variable is unset, so nothing here touches
 //! the network unless asked.
 //!
@@ -18,7 +18,7 @@ use serde_json::json;
 
 /// The local server's address, or `None` to skip.
 fn server() -> Option<String> {
-    std::env::var("FFLAME_API_URL").ok()
+    crate::env_vars::var("API_URL")
 }
 
 /// A fresh account on the local server, signed in.

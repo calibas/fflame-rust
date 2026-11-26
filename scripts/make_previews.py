@@ -6,16 +6,16 @@
     python scripts/make_previews.py DIR --size 640x360
     python scripts/make_previews.py DIR -o previews/     # somewhere else
 
-Reads what the app opens: .fflame (one config or an array), .flame
+Reads what the app opens: .fae or .fflame (one config or an array), .flame
 (Apophysis / JWildfire XML, one flame or several), and .anim / .json
 animations, which preview the base config they embed -- their tracks are
 not played.
 
-Each preview is named after its file -- `Ocean.fflame` makes `Ocean.png`
+Each preview is named after its file -- `Ocean.fae` makes `Ocean.png`
 -- and a file holding several configs makes one each, numbered from 1:
 `Ocean-1.png`, `Ocean-2.png`, ... Nothing is ever overwritten: an image
 that already exists is skipped with a warning, as is every config that
-cannot be previewed. So two files of one name (`Ocean.fflame`,
+cannot be previewed. So two files of one name (`Ocean.fae`,
 `Ocean.flame`) make one preview, and the second is skipped.
 
 Renders through the CLI's `export`, one file at a time, so a preview is
@@ -35,7 +35,7 @@ REPO = Path(__file__).resolve().parent.parent
 EXE = "FractalArtEditor.exe" if sys.platform == "win32" else "FractalArtEditor"
 DEFAULT_BINARY = REPO / "target" / "release" / EXE
 
-READABLE = {".fflame", ".flame", ".anim", ".json"}
+READABLE = {".fae", ".fflame", ".flame", ".anim", ".json"}
 
 # A <flame ...> start tag, not <flames>.
 FLAME_TAG = re.compile(rb"<flame[\s>/]")
@@ -54,7 +54,7 @@ def parse_size(text):
 
 
 def write_config(tmp, n, config):
-    path = tmp / f"config-{n}.fflame"
+    path = tmp / f"config-{n}.fae"
     path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
     return path
 
@@ -107,7 +107,7 @@ def export_inputs(path, tmp):
             raise Skip("it is a list, but not of configs")
         return [write_config(tmp, n, c) for n, c in enumerate(value, 1)]
 
-    if isinstance(value, dict) and (ext == ".fflame" or "flame" in value):
+    if isinstance(value, dict) and (ext in (".fae", ".fflame") or "flame" in value):
         return [path]
     raise Skip("it is not a config or an animation")
 
@@ -148,7 +148,7 @@ def main():
     files = sorted(p for p in source_dir.iterdir()
                    if p.is_file() and p.suffix.lower() in READABLE)
     if not files:
-        print(f"No .fflame, .flame, .anim or .json files in {source_dir}")
+        print(f"No .fae, .fflame, .flame, .anim or .json files in {source_dir}")
         return
 
     width, height = args.size

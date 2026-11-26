@@ -472,7 +472,7 @@ fn presets() -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Not a test: the presets, to splice into `assets/presets.fflame`
+/// Not a test: the presets, to splice into `assets/presets.fae`
 /// (`output/bristor-presets.json`).
 #[test]
 #[ignore = "one-shot: writes the presets"]

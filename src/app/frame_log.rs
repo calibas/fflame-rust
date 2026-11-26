@@ -2,7 +2,7 @@
 //! row a frame of what the frame cost and what it rendered, for
 //! measuring the governor's rungs in the running app.
 //!
-//! Off unless `FFLAME_FRAME_LOG` names a file: then a CSV is written
+//! Off unless `FAE_FRAME_LOG` names a file: then a CSV is written
 //! there, one row a frame, and beside it `<file>.json`, the device
 //! settings the frame times depend on. The GPU's times
 //! (`gpu::timer::FrameTimer`) come back a few frames late, so a row waits
@@ -11,14 +11,14 @@
 //! without them. `scripts/frame_metrics.py summary` reads it.
 //!
 //! For a scripted run (`scripts/governor_playback.py`), two more:
-//! `FFLAME_FRAME_LOG_OPEN` opens an `.anim` (and plays it) or an
-//! `.fflame` on the first frame, and `FFLAME_FRAME_LOG_SECONDS` quits that
-//! many seconds after it. `FFLAME_FRAME_LOG_RENDER_SCALE` renders at that
+//! `FAE_FRAME_LOG_OPEN` opens an `.anim` (and plays it) or an
+//! `.fflame` on the first frame, and `FAE_FRAME_LOG_SECONDS` quits that
+//! many seconds after it. `FAE_FRAME_LOG_RENDER_SCALE` renders at that
 //! scale for the run, in place of the saved setting, which it does not
-//! touch: a measurement needs a known ceiling. `FFLAME_FRAME_LOG_TARGET_FPS`
+//! touch: a measurement needs a known ceiling. `FAE_FRAME_LOG_TARGET_FPS`
 //! does the same for the Target Frame Rate (`display`, or frames a second),
-//! and `FFLAME_FRAME_LOG_VSYNC` (`on` or `off`) for VSync.
-//! `FFLAME_FRAME_LOG_NO_GPU_TIMER` starts the app without its frame timer,
+//! and `FAE_FRAME_LOG_VSYNC` (`on` or `off`) for VSync.
+//! `FAE_FRAME_LOG_NO_GPU_TIMER` starts the app without its frame timer,
 //! as a browser without `timestamp-query` runs: the quality governor's
 //! fallback (`governor::fallback_rung`).
 
@@ -83,16 +83,16 @@ pub(crate) struct FrameState {
     pub sim_scale: Option<f32>,
 }
 
-/// A scripted run without the frame timer (`FFLAME_FRAME_LOG_NO_GPU_TIMER`,
+/// A scripted run without the frame timer (`FAE_FRAME_LOG_NO_GPU_TIMER`,
 /// with the frame log on).
 pub(super) fn without_gpu_timer() -> bool {
-    std::env::var("FFLAME_FRAME_LOG").is_ok_and(|p| !p.is_empty())
-        && std::env::var("FFLAME_FRAME_LOG_NO_GPU_TIMER").is_ok_and(|v| !v.is_empty() && v != "0")
+    crate::env_vars::var("FRAME_LOG").is_some_and(|p| !p.is_empty())
+        && crate::env_vars::var("FRAME_LOG_NO_GPU_TIMER").is_some_and(|v| !v.is_empty() && v != "0")
 }
 
 impl super::App {
     /// The render scale chosen in the Rendering menu, or a scripted run's
-    /// (`FFLAME_FRAME_LOG_RENDER_SCALE`).
+    /// (`FAE_FRAME_LOG_RENDER_SCALE`).
     pub(super) fn user_render_scale(&self) -> f32 {
         self.frame_log
             .as_ref()
@@ -101,7 +101,7 @@ impl super::App {
     }
 
     /// The Target Frame Rate the governor holds: the setting's, or the
-    /// scripted run's (`FFLAME_FRAME_LOG_TARGET_FPS`).
+    /// scripted run's (`FAE_FRAME_LOG_TARGET_FPS`).
     pub(super) fn target_rate(&self) -> crate::storage::settings::TargetRate {
         self.frame_log
             .as_ref()
@@ -109,7 +109,7 @@ impl super::App {
             .unwrap_or(self.config_manager.system_settings().target_rate)
     }
 
-    /// VSync: the setting's, or the scripted run's (`FFLAME_FRAME_LOG_VSYNC`).
+    /// VSync: the setting's, or the scripted run's (`FAE_FRAME_LOG_VSYNC`).
     pub(super) fn vsync_enabled(&self) -> bool {
         self.frame_log
             .as_ref()
@@ -150,7 +150,7 @@ impl super::App {
                     }
                 }
                 Ok(text) => self.open_config_text(&text),
-                Err(e) => log::error!("FFLAME_FRAME_LOG_OPEN: {path}: {e}"),
+                Err(e) => log::error!("FAE_FRAME_LOG_OPEN: {path}: {e}"),
             }
             return;
         }
@@ -238,13 +238,13 @@ pub(crate) struct FrameLog {
 }
 
 impl FrameLog {
-    /// The log `FFLAME_FRAME_LOG` asks for, if it does and the file opens.
+    /// The log `FAE_FRAME_LOG` asks for, if it does and the file opens.
     pub(super) fn from_env(timed: bool) -> Option<Self> {
-        let path = std::env::var("FFLAME_FRAME_LOG").ok().filter(|p| !p.is_empty())?;
+        let path = crate::env_vars::var("FRAME_LOG").filter(|p| !p.is_empty())?;
         let file = match std::fs::File::create(&path) {
             Ok(f) => f,
             Err(e) => {
-                log::error!("FFLAME_FRAME_LOG: cannot write {path}: {e}");
+                log::error!("FAE_FRAME_LOG: cannot write {path}: {e}");
                 return None;
             }
         };
@@ -267,21 +267,20 @@ impl FrameLog {
             timed,
             pending: VecDeque::new(),
             flame: None,
-            open: std::env::var("FFLAME_FRAME_LOG_OPEN").ok().filter(|p| !p.is_empty()),
-            seconds: std::env::var("FFLAME_FRAME_LOG_SECONDS").ok().and_then(|s| s.parse().ok()),
+            open: crate::env_vars::var("FRAME_LOG_OPEN").filter(|p| !p.is_empty()),
+            seconds: crate::env_vars::var("FRAME_LOG_SECONDS").and_then(|s| s.parse().ok()),
             opened_at: None,
-            render_scale: std::env::var("FFLAME_FRAME_LOG_RENDER_SCALE")
-                .ok()
+            render_scale: crate::env_vars::var("FRAME_LOG_RENDER_SCALE")
                 .and_then(|s| s.parse::<f32>().ok())
                 .filter(|s| s.is_finite() && *s > 0.0),
-            target_rate: std::env::var("FFLAME_FRAME_LOG_TARGET_FPS").ok().and_then(|s| {
+            target_rate: crate::env_vars::var("FRAME_LOG_TARGET_FPS").and_then(|s| {
                 use crate::storage::settings::TargetRate;
                 if s.eq_ignore_ascii_case("display") {
                     return Some(TargetRate::Display);
                 }
                 s.parse::<f32>().ok().filter(|f| f.is_finite() && *f > 0.0).map(TargetRate::Fixed)
             }),
-            vsync: std::env::var("FFLAME_FRAME_LOG_VSYNC").ok().and_then(|s| match s.to_ascii_lowercase().as_str() {
+            vsync: crate::env_vars::var("FRAME_LOG_VSYNC").and_then(|s| match s.to_ascii_lowercase().as_str() {
                 "on" | "1" | "true" => Some(true),
                 "off" | "0" | "false" => Some(false),
                 _ => None,

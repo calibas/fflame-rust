@@ -1,7 +1,7 @@
 //! Where the shipped `assets/` and `shaders/` trees actually live at runtime.
 //!
 //! Every reference to them in the codebase is written repo-relative
-//! (`assets/presets.fflame`, `shaders/effects/...`), which resolves against
+//! (`assets/presets.fae`, `shaders/effects/...`), which resolves against
 //! the CURRENT WORKING DIRECTORY. That is right for `cargo run` from the
 //! repo and for a zip the user unpacked and ran from inside, and wrong the
 //! moment the process is started from anywhere else.

@@ -466,7 +466,7 @@ fn walkdir(root: &str) -> Vec<String> {
             let p = e.path();
             if p.is_dir() {
                 stack.push(p);
-            } else if p.extension().and_then(|x| x.to_str()) == Some("fflame") {
+            } else if crate::config::is_config_path(&p) {
                 // Forward slashes on every platform: these become `worst`
                 // labels in a committed, cross-platform-diffable report,
                 // and Windows separators made identical measurements

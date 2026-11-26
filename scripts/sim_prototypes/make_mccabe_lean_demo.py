@@ -9,7 +9,7 @@ import copy
 import json
 import os
 
-BASE = "tests/visual/configs/sim/mccabe-memory.fflame"
+BASE = "tests/visual/configs/sim/mccabe-memory.fae"
 OUT = "output/mccabe-lean"
 
 LEANS = {

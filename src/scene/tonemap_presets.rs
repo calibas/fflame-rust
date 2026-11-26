@@ -232,7 +232,7 @@ pub const TONEMAP_PRESETS: &[TonemapPreset] = &[
     // ===== Fractal-derived presets =====
     //
     // Tone mappings authored alongside the matching fractal in
-    // `assets/presets.fflame`. Named after the source fractal so
+    // `assets/presets.fae`. Named after the source fractal so
     // they're easy to find. Useful as a starting palette of "looks
     // someone actually used and liked" — pick one, then tweak.
     //

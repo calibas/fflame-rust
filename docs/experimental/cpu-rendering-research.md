@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-14 (research) / 2026-05-22 (plan update)
 **Status:** Plan finalized. Partial implementation on
-[`experimental/swiftshader-cpu-fallback`](https://github.com/calibas/fflame-rust/tree/experimental/swiftshader-cpu-fallback)
+[`experimental/swiftshader-cpu-fallback`](https://github.com/calibas/fractal-art-editor/tree/experimental/swiftshader-cpu-fallback)
 (Windows working end-to-end). Cross-platform binaries + cargo feature
 gate are the remaining work.
 
@@ -32,7 +32,7 @@ Single renderer — no second CPU pipeline to maintain.
 
 ## Implementation status (on the branch)
 
-[`experimental/swiftshader-cpu-fallback`](https://github.com/calibas/fflame-rust/tree/experimental/swiftshader-cpu-fallback)
+[`experimental/swiftshader-cpu-fallback`](https://github.com/calibas/fractal-art-editor/tree/experimental/swiftshader-cpu-fallback)
 already has:
 
 - `--cpu-rendering` CLI flag

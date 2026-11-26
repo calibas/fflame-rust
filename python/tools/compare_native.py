@@ -1,7 +1,7 @@
-"""Render configs through the WASI module (pyfflame) and
+"""Render configs through the WASI module (pyfae) and
 through the native CLI, and compare the pictures.
 
-    python python/tools/compare_native.py [--size WxH] CONFIG.fflame...
+    python python/tools/compare_native.py [--size WxH] CONFIG.fae...
 
 Writes output/python/compare/<name>-{wasi,native,diff}.png and a
 table: the mean absolute difference (0-255), the share of pixels off by
@@ -23,7 +23,7 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-import pyfflame as ff  # noqa: E402
+import pyfae as ff  # noqa: E402
 
 OUT = "output/python/compare"
 EXE = os.path.abspath("target/release/FractalArtEditor.exe")

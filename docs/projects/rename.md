@@ -1,7 +1,28 @@
 # Renaming: fractals, Fractal Art Editor, `.fae`
 
-**Status 2026-11-25:** planned, not built. Every part lands **before the
-0.6 release**.
+**Status 2026-11-26:** steps 1-5 built. Step 1 is ffapi's branch `fractals`
+(and `type=<kind>:*`); steps 2-5 are this repository's branch `rename`.
+The GitHub repository was renamed first (step 6's first half, by the
+user); the local folder's rename is left. ffbrowser's changes (module
+imports, `wasmTypes.ts`, `.fae` downloads, DEPLOYMENT.md's paths) are
+the browser session's, listed in ffapi's BROWSER_APP_0.6.md §1.2. Every
+part lands **before the 0.6 release**.
+
+**As built, beyond the plan:**
+- ffapi's stored entity type follows the wire (migration 122:
+  `reports`, `moderation_actions`, `curated_names`), so code, wire and
+  database all say `fractal`; tables and columns keep their names.
+- The OpenAPI operation ids and tag are set in the attributes
+  (`get_fractal`, tag `fractals`), not by renaming Rust items.
+- Every tracked `.fflame` was renamed except the six in
+  `tests/visual/configs/2d/`: the visual configs, `assets/presets.fae`,
+  the texture recipes, test configs and the script-parity fixtures.
+- The deep-zoom diagnostics keep reading the local corpus
+  `output/flame-zoom/*.fflame` under its names.
+- A `FFLAME` variable some ignored diagnostics read (a config file's
+  path) is unchanged.
+- The presets file has no old-name fallback: it ships with the binary
+  that reads it.
 
 **Why:** the app has grown past a flame renderer. It has three engines,
 and the flame is one of them. The names still say "flame" where they mean

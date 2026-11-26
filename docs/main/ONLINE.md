@@ -75,8 +75,8 @@ in, by profile (`build.rs`):
 - `--release` and debug builds use `http://localhost:3000`, for testing
   against an ffapi run on this machine (its default port).
 
-`FFLAME_API_BASE_URL`, set at build time, overrides either. At run time
-a desktop build also takes `FFLAME_API_URL` pointing at a loopback
+`FAE_API_BASE_URL`, set at build time, overrides either. At run time
+a desktop build also takes `FAE_API_URL` pointing at a loopback
 address (`client::local_override`), which the integration test uses.
 `SystemSettings::api_base_url` is a deprecated field that is still read
 from old settings files and never written.
@@ -216,7 +216,7 @@ startup check runs whether or not a sign-in is known.
 | `name` | the flame's name; the server's name column is authoritative on load |
 | `visibility` | `private`, `unlisted` or `public`, or absent |
 | `palette` | the palette, inline: packed `color_data` (R, G, B per entry, 0–255) when it is 256 evenly spaced stops, otherwise its `stops`. The server hashes the content. |
-| `config` | the canonical `.fflame` JSON (versioned, defaults stripped) **minus** the palette and with the root flame's three transform pools emptied. Subflames keep their transforms inside it. |
+| `config` | the canonical `.fae` JSON (versioned, defaults stripped) **minus** the palette and with the root flame's three transform pools emptied. Subflames keep their transforms inside it. |
 | `transforms` | the root flame's transforms, flattened: `kind` (`normal`, `linked`, `final`), `sort_order`, `variation_names` (the non-zero ones, for search) and `data`, the transform's own JSON |
 
 The server stores the blob verbatim and reads only its **root**
@@ -226,7 +226,7 @@ field needs no API work.
 **Loading** (`flame_response_to_config`) reverses it: the transforms
 are bucketed by `kind` and `sort_order` back into the three pools, the
 server's name and the inline palette are re-inserted, and the result
-runs through the same versioned migration as a local `.fflame`. A blob
+runs through the same versioned migration as a local `.fae`. A blob
 with no `flame` object — damage from an earlier server migration that
 flattened the flame into the top level — is rebuilt around the
 transforms; the flame-only state that was flattened (xaos, solo,
@@ -664,14 +664,14 @@ both carry every engine:
 
 | crate | package | what it does |
 | --- | --- | --- |
-| `wasm/script` | `fflame-script` | script + seed + params → config JSON |
-| `wasm/render` | `fflame-render` | config → pixels, every mode |
+| `wasm/script` | `fae-script` | script + seed + params → config JSON |
+| `wasm/render` | `fae-render` | config → pixels, every mode |
 
 `wasm/python` is under `wasm/` too but is not a web module: it is the
 library built for WASI (with `terrain`), the engine of the
 Python package (`python/`).
 
-`fflame-render` has all three engines and renders every mode. It is
+`fae-render` has all three engines and renders every mode. It is
 the one gallery renderer: the single-engine modules (`fflame-flame`,
 `fflame-escape`, `fflame-sim`) were retired on 2026-11-04, because
 escape and simulation configs use flame variations (a lens, a

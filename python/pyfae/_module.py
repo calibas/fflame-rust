@@ -1,6 +1,6 @@
 """The engine's WASI module, instantiated, with a GPU host behind it.
 
-One call crosses into it: `fflame_call`, a JSON request and a block of
+One call crosses into it: `fae_call`, a JSON request and a block of
 bytes beside it; back come a status, an output of bytes and a JSON note
 (src/lib.rs lists the calls).
 """
@@ -18,24 +18,25 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 class EngineError(ValueError):
     """A call the engine refused or failed, with its reason: a config
     that does not parse, a script's error (its line first), a parameter
-    a script does not declare. A ValueError, as pyfflame's errors were."""
+    a script does not declare. A ValueError, as pyfae's errors were."""
 
 
 def find_module(path=None):
-    """The module's file: `path`, $PYFFLAME_WASM, the one packaged beside
+    """The module's file: `path`, $PYFAE_WASM, the one packaged beside
     this file (`python/build.py` puts it there), or the build output in
     a checkout."""
     candidates = [
         path,
-        os.environ.get("PYFFLAME_WASM"),
-        os.path.join(_HERE, "fflame.wasm"),
-        os.path.join(_HERE, "..", "..", "wasm", "target-gallery", "wasm32-wasip1", "release", "fflame_python.wasm"),
+        os.environ.get("PYFAE_WASM"),
+        os.environ.get("PYFFLAME_WASM"),  # its name before the rename (2026-11-26)
+        os.path.join(_HERE, "fae.wasm"),
+        os.path.join(_HERE, "..", "..", "wasm", "target-gallery", "wasm32-wasip1", "release", "fae_python.wasm"),
     ]
     for c in candidates:
         if c and os.path.exists(c):
             return os.path.abspath(c)
     raise FileNotFoundError(
-        "no engine module: run `python python/build.py`, or set PYFFLAME_WASM")
+        "no engine module: run `python python/build.py`, or set PYFAE_WASM")
 
 
 # Compiling the module is most of loading it; a module made again after
@@ -59,8 +60,8 @@ class Module:
         linker.define_wasi()
         self.gpu = GpuHost()
         i32 = wasmtime.ValType.i32()
-        linker.define_func("fflame_gpu", "call", wasmtime.FuncType([i32] * 4, [i32]), self.gpu.call)
-        linker.define_func("fflame_gpu", "take", wasmtime.FuncType([i32], []), self.gpu.take)
+        linker.define_func("fae_gpu", "call", wasmtime.FuncType([i32] * 4, [i32]), self.gpu.call)
+        linker.define_func("fae_gpu", "take", wasmtime.FuncType([i32], []), self.gpu.take)
         instance = linker.instantiate(self.store, module)
         self.exports = instance.exports(self.store)
         self.memory = self.exports["memory"]
@@ -75,7 +76,7 @@ class Module:
     def _put(self, data):
         if not data:
             return 0
-        ptr = self._fn("fflame_alloc", len(data)) & 0xFFFFFFFF
+        ptr = self._fn("fae_alloc", len(data)) & 0xFFFFFFFF
         self.memory.write(self.store, data, ptr)
         return ptr
 
@@ -89,13 +90,13 @@ class Module:
         req = json.dumps(request).encode()
         rp, dp = self._put(req), self._put(data)
         try:
-            status = self._fn("fflame_call", rp, len(req), dp, len(data))
+            status = self._fn("fae_call", rp, len(req), dp, len(data))
         finally:
-            self._fn("fflame_free", rp, len(req))
+            self._fn("fae_free", rp, len(req))
             if dp:
-                self._fn("fflame_free", dp, len(data))
-        out = self._get("fflame_output_ptr", "fflame_output_len")
+                self._fn("fae_free", dp, len(data))
+        out = self._get("fae_output_ptr", "fae_output_len")
         if status != 0:
             raise EngineError(out.decode(errors="replace"))
-        info = self._get("fflame_info_ptr", "fflame_info_len")
+        info = self._get("fae_info_ptr", "fae_info_len")
         return out, (json.loads(info) if info else None)

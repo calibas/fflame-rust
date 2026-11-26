@@ -1,7 +1,7 @@
 """A Python program animating a flame: settings changed over time, every
 frame saved as a PNG and piped to FFmpeg.
 
-    python python/examples/animate_config.py [CONFIG.fflame] [OUT_DIR]
+    python python/examples/animate_config.py [CONFIG.fae] [OUT_DIR]
 """
 
 import math
@@ -10,7 +10,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import pyfflame as ff  # noqa: E402
+import pyfae as ff  # noqa: E402
 
 config_path = sys.argv[1] if len(sys.argv) > 1 else "tests/visual/configs/2d/plastic-sierpinski.fflame"
 out = sys.argv[2] if len(sys.argv) > 2 else "output/python/animate_config"

@@ -1,4 +1,4 @@
-# fflame-script — the Endless Gallery's script evaluator, as a
+# fae-script — the Endless Gallery's script evaluator, as a
 # standalone WASM module. Wraps the main crate's sandboxed script host:
 # script + seed + params (+ optional base config) in, FractalConfig
 # JSON out. No GPU, no UI — this module can live in a worker.
@@ -7,7 +7,7 @@
 # every crate under wasm/. The app must be unaffected by anything here.
 
 [package]
-name = "fflame-script"
+name = "fae-script"
 version = "0.5.0"
 edition = "2021"
 
@@ -20,7 +20,7 @@ crate-type = ["cdylib", "rlib"]
 # default-features = false turns off `web-app`: without that, this
 # module would inherit the full application's wasm-bindgen exports
 # (wasm_main boots egui and all).
-fractal_flame_wgpu = { path = "../..", default-features = false }
+fae = { path = "../..", default-features = false }
 serde_json = "1.0"
 wasm-bindgen = "0.2"
 
