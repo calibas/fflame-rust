@@ -96,7 +96,7 @@ fn every_kind_of_config_round_trips_and_lists_by_reader() {
     // Without a reader: the original vocabulary, 2D/3D at config version 3
     // and below. A current flame is version 7, so not even it is listed.
     let token = api.auth.get_token().unwrap().to_string();
-    let bare: serde_json::Value = block(api_get(&format!("{base}/api/v1/users/me/flames?per_page=100"), &token)).unwrap();
+    let bare: serde_json::Value = block(api_get(&format!("{base}/api/v1/users/me/fractals?per_page=100"), &token)).unwrap();
     let bare: Vec<&str> = bare["items"].as_array().unwrap().iter().filter_map(|f| f["id"].as_str()).collect();
     for id in &ids {
         assert!(!bare.contains(&id.as_str()), "no reader: {id} is newer than the original vocabulary");
@@ -194,7 +194,7 @@ fn the_server_catalogs_what_the_app_saves() {
     config.escape.terrain.enabled = true;
     let id = block(api.save_flame(&config, Some("it twin"), Some(ApiVisibility::Private), None)).unwrap();
     let token = api.auth.get_token().unwrap().to_string();
-    let list: serde_json::Value = block(api_get(&format!("{base}/api/v1/users/me/flames?per_page=100&reader=7&type=mandelbrot&role=primary"), &token)).unwrap();
+    let list: serde_json::Value = block(api_get(&format!("{base}/api/v1/users/me/fractals?per_page=100&reader=7&type=mandelbrot&role=primary"), &token)).unwrap();
     let item = list["items"].as_array().unwrap().iter().find(|f| f["id"] == id.as_str()).unwrap_or_else(|| panic!("not found by type: {list}"));
     assert_eq!((item["engine"].as_str(), item["scene"].as_str(), item["dimension"].as_i64()), (Some("escape"), Some("terrain"), Some(3)));
     assert_eq!(item["primary_type"]["display_name"], "Mandelbrot");
@@ -394,7 +394,7 @@ fn your_own_items_publish_rename_and_change_visibility() {
 
     let id = block(author.save_flame(&flame_config(), Some(&format!("it own flame {tag}")), Some(ApiVisibility::Private), None)).unwrap();
     let new_name = format!("it renamed flame {tag}");
-    block(author.patch_item("flames", &id, &types::ItemPatch { name: Some(new_name.clone()), visibility: Some(ApiVisibility::Public) }))
+    block(author.patch_item("fractals", &id, &types::ItemPatch { name: Some(new_name.clone()), visibility: Some(ApiVisibility::Public) }))
         .unwrap_or_else(|e| panic!("rename a fractal: {e}"));
     let found = block(guest.browse_flames(Scope::Public, &Browse { q: new_name.clone(), ..Default::default() })).unwrap().items.into_inner();
     assert!(found.iter().any(|f| f.id == id), "public under its new name");
@@ -430,7 +430,7 @@ fn curated_browsing_and_opening_by_id() {
     let got = block(guest.get_palette(&made.id)).expect("an unlisted palette opens by id");
     assert_eq!(got.content_hash, made.content_hash);
     let flame_id = block(author.save_flame(&flame_config(), Some("it open"), Some(ApiVisibility::Public), None)).unwrap();
-    block(guest.exists("flames", &flame_id)).expect("a public fractal exists");
+    block(guest.exists("fractals", &flame_id)).expect("a public fractal exists");
     assert!(block(guest.exists("palettes", &flame_id)).is_err(), "not a palette");
     let animation = crate::animation::Animation::new("it open".into(), 5.0);
     let anim_id = block(author.save_animation(&animation, Some("it open"), Some(&flame_id), Some(ApiVisibility::Public))).expect("an animation");

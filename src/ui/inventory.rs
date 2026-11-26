@@ -1692,7 +1692,7 @@ mod phone_tests {
         // Long, a URL (nowhere to break but anywhere), and a server's
         // answer of many lines after it.
         let error = format!(
-            "Network error: http://localhost:3000/api/v1/flames?scope=curated&sort=name&engine=flame&dimension=2&limit=60: connection refused (os error 10061)\n{}",
+            "Network error: http://localhost:3000/api/v1/fractals?scope=curated&sort=name&engine=flame&dimension=2&limit=60: connection refused (os error 10061)\n{}",
             (0..20).map(|i| format!("  <p>line {i} of the server's answer</p>")).collect::<Vec<_>>().join("\n")
         );
         panel.online.fail_for_test(&keys, &error);

@@ -250,7 +250,7 @@ pub fn parse_open(text: &str) -> Option<OpenTarget> {
         // The resource the text names last before the id.
         let before = text[..at].to_ascii_lowercase();
         let hints: [(&str, &'static str); 5] =
-            [("animation", "animations"), ("flame", "flames"), ("fractal", "flames"), ("palette", "palettes"), ("script", "scripts")];
+            [("animation", "animations"), ("flame", "fractals"), ("fractal", "fractals"), ("palette", "palettes"), ("script", "scripts")];
         let resource = hints.iter().filter_map(|(word, r)| before.rfind(word).map(|i| (i, *r))).max_by_key(|(i, _)| *i).map(|(_, r)| r);
         return Some(OpenTarget::Id { resource, id });
     }
@@ -297,7 +297,7 @@ mod tests {
         let at = |resource: Option<&'static str>| Some(OpenTarget::Id { resource, id: id.to_string() });
         assert_eq!(parse_open(id), at(None));
         assert_eq!(parse_open(&format!("  {} ", id.to_uppercase())), at(None));
-        assert_eq!(parse_open(&format!("https://fractalsforall.com/app/?flame={id}")), at(Some("flames")));
+        assert_eq!(parse_open(&format!("https://fractalsforall.com/app/?flame={id}")), at(Some("fractals")));
         assert_eq!(parse_open(&format!("https://fractalsforall.com/app/?animation={id}")), at(Some("animations")));
         assert_eq!(parse_open(&format!("https://fractalsforall.com/api/v1/palettes/{id}")), at(Some("palettes")));
         assert_eq!(parse_open(&format!("/api/v1/scripts/{id}?reader=7")), at(Some("scripts")));
