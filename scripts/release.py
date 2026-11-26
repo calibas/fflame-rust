@@ -894,8 +894,12 @@ def copy_builds(browser, dry_run):
             return False
         info = json.loads(info_path.read_text(encoding="utf-8"))
         built = f"{info.get('version')} {info.get('git_hash')} {info.get('profile')}, {info.get('built')}"
-        stale = info.get("git_hash") != head.strip() or info.get("git_dirty")
-        note = f"  {YELLOW}(not HEAD {head.strip()}){RESET}" if stale else ""
+        if info.get("git_hash") != head.strip():
+            note = f"  {YELLOW}(not HEAD {head.strip()}: rebuild it){RESET}"
+        elif info.get("git_dirty"):
+            note = f"  {YELLOW}(built with uncommitted changes){RESET}"
+        else:
+            note = ""
         if dry_run:
             print(f"  {DIM}would copy{RESET} {rel} -> {dest}  {DIM}{built}{RESET}{note}")
             continue
@@ -1404,12 +1408,18 @@ def cmd_build(args):
         if args.only and args.only not in name:
             continue
         print(f"  {DIM}{note}{RESET}")
+        if name.startswith("gallery:"):
+            # From an empty pkg/: wasm-pack only adds files, and a module
+            # renamed (fflame_render -> fae_render, 2026-11-26) left its old
+            # files beside the new, copied and deployed with them.
+            import shutil
+            shutil.rmtree(ROOT / sub / "pkg", ignore_errors=True)
         t0 = time.time()
         p = subprocess.run(cmd, cwd=ROOT / sub if sub else ROOT,
                            capture_output=True, text=True)
         secs = time.time() - t0
         if p.returncode == 0 and name.startswith("gallery:"):
-            # wasm-pack recreates pkg/, so after it: what deploy-web reads
+            # After wasm-pack, into the pkg/ it wrote: what deploy-web reads
             # back from the live site (the web app's comes from
             # build-wasm.sh itself).
             ok, out = run([sys.executable, "scripts/write_version_json.py",
