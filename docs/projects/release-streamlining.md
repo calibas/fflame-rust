@@ -8,7 +8,9 @@ last item before 0.6, and test it with the 0.6 release itself
 the editor page into ffbrowser. The local stages ran for real: `sync-api`
 synced ffapi on its branch `app-latest-github`. The remote stages
 (`deploy-api`, `deploy-web`, `publish`) have only run as dry runs and
-against stand-ins; their first real run is 0.6.0 (step 4).
+against stand-ins; their first real run is 0.6.0 (step 4). What is
+left before that run is §5. **Paused 2026-11-26 for the rename**
+([rename.md](rename.md)), which touches `release.py` and comes first.
 
 **The goal, in the user's words:** "smaller, more frequent updates,
 different from the enormous changes we've made between 0.5.0 and 0.6.0."
@@ -156,3 +158,64 @@ prompt that names what it is about to do.
    Fix what breaks, and correct RELEASE.md to describe what actually ran.
 5. Then use `ship 0.6.1` for the first patch, to see whether a small
    release is really small.
+
+---
+
+## 5. Left before the 0.6.0 run (2026-11-26)
+
+Picked up after the rename. Its step 5 changes `APP_RELEASES_REPO` and
+the docs' repository name, and its step 3 changes `release.py`'s
+`VERSION_FILES` path for pyfae.
+
+**The user's setup:**
+- [ ] **`gh` on the Windows machine.** It is not installed, and
+      `publish` and `preflight` need it, signed in.
+- [ ] **`release.local.toml`** (gitignored; its format is
+      `release.py`'s header). `[server]` needs `ssh`, `key`, `site`,
+      `ffbrowser_dir` and `ffapi_dir`. The host, key and ffbrowser
+      checkout are in ffbrowser's DEPLOYMENT.md; **where the server's
+      ffapi checkout lives is not written down anywhere.**
+- [ ] **`FFAPI_TOKEN`**, an admin account's token, for `deploy-api`'s
+      curated sync. Without it the stage skips the sync and says so.
+- [ ] **The server's `.env`:** `APP_RELEASES_REPO=calibas/fractal-art-editor`
+      (the name after the rename), with `APP_LATEST_VERSION` unset.
+
+**Untried (none of it has run against the server or GitHub):**
+- [ ] `deploy-api`:
+  - the pull and build over ssh;
+  - whether the server's non-interactive shell finds `cargo`
+    (`. "$HOME/.cargo/env"` is sourced first);
+  - the sudo swap over `ssh -t`;
+  - the `/health` wait.
+- [ ] `deploy-web`: the tar upload and swap on the server, `npm ci` /
+      `npm run build` there, and the read-back of each `version.json`
+      (the live site has none yet).
+- [ ] `publish`: tag, push and `gh release create`; the second
+      machine's `gh release upload`.
+- [ ] The curated sync's first production run, which is also
+      curated-content.md's production dry run.
+- [ ] `build-wasm.bat`'s new lines: it writes `version.json` and
+      starts from an empty `pkg/`. The `.sh` ran; the `.bat` never has.
+- [ ] Correct RELEASE.md §4 to what actually ran (step 4 above).
+
+**In the other repositories:**
+- [ ] **ffapi:** review the relaxed `curated_sync` test
+      (`the_shipped_catalog_imports_cleanly`, on `app-latest-github`).
+      It now accepts `new_version` and `created` against the
+      migration-seeded rows.
+- [ ] **ffbrowser:** commit the editor page `sync-web` copied there
+      (index.html, `js/vkb.js`, `css/vkb.css`). Before the deploy, check
+      `src/museum/wasmTypes.ts`, because `deploy-web` stops on changed
+      typings: the render module's `.d.ts` differs from the live
+      (2026-08) one. The modules' interface has not changed since the
+      2026-11-12 builds the browser has been using.
+- [ ] **ffbrowser:** `public/editor/assets/palettes/packs/` (six tracked
+      packs) looks unused, since the editor fetches packs from
+      `pkg/assets/`. Drop them, or say why they stay.
+
+**Notes for the run:**
+- `sync-api`'s ffapi tests and `check --full`'s API integration test use
+  the database in ffapi's `.env`. Don't run them while a local ffapi
+  that depends on that database is in use.
+- `sync-web` refuses to copy over uncommitted changes to the editor page
+  in ffbrowser. Commit each sync there before the next.
