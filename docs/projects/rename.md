@@ -1,12 +1,18 @@
 # Renaming: fractals, Fractal Art Editor, `.fae`
 
-**Status 2026-11-26:** steps 1-5 built. Step 1 is ffapi's branch `fractals`
-(and `type=<kind>:*`); steps 2-5 are this repository's branch `rename`.
-The GitHub repository was renamed first (step 6's first half, by the
-user); the local folder's rename is left. ffbrowser's changes (module
-imports, `wasmTypes.ts`, `.fae` downloads, DEPLOYMENT.md's paths) are
-the browser session's, listed in ffapi's BROWSER_APP_0.6.md §1.2. Every
-part lands **before the 0.6 release**.
+**Status 2026-11-26: done here and in ffapi.** Steps 1-5 merged (ffapi
+`fractals`, this repository's `rename`); the GitHub repository and the
+local folder are renamed (step 6). Left, elsewhere:
+- ffbrowser's changes (module imports, `wasmTypes.ts`, `.fae` downloads,
+  DEPLOYMENT.md's paths): the browser session's, listed in ffapi's
+  BROWSER_APP_0.6.md §1.2;
+- the server's `APP_RELEASES_REPO=calibas/fractal-art-editor`, set with
+  the 0.6 deploy (release-streamlining.md §5);
+- the macOS clone: `git remote set-url origin
+  https://github.com/calibas/fractal-art-editor.git`, and its folder if
+  wanted.
+
+Archive this once ffbrowser's part has landed.
 
 **As built, beyond the plan:**
 - ffapi's stored entity type follows the wire (migration 122:
