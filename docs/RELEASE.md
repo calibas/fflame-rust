@@ -83,6 +83,7 @@ the git hash). It buys accuracy nobody needs at the price of the matrix.
 ```bash
 python scripts/release.py check          # every gate below
 python scripts/release.py check --fix    # ...and regenerate the generated files if stale
+python scripts/release.py check --full   # ...plus the visual suite and the API integration test
 ```
 
 The gates, in order: every version agrees (§1), unit tests
@@ -98,11 +99,14 @@ the work CI would do is worth automating, the *triggering* is what gets
 in the way. `release.py` is a command you type when you are releasing —
 or when you want to know whether you could.
 
-Two gates it does NOT run, because they need a GPU and minutes rather
-than seconds:
+Two gates it runs only with `--full`, because they need minutes and
+more than a checkout: the visual suite (it builds `--release` first, and
+refuses while the editor is running, since that locks the binary) and the
+API integration test (`scripts/api_integration.py`: a local ffapi beside
+this repository, on the database in its `.env`). The benchmarks it never
+runs:
 
 ```bash
-cargo build --release && python tests/visual/run_tests.py
 python scripts/run_benchmarks.py --quick
 ```
 
@@ -138,6 +142,17 @@ The API is a separate repository. What it consumes from here:
 | the script corpus | `cargo run --release --bin export_scripts_json` | any built-in script added or edited |
 | the effect corpus | `cargo run --release --bin export_effects_json` | any effect added or edited |
 | the curated manifest | `cargo run --release --bin export_curated_json` | anything shipped: a preset, a palette pack, a script or example, a variation or effect. ffapi's `tools/sync_curated.py` posts it (a dry run unless `--write`; [curated-content.md](projects/curated-content.md)) |
+
+**`python scripts/release.py sync-api`** does the copying: the contract
+and catalog checked current, the corpora and the curated manifest written,
+the contract, catalog and three corpora copied into ffapi's
+`docs/generated/` (only those that differ, never over uncommitted changes
+there), then ffapi's tests that read them (`contract_conformance`,
+`catalog_conformance`, `corpus_preflight`, `curated_sync`; two open its
+test database). It never commits in ffapi. `--dry-run` writes ours and
+says what differs. ffapi's seed generators (`tools/generate_*_import.py`)
+are not run: the curated sync supersedes them from the first sync on
+(ffapi's `docs/curated-build.md`).
 
 Only the contract and the catalog are committed. The three corpus binaries write to
 `output/variations-corpus.json`, `output/scripts-corpus.json` and
@@ -217,7 +232,28 @@ has gone stale before.
 Ordered, and every step is a command you type. Nothing fires on push or
 on a timer.
 
+**`python scripts/release.py ship X.Y.Z`** runs the steps below in
+order. It stops at the first failure and pauses wherever a person must
+act: editing the notes, committing the version bump, committing a sync in
+ffapi or ffbrowser, and the smoke test. Each stage is also its own
+subcommand. `--from STAGE` resumes after a stop, and `--dry-run` runs
+every check and prints each plan without building, changing or sending
+anything. The stages are `preflight`, `version`, `notes`, `check
+--full`, `commit` (yours), `sync-api`, `sync-web`, `build`, `smoke`,
+`deploy-api`, `deploy-web`, `publish`. The design is in
+[release-streamlining.md](projects/release-streamlining.md). The deploy
+stages and `publish` first run for real with 0.6.0; correct this section
+to what actually ran.
+
 ### Before you start
+
+```bash
+python scripts/release.py preflight   # all three repositories clean, on main, pushed; gh; the server
+```
+
+The repositories are found beside this one, or where an untracked
+`release.local.toml` says (its `[repos]`; `[server] ssh` is the host the
+deploy stages use). Header of `scripts/release.py` has the format.
 
 You need **both machines**. There is no cross-compilation here: the
 macOS bundle needs macOS (plistlib layout + `codesign`), and the Windows
@@ -229,7 +265,7 @@ generated reports (§4.3) and do the tag there.
 ```bash
 python scripts/release.py version 0.5.0 --dry-run   # read it first
 python scripts/release.py version 0.5.0             # every version, lockstep
-python scripts/release.py changelog > NOTES.md      # raw material, then edit it
+python scripts/release.py notes                     # the changelog into NOTES.md, then edit it
 ```
 
 The changelog is raw material, and `NOTES.md` is the edited result you
@@ -246,21 +282,21 @@ the changelog was generated from.
 **On the tags.** One tag exists: `0.5`, a lightweight tag on the merge
 commit of the 0.5 release (`7e6dacad`, 2026-08-24). `release.py
 changelog` finds the last tag with `git describe --tags --abbrev=0`, so
-it now lists what changed since `0.5`. That tag's form differs from the
-annotated `v0.5.0` that §4.6 shows; which form later releases use is
-not decided here, but `git describe --tags` finds either.
+it now lists what changed since `0.5`. From 0.6 on, tags are annotated
+`vX.Y.Z` as §4.6 shows (decided 2026-11-24,
+[release-streamlining.md](projects/release-streamlining.md) §3); `0.5`
+stays as it is, and `git describe --tags` finds either.
 
 ### 4.2 — Gates
 
 ```bash
-python scripts/release.py check     # the gates listed in §2
+python scripts/release.py check --full   # the gates listed in §2, the visual suite and the API test
+python scripts/release.py sync-api       # the API's copies (§3); commit them in ffapi
 ```
 
-Then the two it deliberately does not run, because they need a GPU and
-minutes:
+Then the benchmarks, which it does not run:
 
 ```bash
-cargo build --release && python tests/visual/run_tests.py    # 375 renders
 python scripts/run_benchmarks.py --quick
 ```
 
@@ -366,10 +402,24 @@ unsigned means Gatekeeper refuses on first launch, and the steps differ
 by macOS version. Copy from the checklist doc, which keeps the current
 wording.
 
-**Web:** upload `pkg/` + `index.html`, `css/`, `js/` to
-`fractalsforall.com/editor/`. `pkg/` is gitignored and there is no deploy
-script, so this is a manual copy (§5). Load the page afterwards and check
-the version — a partial upload leaves a working page running old wasm.
+`python scripts/release.py publish` does this: it tags, pushes the tag
+and creates the release with whichever zips this machine has. Run it
+again on the other machine and it adds that machine's zip.
+
+**Web:** run `python scripts/release.py sync-web`, which copies
+`index.html`, `css/` and `js/` into ffbrowser's tracked `public/editor/`;
+commit and push that there. Then run `python scripts/release.py
+deploy-web`. It checks that each build's `version.json` matches this
+checkout, uploads `pkg/` and the two gallery modules into the server's
+ffbrowser checkout (each swapped in whole), builds the site there, and
+reads every `version.json` back from the live site. A partial upload can
+no longer pass unnoticed.
+
+**API:** `python scripts/release.py deploy-api` follows ffapi's
+`docs/deployment-ubuntu.md` §10: pull, build, swap the binary (sudo), and
+wait for `/health`. With `FFAPI_TOKEN` set, it then runs the curated
+sync: a dry run first, and `--write` only if you say so. Run it before
+`deploy-web`, and both before `publish`.
 
 ---
 
@@ -755,10 +805,11 @@ Honest list, so nobody assumes these exist:
   job.
 - **No signing or notarization** for any platform (§5).
 - **One release tag, in its own form.** `0.5` is the only tag, a
-  lightweight one, where §4.6 shows an annotated `v0.5.0`; the naming
-  is not settled (§4.1). Every exported PNG records a git *hash*, so
-  builds are traceable either way — tags are what make them nameable.
-- **No web deploy step.** `pkg/` is gitignored and the upload to
+  lightweight one; from 0.6 on they are annotated `vX.Y.Z` (§4.1).
+  Every exported PNG records a git *hash*, so builds are traceable
+  either way — tags are what make them nameable.
+- **The web deploy step is new** (`release.py deploy-web`, 2026-11-24)
+  and has not run against the server yet. Before it, `pkg/` was gitignored and the upload to
   `fractalsforall.com/editor/` is manual (§5). A manual upload is also
   how the retired `calibas.github.io` mirror drifted five months behind
   before anyone noticed — one host now, but nothing stops the one host

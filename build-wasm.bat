@@ -58,6 +58,10 @@ REM touched, in any order.
 set OUTDIR=./pkg
 if "%SYMBOLS%"=="1" set OUTDIR=./pkg-names
 if "%SYMBOLS%"=="1" if not exist "pkg-names" mkdir "pkg-names"
+REM ./pkg from scratch: wasm-bindgen only adds files, and what an older
+REM build left there (wasm-pack's package.json and README, a 17 MiB
+REM names module) was copied and deployed with every new one.
+if not "%SYMBOLS%"=="1" if exist "pkg" rmdir /S /Q "pkg"
 wasm-bindgen %BINDGEN_FLAGS% --out-dir %OUTDIR% --target web ./target/wasm32-unknown-unknown/%PROFILE%/fractal_flame_wgpu.wasm
 if %errorlevel% neq 0 exit /b %errorlevel%
 
@@ -78,6 +82,11 @@ REM Copy assets for runtime loading
 echo Copying assets...
 if not exist "pkg\assets\palettes\packs" mkdir "pkg\assets\palettes\packs"
 xcopy /Y /Q "assets\palettes\packs\*.json" "pkg\assets\palettes\packs\" >nul 2>&1
+
+REM pkg\version.json: the version, commit and profile, which a deploy
+REM reads back from the live site (scripts\write_version_json.py).
+python scripts\write_version_json.py pkg --profile %PROFILE%
+if %errorlevel% neq 0 exit /b %errorlevel%
 
 echo.
 echo Build complete! Output in ./pkg

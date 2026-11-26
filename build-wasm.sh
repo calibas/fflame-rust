@@ -59,6 +59,10 @@ echo "Generating JavaScript bindings..."
 # touched, in any order.
 OUTDIR=./pkg
 if [ "$SYMBOLS" = "1" ]; then OUTDIR=./pkg-names; mkdir -p pkg-names; fi
+# ./pkg from scratch: wasm-bindgen only adds files, and what an older
+# build left there (wasm-pack's package.json and README, a 17 MiB
+# names module) was copied and deployed with every new one.
+if [ "$SYMBOLS" != "1" ]; then rm -rf pkg; fi
 wasm-bindgen $BINDGEN_FLAGS --out-dir "$OUTDIR" --target web "./target/wasm32-unknown-unknown/$PROFILE/fractal_flame_wgpu.wasm"
 
 if [ $? -ne 0 ]; then
@@ -83,6 +87,12 @@ fi
 echo "Copying assets..."
 mkdir -p pkg/assets/palettes/packs
 cp assets/palettes/packs/*.json pkg/assets/palettes/packs/
+
+# pkg/version.json: the version, commit and profile, which a deploy reads
+# back from the live site (scripts/write_version_json.py). `python` first:
+# on Windows `python3` can be the Store's stub, which only prints a hint.
+PY=$(command -v python || command -v python3)
+"$PY" scripts/write_version_json.py pkg --profile "$PROFILE"
 
 echo ""
 echo "✅ Build complete! Output in ./pkg"

@@ -3,7 +3,14 @@
 **Status 2026-11-12:** plan, not built. The user's call: build it as the
 last item before 0.6, and test it with the 0.6 release itself
 ([v0.6.0-release.md](v0.6.0-release.md)). **All six decisions made
-2026-11-24 (§3).**
+2026-11-24 (§3).** **Steps 1-3 of §4 built 2026-11-24** on branch
+`release-stages`: every stage in §2's table, plus `sync-web`, which copies
+the editor page into ffbrowser. The local stages ran for real: `sync-api`
+synced ffapi on its branch `app-latest-github`. The remote stages
+(`deploy-api`, `deploy-web`, `publish`) have only run as dry runs and
+against stand-ins; their first real run is 0.6.0 (step 4). What is
+left before that run is §5. **Paused 2026-11-26 for the rename**
+([rename.md](rename.md)), which touches `release.py` and comes first.
 
 **The goal, in the user's words:** "smaller, more frequent updates,
 different from the enormous changes we've made between 0.5.0 and 0.6.0."
@@ -85,7 +92,7 @@ prompt that names what it is about to do.
 | `sync-api` | Copy the contract, the catalog and the corpora into `../ffapi`; run its generators (effects, variations, script import); run its conformance tests; show the diff; leave the commit to the user | by hand |
 | `build` | as now | exists |
 | `deploy-api` | Over SSH, per ffapi's deployment doc: pull, build, swap the binary, restart; wait for `/health`; check `/api/app/latest`; run the script import if `sync-api` regenerated it | by hand |
-| `deploy-web` | Build `pkg/` and the gallery modules; rsync the three into the server's `ffbrowser/public/`, **and the editor's `index.html`, `css/`, `js/`** (ending the drift); build on the server; then fetch the served editor and modules and check they report the new version | by hand |
+| `deploy-web` | Check the builds' `version.json` against HEAD; upload `pkg/` and the gallery modules into the server's `ffbrowser/public/` (tar over ssh, each swapped in whole: no rsync on Windows); build on the server; then fetch the served editor and modules and check they report the new version. The editor's `index.html`, `css/`, `js/` are ffbrowser's tracked files, so a local `sync-web` copies them there for a commit, and `deploy-web` refuses while they differ | by hand |
 | `publish` | Annotated tag `vX.Y.Z`, push it, `gh release create` with whichever zips are present; the server's update notice follows the GitHub release by itself (§3, decision 4) | by hand |
 | `ship X.Y.Z` | `preflight` → `version` → `notes` (pause to edit) → `check` → `sync-api` → `build` → pause for the smoke test → `deploy-api` → `deploy-web` → `publish` | n/a |
 
@@ -125,8 +132,9 @@ prompt that names what it is about to do.
 4. **The update notice reads GitHub.** App versions are tracked as GitHub
    releases, and the server reads the newest one itself (cached), so
    nothing has to be set by hand and it can't announce a version before
-   its release exists. This is ffapi work: `/app/latest` answers from
-   `APP_LATEST_VERSION` / `APP_LATEST_URL` today.
+   its release exists. Built 2026-11-24 on ffapi's branch
+   `app-latest-github`: `APP_RELEASES_REPO` (`owner/name`) turns it on,
+   and `APP_LATEST_VERSION` still overrides it when set.
 5. **How far `release.py` reaches, as proposed.**
    - It copies files and runs their tools and tests in `ffapi`, and
      deploys `ffbrowser`'s already-pushed `main`.
@@ -144,9 +152,70 @@ prompt that names what it is about to do.
    side effects, so they can be built and run any time.
 2. `version.json` in the builds, then `deploy-web` and `deploy-api`,
    first tried against the live site with the 0.6 deploy itself.
-3. `publish`, then `ship` gluing it together. On the server, `/app/latest`
-   reading the newest GitHub release (decision 4).
+3. `publish`, then `ship` gluing it together. (On the server,
+   `/app/latest` reading the newest GitHub release, decision 4: built.)
 4. **The 0.6 release is the test:** run `ship 0.6.0` stage by stage.
    Fix what breaks, and correct RELEASE.md to describe what actually ran.
 5. Then use `ship 0.6.1` for the first patch, to see whether a small
    release is really small.
+
+---
+
+## 5. Left before the 0.6.0 run (2026-11-26)
+
+Picked up after the rename. Its step 5 changes `APP_RELEASES_REPO` and
+the docs' repository name, and its step 3 changes `release.py`'s
+`VERSION_FILES` path for pyfae.
+
+**The user's setup:**
+- [ ] **`gh` on the Windows machine.** It is not installed, and
+      `publish` and `preflight` need it, signed in.
+- [ ] **`release.local.toml`** (gitignored; its format is
+      `release.py`'s header). `[server]` needs `ssh`, `key`, `site`,
+      `ffbrowser_dir` and `ffapi_dir`. The host, key and ffbrowser
+      checkout are in ffbrowser's DEPLOYMENT.md; **where the server's
+      ffapi checkout lives is not written down anywhere.**
+- [ ] **`FFAPI_TOKEN`**, an admin account's token, for `deploy-api`'s
+      curated sync. Without it the stage skips the sync and says so.
+- [ ] **The server's `.env`:** `APP_RELEASES_REPO=calibas/fractal-art-editor`
+      (the name after the rename), with `APP_LATEST_VERSION` unset.
+
+**Untried (none of it has run against the server or GitHub):**
+- [ ] `deploy-api`:
+  - the pull and build over ssh;
+  - whether the server's non-interactive shell finds `cargo`
+    (`. "$HOME/.cargo/env"` is sourced first);
+  - the sudo swap over `ssh -t`;
+  - the `/health` wait.
+- [ ] `deploy-web`: the tar upload and swap on the server, `npm ci` /
+      `npm run build` there, and the read-back of each `version.json`
+      (the live site has none yet).
+- [ ] `publish`: tag, push and `gh release create`; the second
+      machine's `gh release upload`.
+- [ ] The curated sync's first production run, which is also
+      curated-content.md's production dry run.
+- [ ] `build-wasm.bat`'s new lines: it writes `version.json` and
+      starts from an empty `pkg/`. The `.sh` ran; the `.bat` never has.
+- [ ] Correct RELEASE.md §4 to what actually ran (step 4 above).
+
+**In the other repositories:**
+- [ ] **ffapi:** review the relaxed `curated_sync` test
+      (`the_shipped_catalog_imports_cleanly`, on `app-latest-github`).
+      It now accepts `new_version` and `created` against the
+      migration-seeded rows.
+- [ ] **ffbrowser:** commit the editor page `sync-web` copied there
+      (index.html, `js/vkb.js`, `css/vkb.css`). Before the deploy, check
+      `src/museum/wasmTypes.ts`, because `deploy-web` stops on changed
+      typings: the render module's `.d.ts` differs from the live
+      (2026-08) one. The modules' interface has not changed since the
+      2026-11-12 builds the browser has been using.
+- [ ] **ffbrowser:** `public/editor/assets/palettes/packs/` (six tracked
+      packs) looks unused, since the editor fetches packs from
+      `pkg/assets/`. Drop them, or say why they stay.
+
+**Notes for the run:**
+- `sync-api`'s ffapi tests and `check --full`'s API integration test use
+  the database in ffapi's `.env`. Don't run them while a local ffapi
+  that depends on that database is in use.
+- `sync-web` refuses to copy over uncommitted changes to the editor page
+  in ffbrowser. Commit each sync there before the next.
