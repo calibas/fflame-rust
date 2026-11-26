@@ -63,14 +63,14 @@ ROOT = Path(__file__).resolve().parent.parent
 # A manifest's version is its FIRST `version =` line only: a Cargo.toml
 # can hold version strings further down (a `[dependencies.x]` table),
 # and rewriting those would be a disaster wearing the costume of a
-# version bump. pyfflame carries three: its engine module's crate, the
+# version bump. pyfae carries three: its engine module's crate, the
 # wheel's (pyproject.toml) and the package's own `__version__`.
 _MANIFEST_VERSION = re.compile(r'^(version\s*=\s*")([^"]+)(")', re.M)
 VERSION_FILES = [
     ("Cargo.toml", _MANIFEST_VERSION, 1),
     ("wasm/python/Cargo.toml", _MANIFEST_VERSION, 1),
     ("python/pyproject.toml", _MANIFEST_VERSION, 1),
-    ("python/pyfflame/__init__.py", re.compile(r'^(__version__\s*=\s*")([^"]+)(")', re.M), 1),
+    ("python/pyfae/__init__.py", re.compile(r'^(__version__\s*=\s*")([^"]+)(")', re.M), 1),
     ("wasm/render/Cargo.toml", _MANIFEST_VERSION, 1),
     ("wasm/script/Cargo.toml", _MANIFEST_VERSION, 1),
     # The web app's cache-busters on css/ and js/ (every `?v=`): browsers
@@ -188,13 +188,13 @@ GATES = [
     #   envelope -- runs before the modules deploy: `release.py gallery`.
     Gate("gallery modules", lambda: gallery_compiles(),
          why="the library without the web app or terrain: a cfg on the wrong item compiles everywhere else"),
-    # pyfflame's engine: the one WASI build, with code (`browser` versus
+    # pyfae's engine: the one WASI build, with code (`browser` versus
     # wasm32 cfgs, its storage and fetch stubs) nothing else compiles.
     # The PyO3 crate it replaced fell out of every gate and stopped
     # compiling unnoticed. The check runs from the crate's directory,
     # whose .cargo/config.toml names the target.
     Gate("python module (WASI)", ["cargo", "check"], cwd="wasm/python",
-         why="pyfflame's engine; needs `rustup target add wasm32-wasip1`"),
+         why="pyfae's engine; needs `rustup target add wasm32-wasip1`"),
 ]
 
 # The gallery crates, each a workspace of its own sharing
@@ -236,10 +236,10 @@ GALLERY_TESTS = [
          why="script + seed is a shareable artifact; drift redefines every published seed"),
     Gate("gallery renderer smoke", ["cargo", "test", "--profile", "gallery-test"], cwd="wasm/render",
          why="the device-reuse regression froze real galleries once already"),
-    # pyfflame: its module built and packaged, then its tests -- the old
+    # pyfae: its module built and packaged, then its tests -- the old
     # PyO3 package's, which the WASI one passes unchanged, and rendering.
     Gate("python package", lambda: python_tests(),
-         why="pyfflame's API and renders; GPU tests skip without an adapter"),
+         why="pyfae's API and renders; GPU tests skip without an adapter"),
 ]
 
 
@@ -709,7 +709,7 @@ def cmd_preflight(args):
     fetch = not args.no_fetch
     gates = [Gate(f"{name} ready", lambda p=path: repo_ready(p, fetch),
                   why="clean, on main, level with origin")
-             for name, path in [("fflame-rust", ROOT)] + [(n, sibling(n)) for n in SIBLINGS]]
+             for name, path in [("fractal-art-editor", ROOT)] + [(n, sibling(n)) for n in SIBLINGS]]
     gates += [
         Gate("versions agree", lambda: check_versions(),
              why="`release.py versions` lists them"),
@@ -1222,7 +1222,7 @@ def cmd_publish(args):
 
     notes = ROOT / "NOTES.md"
     gates = [
-        Gate("fflame-rust ready", lambda: repo_ready(ROOT, fetch=True),
+        Gate("fractal-art-editor ready", lambda: repo_ready(ROOT, fetch=True),
              why="the tag goes on the pushed main"),
         Gate("versions agree", lambda: check_versions(), why="`release.py versions`"),
         Gate("gh signed in", ["gh", "auth", "status"], why="the release is created with gh"),
@@ -1491,7 +1491,7 @@ def main():
     n.add_argument("--force", action="store_true", help="replace an existing NOTES.md")
     n.set_defaults(fn=cmd_notes)
 
-    gl = sub.add_parser("gallery", help="the gallery modules' and pyfflame's own tests, before they ship")
+    gl = sub.add_parser("gallery", help="the gallery modules' and pyfae's own tests, before they ship")
     gl.set_defaults(fn=cmd_gallery, fix=False)
 
     g = sub.add_parser("changelog", help="generate from git history")

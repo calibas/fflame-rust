@@ -396,7 +396,7 @@ determines. What depends on the view or on the renderer is set after:
 `FlamePipelines::ensure_shaders_current_with_config` takes the census,
 targeting arm (`cylinder_*`), leak probe (which turns on
 `frame_coverage`) and `persistent_orbits` as arguments, because a
-`.fflame` cannot ask for them.
+`.fae` cannot ask for them.
 
 ### Off means byte-identical
 
@@ -868,10 +868,10 @@ histogram buffer. It needs the direct-histogram path, skips solid
 flames, and does not instrument subflame dispatchers.
 
 ```bash
-cargo run --release --bin variation_probe -- census <flame.fflame> [iterations]
+cargo run --release --bin variation_probe -- census <flame.fae> [iterations]
 cargo run --release --bin variation_probe -- census --corpus [iterations] [seeds]
 cargo run --release --bin variation_probe -- rank <old-probe-report> <new-probe-report> [census-report]
-cargo run --release --bin census_dumpseed -- <seed> > seedN.fflame
+cargo run --release --bin census_dumpseed -- <seed> > seedN.fae
 ```
 
 `--corpus` writes `docs/generated/variation-census-<os>.txt`, one file

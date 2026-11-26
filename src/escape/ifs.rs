@@ -14464,7 +14464,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let mut c = ifs_preset_config(name, coloring, flame.transforms.clone());
             c.escape.formula_params.insert("levels".to_string(), 48.0);
             let slug = name.to_lowercase().replace(' ', "-");
-            let path = dir.join(format!("{slug}.fflame"));
+            let path = dir.join(format!("{slug}.fae"));
             std::fs::write(&path, c.to_json().expect("serialise")).expect("write");
             println!("    {}", path.display());
         }
@@ -14473,7 +14473,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let mut c = ifs_preset_config(name, coloring, transforms);
             c.escape.formula_params.insert("levels".to_string(), 64.0);
             let slug = name.to_lowercase().replace(' ', "-");
-            let path = dir.join(format!("julia-{slug}.fflame"));
+            let path = dir.join(format!("julia-{slug}.fae"));
             std::fs::write(&path, c.to_json().expect("serialise")).expect("write");
             println!("    {}", path.display());
         }
@@ -17919,7 +17919,7 @@ fn distance(s, p) {
                 // one the loader reads a v0 file and its v3 migration
                 // takes the render mode from the flame -- 2D.
                 c.deterministic_rng = true;
-                std::fs::write(dir.join(format!("{name}-{tag}.fflame")), c.to_json().expect("json"))
+                std::fs::write(dir.join(format!("{name}-{tag}.fae")), c.to_json().expect("json"))
                     .expect("write config");
                 println!("{name} {tag}: {ms:.0} ms ({samples} samples when path traced) -> {}", path.display());
             }

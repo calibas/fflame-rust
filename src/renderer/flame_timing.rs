@@ -38,15 +38,15 @@ fn flames() -> Vec<(String, FractalConfig)> {
     if let Ok(names) = std::env::var("FLAME_TIMING_VARIATIONS") {
         return names.split(',').flat_map(|n| [false, true].map(|three| variation_flame(n, three))).collect();
     }
-    let presets = FractalConfig::from_json_multi(&std::fs::read_to_string("assets/presets.fflame").expect("the presets")).expect("they parse");
+    let presets = FractalConfig::from_json_multi(&std::fs::read_to_string("assets/presets.fae").expect("the presets")).expect("they parse");
     let mut out: Vec<(String, FractalConfig)> = presets.into_iter().take(8).map(|c| (c.flame.name.clone(), c)).collect();
     for path in [
-        "tests/visual/configs/variations/bipolar-series-smoke.fflame",
-        "tests/visual/configs/variations/classic-blades-misc-smoke.fflame",
-        "tests/visual/configs/variations/misc-variations2.fflame",
-        "tests/visual/configs/variations/init-migration-smoke.fflame",
+        "tests/visual/configs/variations/bipolar-series-smoke.fae",
+        "tests/visual/configs/variations/classic-blades-misc-smoke.fae",
+        "tests/visual/configs/variations/misc-variations2.fae",
+        "tests/visual/configs/variations/init-migration-smoke.fae",
         "tests/visual/configs/2d/subflame-julian.fflame",
-        "tests/visual/configs/3d/swirl3D_wf-smoke.fflame",
+        "tests/visual/configs/3d/swirl3D_wf-smoke.fae",
     ] {
         let cfg = FractalConfig::from_json(&std::fs::read_to_string(path).expect("the config")).expect("it parses");
         out.push((path.rsplit('/').next().unwrap_or(path).trim_end_matches(".fflame").to_string(), cfg));

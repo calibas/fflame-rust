@@ -16,45 +16,45 @@ fn config_of(envelope: &str) -> String {
 #[test]
 fn generator_matches_the_cli_byte_for_byte() {
     // FractalArtEditor generate -s assets/scripts/generators/basic_random.rhai \
-    //   --seed 7 -o basic_random_seed7.fflame
-    let fixture = include_str!("fixtures/basic_random_seed7.fflame");
+    //   --seed 7 -o basic_random_seed7.fae
+    let fixture = include_str!("fixtures/basic_random_seed7.fae");
     let source = include_str!("../../../assets/scripts/generators/basic_random.rhai");
-    let out = fflame_script::run_impl(source, 7, "{}", None).expect("runs");
+    let out = fae_script::run_impl(source, 7, "{}", None).expect("runs");
     assert_eq!(config_of(&out), fixture, "generator output drifted from the CLI");
 }
 
 #[test]
 fn modifier_on_a_base_matches_the_cli() {
     // FractalArtEditor generate -s assets/scripts/modifiers/jitter.rhai \
-    //   --seed 7 -b basic_random_seed7.fflame -o basic_random_seed7_jitter.fflame
-    let base = include_str!("fixtures/basic_random_seed7.fflame");
-    let fixture = include_str!("fixtures/basic_random_seed7_jitter.fflame");
+    //   --seed 7 -b basic_random_seed7.fae -o basic_random_seed7_jitter.fae
+    let base = include_str!("fixtures/basic_random_seed7.fae");
+    let fixture = include_str!("fixtures/basic_random_seed7_jitter.fae");
     let source = include_str!("../../../assets/scripts/modifiers/jitter.rhai");
-    let out = fflame_script::run_impl(source, 7, "{}", Some(base)).expect("runs");
+    let out = fae_script::run_impl(source, 7, "{}", Some(base)).expect("runs");
     assert_eq!(config_of(&out), fixture, "modifier output drifted from the CLI");
 }
 
 #[test]
 fn choice_params_resolve_like_the_cli_set_flag() {
     // FractalArtEditor generate -s assets/scripts/generators/lsystem.rhai \
-    //   --seed 3 --set "preset=2D · Koch snowflake" -o lsystem_koch_seed3.fflame
-    let fixture = include_str!("fixtures/lsystem_koch_seed3.fflame");
+    //   --seed 3 --set "preset=2D · Koch snowflake" -o lsystem_koch_seed3.fae
+    let fixture = include_str!("fixtures/lsystem_koch_seed3.fae");
     let source = include_str!("../../../assets/scripts/generators/lsystem.rhai");
     let params = r#"{"preset": "2D · Koch snowflake"}"#;
-    let out = fflame_script::run_impl(source, 3, params, None).expect("runs");
+    let out = fae_script::run_impl(source, 3, params, None).expect("runs");
     assert_eq!(config_of(&out), fixture, "choice-param output drifted from the CLI");
 }
 
 #[test]
 fn unknown_params_fail_loudly() {
     let source = include_str!("../../../assets/scripts/modifiers/jitter.rhai");
-    let err = fflame_script::run_impl(source, 1, r#"{"nope": 1.0}"#, None).unwrap_err();
+    let err = fae_script::run_impl(source, 1, r#"{"nope": 1.0}"#, None).unwrap_err();
     assert!(err.contains("no parameter `nope`"), "got: {err}");
 }
 
 #[test]
 fn the_library_lists_the_embedded_scripts_with_params() {
-    let json = fflame_script::list_scripts_impl().expect("lists");
+    let json = fae_script::list_scripts_impl().expect("lists");
     let v: serde_json::Value = serde_json::from_str(&json).expect("parses");
     let arr = v.as_array().expect("array");
     assert!(arr.len() >= 10, "all shipped scripts present: {}", arr.len());
@@ -67,7 +67,7 @@ fn the_library_lists_the_embedded_scripts_with_params() {
     assert!(!basic["params"].as_array().unwrap().is_empty(), "params declared");
 
     // And the source getter round-trips an id from the listing.
-    let src = fflame_script::script_source_impl("jitter").expect("source by id");
+    let src = fae_script::script_source_impl("jitter").expect("source by id");
     assert!(src.contains("script("));
 
     // Flags surface: a gallery must know turntable ignores the seed
@@ -84,7 +84,7 @@ fn a_script_defined_animation_rides_in_the_envelope() {
     // The Animation wing's door: turntable defines an animation, and
     // the envelope must carry it — the same .anim JSON the CLI writes.
     let source = include_str!("../../../assets/scripts/modifiers/turntable.rhai");
-    let out = fflame_script::run_impl(source, 1, "{}", None).expect("runs");
+    let out = fae_script::run_impl(source, 1, "{}", None).expect("runs");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let anim = v["animation_json"].as_str().expect("animation present");
     let parsed: serde_json::Value = serde_json::from_str(anim).expect("animation is JSON");
@@ -95,7 +95,7 @@ fn a_script_defined_animation_rides_in_the_envelope() {
 
     // And a script with no animation says null, not a missing key.
     let jitter = include_str!("../../../assets/scripts/modifiers/jitter.rhai");
-    let out = fflame_script::run_impl(jitter, 1, "{}", None).expect("runs");
+    let out = fae_script::run_impl(jitter, 1, "{}", None).expect("runs");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert!(v["animation_json"].is_null());
 }
@@ -113,7 +113,7 @@ fn a_script_defined_animation_rides_in_the_envelope() {
 fn the_seed_ring_wraps_at_both_ends() {
     let source = include_str!("../../../assets/scripts/generators/basic_random.rhai");
     let at = |seed: u64| {
-        let out = fflame_script::run_impl(source, seed, "{}", None).expect("runs");
+        let out = fae_script::run_impl(source, seed, "{}", None).expect("runs");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         v["config_json"].as_str().unwrap().to_string()
     };
@@ -143,11 +143,11 @@ fn run_chain_matches_the_sequential_loop_byte_for_byte() {
     let mutate = include_str!("../../../assets/scripts/modifiers/mutate.rhai");
 
     // The old per-stage loop.
-    let env1 = fflame_script::run_impl(gen, 7, "{}", None).expect("gen runs");
+    let env1 = fae_script::run_impl(gen, 7, "{}", None).expect("gen runs");
     let cfg1 = config_of(&env1);
-    let env2 = fflame_script::run_impl(jitter, 7, "{}", Some(&cfg1)).expect("jitter runs");
+    let env2 = fae_script::run_impl(jitter, 7, "{}", Some(&cfg1)).expect("jitter runs");
     let cfg2 = config_of(&env2);
-    let env3 = fflame_script::run_impl(mutate, 7, "{}", Some(&cfg2)).expect("mutate runs");
+    let env3 = fae_script::run_impl(mutate, 7, "{}", Some(&cfg2)).expect("mutate runs");
     let sequential = config_of(&env3);
 
     // One chained call.
@@ -156,7 +156,7 @@ fn run_chain_matches_the_sequential_loop_byte_for_byte() {
         { "source": jitter, "params": {} },
         { "source": mutate },
     ]);
-    let chained = fflame_script::run_chain_impl(&stages.to_string(), 7, None).expect("chain runs");
+    let chained = fae_script::run_chain_impl(&stages.to_string(), 7, None).expect("chain runs");
     assert_eq!(config_of(&chained), sequential, "chain drifted from the sequential loop");
 
     // Per-stage reports arrive in order.
@@ -174,7 +174,7 @@ fn run_chain_errors_name_the_stage() {
         { "source": gen },
         { "source": jitter, "params": { "nope": 1.0 } },
     ]);
-    let err = fflame_script::run_chain_impl(&stages.to_string(), 1, None).unwrap_err();
+    let err = fae_script::run_chain_impl(&stages.to_string(), 1, None).unwrap_err();
     assert!(err.starts_with("stage 1:"), "got: {err}");
     assert!(err.contains("no parameter `nope`"), "got: {err}");
 }

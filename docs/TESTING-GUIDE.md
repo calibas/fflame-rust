@@ -31,7 +31,7 @@ python scripts/run_benchmarks.py --quick
 cargo run --release --bin variation_probe
 
 # Render configs to PNG through the library, without the release exe
-INSPECT="a.fflame=a.png" INSPECT_SIZE=1280x720 \
+INSPECT="a.fae=a.png" INSPECT_SIZE=1280x720 \
   cargo test --release --lib render_configs_for_inspection -- --ignored --nocapture
 
 # The API integration test: a local ffapi (../ffapi, its .env database),
@@ -144,7 +144,7 @@ config files through the same `renderer::render` the CLI export uses —
 for when the release executable is locked by a running app:
 
 ```bash
-INSPECT="a.fflame=a.png;b.fflame=b.png" INSPECT_SIZE=1280x720 \
+INSPECT="a.fae=a.png;b.fae=b.png" INSPECT_SIZE=1280x720 \
   cargo test --release --lib render_configs_for_inspection -- --ignored --nocapture
 ```
 
@@ -160,7 +160,7 @@ The client's own API calls against a real `ffapi` on this machine
 ([api-updates.md](archive/projects/api-updates.md), decision 7). The script builds
 the API (debug) from `../ffapi` (`--ffapi` to point elsewhere,
 `--skip-build` to reuse its binary), starts it on a free loopback port, runs
-the ignored `api::integration_tests` with `FFLAME_API_URL` set, and stops
+the ignored `api::integration_tests` with `FAE_API_URL` set, and stops
 the server however the run ends. Exit status is the tests'.
 
 - **The database** is the one in ffapi's `.env`, which its own test suite
@@ -178,7 +178,7 @@ the server however the run ends. Exit status is the tests'.
   - the catalogs decode;
   - the update check reads `APP_LATEST_VERSION`, which the script sets to
     99.0.0.
-- **`FFLAME_API_URL`** is honoured by the desktop client only, and only
+- **`FAE_API_URL`** is honoured by the desktop client only, and only
   for a loopback address (`api::client::build_url`). The same variable runs
   the app itself against a local server.
 
@@ -268,7 +268,7 @@ python tests/visual/run_tests.py --update-baseline
   thread.
 - **Categories** (subdirectories of `configs/`): `2d` (6), `3d` (15),
   `escape` (119), `sim` (105), `solid` (6), `tonemap` (2),
-  `variations` (121) — 374 configs, plus `configs/warmup.fflame`, which
+  `variations` (121) — 374 configs, plus `configs/warmup.fae`, which
   is rendered first as a warmup and is then also run as the test
   `general-warmup`.
 - **Compares with a tolerance, not a hash.** Baselines in
@@ -425,7 +425,7 @@ otherwise idle, since the times are real.
 
 | what | how |
 |---|---|
-| **The frame log**: a CSV row a frame from the running app (CPU time and its waits for the surface, the GPU's time for the UI and for the engine, the view, playback, the flame's dispatch, escape supersampling and whether the picture shown is part-drawn, the simulation's grid, its last step's cost and the grid scale the governor holds, the render size, the quality governor's rung, last picture, learned fixed cost and budget, and the flame batch's pacing cap) | `FFLAME_FRAME_LOG=out.csv` when starting the release app; `FFLAME_FRAME_LOG_OPEN=x.anim` (played) or `x.fflame`, and `FFLAME_FRAME_LOG_SECONDS=N` to quit, for a scripted run; `FFLAME_FRAME_LOG_RENDER_SCALE=S` renders at that scale for the run, `FFLAME_FRAME_LOG_TARGET_FPS=display` or `=N` holds that Target Frame Rate, `FFLAME_FRAME_LOG_VSYNC=on` or `=off` sets VSync, without touching the saved settings, and `FFLAME_FRAME_LOG_NO_GPU_TIMER=1` runs without the frame timer, as a browser without `timestamp-query` does (`scripts/governor_playback.py --render-scale --target-fps --vsync --no-gpu-timer`, and `--exe` for a binary built while a running app locks `target/release/`). Settings beside it in `out.csv.json` |
+| **The frame log**: a CSV row a frame from the running app (CPU time and its waits for the surface, the GPU's time for the UI and for the engine, the view, playback, the flame's dispatch, escape supersampling and whether the picture shown is part-drawn, the simulation's grid, its last step's cost and the grid scale the governor holds, the render size, the quality governor's rung, last picture, learned fixed cost and budget, and the flame batch's pacing cap) | `FAE_FRAME_LOG=out.csv` when starting the release app; `FAE_FRAME_LOG_OPEN=x.anim` (played) or `x.fae`, and `FAE_FRAME_LOG_SECONDS=N` to quit, for a scripted run; `FAE_FRAME_LOG_RENDER_SCALE=S` renders at that scale for the run, `FAE_FRAME_LOG_TARGET_FPS=display` or `=N` holds that Target Frame Rate, `FAE_FRAME_LOG_VSYNC=on` or `=off` sets VSync, without touching the saved settings, and `FAE_FRAME_LOG_NO_GPU_TIMER=1` runs without the frame timer, as a browser without `timestamp-query` does (`scripts/governor_playback.py --render-scale --target-fps --vsync --no-gpu-timer`, and `--exe` for a binary built while a running app locks `target/release/`). Settings beside it in `out.csv.json` |
 | **Reference playback**: eight looped scenes made from visual-suite configs, each played in the app with the frame log on | `python scripts/governor_scenes.py`, then `python scripts/governor_playback.py [--warm] [--seconds N] [--only a,b] [--render-scale S]`. Opens a window per scene |
 | **The calibration**: each scene at each rung of the governor's ladder (escape supersampling and size, flame samples and size, a simulation step's cost at each field scale), timed | `cargo test --release --lib -- --ignored governor_calibration --nocapture`; `CALIBRATE_SIZE`, `CALIBRATE_ONLY`, `CALIBRATE_REPEATS`, `CALIBRATE_OUT` |
 | **The upscalers compared**: each calibration rung below full size drawn up to its reference's size by the viewport's own pass, every filter (FSR included); renders and times nothing | `cargo test --release --lib -- --ignored upscaler_comparison` (after `governor_calibration`), then `python scripts/frame_metrics.py upscalers` (writes `upscalers.md`) |
@@ -446,7 +446,7 @@ plausible wrong value. The rules they back are in
 cargo run --release --bin variation_probe                  # probe -> docs/generated/variation-probe.txt (+ -sweep.txt)
 cargo run --release --bin variation_probe -- --no-sweep    # skip the parameter sweep
 cargo run --release --bin variation_probe -- compare OLD NEW
-cargo run --release --bin variation_probe -- census flame.fflame [iterations]
+cargo run --release --bin variation_probe -- census flame.fae [iterations]
 cargo run --release --bin variation_probe -- census --corpus [iterations] [seeds]
 cargo run --release --bin variation_probe -- rank OLD NEW [census-report]
 ```
@@ -545,5 +545,5 @@ cargo test --release --lib some::module::path::exact_test -- --exact
 | benchmarks | `scripts/run_benchmarks.py`, `benches/flame_bench.rs` | `python scripts/run_benchmarks.py` |
 | variation probe / census | `src/bin/variation_probe.rs`, `src/probe/`, `src/census/` | `cargo run --release --bin variation_probe` |
 | gallery module tests | `wasm/*/tests/` | `cargo test --profile gallery-test` in the crate directory |
-| CLI export | `src/main.rs`, `src/app/export.rs` | `cargo run --release -- export -i config.fflame -o out.png` |
+| CLI export | `src/main.rs`, `src/app/export.rs` | `cargo run --release -- export -i config.fae -o out.png` |
 | image diff | `src/bin/compare_images.rs` | `cargo run --release --bin compare_images -- --image1 a.png --image2 b.png` |

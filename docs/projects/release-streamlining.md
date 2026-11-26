@@ -85,7 +85,7 @@ prompt that names what it is about to do.
 
 | Subcommand | What it does | Today |
 |---|---|---|
-| `preflight` | All three repositories (`fflame-rust`, `ffapi`, `ffbrowser`, found beside this one) clean, on `main`, level with `origin`; versions agree; `gh` and `ssh` reachable | by eye |
+| `preflight` | All three repositories (`fractal-art-editor`, `ffapi`, `ffbrowser`, found beside this one) clean, on `main`, level with `origin`; versions agree; `gh` and `ssh` reachable | by eye |
 | `version X.Y.Z` | as now | exists |
 | `notes` | `changelog` grouped by area, written to `NOTES.md` for editing | exists as `changelog` |
 | `check` | as now, plus **the visual suite** and **the API integration test** (`scripts/api_integration.py`) as gates | partly |

@@ -36,8 +36,8 @@
 //! every script's full source, so it is generated on demand rather
 //! than committed.
 
-use fractal_flame_wgpu::config::FractalConfig;
-use fractal_flame_wgpu::script::{library, parse_doc, strip_markdown, ScriptHost, ScriptKind};
+use fae::config::FractalConfig;
+use fae::script::{library, parse_doc, strip_markdown, ScriptHost, ScriptKind};
 
 fn main() {
     let out_path = std::env::args()
@@ -85,7 +85,7 @@ fn main() {
         }
 
         let parameters: Vec<serde_json::Value> =
-            meta.params.iter().map(fractal_flame_wgpu::params::script_json).collect();
+            meta.params.iter().map(fae::params::script_json).collect();
 
         rows.push(serde_json::json!({
             "id": id,
@@ -124,7 +124,7 @@ fn main() {
                      its declared parameters, and its source verbatim. \
                      `id` is the reserved stem — the same list \
                      engine-contract.json carries as `builtin_scripts`.",
-        "contract_shape": fractal_flame_wgpu::contract::generate()["shape"],
+        "contract_shape": fae::contract::generate()["shape"],
         "count": rows.len(),
         "scripts": rows,
     });

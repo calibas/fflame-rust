@@ -1071,7 +1071,7 @@ fn raymarch_volume(input: VertexOutput) -> @location(0) vec4<f32> {
    - Transfer function editor (density → color/opacity)
 
 6. **File size explosion** - Saving voxel grid for later
-   - Current .fflame: ~10 KB (just parameters)
+   - Current .fae: ~10 KB (just parameters)
    - Voxel grid: 512 MB - 2 GB (raw data)
    - Compressed (OpenVDB): 50-200 MB typical
 

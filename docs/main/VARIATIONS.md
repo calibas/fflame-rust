@@ -105,7 +105,7 @@ variations, does.
 - An alias may not shadow a real name, and the first registration of
   an alias wins.
 - Transforms always store the canonical name. `.flame` import and
-  `.fflame` deserialisation both canonicalise, parameter keys included.
+  `.fae` deserialisation both canonicalise, parameter keys included.
 
 **Ordering for the UI.** Iterate `names()`, `all()` or
 `by_category(c)`, never the internal `HashMap`. The Transforms panel's

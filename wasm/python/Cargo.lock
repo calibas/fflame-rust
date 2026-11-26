@@ -1381,6 +1381,69 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af9673d8203fcb076b19dfd17e38b3d4ae9f44959416ea532ce72415a6020365"
 
 [[package]]
+name = "fae"
+version = "0.5.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "base64",
+ "bytemuck",
+ "chrono",
+ "clap",
+ "console_error_panic_hook",
+ "console_log",
+ "cpal",
+ "directories",
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
+ "egui_dock",
+ "env_logger",
+ "futures",
+ "getrandom 0.3.4",
+ "half",
+ "image",
+ "js-sys",
+ "log",
+ "png",
+ "pollster",
+ "pulldown-cmark",
+ "quick-xml 0.36.2",
+ "rand",
+ "rand_pcg",
+ "rayon",
+ "rfd",
+ "rhai",
+ "rustc_version",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2",
+ "smallvec",
+ "symphonia",
+ "ureq",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+ "webbrowser",
+ "wgpu",
+ "windows-sys 0.59.0",
+ "winit",
+ "winresource",
+]
+
+[[package]]
+name = "fae-python"
+version = "0.5.0"
+dependencies = [
+ "fae",
+ "serde",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1408,16 +1471,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fb2907d1f08b2b316b9223ced5b0e89d87028ba8deae9764741dba8ff7f3903"
 dependencies = [
  "bytemuck",
-]
-
-[[package]]
-name = "fflame-python"
-version = "0.5.0"
-dependencies = [
- "fractal_flame_wgpu",
- "serde",
- "serde_json",
- "wgpu",
 ]
 
 [[package]]
@@ -1492,59 +1545,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
-]
-
-[[package]]
-name = "fractal_flame_wgpu"
-version = "0.5.0"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "base64",
- "bytemuck",
- "chrono",
- "clap",
- "console_error_panic_hook",
- "console_log",
- "cpal",
- "directories",
- "egui",
- "egui-wgpu",
- "egui-winit",
- "egui_dock",
- "env_logger",
- "futures",
- "getrandom 0.3.4",
- "half",
- "image",
- "js-sys",
- "log",
- "png",
- "pollster",
- "pulldown-cmark",
- "quick-xml 0.36.2",
- "rand",
- "rand_pcg",
- "rayon",
- "rfd",
- "rhai",
- "rustc_version",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "sha2",
- "smallvec",
- "symphonia",
- "ureq",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "web-time",
- "webbrowser",
- "wgpu",
- "windows-sys 0.59.0",
- "winit",
- "winresource",
 ]
 
 [[package]]

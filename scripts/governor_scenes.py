@@ -41,16 +41,16 @@ def escape(config, **fields):
 
 def scenes():
     """(name, config, tracks)"""
-    seahorse = escape(load(f'{VIS}/escape/mandelbrot-seahorse-zoom.fflame'), supersample=4)
+    seahorse = escape(load(f'{VIS}/escape/mandelbrot-seahorse-zoom.fae'), supersample=4)
     yield 'escape-zoom', seahorse, [track('Escape.ZoomLog2', 7.0, 9.0), track('Escape.Rotation', 0.0, 0.5)]
 
-    ducks = load(f'{VIS}/escape/ducks-julia.fflame')
+    ducks = load(f'{VIS}/escape/ducks-julia.fae')
     yield 'escape-sweep', ducks, [track('Escape.JuliaRe', 0.10, 0.20), track('Escape.JuliaIm', -0.62, -0.55)]
 
-    solid = escape(load(f'{VIS}/escape/ifs-solid-tetrahedron-sky.fflame'), solid_tier='lit')
+    solid = escape(load(f'{VIS}/escape/ifs-solid-tetrahedron-sky.fae'), solid_tier='lit')
     yield 'escape-solid', solid, [track('Escape.CamYaw', 2.6, 3.6)]
 
-    terrain = load(f'{VIS}/escape/terrain-seahorse-lit.fflame')
+    terrain = load(f'{VIS}/escape/terrain-seahorse-lit.fae')
     yield 'escape-terrain', terrain, [track('Escape.CamYaw', 0.0, 0.6)]
 
     flame2d = load(f'{VIS}/2d/plastic-sierpinski.fflame')
@@ -67,13 +67,13 @@ def scenes():
                                        'distance': 0.0, 'rotation_deg': 0.0}
     yield 'flame-2d-heavy', heavy, [track('Rotation', 0.0, 1.0)]
 
-    flame3d = load(f'{VIS}/3d/bubble-3d.fflame')
+    flame3d = load(f'{VIS}/3d/bubble-3d.fae')
     yield 'flame-3d', flame3d, [track('CameraRotationY', 0.0, 1.0)]
 
-    fixed = load(f'{VIS}/sim/gray-scott-coral.fflame')
+    fixed = load(f'{VIS}/sim/gray-scott-coral.fae')
     yield 'sim-fixed', fixed, [track('Sim.Steps', 0.0, 4000.0)]
 
-    bound = load(f'{VIS}/sim/gray-scott-coral.fflame')
+    bound = load(f'{VIS}/sim/gray-scott-coral.fae')
     bound['sim']['grid'] = {'viewport': {'scale': 1.0}}
     yield 'sim-bound', bound, [track('Sim.Steps', 0.0, 4000.0)]
 
@@ -81,7 +81,7 @@ def scenes():
     # 13 ms a million cell-steps (phase 1), on a bound grid. Driven by a
     # step track (250 steps a second), and by the transport (4 steps a
     # frame; a track that is not the step count keeps Run engaged).
-    lenia = load(f'{VIS}/sim/lenia-soup.fflame')
+    lenia = load(f'{VIS}/sim/lenia-soup.fae')
     lenia['sim']['grid'] = {'viewport': {'scale': 1.0}}
     lenia['sim']['steps'] = 0
     yield 'sim-lenia', lenia, [track('Sim.Steps', 0.0, 3000.0)]
@@ -89,7 +89,7 @@ def scenes():
     lenia_run['sim']['steps_per_frame'] = 4
     yield 'sim-lenia-run', lenia_run, [track('Exposure', 1.0, 1.0)]
 
-    deep = load(f'{VIS}/escape/terrain-deep-60.fflame')
+    deep = load(f'{VIS}/escape/terrain-deep-60.fae')
     yield 'escape-terrain-deep', deep, [track('Escape.CamYaw', 0.0, 0.6)]
 
 

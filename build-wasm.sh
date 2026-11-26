@@ -63,7 +63,7 @@ if [ "$SYMBOLS" = "1" ]; then OUTDIR=./pkg-names; mkdir -p pkg-names; fi
 # build left there (wasm-pack's package.json and README, a 17 MiB
 # names module) was copied and deployed with every new one.
 if [ "$SYMBOLS" != "1" ]; then rm -rf pkg; fi
-wasm-bindgen $BINDGEN_FLAGS --out-dir "$OUTDIR" --target web "./target/wasm32-unknown-unknown/$PROFILE/fractal_flame_wgpu.wasm"
+wasm-bindgen $BINDGEN_FLAGS --out-dir "$OUTDIR" --target web "./target/wasm32-unknown-unknown/$PROFILE/fae.wasm"
 
 if [ $? -ne 0 ]; then
     echo "❌ wasm-bindgen failed"

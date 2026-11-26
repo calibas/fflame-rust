@@ -2,7 +2,7 @@
 animation engine renders it, frame by frame, into a video -- the frames
 the app's video export would make.
 
-    python python/examples/rhai_animation.py [CONFIG.fflame] [OUT_DIR]
+    python python/examples/rhai_animation.py [CONFIG.fae] [OUT_DIR]
 """
 
 import os
@@ -10,7 +10,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import pyfflame as ff  # noqa: E402
+import pyfae as ff  # noqa: E402
 
 config_path = sys.argv[1] if len(sys.argv) > 1 else "tests/visual/configs/2d/plastic-sierpinski.fflame"
 out = sys.argv[2] if len(sys.argv) > 2 else "output/python/rhai_animation"

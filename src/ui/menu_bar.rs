@@ -457,11 +457,11 @@ pub fn render_menu_bar(
                 ui.separator();
 
                 if ui.button(t!("menu.report_bug")).clicked() {
-                    let _ = webbrowser::open("https://github.com/calibas/fflame-rust/issues/new");
+                    let _ = webbrowser::open("https://github.com/calibas/fractal-art-editor/issues/new");
                 }
 
                 if ui.button(t!("menu.about")).clicked() {
-                    let _ = webbrowser::open("https://github.com/calibas/fflame-rust");
+                    let _ = webbrowser::open("https://github.com/calibas/fractal-art-editor");
                 }
             });
 

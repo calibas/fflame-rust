@@ -10,7 +10,7 @@ first with me before building anything." Decided the same day (below).
 
 It reopens, for assets named by provider and id, the 2026-10-02 decision
 to skip image files. That decision's reasons -- a path that breaks on
-other machines, a bloated `.fflame`, a read-only `assets/`, a shared
+other machines, a bloated `.fae`, a read-only `assets/`, a shared
 file reading a private image (docs/archive/projects/sim-textures.md) --
 are about user files; an asset a config names, which any machine can
 fetch from its provider, has none of them.
@@ -79,7 +79,7 @@ picker opens and kept for the session.
 **A config names an asset, never holds it**: the sky as
 `polyhaven:<id>` (the bundled ones keep their short ids) and the
 resolution chosen (`environment_resolution`, e.g. `4k`); a texture
-likewise. The `.fflame` stays small and opens anywhere that can fetch
+likewise. The `.fae` stays small and opens anywhere that can fetch
 it. Opening one whose asset is not stored: it is downloaded (a notice,
 a progress bar) and the picture fills in, the background standing in
 meanwhile, as for a missing bundled sky now.

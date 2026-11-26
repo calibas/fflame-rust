@@ -1,6 +1,6 @@
-"""Tests for pyfflame.
+"""Tests for pyfae.
 
-Run with `pytest`, or directly: `python tests/test_pyfflame.py`.
+Run with `pytest`, or directly: `python tests/test_pyfae.py`.
 
 The point of these is that the Python path and the app agree. Anything
 that could drift between them — file formats, script determinism,
@@ -12,7 +12,7 @@ import json
 import os
 import tempfile
 
-import pyfflame as ff
+import pyfae as ff
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(HERE, "..", "..", "assets", "scripts", "generators")
@@ -69,7 +69,7 @@ def test_typos_are_reported_not_swallowed():
             raise AssertionError(f"expected {exc.__name__}")
 
 
-def test_fflame_round_trip():
+def test_config_round_trip():
     c = ff.Config()
     i = c.add_transform()
     c.add_variation(i, "spherical", 1.0)
@@ -79,7 +79,7 @@ def test_fflame_round_trip():
     c.preserve_z = True
 
     with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "t.fflame")
+        path = os.path.join(d, "t.fae")
         c.save(path)
         back = ff.Config.load(path)
 

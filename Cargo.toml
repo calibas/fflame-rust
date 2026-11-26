@@ -1,11 +1,11 @@
 [package]
-name = "fractal_flame_wgpu"
+name = "fae"
 version = "0.5.0"
 edition = "2021"
-# The shipped executable is named for the product. The PACKAGE keeps
-# its crate name — that is an internal identifier, and renaming it would
-# churn every `use fractal_flame_wgpu::` path, the Python module and the
-# wasm-bindgen output for no user-visible gain.
+# The shipped executable is named for the product (Fractal Art Editor);
+# the crate is its short name, `fae`, which also names the web build
+# (`pkg/fae.js`) and the config files (`.fae`). It was
+# `fractal_flame_wgpu` until 2026-11-26 (docs/projects/rename.md).
 default-run = "FractalArtEditor"
 
 [[bin]]

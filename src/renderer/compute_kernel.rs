@@ -364,11 +364,11 @@ fn disc_contains(outer: crate::scene::cylinder::View, inner: crate::scene::cylin
 pub(crate) const EXACT_COUNT_AFTER_PASSES: u64 = 1 << 18;
 
 /// The threshold a renderer starts with: `EXACT_COUNT_AFTER_PASSES`, or
-/// `FFLAME_EXACT_COUNT_AFTER=<passes>` to see the switch in the app
+/// `FAE_EXACT_COUNT_AFTER=<passes>` to see the switch in the app
 /// without rendering for an hour (2^18 passes at 60 fps is 73 minutes).
-/// With `RUST_LOG=fractal_flame_wgpu=info` the log says when it happens.
+/// With `RUST_LOG=fae=info` the log says when it happens.
 fn exact_count_after_default() -> u64 {
-    std::env::var("FFLAME_EXACT_COUNT_AFTER").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(EXACT_COUNT_AFTER_PASSES)
+    crate::env_vars::var("EXACT_COUNT_AFTER").and_then(|v| v.trim().parse().ok()).unwrap_or(EXACT_COUNT_AFTER_PASSES)
 }
 
 pub struct FlameRenderer {
@@ -690,7 +690,7 @@ pub struct FlameRenderer {
     /// made on the first background plan and shared with every one after.
     gpu_planner: Option<SharedPlanner>,
     /// Whether background plans ask the GPU. On, unless
-    /// `FFLAME_PLAN_CPU` is set or [`Self::set_plan_on_gpu`] turned it off.
+    /// `FAE_PLAN_CPU` is set or [`Self::set_plan_on_gpu`] turned it off.
         plan_on_gpu: bool,
     /// Plan in a task polled each frame rather than on a worker thread:
     /// always on the web; on the desktop only when asked, to test the
@@ -966,7 +966,7 @@ impl FlameRenderer {
             applied_view: None,
             standby: None,
             gpu_planner: None,
-            plan_on_gpu: cfg!(target_arch = "wasm32") || std::env::var_os("FFLAME_PLAN_CPU").is_none(),
+            plan_on_gpu: cfg!(target_arch = "wasm32") || crate::env_vars::var_os("PLAN_CPU").is_none(),
             plan_in_task: cfg!(target_arch = "wasm32"),
             auto_exposure: false,
             filter_radius: 0.0,

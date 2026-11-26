@@ -15,12 +15,12 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
-use fractal_flame_wgpu::animation::frames::FrameSource;
-use fractal_flame_wgpu::animation::Animation;
-use fractal_flame_wgpu::config::defaults::DEFAULT_EXPORT_ITERATIONS_PER_THREAD;
-use fractal_flame_wgpu::config::FractalConfig;
-use fractal_flame_wgpu::png_metadata::{encode_png_with_metadata, PngMetadata};
-use fractal_flame_wgpu::renderer::{render_with, FlameRenderer, NoProgress, RenderEngines, RenderJob, RenderOutput};
+use fae::animation::frames::FrameSource;
+use fae::animation::Animation;
+use fae::config::defaults::DEFAULT_EXPORT_ITERATIONS_PER_THREAD;
+use fae::config::FractalConfig;
+use fae::png_metadata::{encode_png_with_metadata, PngMetadata};
+use fae::renderer::{render_with, FlameRenderer, NoProgress, RenderEngines, RenderJob, RenderOutput};
 use serde_json::{json, Value};
 
 use crate::backend;
@@ -158,7 +158,7 @@ impl Session {
             .job(&config, self.width, self.height)
             .with_engines(&mut self.engines)
             .with_moments(&moments)
-            .with_effect_clock(fractal_flame_wgpu::renderer::effect_chain::EffectClock::video(frame as u64, fps));
+            .with_effect_clock(fae::renderer::effect_chain::EffectClock::video(frame as u64, fps));
         let ipt = job.iterations_per_thread;
         let out = block_on(render_with(renderer, device, queue, job, &mut NoProgress)).map_err(|e| e.to_string())?;
         Ok(Frame { out, iterations_per_thread: ipt })
@@ -234,7 +234,7 @@ impl Gpu {
         // (docs/archive/projects/multipass-effects.md, T4).
         let fps = s.source.fps();
         let (config, _) = s.source.frame(frame);
-        for f in fractal_flame_wgpu::effects::warmup_frames(&config, s.last.map(u64::from), frame as u64) {
+        for f in fae::effects::warmup_frames(&config, s.last.map(u64::from), frame as u64) {
             s.render(device, queue, f as u32, fps)?;
         }
         let out = s.render(device, queue, frame, fps);

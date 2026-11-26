@@ -26,7 +26,7 @@ canvas.
 - **The full variation registry** — 647 variations.
 - **Colour modes** Palette, Speed and PathMap
   ([COLOR.md](main/COLOR.md)).
-- **Presets** from `assets/presets.fflame`, embedded in the module at
+- **Presets** from `assets/presets.fae`, embedded in the module at
   compile time (`src/resources/presets.rs`).
 - **Palette packs:** `starter_pack.json` is embedded; the other packs
   are listed by a manifest that `build.rs` generates from
@@ -34,7 +34,7 @@ canvas.
   `src/resources/` ([PALETTE_LIBRARY.md](main/PALETTE_LIBRARY.md)).
 - **Files:** opening uses the browser's file picker
   (`trigger_browser_file_picker` in `src/app/mod.rs`, an
-  `<input type="file">`) for `.fflame` / `.flame` configs, animations,
+  `<input type="file">`) for `.fae` / `.flame` configs, animations,
   scripts and audio; saving and PNG export arrive as browser downloads
   (`trigger_browser_download`).
 - **Settings** persist in the browser's `localStorage`
@@ -107,7 +107,7 @@ python -m http.server 8080      # or: npx serve
 # open http://localhost:8080
 ```
 
-`index.html` imports `./pkg/fractal_flame_wgpu.js`. Palette packs are
+`index.html` imports `./pkg/fae.js`. Palette packs are
 fetched relative to the page, at `pkg/assets/palettes/packs/<file>`
 (`WEB_PACKS_DIR`, read by `load_pack` in `src/resources/palettes.rs`) —
 where the build copied them, so a local server and a deploy find them
@@ -138,10 +138,10 @@ renders it headless — no canvas, no app — through the same
 works.
 
 ```javascript
-import init, { WasmApi } from './pkg/fractal_flame_wgpu.js';
+import init, { WasmApi } from './pkg/fae.js';
 await init();
 const api = new WasmApi();
-api.load_config_json(JSON.stringify(config));       // a .fflame's JSON
+api.load_config_json(JSON.stringify(config));       // a .fae's JSON
 const png = await api.export_png(800, 600, 256, false);
 // width, height, iterations per thread, transparent [, premultiplied] -> Uint8Array (PNG, with metadata)
 ```
@@ -229,7 +229,7 @@ A trap in the stripped `dist` bundle reaches the console as a bare
 1. **Read the offset before rebuilding.** An offset only means
    something against the module that produced it.
 2. `python scripts/wasm-locate.py <offset|#index>` identifies the
-   function containing it from `pkg/fractal_flame_wgpu_bg.wasm` alone,
+   function containing it from `pkg/fae_bg.wasm` alone,
    using the string literals the function references and the export
    names that survive `strip`.
 3. To keep names in the module, rebuild with `--symbols` (same
@@ -244,11 +244,11 @@ that gave confident wrong answers on the way — is recorded in
 
 - `python scripts/release.py check` compiles the library for
   `wasm32-unknown-unknown`, compiles both gallery crates and their
-  tests, and checks the WASI module for pyfflame (the
+  tests, and checks the WASI module for pyfae (the
   `python module (WASI)` gate).
 - `python scripts/release.py gallery` runs the gallery crates' tests
   before the modules deploy -- script parity, and `wasm/render`'s smoke
-  tests, which render every engine -- and then builds pyfflame and runs
+  tests, which render every engine -- and then builds pyfae and runs
   its tests.
 - `tests/visual/wasm/test_wasm.py` renders the visual-suite configs in
   Chrome through `WasmApi.export_png`, driven by Selenium, and

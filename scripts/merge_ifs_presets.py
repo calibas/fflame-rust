@@ -1,4 +1,4 @@
-"""Splice the generated mode-D presets into `assets/presets.fflame`.
+"""Splice the generated mode-D presets into `assets/presets.fae`.
 
 The generator (`escape::ifs::gpu_tests::write_the_classical_ifs_presets`,
 an `#[ignore]`d one-shot) writes `output/ifs-presets.json` through the
@@ -17,7 +17,7 @@ import io
 import json
 
 GENERATED = "output/ifs-presets.json"
-SHIPPED = "assets/presets.fflame"
+SHIPPED = "assets/presets.fae"
 
 new = json.load(io.open(GENERATED, encoding="utf-8"))
 old = json.load(io.open(SHIPPED, encoding="utf-8"))

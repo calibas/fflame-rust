@@ -125,7 +125,7 @@ pub fn flame_update_visibility(make_public: bool, was_public: Option<bool>) -> O
 /// Make the server's copy of an animation's flame its `base_config`.
 ///
 /// The flame embedded in the animation response is authoritative: an
-/// animation is tied to its flame online by `flame_id`, and the flame
+/// animation is tied to its fractal online by `fractal_id`, and the flame
 /// may have been updated since the animation stored a `base_config`
 /// (one is stored only if the animation already carried one). The
 /// stored copy was preferred whenever it existed, so such an animation
@@ -144,8 +144,8 @@ pub fn adopt_server_flame(
 /// deployed server (`https://fractalsforall.com`) for `--profile dist`,
 /// what ships; a local one (`http://localhost:3000`) for `--release` and
 /// debug builds, for testing against an API run on this machine. Set
-/// `FFLAME_API_BASE_URL` when building to choose another.
-pub const API_BASE_URL: &str = env!("FFLAME_API_BASE_URL");
+/// `FAE_API_BASE_URL` when building to choose another.
+pub const API_BASE_URL: &str = env!("FAE_API_BASE_URL");
 
 use auth::AuthState;
 use client::build_url;
@@ -300,7 +300,7 @@ impl ApiState {
         let token = self.require_token()?;
         let url = build_url(
             API_BASE_URL,
-            &format!("/api/v1/users/me/flames?page={}&per_page={}", page, per_page),
+            &format!("/api/v1/users/me/fractals?page={}&per_page={}", page, per_page),
         );
 
         self.flames_load_state = LoadState::Loading;
@@ -334,7 +334,7 @@ impl ApiState {
 
         let mut flame_req = sync::config_to_create_request(config, name)?;
         flame_req.visibility = visibility;
-        let flame_url = build_url(API_BASE_URL, "/api/v1/flames");
+        let flame_url = build_url(API_BASE_URL, "/api/v1/fractals");
         let flame_resp: FlameResponse =
             client::api_post(&flame_url, &flame_req, &token).await?;
         let flame_id = flame_resp.id;
@@ -348,7 +348,7 @@ impl ApiState {
 
     /// Upload a JPEG thumbnail for a flame.
     ///
-    /// PUT /api/v1/flames/{id}/thumbnail?width={w}&height={h}
+    /// PUT /api/v1/fractals/{id}/thumbnail?width={w}&height={h}
     /// Body: raw JPEG bytes, Content-Type: image/jpeg
     /// Returns 204 No Content on success.
     pub async fn upload_thumbnail(
@@ -362,7 +362,7 @@ impl ApiState {
         let url = build_url(
             API_BASE_URL,
             &format!(
-                "/api/v1/flames/{}/thumbnail?width={}&height={}",
+                "/api/v1/fractals/{}/thumbnail?width={}&height={}",
                 flame_id, width, height
             ),
         );
@@ -391,7 +391,7 @@ impl ApiState {
         let effective_visibility = match visibility {
             Some(v) => Some(v),
             None => {
-                let current_url = build_url(API_BASE_URL, &format!("/api/v1/flames/{}", flame_id));
+                let current_url = build_url(API_BASE_URL, &format!("/api/v1/fractals/{}", flame_id));
                 let current: FlameResponse = client::api_get(&current_url, &token).await?;
                 current.visibility
             }
@@ -400,7 +400,7 @@ impl ApiState {
         let mut req = sync::config_to_create_request(config, name)?;
         req.visibility = effective_visibility;
 
-        let url = build_url(API_BASE_URL, &format!("/api/v1/flames/{}", flame_id));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/fractals/{}", flame_id));
         let resp: FlameResponse = client::api_put(&url, &req, &token).await?;
 
         if let Some(jpg_data) = thumbnail_jpg {
@@ -421,7 +421,7 @@ impl ApiState {
     /// A public flame needs no sign-in; a private one is its owner's (the
     /// token, when there is one, says who asks).
     pub async fn load_flame_with_visibility(&self, flame_id: &str) -> FetchResult<FlameLoadResult> {
-        let url = build_url(API_BASE_URL, &format!("/api/v1/flames/{}", flame_id));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/fractals/{}", flame_id));
         let resp: FlameResponse = self.public_get(&url).await?;
 
         let is_public = resp.visibility.as_ref().map(|v| matches!(v, ApiVisibility::Public));
@@ -435,7 +435,7 @@ impl ApiState {
     /// Delete a flame from the API.
     pub async fn delete_flame(&self, flame_id: &str) -> FetchResult<()> {
         let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/v1/flames/{}", flame_id));
+        let url = build_url(API_BASE_URL, &format!("/api/v1/fractals/{}", flame_id));
         client::api_delete(&url, &token).await
     }
 
@@ -443,7 +443,7 @@ impl ApiState {
     /// `recent`, `updated`, `name`, `popular`, `views`; `render_mode` and
     /// the catalog filters as `filters`).
     pub async fn browse_flames(&self, scope: Scope, words: &Browse) -> FetchResult<types::Page<FlameListItem>> {
-        self.browse(scope, "flames", words).await
+        self.browse(scope, "fractals", words).await
     }
 
     /// One page of palettes, each with its colours (`sort` = `recent`,
@@ -640,7 +640,7 @@ impl ApiState {
         let token = self.require_token()?;
         let url = build_url(
             API_BASE_URL,
-            &format!("/api/v1/flames/{}/animations?per_page=100", flame_id),
+            &format!("/api/v1/fractals/{}/animations?per_page=100", flame_id),
         );
         client::api_get::<types::Lenient<AnimationListItem>>(&url, &token).await.map(types::Lenient::into_inner)
     }
@@ -825,7 +825,7 @@ mod tests {
     /// `--release` or debug build to one on this machine (`build.rs`).
     #[test]
     fn the_api_follows_the_build_profile() {
-        if env!("FFLAME_API_BASE_URL_CHOSEN_BY") == "override" {
+        if env!("FAE_API_BASE_URL_CHOSEN_BY") == "override" {
             return;
         }
         match env!("BUILD_PROFILE") {
@@ -859,7 +859,7 @@ mod tests {
             filters: vec![("render_mode".into(), "2d".into())],
         };
         assert_eq!(words.query(), "?q=fire+%26+ice&sort=popular&kind=formula&render_mode=2d&per_page=100&cursor=abc%3D");
-        assert_eq!(Scope::Public.path("flames"), "/api/v1/flames");
+        assert_eq!(Scope::Public.path("fractals"), "/api/v1/fractals");
         assert_eq!(Scope::Curated.path("animations"), "/api/v1/animations");
         assert_eq!(Scope::Mine.path("palettes"), "/api/v1/users/me/palettes");
         assert_eq!(Scope::default(), Scope::Curated, "the app browses the curated collection");

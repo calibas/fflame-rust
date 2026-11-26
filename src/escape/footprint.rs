@@ -2331,7 +2331,7 @@ mod tests {
     #[test]
     fn the_leaves_cover_every_ray_the_walk_draws() {
         let deep: FractalConfig = serde_json::from_str(
-            &std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fflame").expect("config"),
+            &std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fae").expect("config"),
         )
         .expect("parse");
         let mut views: Vec<(&str, EscapeConfig, u32, u32)> = Vec::new();
@@ -3384,7 +3384,7 @@ mod tests {
             eprintln!("no GPU adapter; skipping");
             return;
         };
-        let text = std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fflame").expect("config");
+        let text = std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fae").expect("config");
         let mut c: FractalConfig = serde_json::from_str(&text).expect("parse");
         assert!(c.escape.zoom_log2 >= 60.0);
         c.escape.shading.enabled = false;
@@ -3629,7 +3629,7 @@ mod tests {
             return;
         };
         let mut c: FractalConfig = serde_json::from_str(
-            &std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fflame").expect("config"),
+            &std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fae").expect("config"),
         )
         .expect("parse");
         c.render_mode = crate::scene::transforms::RenderMode::Escape;
@@ -3691,7 +3691,7 @@ mod tests {
             return;
         };
         let mut c: FractalConfig = serde_json::from_str(
-            &std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fflame").expect("config"),
+            &std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fae").expect("config"),
         )
         .expect("parse");
         c.render_mode = crate::scene::transforms::RenderMode::Escape;
@@ -3765,7 +3765,7 @@ mod tests {
             return;
         };
         let deep: FractalConfig = serde_json::from_str(
-            &std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fflame").expect("config"),
+            &std::fs::read_to_string("tests/visual/configs/escape/fe-zoom-60-edge.fae").expect("config"),
         )
         .expect("parse");
         let mut shallow = terrain_config();

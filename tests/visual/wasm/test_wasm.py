@@ -155,7 +155,7 @@ class WasmTestRunner:
 
             for config_file in sorted(category_dir.glob('*.fflame')):
                 # Skip warmup config
-                if config_file.name == 'warmup.fflame':
+                if config_file.name == 'warmup.fae':
                     continue
 
                 # Load and validate config

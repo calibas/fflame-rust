@@ -98,7 +98,7 @@ pub fn render_subflames_content(
                                 if ui
                                     .small_button("📁")
                                     .on_hover_text(
-                                        "Replace this subflame's flame with one loaded from a .fflame file",
+                                        "Replace this subflame's flame with one loaded from a config file (.fae)",
                                     )
                                     .clicked()
                                 {

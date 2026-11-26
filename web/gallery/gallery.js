@@ -1,7 +1,7 @@
 // Endless Gallery — proof of concept.
 //
-// The two wasm modules do all the work: fflame-script turns
-// (generator, rooms, seed) into a FractalConfig, fflame-render turns
+// The two wasm modules do all the work: fae-script turns
+// (generator, rooms, seed) into a FractalConfig, fae-render turns
 // the config into pixels. This file is scroll + URL glue, deliberately
 // minimal — the real gallery lives in its own repo.
 //
@@ -11,8 +11,8 @@
 // carries (hallway, rooms+params, first visible seed), so a link
 // reproduces the exact images.
 
-import initScript, * as script from "../../wasm/script/pkg/fflame_script.js";
-import initRender, * as render from "../../wasm/render/pkg/fflame_render.js";
+import initScript, * as script from "../../wasm/script/pkg/fae_script.js";
+import initRender, * as render from "../../wasm/render/pkg/fae_render.js";
 
 const TILE = 512;
 const TILE_ITERS = 30_000_000;   // user-editable in the full version

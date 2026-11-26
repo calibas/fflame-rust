@@ -67,7 +67,7 @@ control opt into Hable.
    gains a `HableFilmic` variant.
 2. **`FractalConfig`** gains a `hable_params: HableParams` struct with
    the seven knobs above. Serde-default to the Uncharted 2 numbers so old
-   `.fflame` files still load.
+   `.fae` files still load.
 3. **`TonemapParams` uniform** ([src/gpu/buffers.rs](../../src/gpu/buffers.rs))
    gains the seven f32s. Mind the std140 padding — keep the trailing
    `_pad_highlight` slots in sync (we burned an hour on a 144-vs-160 byte

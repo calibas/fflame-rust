@@ -127,11 +127,11 @@ Every script gets these objects:
 - **`flame`** — the structure: transforms, palette, effects, xaos.
   This is where most flame work happens, through typed, validated
   calls.
-- **`config`** — everything else in a `.fflame`, by the same key names
+- **`config`** — everything else in a `.fae`, by the same key names
   the saved JSON uses: `config.set("brightness", 4.0)`,
   `config.set("camera_rotation_x", 30.0 * PI() / 180.0)`. Nested keys
   are dotted — `config.get("sim.model_params.feed")`. Open any saved
-  `.fflame` in a text editor to discover what's settable.
+  `.fae` in a text editor to discover what's settable.
 - **`anim`** — optional keyframes. Touching `anim` at all makes the
   script emit a `.anim` alongside the flame; ignoring it emits none.
 - **`escape`** — the escape-time engine: formula, colouring, centre,
@@ -180,11 +180,11 @@ appear below the controls; errors carry line numbers.
 **From the command line** — how the examples below were verified:
 
 ```bash
-FractalArtEditor generate --script my_gen.rhai --seed 42 -o out.fflame
-FractalArtEditor generate --script my_mod.rhai --base in.fflame -o out.fflame
+FractalArtEditor generate --script my_gen.rhai --seed 42 -o out.fae
+FractalArtEditor generate --script my_mod.rhai --base in.fae -o out.fae
 FractalArtEditor generate --script my_gen.rhai --list-params
 FractalArtEditor generate --script my_gen.rhai --set "count=7" --set "style=Bold"
-FractalArtEditor export -i out.fflame -o out.png --width 1920 --height 1080
+FractalArtEditor export -i out.fae -o out.png --width 1920 --height 1080
 ```
 
 `--seed` wraps modulo 2⁶⁴ (so `--seed -1` is the last seed on the

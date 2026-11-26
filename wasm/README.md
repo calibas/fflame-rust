@@ -7,17 +7,17 @@ whatever repo consumes the modules.
 
 | module | does | size (raw / gzip) | needs |
 | --- | --- | --- | --- |
-| `fflame-script` | script + seed + params → FractalConfig JSON | 3.93 MB / 1.01 MB | nothing (pure CPU; worker-safe) |
-| `fflame-render` | FractalConfig JSON + dims → RGBA pixels, **any render mode** | 3.29 MB / 0.80 MB¹ | WebGPU |
+| `fae-script` | script + seed + params → FractalConfig JSON | 3.93 MB / 1.01 MB | nothing (pure CPU; worker-safe) |
+| `fae-render` | FractalConfig JSON + dims → RGBA pixels, **any render mode** | 3.29 MB / 0.80 MB¹ | WebGPU |
 
-¹ Measured when `fflame-render` carried the flame and escape-time
+¹ Measured when `fae-render` carried the flame and escape-time
 engines only; it now carries the simulation engine too (its
 `Cargo.toml` features) and has not been re-measured.
 
 `wasm/python` is not one of these: it is the library built for WASI,
 the engine of the Python package ([python/README.md](../python/README.md)).
 
-**One renderer.** `fflame-render` renders every mode — 2D and 3D
+**One renderer.** `fae-render` renders every mode — 2D and 3D
 flames, escape-time fractals and simulations. (A terrain config renders
 as its 2D picture: the module is not built with the `terrain`
 feature.) It is the only gallery renderer: the single-engine modules `fflame-flame`, `fflame-escape` and `fflame-sim` were retired on 2026-11-04.
@@ -58,16 +58,16 @@ are text-heavy (embedded WGSL) and compress ~4×.
 ## The contract between the modules
 
 A **FractalConfig JSON string** — the same format as the desktop app's
-`.fflame` files, with skip-if-default field stability. The script
-module emits it, the renderer consumes it, and any `.fflame` file from
+`.fae` files, with skip-if-default field stability. The script
+module emits it, the renderer consumes it, and any `.fae` file from
 the desktop app works too. Treat it as an opaque pass-through: don't
 re-serialize it (key order and float formatting are part of the
 byte-level determinism guarantee).
 
-## `fflame-script`
+## `fae-script`
 
 ```js
-import init, * as script from "./pkg/fflame_script.js";
+import init, * as script from "./pkg/fae_script.js";
 await init();   // in Node: await init({ module_or_path: bytesOfTheWasmFile })
 ```
 
@@ -187,10 +187,10 @@ seed = onRing(seed + 1n);                      // walks past the top to 0
 Also avoid comparing seeds to decide how far to walk — `next < seed + n`
 inverts once the value wraps. Count positions instead.
 
-## `fflame-render`
+## `fae-render`
 
 ```js
-import init, * as render from "./pkg/fflame_render.js";
+import init, * as render from "./pkg/fae_render.js";
 await init();
 await render.probe();   // rejects with a clear message if WebGPU is unavailable
 ```
@@ -260,8 +260,8 @@ ctx.putImageData(new ImageData(new Uint8ClampedArray(t.pixels), t.width, t.heigh
 ```html
 <canvas id="c" width="512" height="512"></canvas>
 <script type="module">
-  import initScript, * as script from "./pkg-script/fflame_script.js";
-  import initRender, * as render from "./pkg-render/fflame_render.js";
+  import initScript, * as script from "./pkg-script/fae_script.js";
+  import initRender, * as render from "./pkg-render/fae_render.js";
 
   await Promise.all([initScript(), initRender()]);
   await render.probe();

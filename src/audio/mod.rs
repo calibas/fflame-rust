@@ -7,7 +7,7 @@
 //!
 //! This module requires the `audio` feature to be enabled:
 //! ```toml
-//! fractal_flame_wgpu = { features = ["audio"] }
+//! fae = { features = ["audio"] }
 //! ```
 //!
 //! ## Architecture

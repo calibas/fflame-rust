@@ -75,7 +75,7 @@ Each blocks the items it names; most carry a recommendation in their doc.
     on WebGPU. [rhai-plugins.md](../archive/projects/rhai-plugins.md) §"P2".
 17. **The volume emitters** (polyhedron_volume, sphere_volume) as Rhai
     twins: possible later work. [rhai-plugins.md](../archive/projects/rhai-plugins.md) §"P7".
-18. **pyfflame's copied code**: the review the user will detail
+18. **pyfae's copied code**: the review the user will detail
     (six copies). [pyfflame.md](../archive/projects/pyfflame.md) §"4".
 
 The API's own decisions (variation slot cap, `simulation` in
@@ -340,7 +340,7 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
 - **Load on demand** (A variations as data, B a language module, C
   wasm-split): see the size study and decision 15.
 
-## Python (pyfflame)
+## Python (pyfae)
 
 [pyfflame.md](../archive/projects/pyfflame.md) §"5", §"6".
 
@@ -350,7 +350,7 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
 - **Backlog**: a transform proxy, palette access, bulk field views;
   linked/final, post-affine, xaos, subflames, solo, post-symmetry,
   effects; type stubs, PyPI, an API reference; animations from Python,
-  seed batches, `_repr_png_`, numpy, `python -m pyfflame convert`.
+  seed batches, `_repr_png_`, numpy, `python -m pyfae convert`.
 - **The copied-code review** (decision 18).
 
 ## App, UI and code health
@@ -378,7 +378,7 @@ C16 unplaced. Detail: [deep-zoom-tracker.md](../archive/deep-zoom/deep-zoom-trac
 - **A lost GPU device on the web** stops with a Reload notice
   (`gpu::device::show_lost_notice`); recovering in place (a new device,
   every renderer rebuilt) is not built.
-- **Deep-zoom gates read gitignored files** (`output/flame-zoom/*.fflame`):
+- **Deep-zoom gates read gitignored files** (`output/flame-zoom/*.fae`):
   they cannot run from a fresh clone.
   [doc-review-findings.md](../archive/projects/doc-review-findings.md) §"Still open".
 - **Move the flame dispatch governor** (`Batch`, `Knee`,

@@ -4,7 +4,7 @@
     python scripts/api_integration.py [--ffapi ../ffapi] [--skip-build]
 
 Builds the API (debug), starts it on a free loopback port, runs the client's
-ignored `api::integration_tests` against it (`FFLAME_API_URL`), and stops
+ignored `api::integration_tests` against it (`FAE_API_URL`), and stops
 the server whatever happens. Exit status is the tests'.
 
 The server uses the database in ffapi's own `.env` (the one its test suite
@@ -104,7 +104,7 @@ def main():
                 print("the API did not come up; its log ends:\n" + tail(log_path))
                 return 1
             print("running the integration tests...", flush=True)
-            test_env = dict(os.environ, FFLAME_API_URL=base)
+            test_env = dict(os.environ, FAE_API_URL=base)
             rc = subprocess.run(
                 ["cargo", "test", "--release", "--lib", "--", "--ignored", "--test-threads=1", "api::integration_tests"],
                 cwd=ROOT,

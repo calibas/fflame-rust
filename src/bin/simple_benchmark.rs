@@ -3,11 +3,11 @@
 /// Usage:
 ///   cargo run --release --bin simple_benchmark
 
-use fractal_flame_wgpu::scene::{
+use fae::scene::{
     presets::global_preset_library,
     transforms::*,
 };
-use fractal_flame_wgpu::variations::VariationRegistry;
+use fae::variations::VariationRegistry;
 use std::time::Instant;
 
 fn main() {

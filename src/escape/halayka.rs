@@ -132,7 +132,7 @@ fn presets() -> Vec<serde_json::Value> {
     out
 }
 
-/// Not a test: the presets, to splice into `assets/presets.fflame`
+/// Not a test: the presets, to splice into `assets/presets.fae`
 /// (`output/halayka-presets.json`).
 #[test]
 #[ignore = "one-shot: writes the presets"]

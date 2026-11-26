@@ -1,8 +1,8 @@
 /// Regression tests for fractal flame rendering
 /// These tests verify core functionality hasn't broken
 
-use fractal_flame_wgpu::scene::{presets::PresetLibrary, transforms::*};
-use fractal_flame_wgpu::variations::global_registry;
+use fae::scene::{presets::PresetLibrary, transforms::*};
+use fae::variations::global_registry;
 
 #[test]
 fn test_transform_default() {
@@ -144,7 +144,7 @@ fn test_variation_parameters() {
 #[test]
 fn test_config_manager_creation() {
     // Test that ConfigManager can be created
-    use fractal_flame_wgpu::config::{ConfigManager, FractalConfig};
+    use fae::config::{ConfigManager, FractalConfig};
 
     let config = FractalConfig::default();
     let manager = ConfigManager::new(config);
@@ -156,7 +156,7 @@ fn test_config_manager_creation() {
 #[test]
 fn test_palette_interpolation() {
     // Test that palette can interpolate colors
-    use fractal_flame_wgpu::scene::palette::Palette;
+    use fae::scene::palette::Palette;
 
     let palette = Palette::fire();
 
@@ -176,10 +176,10 @@ fn test_palette_interpolation() {
 #[test]
 fn test_multi_config_file_loading() {
     // Test that multi-config .fflame files can be loaded
-    use fractal_flame_wgpu::config::FractalConfig;
+    use fae::config::FractalConfig;
     use std::path::Path;
 
-    let test_file = Path::new("tests/test_configs/multi_config.fflame");
+    let test_file = Path::new("tests/test_configs/multi_config.fae");
     let configs = FractalConfig::load_multi_from_file(test_file)
         .expect("Failed to load multi-config file");
 
@@ -205,7 +205,7 @@ fn test_multi_config_file_loading() {
 #[test]
 fn test_single_config_file_as_multi() {
     // Test that single-config files work with multi-config API
-    use fractal_flame_wgpu::config::FractalConfig;
+    use fae::config::FractalConfig;
     use std::path::Path;
 
     // Use an existing single-config file from visual tests
@@ -215,7 +215,7 @@ fn test_single_config_file_as_multi() {
         for entry in std::fs::read_dir(test_dir).unwrap() {
             if let Ok(entry) = entry {
                 let path = entry.path();
-                if path.extension().map(|ext| ext == "fflame").unwrap_or(false) {
+                if fae::config::is_config_path(&path) {
                     let configs = FractalConfig::load_multi_from_file(&path)
                         .expect("Failed to load single-config file");
 

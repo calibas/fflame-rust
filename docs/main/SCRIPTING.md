@@ -152,7 +152,7 @@ error.
 
 ### Variations
 
-Parameter keys are `"variation.param"` — the same names the `.fflame`
+Parameter keys are `"variation.param"` — the same names the `.fae`
 JSON shows. Unknown names error with the valid options listed.
 
 | call | returns | what it does |
@@ -203,7 +203,7 @@ that normals are what finals attach **to**.
 ## The `config` object
 
 Everything outside the flame structure, by the exact key names a saved
-`.fflame` uses (dotted paths reach nested groups), or by a setting's
+`.fae` uses (dotted paths reach nested groups), or by a setting's
 track name (`"Sim.Terrain.Height"`, `"Escape.ZoomLog10"`). The flame
 itself is refused here — use `flame`.
 
@@ -286,7 +286,7 @@ values under which escape output renders black.
 | `escape.no_layer()` | — | Removes the texture layer. |
 | `escape.center(re, im)` | — | The view centre, as **decimal STRINGS** — plain decimals (digits, a sign, a point; no exponent, which deep zoom's fixed point cannot read). See the note below — this is the one place a float would quietly cost you the deep zoom. |
 | `escape.center_re` / `escape.center_im` | string | Read the centre back, still as text. |
-| `escape.zoom` | float | Read/write `zoom_log2`: the **exponent in BASE 2**, so zoom 30 is 2³⁰×, and animating it linearly reads as constant zoom speed. Note the panel displays base 10 (log10) — the engine, the `.fflame` field and this API are all base 2, which is what the deep-zoom maths needs; multiply by 3.3219 to go from a displayed log10 to this. |
+| `escape.zoom` | float | Read/write `zoom_log2`: the **exponent in BASE 2**, so zoom 30 is 2³⁰×, and animating it linearly reads as constant zoom speed. Note the panel displays base 10 (log10) — the engine, the `.fae` field and this API are all base 2, which is what the deep-zoom maths needs; multiply by 3.3219 to go from a displayed log10 to this. |
 | `escape.max_iter` | int | Read/write the iteration cap. Deep views need far more than shallow ones; too low reads as a flat wash. |
 | `escape.bailout` | float | Read/write the escape radius squared. A new config starts at 10000.0 (radius 100), where the smooth count no longer bands; the classic 4.0 leaves it up to 0.75 iterations off. The exponential and trig families test a raw `Re z` or `\|Im z\|` against it instead, and want about 50. |
 | `escape.supersample` | int | Read/write 1–8, the panel's range. |

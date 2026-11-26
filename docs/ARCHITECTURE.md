@@ -6,7 +6,7 @@ does not repeat that detail: when a reference doc in [main/](main/)
 covers a topic, this page links to it.
 
 The program is a GPU fractal editor written in Rust on wgpu (WGSL
-compute shaders) and egui. One library crate (`fractal_flame_wgpu`,
+compute shaders) and egui. One library crate (`fae`,
 `src/lib.rs`) is built five ways: the desktop app, which is also a
 headless CLI; the web app (WASM on WebGPU); the single-purpose gallery
 modules in `wasm/`; and the Python package in `python/`, which runs the
@@ -96,7 +96,7 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 
 | path | what it is | read |
 | --- | --- | --- |
-| `src/main.rs` | The `FractalArtEditor` binary. With no subcommand it launches the GUI (`desktop_main`). Subcommands: `generate` (run a Rhai script to a `.fflame`), `export` (headless PNG, one file or a directory), `export-animation` (video through ffmpeg), `list-encoders` | [EXPORT.md](main/EXPORT.md) |
+| `src/main.rs` | The `FractalArtEditor` binary. With no subcommand it launches the GUI (`desktop_main`). Subcommands: `generate` (run a Rhai script to a `.fae`), `export` (headless PNG, one file or a directory), `export-animation` (video through ffmpeg), `list-encoders` | [EXPORT.md](main/EXPORT.md) |
 | `src/lib.rs` | Library root: module list, `desktop_main`, `export_mode`, `export_animation_mode`, the WASM entry point `wasm_main`, and the `prelude` | |
 | `src/wasm_api.rs` | `WasmApi`, the JavaScript API of the web app (config load, progress, `export_png`, online calls), plus a `PlanBench` for timing deep-zoom planning in a browser. wasm32 + `web-app` only | [WASM.md](WASM.md) |
 | `src/web_clipboard.rs`, `src/web_text_agent.rs` | Browser clipboard bridge and virtual-keyboard bridge for egui. wasm32 only | |
@@ -115,7 +115,7 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | path | what it is | read |
 | --- | --- | --- |
 | `src/config/` | `FractalConfig` (`fractal_config.rs`), with `EscapeConfig` (`escape.rs`) and `SimConfig` (`sim.rs`) inside it; `ConfigManager` (`manager.rs`) around the one setter, `config::apply` (`apply.rs`); the render mode's rules (`mode.rs`); `ConfigPath`, `ConfigValue`, `UpdateType` (`delta.rs`); defaults; the f32 precision policy (`precision.rs`); slider widgets (`slider.rs`, `web-app` only) | [CONFIG.md](main/CONFIG.md) |
-| `src/scene/` | The flame model: `Flame`, `Transform`, `RenderMode` (`transforms.rs`); palettes and `ColorMode` (Palette, Speed, PathMap) (`palette.rs`); tone-map types and presets; xaos; the preset library (`presets.rs`, from `assets/presets.fflame`); random flames (`randomize.rs`). Also the Focused Rendering planners: `cylinder.rs`, `backward.rs`, `plan_gpu.rs`, `word_tree.rs`, `final_map.rs`, `importance.rs`, `slice.rs`, and the IFS analysis they rest on (`ifs_analysis.rs`, `ifs_estimate.rs`, `ifs_ball.rs`, `ifs_real.rs`, `mobius.rs`, `forward_delta.rs`) | [TRANSFORMS.md](main/TRANSFORMS.md), [COLOR.md](main/COLOR.md), [FOCUSED-RENDERING.md](main/FOCUSED-RENDERING.md) |
+| `src/scene/` | The flame model: `Flame`, `Transform`, `RenderMode` (`transforms.rs`); palettes and `ColorMode` (Palette, Speed, PathMap) (`palette.rs`); tone-map types and presets; xaos; the preset library (`presets.rs`, from `assets/presets.fae`); random flames (`randomize.rs`). Also the Focused Rendering planners: `cylinder.rs`, `backward.rs`, `plan_gpu.rs`, `word_tree.rs`, `final_map.rs`, `importance.rs`, `slice.rs`, and the IFS analysis they rest on (`ifs_analysis.rs`, `ifs_estimate.rs`, `ifs_ball.rs`, `ifs_real.rs`, `mobius.rs`, `forward_delta.rs`) | [TRANSFORMS.md](main/TRANSFORMS.md), [COLOR.md](main/COLOR.md), [FOCUSED-RENDERING.md](main/FOCUSED-RENDERING.md) |
 | `src/camera/` | Every camera behind one interface: `quat`, `chain`, `view3d`, `gesture`, `fly`. Returns a `CameraEdit` the caller applies | [CAMERA.md](main/CAMERA.md) |
 
 ### Flame engine
@@ -177,10 +177,10 @@ From the module list in `src/lib.rs`. Gating is noted where it applies.
 | path | what it is |
 | --- | --- |
 | `shaders/` | `core/` (the flame template and its helpers: `header`, `main_template`, `utilities`, `rng`, `affine`, `affine_3d`, `accumulate_samples`, `noise`, `voronoi`, `complex`, `fractwf`, `polychora`, `polyhedra`, `su_mobius`, `subflame`, and for Focused Rendering `replay`, `replay_delta`, `plan_eval`, `plan_gather`, `plan_offsets`); `accumulate`, `accumulate_tiled`, `tonemap`, `downsample`, `histogram_blur`, `blur_convolve`, `blur_upscale`; solid shading `shade`, `normals`, `atrous`, `dof`; `effects/{density,color,common}/`. Variation, escape and simulation WGSL is inline in Rust |
-| `assets/` | `presets.fflame`, `palettes/` (packs and loose files), `scripts/`, `textures/`, `fonts/`, `branding/` |
+| `assets/` | `presets.fae`, `palettes/` (packs and loose files), `scripts/`, `textures/`, `fonts/`, `branding/` |
 | `build.rs` | Build provenance (version, git hash, profile), the WASM palette manifest, embedded texture presets, asset and shader copies into the target directory, the Windows icon |
-| `wasm/` | Gallery crates `script`, `render`, `flame`, `escape`, `sim`; see [wasm/README.md](../wasm/README.md). `python`: the library for WASI, pyfflame's engine |
-| `python/` | `pyfflame`: the WASI module run by wasmtime, its GPU work by wgpu-py -- config editing, `.flame` conversion, scripts, rendering, animation, video; [projects/pyfflame.md](archive/projects/pyfflame.md) |
+| `wasm/` | Gallery crates `script`, `render`, `flame`, `escape`, `sim`; see [wasm/README.md](../wasm/README.md). `python`: the library for WASI, pyfae's engine |
+| `python/` | `pyfae`: the WASI module run by wasmtime, its GPU work by wgpu-py -- config editing, `.flame` conversion, scripts, rendering, animation, video; [projects/pyfflame.md](archive/projects/pyfflame.md) |
 | `tests/` | `regression.rs`, `shader_dumps/`, `test_configs/`, and `visual/` (383 configs in `2d`, `3d`, `escape`, `sim`, `solid`, `tonemap`, `variations`) |
 | `benches/` | `flame_bench.rs` (Criterion) |
 | `scripts/` | `release.py`, `run_benchmarks.py`, `check_doc_links.py`, audits and one-shot codemods |
@@ -229,7 +229,7 @@ The registries also change at runtime, which is why
 ### Configuration and undo
 
 All editable state is one `FractalConfig`, serialised as JSON
-(`.fflame`). Device preferences are `SystemSettings`, which has no undo.
+(`.fae`). Device preferences are `SystemSettings`, which has no undo.
 `ConfigManager` owns both.
 
 - A UI control writes through `update_param(ConfigPath, ConfigValue)` or
@@ -385,7 +385,7 @@ current one (modifiers), under execution budgets and with a pinned PRNG,
 so script plus seed reproduces a flame byte for byte on desktop, web and
 Python. Scripts may declare animation. They run from the Catalog's info
 pane and the Rhai Editor's Run ([CATALOG.md](main/CATALOG.md)), the
-`generate` subcommand, `wasm/script` and `pyfflame.run_script`.
+`generate` subcommand, `wasm/script` and `pyfae.run_script`.
 Reference: [SCRIPTING.md](main/SCRIPTING.md); language guide:
 [SCRIPTING-GUIDE.md](main/SCRIPTING-GUIDE.md).
 
@@ -456,7 +456,7 @@ Attractor names flame variations), and the features went with them.
 `python scripts/release.py check` compiles the two gallery crates and
 their tests (no web app, no terrain), the one build of the library
 without them, and the WASI module (the `python module (WASI)` gate). The gallery crates' own tests and
-pyfflame's run under `python scripts/release.py gallery`.
+pyfae's run under `python scripts/release.py gallery`.
 
 | target | how | notes |
 | --- | --- | --- |
@@ -488,7 +488,7 @@ exported PNG. Release procedure: [RELEASE.md](RELEASE.md).
 | Add a GPU binding to the flame shader | `compute_layout_entries` / `compute_entries` in `src/gpu/pipelines.rs`, the declaration in `shaders/core/header.wgsl` | [BUFFERS.md](main/BUFFERS.md) |
 | Add a stage to the render tail | `Tail` in `src/renderer/tail.rs` (the viewport and every headless render); `HighResExporter` (`src/export/high_res.rs`) if it reaches the exporter's own tone map | [RENDERER.md](main/RENDERER.md) |
 | Add a keyboard shortcut | `handle_keyboard` in `src/app/input.rs` | [UI.md](main/UI.md) |
-| Add a palette or preset | a pack in `assets/palettes/packs/` or a `.palette` file; presets in `assets/presets.fflame` | [PALETTE_LIBRARY.md](main/PALETTE_LIBRARY.md), [CONFIG.md](main/CONFIG.md) |
+| Add a palette or preset | a pack in `assets/palettes/packs/` or a `.palette` file; presets in `assets/presets.fae` | [PALETTE_LIBRARY.md](main/PALETTE_LIBRARY.md), [CONFIG.md](main/CONFIG.md) |
 | Expose something to scripts | `src/script/api.rs` | [SCRIPTING.md](main/SCRIPTING.md) |
 | Change what the API sees | regenerate the contract and corpora | [RELEASE.md](RELEASE.md) |
 
@@ -510,7 +510,7 @@ exported PNG. Release procedure: [RELEASE.md](RELEASE.md).
 - `python scripts/release.py check` runs the fast gates (unit tests,
   WASM check, contract, shader dumps, doc links, the gallery crates
   compiled and the WASI module). `python scripts/release.py gallery`
-  runs the gallery crates' tests and pyfflame's.
+  runs the gallery crates' tests and pyfae's.
 
 Detail: [TESTING-GUIDE.md](TESTING-GUIDE.md).
 

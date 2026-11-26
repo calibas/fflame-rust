@@ -337,7 +337,7 @@ the picture cannot disagree about where a word sends a point.
   `Backward::gpu_resolves` says no. Then, on the desktop, the CPU checks
   in f64 and the GPU runs the replays in offsets (`plan_offsets.wgsl`);
   on the web the CPU plans.
-- Background plans use the GPU by default. `FFLAME_PLAN_CPU` set in the
+- Background plans use the GPU by default. `FAE_PLAN_CPU` set in the
   environment plans on the CPU instead (desktop).
 
 ---

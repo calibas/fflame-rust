@@ -12,11 +12,11 @@
 ///   cargo bench
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use fractal_flame_wgpu::scene::{
+use fae::scene::{
     presets::PresetLibrary,
     transforms::*,
 };
-use fractal_flame_wgpu::variations::VariationRegistry;
+use fae::variations::VariationRegistry;
 
 fn bench_affine_transform(c: &mut Criterion) {
     let mut group = c.benchmark_group("affine_transform");

@@ -5874,7 +5874,7 @@ mod tests {
     #[ignore = "registers twins, reads output/flame-zoom; minutes of chaos game"]
     fn the_corpus_plans_through_rhai_twins() {
         crate::variations::twins::BORROW.with(|b| b.set(false));
-        let mut files: Vec<_> = std::fs::read_dir("output/flame-zoom").expect("the corpus").flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "fflame")).collect();
+        let mut files: Vec<_> = std::fs::read_dir("output/flame-zoom").expect("the corpus").flatten().map(|e| e.path()).filter(|p| crate::config::is_config_path(&p)).collect();
         files.sort();
         let only: Option<Vec<String>> = std::env::var("CORPUS").ok().map(|v| v.split(',').map(str::to_string).collect());
         let (mut walked, mut failures) = (0usize, Vec::new());
@@ -7028,7 +7028,7 @@ mod tests {
     }
 
     /// What the analysis and the walk say of the true Grand Julian
-    /// (`assets/presets.fflame`'s first flame, extracted to
+    /// (`assets/presets.fae`'s first flame, extracted to
     /// `output/flame-zoom/true-grand-julian.fflame`): tracker item C2.
     #[test]
     #[ignore = "reads output/flame-zoom"]
@@ -8442,7 +8442,7 @@ mod tests {
 
     /// **What the inverse walk refuses across the corpus, and why**
     /// (tracker C2c). Every flame in `output/*.flame`, `output/flame-zoom`
-    /// and `assets/presets.fflame` is read by `Backward::read`, and the
+    /// and `assets/presets.fae` is read by `Backward::read`, and the
     /// refusals are tallied by reason, with the blurs each flame carries.
     #[test]
     #[ignore = "reads output/*.flame"]
@@ -8457,7 +8457,7 @@ mod tests {
             .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().and_then(|x| x.to_str()) == Some("flame")).collect())
             .unwrap_or_default();
         paths.extend(std::fs::read_dir("output/flame-zoom").map(|rd| rd.flatten().map(|e| e.path()).collect::<Vec<_>>()).unwrap_or_default());
-        paths.push("assets/presets.fflame".into());
+        paths.push("assets/presets.fae".into());
         paths.sort();
         for p in &paths {
             let stem = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
@@ -8470,7 +8470,7 @@ mod tests {
                         }
                     }
                 }
-                Some("fflame") => {
+                Some("fae" | "fflame") => {
                     if let Ok(c) = serde_json::from_str::<crate::config::FractalConfig>(&text) {
                         flames.push((stem, c.flame));
                     } else if let Ok(cs) = serde_json::from_str::<Vec<crate::config::FractalConfig>>(&text) {

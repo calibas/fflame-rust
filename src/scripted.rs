@@ -164,6 +164,8 @@ pub fn key_id(key: &str) -> Option<String> {
 /// UUID (version 8, a hash of the name) that is the same for the same name
 /// on every machine -- what a config saved then migrates to, and what the
 /// script is given when it is next saved, so its versions stay one thing.
+/// The salt keeps the app's old name: ids are persistent, and a new salt
+/// would give every such script a second id.
 pub fn derived_id(name: &str) -> String {
     use sha2::{Digest, Sha256};
     let d = Sha256::digest(format!("fflame-script-name:{name}").as_bytes());

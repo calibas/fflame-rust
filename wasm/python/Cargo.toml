@@ -1,4 +1,4 @@
-# fflame-python -- pyfflame's engine (python/): the engine as a WASI
+# fae-python -- pyfae's engine (python/): the engine as a WASI
 # module Python loads with wasmtime, its GPU calls forwarded to wgpu-py
 # through a wgpu custom backend. Standalone, like the gallery crates: the
 # app must be unaffected by anything here. `cargo build --release` in
@@ -6,7 +6,7 @@
 # python/build.py builds it and puts it in the package.
 
 [package]
-name = "fflame-python"
+name = "fae-python"
 version = "0.5.0"
 edition = "2021"
 
@@ -16,7 +16,7 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-fractal_flame_wgpu = { path = "../..", default-features = false, features = ["terrain"] }
+fae = { path = "../..", default-features = false, features = ["terrain"] }
 serde = "1.0"
 serde_json = "1.0"
 # The same wgpu as the engine's; `serde` gives wgpu's enums their WebGPU

@@ -1,4 +1,4 @@
-use fractal_flame_wgpu::scene::tonemap::ToneCurve;
+use fae::scene::tonemap::ToneCurve;
 
 fn main() {
     let curve = ToneCurve::linear();

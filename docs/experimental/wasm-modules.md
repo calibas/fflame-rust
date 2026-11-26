@@ -129,7 +129,7 @@ catalogue.
 
 **B. The formula languages as a separate module.** Compiling a Rhai,
 Ultra Fractal or Fractint source is CPU-only: source text in, WGSL and
-parameter definitions out. A second wasm instance (as `fflame-script`
+parameter definitions out. A second wasm instance (as `fae-script`
 already is for scripts) loaded on the first custom source, called
 synchronously once loaded (two instances on one page call each other
 through JS without awaiting). The work is the boundary: what the app

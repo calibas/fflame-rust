@@ -1,4 +1,4 @@
-"""pyfflame: the Fractal Art Editor's engine in Python.
+"""pyfae: the Fractal Art Editor's engine in Python.
 
 The engine -- flames, escape-time fractals, simulations, terrains, the
 animation engine and Rhai scripting -- is one WebAssembly module (WASI,
@@ -7,12 +7,12 @@ wgpu-py. The same module runs on every platform those two do.
 
 Build, edit and convert flames, and run scripts -- no GPU needed::
 
-    import pyfflame as ff
+    import pyfae as ff
     c = ff.Config()
     i = c.add_transform()
     c.add_variation(i, "julian", 1.0)
     c.set_variation_param(i, "julian.power", 3.0)
-    c.save("mine.fflame")
+    c.save("mine.fae")
     r = ff.run_script(open("lsystem.rhai").read(), seed=3)
 
 Render, animate, and write video::
@@ -110,7 +110,7 @@ class Image:
         return PILImage.frombytes("RGBA", (self.width, self.height), self.rgba)
 
     def __repr__(self):
-        return f"<pyfflame.Image {self.width}x{self.height}, {self.info['iterations']:,} iterations, {self.info['ms']:.0f} ms>"
+        return f"<pyfae.Image {self.width}x{self.height}, {self.info['iterations']:,} iterations, {self.info['ms']:.0f} ms>"
 
 
 class Frames:
@@ -281,7 +281,8 @@ def _blank_transform():
 
 class Config:
     """A complete flame: the model plus its camera, colour and render
-    settings -- what a `.fflame` file holds. `data` is that file's JSON,
+    settings -- what a `.fae` file holds (or a `.fae`, its name before
+    2026-11-26). `data` is that file's JSON,
     as a dict, for anything the properties below do not name."""
 
     def __init__(self, data=None):
@@ -293,12 +294,12 @@ class Config:
 
     @staticmethod
     def load(path):
-        """Read a `.fflame` file."""
+        """Read a `.fae` (or `.fae`) file."""
         return Config.from_json(_read(path))
 
     @staticmethod
     def from_json(text):
-        """A `.fflame` from a JSON string. Checked: a config the engine
+        """A `.fae` config from a JSON string. Checked: a config the engine
         cannot read is refused here, not at the render."""
         return Config(json.loads(_engine()._data({"fn": "config_normalize", "config": text})))
 
@@ -313,7 +314,7 @@ class Config:
         return [Config(json.loads(c)) for c in _engine()._data({"fn": "flame_import", "xml": xml})]
 
     def to_json(self):
-        """The `.fflame` JSON, exactly as the app writes it."""
+        """The `.fae` JSON, exactly as the app writes it."""
         return _engine()._data({"fn": "config_normalize", "config": json.dumps(self.data)})
 
     def save(self, path):
@@ -458,14 +459,14 @@ class Config:
         """Add (or re-weight) a variation. Checked against the registry: an
         unknown name is a typo that would render as a missing variation."""
         if name not in _engine().variations():
-            raise ValueError(f"unknown variation {name!r} (see pyfflame.variations())")
+            raise ValueError(f"unknown variation {name!r} (see pyfae.variations())")
         self._xform(index).setdefault("variations", {})[name] = weight
 
     def remove_variation(self, index, name):
         self._xform(index).get("variations", {}).pop(name, None)
 
     def set_variation_param(self, index, key, value):
-        """A variation parameter, keyed "variation.param" as `.fflame`
+        """A variation parameter, keyed "variation.param" as `.fae`
         files store it."""
         var, dot, param = key.partition(".")
         if not dot:
@@ -481,7 +482,7 @@ class Config:
         return dict(self._field(index, "variation_params"))
 
     def __repr__(self):
-        return f"<pyfflame.Config {self.name!r} {self.transform_count} transform(s) {self.render_mode}>"
+        return f"<pyfae.Config {self.name!r} {self.transform_count} transform(s) {self.render_mode}>"
 
 
 class Animation:
@@ -530,7 +531,7 @@ class Animation:
         return Config.from_json(json.dumps(base)) if base is not None else None
 
     def __repr__(self):
-        return f"<pyfflame.Animation {self.name!r} {self.duration:.3f}s {len(self.targets)} track(s)>"
+        return f"<pyfae.Animation {self.name!r} {self.duration:.3f}s {len(self.targets)} track(s)>"
 
 
 class ScriptResult:
@@ -549,7 +550,7 @@ class ScriptResult:
         self.warnings = [w for s in self.stages for w in s["warnings"]]
 
     def __repr__(self):
-        return f"<pyfflame.ScriptResult {len(self.messages)} message(s) {len(self.warnings)} warning(s)>"
+        return f"<pyfae.ScriptResult {len(self.messages)} message(s) {len(self.warnings)} warning(s)>"
 
 
 # --------------------------------------------------------------- the module's calls

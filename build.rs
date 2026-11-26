@@ -71,18 +71,21 @@ fn main() {
     // for a `dist` build -- what ships, the web app included -- and any
     // other custom profile; this machine's (`http://localhost:3000`, ffapi's
     // default) for `release` and `debug`, the builds for testing against a
-    // local API. `FFLAME_API_BASE_URL` set at build time overrides both.
+    // local API. `FAE_API_BASE_URL` set at build time overrides both (its
+    // old name, `FFLAME_API_BASE_URL`, is still read: src/env_vars.rs).
+    println!("cargo:rerun-if-env-changed=FAE_API_BASE_URL");
     println!("cargo:rerun-if-env-changed=FFLAME_API_BASE_URL");
-    let api_base_url = env::var("FFLAME_API_BASE_URL")
+    let api_override = env::var("FAE_API_BASE_URL").or_else(|_| env::var("FFLAME_API_BASE_URL"));
+    let api_base_url = api_override.clone()
         .ok()
         .filter(|u| !u.trim().is_empty())
         .unwrap_or_else(|| match profile.as_str() {
             "release" | "debug" => "http://localhost:3000".to_string(),
             _ => "https://fractalsforall.com".to_string(),
         });
-    println!("cargo:rustc-env=FFLAME_API_BASE_URL={api_base_url}");
-    let chosen_by = if env::var("FFLAME_API_BASE_URL").is_ok_and(|u| !u.trim().is_empty()) { "override" } else { "profile" };
-    println!("cargo:rustc-env=FFLAME_API_BASE_URL_CHOSEN_BY={chosen_by}");
+    println!("cargo:rustc-env=FAE_API_BASE_URL={api_base_url}");
+    let chosen_by = if api_override.is_ok_and(|u| !u.trim().is_empty()) { "override" } else { "profile" };
+    println!("cargo:rustc-env=FAE_API_BASE_URL_CHOSEN_BY={chosen_by}");
 
     // The gallery crates (wasm/render, wasm/script) build this crate as
     // a DEPENDENCY, and nothing in either surfaces build provenance —
@@ -97,8 +100,9 @@ fn main() {
     // exported PNG is what makes a bug report traceable to a source
     // tree. The values are explicit placeholders rather than a frozen
     // real hash, because a wrong label is worse than none.
+    println!("cargo:rerun-if-env-changed=FAE_SKIP_GIT_PROVENANCE");
     println!("cargo:rerun-if-env-changed=FFLAME_SKIP_GIT_PROVENANCE");
-    if env::var_os("FFLAME_SKIP_GIT_PROVENANCE").is_some() {
+    if env::var_os("FAE_SKIP_GIT_PROVENANCE").or_else(|| env::var_os("FFLAME_SKIP_GIT_PROVENANCE")).is_some() {
         println!("cargo:rustc-env=GIT_HASH=not-recorded");
         println!("cargo:rustc-env=GIT_BRANCH=not-recorded");
         println!("cargo:rustc-env=BUILD_TIME=not-recorded");
@@ -374,7 +378,7 @@ fn parse_locale(text: &str, file: &str) -> Vec<(String, String)> {
 }
 
 /// Generate `texture_presets.rs` in OUT_DIR: one `(name, contents)` pair
-/// per `assets/textures/*.fflame`, the contents embedded with
+/// per `assets/textures/*.fae` (or `.fflame`), the contents embedded with
 /// `include_str!`. Embedded on every platform -- they are small JSON
 /// recipes, and the web build cannot list a folder -- so the folder is
 /// the catalog and nothing else lists them (`src/textures/mod.rs`).
@@ -386,7 +390,7 @@ fn generate_texture_presets() {
         .map(|it| {
             it.flatten()
                 .filter_map(|e| e.file_name().to_str().map(String::from))
-                .filter(|n| n.ends_with(".fflame"))
+                .filter(|n| n.ends_with(".fae") || n.ends_with(".fflame"))
                 .collect()
         })
         .unwrap_or_default();
@@ -400,7 +404,7 @@ fn generate_texture_presets() {
     // absolute paths then point into that checkout: deleting it broke
     // every later build until this script reran.
     for file in &files {
-        let stem = file.trim_end_matches(".fflame");
+        let stem = file.trim_end_matches(".fae").trim_end_matches(".fflame");
         let rel = format!("/assets/textures/{file}");
         code.push_str(&format!("    ({stem:?}, include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), {rel:?}))),
 "));

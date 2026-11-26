@@ -577,11 +577,11 @@ impl OnlinePlace {
                 };
                 let order: Vec<String> = match resource {
                     Some(r) => vec![r],
-                    None => ["flames", "animations", "palettes", "scripts"].iter().map(|s| s.to_string()).collect(),
+                    None => ["fractals", "animations", "palettes", "scripts"].iter().map(|s| s.to_string()).collect(),
                 };
                 for r in order {
                     let found = match r.as_str() {
-                        "flames" => api.load_flame_with_visibility(&id).await.ok().map(|l| Opened::Flame(id.clone(), l)),
+                        "fractals" => api.load_flame_with_visibility(&id).await.ok().map(|l| Opened::Flame(id.clone(), l)),
                         "animations" => api.exists("animations", &id).await.ok().map(|_| Opened::Animation(id.clone())),
                         "palettes" => api.get_palette(&id).await.ok().map(Opened::Palette),
                         "scripts" => match api.load_script(&id).await {
@@ -754,7 +754,7 @@ impl OnlinePlace {
         }
         if mine && matches!(item, Item::Flame(_) | Item::Palette(_)) {
             ui.separator();
-            let resource = if matches!(item, Item::Flame(_)) { "flames" } else { "palettes" };
+            let resource = if matches!(item, Item::Flame(_)) { "fractals" } else { "palettes" };
             let busy = self.patch_job.is_some() || self.delete_job.as_ref().is_some_and(|(_, id, _, _)| *id == info.id);
             let mut patch: Option<crate::api::types::ItemPatch> = None;
             ui.horizontal_wrapped(|ui| {

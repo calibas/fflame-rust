@@ -8,7 +8,7 @@ class VideoWriter:
     """Pipes RGBA frames to FFmpeg::
 
         with VideoWriter("out.mp4", 1280, 720, fps=30) as video:
-            video.write(image)   # an fflame.Image, or width*height*4 RGBA bytes
+            video.write(image)   # an pyfae.Image, or width*height*4 RGBA bytes
 
     The default is H.264 at CRF 18 in yuv420p, which players expect; an
     odd size is padded to even, which yuv420p needs. `args` replaces the

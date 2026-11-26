@@ -10,7 +10,7 @@
 //! It also emits the variation-level `description`, `description_plain`
 //! and `authors`. Those live in `///` doc comments, invisible at
 //! runtime, so they are recovered from the source by
-//! [`fractal_flame_wgpu::variations::docs`].
+//! [`fae::variations::docs`].
 //!
 //! §4.1 planned a separate Python pass for that merge. It was never
 //! written, so every corpus this binary produced carried 647 null
@@ -39,7 +39,7 @@ fn main() {
 
     // The rows are built by the library, which the curated manifest
     // (`export_curated_json`) shares: one definition of a corpus record.
-    let corpus = fractal_flame_wgpu::curated::variation_corpus();
+    let corpus = fae::curated::variation_corpus();
     let rows = corpus.rows;
     let missing_description = corpus.missing_description;
     let with_authors = corpus.with_authors;
@@ -54,7 +54,7 @@ fn main() {
                      the syntax stripped. \
                      Vocabularies match docs/generated/engine-contract.json \
                      by construction — both read to_api_str.",
-        "contract_shape": fractal_flame_wgpu::contract::generate()["shape"],
+        "contract_shape": fae::contract::generate()["shape"],
         "count": rows.len(),
         "variations": rows,
     });

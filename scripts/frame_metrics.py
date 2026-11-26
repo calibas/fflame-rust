@@ -17,7 +17,7 @@ upscalers reads DIR/upscalers.csv (the `upscaler_comparison` test's: each
          Writes DIR/upscalers.md.
 flicker  compares each frame of a folder of PNGs with the one before it:
          how much a still-looking picture moves from frame to frame.
-summary  reads a frame log (FFLAME_FRAME_LOG) and summarises it by mode,
+summary  reads a frame log (FAE_FRAME_LOG) and summarises it by mode,
          view size and whether playback ran.
 
 The measures, on 8-bit sRGB, RGB only:

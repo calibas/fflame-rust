@@ -157,7 +157,7 @@ pub fn generate_mode(
 
     let out_path = output.map(String::from).unwrap_or_else(|| {
         Path::new(script_path)
-            .with_extension("fflame")
+            .with_extension(crate::config::CONFIG_EXT)
             .to_string_lossy()
             .into_owned()
     });

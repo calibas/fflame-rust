@@ -1,15 +1,15 @@
-//! pyfflame's engine (python/): the engine as a WASI module for Python.
+//! pyfae's engine (python/): the engine as a WASI module for Python.
 //! wasmtime runs it; its GPU calls go to the host through a wgpu custom
 //! backend (`backend`), and the host makes them with wgpu-py
-//! (python/pyfflame/_gpu.py). docs/archive/projects/pyfflame.md has the design.
+//! (python/pyfae/_gpu.py). docs/archive/projects/pyfflame.md has the design.
 //!
-//! One call crosses the boundary: `fflame_call`, a JSON request
+//! One call crosses the boundary: `fae_call`, a JSON request
 //! (`{"fn": ..., ...}`) and a block of bytes beside it (pixels to encode),
 //! both in this module's memory. It answers with a status (0, or 1 with
 //! the error's text as the output), an output of bytes (pixels, a PNG)
 //! and a JSON note (`{"result": ...}` for the calls whose answer is data,
 //! a render's numbers for the rest). The host allocates with
-//! `fflame_alloc` and frees with `fflame_free`.
+//! `fae_alloc` and frees with `fae_free`.
 //!
 //! The calls:
 //! - `info`, `default_config`, `presets`
@@ -35,7 +35,7 @@ mod scripts;
 
 use std::cell::RefCell;
 
-use fractal_flame_wgpu::config::FractalConfig;
+use fae::config::FractalConfig;
 use serde_json::{json, Value};
 
 use render::{Frame, Gpu, Options};
@@ -47,7 +47,7 @@ thread_local! {
 }
 
 #[no_mangle]
-pub extern "C" fn fflame_alloc(len: usize) -> *mut u8 {
+pub extern "C" fn fae_alloc(len: usize) -> *mut u8 {
     let mut v = Vec::<u8>::with_capacity(len.max(1));
     let p = v.as_mut_ptr();
     std::mem::forget(v);
@@ -55,29 +55,29 @@ pub extern "C" fn fflame_alloc(len: usize) -> *mut u8 {
 }
 
 /// # Safety
-/// `ptr` and `len` from one `fflame_alloc`.
+/// `ptr` and `len` from one `fae_alloc`.
 #[no_mangle]
-pub unsafe extern "C" fn fflame_free(ptr: *mut u8, len: usize) {
+pub unsafe extern "C" fn fae_free(ptr: *mut u8, len: usize) {
     drop(Vec::from_raw_parts(ptr, 0, len.max(1)));
 }
 
 #[no_mangle]
-pub extern "C" fn fflame_output_ptr() -> *const u8 {
+pub extern "C" fn fae_output_ptr() -> *const u8 {
     OUTPUT.with(|o| o.borrow().as_ptr())
 }
 
 #[no_mangle]
-pub extern "C" fn fflame_output_len() -> usize {
+pub extern "C" fn fae_output_len() -> usize {
     OUTPUT.with(|o| o.borrow().len())
 }
 
 #[no_mangle]
-pub extern "C" fn fflame_info_ptr() -> *const u8 {
+pub extern "C" fn fae_info_ptr() -> *const u8 {
     INFO.with(|o| o.borrow().as_ptr())
 }
 
 #[no_mangle]
-pub extern "C" fn fflame_info_len() -> usize {
+pub extern "C" fn fae_info_len() -> usize {
     INFO.with(|o| o.borrow().len())
 }
 
@@ -88,7 +88,7 @@ pub extern "C" fn fflame_info_len() -> usize {
 /// `ptr`/`len` a UTF-8 string, `data`/`data_len` bytes, in this module's
 /// memory.
 #[no_mangle]
-pub unsafe extern "C" fn fflame_call(ptr: *const u8, len: usize, data: *const u8, data_len: usize) -> i32 {
+pub unsafe extern "C" fn fae_call(ptr: *const u8, len: usize, data: *const u8, data_len: usize) -> i32 {
     let text = std::str::from_utf8(std::slice::from_raw_parts(ptr, len)).unwrap_or("");
     let data = if data_len == 0 { Vec::new() } else { std::slice::from_raw_parts(data, data_len).to_vec() };
     let outcome = serde_json::from_str::<Value>(text).map_err(|e| format!("request is not JSON: {e}")).and_then(|r| call(&r, data));
@@ -138,7 +138,7 @@ fn call(r: &Value, bytes: Vec<u8>) -> Result<(Vec<u8>, Value), String> {
     let f = r["fn"].as_str().ok_or("`fn` is missing")?;
     match f {
         "info" => {
-            let v = fractal_flame_wgpu::version::get_version_info();
+            let v = fae::version::get_version_info();
             Ok(data(json!({
                 "version": v.version, "git_hash": v.git_hash,
                 "engines": ["flame", "escape", "simulation", "terrain"],
@@ -152,7 +152,7 @@ fn call(r: &Value, bytes: Vec<u8>) -> Result<(Vec<u8>, Value), String> {
         // default config without those fields, read back. And a new
         // transform as the app makes it, and a transform's absent fields.
         "defaults" => {
-            use fractal_flame_wgpu::scene::transforms::Transform;
+            use fae::scene::transforms::Transform;
             const FIELDS: [&str; 10] = [
                 "render_mode", "zoom", "pan_x", "pan_y", "rotation", "camera_rotation_x",
                 "camera_rotation_y", "perspective_strength", "preserve_z", "max_iterations",
@@ -185,7 +185,7 @@ fn call(r: &Value, bytes: Vec<u8>) -> Result<(Vec<u8>, Value), String> {
         // setter). The config back as the app writes it, and whether the
         // write did anything a name the config knows would.
         "config_set" => {
-            use fractal_flame_wgpu::config::by_name;
+            use fae::config::by_name;
             let mut config = config_arg(r, "config")?;
             let applied = by_name::set(&mut config, str_arg(r, "key")?, r["value"].clone())?;
             Ok(data(json!({
@@ -195,7 +195,7 @@ fn call(r: &Value, bytes: Vec<u8>) -> Result<(Vec<u8>, Value), String> {
         }
         // Every variation in registration order, with its parameters' names.
         "variations" => {
-            let registry = fractal_flame_wgpu::variations::global_registry();
+            let registry = fae::variations::global_registry();
             let list: Vec<Value> = registry
                 .all()
                 .iter()
@@ -204,7 +204,7 @@ fn call(r: &Value, bytes: Vec<u8>) -> Result<(Vec<u8>, Value), String> {
             Ok(data(Value::Array(list)))
         }
         "presets" => {
-            let presets = fractal_flame_wgpu::resources::presets::load_embedded_presets().map_err(|e| e.to_string())?;
+            let presets = fae::resources::presets::load_embedded_presets().map_err(|e| e.to_string())?;
             let list: Result<Vec<Value>, String> = presets
                 .iter()
                 .map(|c| Ok(json!({ "name": c.flame.name, "config": c.to_json().map_err(|e| e.to_string())? })))
@@ -212,11 +212,11 @@ fn call(r: &Value, bytes: Vec<u8>) -> Result<(Vec<u8>, Value), String> {
             Ok(data(Value::Array(list?)))
         }
         "flame_import" => {
-            let configs = fractal_flame_wgpu::flame_xml::parse_flame_xml(str_arg(r, "xml")?).map_err(|e| e.to_string())?;
+            let configs = fae::flame_xml::parse_flame_xml(str_arg(r, "xml")?).map_err(|e| e.to_string())?;
             let list: Result<Vec<Value>, String> = configs.iter().map(|c| c.to_json().map(Value::String).map_err(|e| e.to_string())).collect();
             Ok(data(Value::Array(list?)))
         }
-        "flame_export" => Ok(data(json!(fractal_flame_wgpu::flame_xml::write_flame_xml(&config_arg(r, "config")?)))),
+        "flame_export" => Ok(data(json!(fae::flame_xml::write_flame_xml(&config_arg(r, "config")?)))),
         "render" => {
             let config = config_arg(r, "config")?;
             let (w, h) = (u32_arg(r, "width")?, u32_arg(r, "height")?);

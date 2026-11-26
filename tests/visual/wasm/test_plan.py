@@ -14,7 +14,7 @@ browser's own work, and the editor's -- the module's start function boots
 the whole app on the page's canvas, so it runs beside the bench -- so they
 are context, not the gate. Frames over 50 ms are attributed by the browser
 (Long Animation Frames): a script in plan.html is the bench's, one in
-fractal_flame_wgpu.js is the editor's.
+fae.js is the editor's.
 
 Expect one long frame (~40-50 ms) in a flame's first cold case: the GPU
 process compiles the planner's kernels -- synchronously, since wgpu has no

@@ -1,4 +1,4 @@
-//! fflame-script — the Endless Gallery's script evaluator.
+//! fae-script — the Endless Gallery's script evaluator.
 //!
 //! Thin wrapper over the main crate's sandboxed Rhai host. The API is
 //! four calls: list the embedded script library, collect a script's
@@ -34,7 +34,7 @@
 //! }
 //! ```
 
-use fractal_flame_wgpu::script::headless;
+use fae::script::headless;
 use serde_json::{json, Value};
 
 // The calls are the engine's (`script::headless`), shared with Python;

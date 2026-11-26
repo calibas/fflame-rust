@@ -53,6 +53,7 @@ pub mod api;
 pub mod script;
 /// What every user-written script shares: its identity and labels.
 pub mod scripted;
+pub mod env_vars;
 pub mod curated;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod crash_report;
@@ -241,7 +242,7 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
     println!("Output: {}", output);
     println!();
 
-    // Find all .fflame and .flame files
+    // Find all config files (.fae, .fflame) and .flame files
     let input_path = Path::new(input);
     let flame_files = if input_path.is_dir() {
         scene::assets::load_configs_from_dir(input_path)
@@ -255,7 +256,7 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
     };
 
     if flame_files.is_empty() {
-        eprintln!("No .fflame files found");
+        eprintln!("No config files (.fae, .fflame, .flame) found");
         return Ok(());
     }
 

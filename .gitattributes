@@ -5,4 +5,5 @@ tests/shader_dumps/*.wgsl text eol=lf
 
 # CLI-parity fixtures are compared byte-for-byte (include_str!) against
 # run_impl output by wasm/script's tests — same autocrlf hazard.
+wasm/script/tests/fixtures/*.fae text eol=lf
 wasm/script/tests/fixtures/*.fflame text eol=lf

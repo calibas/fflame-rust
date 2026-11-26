@@ -4,7 +4,7 @@
 //! gives byte-identical config JSON on every platform, the RNG being a
 //! pinned-algorithm Pcg64Mcg.
 
-use fractal_flame_wgpu::script::headless;
+use fae::script::headless;
 use serde_json::{json, Value};
 
 /// The embedded library: each script's id, name, kind, summary, flags

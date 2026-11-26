@@ -52,7 +52,7 @@ tests/visual/
 ├── run_all_tests.py        desktop suite + WASM suite + performance CSV
 ├── performance_history.csv written by run_all_tests.py
 ├── configs/
-│   ├── warmup.fflame       rendered first to warm the GPU
+│   ├── warmup.fae       rendered first to warm the GPU
 │   ├── 2d/  3d/  escape/  sim/  solid/  tonemap/  variations/
 ├── baseline/               committed 160x120 thumbnails + baseline_manifest.json
 │   └── wasm/               the WASM suite's baselines (exact-hash, 7 images)
@@ -73,7 +73,7 @@ tests/visual/
 | `tonemap` | 2 | tone curves |
 | `variations` | 121 | smoke tests of individual variations and variation families |
 
-374 configs in the categories. `configs/warmup.fflame` is rendered once
+374 configs in the categories. `configs/warmup.fae` is rendered once
 before the suite to absorb cold-start cost, and is then picked up by
 discovery as a test of its own (`general-warmup`), so a full run reports
 375 tests.
@@ -85,7 +85,7 @@ other's output and baseline.
 
 ## How a run works
 
-1. **Discovery** — every `.fflame` under `configs/`, recursively. A
+1. **Discovery** — every `.fae` under `configs/`, recursively. A
    config without `"deterministic_rng": true` is skipped with a warning.
 2. **Render** — for each config:
    `FractalArtEditor export -i <config> -o current/<name>.png --width 800 --height 600 --iterations-per-thread 256`,
@@ -147,7 +147,7 @@ Look at the changed images before committing them.
 
 ## Adding a test
 
-1. Put a `.fflame` in the right category directory.
+1. Put a `.fae` in the right category directory.
 2. Set `"deterministic_rng": true`, or the suite skips it.
 3. Run the category (`--category NAME`) and look at the render in
    `current/`.

@@ -6,9 +6,9 @@
 
 #[pollster::test]
 async fn a_fixture_config_renders_to_nonblank_pixels() {
-    let config = include_str!("../../script/tests/fixtures/basic_random_seed7.fflame");
+    let config = include_str!("../../script/tests/fixtures/basic_random_seed7.fae");
 
-    let tile = match fflame_render::render_impl(config, 64, 64, Some(500_000), None).await {
+    let tile = match fae_render::render_impl(config, 64, 64, Some(500_000), None).await {
         Ok(t) => t,
         Err(e) if e.contains("no GPU adapter") => {
             eprintln!("skipped: {e}");
@@ -35,8 +35,8 @@ async fn a_fixture_config_renders_to_nonblank_pixels() {
 /// reload — so one hostile tile request killed the whole session.
 #[pollster::test]
 async fn oversized_dimensions_return_an_error_rather_than_panicking() {
-    let config = include_str!("../../script/tests/fixtures/basic_random_seed7.fflame");
-    let err = match fflame_render::render_impl(config, 100_000, 100_000, Some(1000), None).await {
+    let config = include_str!("../../script/tests/fixtures/basic_random_seed7.fae");
+    let err = match fae_render::render_impl(config, 100_000, 100_000, Some(1000), None).await {
         Err(e) => e,
         Ok(_) => panic!("a 100000x100000 render was accepted"),
     };
@@ -50,7 +50,7 @@ async fn oversized_dimensions_return_an_error_rather_than_panicking() {
     );
 
     // And the module still works afterwards — the point of not panicking.
-    match fflame_render::render_impl(config, 32, 32, Some(100_000), None).await {
+    match fae_render::render_impl(config, 32, 32, Some(100_000), None).await {
         Ok(t) => assert_eq!(t.pixels.len(), 32 * 32 * 4),
         Err(e) => panic!("module unusable after a rejected render: {e}"),
     }
@@ -61,11 +61,11 @@ async fn oversized_dimensions_return_an_error_rather_than_panicking() {
 /// config's value and the caller's argument are clamped.
 #[pollster::test]
 async fn a_hostile_iteration_count_is_clamped() {
-    let config = include_str!("../../script/tests/fixtures/basic_random_seed7.fflame");
+    let config = include_str!("../../script/tests/fixtures/basic_random_seed7.fae");
     let bomb = config.replacen('{', r#"{"max_iterations": 500000000000,"#, 1);
 
     let t0 = std::time::Instant::now();
-    let tile = match fflame_render::render_impl(&bomb, 64, 64, None, None).await {
+    let tile = match fae_render::render_impl(&bomb, 64, 64, None, None).await {
         Ok(t) => t,
         Err(e) if e.contains("no GPU adapter") => {
             eprintln!("skipped: {e}");
@@ -95,10 +95,10 @@ async fn a_hostile_iteration_count_is_clamped() {
 /// turning a single dispatch into a watchdog-length stall.
 #[pollster::test]
 async fn iterations_per_thread_is_adjustable_and_clamped() {
-    let config = include_str!("../../script/tests/fixtures/basic_random_seed7.fflame");
+    let config = include_str!("../../script/tests/fixtures/basic_random_seed7.fae");
 
     // A longer-dispatch render succeeds and produces pixels.
-    let deep = match fflame_render::render_impl(config, 48, 48, Some(500_000), Some(1024)).await {
+    let deep = match fae_render::render_impl(config, 48, 48, Some(500_000), Some(1024)).await {
         Ok(t) => t,
         Err(e) if e.contains("no GPU adapter") => {
             eprintln!("skipped: {e}");
@@ -115,7 +115,7 @@ async fn iterations_per_thread_is_adjustable_and_clamped() {
     // dispatch: the render must complete in bounded time, not stall a
     // dispatch for u32::MAX iterations.
     let t0 = std::time::Instant::now();
-    let clamped = fflame_render::render_impl(config, 32, 32, Some(200_000), Some(u32::MAX))
+    let clamped = fae_render::render_impl(config, 32, 32, Some(200_000), Some(u32::MAX))
         .await
         .expect("clamped-ipt render failed");
     assert!(clamped.iterations > 0);
@@ -148,10 +148,10 @@ async fn iterations_per_thread_is_adjustable_and_clamped() {
 /// error, which is how the failure presented.
 #[pollster::test]
 async fn many_renders_in_a_row_reuse_the_device() {
-    let config = include_str!("../../script/tests/fixtures/basic_random_seed7.fflame");
+    let config = include_str!("../../script/tests/fixtures/basic_random_seed7.fae");
 
     // First one doubles as the adapter probe.
-    match fflame_render::render_impl(config, 48, 48, Some(200_000), None).await {
+    match fae_render::render_impl(config, 48, 48, Some(200_000), None).await {
         Ok(_) => {}
         Err(e) if e.contains("no GPU adapter") => {
             eprintln!("skipped: {e}");
@@ -162,7 +162,7 @@ async fn many_renders_in_a_row_reuse_the_device() {
 
     // Same size, repeatedly: the pure `load_config` reuse path.
     for i in 0..12 {
-        let tile = fflame_render::render_impl(config, 48, 48, Some(200_000), None)
+        let tile = fae_render::render_impl(config, 48, 48, Some(200_000), None)
             .await
             .unwrap_or_else(|e| panic!("render {i} failed: {e}"));
         assert_eq!(tile.pixels.len(), 48 * 48 * 4, "render {i}");
@@ -175,7 +175,7 @@ async fn many_renders_in_a_row_reuse_the_device() {
     // Size changes take the rebuild branch, which destroys the previous
     // renderer explicitly. Alternating sizes exercises it repeatedly.
     for (i, (w, h)) in [(64u32, 64u32), (48, 48), (32, 96), (48, 48)].iter().enumerate() {
-        let tile = fflame_render::render_impl(config, *w, *h, Some(200_000), None)
+        let tile = fae_render::render_impl(config, *w, *h, Some(200_000), None)
             .await
             .unwrap_or_else(|e| panic!("resize render {i} ({w}x{h}) failed: {e}"));
         assert_eq!(tile.width, *w);
@@ -185,8 +185,8 @@ async fn many_renders_in_a_row_reuse_the_device() {
 
     // `release()` must leave the module usable, not poisoned — the next
     // call transparently builds a new device.
-    fflame_render::release_impl();
-    let after = fflame_render::render_impl(config, 48, 48, Some(200_000), None)
+    fae_render::release_impl();
+    let after = fae_render::render_impl(config, 48, 48, Some(200_000), None)
         .await
         .expect("render after release() should rebuild the device");
     assert_eq!(after.pixels.len(), 48 * 48 * 4);
@@ -196,9 +196,9 @@ async fn many_renders_in_a_row_reuse_the_device() {
 /// rather than reporting a missing engine.
 #[pollster::test]
 async fn an_escape_config_also_renders() {
-    let config = include_str!("../../../tests/visual/configs/escape/mandelbrot-smooth.fflame");
+    let config = include_str!("../../../tests/visual/configs/escape/mandelbrot-smooth.fae");
 
-    let tile = match fflame_render::render_impl(config, 64, 64, Some(500_000), None).await {
+    let tile = match fae_render::render_impl(config, 64, 64, Some(500_000), None).await {
         Ok(t) => t,
         Err(e) if e.contains("no GPU adapter") => {
             eprintln!("skipped: {e}");
@@ -215,9 +215,9 @@ async fn an_escape_config_also_renders() {
 /// And a simulation config.
 #[pollster::test]
 async fn a_simulation_config_also_renders() {
-    let config = include_str!("../../../tests/visual/configs/sim/brusselator-turing.fflame");
+    let config = include_str!("../../../tests/visual/configs/sim/brusselator-turing.fae");
 
-    let tile = match fflame_render::render_impl(config, 64, 64, None, None).await {
+    let tile = match fae_render::render_impl(config, 64, 64, None, None).await {
         Ok(t) => t,
         Err(e) if e.contains("no GPU adapter") => {
             eprintln!("skipped: {e}");
@@ -238,7 +238,7 @@ async fn a_simulation_config_also_renders() {
 #[pollster::test]
 async fn a_flame_attractor_with_a_catalog_variation_renders() {
     let presets: serde_json::Value =
-        serde_json::from_str(include_str!("../../../assets/presets.fflame")).expect("the presets parse");
+        serde_json::from_str(include_str!("../../../assets/presets.fae")).expect("the presets parse");
     let attractor = presets
         .as_array()
         .expect("the presets are an array")
@@ -253,7 +253,7 @@ async fn a_flame_attractor_with_a_catalog_variation_renders() {
         })
         .expect("a Flame Attractor preset names a variation besides linear");
 
-    let tile = match fflame_render::render_impl(&attractor.to_string(), 64, 64, None, None).await {
+    let tile = match fae_render::render_impl(&attractor.to_string(), 64, 64, None, None).await {
         Ok(t) => t,
         Err(e) if e.contains("no GPU adapter") => {
             eprintln!("skipped: {e}");
@@ -274,7 +274,7 @@ async fn a_flame_attractor_with_a_catalog_variation_renders() {
 #[pollster::test]
 async fn the_grid_actually_steps() {
     let base: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../tests/visual/configs/sim/brusselator-turing.fflame"
+        "../../../tests/visual/configs/sim/brusselator-turing.fae"
     ))
     .expect("the shipped config parses");
 
@@ -284,7 +284,7 @@ async fn the_grid_actually_steps() {
         c.to_string()
     };
 
-    let early = match fflame_render::render_impl(&at(20), 64, 64, None, None).await {
+    let early = match fae_render::render_impl(&at(20), 64, 64, None, None).await {
         Ok(t) => t,
         Err(e) if e.contains("no GPU adapter") => {
             eprintln!("skipped: {e}");
@@ -292,7 +292,7 @@ async fn the_grid_actually_steps() {
         }
         Err(e) => panic!("render failed: {e}"),
     };
-    let late = fflame_render::render_impl(&at(2000), 64, 64, None, None)
+    let late = fae_render::render_impl(&at(2000), 64, 64, None, None)
         .await
         .expect("the second render");
 

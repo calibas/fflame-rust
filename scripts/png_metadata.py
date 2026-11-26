@@ -8,8 +8,8 @@ travels with it.
 
     python scripts/png_metadata.py IMAGE.png              # list everything
     python scripts/png_metadata.py IMAGE.png --config     # just the config JSON
-    python scripts/png_metadata.py IMAGE.png -o out.fflame
-    python scripts/png_metadata.py IMAGE.png --save-config  # IMAGE.fflame beside it
+    python scripts/png_metadata.py IMAGE.png -o out.fae
+    python scripts/png_metadata.py IMAGE.png --save-config  # IMAGE.fae beside it
 
 No dependencies and no build — tEXt is uncompressed key/NUL/value, so
 this works on a PNG from any version of the app, including one built by
@@ -75,9 +75,9 @@ def main():
     ap.add_argument("image")
     ap.add_argument("--config", action="store_true",
                     help="print only the embedded FractalConfig JSON")
-    ap.add_argument("-o", "--output", help="write the config to a .fflame file")
+    ap.add_argument("-o", "--output", help="write the config to a .fae file")
     ap.add_argument("--save-config", action="store_true",
-                    help="save the config beside the PNG as a .fflame of the same name; "
+                    help="save the config beside the PNG as a .fae of the same name; "
                          "an existing file is never overwritten")
     args = ap.parse_args()
 
@@ -95,7 +95,7 @@ def main():
                 "or predates config embedding"
             )
         if args.save_config:
-            target = os.path.splitext(args.image)[0] + ".fflame"
+            target = os.path.splitext(args.image)[0] + ".fae"
             try:
                 # "x" creates the file or fails: never an overwrite, and no
                 # gap between a check and the write.

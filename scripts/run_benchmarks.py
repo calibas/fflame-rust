@@ -339,7 +339,7 @@ class UnifiedBenchmarkRunner:
             self.render_dir.mkdir(parents=True, exist_ok=True)
 
             # Find all config files
-            config_files = sorted(self.configs_dir.rglob("*.fflame"))
+            config_files = sorted([*self.configs_dir.rglob("*.fae"), *self.configs_dir.rglob("*.fflame")])
 
             if not config_files:
                 print(f"{Colors.WARNING}No .fflame configs found in {self.configs_dir}{Colors.ENDC}")

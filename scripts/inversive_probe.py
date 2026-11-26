@@ -411,7 +411,7 @@ def main(paths):
     rng = np.random.default_rng(7)
     for path in paths:
         d, xs = load(path)
-        name = path.replace("\\", "/").split("/")[-1].replace(".fflame", "")
+        name = path.replace("\\", "/").split("/")[-1].replace(".fflame", "").replace(".fae", "")
         print(f"\n== {name}")
         for j, x in enumerate(xs):
             print(f"     xform {j}  w={x.w:<6.3f} {[(n, w) for n, w in x.vars]}  "
@@ -449,7 +449,7 @@ if __name__ == "__main__":
         rng = np.random.default_rng(7)
         for path in args[1:]:
             d, xs = load(path)
-            name = path.replace("\\", "/").split("/")[-1].replace(".fflame", "")
+            name = path.replace("\\", "/").split("/")[-1].replace(".fflame", "").replace(".fae", "")
             print(f"\n== {name}")
             localize(xs, name, rng)
     else:

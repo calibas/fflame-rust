@@ -26,7 +26,7 @@ pub fn corpus() -> Vec<(String, serde_json::Value)> {
         for p in entries {
             if p.is_dir() {
                 walk(&p, root, out);
-            } else if p.extension().is_some_and(|e| e == "fflame") {
+            } else if crate::config::is_config_path(&p) {
                 let Ok(text) = std::fs::read_to_string(&p) else { continue };
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
                 let name = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace(['/', '\\'], "__");
@@ -88,7 +88,7 @@ mod tests {
         let presets: Vec<serde_json::Value> = serde_json::from_str(crate::resources::presets::PRESETS_JSON).unwrap();
         let configs: Vec<FractalConfig> = presets.into_iter().map(|p| FractalConfig::from_json_value(p).expect("a preset loads")).collect();
         let text = FractalConfig::to_json_array(&configs).unwrap() + "\n";
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/presets.fflame");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/presets.fae");
         std::fs::write(path, text).unwrap();
         eprintln!("re-saved {} presets", configs.len());
     }

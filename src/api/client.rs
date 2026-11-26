@@ -21,7 +21,7 @@ pub fn build_url(base_url: &str, path: &str) -> String {
     format!("{base}{path}{sep}reader={}", crate::config::fractal_config::CURRENT_CONFIG_VERSION)
 }
 
-/// A local server to talk to instead of the real one: `FFLAME_API_URL`, for
+/// A local server to talk to instead of the real one: `FAE_API_URL`, for
 /// the API integration test (`scripts/api_integration.py`) and for trying
 /// the app against an `ffapi` on this machine. Desktop only, and only a
 /// LOOPBACK address (`http://127.0.0.1:…`, `http://localhost:…`,
@@ -33,13 +33,13 @@ fn local_override() -> Option<&'static str> {
         static OVERRIDE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
         OVERRIDE
             .get_or_init(|| {
-                let url = std::env::var("FFLAME_API_URL").ok()?;
+                let url = crate::env_vars::var("API_URL")?;
                 let loopback = ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"].iter().any(|p| url.starts_with(p));
                 if loopback {
-                    log::info!("API requests go to the local server {url} (FFLAME_API_URL)");
+                    log::info!("API requests go to the local server {url} (FAE_API_URL)");
                     Some(url)
                 } else {
-                    log::warn!("FFLAME_API_URL ignored: only a loopback address is allowed, not {url}");
+                    log::warn!("FAE_API_URL ignored: only a loopback address is allowed, not {url}");
                     None
                 }
             })

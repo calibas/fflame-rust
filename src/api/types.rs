@@ -396,7 +396,7 @@ pub struct ApiVariation {
 // Flames
 // ============================================================================
 
-/// Request body for `POST /api/flames` (and `PUT`). The flame config is an
+/// Request body for `POST /api/v1/fractals` (and `PUT`). The flame config is an
 /// **opaque blob** — the same JSON a `.fflame` file holds, minus the root
 /// flame's transforms (split into `transforms` below) and minus the palette
 /// (sent inline via `palette`). New config fields need zero API/DB work; the
@@ -655,6 +655,7 @@ impl From<ApiLoopMode> for crate::animation::LoopMode {
 pub struct CreateAnimationRequest {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fractal_id")]
     pub flame_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
@@ -691,9 +692,11 @@ pub struct AnimationResponse {
     /// Absent from an older server, or when the animation has none.
     #[serde(default)]
     pub motion_blur: Option<serde_json::Value>,
+    #[serde(rename = "fractal_id")]
     pub flame_id: Option<String>,
     /// Full flame data embedded by the server (same shape as FlameResponse).
     /// Authoritative source for the flame config — no separate flame request needed.
+    #[serde(rename = "fractal")]
     pub flame: Option<FlameResponse>,
     pub created_at: String,
     pub updated_at: String,
@@ -719,6 +722,7 @@ pub struct AnimationListItem {
     pub duration: f64,
     pub loop_mode: ApiLoopMode,
     pub visibility: ApiVisibility,
+    #[serde(rename = "fractal_id", alias = "flame_id")]
     pub flame_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,

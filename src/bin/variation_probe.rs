@@ -9,7 +9,7 @@
 //! committed, so a diff between platforms — or between builds — is a
 //! `git diff`. See `src/probe/` for what the columns mean.
 
-use fractal_flame_wgpu::probe::{self, report};
+use fae::probe::{self, report};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_REPORT: &str = "docs/generated/variation-probe.txt";
@@ -53,18 +53,18 @@ fn main() {
                     .unwrap_or(default)
             };
             match args.get(1).map(String::as_str) {
-                Some("--corpus") => fractal_flame_wgpu::census::run::run_corpus_cli(
+                Some("--corpus") => fae::census::run::run_corpus_cli(
                     num(2, 50_000_000),
                     num(3, 100) as u32,
                     &default_census_path(),
                 ),
-                Some(p) => fractal_flame_wgpu::census::run::run_single_cli(
+                Some(p) => fae::census::run::run_single_cli(
                     Path::new(p),
                     num(2, 100_000_000),
                 ),
                 None => {
                     eprintln!(
-                        "usage: variation_probe census <config.fflame> [iterations]\n       variation_probe census --corpus [iterations] [seeds]"
+                        "usage: variation_probe census <config.fae> [iterations]\n       variation_probe census --corpus [iterations] [seeds]"
                     );
                     2
                 }
@@ -76,7 +76,7 @@ fn main() {
                     .get(3)
                     .map(|s| Path::new(s).to_path_buf())
                     .unwrap_or_else(default_census_path);
-                fractal_flame_wgpu::census::rank::run_cli(Path::new(a), Path::new(b), &census)
+                fae::census::rank::run_cli(Path::new(a), Path::new(b), &census)
             }
             _ => {
                 eprintln!("usage: variation_probe rank <old-report> <new-report> [census-report]");
@@ -126,7 +126,7 @@ fn main() {
 /// the maps. `scripts/lens_sheet.py` turns the dump into contact
 /// sheets; see `src/probe/lens.rs` for what a lens is.
 fn do_lens(grid: u32, out: PathBuf) -> i32 {
-    let maps = match pollster::block_on(fractal_flame_wgpu::probe::lens::run(
+    let maps = match pollster::block_on(fae::probe::lens::run(
         grid,
         |i, total| {
             print!("\r  batch {i}/{total}   ");
@@ -141,7 +141,7 @@ fn do_lens(grid: u32, out: PathBuf) -> i32 {
         }
     };
     println!("\r  {} variations at {grid}x{grid}          ", maps.len());
-    match fractal_flame_wgpu::probe::lens::write_dump(&out, grid, &maps) {
+    match fae::probe::lens::write_dump(&out, grid, &maps) {
         Ok(()) => {
             println!("wrote {}", out.display());
             0

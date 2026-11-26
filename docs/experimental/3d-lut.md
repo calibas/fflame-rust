@@ -118,7 +118,7 @@ Go with A.
 - **Animation** — should `lut3d_strength` be animatable? Probably yes,
   trivially via ConfigPath.
 - **WASM** — can the browser read user-selected `.cube` files via the
-  same file picker we use for `.fflame` files? Probably yes (it's just
+  same file picker we use for `.fae` files? Probably yes (it's just
   text), but verify the picker accepts the extension.
 - **HDR LUTs** — `.cube` supports `DOMAIN_MIN`/`DOMAIN_MAX` for input
   ranges outside `[0,1]`. Our pipeline is sRGB-clamped already; either
@@ -127,6 +127,6 @@ Go with A.
 ## Why not just extend the 1D LUT to 3D in-place
 
 The existing `curve_lut_texture` binding could be replaced with a 3D
-texture, but that breaks all existing `.fflame` files that ship a 1D
+texture, but that breaks all existing `.fae` files that ship a 1D
 tone curve. Cleaner to keep them separate — 1D for the tone curve, 3D
 for the LUT — and let them compose.

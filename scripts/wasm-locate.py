@@ -46,7 +46,7 @@ USAGE:
   python scripts/wasm-locate.py <offset|#index> [...]
 
 Offsets may be decimal or 0x-hex; `#N` is a `wasm-function[N]` from a
-Chrome trace. Reads `pkg/fractal_flame_wgpu_bg.wasm`, whatever
+Chrome trace. Reads `pkg/fae_bg.wasm`, whatever
 `./build-wasm.sh` last put there.
 
 AN OFFSET IS ONLY MEANINGFUL AGAINST THE MODULE THAT PRODUCED IT. Any
@@ -64,7 +64,7 @@ in a rAF callback.
 import io
 import sys
 
-SHIPPED = "pkg/fractal_flame_wgpu_bg.wasm"
+SHIPPED = "pkg/fae_bg.wasm"
 
 
 def leb(b, o, signed=False):
